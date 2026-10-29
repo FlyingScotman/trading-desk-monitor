@@ -5,9 +5,12 @@ up for ``desk inbox status``. Unlike the rest of ``desk.inbox`` this module uses
 One scan at a time: a Postgres advisory lock; a second scan finds it taken and does nothing. The adapter is
 loaded once per process; when it fails to load, ingestion is off with the reason and nothing is touched.
 
+The folders are ``Settings.scan_dirs``: ``DESK_INBOX_DIRS`` and the adapter's output folder ``<home>/adapter-output``
+(08 §3 ``run_action``: the backend writes its files there, one folder per action, replaced by a single rename).
 A file of the folders (temp, hidden and oversized files skipped) is **offered** once it is stable: its size and
 modification time unchanged since the previous scan of this process (the watcher), or its modification time
-older than ``DESK_INBOX_POLL_SECONDS`` (so a one-shot ``desk inbox scan`` takes files copied earlier). A path
+older than ``DESK_INBOX_POLL_SECONDS`` (so a one-shot ``desk inbox scan`` takes files copied earlier); a file of
+the output folder is stable as soon as it is there. A path
 with the size and time already taken in is not hashed again. Then, per file:
 
 * known content under a new path: ``duplicate`` (same source and report date: nothing) or ``stale_copy`` (another
@@ -355,7 +358,9 @@ class _Scan:
         seen = set(self.con.execute("SELECT path, size_bytes, mtime FROM inbox_sighting").fetchall())
         unread = {(p, n, m): (st, fp, rd) for p, n, m, st, fp, rd in self.con.execute(
             "SELECT path, size_bytes, mtime, status, adapter_fingerprint, report_date FROM inbox_unread")}
-        entries = list_entries([str(d) for d in self.settings.inbox_dirs])
+        entries = list_entries([str(d) for d in getattr(self.settings, "scan_dirs", self.settings.inbox_dirs)])
+        out_dir = getattr(self.settings, "adapter_output_dir", None)
+        written = str(out_dir) + os.sep if out_dir is not None else None  # complete when it appears (one rename)
         self.res.timings["list_s"] = round(time.perf_counter() - t0, 2)
         for n, (p, st) in enumerate(entries, 1):
             if n % LIST_TICK == 0:
@@ -366,7 +371,7 @@ class _Scan:
             if st.st_size > limit:
                 self.res.skipped["too_large"] += 1
                 continue
-            stable = (_last_seen.get(p) == (st.st_size, st.st_mtime_ns)
+            stable = (_last_seen.get(p) == (st.st_size, st.st_mtime_ns) or bool(written and p.startswith(written))
                       or self.now.timestamp() - st.st_mtime >= self.settings.inbox_poll_seconds)
             _last_seen[p] = (st.st_size, st.st_mtime_ns)
             if not stable:

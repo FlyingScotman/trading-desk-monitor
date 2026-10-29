@@ -1250,7 +1250,7 @@
     "/api/v1/runs/{run_id}/ocp": {
       "get": {
         "summary": "Ocp",
-        "description": "The run's OCP (B2, TDM#59): derived from positions by component (cash and to be settled, PV of the FX\nlegs, futures, bonds, their funding liability, other, OCP transfers), reconciled per currency with the\nreported ``ocp`` at the report's level, the breaks with their explanation and the transfers per book; state\n``no_report`` without a report in force, ``not_computed`` for a run before B2.",
+        "description": "The run's OCP (B2, TDM#59): the published OCP (TDM#416: the bank's OCP report + the components it does\nnot hold, derived from positions where no report unit covers; per currency and per book with the source of\neach figure) and what it lacks (``gaps``); the OCP derived from positions by component (cash and to be\nsettled, PV of the FX legs, NDF, futures, options, bonds, their funding liability, other, OCP transfers),\nreconciled per currency with the reported ``ocp`` at the report's level, the breaks with their explanation\nand the transfers per book; state ``no_report`` without a report in force, ``not_computed`` for a run before\nB2.",
         "operationId": "ocp_api_v1_runs__run_id__ocp_get",
         "parameters": [
           {
@@ -5544,6 +5544,22 @@
               }
             ],
             "title": "Valid Date"
+          },
+          "scope": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "type": "object",
+            "title": "Scope",
+            "description": "The report unit's scope (entity, book_id)"
+          },
+          "books": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Books",
+            "description": "The books the comparison sums (a run before v2: [])"
           }
         },
         "type": "object",
@@ -5570,6 +5586,41 @@
         "title": "OcpComparison",
         "description": "The reported OCP against the OCP derived from positions, at the level of the report (a book or an entity)."
       },
+      "OcpGap": {
+        "properties": {
+          "code": {
+            "type": "string",
+            "enum": [
+              "no_report",
+              "stale_report",
+              "outside_without_terms",
+              "books_outside_report",
+              "outside_double_count"
+            ],
+            "title": "Code"
+          },
+          "text": {
+            "type": "string",
+            "title": "Text"
+          },
+          "items": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Items",
+            "description": "Scopes, books or position ids concerned (at most 50)"
+          }
+        },
+        "type": "object",
+        "required": [
+          "code",
+          "text",
+          "items"
+        ],
+        "title": "OcpGap",
+        "description": "What is missing for the published OCP to be trusted."
+      },
       "OcpLineOut": {
         "properties": {
           "key": {
@@ -5580,7 +5631,7 @@
           "component": {
             "type": "string",
             "title": "Component",
-            "description": "cash, fx_legs, futures, bonds, funding, other, transfers"
+            "description": "cash, fx_legs, ndf, futures, options, bonds, funding, other, transfers"
           },
           "book_id": {
             "type": "string",
@@ -5633,6 +5684,191 @@
           "note"
         ],
         "title": "OcpLineOut"
+      },
+      "OcpPublished": {
+        "properties": {
+          "basis": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "report_plus_outside",
+                  "derived"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Basis"
+          },
+          "by_ccy": {
+            "additionalProperties": {
+              "$ref": "#/components/schemas/OcpPublishedCcy"
+            },
+            "type": "object",
+            "title": "By Ccy"
+          },
+          "by_book": {
+            "items": {
+              "$ref": "#/components/schemas/OcpPublishedLine"
+            },
+            "type": "array",
+            "title": "By Book"
+          }
+        },
+        "type": "object",
+        "title": "OcpPublished",
+        "description": "The OCP the run publishes (TDM#416): the bank's report where a unit covers plus the components outside it,\nderived elsewhere. ``basis`` None: a run before v2 of the block (the pages show the derived OCP)."
+      },
+      "OcpPublishedCcy": {
+        "properties": {
+          "total": {
+            "type": "number",
+            "title": "Total"
+          },
+          "rate": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Rate"
+          },
+          "total_rub": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Total Rub"
+          },
+          "by_source": {
+            "additionalProperties": {
+              "type": "number"
+            },
+            "type": "object",
+            "title": "By Source",
+            "description": "source -> amount"
+          }
+        },
+        "type": "object",
+        "required": [
+          "total",
+          "rate",
+          "total_rub",
+          "by_source"
+        ],
+        "title": "OcpPublishedCcy"
+      },
+      "OcpPublishedLine": {
+        "properties": {
+          "entity": {
+            "type": "string",
+            "title": "Entity"
+          },
+          "book_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Book Id",
+            "description": "None: an entity-level report unit (its books in ``books``)"
+          },
+          "books": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Books",
+            "description": "The books whose OCP the figure holds"
+          },
+          "ccy": {
+            "type": "string",
+            "title": "Ccy"
+          },
+          "amount": {
+            "type": "number",
+            "title": "Amount",
+            "description": "Signed, units of the currency: + long"
+          },
+          "source": {
+            "type": "string",
+            "enum": [
+              "report",
+              "derived",
+              "derived_stale_report"
+            ],
+            "title": "Source",
+            "description": "report: the report + outside components; derived: from positions (no report unit covers); derived_stale_report: from positions, the unit is too old"
+          },
+          "components": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Components",
+            "description": "The components outside the report added to it (source report)"
+          },
+          "outside": {
+            "additionalProperties": {
+              "type": "number"
+            },
+            "type": "object",
+            "title": "Outside",
+            "description": "Their amounts"
+          },
+          "reported": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reported",
+            "description": "The report's figure (an entity's less the books published apart)"
+          },
+          "valid_date": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Valid Date",
+            "description": "The report unit's date"
+          }
+        },
+        "type": "object",
+        "required": [
+          "entity",
+          "book_id",
+          "books",
+          "ccy",
+          "amount",
+          "source",
+          "components",
+          "outside",
+          "reported",
+          "valid_date"
+        ],
+        "title": "OcpPublishedLine",
+        "description": "One figure of the published OCP (``rules.ocp.published``, TDM#416): a report scope's report + the components\noutside the report, or a derived OCP."
       },
       "OcpTransfer": {
         "properties": {
@@ -8196,6 +8432,17 @@
             "type": "array",
             "title": "Components"
           },
+          "sources": {
+            "items": {
+              "additionalProperties": {
+                "type": "string"
+              },
+              "type": "object"
+            },
+            "type": "array",
+            "title": "Sources",
+            "description": "source key -> its name on the pages"
+          },
           "policy": {
             "anyOf": [
               {
@@ -8207,6 +8454,16 @@
               }
             ],
             "title": "Policy"
+          },
+          "published": {
+            "$ref": "#/components/schemas/OcpPublished"
+          },
+          "gaps": {
+            "items": {
+              "$ref": "#/components/schemas/OcpGap"
+            },
+            "type": "array",
+            "title": "Gaps"
           },
           "by_ccy": {
             "additionalProperties": {
@@ -8301,7 +8558,7 @@
           "notes"
         ],
         "title": "RunOcp",
-        "description": "The run's OCP (wave B2, TDM#59, ``publish.ocp_run``): derived from positions by component, reconciled with the\nreported ``ocp`` and the OCP transfers. ``state`` no_report: no ``ocp`` unit in force (derived only);\nnot_computed: a run before B2. ``policy.provisional``: the conventions at a provisional default (TDM#60)."
+        "description": "The run's OCP (wave B2, TDM#59, ``publish.ocp_run``): the **published** OCP (TDM#416: the bank's report + the\ncomponents outside it, derived where no report unit covers) and its ``gaps``, the OCP derived from positions by\ncomponent, its reconciliation with the reported ``ocp`` and the OCP transfers. ``state`` no_report: no ``ocp``\nunit in force (derived only); not_computed: a run before B2. ``policy.source``: where each convention came from\n(the adapter's ``ocp_policy``, an owner decision, a provisional default); ``policy.provisional``: those neither\ndecided nor given (TDM#60, TDM#180)."
       },
       "RunPnl": {
         "properties": {

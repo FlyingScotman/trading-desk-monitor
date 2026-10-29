@@ -19,23 +19,33 @@ in the run's publication.
   bonds: the bond book's OCP = Σ of its bonds' FX PnL since the last transfer + the transfer deals (signed: a transfer
   out is negative), counted once, ≈ the residual when the transfer matched;
 - the reported OCP: ``store.dataset_rows("ocp", D)`` (08 §10, a stock; a unit older than ``D`` is carried forward
-  and its ``valid_date`` said). No unit: status ``no_report``, the derived OCP is still published.
+  and its ``valid_date`` said). No unit: status ``no_report``, the derived OCP is still published;
+- the policy: ``rules.ocp.PROVISIONAL_POLICY`` with the adapter's ``ocp_policy`` in force on ``D`` (private/1.5,
+  TDM#180; ``run_policy``): which components the report holds, what is published, NDFs, cash, the settlement
+  window, the tolerance, the report's age. A conflict of two rows keeps the default and is said in the notes.
 
-**Output** (``RunOcp``): the block stored as ``run_reference`` kind ``ocp`` (``BLOCK_VERSION``): status, policy (with
-the provisional fields: every one until the owner answers TDM#60), the derived OCP by currency and component and by
-book, the lines, the reconciliation per report scope and currency with the components outside the report, the
-derived OCP outside any report unit, the transfers per book and currency, the report's units, totals and notes;
+**Output** (``RunOcp``): the block stored as ``run_reference`` kind ``ocp`` (``BLOCK_VERSION`` 2): status, policy (its
+values, ``source`` per field, the ``provisional`` fields neither decided nor given by the adapter, the conflicts),
+**the published OCP** (``published``, TDM#416: the report + the components outside it where a report unit covers, the
+derived OCP elsewhere; ``by_ccy`` {ccy: total, rate, total_rub, by_source}, ``by_book`` the lines of
+``rules.ocp.published``, ``basis``), the ``gaps`` (what is missing for it to be trusted: no report, a stale report,
+positions outside the report without trade terms, books outside every report unit), the derived OCP by currency and
+component and by book, the lines, the reconciliation per report scope and currency with the components outside the
+report, the derived OCP outside any report unit, the transfers per book and currency, the report's units, totals and
+notes;
 per position ``fact.extra.ocp`` (component, amounts, basis) and, for a transfer deal, ``extra.ocp_transfer`` true
-(the pages mark it «Перенос ОВП»). The run log gets a summary line and a WARN line per break.
+(the pages mark it «Перенос ОВП»). The run log gets a summary line (the published OCP and its sources, the derived
+OCP, the reconciliation) and a WARN line per break. The per-position FX delta and FX PnL are not changed by any of it.
 
-The run never fails on the OCP: an error is status ``failed`` with its type and message in the log.
+The run never fails on the OCP: an error is status ``failed`` with its type and message in the log; the computation
+runs in a savepoint (TDM#215), so an SQL error inside does not abort the run's transaction.
 """
 
 from __future__ import annotations
 
 import math
 from collections import defaultdict
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, fields
 from datetime import date
 from typing import Any
 
@@ -45,14 +55,19 @@ from .. import store
 from ..marketdata.adapter import MarketView
 from ..rules import funding as F
 from ..rules import ocp as O
-from ..rules.reference import apply_funding_policy, entities_from_reference, policy_from_reference
+from ..rules.reference import (
+    apply_funding_policy,
+    apply_ocp_policy,
+    entities_from_reference,
+    policy_from_reference,
+)
 from . import funding_run
 
 KIND = "ocp"
-BLOCK_VERSION = 1
+BLOCK_VERSION = 2
 COMPUTED, NO_REPORT, FAILED, NOT_COMPUTED = "computed", "no_report", "failed", "not_computed"
 STATUS_TEXT = {
-    COMPUTED: "ОВП из позиций сверено с отчётом ОВП",
+    COMPUTED: "ОВП — отчёт ОВП и слагаемые вне отчёта из позиций; сверено с ОВП из позиций",
     NO_REPORT: "отчёта ОВП (ocp) на дату нет: ОВП посчитано только из позиций, сверки нет",
     FAILED: "ОВП не посчитано: ошибка расчёта",
     NOT_COMPUTED: "прогон без расчёта ОВП (до B2)",
@@ -70,6 +85,7 @@ class RunOcp:
     def lineage(self) -> dict[str, Any]:
         b = self.block
         return {"status": self.status, "breaks": (b.get("totals") or {}).get("breaks"),
+                "published": {c: x.get("total") for c, x in ((b.get("published") or {}).get("by_ccy") or {}).items()},
                 "report_units": [{"scope": u.get("scope"), "set_id": u.get("set_id"), "valid_date": u.get("valid_date")}
                                  for u in (b.get("report") or {}).get("units") or []],
                 "provisional": (b.get("policy") or {}).get("provisional")}
@@ -92,7 +108,9 @@ def empty_block(status: str, text: str, on: date | None = None, **kw: Any) -> di
     return {"version": BLOCK_VERSION, "status": status, "text": text, "as_of": on.isoformat() if on else None,
             "reporting_ccy": O.PROVISIONAL_POLICY.reporting_ccy,
             "components": [{"key": c, "name": O.COMPONENT_TEXT[c]} for c in O.COMPONENTS],
-            "policy": None, "by_ccy": {}, "by_book": [], "lines": [], "reconciliation": [], "outside_report": [],
+            "sources": [{"key": k, "name": v} for k, v in O.SOURCE_TEXT.items()],
+            "policy": None, "published": {"basis": None, "by_ccy": {}, "by_book": []}, "gaps": [],
+            "by_ccy": {}, "by_book": [], "lines": [], "reconciliation": [], "outside_report": [],
             "transfers": [], "report": {"units": [], "rows": 0}, "totals": None, "notes": [], **kw}
 
 
@@ -129,12 +147,28 @@ def _rates(reference_fx: list[dict[str, Any]]) -> dict[str, float]:
     return {r["ccy"]: float(r["rate"]) for r in reference_fx if r.get("rate")}
 
 
+def run_policy(con: psycopg.Connection, on: date, known_at: Any, base: O.OcpPolicy = O.PROVISIONAL_POLICY
+               ) -> tuple[O.OcpPolicy, dict[str, str], tuple[str, ...]]:
+    """The OCP policy of the run of ``on``: ``base`` with the adapter's ``ocp_policy`` in force (private/1.5,
+    ``rules.reference.apply_ocp_policy``); (policy, source per field, conflicts). A field's source:
+    ``ocp_policy:<id>``, an owner decision (``rules.ocp.DECIDED``), ``provisional`` (``OPEN_DECISIONS``) or
+    ``default``."""
+    s = apply_ocp_policy(store.current_reference(con, "ocp_policy", on, known_at), base)
+    open_fields = {d.field for d in O.OPEN_DECISIONS}
+    source = {f.name: s.source.get(f.name) or O.DECIDED.get(f.name)
+              or ("provisional" if f.name in open_fields else "default") for f in fields(O.OcpPolicy)}
+    return s.policy, source, s.conflicts
+
+
 def compute(con: psycopg.Connection, on: date, market: MarketView | None, content_rows: list[dict[str, Any]],
             reference: dict[str, Any], inputs: store.PositionInputs,
             policy: O.OcpPolicy = O.PROVISIONAL_POLICY) -> RunOcp:
-    """The OCP of the run of ``on`` (see the module docstring). ``reference``: ``RunContent.reference`` (books, fx)."""
+    """The OCP of the run of ``on`` (see the module docstring). ``reference``: ``RunContent.reference`` (books, fx);
+    ``policy``: the base the adapter's ``ocp_policy`` applies over. In a savepoint (TDM#215): an SQL error inside
+    rolls back only the block's reads, so the run still publishes, with the block ``failed``."""
     try:
-        return _compute(con, on, market, content_rows, reference, inputs, policy)
+        with funding_run.savepoint(con):
+            return _compute(con, on, market, content_rows, reference, inputs, policy)
     except Exception as e:  # noqa: BLE001 - the OCP never fails the run; it says why it has none
         text = f"{STATUS_TEXT[FAILED]}: {type(e).__name__}: {e}"
         return RunOcp(FAILED, empty_block(FAILED, text, on), log=[("WARN", text[:2000])])
@@ -143,9 +177,10 @@ def compute(con: psycopg.Connection, on: date, market: MarketView | None, conten
 def _compute(con: psycopg.Connection, on: date, market: MarketView | None, content_rows: list[dict[str, Any]],
              reference: dict[str, Any], inputs: store.PositionInputs, policy: O.OcpPolicy) -> RunOcp:
     known_at = inputs.known_at
+    policy, source, conflicts = run_policy(con, on, known_at, policy)
     books = {b["book_id"]: b for b in store.current_books(con, on, known_at)}
     books.update({b["book_id"]: b for b in reference.get("books") or []})
-    notes: list[str] = []
+    notes: list[str] = list(conflicts)
     cash = store.dataset_rows(con, "cash_balances", on, known_at=known_at) if policy.cash_from_balances else None
     liabs = _liabilities(con, on, known_at, content_rows, books, market, notes) \
         if policy.bond_funding_liability else []
@@ -183,12 +218,18 @@ def _compute(con: psycopg.Connection, on: date, market: MarketView | None, conte
     if stale:
         notes.append("отчёт ОВП перенесён с прошлой даты: " + ", ".join(
             f"{_scope(u['scope'])} от {u['valid_date']}" for u in stale))
-    prov = O.provisional(policy)
+    prov = O.provisional(policy, [f for f, src in source.items() if src.startswith("ocp_policy:")])
+    pub_ccy = {}
+    for ccy, x in O.published_by_currency(res.published).items():
+        pub_ccy[ccy] = {**x, "rate": rates.get(ccy),
+                        "total_rub": x["total"] * rates[ccy] if ccy in rates else None}
     block = empty_block(
         status, STATUS_TEXT[status], on,
-        policy={**policy.lineage(), "provisional": prov,
+        policy={**policy.lineage(), "provisional": prov, "source": source, "conflicts": list(conflicts),
                 "decisions": [{"field": d.field, "ref": d.ref, "question": d.question, "provisional": d.provisional}
                               for d in O.OPEN_DECISIONS if d.field in prov]},
+        published={"basis": policy.published.value, "by_ccy": pub_ccy, "by_book": res.published},
+        gaps=res.gaps,
         by_ccy=by_ccy, by_book=by_book, lines=[x.as_json() for x in res.lines], reconciliation=res.comparisons,
         outside_report=res.outside_report, transfers=res.transfers,
         report={"units": [{k: (v.isoformat() if isinstance(v, date) else v) for k, v in u.items()}
@@ -219,12 +260,18 @@ def _scope(s: dict[str, Any] | None) -> str:
 
 
 def _summary(block: dict[str, Any]) -> str:
+    pub = []
+    for ccy, x in (block.get("published") or {}).get("by_ccy", {}).items():
+        pub.append(f"{ccy} {x['total']:,.0f} (" + ", ".join(
+            f"{O.SOURCE_TEXT.get(k, k)} {v:,.0f}" for k, v in x["by_source"].items()) + ")")
     parts = []
     for ccy, x in block["by_ccy"].items():
         parts.append(f"{ccy} {x['total']:,.0f} (" + ", ".join(
             f"{O.COMPONENT_TEXT[c]} {v:,.0f}" for c, v in x["components"].items()) + ")")
     t = block["totals"] or {}
-    return ("ОВП из позиций: " + ("; ".join(parts) or "нет валютных позиций") + "; "
+    return ("ОВП: " + ("; ".join(pub) or "нет валютных позиций") + "; "
+            + "ОВП из позиций: " + ("; ".join(parts) or "нет валютных позиций") + "; "
             + (f"сверка с отчётом: сравнений {t.get('comparisons', 0)}, брейков {t.get('breaks', 0)}"
                if block["status"] == COMPUTED else STATUS_TEXT[block["status"]])
+            + (f"; не хватает: {len(block['gaps'])}" if block.get("gaps") else "")
             + "; по умолчанию (provisional): " + (", ".join(block["policy"]["provisional"]) or "нет"))

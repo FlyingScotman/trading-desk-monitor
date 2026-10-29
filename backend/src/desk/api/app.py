@@ -364,8 +364,9 @@ def funding_out(run_id: int, block: dict[str, Any] | None) -> RunFunding:
 def ocp_out(run_id: int, block: dict[str, Any] | None) -> RunOcp:
     """``RunOcp`` of a run's OCP block (``publish.ocp_run``); a run before B2 has none."""
     b = block or ocp_run.empty_block(ocp_run.NOT_COMPUTED, ocp_run.STATUS_TEXT[ocp_run.NOT_COMPUTED])
+    keep = ("sources", "published", "gaps")  # v2 of the block (TDM#416): a v1 block has none, the model's defaults
     return RunOcp(run_id=run_id, state=b["status"], **{k: b.get(k) for k in RunOcp.model_fields
-                                                       if k not in ("run_id", "state")})
+                                                       if k not in ("run_id", "state") and (k in b or k not in keep)})
 
 
 def _total(components: dict[str, Any] | None) -> float | None:
@@ -599,10 +600,13 @@ def create_app(store_url: str, static_dir: Path | None = None, app_dir: Path | N
 
     @app.get("/api/v1/runs/{run_id}/ocp", response_model=RunOcp)
     def ocp(con: Con, run_id: int, request: Request):
-        """The run's OCP (B2, TDM#59): derived from positions by component (cash and to be settled, PV of the FX
-        legs, futures, bonds, their funding liability, other, OCP transfers), reconciled per currency with the
-        reported ``ocp`` at the report's level, the breaks with their explanation and the transfers per book; state
-        ``no_report`` without a report in force, ``not_computed`` for a run before B2."""
+        """The run's OCP (B2, TDM#59): the published OCP (TDM#416: the bank's OCP report + the components it does
+        not hold, derived from positions where no report unit covers; per currency and per book with the source of
+        each figure) and what it lacks (``gaps``); the OCP derived from positions by component (cash and to be
+        settled, PV of the FX legs, NDF, futures, options, bonds, their funding liability, other, OCP transfers),
+        reconciled per currency with the reported ``ocp`` at the report's level, the breaks with their explanation
+        and the transfers per book; state ``no_report`` without a report in force, ``not_computed`` for a run before
+        B2."""
         run = _run_or_404(con, run_id)
         row = con.execute("SELECT data FROM run_reference WHERE run_id = %s AND kind = 'ocp'", (run_id,)).fetchone()
         return _cached(request, run, ocp_out(run_id, row["data"] if row else None))
@@ -980,6 +984,7 @@ def create_app(store_url: str, static_dir: Path | None = None, app_dir: Path | N
         return out
 
     from .acquisition_routes import router as acquisition_router
+    from .adapter_routes import router as adapter_router  # the settings page's adapter tools (TDM#421)
     from .alias_routes import router as alias_router  # /api/v1/instruments/alias(es) (batch 1, item 3)
     from .backup_routes import router as backup_router  # /api/v1/backup: backups, restore drill (desk.backup)
     from .cash_routes import public as cash_router  # /api/v1/cash: balances and ledger breaks (B3, #61)
@@ -992,6 +997,7 @@ def create_app(store_url: str, static_dir: Path | None = None, app_dir: Path | N
     from .updater_routes import router as updater_router  # GitHub Releases (desk.updater)
 
     app.include_router(settings_router, include_in_schema=False)  # local admin routes (/settings.html)
+    app.include_router(adapter_router, include_in_schema=False)
     app.include_router(update_router, include_in_schema=False)
     app.include_router(updater_router, include_in_schema=False)
     app.include_router(acquisition_router, include_in_schema=False)

@@ -87,7 +87,15 @@ def assert_parity(c: TestClient, rid: int) -> dict:
     r = c.get(f"/api/v1/concepts/run?run_id={rid}")
     assert r.status_code == 200, r.text
     got = r.json()
-    assert set(got) == TOP and set(got["source"]) <= SOURCE
+    assert set(got) == TOP | {"OCP"} and set(got["source"]) <= SOURCE
+    # OCP (TDM#416): the run's published OCP, not in compat (window.DESK is never extended): the OCP route's
+    ocp = c.get(f"/api/v1/runs/{rid}/ocp").json()
+    if ocp["published"]["basis"] is None:
+        assert got["OCP"] is None
+    else:
+        assert got["OCP"]["basis"] == ocp["published"]["basis"] and got["OCP"]["gaps"] == ocp["gaps"]
+        assert [(x["book"], x["ccy"], x["amount"], x["source"]) for x in got["OCP"]["byBook"]] == [
+            (x["book_id"], x["ccy"], x["amount"], x["source"]) for x in ocp["published"]["by_book"]]
     assert all(set(p) <= POSITION and set(p["pnl"]) == PNL for p in got["positions"])
     for k in TOP:
         assert (zeroed(got[k]) if k in MOVES else got[k]) == want[k], k

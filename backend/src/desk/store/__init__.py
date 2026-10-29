@@ -16,6 +16,7 @@ import hashlib
 import json
 import math
 from collections import Counter
+from collections.abc import Iterable
 from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal
@@ -254,6 +255,33 @@ def current_sets(con: psycopg.Connection, valid_date: date) -> tuple[list[int], 
         " (SELECT count(*) FROM position_input WHERE set_id IN (SELECT set_id FROM s)) FROM s",
         (valid_date,)).fetchone()
     return list(ids), n
+
+
+LATE_DATASETS = {"ocp": "ОВП", "cash_balances": "остатки"}
+"""Stocks a run reads besides positions and trade terms (the OCP report, the cash balances: ``publish.ocp_run``,
+``publish.funding_run``) that usually arrive in the evening, after the run (TDM#181) -> their name in the day status."""
+
+
+def dataset_set_ids(con: psycopg.Connection, valid_date: date, datasets: Iterable[str] = tuple(LATE_DATASETS), *,
+                    known_at: datetime | None = None) -> dict[str, list[int]]:
+    """Per dataset (a stock) the set ids ``dataset_rows(dataset, valid_date, known_at=known_at)`` reads (sorted),
+    without the rows; a dataset with none is absent."""
+    known_at = known_at or con.execute("SELECT now()").fetchone()[0]
+    return {ds: list(ids) for ds, ids in con.execute(
+        "SELECT dataset, array_agg(set_id ORDER BY set_id) FROM (SELECT DISTINCT ON (dataset, scope_key) dataset,"
+        " set_id FROM dataset_set WHERE dataset = ANY(%s) AND valid_date <= %s AND recorded_at <= %s"
+        f" ORDER BY dataset, scope_key, {CURRENT_SET}) s GROUP BY dataset",
+        (list(datasets), valid_date, known_at))}
+
+
+def late_inputs(con: psycopg.Connection, valid_date: date, known_at: datetime | None) -> list[str]:
+    """The ``LATE_DATASETS`` whose sets in force on ``valid_date`` now differ from those a run that read its inputs at
+    ``known_at`` (its ``positions_known_at``) saw: an OCP report or balances recorded (or corrected) after the run.
+    The autopilot and the backfill run the date again, the day status names them (TDM#181)."""
+    if known_at is None:
+        return []
+    now, then = dataset_set_ids(con, valid_date), dataset_set_ids(con, valid_date, known_at=known_at)
+    return [ds for ds in LATE_DATASETS if now.get(ds, []) != then.get(ds, [])]
 
 
 def position_dates(con: psycopg.Connection, since: date) -> list[date]:
@@ -533,14 +561,14 @@ def prune_intraday(con: psycopg.Connection, business_date: date, keep_run_id: in
 
 def default_runs(con: psycopg.Connection, since: date) -> dict[date, dict]:
     """The default run of each business date from ``since`` on: run_id, its snapshots, position sets (sorted),
-    completed_at, private inputs hash and the ``logic_version`` of the code that made it (lineage; None for a run
-    made before it was recorded)."""
+    completed_at, private inputs hash, the horizon it read its inputs at (``positions_known_at``: ``late_inputs``) and
+    the ``logic_version`` of the code that made it (lineage; None for a run made before it was recorded)."""
     return {r[0]: {"run_id": r[1], "market_snapshot_id": r[2], "prev_market_snapshot_id": r[3],
                    "position_set_ids": sorted(r[4]), "completed_at": r[5], "logic_version": r[6],
-                   "private_inputs_hash": r[7]}
+                   "private_inputs_hash": r[7], "positions_known_at": r[8]}
             for r in con.execute(
                 "SELECT business_date, run_id, market_snapshot_id, prev_market_snapshot_id, position_set_ids,"
-                " completed_at, lineage->>'logic_version', private_inputs_hash FROM run"
+                " completed_at, lineage->>'logic_version', private_inputs_hash, positions_known_at FROM run"
                 f" WHERE run_id IN ({DEFAULT_RUNS}) AND business_date >= %s", (since,))}
 
 

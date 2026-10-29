@@ -18,7 +18,8 @@ upgrade recomputes only the latest date. Nothing ever computed an older date.
    book whose report did not come that day is carried forward from its last report, as every run does; a date
    before the first report of every book has no positions and no run. A date needs a run when it has none, or its
    default run read other position sets or canonical private inputs, another market snapshot (a hub correction),
-   another previous close, or was
+   another previous close, read its inputs before an ``ocp`` report or ``cash_balances`` in force on the date were
+   recorded (``late_why``, TDM#181), or was
    made by another valuation or core version (``same_logic``: ``VALUATION_VERSION`` and the core version of
    ``logic_version()`` recompute the history; a new release or Windows bundle of the same computation does not). Otherwise it is skipped: nothing
    is computed twice.
@@ -171,6 +172,17 @@ def same_logic(a: str | None, b: str | None) -> bool:
     return logic_key(a) == logic_key(b)
 
 
+LATE_WHY = {"ocp": "ocp report", "cash_balances": "cash balances"}
+"""``store.LATE_DATASETS`` as a reason to run a date again (TDM#181)."""
+
+
+def late_why(con: psycopg.Connection, d: date, run: dict | None) -> str | None:
+    """"ocp report changed after the run" (and / or the cash balances) when an ``ocp`` or ``cash_balances`` set in
+    force on ``d`` was recorded after the default run ``run`` read its inputs (``store.late_inputs``); else None."""
+    late = store.late_inputs(con, d, run.get("positions_known_at")) if run else []
+    return " and ".join(LATE_WHY[x] for x in late) + " changed after the run" if late else None
+
+
 def plan(con: psycopg.Connection, settings: Settings, date_from: date, date_to: date,
          hub: list[tuple[str, str]] | None = None) -> Plan:
     """What the backfill would do (module doc, step 2). ``hub``: the hub's (date, snapshot id) rows (``hub_rows``);
@@ -208,12 +220,14 @@ def plan(con: psycopg.Connection, settings: Settings, date_from: date, date_to: 
             prev = sd.market_id(*pc) if pc else None
         run = runs.get(date.fromisoformat(d))
         inputs_hash = store.positions_for(con, date.fromisoformat(d)).private_inputs_hash
+        late = late_why(con, date.fromisoformat(d), run)
         why = ("no default run" if run is None else "positions changed" if run["position_set_ids"] != ids
                else "market snapshot changed" if run["market_snapshot_id"] != snap
                else "previous snapshot changed" if prev is not None and run["prev_market_snapshot_id"] != prev
                else "private inputs changed" if run["private_inputs_hash"] != inputs_hash
-               else "program updated" if not same_logic(run.get("logic_version"), logic) else None)
-        sig = [ids, snap, prev, logic, inputs_hash]
+               else late
+               or ("program updated" if not same_logic(run.get("logic_version"), logic) else None))
+        sig = [ids, snap, prev, logic, inputs_hash, store.dataset_set_ids(con, date.fromisoformat(d))]
         if why is None:
             days.append(Day(d, "done", market_id=snap, cached=is_cached, prev_date=pd))
         elif failed.get(d) == sig:
@@ -229,7 +243,7 @@ def inbox(con: psycopg.Connection, settings: Settings, date_from: date, *, force
     ``force``. Returns the scan's summary line, None when skipped (done before, or no inbox folders)."""
     from .inbox import scan
 
-    if not settings.inbox_dirs:
+    if not settings.scan_dirs:
         return None
     h = scan.adapter(settings)
     st = state(settings)
@@ -266,15 +280,18 @@ def _attempt(problems: dict[str, Any], day: Day, kind: str, error: str) -> int:
 
 def _differs(con: psycopg.Connection, day: Day) -> str:
     """What of the date's default run differs from its plan (``Day.sig``: position sets, market snapshot, previous
-    snapshot, logic version, private inputs hash), for the log of a date that does not converge."""
+    snapshot, logic version, private inputs hash, the ``ocp`` / ``cash_balances`` sets in force), for the log of a
+    date that does not converge."""
     run = store.default_runs(con, date.fromisoformat(day.date)).get(date.fromisoformat(day.date))
     if run is None:
         return "no default run"
-    ids, snap, prev, logic, inputs_hash = day.sig
+    ids, snap, prev, logic, inputs_hash, *late = day.sig
     have = {"position_set_ids": (run["position_set_ids"], ids), "market_snapshot_id": (run["market_snapshot_id"], snap),
             "prev_market_snapshot_id": (run["prev_market_snapshot_id"], prev),
             "logic_version": (logic_key(run.get("logic_version")), logic_key(logic)),
-            "private_inputs_hash": (run["private_inputs_hash"], inputs_hash)}
+            "private_inputs_hash": (run["private_inputs_hash"], inputs_hash),
+            "late_inputs": (store.dataset_set_ids(con, date.fromisoformat(day.date), known_at=run["positions_known_at"]),
+                            late[0] if late else None)}
     return "; ".join(f"{k}: run {a}, plan {b}" for k, (a, b) in have.items() if a != b) or "nothing"
 
 

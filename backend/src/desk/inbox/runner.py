@@ -1,6 +1,7 @@
 """The adapter's child process (08 §2) and the parent-side calls into it.
 
-The backend never imports adapter code itself: every call (``describe``, ``reference``, ``match``, ``read``)
+The backend never imports adapter code itself: every call (``describe``, ``reference``, ``match``, ``read``, and the
+optional ``status`` and ``run_action`` of the settings page)
 runs in a child ``<python> -I`` with an environment stripped to ``DESK_PRIVATE_ADAPTER*``, ``PATH``, ``SYSTEMROOT``,
 ``TEMP`` and ``TMP``, so a hung or crashing adapter cannot stop the backend and never sees the store URL or the
 hub token. ``-I`` also drops ``PYTHONPATH``; the folder holding ``desk`` is put on the child's ``sys.path`` by
@@ -41,6 +42,8 @@ from desk.inbox.spi import SPI_VERSION, AdapterFailure
 from desk.inbox.static_index import Instruments
 
 REFERENCE_ADAPTER = "desk.inbox.reference"
+OPTIONAL_FUNCTIONS = ("status", "run_action")  # 08 §3: SPI 1 functions an adapter may leave out (since 28.10.2026)
+TOOL_OPS = ("status", "action")  # the child ops of those functions: the only ones whose ctx has adapter_output_dir
 DEBUG_ENV = "DESK_PRIVATE_ADAPTER_DEBUG"
 _ENV_KEEP = ("PATH", "SYSTEMROOT", "TEMP", "TMP")
 MATCH_CHUNK = 50      # paths per match call: a folder of hundreds of files is not one timeout
@@ -64,6 +67,9 @@ class Ctx:
     config_dir: str | None
     instruments: Instruments
     inbox_dirs: list[str] = field(default_factory=list)  # optional member (08 §7, §9): the report folders
+    # optional member (08 §7, §9): the backend's folder of action files, absolute; for status and run_action only
+    # (None in match, read and reference: the adapter never reads its outputs as inputs)
+    adapter_output_dir: str | None = None
 
 
 class _LoadError(Exception):
@@ -157,9 +163,11 @@ def _handle(req: dict) -> dict:
         location = {"file": getattr(mod, "__file__", None), "path": list(getattr(mod, "__path__", None) or [])}
         return {"ok": True, "result": {"describe": desc, "spi_version": getattr(mod, "SPI_VERSION", None),
                                        "has_reference": callable(getattr(mod, "reference", None)),
+                                       "optional": [f for f in OPTIONAL_FUNCTIONS if callable(getattr(mod, f, None))],
                                        "location": location}}
+    out_dir = req.get("adapter_output_dir") if op in TOOL_OPS else None
     ctx = Ctx(SPI_VERSION, req.get("config_dir"), _instruments(req.get("instruments_index")),
-              [str(d) for d in req.get("inbox_dirs") or []])
+              [str(d) for d in req.get("inbox_dirs") or []], str(out_dir) if out_dir else None)
     if op == "match":
         out: dict[str, Any] = {}
         for path in req["paths"]:
@@ -173,6 +181,11 @@ def _handle(req: dict) -> dict:
             result = mod.read(req["path"], req["hit"], ctx)
         elif op == "reference":
             result = mod.reference(ctx)
+        elif op in ("status", "action"):  # optional functions (08 §3): absent is the adapter's answer, not a crash
+            fn = getattr(mod, "status" if op == "status" else "run_action", None)
+            if not callable(fn):
+                return {"ok": False, "error": {"type": "missing_function", "frames": []}}
+            result = fn(ctx) if op == "status" else fn(req["action_id"], req.get("params") or {}, ctx)
         else:
             return {"ok": False, "error": {"type": "unknown_op", "frames": []}}
         return {"ok": True, "result": _plain(result)}
@@ -461,6 +474,27 @@ def call_match(handle: Any, paths: list[str], instruments_index: str | Path | No
 def call_read(handle: Any, path: str, hit: dict, instruments_index: str | Path | None, timeout_s: float) -> Any:
     """The raw ``read`` result (checked by ``validate.check_read``); raises ``AdapterFailure``."""
     return _result(_call(_request(handle, "read", instruments_index, path=path, hit=hit), timeout_s))
+
+
+def _out_dir(output_dir: str | Path | None) -> str | None:
+    return os.path.abspath(output_dir) if output_dir else None
+
+
+def call_status(handle: Any, instruments_index: str | Path | None, timeout_s: float,
+                output_dir: str | Path | None = None) -> Any:
+    """The raw ``status(ctx)`` result (08 §3, optional; checked by ``desk.inbox.tools.check_status``), in a one-shot
+    child; raises ``AdapterFailure`` (type ``missing_function`` when the adapter has none). ``output_dir``: the
+    backend's folder of action files, ``ctx.adapter_output_dir`` (08 §7)."""
+    return _result(run(_request(handle, "status", instruments_index, adapter_output_dir=_out_dir(output_dir)),
+                       timeout_s))
+
+
+def call_action(handle: Any, action_id: str, params: dict, instruments_index: str | Path | None,
+                timeout_s: float, output_dir: str | Path | None = None) -> Any:
+    """The raw ``run_action(action_id, params, ctx)`` result (08 §3, optional; ``desk.inbox.tools.check_action_result``),
+    in a one-shot child; raises ``AdapterFailure``. ``output_dir`` as ``call_status``."""
+    return _result(run(_request(handle, "action", instruments_index, action_id=action_id, params=params,
+                                adapter_output_dir=_out_dir(output_dir)), timeout_s))
 
 
 def call_reference(handle: Any, instruments_index: str | Path | None, timeout_s: float,

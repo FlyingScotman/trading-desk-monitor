@@ -1,6 +1,6 @@
 # 08 Private adapter interface (SPI v1)
 
-As of 23 October 2026, revision 5 (private contract 1.4: `trade_terms` of interest rate and cross-currency swaps, REPO and HTM purchases, for the valuation of swaps by core and the funding of REPO and HTM lots; revision 4 of 22 October, contract 1.3: the `reference()` table `funding_policy` and
+As of 28 October 2026, revision 7 (SPI 1 optional functions `status` and `run_action` with `describe()["actions"]`, the settings page's adapter tools of TDM#421, no contract change; revision 6, private contract 1.5: the `reference()` table `ocp_policy`, the organisation's OCP conventions, for the published OCP of TDM#416; revision 5 of 23 October, contract 1.4: `trade_terms` of interest rate and cross-currency swaps, REPO and HTM purchases, for the valuation of swaps by core and the funding of REPO and HTM lots; revision 4 of 22 October, contract 1.3: the `reference()` table `funding_policy` and
 `positions.purchase_accrued_ccy`, for the funding engine in the runs, wave B1; revision 3, contract 1.2: FUTURES books, the `ocp`, `cash_balances`, `pnl_official` and `trade_terms` schemas, `reference()` entities and funding rules, `describe()` settings tabs, multi-date cash history, adapter phases A7–A10; revision 2 of 19 October followed an independent review). Status: **accepted; both tracks build against it.** Decision: [ADR-008](adr/ADR-008-private-adapter-boundary.md). Owner of this document: the backend. A change here is a versioned change (§9).
 
 The desk's own data (positions, OCP and cash, official PnL, trade terms, trades, internal market data, and the firm's own rules: entities, book types, funding) arrives as bank reports. The backend reads them through a **private adapter**: a Python package that lives outside this repository and is plugged in by a path in the settings. This document is the whole contract between the two. Neither side needs to read the other's code.
@@ -119,7 +119,36 @@ def describe() -> dict: ...                          # §4, called once at load
 def match(path: str, ctx) -> dict | None: ...        # §5, called for every new stable file
 def read(path: str, hit: dict, ctx) -> dict: ...     # §6, called for every matched file
 def reference(ctx) -> dict: ...                      # §7; required when any source emits book_id
+
+# optional (since 28.10.2026, TDM#421; SPI stays 1): the settings page's adapter tools
+def status(ctx) -> dict: ...                         # the adapter's own state, below
+def run_action(action_id: str, params: dict, ctx) -> dict: ...  # an action of describe()["actions"] (§4), below
 ```
+
+**Optional functions** (an adapter without them loads and works as before; the backend asks the child which of them
+are callable, `desk.inbox.runner.OPTIONAL_FUNCTIONS`, and the settings page shows only what exists). Both run in a
+one-shot child like every call (§2), with the `ctx` of §7, and their answers are checked by `desk.inbox.tools`; like
+issues (§6.3), nothing in them but the files of an action may hold a cell value.
+
+- `status(ctx) -> {"panels": [{"id": str, "title": str, "level": "ok" | "info" | "warning" | "error", "lines": [str],
+  "table"?: {"columns": [str], "rows": [[str | number | null]]}}], "issues"?: [§6.3 issues]}`: what the adapter knows of
+  its own state (folders found, the newest report of each family, a config file missing), shown on the settings page
+  in «Адаптер → Состояние адаптера» when the section is opened and on «Обновить», under the setting
+  `adapter_status_timeout_s` (default 60 s). A panel of a bad shape is left out and said; an exception or a timeout is
+  shown as such (its type, never its message).
+- `run_action(action_id, params, ctx) -> {"ok": bool, "summary": [str], "table"?: {as above}, "files": [{"name": str,
+  "text": str}], "issues"?: [...]}`: runs an action the adapter declares in `describe()["actions"]` (§4), started by the
+  owner on the settings page («Адаптер → Действия»). The backend checks `params` against the action's schema first,
+  runs the call as a background job (one action at a time) under `adapter_action_timeout_s` (default 900 s), and, when
+  `ok` is true, writes `files` into `<DESK home>/adapter-output/<action_id>/`, replacing that action's previous files
+  at once (written beside the folder, then renamed in); `ok` false is an ordinary outcome (nothing to do, data
+  missing: the summary says why) and keeps the previous files. A file `name` is a plain file name: no folder, none of
+  `\ / : * ? " < > |`, not hidden or temporary (`.`, `~$`, `.tmp`), not a Windows device name, at most 255 characters,
+  unique ignoring case; the texts together at most 50 MB of UTF-8. A result that breaks this writes nothing and fails
+  the job (`bad_result`). Then the backend runs an inbox scan: the `adapter-output` tree is always scanned, as an extra
+  recursive report folder (§13), so the files go through `match` / `read` like any report, and the page shows each
+  file's outcome (accepted, rejected, …). `ctx.inbox_dirs` never includes that folder: the adapter does not read its
+  own outputs as inputs. The adapter itself still writes no files (§2): the backend does.
 
 **Values.** All values crossing the boundary are JSON types: `dict`, `list`, `str`, `int`, `float`, `bool`, `None`.
 - Dates are `YYYY-MM-DD`. Timestamps are ISO 8601; one without an offset is Europe/Moscow.
@@ -146,7 +175,8 @@ def reference(ctx) -> dict: ...                      # §7; required when any so
     {"source": "fx_terms",            "dataset": "trade_terms",    "time_basis": "end_of_day",   "completeness": "full_snapshot", "scope": ["book_id"], "covers": "listed"}
   ],
   "config_files":  [...],              # optional, below
-  "settings_tabs": [...]               # optional, below (1.2)
+  "settings_tabs": [...],              # optional, below (1.2)
+  "actions":       [...]               # optional, below (28.10.2026; with run_action, §3)
 }
 ```
 
@@ -197,6 +227,30 @@ def reference(ctx) -> dict: ...                      # §7; required when any so
   (`PUT /api/v1/adapter/settings/{tab}`) refuses a schema error and a file changed since it was read, and each
   write is a revision in the store (`adapter_config_rev`, migration 0018: who and when). The page matches fields to
   lists by name (`entity`, `ocp_to`, `book_id`, `ccy`, `index_code`); an adapter needs nothing beyond the schema.
+  Since 28.10.2026 (TDM#421) the forms cover every file and every key, so the raw JSON is only behind «Для опытных»:
+  nested objects (collapsible groups), arrays of strings or numbers (rows to add, remove and move), arrays of objects
+  (an editable table, a row's lists and objects under «поля…»), objects with `additionalProperties: <schema>` or
+  `patternProperties` (a key → value editor, `propertyNames` `enum` or `pattern` for the keys), `enum` and `oneOf` /
+  `anyOf` of `const` branches with a `title` each (a dropdown with labels), `type: [X, "null"]` (an explicit «по
+  умолчанию»), `const`, `readOnly`, `default` (shown in the empty field), `description` (help), `pattern` and the
+  bounds (an error under the field); keys `^_` (comments) and keys outside the form are kept untouched, and
+  `additionalProperties: false` offers no key to add. A root schema of keys only is one key → value editor.
+- `actions` (list, optional, since 28.10.2026; ignored without `run_action`, §3): what the owner can start from the
+  settings page:
+
+  ```python
+  "actions": [{"id": "rebuild_history", "title": "...", "description": "...",
+               "params": {"type": "object", "properties": {"from": {"type": ["string", "null"], "format": "date"}}},
+               "output_dir": True}]
+  ```
+
+  `id` matches `^[a-z0-9_]{1,40}$` and is unique; `params` (optional, default no parameters) is a JSON Schema object
+  rendered with the same form renderer as the settings tabs and checked by the backend before the run
+  (`desk.settings_forms.check_schema`; unlike a settings form, a key outside `"additionalProperties": false` is an
+  error, so the action does not run); `output_dir` (optional) says the action writes files for the inbox: the page
+  shows the output folder, and an empty `files` of a successful run then clears the action's previous files (an
+  action without it replaces them only when it returns some). A bad entry is ignored with a warning
+  (`desk.inbox.tools.check_actions`), never a load error.
 
 ## 5 `match(path, ctx)`
 
@@ -309,26 +363,35 @@ Read-only; the backend builds it. An adapter must work when every lookup returns
 | `ctx.spi` | `1` |
 | `ctx.config_dir` | `DESK_PRIVATE_ADAPTER_CONFIG` as a string, or `None` |
 | `ctx.inbox_dirs` | the report folders (`DESK_INBOX_DIRS` or the settings page) as a list of absolute path strings, same syntax (a recursive folder ends in `\**` or `/**`); `[]` when none. Optional member (§9): read it with `getattr(ctx, "inbox_dirs", [])`. For `reference()` that discovers books in the newest reports, say; the backend still offers files only through `match` |
+| `ctx.adapter_output_dir` | in `status(ctx)` and `run_action(..., ctx)` only (§3): the backend's folder of action files, `<DESK home>/adapter-output`, as an absolute path string (an action's files are in its subfolder `<action_id>/`); `None` in `match`, `read` and `reference`, and never in `ctx.inbox_dirs`. For telling what an action already wrote (a reminder «run the action» that goes once its file is there); read only, the backend alone writes there, and the files still reach the adapter only through `match` / `read`. Optional member (§9): read it with `getattr(ctx, "adapter_output_dir", None)` |
 | `ctx.instruments.lookup(kind, value, on=None)` | `kind` ∈ `isin`, `regnum`, `moex_secid`; `on` is a date (default: the latest). Returns `{"instrument_id", "isin", "regnum", "moex_secid", "name", "currency", "kind", "initial_face"}` from the cached static snapshot covering `on`, or `None` |
 | `ctx.instruments.snapshot_id` | the static snapshot used, recorded in lineage |
 
 Because the adapter runs in a child process, `ctx.instruments` is served from a read-only index file that the backend writes before the call. The adapter cannot tell the difference.
 
-`reference(ctx)` returns reference rows the adapter owns: `{"books": [...]}` (§10), since 1.2 optionally `"entities": [...]` and `"funding_rules": [...]`, since 1.3 `"funding_policy": [...]` (§10; absent: none, and the backend keeps what it stored before), optionally with `"issues": [...]` shaped as in §6.3 (for example a malformed line of its mapping file); an `error` there fails the reference call. It is **required** when any source emits `book_id`. The backend calls it at load time and on `desk inbox scan`, and stores a new revision only when the content changed. Each book row may carry `valid_from`; without it, a change applies from its `known_at`, so a later change of `book_type` does not rewrite history. A `book_id` that is not in `books` gets a unit-scoped `unknown_book` error, raised by the backend.
+`status(ctx)` and `run_action(..., ctx)` (§3) get the same `ctx`: `ctx.inbox_dirs` the report folders of the settings
+(never the backend's `adapter-output` folder), `ctx.instruments` the inbox scan's last index (every lookup `None`
+before the first scan), and in addition `ctx.adapter_output_dir`. It is not given to `match`, `read` or `reference`
+(`None` there) so that no source treats the adapter's own outputs as inputs; the kit (§8) gives `None` everywhere.
 
-`entities`, `funding_rules` and `funding_policy` are the firm's rules **as data** (adapter phase A7): the backend's funding engine is
-generic and parameterised by them, never by firm constants in public code. They are stored like books, bitemporal
+`reference(ctx)` returns reference rows the adapter owns: `{"books": [...]}` (§10), since 1.2 optionally `"entities": [...]` and `"funding_rules": [...]`, since 1.3 `"funding_policy": [...]`, since 1.5 `"ocp_policy": [...]` (§10; absent: none, and the backend keeps what it stored before), optionally with `"issues": [...]` shaped as in §6.3 (for example a malformed line of its mapping file); an `error` there fails the reference call. It is **required** when any source emits `book_id`. The backend calls it at load time and on `desk inbox scan`, and stores a new revision only when the content changed. Each book row may carry `valid_from`; without it, a change applies from its `known_at`, so a later change of `book_type` does not rewrite history. A `book_id` that is not in `books` gets a unit-scoped `unknown_book` error, raised by the backend.
+
+`entities`, `funding_rules`, `funding_policy` and `ocp_policy` are the firm's rules **as data** (adapter phase A7): the backend's funding
+and OCP engines are generic and parameterised by them, never by firm constants in public code. They are stored like books, bitemporal
 (`reference_rev`; `store.current_reference(kind, on)`), a new revision only when a row changed. Unlike books they
 may carry history: several rows of one key with different `valid_from`, the one in force on date D being the
 latest `valid_from` <= D (a row without `valid_from` applies from its first revision on, a later change from the
 day it was recorded, as books). An invalid row, or a repeated (key, `valid_from`), is left out with an error issue
 and the rest is kept; a book or rule naming an entity that `entities` does not list gets `unknown_entity`, a rule
 naming an unknown book `unknown_book`, two rules with the same selectors and `valid_from` `ambiguous_rule`, a
-`funding_policy` setting given twice with different values `ambiguous_policy` (all warnings). The kit (§8) prints the number of rows kept per table.
+`funding_policy` or `ocp_policy` setting given twice with different values `ambiguous_policy`, an `ocp_policy.report_components`
+naming a component the backend does not have `unknown_component` (all warnings). The kit (§8) prints the number of rows kept per table.
 
 ## 8 Conformance kit
 
 `desk adapter check [--adapter PATH] [--dir FOLDER ...] [--stub-ctx] [--json]`, also runnable as `python -m desk.inbox.conformance`. It runs the adapter through the same child-process runner, **without touching the store**:
+
+The owner runs it from the settings page («Проверка адаптера», since 28.10.2026, TDM#421): the inbox folders as checkboxes plus folders of one's own, a background job in a child process of its own (one at a time, killed after the setting `adapter_kit_timeout_s`, default 1800 s), the summary below as a table and as the printed text («Скопировать сводку»), the last result kept until the next run (`POST`/`GET /api/v1/adapter/check`). The CLI also takes `--sha256`, `--match-timeout`, `--read-timeout` and `--inbox-dir` (the adapter's `ctx.inbox_dirs`, default the checked folders).
 
 1. Load: name collision, SPI version (`SPI_VERSION == describe()["spi"]`), `describe()` shape, datasets known, contract version supported, `reference()` present if needed.
 2. For each file in the folders:
@@ -350,15 +413,15 @@ The summary holds counts and codes only. It has no values and no sheet names, an
 
 ## 9 Versions
 
-- **SPI** (`SPI_VERSION`, this document): an integer major. The backend lists the majors it supports (now `{1}`). Additions that old adapters can ignore (a new optional `ctx` member, a new optional function) do not bump it; anything else does, and the backend keeps the old major for one release.
+- **SPI** (`SPI_VERSION`, this document): an integer major. The backend lists the majors it supports (now `{1}`). Additions that old adapters can ignore (a new optional `ctx` member, a new optional function) do not bump it; anything else does, and the backend keeps the old major for one release. So far: `ctx.inbox_dirs` (20.10.2026); `status(ctx)`, `run_action(action_id, params, ctx)` and `describe()["actions"]` (28.10.2026, TDM#421; backends after 0.2.10); `ctx.adapter_output_dir` for those two (28.10.2026, TDM#421; an older backend has no such member, hence `getattr`). None of them changes a dataset, so the private contract keeps its minor (`private/1.5`); an adapter that uses them needs a backend from that date, an older one ignores them.
 - **Private input contract** (`describe()["contract"]`, `private/<major>.<minor>`): the dataset schemas of §10, versioned on their own, separate from the public results contract (1.3/1.4).
   - The backend accepts its own major with any minor. Fields from a newer minor are dropped with a `field_from_newer_contract` warning; the file is not rejected.
   - A new optional field is a minor version; a renamed, retyped or newly required field is a major one.
-  - Minors so far: 1.0 (S7a); 1.1 adds the optional `positions` fields `maturity_date`, `risk_dv01_rub`, `risk_cs01_rub`; 1.2 (22.10.2026) adds `book_type` `FUTURES`, the schemas of `ocp`, `cash_balances` (with the optional key field `ledger`), `pnl_official` and the new dataset `trade_terms`, the optional reference tables `entities` and `funding_rules`, the optional `describe()["settings_tabs"]`, and multi-date `cash_balances`; 1.3 (22.10.2026, wave B1) adds the optional reference table `funding_policy` and the optional `positions` field `purchase_accrued_ccy`; 1.4 (23.10.2026) adds to `trade_terms` the `product_kind` values `irs`, `ois`, `ccs`, `repo` and `bond_purchase`, the `side` values `pay`, `receive`, `repo` and `reverse_repo`, and their optional fields (§10). The backend supports 1.4 and accepts 1.0–1.3 adapters unchanged (a 1.2 adapter without `funding_policy` gets the engine's provisional conventions, said in each run). A 1.4 adapter that emits the new products needs a backend on 1.4: an older one rejects those `trade_terms` units (`bad_value` of `product_kind`), as with `FUTURES`.
+  - Minors so far: 1.0 (S7a); 1.1 adds the optional `positions` fields `maturity_date`, `risk_dv01_rub`, `risk_cs01_rub`; 1.2 (22.10.2026) adds `book_type` `FUTURES`, the schemas of `ocp`, `cash_balances` (with the optional key field `ledger`), `pnl_official` and the new dataset `trade_terms`, the optional reference tables `entities` and `funding_rules`, the optional `describe()["settings_tabs"]`, and multi-date `cash_balances`; 1.3 (22.10.2026, wave B1) adds the optional reference table `funding_policy` and the optional `positions` field `purchase_accrued_ccy`; 1.4 (23.10.2026) adds to `trade_terms` the `product_kind` values `irs`, `ois`, `ccs`, `repo` and `bond_purchase`, the `side` values `pay`, `receive`, `repo` and `reverse_repo`, and their optional fields (§10); 1.5 (28.10.2026, TDM#180, TDM#416) adds the optional reference table `ocp_policy`. The backend supports 1.5 and accepts 1.0–1.4 adapters unchanged (a 1.2 adapter without `funding_policy` gets the funding engine's provisional conventions, an adapter before 1.5 without `ocp_policy` the OCP engine's; each run says which). A 1.4 adapter that emits the new products needs a backend on 1.4: an older one rejects those `trade_terms` units (`bad_value` of `product_kind`), as with `FUTURES`.
   - A new enum value (`FUTURES`) is a minor too: old adapters stay valid. An adapter that emits it needs a backend on 1.2; an older one rejects that book (`bad_value`), never silently re-types it.
 - The adapter's README states the lowest backend version it needs. `desk adapter check` prints the backend version, the SPI, the contract and the adapter fingerprint.
 
-## 10 Private input contract v1 (`private/1.4`)
+## 10 Private input contract v1 (`private/1.5`)
 
 The schemas live in `contract/private/v1/` (one per dataset and reference table, with a header-only CSV template each). The tables below are the design; the schema files are authoritative once written (S7a; `ocp`, `cash_balances`, `pnl_official`, `trade_terms`, `entities`, `funding_rules` since 1.2, and a test keeps each table equal to its schema). They extend contract 1.3 ([DATA_REQUIREMENTS](../DATA_REQUIREMENTS.md) §4) and supersede its templates (below). A dataset without a schema (`trades`, `internal_market`) is declared but its sources are rejected with `dataset_not_supported` until its slice.
 
@@ -404,7 +467,7 @@ An `otc` or `other` row is valued at its `mv_rub` (quality `reported_value`; wit
 
 ### `ocp` — stock; `full_snapshot`, scope `["entity"]` or `["entity", "book_id"]`
 
-The open currency position as the bank's system reports it. The backend derives OCP from positions too and compares the two **at the level the report has**: per entity, or per book (S9). Key: (`entity`, `book_id`, `ccy`).
+The open currency position as the bank's system reports it. The backend derives OCP from positions too and compares the two **at the level the report has**: per entity, or per book (S9). Key: (`entity`, `book_id`, `ccy`). Since TDM#416 the run **publishes** the report where a unit covers (its `ocp_ccy` plus the components the report does not hold, `ocp_policy.report_components`, derived from positions), the derived OCP elsewhere; a unit older than `ocp_policy.report_max_age_days` is not published. An entity unit is taken as the entity's total: a book that also has a unit of its own is published from that unit and subtracted from the entity's figure (TDM#214).
 
 | Field | Type | Meaning |
 |---|---|---|
@@ -654,6 +717,33 @@ with different values is `ambiguous_policy` (warning) and also keeps the default
 | `repo_security_book_type` | enum | Firm-wide: the book type whose rules give "the collateral's rate"; absent: `TRADING` |
 | `write_off_date` | enum | Firm-wide: `last_calendar_day` or `last_business_day` of the write-off period |
 
+### `ocp_policy` — from `reference()` (optional, since 1.5)
+
+The organisation's OCP conventions: which components of the OCP the bank's OCP report holds, what the run publishes
+and the settings the generic engine leaves open (`desk.rules.ocp.OcpPolicy`, `OPEN_DECISIONS`). Key: `policy_id`,
+with `valid_from`; every row is firm-wide. The run publishes the bank's report where a report unit covers a book or
+an entity, plus the components the report does not hold, derived from positions; a book no unit covers is derived
+from positions (owner, 28.10.2026, TDM#416). A field no row gives keeps the engine's value: the provisional default,
+listed in the run (`policy.provisional`), or the owner's decision (`published`); `policy.source` names where each
+field came from (`ocp_policy:<policy_id>`). A field two rows in force give with different values is
+`ambiguous_policy` (warning) and keeps the engine's value; a `report_components` naming an unknown component is
+`unknown_component` (warning) and keeps it too, as does a negative `settle_window_bd` or `report_max_age_days`
+(`bad_policy_value`, warning; `rules.reference.apply_ocp_policy`).
+
+| Field | Type | Meaning |
+|---|---|---|
+| `policy_id` ● | str | The adapter's stable id of the row |
+| `valid_from` | date | First business date the row applies (§7) |
+| `active` | bool | Default true; false retires the row from `valid_from` on |
+| `report_components` | str | The components the bank's OCP report holds, comma-separated keys of `cash`, `fx_legs`, `ndf`, `futures`, `options`, `bonds`, `funding`, `other`, `transfers` (`rules.ocp.COMPONENTS`); the others are added to the report from positions; absent: all of them (provisional) |
+| `published` | enum | `report_plus_outside` (the report + the components outside it; the owner's decision) or `derived` (every figure from positions, the report only reconciled) |
+| `amount_basis` | enum | `spot_equivalent` (core's FX delta, discounted) or `nominal` (the legs' nominal per currency) — the amount of an FX derivative valued from its terms in the derived OCP (OQ-11); the reconciliation compares the report with the components it holds on this basis. The published figure of a covered scope keeps the report's own amount for the components it holds; the components outside the report added to it follow this basis |
+| `include_ndf` | bool | Does an NDF enter the OCP (OQ-11) |
+| `cash_from_balances` | bool | Do the `cash_balances` enter the OCP beside the positions' FX rows |
+| `settle_window_bd` | int | Up to how many business days after the date an FX row without terms is cash to be settled, not a forward |
+| `tolerance_ccy` | num | The break threshold, units of the currency (DEC12) |
+| `report_max_age_days` | int | A report unit carried forward from more than this many calendar days before the run's date is not published: its books take the derived OCP, said in the run; absent: 0 (only the report of the date) |
+
 ### Differences from 1.3, settled here
 
 | 1.3 | Private contract v1 | Why |
@@ -682,7 +772,7 @@ prototype `tdm`; for the backend the private contract replaces them:
 | `funding.csv` (REPO and funding deals) | `trade_terms` (REPO since 1.4) |
 | `trades.csv` | `trades` |
 
-### Drafts (not in 1.4)
+### Drafts (not in 1.5)
 
 Designs agreed in direction, without a schema yet; each becomes a minor with its slice:
 
@@ -743,6 +833,7 @@ CSV (`desk.inbox.reference`), so the backend builds on them before the private a
 So both sides read the same rules:
 
 - `DESK_INBOX_DIRS`: folders separated by `;` (Windows paths), each resolved like other path settings. A folder ending in `\**` (or `/**`) is scanned recursively.
+- `<DESK home>/adapter-output` (since 28.10.2026): the files of the adapter's actions (§3 `run_action`), one folder per action, is always scanned as one more recursive folder, never passed as `ctx.inbox_dirs`; its files are offered at once (the backend puts a whole folder in place by a rename, so no file there is half written).
 - `DESK_INBOX_POLL_SECONDS` (default 60). A file is offered to `match` once its size and modification time are unchanged since the previous scan of the same process, or its modification time is older than `DESK_INBOX_POLL_SECONDS`. So a one-shot `desk inbox scan` takes files copied earlier. A known (path, size, modification time) is not hashed again. Names `~$*`, `*.tmp`, `*.part` and dot-files are skipped (Windows hidden attributes: S7b).
 - **One scan at a time**: a scan holds a Postgres advisory try-lock (a second scan reports "busy" and does nothing), so `desk serve`'s watcher and a manual `desk inbox scan` never process a file twice. Ledger inserts are idempotent on the file hash.
 - **Ledger.** One file row, keyed by SHA-256; an append-only status history; one row per (dataset, `valid_date`, scope unit) it touched. A unit that sorts below the current revision, or whose content equals it, stores no new position set. Statuses: `waiting_calendar`, `ignored`, `ignored_too_old` (report date behind the backend's inbox lookback; never read), `match_failed`, `accepted`, `partially_accepted`, `rejected`, `failed`, `timed_out`, `duplicate`, `stale_copy`, `superseded`.

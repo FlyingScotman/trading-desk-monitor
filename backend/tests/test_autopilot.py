@@ -268,6 +268,7 @@ def test_upgrade_leaves_older_dates_alone(tmp_path, monkeypatch):
     monkeypatch.setattr(ap_mod.store, "positions_for", lambda con, d:
                         store.PositionInputs([], [], {}, datetime.now(UTC), "unchanged"))
     monkeypatch.setattr(ap_mod.store, "default_runs", lambda con, since: default)
+    monkeypatch.setattr(ap_mod.store, "dataset_set_ids", lambda con, d, *a, **kw: {})  # no OCP report, no balances
     calls: list[str] = []
     monkeypatch.setattr(cli, "eod_run", lambda settings, d, **kw: calls.append(d) or len(calls) + 2)
     ap = Autopilot(settings_loader=lambda: Settings(home=tmp_path), today=lambda: TODAY)

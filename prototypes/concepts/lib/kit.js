@@ -3085,16 +3085,62 @@
   // один формат (1 знак, разделитель тысяч, знак цветом); строки, которые округляются до 0.0 mm, — под «+N прочих».
   // Суммы — по ногам (INSTR.fxIn: ключи fx_delta прогона; вторая валюта кросса — в своей строке).
   K.tips.fxMini = 'Открытая валютная позиция по валютам, mm в валюте и ≈ в валюте отчёта по курсу прогона. Слагаемые: облигации — грязная MV в валюте минус валютный пассив фондирования (грязная MV на прошлый перенос ОВП, за стоимостью дня не следует) плюс купоны дня, то есть валютный PnL с прошлого переноса; вечерний перенос уводит его в деривативную книгу (предварительно: residual прошлых дней не накапливается), без пассива (фондирование не настроено, проблема) — вся грязная MV; деривативы и FX — FX-дельта по ногам (у кросса — обе валюты); сделки переноса ОВП — их сумма. Щелчок по цифре — из каких позиций';
-  K.fxRows = L => K.fxCcys(L).map(c => { const v = M.sum(L, p => INSTR.fxIn(p, c)); return { c, v, eq: v * ((M.toRepr && M.toRepr[c]) || 1) }; })
-    .sort((a, b) => (Math.abs(b.eq) - Math.abs(a.eq)) || a.c.localeCompare(b.c));
+  K.tips.fxMiniPub = 'Открытая валютная позиция прогона по валютам, mm в валюте и ≈ в валюте отчёта по курсу прогона. Где книгу покрывает отчёт ОВП банка — его цифра плюс слагаемые, которых в отчёте нет, из позиций (какие — по настройке адаптера); книги вне отчёта и книги с устаревшим отчётом — из позиций. Метка у валюты — источник: «отчёт», «из позиций» или «отчёт + поз.». Часть отчёта по юрлицу целиком входит только без фильтра книг или когда фильтр покрывает все её книги. FX-дельта и PnL FX позиций не меняются. Щелчок по цифре — позиции с FX-дельтой в валюте (разбор из позиций, не отчёт)';
+  // ---------- публикуемая ОВП прогона (TDM#416, M.ocp из D.OCP) ----------
+  // строки M.ocp.byBook под фильтром книг: строка книги — если книга проходит фильтр (юрлицо, деск, книги, валюта);
+  // строка части отчёта по юрлицу (book null, books — её книги) — только своего юрлица и если фильтр снят или покрывает
+  // все её книги; без книг (books пуст) — только без фильтра книг и деска;
+  // частично покрытая не входит и называется в notes. Фильтр портфелей к ОВП по книгам не применяется (notes).
+  // null — у прогона нет публикуемой ОВП (до v2 блока, демо): страницы берут сумму FX-дельт позиций, как раньше.
+  K.ocpScope = function () {
+    const O = M.ocp;
+    if (!O || !Array.isArray(O.byBook)) return null;
+    const F = K.filter, bk = id => M.book[id] || {};
+    const bookOk = id => (!F.entity || bk(id).entity === F.entity) && (!F.desk || bk(id).desk === F.desk) && (!F.books || !F.books.length || F.books.includes(id));
+    const lines = [], partial = [];
+    O.byBook.forEach(x => {
+      if (F.ccy && x.ccy !== F.ccy) return;
+      if (x.book) { if (bookOk(x.book)) lines.push(x); return; }
+      if (F.entity && x.entity !== F.entity) return;  // часть отчёта другого юрлица
+      const books = x.books || [], ok = books.filter(bookOk);
+      // без книг (остаток юрлица за вычетом частей по книгам, юрлицо без известных книг): только без фильтра книг и деска
+      if (!books.length) { if (!F.desk && !(F.books && F.books.length)) lines.push(x); return; }
+      if (ok.length === books.length) lines.push(x);
+      else if (ok.length) partial.push(x);
+    });
+    const notes = [...new Set(partial.map(x => 'часть отчёта ОВП по юрлицу ' + x.entity + ' учтена только целиком: без фильтра книг или с фильтром на все её книги (' + (x.books || []).join(', ') + ')'))];
+    if ((F.portsOff || []).length) notes.push('фильтр портфелей к ОВП по книгам не применяется');
+    return { lines, notes, partial: partial.length > 0 };
+  };
+  // источник суммы валюты: отчёт / из позиций / отчёт + поз.
+  K.ocpSrcMark = src => { const k = Object.keys(src || {}).filter(s => src[s]); const rep = k.includes('report'), der = k.some(s => s !== 'report'); return rep && der ? 'отчёт + поз.' : rep ? 'отчёт' : der ? 'из позиций' : ''; };
+  K.ocpSrcTitle = src => Object.entries(src || {}).filter(([, v]) => v).map(([s, v]) => (((M.ocp || {}).sourceNames || {})[s] || s) + ' ' + f.mns(v, 1)).join(' · ');
+  // курс валюты к валюте отчёта: курса прогона нет (валюта только в отчёте ОВП) — курс из блока ОВП
+  const reprRate = c => (M.toRepr && M.toRepr[c]) || (M.ocp && M.ocp.byCcy && M.ocp.byCcy[c] && M.ocp.byCcy[c].rate && M.fx[K.repr] ? M.ocp.byCcy[c].rate / M.fx[K.repr] : 1);
+  // строки ОВП по валютам: публикуемая ОВП, когда она есть (v, src — суммы по источникам, pub: true), иначе Σ FX-дельт
+  // позиций по ногам (INSTR.fxIn), как до TDM#416; der — Σ FX-дельт позиций под фильтром (разбор из позиций)
+  K.fxRows = L => {
+    const S = K.ocpScope(), der = c => M.sum(L, p => INSTR.fxIn(p, c));
+    let R;
+    if (S) {
+      const by = {};
+      S.lines.forEach(x => { if (x.ccy === 'RUB') return; const r = by[x.ccy] = by[x.ccy] || { c: x.ccy, v: 0, src: {} }; r.v += x.amount || 0; r.src[x.source] = (r.src[x.source] || 0) + (x.amount || 0); });
+      R = Object.values(by).map(r => Object.assign(r, { pub: true, der: der(r.c), eq: r.v * reprRate(r.c) }));
+    } else R = K.fxCcys(L).map(c => { const v = der(c); return { c, v, der: v, eq: v * reprRate(c) }; });
+    return R.sort((a, b) => (Math.abs(b.eq) - Math.abs(a.eq)) || a.c.localeCompare(b.c));
+  };
   K.FX_MINOR = 0.05e6;  // меньше — 0.0 mm: в «прочих»
+  // заметка под ОВП: часть отчёта по юрлицу не вошла из-за фильтра, фильтр портфелей (K.ocpScope)
+  K.ocpNote = () => { const S = K.ocpScope(); return S && S.notes.length ? '<span class="mut3 k-ocpnote" title="' + esc(S.notes.join('; ')) + '">ОВП под фильтром — не вся (' + S.notes.length + ')</span> ' : ''; };
   K.fxMini = function (L) {
     const R = K.fxRows(L);
     if (!R.length) return '<span class="mut3">открытых позиций нет</span>';
     const minor = r => Math.abs(r.v) < K.FX_MINOR;
     const big = R.filter(r => !minor(r)), rest = R.filter(minor);
-    const row = (r, cls) => '<tr' + (cls ? ' class="' + cls + '"' : '') + '><td class="c">' + esc(r.c) + '</td><td>' +
-      K.d({ title: 'ОВП ' + r.c + ' (FX-дельта)', unit: 'mm ' + r.c, fmt: v => f.mns(v, 1), list: L, val: p => INSTR.fxIn(p, r.c) }, f.mns(r.v, 1)) +
+    // у публикуемой ОВП — метка источника у валюты; разбор по щелчку — позиции с FX-дельтой в валюте
+    const mark = r => r.pub ? ' <small class="mut3 k-ocpsrc" title="' + esc(K.ocpSrcTitle(r.src) + ' · FX-дельта позиций ' + f.mns(r.der, 1)) + '">' + esc(K.ocpSrcMark(r.src)) + '</small>' : '';
+    const row = (r, cls) => '<tr' + (cls ? ' class="' + cls + '"' : '') + '><td class="c">' + esc(r.c) + mark(r) + '</td><td>' +
+      K.d(Object.assign({ title: 'ОВП ' + r.c + (r.pub ? ' — позиции с FX-дельтой (разбор из позиций)' : ' (FX-дельта)'), unit: 'mm ' + r.c, fmt: v => f.mns(v, 1), list: L, val: p => INSTR.fxIn(p, r.c) }, r.pub ? { v: r.v } : {}), f.mns(r.v, 1)) +
       '</td><td class="' + f.cls(r.eq) + '">' + f.mns(r.eq, 1) + '</td></tr>';
     return '<table class="k-fxm"><thead><tr><th>вал.</th><th>mm в вал.</th><th>≈ mm ' + K.SYM[K.repr] + '</th></tr></thead><tbody>' +
       big.map(r => row(r)).join('') +
@@ -3133,7 +3179,7 @@
            ['в год ≈', '<span class="' + f.cls(k.carryDay) + '">' + f.mn(k.carryDay == null ? null : k.carryDay * 365, 0) + '</span> <span class="u">mm ₽</span>']], null, K.tips.carry) +
         K.kpi('Облигации MV', K.d({ title: 'MV облигаций', unit: 'bn ₽', fmt: v => f.bn(v, 1), list: L.filter(p => !M.deal(p)), val: 'mv', color: false }) + K.kpiUnit('bn ₽'),
           K.kpiCcyRows(M.ccys.reduce((o, c) => (o[c] = k.byCcy[c].mv, o), {}), (c, v) => f.bn(v, 1), 3, v => f.bn(v, 1))) +
-        '<div class="k-kpi k-fxk"><div class="l">' + K.hint('ОВП', K.tips.fxMini) + '</div><div class="v">' + K.fxMini(L) + '</div><div class="s"><a class="go" href="c06-launchpad.html#fx" title="плитка «ОВП и курсы»: бонды и деривативы по валютам, курсы, PnL FX">подробно (C06) →</a></div></div>' +
+        '<div class="k-kpi k-fxk"><div class="l">' + K.hint('ОВП', M.ocp ? K.tips.fxMiniPub : K.tips.fxMini) + '</div><div class="v">' + K.fxMini(L) + '</div><div class="s">' + K.ocpNote() + '<a class="go" href="c06-launchpad.html#fx" title="плитка «ОВП и курсы»: бонды и деривативы по валютам, курсы, PnL FX">подробно (C06) →</a></div></div>' +
         '</div>';
     }
     draw(); K.live(el, 'filter', draw);

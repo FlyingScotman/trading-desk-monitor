@@ -81,11 +81,12 @@ def ctx():
     return prepare(SnapshotDir(SNAPS), DATE.isoformat())
 
 
-def _scan(con, tmp_path: Path, report: bool = True) -> None:
+def _scan(con, tmp_path: Path, report: bool = True, policy: str | None = None) -> None:
     cfg, inbox = tmp_path / "cfg", tmp_path / "in"
     cfg.mkdir()
     inbox.mkdir()
-    for name, text in (("books.csv", BOOKS), ("entities.csv", ENTITIES), ("funding_rules.csv", RULES)):
+    for name, text in (("books.csv", BOOKS), ("entities.csv", ENTITIES), ("funding_rules.csv", RULES),
+                       *((("ocp_policy.csv", policy),) if policy else ())):
         _csv(cfg / name, text)
     files = [("positions_20261016.csv", POSITIONS), ("trade_terms_20261015.csv", TERMS),
              ("cash_balances_20261015.csv", CASH)] + ([("ocp_20261015.csv", OCP)] if report else [])
@@ -146,8 +147,27 @@ def test_ocp_end_to_end_inbox_run_api(store_url, ctx, tmp_path):
     assert pos["D1|XFER"]["extra"]["ocp_transfer"] is True and pos["D1|XFER"]["extra"]["ocp"]["component"] == "transfers"
     assert pos["D1|USD"]["extra"]["ocp"] == {"component": "cash", "amounts": {"USD": 1_000_000.0}, "basis": "amount"}
     assert lin["ocp"]["status"] == "computed" and lin["ocp"]["breaks"] == 1
-    assert any(m.startswith("ОВП из позиций: USD") for m in log)
+    assert any(m.startswith("ОВП: USD 1,050,000 (отчёт 150,000, из позиций 900,000)") and "ОВП из позиций: USD" in m
+               for m in log)
     assert [w for w in warnings if w.startswith("ОВП: брейк D1 USD")]
+
+    # the published OCP (TDM#416): D1 = its report (the default policy: the report holds every component, nothing
+    # added), X1 outside every report unit = derived; the gaps say X1
+    pub = o["published"]
+    assert pub["basis"] == "report_plus_outside"
+    lines = {(x["book_id"], x["ccy"]): x for x in pub["by_book"]}
+    assert lines[("D1", "USD")]["source"] == "report" and lines[("D1", "USD")]["amount"] == 150_000
+    assert lines[("D1", "USD")]["components"] == [] and lines[("D1", "USD")]["reported"] == 150_000
+    assert lines[("X1", "USD")]["source"] == "derived" and lines[("X1", "USD")]["amount"] == 900_000
+    usd = pub["by_ccy"]["USD"]
+    assert usd["total"] == 1_050_000 and usd["by_source"] == {"report": 150_000, "derived": 900_000}
+    assert usd["rate"] and usd["total_rub"] == pytest.approx(usd["total"] * usd["rate"])
+    assert [(g["code"], g["items"]) for g in o["gaps"]] == [("books_outside_report", ["X1"])]
+    assert o["policy"]["source"]["published"].startswith("OQ-18") and o["policy"]["source"]["report_components"] \
+        == "provisional" and "published" not in o["policy"]["provisional"]
+    assert lin["ocp"]["published"] == {"USD": 1_050_000}
+    # the FX delta of the positions does not change: the derived OCP is still the sum of the positions' lines
+    assert o["by_ccy"]["USD"]["total"] == pytest.approx(1_050_000 + fwd + 900_000 - 900_000)
 
     # window.DESK, in tdm's shape (run_ocp_transfer, prototypes/data.js): the source book only, the amount moved
     # signed as the OCP before the transfer; the receiving book's mirror deal has no row
@@ -171,3 +191,74 @@ def test_no_report_and_before_b2(store_url, ctx, tmp_path):
     old = ocp_out(7, None).model_dump(by_alias=True)  # a run published before B2 has no block
     assert old["state"] == "not_computed" and old["lines"] == [] and old["transfers"] == []
     assert old["text"] == ocp_run.STATUS_TEXT["not_computed"]
+
+
+# the adapter's ocp_policy (private/1.5, TDM#180), an invented composition: the report holds the cash, the futures,
+# the options and the transfers, not the FX legs; published = report + forward
+POLICY = """policy_id;valid_from;active;report_components;published;amount_basis;include_ndf;cash_from_balances;settle_window_bd;tolerance_ccy;report_max_age_days
+firm;;1;cash,futures,options,transfers;report_plus_outside;spot_equivalent;0;;;;
+"""
+
+
+def test_adapter_policy_explains_the_break_and_publishes_report_plus_outside(store_url, ctx, tmp_path):
+    with store.connect(store_url) as con:
+        _scan(con, tmp_path, policy=POLICY)
+        rid, warnings = _run(con, ctx)
+    o = TestClient(create_app(store_url)).get(f"/api/v1/runs/{rid}/ocp").json()
+    d1 = {(x["book_id"], x["ccy"]): x for x in o["reconciliation"]}[("D1", "USD")]
+    fwd = d1["components"]["fx_legs"]
+    assert d1["break"] == pytest.approx(0) and not d1["over"] and d1["not_in_report"] == {"fx_legs": fwd}
+    assert o["totals"]["breaks"] == 0 and not [w for w in warnings if "брейк" in w]
+    assert o["policy"]["source"]["report_components"] == "ocp_policy:firm"
+    assert o["policy"]["source"]["published"] == "ocp_policy:firm"
+    assert o["policy"]["source"]["amount_basis"] == "ocp_policy:firm" and o["policy"]["amount_basis"] == "spot_equivalent"
+    assert o["policy"]["source"]["include_ndf"] == "ocp_policy:firm"
+    assert "report_components" not in o["policy"]["provisional"] and "amount_basis" not in o["policy"]["provisional"]
+    assert "transfer_rule" in o["policy"]["provisional"]
+    line = {(x["book_id"], x["ccy"]): x for x in o["published"]["by_book"]}[("D1", "USD")]
+    assert line["source"] == "report" and line["amount"] == pytest.approx(150_000 + fwd)
+    assert line["components"] == ["fx_legs"] and line["outside"] == {"fx_legs": fwd}
+    gaps = {g["code"]: g for g in o["gaps"]}
+    assert gaps["outside_without_terms"]["items"] == ["D1|FWD"]  # the forward has no trade terms: its notional
+
+
+def test_stale_report_is_not_published(store_url, ctx, tmp_path):
+    """The report of the 14th carried into the run of the 15th: reconciled, but the published OCP is derived."""
+    with store.connect(store_url) as con:
+        _scan(con, tmp_path, report=False)
+        inbox = tmp_path / "in"
+        _csv(inbox / "ocp_20261014.csv", OCP)
+        s = Settings(snapshot_cache=SNAPS, inbox_dirs=(inbox,), inbox_archive=tmp_path / "archive",
+                     private_adapter=None, private_adapter_config=tmp_path / "cfg", inbox_poll_seconds=0,
+                     inbox_lookback_days=0)
+        assert scan.scan(con, s).ok
+        rid, _ = _run(con, ctx)
+    o = TestClient(create_app(store_url)).get(f"/api/v1/runs/{rid}/ocp").json()
+    assert o["state"] == "computed" and o["reconciliation"]
+    line = {(x["book_id"], x["ccy"]): x for x in o["published"]["by_book"]}[("D1", "USD")]
+    assert line["source"] == "derived_stale_report" and line["amount"] == pytest.approx(
+        {(x["book_id"], x["ccy"]): x for x in o["reconciliation"]}[("D1", "USD")]["derived"])
+    assert {g["code"] for g in o["gaps"]} >= {"stale_report"}
+
+
+def _boom(*a, **kw):
+    """An SQL error inside a block's computation (TDM#215)."""
+    con = a[0]
+    con.execute("SELECT * FROM no_such_table")
+
+
+def test_sql_error_in_a_block_fails_only_the_block(store_url, ctx, tmp_path, monkeypatch):
+    from desk.publish import funding_run, fx_liability
+
+    with store.connect(store_url) as con:
+        _scan(con, tmp_path)
+        for mod in (ocp_run, funding_run, fx_liability):
+            monkeypatch.setattr(mod, "_compute", _boom)
+        with con.transaction():  # a caller's transaction: an aborted one would fail the run's own INSERTs
+            rid, _ = _run(con, ctx)
+        status, lin = con.execute("SELECT status, lineage FROM run WHERE run_id = %s", (rid,)).fetchone()
+        log = [m for (m,) in con.execute("SELECT message FROM run_log WHERE run_id = %s ORDER BY seq", (rid,))]
+    assert status == "complete" and lin["ocp"]["status"] == "failed" and lin["funding"]["status"] == "failed"
+    assert any("ОВП не посчитано" in m and "UndefinedTable" in m for m in log)
+    o = TestClient(create_app(store_url)).get(f"/api/v1/runs/{rid}/ocp").json()
+    assert o["state"] == "failed" and o["published"]["by_book"] == [] and o["gaps"] == []

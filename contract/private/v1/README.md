@@ -1,4 +1,4 @@
-# Private input contract v1 (`private/1.4`)
+# Private input contract v1 (`private/1.5`)
 
 The rows a private adapter emits, one JSON Schema per dataset (`<dataset>.schema.json`) and per reference table of
 `reference()`, authoritative over the design tables of [08 §10](../../../docs/architecture/08_PRIVATE_ADAPTER_INTERFACE.md):
@@ -14,6 +14,7 @@ The rows a private adapter emits, one JSON Schema per dataset (`<dataset>.schema
 | `entities` | `reference()["entities"]`: legal entities and their funding scheme (optional) | 1.2 |
 | `funding_rules` | `reference()["funding_rules"]`: funding basis and rate per selectors, with history (optional) | 1.2 |
 | `funding_policy` | `reference()["funding_policy"]`: the funding conventions that are not a rate (HTM base, timing, REPO policy, write-off), with history (optional) | 1.3 |
+| `ocp_policy` | `reference()["ocp_policy"]`: the OCP conventions (which components the bank's OCP report holds, what is published, the amount basis, NDFs, cash, settlement window, tolerance, report age), with history (optional) | 1.5 |
 
 `trades` and `internal_market` are declared in 08 but have no schema yet: they come with their slices.
 
@@ -28,7 +29,7 @@ bond needs a size, an FX trade its legs, a funding rule of `index_spread` its in
 
 Each `<name>.csv` is the canonical CSV template of a schema (header only, `;`, UTF-8 with BOM, CRLF, as
 `contract/csv/`), read by the reference adapter `desk.inbox.reference`: `<dataset>_YYYYMMDD.csv` in the inbox,
-`books.csv`, `entities.csv`, `funding_rules.csv`, `funding_policy.csv` in the adapter config folder. The backend ships the schemas as
+`books.csv`, `entities.csv`, `funding_rules.csv`, `funding_policy.csv`, `ocp_policy.csv` in the adapter config folder. The backend ships the schemas as
 package data (`backend/src/desk/inbox/schemas/v1/`); a test keeps that copy byte-identical to this one, so change
 both.
 
@@ -62,3 +63,10 @@ terms come with their slices.
 Open points (the contract leaves them to the adapter's data and to later minors, 08 §10 "Drafts"): which ledger of
 `cash_balances` is authoritative on a break; the hub fixing a `trade_terms.fixing_source` maps to; the default day
 count of a `funding_rules` row without `day_count`; extra spreads by bond class; the `price_policy` table.
+
+Minor 1.5 (TDM#180, TDM#416: the published OCP) is additive: the optional reference table `ocp_policy`, the firm's
+OCP conventions (`report_components`, the components the bank's OCP report holds, comma-separated keys of
+`desk.rules.ocp.COMPONENTS`; `published`; `amount_basis`; `include_ndf`; `cash_from_balances`; `settle_window_bd`; `tolerance_ccy`;
+`report_max_age_days`; 08 §10). The run publishes the report plus the components outside it, derived from positions,
+and the derived OCP where no report unit covers a book. A 1.0–1.4 adapter stays valid; its runs use the OCP engine's
+provisional conventions and say so (`policy.provisional` of the run's OCP block).

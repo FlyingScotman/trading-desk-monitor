@@ -28,7 +28,9 @@ every ``inbox_poll_seconds`` and on ``POST /api/v1/autopilot/run``):
 3. **eod**: for each cached ``eod_final`` business date from ``min(today - WINDOW_DAYS, latest positions date)``
    on (at most ``MAX_EOD_DATES``, the latest positions date always) that has positions in the store, the EOD run of
    ``desk eod`` when the date has no default run, or its default run read other position sets (a new revision of a
-   book), another market snapshot (a correction) or another previous snapshot (the flash PnL); the latest positions
+   book), another market snapshot (a correction) or another previous snapshot (the flash PnL), or an ``ocp`` report or
+   ``cash_balances`` in force on the date were recorded after it read its inputs (``backfill.late_why``, TDM#181: they
+   usually arrive in the evening, after the run); the latest positions
    date also when its default run was made by another ``desk.logic_version()`` (an upgrade: the older dates are the
    backfill step's, after the other steps; ``backfill.same_logic``: a new bundle build of the same code recomputes nothing). Oldest first, except that the latest positions date goes first while it has no
    default run at all (a first launch, a new day): the current position shows before the backlog is done (its model
@@ -120,7 +122,7 @@ from typing import Any
 import psycopg
 
 from . import logic_version, store
-from .backfill import same_logic
+from .backfill import late_why, same_logic
 from .inbox.timesem import MSK
 from .marketdata import cache, history, hubhistory, static_facts
 from .marketdata.adapter import StaticView
@@ -926,7 +928,7 @@ class Autopilot:
         from .inbox import scan
 
         self._inbox_waiting = 0
-        if not settings.inbox_dirs:
+        if not settings.scan_dirs:
             return "skipped", "no inbox folders (inbox_dirs)"
         res = scan.scan(con, settings, progress=lambda done, total, detail: self._progress("scan", done, total, detail))
         self._inbox_waiting = res.files.get("waiting_calendar", 0)
@@ -971,11 +973,12 @@ class Autopilot:
                    else "market snapshot changed" if run["market_snapshot_id"] != snap
                    else "previous snapshot changed" if run["prev_market_snapshot_id"] != prev
                    else "private inputs changed" if run["private_inputs_hash"] != inputs_hash
-                   else "program updated" if d == latest_valid and not same_logic(run.get("logic_version"), logic)
-                   else None)
+                   else late_why(con, date.fromisoformat(d), run)  # an OCP report or balances after the run (TDM#181)
+                   or ("program updated" if d == latest_valid and not same_logic(run.get("logic_version"), logic)
+                       else None))
             if why is None:
                 continue
-            sig = (tuple(ids), snap, prev, logic, inputs_hash)
+            sig = (tuple(ids), snap, prev, logic, inputs_hash, store.dataset_set_ids(con, date.fromisoformat(d)))
             if self._failed_before(d, sig, store.slice_label(d, "eod_final")):
                 self._eod_tried.add(d)  # not the backfill's either this cycle (#23)
                 notes.append(f"{d} failed before on the same inputs, not retried")

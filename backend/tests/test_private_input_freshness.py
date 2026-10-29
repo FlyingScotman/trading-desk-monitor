@@ -151,3 +151,45 @@ def test_hash_keeps_existing_date_book_and_known_at_scope(env):
         ingest(con, s, 3, rate=82, day=date(2026, 10, 16))
         assert store.positions_for(con, DAY).private_inputs_hash == effective.private_inputs_hash
         assert store.positions_for(con, date(2026, 10, 16)).private_inputs_hash != effective.private_inputs_hash
+
+
+def drop(s, name, text):
+    """A report file (header line, then rows) into the inbox, then a scan that accepts it."""
+    (s.inbox_dirs[0] / name).write_text("﻿" + text.replace("\n", "\r\n"), encoding="utf-8")
+
+
+@pytest.mark.parametrize("path", ["backfill", "eod"])
+def test_ocp_report_or_balances_after_the_run_recompute_the_date(env, path):
+    """TDM#181: the OCP report and the cash balances arrive in the evening, after the run; the autopilot (and the
+    backfill) run the date again, and the day status names the reason until then."""
+    from desk import daystatus
+
+    s = env
+    ap = Autopilot(settings_loader=lambda: s, today=lambda: DAY)
+    with store.connect(s.store_url) as con:
+        cli.eod_run(s, DAY.isoformat(), report_dir=None, out=lambda _: None)
+        hash_before = current(con)["private_inputs_hash"]
+        for name, text, label, why in (
+                ("ocp_20261015.csv", "entity;book_id;ccy;ocp_ccy\nTEST;OFZ;USD;1000\n", "ОВП", "ocp report"),
+                ("cash_balances_20261014.csv", "entity;book_id;ccy;account_id;balance_ccy\nTEST;OFZ;USD;A;5\n",
+                 "Остатки", "cash balances")):
+            old = current(con)
+            drop(s, name, text)
+            r = scan.scan(con, s)
+            assert r.ok and r.files.get("accepted") == 1, r.text()
+            assert store.late_inputs(con, DAY, old["positions_known_at"]) != []
+            warn = daystatus._rate(daystatus._facts(con, s, DAY, DAY, every=True)[DAY])["warnings"]
+            assert any(w.startswith(label) and "после расчёта" in w for w in warn), warn
+            assert planner(con, s).days[0].status == "todo" and planner(con, s).days[0].why.startswith(why)
+            run_scheduler(con, s, path, ap)
+            new = current(con)
+            assert new["run_id"] != old["run_id"] and new["private_inputs_hash"] == hash_before  # positions alike
+            warn = daystatus._rate(daystatus._facts(con, s, DAY, DAY, every=True)[DAY])["warnings"]
+            assert not any("после расчёта" in w for w in warn), warn
+            changed = {r["run_id"]: r["changed"] for r in daystatus._runs(con, DAY)}
+            assert changed[new["run_id"]] == ["ocp" if label == "ОВП" else "cash_balances"]
+            before = run_count(con)
+            run_scheduler(con, s, path, ap)
+            assert run_count(con) == before and planner(con, s).days[0].status == "done"
+        lin = con.execute("SELECT lineage FROM run WHERE run_id = %s", (current(con)["run_id"],)).fetchone()[0]
+        assert lin["ocp"]["status"] == "computed"  # the run of the date now reconciles with the report

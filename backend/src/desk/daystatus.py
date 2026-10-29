@@ -81,7 +81,10 @@ UNIT_STATUS = {"accepted": "принято", "rejected": "отклонено", "
 """A file's parts (books, entities) by status, as the feed counts them."""
 
 RUN_CHANGES = {"positions": "позиции", "market": "снимок рынка", "prev_market": "снимок прошлого дня",
-               "program": "версия программы", "cut": "срез (окончательное закрытие вместо предварительного)"}
+               "program": "версия программы", "cut": "срез (окончательное закрытие вместо предварительного)",
+               **store.LATE_DATASETS}
+"""What changed against the run a run superseded; ``ocp`` / ``cash_balances``: the OCP report or the balances in force
+on the date were recorded between the two runs (``store.late_inputs``, TDM#181)."""
 
 LATEST = "(SELECT DISTINCT ON (sha256) * FROM inbox_file_status ORDER BY sha256, status_id DESC)"
 
@@ -321,7 +324,7 @@ def _runs(con: psycopg.Connection, day: date) -> list[dict[str, Any]]:
     """The runs of ``day``, oldest first: type, cut, status, default or shown, which run each superseded and which
     superseded it, and what changed against the run it superseded (positions, market, previous close, program)."""
     rows = _rows(con, "SELECT r.run_id, r.run_type, r.cut_type, r.cut_ts, r.status, r.started_at, r.completed_at,"
-                      " r.supersedes_run_id, r.error, r.position_set_ids, r.market_snapshot_id,"
+                      " r.supersedes_run_id, r.error, r.position_set_ids, r.market_snapshot_id, r.positions_known_at,"
                       " r.prev_market_snapshot_id, r.lineage->>'logic_version' AS logic_version,"
                       " r.coverage->'_total' AS coverage,"
                       f" r.run_id IN ({store.DEFAULT_RUNS}) AS is_default,"
@@ -347,6 +350,10 @@ def _runs(con: psycopg.Connection, day: date) -> list[dict[str, Any]]:
                 changed.append("prev_market")
             if old["logic_version"] != r["logic_version"]:
                 changed.append("program")
+            if old["positions_known_at"] and r["positions_known_at"]:
+                a = store.dataset_set_ids(con, day, known_at=old["positions_known_at"])
+                b = store.dataset_set_ids(con, day, known_at=r["positions_known_at"])
+                changed += [ds for ds in store.LATE_DATASETS if a.get(ds, []) != b.get(ds, [])]
         err = (r["error"] or "").splitlines()[0][:300] if r["error"] else None
         out.append({"run_id": r["run_id"], "run_type": r["run_type"], "cut_type": r["cut_type"],
                     "label": store.slice_label(day, r["cut_type"], r["cut_ts"], r["run_type"]),
@@ -365,7 +372,7 @@ LOST = ("rejected", "failed", "timed_out", "match_failed")
 def _facts_empty() -> dict[str, Any]:
     return {"inputs": {}, "files_lost": 0, "stale_copies": 0, "runs": 0, "runs_failed": 0, "default_run_id": None,
             "current_run_id": None, "default_set_ids": None, "eod_final": False, "positions_in_force": False,
-            "run_behind": False, "books_no_positions": 0, "books_rows_differ": 0}
+            "run_behind": False, "late_inputs": [], "books_no_positions": 0, "books_rows_differ": 0}
 
 
 ROWS_DIFFER_SQL = (
@@ -438,16 +445,19 @@ def _facts(con: psycopg.Connection, settings: Settings, lo: date, hi: date, *,
         x["books_no_positions"] = sum(1 for b in store.current_books(con, d) if b.get("active", True)
                                       and (first_set.get(b["book_id"]) is None or first_set[b["book_id"]] > d))
         if x["default_run_id"]:
-            ids = con.execute("SELECT position_set_ids FROM run WHERE run_id = %s", (x["default_run_id"],)).fetchone()[0]
+            ids, known = con.execute("SELECT position_set_ids, positions_known_at FROM run WHERE run_id = %s",
+                                     (x["default_run_id"],)).fetchone()
             x["default_set_ids"] = sorted(ids or [])
             x["run_behind"] = x["default_set_ids"] != store.current_sets(con, d)[0]
+            x["late_inputs"] = store.late_inputs(con, d, known)
     return out
 
 
 def _rate(x: dict[str, Any]) -> dict[str, Any]:
     """The state of a date from its ``_facts``: ``bad`` (a dataset only rejected, no positions in force, a file lost,
     a failed run not superseded, no run shown), ``warn`` (a dataset partly rejected, a stale copy, no default run
-    while an intraday run is shown, the default run on older position sets, an active book without positions, a book
+    while an intraday run is shown, the default run on older position sets or before the OCP report or the balances in
+    force (TDM#181: «ОВП» / «остатки»), an active book without positions, a book
     whose rows the run lost, no final close), else ``ok``; with the reasons. One rule for the strip and the date's
     headline."""
     bad, warn = [], []
@@ -470,6 +480,9 @@ def _rate(x: dict[str, Any]) -> dict[str, Any]:
         (warn if x["current_run_id"] else bad).append("нет основного прогона")
     elif x["run_behind"]:
         warn.append("позиции загружены после расчёта: прогон не пересчитан")
+    if x["default_run_id"] and x.get("late_inputs"):
+        names = " и ".join(store.LATE_DATASETS[ds] for ds in x["late_inputs"])
+        warn.append(f"{names[0].upper()}{names[1:]} загружены после расчёта: прогон не пересчитан")
     if x["positions_in_force"] and x["books_no_positions"]:
         warn.append(f"книг без позиций: {x['books_no_positions']}")
     if x["books_rows_differ"]:

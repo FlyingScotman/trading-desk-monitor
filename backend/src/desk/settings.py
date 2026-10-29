@@ -45,6 +45,11 @@ checkout keeps its old names ``.devdata/inbox`` and ``.devdata/desk_pg``.
                            the largest file offered (500)
 * ``DESK_ADAPTER_CHECK_TIMEOUT_S``  the limit of one ``reference()`` run when a settings form checks a file with
                            the adapter (60; ``desk.settings_forms``); a save never waits for the check
+* ``DESK_ADAPTER_KIT_TIMEOUT_S``, ``DESK_ADAPTER_STATUS_TIMEOUT_S``, ``DESK_ADAPTER_ACTION_TIMEOUT_S``  the settings
+                           page's adapter tools (``desk.adapter_jobs``): the whole «Проверка адаптера» run of the
+                           conformance kit (1800), one ``status(ctx)`` call (60) and one ``run_action()`` call (900)
+                           (08 §3). The files of an action land in ``<home>/adapter-output/<action>/``, which the
+                           inbox always scans (``Settings.scan_dirs``)
 * ``DESK_AUTOPILOT``, ``DESK_AUTOPILOT_SYNC_LAST``  the ``desk serve`` autopilot (on) and the number of
                            latest hub dates it keeps in sync (5)
 * ``DESK_INTRADAY``        the autopilot's intraday step (on): today's book on the hub's intraday cuts every half
@@ -125,6 +130,7 @@ UPDATE_TRANSPORTS = ("auto", "python", "curl", "powershell", "browser")
 DEFAULT_UPDATE_REPO = "FlyingScotman/trading-desk-monitor"
 _REPO_RE = re.compile(r"[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})/[A-Za-z0-9._-]{1,100}")
 ADAPTER_CONFIG_DIR = "adapter-config"
+ADAPTER_OUTPUT_DIR = "adapter-output"  # the files of the adapter's actions (08 §3 run_action), scanned as an inbox folder
 _LOCAL_HOSTS = ("localhost", "127.0.0.1", "::1")
 
 # settings.json key -> (DESK_* variable, kind); kinds are checked by check_settings_doc
@@ -141,7 +147,18 @@ JSON_KEYS: dict[str, tuple[str, str]] = {
     "acquisition_python": ("DESK_ACQUISITION_PYTHON", "path"),
     "inbox_dirs": ("DESK_INBOX_DIRS", "dirs"),
     "inbox_poll_seconds": ("DESK_INBOX_POLL_SECONDS", "num"),
+    "inbox_archive": ("DESK_INBOX_ARCHIVE", "path"),
+    "inbox_max_file_mb": ("DESK_INBOX_MAX_FILE_MB", "num"),
+    "snapshot_cache": ("DESK_SNAPSHOT_CACHE", "path"),
+    "report_dir": ("DESK_REPORT_DIR", "path"),
+    "private_adapter_sha256": ("DESK_PRIVATE_ADAPTER_SHA256", "str"),
+    "adapter_match_timeout_s": ("DESK_ADAPTER_MATCH_TIMEOUT_S", "num"),
+    "adapter_read_timeout_s": ("DESK_ADAPTER_READ_TIMEOUT_S", "num"),
     "adapter_check_timeout_s": ("DESK_ADAPTER_CHECK_TIMEOUT_S", "num"),
+    # the settings page's adapter tools (desk.adapter_jobs, 08 §3, §8): the kit run, status(), run_action()
+    "adapter_kit_timeout_s": ("DESK_ADAPTER_KIT_TIMEOUT_S", "num"),
+    "adapter_status_timeout_s": ("DESK_ADAPTER_STATUS_TIMEOUT_S", "num"),
+    "adapter_action_timeout_s": ("DESK_ADAPTER_ACTION_TIMEOUT_S", "num"),
     "autopilot": ("DESK_AUTOPILOT", "bool"),
     "autopilot_sync_last": ("DESK_AUTOPILOT_SYNC_LAST", "int"),
     "intraday": ("DESK_INTRADAY", "bool"),
@@ -241,6 +258,9 @@ class Settings:
     adapter_match_timeout_s: float = 60.0  # per match call (50 files); the worker start-up is apart (R22)
     adapter_read_timeout_s: float = 600.0
     adapter_check_timeout_s: float = 60.0  # one reference() run of a settings form's check (desk.settings_forms)
+    adapter_kit_timeout_s: float = 1800.0  # the whole conformance kit run of the settings page (desk.adapter_jobs)
+    adapter_status_timeout_s: float = 60.0  # one status(ctx) call (08 §3), the settings page's «Состояние»
+    adapter_action_timeout_s: float = 900.0  # one run_action() call (08 §3), the settings page's «Действия»
     inbox_max_file_mb: float = 500.0
     home: Path = None  # type: ignore[assignment]  # None: desk_home()
     autopilot: bool = True
@@ -312,6 +332,19 @@ class Settings:
     def logs_dir(self) -> Path:
         return self.home / "logs"
 
+    @property
+    def adapter_output_dir(self) -> Path:
+        """``<home>/adapter-output``: one folder per action of the adapter (08 §3 ``run_action``), written by the
+        backend only. Always scanned by the inbox (``scan_dirs``), never in ``ctx.inbox_dirs``."""
+        return self.home / ADAPTER_OUTPUT_DIR
+
+    @property
+    def scan_dirs(self) -> tuple[Path, ...]:
+        """What the inbox scan lists: ``inbox_dirs`` and, once it exists, the adapter's output folder (recursive).
+        ``ctx.inbox_dirs`` stays ``inbox_dirs``: the adapter never reads its own outputs as inputs."""
+        out = self.adapter_output_dir
+        return self.inbox_dirs + ((out / "**",) if out.is_dir() else ())
+
     def describe(self) -> list[tuple[str, str]]:
         """Effective settings for ``desk config``; the token and the store password are masked."""
         token = (f"{self.hub_token[:4]}…{self.hub_token[-4:]} ({self.hub_token_source})" if self.hub_token
@@ -340,6 +373,10 @@ class Settings:
             ("adapter_match_timeout_s", f"{self.adapter_match_timeout_s:g}"),
             ("adapter_read_timeout_s", f"{self.adapter_read_timeout_s:g}"),
             ("adapter_check_timeout_s", f"{self.adapter_check_timeout_s:g}"),
+            ("adapter_kit_timeout_s", f"{self.adapter_kit_timeout_s:g}"),
+            ("adapter_status_timeout_s", f"{self.adapter_status_timeout_s:g}"),
+            ("adapter_action_timeout_s", f"{self.adapter_action_timeout_s:g}"),
+            ("adapter_output_dir", str(self.adapter_output_dir)),
             ("inbox_max_file_mb", f"{self.inbox_max_file_mb:g}"),
             ("autopilot", "on" if self.autopilot else "off"),
             ("autopilot_sync_last", str(self.autopilot_sync_last)),
@@ -692,6 +729,9 @@ def _build(proc: dict[str, str], doc: dict[str, Any], file_env: dict[str, str], 
         adapter_match_timeout_s=num("DESK_ADAPTER_MATCH_TIMEOUT_S", defaults.adapter_match_timeout_s),
         adapter_read_timeout_s=num("DESK_ADAPTER_READ_TIMEOUT_S", defaults.adapter_read_timeout_s),
         adapter_check_timeout_s=num("DESK_ADAPTER_CHECK_TIMEOUT_S", defaults.adapter_check_timeout_s),
+        adapter_kit_timeout_s=num("DESK_ADAPTER_KIT_TIMEOUT_S", defaults.adapter_kit_timeout_s),
+        adapter_status_timeout_s=num("DESK_ADAPTER_STATUS_TIMEOUT_S", defaults.adapter_status_timeout_s),
+        adapter_action_timeout_s=num("DESK_ADAPTER_ACTION_TIMEOUT_S", defaults.adapter_action_timeout_s),
         inbox_max_file_mb=num("DESK_INBOX_MAX_FILE_MB", defaults.inbox_max_file_mb),
         home=home,
         autopilot=flag("DESK_AUTOPILOT", defaults.autopilot),

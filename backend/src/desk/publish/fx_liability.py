@@ -290,9 +290,10 @@ def compute(con: psycopg.Connection, on: date, prev: MarketView | None, market: 
             terms: Mapping[str, Any] | None = None, outcomes: Mapping[str, Any] | None = None) -> RunFxLiability:
     """The liabilities of the run of ``on`` (module docstring). ``rows``: ``RunContent.rows`` (after funding);
     ``terms``: position_id -> ``BondTerms``; ``outcomes``: position_id -> ``Outcome`` (its flash PnL: FX rates and
-    the flows received)."""
+    the flows received). In a savepoint (TDM#215), as the funding and the OCP: an SQL error fails only the block."""
     try:
-        return _compute(con, on, prev, market, rows, run_books, inputs, terms or {}, outcomes or {})
+        with funding_run.savepoint(con):
+            return _compute(con, on, prev, market, rows, run_books, inputs, terms or {}, outcomes or {})
     except Exception as e:  # noqa: BLE001 - never fails the run; the bonds keep their dirty MV
         text = f"{STATUS_TEXT[FAILED]}: {type(e).__name__}: {e}"
         return RunFxLiability(FAILED, _empty(FAILED, text), log=[("WARN", text[:2000])])

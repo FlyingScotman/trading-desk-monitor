@@ -8,7 +8,8 @@ adapter's readers (``tda.config``: ``missing_required``, ``bad_value``, ``bad_da
 settings page shows one Russian text per code wherever an issue comes from. Messages carry field names only.
 
 The schema check is the JSON-Schema (draft 2020-12) subset the adapter's tabs use: ``type`` (one or a list),
-``enum``, ``required``, ``properties``, ``patternProperties``, ``additionalProperties`` (false or a schema),
+``enum``, ``const``, ``oneOf`` / ``anyOf`` of ``const`` branches (an enum with titles), ``required``, ``properties``,
+``patternProperties``, ``additionalProperties`` (false or a schema),
 ``propertyNames``, ``items``, ``pattern``, ``minLength``, ``minimum`` / ``maximum`` (and the exclusive ones),
 ``format: date``. As in the adapter, null is the same as absent unless the type allows null; a property outside
 the schema is a warning (the adapter strips it), never an error.
@@ -80,6 +81,15 @@ def _is_type(value: Any, t: str) -> bool:
     return True
 
 
+def _consts(node: dict) -> list | None:
+    """The values of a ``oneOf`` / ``anyOf`` whose every branch is a ``const`` (an enum with a title per value, as the
+    settings page shows it), else None."""
+    opts = node.get("oneOf", node.get("anyOf"))
+    if isinstance(opts, list) and opts and all(isinstance(o, dict) and "const" in o for o in opts):
+        return [o["const"] for o in opts]
+    return None
+
+
 def _is_date_node(node: dict) -> bool:
     return node.get("format") == "date"
 
@@ -113,7 +123,8 @@ class _Checker:
         if types and not any(_is_type(value, t) for t in types):
             self.add("error", _bad_code(node), path, f"field {_name(path)}: wrong type")
             return
-        if "enum" in node and value not in node["enum"]:
+        if ("enum" in node and value not in node["enum"]) or ("const" in node and value != node["const"]) or (
+                (consts := _consts(node)) is not None and value not in consts):
             self.add("error", "bad_value", path, f"field {_name(path)}: not one of the allowed values")
             return
         if isinstance(value, str):

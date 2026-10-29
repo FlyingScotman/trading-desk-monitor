@@ -81,7 +81,7 @@ def test_publish_into_the_store(con, ctx, book, run_inputs, tmp_path, monkeypatc
     funding = [m for m in log if m.startswith("фондирование")]  # B1: the desk store's own lines, before the last
     assert funding == [funding_run.STATUS_TEXT["not_configured"] + "; фондирование не посчитано, в PnL его нет (не 0)"]
     ocp = [m for m in log if m.startswith("ОВП")]  # B2: after funding, before the last
-    assert ocp and ocp[0].startswith("ОВП из позиций") and log[-2] == ocp[-1]
+    assert ocp and ocp[0].startswith("ОВП: ") and "ОВП из позиций: " in ocp[0] and log[-2] == ocp[-1]
     assert log[-2 - len(ocp)] == funding[0]
     own = funding + ocp
     assert [m for m in log if m not in own][1:] == [m for _, m in content.log][1:]  # tdm's, after the lineage

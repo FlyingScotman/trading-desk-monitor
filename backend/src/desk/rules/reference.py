@@ -20,6 +20,10 @@ The two models differ in a few places; the conversion is explicit about each:
   (``apply_funding_policy``): the HTM base (OQ-02), the DEC01 timing choices, the REPO policy (DEC03), the write-off
   periodicity per book type and its date. A field the table does not give keeps the policy's value (the engine's
   provisional default, or unset); ``FundingSettings.source`` says which field came from where.
+- ``ocp_policy`` (private/1.5, TDM#180): the organisation's OCP conventions (``apply_ocp_policy``): which components
+  the bank's OCP report holds, what is published, the amount basis of FX derivatives, NDFs, cash balances, the settlement window, the break tolerance and
+  how old a carried-forward report may be. Same rules: a field no row gives keeps the engine's value, one given
+  twice with different values is a conflict and keeps it; ``OcpSettings.source`` says which field came from where.
 """
 
 from __future__ import annotations
@@ -50,6 +54,8 @@ from .funding import (
     RuleTier,
     WriteOffDate,
 )
+from .ocp import COMPONENTS as OCP_COMPONENTS
+from .ocp import PROVISIONAL_POLICY, AmountBasis, OcpPolicy, PublishedBasis
 
 _SCHEME_TYPES = {"by_book_type": EntityType.MAIN, "cash_balance": EntityType.OTHER}
 
@@ -219,3 +225,94 @@ def apply_funding_policy(rows: Iterable[Mapping[str, Any]], policy: FundingPolic
     if sweeps != pol.write_off.by_book_type:
         pol = replace(pol, write_off=replace(pol.write_off, by_book_type=sweeps))
     return FundingSettings(pol, source, tuple(conflicts))
+
+
+# ---- ocp_policy (private/1.5): the organisation's OCP conventions -------------------------------------------------
+
+OCP_POLICY_FIELDS: dict[str, Callable[[Any], Any]] = {
+    "report_components": lambda v: frozenset(c.strip().lower() for c in str(v).split(",") if c.strip()),
+    "published": lambda v: PublishedBasis(v),
+    "amount_basis": lambda v: AmountBasis(v),
+    "include_ndf": bool,
+    "cash_from_balances": bool,
+    "settle_window_bd": int,
+    "tolerance_ccy": _num,
+    "report_max_age_days": int,
+}
+"""The ``ocp_policy`` fields (08 §10, private/1.5) -> their ``OcpPolicy`` value (``report_components``: comma-separated
+component keys, ``rules.ocp.COMPONENTS``)."""
+
+
+@dataclass(frozen=True)
+class OcpSettings:
+    """``apply_ocp_policy``: the OCP policy, where each field the table set came from, and the conflicts."""
+
+    policy: OcpPolicy
+    source: dict[str, str]
+    """Per policy field the table set: ``ocp_policy:<policy_id>``."""
+    conflicts: tuple[str, ...]
+    """Fields given twice with different values (``ambiguous_policy``) or with an unknown component: each keeps the
+    policy's previous value."""
+
+
+def _ocp_value(name: str, raw: Any) -> Any:
+    """A row's value as the policy's, comparable across rows (``1000`` and ``1000.0`` are one tolerance)."""
+    if name in ("include_ndf", "cash_from_balances"):
+        if isinstance(raw, bool):
+            return raw
+        flag = str(raw).strip().lower()
+        if flag in ("1", "true", "yes"):
+            return True
+        if flag in ("0", "false", "no"):
+            return False
+        raise ValueError(f"{raw!r} is not a boolean")
+    return OCP_POLICY_FIELDS[name](raw)
+
+
+def _ocp_text(v: Any) -> str:
+    if isinstance(v, frozenset):
+        return ",".join(c for c in OCP_COMPONENTS if c in v) or "—"
+    return str(v.value if isinstance(v, PublishedBasis | AmountBasis) else v)
+
+
+def apply_ocp_policy(rows: Iterable[Mapping[str, Any]], policy: OcpPolicy | None = None) -> OcpSettings:
+    """``policy`` (default ``PROVISIONAL_POLICY``) with the fields of the active ``reference()["ocp_policy"]`` rows
+    in force (``store.current_reference``, private/1.5). A field two rows give with different values is a conflict
+    (``ambiguous_policy``): it keeps the previous value and is listed, never decided by row order. A
+    ``report_components`` naming a component the engine does not have, and a negative ``settle_window_bd`` or
+    ``report_max_age_days`` (every report would be stale), keep the previous value too."""
+    pol = policy or PROVISIONAL_POLICY
+    wanted: dict[str, dict[Any, list[str]]] = {}
+    conflicts: list[str] = []
+    for r in rows:
+        if not _active(r):
+            continue
+        pid = str(r.get("policy_id"))
+        for name in OCP_POLICY_FIELDS:
+            if r.get(name) is None:
+                continue
+            try:
+                value = _ocp_value(name, r[name])
+            except (ValueError, ArithmeticError):
+                conflicts.append(f"ocp_policy {pid}: {name} = {r[name]!r} не прочитано, взято прежнее значение")
+                continue
+            if name in ("settle_window_bd", "report_max_age_days") and value < 0:
+                conflicts.append(f"ocp_policy {pid}: {name} = {value} отрицательное, взято прежнее значение")
+                continue
+            if name == "report_components" and (bad := sorted(value - set(OCP_COMPONENTS))):
+                conflicts.append(f"ocp_policy {pid}: report_components — неизвестные слагаемые {', '.join(bad)}, "
+                                 "взято прежнее значение")
+                continue
+            wanted.setdefault(name, {}).setdefault(value, []).append(pid)
+    source: dict[str, str] = {}
+    changes: dict[str, Any] = {}
+    for name, values in sorted(wanted.items()):
+        if len(values) > 1:
+            conflicts.append(f"ocp_policy: {name} задано по-разному ("
+                             + "; ".join(f"{_ocp_text(v)}: {', '.join(ids)}" for v, ids in values.items())
+                             + "), взято прежнее значение")
+            continue
+        ((value, ids),) = values.items()
+        source[name] = "ocp_policy:" + ",".join(ids)
+        changes[name] = value
+    return OcpSettings(replace(pol, **changes) if changes else pol, source, tuple(conflicts))

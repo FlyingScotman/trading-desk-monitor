@@ -38,13 +38,15 @@
 <script>
 (function () {
   'use strict';
-  // «ОВП» (B2, trading-desk-monitor#59): ОВП из позиций по слагаемым (кэш и к расчёту, PV валютных ног, фьючерсы,
-  // облигации, пассив фондирования, прочее, перенос ОВП), сверка с отчётом ОВП по каждой валюте на уровне отчёта
-  // (книга или юрлицо), брейк с разложением по слагаемым и подсказками, перенос ОВП по книгам.
+  // «ОВП» (B2, trading-desk-monitor#59): публикуемая ОВП (TDM#416: отчёт ОВП банка + слагаемые, которых в отчёте нет,
+  // по книгам без отчёта и с устаревшим отчётом — из позиций; источник каждой цифры и чего не хватает), ОВП из позиций
+  // по слагаемым (кэш и к расчёту, PV валютных ног, NDF, фьючерсы, опционы, облигации, пассив фондирования, прочее,
+  // перенос ОВП), сверка с отчётом ОВП по каждой валюте на уровне отчёта (книга или юрлицо), брейк с разложением по
+  // слагаемым и подсказками, перенос ОВП по книгам. Прогон до TDM#416 (блок без published) — без панели публикуемой ОВП.
   // Данные: GET ../api/v1/runs/{run_id}/ocp (backend desk/publish/ocp_run.py, движок desk/rules/ocp.py); в демо —
   // вымышленный набор той же формы. Состав ОВП в отчётах организации — только в приватном адаптере (TDM#60).
   const M = MOCK, K = KIT, f = K.f, esc = K.esc;
-  K.top({ title: 'C16 · ОВП', tag: 'ОВП из позиций против отчёта, перенос ОВП' });
+  K.top({ title: 'C16 · ОВП', tag: 'ОВП: отчёт + вне отчёта, сверка с позициями, перенос ОВП' });
   const server = K.source === 'real';
   const view = document.getElementById('view');
   const STATE = { computed: ['сверено с отчётом', 'st-ok'], no_report: ['отчёта ОВП нет', 'st-warn'], failed: ['ошибка расчёта', 'st-bad'], not_computed: ['прогон до расчёта ОВП', 'st-none'] };
@@ -77,16 +79,41 @@
     // итог: статус, брейки, что взято по умолчанию
     const hd = panel('ОВП на ' + f.dshort(d.as_of), server ? 'прогон #' + esc(M.run.id) : 'демо');
     const prov = ((d.policy || {}).decisions) || [];
+    const adapterFields = Object.entries(((d.policy || {}).source) || {}).filter(([, v]) => String(v).startsWith('ocp_policy:')).map(([k]) => k);
     hd.querySelector('.bd').innerHTML = '<div class="c16-head"><div><span class="c16-badge ' + (t.breaks ? 'st-bad' : stC) + '">' + (t.breaks ? 'брейков: ' + t.breaks : stT) + '</span>' +
       '<div class="mut" style="font-size:12px;margin-top:4px">' + esc(d.text) + '</div></div>' +
       '<div style="flex:1;min-width:260px">' + (prov.length ? '<div class="mut" style="font-size:12px">Пока не решено владельцем — взято по умолчанию (provisional):</div><ul class="c16-list">' +
         prov.map(x => '<li class="warn" title="' + esc(x.question) + '"><b>' + esc(x.field) + '</b> — ' + esc(x.provisional) + ' <span class="mut3">(' + esc(x.ref) + ')</span></li>').join('') + '</ul>' : '') +
       ((d.notes || []).length ? '<ul class="c16-list">' + d.notes.map(n => '<li>' + esc(n) + '</li>').join('') + '</ul>' : '') + '</div>' +
-      '<div class="mut" style="font-size:12px">в отчёт входят: ' + esc(keys.filter(k => inRep.has(k)).map(k => C[k]).join(', ') || '—') + '</div></div>';
+      '<div class="mut" style="font-size:12px">в отчёт входят: ' + esc(keys.filter(k => inRep.has(k)).map(k => C[k]).join(', ') || '—') +
+      (adapterFields.length ? '<br>из настроек адаптера (ocp_policy): ' + esc(adapterFields.join(', ')) : '') + '</div></div>';
     wrap.appendChild(hd);
 
+    // публикуемая ОВП (TDM#416): по валютам с источниками, по книгам и частям отчёта, чего не хватает
+    const P = d.published || {};
+    if (P.basis) {
+      const SRC = {}; (d.sources || []).forEach(x => { SRC[x.key] = x.name; });
+      const srcBadge = s => '<span class="c16-badge ' + (s === 'report' ? 'st-ok' : s === 'derived' ? 'st-none' : 'st-warn') + '">' + esc(SRC[s] || s) + '</span>';
+      const pp = panel('Публикуемая ОВП', P.basis === 'derived' ? 'всё из позиций (настройка published = derived)' : 'отчёт ОВП + слагаемые вне отчёта; книги без отчёта — из позиций');
+      const pc = Object.entries(P.by_ccy || {});
+      const PB = P.by_book || [];
+      pp.querySelector('.bd').innerHTML = (pc.length ? '<div class="c16-ccys">' + pc.map(([c, x]) => '<div class="c16-ccy" data-pub-ccy="' + esc(c) + '"><div class="l">' + esc(c) + '</div><div class="v">' + amt(x.total) + '</div>' +
+        '<div class="mut3" style="font-size:11px">' + (x.total_rub != null ? f.mns(x.total_rub, 1) + ' mm ₽ по ' + f.n(x.rate, 4) : 'курса нет') + '</div>' +
+        '<div class="s">' + Object.entries(x.by_source || {}).map(([s, v]) => '<span>' + esc(SRC[s] || s) + '</span><span>' + amt(v) + '</span>').join('') + '</div></div>').join('') + '</div>' : '<div class="k-empty">Валютной позиции нет</div>') +
+        (PB.length ? '<div style="overflow:auto;margin-top:8px;max-width:100%"><table class="k-tbl" data-vk="c16-published" data-title="Публикуемая ОВП по книгам"><thead><tr><th>Книга / часть отчёта</th><th>Валюта</th><th class="n">ОВП</th><th>Источник</th><th class="n">Отчёт</th><th>Добавлено из позиций</th></tr></thead><tbody>' +
+          PB.map(x => '<tr data-pub="' + esc((x.book_id || '') + '|' + x.ccy) + '"><td>' + scopeOf(x) + (x.book_id ? '' : ' <span class="mut3">книги: ' + esc((x.books || []).join(', ') || '—') + '</span>') + '</td><td>' + esc(x.ccy) + '</td><td class="n"><b>' + amt(x.amount) + '</b></td><td>' + srcBadge(x.source) +
+            (x.valid_date && x.valid_date !== d.as_of ? ' <span class="mut3">отчёт от ' + f.date(x.valid_date) + '</span>' : '') + '</td><td class="n">' + amt(x.reported) + '</td>' +
+            '<td class="wrap mut">' + (Object.keys(x.outside || {}).length ? Object.entries(x.outside).map(([k, v]) => esc(C[k] || k) + ' <span class="k-num">' + f.s(v, 0) + '</span>').join(' · ') : '<span class="mut3">—</span>') + '</td></tr>').join('') + '</tbody></table></div>' : '');
+      wrap.appendChild(pp);
+      const G = d.gaps || [];
+      const gp = panel('Чего не хватает публикуемой ОВП', G.length ? '' : 'всё есть');
+      gp.querySelector('.bd').innerHTML = G.length ? '<ul class="c16-list">' + G.map(g => '<li class="warn" data-gap="' + esc(g.code) + '"' + (g.items && g.items.length ? ' title="' + esc(g.items.join(', ')) + '"' : '') + '>' + esc(g.text) + '</li>').join('') + '</ul>'
+        : '<div class="k-empty">Отчёт ОВП на дату есть, книги вне отчёта и позиции вне отчёта без условий сделки не найдены</div>';
+      wrap.appendChild(gp);
+    }
+
     // ОВП деска по валютам и слагаемым
-    const cp = panel('ОВП из позиций по валютам', 'в единицах валюты; + длинная позиция');
+    const cp = panel('ОВП из позиций по валютам', 'в единицах валюты; + длинная позиция; FX-дельта позиций — без отчёта');
     const ccys = Object.entries(d.by_ccy || {});
     cp.querySelector('.bd').innerHTML = ccys.length ? '<div class="c16-ccys">' + ccys.map(([c, x]) => {
       const br = (t.by_ccy || {})[c];
@@ -149,27 +176,37 @@
 
   // ---------- демо-набор (файл или ?demo=1): вымышленный, форма ответа /api/v1/runs/{id}/ocp ----------
   const DEMO = (function () {
-    const comps = [['cash', 'кэш и к расчёту'], ['fx_legs', 'PV валютных ног'], ['futures', 'фьючерсы'], ['bonds', 'облигации'], ['funding', 'пассив фондирования'], ['other', 'прочее'], ['transfers', 'перенос ОВП']].map(([key, name]) => ({ key, name }));
-    const d1 = { cash: 1050000, fx_legs: 250000, transfers: -900000 };
+    const comps = [['cash', 'кэш и к расчёту'], ['fx_legs', 'PV валютных ног'], ['ndf', 'NDF'], ['futures', 'фьючерсы'], ['options', 'опционы'], ['bonds', 'облигации'], ['funding', 'пассив фондирования'], ['other', 'прочее'], ['transfers', 'перенос ОВП']].map(([key, name]) => ({ key, name }));
+    const sources = [['report', 'отчёт'], ['derived', 'из позиций'], ['derived_stale_report', 'из позиций: отчёт устарел']].map(([key, name]) => ({ key, name }));
+    const d1 = { cash: 1050000, fx_legs: 250000, other: -50000, transfers: -900000 };
+    const asOf = M.asOf || '2026-10-15';
     return {
-      state: 'computed', text: 'ОВП из позиций сверено с отчётом ОВП', as_of: M.asOf || '2026-10-15', reporting_ccy: 'RUB', components: comps,
-      policy: { report_components: comps.map(c => c.key), provisional: ['amount_basis', 'report_components', 'transfer_rule'],
+      state: 'computed', text: 'ОВП — отчёт ОВП и слагаемые вне отчёта из позиций; сверено с ОВП из позиций', as_of: asOf, reporting_ccy: 'RUB', components: comps, sources,
+      policy: { report_components: ['cash', 'fx_legs', 'ndf', 'futures', 'options', 'bonds', 'funding', 'transfers'], published: 'report_plus_outside', provisional: ['amount_basis', 'transfer_rule'],
+        source: { report_components: 'ocp_policy:demo', published: 'OQ-18, TDM#416', amount_basis: 'provisional', transfer_rule: 'provisional' },
         decisions: [{ field: 'amount_basis', ref: 'OQ-11, TDM#60', question: 'ОВП деривативов: номинал или спот-эквивалент', provisional: 'spot_equivalent (core fx_delta)' },
-          { field: 'report_components', ref: 'TDM#37', question: 'Какие слагаемые входят в отчёт ОВП', provisional: 'все: любая разница — брейк' },
           { field: 'transfer_rule', ref: 'DEC06, TDM#60', question: 'Какие сделки — перенос ОВП', provisional: 'internal_counterparty (контрагент — книга ocp_to)' }] },
-      by_ccy: { USD: { components: { cash: 1050000, fx_legs: 250000, bonds: 1000500, funding: -1000000 }, total: 1300500, rate: 81.2, total_rub: 1300500 * 81.2 },
+      published: { basis: 'report_plus_outside',
+        by_ccy: { USD: { total: 1000000, rate: 81.2, total_rub: 1000000 * 81.2, by_source: { report: 100000, derived: 900000 } },
+          CNY: { total: 1000000, rate: 11.4, total_rub: 11.4e6, by_source: { derived: 1000000 } } },
+        by_book: [{ entity: 'ENT1', book_id: 'B2', books: ['B2'], ccy: 'USD', amount: 100000, source: 'report', components: ['other'], outside: { other: -50000 }, reported: 150000, valid_date: asOf },
+          { entity: 'ENT1', book_id: 'B1', books: ['B1'], ccy: 'USD', amount: 0, source: 'report', components: [], outside: {}, reported: 0, valid_date: asOf },
+          { entity: 'ENT1', book_id: 'B3', books: ['B3'], ccy: 'USD', amount: 900000, source: 'derived', components: [], outside: {}, reported: null, valid_date: null },
+          { entity: 'ENT2', book_id: 'B4', books: ['B4'], ccy: 'CNY', amount: 1000000, source: 'derived', components: [], outside: {}, reported: null, valid_date: null }] },
+      gaps: [{ code: 'books_outside_report', text: 'книг с валютной позицией вне отчёта ОВП: 2 (B3, B4): их ОВП — из позиций', items: ['B3', 'B4'] }],
+      by_ccy: { USD: { components: { cash: 1050000, fx_legs: 250000, other: -50000, bonds: 1000500, funding: -1000000 }, total: 1250500, rate: 81.2, total_rub: 1250500 * 81.2 },
         CNY: { components: { futures: 1000000 }, total: 1000000, rate: 11.4, total_rub: 11.4e6 } },
       by_book: [{ entity: 'ENT1', book_id: 'B1', ccy: 'USD', components: { bonds: 1000500, funding: -1000000 }, total: 500 },
-        { entity: 'ENT1', book_id: 'B2', ccy: 'USD', components: d1, total: 400000, ocp_to: 'B3' },
+        { entity: 'ENT1', book_id: 'B2', ccy: 'USD', components: d1, total: 350000, ocp_to: 'B3' },
         { entity: 'ENT1', book_id: 'B3', ccy: 'USD', components: { transfers: 900000 }, total: 900000 },
         { entity: 'ENT2', book_id: 'B4', ccy: 'CNY', components: { futures: 1000000 }, total: 1000000 }],
       reconciliation: [
-        { level: 'book', entity: 'ENT1', book_id: 'B2', ccy: 'USD', reported: 150000, in_report_file: true, src: ['L2'], derived: 400000, components: d1, in_report: 400000, not_in_report: {}, break: -250000, over: true, hints: ['без слагаемого «PV валютных ног» сходится: отчёт, похоже, его не включает'], valid_date: '2026-10-15' },
-        { level: 'book', entity: 'ENT1', book_id: 'B1', ccy: 'USD', reported: 0, in_report_file: false, src: [], derived: 500, components: { bonds: 1000500, funding: -1000000 }, in_report: 500, not_in_report: {}, break: -500, over: false, hints: [], valid_date: '2026-10-15' }],
+        { level: 'book', entity: 'ENT1', book_id: 'B2', ccy: 'USD', reported: 150000, in_report_file: true, src: ['L2'], derived: 350000, components: d1, in_report: 400000, not_in_report: { other: -50000 }, break: -250000, over: true, hints: ['без слагаемого «PV валютных ног» сходится: отчёт, похоже, его не включает'], valid_date: asOf, books: ['B2'] },
+        { level: 'book', entity: 'ENT1', book_id: 'B1', ccy: 'USD', reported: 0, in_report_file: false, src: [], derived: 500, components: { bonds: 1000500, funding: -1000000 }, in_report: 500, not_in_report: {}, break: -500, over: false, hints: [], valid_date: asOf, books: ['B1'] }],
       outside_report: [{ entity: 'ENT1', book_id: 'B3', ccy: 'USD', derived: 900000, components: { transfers: 900000 } }, { entity: 'ENT2', book_id: 'B4', ccy: 'CNY', derived: 1000000, components: { futures: 1000000 } }],
       transfers: [{ book_id: 'B2', entity: 'ENT1', ocp_to: 'B3', ccy: 'USD', before: 1300000, transferred: -900000, after: 400000, expected: -1300000, gap: 400000, over: true, rate: 81.25, value_date: '2026-10-16', deals: [{ position_id: 'B2|XFER', amount: -900000, trade_ids: ['XF-1'], counterparty: 'B3', rate: 81.25, value_date: '2026-10-16' }] },
         { book_id: 'B3', entity: 'ENT1', ocp_to: 'B2', ccy: 'USD', before: 0, transferred: 900000, after: 900000, expected: 0, gap: 900000, over: false, rate: 81.25, value_date: '2026-10-16', deals: [{ position_id: 'B3|XFER', amount: 900000, trade_ids: ['XF-2'], counterparty: 'B2', rate: 81.25, value_date: '2026-10-16' }] }],
-      report: { units: [], rows: 1 }, totals: { breaks: 1, comparisons: 2, by_ccy: { USD: { reported: 150000, derived: 400500, in_report: 400500, break: -250500, breaks: 1 } } },
+      report: { units: [], rows: 1 }, totals: { breaks: 1, comparisons: 2, by_ccy: { USD: { reported: 150000, derived: 350500, in_report: 400500, break: -250500, breaks: 1 } } },
       notes: ['демо: вымышленные книги и суммы'],
     };
   })();

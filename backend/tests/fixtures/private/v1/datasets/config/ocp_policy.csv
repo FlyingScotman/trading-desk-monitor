@@ -1,0 +1,3 @@
+﻿policy_id;valid_from;active;report_components;published;include_ndf;cash_from_balances;settle_window_bd;tolerance_ccy;report_max_age_days
+firm;;1;cash,futures,options;report_plus_outside;0;;;;
+firm;2026-10-21;1;cash,futures,options;report_plus_outside;0;;;500;3
