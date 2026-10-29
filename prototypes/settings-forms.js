@@ -48,6 +48,8 @@
     auto_book: 'книга из отчёта, не описанная в books.json (авто-книга)',
     bad_options: 'параметр неверного типа — взято значение по умолчанию',
     options_unknown_key: 'неизвестный параметр',
+    report_dirs_not_scanned: 'папки из параметров адаптера монитор не сканирует: добавьте их в «Папки с отчётами» (Настройки → Адаптер и источники)',
+    report_dirs_override: 'в параметрах адаптера нет ни одной папки монитора: адаптер не увидит папку позиций — авто-книги и префикс перестанут находиться; впишите все папки или очистите поле',
     bad_reference: 'адаптер вернул справочник неверного вида',
     needs_index: 'для «индекс + спред» нужен индекс',
     needs_fixed_rate: 'для фиксированной ставки нужна ставка, %'
@@ -307,7 +309,7 @@
     var c = i.code || '', m = i.message || '';
     if (/^entit/.test(m) || c === 'unknown_entity_field') return 'entities.json';
     if (/^(rule|funding)/.test(m) || c === 'unknown_rule_field' || /funding/.test(c) || c === 'ambiguous_rule') return 'funding.json';
-    if (/^options/.test(m) || c === 'bad_options' || c === 'options_unknown_key') return 'options.json';
+    if (/^options/.test(m) || c === 'bad_options' || c === 'options_unknown_key' || /^report_dirs_/.test(c)) return 'options.json';
     if (/^(field |a book|book|codes|a local code)/.test(m) || BOOK_CODES.indexOf(c) >= 0) return 'books.json';
     return null;
   };
