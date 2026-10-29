@@ -245,6 +245,12 @@ def extras(con, run: dict[str, Any], writer: Writer = None) -> dict[str, Any]:
     if (old := old_runs(con, runs)):
         notes.append(f"история: {old} из {n} дат посчитаны прошлой версией программы — в графиках истории позиции "
                      f"они пунктиром; пересчитать: {BACKFILL_LINK} (идёт в фоне, от ранних дат)")
+    if (bad := [(d, s["riskBad"]) for d, s in zip(dates, sums) if s.get("riskBad")]):  # TDM#170
+        notes.append(f"невозможный риск (|DV01| не сходится с MV и номиналом) — не в суммах DV01, CS01 и базиса: "
+                     f"{len(bad)} дат(ы), " + "; ".join(f"{d}: " + ", ".join(f"{p} ({w})" for p, w in list(b.items())[:3])
+                                                      + (f" и ещё {len(b) - 3}" if len(b) > 3 else "")
+                                                      for d, b in bad[-5:])
+                     + (f"; ещё {len(bad) - 5} дат раньше" if len(bad) > 5 else ""))
     flows.sort(key=lambda c: c["date"])
     market = universe(con, as_of, held)
     notes += market.pop("notes")
@@ -256,6 +262,7 @@ def extras(con, run: dict[str, Any], writer: Writer = None) -> dict[str, Any]:
                      "ofzSpr01": [s.get("ofzSpr", 0.0) for s in sums], "basisPk01": [s.get("basisPk", 0.0) for s in sums],
                      "basisIn01": [s.get("basisIn", 0.0) for s in sums],
                      "ofzRuo01": [s.get("ofzRuo") for s in sums],
+                     "riskBad": [sorted(s.get("riskBad") or ()) for s in sums],
                      "dv01Book": series("dv01Book"), "mvType": series("mvType"), "mvCcy": series("mvCcy"), "pnl": pnl},
             "histSource": "runs", "pnlPeriods": periods,
             "positions": positions, "cashflows": flows, **market,
@@ -892,7 +899,9 @@ OFZ_VIEW_APPROX = ("a run before 0.2.6: its OFZ were on RUONIA, their KBD risk i
 OFZ_VIEW_P = ("{n} OFZ or KBD floaters without a computed RUONIA risk (a run of 0.2.6, an OFZ or a KBD floater off core):"
               " their RUONIA risk is their KBD risk and the basis the same risk again (core basis_view, variant P)")
 MISSING_TEXT = {"not_valued": "не оценена", "reported_no_risk": "оценена по отчёту, риска в отчёте нет",
-                "no_risk": "риск не посчитан"}
+                "no_risk": "риск не посчитан",
+                "implausible": "риск невозможен (|DV01| не сходится с MV и номиналом): не в суммах, причина в журнале "
+                               "прогона"}
 GROUPS = ("GOV", "SUB", "CORP", "DER", "MM", "OTH")
 
 
@@ -1038,6 +1047,13 @@ def risk_table(items: list[dict[str, Any]], fx: dict[str, float | None],
         legs = attribution == "legs" or kind not in CROSS_CCY_KINDS
         c = cell(home, kind)
         c["ids"].add(pid)
+        if summary.risk_problem(f.get("risk"), f.get("dv01"), f.get("mv_rub"), f.get("notional_rub"),
+                                f.get("instr_type") == "BOND"):
+            # TDM#170: an impossible risk is counted as missing, none of it in the sums (its MV and notional are)
+            for key, src in (("notional_ccy", "notional"), ("notional_rub", "notional_rub"), ("mv_rub", "mv_rub")):
+                c[key] += f.get(src) or 0.0
+            c["missing"]["implausible"] = c["missing"].get("implausible", 0) + 1
+            continue
         for key, src in (("notional_ccy", "notional"), ("notional_rub", "notional_rub"), ("mv_rub", "mv_rub"),
                          ("cs01", "cs01")):
             c[key] += f.get(src) or 0.0

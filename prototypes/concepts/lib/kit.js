@@ -1457,6 +1457,38 @@
     return w;
   };
 
+  // Выброс в истории (#170): одна дата на порядки выше соседних не задаёт шкалу графика. Масштаб даты — наибольший
+  // |ряд| на ней; значение ряда — выброс, если оно не конечно или больше SPIKE_X × медианы масштаба соседних дат
+  // (±SPIKE_W, не меньше 4 с данными). Ступень (книга выросла) не выброс: после неё соседи такие же. Выброс в линии —
+  // разрыв, дата — пунктирной чертой, значение — в подсказке и примечании. rows — ряды по датам (null — нет точки);
+  // flag — { индекс даты: текст } (у прогона позиции с невозможным риском, M.hist.riskBad) — та же черта, без вырезания.
+  // → { data, idx, markLine, tip(i), note }
+  K.SPIKE_X = 10; K.SPIKE_W = 15;
+  K.spikes = function (rows, dates, names, fmt, flag) {
+    const n = dates.length, out = rows.map(r => (r || []).slice()), hit = {};
+    const scale = dates.map((_, i) => Math.max(0, ...rows.map(r => r && r[i] != null && isFinite(r[i]) ? Math.abs(r[i]) : 0)));
+    const has = dates.map((_, i) => rows.some(r => r && r[i] != null));
+    const med = a => { const s = a.slice().sort((x, y) => x - y), m = s.length >> 1; return s.length % 2 ? s[m] : (s[m - 1] + s[m]) / 2; };
+    for (let i = 0; i < n; i++) {
+      const nb = [];
+      for (let j = Math.max(0, i - K.SPIKE_W); j <= Math.min(n - 1, i + K.SPIKE_W); j++) if (j !== i && has[j]) nb.push(scale[j]);
+      const lim = nb.length >= 4 ? K.SPIKE_X * med(nb) : Infinity;
+      rows.forEach((r, k) => {
+        const v = r && r[i];
+        if (v == null || (isFinite(v) && (!lim || Math.abs(v) <= lim))) return;
+        (hit[i] = hit[i] || []).push(names[k] + ' ' + (isFinite(v) ? fmt(v) : String(v)));
+        out[k][i] = null;
+      });
+    }
+    const idx = Object.keys(hit).map(Number).sort((a, b) => a - b), fl = flag || {};
+    const marks = [...new Set(idx.concat(Object.keys(fl).map(Number)))].sort((a, b) => a - b);
+    const tip = i => (hit[i] ? 'выброс, не в шкале: ' + hit[i].join(', ') : '') + (hit[i] && fl[i] ? '; ' : '') + (fl[i] || '');
+    const markLine = marks.length ? { symbol: 'none', silent: true, animation: false, label: { show: false }, lineStyle: { type: 'dashed', width: 1, color: css('--warn') || '#e3b341' }, data: marks.map(i => ({ xAxis: dates[i] })) } : undefined;
+    const note = (idx.length ? 'выброс не в шкале (больше ' + K.SPIKE_X + '× соседних дат; пунктир): ' + idx.map(i => f.dshort(dates[i]) + ' ' + hit[i].join(', ')).join('; ') : '') +
+      (idx.length && Object.keys(fl).length ? ' · ' : '') + (Object.keys(fl).length ? Object.keys(fl).length + ' дат с позициями без риска в сумме (невозможный риск; пунктир)' : '');
+    return { data: out, idx, markLine, tip, note };
+  };
+
   // Риск по бакетам: стек по кривым, ромб — итог бакета, линия — кумулятивный риск до срока.
   // opts: {curves:[id], list?, cs01?:bool, title?, height?}
   K.riskStack = function (el, opts) {
