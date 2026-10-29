@@ -11,7 +11,25 @@
                  the current user's login to it (``DefaultNetworkCredentials``), the Windows certificate store, as
                  the browser (Edge, Chrome) does
 
-None of them carries a token: everything fetched is public. Each failure becomes a ``NetError`` with a ``code``
+The monitor's own releases are public and fetched without a token. The private adapter's releases
+(``desk.updater.adapter``) need one: ``fetch(..., auth=True)`` sends ``Authorization: Bearer <Context.token>`` and
+only to ``https://api.github.com/`` (anything else is refused before a request is made), and never on to the host a
+redirect leads to (an asset is a 302 from the API to GitHub's file storage):
+
+* ``python``     the header is an unredirected one (``Request.add_unredirected_header``): urllib copies only the
+                 ordinary headers to a redirected request; ``_ApiOnlyRedirect`` puts it back only when the redirect
+                 stays on ``https://api.github.com/`` (a renamed repository)
+* ``curl``       the header is a line of the ``-K`` config file (never on the command line, where other users of the
+                 computer could read it); curl from 7.58 (Windows 10 1803 ships 7.55, later ones 7.79+) does not send
+                 a custom ``Authorization`` to another host after ``--location`` (CVE-2018-1000007); an older curl
+                 is ``unavailable`` for an authenticated request
+* ``powershell`` the token comes in an environment variable of the child (``DESK_UPD_TOKEN``), never in the script
+                 or on its command line; .NET Framework's ``HttpWebRequest`` (Windows PowerShell 5.1) clears the
+                 ``Authorization`` header on every automatic redirect, so the file storage never sees it
+
+A 401 is ``token_rejected`` (expired, revoked or mistyped); a 404 of an authenticated request is ``no_access``
+(no such repository for this token, or no release yet). The token never appears in a ``NetError``, a ``Result`` or
+an attempt record (``fetch`` scrubs it from messages, too). Each failure becomes a ``NetError`` with a ``code``
 (``CODES``) that tells a TLS-inspecting proxy (``tls_untrusted``) from a proxy that wants a login (``proxy_auth``),
 one that blocks the site (``proxy_denied``), a name that does not resolve (``dns``), a closed connection
 (``connect``) or a timeout, and an ``IT_HINTS`` sentence for the owner's IT department.
@@ -66,6 +84,9 @@ CODES = {
     "proxy_denied": "прокси не пускает на этот адрес",
     "not_found": "нет такого файла или релиза (404)",
     "rate_limited": "лимит запросов к GitHub API исчерпан (60 в час на внешний адрес сети)",
+    "token_rejected": "GitHub не принял токен (401): срок истёк, токен отозван или вставлен с ошибкой",
+    "no_access": "нет доступа или релиза (404): у токена нет доступа к этому репозиторию, или в нём ещё нет релиза",
+    "no_token": "токен GitHub не задан",
     "http": "сервер ответил ошибкой",
     "too_big": "ответ больше допустимого",
     "unavailable": "способ недоступен на этом компьютере",
@@ -92,6 +113,11 @@ IT_HINTS = {
                     "objects.githubusercontent.com.",
     "rate_limited": "GitHub API ограничивает 60 запросов в час на внешний адрес всей сети. Проверка повторится "
                     "позже; скачивание релиза этим лимитом не ограничено.",
+    "token_rejected": "Создайте новый токен (GitHub → Settings → Developer settings → Fine-grained tokens, только "
+                      "этот репозиторий, Contents: Read-only) и вставьте его в «Обновление адаптера».",
+    "no_access": "Проверьте, что токен создан для этого репозитория (Repository access → Only select repositories) "
+                 "с правом Contents: Read-only, и что в репозитории опубликован релиз.",
+    "no_token": "Вставьте токен GitHub в «Обновление адаптера» (или скачайте архив браузером, где вы вошли в GitHub).",
 }
 
 # what diagnose() asks: the API, the release pages (and their redirect), the file storage behind the downloads
@@ -102,6 +128,8 @@ TARGETS = (
     ("objects", "https://objects.githubusercontent.com/", "хранилище файлов (старый адрес)"),
 )
 GITHUB_HOSTS = ("github.com", "api.github.com")
+API_ORIGIN = "https://api.github.com/"
+CURL_AUTH_MIN = (7, 58)  # drops a custom Authorization on a redirect to another host (CVE-2018-1000007)
 
 
 class NetError(Exception):
@@ -134,6 +162,8 @@ def http_error(layer: str, url: str, status: int, headers: dict[str, str]) -> Ne
     host = urllib.parse.urlsplit(url).hostname or ""
     if status == 407:
         return NetError("proxy_auth", "407 Proxy Authentication Required", layer, 407)
+    if status == 401 and host == "api.github.com":
+        return NetError("token_rejected", "401 Unauthorized от api.github.com", layer, 401)
     if status == 404:
         return NetError("not_found", f"404 {host}{urllib.parse.urlsplit(url).path}", layer, 404)
     if status in (403, 429) and headers.get("x-ratelimit-remaining") == "0":
@@ -228,6 +258,7 @@ class Context:
     ca_bundle: Path | None = None
     runner: Callable[..., Any] | None = None  # subprocess.run, replaced in tests
     proxy_for: Callable[[str], str | None] | None = None  # system_proxy, replaced in tests
+    token: str | None = field(default=None, repr=False)  # GitHub token, sent only with fetch(auth=True)
 
     def proxy(self, url: str) -> str | None:
         return (self.proxy_for or (lambda u: system_proxy(u, self.runner)))(url)
@@ -271,11 +302,36 @@ def _headers(msg: Message | None) -> dict[str, str]:
     return out
 
 
+def api_url(url: str) -> bool:
+    """``url`` is on ``https://api.github.com/`` (the only place a token goes)."""
+    u = urllib.parse.urlsplit(url)
+    return u.scheme == "https" and u.hostname == "api.github.com" and u.port in (None, 443) and not u.username \
+        and url.startswith(API_ORIGIN)
+
+
+class _ApiOnlyRedirect(urllib.request.HTTPRedirectHandler):
+    """urllib's redirect, the token kept only while the redirect stays on the API (it is an unredirected header:
+    urllib never copies it itself)."""
+
+    def __init__(self, token: str | None) -> None:
+        super().__init__()
+        self._token = token
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        new = super().redirect_request(req, fp, code, msg, headers, newurl)
+        if new is not None:
+            new.headers.pop("Authorization", None)
+            new.unredirected_hdrs.pop("Authorization", None)
+            if self._token and api_url(new.full_url):
+                new.add_unredirected_header("Authorization", f"Bearer {self._token}")
+        return new
+
+
 def fetch_python(ctx: Context, url: str, dest: Path, max_bytes: int, accept: str | None = None,
-                 progress: Callable[[int], None] | None = None) -> Result:
+                 progress: Callable[[int], None] | None = None, token: str | None = None) -> Result:
     layer = "python"
     proxy = ctx.proxy(url)
-    handlers: list[Any] = [urllib.request.HTTPSHandler(context=tls_context(ctx.ca_bundle))]
+    handlers: list[Any] = [urllib.request.HTTPSHandler(context=tls_context(ctx.ca_bundle)), _ApiOnlyRedirect(token)]
     scheme = urllib.parse.urlsplit(url).scheme
     if proxy:
         p = with_credentials(proxy, ctx.proxy_user, ctx.proxy_password) if ctx.proxy_user else proxy
@@ -285,6 +341,9 @@ def fetch_python(ctx: Context, url: str, dest: Path, max_bytes: int, accept: str
     opener = urllib.request.build_opener(*handlers)
     req = urllib.request.Request(url, headers={"User-Agent": USER_AGENT, "Accept-Encoding": "identity",
                                                **({"Accept": accept} if accept else {})})
+    if token:
+        req.add_unredirected_header("Authorization", f"Bearer {token}")
+        req.add_unredirected_header("X-GitHub-Api-Version", "2022-11-28")
     bare = split_proxy(proxy)[0] if proxy else None
     try:
         with opener.open(req, timeout=ctx.timeout_s) as r, open(dest, "wb") as out:
@@ -335,15 +394,22 @@ _CURL = {5: "dns", 6: "dns", 7: "connect", 28: "timeout", 35: "tls", 60: "tls_un
 
 
 def fetch_curl(ctx: Context, url: str, dest: Path, max_bytes: int, accept: str | None = None,
-               progress: Callable[[int], None] | None = None, curl: str | None = None) -> Result:
+               progress: Callable[[int], None] | None = None, curl: str | None = None,
+               token: str | None = None) -> Result:
     layer = "curl"
     exe = curl or find_curl()
     if not exe:
         raise NetError("unavailable", "нет curl (в Windows 10/11 это C:\\Windows\\System32\\curl.exe)", layer)
+    if token and curl_version(exe) < CURL_AUTH_MIN:
+        raise NetError("unavailable", "curl старше 7.58 может переслать токен при перенаправлении: с токеном не "
+                       "используется", layer)
     proxy = ctx.proxy(url)
     lines = [f"header = {_q('User-Agent: ' + USER_AGENT)}", f"header = {_q('Accept-Encoding: identity')}"]
     if accept:
         lines.append(f"header = {_q('Accept: ' + accept)}")
+    if token:  # in the config file only: never on the command line
+        lines += [f"header = {_q('Authorization: Bearer ' + token)}",
+                  f"header = {_q('X-GitHub-Api-Version: 2022-11-28')}"]
     if proxy:
         bare, user, password = split_proxy(proxy)
         if ctx.proxy_user:
@@ -414,7 +480,10 @@ PS_FETCH = (
     "try { $x=[Net.WebRequest]::GetSystemWebProxy().GetProxy($u); "
     "if ($x -and $x.AbsoluteUri -ne $u.AbsoluteUri) { $p=$x.AbsoluteUri } } catch {} ; "
     "$a=@{ Uri=$u; OutFile=$env:DESK_UPD_OUT; UseBasicParsing=$true; PassThru=$true; UserAgent='desk-updater'; "
-    "TimeoutSec=[int]$env:DESK_UPD_TIMEOUT }; "
+    "TimeoutSec=[int]$env:DESK_UPD_TIMEOUT }; $h=@{}; "
+    "if ($env:DESK_UPD_ACCEPT) { $h['Accept']=$env:DESK_UPD_ACCEPT }; "
+    "if ($env:DESK_UPD_TOKEN) { $h['Authorization']='Bearer ' + $env:DESK_UPD_TOKEN; "
+    "$h['X-GitHub-Api-Version']='2022-11-28' }; if ($h.Count) { $a['Headers']=$h }; "
     "if ($p) { $a['Proxy']=$p; $a['ProxyUseDefaultCredentials']=$true }; "
     "try { $r=Invoke-WebRequest @a; $g=[string]$r.Headers['X-GitHub-Request-Id']; "
     "@{ ok=$true; status=[int]$r.StatusCode; proxy=$p; github=$g; "
@@ -435,10 +504,11 @@ _WEB = {"NameResolutionFailure": "dns", "ProxyNameResolutionFailure": "dns", "Co
 
 
 def fetch_powershell(ctx: Context, url: str, dest: Path, max_bytes: int, accept: str | None = None,
-                     progress: Callable[[int], None] | None = None) -> Result:
+                     progress: Callable[[int], None] | None = None, token: str | None = None) -> Result:
     layer = "powershell"
-    doc = _ps(PS_FETCH, {"DESK_UPD_URL": url, "DESK_UPD_OUT": str(dest), "DESK_UPD_TIMEOUT": f"{int(ctx.timeout_s)}"},
-              3600, ctx.runner)
+    env = {"DESK_UPD_URL": url, "DESK_UPD_OUT": str(dest), "DESK_UPD_TIMEOUT": f"{int(ctx.timeout_s)}",
+           "DESK_UPD_ACCEPT": accept or "", "DESK_UPD_TOKEN": token or ""}  # values in the child's environment only
+    doc = _ps(PS_FETCH, env, 3600, ctx.runner)
     proxy = str(doc.get("proxy") or "").rstrip("/") or None
     if not doc.get("ok"):
         status = int(doc.get("status") or 0)
@@ -479,23 +549,44 @@ def available(layer: str) -> str | None:
     return None
 
 
+def scrub(text: str, token: str | None) -> str:
+    return text.replace(token, "***") if token and len(token) >= 4 else text
+
+
 def fetch(layer: str, ctx: Context, url: str, max_bytes: int, *, dest: Path | None = None,
-          accept: str | None = None, progress: Callable[[int], None] | None = None) -> Result:
+          accept: str | None = None, progress: Callable[[int], None] | None = None, auth: bool = False) -> Result:
     """GET ``url`` through ``layer`` into ``dest`` (a temporary file in ``<home>/updates/downloads`` when None, the
-    caller removes it); NetError on anything but a 2xx answer."""
+    caller removes it); NetError on anything but a 2xx answer. ``auth``: with ``ctx.token``, only to the API."""
+    token = None
+    if auth:
+        if not ctx.token:
+            raise NetError("no_token", "токен GitHub не задан", layer)
+        if not api_url(url):
+            raise NetError("failed", "токен передаётся только на https://api.github.com/", layer)
+        token = ctx.token
     why = available(layer)
     if why:
         raise NetError("unavailable", why, layer)
     out = dest or ctx.tmp()
     try:
+        if token:
+            return FETCHERS[layer](ctx, url, out, max_bytes, accept=accept, progress=progress, token=token)
         return FETCHERS[layer](ctx, url, out, max_bytes, accept=accept, progress=progress)
+    except NetError as e:
+        out.unlink(missing_ok=True)
+        if token:
+            if e.code == "not_found":
+                e.code = "no_access"
+            e.args = (scrub(str(e), token),)
+        raise
     except BaseException:
         out.unlink(missing_ok=True)
         raise
 
 
-def get_json(layer: str, ctx: Context, url: str, max_bytes: int = 4 << 20, accept: str | None = None) -> Any:
-    r = fetch(layer, ctx, url, max_bytes, accept=accept)
+def get_json(layer: str, ctx: Context, url: str, max_bytes: int = 4 << 20, accept: str | None = None,
+             auth: bool = False) -> Any:
+    r = fetch(layer, ctx, url, max_bytes, accept=accept, auth=auth)
     try:
         return json.loads(r.read().decode("utf-8-sig"))
     except ValueError:

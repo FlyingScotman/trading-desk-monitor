@@ -609,6 +609,15 @@ def cmd_import_drop(a: argparse.Namespace) -> int:
     return 1 if rejected else 0
 
 
+def _fresh(settings: Settings) -> Settings:
+    """The settings as they are now (an adapter the updater installed, an edit of the settings page), else the
+    ones ``desk serve`` started with."""
+    try:
+        return load()
+    except SettingsError:
+        return settings
+
+
 def _load_history(settings: Settings, folder: Path) -> None:
     """The new bundles of the cache into the store's market history (the bond charts) when a store is set
     (``DESK_STORE_URL``): the embedded one is not started for it. ``desk eod``, ``desk cycle`` and the autopilot load
@@ -696,7 +705,7 @@ def cmd_serve(a: argparse.Namespace) -> int:
           f"in {backup.backup_dir(st)}")
     # not 0 when the settings page installs an update: the launcher (start.bat) restarts it (desk.update)
     return serve(url, host=host, port=port, snapshots=None if a.no_worker else a.settings.snapshot_cache,
-                 adapter_status=lambda: scan.adapter_line(scan.adapter(a.settings)), autopilot=ap,
+                 adapter_status=lambda: scan.adapter_line(scan.adapter(_fresh(a.settings))), autopilot=ap,
                  auth=auth.AuthConfig.from_settings(st, host), tls=tls, allow_plain_http=st.allow_plain_http)
 
 

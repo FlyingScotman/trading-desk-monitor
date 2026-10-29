@@ -286,7 +286,8 @@ def scrubber(settings: Settings, con: psycopg.Connection | None) -> Scrubber:
     the store the book ids and names, traders, entities, position and instrument ids of the last ``TOKEN_DAYS``,
     report file names and the report's ``x_*`` values."""
     sc = Scrubber()
-    for secret in (settings.hub_token, settings.proxy_password, settings.store_url, settings.private_adapter_sha256):
+    for secret in (settings.hub_token, settings.proxy_password, settings.github_token, settings.store_url,
+                   settings.private_adapter_sha256):
         sc.add(secret, "<secret>")
     for url in (settings.hub_url, settings.store_url, os.environ.get("HTTPS_PROXY"), os.environ.get("https_proxy"),
                 os.environ.get("HTTP_PROXY"), os.environ.get("http_proxy")):
@@ -364,7 +365,7 @@ def scrubber(settings: Settings, con: psycopg.Connection | None) -> Scrubber:
 # ---- sections ---------------------------------------------------------------------------------------------------
 
 _FLAG_OR_NUMBER = re.compile(r"(?i)^(?:[01]|true|false|yes|no|on|off|[-+]?\d+(?:\.\d+)?)$")
-_ENUM_FIELDS = ("hub_transport",)
+_ENUM_FIELDS = ("hub_transport", "private_adapter_source", "update_transport")
 
 
 def app_section(started_at: datetime | None, now: datetime) -> dict[str, Any]:
@@ -429,7 +430,11 @@ def settings_section(settings: Settings, error: str | None, scrub: Scrubber) -> 
                                else "not set")
     out["store"] = "external" if settings.store_url else "embedded"
     out["private_adapter"] = ("reference" if not settings.private_adapter else "bundle default"
-                              if settings.private_adapter_default else "custom")
+                              if settings.private_adapter_default else "installed release"
+                              if settings.private_adapter_source == "installed" else "custom")
+    gsrc = settings.github_token_source or ""
+    out["github_token_source"] = ("env" if gsrc.startswith("DESK_GITHUB_TOKEN") else "file" if gsrc.startswith("file")
+                                  else "not set")
     out["private_adapter_pinned"] = bool(settings.private_adapter_sha256)
     out["https_proxy"] = "set" if (os.environ.get("HTTPS_PROXY") or os.environ.get("https_proxy")) else "unset"
     try:
