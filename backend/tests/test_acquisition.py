@@ -61,7 +61,8 @@ if mode == 'raw':
 if mode == 'hang':
     out.mkdir(parents=True)
     child = subprocess.Popen([sys.executable, '-c', 'import time;time.sleep(60)'])
-    (out / 'child.pid').write_text(str(child.pid))
+    (out / 'child.pid.tmp').write_text(str(child.pid))
+    os.replace(out / 'child.pid.tmp', out / 'child.pid')  # the test never sees an empty pid file
     time.sleep(60)
 if mode == 'overflow':
     print('x' * 300000)
@@ -198,7 +199,19 @@ def test_timeout_cancel_kill_descendants_and_no_ingestion(configured, action):
     assert status["code"] == ("acquisition_timeout" if action == "timeout" else "cancelled")
     no_secrets(status)
     pid = int(pidfile.read_text())
-    assert not psutil.pid_exists(pid) or psutil.Process(pid).status() == psutil.STATUS_ZOMBIE
+    # SIGKILL to the process group is sent before the status turns final, but the kernel finishes the
+    # orphaned grandchild asynchronously: on a loaded machine it can still read "running" for a while.
+    # The descendant must die (gone, or a zombie nobody reaps); a bounded wait, not a one-moment check.
+    def dead():
+        try:
+            return psutil.Process(pid).status() == psutil.STATUS_ZOMBIE
+        except psutil.NoSuchProcess:
+            return True
+
+    until = time.monotonic() + 10
+    while not dead() and time.monotonic() < until:
+        time.sleep(0.01)
+    assert dead()
     assert not list(st.home.rglob("*.csv"))
     service.close()
 
