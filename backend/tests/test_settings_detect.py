@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import json
 import os
+import urllib.request
 from datetime import date
 from pathlib import Path
 
@@ -35,27 +36,70 @@ def client(url: str = "postgresql://unused") -> TestClient:
     return TestClient(create_app(url), base_url="http://127.0.0.1:8000", client=("127.0.0.1", 50000))
 
 
-def test_registry_proxy_reads_the_internet_options() -> None:
-    assert sd.registry_proxy({"ProxyEnable": 1, "ProxyServer": "proxy.example:3128"}) == "http://proxy.example:3128"
-    assert sd.registry_proxy({"ProxyEnable": 1, "ProxyServer": "http=a:1;https=b.example:8080"}) == "http://b.example:8080"
-    assert sd.registry_proxy({"ProxyEnable": 0, "ProxyServer": "proxy.example:3128"}) is None  # switched off
-    assert sd.registry_proxy({"ProxyEnable": 1, "ProxyServer": "ftp=a:1"}) is None
-    assert sd.registry_proxy({}) is None
+def winreg_like(server: str, override: str = ""):
+    """What urllib's ``getproxies_registry`` / ``proxy_bypass_registry`` give for these Internet Options (their
+    Windows-only code; the override match is urllib's own ``_proxy_bypass_winreg_override``)."""
+    proxies: dict[str, str] = {}
+    if "=" not in server:
+        server = f"http={server};https={server};ftp={server}"
+    for part in server.split(";"):
+        scheme, addr = part.split("=", 1)
+        proxies[scheme] = addr if "://" in addr else ("socks://" if scheme == "socks" else "http://") + addr
+    if proxies.get("socks"):
+        proxies.setdefault("https", proxies["socks"].replace("socks://", "socks4://"))
+    return lambda: (proxies, lambda host: bool(override) and urllib.request._proxy_bypass_winreg_override(host, override))
 
 
-def test_proxy_source_order_and_masking() -> None:
-    reg = {"ProxyEnable": 1, "ProxyServer": "win.example:3128", "AutoConfigURL": "http://pac.example/p.pac"}
-    p = sd.proxy({}, {}, {}, reg)
-    assert (p["system"], p["source"], p["effective_source"], p["pac"]) == ("http://win.example:3128", "windows", "windows", True)
-    env = {"HTTPS_PROXY": "http://u:secret@env.example:8080"}
-    p = sd.proxy(env, {"https_proxy": "http://s.example:1"}, {}, reg)
+HUB = "https://hub.example"
+
+
+def test_proxy_is_what_hub_proxy_takes() -> None:
+    p = sd.proxy(HUB, {}, {}, winreg_like("win.example:3128"), pac=True)
+    assert p == {"system": "http://win.example:3128", "source": "windows", "bypassed": False, "socks": False, "pac": True}
+    # http only: urllib has no https proxy, the hub goes direct
+    p = sd.proxy(HUB, {}, {}, winreg_like("http=a.example:1"))
+    assert p["system"] is None and p["source"] is None and not p["bypassed"]
+    # the hub in the exceptions (by name, or <local> for a host without dots): direct
+    assert sd.proxy(HUB, {}, {}, winreg_like("win.example:3128", "*.example;10.*"))["bypassed"] is True
+    p = sd.proxy("https://hub", {}, {}, winreg_like("win.example:3128", "<local>"))
+    assert p["bypassed"] and p["system"] is None and p["source"] == "windows"
+    assert sd.proxy(HUB, {}, {}, winreg_like("win.example:3128", "<local>"))["bypassed"] is False
+    # SOCKS only: urllib takes it for https too, the monitor cannot use it
+    p = sd.proxy(HUB, {}, {}, winreg_like("socks=s.example:1080"))
+    assert p["system"] == "socks4://s.example:1080" and p["socks"] is True
+
+
+def test_proxy_from_the_environment_masked_and_not_the_exported_one() -> None:
+    env = {"HTTPS_PROXY": "http://u:secret@env.example:8080", "NO_PROXY": "other.example"}
+    p = sd.proxy(HUB, env, {}, winreg_like("win.example:3128"))
     assert p["system"] == "http://u:***@env.example:8080" and p["source"] == "environment"
-    assert p["effective_source"] == "environment" and "secret" not in json.dumps(p)  # the real environment wins
-    # the variable load() exported from settings.json is not the system's
-    p = sd.proxy({"HTTPS_PROXY": "http://s.example:1"}, {"https_proxy": "http://s.example:1"},
-                 {"HTTPS_PROXY": "http://s.example:1"}, {})
-    assert p["environment"] is None and p["system"] is None and p["settings"] == "http://s.example:1"
-    assert p["effective_source"] == "settings"
+    assert "secret" not in json.dumps(p)
+    assert sd.proxy(HUB, {**env, "NO_PROXY": "hub.example"}, {}, winreg_like("win.example:3128"))["bypassed"] is True
+    # the variable load() exported from settings.json is not the system's: the Internet Options are
+    p = sd.proxy(HUB, {"HTTPS_PROXY": "http://s.example:1"}, {"HTTPS_PROXY": "http://s.example:1"},
+                 winreg_like("w.example:2"))
+    assert p["system"] == "http://w.example:2" and p["source"] == "windows"
+    both = {"https_proxy": "http://low:1", "HTTPS_PROXY": "http://up:1"}
+    assert sd.environment_proxies(both, {}) == {"https": "http://low:1"}
+
+
+def test_trust_follows_tls_context(monkeypatch) -> None:
+    import ssl
+
+    from desk.marketdata import hub
+
+    assert sd.trust(Settings(hub_ca_bundle=Path("/x/ca.pem"))) == {"kind": "bundle"}
+    monkeypatch.setattr(hub, "tls_context", lambda ca=None: ssl.create_default_context())  # truststore unusable
+    assert sd.trust(Settings()) == {"kind": "python"}
+
+
+def test_disk_never_touches_network_paths_and_has_a_budget(tmp_path: Path) -> None:
+    d = sd.Disk(budget=2, remote=lambda drive: drive == "Z:")
+    assert d.network("\\\\server\\share\\x") and d.network("Z:\\Reports") and not d.network("C:\\x")
+    assert d.is_dir("\\\\server\\share") is None and d.is_dir("Z:\\Reports") is None and d.budget == 2
+    assert d.is_dir(str(tmp_path)) is True and d.is_dir(str(tmp_path / "none")) is False
+    assert d.is_dir(str(tmp_path / "none")) is False and d.budget == 0  # remembered, not asked again
+    assert d.is_dir(str(tmp_path / "other")) is None  # out of checks
 
 
 def test_pythons_are_found_not_run(tmp_path: Path) -> None:
@@ -68,7 +112,7 @@ def test_pythons_are_found_not_run(tmp_path: Path) -> None:
     own = tmp_path / "own" / "python"
     own.parent.mkdir()
     own.write_text("this program")
-    found = sd.pythons({"PATH": ""}, registry=lambda: [(str(exe), "3.11"), (str(stub), "3.12"), (str(exe), "3.11"),
+    found = sd.pythons({"PATH": ""}, sd.Disk(), registry=lambda: [(str(exe), "3.11"), (str(stub), "3.12"), (str(exe), "3.11"),
                                                        ("\\\\server\\share\\python.exe", "3.10")], own=str(own))
     assert [(f["path"], f["source"], f["version"], f["own"]) for f in found] == [
         (str(exe), "registry", "3.11", False), (str(own), "own", found[1]["version"], True)]
@@ -92,11 +136,12 @@ def test_folders_named_in_the_adapter_config_are_offered(tmp_path: Path) -> None
         "report_dirs": [str(a), str(b) + "/**", str(tmp_path / "missing")], "output_dir": str(out),
         "note": "not a path", "nested": {"folder": "\\\\server\\share\\reports"}}), encoding="utf-8")
     (cfg / "broken.json").write_text("{", encoding="utf-8")
-    found = sd.config_folders(cfg, [(str(a), False)])
+    found = sd.config_folders(cfg, [(str(a), False)], sd.Disk())
     assert [(f["path"], f["recursive"], f["key"], f["exists"]) for f in found] == [
         (str(b), True, "report_dirs[1]", True), ("\\\\server\\share\\reports", False, "nested.folder", None)]
     assert all(f["file"] == "options.json" for f in found)
-    assert sd.config_folders(None, []) == [] and sd.config_folders(tmp_path / "none", []) == []
+    assert sd.config_folders(None, [], sd.Disk()) == []
+    assert sd.config_folders(tmp_path / "none", [], sd.Disk()) == []
 
 
 def test_api_detect(home: Path, tmp_path: Path, monkeypatch) -> None:
@@ -110,10 +155,9 @@ def test_api_detect(home: Path, tmp_path: Path, monkeypatch) -> None:
     j = c.get("/api/v1/settings/detect").json()
     assert j["proxy"]["source"] in (None, "windows") and j["trust"]["kind"] in ("system", "python")
     assert j["defaults"] == {"snapshot_cache": str(home / "snapshots"), "inbox_archive": str(home / "inbox-archive"),
-                             "private_adapter_config": str(home / "adapter-config")}
-    assert j["adapter"]["config_default_exists"] is True and j["adapter"]["config_files"] == 1
+                             "private_adapter_config": str(home / "adapter-config"), "private_adapter": None}
     assert [f["path"] for f in j["inbox"]["from_adapter_config"]] == [str(reports)]
-    assert j["inbox"]["from_accepted"] == [] and "store unavailable" in j["inbox"]["accepted_error"]
+    assert j["inbox"]["from_accepted"] == []  # no store: nothing to offer
     assert any(p["own"] for p in j["python"])
     c.put("/api/v1/settings", json={"inbox_dirs": [{"path": str(reports), "label": "", "recursive": False}],
                                     "acquisition_python": str(tmp_path / "nope.exe")})
@@ -141,10 +185,9 @@ def test_folders_of_accepted_files(home: Path, tmp_path: Path, store_url: str) -
                         "VALUES (%s, %s, 'fp', %s, %s)", (sha, status, str(folder / f"f{i}.csv"), day))
         rows = con.execute(sd.ACCEPTED_FOLDERS).fetchall()
     cols = ["folder", "files", "last_report"]
-    found = sd.accepted_folders([dict(zip(cols, r, strict=True)) for r in rows], st, [(str(cur), False)])
+    found = sd.accepted_folders([dict(zip(cols, r, strict=True)) for r in rows], st, [(str(cur), False)], sd.Disk())
     assert found == [{"path": str(old), "files": 2, "last_report": "2026-10-21", "exists": True}]
     (home / "settings.json").write_text(json.dumps({"inbox_dirs": [{"path": str(cur)}]}), encoding="utf-8")
     j = client(store_url).get("/api/v1/settings/detect").json()
-    assert j["inbox"]["accepted_error"] is None
     assert [(f["path"], f["files"], f["last_report"]) for f in j["inbox"]["from_accepted"]] == [
         (str(old), 2, date(2026, 10, 21).isoformat())]

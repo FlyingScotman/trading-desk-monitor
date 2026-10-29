@@ -26,25 +26,28 @@ function server() {
     effective: { home: HOME, hub_url: 'https://hub.example', adapter_output_dir: HOME + '\\adapter-output', private_adapter: 'C:\\desk\\adapter',
       private_adapter_default: true, private_adapter_config: HOME + '\\adapter-config', snapshot_cache: HOME + '\\snapshots',
       inbox_archive: HOME + '\\inbox-archive', autopilot: true } };
-  st.detect = { proxy: { settings: null, environment: null, windows: 'http://proxy.example:3128', pac: false, system: 'http://proxy.example:3128',
-    source: 'windows', effective_source: 'windows' }, trust: { kind: 'system', path: null, exists: null }, curl: 'C:\\Windows\\System32\\curl.exe',
+  st.detect = { proxy: { system: 'http://proxy.example:3128', source: 'windows', bypassed: false, socks: false, pac: false },
+    trust: { kind: 'system' }, curl: 'C:\\Windows\\System32\\curl.exe',
     python: [{ path: PY, source: 'registry', version: '3.11', own: false }, { path: 'C:\\desk\\python\\python.exe', source: 'own', version: '3.12', own: true }],
     acquisition_python: { path: null, exists: null },
-    defaults: { snapshot_cache: HOME + '\\snapshots', inbox_archive: HOME + '\\inbox-archive', private_adapter_config: HOME + '\\adapter-config' },
-    adapter: { default: 'C:\\desk\\adapter', config_default: HOME + '\\adapter-config', config_default_exists: true, config_files: 1 },
+    defaults: { snapshot_cache: HOME + '\\snapshots', inbox_archive: HOME + '\\inbox-archive', private_adapter_config: HOME + '\\adapter-config',
+      private_adapter: 'C:\\desk\\adapter' },
     inbox: { from_adapter_config: [{ path: 'D:\\Выгрузки', recursive: false, file: 'options.json', key: 'report_dirs[1]', exists: true }],
-      from_accepted: [{ path: 'E:\\Старые', files: 3, last_report: '2026-10-21', exists: true }], accepted_error: null } };
+      from_accepted: [{ path: 'E:\\Старые', files: 3, last_report: '2026-10-21', exists: true }] } };
   st.handle = (u, method, body) => {
     const p = u.pathname;
     if (p === '/api/v1/auth/state') return { enabled: false, user: null };
     if (p === '/api/v1/settings' && method === 'GET') return st.settings;
-    if (p === '/api/v1/settings' && method === 'PUT') { st.puts.push(body); Object.assign(st.settings, body); return st.settings; }
+    if (p === '/api/v1/settings' && method === 'PUT') {
+      if (body.tls_cert && !body.tls_key) return { status: 422, body: { message: 'tls_cert and tls_key (DESK_TLS_CERT, DESK_TLS_KEY) go together: set both or neither' } };
+      st.puts.push(body); Object.assign(st.settings, body); return st.settings;
+    }
     if (p === '/api/v1/settings/detect') return st.detect;
     if (p === '/api/v1/settings/test-hub') return st.hubOk ? { ok: true, host: 'hub.example' } : { ok: false, error: 'прокси: 407', host: 'hub.example' };
     if (p === '/api/v1/adapter') return { loaded: true, path: 'C:\\desk\\adapter', reference: false, default: true, name: 'synthetic', version: '0.9.0',
       fingerprint: 'cd'.repeat(32), config_dir: HOME + '\\adapter-config', describe: { contract: 'private/1.5', acquisition: { version: 1 } },
       config_files: [], settings_tabs: [], optional: [], actions: [], warnings: [], error: null };
-    if (p === '/api/v1/autopilot/status') return { enabled: true, state: 'idle', steps: [{ name: 'sync', status: 'ok', detail: 'срезов: 1', at: '' }] };
+    if (p === '/api/v1/autopilot/status') return { enabled: true, state: 'idle', steps: st.noSync ? [] : [{ name: 'sync', status: 'ok', detail: 'срезов: 1', at: '' }] };
     if (p === '/api/v1/backfill/status') return { enabled: true, dates: 20, done: 10, todo: 5, no_positions: 4, no_market: 1, failed: 0 };
     if (p === '/api/v1/acquisition') return { available: false, code: 'runtime_unavailable', job: { state: 'idle', phase: 'idle', code: 'idle' } };
     return null;
@@ -62,6 +65,7 @@ async function open(browser, st, hash, opts) {
     if (u.pathname.startsWith('/api/') || u.pathname.startsWith('/health')) {
       let body = null; try { body = req.postDataJSON(); } catch (e) { /* GET */ }
       const out = st.handle(u, req.method(), body);
+      if (out && out.status) return route.fulfill({ status: out.status, contentType: 'application/json', body: JSON.stringify(out.body) });
       return out ? route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(out) })
         : route.fulfill({ status: 404, contentType: 'application/json', body: '{"message":"нет в тесте"}' });
     }
@@ -83,7 +87,9 @@ test('настройки: главное сверху, редкое по кно�
       await pg.waitForFunction(() => /Адаптер/.test(document.getElementById('st-sum').innerText));
       const sum = await pg.locator('#st-sum').innerText();
       assert.ok(/Требует внимания: 2/.test(sum) && /Токен:\s*не задан/.test(sum) && /Папки отчётов:\s*1 папка · подсказка/.test(sum), sum);
-      assert.ok(/Хаб:\s*работает/.test(sum) && /Адаптер:\s*загружен/.test(sum) && /История прогонов:\s*10 из 15/.test(sum), sum);
+      assert.ok(/История прогонов:\s*10 из 15/.test(sum) && !/Адаптер:/.test(sum), sum);
+      assert.deepStrictEqual(await pg.locator('#st-sum a.ok').allInnerTexts(), ['Хаб', 'Адаптер', 'Автообновление']);
+      assert.strictEqual(await pg.locator('#st-sum a.ok', { hasText: 'Адаптер' }).getAttribute('title'), 'загружен · synthetic 0.9.0');
       assert.strictEqual(await pg.locator('#st-sum a').first().getAttribute('href'), '#token', 'сначала — что требует внимания');
       assert.strictEqual(await pg.locator('label[for="hub_url"] .key').textContent(), 'hub_url');
       assert.strictEqual(await pg.locator('label[for="tls_cert"] .key').textContent(), 'tls_cert, tls_key');
@@ -93,7 +99,7 @@ test('настройки: главное сверху, редкое по кно�
       await pg.locator('#dirs-hint button', { hasText: 'Добавить в папки с отчётами' }).click();
       assert.ok(await pg.locator('#savebar').isVisible());
       assert.ok(!/D:\\Выгрузки/.test(await pg.locator('#dirs-hint').innerText()), 'подсказка ушла: папка в списке');
-      assert.ok(/2 папки/.test(await pg.locator('#st-sum').innerText()));
+      assert.strictEqual(await pg.locator('#st-sum a.ok', { hasText: 'Папки отчётов' }).getAttribute('title'), '2 папки');
       await pg.locator('#save').click();
       await pg.waitForTimeout(300);
       assert.deepStrictEqual(st.puts[0].inbox_dirs.map(d => d.path), ['C:\\in', 'D:\\Выгрузки']);
@@ -135,11 +141,15 @@ test('настройки: главное сверху, редкое по кно�
       const st = server(), { pg, ctx, errors } = await open(browser, st, '#adapter');
       const auto = pg.locator('.auto[data-auto="private_adapter_config"]');
       assert.ok(/Определено автоматически:/.test(await auto.innerText()) && (await auto.innerText()).includes(HOME + '\\adapter-config'));
+      // путь по умолчанию в settings.json не закрепляется: «изменить» только ставит курсор в поле
       await auto.locator('button', { hasText: 'изменить' }).click();
-      assert.strictEqual(await pg.locator('#private_adapter_config').inputValue(), HOME + '\\adapter-config');
+      assert.strictEqual(await pg.locator('#private_adapter_config').inputValue(), '');
+      assert.strictEqual(await pg.evaluate(() => document.activeElement.id), 'private_adapter_config');
+      await pg.locator('#private_adapter_config').fill('D:\\cfg');
       assert.ok(/вручную/.test(await auto.innerText()) && await pg.locator('#savebar').isVisible());
       await auto.locator('button', { hasText: 'вернуть авто' }).click();
       assert.strictEqual(await pg.locator('#private_adapter_config').inputValue(), '');
+      assert.ok(/из комплекта программы/.test(await pg.locator('.auto[data-auto="private_adapter"]').innerText()));
       // у адаптера есть получение условий сделок, а Python не задан: блок раскрыт, найденный подставляется, не выбирается сам
       assert.ok(await pg.locator('#adv-acq').evaluate(d => d.open));
       assert.strictEqual(await pg.locator('#acquisition_python').inputValue(), '');
@@ -150,6 +160,18 @@ test('настройки: главное сверху, редкое по кно�
       await pg.locator('#adv-adapter > summary').click();
       await pg.locator('#sha-cur').click();
       assert.strictEqual(await pg.locator('#private_adapter_sha256').inputValue(), 'cd'.repeat(32));
+      // ответ сервера 422 называет поле: его свёрнутый блок раскрывается
+      await pg.locator('#tls_cert').evaluate(e => { e.value = 'C:\\c.pem'; e.dispatchEvent(new Event('input', { bubbles: true })); });
+      await pg.locator('#save').click();
+      await pg.waitForFunction(() => /go together/.test(document.getElementById('save-msg').textContent));
+      assert.ok(await pg.locator('#sess-card').evaluate(d => d.open) && await pg.evaluate(() => document.activeElement.id) === 'tls_cert');
+      assert.ok(await pg.locator('#sec-users').evaluate(x => x.classList.contains('on')), 'поле в другом разделе: раздел открыт');
+      await pg.locator('#save-undo').click();
+      await pg.goto(ORIGIN + '/settings.html#adapter');
+      // Python раскрылся сам один раз: свернули — так и остаётся
+      await pg.locator('#adv-acq > summary').click();
+      await pg.locator('#dirs-hint button').first().click();  // renderDetect ещё раз
+      assert.ok(!(await pg.locator('#adv-acq').evaluate(d => d.open)), 'свёрнутый пользователем не раскрывается снова');
       // прокси и сертификаты: свёрнуто, в заголовке — что найдено; нет связи — раскрывается
       await pg.goto(ORIGIN + '/settings.html#hub');
       await pg.waitForSelector('#st-sum:not([hidden]) a');
@@ -160,6 +182,25 @@ test('настройки: главное сверху, редкое по кно�
       await pg.waitForFunction(() => document.getElementById('proxy-card').open);
       assert.ok(/Хаб:\s*нет связи/.test(await pg.locator('#st-sum').innerText()));
       assert.ok(/из настроек Windows/.test(await pg.locator('.auto[data-auto="https_proxy"]').innerText()));
+      await pg.locator('.auto[data-auto="https_proxy"] button', { hasText: 'изменить' }).click();
+      assert.strictEqual(await pg.locator('#https_proxy').inputValue(), 'http://proxy.example:3128', 'без пароля — подставляется');
+      assert.deepStrictEqual(errors, []);
+      await ctx.close();
+    });
+    await t.test('прокси с паролем не подставляется; хаб без проверки — «Не всё проверено»', async () => {
+      const st = server();
+      st.detect.proxy = { system: 'http://u:***@proxy.example:8080', source: 'environment', bypassed: false, socks: false, pac: false };
+      st.settings.hub_token_set = true; st.noSync = true;
+      st.detect.inbox = { from_adapter_config: [], from_accepted: [{ path: 'E:\\Старые', files: 1, last_report: null, exists: null }] };
+      const { pg, ctx, errors } = await open(browser, st, '#hub');
+      await pg.waitForFunction(() => /Хаб/.test(document.getElementById('st-sum').innerText));
+      const sum = await pg.locator('#st-sum').innerText();
+      assert.ok(/Не всё проверено/.test(sum) && /Хаб:\s*не проверен/.test(sum) && !/Всё работает/.test(sum), sum);
+      await pg.locator('#proxy-card > summary').click();
+      await pg.locator('.auto[data-auto="https_proxy"] button', { hasText: 'изменить' }).click();
+      assert.strictEqual(await pg.locator('#https_proxy').inputValue(), '', 'замаскированный пароль в поле не попадает');
+      assert.strictEqual(await pg.evaluate(() => document.activeElement.id), 'https_proxy');
+      assert.ok(/сетевая, не проверялась/.test(await pg.locator('#dirs-hint').innerText()));
       assert.deepStrictEqual(errors, []);
       await ctx.close();
     });

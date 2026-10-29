@@ -206,13 +206,12 @@ def detect_settings(request: Request) -> dict[str, Any]:
     except SettingsError:
         stored = {}
     rows: list[dict[str, Any]] = []
-    error = None
     try:
         with _store(request) as con:
             rows = con.execute(settings_detect.ACCEPTED_FOLDERS).fetchall()
-    except psycopg.Error as e:
-        error = f"store unavailable ({type(e).__name__})"
-    return settings_detect.detect(st, stored, accepted=rows, accepted_error=error)
+    except psycopg.Error:
+        pass  # without the store: no folders of accepted files to offer
+    return settings_detect.detect(st, stored, accepted=rows)
 
 
 # ---- funding (#237) -------------------------------------------------------------------------------------------
