@@ -37,7 +37,14 @@ from typing import Any
 from rub_fixed_income import RISK_BUCKETS, RISK_PILLARS
 
 from ..marketdata import ratings
-from ..pnl.reasons import METHOD_TEXT, REPORTED_METHOD, RUN_NO_POSITION_PNL, RUN_NO_PREV_MARKET, no_pnl_text
+from ..pnl.reasons import (
+    METHOD_TEXT,
+    REPORTED_METHOD,
+    RUN_NO_POSITION_PNL,
+    RUN_NO_PREV_MARKET,
+    no_pnl_reason_text,
+    no_pnl_text,
+)
 from ..publish.funding_run import NOT_COMPUTED, STATUS_TEXT
 from ..publish.summary import fx_net
 from ..scenario.carry import HORIZONS as carry_horizons
@@ -158,8 +165,8 @@ PNL_FIELDS = ("carry", "rolldown", "rates", "spread", "fx", "funding", "convexit
 def no_pnl(code: str, detail: str | None = None) -> dict[str, Any]:
     """A position's ``pnl`` without PnL (R10): every amount null, not 0, and why (``pnl.reasons``)."""
     return {**dict.fromkeys(PNL_FIELDS), "official": None, "breakNote": None, "available": False, "reason": code,
-            "reasonText": no_pnl_text(code), "reasonDetail": detail or None, "method": None, "methodText": None,
-            "flag": None}
+            "reasonText": no_pnl_reason_text(code, detail), "reasonDetail": detail or None, "method": None,
+            "methodText": None, "flag": None}
 
 
 def _json(v: Any) -> Any:

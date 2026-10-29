@@ -2467,7 +2467,7 @@
   K.posCols = {
     // валюта и эмитент — обычные столбцы (R37): сортировка и фильтр по значениям, как у остальных
     issuer: { key: 'issuerName', label: 'Эмитент', filter: true, title: 'эмитент (у деривативов — контрагент)', fmt: (v, r) => '<b style="color:' + K.issuerColor(r.issuer) + '">●</b> ' + esc(v) },
-    name: { key: 'name', label: 'Бумага', fmt: (v, r) => K.nameCell(r, v) + (r.tradedToday ? ' <span class="k-tag" style="border-color:var(--warn);color:var(--warn)" title="сделки сегодня">сд</span>' : '') },
+    name: { key: 'name', label: 'Бумага', fmt: (v, r) => K.nameCell(r, v) + (r.tradedToday ? ' <span class="k-tag" style="border-color:var(--warn);color:var(--warn)" title="сделки сегодня">сд</span>' : '') + K.curveProxyTag(r) },
     isin: { key: 'isin', label: 'ISIN', fmt: v => '<span class="mono mut">' + esc(v || '—') + '</span>' },
     ccy: { key: 'ccy', label: 'Вал', fmt: (v, r) => K.ccyTag(r.ccy), val: r => M.ccyOrder[r.ccy] ?? 99, filter: r => r.ccy, fltOrder: (a, b) => ((M.ccyOrder[a] ?? 99) - (M.ccyOrder[b] ?? 99)) || a.localeCompare(b) },
     kind: { key: 'kind', label: 'Тип', filter: r => M.kindLabel[r.kind] || r.kind, fmt: (v, r) => '<span class="tagc" style="border-color:' + K.kindColor[v] + '55">' + esc(M.kindShort[v]) + '</span>' },
@@ -2759,10 +2759,11 @@
     o.bd.innerHTML = '<div class="k-tags">' + [p.desk, (M.entities.find(e => e.id === p.entity) || {}).name, p.rating !== '—' ? 'рейтинг ' + K.ratingText(p.rating, p.ratingInfo) : null, p.tradedToday ? 'сделки сегодня' : null, p.quality && p.quality !== 'exact' ? 'оценка: ' + p.quality : null].filter(t => t && t !== '—').map(t => '<span class="k-tag">' + esc(t) + '</span>').join('') + '</div>' +
       (p.notValued && p.estReason ? '<div class="k-note" style="overflow-wrap:anywhere;margin:8px 0"><b>Причина отсутствия оценки:</b> ' + esc(p.estReason) + '</div>' : '') +
       (p.riskProblem ? '<div class="k-note risk-problem" style="overflow-wrap:anywhere;margin:8px 0;color:var(--warn)"><b>Риск не в суммах (невозможный риск):</b> ' + esc(p.riskProblem) + '</div>' : '') +
+      K.curveProxyNote(p) +
       '<div class="k-sec">Параметры</div>' + K.fieldsHtml(fields) +
       (p.legs && p.legs.length ? '<div class="k-sec">Ноги сделки <span class="sp"></span><span class="mut3" style="text-transform:none;letter-spacing:0">' + p.legs.length + '</span></div>' + K.legsHtml(p) : '') +
       '<div class="k-sec">PnL <span class="sp"></span><span class="mut3" style="text-transform:none;letter-spacing:0">тыс ₽</span></div>' +
-      '<div class="k-fields">' + [['Итого день', pn.total], ['Кэрри', pn.carry, K.tips.carry], ['Фондирование', pn.funding, K.tips.funding], ['Ставки', pn.rates], ['Спред', pn.spread], ['FX', pn.fx, K.tips.fx], ['Сделки', pn.trading], ['Прочее', pn.other], ['MTD', p.pnlMtd], ['YTD', p.pnlYtd]].map(([l, v, tip]) => '<div><div class="l">' + K.hint(l, tip) + '</div><div class="v ' + f.cls(v) + '">' + (v == null ? '<span class="mut3">—</span>' : Math.abs(v) >= 1e7 ? f.mns(v, 1) + ' <small>mm ₽</small>' : f.ks(v) + ' <small>тыс ₽</small>') + '</div></div>').join('') + '</div>' + K.fundingLine(p) +
+      K.pnlWhyNote(p) + '<div class="k-fields">' + [['Итого день', pn.total], ['Кэрри', pn.carry, K.tips.carry], ['Фондирование', pn.funding, K.tips.funding], ['Ставки', pn.rates], ['Спред', pn.spread], ['FX', pn.fx, K.tips.fx], ['Сделки', pn.trading], ['Прочее', pn.other], ['MTD', p.pnlMtd], ['YTD', p.pnlYtd]].map(([l, v, tip]) => '<div><div class="l">' + K.hint(l, tip) + '</div><div class="v ' + f.cls(v) + '">' + (v == null ? '<span class="mut3">—</span>' : Math.abs(v) >= 1e7 ? f.mns(v, 1) + ' <small>mm ₽</small>' : f.ks(v) + ' <small>тыс ₽</small>') + '</div></div>').join('') + '</div>' + K.fundingLine(p) +
       '<div class="k-sec">История <span class="sp"></span><span class="hunit" style="margin-right:6px"></span><span class="hseg"></span></div><div class="hchart" style="height:230px"></div><div class="hnote mut3" style="font-size:11.5px;line-height:1.45;margin:4px 0 0"></div>' +
       '<div class="k-sec">Риск по бакетам <span class="sp"></span><span class="mut3" style="text-transform:none;letter-spacing:0">тыс ₽/бп</span></div><div class="rchart" style="height:200px"></div>' +
       '<div class="k-sec">Риск по кривым и срокам <span class="sp"></span><span class="mut3" style="text-transform:none;letter-spacing:0">тыс ₽/бп · подпись — как считается</span></div>' + K.curveRiskTable(p) +
@@ -2830,6 +2831,13 @@
     });
     fire('alias'); fire('filter');
   };
+  // прокси-кривая (#31): в день без кривой RUONIA рублёвая бумага (RUONIA-флоатер, корпоратив) дисконтирована по КБД,
+  // спред и риск — к RUB OFZ (extra.curve_proxy прогона, p.curveProxy — lib/real.js); пометка в таблице и в карточке
+  K.curveProxyTag = r => r && r.curveProxy ? ' <span class="k-tag k-proxy" title="' + esc(r.curveProxy) + '">прокси RUB OFZ</span>' : '';
+  K.curveProxyNote = p => p && p.curveProxy ? '<div class="k-note curve-proxy" style="overflow-wrap:anywhere;margin:8px 0;color:var(--warn)"><b>Кривая:</b> ' + esc(p.curveProxy) + '</div>' : '';
+  // нет PnL позиции (R10, #31): причина сервера (pnl.reasonText; смена кривой дисконтирования — с кривыми вчера и сегодня)
+  K.pnlWhy = p => p && p.pnl && p.pnl.available === false ? p.pnl.reason || null : null;
+  K.pnlWhyNote = p => K.pnlWhy(p) ? '<div class="k-note pnl-why" style="overflow-wrap:anywhere;margin:4px 0 8px"><b>Нет PnL:</b> ' + esc(K.pnlWhy(p)) + '</div>' : '';
   // ячейка «Бумага»: у бумаги с алиасом биржевое имя — в подсказке
   K.nameCell = (r, v) => r && r.alias && r.exchName && r.exchName !== r.alias ? '<span title="' + esc('биржевое имя: ' + r.exchName) + '">' + esc(v == null ? r.name : v) + '</span>' : esc(v == null ? (r && r.name) : v);
   const canAlias = p => !!(p && p.isin && M.aliasApi);

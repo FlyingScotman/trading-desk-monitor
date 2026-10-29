@@ -303,5 +303,6 @@ table.k-tbl.k-compact { width: auto; font-size: 12px; }
 .k-rcfix.warn { --c: var(--warn); } .k-rcfix.bad { --c: var(--neg); }
 .k-rcfix .w { color: var(--warn); } .k-rcfix .b { color: var(--neg); }
 .k-tag.k-prov { border-color: var(--warn); color: var(--warn); cursor: help; margin-left: 6px; }
+.k-tag.k-proxy { border-color: var(--warn); color: var(--warn); cursor: help; margin-left: 4px; }
 .k-tag.k-carry { cursor: help; margin-left: 6px; }
 .k-rcsub { margin: 12px 0 4px; font-weight: 600; font-size: 12.5px; }

@@ -77,17 +77,23 @@ from ..pnl.reasons import (
     FX_METHOD,
     NO_PNL_TEXT,
     OTHER_REASON_TEXT,
+    PROXIED_CURVE,
+    PROXY_CURVE,
+    PROXY_CURVE_TEXT,
     REPORTED_METHOD,
     RUN_NO_PREV_MARKET,
 )
 from ..settings import REPO_ROOT
 from ..store import PositionInputs
 from ..valuation.bonds import (
+    DISCOUNT_CURVE_ID,
+    KBD_CURVE_ID,
     OFZ_CURVE,
     OFZ_KBD_CLASSES,
     RISK_CURVES,
     BondValuation,
     coupon_view,
+    discount_curve,
     implied_frequency,
     is_kbd_floater,
 )
@@ -569,6 +575,21 @@ def ofz_basis(t: Any, v: BondValuation) -> dict[str, Any]:
     return out
 
 
+def curve_proxy(no_ruonia: bool, t: Any, v: BondValuation) -> dict[str, Any]:
+    """``curve_proxy`` (TDM#31) of a RUB bond normally discounted on RUONIA OIS, on a date whose market has no RUONIA
+    curve (``no_ruonia``: ``bonds.discount_curve`` is the KBD): it is discounted on the KBD (core or a rung with a
+    schedule) or its duration risk is on it (a rung without one: a RUONIA floater core refuses for its projection), so
+    its spread is to ``RUB OFZ`` and its risk on it -- the proxy of ``RUB RUONIA``; the pages mark the row
+    (``pnl.reasons.PROXY_CURVE_TEXT``). Empty for every other row, an OFZ on the KBD by rule
+    (``OFZ_KBD_CLASSES``) and a foreign bond included."""
+    if not no_ruonia or t.bond_class in OFZ_KBD_CLASSES or bond_currency(t) != "RUB":
+        return {}
+    if v.discount_curve_id != KBD_CURVE_ID and not (v.discount_curve_id is None and OFZ_CURVE in v.curve_buckets):
+        return {}
+    return {"curve_proxy": {"curve": PROXY_CURVE, "instead_of": PROXIED_CURVE, "reason": "no_ruonia_curve",
+                            "text": PROXY_CURVE_TEXT}}
+
+
 def _f(x: Any) -> float | None:
     try:
         return None if x is None else float(x)
@@ -629,6 +650,7 @@ def position_row(ctx: EodContext, book: str, pid: str, o: Outcome, issuer: str,
             "cashflows": cashflows(t, v, as_of, face_ccy, freq, cpn.pct), "cashflows_to": "maturity",
             **_quote_extra(q, sa), **core_analytics(v),
             **ofz_basis(t, v),
+            **curve_proxy(discount_curve(ctx.core_market)[0] != DISCOUNT_CURVE_ID, t, v),
             **({"coupon_freq_source": "schedule"} if freq and not t.coupon_frequency else {}),
             **({"not_exact_reason": o.reason} if o.reason else {}),
             **({"fx_rate": fx[0], "fx_source": fx[1]} if fx else {}),

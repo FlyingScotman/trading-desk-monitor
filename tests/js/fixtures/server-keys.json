@@ -109,6 +109,7 @@
   "core",
   "core_version",
   "coupon_basis",
+  "curve_proxy",
   "dm_bp",
   "funding",
   "fx_liability",
@@ -156,6 +157,7 @@
  "extraRead": [
   "assumptions",
   "core",
+  "curve_proxy",
   "dm_bp",
   "funding",
   "g_spread_bp",
@@ -181,6 +183,12 @@
   "swaps"
  ],
  "extraNested": {
+  "curve_proxy": [
+   "curve",
+   "instead_of",
+   "reason",
+   "text"
+  ],
   "funding": [
    "amount_rub",
    "default_rate",
