@@ -33,17 +33,22 @@ fails holds ``{"error": ...}`` and the rest is still there):
   unmapped bonds by reason, book ages;
 * ``runs``: the last runs: id, date, type, cut, times, status, versions, snapshot id prefixes, position counts by
   valuation quality and reason code, discount curve, curves built, risk per curve (positions contributing, no
-  amounts), floaters by index, coupon display counts (R16), PnL availability, basis and reason codes;
+  amounts), floaters by index, coupon display counts (R16), PnL availability, basis and reason codes; and the
+  ``logic_version`` of the default runs over the whole history (dates per version, #157);
 * ``logs``: per log file of ``<home>/logs`` the records by day, level and logger, the most frequent warning and
-  error kinds and the last error lines, scrubbed; ``db``: migrations, table row counts, size.
+  error kinds and the last error lines, scrubbed, at most ``REPEATS_IN_WINDOW`` of one kind (#157);
+  ``db``: migrations, table row counts, size.
+
+The logs and runs sections stop after ``SECTION_BUDGET_S`` (``cut_by_time``) and every query has a statement timeout
+(#157: the export took ten minutes on a large store).
 
 Privacy is the point: no ISIN or SECID, no book, portfolio, trader or counterparty, no amount, price, notional or
 PnL value, no file path, user or host name, no token. Sections hold dates, codes, counts and snapshot id prefixes;
 free text (step details, errors, log lines) goes through ``Scrubber.text``, which replaces ISIN-like tokens, paths,
 URLs, IP addresses, e-mails and amounts, and every sensitive value the settings and the store know (the hub token
 and host, the proxy, the folders, user and computer names, book ids and names, traders, position and instrument ids,
-report file names, the report's free ``x_*`` fields). A last pass over the whole document (``Scrubber.doc``) does
-the same to every string and key.
+report file names, the report's free ``x_*`` fields; not a date, a version or a service word among them, #157). A last
+pass over the whole document (``Scrubber.doc``) does the same to every string and key.
 """
 
 from __future__ import annotations
@@ -82,6 +87,9 @@ CYCLE_DAYS = 3             # days of autopilot step outcomes by kind
 LOG_DAYS = 7               # days of log counts
 LOG_TAIL_BYTES = 4 << 20   # read at most this much of the end of each log file
 MAX_LOG_LINES = 50         # the last warning and error lines
+REPEATS_IN_WINDOW = 2      # ... at most this many of one kind: a flood of one kind does not hide the others (#157)
+SECTION_BUDGET_S = 60.0    # a section that reads many logs or runs stops there, marked ``cut_by_time`` (#157)
+STATEMENT_TIMEOUT_MS = 60_000  # one query of the export at most this long: its section fails, the others go out
 MAX_KINDS = 30             # most frequent kinds (signatures) listed
 MAX_TEXT = 400             # a free-text line is cut here
 MAX_LIST = 60              # lists copied from snapshot coverage are cut here
@@ -114,6 +122,32 @@ SAFE_WORDS = frozenset((
     "Rates", "Credit", "ok", "error", "skipped"))
 """Values never scrubbed as tokens: generic words a book id or a desk may happen to equal (a book coded ``OFZ``
 says nothing private, while scrubbing it would break the curve ``RUB OFZ`` in every line)."""
+SAFE_UPPER = frozenset(w.upper() for w in SAFE_WORDS) | frozenset((
+    "BONDS", "INSTRUMENT", "INSTRUMENTS", "POSITION", "POSITIONS", "SECURITY", "SECURITIES", "FIXED", "FLOAT",
+    "FLOATING", "FLOATER", "COUPON", "ZERO", "AMORTIZING", "REPO", "SWAP", "CASH", "EQUITY", "SHARE", "SHARES",
+    "FUTURE", "FUTURES", "OPTION", "OPTIONS", "DEAL", "DEALS", "TRADE", "TRADES", "BUY", "SELL", "LONG", "SHORT",
+    "ACTIVE", "CLOSED", "OPEN", "NEW", "CANCELLED", "MATURED", "REPORT", "REPORTS"))
+"""The service words kept (#157), in any case: ``SAFE_WORDS`` and the categories a report's ``x_*`` fields and file
+names hold (``bond``, ``instrument``). An explicit list: any other word may be a name or a counterparty."""
+HARMLESS = re.compile(r"(?:\d{4}-\d\d-\d\d(?:[T ]\d\d:\d\d(?::\d\d(?:[.,]\d+)?)?(?:Z|[+-]\d\d:?\d\d)?)?"
+                      r"|\d\d\.\d\d\.\d{2,4}|v?\d{1,4}(?:\.\d{1,2}){2,3}|v?\d{1,4}(?:\.\d{1,2})*\.x)", re.IGNORECASE)
+"""A date, a timestamp or a version (``2026-10-16``, ``16.10.2026``, ``3.11.4``, ``3.11.x``; not ``1234.56`` or
+``1.234.567``, amounts): never a private value, kept (#157)."""
+
+
+def _harmless(v: str, label: str) -> bool:
+    """A value the scrubber keeps (#157): a date, a version, an eight-digit date ``20261016``, a service word of
+    ``SAFE_UPPER`` (any case). Never for secrets, books and names; any other word is scrubbed."""
+    if label in ("<secret>", "<book>", "<name>"):
+        return False
+    if HARMLESS.fullmatch(v) or v.upper() in SAFE_UPPER:
+        return True
+    if not (len(v) == 8 and v.isdigit()):
+        return False
+    try:
+        return 1990 <= int(v[:4]) <= 2100 and bool(date.fromisoformat(f"{v[:4]}-{v[4:6]}-{v[6:]}"))
+    except ValueError:
+        return False
 
 
 class Scrubber:
@@ -124,6 +158,8 @@ class Scrubber:
     def __init__(self, tokens: dict[str, str] | None = None, names: Iterable[str] = ()) -> None:
         self.tokens: dict[str, str] = {}
         self.short: dict[str, str] = {}
+        self._by_gram: dict[str, list[str]] | None = None  # the tokens by their first four characters (#157)
+        self.memo: dict[tuple[str, int], str] = {}  # signature() of a text: a log or a run repeats its kinds
         for value, label in (tokens or {}).items():
             self.add(value, label)
         names = sorted({n for n in names if n and len(n) >= 3 and n not in SAFE_WORDS}, key=len, reverse=True)
@@ -136,9 +172,12 @@ class Scrubber:
         if not isinstance(value, str):
             return
         v = value.strip()
-        if not v or v in SAFE_WORDS or len(v) < 2 or (v.isdigit() and len(v) < 6):
+        if not v or v in SAFE_WORDS or len(v) < 2 or (v.isdigit() and len(v) < 6) or _harmless(v, label):
             return
         if len(v) >= 4:
+            if v not in self.tokens:
+                self._by_gram = None
+                self.memo.clear()
             self.tokens.setdefault(v, label)
         elif label == "<book>":
             self.short.setdefault(v, label)
@@ -166,8 +205,12 @@ class Scrubber:
         """The tokens that occur in ``strings``, longest first: a token is searched only when its first four
         characters occur somewhere (thousands of tokens against a document of a few hundred kB)."""
         blob = "\x00".join(strings)
+        if self._by_gram is None:  # indexed once: a lookup per gram, not a pass over every token per text (#157)
+            self._by_gram = defaultdict(list)
+            for t in self.tokens:
+                self._by_gram[t[:4]].append(t)
         grams = {blob[i:i + 4] for i in range(max(0, len(blob) - 3))}
-        hits = [t for t in self.tokens if t[:4] in grams and t in blob]
+        hits = [t for g in grams for t in self._by_gram.get(g, ()) if t in blob]
         return sorted(hits, key=len, reverse=True)
 
     @staticmethod
@@ -232,14 +275,21 @@ NUMBER = re.compile(r"[-+−]?\d+(?:[.,]\d+)?")
 
 
 def signature(scrub: Scrubber, text: Any, limit: int = 160) -> str:
-    """The kind of a message: scrubbed, with its dates, ids and numbers replaced, so equal kinds count together."""
+    """The kind of a message: scrubbed, with its dates, ids and numbers replaced, so equal kinds count together.
+    Remembered per text (a log or a run repeats the same messages thousands of times, #157)."""
+    key = (str(text), limit)
+    if key in scrub.memo:
+        return scrub.memo[key]
     s = scrub.text(text, limit=1000) or ""
     s = DATE_TS.sub("<date>", s)
     s = SHORT_DATE.sub("<date>", s)
     s = HEX_ID.sub("<id>", s)
     s = NUMBER.sub("#", s)
     s = " ".join(s.split())
-    return s if len(s) <= limit else s[:limit - 1] + "…"
+    s = s if len(s) <= limit else s[:limit - 1] + "…"
+    if len(scrub.memo) < 50_000:
+        scrub.memo[key] = s
+    return s
 
 
 def _top(c: Counter, n: int = MAX_KINDS) -> dict[str, int]:
@@ -573,14 +623,23 @@ def log_files(settings: Settings) -> list[Path]:
     return sorted(files, key=order)
 
 
-def logs_section(settings: Settings, scrub: Scrubber, now: datetime) -> tuple[dict[str, Any], dict[str, Any]]:
-    """(the ``logs`` section, the autopilot cycles read from ``autopilot.log``)."""
+def logs_section(settings: Settings, scrub: Scrubber, now: datetime,
+                 budget_s: float = SECTION_BUDGET_S) -> tuple[dict[str, Any], dict[str, Any]]:
+    """(the ``logs`` section, the autopilot cycles read from ``autopilot.log``). The files after ``budget_s`` are
+    listed, not read (``cut_by_time``); the window of the last warnings and errors holds at most
+    ``REPEATS_IN_WINDOW`` of one kind, the rest counted in ``recent_repeats_dropped`` (#157: a flood of
+    ``ConnectionResetError`` hid every other error)."""
     since = (now - timedelta(days=LOG_DAYS)).date().isoformat()
     files, by_day, by_logger, kinds, recent = [], defaultdict(Counter), defaultdict(Counter), Counter(), []
     kind_last: dict[str, str] = {}
     exceptions: Counter = Counter()
     autopilot_recs: list[dict[str, Any]] = []
+    deadline, cut_by_time = time.perf_counter() + budget_s, False
     for p in log_files(settings):
+        if time.perf_counter() > deadline:
+            cut_by_time = True
+            files.append({"name": p.name, "skipped": "time"})
+            continue
         try:
             st = p.stat()
             recs, cut = _records(p)
@@ -608,14 +667,26 @@ def logs_section(settings: Settings, scrub: Scrubber, now: datetime) -> tuple[di
                 if r["at"]:
                     kind_last[k] = _iso(r["at"])
                 recent.append({"at": _iso(r["at"]), "file": p.name, "level": r["level"], "logger": r["logger"],
-                               "text": scrub.text(r["message"]), "exception": exc})
+                               "text": r["message"], "exception": exc, "kind": k})
     recent.sort(key=lambda r: r["at"] or "")
+    window, per_kind, dropped = [], Counter(), Counter()
+    for r in reversed(recent):  # newest first; scrubbed only once in the window
+        if len(window) >= MAX_LOG_LINES:
+            break
+        k = r.pop("kind")
+        per_kind[k] += 1
+        if per_kind[k] > REPEATS_IN_WINDOW:
+            dropped[k] += 1
+            continue
+        window.append({**r, "text": scrub.text(r["text"])})
     out = {"files": files, "days": LOG_DAYS, "times": "the computer's local time (clock.local_utc_offset_h)",
+           "cut_by_time": cut_by_time,
            "by_day": {d: dict(c) for d, c in sorted(by_day.items())},
            "by_logger": {k: dict(c) for k, c in sorted(by_logger.items())},
            "warning_error_kinds": [{"kind": k, "count": n, "last_at": kind_last.get(k)}
                                    for k, n in kinds.most_common(MAX_KINDS)],
-           "exceptions": _top(exceptions), "recent_warnings_errors": recent[-MAX_LOG_LINES:][::-1]}
+           "exceptions": _top(exceptions), "recent_warnings_errors": window,
+           "recent_repeats_dropped": _top(dropped, 10)}
     return out, autopilot_from_log(autopilot_recs, scrub, now)
 
 
@@ -1158,7 +1229,11 @@ def run_summary(con: psycopg.Connection, r: dict[str, Any], scrub: Scrubber) -> 
     return out
 
 
-def runs_section(con: psycopg.Connection, scrub: Scrubber, limit: int = MAX_RUNS) -> dict[str, Any]:
+def runs_section(con: psycopg.Connection, scrub: Scrubber, limit: int = MAX_RUNS,
+                 budget_s: float = SECTION_BUDGET_S) -> dict[str, Any]:
+    """The run counts, the runs per date, the ``logic_version`` of the default runs over the whole history (#157:
+    which dates an upgrade recomputes) and the last ``limit`` runs in full, those after ``budget_s`` by id only
+    (``cut_by_time``)."""
     from psycopg.rows import dict_row
 
     with con.cursor(row_factory=dict_row) as cur:
@@ -1168,7 +1243,15 @@ def runs_section(con: psycopg.Connection, scrub: Scrubber, limit: int = MAX_RUNS
     by_date = [{"as_of": _iso(d), "runs": n, "types": t} for d, n, t in con.execute(
         "SELECT business_date, count(*), array_agg(DISTINCT run_type || '/' || cut_type) FROM run"
         " GROUP BY 1 ORDER BY 1 DESC LIMIT 20")]
-    return {"counts": counts, "by_date": by_date, "last": [run_summary(con, r, scrub) for r in rows]}
+    versions = [{"logic_version": v, "dates": n, "from": _iso(d0), "to": _iso(d1)} for v, n, d0, d1 in con.execute(
+        "SELECT lineage->>'logic_version', count(DISTINCT business_date), min(business_date), max(business_date)"
+        f" FROM run WHERE run_id IN ({store.DEFAULT_RUNS}) GROUP BY 1 ORDER BY 3, 1")]
+    deadline, last = time.perf_counter() + budget_s, []
+    for r in rows:
+        last.append(run_summary(con, r, scrub) if time.perf_counter() <= deadline
+                    else {"run_id": r["run_id"], "as_of": _iso(r["business_date"]), "skipped": "time"})
+    return {"counts": counts, "by_date": by_date, "logic_versions": versions,
+            "cut_by_time": any("skipped" in x for x in last), "last": last}
 
 
 def db_section(con: psycopg.Connection, settings: Settings) -> dict[str, Any]:
@@ -1210,7 +1293,8 @@ def build(settings: Settings | None = None, *, store_url: str | None = None, aut
     store_error = None
     try:
         con = psycopg.connect(store_url or store.resolve_url(settings), autocommit=True, connect_timeout=5,
-                              options="-c default_transaction_read_only=on")
+                              options="-c default_transaction_read_only=on"
+                                      f" -c statement_timeout={STATEMENT_TIMEOUT_MS}")  # a slow query: its section only
     except Exception as e:  # noqa: BLE001 - no store: the file-based sections still go out
         store_error = f"{type(e).__name__}: {e}"
     try:
@@ -1263,7 +1347,7 @@ def build(settings: Settings | None = None, *, store_url: str | None = None, aut
         section("positions", need_store(lambda c: positions_section(settings, c, now)))
         section("runs", need_store(lambda c: runs_section(c, scrub)))
         section("db", need_store(lambda c: db_section(c, settings)))
-        section("backfill", need_store(lambda c: backfill_section(settings, c)))
+        section("backfill", need_store(lambda c: backfill_section(settings, c, scrub)))
         section("backup", lambda: backup.diagnostics(settings))
         doc["build"] = {"duration_s": round(time.perf_counter() - t_all, 2), "sections_s": times,
                         "store_error": scrub.text(store_error) if store_error else None, "hub_asked": bool(hub)}
@@ -1313,12 +1397,17 @@ def market_history_section(con: psycopg.Connection, scrub: Scrubber) -> dict[str
     return st
 
 
-def backfill_section(settings: Settings, con: psycopg.Connection) -> dict[str, Any]:
-    """The history of runs (R23, ``desk.backfill.status``: dates and counts) and the concept pages' read model: run
-    summaries, the static snapshots' facts (date, coverage counts), the CBR meetings."""
+def backfill_section(settings: Settings, con: psycopg.Connection, scrub: Scrubber) -> dict[str, Any]:
+    """The history of runs (R23, ``desk.backfill.status``: dates and counts, the problem dates with their error
+    texts and the stall, scrubbed, #157) and the concept pages' read model: run summaries, the static snapshots'
+    facts (date, coverage counts), the CBR meetings."""
     from . import backfill
 
     st = backfill.status(con, settings)
+    st["problem_dates"] = [{**x, "error": scrub.text(x.get("error"), 300), "why": scrub.text(x.get("why"), 200)}
+                           for x in st.get("problem_dates") or []]
+    if st.get("stalled"):
+        st["stalled"] = {**st["stalled"], "error": scrub.text(st["stalled"].get("error"), 300)}
     summ = con.execute("SELECT count(*), (SELECT count(*) FROM run WHERE status = 'complete') FROM run_summary").fetchone()
     stat = [{"business_date": d.isoformat(), "snapshot": sid[:12], "coverage": (data or {}).get("coverage")}
             for sid, d, data in con.execute("SELECT snapshot_id, business_date, data->'calendar' FROM md_static_summary"

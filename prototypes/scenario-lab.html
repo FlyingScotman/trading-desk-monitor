@@ -459,11 +459,11 @@ input[type=date].dt{border:1px solid var(--line-strong);background:var(--surface
     </div>
     <div class="panel s5">
       <div class="ph"><h2>История · 22 дня</h2><span class="hint">клик по дню выбирает дату</span></div>
-      <div class="cap">Official vs explained, млн ₽</div>
+      <div class="cap" id="h-main-cap">Official vs explained, млн ₽</div>
       <div class="chart md" id="h-main"></div>
       <div class="cap">Unexplained, млн ₽ · порог ±2 млн</div>
       <div class="chart sm" id="h-un"></div>
-      <div class="cap">Накопленный official PnL, млн ₽</div>
+      <div class="cap" id="h-cum-cap">Накопленный official PnL, млн ₽</div>
       <div class="chart sm" id="h-cum"></div>
     </div>
     <div class="panel s12">
@@ -931,25 +931,30 @@ const TREE = (function(){
 TREE.desks.forEach(d => S.open.add(d.key));
 (function(){ let best = null; TREE.desks.forEach(d => d.children.forEach(b => { if (!best || Math.abs(b.unexplained) > Math.abs(best.unexplained)) best = b; })); if (best) S.open.add(best.key); })();
 
-// null — не посчитано (нет PnL ни у одной позиции, официальный ещё не пришёл): «—», а не 0
-const hUn = h => h.pnlOfficial == null || h.pnlExplained == null ? null : h.pnlOfficial - h.pnlExplained;
+// null — не посчитано (нет PnL ни у одной позиции, официальный ещё не пришёл): «—», а не 0.
+// officialReceived === false (TDM#106): официального PnL за день нет, pnlOfficial — флэш плюс курсы ЦБ («Explain ЦБ»),
+// его не называем официальным и unexplained по нему не считаем; поля нет (демо, старый сервер) — как раньше
+const hOffOk = h => h.officialReceived !== false;
+const hOff = h => hOffOk(h) ? h.pnlOfficial : null;
+const hUn = h => hOff(h) == null || h.pnlExplained == null ? null : hOff(h) - h.pnlExplained;
+const OFF_NONE = 'Официального PnL за дату нет; «Explain ЦБ» — флэш плюс курсы ЦБ, не официальный';
 function dayTotals(date){
   if (date === TODAY) { const t = TREE.tot, no = t.none;
     return {official:no || !READY ? null : t.official, explained:no ? null : t.explained, fxBasis:no ? null : t.fxBasis, unexplained:no || !READY ? null : t.unexplained, detail:true, cover:t.cover,
       tip: no ? t.cover.tip : OFF_WAIT}; }
   const h = D.history.find(x => x.date === date);
-  return {official:h.pnlOfficial, explained:h.pnlExplained, fxBasis:h.pnlExplained == null ? null : 0, unexplained:hUn(h), detail:false, tip:'PnL за ' + fdate(date) + ' не посчитан'};
+  return {official:hOff(h), explained:h.pnlExplained, fxBasis:h.pnlExplained == null ? null : 0, unexplained:hUn(h), detail:false, noOfficial:!hOffOk(h), tip:'PnL за ' + fdate(date) + ' не посчитан'};
 }
-const dayChip = t => t.explained == null ? chip('info', 'PnL не посчитан') : t.official == null ? chip('info', 'Ожидается T+1') : chip(status(t.unexplained, t.official, false));
+const dayChip = t => t.explained == null ? chip('info', 'PnL не посчитан') : t.official == null ? chip('info', t.noOfficial ? 'Официального нет' : 'Ожидается T+1') : chip(status(t.unexplained, t.official, false));
 function renderRecon(){
   const t = dayTotals(S.date), pct = t.official && t.unexplained != null ? t.unexplained / Math.abs(t.official) * 100 : null;
   const val = (x, tip) => x == null ? na(tip) : smln(x) + '<small>млн ₽</small>', pc = t.detail ? t.cover : null;
   const opts = D.history.slice().reverse().map(h => `<option value="${h.date}"${h.date === S.date ? ' selected' : ''}>${fdate(h.date)}${h.date === TODAY ? ' · детализация' : ' · только итоги'}</option>`).join('');
   $('#recon').innerHTML = `<div class="datebox"><label class="lbl mono muted" for="ex-date" style="font:600 10px var(--font-mono);letter-spacing:.08em;text-transform:uppercase">Дата</label><select id="ex-date">${opts}</select></div>
-    <div class="kpi"><span class="lbl">Official PnL (ЦБ)</span><span class="val">${val(t.official, t.explained == null ? t.tip : OFF_WAIT)}</span></div><span class="op">−</span>
+    <div class="kpi"><span class="lbl">Official PnL (ЦБ)</span><span class="val">${val(t.official, t.explained == null ? t.tip : t.noOfficial ? OFF_NONE : OFF_WAIT)}</span></div><span class="op">−</span>
     <div class="kpi"><span class="lbl">Флэш (рынок)</span><span class="val">${val(t.explained, t.tip)}</span></div><span class="op">−</span>
     <div class="kpi"><span class="lbl">Курсы ЦБ − рынок</span><span class="val">${val(t.fxBasis, t.tip)}</span></div><span class="op">=</span>
-    <div class="kpi"><span class="lbl">Unexplained</span><span class="val">${val(t.unexplained, t.explained == null ? t.tip : OFF_WAIT)}</span></div>
+    <div class="kpi"><span class="lbl">Unexplained</span><span class="val">${val(t.unexplained, t.explained == null ? t.tip : t.noOfficial ? OFF_NONE : OFF_WAIT)}</span></div>
     <div class="kpi"><span class="lbl">% unexplained</span><span class="val">${pct == null ? '—' : num(Math.abs(pct), 1) + '<small>%</small>'}</span></div>
     <div class="kpi"><span class="lbl">Статус</span>${dayChip(t)}<span class="muted" style="font-size:11px">порог условный: max(5% · |official|, 2 млн ₽)</span></div>
     ${pc && pc.partial ? `<div class="kpi" style="max-width:320px"><span class="lbl">Покрытие PnL</span>${U.pnlPartHtml(pc)}<span class="muted" style="font-size:11px">итоги — только по позициям с PnL. Без PnL: ${esc(pc.reasons.map(x => x[0] + ' — ' + x[1]).join('; '))}</span></div>` : ''}
@@ -1021,18 +1026,24 @@ function renderHistory(){
   const mark = {silent:true, symbol:'none', lineStyle:{color:tok('--accent'), type:'solid', width:1}, label:{show:false}, data:[{xAxis:selI}]};
   const tt = Object.assign({trigger:'axis', axisPointer:{type:'line', lineStyle:{color:line2}}}, ttStyle());
   const m = ch('h-main'), u = ch('h-un'), cu = ch('h-cum');
-  m.setOption({animation:!reduced, grid:{left:46, right:10, top:26, bottom:18}, legend:{top:0, right:6, itemWidth:14, itemHeight:2, textStyle:{color:fg2, fontSize:11}, data:['Official','Explained']},
+  // официальный PnL — только за дни, где он получен; остальные дни — линия «Explain ЦБ» (флэш + курсы ЦБ), TDM#106
+  const anyOff = H.some(h => hOffOk(h) && h.pnlOfficial != null), allOff = H.every(hOffOk);
+  const OFFN = 'Official', CBRN = 'Explain ЦБ';
+  $('#h-main-cap').textContent = anyOff ? (allOff ? 'Official vs explained, млн ₽' : 'Official (где получен), explain по курсам ЦБ и explained, млн ₽') : 'Explain по курсам ЦБ vs explained, млн ₽ · официального PnL нет';
+  $('#h-cum-cap').textContent = allOff ? 'Накопленный official PnL, млн ₽' : anyOff ? 'Накопленный PnL: official, где получен, иначе по курсам ЦБ, млн ₽' : 'Накопленный PnL по курсам ЦБ (не официальный), млн ₽';
+  m.setOption({animation:!reduced, grid:{left:46, right:10, top:26, bottom:18}, legend:{top:0, right:6, itemWidth:14, itemHeight:2, textStyle:{color:fg2, fontSize:11}, data:(anyOff ? [OFFN] : []).concat(allOff ? [] : [CBRN], ['Explained'])},
     tooltip: Object.assign({}, tt, {formatter: ps => `<b>${fdate(H[ps[0].dataIndex].date)}</b><br>` + ps.map(p => `${p.marker}${p.seriesName}: ${p.value == null ? '— не посчитан' : smln(p.value) + ' млн'}`).join('<br>') + `<br>Unexplained: ${smlnN(hUn(H[ps[0].dataIndex]))} млн`}),
     xAxis: ax(false), yAxis: ya(),
-    series:[{name:'Official', type:'line', data:H.map(h => h.pnlOfficial), symbol:'circle', symbolSize:5, lineStyle:{width:2, color:tok('--c1')}, itemStyle:{color:tok('--c1')}, markLine:mark},
-            {name:'Explained', type:'line', data:H.map(h => h.pnlExplained), symbol:'circle', symbolSize:5, lineStyle:{width:2, color:tok('--c2'), type:[4, 3]}, itemStyle:{color:tok('--c2')}}]}, true);
+    series:(anyOff ? [{name:OFFN, type:'line', data:H.map(hOff), symbol:'circle', symbolSize:5, lineStyle:{width:2, color:tok('--c1')}, itemStyle:{color:tok('--c1')}, markLine:mark}] : [])
+      .concat(allOff ? [] : [{name:CBRN, type:'line', data:H.map(h => hOffOk(h) ? null : h.pnlOfficial), symbol:'emptyCircle', symbolSize:5, lineStyle:{width:2, color:tok('--c1'), type:'dotted'}, itemStyle:{color:tok('--c1')}, markLine: anyOff ? undefined : mark}]).concat([
+            {name:'Explained', type:'line', data:H.map(h => h.pnlExplained), symbol:'circle', symbolSize:5, lineStyle:{width:2, color:tok('--c2'), type:[4, 3]}, itemStyle:{color:tok('--c2')}}])}, true);
   u.setOption({animation:!reduced, grid:{left:46, right:10, top:8, bottom:18},
-    tooltip: Object.assign({}, tt, {axisPointer:{type:'shadow', shadowStyle:{color:'rgba(127,127,127,.12)'}}, formatter: ps => { const h = H[ps[0].dataIndex], v = hUn(h); return `<b>${fdate(h.date)}</b><br>Unexplained: ${smlnN(v)} млн<br>Статус: ${v == null ? 'PnL не посчитан' : ST_LBL[status(v, h.pnlOfficial, false)]}`; }}),
+    tooltip: Object.assign({}, tt, {axisPointer:{type:'shadow', shadowStyle:{color:'rgba(127,127,127,.12)'}}, formatter: ps => { const h = H[ps[0].dataIndex], v = hUn(h); return `<b>${fdate(h.date)}</b><br>Unexplained: ${smlnN(v)} млн<br>Статус: ${v == null ? (hOffOk(h) ? 'PnL не посчитан' : 'официального PnL нет') : ST_LBL[status(v, h.pnlOfficial, false)]}`; }}),
     xAxis: ax(false), yAxis: ya(),
     series:[{type:'bar', barWidth:'55%', data: H.map(h => { const v = hUn(h), st = v == null ? 'ok' : status(v, h.pnlOfficial, false); return {value:v, itemStyle:{color: st === 'crit' ? tok('--crit') : st === 'warn' ? tok('--warn') : tok('--fg-3'), borderRadius:1}}; }),
       markLine:{silent:true, symbol:'none', lineStyle:{color:line2, type:'dashed'}, label:{show:false}, data:[{yAxis:2e6}, {yAxis:-2e6}, {xAxis:selI, lineStyle:{color:tok('--accent'), type:'solid'}}]}}]}, true);
   cu.setOption({animation:!reduced, grid:{left:46, right:10, top:8, bottom:22},
-    tooltip: Object.assign({}, tt, {formatter: ps => `<b>${fdate(H[ps[0].dataIndex].date)}</b><br>Накопленный: ${smlnN(ps[0].value)} млн<br>За день: ${H[ps[0].dataIndex].pnlOfficial == null ? '— не посчитан' : smln(H[ps[0].dataIndex].pnlOfficial) + ' млн'}`}),
+    tooltip: Object.assign({}, tt, {formatter: ps => `<b>${fdate(H[ps[0].dataIndex].date)}</b><br>Накопленный: ${smlnN(ps[0].value)} млн<br>За день: ${H[ps[0].dataIndex].pnlOfficial == null ? '— не посчитан' : smln(H[ps[0].dataIndex].pnlOfficial) + ' млн' + (hOffOk(H[ps[0].dataIndex]) ? '' : ' (по курсам ЦБ, не официальный)')}`}),
     xAxis: ax(true), yAxis: ya(),
     series:[{type:'line', data:H.map(h => h.pnlCum), symbol:'none', lineStyle:{width:2, color:tok('--accent')}, areaStyle:{color:tok('--accent'), opacity:.12}, markLine:mark}]}, true);
   [m, u, cu].forEach(c => { c.group = 'hist'; });

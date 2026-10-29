@@ -141,6 +141,12 @@ def run_totals(rows) -> tuple[float | None, float | None, float, float]:
             math.fsum(p.get("cs01") or 0.0 for p in facts))
 
 
+def official_received(rows) -> bool:
+    """Whether any row (fact, pnl) of a run carries the official PnL itself (TDM#106), not the fallback of
+    ``run_totals`` (explained plus the FX basis at the CBR rates)."""
+    return any((r["pnl"] or {}).get("official") is not None for r in rows)
+
+
 NOT_VALUED_KIND = {"otc": ("OTC-деривативы", "Деривативы"), "other": ("Прочее", "Прочее"), "fx": ("Валюта", "FX")}
 """asset_class of an unvalued report row -> (asset class, segment), as ``tdm_run.DIRECT_KIND`` names a valued one;
 a bond and a legacy row get none (segment ``—`` in the Desk Monitor)."""
@@ -383,8 +389,10 @@ def assemble(con, run: dict[str, Any]) -> dict[str, Any]:
             " WHERE run_id = %s AND fact IS NOT NULL", (h["run_id"],)).fetchall()) for h in hist] + [(as_of, prows)]:
         off, exp, dv01, cs01 = run_totals(rows)
         cum += off or 0.0
+        # officialReceived (TDM#106): pnlOfficial is the official PnL only when one arrived; else it is the explained
+        # PnL plus the FX basis (run_totals), and the pages must not call it official
         history.append({"date": d, "pnlOfficial": off, "pnlExplained": exp, "pnlCum": cum, "dv01": dv01,
-                        "cs01": cs01})
+                        "cs01": cs01, "officialReceived": official_received(rows)})
     # no previous market: prevDate null (R10), the funding accrual still over the previous weekday
     prev = run["prev_date"] or _prev_weekday(run["business_date"])
     zero_book = {"carry": 0.0, "fx": 0.0, "fxCbr": 0.0, "fxAllocated": 0.0, "inPositions": 0.0}
