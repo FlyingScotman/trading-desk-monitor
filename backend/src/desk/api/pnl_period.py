@@ -18,7 +18,7 @@ from typing import Any
 from psycopg.rows import dict_row
 from rub_fixed_income import RISK_BUCKETS
 
-from ..pnl.reasons import REPORTED_METHOD
+from ..pnl.reasons import REPORTED_METHOD, UNRECORDED
 from ..publish.summary import kind_of
 from .pnl_history import (
     KEYS,
@@ -196,6 +196,7 @@ class Position:
         self.buckets: dict[int, Sum] = {}
         self.n = n_buckets
         self.methods: dict[str, None] = {}
+        self.reasons: dict[str, None] = {}  # other_reason codes of the rows (TDM#442)
         self.no_pnl: dict[str, int] = {}
 
     def add(self, r: dict[str, Any], a: dict[str, Any], comp: dict[str, float | None], d: date, i: int) -> None:
@@ -205,6 +206,9 @@ class Position:
         self.agg.add(a, comp)
         if a["method"]:
             self.methods[a["method"]] = None
+        unexplained = [v for v in (comp.get("other"), comp.get("reported")) if v]
+        if code := (a["reason"] or {}).get("code") or (UNRECORDED if unexplained else None):
+            self.reasons[str(code)] = None
         if r.get("noPnl"):
             why = str((r["noPnl"] or {}).get("reason") or "")
             self.no_pnl[why] = self.no_pnl.get(why, 0) + 1
@@ -228,7 +232,8 @@ class Position:
                 "pvAvg": self.pv.value() / self.pv.n if self.pv.n else None, "calDays": self.cal_days,
                 "fundingRatePct": self.rate.value() / w if w else None,
                 "buckets": [self.buckets[i].value() if i in self.buckets else None for i in range(self.n)],
-                "methods": sorted(self.methods), "noPnlReasons": dict(self.no_pnl), **self.agg.result()}
+                "methods": sorted(self.methods), "reasons": sorted(self.reasons), "noPnlReasons": dict(self.no_pnl),
+                **self.agg.result()}
 
 
 class Period:
@@ -656,6 +661,8 @@ def position_days(rows: Iterable[dict[str, Any]], run_dates: list[date], gov: fr
             events.append(f"позиции нет в прогоне {_fmt(run_dates[i + 1])}")
         no_pnl = r.get("noPnl")
         days.append({"date": d, "prevDate": prev_date, "runId": r["runId"], "method": a["method"], "note": a["note"],
+                     "reason": a["reason"],
+                     "reportFrom": _date(extra.get("report_from")),  # D-1 carried an older report (TDM#440)
                      "noPnl": {"reason": no_pnl.get("reason"), "detail": no_pnl.get("detail")} if no_pnl else None,
                      "total": a["total"], "c": comp, "ratesLinear": _num(extra.get("rates_linear")),
                      "grossCheck": a["grossCheck"],

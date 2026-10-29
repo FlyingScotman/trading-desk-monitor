@@ -79,8 +79,8 @@
   const mn = v => v == null || !isFinite(v) ? '<span class="mut3">—</span>' : f.mn(v, DIG);
   const bp = v => v == null || !isFinite(v) ? '<span class="mut3">—</span>' : f.n(v, 0);
   const KIND = k => k === 'CASH' ? 'остатки ДС' : (window.INSTR && INSTR.SHORT[k]) || k || '—';
-  // бумага без своей цены сегодня (#383): керри ядра по прошлой или рыночной цене
-  const PRICED = { stale_price: 'по прошлой цене', market_value: 'по рыночной цене' };
+  // бумага без своей цены сегодня (#383) и модельная цена (#441): керри ядра по прошлой, рыночной или модельной цене
+  const PRICED = { stale_price: 'по прошлой цене', market_value: 'по рыночной цене', model_price: 'по модельной цене' };
   const QUAL = r => r.isCash ? 'остатки ДС' : r.covered ? (r.carryMethod === 'redeemed' ? 'погашается до горизонта' : PRICED[r.quality] || (r.quality === 'assumed' ? 'с допущениями' : 'точная')) : r.reason;
   const entName = e => ((M.entities || []).find(x => x.id === e) || {}).name || e;
   const TIP = {

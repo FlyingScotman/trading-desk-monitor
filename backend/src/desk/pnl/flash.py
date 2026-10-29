@@ -34,6 +34,33 @@ V1          the D dirty price                                                   
   RUONIA risk x the OIS par move) and the basis (the rest); ``rates`` itself is the full repricing of the KBD's move.
 - ``other`` is what the D-1 position does not explain at the D market: a changed schedule
   (an offer passed, a new coupon fixed) or a quote whose price and accrued disagree.
+- A bond valued by core at a fallback rung's price (``market_value`` / ``stale_price``, ``fallback.at_last_price``;
+  ``model_price``, ``fallback.at_model_price``, TDM#441) takes the same steps: its price is the rung's, its flows and
+  spread core's. A model price on one date and a market price on the other (``price_discovery``): the spread step, the
+  model's Z against the market's, is price discovery, not a spread move, so it stays in ``other``
+  (``price_source_switch``) and ``flag`` says the direction.
+
+Why a PnL is in ``other`` (TDM#442): ``extra["other_reason"]`` (``pnl.reasons.other_reason``), on every PnL with an
+unexplained part, here and on the paths without these steps; what cannot be decomposed stays in ``other``, nothing
+is approximated in its place:
+
+========================  =============================================================================================
+``other_reason.code``     Path
+========================  =============================================================================================
+``flash_residual``        these steps (``explain``): ``other`` above; ``detail`` a changed horizon or schedule, else the
+                          D price and accrued against the D-1 position
+``price_source_switch``   these steps with a model price on one date (``price_discovery``), or the simple PnL so
+``discount_curve_switch`` discounted on another curve on D-1 than on D (``orchestrator.attach_pnl``): the simple PnL
+``no_curve_on_date``      a fallback rung because core refused the bond for a curve the date's market lacks (a floater on
+                          a date without RUONIA OIS): the simple PnL, with the curve and the date
+``core_refused``          a fallback rung because core refused the bond otherwise (its code): the simple PnL
+``fallback_price``        a fallback rung off core for another reason (no price, terms core does not take): the simple
+                          PnL (``valuation.fallback.simple_pnl``), with the rung
+``yield_no_curve``        a foreign bond without a curve in its currency: the yield move (``fallback.yield_pnl``)
+``reported_value``,       a report value (``pnl.direct``), for want of terms or not
+``no_terms``
+``fx_core_rest``          an FX deal by core: what its FX delta does not explain (``pnl.direct``)
+========================  =============================================================================================
 
 Breakdowns kept in ``extra`` (TDM#406, the PnL period screen: docs/architecture/briefs/PNL_PERIOD.md); they split
 the components above and change none of them. Absent when not computable (a bond valued off core), never 0; nice to
@@ -80,7 +107,7 @@ from __future__ import annotations
 
 import logging
 import math
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import date, timedelta
 from typing import Any
 
@@ -105,8 +132,11 @@ from rub_fixed_income import (
 from ..curves.rates import RUONIA_OIS_CURVE_ID
 from ..marketdata.adapter import KBD_CURVE_ID
 from ..valuation.bonds import RISK_CURVES, SPREAD_CONVENTION, BondValuation, FloaterModel
+from .reasons import FLASH_RESIDUAL, PRICE_SOURCE_SWITCH, other_reason
 
 log = logging.getLogger(__name__)
+MODEL_PRICE = "model_price"
+"""The quality of a model price (``valuation.fallback``): a price of no market, from a spread (``price_discovery``)."""
 
 METHOD = "desk-flash-exact-v2"
 """v2: on the bond's own curves (the RUONIA discount curve, a floater's projection curve reprojected); v1 repriced
@@ -307,6 +337,11 @@ class FlashPnl:
     """The moves of ``rates_linear_curves`` (and RUONIA's of ``rates_linear_ofz``) by published curve and bucket."""
     prev_inputs: dict[str, Any] | None = field(default=None, compare=False)
     """The D-1 inputs (``extra["prev"]``)."""
+    flag: str = ""
+    """Set when a model price is on either side (``price_discovery``; the simple PnL's too): the PnL is then partly
+    price discovery, not a market move."""
+    other_reason: dict[str, Any] | None = field(default=None, compare=False)
+    """Why the PnL is (partly) in ``other`` (module docstring, ``pnl.reasons.other_reason``): ``extra["other_reason"]``."""
 
     @property
     def carry_pull(self) -> float | None:
@@ -339,8 +374,13 @@ class FlashPnl:
             "identity_error": self.identity_error, "rates_linear": self.rates_linear,
             **({"rates_linear_ruonia": self.rates_linear_ofz[0], "rates_linear_basis": self.rates_linear_ofz[1]}
                if self.rates_linear_ofz is not None else {}),
-            "prev_price_basis": self.price_basis[0], **fx, **self.breakdown(),
+            "prev_price_basis": self.price_basis[0], **fx, **self.tags(), **self.breakdown(),
         }
+
+    def tags(self) -> dict[str, Any]:
+        """``flag`` and ``other_reason`` in ``extra``, when set."""
+        return {**({"flag": self.flag} if self.flag else {}),
+                **({"other_reason": self.other_reason} if self.other_reason else {})}
 
     def breakdown(self) -> dict[str, Any]:
         """The keys of TDM#406 in ``extra`` (module docstring), JSON-safe: a pair whose value is not finite left out,
@@ -369,6 +409,8 @@ BREAKDOWN_KEYS = ("carry_coupon", "carry_pull", "received_coupon_rub", "received
                   "curve_moves_bp", "prev")
 """The keys of ``FlashPnl.breakdown``: kept in the store's ``pnl.extra`` (``publish.desk_run``), which the PnL period
 API reads, not in the fact's copy of it (``publish.tdm_run.pnl_extra``), whose shape stays as it was."""
+STORE_ONLY_KEYS = (*BREAKDOWN_KEYS, "other_reason")
+"""``BREAKDOWN_KEYS`` and the reason of the unexplained (TDM#442): the store's ``pnl.extra`` only."""
 
 
 def _finite(x: Any) -> float | None:
@@ -482,6 +524,34 @@ def _prev_fields(prev: BondValuation) -> dict[str, Any]:
     }
 
 
+def _residual(prev: BondValuation, cur: BondValuation, s1: date) -> str:
+    """``flash_residual``'s detail: what the D-1 position may not explain at the D market (its horizon, its schedule:
+    the dates of a floater's flows, a fixed bond's amounts too), else the D quote itself."""
+    if prev.horizon_date != cur.horizon_date:
+        return f"horizon {prev.horizon_date} -> {cur.horizon_date}"
+
+    def flows(v: BondValuation) -> list[tuple[date, float]]:
+        return [(f.payment_date, 0.0 if v.floater else round(f.amount, 6)) for f in v.cashflows if f.payment_date > s1]
+    if flows(prev) != flows(cur):
+        return "schedule changed"
+    return "the D price and accrued against the D-1 position on the D market"
+
+
+def price_discovery(pnl: FlashPnl, prev: BondValuation, cur: BondValuation) -> FlashPnl:
+    """``pnl`` of a bond on core on both dates (``explain``) with a model price on one date and a market one on the other
+    (TDM#441): its spread step goes to ``other`` (``price_source_switch``, the module docstring; ``spread_rub`` that step,
+    ``residual_rub`` the flash's own rest), ``flag`` says the direction; a model price on both dates keeps its spread step (the model's own Z: carried, or the medians' move),
+    flagged; ``pnl`` as is without a model price."""
+    qs = (prev.quality, cur.quality)
+    if MODEL_PRICE not in qs:
+        return pnl
+    if qs[0] == qs[1]:
+        return replace(pnl, flag="model price on both dates")
+    way = "model -> market" if qs[0] == MODEL_PRICE else "market -> model"
+    return replace(pnl, spread=0.0, other=pnl.other + pnl.spread, flag=f"price discovery: {way}",
+                   other_reason=other_reason(PRICE_SOURCE_SWITCH, way, spread_rub=pnl.spread, residual_rub=pnl.other))
+
+
 def explain(prev: BondValuation, cur: BondValuation, curves: FlashCurves,
             cache: ShockedCurveCache | None = None) -> FlashPnl:
     """Flash PnL from ``prev`` (valued on ``curves.prev_curves``) to ``cur`` (on ``curves.cur_curves``), both
@@ -559,6 +629,7 @@ def explain(prev: BondValuation, cur: BondValuation, curves: FlashCurves,
         carry_coupon=None if coupon is None else coupon * f1,
         received_coupon_rub=None if coupon_received is None else coupon_received * f1,
         rates_linear_curves=terms or None, curve_moves_bp=moves or None, prev_inputs=_prev_inputs(prev),
+        other_reason=other_reason(FLASH_RESIDUAL, _residual(prev, cur, s1)),
     )
     err = out.explained - total
     object.__setattr__(out, "identity_error", err)

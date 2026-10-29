@@ -120,6 +120,10 @@ def server_state(request: Request) -> dict[str, Any]:
     ip = authn.client_ip(request)
     cfg: authn.AuthConfig = request.app.state.auth
     why = unavailable(request)
+    # the outcome before the staged change: the launcher drops network.json, then writes last.json, so an outcome
+    # read here is never paired with the marker it already dropped (TDM#451)
+    last = restart.last(st.home)
+    pending = restart.pending(st.home) is not None
     return {
         "version": update.current_version(), "instance": request.app.state.instance,
         "started_at": request.app.state.started_at.isoformat(timespec="seconds"),
@@ -133,7 +137,7 @@ def server_state(request: Request) -> dict[str, Any]:
         "cert": lan.cert_info(st.tls_cert, lan.local_names()) if conf["https"] else None,
         "firewall": {"rule": lan.FIREWALL_RULE.format(port=st.port), "add": lan.firewall_add_command(st.port),
                      "present": lan.firewall_rule(st.port)} if conf["lan"] else None,
-        "pending": restart.pending(st.home) is not None, "last": restart.last(st.home),
+        "pending": pending, "last": last,
     }
 
 

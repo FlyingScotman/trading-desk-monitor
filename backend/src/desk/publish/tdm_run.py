@@ -71,8 +71,15 @@ from ..marketdata.bundle import SnapshotError
 from ..marketdata.static_facts import SECTOR_LABELS
 from ..orchestrator import EodContext, Outcome, market_rates
 from ..pnl.direct import DirectPnl
-from ..pnl.flash import BREAKDOWN_KEYS, METHOD
-from ..pnl.reasons import CORE_FX_METHOD, FX_METHOD, NO_PNL_TEXT, REPORTED_METHOD, RUN_NO_PREV_MARKET
+from ..pnl.flash import METHOD, STORE_ONLY_KEYS, FlashPnl
+from ..pnl.reasons import (
+    CORE_FX_METHOD,
+    FX_METHOD,
+    NO_PNL_TEXT,
+    OTHER_REASON_TEXT,
+    REPORTED_METHOD,
+    RUN_NO_PREV_MARKET,
+)
 from ..settings import REPO_ROOT
 from ..store import PositionInputs
 from ..valuation.bonds import (
@@ -317,9 +324,9 @@ def _proxy_points(ctx: EodContext, prev: MarketView | None, ccy: str) -> tuple[s
 
 
 def pnl_extra(pnl: Any) -> dict[str, Any]:
-    """The fact's copy of a PnL's ``extra``: without the flash breakdowns of TDM#406 (``pnl.flash.BREAKDOWN_KEYS``),
-    which the store keeps in ``run_position.pnl`` only."""
-    return {k: v for k, v in pnl.extra().items() if k not in BREAKDOWN_KEYS}
+    """The fact's copy of a PnL's ``extra``: without the flash breakdowns of TDM#406 and the reason of the unexplained
+    (TDM#442; ``pnl.flash.STORE_ONLY_KEYS``), which the store keeps in ``run_position.pnl`` only."""
+    return {k: v for k, v in pnl.extra().items() if k not in STORE_ONLY_KEYS}
 
 
 def risk_by_curve(v: BondValuation) -> dict[str, dict[str, float]]:
@@ -676,7 +683,7 @@ def run_content(ctx: EodContext, positions: list[tuple[str, str, Outcome]], prev
             continue
         if o.pnl is None and prev is not None:
             no_pnl.append(f"{pid} {o.secid}: нет PnL ({_why(o)})")
-        if isinstance(o.pnl, SimplePnl) and o.pnl.flag:
+        if isinstance(o.pnl, FlashPnl) and o.pnl.flag:
             no_pnl.append(f"{pid} {o.secid}: PnL {o.pnl.total:,.0f} ₽ с модельной ценой ({o.pnl.flag})")
         key, rec = _issuer_key(ctx, o)
         issuers[key] = rec
@@ -733,6 +740,14 @@ def run_content(ctx: EodContext, positions: list[tuple[str, str, Outcome]], prev
                     f"позиций {len(with_pnl)} (без разложения {len(simple)}): "
                     + ", ".join(f"{k} {v:,.0f}" for k, v in tot.items())
                     + f"; итог {sum(x.total for x in with_pnl):,.0f} ₽, макс. ошибка тождества {worst:.2e} ₽"))
+    reasons: dict[str, list[float]] = {}  # the unexplained by its reason (TDM#442): other, and reported's other
+    for x in [o.pnl for _, _, o in positions if o.pnl]:
+        if isinstance(r := x.other_reason, dict) and r.get("code") in OTHER_REASON_TEXT:
+            reasons.setdefault(r["code"], []).append(x.other)
+    if reasons:
+        log.append(("INFO", "необъяснённое по причинам: " + "; ".join(
+            f"{OTHER_REASON_TEXT[c]} — {len(reasons[c])} поз., {sum(reasons[c]):,.0f} ₽"
+            for c in OTHER_REASON_TEXT if c in reasons)))
     log.append(("WARN", "JTD не считается в слайсе S1 (нет решения по recovery): поле jtd = 0"))
     log.append(("INFO", f"опубликовано позиций: {len(rows)} (точно {quality['exact']}), не посчитано: {len(skipped)}"))
     return RunContent(rows, reference, log)
