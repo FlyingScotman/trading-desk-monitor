@@ -30,8 +30,13 @@
   // дням. Данные вымышленные, встроены в страницу, запросов к серверу нет; боевой экран — c16-ocp.html.
   // Курсы — те, что прогон публикует (FX — рыночный: MOEX 19:00, иначе 14:00, иначе закрытие CETS, иначе ЦБ;
   // FX_CBR — ЦБ, действующий на дату); в макете — демо-значения.
-  // Общая ОВП — большая из сумм длинных и коротких позиций по валютам в USD-эквиваленте (USD входит своей суммой).
-  const M = MOCK, K = KIT, f = K.f, esc = K.esc, h = K.h;
+  // Общая ОВП — большая из сумм длинных и коротких позиций по валютам в USD-эквиваленте (USD входит своей суммой),
+  // со знаком преобладающей стороны.
+  const K = KIT;
+  // открыт на прогоне сервера (desk serve): книги в M.book — настоящие, демо-цифр к ним нет. Тот же адрес с ?demo=1
+  // (boot.js читает параметр и не запоминает его; переключатель шапки запомнил бы демо для всех экранов)
+  if (K.source !== 'demo' && K.source !== 'file') { const u = new URL(location.href); u.searchParams.set('demo', '1'); location.replace(u.href); return; }
+  const M = MOCK, f = K.f, esc = K.esc, h = K.h;
   const bar = K.top({ title: 'C16 · ОВП — макет' });
   ['[data-a=ofzview]', '[data-a=repr]'].forEach(s => { const e = bar.querySelector(s); if (e) e.style.display = 'none'; });
   const view = document.getElementById('view');
@@ -48,8 +53,8 @@
     HTM: { EUR: 2 }, 'IC-BND': { USD: 1.5 }, 'AM-CNY': { CNY: 40 },
   };
   const RATES = {  // ₽ за единицу, по дням; источник — как в прогоне
-    market: { name: 'MOEX 19:00', title: 'рыночный курс: индикативный MOEX 19:00 (нет — 14:00, закрытие CETS, ЦБ)', base: { USD: 81.4, EUR: 94.6, CNY: 11.4 } },
-    cbr: { name: 'ЦБ', title: 'официальный курс ЦБ, действующий на дату', base: { USD: 81.2, EUR: 94.3, CNY: 11.38 } },
+    market: { name: 'MOEX 19:00', title: 'рыночный курс: индикативный MOEX 19:00 (нет — 14:00, закрытие CETS, ЦБ)', base: { USD: M.fx.USD, EUR: M.fx.EUR, CNY: M.fx.CNY } },
+    cbr: { name: 'ЦБ', title: 'официальный курс ЦБ, действующий на дату', base: { USD: 79.9, EUR: 95.9, CNY: 11.05 } },
   };
   let seed = 7; const rnd = () => { seed = (seed * 16807) % 2147483647; return seed / 2147483647; };
   const HIST = {};  // книга → валюта → [mm по дням]; случайное блуждание назад от сегодняшней цифры
@@ -62,7 +67,9 @@
     });
   });
   const rateOn = (src, c, i) => c === 'USD' ? RATES[src].base.USD * (1 + 0.003 * Math.sin(i / 4)) : RATES[src].base[c] * (1 + 0.004 * Math.sin(i / 5 + c.length + (c === 'CNY' ? 2 : 0)));
-  const toUsd = (v, c, i) => c === 'USD' ? v : v * rateOn(S.rate, c, i) / rateOn(S.rate, 'USD', i);
+  // USD-эквивалент, округлённый до 0.1 mm: из этих же цифр складывается общая ОВП (плитки и общая сходятся)
+  const r1 = v => Math.round(v * 10) / 10;
+  const toUsd = (v, c, i) => r1(c === 'USD' ? v : v * rateOn(S.rate, c, i) / rateOn(S.rate, 'USD', i));
 
   // ---------- состояние ----------
   const S = { data: 'ok', unit: 'ccy', rate: 'market', period: 22 };
@@ -74,7 +81,8 @@
     return Object.keys(TODAY).map(id => M.book[id]).filter(b => b && (!F.entity || b.entity === F.entity) && (!F.desk || b.desk === F.desk) && (!F.books || !F.books.length || F.books.includes(b.id)));
   };
   const ccys = () => CCYS.filter(c => !K.filter.ccy || K.filter.ccy === c);
-  const gross = vals => { let l = 0, s = 0; vals.forEach(v => { if (v > 0) l += v; else s -= v; }); return Math.max(l, s); };  // большая из сумм длинных и коротких
+  // большая из сумм длинных и коротких, со знаком преобладающей стороны
+  const gross = vals => { let l = 0, s = 0; vals.forEach(v => { if (v > 0) l += v; else s -= v; }); return r1(l >= s ? l : -s); };
   const fmt = v => v == null ? '<span class="mut3">—</span>' : '<span class="' + f.cls(Math.round(v * 10)) + '">' + f.s(v, 1) + '</span>';
   const unitOf = c => 'mm ' + (S.unit === 'usd' ? 'USD' : c);
   const shown = (v, c, i) => S.unit === 'usd' ? toUsd(v, c, i) : v;
@@ -84,12 +92,13 @@
 
   function render() {
     if (chart) { chart.dispose(); chart = null; }
-    const B = books(), C = ccys().filter(c => B.some(b => HIST[b.id][c])), today = S.data === 'ok', T = N - 1;
+    const B0 = books(), C = ccys().filter(c => B0.some(b => HIST[b.id][c])), B = B0.filter(b => C.some(c => HIST[b.id][c]));
+    const today = S.data === 'ok', T = N - 1, EMPTY = '<div class="k-empty">' + (today ? 'Нет валютной позиции' : 'Нет данных за ' + f.date(AS_OF)) + '</div>';
     view.innerHTML = '';
     const wrap = h('div', 'k-grid');
 
     const strip = h('div', 'v2-strip'); strip.innerHTML = '<span>макет · демо-данные</span><span class="m"></span>';
-    K.seg(strip.querySelector('.m'), [['ok', 'есть данные'], ['none', 'нет данных за день']], S.data, v => { S.data = v; history.replaceState(null, '', v === 'none' ? '#s=none' : '#'); render(); });
+    K.seg(strip.querySelector('.m'), [['ok', 'есть данные'], ['none', 'нет данных за день']], S.data, v => { S.data = v; history.replaceState(null, '', location.pathname + location.search + (v === 'none' ? '#s=none' : '')); render(); });
     wrap.appendChild(strip);
 
     // итог: дата, общая ОВП в USD, валюты
@@ -100,12 +109,11 @@
     const rs = K.seg(r, Object.entries(RATES).map(([k, x]) => [k, 'курс ' + x.name]), S.rate, v => { S.rate = v; render(); });
     rs.querySelectorAll('button').forEach((b, i) => { b.title = Object.values(RATES)[i].title; });
     const tot = c => B.reduce((s, b) => s + ((HIST[b.id][c] || [])[T] || 0), 0);
-    if (!today) sp.querySelector('.bd').innerHTML = '<div class="k-empty">Нет данных ОВП за ' + f.date(AS_OF) + '</div>';
-    else if (!B.length) sp.querySelector('.bd').innerHTML = '<div class="k-empty">У книг фильтра нет валютной позиции</div>';
+    if (!today || !B.length) sp.querySelector('.bd').innerHTML = EMPTY;
     else {
       const usd = C.map(c => toUsd(tot(c), c, T));
       sp.querySelector('.bd').innerHTML = '<div class="v2-sum">' +
-        '<div class="k-kpi tot" title="большая из сумм длинных и коротких позиций по валютам, USD-эквивалент"><div class="l">Общая ОВП</div><div class="v">' + f.n(gross(usd), 1) + ' <span class="u">mm USD</span></div><div class="s">&nbsp;</div></div>' +
+        '<div class="k-kpi tot" title="большая из сумм длинных и коротких позиций по валютам, USD-эквивалент; знак — преобладающей стороны"><div class="l">Общая ОВП</div><div class="v">' + fmt(gross(usd)) + ' <span class="u">mm USD</span></div><div class="s">&nbsp;</div></div>' +
         C.map((c, k) => '<div class="k-kpi"><div class="l"><i class="c" style="background:' + K.ccyColor(c) + '"></i>' + c + '</div><div class="v">' + fmt(shown(tot(c), c, T)) + ' <span class="u">' + unitOf(c) + '</span></div><div class="s">' +
           (c === 'USD' ? '&nbsp;' : S.unit === 'usd' ? f.s(tot(c), 1) + ' mm ' + c : '≈ ' + f.s(usd[k], 1) + ' mm USD') + '</div></div>').join('') + '</div>';
     }
@@ -115,13 +123,13 @@
     const bp = panel('По книгам');
     bp.querySelector('.bd').classList.add('flush', 'scroll');
     if (today && B.length) {
-      const rows = B.map(b => { const v = C.map(c => (HIST[b.id][c] || [])[T]); return { b, v, g: gross(C.map((c, k) => v[k] == null ? 0 : toUsd(v[k], c, T))) }; }).sort((a, z) => z.g - a.g);
+      const rows = B.map(b => { const v = C.map(c => (HIST[b.id][c] || [])[T]); return { b, v, g: gross(C.map((c, k) => v[k] == null ? 0 : toUsd(v[k], c, T))) }; }).sort((a, z) => Math.abs(z.g) - Math.abs(a.g));
       const cell = (v, c) => '<td class="n">' + (v == null ? '<span class="mut3">—</span>' : fmt(shown(v, c, T))) + '</td>';
       bp.querySelector('.bd').innerHTML = '<table class="k-tbl" data-vk="c16v2-books" data-title="ОВП по книгам"><thead><tr><th>Книга</th>' +
-        C.map(c => '<th class="n">' + c + '<span class="k-thu">' + unitOf(c) + '</span></th>').join('') + '<th class="n" title="большая из сумм длинных и коротких, USD-эквивалент">Общая<span class="k-thu">mm USD</span></th></tr></thead><tbody>' +
-        rows.map(x => '<tr><td>' + esc(x.b.name) + '</td>' + x.v.map((v, k) => cell(v, C[k])).join('') + '<td class="n">' + f.n(x.g, 1) + '</td></tr>').join('') +
-        '<tr class="tot"><td>Итого</td>' + C.map(c => cell(tot(c), c)).join('') + '<td class="n">' + f.n(gross(C.map(c => toUsd(tot(c), c, T))), 1) + '</td></tr></tbody></table>';
-    } else bp.querySelector('.bd').innerHTML = '<div class="k-empty">' + (today ? 'Нет книг с ОВП' : 'Нет данных за ' + f.date(AS_OF)) + '</div>';
+        C.map(c => '<th class="n">' + c + '<span class="k-thu">' + unitOf(c) + '</span></th>').join('') + '<th class="n" title="большая из сумм длинных и коротких позиций книги, USD-эквивалент">ОВП книги<span class="k-thu">mm USD</span></th></tr></thead><tbody>' +
+        rows.map(x => '<tr><td>' + esc(x.b.name) + '</td>' + x.v.map((v, k) => cell(v, C[k])).join('') + '<td class="n">' + fmt(x.g) + '</td></tr>').join('') +
+        '<tr class="tot"><td>Итого</td>' + C.map(c => cell(tot(c), c)).join('') + '<td></td></tr></tbody></table>';
+    } else bp.querySelector('.bd').innerHTML = EMPTY;
     wrap.appendChild(bp);
 
     // история по дням: столбцы по валютам (USD-эквивалент), линия — общая ОВП
@@ -140,8 +148,8 @@
       tooltip: { trigger: 'axis', axisPointer: { type: 'shadow' }, valueFormatter: v => v == null ? '—' : f.s(v, 1) + ' mm USD' },
       xAxis: { type: 'category', data: I.map(i => f.dshort(DATES[i])) },
       yAxis: { type: 'value', unit: 'mm USD', axisLabel: { formatter: v => K.tick(v, 1) } },
-      series: C.map(c => ({ name: c, type: 'bar', stack: 'o', barMaxWidth: 28, data: I.map(i => Math.round(toUsd(day(c, i), c, i) * 10) / 10), itemStyle: { color: K.ccyColor(c) } }))
-        .concat([{ name: 'общая', type: 'line', data: I.map(i => Math.round(gross(C.map(c => toUsd(day(c, i), c, i))) * 10) / 10), showSymbol: false, lineStyle: { width: 2 }, color: css('--fg') }]),
+      series: C.map(c => ({ name: c, type: 'bar', stack: 'o', barMaxWidth: 28, data: I.map(i => toUsd(day(c, i), c, i)), itemStyle: { color: K.ccyColor(c) } }))
+        .concat([{ name: 'Общая', type: 'line', data: I.map(i => gross(C.map(c => toUsd(day(c, i), c, i)))), showSymbol: false, lineStyle: { width: 2 }, color: css('--fg') }]),
     }));
   }
 
