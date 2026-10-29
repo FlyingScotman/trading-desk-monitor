@@ -737,7 +737,8 @@ positions[{id,book,entity,portfolio,assetClass,segment,instrType,name,isin,issue
 funding[{id,book,kind,positionId,type,ccy,amount,amountRub,index,spreadBp,fixed,rate,rateExpr,ruleNote?,benchmark,dayBasis,
          start,maturity,tenorY,counterparty,collateral,fxDelta,pnl{carry,fx,fxCbr,fxGross,fxGrossCbr,fxAllocated,inPosition}}]
 fundingPnl{carry,fx,fxCbr}, fundingPnlByBook{book:{carry,fx,fxCbr,fxAllocated,inPositions}}   (итоги — только строки без positionId)
-history[{date,pnlOfficial,pnlExplained,pnlCum,dv01,cs01}]          (22 точки, последняя — текущий прогон)
+history[{date,pnlOfficial,pnlExplained,pnlCum,dv01,cs01,officialReceived}]   (22 точки, последняя — текущий прогон;
+         officialReceived false — официального PnL за день нет, pnlOfficial = explained + fxBasis, не официальный, #106)
 source{kind:'db'|'demo',runId,runType,publishedAt,libVersion,marketSnapshot,contractVersion}
 ```
 
