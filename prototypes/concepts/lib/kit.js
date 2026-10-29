@@ -2905,19 +2905,21 @@
     if (M.posFlows) M.posFlows(p.id).then(x => {
       if (!el.isConnected || el.dataset.pos !== p.id) return;
       x = x || {};
-      el.innerHTML = x.flows ? K.flowsTable(p, x.flows) : K.flowsTable(p, own(), false, x.error ? { error: x.error } : x.reason || null);
+      el.innerHTML = x.flows ? K.flowsTable(p, x.flows, false, null, x.note) : K.flowsTable(p, own(), false, x.error ? { error: x.error } : x.reason || null);
       K.cardTableTools(el, p);
     });
     el.dataset.pos = p.id;
   };
-  // why — почему нет всего графика выпуска (показаны потоки прогона или их тоже нет): текст причины или {error} — сбой
-  K.flowsTable = function (p, cf, loading, why) {
+  // why — почему нет всего графика выпуска (показаны потоки прогона или их тоже нет): текст причины или {error} — сбой;
+  // тогда прямо: «расписание до <дата>, полное недоступно: <причина>» (#166). note — откуда весь график, если не из статики
+  K.flowsTable = function (p, cf, loading, why, note) {
     const err = why && why.error;
     const offer = p.offer || p.yieldDate || null;
     const KIND = { cpn: 'купон', amort: 'амортизация', mat: 'погашение', put: 'пут-оферта', call: 'колл' };
     if (!cf.length) return '<div class="k-empty">' + (loading ? 'загрузка потоков…' : err ? 'потоки не загружены: ' + esc(err) : 'потоков нет' + (why ? ': ' + esc(why) : '')) + '</div>';
     const sum = cf.reduce((s, c) => s + (c.kind === 'put' || c.kind === 'call' || c.amountRub == null ? 0 : c.amountRub), 0);
-    return (why ? '<div class="mut" style="font-size:11px;margin-bottom:4px">' + (err ? 'Весь график выпуска не загружен: ' + esc(err) : 'Весь график выпуска недоступен: ' + esc(why)) + '. Показаны потоки прогона.</div>' : '') +
+    return (why ? '<div class="mut" style="font-size:11px;margin-bottom:4px">Расписание до ' + f.date(cf[cf.length - 1].date) + ', полное недоступно: ' + esc(err || why) + '. Показаны потоки прогона.</div>' : '') +
+      (note ? '<div class="mut3" style="font-size:11px;margin-bottom:4px">' + esc(note) + '</div>' : '') +
       '<div class="mut3" style="font-size:11px;margin-bottom:4px">' + (loading ? 'загрузка всех потоков… · ' : '') + cf.length + ' потоков до ' + f.date(cf[cf.length - 1].date) +
       (offer ? ' · после оферты ' + f.date(offer) + ' — бледнее' : '') + ' · оферта — номинал к предъявлению, в сумму не входит</div>' +
       '<div style="max-height:360px;overflow:auto"><table class="k-tbl k-cflows"><thead><tr><th>Дата</th><th>Тип</th><th class="n">Сумма, ' + p.ccy + '</th><th class="n">≈ mm ₽</th></tr></thead><tbody>' +

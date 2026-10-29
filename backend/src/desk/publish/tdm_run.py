@@ -472,7 +472,8 @@ def direct_row(ctx: EodContext, book: str, pid: str, o: Outcome, x: dict[str, An
 
 
 CASHFLOW_DAYS = 548
-"""How far ahead a position's ``extra.cashflows`` go (18 months): the payment calendars of the concept pages."""
+"""How far ahead the payment calendars of the concept pages read a position's ``extra.cashflows`` (18 months), up to
+the offer the bond is priced to (``concepts.calendar_flows``); the flows themselves go to maturity (TDM#166)."""
 
 
 def _per_bond(c: Any, face: float, freq: int | None, pct: float | None) -> tuple[float | None, bool]:
@@ -488,26 +489,34 @@ def _per_bond(c: Any, face: float, freq: int | None, pct: float | None) -> tuple
 
 def cashflows(t: Any, v: BondValuation, as_of: date, face_ccy: float, freq: int | None, pct: float | None
               ) -> list[list[Any]]:
-    """The position's flows of the next ``CASHFLOW_DAYS`` up to its horizon (the offer or call it is priced to, else
-    maturity): ``[date, kind, amount, forecast]`` with kind ``cpn`` / ``amort`` / ``put`` / ``call`` / ``mat``, the
-    amount in the face currency for the whole position (signed by the side). A coupon without a published amount or
+    """The position's flows after ``as_of`` to maturity (TDM#166: the position card's schedule when the hub's static is
+    not at hand; the calendars cut them, ``CASHFLOW_DAYS``): ``[date, kind, amount, forecast]`` with kind ``cpn`` /
+    ``amort`` / ``put`` / ``call`` / ``mat``, the amount in the face currency for the whole position (signed by the
+    side). The offer or call the bond is priced to is the face outstanding on its date (in the flows, not paid: the
+    bond is redeemed only if put); a never-called perpetual redeems nothing. A coupon without a published amount or
     rate is the current coupon on the face, a forecast; so is every floater's coupon after the next one (its rate is
     fixed later, whatever the schedule repeats)."""
-    end = min(as_of + timedelta(days=CASHFLOW_DAYS), v.horizon_date)
     q, out, floating, nth = v.quantity, [], t.coupon_type == "floating", 0
+    mat = t.maturity_date or (v.horizon_date if v.horizon_kind == "maturity" else None)
     for c in sorted(t.coupons, key=lambda c: c.pay_date):
-        if as_of < c.pay_date <= end:
+        if as_of < c.pay_date and (mat is None or c.pay_date <= mat):
             face = float(c.face) if c.face is not None else face_ccy
             amt, est = _per_bond(c, face, freq, pct)
             nth += 1
             if amt is not None:
                 out.append([c.pay_date.isoformat(), "cpn", amt * q, est or (floating and nth > 1)])
-    for r in t.redemptions:
-        if as_of < r.date < v.horizon_date and r.date <= end and r.value_per_bond is not None:
-            out.append([r.date.isoformat(), "amort", float(r.value_per_bond) * q, False])
-    if as_of < v.horizon_date <= as_of + timedelta(days=CASHFLOW_DAYS) and v.horizon_kind != "perpetual":
-        kind = {"offer": "put", "call": "call"}.get(v.horizon_kind, "mat")  # a never-called perpetual redeems nothing
-        out.append([v.horizon_date.isoformat(), kind, face_ccy * q, False])
+    amort = [(r.date, float(r.value_per_bond)) for r in t.redemptions
+             if as_of < r.date and (mat is None or r.date < mat) and r.value_per_bond is not None]
+    out += [[d.isoformat(), "amort", a * q, False] for d, a in amort]
+
+    def outstanding(d: date) -> float:  # the face per bond left on ``d``: today's less what is redeemed before
+        return face_ccy - sum(a for x, a in amort if x < d)
+
+    if v.horizon_kind in ("offer", "call") and as_of < v.horizon_date:
+        out.append([v.horizon_date.isoformat(), "call" if v.horizon_kind == "call" else "put",
+                     outstanding(v.horizon_date) * q, False])
+    if mat is not None and as_of < mat and v.horizon_kind != "perpetual" and not t.is_perpetual:
+        out.append([mat.isoformat(), "mat", outstanding(mat) * q, False])
     return sorted(out, key=lambda x: x[0])
 
 
@@ -617,7 +626,8 @@ def position_row(ctx: EodContext, book: str, pid: str, o: Outcome, issuer: str,
             **({"lat_name": t.lat_name} if t.lat_name else {}),
             **({"issue_size": float(t.issue_size)} if t.issue_size is not None else {}),
             **({"rating": rating} if rating else {}),
-            "cashflows": cashflows(t, v, as_of, face_ccy, freq, cpn.pct), **_quote_extra(q, sa), **core_analytics(v),
+            "cashflows": cashflows(t, v, as_of, face_ccy, freq, cpn.pct), "cashflows_to": "maturity",
+            **_quote_extra(q, sa), **core_analytics(v),
             **ofz_basis(t, v),
             **({"coupon_freq_source": "schedule"} if freq and not t.coupon_frequency else {}),
             **({"not_exact_reason": o.reason} if o.reason else {}),
