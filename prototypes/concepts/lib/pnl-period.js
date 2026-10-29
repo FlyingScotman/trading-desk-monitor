@@ -112,6 +112,7 @@
       grossCheck: sumAvail(list.map(a => a.grossCheck)), grossCount: cnt('grossCount'), c: {}, m: {} };
     keys.forEach(k => { out.c[k] = sumAvail(list.map(a => val(a, k))); out.m[k] = list.reduce((s, a) => s + (rowsOf(a) - coverage(a, k).have), 0); });
     if (curves.size) { out.ratesByCurve = {}; curves.forEach(id => { out.ratesByCurve[id] = sumAvail(list.map(a => a.ratesByCurve ? a.ratesByCurve[id] : null)); }); }
+    if (list.some(a => a.ratesByFactor)) out.ratesByFactor = factorAgg(list);  // buckets, groups (TDM#437): rates by factor
     return out;
   }
 
@@ -203,6 +204,9 @@
     const positions = (period.positions || []).map(p => Object.assign({}, p, { ratesByCurve: { [p.curve || '']: val(p, 'rates') } }));
     const summary = Object.assign({}, period.summary);
     if (!summary.ratesByCurve) summary.ratesByCurve = (sumAggs(days.length ? days : positions) || {}).ratesByCurve || {};
+    // the period's rates by factor (TDM#437) — the days' sum (as the buckets'); an older server: none
+    const fsrc = days.length ? days : positions;
+    if (!summary.ratesByFactor && fsrc.some(a => a.ratesByFactor)) summary.ratesByFactor = factorAgg(fsrc);
     const dates = periodDates(period);
     // days as columns (gran day): the working days of the axis, not every calendar day (TDM#434); the positions'
     // buckets follow by index
@@ -262,7 +266,8 @@
       Object.assign(derived('ratesRest', ['rates'], a => (val(a, 'rates') == null ? null : val(a, 'rates') - (ex(a) || 0))), { hideZero: true }),
     ];
   }
-  // Explain (one rates bar or one per curve) and attribution; gap — total minus the shown rows
+  // Explain (one rates bar, or by curves: one per factor of ratesByFactor — RUONIA, the OFZ basis, the KBD only… —
+  // given opt.prep with factors (TDM#437), else one per discount curve) and attribution; gap — total minus the shown rows
   function componentRows(mode, opt) {
     opt = opt || {};
     if (mode === 'attr') return attrDefs();
@@ -270,7 +275,8 @@
     let out = carryDefs(opt.carry || 'net', !!opt.split);
     EXPLAIN.forEach(k => {
       if (!(BY_KEY[k].parts || [k]).some(x => keys.has(x))) return;
-      if (k === 'rates' && mode === 'curves') (opt.curves || []).forEach((cv, i, all) => out.push({ k: 'rates:' + cv.id, l: 'Ставки · ' + (cv.name || cv.id || NO_CURVE), color: 'pnl:rates',
+      if (k === 'rates' && mode === 'curves' && opt.prep && hasFactors(opt.prep)) out.push(...factorRows(opt.prep));
+      else if (k === 'rates' && mode === 'curves') (opt.curves || []).forEach((cv, i, all) => out.push({ k: 'rates:' + cv.id, l: 'Ставки · ' + (cv.name || cv.id || NO_CURVE), color: 'pnl:rates',
         shade: cv.id ? [1, 0.72, 0.52, 0.36, 0.26][i % 5] : 0.2, d: 'Точная переоценка позиций с кривой дисконтирования «' + (cv.name || cv.id || NO_CURVE) + '» — отнесение к одной кривой, а не разложение по кривым.',
         parts: ['rates'], curve: cv.id, v: a => a && a.ratesByCurve && num(a.ratesByCurve[cv.id]) ? a.ratesByCurve[cv.id] : null }));
       else if (k === 'rates' && keys.has('rates_linear')) out.push(...ratesDefs());
@@ -312,7 +318,7 @@
   function rowsFor(mode, prep, opt) {
     opt = opt || {};
     if (COMPONENT_MODES.includes(mode)) {
-      const defs = visibleRows(componentRows(mode, { carry: CARRY_MODES.includes(mode) ? opt.carry : null, split: prep.split, keys: prep.keys, curves: prep.curves }), prep.summary);
+      const defs = visibleRows(componentRows(mode, { carry: CARRY_MODES.includes(mode) ? opt.carry : null, split: prep.split, keys: prep.keys, curves: prep.curves, prep }), prep.summary);
       return defs.map(d => Object.assign(d, { daily: true, total: d.v(prep.summary), buckets: prep.bucketAggs.map(a => (a ? d.v(a) : null)) }));
     }
     const g = GROUPS[mode];
@@ -702,6 +708,7 @@
   // a colour per method group, the same in the bars, the daily columns and the table
   const UNEXPL_COLOR = { exact: 'pnl:other', simple: 'pal:6', yield: 'pal:8', reported: 'pal:10', fx: 'pnl:fx', other: '--fg-3' };
   const UNEXPL_TIP = {
+    mixed: 'У позиции за период методы разных групп (например, точный flash в одни дни и простой PnL в другие): по записям её необъяснённое делит экран F.',
     exact: 'Точный flash (пересчёт ядром): остаток, который позиция D−1 не объясняет на рынке D — сменилось расписание, цена и НКД расходятся.',
     simple: 'desk-flash-simple-v1: бумага не оценена точно на обе даты (нет потоков, модельная или старая цена) — весь PnL q × Δ грязной цены, без разложения.',
     yield: 'desk-flash-yield-v1: кэрри по доходности бумаги; изменение доходности без кривой в валюте — в «Прочем».',
@@ -722,6 +729,36 @@
       top: (u.top || []).map(t => Object.assign({}, t, { color: UNEXPL_COLOR[t.group] || '--fg-3' })), topTotal: num(u.topTotal) ? u.topTotal : (u.top || []).length };
   }
 
-  Object.assign(api, { FACTOR_NAMES, FACTOR_TIPS, factorOrder, factorName, factorShade, factorAgg, hasFactors, factorList, factorRows, factorGrids,
+  // A · the unexplained bar by method group (TDM#436 on A): the method → group map and the labels of /checks
+  // (pnl_checks.METHOD_GROUP, UNEXPL_GROUPS); any other code or none — «other»
+  const METHOD_GROUP = { 'desk-flash-exact-v1': 'exact', 'desk-flash-exact-v2': 'exact', 'desk-flash-exact-fx-v1': 'exact', 'desk-flash-simple-v1': 'simple',
+    'desk-flash-yield-v1': 'yield', 'desk-reported-v1': 'reported', 'desk-fx-spot-v1': 'fx', 'desk-fx-core-v1': 'fx' };
+  const UNEXPL_LABEL = { exact: 'остаток точного flash', simple: 'без разложения: нет потоков / модельная цена', yield: 'по доходности', reported: 'по отчёту',
+    fx: 'FX-сделки: прочие эффекты', other: 'другой метод или не указан', mixed: 'позиции с несколькими методами' };
+  const UNEXPL_ORDER = ['exact', 'simple', 'yield', 'reported', 'fx', 'other', 'mixed'];
+  const methodGroup = m => METHOD_GROUP[m] || 'other';
+  // the split of «Необъяснённое / прочее» (key 'other') or «Разница PV по отчётам» ('reported') by method group. With
+  // the /checks answer of the same period and filter at hand (F's cache) — its unexplainedBy, by row (source 'checks');
+  // else from /period: a position whose methods are one group gives it its whole value, a position with methods of
+  // several groups is «mixed» (by row — only on F; source 'period'). n — rows (checks) or positions (period); missing — null
+  function unexplainedSplit(positions, def, ck) {
+    const key = def && def.k === 'reported' ? 'reported' : 'other', V = unexplainedView(ck);
+    if (V) {
+      const groups = V.groups.filter(g => num(g[key])).map(g => ({ key: g.key, label: g.label, color: g.color, tip: g.tip, total: g[key], n: g.rows }));
+      if (groups.length) return { source: 'checks', key, total: V[key], groups };
+    }
+    const m = new Map();
+    (positions || []).forEach(p => {
+      const v = def.v(p);
+      if (!num(v) || v === 0) return;
+      const gs = new Set((p.methods || []).map(methodGroup)), g = gs.size > 1 ? 'mixed' : gs.size ? [...gs][0] : 'other';
+      const x = m.get(g) || { total: 0, n: 0 }; x.total += v; x.n++; m.set(g, x);
+    });
+    if (!m.size) return null;
+    const groups = UNEXPL_ORDER.filter(g => m.has(g)).map(g => ({ key: g, label: UNEXPL_LABEL[g], color: g === 'mixed' ? '--fg-2' : UNEXPL_COLOR[g] || '--fg-3', tip: UNEXPL_TIP[g] || '', total: m.get(g).total, n: m.get(g).n }));
+    return { source: 'period', key, total: sumAvail(groups.map(g => g.total)), groups };
+  }
+
+  Object.assign(api, { METHOD_GROUP, UNEXPL_LABEL, methodGroup, unexplainedSplit, FACTOR_NAMES, FACTOR_TIPS, factorOrder, factorName, factorShade, factorAgg, hasFactors, factorList, factorRows, factorGrids,
     factorLinVsExact, factorSeries, factorPositions, UNEXPL_COLOR, UNEXPL_TIP, unexplainedView });
 })(typeof window === 'object' ? window : globalThis);

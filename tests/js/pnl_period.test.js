@@ -103,8 +103,27 @@ test('explain rows: carry net / gross + funding / components, the rows sum to th
   assert.equal(new Set(P.COMPONENTS.map(c => c.label)).size, P.COMPONENTS.length);
 });
 
-test('explain by curves: rates of each position on its discount curve, «кривая не указана» kept', () => {
+test('explain by curves: by factor when the server sends ratesByFactor; Σ factors = rates, buckets and drill from it', () => {
   const p = prep(), defs = P.rowsFor('curves', p, { carry: 'net' }), rates = defs.filter(d => d.k.startsWith('rates:'));
+  assert.deepEqual(rates.map(d => d.k), ['rates:f:ruonia', 'rates:f:basis', 'rates:f:kbd', 'rates:f:']);
+  assert.equal(rates[3].l, 'Ставки · ' + P.NO_CURVE);
+  near(P.sumAvail(rates.map(d => d.total)), p.summary.c.rates, 'Σ factors = rates');
+  p.bucketAggs.forEach((a, i) => near(P.sumAvail(rates.map(d => d.buckets[i])), a.c.rates, 'bucket ' + i));
+  assert.equal(rates[2].buckets.filter(v => v != null).length, 1, 'KBD only on one date: the other buckets «—»');
+  const ofz = pos(p, 'DEMO-A|OFZ-1');
+  assert.equal(rates[1].v(ofz), ofz.ratesByFactor.basis);
+  near(P.contrib(p.positions, rates[0]).total, rates[0].total, 'drill = bar');
+  near(P.sumAvail(defs.map(d => d.total)), p.summary.total, 'Σ rows = total');
+  // the bar breakdown (TDM#431): shares of the groups from their positions' ratesByFactor add up to the bar
+  const items = P.waterfallItems(defs, p.summary), S = P.stackItems(items, defs, p.positions, 'book');
+  S.items.filter(it => it.k.startsWith('rates:f:')).forEach(it => near(P.sumAvail(it.pieces.map(x => x.v)), it.v, it.k));
+  assert.ok(!S.items.some(it => it.pieces.some(x => x.g === '')), 'nothing left unassigned');
+});
+
+test('explain by curves without factors (an older server): rates of each position on its discount curve, «кривая не указана» kept', () => {
+  const raw = JSON.parse(JSON.stringify(FX.period));
+  raw.days.concat(raw.positions).forEach(a => { delete a.ratesByFactor; });
+  const p = P.prepare(raw), defs = P.rowsFor('curves', p, { carry: 'net' }), rates = defs.filter(d => d.k.startsWith('rates:'));
   assert.deepEqual(rates.map(d => d.curve), ['RUB OFZ', 'RUB RUONIA', '']);
   assert.equal(rates[2].l, 'Ставки · ' + P.NO_CURVE);
   near(P.sumAvail(rates.map(d => d.total)), p.summary.c.rates, 'Σ curves = rates');

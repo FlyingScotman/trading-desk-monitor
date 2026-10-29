@@ -87,3 +87,23 @@ test('F: unexplained by method — groups, days and the top add up to the period
   assert.equal(P.unexplainedView({}), null);
   assert.equal(P.unexplainedView({ unexplainedBy: Object.assign(clone(u), { total: null }) }), null);
 });
+
+test('A: the unexplained bar by method — from /checks when at hand (by row), else from /period methods (by position)', () => {
+  const prep = P.prepare(FX.period), other = P.rowsFor('explain', prep, { carry: 'net' }).find(d => d.k === 'other');
+  // with F's answer: the groups of unexplainedBy, their other; Σ = the bar
+  const C = P.unexplainedSplit(prep.positions, other, FX.checks);
+  assert.equal(C.source, 'checks');
+  assert.deepEqual(C.groups.map(g => g.key), FX.checks.unexplainedBy.groups.map(g => g.key));
+  near(sum(C.groups.map(g => g.total)), other.total, 1, 'checks');
+  // without it: by position — one group of methods gives the whole value, several groups — «mixed»
+  const S = P.unexplainedSplit(prep.positions, other, null);
+  assert.equal(S.source, 'period');
+  near(sum(S.groups.map(g => g.total)), other.total, 1, 'period');
+  const mixed = S.groups.find(g => g.key === 'mixed');
+  assert.equal(mixed.n, 1); assert.equal(mixed.total, prep.positions.find(p => p.ref === 'DEMO-A|CORP-1').c.other);
+  assert.equal(S.groups.find(g => g.key === 'other').total, prep.positions.find(p => p.ref === 'DEMO-B|IRS-1').c.other, 'flash-v1: not a known method');
+  assert.equal(P.methodGroup('desk-flash-exact-v2'), 'exact'); assert.equal(P.methodGroup(undefined), 'other');
+  // «Разница PV по отчётам»: no reported anywhere — nothing to split (null, not zero bars)
+  assert.equal(P.unexplainedSplit(prep.positions, { k: 'reported', v: p => P.val(p, 'reported') }, null), null);
+  assert.equal(P.unexplainedSplit(prep.positions, { k: 'reported', v: p => P.val(p, 'reported') }, FX.checks), null, 'unexplainedBy.reported null too');
+});

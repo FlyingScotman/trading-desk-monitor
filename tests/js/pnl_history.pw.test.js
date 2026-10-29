@@ -216,6 +216,71 @@ test('C19 acceptance (TDM#431–#435): bars split by groups with a drill list, n
   } finally { await browser.close(); }
 });
 
+// the centre of the waterfall bar named l (a stacked bar: one of its pieces)
+const clickBar = async (pg, l) => {
+  await pg.locator('#wf').scrollIntoViewIfNeeded();
+  const at = await pg.evaluate(name => {
+    const el = document.getElementById('wf'), c = echarts.getInstanceByDom(el), o = c.getOption(), i = o.xAxis[0].data.indexOf(name), row = o.series[0].data[i], r = el.getBoundingClientRect();
+    const [x, y] = c.convertToPixel({ seriesIndex: 0 }, [i, (row[1] + row[2]) / 2]);
+    return i < 0 ? null : [r.left + x, r.top + y];
+  }, l);
+  assert.ok(at, 'no bar ' + l);
+  await pg.mouse.click(at[0], at[1]);
+};
+
+test('C19 A follow-ups: «Explain по кривым» by factor (TDM#437), the unexplained bar by method (TDM#436)', { skip: pw ? false : 'нет Playwright', timeout: 120000 }, async () => {
+  const browser = await pw.chromium.launch();
+  try {
+    const { pg, ctx, errors } = await open(browser);
+    const sum = vals => vals.reduce((s, v) => s + (v || 0), 0);
+    // by factor: RUONIA, the OFZ basis, the KBD only, no curve — not by discount curve
+    await pg.locator('#lensSeg button', { hasText: 'Explain по кривым' }).click();
+    const names = await wfNames(pg);
+    for (const n of ['Ставки · RUONIA', 'Ставки · Базис ОФЗ (КБД − RUONIA)', 'Ставки · КБД (нет RUONIA на дату)', 'Ставки · кривая не указана']) assert.ok(names.includes(n), n + ' in ' + names.join('|'));
+    assert.ok(!names.includes('Ставки · RUB OFZ'), 'curves only without factors');
+    // the drill of a factor reads the positions' ratesByFactor
+    await clickBar(pg, 'Ставки · Базис ОФЗ (КБД − RUONIA)');
+    await pg.waitForFunction(() => /Кто дал: Ставки · Базис ОФЗ/.test(document.getElementById('contribTitle').textContent));
+    const basis = sum(FX.period.positions.map(p => (p.ratesByFactor || {}).basis));
+    assert.match(await pg.locator('#contribTitle').textContent(), new RegExp((await mn(pg, basis)).replace(/[()]/g, '\\$&') + ' млн'));
+    assert.match(await pg.locator('#contrib').innerText(), /Synthetic OFZ 1[\s\S]*DEMO-A[\s\S]*Synthetic OFZ 1[\s\S]*DEMO-B/);
+    assert.doesNotMatch(await pg.locator('#contrib').innerText(), /Synthetic Corp 1/, 'no basis for the corporate bond');
+    // «По периодам» in that mode: the factor rows
+    await pg.locator('#btSeg button', { hasText: 'Explain по кривым' }).click();
+    assert.match(await pg.locator('#bt tbody').innerText(), /Ставки · RUONIA[\s\S]*Ставки · Базис ОФЗ[\s\S]*Ставки · КБД/);
+    // the bar breakdown (#431) keeps working: book shares of each factor bar
+    await pg.locator('#wfBreak').selectOption('book');
+    assert.match(await pg.locator('#wfLegend').innerText(), /Книга:[\s\S]*DEMO-A[\s\S]*DEMO-B/);
+    await clickBar(pg, 'Ставки · RUONIA');
+    await pg.waitForFunction(() => /Кто дал: Ставки · RUONIA/.test(document.getElementById('contribTitle').textContent));
+    if (SHOTS) { fs.mkdirSync(SHOTS, { recursive: true }); await pg.evaluate(() => scrollTo(0, 0)); await pg.screenshot({ path: path.join(SHOTS, 'c19-A-curves-factors.png'), fullPage: true }); }
+    assert.ok(!BAD.test(await pg.locator('#main').innerText()));
+    // «Необъяснённое / прочее»: the drill adds the split by method group — from /period while F has not been asked
+    await pg.locator('#wfBreak').selectOption('none');
+    await pg.locator('#lensSeg button', { hasText: 'Explain' }).first().click();
+    await clickBar(pg, 'Необъяснённое / прочее');
+    await pg.waitForSelector('#contribMethods');
+    const byPos = await pg.locator('#contrib').innerText();
+    assert.match(byPos, /По методу расчёта[\s\S]*остаток точного flash[\s\S]*позиции с несколькими методами/i);
+    assert.match(byPos, /По позициям/); assert.match(byPos, /подробнее — экран F/);
+    if (SHOTS) await pg.screenshot({ path: path.join(SHOTS, 'c19-A-unexplained-by-position.png'), fullPage: true });
+    // after F: by row from its answer (no request of A's own), the groups of unexplainedBy
+    await pg.locator('#contribToF').click();
+    await pg.waitForSelector('#tabs [data-tab=control].on');
+    await pg.waitForSelector('#ckWhy .contrib');
+    await tab(pg, 'decomp');
+    await pg.waitForSelector('#contribMethods');
+    const byRow = await pg.locator('#contrib').innerText();
+    assert.match(byRow, /По записям периода/);
+    assert.match(byRow, /без разложения: нет потоков \/ модельная цена/);
+    assert.doesNotMatch(byRow, /позиции с несколькими методами/);
+    if (SHOTS) await pg.screenshot({ path: path.join(SHOTS, 'c19-A-unexplained-by-method.png'), fullPage: true });
+    assert.ok(!BAD.test(await pg.locator('#main').innerText()));
+    assert.deepEqual(errors, []);
+    await ctx.close();
+  } finally { await browser.close(); }
+});
+
 test('C19 D, E, F on the synthetic fixture: requests, missing data, F → E on its day, themes, 390 px', { skip: pw ? false : 'нет Playwright', timeout: 120000 }, async () => {
   const browser = await pw.chromium.launch();
   try {
