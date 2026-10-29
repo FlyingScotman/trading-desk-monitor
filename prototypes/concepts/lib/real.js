@@ -654,23 +654,28 @@
   };
 
   // ---------- все потоки позиции (лениво, карточка): /api/v1/positions/flows — график выпуска из статики хаба до
-  // погашения × бумаги позиции, оферты внутри. Промис {flows, reason, error}: flows — график; null — графика нет
-  // (карточка берёт потоки прогона), reason — почему его нет словами, error — сбой запроса (#288). «Графика нет» —
-  // ожидаемый ответ: сервер отдаёт 200 с пустым flows и кодом reason; 404 — нет позиции или прогона (у прежнего
-  // сервера — и нет графика). Сбой не запоминается: следующее открытие карточки спросит снова ----------
+  // погашения × бумаги позиции, оферты внутри; без файла статики в кэше — потоки прогона до погашения (source 'run',
+  // прогоны с #166). Промис {flows, reason, error, note}: flows — график; null — графика нет (карточка берёт потоки
+  // прогона), reason — почему его нет словами, error — сбой запроса (#288), note — откуда график, если не из статики.
+  // «Графика нет» — ожидаемый ответ: сервер отдаёт 200 с пустым flows и кодом reason; 404 — нет позиции или прогона
+  // (у прежнего сервера — и нет графика). Запоминается только график: ответ без него и сбой следующее открытие
+  // карточки спросит снова (#166) ----------
   const FLOW_REASON = { not_bond: 'не облигация — у позиции нет графика выпуска', not_valued: 'позиция не оценена в прогоне',
     no_static: 'нет статики хаба за дату прогона', no_schedule: 'в статике хаба нет графика этой бумаги', past: 'выплат после даты прогона нет' };
   const flowCache = {};
   M.posFlows = function (id) {  // повторно — из памяти
     if (!flowCache[id]) flowCache[id] = fetch('../api/v1/positions/flows?' + runQ + '&id=' + encodeURIComponent(id)).then(r => {
       if (r.status === 404) return { flows: null, reason: 'сервер не нашёл позицию или её график выпуска' };
-      if (!r.ok) { delete flowCache[id]; return { flows: null, error: 'ошибка сервера ' + r.status + (r.statusText ? ' ' + r.statusText : '') }; }
+      if (!r.ok) return { flows: null, error: 'ошибка сервера ' + r.status + (r.statusText ? ' ' + r.statusText : '') };
       return r.json().then(j => {
         if (!j || !Array.isArray(j.flows) || !j.flows.length) return { flows: null, reason: FLOW_REASON[j && j.reason] || FLOW_REASON.past };
         const k = (M.toRepr && M.toRepr[j.ccy]) || M.fx[j.ccy] || 1;  // в валюту отчёта, как и всё на страницах
-        return { flows: j.flows.map(([date, kind, amount, est]) => ({ date, pos: id, kind, amort: kind === 'amort', ccy: j.ccy, amount, est, amountRub: amount == null ? null : amount * k })) };
+        const out = { flows: j.flows.map(([date, kind, amount, est]) => ({ date, pos: id, kind, amort: kind === 'amort', ccy: j.ccy, amount, est, amountRub: amount == null ? null : amount * k })) };
+        if (j.source === 'run') out.note = 'график по условиям бумаги в прогоне' + (FLOW_REASON[j.reason] ? ' (' + FLOW_REASON[j.reason] + ')' : '') + ', из оферт — только та, к которой оценена бумага';
+        return out;
       });
-    }).catch(e => { delete flowCache[id]; return { flows: null, error: 'нет связи с сервером' + (e && e.message ? ': ' + e.message : '') }; });
+    }).catch(e => ({ flows: null, error: 'нет связи с сервером' + (e && e.message ? ': ' + e.message : '') }))
+      .then(x => { if (!x.flows) delete flowCache[id]; return x; });
     return flowCache[id];
   };
 

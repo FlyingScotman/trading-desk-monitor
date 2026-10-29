@@ -7,7 +7,8 @@ and ``window.DESK``).
 market value by instrument type and currency, PnL by factor: each run's own sums, ``publish.summary``), per position
 of the run its PnL month and year to date over those runs (``pnlPeriods`` says from which date and whether a business
 day of the period has no run: then the sum is partial), the previous run's price and spread and what changed in its
-holding (a trade, a new position), its flows of the next 18 months (``extra.cashflows``), the market of the latest
+holding (a trade, a new position), its flows of the next 18 months up to the offer it is priced to
+(``extra.cashflows`` cut by ``calendar_flows``: they go to maturity, TDM#166), the market of the latest
 cached close not after the run (every quoted bond, ``universeRub`` and ``universeFx``, with the static snapshot's
 issuer, group, sector, outstanding face, coupon and frequency: ``marketdata.static_facts``; the day's movers) and the
 CBR meetings (``cbr``: the next one, the dates ahead, the past decisions). Issuer, group, sector and the desk's rating
@@ -231,10 +232,10 @@ def extras(con, run: dict[str, Any], writer: Writer = None) -> dict[str, Any]:
     flows = []
     held = set()
     for x in con.execute("SELECT position_id, fact->>'ccy' AS ccy, fact->>'instrument_id' AS secid,"
-                         " fact->'extra'->'cashflows' AS cf FROM run_position WHERE run_id = %s AND fact IS NOT NULL",
-                         (run["run_id"],)):
+                         " fact->'extra'->'cashflows' AS cf, fact->'extra'->>'offer_date' AS offer"
+                         " FROM run_position WHERE run_id = %s AND fact IS NOT NULL", (run["run_id"],)):
         held.add(x["secid"])
-        for d, kind, amount, est in x["cf"] or []:
+        for d, kind, amount, est in calendar_flows(x["cf"], as_of, x["offer"]):
             flows.append({"date": d, "pos": x["position_id"], "kind": kind, "ccy": x["ccy"] or "RUB",
                           "amount": amount, "est": bool(est)})
     if not flows and cur:
@@ -414,16 +415,31 @@ def market_calendar(con, as_of: date, held: set[str] | None = None) -> dict[str,
     return cal
 
 
+def calendar_flows(cf: list[list[Any]] | None, as_of: date, offer: str | None) -> list[list[Any]]:
+    """A position's stored flows (``extra.cashflows``, to maturity since TDM#166) as the payment calendars read them:
+    the next ``tdm_run.CASHFLOW_DAYS`` up to the offer the bond is priced to (the offer itself in)."""
+    from ..publish.tdm_run import CASHFLOW_DAYS
+
+    end = (as_of + timedelta(days=CASHFLOW_DAYS)).isoformat()
+    if offer and offer < end:
+        end = offer
+    return [x for x in cf or [] if x[0] <= end]
+
+
 def position_flows(con, run: dict[str, Any], pid: str, snapshots: Path) -> dict[str, Any] | None:
     """A bond position's whole schedule after the run's date (``static_facts.schedule`` of the static snapshot the read
     model shows for the run, × the position's bonds): coupons, amortizations, maturity, and the put offers and calls
-    on the face outstanding then, in the face currency, signed by the side. The position card shows it; the stored
-    ``extra.cashflows`` stop at 18 months and at the offer the bond is priced to. None: no such position in the run.
-    No schedule is an answer, not an error (#288): empty ``flows`` and a ``reason`` — ``not_valued``, ``not_bond``,
-    ``no_static`` (the static or its bundle is missing) or ``no_schedule``; the card then shows the stored flows."""
+    on the face outstanding then, in the face currency, signed by the side. The position card shows it. None: no such
+    position in the run. No schedule is an answer, not an error (#288): empty ``flows`` and a ``reason`` —
+    ``not_valued``, ``not_bond``, ``no_static`` (the static or its bundle is missing) or ``no_schedule``; the card then
+    shows the stored flows. TDM#166: without the static's bundle (a cleared cache) or the bond in it, the run's own
+    flows when they go to maturity (``extra.cashflows_to``, the runs since then): ``source`` ``run`` and the
+    ``reason`` the static was not used; of the offers, only the one the bond is priced to."""
     row = con.execute("SELECT fact IS NOT NULL AS valued, fact->>'instrument_id' AS secid,"
                       " (fact->'extra'->>'quantity_bonds')::float8 AS q,"
-                      " fact->'extra'->>'offer_date' AS offer, fact->'extra'->>'offer_kind' AS offer_kind"
+                      " fact->'extra'->>'offer_date' AS offer, fact->'extra'->>'offer_kind' AS offer_kind,"
+                      " fact->>'ccy' AS ccy, fact->>'maturity' AS maturity,"
+                      " fact->'extra'->>'cashflows_to' AS cf_to, fact->'extra'->'cashflows' AS cf"
                       " FROM run_position WHERE run_id = %s AND position_id = %s",
                       (run["run_id"], pid)).fetchone()
     if row is None:
@@ -432,18 +448,26 @@ def position_flows(con, run: dict[str, Any], pid: str, snapshots: Path) -> dict[
         return {"flows": [], "reason": "not_valued"}
     if not row["secid"] or row["q"] is None:
         return {"flows": [], "reason": "not_bond"}
+
+    def own(reason: str) -> dict[str, Any]:  # the run's flows to maturity, else no schedule and why
+        if row.get("cf_to") != "maturity" or not row.get("cf"):
+            return {"flows": [], "reason": reason}
+        return {"source": "run", "reason": reason, "staticDate": None, "ccy": row["ccy"] or "RUB",
+                "maturity": row["maturity"], "offer": row["offer"], "offerKind": row["offer_kind"],
+                "flows": [list(x) for x in row["cf"]]}
+
     st = static_facts.static_for(con, run["business_date"])
     if st is None:
-        return {"flows": [], "reason": "no_static"}
+        return own("no_static")
     path = Path(snapshots) / f"{st['snapshot_id']}.json.gz"
     if not path.is_file() and st["snapshot_id"] not in static_facts._SCHEDULES:
-        return {"flows": [], "reason": "no_static"}
+        return own("no_static")
     sch = static_facts.schedule(st["snapshot_id"], lambda: read_bundle(path), row["secid"], run["business_date"])
     if sch is None:
-        return {"flows": [], "reason": "no_schedule"}
+        return own("no_schedule")
     q = row["q"]
-    return {"staticDate": st["business_date"].isoformat(), "ccy": sch["ccy"], "maturity": sch["maturity"],
-            "offer": row["offer"], "offerKind": row["offer_kind"],
+    return {"source": "static", "staticDate": st["business_date"].isoformat(), "ccy": sch["ccy"],
+            "maturity": sch["maturity"], "offer": row["offer"], "offerKind": row["offer_kind"],
             "flows": [[d, kind, None if amt is None else amt * q, est] for d, kind, amt, est in sch["flows"]]}
 
 
