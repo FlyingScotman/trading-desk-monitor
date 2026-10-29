@@ -195,3 +195,114 @@ def test_scrubber_text():
     assert t == ("book <book> (<book>) <position> <ISIN> <path> <path> <path> <url> <ip> user <name> pnl # RUB, # "
                  "and # ₽; on 2026-10-19 run 12 of 19.10")
     assert signature(sc, "eod 2026-10-15 run 17 (no default run) 4f173275220b") == "eod <date> run # (no default run) <id>"
+
+
+def test_scrubber_keeps_dates_versions_and_service_words_but_not_private_values():
+    """#157: the report's ``x_*`` values and the file names are scrubbed as tokens, but a date, a version or a
+    service word among them is no private value: scrubbing it erased the dates of every run and step. ISINs, numbers,
+    book names and report names still go."""
+    sc = Scrubber()
+    for v, label in (("2026-10-16", "<position>"), ("16.10.2026", "<position>"), ("20261016", "<file>"),
+                     ("3.11.x", "<position>"), ("0.2.12", "<position>"), ("bond", "<position>"),
+                     ("instrument", "<position>"), ("positions", "<file>"), ("Bond", "<position>"),
+                     ("RU000A0JX0J2", "<position>"), ("DEAL-48151", "<position>"), ("48151623", "<position>"),
+                     ("1.234.567", "<position>"), ("Alpha Desk", "<book>"), ("positions_20261016", "<file>"),
+                     ("2026-10-15", "<secret>")):
+        sc.add(v, label)
+    text = ("run 2026-10-16 (16.10.2026) of positions_20261016 on python 3.11.x, desk 0.2.12: bond instrument "
+            "positions Bond RU000A0JX0J2 DEAL-48151 48151623 1.234.567 Alpha Desk 20261016 2026-10-15")
+    assert sc.doc({"x": text}) == {"x": (
+        "run 2026-10-16 (16.10.2026) of <file> on python 3.11.x, desk 0.2.12: bond instrument positions Bond "
+        "<ISIN> <position> <position> <position> <book> 20261016 <secret>")}
+    t = sc.text(text)
+    assert t.startswith("run 2026-10-16 (16.10.2026) of <file> on python 3.11.x, desk 0.2.12: bond instrument "
+                        "positions Bond <ISIN> <position> "), t
+    assert t.endswith(" <position> <position> <book> # <secret>"), t  # free text: a long number is an amount
+    assert signature(sc, "step of 2026-10-16 for positions_20261016") == "step of <date> for <file>"
+
+
+def test_scrubber_keeps_the_dates_of_the_autopilot_log(tmp_path):
+    """#157: ``steps_by_day`` was one «day»: the dates of the autopilot log were scrubbed as file names."""
+    from desk.settings import Settings
+
+    sc = Scrubber({"20261015": "<file>", "2026-10-16": "<position>", "B1": "<book>"})
+    log_dir = tmp_path / "logs"
+    log_dir.mkdir()
+    (log_dir / "autopilot.log").write_text(
+        "2026-10-15 09:00:00,000 INFO desk.autopilot autopilot: cycle start\n"
+        "2026-10-15 09:00:01,000 INFO desk.autopilot autopilot: sync ok: pulled 2026-10-15\n"
+        "2026-10-16 09:00:00,000 INFO desk.autopilot autopilot: cycle start\n"
+        "2026-10-16 09:00:01,000 INFO desk.autopilot autopilot: sync ok: pulled 2026-10-16\n", encoding="utf-8")
+    _, cycles = diagnostics.logs_section(Settings(home=tmp_path), sc, datetime(2026, 10, 16, 12))
+    doc = sc.doc(cycles)
+    assert set(doc["steps_by_day"]) == {"2026-10-15", "2026-10-16"}, doc["steps_by_day"]
+    assert doc["last_cycles"][0]["steps"][0]["detail"] == "pulled 2026-10-16"
+
+
+RESET = ("{d} {t},000 ERROR asyncio Exception in callback _ProactorBasePipeTransport._call_connection_lost(None)\n"
+         "handle: <Handle _ProactorBasePipeTransport._call_connection_lost(None)>\n"
+         "Traceback (most recent call last):\n"
+         "ConnectionResetError: [WinError 10054] An existing connection was forcibly closed by the remote host\n")
+
+
+def test_a_flood_of_connection_resets_does_not_hide_the_other_errors(tmp_path):
+    """#157: hundreds of ``ConnectionResetError`` in serve.log filled the window of the last 50 warnings and errors;
+    the window now holds at most ``REPEATS_IN_WINDOW`` of one kind, the others still there, the rest counted."""
+    from desk.settings import Settings
+
+    log_dir = tmp_path / "logs"
+    log_dir.mkdir()
+    lines = ["2026-10-16 08:00:00,000 ERROR desk.autopilot autopilot: step eod failed\n",
+             "Traceback (most recent call last):\n", "ValueError: no curve\n",
+             "2026-10-16 08:00:05,000 WARNING desk.api slow request 1200 ms\n"]
+    lines += [RESET.format(d="2026-10-16", t=f"09:{i // 60:02d}:{i % 60:02d}") for i in range(600)]
+    (log_dir / "serve.log").write_text("".join(lines), encoding="utf-8")
+    out, _ = diagnostics.logs_section(Settings(home=tmp_path), Scrubber(),
+                                      datetime(2026, 10, 16, 12))
+    window = out["recent_warnings_errors"]
+    assert [x["exception"] for x in window].count("ConnectionResetError") == diagnostics.REPEATS_IN_WINDOW
+    assert {x["exception"] for x in window} >= {"ValueError", None} and len(window) == 4, window
+    assert sum(out["recent_repeats_dropped"].values()) == 600 - diagnostics.REPEATS_IN_WINDOW
+    assert out["exceptions"]["ConnectionResetError"] == 600  # still counted
+    assert out["cut_by_time"] is False
+
+
+def test_logs_and_runs_sections_stop_at_their_time_budget(diag_run):
+    """#157: the export took ten minutes (runs ~7, logs ~3): each section has a time budget and says when it was
+    cut; a query of the export has a statement timeout. The runs section also sums up the ``logic_version`` of the
+    default runs over the whole history."""
+    import psycopg
+
+    from desk import logic_version
+
+    s, _ = diag_run
+    out, _ = diagnostics.logs_section(s, Scrubber(), NOW, budget_s=-1)
+    assert out["cut_by_time"] and out["files"] and all(f.get("skipped") == "time" for f in out["files"]), out
+    with psycopg.connect(s.store_url, autocommit=True) as con:
+        runs = diagnostics.runs_section(con, Scrubber(), budget_s=-1)
+    assert runs["cut_by_time"] and runs["last"] == [{"run_id": 1, "as_of": "2026-10-15", "skipped": "time"}]
+    assert runs["logic_versions"] == [{"logic_version": logic_version(), "dates": 1, "from": "2026-10-15",
+                                       "to": "2026-10-15"}]
+    doc = diagnostics.build(s, store_url=s.store_url, hub=False, now=NOW)
+    assert doc["runs"]["cut_by_time"] is False and doc["logs"]["cut_by_time"] is False
+    assert doc["runs"]["logic_versions"][0]["dates"] == 1 and doc["runs"]["last"][0]["positions"] == 5
+
+
+def test_serve_logs_one_connection_reset_then_a_count():
+    """#157: the asyncio logger's ``ConnectionResetError`` (a client gone first) is logged once, then one line per
+    ``every`` with the count; other records pass."""
+    import logging
+
+    from desk.api.app import ConnectionResetNoise
+
+    f = ConnectionResetNoise(every=3)
+
+    def rec(exc: BaseException | None) -> logging.LogRecord:
+        return logging.LogRecord("asyncio", logging.ERROR, __file__, 1, "Exception in callback", None,
+                                 (type(exc), exc, None) if exc else None)
+
+    records = [rec(ConnectionResetError(10054, "reset")) for _ in range(7)]
+    assert [f.filter(r) for r in records] == [True, False, True, False, False, True, False]
+    assert records[5].getMessage() == "6 client connection resets so far (ConnectionResetError), not each logged"
+    assert records[5].exc_info is None and records[0].exc_info is not None
+    assert f.filter(rec(ValueError("x"))) and f.filter(rec(None))
