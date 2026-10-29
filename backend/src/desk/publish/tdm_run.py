@@ -94,7 +94,7 @@ from ..valuation.bonds import (
 from ..valuation.fallback import METHOD as SIMPLE_METHOD
 from ..valuation.fallback import QUALITIES, SimplePnl, fx_rate, market_fx
 from ..valuation.positions import normalised
-from .summary import MINFIN_CLASSES, MINFIN_INN, NOT_MINFIN_CLASSES
+from .summary import MINFIN_CLASSES, MINFIN_INN, NOT_MINFIN_CLASSES, risk_problem
 
 ASSET_CLASS = {"ofz_pd": "ОФЗ-ПД", "ofz_ad": "ОФЗ-АД", "ofz_pk": "ОФЗ-ПК", "ofz_in": "ОФЗ-ИН",
                "subfederal": "Субфедеральные", "municipal": "Муниципальные", "corporate": "Корпоративные"}
@@ -728,6 +728,12 @@ def run_content(ctx: EodContext, positions: list[tuple[str, str, Outcome]], prev
         log.append(("WARN", (f"PnL не посчитан: {NO_PNL_TEXT[RUN_NO_PREV_MARKET]} (нет среза eod_final раньше "
                              f"{ctx.business_date}); позиции без PnL, а не с нулём")))
     log += [("WARN", s) for s in skipped + approx + no_pnl]
+    for r in rows:  # TDM#170: an impossible risk is the run's problem, said here and kept out of every sum (summary)
+        if (why := risk_problem(r.get("risk"), r.get("dv01"), r.get("mv_rub"), r.get("notional_rub"),
+                                 r.get("instr_type") == "BOND")) is not None:
+            r["extra"]["risk_problem"] = why
+            log.append(("WARN", (f"{r['position_id']} {r.get('instrument_id') or r.get('name') or '—'}: {why}; "
+                                 "риск позиции не в суммах DV01 (сводка прогона, таблица риска)")))
     direct = [o.pnl for _, _, o in positions if isinstance(o.pnl, DirectPnl)]
     for method, flag in ((FX_METHOD, "по курсу"), (REPORTED_METHOD, "по отчёту"), (CORE_FX_METHOD, "ядром")):
         if xs := [x for x in direct if x.method == method]:

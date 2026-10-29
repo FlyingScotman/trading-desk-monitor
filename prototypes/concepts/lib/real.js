@@ -537,6 +537,8 @@
     pnl: series(H.pnl, ['carry', 'funding', 'rates', 'spread', 'fx', 'trading', 'other', 'total'], k => positions.some(p => p.pnl[k] != null) ? sumBy(p => p.pnl[k]) : null),
   };
   if (!H.cs01) M.hist.cs01[n - 1] = sumBy(p => p.cs01);
+  // позиции с невозможным риском по датам (#170, сводка прогона riskBad): их риска в суммах нет — график отмечает дату
+  M.hist.riskBad = H.riskBad || null;
   // базис в истории — сводки прогонов (кривая «RUB OFZ» страниц: ofz_basis01 в прогоне 0.2.6+, ofzSpr01 до него);
   // в виде «КБД» — риск КБД, RUONIA без него
   // basis01 — без номинального прокси ОФЗ-ИН (basisIn01, #173): в «RUONIA + базис» он только в RUONIA, в «КБД» — на КБД
