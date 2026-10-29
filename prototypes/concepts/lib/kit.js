@@ -1466,8 +1466,9 @@
   };
 
   // Выброс в истории (#170): одна дата на порядки выше соседних не задаёт шкалу графика. Масштаб даты — наибольший
-  // |ряд| на ней; значение ряда — выброс, если оно не конечно или больше SPIKE_X × медианы масштаба соседних дат
-  // (±SPIKE_W, не меньше 4 с данными). Ступень (книга выросла) не выброс: после неё соседи такие же. Выброс в линии —
+  // |ряд| на ней; значение ряда — выброс, если оно не конечно или больше SPIKE_X × медианы масштаба соседних дат и
+  // слева, и справа (по SPIKE_W дат, не меньше 2 с данными с каждой стороны; на краях истории — только неконечное).
+  // Ступень (книга выросла) не выброс: с одной стороны соседи такие же, в том числе на последних датах. Выброс в линии —
   // разрыв, дата — пунктирной чертой, значение — в подсказке и примечании. rows — ряды по датам (null — нет точки);
   // flag — { индекс даты: текст } (у прогона позиции с невозможным риском, M.hist.riskBad) — та же черта, без вырезания.
   // → { data, idx, markLine, tip(i), note }
@@ -1478,12 +1479,15 @@
     const has = dates.map((_, i) => rows.some(r => r && r[i] != null));
     const med = a => { const s = a.slice().sort((x, y) => x - y), m = s.length >> 1; return s.length % 2 ? s[m] : (s[m - 1] + s[m]) / 2; };
     for (let i = 0; i < n; i++) {
-      const nb = [];
-      for (let j = Math.max(0, i - K.SPIKE_W); j <= Math.min(n - 1, i + K.SPIKE_W); j++) if (j !== i && has[j]) nb.push(scale[j]);
-      const lim = nb.length >= 4 ? K.SPIKE_X * med(nb) : Infinity;
+      const L = [], R = [];
+      for (let j = Math.max(0, i - K.SPIKE_W); j < i; j++) if (has[j]) L.push(scale[j]);
+      for (let j = i + 1; j <= Math.min(n - 1, i + K.SPIKE_W); j++) if (has[j]) R.push(scale[j]);
+      // выше соседей и слева, и справа: ступень у края истории (самая свежая дата) не выброс — у неё одна сторона
+      const lim = L.length >= 2 && R.length >= 2 ? K.SPIKE_X * Math.max(med(L), med(R)) : Infinity;
+      const zero = L.length >= 2 && R.length >= 2 && !(med(L) && med(R));  // соседи нулевые: масштаба нет
       rows.forEach((r, k) => {
         const v = r && r[i];
-        if (v == null || (isFinite(v) && (!lim || Math.abs(v) <= lim))) return;
+        if (v == null || (isFinite(v) && (zero || Math.abs(v) <= lim))) return;
         (hit[i] = hit[i] || []).push(names[k] + ' ' + (isFinite(v) ? fmt(v) : String(v)));
         out[k][i] = null;
       });

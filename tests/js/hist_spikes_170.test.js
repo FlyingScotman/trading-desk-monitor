@@ -54,6 +54,21 @@ t('ступень, рост позиции, нули и шум — не выбр
   }
 });
 
+t('ступень ×20 на последних или первых 1–8 датах — не выброс: свежая точка не прячется (ревью PR #469)', () => {
+  for (let k = 1; k <= 8; k++) {
+    const end = base.map((v, i) => i >= dates.length - k ? v * 20 : v);  // книга выросла в последние k дат
+    const start = base.map((v, i) => i < k ? v * 20 : v);  // история начинается с большой книги
+    for (const r of [end, start]) {
+      const S = K.spikes([r, small], dates, ['RUONIA', 'USD'], fmt);
+      assert.deepStrictEqual(Array.from(S.idx), [], 'k=' + k);
+      assert.deepStrictEqual(Array.from(S.data[0]), r);
+    }
+  }
+  // а выброс у края с двумя соседями справа — выброс; неконечное на последней дате — тоже
+  const r = base.slice(); r[dates.length - 3] = 1e14; r[dates.length - 1] = NaN;
+  assert.deepStrictEqual(Array.from(K.spikes([r], dates, ['RUONIA'], fmt).idx), [dates.length - 3, dates.length - 1]);
+});
+
 t('неконечное значение — выброс даже без соседей; null — просто нет точки', () => {
   const r = [null, -1e6, Infinity, -1e6, null];
   const S = K.spikes([r], dates.slice(0, 5), ['RUONIA'], fmt);
