@@ -35,6 +35,7 @@
 <script src="lib/boot.js"></script>
 <script src="lib/kit.js"></script>
 <script src="lib/instr.js"></script>
+<script src="lib/inbox-why.js"></script>
 <script>
 (function () {
   'use strict';
@@ -45,6 +46,7 @@
   // слагаемым и подсказками, перенос ОВП по книгам. Прогон до TDM#416 (блок без published) — без панели публикуемой ОВП.
   // Данные: GET ../api/v1/runs/{run_id}/ocp (backend desk/publish/ocp_run.py, движок desk/rules/ocp.py); в демо —
   // вымышленный набор той же формы. Состав ОВП в отчётах организации — только в приватном адаптере (TDM#60).
+  // Отчёта ОВП нет (no_report) — почему, по журналу входящих (TDM#445): GET ../api/v1/inbox/datasets/ocp, lib/inbox-why.js.
   const M = MOCK, K = KIT, f = K.f, esc = K.esc;
   K.top({ title: 'C16 · ОВП', tag: 'ОВП: отчёт + вне отчёта, сверка с позициями, перенос ОВП' });
   const server = K.source === 'real';
@@ -57,7 +59,31 @@
   // сообщение вместо данных (ошибка «обновить»): сохранённый ответ сбрасывается — смена формата не нарисует его поверх
   function msg(t) { last = null; view.innerHTML = '<div class="k-panel"><div class="c16-msg">' + t + '</div></div>'; }
 
+  // нет отчёта ОВП (no_report): почему — по журналу входящих сейчас (TDM#445; lib/inbox-why.js над
+  // ../api/v1/inbox/datasets/ocp?on=<дата прогона>); ответ помнится на дату прогона: перерисовка его не спрашивает снова
+  // (и ошибка загрузки тоже: «Обновить» спрашивает снова)
+  let why = null;
+  function whyPanel(d) {
+    const p = panel('Почему отчёта ОВП нет');
+    const bd = p.querySelector('.bd');
+    const c14 = 'c14-day-status.html' + (d.as_of ? '?on=' + encodeURIComponent(d.as_of) : '');
+    const show = w => {
+      bd.innerHTML = w.x ? INBOX_WHY.html(w.x, { on: d.as_of }) : '<div class="mut">Причина не загрузилась (' + esc(w.err) + ') — файлы дня в <a href="' + c14 + '">C14</a></div>';
+    };
+    if (why && why.on === d.as_of) show(why);
+    else if (!server) show({ x: DEMO_WHY });
+    else {
+      bd.innerHTML = '<div class="mut">загрузка…</div>';
+      fetch('../api/v1/inbox/datasets/ocp' + (d.as_of ? '?on=' + encodeURIComponent(d.as_of) : ''), { cache: 'no-store' }).then(r => {
+        if (!r.ok) throw new Error(r.status + ' ' + r.statusText);
+        return r.json();
+      }).then(x => ({ on: d.as_of, x }), e => ({ on: d.as_of, err: e.message })).then(w => { why = w; show(w); });
+    }
+    return p;
+  }
+
   function load() {
+    why = null;
     if (!server) { render(DEMO); return; }
     fetch('../api/v1/runs/' + encodeURIComponent(M.run.id) + '/ocp', { cache: 'no-store' }).then(r => {
       if (r.status === 401 || r.status === 403) throw Object.assign(new Error('forbidden'), { forbidden: true });
@@ -88,6 +114,7 @@
       '<div class="mut" style="font-size:12px">в отчёт входят: ' + esc(keys.filter(k => inRep.has(k)).map(k => C[k]).join(', ') || '—') +
       (adapterFields.length ? '<br>из настроек адаптера (ocp_policy): ' + esc(adapterFields.join(', ')) : '') + '</div></div>';
     wrap.appendChild(hd);
+    if (d.state === 'no_report') wrap.appendChild(whyPanel(d));
 
     // публикуемая ОВП (TDM#416): по валютам с источниками, по книгам и частям отчёта, чего не хватает
     const P = d.published || {};
@@ -210,6 +237,14 @@
       notes: ['демо: вымышленные книги и суммы'],
     };
   })();
+
+  // демо «почему отчёта нет» (форма ответа /api/v1/inbox/datasets/ocp): вымышленные файл и коды
+  const DEMO_WHY = { dataset: 'ocp', name: 'ОВП', on: DEMO.as_of, adapter: 'ok demo 1.0 000000000000', sources: ['ocp_demo'], in_force: null,
+    files: { total: 1, by_status: { rejected: 1 }, status_text: { rejected: 'отклонён' }, later: { total: 0, by_status: {}, first_date: null } },
+    latest: { file: '000000000000', name: 'ocp_demo.csv', status: 'rejected', status_text: 'отклонён', source: 'ocp_demo', report_date: DEMO.as_of, valid_date: DEMO.as_of,
+      after: false, units: { rejected: 2 }, reason: 'книги нет в справочнике', issues: [{ severity: 'error', code: 'unknown_book', count: 2, text: 'книги нет в справочнике' }] },
+    unread: { ignored: 3, too_old: 0 }, lookback_days: 35, folders: { count: 1, scanned: 1, missing: 0 }, settings_link: true,
+    last_scan: { at: DEMO.as_of + 'T07:00:00Z', files: { rejected: 1 }, skipped: {} } };
 
   K.commands && K.commands([{ label: 'ОВП: обновить', run: load }]);
   // формат отрицательных «(1) / −1» (#153): перерисовать в новом формате, как остальные мониторы (#262)

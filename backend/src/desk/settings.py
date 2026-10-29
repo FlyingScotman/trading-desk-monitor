@@ -547,6 +547,13 @@ def _json_dirs(entries: list[dict], home: Path) -> tuple[Path, ...]:
     return tuple(out)
 
 
+def inbox_dir(entry: dict, home: Path) -> Path | None:
+    """One ``inbox_dirs`` entry of settings.json as the server resolves it (``~``, relative to ``home``, ``**`` when
+    recursive): the folder ``Settings.inbox_dirs`` gets; None for an empty path (TDM#445: the settings page's folders
+    matched to the scanned ones)."""
+    return next(iter(_json_dirs([entry], home)), None)
+
+
 _exported: dict[str, str] = {}  # proxy variables load() set itself, so it can update or remove them
 
 

@@ -3,6 +3,8 @@
 * ``GET /api/v1/inbox?on=YYYY-MM-DD``: the date's inputs, closes, files, rejections with their reasons, runs and what
   superseded what, per book where the positions went (``inbox.scan.reconcile``), the date's events.
 * ``GET /api/v1/inbox/days?to=&n=``: a line per business date for the screen's strip.
+* ``GET /api/v1/inbox/datasets/{dataset}?on=``: why a dataset is not in force on a date: the files of its sources,
+  the latest with its status and codes, the files never read (C16 «отчёта ОВП нет», TDM#445).
 * ``GET /api/v1/events?after=&before=&on=&type=&limit=``: the event feed (JSON pages by ``event_id``).
 * ``GET /api/v1/events/stream?after=&type=``: the same feed as Server-Sent Events (#28): ``id:`` = ``event_id``,
   ``event:`` = the type, ``data:`` = the event as in the JSON pages (one line). It opens with ``event: hello``
@@ -40,6 +42,8 @@ from fastapi.responses import JSONResponse, StreamingResponse
 
 from .. import daystatus, store
 from ..settings import SettingsError, load
+from . import auth
+from .app import ApiError
 
 log = logging.getLogger(__name__)
 public = APIRouter()
@@ -85,6 +89,26 @@ def get_days(request: Request, to: str | None = None, n: Annotated[int, Query(ge
     settings, url = _url(request)
     with store.connect(url) as con:
         return _json(daystatus.days(con, settings, day, n))
+
+
+@public.get("/api/v1/inbox/datasets/{dataset}")
+def get_dataset_files(request: Request, dataset: str, on: str | None = None) -> JSONResponse:
+    """Why ``dataset`` is or is not in force on ``on`` (default today): its sources' files and the latest of them,
+    the files never read, what is in force now (TDM#445)."""
+    if not dataset.replace("_", "").isalnum() or len(dataset) > 64:
+        raise HTTPException(400, "dataset must be a dataset name")
+    day = _date(on, "on")
+    settings, url = _url(request)
+    with store.connect(url) as con:
+        doc = daystatus.dataset_files(con, settings, dataset, day)
+    try:  # the settings page answers this user (an admin, or this computer with sign-in off): the page may link it
+        auth.require_admin(request, ())
+        doc["settings_link"] = True
+    except ApiError as e:  # 401/403: a viewer, another computer
+        if e.status not in (401, 403):
+            raise
+        doc["settings_link"] = False
+    return _json(doc)
 
 
 @public.get("/api/v1/events")

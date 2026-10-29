@@ -134,4 +134,22 @@ t('C16: панель публикуемой ОВП (по валютам с ис�
   assert.ok(!h2.includes('Публикуемая ОВП') && h2.includes('ОВП из позиций по валютам') && h2.includes('c16-recon'));
 });
 
+t('C16: «отчёта ОВП нет» — панель «Почему», по журналу входящих (TDM#445), только при no_report', () => {
+  const page = P('concepts/c16-ocp.html');
+  assert.ok(page.includes('<script src="lib/inbox-why.js"></script>') && page.includes("'../api/v1/inbox/datasets/ocp'"), 'запрос и библиотека');
+  const page16 = (src) => {
+    const x = load(null); x.ctx.KIT.top = () => {}; x.ctx.KIT.tableToolsAll = () => {};
+    vm.runInContext(P('concepts/lib/inbox-why.js'), x.ctx); vm.runInContext(src, x.ctx); return dump(x.view);
+  };
+  const code = page.slice(page.lastIndexOf('<script>') + 8, page.lastIndexOf('</script>'));
+  assert.ok(!page16(code).includes('Почему отчёта ОВП нет'), 'отчёт есть — панели нет');
+  const none = code.replace("state: 'computed', text:", "state: 'no_report', text:");
+  assert.notStrictEqual(none, code);
+  const html = page16(none);  // демо: вымышленный ответ /api/v1/inbox/datasets/ocp той же формы
+  assert.ok(html.includes('Почему отчёта ОВП нет') && html.includes('<div data-why="ocp">'), 'панель');
+  assert.ok(html.includes('Отчёт ОВП отклонён: книги нет в справочнике') && html.includes('title="unknown_book ×2"'), html);
+  assert.ok(html.includes('ocp_demo.csv</span> · ещё 3 файла не распознано') && html.includes('href="c14-day-status.html?on='), html);
+  assert.strictEqual((html.match(/Почему отчёта ОВП нет/g) || []).length, 1);
+});
+
 console.log(n + ' tests passed');
