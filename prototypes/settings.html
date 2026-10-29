@@ -1059,7 +1059,7 @@ function renderDirs(){
   if (!S.dirs.length) tb.append(h('tr', {}, h('td', {colspan:4, class:'muted'}, 'Папки не заданы.')));
   S.dirs.forEach((d, i) => tb.append(h('tr', {},
     h('td', {style:'width:55%'}, h('input', {class:'inp mono', value:d.path, placeholder:'C:\\Отчёты\\Позиции', 'aria-label':'Папка',
-      oninput:e => { d.path = e.target.value; }}), DeskInboxFolders.node(d.path, S.data && S.data.home)),  // что найдено в папке (TDM#445)
+      oninput:e => { d.path = e.target.value; }}), DeskInboxFolders.node(d.path)),  // что найдено в папке (TDM#445)
     h('td', {}, h('input', {class:'inp', value:d.label, placeholder:'Позиции', 'aria-label':'Подпись', oninput:e => { d.label = e.target.value; }})),
     h('td', {}, h('label', {class:'chk'}, h('input', {type:'checkbox', checked:d.recursive, onchange:e => { d.recursive = e.target.checked; }}), 'включая подпапки')),
     h('td', {style:'width:1%'}, h('button', {class:'x del', type:'button', title:'Убрать папку', 'aria-label':'Убрать папку',

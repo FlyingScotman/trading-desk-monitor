@@ -554,92 +554,97 @@ def days(con: psycopg.Connection, settings: Settings, to: date | None = None, n:
 LOST = ("rejected", "failed", "timed_out", "match_failed")
 """The statuses of a file the adapter took and the inbox lost (the folders' «отклонено»)."""
 
+NOT_READ = {"ignored": "ignored", "ignored_too_old": "too_old"}
+"""A file whose current status says it was never read (a ledger row from before migration 0007, or a file offered
+again whose new reading declined it), counted with the ``inbox_unread`` files."""
 
-def _folder(d: Path | str) -> tuple[str, bool]:
-    """A folder of ``Settings.scan_dirs`` as ``inbox.conformance.list_entries`` lists it: (its path, recursive)."""
-    s = str(d)
-    rec = s.rstrip("/\\").endswith("**")
-    return str(Path(s.rstrip("/\\").removesuffix("**") if rec else s)), rec
-
-
-def _under(folders: list[tuple[str, bool]], col: str = "path") -> tuple[str, dict[str, Any]]:
-    """An SQL condition: ``col`` is the path of a file of one of ``folders`` (of its subfolders too when recursive),
-    as the scan wrote it (``os.scandir``: the folder, the separator, the name); on Windows regardless of case."""
-    fold = os.name == "nt"
-    c = f"lower({col})" if fold else col
-    parts, args = [], {"sep": os.sep}
-    for i, (p, rec) in enumerate(folders):
-        pre = p if p.endswith(os.sep) else p + os.sep
-        args[f"p{i}"] = pre.lower() if fold else pre
-        parts.append(f"(starts_with({c}, %(p{i})s)"
-                     + ("" if rec else f" AND strpos(substr({col}, {len(pre) + 1}), %(sep)s) = 0") + ")")
-    return "(" + " OR ".join(parts) + ")" if parts else "false", args
+UNREAD_SQL = ("SELECT u.path, u.status, u.source FROM inbox_unread u WHERE {where} AND NOT EXISTS ("
+              "SELECT 1 FROM inbox_sighting s WHERE s.path = u.path AND s.size_bytes = u.size_bytes"
+              " AND s.mtime = u.mtime)")
+"""The files never read. The scan does not delete a row of ``inbox_unread`` when it reads that file version after all
+(the adapter changed, the lookback grew): it writes its ``inbox_sighting`` (the same path, size and time), so such a
+row is not counted. A row ``ignored`` by an earlier adapter fingerprint still counts: the next scan offers it again
+and rewrites it (declined again) or reads it (then it has a sighting)."""
 
 
-def _source_datasets(con: psycopg.Connection, h: Any) -> dict[str, list[str]]:
-    """Per source the datasets it gives: as the adapter ``h`` declares them (``describe``) and as the ledger read
-    them (the units of its files), so a source the adapter no longer declares keeps its datasets."""
+def _declared(h: Any) -> dict[str, list[str]]:
+    """Per source the datasets the adapter ``h`` declares (``describe``)."""
     from .inbox.spi import source_datasets
 
-    out: dict[str, set[str]] = defaultdict(set)
+    out: dict[str, list[str]] = {}
     for decl in (h.describe or {}).get("sources") or []:
         try:
-            out[decl["source"]].update(source_datasets(decl))
+            out[decl["source"]] = sorted(set(out.get(decl["source"], [])) | set(source_datasets(decl)))
         except (KeyError, TypeError):
             continue
-    for src, ds in con.execute("SELECT DISTINCT l.source, u.dataset FROM inbox_unit u"
-                               " JOIN inbox_file_status l USING (status_id) WHERE l.source IS NOT NULL"):
-        out[src].add(ds)
-    return {k: sorted(v) for k, v in sorted(out.items())}
+    return out
+
+
+def _scan_dirs(settings: Settings) -> list[tuple[str, str, bool, dict[str, Any] | None]]:
+    """The folders of ``Settings.scan_dirs``: (as configured, its path, recursive, what this process's last scan found
+    there: ``exists``, ``listed``, ``skipped``; None when no scan has listed it yet: just added, or no scan since the
+    server started). Whether a folder exists is the scan's word: a request never waits on an unreachable share."""
+    from .inbox import scan
+
+    seen = (scan.last_scan or {}).get("dirs") or {}
+    return [(str(d), *scan.folder_of(d), seen.get(str(d))) for d in settings.scan_dirs]
 
 
 def _last_scan() -> dict[str, Any] | None:
-    """This process's last inbox scan: when, and its files by status."""
+    """This process's last inbox scan: when, its files by status and those it skipped (too old, too large)."""
     from .inbox import scan
 
     ls = scan.last_scan
-    return {"at": ls["at"], "files": ls.get("files") or {}} if ls else None
+    return {"at": ls["at"], "files": ls.get("files") or {}, "skipped": ls.get("skipped") or {}} if ls else None
 
 
-def _is_dir(p: str) -> bool:
-    try:
-        return Path(p).is_dir()
-    except OSError:
-        return False
+def _reason(codes: list[dict[str, Any]], f: dict[str, Any]) -> str | None:
+    """A lost file's reason in a few words: its first error code's text (or the code), else its error code or the
+    exception type; None for a file read."""
+    if f["status"] not in LOST:
+        return None
+    err = next((i for i in codes if i["severity"] == "error"), None)
+    return (err["text"] or err["code"]) if err else f.get("error_code") or f.get("error_type")
 
 
 def dataset_files(con: psycopg.Connection, settings: Settings, dataset: str, on: date | None = None) -> dict[str, Any]:
     """``GET /api/v1/inbox/datasets/{dataset}?on=``: why ``dataset`` is or is not in force on ``on`` (default today,
-    Moscow), for a page that has none of it (C16 «отчёта ОВП нет», TDM#445). ``sources``: the sources that give it (the
-    adapter's ``describe`` and the ledger); ``in_force``: its scope units in the store now for ``on`` (a stock: valid
-    date <= ``on``), their latest valid date and when the latest was recorded: a run published before that did not
-    see it (TDM#181); ``files``: the files of those sources in the ledger by current status; ``latest``: the latest of
-    them dated on or before ``on`` (else the newest, ``after``), with its units of the dataset, issue codes and why it
-    was lost; ``unread``: the files never read, those of the folders scanned now that ``match`` declined
-    (``ignored``: they have no source, so they may be this dataset's) and those of its sources dated behind the
-    lookback (``too_old``); ``folders``: the report folders and how many of them the server cannot see;
-    ``last_scan``: this process's. Codes, counts, file names and sources, as ``day``; no row values, no messages."""
+    Moscow), for a page that has none of it (C16 «отчёта ОВП нет», TDM#445). ``sources``: the adapter's sources of it;
+    ``in_force``: its scope units in the store now for ``on`` (a stock: valid date <= ``on``), their latest valid date
+    and when the latest was recorded: a run published before that did not see it (TDM#181); ``files``: the files of
+    those sources (or with a unit of it) dated on or before ``on`` by current status, ``later`` those dated after;
+    ``latest``: the latest dated on or before ``on`` (else the first after, ``after``) with its status, ``reason`` (a
+    few words), issue codes and units of the dataset; ``unread``: in the folders scanned now, the files never read
+    that ``match`` declined (``ignored``: no source, so they may be this dataset's) and those of its sources dated
+    behind the lookback (``too_old``); ``folders``: the report folders, how many the last scan listed and how many it
+    did not find; ``last_scan``: this process's. Codes, counts, file names and sources, as ``day``; no row values."""
     from .inbox import scan
     from .inbox.spi import STOCK_DATASETS
 
     on = on or datetime.now(UTC).astimezone(store.MSK).date()
     h = scan.adapter(settings)
-    sources = [s for s, ds in _source_datasets(con, h).items() if dataset in ds]
+    sources = [s for s, ds in _declared(h).items() if dataset in ds]
     files = _rows(con, "SELECT l.status_id, l.sha256, f.name, l.status, l.at, l.source, l.report_date, l.valid_date,"
                        f" l.error_code, l.error_type FROM {LATEST} l JOIN inbox_file f USING (sha256)"
-                       " WHERE l.source = ANY(%(src)s) OR EXISTS (SELECT 1 FROM inbox_unit u"
-                       "  WHERE u.status_id = l.status_id AND u.dataset = %(ds)s)", {"src": sources, "ds": dataset})
+                       " WHERE (l.source = ANY(%(src)s) OR EXISTS (SELECT 1 FROM inbox_unit u"
+                       "  WHERE u.status_id = l.status_id AND u.dataset = %(ds)s)) AND l.status <> ALL(%(nr)s)",
+                  {"src": sources, "ds": dataset, "nr": list(NOT_READ)})
 
     def day_of(f: dict[str, Any]) -> date | None:
         return f["valid_date"] or f["report_date"]
 
-    dated = [f for f in files if day_of(f) is None or day_of(f) <= on]
-    latest = max(dated or files, key=lambda f: (day_of(f) or date.min, f["at"], f["status_id"]), default=None)
+    def key(f: dict[str, Any]) -> tuple:
+        return day_of(f) or date.min, f["at"], f["status_id"]
+
+    before = [f for f in files if day_of(f) is None or day_of(f) <= on]
+    later = [f for f in files if day_of(f) is not None and day_of(f) > on]
+    latest = max(before, key=key, default=None) or min(later, key=key, default=None)
     last = None
     if latest is not None:
         issues: Counter = Counter()
         for c in _issues(con, [latest["status_id"]]).values():
             issues.update(c)
+        codes = _codes(issues)
         units = Counter(st for (st,) in con.execute(
             "SELECT status FROM inbox_unit WHERE status_id = %s AND dataset = %s", (latest["status_id"], dataset)))
         d = day_of(latest)
@@ -647,69 +652,124 @@ def dataset_files(con: psycopg.Connection, settings: Settings, dataset: str, on:
                 "status_text": FILE_STATUS.get(latest["status"], latest["status"]), "at": _iso(latest["at"]),
                 "source": latest["source"], "report_date": _iso(latest["report_date"]),
                 "valid_date": _iso(latest["valid_date"]), "after": d is not None and d > on,
-                "units": dict(units), "issues": _codes(issues), "why": _why(latest)}
+                "units": dict(units), "issues": codes, "reason": _reason(codes, latest), "why": _why(latest)}
     when = "valid_date <= %s" if dataset in STOCK_DATASETS else "valid_date = %s"
     n, vd, at = con.execute(f"SELECT count(DISTINCT scope_key), max(valid_date), max(recorded_at) FROM dataset_set"
                             f" WHERE dataset = %s AND {when}", (dataset, on)).fetchone()
-    cond, args = _under([_folder(x) for x in settings.scan_dirs])
-    ignored = con.execute(f"SELECT count(*) FROM inbox_unread WHERE status = 'ignored' AND {cond}", args).fetchone()[0]
-    too_old = con.execute("SELECT count(*) FROM inbox_unread WHERE status = 'ignored_too_old' AND source = ANY(%s)",
-                          (sources,)).fetchone()[0]
-    by_status = Counter(f["status"] for f in files)
+    dirs = _scan_dirs(settings)
+    unread: Counter = Counter()
+    for path, st, _ in con.execute(UNREAD_SQL.format(
+            where="(u.status = 'ignored' OR (u.status = 'ignored_too_old' AND u.source = ANY(%s)))"), (sources,)):
+        if any(scan.in_folder(path, p, rec) for _, p, rec, _ in dirs):
+            unread[NOT_READ[st]] += 1
+    report = [x for x in dirs if x[0] in {str(d) for d in settings.inbox_dirs}]
+
+    def counts(fs: list[dict[str, Any]]) -> dict[str, int]:
+        return dict(Counter(f["status"] for f in fs))
+
     return {"dataset": dataset, "name": DATASET_NAMES.get(dataset, dataset), "on": on.isoformat(),
             "adapter": scan.adapter_line(h), "sources": sources,
             "in_force": {"units": n, "valid_date": _iso(vd), "recorded_at": _iso(at)} if n else None,
-            "files": {"total": len(files), "by_status": dict(by_status),
-                      "status_text": {st: FILE_STATUS.get(st, st) for st in by_status}},
-            "latest": last, "unread": {"ignored": ignored, "too_old": too_old},
+            "files": {"total": len(before), "by_status": counts(before),
+                      "status_text": {st: FILE_STATUS.get(st, st) for st in {f["status"] for f in files}},
+                      "later": {"total": len(later), "by_status": counts(later),
+                                "first_date": _iso(min((day_of(f) for f in later), default=None))}},
+            "latest": last, "unread": {"ignored": unread["ignored"], "too_old": unread["too_old"]},
             "lookback_days": settings.inbox_lookback_days or None,
-            "folders": {"count": len(settings.inbox_dirs),
-                        "missing": sum(1 for x in settings.inbox_dirs if not _is_dir(_folder(x)[0]))},
+            "folders": {"count": len(report), "scanned": sum(1 for x in report if x[3] is not None),
+                        "missing": sum(1 for x in report if x[3] is not None and not x[3].get("exists", True))},
             "last_scan": _last_scan(), "generated_at": datetime.now(UTC).isoformat()}
+
+
+def _entries(settings: Settings, dirs: list[tuple[str, str, bool, Any]]) -> tuple[list[dict[str, Any]], bool]:
+    """The report folders as settings.json lists them (what the settings page edits), each with the index of its
+    folder in ``dirs``, resolved as the server resolves it (``~``, relative to the data folder); None: not scanned
+    (``DESK_INBOX_DIRS`` overrides settings.json). And whether the environment overrides them."""
+    from .inbox import scan
+    from .settings import SettingsError, _json_dirs, desk_home, env_overrides, read_settings_json
+
+    home = settings.home or desk_home()
+    try:
+        raw = read_settings_json(home).get("inbox_dirs")
+    except SettingsError:
+        raw = None
+    out = []
+    for e in raw if isinstance(raw, list) else []:
+        if not isinstance(e, dict) or not str(e.get("path") or "").strip():
+            continue
+        p, rec = scan.folder_of(_json_dirs([e], home)[0])
+        i = next((i for i, (_, f, r, _) in enumerate(dirs)
+                  if r == rec and os.path.normcase(f) == os.path.normcase(p)), None)
+        out.append({"path": str(e["path"]), "recursive": bool(e.get("recursive")), "folder": i})
+    return out, "inbox_dirs" in env_overrides()
 
 
 def folders(con: psycopg.Connection, settings: Settings) -> dict[str, Any]:
     """``GET /api/v1/inbox/folders`` (the settings page's «Папки с отчётами», TDM#445): per folder of
-    ``Settings.scan_dirs`` what the inbox knows of its files, by the paths the scans saw (``inbox_sighting`` for the
-    files read, ``inbox_unread`` for those never read; a file at several paths of one folder counts once): ``exists``
-    (the server sees the folder), ``files`` known, of them ``matched`` (the adapter took them), ``ignored`` (``match``
-    declined), ``too_old`` (dated behind the lookback), ``lost`` (rejected, read failed or timed out, match failed);
-    per source the files by current status and the datasets it gives; per dataset the latest business date read (an
-    accepted unit of the file's current reading) and the files that gave it; ``last_seen``: the latest sighting.
+    ``Settings.scan_dirs`` what the inbox knows of its files, by the paths the scans saw (``inbox_sighting`` with the
+    file's current status for the files read, ``UNREAD_SQL`` for those never read; a file at several paths of one
+    folder counts once), in one pass over each table: ``scanned`` (this process's last scan listed it) and from that
+    scan ``exists``, ``listed`` (the files there) and ``skipped`` (too old by modification time, too large: never
+    ledgered); ``files`` known, of them ``matched`` (the adapter took them), ``ignored`` (``match`` declined),
+    ``too_old`` (dated behind the lookback), ``lost`` (rejected, read failed or timed out, match failed); per source
+    the files by current status and its datasets; per dataset the latest business date read (an accepted unit of the
+    file's current reading). ``entries``: settings.json's folders, each with its folder's index (``_entries``).
     ``output``: the adapter's output folder, scanned too but not a report folder. Paths of this machine: local only."""
     from .inbox import scan
 
     h = scan.adapter(settings)
-    by_source = _source_datasets(con, h)
+    declared = _declared(h)
+    dirs = _scan_dirs(settings)
     out_dir = getattr(settings, "adapter_output_dir", None)
+    read: list[dict[str, tuple]] = [{} for _ in dirs]
+    unread: list[Counter] = [Counter() for _ in dirs]
+    for path, sha, sid, st, src in con.execute(
+            "SELECT s.path, s.sha256, l.status_id, l.status, l.source FROM inbox_sighting s"
+            " JOIN LATERAL (SELECT status_id, status, source FROM inbox_file_status x WHERE x.sha256 = s.sha256"
+            "  ORDER BY status_id DESC LIMIT 1) l ON true"):
+        for i, (_, p, rec, _) in enumerate(dirs):
+            if scan.in_folder(path, p, rec):
+                read[i][sha] = (sid, st, src)
+    for path, st, _ in con.execute(UNREAD_SQL.format(where="true")):
+        for i, (_, p, rec, _) in enumerate(dirs):
+            if scan.in_folder(path, p, rec):
+                unread[i][NOT_READ[st]] += 1
+    units: dict[int, list[tuple[str, date]]] = defaultdict(list)
+    for sid, ds, vd in con.execute(
+            "SELECT status_id, dataset, max(valid_date) FROM inbox_unit WHERE status = 'accepted'"
+            " AND status_id = ANY(%s) GROUP BY 1, 2", (sorted({x[0] for r in read for x in r.values()}),)):
+        units[sid].append((ds, vd))
     res = []
-    for d in settings.scan_dirs:
-        path, rec = _folder(d)
-        cond, args = _under([(path, rec)], "s.path")
-        read = _rows(con, f"WITH f AS (SELECT sha256, max(at) AS seen FROM inbox_sighting s WHERE {cond} GROUP BY 1)"
-                          f" SELECT l.status_id, l.status, l.source, f.seen FROM f JOIN {LATEST} l USING (sha256)",
-                     args)
-        unread = {st: (n, seen) for st, n, seen in con.execute(
-            f"SELECT status, count(*), max(at) FROM inbox_unread s WHERE {cond} GROUP BY 1", args)}
+    for (d, path, rec, seen), files, nr in zip(dirs, read, unread, strict=True):
+        statuses: Counter = Counter()
         srcs: dict[str, Counter] = defaultdict(Counter)
-        for r in read:
-            srcs[r["source"] or "-"][r["status"]] += 1
-        ds = [{"dataset": name, "name": DATASET_NAMES.get(name, name), "latest_valid_date": _iso(vd), "files": n}
-              for name, vd, n in con.execute(
-                  "SELECT dataset, max(valid_date), count(DISTINCT sha256) FROM inbox_unit"
-                  " WHERE status = 'accepted' AND status_id = ANY(%s) GROUP BY 1 ORDER BY 1",
-                  ([r["status_id"] for r in read],))]
-        statuses = Counter(r["status"] for r in read)
-        seen = [x for x in [*(r["seen"] for r in read), *(s for _, s in unread.values())] if x]
-        res.append({"dir": str(d), "path": path, "recursive": rec,
-                    "output": out_dir is not None and path == str(out_dir), "exists": _is_dir(path),
-                    "files": len(read) + sum(n for n, _ in unread.values()), "matched": len(read),
-                    "ignored": unread.get("ignored", (0, None))[0],
-                    "too_old": unread.get("ignored_too_old", (0, None))[0],
-                    "lost": sum(statuses[s] for s in LOST), "by_status": dict(statuses),
-                    "sources": [{"source": s, "datasets": by_source.get(s, []), "files": sum(c.values()),
-                                 "by_status": dict(c)} for s, c in sorted(srcs.items())],
-                    "datasets": ds, "last_seen": _iso(max(seen)) if seen else None})
-    return {"adapter": scan.adapter_line(h), "folders": res, "status_text": FILE_STATUS,
-            "lookback_days": settings.inbox_lookback_days or None, "last_scan": _last_scan(),
-            "generated_at": datetime.now(UTC).isoformat()}
+        src_ds: dict[str, set[str]] = defaultdict(set)
+        latest: dict[str, date] = {}
+        by_ds: dict[str, set[int]] = defaultdict(set)
+        for sid, st, src in files.values():
+            if st in NOT_READ:
+                nr[NOT_READ[st]] += 1
+                continue
+            statuses[st] += 1
+            srcs[src or "-"][st] += 1
+            for ds, vd in units.get(sid, ()):
+                src_ds[src or "-"].add(ds)
+                by_ds[ds].add(sid)
+                latest[ds] = max(latest.get(ds, vd), vd)
+        matched = sum(statuses.values())
+        res.append({"dir": d, "path": path, "recursive": rec, "output": out_dir is not None and path == str(out_dir),
+                    "scanned": seen is not None, "exists": seen.get("exists") if seen else None,
+                    "listed": seen.get("listed") if seen else None, "skipped": (seen or {}).get("skipped") or {},
+                    "files": matched + nr["ignored"] + nr["too_old"], "matched": matched,
+                    "ignored": nr["ignored"], "too_old": nr["too_old"], "lost": sum(statuses[s] for s in LOST),
+                    "by_status": dict(statuses),
+                    "sources": [{"source": s, "datasets": sorted(set(declared.get(s, [])) | src_ds[s]),
+                                 "files": sum(c.values()), "by_status": dict(c)} for s, c in sorted(srcs.items())],
+                    "datasets": [{"dataset": ds, "name": DATASET_NAMES.get(ds, ds), "latest_valid_date": _iso(vd),
+                                  "files": len(by_ds[ds])} for ds, vd in sorted(latest.items())]})
+    entries, from_env = _entries(settings, dirs)
+    return {"adapter": scan.adapter_line(h), "folders": res, "entries": entries, "from_env": from_env,
+            "status_text": FILE_STATUS, "dataset_names": DATASET_NAMES,
+            "lookback_days": settings.inbox_lookback_days or None, "poll_seconds": settings.inbox_poll_seconds,
+            "last_scan": _last_scan(), "generated_at": datetime.now(UTC).isoformat()}
+

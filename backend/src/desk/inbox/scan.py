@@ -183,6 +183,7 @@ class ScanResult:
     notes: Counter = field(default_factory=Counter)     # reference() problems by code
     match: Counter = field(default_factory=Counter)     # retried, recovered, warm_<failure>: the match step (R22)
     timings: dict = field(default_factory=dict)         # list_s, match_s, process_s, index_builds
+    dirs: dict = field(default_factory=dict)            # per folder listed: exists, files listed, skipped (TDM#445)
 
     @property
     def ok(self) -> bool:
@@ -358,18 +359,25 @@ class _Scan:
         seen = set(self.con.execute("SELECT path, size_bytes, mtime FROM inbox_sighting").fetchall())
         unread = {(p, n, m): (st, fp, rd) for p, n, m, st, fp, rd in self.con.execute(
             "SELECT path, size_bytes, mtime, status, adapter_fingerprint, report_date FROM inbox_unread")}
-        entries = list_entries([str(d) for d in getattr(self.settings, "scan_dirs", self.settings.inbox_dirs)])
+        dirs = [str(d) for d in getattr(self.settings, "scan_dirs", self.settings.inbox_dirs)]
+        entries = list_entries(dirs)
         out_dir = getattr(self.settings, "adapter_output_dir", None)
         written = str(out_dir) + os.sep if out_dir is not None else None  # complete when it appears (one rename)
         self.res.timings["list_s"] = round(time.perf_counter() - t0, 2)
+        folders = [(d, *folder_of(d)) for d in dirs]
+        per = {d: {"listed": 0, "skipped": Counter()} for d in dirs}  # what each folder held (TDM#445)
         for n, (p, st) in enumerate(entries, 1):
             if n % LIST_TICK == 0:
                 self.progress(n, None, "просмотр папок")
-            if oldest is not None and st.st_mtime < oldest:
-                self.res.skipped["too_old"] += 1
-                continue
-            if st.st_size > limit:
-                self.res.skipped["too_large"] += 1
+            mine = [per[d] for d, f, rec in folders if in_folder(p, f, rec)]
+            for x in mine:
+                x["listed"] += 1
+            skip = "too_old" if oldest is not None and st.st_mtime < oldest else \
+                "too_large" if st.st_size > limit else None
+            if skip:
+                self.res.skipped[skip] += 1
+                for x in mine:
+                    x["skipped"][skip] += 1
                 continue
             stable = (_last_seen.get(p) == (st.st_size, st.st_mtime_ns) or bool(written and p.startswith(written))
                       or self.now.timestamp() - st.st_mtime >= self.settings.inbox_poll_seconds)
@@ -384,6 +392,8 @@ class _Scan:
             if u and ((u[0] == "ignored" and u[1] == self.h.fingerprint) or (u[0] == TOO_OLD and self.too_old(u[2]))):
                 continue
             out.append(Offer("", p, os.path.basename(p), st.st_size, mtime, True))
+        self.res.dirs = {d: {"exists": per[d]["listed"] > 0 or os.path.isdir(f), "listed": per[d]["listed"],
+                             "skipped": dict(per[d]["skipped"])} for d, f, _ in folders}
         return out
 
     def known(self, want: Callable[[str, str], bool], source: str | None = None,
@@ -876,12 +886,29 @@ def scan(con: psycopg.Connection, settings: Settings, *, now: datetime | None = 
     res = _session(con, settings, now, offers, lookback=True, progress=progress, since=since)
     global last_scan
     last_scan = {"at": datetime.now(UTC).isoformat(), "files": dict(res.files), "skipped": dict(res.skipped),
-                 "copies": dict(res.copies), "match": dict(res.match), "timings": dict(res.timings)}
+                 "copies": dict(res.copies), "match": dict(res.match), "timings": dict(res.timings),
+                 "dirs": dict(res.dirs)}
     return res
 
 
 last_scan: dict[str, Any] | None = None
-"""The counts of this process's last ``scan`` (``reconcile`` shows them: the skipped files are not ledgered)."""
+"""The counts of this process's last ``scan`` (``reconcile`` shows them: the skipped files are not ledgered); ``dirs``:
+per folder of ``Settings.scan_dirs`` (as ``str``) whether it was there, the files listed and those skipped
+(``daystatus.folders``: a folder not scanned yet, an empty one, one whose files are all too old)."""
+
+
+def folder_of(d: Path | str) -> tuple[str, bool]:
+    """A folder of ``Settings.scan_dirs`` as ``list_entries`` lists it: (its path, recursive)."""
+    s = str(d)
+    rec = s.rstrip("/\\").endswith("**")
+    return str(Path(s.rstrip("/\\").removesuffix("**") if rec else s)), rec
+
+
+def in_folder(path: str, folder: str, recursive: bool) -> bool:
+    """``path``, as the scan wrote it (``os.scandir``: the folder, the separator, the name), is a file of ``folder``
+    (of its subfolders too when ``recursive``); on Windows regardless of case (``os.path.normcase``)."""
+    p, pre = os.path.normcase(path), os.path.normcase(folder if folder.endswith(os.sep) else folder + os.sep)
+    return p.startswith(pre) and (recursive or os.sep not in p[len(pre):])
 
 
 def ingest_produced(con: psycopg.Connection, settings: Settings, path: Path, *, source: str,
