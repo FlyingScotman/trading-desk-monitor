@@ -122,7 +122,7 @@ def test_fx_rows_by_the_rate_move_and_otc_by_the_reports(ctx, prev):
     assert o1.as_tdm()["other"] == pytest.approx(8e4) and o1.extra()["method"] == REPORTED_METHOD
     assert d["B2"].pnl is None and d["B2"].no_pnl.reason == "no_prev_report"
     # D-1's own report (valid on D-1): the note says nothing of a gap, no report_from (TDM#440)
-    assert "разница отчётов" not in o1.note and o1.report_from is None and "report_from" not in o1.extra()
+    assert "reports gap" not in o1.note and o1.report_from is None and "report_from" not in o1.extra()
     assert o1.note == "reported PV 500,000.00 - 420,000.00 RUB (trades of the day inside)"
 
 
@@ -133,11 +133,12 @@ def test_gap_between_reports_names_the_old_report(ctx, prev):
     _, bp = _direct(ctx, prev, prev_valid=old)
     o1 = bp.direct["O1"].pnl
     assert (o1.method, o1.other, o1.prev_date, o1.flag) == (REPORTED_METHOD, pytest.approx(8e4), PREV, "по отчёту")
-    assert "разница отчётов с 05.10" in o1.note and "05.10.2026" in o1.note
+    assert o1.note.endswith("; reports gap since 05.10: the D-1 report is valid from 05.10.2026"), o1.note
+    assert all(ord(ch) < 128 for ch in o1.note)  # one language: the tail is English like the rest (TDM#459)
     assert o1.report_from == old and o1.extra()["report_from"] == "2026-10-05"
     assert o1.extra()["prev_date"] == PREV.isoformat()
     # rows not valued by the report are not touched
-    assert "report_from" not in bp.direct["FX1"].pnl.extra() and "разница" not in bp.direct["FX1"].pnl.note
+    assert "report_from" not in bp.direct["FX1"].pnl.extra() and "reports gap" not in bp.direct["FX1"].pnl.note
 
 
 def test_carried_report_and_missing_rate_give_reasons(ctx, prev):
