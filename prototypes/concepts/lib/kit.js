@@ -2919,7 +2919,7 @@
     el.innerHTML = K.flowsTable(p, own(), !!M.posFlows);
     K.cardTableTools(el, p);
     if (M.posFlows) M.posFlows(p.id).then(x => {
-      if (!el.isConnected || el.dataset.pos !== p.id) return;
+      if (!el.isConnected || el.dataset.pos !== String(p.id)) return;
       x = x || {};
       el.innerHTML = x.flows ? K.flowsTable(p, x.flows, false, null, x.note) : K.flowsTable(p, own(), false, x.error ? { error: x.error } : x.reason || null);
       K.cardTableTools(el, p);
