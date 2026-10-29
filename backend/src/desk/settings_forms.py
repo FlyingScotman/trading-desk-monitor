@@ -23,6 +23,9 @@ no idle timer: the child lives until the next check, which ends it and starts a 
 more than ``WORKER_IDLE_S`` ago or the adapter's own files changed (``reset``, at the server's exit, ends it too).
 A timeout or a crash of a run kills it as well, and the next run starts a new one. The limit of one run is the setting
 ``adapter_check_timeout_s``; when the current files' run hits it, the candidate is not tried with the same limit.
+The candidate's copy is a dot folder beside the config folder, its subfolders linked, so that paths of the files
+relative to the config folder lead where they lead from the real one (``_check_dir``, TDM#130): an unchanged file
+then has exactly the current files' issues, none of them ``new``.
 """
 
 from __future__ import annotations
@@ -30,6 +33,7 @@ from __future__ import annotations
 import atexit
 import dataclasses
 import json
+import os
 import re
 import shutil
 import tempfile
@@ -252,12 +256,41 @@ def _worker(handle: Any) -> runner.Worker:
     return _warm["worker"]
 
 
+def _check_dir(cfg: Path | None) -> tempfile.TemporaryDirectory:
+    """The candidate's folder, beside the config folder (the same parent) when it can be made there, so that a path
+    of the files relative to the config folder (``options.json`` ``report_dirs``, say: the adapter joins it to
+    ``ctx.config_dir``) reaches what it reaches from the real folder: ``../x`` the same folder, ``x`` through a link
+    (``_copy_config``). A dot name, so the adapter's and the backend's file lists skip it; else the system temp."""
+    if cfg is not None and cfg.is_dir():
+        try:
+            return tempfile.TemporaryDirectory(prefix=".desk-settings-check-", dir=cfg.parent)
+        except OSError:
+            pass  # a read-only parent: relative paths then miss, as before #130
+    return tempfile.TemporaryDirectory(prefix="desk-settings-check-")
+
+
+def _link_dir(src: Path, dest: Path) -> None:
+    try:
+        dest.symlink_to(src, target_is_directory=True)
+    except OSError:
+        if os.name == "nt":  # no right to make symlinks (no developer mode): a junction needs none
+            try:
+                import _winapi
+                _winapi.CreateJunction(str(src), str(dest))
+            except OSError:
+                pass
+
+
 def _copy_config(cfg: Path | None, dest: Path) -> None:
     if cfg is None or not cfg.is_dir():
         return
     for f in cfg.iterdir():
-        if f.is_file() and not f.name.startswith(".") and f.stat().st_size <= MAX_COPY_BYTES:
+        if f.name.startswith("."):
+            continue
+        if f.is_file() and f.stat().st_size <= MAX_COPY_BYTES:
             shutil.copy2(f, dest / f.name)
+        elif f.is_dir():  # a subfolder (reports under the config folder, say): linked, never copied
+            _link_dir(f.resolve(), dest / f.name)
 
 
 def _plain_issue(i: dict) -> dict:
@@ -303,7 +336,7 @@ def dry_run(handle: Any, cfg: Path | None, name: str, text: str, timeout_s: floa
                 if f.kind == "timed_out":
                     return _failure(f)  # the candidate would hit the same limit: say so now, not after a second wait
                 base = frozenset()  # the current config already fails: every issue of the candidate is worth showing
-        with tempfile.TemporaryDirectory(prefix="desk-settings-check-") as d:
+        with _check_dir(cfg) as d:
             tmp = Path(d)
             _copy_config(cfg, tmp)
             (tmp / name).write_text(text, encoding="utf-8")

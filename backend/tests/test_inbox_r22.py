@@ -202,6 +202,27 @@ def test_one_listing_with_stats_skips_temp_hidden_and_linked_folders(tmp_path):
     assert deep == ["a.csv", "sub/c.csv", "sub/deeper/d.csv"]  # a linked folder is not followed
 
 
+def test_a_recursive_listing_skips_dot_folders_such_as_the_settings_checks_copy(tmp_path):
+    """TDM#130: the settings page's check copies the config folder into ``.desk-settings-check-*`` beside it, with
+    its subfolders linked; a recursive inbox folder above it offers none of that, only the real files."""
+    root = tmp_path / "in"
+    cfg = root / "adapter-config"
+    (cfg / "reports").mkdir(parents=True)
+    (cfg / "options.json").write_text("{}", encoding="utf-8")
+    (cfg / "reports" / "r.csv").write_text("x", encoding="utf-8")
+    check = root / ".desk-settings-check-x"
+    (check / "deeper").mkdir(parents=True)
+    (check / "options.json").write_text("{}", encoding="utf-8")
+    (check / "deeper" / "d.csv").write_text("x", encoding="utf-8")
+    try:
+        os.symlink(cfg / "reports", check / "reports", target_is_directory=True)
+    except (OSError, NotImplementedError):
+        pass
+    deep = [Path(p).relative_to(root).as_posix() for p in conformance.list_files([f"{root}/**"])]
+    assert deep == ["adapter-config/options.json", "adapter-config/reports/r.csv"]
+    assert conformance.list_files([str(check)]) == [str(check / "options.json")]  # a folder named as such: listed
+
+
 def test_the_lookback_goes_by_report_date_not_by_modification_time(con, tmp_path):
     inbox = tmp_path / "in"
     put(inbox, "positions_20261017.csv", "positions_20261015.csv")

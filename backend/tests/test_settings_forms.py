@@ -65,6 +65,13 @@ def reference(ctx):
     ids = {b["book_id"] for b in books}
     issues = [{"severity": "warning", "code": "unknown_ocp_to", "src": b["_src"], "scope": {"book_id": b["book_id"]},
                "message": "books: ocp_to names no book"} for b in books if b.get("ocp_to") and b["ocp_to"] not in ids]
+    opts = json.load(open(os.path.join(ctx.config_dir, "options.json"), encoding="utf-8"))
+    for d in opts.get("report_dirs") or []:  # as the adapter takes them: a relative one from the config folder
+        d = d if os.path.isabs(d) else os.path.join(ctx.config_dir, d)
+        issues.append({"severity": "warning", "code": "report_dir_missing", "message": "options: report_dirs"}
+                      if not os.path.isdir(d) else
+                      {"severity": "info", "code": "report_dir_files", "message": "options: report_dirs %d files"
+                       % len(os.listdir(d))})
     out = {"books": books, "issues": issues}
     ents = _rows(ctx, "entities.json", "entities")
     if ents is not None:
@@ -177,6 +184,28 @@ def test_check_reports_schema_then_the_adapters_dry_run(client: TestClient, home
     assert not j["ok"] and any(i["code"] == "duplicate_key" and i["new"] for i in j["adapter"])
     assert client.post("/api/v1/adapter/settings/nope/check", json={"data": {}}).status_code == 404
     assert client.post("/api/v1/adapter/settings/books/check", json={}).status_code == 422
+
+
+def test_check_sees_the_paths_relative_to_the_config_folder(client: TestClient, home: Path) -> None:
+    """TDM#130: the candidate's copy lies beside the config folder with its subfolders linked, so a relative path of
+    the files leads where it leads from the real folder: an unchanged file has the current files' issues, none new."""
+    cfg = home / "adapter-config"
+    (home / "reports").mkdir()
+    (home / "reports" / "r1.csv").write_text("x", encoding="utf-8")
+    (cfg / "inner").mkdir()
+    for n in ("a.csv", "b.csv"):
+        (cfg / "inner" / n).write_text("x", encoding="utf-8")
+    doc = json.loads((cfg / "options.json").read_text(encoding="utf-8"))
+    doc["report_dirs"] = ["../reports", "inner", "../adapter-config/inner"]
+    (cfg / "options.json").write_text(file_text(doc), encoding="utf-8")
+    j = client.post("/api/v1/adapter/settings/sources/check", json={"data": doc}).json()
+    assert j["adapter_checked"]
+    got = sorted((i["code"], i["message"], i["new"]) for i in j["adapter"])  # what the real folder gives:
+    assert got == [("report_dir_files", "options: report_dirs 1 files", False),  # ../reports
+                   ("report_dir_files", "options: report_dirs 2 files", False),  # inner
+                   ("report_dir_files", "options: report_dirs 2 files", False)]  # ../adapter-config/inner
+    assert [p.name for p in home.iterdir() if p.name.startswith(".desk-settings-check-")] == []  # removed
+    assert (cfg / "inner" / "a.csv").exists()  # the link went, not the folder it led to
 
 
 def _calls(home: Path) -> list[str]:
