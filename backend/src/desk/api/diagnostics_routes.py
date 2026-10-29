@@ -7,7 +7,9 @@ routes: the document has no private data, but it does describe this machine's se
 autopilot sync step's ``problem_dates`` (#163).
 
 ``GET /api/v1/inbox/reconcile`` (R22) is the settings page's «Загрузка позиций»: ``desk inbox reconcile`` as JSON,
-book ids and file names included (the owner's own machine, local only).
+book ids and file names included (the owner's own machine, local only). ``GET /api/v1/inbox/folders`` (TDM#445) is
+its «Папки с отчётами»: per folder what the inbox found there (``desk.daystatus.folders``), the folders' paths
+included, so local only too.
 """
 
 from __future__ import annotations
@@ -76,6 +78,24 @@ def get_reconcile(request: Request, on: str | None = None) -> Response:
         raise HTTPException(500, f"settings: {e}") from None
     with store.connect(request.app.state.store_url or store.resolve_url(settings)) as con:
         doc = scan.reconcile(con, settings, day)
+    return Response(json.dumps(doc, ensure_ascii=False, default=str), media_type="application/json; charset=utf-8",
+                    headers={"Cache-Control": "no-store"})
+
+
+@router.get("/api/v1/inbox/folders")
+def get_inbox_folders(request: Request) -> Response:
+    """Per scanned folder what the inbox knows of its files: by source and status, the files never read, the latest
+    business date read per dataset (``daystatus.folders``, TDM#445)."""
+    import json
+
+    from .. import daystatus
+
+    try:
+        settings = load()
+    except SettingsError as e:
+        raise HTTPException(500, f"settings: {e}") from None
+    with store.connect(request.app.state.store_url or store.resolve_url(settings)) as con:
+        doc = daystatus.folders(con, settings)
     return Response(json.dumps(doc, ensure_ascii=False, default=str), media_type="application/json; charset=utf-8",
                     headers={"Cache-Control": "no-store"})
 

@@ -10,6 +10,12 @@ repeated). ``days(con, settings, to, n)`` is ``GET /api/v1/inbox/days``: one lin
 Codes, counts, book ids, file names and sources, for every signed-in user (the owner's decision in #25); no row
 values and no issue messages (08 §6.8).
 
+``dataset_files(con, settings, dataset, on)`` is ``GET /api/v1/inbox/datasets/{dataset}?on=``: why a dataset is not in
+force on a date (C16 «отчёта ОВП нет», TDM#445): the files of its sources and the latest of them with its status and
+codes, the files never read, what is in force now. ``folders(con, settings)`` is ``GET /api/v1/inbox/folders`` (local
+only, the settings page's «Папки с отчётами»): per scanned folder the files the inbox knows there, by source and
+status, and the latest business date read per dataset.
+
 ``events(con, ...)`` is ``GET /api/v1/events``: the ``event`` table (inbox status changes since S7a, runs since
 migration 0019) in ``event_id`` order. ``event_id`` is the one cursor: ``after`` pages forward (what a poll or the
 SSE stream of #28 sends: ``id:`` = ``event_id``, a reconnect resumes from ``Last-Event-ID`` with ``after``),
@@ -18,6 +24,7 @@ SSE stream of #28 sends: ``id:`` = ``event_id``, a reconnect resumes from ``Last
 
 from __future__ import annotations
 
+import os
 from collections import Counter, defaultdict
 from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
@@ -271,22 +278,12 @@ def _files(con: psycopg.Connection, day: date) -> list[dict[str, Any]]:
     for u in _rows(con, "SELECT unit_id, status_id, dataset, valid_date, scope, status, row_count FROM inbox_unit"
                         " WHERE status_id = ANY(%s) ORDER BY unit_id", (ids,)):
         units[u["status_id"]].append(u)
-    issues: dict[tuple, Counter] = defaultdict(Counter)
-    for sid, uid, sev, code, n in con.execute(
-            "SELECT status_id, unit_id, severity, code, sum(count) FROM inbox_issue WHERE status_id = ANY(%s)"
-            " GROUP BY 1, 2, 3, 4", (ids,)):
-        issues[(sid, uid)][(sev, code)] += int(n)
-
-    def codes(c: Counter) -> list[dict[str, Any]]:
-        order = {"error": 0, "warning": 1, "info": 2}
-        return [{"severity": s, "code": k, "count": n, "text": ISSUE_TEXT.get(k)}
-                for (s, k), n in sorted(c.items(), key=lambda x: (order.get(x[0][0], 3), -x[1], x[0][1]))]
-
+    issues = _issues(con, ids)
     out = []
     for f in files:
         us = []
         for u in units.get(f["status_id"], []):
-            iss = codes(issues.get((f["status_id"], u["unit_id"]), Counter()))
+            iss = _codes(issues.get((f["status_id"], u["unit_id"]), Counter()))
             why = None
             if u["status"] == "rejected":
                 why = "; ".join(i["text"] or i["code"] for i in iss if i["severity"] == "error") or "отклонена"
@@ -295,17 +292,41 @@ def _files(con: psycopg.Connection, day: date) -> list[dict[str, Any]]:
             us.append({"dataset": u["dataset"], "valid_date": _iso(u["valid_date"]), "scope": u["scope"],
                        "status": u["status"], "rows": u["row_count"], "issues": iss, "why": why})
         st = f["status"]
-        why = LOSS_REASONS.get(st) if st not in ("accepted", "superseded", "partially_accepted") else None
-        if st == "rejected" and f["error_code"]:
-            why = f"{why}: {f['error_code']}"
-        elif st in ("failed", "timed_out", "match_failed") and (f["error_type"] or f["error_code"]):
-            why = f"{why} ({f['error_type'] or f['error_code']})"
         out.append({"file": f["sha256"][:12], "name": f["name"], "status": st, "status_text": FILE_STATUS.get(st, st),
                     "at": _iso(f["at"]), "source": f["source"], "report_date": _iso(f["report_date"]),
                     "valid_date": _iso(f["valid_date"]),
                     "datasets": sorted({u["dataset"] for u in us}),
-                    "units": us, "issues": codes(issues.get((f["status_id"], None), Counter())), "why": why})
+                    "units": us, "issues": _codes(issues.get((f["status_id"], None), Counter())), "why": _why(f)})
     return out
+
+
+def _issues(con: psycopg.Connection, status_ids: list[int]) -> dict[tuple, Counter]:
+    """The issue codes of these attempts: (status_id, unit_id; None: the file's own) -> (severity, code) -> count."""
+    out: dict[tuple, Counter] = defaultdict(Counter)
+    for sid, uid, sev, code, n in con.execute(
+            "SELECT status_id, unit_id, severity, code, sum(count) FROM inbox_issue WHERE status_id = ANY(%s)"
+            " GROUP BY 1, 2, 3, 4", (status_ids,)):
+        out[(sid, uid)][(sev, code)] += int(n)
+    return out
+
+
+def _codes(c: Counter) -> list[dict[str, Any]]:
+    order = {"error": 0, "warning": 1, "info": 2}
+    return [{"severity": s, "code": k, "count": n, "text": ISSUE_TEXT.get(k)}
+            for (s, k), n in sorted(c.items(), key=lambda x: (order.get(x[0][0], 3), -x[1], x[0][1]))]
+
+
+def _why(f: dict[str, Any]) -> str | None:
+    """Why a file was lost (``inbox.scan.LOSS_REASONS``), with its error code or exception type; None when read."""
+    from .inbox.scan import LOSS_REASONS
+
+    st = f["status"]
+    why = LOSS_REASONS.get(st) if st not in ("accepted", "superseded", "partially_accepted") else None
+    if st == "rejected" and f["error_code"]:
+        why = f"{why}: {f['error_code']}"
+    elif st in ("failed", "timed_out", "match_failed") and (f["error_type"] or f["error_code"]):
+        why = f"{why} ({f['error_type'] or f['error_code']})"
+    return why
 
 
 def _copies(con: psycopg.Connection, day: date) -> list[dict[str, Any]]:
@@ -526,3 +547,169 @@ def days(con: psycopg.Connection, settings: Settings, to: date | None = None, n:
                      "runs": x["runs"], "runs_failed": x["runs_failed"], "default_run_id": x["default_run_id"],
                      "eod_final": x["eod_final"], "files_lost": x["files_lost"], **_rate(x)})
     return {"from": lo.isoformat(), "to": to.isoformat(), "days": rows}
+
+
+# ---- a dataset's files, the folders' files (TDM#445) --------------------------------------------------------------
+
+LOST = ("rejected", "failed", "timed_out", "match_failed")
+"""The statuses of a file the adapter took and the inbox lost (the folders' «отклонено»)."""
+
+
+def _folder(d: Path | str) -> tuple[str, bool]:
+    """A folder of ``Settings.scan_dirs`` as ``inbox.conformance.list_entries`` lists it: (its path, recursive)."""
+    s = str(d)
+    rec = s.rstrip("/\\").endswith("**")
+    return str(Path(s.rstrip("/\\").removesuffix("**") if rec else s)), rec
+
+
+def _under(folders: list[tuple[str, bool]], col: str = "path") -> tuple[str, dict[str, Any]]:
+    """An SQL condition: ``col`` is the path of a file of one of ``folders`` (of its subfolders too when recursive),
+    as the scan wrote it (``os.scandir``: the folder, the separator, the name); on Windows regardless of case."""
+    fold = os.name == "nt"
+    c = f"lower({col})" if fold else col
+    parts, args = [], {"sep": os.sep}
+    for i, (p, rec) in enumerate(folders):
+        pre = p if p.endswith(os.sep) else p + os.sep
+        args[f"p{i}"] = pre.lower() if fold else pre
+        parts.append(f"(starts_with({c}, %(p{i})s)"
+                     + ("" if rec else f" AND strpos(substr({col}, {len(pre) + 1}), %(sep)s) = 0") + ")")
+    return "(" + " OR ".join(parts) + ")" if parts else "false", args
+
+
+def _source_datasets(con: psycopg.Connection, h: Any) -> dict[str, list[str]]:
+    """Per source the datasets it gives: as the adapter ``h`` declares them (``describe``) and as the ledger read
+    them (the units of its files), so a source the adapter no longer declares keeps its datasets."""
+    from .inbox.spi import source_datasets
+
+    out: dict[str, set[str]] = defaultdict(set)
+    for decl in (h.describe or {}).get("sources") or []:
+        try:
+            out[decl["source"]].update(source_datasets(decl))
+        except (KeyError, TypeError):
+            continue
+    for src, ds in con.execute("SELECT DISTINCT l.source, u.dataset FROM inbox_unit u"
+                               " JOIN inbox_file_status l USING (status_id) WHERE l.source IS NOT NULL"):
+        out[src].add(ds)
+    return {k: sorted(v) for k, v in sorted(out.items())}
+
+
+def _last_scan() -> dict[str, Any] | None:
+    """This process's last inbox scan: when, and its files by status."""
+    from .inbox import scan
+
+    ls = scan.last_scan
+    return {"at": ls["at"], "files": ls.get("files") or {}} if ls else None
+
+
+def _is_dir(p: str) -> bool:
+    try:
+        return Path(p).is_dir()
+    except OSError:
+        return False
+
+
+def dataset_files(con: psycopg.Connection, settings: Settings, dataset: str, on: date | None = None) -> dict[str, Any]:
+    """``GET /api/v1/inbox/datasets/{dataset}?on=``: why ``dataset`` is or is not in force on ``on`` (default today,
+    Moscow), for a page that has none of it (C16 «отчёта ОВП нет», TDM#445). ``sources``: the sources that give it (the
+    adapter's ``describe`` and the ledger); ``in_force``: its scope units in the store now for ``on`` (a stock: valid
+    date <= ``on``), their latest valid date and when the latest was recorded: a run published before that did not
+    see it (TDM#181); ``files``: the files of those sources in the ledger by current status; ``latest``: the latest of
+    them dated on or before ``on`` (else the newest, ``after``), with its units of the dataset, issue codes and why it
+    was lost; ``unread``: the files never read, those of the folders scanned now that ``match`` declined
+    (``ignored``: they have no source, so they may be this dataset's) and those of its sources dated behind the
+    lookback (``too_old``); ``folders``: the report folders and how many of them the server cannot see;
+    ``last_scan``: this process's. Codes, counts, file names and sources, as ``day``; no row values, no messages."""
+    from .inbox import scan
+    from .inbox.spi import STOCK_DATASETS
+
+    on = on or datetime.now(UTC).astimezone(store.MSK).date()
+    h = scan.adapter(settings)
+    sources = [s for s, ds in _source_datasets(con, h).items() if dataset in ds]
+    files = _rows(con, "SELECT l.status_id, l.sha256, f.name, l.status, l.at, l.source, l.report_date, l.valid_date,"
+                       f" l.error_code, l.error_type FROM {LATEST} l JOIN inbox_file f USING (sha256)"
+                       " WHERE l.source = ANY(%(src)s) OR EXISTS (SELECT 1 FROM inbox_unit u"
+                       "  WHERE u.status_id = l.status_id AND u.dataset = %(ds)s)", {"src": sources, "ds": dataset})
+
+    def day_of(f: dict[str, Any]) -> date | None:
+        return f["valid_date"] or f["report_date"]
+
+    dated = [f for f in files if day_of(f) is None or day_of(f) <= on]
+    latest = max(dated or files, key=lambda f: (day_of(f) or date.min, f["at"], f["status_id"]), default=None)
+    last = None
+    if latest is not None:
+        issues: Counter = Counter()
+        for c in _issues(con, [latest["status_id"]]).values():
+            issues.update(c)
+        units = Counter(st for (st,) in con.execute(
+            "SELECT status FROM inbox_unit WHERE status_id = %s AND dataset = %s", (latest["status_id"], dataset)))
+        d = day_of(latest)
+        last = {"file": latest["sha256"][:12], "name": latest["name"], "status": latest["status"],
+                "status_text": FILE_STATUS.get(latest["status"], latest["status"]), "at": _iso(latest["at"]),
+                "source": latest["source"], "report_date": _iso(latest["report_date"]),
+                "valid_date": _iso(latest["valid_date"]), "after": d is not None and d > on,
+                "units": dict(units), "issues": _codes(issues), "why": _why(latest)}
+    when = "valid_date <= %s" if dataset in STOCK_DATASETS else "valid_date = %s"
+    n, vd, at = con.execute(f"SELECT count(DISTINCT scope_key), max(valid_date), max(recorded_at) FROM dataset_set"
+                            f" WHERE dataset = %s AND {when}", (dataset, on)).fetchone()
+    cond, args = _under([_folder(x) for x in settings.scan_dirs])
+    ignored = con.execute(f"SELECT count(*) FROM inbox_unread WHERE status = 'ignored' AND {cond}", args).fetchone()[0]
+    too_old = con.execute("SELECT count(*) FROM inbox_unread WHERE status = 'ignored_too_old' AND source = ANY(%s)",
+                          (sources,)).fetchone()[0]
+    by_status = Counter(f["status"] for f in files)
+    return {"dataset": dataset, "name": DATASET_NAMES.get(dataset, dataset), "on": on.isoformat(),
+            "adapter": scan.adapter_line(h), "sources": sources,
+            "in_force": {"units": n, "valid_date": _iso(vd), "recorded_at": _iso(at)} if n else None,
+            "files": {"total": len(files), "by_status": dict(by_status),
+                      "status_text": {st: FILE_STATUS.get(st, st) for st in by_status}},
+            "latest": last, "unread": {"ignored": ignored, "too_old": too_old},
+            "lookback_days": settings.inbox_lookback_days or None,
+            "folders": {"count": len(settings.inbox_dirs),
+                        "missing": sum(1 for x in settings.inbox_dirs if not _is_dir(_folder(x)[0]))},
+            "last_scan": _last_scan(), "generated_at": datetime.now(UTC).isoformat()}
+
+
+def folders(con: psycopg.Connection, settings: Settings) -> dict[str, Any]:
+    """``GET /api/v1/inbox/folders`` (the settings page's «Папки с отчётами», TDM#445): per folder of
+    ``Settings.scan_dirs`` what the inbox knows of its files, by the paths the scans saw (``inbox_sighting`` for the
+    files read, ``inbox_unread`` for those never read; a file at several paths of one folder counts once): ``exists``
+    (the server sees the folder), ``files`` known, of them ``matched`` (the adapter took them), ``ignored`` (``match``
+    declined), ``too_old`` (dated behind the lookback), ``lost`` (rejected, read failed or timed out, match failed);
+    per source the files by current status and the datasets it gives; per dataset the latest business date read (an
+    accepted unit of the file's current reading) and the files that gave it; ``last_seen``: the latest sighting.
+    ``output``: the adapter's output folder, scanned too but not a report folder. Paths of this machine: local only."""
+    from .inbox import scan
+
+    h = scan.adapter(settings)
+    by_source = _source_datasets(con, h)
+    out_dir = getattr(settings, "adapter_output_dir", None)
+    res = []
+    for d in settings.scan_dirs:
+        path, rec = _folder(d)
+        cond, args = _under([(path, rec)], "s.path")
+        read = _rows(con, f"WITH f AS (SELECT sha256, max(at) AS seen FROM inbox_sighting s WHERE {cond} GROUP BY 1)"
+                          f" SELECT l.status_id, l.status, l.source, f.seen FROM f JOIN {LATEST} l USING (sha256)",
+                     args)
+        unread = {st: (n, seen) for st, n, seen in con.execute(
+            f"SELECT status, count(*), max(at) FROM inbox_unread s WHERE {cond} GROUP BY 1", args)}
+        srcs: dict[str, Counter] = defaultdict(Counter)
+        for r in read:
+            srcs[r["source"] or "-"][r["status"]] += 1
+        ds = [{"dataset": name, "name": DATASET_NAMES.get(name, name), "latest_valid_date": _iso(vd), "files": n}
+              for name, vd, n in con.execute(
+                  "SELECT dataset, max(valid_date), count(DISTINCT sha256) FROM inbox_unit"
+                  " WHERE status = 'accepted' AND status_id = ANY(%s) GROUP BY 1 ORDER BY 1",
+                  ([r["status_id"] for r in read],))]
+        statuses = Counter(r["status"] for r in read)
+        seen = [x for x in [*(r["seen"] for r in read), *(s for _, s in unread.values())] if x]
+        res.append({"dir": str(d), "path": path, "recursive": rec,
+                    "output": out_dir is not None and path == str(out_dir), "exists": _is_dir(path),
+                    "files": len(read) + sum(n for n, _ in unread.values()), "matched": len(read),
+                    "ignored": unread.get("ignored", (0, None))[0],
+                    "too_old": unread.get("ignored_too_old", (0, None))[0],
+                    "lost": sum(statuses[s] for s in LOST), "by_status": dict(statuses),
+                    "sources": [{"source": s, "datasets": by_source.get(s, []), "files": sum(c.values()),
+                                 "by_status": dict(c)} for s, c in sorted(srcs.items())],
+                    "datasets": ds, "last_seen": _iso(max(seen)) if seen else None})
+    return {"adapter": scan.adapter_line(h), "folders": res, "status_text": FILE_STATUS,
+            "lookback_days": settings.inbox_lookback_days or None, "last_scan": _last_scan(),
+            "generated_at": datetime.now(UTC).isoformat()}

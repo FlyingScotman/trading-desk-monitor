@@ -878,6 +878,7 @@ details.sf-grp[open] > summary::before{content:"▾"}
 <script src="desk-nav.js"></script>
 <script src="settings-forms.js"></script>
 <script src="settings-adapter.js"></script>
+<script src="settings-inbox-folders.js"></script>
 <script>
 'use strict';
 const $ = id => document.getElementById(id);
@@ -1037,6 +1038,7 @@ function render(d){
   S.dirs = (Array.isArray(d.inbox_dirs) ? d.inbox_dirs : []).map(x => ({path:x.path || '', label:x.label || '', recursive:!!x.recursive}));
   $('dirs-env').hidden = !env.includes('inbox_dirs');
   renderDirs();
+  DeskInboxFolders.load();
   renderEffective(eff);
   S.dirtySecs = new Set();
   setDirty(false);
@@ -1057,7 +1059,7 @@ function renderDirs(){
   if (!S.dirs.length) tb.append(h('tr', {}, h('td', {colspan:4, class:'muted'}, 'Папки не заданы.')));
   S.dirs.forEach((d, i) => tb.append(h('tr', {},
     h('td', {style:'width:55%'}, h('input', {class:'inp mono', value:d.path, placeholder:'C:\\Отчёты\\Позиции', 'aria-label':'Папка',
-      oninput:e => { d.path = e.target.value; }})),
+      oninput:e => { d.path = e.target.value; }}), DeskInboxFolders.node(d.path, S.data && S.data.home)),  // что найдено в папке (TDM#445)
     h('td', {}, h('input', {class:'inp', value:d.label, placeholder:'Позиции', 'aria-label':'Подпись', oninput:e => { d.label = e.target.value; }})),
     h('td', {}, h('label', {class:'chk'}, h('input', {type:'checkbox', checked:d.recursive, onchange:e => { d.recursive = e.target.checked; }}), 'включая подпапки')),
     h('td', {style:'width:1%'}, h('button', {class:'x del', type:'button', title:'Убрать папку', 'aria-label':'Убрать папку',
