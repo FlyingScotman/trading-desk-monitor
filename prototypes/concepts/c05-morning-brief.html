@@ -281,7 +281,9 @@
     const fxPnlRate = c => (M.fxSource && M.fxSource[c] ? ', ' + esc(M.fxSource[c]) : '') +
       (differs(M.fxPnl, c) ? ' · PnL по курсу ' + M.fxPnl.label + ' ' + f.n(M.fxPnl.rate[c], 2) + ', ' + f.pcts(M.fxPnl.chgPct[c], 2)
         : differs(M.fxCbr, c) ? ' · ЦБ ' + f.n(M.fxCbr.rate[c], 2) + ', ' + f.pcts(M.fxCbr.chgPct[c], 2) : '');
-    const mv = M.marketMovers.slice().sort((a, b) => b.chgBp - a.chgBp);
+    // дефолтные и дистрессные выпуски (#111, K.distress): их доходность MOEX — не движение рынка, в списки не входят
+    const mvOut = M.marketMovers.filter(b => K.distress(b)).length;
+    const mv = M.marketMovers.filter(b => !K.distress(b) && b.chgBp != null).sort((a, b) => b.chgBp - a.chgBp);
     const up = mv.slice(0, 6), dn = mv.slice(-6).reverse();
     const ccyFx = M.ccys.filter(c => c !== 'RUB');
     const mvT = (arr, vk, t) => '<table class="mini" data-vk="' + vk + '" data-title="' + t + '"><thead><tr><th>Выпуск</th><th>Рейт.</th><th class="n">Дох.</th><th class="n">Δ б.п.</th></tr></thead><tbody>' + arr.map(b => '<tr><td class="name">' + esc(b.name) + ' <span class="mut3">' + esc(b.sector) + '</span></td><td class="mut">' + esc(b.rating) + '</td><td class="n">' + f.pct(b.ytm) + '</td><td class="n ' + (b.chgBp > 0 ? 'chg-up' : 'chg-dn') + '"><b>' + f.bps(b.chgBp) + '</b></td></tr>').join('') + '</tbody></table>';
@@ -290,7 +292,7 @@
       fxRatesLine().replace(/\.$/, '') + '. Курсы: ' + ccyFx.map(c => c + ' ' + f.n(M.fx[c], 2) + ' · ' + f.pcts(M.fxChgPct[c], 2) + fxPnlRate(c) + ' · PnL ' + K.d({ title: 'FX PnL ' + c, unit: 'mm ₽', fmt: v => f.mns(v, 2), list: L.filter(p => p.ccy === c), val: p => p.pnl.fx }) + ' mm').join('; ') + '. ' +
       'КС ' + f.pct(M.indices['КС']) + ', RUONIA ' + f.pct(M.indices['RUONIA']) + '.</p>' +
       '<div class="two"><div><div class="cap">Кривые RUB: сегодня, вчера и сдвиг</div><div class="chart" id="curveChart"></div></div>' +
-      '<div><div class="cap">Корпоративный рынок: сильнее всего выросли доходности</div>' + mvT(up, 'c05-movers-up', 'Корпоративный рынок: рост доходностей') + '<div class="cap" style="margin-top:10px">…и снизились</div>' + mvT(dn, 'c05-movers-down', 'Корпоративный рынок: снижение доходностей') + '</div></div>' + marketHist() + '</section>';
+      '<div><div class="cap">Корпоративный рынок: сильнее всего выросли доходности' + (mvOut ? ' <span class="mut3" title="доходность MOEX дефолтного или дистрессного выпуска не показатель рынка">(без ' + mvOut + ' дефолтн./дистрессн.)</span>' : '') + '</div>' + mvT(up, 'c05-movers-up', 'Корпоративный рынок: рост доходностей') + '<div class="cap" style="margin-top:10px">…и снизились</div>' + mvT(dn, 'c05-movers-down', 'Корпоративный рынок: снижение доходностей') + '</div></div>' + marketHist() + '</section>';
 
     root.innerHTML = html;
     K.tableToolsAll(root);

@@ -265,8 +265,9 @@ table.sp td:first-child, table.sp th:first-child { text-align: left; }
   const TBK = [[1, '< 1г'], [2, '1–2г'], [3, '2–3г'], [5, '3–5г'], [99, '5г+']];
   const tbk = t => TBK.findIndex(x => t <= x[0]);
   const med = a => { if (!a.length) return null; const s = a.slice().sort((x, y) => x - y), m = s.length >> 1; return s.length % 2 ? s[m] : (s[m - 1] + s[m]) / 2; };
-  // выпуски без G-спреда (нет котировки или доходности) в медиану не входят: null в сортировке стал бы нулём
-  const grid = {}; M.universeRub.filter(b => !b.isOfz && !b.flt && b.spread != null).forEach(b => { const k = (NR(b.rating) ? 'без рейтинга' : b.rating) + '|' + tbk(b.tenor); (grid[k] = grid[k] || []).push(b.spread); });
+  // выпуски без G-спреда (нет котировки или доходности) в медиану не входят: null в сортировке стал бы нулём;
+  // дефолтные и дистрессные (K.distress, #111) — тоже: их спред не уровень рынка
+  const grid = {}; M.universeRub.filter(b => !b.isOfz && !b.flt && b.spread != null && !K.distress(b)).forEach(b => { const k = (NR(b.rating) ? 'без рейтинга' : b.rating) + '|' + tbk(b.tenor); (grid[k] = grid[k] || []).push(b.spread); });
   // позиция без рейтинга («—») сравнивается с выпусками рынка без рейтинга (у хаба рейтингов нет вовсе)
   const rk = r => NR(r) ? 'без рейтинга' : r;
   const medOf = (r, t) => med(grid[rk(r) + '|' + tbk(t)] || []);
@@ -288,7 +289,8 @@ table.sp td:first-child, table.sp th:first-child { text-align: left; }
     'name', 'ccy', 'issuer', 'rating', 'tenor', 'ytm',
     { key: 'gspread', label: 'G-спред', num: true, unit: 'б.п.', fmt: v => f.bp(v) },
     { key: 'mkt', label: 'рынок', num: true, unit: 'б.п.', val: r => medOf(r.rating, r.tenor), fmt: v => v == null ? '—' : f.bp(v), title: 'медиана G-спреда рейтинга и срока' },
-    { key: 'rv', label: 'разница', num: true, unit: 'б.п.', val: r => { const m = medOf(r.rating, r.tenor); return m == null || r.gspread == null ? null : r.gspread - m; }, fmt: v => v == null ? '—' : f.bps(v), style: v => v == null ? '' : K.heat(v, 120), title: '> 0 — бумага дешевле рынка (шире спред)' },
+    // своя дефолтная или дистрессная бумага (#111): разница с медианой рынка не сравнение — пометка вместо числа
+    { key: 'rv', label: 'разница', num: true, unit: 'б.п.', val: r => { const m = medOf(r.rating, r.tenor); return m == null || r.gspread == null || K.distress(r) ? null : r.gspread - m; }, fmt: (v, r) => K.distress(r) ? K.distressTag(K.distress(r)) : v == null ? '—' : f.bps(v), style: v => v == null ? '' : K.heat(v, 120), title: '> 0 — бумага дешевле рынка (шире спред)' },
     'mv',
   ];
   K.table(document.getElementById('rv'), { viewKey: 'c09-rv',
@@ -300,22 +302,24 @@ table.sp td:first-child, table.sp th:first-child { text-align: left; }
     if (!MH || !MH.bonds) return M.marketMovers;
     const k = perIdx(S.per);
     return M.universeRub.filter(b => b.value && MH.bonds[b.id] && MH.bonds[b.id].y[k] != null).sort((a, b) => b.value - a.value).slice(0, 60)
-      .map(b => ({ name: b.name, rating: b.rating, sector: b.sector, ytm: b.ytmMoex, chgBp: MH.bonds[b.id].y[k], chgPx: MH.bonds[b.id].p[k], vol: b.value }));
+      .map(b => ({ name: b.name, rating: b.rating, sector: b.sector, ytm: b.ytmMoex, spread: b.spread, chgBp: MH.bonds[b.id].y[k], chgPx: MH.bonds[b.id].p[k], vol: b.value }));
   };
-  const movRows = () => movers().map((b, i) => Object.assign({ id: 'm' + i, searchText: (b.name + ' ' + b.sector + ' ' + b.rating).toLowerCase() }, b));
+  // дефолтный или дистрессный выпуск (#111): пометка вместо доходности, изменение не число и не входит в шкалу
+  const movRows = () => movers().map((b, i) => Object.assign({ id: 'm' + i, searchText: (b.name + ' ' + b.sector + ' ' + b.rating).toLowerCase(), dist: K.distress(b) }, b));
+  const movMax = rows => Math.max(1, ...rows.filter(b => !b.dist && b.chgBp != null).map(b => Math.abs(b.chgBp)));
   let mov = movRows();
-  let mxChg = Math.max(1, ...mov.map(b => Math.abs(b.chgBp)));
+  let mxChg = movMax(mov);
   const movNote = () => { const d = MH && MH.periods && MH.periods[S.per]; document.getElementById('movNote').textContent = MH ? 'крупнейшие по обороту выпуски, изм. доходности' + (d ? ' к ' + f.date(d) : '') : 'крупные выпуски (> 8 bn), изм. доходности за день'; };
-  if (MH && MH.bonds) K.seg(document.getElementById('cMov'), PER, S.per, v => { S.per = v; save(); mov = movRows(); mxChg = Math.max(1, ...mov.map(b => Math.abs(b.chgBp))); movNote(); movT.redraw(); cv.redraw(); });
+  if (MH && MH.bonds) K.seg(document.getElementById('cMov'), PER, S.per, v => { S.per = v; save(); mov = movRows(); mxChg = movMax(mov); movNote(); movT.redraw(); cv.redraw(); });
   movNote();
   const movT = K.table(document.getElementById('movers'), { viewKey: 'c09-movers',
     rowsFn: () => mov, autoFilter: false, footer: false, sort: [['chgBp', -1]], maxHeight: '420px', onRow: () => { },
     columns: [
       { key: 'name', label: 'Выпуск' }, { key: 'sector', label: 'Сектор', fmt: v => '<span class="mut">' + esc(v) + '</span>' }, { key: 'rating', label: 'Рейтинг', fmt: v => '<b style="color:' + (RB.find(x => x[0] === rbOf(v)) || RB[4])[2] + '">●</b> ' + esc(v) },
-      { key: 'ytm', label: 'Доходность', num: true, fmt: v => f.pct(v) },
-      { key: 'chgBp', label: 'Изм., б.п.', num: true, fmt: v => f.bps(v), style: v => K.heat(-v, mxChg), title: 'рост доходности — красный' },
+      { key: 'ytm', label: 'Доходность', num: true, val: r => r.dist ? null : r.ytm, fmt: (v, r) => r.dist ? K.distressTag(r.dist) : f.pct(v) },
+      { key: 'chgBp', label: 'Изм., б.п.', num: true, val: r => r.dist ? null : r.chgBp, fmt: v => v == null ? '<span class="mut3">—</span>' : f.bps(v), style: v => v == null ? '' : K.heat(-v, mxChg), title: 'рост доходности — красный; дефолтные и дистрессные выпуски — без числа и вне шкалы' },
       { key: 'chgPx', label: 'Изм. цены', num: true, unit: 'п.п.', fmt: v => v == null ? '—' : f.s(v, 2), title: 'изменение чистой цены, п.п.' },
-      { key: 'bar', label: '', val: r => r.chgBp, fmt: v => K.bar(-v, mxChg) },
+      { key: 'bar', label: '', val: r => r.dist ? null : r.chgBp, fmt: v => v == null ? '' : K.bar(-v, mxChg) },
       { key: 'vol', label: 'Оборот, mm RUB', num: true, fmt: v => f.mn(v, 0) },
     ],
   });
