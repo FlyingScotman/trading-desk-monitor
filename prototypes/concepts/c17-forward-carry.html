@@ -79,7 +79,9 @@
   const mn = v => v == null || !isFinite(v) ? '<span class="mut3">—</span>' : f.mn(v, DIG);
   const bp = v => v == null || !isFinite(v) ? '<span class="mut3">—</span>' : f.n(v, 0);
   const KIND = k => k === 'CASH' ? 'остатки ДС' : (window.INSTR && INSTR.SHORT[k]) || k || '—';
-  const QUAL = r => r.isCash ? 'остатки ДС' : r.covered ? (r.carryMethod === 'redeemed' ? 'погашается до горизонта' : r.quality === 'assumed' ? 'с допущениями' : 'точная') : r.reason;
+  // бумага без своей цены сегодня (#383): керри ядра по прошлой или рыночной цене
+  const PRICED = { stale_price: 'по прошлой цене', market_value: 'по рыночной цене' };
+  const QUAL = r => r.isCash ? 'остатки ДС' : r.covered ? (r.carryMethod === 'redeemed' ? 'погашается до горизонта' : PRICED[r.quality] || (r.quality === 'assumed' ? 'с допущениями' : 'точная')) : r.reason;
   const entName = e => ((M.entities || []).find(x => x.id === e) || {}).name || e;
   const TIP = {
     carry: 'Кэрри до горизонта: полное изменение стоимости позиции, если кривые перенести на дату горизонта, — полученные купоны и изменение грязной цены ' +

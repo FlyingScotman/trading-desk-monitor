@@ -23,6 +23,11 @@ reported_value  an instrument the static snapshot does not know (an unmapped ban
                 cannot check against terms or the market
 ==============  ==============================================================================
 
+A RUB bond refused only for want of a price of its own today (``no_price``, ``no_quote``) is valued by core's exact path at the
+price of ``market_value`` / ``stale_price`` instead, with that quality (``at_last_price``, TDM#383): a floater's
+projection, OFZ basis and a perpetual's tail, which no duration estimate has, core's accrued, and ``orchestrator.horizon``
+carries it from the same value. The rungs' own risk below is for the bonds core refuses.
+
 Risk of the priced rungs: with a usable fixed schedule, core ``BondRiskEngine`` calibrated to the
 dirty price (bucket DV01 and spread risk on the discount curve, as for exact bonds: the KBD for ``OFZ_KBD_CLASSES``,
 ``bond_discount``). Otherwise a duration estimate: MOEX ``duration_days``, else the time to the horizon; DV01 =
@@ -83,6 +88,7 @@ from .bonds import (
     PRICE_BASIS_ORDER,
     RISK_CURVES,
     SPREAD_CONVENTION,
+    BondRequest,
     BondValuation,
     Rejected,
     bond_request,
@@ -92,6 +98,7 @@ from .bonds import (
     face_on,
     fixed_schedule,
     next_offer,
+    settlement_date,
     value_bonds,
 )
 
@@ -234,6 +241,58 @@ def _price(q: BondQuote) -> tuple[str, float] | None:
     return next(((b, float(q.prices_pct[b])) for b in FALLBACK_BASES if q.prices_pct.get(b, 0) > 0), None)
 
 
+OWN_PRICE_MISSING = ("no_price", "no_quote")
+"""The exact path's refusals ``at_last_price`` takes: no price basis of its own today, or no quote today at all."""
+
+
+def last_price(outcome: Outcome, fb: FallbackContext) -> tuple[BondQuote, str, float] | None:
+    """The ladder's price of ``outcome``'s bond: today's quote with a price of ``FALLBACK_BASES``, else the latest
+    earlier close of the previous ``LOOKBACK_DAYS`` calendar days (the history is loaded only when today's quote has
+    none): (its quote, basis, clean %), or None."""
+    bd = fb.ctx.business_date
+    for cand in chain([outcome.quote] if outcome.quote else [], fb.past_quotes(outcome.terms)):  # type: ignore[arg-type]
+        if (bd - cand.trade_date).days > LOOKBACK_DAYS:
+            break
+        if (p := _price(cand)) is not None:
+            return cand, *p
+    return None
+
+
+def at_last_price(ctx: EodContext, position_id: str, outcome: Outcome, quantity: float, fb: FallbackContext
+                  ) -> tuple[BondRequest, str, tuple[str, ...]] | None:
+    """A RUB bond the exact path refused only for want of a price of its own today (``OWN_PRICE_MISSING``: an intraday
+    cut before its first trade, a day it did not trade) as a request core values exactly at the ladder's price
+    (``last_price``): today's quote (its face and accrued) with that price, else the last close's quote as of today
+    (face and accrued from the static). Returns the request, its rung (``market_value``: a price of today,
+    ``stale_price``: an earlier close) and the notes, or None (another refusal, no price, a foreign face).
+
+    Why (TDM#383): a floater has no fixed schedule, so the ladder's own risk is a duration estimate, rates only to its
+    next coupon on the discount curve: a KBD floater lost its KBD risk and the OFZ basis, a perpetual its tail, and
+    the carry (core's, ``orchestrator.horizon``) was none. The same bond at the same price through core has them all.
+    A fixed coupon had core's risk on its schedule already, but the ladder's own accrued (rate x days / 365), so its
+    value was not the one core carries from (``scenario.carry``: ``base_mismatch``)."""
+    t = outcome.terms
+    if (t is None or outcome.reason not in OWN_PRICE_MISSING or bond_currency(t) != "RUB"
+            or (found := last_price(outcome, fb)) is None):
+        return None
+    cand, basis, clean = found
+    bd = ctx.business_date
+    quote = (outcome.quote if outcome.quote is not None and outcome.quote.trade_date == bd
+             else replace(cand, trade_date=bd, face_value=None, accrued_per_bond=None, num_trades=None,
+                          source_analytics={}, volume_bonds=None, value=None))
+    quality = "market_value" if cand.trade_date == bd else "stale_price"
+    notes = [f"not exact: {outcome.reason}{': ' + outcome.detail if outcome.detail else ''}",
+             f"last price {cand.trade_date}, {(bd - cand.trade_date).days} days old ({basis})"
+             if quality == "stale_price" else f"price basis {basis}",
+             "valued by core at this price"]
+    try:
+        settle = settlement_date(bd, t.settle_lag_days, ctx.calendar, *ctx.calendar_window)
+        req = bond_request(position_id, t, quote, settle, quantity, price=(basis, clean))
+    except Rejected:
+        return None
+    return req, quality, tuple(notes)
+
+
 def _accrued(t: BondTerms, d: date, face: float) -> tuple[float, str] | None:
     """Accrued per bond in face currency from the current coupon, ACT/365 on the rate."""
     c, start = current_period(t, d)
@@ -347,14 +406,7 @@ def approximate(ctx: EodContext, outcome: Outcome, quantity: float,
         why.append(f"FX bond ({face_ccy}): market value at {fx_face[1]} {fx_face[0]:g} RUB, no core curve in "
                    f"{face_ccy}: rate risk a duration proxy on curve {curve}")
 
-    found = None
-    # today's quote first; the history is loaded only when it has no usable price
-    for cand in chain([outcome.quote] if outcome.quote else [], fb.past_quotes(t)):
-        if (bd - cand.trade_date).days > LOOKBACK_DAYS:
-            break
-        if (p := _price(cand)) is not None:
-            found = cand, *p
-            break
+    found = last_price(outcome, fb)
     ref = found[0] if found else outcome.quote
     # today's MOEX face, else the face outstanding today by the static schedule (not an old quote's: an
     # amortization since then would be valued again and booked as received)

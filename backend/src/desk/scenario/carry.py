@@ -16,9 +16,10 @@ held, the curves are static (core's forwards realised for the carry, the shape h
 (``valuation.bonds.BondCarry``): ``coupon`` (coupons received + the change of the accrued coupon), ``pull`` (the rest
 of core's ``carry_rub``: the clean price's drift on today's forwards at the held spread), ``rolldown`` (core's
 ``rolldown_rub``); ``carry = coupon + pull + rolldown`` (core's ``horizon_pnl_rub``). Covered: the run's positions core
-valued (quality ``exact`` / ``assumed``, with a secid) whose start PV core reproduces within
+valued (quality ``exact`` / ``assumed``, with a secid) and the bonds on a price rung (``market_value`` /
+``stale_price``: carried at that price, ``fallback.at_last_price``, TDM#383), whose start PV core reproduces within
 ``exact.BASE_TOLERANCE_RUB``. Every other position has no forecast (null, never 0) and a ``code``: its quality (a
-fallback rung, a report value), ``not_a_bond`` (a derivative: core's swap and REPO carry is not wired here yet),
+model or par price, a report value), core's refusal of a bond on a price rung, ``not_a_bond`` (a derivative: core's swap and REPO carry is not wired here yet),
 ``base_mismatch``, or core's refusal (``core_<code>``). A bond whose last flow is paid by the horizon, which core does
 not carry, is carried as cash by the backend (``carryMethod`` ``redeemed``: what it receives to the horizon less its
 dirty value at the start; ``coupon`` the coupons received less the accrued bought, ``pull`` the rest, no roll-down).
@@ -75,6 +76,10 @@ from ..rules.rate_index import HeldFx, HeldRates, KeyRatePath
 from ..rules.reference import funding_rules_from_reference
 from . import spread_curve
 from .exact import BASE_TOLERANCE_RUB, REPRICED, _context
+
+CARRIED = (*REPRICED, "market_value", "stale_price")
+"""The qualities a forward carry is computed for: core's, and a price rung's (``orchestrator.horizon`` carries a bond
+without a price of its own at that price, TDM#383; one core refuses keeps core's reason)."""
 
 METHOD = "desk-forward-carry-v1"
 HORIZONS = (("1M", 1), ("3M", 3), ("6M", 6), ("1Y", 12))
@@ -202,7 +207,7 @@ def bond_carry(ctx: EodContext, rows: Sequence[Mapping[str, Any]], hdate: date) 
            for r in rows]
     todo = []
     for p, r in zip(out, rows):
-        if p.quality not in REPRICED:
+        if p.quality not in CARRIED or p.quality not in REPRICED and p.secid is None:  # a price rung: bonds only
             p.code = p.quality or NOT_VALUED
         elif p.secid is None or r.get("quantity") is None:
             p.code = "not_a_bond"
