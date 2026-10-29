@@ -1,7 +1,9 @@
 'use strict';
 // C19 «PnL за период» (TDM#408): pure helpers of lib/pnl-period.js on a synthetic fixture in the shape of
 // docs/architecture/briefs/PNL_PERIOD.md — two books, one instrument in both, a closed position, a market day without
-// a run, positions with and without the carry split (carry_coupon / carry_pull), funding null for a swap and a USD bond.
+// a run, positions with and without the carry split (carry_coupon / carry_pull; carry_nosplit for the others), funding
+// null for a swap and a USD bond, linear rates of RUB bonds (rates_linear / rates_exact_lin), a new bond without PnL.
+// The /period answer is derived from the /position days of the same fixture.
 const test = require('node:test'), assert = require('node:assert/strict');
 const P = require('../../prototypes/concepts/lib/pnl-period.js');
 const FX = require('./fixtures/pnl_period.json');
@@ -81,10 +83,18 @@ test('explain rows: carry net / gross + funding / components, the rows sum to th
   assert.equal(net.k, 'carryNet'); near(net.total, s.c.carry + s.c.rolldown + s.c.funding, 'carry net');
   const split = P.rowsFor('explain', p, { carry: 'split' });
   assert.deepEqual(split.slice(0, 2).map(d => d.k), ['carryGross', 'funding']);
-  // the selection has positions without the split: «Компоненты» keep carry whole, not a partial coupon
-  assert.equal(p.split, false);
-  assert.deepEqual(P.rowsFor('explain', p, { carry: 'comp' }).slice(0, 3).map(d => d.k), ['carry', 'rolldown', 'funding']);
-  assert.deepEqual(P.componentRows('explain', { carry: 'comp', split: true }).slice(0, 4).map(d => d.k), ['carry_coupon', 'carry_pull', 'rolldown', 'funding']);
+  // the split per row (TDM#432): positions with it give coupon and pull, the others keep their carry whole, Σ = carry
+  assert.equal(p.split, true); assert.equal(P.hasSplit(s), false);
+  const compRows = P.rowsFor('explain', p, { carry: 'comp' });
+  assert.deepEqual(compRows.slice(0, 5).map(d => d.k), ['carry_coupon', 'carry_pull', 'carry_nosplit', 'rolldown', 'funding']);
+  near(P.sumAvail(compRows.slice(0, 3).map(d => d.total)), s.c.carry, 'coupon + pull + without the split = carry');
+  assert.match(compRows[0].cover(s), /^\d+ из \d+ записей$/);
+  compRows.slice(0, 3).forEach(d => d.buckets.forEach((v, i) => assert.ok(v != null, d.k + ' bucket ' + i)));
+  assert.deepEqual(P.componentRows('explain', { carry: 'comp', split: false }).slice(0, 3).map(d => d.k), ['carry', 'rolldown', 'funding']);
+  // flash convexity is 0 by design: hidden while it is 0, shown when a method saves one
+  assert.ok(!P.rowsFor('explain', p, { carry: 'net' }).some(d => d.k === 'convexity'));
+  const cvx = Object.assign({}, s, { c: Object.assign({}, s.c, { convexity: 5e4 }) });
+  assert.ok(P.visibleRows(P.componentRows('explain', { carry: 'net', keys: p.keys }), cvx).some(d => d.k === 'convexity'));
   // a gap appears when the components do not sum to the total
   const bad = Object.assign({}, s, { total: s.total + 5e4 });
   assert.ok(P.visibleRows(P.componentRows('explain', { carry: 'net', keys: p.keys }), bad).some(d => d.k === 'gap'));
@@ -103,21 +113,58 @@ test('explain by curves: rates of each position on its discount curve, «кри�
   near(P.sumAvail(defs.map(d => d.total)), p.summary.total, 'Σ rows = total');
 });
 
-test('attribution: «нет данных» without the coupon split of every row; with it price + coupon + FX + funding + trades = total', () => {
-  const p = prep(), attr = P.rowsFor('attr', p, {});
-  assert.deepEqual(attr.map(d => d.k), ['price', 'carry_coupon', 'fx', 'funding', 'new_trades']);
-  attr.forEach(d => assert.equal(d.total, null, d.k + ' on the selection'));
+test('attribution per row (TDM#432): price + coupon + carry without the split + FX + funding + trades = total', () => {
+  const p = prep(), s = p.summary, attr = P.rowsFor('attr', p, {}), by = k => attr.find(d => d.k === k);
+  assert.deepEqual(attr.map(d => d.k), ['price', 'carry_coupon', 'carry_nosplit', 'fx', 'funding', 'new_trades']);
+  // rows without the coupon split no longer blank the selection
+  attr.forEach(d => assert.ok(d.total != null, d.k + ' on the selection'));
+  near(P.sumAvail(attr.map(d => d.total)), s.total, 'identity on the selection');
+  near(by('carry_coupon').total, s.c.carry_coupon, 'coupon of the split rows'); near(by('carry_nosplit').total, s.c.carry_nosplit, 'carry of the others');
+  assert.match(by('carry_coupon').cover(s), /^\d+ из \d+ записей$/);
   const corp = pos(p, 'DEMO-A|CORP-1'), ofz = pos(p, 'DEMO-A|OFZ-1'), usd = pos(p, 'DEMO-B|USD-1');
-  attr.forEach(d => assert.equal(d.v(corp), null, d.k + ' without carry_coupon'));
+  // a position without the split: no coupon, its carry whole apart, so the price holds no coupon
+  assert.equal(by('carry_coupon').v(corp), null); near(by('carry_nosplit').v(corp), corp.c.carry, 'CORP carry apart');
+  near(by('price').v(corp), corp.total - corp.c.carry - corp.c.funding - corp.c.fx_gross - corp.c.fx_funding - corp.c.new_trades, 'CORP price');
+  near(P.sumAvail(attr.map(d => d.v(corp))), corp.total, 'CORP attribution');
+  // a split position: nothing apart — 0, not «—»
+  assert.equal(by('carry_nosplit').v(ofz), 0);
   near(P.sumAvail(attr.map(d => d.v(ofz))), ofz.total, 'OFZ attribution');
-  near(attr[1].v(ofz), ofz.c.carry_coupon, 'coupon');
+  near(by('carry_coupon').v(ofz), ofz.c.carry_coupon, 'coupon');
   // funding missing in the row is missing in its total too: the identity holds and funding stays «—»
   near(P.sumAvail(attr.map(d => d.v(usd))), usd.total, 'USD attribution');
-  assert.equal(attr[3].v(usd), null);
-  near(attr[2].v(usd), usd.c.fx_gross + usd.c.fx_funding, 'FX net');
+  assert.equal(by('funding').v(usd), null);
+  near(by('fx').v(usd), usd.c.fx_gross + usd.c.fx_funding, 'FX net');
+  // an answer without carry_nosplit: unknown for a mixed split («нет данных»), the whole carry when nothing is split
+  const old = JSON.parse(JSON.stringify(s)); delete old.c.carry_nosplit;
+  attr.forEach(d => assert.equal(d.v(old), null, d.k + ' mixed, no carry_nosplit'));
+  const oldCorp = JSON.parse(JSON.stringify(corp)); delete oldCorp.c.carry_nosplit;
+  near(by('carry_nosplit').v(oldCorp), corp.c.carry, 'nothing split, no carry_nosplit');
   // «Валюта» of the attribution is the same source as the explain FX: one name, one colour
   const fx = P.rowsFor('explain', p, { carry: 'net' }).find(d => d.k === 'fx');
-  assert.equal(attr[2].l, fx.l); assert.equal(attr[2].color, fx.color);
+  assert.equal(by('fx').l, fx.l); assert.equal(by('fx').color, fx.color);
+});
+
+test('rates of RUB bonds (TDM#435): linear + convexity for the rows with rates_linear, the rest whole; Σ = rates', () => {
+  const p = prep(), s = p.summary, defs = P.rowsFor('explain', p, { carry: 'net' }), by = k => defs.find(d => d.k === k);
+  assert.deepEqual(defs.filter(d => d.parts.includes('rates') || d.parts.includes('rates_linear')).map(d => d.k), ['ratesLin', 'ratesCvx', 'ratesRest']);
+  assert.ok(!defs.some(d => d.k === 'rates'));
+  near(P.sumAvail(['ratesLin', 'ratesCvx', 'ratesRest'].map(k => by(k).total)), s.c.rates, 'Σ = rates');
+  near(by('ratesCvx').total, s.c.rates_exact_lin - s.c.rates_linear, 'convexity = exact − linear');
+  // the USD bond and the swap keep their rates whole
+  const usd = pos(p, 'DEMO-B|USD-1'), irs = pos(p, 'DEMO-B|IRS-1'), ofz = pos(p, 'DEMO-A|OFZ-1');
+  near(by('ratesRest').total, usd.c.rates + irs.c.rates, 'rest = foreign bond + swap');
+  assert.equal(by('ratesLin').v(usd), null); near(by('ratesRest').v(usd), usd.c.rates, 'USD whole');
+  near(by('ratesLin').v(ofz) + by('ratesCvx').v(ofz), ofz.c.rates, 'OFZ'); assert.equal(by('ratesRest').v(ofz), 0);
+  assert.match(by('ratesLin').cover(s), /^\d+ из \d+ записей$/);
+  near(P.sumAvail(defs.map(d => d.total)), s.total, 'Σ rows = total');
+  // a selection where every row with rates has the linear estimate: no «без линейной оценки» row
+  const d = JSON.parse(JSON.stringify(FX.period)); d.positions = d.positions.filter(x => x.c.rates_linear != null); d.summary = P.sumAggs(d.positions);
+  assert.ok(!P.rowsFor('explain', P.prepare(d), { carry: 'net' }).some(x => x.k === 'ratesRest'));
+  // no rates_linear in the answer: one «Ставки»
+  const none = JSON.parse(JSON.stringify(FX.period)); none.keys = none.keys.filter(k => !k.startsWith('rates_'));
+  assert.ok(P.rowsFor('explain', P.prepare(none), { carry: 'net' }).some(x => x.k === 'rates'));
+  const T = P.tilesA(p);
+  near(T.ratesLin, s.c.rates_linear, 'tile linear'); near(T.ratesCvx, s.c.rates_exact_lin - s.c.rates_linear, 'tile convexity');
 });
 
 test('carry split rule (A–E): a row without PnL does not blank it; a row with carry but without the split does', () => {
@@ -146,14 +193,18 @@ test('carry split rule (A–E): a row without PnL does not blank it; a row with 
   assert.deepEqual(P.rowsFor('explain', ok, { carry: 'comp' }).slice(0, 2).map(d => d.k), ['carry_coupon', 'carry_pull'], 'B/A components split');
   const rows = ok.positions.map(P.carryPosition);
   near(P.carryTotal(rows).coupon, s.c.carry_coupon, 'C group coupon');
-  // the same selection plus one position with carry but no split: «нет данных»
-  const corp = FX.period.positions.find(x => x.ref === 'DEMO-A|CORP-1'), bad = sel(split.concat([fresh, corp]));
-  assert.equal(bad.split, false); assert.equal(bad.coupon, false);
-  P.rowsFor('attr', bad, {}).forEach(d => assert.equal(d.total, null, d.k + ' «нет данных»'));
+  // the same selection plus one position with carry but no split: the others keep theirs, its carry apart (TDM#432)
+  const corp = FX.period.positions.find(x => x.ref === 'DEMO-A|CORP-1'), bad = sel(split.concat([fresh, corp])), bs = bad.summary;
+  assert.equal(bad.split, true); assert.equal(P.hasSplit(bs), false);
+  const attrB = P.rowsFor('attr', bad, {});
+  attrB.forEach(d => assert.ok(d.total != null, d.k + ' shown'));
+  near(P.sumAvail(attrB.map(d => d.total)), bs.total, 'identity'); near(attrB.find(d => d.k === 'carry_nosplit').total, corp.c.carry, 'its carry apart');
   const have = P.sumAvail(split.map(x => x.rows));
-  assert.equal(P.splitCover(bad.summary), have + ' из ' + (have + corp.rows) + ' записей');
-  assert.equal(P.carrySummary(bad).coupon, null);
-  assert.equal(P.carryTotal(bad.positions.map(P.carryPosition)).coupon, null);
+  assert.equal(P.splitCover(bs), have + ' из ' + (have + corp.rows) + ' записей');
+  const SB = P.carrySummary(bad);
+  near(SB.coupon, bs.c.carry_coupon, 'C coupon of the split rows'); near(SB.nosplit, corp.c.carry, 'C carry without the split');
+  const TB = P.carryTotal(bad.positions.map(P.carryPosition));
+  near(TB.coupon + TB.pull + TB.nosplit, bs.c.carry, 'C group: coupon + pull + without the split = carry');
 });
 
 test('groups from positions: type, book, currency, curve, rating, position; buckets by index', () => {
@@ -182,15 +233,76 @@ test('groups from positions: type, book, currency, curve, rating, position; buck
   near(P.sumAvail(wf.map(x => x.v)), P.sumAvail(many.map(x => x.total)), 'folded waterfall');
 });
 
-test('contributors: who added and who subtracted, positions without a value counted', () => {
+test('contributors: by |contribution|, small and zero ones counted, positions without a value last with reasons', () => {
   const p = prep(), fund = P.rowsFor('explain', p, { carry: 'split' }).find(d => d.k === 'funding');
   const C = P.contrib(p.positions, fund);
-  assert.equal(C.missing, 2);  // the swap and the USD bond have no funding
+  assert.equal(C.missing, 3);  // the swap and the USD bond have no funding, the new bond no PnL
+  assert.deepEqual(C.why, [{ text: 'метод без этой компоненты: desk-flash-exact-v1', n: 1 }, { text: 'метод без этой компоненты: desk-flash-simple-v1', n: 1 }, { text: 'нет PnL: no_prev_report', n: 1 }]);
   assert.ok(C.minus.length && C.minus.every((x, i, a) => x.v < 0 && (!i || a[i - 1].v <= x.v)));
+  assert.ok(C.list.every((x, i, a) => !i || Math.abs(a[i - 1].v) >= Math.abs(x.v)));
   near(C.total, p.summary.c.funding, 'Σ funding');
   const T = P.contrib(p.positions, { k: 'total', v: x => x.total });
   assert.ok(T.plus.every((x, i, a) => x.v > 0 && (!i || a[i - 1].v >= x.v)));
-  assert.equal(T.missing, 0);
+  assert.equal(T.missing, 1); assert.ok(!T.list.some(x => x.v == null));
+  // zeros are not contributions; small ones (≤ MIN_CONTRIB) are counted and summed; a long list keeps the rest summed
+  const fake = [1e6, -2e6, 0, 0, 3e3, -1e3, null].map((v, i) => ({ ref: 'X|' + i, total: v }));
+  const F = P.contrib(fake, { k: 'total', v: x => x.total }, 1);
+  assert.deepEqual(F.list.map(x => x.v), [-2e6]); assert.deepEqual(F.more, { n: 1, sum: 1e6 });
+  assert.deepEqual(F.small, { n: 2, sum: 2e3 }); assert.equal(F.zero, 2); assert.equal(F.missing, 1);
+  assert.ok(!F.plus.concat(F.minus).some(x => x.v === 0));
+  assert.deepEqual(F.why, [{ text: 'нет итога', n: 1 }]);
+});
+
+test('waterfall of groups: nulls last as one «не посчитано» (TDM#433); bars split by groups sum to the bar (TDM#431)', () => {
+  const p = prep(), L = { kind: x => x.group + ' · ' + x.kind, curve: id => p.curveName(id) };
+  const wf = P.waterfallItems(P.rowsFor('pos', p, { labels: L }));
+  assert.equal(wf.at(-1).k, 'g:null'); assert.equal(wf.at(-1).l, 'не посчитано: 1 поз.'); assert.deepEqual(wf.at(-1).keys, ['g:DEMO-B|NEW-1']);
+  assert.ok(wf.slice(0, -1).every((x, i, a) => x.v != null && (!i || a[i - 1].v >= x.v)));
+  assert.ok(P.groupRows(p.positions, 'pos', L, 0).at(-1).v == null, 'groups: nulls last');
+  for (const mode of ['ccy', 'type', 'book']) for (const lens of ['explain', 'attr']) {
+    const defs = P.rowsFor(lens, p, { carry: 'split', labels: L }), items = P.waterfallItems(defs, p.summary);
+    const S = P.stackItems(items, defs, p.positions, mode, L);
+    assert.equal(S.items.length, items.length);
+    S.items.forEach(it => { if (it.v != null) near(it.pieces.reduce((a, x) => a + x.v, 0), it.v, mode + ' ' + lens + ' ' + it.k); });
+    assert.ok(S.groups.every((g, i) => g.color === 'pal:' + i));
+  }
+  // the share of a group is the row on the group's positions
+  const defs = P.rowsFor('explain', p, { carry: 'split' }), S = P.stackItems(P.waterfallItems(defs), defs, p.positions, 'ccy', L);
+  const usd = S.items.find(x => x.k === 'fx').pieces.find(x => x.g === 'USD');
+  near(usd.v, P.srcVal(pos(p, 'DEMO-B|USD-1'), 'fx'), 'USD piece of FX');
+  // more groups than STACK_GROUPS: the tail as «Остальные N»
+  const many = P.stackItems(P.waterfallItems(defs), defs, p.positions, 'pos', L);
+  assert.equal(many.groups.length, p.positions.length <= P.STACK_GROUPS + 1 ? p.positions.length : P.STACK_GROUPS + 1);
+});
+
+test('daily axis (TDM#434): working days only, a day without a run marked and carried, day columns follow', () => {
+  const p = prep();
+  assert.ok(!p.dates.some(d => [0, 6].includes(new Date(d + 'T00:00:00Z').getUTCDay())), 'no weekends');
+  const i = p.dates.indexOf('2026-10-07');
+  assert.equal(p.axis.state[i], 'norun'); assert.equal(p.axis.hold[i], true);
+  assert.equal(p.axis.text, 'прогонов ' + FX.period.runs.length + ' из ' + p.dates.length + ' рабочих дней');
+  const byDate = new Map(p.days.map(d => [d.date, d])), tot = p.dates.map(d => (byDate.has(d) ? byDate.get(d).total : null));
+  const cum = P.cumulate(tot, p.axis.hold);
+  assert.equal(cum[i], cum[i - 1], 'the level carries over the day without a run'); near(cum.at(-1), p.summary.total, 'cumulative');
+  assert.equal(P.cumulate([null, 1, null, 2], [true, false, true, false]).join(), ',1,1,3');
+  // weekend market dates (a market data store with every day) do not enter the axis; a run on a weekend does
+  const wk = JSON.parse(JSON.stringify(FX.period)); wk.marketDates = wk.marketDates.concat(['2026-10-03', '2026-10-04']).sort(); wk.runs.push({ date: '2026-10-04', runId: 1, prevDate: '2026-10-02' });
+  const pw = P.prepare(wk);
+  assert.ok(!pw.dates.includes('2026-10-03') && pw.dates.includes('2026-10-04'));
+  assert.equal(pw.axis.state[pw.dates.indexOf('2026-10-04')], 'norows');
+  // no market dates: every weekday of the period
+  const nm = JSON.parse(JSON.stringify(FX.period)); nm.marketDates = [];
+  assert.equal(P.prepare(nm).dates.length, P.weekdays(FX.period.from, FX.period.to));
+  // gran day: calendar-day buckets of the server keep the working days; positions' buckets follow by index
+  const day = JSON.parse(JSON.stringify(FX.period)), B = P.makeBuckets(day.from, day.to, 'day');
+  day.gran = 'day'; day.buckets = B;
+  const byPos = new Map(Object.entries(FX.position).map(([ref, v]) => [ref, new Map(v.days.map(x => [x.date, x.total]))]));
+  day.positions.forEach(x => { x.buckets = B.map(b => (byPos.get(x.ref).has(b.from) ? byPos.get(x.ref).get(b.from) : null)); });
+  const pd = P.prepare(day);
+  assert.deepEqual(pd.buckets.map(b => b.from), pd.dates);
+  assert.ok(pd.buckets.length < B.length);
+  pd.buckets.forEach((b, k) => { if (pd.bucketAggs[k]) near(P.sumAvail(pd.positions.map(x => x.buckets[k])), pd.bucketAggs[k].total, b.key); });
+  assert.equal(pd.bucketAggs[pd.dates.indexOf('2026-10-07')], null);
 });
 
 test('matrix: group cells are the sum of their positions, sorting keeps nulls last', () => {
@@ -200,7 +312,8 @@ test('matrix: group cells are the sum of their positions, sorting keeps nulls la
   assert.ok(G[0].v.at(-1) >= G[1].v.at(-1));
   const fj = defs.findIndex(d => d.k === 'carryNet');
   const sorted = P.sortMatrix(P.matrix(p.positions, 'book', defs, {}), fj, -1).find(g => g.key === 'DEMO-B').kids;
-  assert.ok(sorted.every((k, i, a) => !i || a[i - 1].v[fj] >= k.v[fj]));
+  assert.ok(sorted.every((k, i, a) => !i || k.v[fj] == null || (a[i - 1].v[fj] != null && a[i - 1].v[fj] >= k.v[fj])));
+  assert.ok(sorted.at(-1).v[fj] == null, 'the position without PnL last');
   // cell drill-down on a /position response: running sum and the largest days
   const resp = FX.position['DEMO-A|CORP-1'], D = P.cellDays(resp.days, { k: 'other', v: a => P.val(a, 'other') });
   assert.equal(D.dates.length, resp.days.length);
@@ -214,11 +327,15 @@ test('carry: net = carry without roll-down + roll-down; gross = coupon + pull (o
   near(net.parts[0].v(s) + net.parts[1].v(s), net.tot.v(s), 'net parts');
   near(net.tot.v(s), s.c.carry + s.c.rolldown + s.c.funding, 'net');
   assert.deepEqual(gross.parts.map(d => d.k), ['carry', 'rolldown']);
-  assert.deepEqual(grossSplit.parts.map(d => d.k), ['carry_coupon', 'carry_pull', 'rolldown']);
+  assert.deepEqual(grossSplit.parts.map(d => d.k), ['carry_coupon', 'carry_pull', 'carry_nosplit', 'rolldown']);
+  assert.deepEqual(P.carryParts('gross', true, false).parts.map(d => d.k), ['carry_coupon', 'carry_pull', 'rolldown'], 'every row split');
   const ofz = pos(p, 'DEMO-A|OFZ-1');
   near(grossSplit.parts.reduce((a, d) => a + d.v(ofz), 0), gross.tot.v(ofz), 'coupon + pull + roll = gross');
+  near(grossSplit.parts.reduce((a, d) => a + d.v(s), 0), gross.tot.v(s), 'selection: coupon + pull + without the split + roll = gross');
+  // the selection is split per row (TDM#432): coupon and pull of the rows with it, the carry of the rest
   const S = P.carrySummary(p);
-  assert.equal(S.coupon, null); assert.equal(S.pull, null);  // the selection is not fully split
+  near(S.coupon, s.c.carry_coupon, 'coupon tile'); near(S.pull, s.c.carry_pull, 'pull tile'); near(S.nosplit, s.c.carry_nosplit, 'without the split');
+  near(S.coupon + S.pull + S.nosplit, s.c.carry, 'tiles = carry');
   assert.match(S.cover.coupon, / из \d+ записей$/);
   near(S.gross, s.c.carry + s.c.rolldown, 'gross'); near(S.net, s.c.carry + s.c.rolldown + s.c.funding, 'net');
   assert.equal(S.days, P.calDays(p.days));
@@ -236,7 +353,11 @@ test('carry: net = carry without roll-down + roll-down; gross = coupon + pull (o
   const T = P.carryTotal([o, usd]);
   near(T.net, o.net + usd.net, 'group net'); assert.equal(P.carryTotal([irs]).funding, null);
   near(T.coupon, o.coupon + usd.coupon, 'group coupon');
-  assert.equal(P.carryTotal([o, P.carryPosition(pos(p, 'DEMO-A|CORP-1'))]).coupon, null, 'a row without the split: the group coupon is «—»');
+  const corp = P.carryPosition(pos(p, 'DEMO-A|CORP-1')), mixed = P.carryTotal([o, corp]);
+  near(mixed.coupon, o.coupon, 'a row without the split: the group coupon is that of the split rows');
+  near(mixed.nosplit, corp.carry, 'and its carry apart'); near(mixed.coupon + mixed.pull + mixed.nosplit, o.carry + corp.carry, 'group = carry');
+  // nulls last in the carry table's sort (TDM#433): the deal has no carry % p.a.
+  assert.equal(irs.cy, null);
   assert.equal(P.perCalDay({ date: '2026-10-08', prevDate: '2026-10-06' }, 10), 5);
   assert.equal(P.perCalDay({ date: '2026-10-08', prevDate: '2026-10-06' }, null), null);
 });
