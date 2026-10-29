@@ -74,6 +74,7 @@ LOCK_FILE = "backup.lock"
 SERVE_LOCK = "serve.lock"  # held by desk serve while it runs (hold_serve_lock); a restore needs it free
 DUMP_TIMEOUT_S = 3 * 3600
 CONFIRM_WORD = "restore"
+SESSION_GRACE_S = 5.0    # a just-closed connection's server process may still be listed this long (other_sessions)
 
 
 class BackupError(Exception):
@@ -622,13 +623,24 @@ def _exists(con: psycopg.Connection, name: str) -> bool:
     return con.execute("SELECT 1 FROM pg_database WHERE datname = %s", (name,)).fetchone() is not None
 
 
-def other_sessions(url: str) -> int:
+def other_sessions(url: str, *, grace_s: float | None = None) -> int:
     """Connections to the live database other than this one (a running ``desk serve``, a ``desk cycle``). An
     autovacuum worker is no connection: the server starts one in every database now and then and lists it with its
-    datname, and ``ALTER DATABASE ... RENAME`` stops it by itself (trading-desk-monitor#300)."""
+    datname, and ``ALTER DATABASE ... RENAME`` stops it by itself (trading-desk-monitor#300).
+
+    A connection its client has just closed (the restore's own ``pg_dump``, a count of the tables) stays listed
+    until its server process has exited, which takes milliseconds or, on a busy machine, longer. So a count above
+    zero is asked again for up to ``grace_s`` (``SESSION_GRACE_S``) and only the connections still there then count;
+    a client that stays connected is refused as before, only later (trading-desk-monitor#485). PostgreSQL waits the
+    same 5 s for such processes before it refuses ``ALTER DATABASE ... RENAME``."""
+    deadline = time.monotonic() + (SESSION_GRACE_S if grace_s is None else grace_s)
     with _admin(url) as con:
-        return con.execute("SELECT count(*) FROM pg_stat_activity WHERE datname = %s AND pid <> pg_backend_pid()"
-                           " AND backend_type <> 'autovacuum worker'", (db_name(url),)).fetchone()[0]
+        while True:
+            n = con.execute("SELECT count(*) FROM pg_stat_activity WHERE datname = %s AND pid <> pg_backend_pid()"
+                            " AND backend_type <> 'autovacuum worker'", (db_name(url),)).fetchone()[0]
+            if not n or time.monotonic() >= deadline:
+                return n
+            time.sleep(0.05)
 
 
 def restore_check(settings: Settings, url: str | None, dump: Path, *, keep_scratch: bool = False,
