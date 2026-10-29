@@ -80,6 +80,19 @@ t('резервный список прогона — «Расписание д�
   assert.ok(box.innerHTML.includes('Расписание до 15.09.27, полное недоступно: в статике хаба нет графика этой бумаги. Показаны потоки прогона.'), box.innerHTML);
 });
 
+// #464: dataset в браузере хранит строки — числовой id позиции не должен делать ответ сервера «устаревшим»
+t('числовой id позиции: карточка показывает весь график, а не «загрузка потоков…»', async () => {
+  const { M, K } = load([{ status: 200, body: { source: 'static', ccy: 'RUB', flows: FLOWS } }]);
+  const p = { id: 7, isin: 'RU000TEST007', name: 'Тест', ccy: 'RUB' };
+  M.cashflows = [];
+  const box = el(); box.querySelector = () => null;
+  box.dataset = new Proxy({}, { set(o, k, v) { o[k] = String(v); return true; } });  // как DOMStringMap
+  K.flows(box, p);
+  assert.ok(box.innerHTML.includes('загрузка потоков…'), box.innerHTML);
+  await new Promise(r => setTimeout(r, 0));
+  assert.ok(box.innerHTML.includes('2 потоков до 15.03.30') && !box.innerHTML.includes('загрузка'), box.innerHTML);
+});
+
 (async () => {
   for (const [name, f] of T) { await f(); n++; console.log('ok', name); }
   console.log(n + ' tests passed');
