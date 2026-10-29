@@ -1778,6 +1778,10 @@ function mountTabs(a, reload){
         ['Самый ранний расчёт', dd(s.oldest_run)],
         ['Старые отчёты прочитаны с', dd(s.inbox_scanned_from)],
       ];
+      // #447: одна и та же ошибка сети или базы на датах подряд — догрузка стоит, даты в проблемные не записываются
+      const at = t => t ? new Date(t).toLocaleString('ru-RU', {day:'2-digit', month:'2-digit', hour:'2-digit', minute:'2-digit'}) : '—';
+      if (s.stall) rows.splice(4, 0, ['Догрузка стоит', 'с ' + at(s.stall.since) + ': ' + s.stall.error + ' (одна и та же ошибка на ' + s.stall.dates +
+        ' датах подряд — связь или база, не данные дат)\nследующая попытка ' + at(s.stall.next_attempt)]);
       if (s.step) rows.push(['Последний цикл', s.step.status + ': ' + s.step.detail]);
       const tb = $('bf-rows'); tb.textContent = '';
       rows.forEach(([k, v]) => { const tr = document.createElement('tr'); tr.innerHTML = '<td class="k"></td><td class="v" style="white-space:pre-wrap"></td>'; tr.children[0].textContent = k; tr.children[1].textContent = v; tb.append(tr); });

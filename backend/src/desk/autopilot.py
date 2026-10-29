@@ -84,7 +84,9 @@ every ``inbox_poll_seconds`` and on ``POST /api/v1/autopilot/run``):
    the latest positions date, and these dates stayed stale while the backfill stopped at the window), but the dates
    the eod step ran or failed (a date is not tried twice a cycle, nor again on inputs the eod step failed on). Last in the cycle, after the EOD, intraday and history steps, so the latest date never waits for it; not while the inbox
    backlog drains (R22). The hub's date list is read once per ``RECHECK_S``, less the dates the sync step cannot load
-   (its ``problem_dates``): no run and no previous close on them until they load.
+   (its ``problem_dates``): no run and no previous close on them until they load. While the backfill stands (the
+   same store or network error on two dates in a row, ``backfill.stalled``, TDM#447) the step runs it again only
+   after the stall's ``next_attempt`` (``backfill.STALL_BACKOFF_S``) and says so, status ``error``.
 8. **status** (``status()``, the shape of ``GET /api/v1/autopilot/status``). While a cycle runs, ``message`` and
    ``progress`` ({"step": "sync"|"scan"|"eod"|"intraday"|"history"|"backfill", "done": int, "total": int|null, "detail": str})
    follow it live: hub dates fetched of those to fetch, report files done of those offered, EOD dates run of those
@@ -171,6 +173,12 @@ LATEST_RUN = ("SELECT run_id, business_date, completed_at, run_type, cut_type, c
 
 def _iso(ts: datetime | None) -> str | None:
     return ts.isoformat(timespec="seconds") if ts else None
+
+
+def _stall_text(s: dict[str, Any]) -> str:
+    """The backfill step's detail while the backfill stands (``backfill.stalled``, TDM#447)."""
+    return (f"stands since {s.get('since')}: {_short(s.get('error') or '')} on {len(s.get('dates') or [])} dates in a "
+            f"row ({s.get('cause')}, not the dates' data); next attempt {s.get('next_attempt')}")
 
 
 def _short(text: str, limit: int = 200) -> str:
@@ -906,15 +914,22 @@ class Autopilot:
                 f"positions have their run" + (f", {s['failed']} failed before" if s["failed"] else ""))
         if not [d for d in p.todo if d.date not in exclude]:
             return "ok", "; ".join(parts + [f"up to date ({span})"])
+        stall = backfill.stalled(backfill.state(settings))
+        if stall and stall.get("next_attempt") and self._now() < datetime.fromisoformat(stall["next_attempt"]):
+            # the same store or network error on two dates in a row (TDM#447): not tried again before its wait
+            return "error", "; ".join(parts + [_stall_text(stall), span])
         if self._contexts is None:
             self._contexts = ContextCache()
         res = backfill.run(settings, p, store_url=url, client=client, budget_s=float(settings.backfill_budget_s),
-                           out=self._eod_line, contexts=self._contexts, exclude=exclude,
+                           out=self._eod_line, contexts=self._contexts, exclude=exclude, now=self._now(),
                            progress=lambda i, n, d: self._progress("backfill", i, n, d))
         if res["done"]:
             ran.append(f"история {len(res['done'])} дат")
             parts.append(f"ran {len(res['done'])} dates ({res['done'][0]}..{res['done'][-1]}) in {res['seconds']} s")
-        parts += [f"{d} failed ({e})" for d, e in res["failed"][:5]]
+        if res["stall"]:
+            parts.append(_stall_text(res["stall"]))
+        else:
+            parts += [f"{d} failed ({e})" for d, e in res["failed"][:5]]
         if res["unconverged"]:
             parts.append(f"still stale after the run, tried again next cycle: {', '.join(res['unconverged'][:5])}")
         if res["skipped"]:
