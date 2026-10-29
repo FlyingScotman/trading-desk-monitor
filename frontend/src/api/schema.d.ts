@@ -2346,7 +2346,7 @@ export interface components {
              * Reason
              * @enum {string}
              */
-            reason: "not_valued" | "reported_no_risk" | "no_risk";
+            reason: "not_valued" | "reported_no_risk" | "no_risk" | "implausible";
             /** Text */
             text: string;
             /** N */
