@@ -35,7 +35,7 @@ Setting `DESK_PRIVATE_ADAPTER` (environment, the settings page or `backend/.env`
 - the adapter never sees the store URL or the hub token;
 - "plain data only" (§3) is enforced by the JSON encoding.
 
-**Fingerprint.** At load the backend computes the SHA-256 over the adapter package's files and the contents of `DESK_PRIVATE_ADAPTER_CONFIG`. The fingerprint is shown by `desk inbox status` and recorded on every ledger row and revision. `DESK_PRIVATE_ADAPTER_SHA256`, if set, must match, or loading fails.
+**Fingerprint.** At load the backend computes the SHA-256 over the adapter package's files and the contents of `DESK_PRIVATE_ADAPTER_CONFIG`. The fingerprint is shown by `desk inbox status` and recorded on every ledger row and revision. `DESK_PRIVATE_ADAPTER_SHA256`, if set, must match, or loading fails; it is checked before any adapter code runs (no import, no `describe()`): a module name is located in the child without importing it (TDM#87).
 
 **When it loads.** Once per process, by every command that ingests (`desk inbox …`, `desk adapter check`) and by `desk serve` when the watcher is on.
 

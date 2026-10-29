@@ -584,6 +584,36 @@ def test_module_adapter_is_fingerprinted_from_what_the_child_imported(monkeypatc
     assert h.ok and h.fingerprint == fp
 
 
+@pytest.mark.parametrize("as_path", [False, True])
+def test_adapter_with_a_wrong_fingerprint_never_runs(tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+                                                    as_path: bool) -> None:
+    """Issue #87: DESK_PRIVATE_ADAPTER_SHA256 is checked before the adapter is imported, by name or by folder."""
+    root, marks = tmp_path / "root", tmp_path / "marks"
+    pkg = (tmp_path if as_path else root) / "noisy87_adapter"  # a folder off sys.path: no name collision
+    root.mkdir()
+    pkg.mkdir()
+    marks.mkdir()
+    (root / "desk").symlink_to(Path(runner._DESK_ROOT) / "desk")
+    (pkg / "__init__.py").write_text(
+        "import os, pathlib\n"
+        "from desk.inbox.reference import SPI_VERSION, match, read, reference, describe as _describe\n"
+        "pathlib.Path(os.environ['DESK_PRIVATE_ADAPTER_MARKS'], 'imported').touch()\n"
+        "def describe():\n"
+        "    pathlib.Path(os.environ['DESK_PRIVATE_ADAPTER_MARKS'], 'described').touch()\n"
+        "    return _describe()\n", encoding="utf-8")
+    monkeypatch.setattr(runner, "_DESK_ROOT", str(root))  # the child's sys.path: the fake adapter is importable
+    monkeypatch.setenv("DESK_PRIVATE_ADAPTER_MARKS", str(marks))
+    spec = str(pkg) if as_path else "noisy87_adapter"
+    bad = load_adapter(spec, str(CONFIG), "0" * 64)
+    assert bad.error == "fingerprint_mismatch: DESK_PRIVATE_ADAPTER_SHA256 differs" and not bad.describe
+    assert bad.fingerprint == fingerprint(spec, str(CONFIG), {"file": None, "path": [str(pkg)]})
+    assert list(marks.iterdir()) == []  # neither imported nor described
+    assert load_adapter("no_such87_adapter", None, "0" * 64).error.startswith("not_found")
+    good = load_adapter(spec, str(CONFIG), bad.fingerprint)
+    assert good.ok and good.fingerprint == bad.fingerprint
+    assert sorted(p.name for p in marks.iterdir()) == ["described", "imported"]
+
+
 def test_kit_survives_odd_hits_and_reports_names_only(tmp_path: Path) -> None:
     odd = tmp_path / "odd_adapter"
     odd.mkdir()
