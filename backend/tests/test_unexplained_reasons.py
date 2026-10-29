@@ -105,6 +105,42 @@ def test_model_price_on_both_dates_is_explained_exactly(dates, monkeypatch):
     assert p.explained == pytest.approx(p.total, abs=0.01)
 
 
+@pytest.mark.parametrize("refusal", orch.EXACT_REFUSALS)
+def test_a_rung_on_core_keeps_the_simple_pnl_when_the_exact_steps_refuse(dates, monkeypatch, refusal):
+    prev, cur = dates
+    (e,) = value(prev, [(RZD, Q)])
+    spreads = _carried(e.valuation.z_spread_bp + 40.0)
+    _no_price(monkeypatch, prev, cur)
+    po, co = value(prev, [(RZD, Q)], carried_spreads=spreads), value(cur, [(RZD, Q)], carried_spreads=spreads)
+
+    def refuse(*a, **k):
+        raise orch.NoPnl(refusal, "synthetic")
+
+    monkeypatch.setattr(orch, "explain", refuse)
+    attach_pnl(prev, po, cur, co)
+    o = co[0]
+    assert o.no_pnl is None and o.pnl is not None  # a PnL, as before TDM#441, not a missing one
+    x = o.pnl.extra()
+    assert x["method"] == fallback.METHOD and o.pnl.other == pytest.approx(o.pnl.total)
+    assert x["other_reason"]["code"] == reasons.CORE_REFUSED and x["other_reason"]["core_code"] == refusal
+    assert f"exact flash refused: {refusal}" in x["note"]
+
+
+def test_other_refusals_of_the_exact_steps_stay_no_pnl(dates, monkeypatch):
+    prev, cur = dates
+    (e,) = value(prev, [(RZD, Q)])
+    spreads = _carried(e.valuation.z_spread_bp + 40.0)
+    _no_price(monkeypatch, prev, cur)
+    po, co = value(prev, [(RZD, Q)], carried_spreads=spreads), value(cur, [(RZD, Q)], carried_spreads=spreads)
+
+    def refuse(*a, **k):
+        raise orch.NoPnl("stale_quote", "synthetic")
+
+    monkeypatch.setattr(orch, "explain", refuse)
+    attach_pnl(prev, po, cur, co)
+    assert co[0].pnl is None and co[0].no_pnl.reason == "stale_quote"
+
+
 def test_model_to_market_is_flagged_and_its_spread_step_is_price_discovery(dates, monkeypatch):
     prev, cur = dates
     (e,) = value(prev, [(RZD, Q)])

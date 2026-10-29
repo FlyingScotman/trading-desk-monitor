@@ -533,7 +533,8 @@ def with_cbr(pnl: FlashPnl, prev: EodContext, ctx: EodContext) -> FlashPnl:
 
 def attach_pnl(prev: EodContext, prev_outcomes: list[Outcome], ctx: EodContext, outcomes: list[Outcome]) -> None:
     """Set ``pnl`` or ``no_pnl`` on every outcome of ``ctx`` priced today. Both lists are in request order. A bond valued
-    by core on both dates (``fallback.by_core``: exact, or a rung at its price) takes the exact flash steps; one on a
+    by core on both dates (``fallback.by_core``: exact, or a rung at its price) takes the exact flash steps (a rung keeps
+    the simple PnL when they refuse, ``EXACT_REFUSALS``); one on a
     fallback rung off core on either date, or discounted on another curve on each, the simple PnL; each with why its PnL
     is (partly) in ``other`` (``pnl.extra.other_reason``, ``ladder_reason``, ``curve_switch``; ``pnl.flash``)."""
     if len(prev_outcomes) != len(outcomes):
@@ -572,9 +573,26 @@ def attach_pnl(prev: EodContext, prev_outcomes: list[Outcome], ctx: EodContext, 
                 continue
             # a foreign bond (core 0.34) in its currency on its own curve, the rate move in fx_gross; a model price on
             # one date: its spread step is price discovery, in other (TDM#441)
-            o.pnl = with_cbr(price_discovery(explain(pv, ov, curves, cache), pv, ov), prev, ctx)
+            try:
+                o.pnl = with_cbr(price_discovery(explain(pv, ov, curves, cache), pv, ov), prev, ctx)
+            except NoPnl as e:
+                # a rung core valued on both dates had the simple PnL before the exact steps (TDM#441): when they
+                # refuse, it keeps it, with why in other_reason
+                if e.reason not in EXACT_REFUSALS or not (ov.quality in RUNGS or pv.quality in RUNGS):
+                    raise
+                assert o.terms is not None
+                why = f"exact flash refused: {e.reason}{': ' + e.detail if e.detail else ''}"
+                pnl, lr = yield_pnl(pv, ov, o.terms, prev, ctx), ladder_reason(prev, p, ctx, o)
+                reason = pnl.other_reason or (lr if lr["code"] == PRICE_SOURCE_SWITCH else other_reason(
+                    CORE_REFUSED, why, core_code=e.reason, rung=ov.quality if ov.quality in RUNGS else pv.quality,
+                    date=ov.valuation_date.isoformat()))
+                o.pnl = split_fx(replace(pnl, note=f"{pnl.note}; {why}", other_reason=reason), prev, ctx, o.terms)
         except NoPnl as e:
             o.no_pnl = e
+
+
+EXACT_REFUSALS = ("curve_missing", "core_error", "identity_failed")
+"""Refusals of the exact steps after which a rung core valued on both dates keeps the simple PnL (``attach_pnl``)."""
 
 
 def missing_curve(ctx: EodContext) -> str | None:

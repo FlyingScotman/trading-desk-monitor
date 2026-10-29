@@ -662,6 +662,7 @@ def position_days(rows: Iterable[dict[str, Any]], run_dates: list[date], gov: fr
         no_pnl = r.get("noPnl")
         days.append({"date": d, "prevDate": prev_date, "runId": r["runId"], "method": a["method"], "note": a["note"],
                      "reason": a["reason"],
+                     "reportFrom": _date(extra.get("report_from")),  # D-1 carried an older report (TDM#440)
                      "noPnl": {"reason": no_pnl.get("reason"), "detail": no_pnl.get("detail")} if no_pnl else None,
                      "total": a["total"], "c": comp, "ratesLinear": _num(extra.get("rates_linear")),
                      "grossCheck": a["grossCheck"],

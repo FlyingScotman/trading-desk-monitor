@@ -457,6 +457,31 @@ test('C19 D, E, F: a held-back answer never shows for another slice; a failed re
   } finally { await browser.close(); }
 });
 
+test('C19 E: a day by the reports whose D−1 carried an older report shows «с dd.mm» of that report (TDM#440)', { skip: pw ? false : 'нет Playwright', timeout: 60000 }, async () => {
+  const browser = await pw.chromium.launch();
+  try {
+    const { pg, ctx, errors } = await open(browser);
+    // CORP-1 as a report-valued position: on 13.10 the report of D−1 (12.10) was carried from 28.09
+    const pos = JSON.parse(JSON.stringify(FX.position['DEMO-A|CORP-1'])), d = pos.days.find(x => x.date === '2026-10-13');
+    Object.assign(d, { method: 'desk-reported-v1', reportFrom: '2026-09-28', note: 'reported PV; разница отчётов с 28.09' });
+    await pg.route('**/api/v1/history/pnl/position?*', route => {
+      const u = new URL(route.request().url()), ref = u.searchParams.get('position_book') + '|' + u.searchParams.get('position_id');
+      return route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(ref === 'DEMO-A|CORP-1' ? pos : FX.position[ref]) }).catch(() => { });
+    });
+    await pg.evaluate(() => { location.hash = 'position'; });
+    await pg.waitForSelector('#plist [data-ref="DEMO-A|CORP-1"]');
+    await pg.locator('#plist [data-ref="DEMO-A|CORP-1"]').click();
+    await pg.waitForSelector('#pDays tr[data-d="2026-10-13"]');
+    const cell = pg.locator('#pDays tr[data-d="2026-10-13"] td.stick');
+    assert.match(await cell.innerText(), /13\.10\.26\s+с 28\.09/);
+    assert.match(await cell.locator('span').getAttribute('title'), /Разница отчётов: отчёт D−1 действует с 28\.09\.26/);
+    // a day by its own report of D−1 and the previous run a day before: no mark
+    assert.doesNotMatch(await pg.locator('#pDays tr[data-d="2026-10-12"] td.stick').innerText(), /с \d/);
+    assert.deepEqual(errors, []);
+    await ctx.close();
+  } finally { await browser.close(); }
+});
+
 test('C19: the latest request wins and a loading period never shows the previous result', { skip: pw ? false : 'нет Playwright', timeout: 60000 }, async () => {
   const browser = await pw.chromium.launch();
   try {
