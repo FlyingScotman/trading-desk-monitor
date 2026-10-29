@@ -194,6 +194,21 @@
   // эмитента (рейтинги в статике есть), «нет данных» / «—» — рейтингов в данных нет вовсе
   K.RATINGS = ['AAA', 'AA+', 'AA', 'AA-', 'A+', 'A', 'A-', 'BBB+', 'BBB', 'BBB-', 'BB+', 'BB', 'BB-', 'B+', 'B', 'B-', 'CCC+', 'CCC', 'CCC-', 'CC', 'C', 'RD', 'SD', 'D'];
   K.RATING_BUCKETS = [['AAA', '#4c9dff'], ['AA', '#22c3d6'], ['A', '#3fb67a'], ['BBB', '#e3b341'], ['≤BB', '#f0645a'], ['б/р', '#8a96a3']];
+  // дефолтные и дистрессные выпуски (#111): доходность MOEX вида «29 574 %» — не уровень рынка. Признак — рейтинг
+  // дефолта (RD / SD / D), доходность от 50 % или G-спред шире 2000 б.п. (та же граница дистресса, что у медиан
+  // Z-спреда запасной оценки, backend desk/valuation/fallback.py Z_BAND_BP). Такие выпуски помечены, их доходность не
+  // показывается числом, в медианы и шкалы таблиц они не входят. b — выпуск рынка (ytm/ytmMoex, spread) или позиция (gspread)
+  K.DISTRESS = { ratings: ['RD', 'SD', 'D'], ytmPct: 50, spreadBp: 2000 };
+  K.distress = b => {
+    if (!b) return null;
+    const y = b.ytmMoex != null ? b.ytmMoex : b.ytm, sp = b.spread != null ? b.spread : b.gspread;
+    if (K.DISTRESS.ratings.includes(b.rating)) return { kind: 'default', text: 'дефолт', why: 'рейтинг ' + b.rating + ' — дефолт', ytm: y };
+    if (y != null && isFinite(y) && y >= K.DISTRESS.ytmPct) return { kind: 'distress', text: 'дистресс', why: 'доходность MOEX ' + K.f.pct(y) + ' (от ' + K.DISTRESS.ytmPct + ' %)', ytm: y };
+    if (sp != null && isFinite(sp) && sp > K.DISTRESS.spreadBp) return { kind: 'distress', text: 'дистресс', why: 'G-спред ' + K.f.bp(sp) + ' б.п. (шире ' + K.DISTRESS.spreadBp + ')', ytm: y };
+    return null;
+  };
+  // пометка вместо числа: подсказка говорит, почему и что выпуск не входит в медианы и шкалы
+  K.distressTag = d => '<span class="k-tag" style="border-color:var(--warn);color:var(--warn)" title="' + esc(d.why + ': доходность не показатель рынка, выпуск не входит в медианы и шкалы') + '">' + d.text + '</span>';
   K.ratingRank = r => { const i = K.RATINGS.indexOf(r); return i < 0 ? 99 : i; };
   K.ratingBucket = r => K.RATINGS.indexOf(r) < 0 ? 'б/р' : r === 'AAA' ? 'AAA' : /^AA[+-]?$/.test(r) ? 'AA' : /^A[+-]?$/.test(r) ? 'A' : /^BBB/.test(r) ? 'BBB' : '≤BB';
   K.ratingColor = r => (K.RATING_BUCKETS.find(b => b[0] === K.ratingBucket(r)) || K.RATING_BUCKETS[5])[1];
@@ -2691,8 +2706,20 @@
     const t = root && root.querySelector && root.querySelector(sel);
     if (t) K.tableTools(t, { viewKey: key, title: title + ': ' + K.htmlText(p.name), fileName: key + '_' + (p.isin || p.id) });
   });
-  // ссылка на прогнозное кэрри позиции (C17, #66): тот же прогон (run_id / as_of / demo из адреса)
-  K.carryLink = id => { const q = new URLSearchParams(); const u = new URLSearchParams(location.search); ['run_id', 'as_of', 'demo'].forEach(k => { if (u.get(k)) q.set(k, u.get(k)); }); q.set('pos', id); return 'c17-forward-carry.html?' + q.toString(); };
+  // ссылка на прогнозное кэрри позиции (C17, #66): тот же прогон (run_id / as_of / demo из адреса). Как в desk-nav.js
+  // (#30): выбор в адресе, совпавший с сохранённым в desk.run.v1 выбором старше 12 ч, дальше не переносится — ссылка
+  // ведёт на последний прогон; адрес считается в момент перехода (вкладка могла простоять открытой до истечения срока)
+  K.carryLink = id => {
+    const PARAMS = ['run_id', 'as_of', 'demo'], q = new URLSearchParams(), u = new URLSearchParams(location.search);
+    let s = null; try { s = JSON.parse(localStorage.getItem('desk.run.v1') || 'null'); } catch (e) { }
+    const expired = s && s.sel && Date.now() - s.at >= 12 * 3600e3 && PARAMS.every(k => (u.get(k) || undefined) === s.sel[k]);
+    if (!expired) PARAMS.forEach(k => { if (u.get(k)) q.set(k, u.get(k)); });
+    q.set('pos', id); return 'c17-forward-carry.html?' + q.toString();
+  };
+  ['click', 'auxclick'].forEach(ev => document.addEventListener(ev, e => {
+    const a = e.target && e.target.closest && e.target.closest('a[data-carry-pos]');
+    if (a) a.href = K.carryLink(a.getAttribute('data-carry-pos'));
+  }, true));
   K.card = function (id) {
     const p = M.pos[id]; if (!p) return;
     const o = drawer(true); o.title = p.name; o.charts = [];
@@ -2711,7 +2738,7 @@
       ['Ближайшее событие', p.event.date ? f.date(p.event.date) + ' <small>' + ev + ', ' + f.yrs(p.tenor) + '</small>' : '<span class="mut3">—</span> <small>' + ev + '</small>'], ['Погашение', f.date(p.maturity) + ' <small>' + f.yrs(p.yearsToMat) + '</small>'],
       ['DV01 ставки', K.d({ title: 'DV01 ' + p.name, unit: 'тыс ₽/бп', rows: [{ p, v: p.dv01 }] }, f.dv(p.dv01), '') + ' <small>тыс ₽/бп</small>', false, K.tips.dv01], ['CS01', f.dv(p.cs01) + ' <small>тыс ₽/бп</small>', false, K.tips.cs01],
       ['Базис ОФЗ01', p.basis01 ? f.dv(p.basis01) + ' <small>тыс ₽/бп</small>' : '—', false, K.tips.basis01],
-      ['Спред к КБД01', p.ofzSpr01 ? f.dv(p.ofzSpr01) + ' <small>тыс ₽/бп</small>' : '—', false, K.tips.ofzSpr01], ['Кэрри / день', '<span class="' + f.cls(p.carryDay) + '">' + f.k(p.carryDay) + '</span> <small>тыс ₽ · <a href="' + K.carryLink(p.id) + '" title="C17: кэрри, фондирование и нетто позиции до горизонта">прогноз →</a></small>', false, K.tips.carry],
+      ['Спред к КБД01', p.ofzSpr01 ? f.dv(p.ofzSpr01) + ' <small>тыс ₽/бп</small>' : '—', false, K.tips.ofzSpr01], ['Кэрри / день', '<span class="' + f.cls(p.carryDay) + '">' + f.k(p.carryDay) + '</span> <small>тыс ₽ · <a href="' + K.carryLink(p.id) + '" data-carry-pos="' + esc(String(p.id)) + '" title="C17: кэрри, фондирование и нетто позиции до горизонта">прогноз →</a></small>', false, K.tips.carry],
       ['Фондирование / день', K.fundingDayHtml(p) + ' <small>тыс ₽ · ставка ' + f.pct(p.fundRate) + '</small>', false, K.tips.funding + K.tips.fundRate],
       ['НКД', f.mn(p.accrued, 2) + ' <small>mm ₽</small>'], ['Рейтинг / сектор', '<span title="' + esc(K.ratingTip(p.rating, p.ratingInfo)) + '">' + esc(K.ratingText(p.rating, p.ratingInfo)) + '</span> <small>' + esc(p.sector) + '</small>'],
     ] : [
