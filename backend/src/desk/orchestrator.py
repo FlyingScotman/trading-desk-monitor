@@ -60,6 +60,7 @@ from .valuation.fallback import (
     CarriedSpread,
     FallbackContext,
     approximate,
+    at_last_price,
     fx_rate_cbr,
     market_fx,
     par_proxy,
@@ -371,6 +372,22 @@ def value(ctx: EodContext, requests: list[tuple[str, float]], *, second_order: b
             o.valuation, o.core_result = v, by_pid[pid]
     if fallback:
         fb = FallbackContext.build(ctx, carried_spreads)
+        # a bond without a price of its own today: core at the ladder's price, its risk and model with it (TDM#383)
+        at_price = {pid: (o, r) for pid, o, (_, qty) in zip(pids, out, requests) if o.valuation is None
+                    and (r := at_last_price(ctx, pid, o, qty, fb)) is not None}
+        if at_price:
+            valued, results = value_bonds(ctx.risk_market, [r[0] for _, r in at_price.values()],
+                                          second_order=second_order, cache=ctx.cache, scenarios=scenarios,
+                                          foreign=foreign_bond_curves(ctx), quote_curve_risk=ctx.quote_curve_risk,
+                                          ofz_basis=ctx.ofz_basis)
+            by_pid = {p.position_id: r for r in results for p in r.positions}
+            for pid, v in valued.items():
+                o, (_, quality, notes) = at_price[pid]
+                if isinstance(v, BondValuation):
+                    o.valuation, o.core_result = replace(v, quality=quality, assumptions=notes + v.assumptions), by_pid[pid]
+                else:  # the ladder's own rung below, saying core was tried
+                    o.detail = (f"{o.detail}; " if o.detail else "") + f"core at the last price refused: {v.reason}" \
+                        + (f" ({v.detail})" if v.detail else "")
         for o, (_, qty) in zip(out, requests):
             if o.valuation is None and o.terms is not None:
                 try:
@@ -426,12 +443,19 @@ def horizon(ctx: EodContext, requests: list[tuple[str, float]], horizon_date: da
             position_ids: list[str] | None = None) -> tuple[list[CarryOutcome], PortfolioHorizonResult | None]:
     """Carry and roll-down of (secid, quantity) ``requests`` from the context's date to ``horizon_date`` through core
     ``horizon_portfolio`` (``valuation.bonds.horizon_bonds``) on the inputs ``value`` values them on: the same
-    backend checks, instruments, quotes, curves (``risk_market``) and policy. No fallback ladder: a bond core cannot
-    value has no carry, with its reason. ``position_ids`` as in ``value``. Returns one ``CarryOutcome`` per request
-    and the core result."""
+    backend checks, instruments, quotes, curves (``risk_market``) and policy. A RUB bond without a price of its own
+    today is carried at the ladder's price (``fallback.at_last_price``, TDM#383: an intraday cut before its first
+    trade, a day it did not trade; ``detail`` says which); otherwise no fallback ladder: a bond core cannot value has no
+    carry, with its reason. ``position_ids`` as in ``value``. Returns one ``CarryOutcome`` per request and the core
+    result."""
     pids = _pids(requests, position_ids)
     pre, todo = bond_requests(ctx, requests, pids)
     out = [CarryOutcome(o.secid, reason=o.reason, detail=o.detail) for o in pre]
+    fb, at_price = FallbackContext.build(ctx), {}
+    for pid, o, (_, qty) in zip(pids, pre, requests):  # without a price today: at the ladder's price (TDM#383)
+        if (r := at_last_price(ctx, pid, o, qty, fb)) is not None:
+            todo.append(r[0])
+            at_price[pid] = r
     carried, result = horizon_bonds(ctx.risk_market, todo, horizon_date, cache=ctx.cache, foreign=foreign_bond_curves(ctx),
                                     quote_curve_risk=ctx.quote_curve_risk, ofz_basis=ctx.ofz_basis)
     index = {p: i for i, p in enumerate(pids)}
@@ -441,6 +465,8 @@ def horizon(ctx: EodContext, requests: list[tuple[str, float]], horizon_date: da
             o.reason, o.detail = v.reason, v.detail
         else:
             o.carry = v
+            if pid in at_price:
+                o.reason, o.detail = None, "; ".join(at_price[pid][2][1:])
     return out, result
 
 
