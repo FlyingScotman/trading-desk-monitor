@@ -918,7 +918,7 @@ class Autopilot:
         span = (f"{s['from']}..{s['to']}: {s['done']} of {s['dates'] - s['no_positions'] - s['no_market']} dates with "
                 f"positions have their run" + (f", {s['failed']} failed before" if s["failed"] else ""))
         if not p.todo:
-            backfill.drop_stall(settings)  # nothing left to run: a later outage is a new one (TDM#447)
+            backfill.drop_stall(settings, hub=p.hub)  # nothing left to run: a later outage is a new one (TDM#447)
         if not [d for d in p.todo if d.date not in exclude]:
             return "ok", "; ".join(parts + [f"up to date ({span})"])
         # the same store or network error on two dates in a row (TDM#447): not tried again before its wait, unless the

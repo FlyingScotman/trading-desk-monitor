@@ -384,9 +384,9 @@ def run(settings: Settings, p: Plan, *, store_url: str | None = None, client: An
     problems = st.setdefault("problems", {})
     now = now or datetime.now(UTC)
     old = st.get("stall")
-    if old and (not set(old.get("dates") or []) & {d.date for d in p.todo}
+    if old and (not set(old.get("dates") or []) & {d.date for d in p.todo} and (p.hub or old.get("phase") != "bundle")
                 or now - _when(old.get("at"), now) > STALL_STALE):
-        st.pop("stall")  # none of its dates is left, or it is old: a new outage is a new streak
+        st.pop("stall")  # none of its dates is left (a plan of the cache alone has no download dates), or it is old
     hits = 0  # the dates of this run that joined the stall's streak (since a date passed its phase)
     tried: list[tuple[str, str]] = []  # (date, phase) of this run's transient errors: a later date that passes the
     # phase shows they are the dates' own (#23)
@@ -515,9 +515,12 @@ def _when(iso: str | None, default: datetime) -> datetime:
         return default
 
 
-def drop_stall(settings: Settings) -> None:
-    """Forget the stall (nothing left to run): a later outage is a new one (TDM#447)."""
+def drop_stall(settings: Settings, *, hub: bool = True) -> None:
+    """Forget the stall (nothing left to run): a later outage is a new one (TDM#447). ``hub``: the plan with nothing
+    left was the hub's; one of the cache alone keeps a stall of the downloads (its dates are the hub's)."""
     st = state(settings)
+    if (st.get("stall") or {}).get("phase") == "bundle" and not hub:
+        return
     if st.pop("stall", None) is not None:
         save_state(settings, st)
 
