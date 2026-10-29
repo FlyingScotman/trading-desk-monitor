@@ -18,8 +18,9 @@ from typing import Any
 
 from psycopg.rows import dict_row
 
+from ..pnl.reasons import CORE_FX_METHOD, FX_METHOD, REPORTED_METHOD, no_pnl_text
 from ..publish.summary import FX_PARTS, fx_net
-from .pnl_history import amounts, market_dates, period_runs, rows_query
+from .pnl_history import Sum, amounts, market_dates, period_runs, rows_query
 from .pnl_period import TRIMMED_PNL
 from .runs import PNL_KEYS
 
@@ -40,6 +41,24 @@ LABELS = {"recon": "Сверка тождества", "unexpl": "Необъяс�
           "fsign": "Знак фондирования", "lin": "Ставки: линейно и точно", "fxrev": "Скачок курса",
           "outlier": "Выброс по позиции", "norun": "Нет прогона", "life": "Жизнь позиции"}
 SEV = {"crit": 0, "warn": 1, "info": 2}
+UNEXPL_GROUPS = {"exact": "остаток точного flash", "simple": "без разложения: нет потоков / модельная цена",
+                 "yield": "по доходности", "reported": "по отчёту", "fx": "FX-сделки: прочие эффекты",
+                 "other": "другой метод или не указан"}
+"""``unexplainedBy`` (TDM#436): what ``other`` (and ``reported``) is, by the calculation method's group, in this order."""
+METHOD_GROUP = {"desk-flash-exact-v1": "exact", "desk-flash-exact-v2": "exact", "desk-flash-exact-fx-v1": "exact",
+                "desk-flash-simple-v1": "simple", "desk-flash-yield-v1": "yield", REPORTED_METHOD: "reported",
+                FX_METHOD: "fx", CORE_FX_METHOD: "fx"}
+"""``pnl.extra.method`` -> group: the exact flash's rest (a changed schedule, a price and accrued that disagree), the
+simple PnL of a bond not exact on both dates (all of q x Δdirty, ``valuation.fallback.simple_pnl``), the yield carry's
+yield change, the reports' PV difference, an FX deal's other effects; any other code (or none) — ``other``."""
+QUALITY_TEXT = {"exact": "точная", "assumed": "с допущениями", "market_value": "рыночная цена",
+                "stale_price": "старая цена", "model_price": "модельная цена", "par_proxy": "по номиналу",
+                "reported_value": "по отчёту"}
+"""``run_position.quality`` of D (``valuation.fallback``); another code is shown as is, none as «не указано»."""
+UNEXPL_TOP = 30
+"""``unexplainedBy.top`` keeps this many positions, the largest by |Σ other + reported| (``topTotal``: before)."""
+UNEXPL_KEYS_CAP = 40
+"""Distinct method and quality codes kept; more (a corrupt store) are pooled under ``…``."""
 
 COLUMNS = TRIMMED_PNL + """, p.pv_rub AS pv, p.dv01_rub AS dv01, p.quantity, p.quality,
  (p.fact->>'price')::float8 AS clean"""
@@ -70,6 +89,116 @@ def observe(r: dict[str, Any]) -> Obs:
             "positionId": r["positionId"], "name": r.get("name"), "ccy": r.get("ccy"), "a": a,
             "ratesLinear": _num(extra.get("rates_linear")), "clean": r.get("clean"), "quality": r.get("quality"),
             "dv01": r.get("dv01"), "pv": r.get("pv"), "quantity": r.get("quantity"), "noPnl": r.get("noPnl")}
+
+
+def unexplained_part(o: Obs) -> float | None:
+    """``other`` + ``reported`` of a row (a row has at most one of them by method); null when it has neither."""
+    c = o["a"]["components"]
+    vals = [v for v in (c.get("other"), c.get("reported")) if v is not None]
+    return math.fsum(vals) if vals else None
+
+
+class Unexplained:
+    """``unexplainedBy`` (TDM#436): Σ ``other`` and ``reported`` by method group, method, valuation quality and date, and
+    the UNEXPL_TOP positions with the largest |Σ|; fed one position at a time (``Scan``). Kept: sums by group x date
+    (dates of the period), by method x quality (capped codes) and the top heap."""
+
+    def __init__(self) -> None:
+        self.total, self.other, self.reported = Sum(), Sum(), Sum()
+        self.rows = 0
+        self.groups: dict[str, list[Any]] = {}  # group -> [Sum total, Sum other, Sum reported, rows]
+        self.methods: dict[str, dict[str, Any]] = {}  # method code ("" none) -> {group, total, rows, quality}
+        self.quality: dict[str, list[Any]] = {}  # quality code ("" none) -> [Sum, rows]
+        self.days: dict[date, dict[str, Sum]] = {}
+        self.top: list[tuple[float, int, dict[str, Any]]] = []
+        self.top_total = 0
+
+    @staticmethod
+    def _key(seen: dict[str, Any], code: str) -> str:
+        return code if code in seen or len(seen) < UNEXPL_KEYS_CAP else "…"
+
+    def add(self, rows: list[Obs]) -> None:
+        pos_total, pos_other, pos_reported, n = Sum(), Sum(), Sum(), 0
+        by_group: dict[str, Sum] = {}
+        methods: dict[str, None] = {}
+        quality: dict[str, None] = {}
+        notes: dict[str, None] = {}
+        no_pnl: dict[str, int] = {}
+        for o in rows:
+            if o["noPnl"]:
+                reason = str(o["noPnl"].get("reason") or "not_computed")
+                no_pnl[reason] = no_pnl.get(reason, 0) + 1
+            v = unexplained_part(o)
+            if v is None:
+                continue
+            c, a = o["a"]["components"], o["a"]
+            method = a["method"] or ""
+            group = METHOD_GROUP.get(method, "other")
+            q = o["quality"] or ""
+            n += 1
+            for s, x in ((self.total, v), (self.other, c.get("other")), (self.reported, c.get("reported")),
+                         (pos_total, v), (pos_other, c.get("other")), (pos_reported, c.get("reported"))):
+                s.add(x)
+            g = self.groups.setdefault(group, [Sum(), Sum(), Sum(), 0])
+            g[0].add(v)
+            g[1].add(c.get("other"))
+            g[2].add(c.get("reported"))
+            g[3] += 1
+            m = self.methods.setdefault(self._key(self.methods, method), {"group": group, "total": Sum(), "rows": 0,
+                                                                          "quality": {}})
+            m["total"].add(v)
+            m["rows"] += 1
+            mq = m["quality"].setdefault(self._key(m["quality"], q), Sum())
+            mq.add(v)
+            qq = self.quality.setdefault(self._key(self.quality, q), [Sum(), 0])
+            qq[0].add(v)
+            qq[1] += 1
+            self.days.setdefault(o["date"], {}).setdefault(group, Sum()).add(v)
+            by_group.setdefault(group, Sum()).add(v)
+            if len(methods) < 8:
+                methods[method] = None
+            if len(quality) < 8:
+                quality[q] = None
+            if a["note"] and len(notes) < 3:
+                notes[str(a["note"])[:200]] = None
+        self.rows += n
+        if not n:
+            return
+        self.top_total += 1
+        total = pos_total.value() or 0.0
+        main = max(by_group, key=lambda k: abs(by_group[k].value() or 0.0))
+        first = rows[0]
+        item = {"ref": first["ref"], "book": first["book"], "positionId": first["positionId"], "name": first["name"],
+                "total": total, "other": pos_other.value(), "reported": pos_reported.value(), "rows": n,
+                "group": main, "groupLabel": UNEXPL_GROUPS[main], "methods": [m or None for m in methods],
+                "quality": [q or None for q in quality], "notes": list(notes),
+                "noPnl": [{"reason": k, "text": no_pnl_text(k), "days": d} for k, d in list(no_pnl.items())[:5]]}
+        entry = (abs(total), -self.top_total, item)
+        if len(self.top) < UNEXPL_TOP:
+            heapq.heappush(self.top, entry)
+        else:
+            heapq.heappushpop(self.top, entry)
+
+    def result(self) -> dict[str, Any]:
+        dates = sorted(self.days)
+        groups = [k for k in UNEXPL_GROUPS if k in self.groups]
+        return {
+            "total": self.total.value(), "other": self.other.value(), "reported": self.reported.value(),
+            "rows": self.rows,
+            "groups": [{"key": k, "label": UNEXPL_GROUPS[k], "total": self.groups[k][0].value(),
+                        "other": self.groups[k][1].value(), "reported": self.groups[k][2].value(),
+                        "rows": self.groups[k][3]} for k in groups],
+            "methods": sorted(({"method": m or None, "group": x["group"], "total": x["total"].value(),
+                                "rows": x["rows"], "quality": {q or "": s.value() for q, s in x["quality"].items()}}
+                               for m, x in self.methods.items()), key=lambda x: -abs(x["total"] or 0.0)),
+            "quality": sorted(({"quality": q or None, "label": QUALITY_TEXT.get(q, q or "не указано"),
+                                "total": s.value(), "rows": k} for q, (s, k) in self.quality.items()),
+                              key=lambda x: -abs(x["total"] or 0.0)),
+            "dates": dates,
+            "byDate": {k: [self.days[d][k].value() if k in self.days[d] else None for d in dates] for k in groups},
+            "top": [h[2] for h in sorted(self.top, key=lambda h: (-h[0], -h[1]))],
+            "topTotal": self.top_total,
+        }
 
 
 def finding(sev: str, check: str, o: Obs | None, value: float | None, text: str, *, day: date | None = None,
@@ -347,6 +476,7 @@ class Scan:
         self.ccys: set[str] = set()
         self.heat: list[tuple[float, int, str, list[tuple[date, float]]]] = []  # min-heap by max |other|
         self.refs_total = 0
+        self.by = Unexplained()
 
     def add(self, rows: list[Obs]) -> None:
         if not rows:
@@ -358,6 +488,7 @@ class Scan:
             self.found[key].extend(part[0])
             self.n[key] += part[1]
         self.ccys.update(o["ccy"] for o in rows if o["ccy"])
+        self.by.add(rows)
         cells = [(o["date"], v) for o in rows if (v := o["a"]["components"]["other"]) is not None]
         if cells:
             self.refs_total += 1  # also the tie-break: of equal maxima, the position read first stays
@@ -391,7 +522,7 @@ class Scan:
                 "findings": findings,
                 "coverage": {"marketDates": market, "runDates": covered,
                              "missingRuns": [d for d in market if d not in have]},
-                "unexplained": self.unexplained()}
+                "unexplained": self.unexplained(), "unexplainedBy": self.by.result()}
 
 
 def evaluate(obs: Iterable[Obs], run_ids: list[int], run_dates: list[date], market: list[date],

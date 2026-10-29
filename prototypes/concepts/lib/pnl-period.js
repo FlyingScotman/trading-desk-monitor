@@ -512,4 +512,105 @@
     matrix, sortMatrix, cellDays, isDeal, carryParts, carryPosition, carrySummary, carryTotal, annual, tilesA };
   if (typeof module === 'object' && module.exports) module.exports = api;
   else root.PNL_PERIOD = api;
+
+  // ---------- rates by factor (TDM#437): RUONIA and the OFZ basis instead of the curves KBD and RUONIA ----------
+  // ids of the API (/curves factors, /period ratesByFactor): 'ruonia', 'basis', 'kbd' (a date valued on the KBD only),
+  // another curve by its id, '' — no curve
+  const FACTOR_NAMES = { ruonia: 'RUONIA', basis: 'Базис ОФЗ (КБД − RUONIA)', kbd: 'КБД (нет RUONIA на дату)' };
+  const FACTOR_TIPS = {
+    ruonia: 'Позиции с дисконтированием по RUONIA OIS и RUONIA-часть ОФЗ (риск ОФЗ к RUONIA × сдвиг OIS).',
+    basis: 'ОФЗ в модели RUONIA + базис: член КБД − член RUONIA (в точной переоценке — и нелинейность).',
+    kbd: 'Даты, где позиции оценены только по КБД (нет RUONIA OIS на дату), и прогоны без разбивки ОФЗ на RUONIA + базис.',
+  };
+  const FIXED = ['ruonia', 'basis', 'kbd'];
+  const factorOrder = ids => { const s = new Set(ids); return FIXED.filter(f => s.has(f)).concat([...s].filter(f => f && !FIXED.includes(f)).sort(), s.has('') ? [''] : []); };
+  const factorName = (id, curveName) => FACTOR_NAMES[id] || (curveName ? curveName(id) : id) || NO_CURVE;
+  // the rates family on every factor view (D, «Explain по кривым»): the fixed factors first, then other curves
+  const factorShade = (id, i) => (id === 'ruonia' ? 1 : id === 'basis' ? 0.62 : id === 'kbd' ? 0.4 : id ? [0.3, 0.22][i % 2] : 0.16);
+  const fval = (a, id) => (a && a.ratesByFactor && num(a.ratesByFactor[id]) ? a.ratesByFactor[id] : null);
+  // ratesByFactor of a list of aggregates (days of a bucket, the period): available sums; none — null
+  function factorAgg(list) {
+    const ids = new Set();
+    (list || []).forEach(a => Object.keys((a && a.ratesByFactor) || {}).forEach(k => ids.add(k)));
+    const out = {};
+    ids.forEach(id => { out[id] = sumAvail(list.map(a => fval(a, id))); });
+    return out;
+  }
+  const hasFactors = prep => !!prep && prep.days.some(d => d.ratesByFactor);
+  // the factors of a /period answer in order: those with a value on some day or position
+  const factorList = (prep, curveName) => factorOrder(prep.days.concat(prep.positions).flatMap(a => Object.keys(a.ratesByFactor || {}).filter(k => num(a.ratesByFactor[k]))))
+    .map(id => ({ id, name: factorName(id, curveName || prep.curveName) }));
+  // rows of «Explain по кривым» by factor (A, componentRows' 'rates:' rows): v reads ratesByFactor; an aggregate without
+  // it (the summary, a bucket) gets it from factorAgg of its days by the caller
+  function factorRows(prep) {
+    return factorList(prep).map((cv, i) => ({ k: 'rates:f:' + cv.id, l: 'Ставки · ' + cv.name, color: 'pnl:rates', shade: factorShade(cv.id, i), factor: cv.id, parts: ['rates'],
+      d: FACTOR_TIPS[cv.id] || 'Точная переоценка позиций с кривой дисконтирования «' + cv.name + '».', v: a => fval(a, cv.id) }));
+  }
+  // three factor × term grids of /curves (move, mean DV01, linear) and the linear terms without a split by term (rest,
+  // a column of its own); Σ — the factor's total (by term + rest); cover — 'N записей · M дат' of the factor
+  function factorGrids(cv) {
+    const B = (cv && cv.buckets) || [], F = (cv && cv.factors) || [], cov = (cv && cv.factorCoverage) || {};
+    const cover = id => { const c = cov[id]; return c && c.rows ? c.rows + ' записей · ' + c.dates + (c.dates === 1 ? ' дата' : c.dates < 5 ? ' даты' : ' дат') : ''; };
+    const grid = (src, sum, extra) => {
+      const rows = F.map(f => {
+        const vals = B.map(b => cell(src, f.id, b)), rest = extra ? (num((extra[f.id])) ? extra[f.id] : null) : null;
+        return { id: f.id, name: f.name || factorName(f.id), tip: FACTOR_TIPS[f.id] || '', vals, rest, cover: cover(f.id),
+          sum: sum ? (sum === true ? sumAvail(vals) : num(sum[f.id]) ? sum[f.id] : null) : null };
+      }).filter(r => r.vals.some(num) || r.rest != null);
+      return { rows, max: absMax(rows), rest: rows.some(r => r.rest != null) };
+    };
+    return { buckets: B, move: grid(cv && cv.factorMove, false), dv01: grid(cv && cv.factorDv01, true),
+      linear: grid(cv && cv.factorLinear, (cv && cv.factorLinearTotal) || {}, (cv && cv.factorLinearRest) || {}), coverage: cov };
+  }
+  // linear (Σ by factor) against exact (rates by factor: RUONIA of an OFZ its linear RUONIA term, the basis the rest);
+  // the warning as linearVsExact, only when every row of the factor has the linear estimate
+  function factorLinVsExact(cv) {
+    const lt = (cv && cv.factorLinearTotal) || {}, ex = (cv && cv.factorExact) || {}, cov = (cv && cv.factorCoverage) || {};
+    return ((cv && cv.factors) || []).map(f => {
+      const lin = num(lt[f.id]) ? lt[f.id] : null, exact = num(ex[f.id]) ? ex[f.id] : null, diff = lin != null && exact != null ? exact - lin : null;
+      const pct = diff != null && lin ? diff / Math.abs(lin) * 100 : null, c = cov[f.id] || {}, full = c.rows > 0 && c.linearRows === c.rows;
+      return { id: f.id, name: f.name || factorName(f.id), linear: lin, exact, diff, pct, full, warn: full && diff != null && pct != null && Math.abs(diff) > LIN_WARN_ABS && Math.abs(pct) > LIN_WARN_PCT };
+    }).filter(r => r.linear != null || r.exact != null);
+  }
+  // cumulative rates PnL by factor on the date axis (days' ratesByFactor)
+  function factorSeries(prep) {
+    const byDate = new Map(prep.days.map(d => [d.date, d]));
+    return factorList(prep).map((f, i) => ({ id: f.id, name: f.name, shade: factorShade(f.id, i), vals: prep.dates.map(d => fval(byDate.get(d), f.id)) }))
+      .filter(s => s.vals.some(num)).map(s => Object.assign(s, { cum: cumulate(s.vals), total: sumAvail(s.vals) }));
+  }
+  // positions by factor: one row per (position, factor) with its exact rates there and the share of the factor's
+  function factorPositions(prep) {
+    const tot = {}, out = [];
+    prep.positions.forEach(p => Object.keys(p.ratesByFactor || {}).forEach(id => { const v = fval(p, id); if (v != null) { tot[id] = (tot[id] || 0) + v; out.push({ ref: p.ref, p, factor: id, rates: v }); } }));
+    const order = factorOrder(Object.keys(tot)), rank = id => order.indexOf(id);
+    out.forEach(r => { r.name = factorName(r.factor, prep.curveName); r.share = tot[r.factor] ? r.rates / Math.abs(tot[r.factor]) * 100 : null; });
+    return out.sort((a, b) => rank(a.factor) - rank(b.factor) || Math.abs(b.rates) - Math.abs(a.rates));
+  }
+
+  // ---------- F · Необъяснённое (TDM#436): /checks unexplainedBy ----------
+  // a colour per method group, the same in the bars, the daily columns and the table
+  const UNEXPL_COLOR = { exact: 'pnl:other', simple: 'pal:6', yield: 'pal:8', reported: 'pal:10', fx: 'pnl:fx', other: '--fg-3' };
+  const UNEXPL_TIP = {
+    exact: 'Точный flash (пересчёт ядром): остаток, который позиция D−1 не объясняет на рынке D — сменилось расписание, цена и НКД расходятся.',
+    simple: 'desk-flash-simple-v1: бумага не оценена точно на обе даты (нет потоков, модельная или старая цена) — весь PnL q × Δ грязной цены, без разложения.',
+    yield: 'desk-flash-yield-v1: кэрри по доходности бумаги; изменение доходности без кривой в валюте — в «Прочем».',
+    reported: 'desk-reported-v1: разница отчётных стоимостей, сделки могут быть внутри.',
+    fx: 'FX-сделки: прочие эффекты ставок, пунктов и времени.',
+    other: 'Метод не из перечня или не сохранён в записи.',
+  };
+  // bars by method group, daily stacked columns, the top table; sums as the API gives them (they add up to total)
+  function unexplainedView(ck) {
+    const u = ck && ck.unexplainedBy;
+    if (!u || u.total == null) return null;
+    const groups = (u.groups || []).map(g => Object.assign({}, g, { color: UNEXPL_COLOR[g.key] || '--fg-3', tip: UNEXPL_TIP[g.key] || '' }));
+    const series = groups.map(g => ({ key: g.key, label: g.label, color: g.color, vals: (u.byDate && u.byDate[g.key]) || u.dates.map(() => null) }));
+    const shown = sumAvail(groups.map(g => g.total)), ql = new Map((u.quality || []).map(q => [q.quality, q.label]));
+    return { total: u.total, other: u.other, reported: u.reported, rows: u.rows, groups, dates: u.dates || [], series,
+      gap: shown == null ? null : u.total - shown, methods: u.methods || [], quality: u.quality || [],
+      qualityLabel: q => ql.get(q) || q || 'не указано',
+      top: (u.top || []).map(t => Object.assign({}, t, { color: UNEXPL_COLOR[t.group] || '--fg-3' })), topTotal: num(u.topTotal) ? u.topTotal : (u.top || []).length };
+  }
+
+  Object.assign(api, { FACTOR_NAMES, FACTOR_TIPS, factorOrder, factorName, factorShade, factorAgg, hasFactors, factorList, factorRows, factorGrids,
+    factorLinVsExact, factorSeries, factorPositions, UNEXPL_COLOR, UNEXPL_TIP, unexplainedView });
 })(typeof window === 'object' ? window : globalThis);

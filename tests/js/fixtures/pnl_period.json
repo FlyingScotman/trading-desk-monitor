@@ -228,6 +228,11 @@
      "RUB OFZ": 185926,
      "RUB RUONIA": -317588,
      "": 157399
+    },
+    "ratesByFactor": {
+     "ruonia": -194448,
+     "basis": 62786,
+     "": 157399
     }
    },
    {
@@ -273,6 +278,11 @@
     "ratesByCurve": {
      "RUB OFZ": 2757407,
      "RUB RUONIA": -362792,
+     "": -9982
+    },
+    "ratesByFactor": {
+     "ruonia": 1461409,
+     "basis": 933206,
      "": -9982
     }
    },
@@ -320,6 +330,11 @@
      "RUB OFZ": -899392,
      "RUB RUONIA": -610515,
      "": 16741
+    },
+    "ratesByFactor": {
+     "ruonia": -1204778,
+     "basis": -305129,
+     "": 16741
     }
    },
    {
@@ -365,6 +380,11 @@
     "ratesByCurve": {
      "RUB OFZ": -2895523,
      "RUB RUONIA": 138318,
+     "": 185171
+    },
+    "ratesByFactor": {
+     "ruonia": -1772492,
+     "basis": -984713,
      "": 185171
     }
    },
@@ -412,6 +432,11 @@
      "RUB OFZ": 137404,
      "RUB RUONIA": -2883,
      "": -113816
+    },
+    "ratesByFactor": {
+     "ruonia": 87692,
+     "basis": 46829,
+     "": -113816
     }
    },
    {
@@ -457,6 +482,11 @@
     "ratesByCurve": {
      "RUB OFZ": -991009,
      "RUB RUONIA": 212394,
+     "": -38031
+    },
+    "ratesByFactor": {
+     "kbd": -991009,
+     "ruonia": 212394,
      "": -38031
     }
    },
@@ -504,6 +534,11 @@
      "RUB OFZ": 2102531,
      "RUB RUONIA": 574245,
      "": -22518
+    },
+    "ratesByFactor": {
+     "ruonia": 1958332,
+     "basis": 718444,
+     "": -22518
     }
    },
    {
@@ -549,6 +584,11 @@
     "ratesByCurve": {
      "RUB OFZ": -60585,
      "RUB RUONIA": 18941,
+     "": 78469
+    },
+    "ratesByFactor": {
+     "ruonia": -20937,
+     "basis": -20707,
      "": 78469
     }
    },
@@ -596,6 +636,11 @@
      "RUB OFZ": -2396422,
      "RUB RUONIA": -339565,
      "": -269756
+    },
+    "ratesByFactor": {
+     "ruonia": -1917406,
+     "basis": -818581,
+     "": -269756
     }
    },
    {
@@ -642,6 +687,11 @@
      "RUB OFZ": -3825853,
      "RUB RUONIA": -890704,
      "": -61701
+    },
+    "ratesByFactor": {
+     "ruonia": -3411416,
+     "basis": -1305141,
+     "": -61701
     }
    },
    {
@@ -687,6 +737,11 @@
     "ratesByCurve": {
      "RUB OFZ": 1198190,
      "RUB RUONIA": 131046,
+     "": 5690
+    },
+    "ratesByFactor": {
+     "ruonia": 921274,
+     "basis": 407962,
      "": 5690
     }
    }
@@ -750,7 +805,12 @@
      -2582443,
      -3640351,
      -4407021
-    ]
+    ],
+    "ratesByFactor": {
+     "ruonia": -2674515,
+     "basis": -1873979,
+     "kbd": -1225209
+    }
    },
    {
     "total": 3884596,
@@ -810,7 +870,12 @@
      1050546,
      1319763,
      1514287
-    ]
+    ],
+    "ratesByFactor": {
+     "ruonia": 869062,
+     "basis": 608935,
+     "kbd": 404093
+    }
    },
    {
     "total": 504114,
@@ -870,7 +935,11 @@
      -267828,
      1377954,
      -606012
-    ]
+    ],
+    "ratesByFactor": {
+     "ruonia": -625820,
+     "kbd": -169893
+    }
    },
    {
     "total": 91953,
@@ -930,7 +999,10 @@
      91953,
      null,
      null
-    ]
+    ],
+    "ratesByFactor": {
+     "ruonia": 39681
+    }
    },
    {
     "total": -1847251,
@@ -990,7 +1062,10 @@
      -1320759,
      311606,
      -838098
-    ]
+    ],
+    "ratesByFactor": {
+     "ruonia": -1488784
+    }
    },
    {
     "total": 1344760,
@@ -1050,7 +1125,10 @@
      883155,
      121124,
      340481
-    ]
+    ],
+    "ratesByFactor": {
+     "": -72334
+    }
    }
   ],
   "catalogue": [
@@ -1152,7 +1230,7 @@
      "date": "2026-09-28",
      "prevDate": "2026-09-25",
      "runId": 1000,
-     "method": "flash-v1",
+     "method": "desk-flash-exact-v2",
      "note": null,
      "noPnl": null,
      "total": -531677,
@@ -1194,7 +1272,7 @@
      "date": "2026-09-29",
      "prevDate": "2026-09-28",
      "runId": 1001,
-     "method": "flash-v1",
+     "method": "desk-flash-exact-v2",
      "note": null,
      "noPnl": null,
      "total": 3155673,
@@ -1236,7 +1314,7 @@
      "date": "2026-09-30",
      "prevDate": "2026-09-29",
      "runId": 1002,
-     "method": "flash-v1",
+     "method": "desk-flash-exact-v2",
      "note": null,
      "noPnl": null,
      "total": -1341456,
@@ -1278,7 +1356,7 @@
      "date": "2026-10-01",
      "prevDate": "2026-09-30",
      "runId": 1003,
-     "method": "flash-v1",
+     "method": "desk-flash-exact-v2",
      "note": null,
      "noPnl": null,
      "total": -3694767,
@@ -1320,7 +1398,7 @@
      "date": "2026-10-02",
      "prevDate": "2026-10-01",
      "runId": 1004,
-     "method": "flash-v1",
+     "method": "desk-flash-exact-v2",
      "note": null,
      "noPnl": null,
      "total": -170216,
@@ -1362,7 +1440,7 @@
      "date": "2026-10-05",
      "prevDate": "2026-10-02",
      "runId": 1005,
-     "method": "flash-v1",
+     "method": "desk-flash-exact-v2",
      "note": null,
      "noPnl": null,
      "total": -2121008,
@@ -1404,7 +1482,7 @@
      "date": "2026-10-06",
      "prevDate": "2026-10-05",
      "runId": 1006,
-     "method": "flash-v1",
+     "method": "desk-flash-exact-v2",
      "note": null,
      "noPnl": null,
      "total": 2313797,
@@ -1446,7 +1524,7 @@
      "date": "2026-10-08",
      "prevDate": "2026-10-06",
      "runId": 1007,
-     "method": "flash-v1",
+     "method": "desk-flash-exact-v2",
      "note": null,
      "noPnl": null,
      "total": -605074,
@@ -1488,7 +1566,7 @@
      "date": "2026-10-09",
      "prevDate": "2026-10-08",
      "runId": 1008,
-     "method": "flash-v1",
+     "method": "desk-flash-exact-v2",
      "note": null,
      "noPnl": null,
      "total": -3228066,
@@ -1530,7 +1608,7 @@
      "date": "2026-10-12",
      "prevDate": "2026-10-09",
      "runId": 1009,
-     "method": "flash-v1",
+     "method": "desk-flash-exact-v2",
      "note": null,
      "noPnl": null,
      "total": -5618457,
@@ -1572,7 +1650,7 @@
      "date": "2026-10-13",
      "prevDate": "2026-10-12",
      "runId": 1010,
-     "method": "flash-v1",
+     "method": "desk-flash-exact-v2",
      "note": null,
      "noPnl": null,
      "total": 1211436,
@@ -1631,7 +1709,7 @@
      "date": "2026-09-28",
      "prevDate": "2026-09-25",
      "runId": 1000,
-     "method": "flash-v1",
+     "method": "desk-flash-exact-v2",
      "note": null,
      "noPnl": null,
      "total": 311087,
@@ -1673,7 +1751,7 @@
      "date": "2026-09-29",
      "prevDate": "2026-09-28",
      "runId": 1001,
-     "method": "flash-v1",
+     "method": "desk-flash-exact-v2",
      "note": null,
      "noPnl": null,
      "total": -1038870,
@@ -1715,7 +1793,7 @@
      "date": "2026-09-30",
      "prevDate": "2026-09-29",
      "runId": 1002,
-     "method": "flash-v1",
+     "method": "desk-flash-exact-v2",
      "note": null,
      "noPnl": null,
      "total": 468801,
@@ -1757,7 +1835,7 @@
      "date": "2026-10-01",
      "prevDate": "2026-09-30",
      "runId": 1003,
-     "method": "flash-v1",
+     "method": "desk-flash-exact-v2",
      "note": null,
      "noPnl": null,
      "total": 1296698,
@@ -1799,7 +1877,7 @@
      "date": "2026-10-02",
      "prevDate": "2026-10-01",
      "runId": 1004,
-     "method": "flash-v1",
+     "method": "desk-flash-exact-v2",
      "note": null,
      "noPnl": null,
      "total": 12830,
@@ -1841,7 +1919,7 @@
      "date": "2026-10-05",
      "prevDate": "2026-10-02",
      "runId": 1005,
-     "method": "flash-v1",
+     "method": "desk-flash-exact-v2",
      "note": null,
      "noPnl": null,
      "total": 723479,
@@ -1883,7 +1961,7 @@
      "date": "2026-10-06",
      "prevDate": "2026-10-05",
      "runId": 1006,
-     "method": "flash-v1",
+     "method": "desk-flash-exact-v2",
      "note": null,
      "noPnl": null,
      "total": -764454,
@@ -1925,7 +2003,7 @@
      "date": "2026-10-08",
      "prevDate": "2026-10-06",
      "runId": 1007,
-     "method": "flash-v1",
+     "method": "desk-flash-exact-v2",
      "note": null,
      "noPnl": null,
      "total": 237404,
@@ -1967,7 +2045,7 @@
      "date": "2026-10-09",
      "prevDate": "2026-10-08",
      "runId": 1008,
-     "method": "flash-v1",
+     "method": "desk-flash-exact-v2",
      "note": null,
      "noPnl": null,
      "total": 1123334,
@@ -2009,7 +2087,7 @@
      "date": "2026-10-12",
      "prevDate": "2026-10-09",
      "runId": 1009,
-     "method": "flash-v1",
+     "method": "desk-flash-exact-v2",
      "note": null,
      "noPnl": null,
      "total": 1887455,
@@ -2051,7 +2129,7 @@
      "date": "2026-10-13",
      "prevDate": "2026-10-12",
      "runId": 1010,
-     "method": "flash-v1",
+     "method": "desk-flash-exact-v2",
      "note": null,
      "noPnl": null,
      "total": -373168,
@@ -2110,7 +2188,7 @@
      "date": "2026-09-28",
      "prevDate": "2026-09-25",
      "runId": 1000,
-     "method": "flash-v1",
+     "method": "desk-flash-exact-v2",
      "note": null,
      "noPnl": null,
      "total": 67812,
@@ -2152,7 +2230,7 @@
      "date": "2026-09-29",
      "prevDate": "2026-09-28",
      "runId": 1001,
-     "method": "flash-v1",
+     "method": "desk-flash-exact-v2",
      "note": null,
      "noPnl": null,
      "total": 532715,
@@ -2194,7 +2272,7 @@
      "date": "2026-09-30",
      "prevDate": "2026-09-29",
      "runId": 1002,
-     "method": "flash-v1",
+     "method": "desk-flash-exact-v2",
      "note": null,
      "noPnl": null,
      "total": -47454,
@@ -2236,8 +2314,8 @@
      "date": "2026-10-01",
      "prevDate": "2026-09-30",
      "runId": 1003,
-     "method": "flash-v1",
-     "note": null,
+     "method": "desk-flash-simple-v1",
+     "note": "simple PnL (model_price -> model_price): q x (dirty D - dirty D-1) + received, all in other",
      "noPnl": null,
      "total": -635869,
      "c": {
@@ -2278,8 +2356,8 @@
      "date": "2026-10-02",
      "prevDate": "2026-10-01",
      "runId": 1004,
-     "method": "flash-v1",
-     "note": null,
+     "method": "desk-flash-simple-v1",
+     "note": "simple PnL (model_price -> model_price): q x (dirty D - dirty D-1) + received, all in other",
      "noPnl": null,
      "total": -185032,
      "c": {
@@ -2320,7 +2398,7 @@
      "date": "2026-10-05",
      "prevDate": "2026-10-02",
      "runId": 1005,
-     "method": "flash-v1",
+     "method": "desk-flash-exact-v2",
      "note": null,
      "noPnl": null,
      "total": -338700,
@@ -2362,8 +2440,8 @@
      "date": "2026-10-06",
      "prevDate": "2026-10-05",
      "runId": 1006,
-     "method": "flash-v1",
-     "note": null,
+     "method": "desk-flash-simple-v1",
+     "note": "simple PnL (model_price -> model_price): q x (dirty D - dirty D-1) + received, all in other",
      "noPnl": null,
      "total": 357661,
      "c": {
@@ -2404,7 +2482,7 @@
      "date": "2026-10-08",
      "prevDate": "2026-10-06",
      "runId": 1007,
-     "method": "flash-v1",
+     "method": "desk-flash-exact-v2",
      "note": null,
      "noPnl": null,
      "total": 34965,
@@ -2449,8 +2527,8 @@
      "date": "2026-10-09",
      "prevDate": "2026-10-08",
      "runId": 1008,
-     "method": "flash-v1",
-     "note": null,
+     "method": "desk-flash-simple-v1",
+     "note": "simple PnL (model_price -> model_price): q x (dirty D - dirty D-1) + received, all in other",
      "noPnl": null,
      "total": 1324028,
      "c": {
@@ -2491,7 +2569,7 @@
      "date": "2026-10-12",
      "prevDate": "2026-10-09",
      "runId": 1009,
-     "method": "flash-v1",
+     "method": "desk-flash-exact-v2",
      "note": null,
      "noPnl": null,
      "total": -814307,
@@ -2533,7 +2611,7 @@
      "date": "2026-10-13",
      "prevDate": "2026-10-12",
      "runId": 1010,
-     "method": "flash-v1",
+     "method": "desk-flash-exact-v2",
      "note": null,
      "noPnl": null,
      "total": 208295,
@@ -2592,7 +2670,7 @@
      "date": "2026-09-28",
      "prevDate": "2026-09-25",
      "runId": 1000,
-     "method": "flash-v1",
+     "method": "desk-flash-exact-v2",
      "note": null,
      "noPnl": null,
      "total": 28798,
@@ -2634,7 +2712,7 @@
      "date": "2026-09-29",
      "prevDate": "2026-09-28",
      "runId": 1001,
-     "method": "flash-v1",
+     "method": "desk-flash-exact-v2",
      "note": null,
      "noPnl": null,
      "total": 19028,
@@ -2676,7 +2754,7 @@
      "date": "2026-09-30",
      "prevDate": "2026-09-29",
      "runId": 1002,
-     "method": "flash-v1",
+     "method": "desk-flash-exact-v2",
      "note": null,
      "noPnl": null,
      "total": 28743,
@@ -2718,7 +2796,7 @@
      "date": "2026-10-01",
      "prevDate": "2026-09-30",
      "runId": 1003,
-     "method": "flash-v1",
+     "method": "desk-flash-exact-v2",
      "note": null,
      "noPnl": null,
      "total": 8179,
@@ -2760,7 +2838,7 @@
      "date": "2026-10-02",
      "prevDate": "2026-10-01",
      "runId": 1004,
-     "method": "flash-v1",
+     "method": "desk-flash-exact-v2",
      "note": null,
      "noPnl": null,
      "total": 7205,
@@ -3300,7 +3378,7 @@
      "date": "2026-09-28",
      "prevDate": "2026-09-25",
      "runId": 1000,
-     "method": "flash-v1",
+     "method": "desk-flash-yield-v1",
      "note": null,
      "noPnl": null,
      "total": 522363,
@@ -3342,7 +3420,7 @@
      "date": "2026-09-29",
      "prevDate": "2026-09-28",
      "runId": 1001,
-     "method": "flash-v1",
+     "method": "desk-flash-yield-v1",
      "note": null,
      "noPnl": null,
      "total": 111916,
@@ -3384,7 +3462,7 @@
      "date": "2026-09-30",
      "prevDate": "2026-09-29",
      "runId": 1002,
-     "method": "flash-v1",
+     "method": "desk-flash-yield-v1",
      "note": null,
      "noPnl": null,
      "total": 76171,
@@ -3426,7 +3504,7 @@
      "date": "2026-10-01",
      "prevDate": "2026-09-30",
      "runId": 1003,
-     "method": "flash-v1",
+     "method": "desk-flash-yield-v1",
      "note": null,
      "noPnl": null,
      "total": 250730,
@@ -3468,7 +3546,7 @@
      "date": "2026-10-02",
      "prevDate": "2026-10-01",
      "runId": 1004,
-     "method": "flash-v1",
+     "method": "desk-flash-yield-v1",
      "note": null,
      "noPnl": null,
      "total": -78025,
@@ -3510,7 +3588,7 @@
      "date": "2026-10-05",
      "prevDate": "2026-10-02",
      "runId": 1005,
-     "method": "flash-v1",
+     "method": "desk-flash-yield-v1",
      "note": null,
      "noPnl": null,
      "total": 193318,
@@ -3552,7 +3630,7 @@
      "date": "2026-10-06",
      "prevDate": "2026-10-05",
      "runId": 1006,
-     "method": "flash-v1",
+     "method": "desk-flash-yield-v1",
      "note": null,
      "noPnl": null,
      "total": 77191,
@@ -3594,7 +3672,7 @@
      "date": "2026-10-08",
      "prevDate": "2026-10-06",
      "runId": 1007,
-     "method": "flash-v1",
+     "method": "desk-flash-yield-v1",
      "note": null,
      "noPnl": null,
      "total": 105037,
@@ -3636,7 +3714,7 @@
      "date": "2026-10-09",
      "prevDate": "2026-10-08",
      "runId": 1008,
-     "method": "flash-v1",
+     "method": "desk-flash-yield-v1",
      "note": null,
      "noPnl": null,
      "total": -254422,
@@ -3678,7 +3756,7 @@
      "date": "2026-10-12",
      "prevDate": "2026-10-09",
      "runId": 1009,
-     "method": "flash-v1",
+     "method": "desk-flash-yield-v1",
      "note": null,
      "noPnl": null,
      "total": 178847,
@@ -3720,7 +3798,7 @@
      "date": "2026-10-13",
      "prevDate": "2026-10-12",
      "runId": 1010,
-     "method": "flash-v1",
+     "method": "desk-flash-yield-v1",
      "note": null,
      "noPnl": null,
      "total": 161634,
@@ -3830,18 +3908,18 @@
   },
   "linear": {
    "RUB OFZ": {
-    "1Y": null,
-    "2Y": null,
-    "3Y": null,
-    "5Y": null,
-    "7Y": null,
-    "10Y": null
+    "1Y": -199014,
+    "2Y": -597042,
+    "3Y": -995069,
+    "5Y": -1194083,
+    "7Y": -796056,
+    "10Y": -199014
    },
    "RUB RUONIA": {
-    "1Y": null,
-    "2Y": null,
-    "3Y": null,
-    "5Y": null,
+    "1Y": -391130,
+    "2Y": -606139,
+    "3Y": -621694,
+    "5Y": -414462,
     "7Y": null,
     "10Y": null
    }
@@ -3859,7 +3937,171 @@
   "coverage": {
    "rows": 60,
    "linearRows": 60,
-   "bucketRows": 0
+   "bucketRows": 49
+  },
+  "factors": [
+   {
+    "id": "ruonia",
+    "name": "RUONIA"
+   },
+   {
+    "id": "basis",
+    "name": "Базис ОФЗ (КБД − RUONIA)"
+   },
+   {
+    "id": "kbd",
+    "name": "КБД (нет RUONIA на дату)"
+   },
+   {
+    "id": "",
+    "name": "кривая не указана"
+   }
+  ],
+  "factorMove": {
+   "ruonia": {
+    "1Y": -20,
+    "2Y": -17,
+    "3Y": -14,
+    "5Y": -11,
+    "7Y": -8,
+    "10Y": -5
+   },
+   "basis": {
+    "1Y": 5,
+    "2Y": 5,
+    "3Y": 5,
+    "5Y": 5,
+    "7Y": 5,
+    "10Y": 5
+   },
+   "kbd": {
+    "1Y": -15,
+    "2Y": -12,
+    "3Y": -9,
+    "5Y": -6,
+    "7Y": -3,
+    "10Y": 0
+   },
+   "": {
+    "1Y": null,
+    "2Y": null,
+    "3Y": null,
+    "5Y": null,
+    "7Y": null,
+    "10Y": null
+   }
+  },
+  "factorDv01": {
+   "ruonia": {
+    "1Y": -92500,
+    "2Y": -185000,
+    "3Y": -277500,
+    "5Y": -370000,
+    "7Y": -462500,
+    "10Y": -555000
+   },
+   "basis": {
+    "1Y": -45000,
+    "2Y": -90000,
+    "3Y": -135000,
+    "5Y": -180000,
+    "7Y": -225000,
+    "10Y": -270000
+   },
+   "kbd": {
+    "1Y": -455,
+    "2Y": -909,
+    "3Y": -1364,
+    "5Y": -1818,
+    "7Y": -2273,
+    "10Y": -2727
+   },
+   "": {
+    "1Y": null,
+    "2Y": null,
+    "3Y": null,
+    "5Y": null,
+    "7Y": null,
+    "10Y": null
+   }
+  },
+  "factorLinear": {
+   "ruonia": {
+    "1Y": -666296,
+    "2Y": -1156471,
+    "3Y": -1309608,
+    "5Y": -1102377,
+    "7Y": -412749,
+    "10Y": -137583
+   },
+   "basis": {
+    "1Y": 45861,
+    "2Y": -137583,
+    "3Y": -458610,
+    "5Y": -687915,
+    "7Y": -504471,
+    "10Y": -91722
+   },
+   "kbd": {
+    "1Y": -48559,
+    "2Y": -145678,
+    "3Y": -242797,
+    "5Y": -291357,
+    "7Y": -194238,
+    "10Y": -48559
+   },
+   "": {
+    "1Y": null,
+    "2Y": null,
+    "3Y": null,
+    "5Y": null,
+    "7Y": null,
+    "10Y": null
+   }
+  },
+  "factorLinearRest": {
+   "ruonia": 946206,
+   "basis": 630804,
+   "kbd": null,
+   "": -70887
+  },
+  "factorLinearTotal": {
+   "ruonia": -3838878,
+   "basis": -1203636,
+   "kbd": -971188,
+   "": -70887
+  },
+  "factorExact": {
+   "ruonia": -3880376,
+   "basis": -1265044,
+   "kbd": -991009,
+   "": -72334
+  },
+  "factorCoverage": {
+   "ruonia": {
+    "rows": 46,
+    "linearRows": 46,
+    "bucketRows": 42,
+    "dates": 11
+   },
+   "basis": {
+    "rows": 20,
+    "linearRows": 20,
+    "bucketRows": 16,
+    "dates": 10
+   },
+   "kbd": {
+    "rows": 3,
+    "linearRows": 3,
+    "bucketRows": 3,
+    "dates": 1
+   },
+   "": {
+    "rows": 11,
+    "linearRows": 11,
+    "bucketRows": 0,
+    "dates": 11
+   }
   }
  },
  "checks": {
@@ -4375,6 +4617,298 @@
      746
     ]
    ]
+  },
+  "unexplainedBy": {
+   "total": 1966948,
+   "other": 1966948,
+   "reported": null,
+   "rows": 60,
+   "groups": [
+    {
+     "key": "exact",
+     "label": "остаток точного flash",
+     "total": 166233,
+     "other": 166233,
+     "reported": null,
+     "rows": 34
+    },
+    {
+     "key": "simple",
+     "label": "без разложения: нет потоков / модельная цена",
+     "total": 1772862,
+     "other": 1772862,
+     "reported": null,
+     "rows": 4
+    },
+    {
+     "key": "yield",
+     "label": "по доходности",
+     "total": 13493,
+     "other": 13493,
+     "reported": null,
+     "rows": 11
+    },
+    {
+     "key": "other",
+     "label": "другой метод или не указан",
+     "total": 14360,
+     "other": 14360,
+     "reported": null,
+     "rows": 11
+    }
+   ],
+   "methods": [
+    {
+     "method": "desk-flash-simple-v1",
+     "group": "simple",
+     "total": 1772862,
+     "rows": 4,
+     "quality": {
+      "model_price": 1772862
+     }
+    },
+    {
+     "method": "desk-flash-exact-v2",
+     "group": "exact",
+     "total": 166233,
+     "rows": 34,
+     "quality": {
+      "exact": 166233
+     }
+    },
+    {
+     "method": "flash-v1",
+     "group": "other",
+     "total": 14360,
+     "rows": 11,
+     "quality": {
+      "exact": 14360
+     }
+    },
+    {
+     "method": "desk-flash-yield-v1",
+     "group": "yield",
+     "total": 13493,
+     "rows": 11,
+     "quality": {
+      "market_value": 13493
+     }
+    }
+   ],
+   "quality": [
+    {
+     "quality": "model_price",
+     "label": "модельная цена",
+     "total": 1772862,
+     "rows": 4
+    },
+    {
+     "quality": "exact",
+     "label": "точная",
+     "total": 180593,
+     "rows": 45
+    },
+    {
+     "quality": "market_value",
+     "label": "рыночная цена",
+     "total": 13493,
+     "rows": 11
+    }
+   ],
+   "dates": [
+    "2026-09-28",
+    "2026-09-29",
+    "2026-09-30",
+    "2026-10-01",
+    "2026-10-02",
+    "2026-10-05",
+    "2026-10-06",
+    "2026-10-08",
+    "2026-10-09",
+    "2026-10-12",
+    "2026-10-13"
+   ],
+   "byDate": {
+    "exact": [
+     104505,
+     7868,
+     48751,
+     158261,
+     -103372,
+     -65818,
+     -25782,
+     8428,
+     49738,
+     -48770,
+     32424
+    ],
+    "simple": [
+     null,
+     null,
+     null,
+     -350,
+     -6746,
+     null,
+     -18167,
+     null,
+     1798125,
+     null,
+     null
+    ],
+    "yield": [
+     17649,
+     -3866,
+     9701,
+     -4054,
+     -10283,
+     9024,
+     1561,
+     -8691,
+     -18234,
+     19940,
+     746
+    ],
+    "other": [
+     31323,
+     -21476,
+     13060,
+     -17581,
+     14045,
+     -11891,
+     2103,
+     16417,
+     -16050,
+     13805,
+     -9395
+    ]
+   },
+   "top": [
+    {
+     "ref": "DEMO-A|CORP-1",
+     "book": "DEMO-A",
+     "positionId": "CORP-1",
+     "name": "Synthetic Corp 1",
+     "total": 1802354,
+     "other": 1802354,
+     "reported": null,
+     "rows": 11,
+     "group": "simple",
+     "groupLabel": "без разложения: нет потоков / модельная цена",
+     "methods": [
+      "desk-flash-exact-v2",
+      "desk-flash-simple-v1"
+     ],
+     "quality": [
+      "exact",
+      "model_price"
+     ],
+     "notes": [
+      "simple PnL (model_price -> model_price): q x (dirty D - dirty D-1) + received, all in other"
+     ],
+     "noPnl": []
+    },
+    {
+     "ref": "DEMO-A|OFZ-1",
+     "book": "DEMO-A",
+     "positionId": "OFZ-1",
+     "name": "Synthetic OFZ 1",
+     "total": 187303,
+     "other": 187303,
+     "reported": null,
+     "rows": 11,
+     "group": "exact",
+     "groupLabel": "остаток точного flash",
+     "methods": [
+      "desk-flash-exact-v2"
+     ],
+     "quality": [
+      "exact"
+     ],
+     "notes": [],
+     "noPnl": []
+    },
+    {
+     "ref": "DEMO-B|OFZ-1",
+     "book": "DEMO-B",
+     "positionId": "OFZ-1",
+     "name": "Synthetic OFZ 1",
+     "total": -49181,
+     "other": -49181,
+     "reported": null,
+     "rows": 11,
+     "group": "exact",
+     "groupLabel": "остаток точного flash",
+     "methods": [
+      "desk-flash-exact-v2"
+     ],
+     "quality": [
+      "exact"
+     ],
+     "notes": [],
+     "noPnl": []
+    },
+    {
+     "ref": "DEMO-B|IRS-1",
+     "book": "DEMO-B",
+     "positionId": "IRS-1",
+     "name": "Synthetic IRS pay",
+     "total": 14360,
+     "other": 14360,
+     "reported": null,
+     "rows": 11,
+     "group": "other",
+     "groupLabel": "другой метод или не указан",
+     "methods": [
+      "flash-v1"
+     ],
+     "quality": [
+      "exact"
+     ],
+     "notes": [],
+     "noPnl": []
+    },
+    {
+     "ref": "DEMO-B|USD-1",
+     "book": "DEMO-B",
+     "positionId": "USD-1",
+     "name": "Synthetic USD 1",
+     "total": 13493,
+     "other": 13493,
+     "reported": null,
+     "rows": 11,
+     "group": "yield",
+     "groupLabel": "по доходности",
+     "methods": [
+      "desk-flash-yield-v1"
+     ],
+     "quality": [
+      "market_value"
+     ],
+     "notes": [],
+     "noPnl": []
+    },
+    {
+     "ref": "DEMO-A|CLOSED",
+     "book": "DEMO-A",
+     "positionId": "CLOSED",
+     "name": "Synthetic Closed",
+     "total": -1381,
+     "other": -1381,
+     "reported": null,
+     "rows": 5,
+     "group": "exact",
+     "groupLabel": "остаток точного flash",
+     "methods": [
+      "desk-flash-exact-v2"
+     ],
+     "quality": [
+      "exact"
+     ],
+     "notes": [],
+     "noPnl": []
+    }
+   ],
+   "topTotal": 6
   }
  }
 }
