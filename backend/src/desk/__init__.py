@@ -45,7 +45,8 @@ VALUATION_VERSION = 22  # 2: risk per curve (R8); 3: static display fields (R9 D
 # curve_moves_bp, prev; the owner chose to recompute the history so old dates get them (TDM#417)
 # 22: a RUB bond without a price of its own today (an intraday cut before its first trade, a day it did not trade) is
 # valued and carried by core at the ladder's price (fallback.at_last_price, TDM#383): a floater's projection, OFZ basis
-# and tail instead of a duration estimate, core's accrued and value for every one (the forward carry's base)
+# and tail instead of a duration estimate, core's accrued and value for every one (the forward carry's base); a
+# report-valued row whose D-1 carried an older report names that report's date (extra.report_from, TDM#440)
 
 
 def logic_version() -> str:

@@ -16,7 +16,9 @@ positions valued at the report's figure. Each is flagged with its method (``reas
   report's mv_rub): today's reported PV - yesterday's for the same position_id, both from the reports (method
   ``desk-reported-v1``, flag «по отчёту»), all in ``other``. Trades of the day are inside it. None when the
   position had no reported value the day before, or the book's report was not renewed since then (its set is
-  carried: the difference would be a false 0).
+  carried: the difference would be a false 0). When D-1 itself carried an older report (valid before D-1), the whole
+  gap between the two reports falls on D: the note says «разница отчётов с dd.mm» (the old report's valid date) and
+  ``extra.report_from`` gives that date; ``prev_date`` stays D-1 (TDM#440).
 
 Anything else valued without core keeps ``NoPnl("valued_without_core")``. A missing PnL is a reason, never 0.
 """
@@ -63,6 +65,8 @@ class DirectPnl:
     fx_funding: float = 0.0
     """An unmapped foreign bond: the FX revaluation of its currency funding liability (``FlashPnl.fx_funding``)."""
     fx_funding_cbr: float | None = None
+    report_from: date | None = None
+    """A report-valued row whose D-1 carried an older report: that report's valid date (``extra.report_from``)."""
 
     @property
     def explained(self) -> float:
@@ -76,7 +80,8 @@ class DirectPnl:
 
     def extra(self) -> dict[str, Any]:
         return {"method": self.method, "prev_date": self.prev_date.isoformat(), "total": self.total,
-                "note": self.note, **({"flag": self.flag} if self.flag else {})}
+                "note": self.note, **({"flag": self.flag} if self.flag else {}),
+                **({"report_from": self.report_from.isoformat()} if self.report_from else {})}
 
 
 def split_fx(pnl: SimplePnl, prev: EodContext, ctx: EodContext, terms: BondTerms) -> SimplePnl:
@@ -119,7 +124,10 @@ def _fx_row(prev: EodContext, ctx: EodContext, o: Outcome, x: dict[str, Any]) ->
                      note=f"{amount:,.2f} {ccy} x ({r1:g} - {r0[0]:g} {r0[1]})")
 
 
-def _reported(prev: EodContext, ctx: EodContext, o: Outcome, p: Outcome | None, carried: date | None) -> DirectPnl:
+def _reported(prev: EodContext, ctx: EodContext, o: Outcome, p: Outcome | None, carried: date | None,
+              prev_valid: date | None = None) -> DirectPnl:
+    """``prev_valid``: the valid date of the book's report on D-1; earlier than D-1 when that report was carried, then
+    the difference covers the gap between the reports, said in the note."""
     v = o.valuation
     assert v is not None
     if carried is not None:
@@ -127,8 +135,11 @@ def _reported(prev: EodContext, ctx: EodContext, o: Outcome, p: Outcome | None, 
     if p is None or p.valuation is None or p.valuation.quality != "reported_value":
         raise NoPnl("no_prev_report", f"no reported value on {prev.business_date}")
     total = v.pv_rub - p.valuation.pv_rub
+    gap = prev_valid if prev_valid is not None and prev_valid < prev.business_date else None
     return DirectPnl(REPORTED_METHOD, prev.business_date, ctx.business_date, total, other=total, flag=REPORTED_FLAG,
-                     note=f"reported PV {v.pv_rub:,.2f} - {p.valuation.pv_rub:,.2f} RUB (trades of the day inside)")
+                     note=f"reported PV {v.pv_rub:,.2f} - {p.valuation.pv_rub:,.2f} RUB (trades of the day inside)"
+                          + (f"; разница отчётов с {gap:%d.%m}: отчёт D-1 действует с {gap:%d.%m.%Y}" if gap else ""),
+                     report_from=gap)
 
 
 def _core_fx(prev: EodContext, ctx: EodContext, o: Outcome, p: Outcome | None) -> DirectPnl:
@@ -156,9 +167,10 @@ def _core_fx(prev: EodContext, ctx: EodContext, o: Outcome, p: Outcome | None) -
 
 
 def attach(prev: EodContext, ctx: EodContext, direct: dict[str, Outcome], inputs: PositionInputs,
-           prev_direct: dict[str, Outcome]) -> None:
+           prev_direct: dict[str, Outcome], prev_valid_dates: dict[str, date] | None = None) -> None:
     """Set ``pnl`` or ``no_pnl`` on each valued outcome of ``direct`` (``positions.plan(ctx, inputs).direct``).
-    ``prev_direct``: the same plan on the previous date's inputs and context (the reported values of D-1)."""
+    ``prev_direct``: the same plan on the previous date's inputs and context (the reported values of D-1);
+    ``prev_valid_dates``: the valid dates of those inputs' books (``PositionInputs.valid_dates`` of D-1)."""
     book = {pid: b for pid, b, _, _ in inputs.rows}
     for pid, o in direct.items():
         v = o.valuation
@@ -172,7 +184,8 @@ def attach(prev: EodContext, ctx: EodContext, direct: dict[str, Outcome], inputs
                 o.pnl = _core_fx(prev, ctx, o, prev_direct.get(pid))  # type: ignore[assignment]
             elif v.quality == "reported_value":
                 o.pnl = _reported(prev, ctx, o, prev_direct.get(pid),  # type: ignore[assignment]
-                                  vd if vd is not None and vd <= prev.business_date else None)
+                                  vd if vd is not None and vd <= prev.business_date else None,
+                                  (prev_valid_dates or {}).get(book.get(pid, "")))
             elif kind == "fx":
                 o.pnl = _fx_row(prev, ctx, o, x)  # type: ignore[assignment]
             else:
