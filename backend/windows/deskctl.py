@@ -1078,13 +1078,15 @@ def save_good(env: dict[str, str]) -> None:
 
 
 def confirm_network(env: dict[str, str], url: str) -> None:
-    """The server answers with the new network settings: they stay."""
+    """The server answers with the new network settings: they stay. The staged change goes first, then the outcome,
+    as in rollback_network: the page (desk.api.server_routes.server_state) never shows a confirmed change as still
+    pending (TDM#451)."""
     state = network_pending(env) or {}
     exp = state.get("expect") if isinstance(state.get("expect"), dict) else {}
     where = f"{exp.get('host')}:{exp.get('port')}" if exp.get("host") else url
+    (restart_dir(env) / "network.json").unlink(missing_ok=True)
     record_restart(env, "network", True, f"Новые настройки сети работают ({where}). Адрес на этом компьютере: {url}",
                    url)
-    (restart_dir(env) / "network.json").unlink(missing_ok=True)
 
 
 def rollback_network(env: dict[str, str], why: str) -> bool:

@@ -304,18 +304,21 @@
     $('contrib').querySelectorAll('[data-ref]').forEach(b => b.onclick = () => openPosition(b.dataset.ref));
     const toF = $('contribToF'); if (toF) toF.onclick = () => { location.hash = 'control'; };
   }
-  // «Необъяснённое» and «Разница PV по отчётам» by method group (TDM#436 on A): by row from F's /checks answer of this
-  // period and filter when it is cached (whole bar only), else by position from /period methods; no extra request
+  // «Необъяснённое» and «Разница PV по отчётам» by reason, then by method group (TDM#436, TDM#442 on A): by row from F's
+  // /checks answer of this period and filter when it is cached (whole bar only), else by position from /period reasons
+  // and methods; no extra request
   function byMethod(def, scope, whole) {
     const ck = whole && st.ui.cache ? st.ui.cache.get('/api/v1/history/pnl/checks?' + query(P.thrQuery(st.ui))) : null;
     const S = P.unexplainedSplit(scope, def, ck);
     const link = '<button class="link" id="contribToF" title="Экран F · Контроль: «Необъяснённое: что внутри»">подробнее — экран F</button>';
-    if (!S) return '<div class="contrib"><h4>По методу расчёта</h4><span class="mut more">нет данных · ' + link + '</span></div>';
-    const max = Math.max(1, ...S.groups.map(g => Math.abs(g.total)));
-    const row = g => '<span class="nm" title="' + esc(g.tip) + '"><span class="sw" style="background-color:' + colour(g.color) + '"></span>' + esc(g.label) + ' <span class="mut3">· ' + g.n + (S.source === 'checks' ? ' зап.' : ' поз.') + '</span></span>' +
+    if (!S) return '<div class="contrib"><h4>По причине и методу расчёта</h4><span class="mut more">нет данных · ' + link + '</span></div>';
+    const max = Math.max(1, ...S.groups.map(g => Math.abs(g.total)), ...(S.reasons || []).map(g => Math.abs(g.total)));
+    const unit = S.source === 'checks' ? ' зап.' : ' поз.';
+    const row = g => '<span class="nm" title="' + esc(g.tip) + '"><span class="sw" style="background-color:' + colour(g.color) + '"></span>' + esc(g.label) + ' <span class="mut3">· ' + g.n + unit + '</span></span>' +
       '<span class="n">' + mn2(g.total) + '</span><span class="bars' + (g.total < 0 ? ' l' : '') + '"><span class="bar" style="width:' + Math.max(2, Math.abs(g.total) / max * 90) + 'px;background:' + colour(g.color) + '"></span></span>';
-    return '<div class="contrib" id="contribMethods"><h4>По методу расчёта</h4>' + S.groups.map(row).join('') + '</div>' +
-      '<p class="hint">' + (S.source === 'checks' ? 'По записям периода (ответ экрана F). ' : 'По позициям: у позиции с методами разных групп — строка «позиции с несколькими методами»; по записям их делит экран F. ') + link + '</p>';
+    const reasons = (S.reasons || []).length ? '<div class="contrib" id="contribReasons"><h4>По причине</h4>' + S.reasons.map(row).join('') + '</div>' : '';
+    return reasons + '<div class="contrib" id="contribMethods"><h4>По методу расчёта</h4>' + S.groups.map(row).join('') + '</div>' +
+      '<p class="hint">' + (S.source === 'checks' ? 'По записям периода (ответ экрана F). ' : 'По позициям: у позиции с разными причинами или методами — строка «позиции с несколькими…»; по записям их делит экран F. ') + link + '</p>';
   }
   // «Разбивка столбцов» of the waterfall (TDM#431): only for the component lenses — group lenses are groups already
   const BREAKS = [['none', 'нет'], ['ccy', 'Валюта'], ['type', 'Тип'], ['book', 'Книга']];

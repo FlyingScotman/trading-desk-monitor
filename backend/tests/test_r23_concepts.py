@@ -203,8 +203,8 @@ def test_market_calendar_endpoint_and_drill(desk):
 
 
 def test_position_flows_the_whole_schedule_beyond_the_calendars_horizon(desk, store_url, tmp_path, monkeypatch):
-    """The card's flows: every payment to maturity × the position's bonds, the put inside; the run's stored flows stop
-    at 18 months (and at the offer the bond is priced to)."""
+    """The card's flows: every payment to maturity × the position's bonds, the put inside. The run's stored flows go to
+    maturity too (TDM#166); the calendars cut them at 18 months and at the offer the bond is priced to."""
     monkeypatch.setenv("DESK_HOME", str(tmp_path / "home"))
     monkeypatch.setenv("DESK_SNAPSHOT_CACHE", str(tmp_path / "cache"))
     j = desk.get("/api/v1/positions/flows?id=P4").json()
@@ -217,20 +217,31 @@ def test_position_flows_the_whole_schedule_beyond_the_calendars_horizon(desk, st
     with store.connect(store_url) as con:
         stored = con.execute("SELECT fact->'extra'->'cashflows' FROM run_position WHERE run_id = (SELECT max(run_id)"
                              " FROM run) AND position_id = 'P4'").fetchone()[0]
-    assert len(j["flows"]) > len(stored)
+    assert j["source"] == "static"
+    # TDM#166: the run's flows to maturity, the same dates as the static's (the offer it is priced to inside)
+    assert [x[:2] for x in stored] == [x[:2] for x in j["flows"]] and stored[-1][1] == "mat"
+    cal = concepts.calendar_flows(stored, date.fromisoformat(DATE), "2027-10-14")  # up to an offer
+    assert cal == [x for x in stored if x[0] <= "2027-10-14"] and len(cal) == 2
+    for offer in (None, "2028-04-18"):  # the put is past the 548 days: as before TDM#166
+        assert concepts.calendar_flows(stored, date.fromisoformat(DATE), offer) == [x for x in stored if x[0] <= "2028-04-15"]
     assert desk.get("/api/v1/positions/flows?id=nope").status_code == 404  # no such position
-    # #288: no hub static is an answer, not an error — 200, no flows and why (the card says it in words)
-    def why() -> str:
-        r = desk.get("/api/v1/positions/flows?id=P4")
-        assert r.status_code == 200 and r.json()["flows"] == []
-        return r.json()["reason"]
-
+    # TDM#166: without the static's bundle in the cache (cleared) the run's own flows to maturity, and why
+    for f in (tmp_path / "cache").glob("*.json.gz"):
+        f.unlink()
     with monkeypatch.context() as m:
+        m.setattr(static_facts, "_SCHEDULES", {})
+        r = desk.get("/api/v1/positions/flows?id=P4")
+        assert r.status_code == 200
+        own = r.json()
+        assert own["source"] == "run" and own["reason"] == "no_static" and own["ccy"] == "RUB"
+        assert own["flows"] == stored and own["flows"][-1] == [j["maturity"], "mat", 4000.0, False]
+        assert any(k == "put" and d == own["offer"] for d, k, *_ in own["flows"])
         m.setattr(static_facts, "static_for", lambda *_a: None)
-        assert why() == "no_static"
+        assert desk.get("/api/v1/positions/flows?id=P4").json()["source"] == "run"
     with monkeypatch.context() as m:
         m.setattr(static_facts, "schedule", lambda *_a: None)
-        assert why() == "no_schedule"
+        own = desk.get("/api/v1/positions/flows?id=P4").json()
+        assert own["source"] == "run" and own["reason"] == "no_schedule" and own["flows"] == stored
 
     class Row:  # the run's rows are frozen: the position row as the query returns it
         def __init__(self, row):
@@ -249,6 +260,20 @@ def test_position_flows_the_whole_schedule_beyond_the_calendars_horizon(desk, st
         {"flows": [], "reason": "not_valued"}
     assert concepts.position_flows(Row(dict(pos, secid=None)), run, "x", tmp_path) == {"flows": [], "reason": "not_bond"}
     assert concepts.position_flows(Row(dict(pos, q=None)), run, "x", tmp_path) == {"flows": [], "reason": "not_bond"}
+    # #288: no hub static is an answer, not an error — no flows and why (the card says it in words); a run before
+    # TDM#166 (its flows cut, no extra.cashflows_to) gives no schedule rather than its cut flows as the whole
+    cut = [["2027-04-15", "cpn", 287.2, False]]
+    with monkeypatch.context() as m:
+        m.setattr(static_facts, "static_for", lambda *_a: None)
+        assert concepts.position_flows(Row(dict(pos, cf=cut)), run, "x", tmp_path) == {"flows": [], "reason": "no_static"}
+        got = concepts.position_flows(Row(dict(pos, cf=cut, cf_to="maturity", ccy="RUB", maturity="2032-04-08")), run,
+                                      "x", tmp_path)
+        assert got["source"] == "run" and got["reason"] == "no_static" and got["flows"] == cut
+    with monkeypatch.context() as m:
+        m.setattr(static_facts, "static_for", lambda *_a: {"snapshot_id": "gone", "business_date": run["business_date"]})
+        m.setattr(static_facts, "_SCHEDULES", {"gone": None})
+        m.setattr(static_facts, "schedule", lambda *_a: None)
+        assert concepts.position_flows(Row(dict(pos, cf=cut)), run, "x", tmp_path) == {"flows": [], "reason": "no_schedule"}
 
 
 def test_a_currency_curve_is_its_own_and_its_rate_published(desk, store_url):
@@ -438,3 +463,37 @@ def test_prewarm_does_not_retry_a_run_that_fails_to_build(desk, store_url, monke
     assert prewarm_summaries(app) == 0 and calls == ids[::-1]
     assert app.state.prewarm_failed == {ids[-1]} and not app.state.prewarm_off
     assert prewarm_summaries(app) == 0 and calls == ids[::-1]  # not tried again
+
+
+def test_a_coupon_not_set_yet_listed_as_zero_is_projected():
+    """TDM#166: MOEX lists a coupon not set yet with a zero amount; the schedule projects it (the last published
+    amount scaled by the face, a forecast) instead of a zero payment. A known zero stays zero. Synthetic bond."""
+    cpns = [{"pay_date": "2026-04-01", "amount_per_bond": "40", "face_value": "1000", "status": "known"},
+            {"pay_date": "2026-10-01", "amount_per_bond": "0", "face_value": "500", "status": "unknown"},
+            {"pay_date": "2027-04-01", "amount_per_bond": "0", "face_value": "500", "status": "known"}]
+    fl = static_facts.bond_flows(cpns, [], [], 1000.0, "2026-01-01", "9999-12-31")
+    assert fl == [("2026-04-01", "cpn", 40.0, False), ("2026-10-01", "cpn", 20.0, True), ("2027-04-01", "cpn", 0.0, False)]
+
+
+def test_the_runs_flows_go_to_maturity():
+    """TDM#166: a position's stored flows (``tdm_run.cashflows``) go past 18 months and past the offer the bond is
+    priced to, to maturity: the put and the maturity on the face outstanding then. A never-called perpetual redeems
+    nothing. Synthetic bond: 2 bonds, face 1000, amortizing 300 in 2029, a put in 2028, maturity in 2031."""
+    from types import SimpleNamespace as NS
+
+    from desk.publish.tdm_run import cashflows
+
+    d = date.fromisoformat
+    cpns = [NS(pay_date=d(f"{y}-06-01"), face=None, amount_per_bond=50, rate_pct=None) for y in range(2026, 2032)]
+    t = NS(coupons=cpns, redemptions=[NS(date=d("2029-06-01"), value_per_bond=300), NS(date=d("2031-06-01"),
+           value_per_bond=700)], coupon_type="fixed", maturity_date=d("2031-06-01"), is_perpetual=False)
+    v = NS(quantity=2.0, horizon_date=d("2028-06-01"), horizon_kind="offer")
+    got = cashflows(t, v, d("2026-01-15"), 1000.0, 1, None)
+    assert [x[:2] for x in got] == [["2026-06-01", "cpn"], ["2027-06-01", "cpn"], ["2028-06-01", "cpn"],
+                                    ["2028-06-01", "put"], ["2029-06-01", "cpn"], ["2029-06-01", "amort"],
+                                    ["2030-06-01", "cpn"], ["2031-06-01", "cpn"], ["2031-06-01", "mat"]]
+    assert {x[1]: x[2] for x in got if x[1] != "cpn"} == {"put": 2000.0, "amort": 600.0, "mat": 1400.0}
+    perp = cashflows(NS(**{**vars(t), "maturity_date": None, "is_perpetual": True, "redemptions": []}),
+                     NS(quantity=2.0, horizon_date=d("2031-06-01"), horizon_kind="perpetual"), d("2026-01-15"), 1000.0,
+                     1, None)
+    assert {x[1] for x in perp} == {"cpn"} and len(perp) == 6

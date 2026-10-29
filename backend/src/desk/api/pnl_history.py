@@ -42,7 +42,8 @@ def amounts(pnl: dict[str, Any] | None) -> dict[str, Any]:
     return {"components": comp, "total": math.fsum(known) if known else None,
             "missing": [k for k in PNL_KEYS if q.get(k) is None],
             "method": extra.get("method"), "note": extra.get("note"), "gross": gross,
-            "grossCheck": gap, "prevDate": extra.get("prev_date")}
+            "grossCheck": gap, "prevDate": extra.get("prev_date"),
+            "reason": r if isinstance(r := extra.get("other_reason"), dict) else None}
 
 
 class Sum:

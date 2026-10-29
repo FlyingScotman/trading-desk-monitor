@@ -105,6 +105,7 @@
   "assumptions",
   "calculation_id",
   "cashflows",
+  "cashflows_to",
   "core",
   "core_version",
   "coupon_basis",

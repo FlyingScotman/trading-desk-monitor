@@ -152,9 +152,9 @@ t('#288: потоки карточки — графика выпуска нет:
   assert.strictEqual(K.flowsTable(p, [], true), '<div class="k-empty">загрузка потоков…</div>');
   const own = [{ date: '2027-03-15', pos: 'PX', kind: 'cpn', amount: 1000, amountRub: 1e6 }];
   const h = K.flowsTable(p, own, false, { error: 'ошибка сервера 500' });
-  assert.ok(h.startsWith('<div class="mut" style="font-size:11px;margin-bottom:4px">Весь график выпуска не загружен: ошибка сервера 500. Показаны потоки прогона.</div>') && h.includes('k-cflows'));
+  assert.ok(h.startsWith('<div class="mut" style="font-size:11px;margin-bottom:4px">Расписание до 15.03.27, полное недоступно: ошибка сервера 500. Показаны потоки прогона.</div>') && h.includes('k-cflows'));
   assert.strictEqual(K.flowsTable(p, [], false, { error: 'ошибка сервера 500' }), '<div class="k-empty">потоки не загружены: ошибка сервера 500</div>');
-  assert.ok(K.flowsTable(p, own, false, 'не облигация').includes('Весь график выпуска недоступен: не облигация. Показаны потоки прогона.'));
+  assert.ok(K.flowsTable(p, own, false, 'не облигация').includes('Расписание до 15.03.27, полное недоступно: не облигация. Показаны потоки прогона.'));
   // K.flows: ответ M.posFlows {flows, reason, error}
   const run = async (ans, cfs) => {
     M.cashflows = cfs; M.posFlows = () => Promise.resolve(ans);
@@ -163,7 +163,7 @@ t('#288: потоки карточки — графика выпуска нет:
   };
   const saved = [M.cashflows, M.posFlows];
   assert.strictEqual(await run({ flows: null, reason: 'не облигация' }, []), '<div class="k-empty">потоков нет: не облигация</div>');
-  assert.ok((await run({ flows: null, error: 'ошибка сервера 502' }, own)).includes('Весь график выпуска не загружен: ошибка сервера 502.'));
+  assert.ok((await run({ flows: null, error: 'ошибка сервера 502' }, own)).includes('Расписание до 15.03.27, полное недоступно: ошибка сервера 502.'));
   assert.strictEqual(await run({ flows: null, error: 'нет связи с сервером' }, []), '<div class="k-empty">потоки не загружены: нет связи с сервером</div>');
   const full = await run({ flows: own.concat([{ date: '2028-03-15', pos: 'PX', kind: 'mat', amount: 1e5, amountRub: 1e8 }]) }, own);
   assert.ok(full.includes('2 потоков') && !full.includes('недоступен'));
@@ -171,7 +171,7 @@ t('#288: потоки карточки — графика выпуска нет:
   // real.js: 404 — «нет данных», а не сбой; код причины сервера — словами
   const real = P('concepts/lib/real.js');
   assert.ok(real.includes("if (r.status === 404) return { flows: null, reason: 'сервер не нашёл позицию или её график выпуска' };"));
-  assert.ok(real.includes("if (!r.ok) { delete flowCache[id]; return { flows: null, error:") && real.includes("}).catch(e => { delete flowCache[id];"), 'сбой не запоминается');
+  assert.ok(real.includes(".then(x => { if (!x.flows) delete flowCache[id]; return x; });"), 'сбой и ответ без графика не запоминаются (#166)');
   // вид спреда флоатера без DM ядра — Z (в значении Z), с DM ядра — DM
   assert.ok(real.includes("p.spreadLabel = p.zspread == null ? '' : flt && p.dmSource === 'core' ? 'DM' : 'Z';"));
   assert.ok(/no_static: 'нет статики хаба за дату прогона'/.test(real) && real.includes('FLOW_REASON[j && j.reason]'));
