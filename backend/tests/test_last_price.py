@@ -34,7 +34,9 @@ def untraded(ctx, monkeypatch):  # noqa: F811
         t = ctx.static.bonds[secid]
         today = None if prices is None else dataclasses.replace(quote(t), prices_pct=prices)
         monkeypatch.setattr(ctx.market, "quote", lambda terms: today if terms.secid == secid else quote(terms))
-        earlier = dataclasses.replace(quote(t), trade_date=ctx.business_date - timedelta(days))
+        # another accrued and face than today's: neither may reach today's valuation
+        earlier = dataclasses.replace(quote(t), trade_date=ctx.business_date - timedelta(days),
+                                      accrued_per_bond=Decimal("1.23"), face_value=Decimal(700))
         monkeypatch.setattr(FallbackContext, "past_quotes", lambda self, terms: iter([earlier]))
         return quote(t)
 
@@ -58,7 +60,7 @@ def test_untraded_kbd_reset_perpetual_is_valued_by_core_at_its_last_price(ctx, u
     assert v.assumptions[1:3] == ("last price 2026-10-14, 1 days old (legal_close)", "valued by core at this price")
     assert "perpetual: no call assumed" in v.assumptions
     # the same price and accrued as the close: the exact valuation's value and its risk on both curves
-    assert v.pv_rub == pytest.approx(e.pv_rub, rel=1e-9)
+    assert v.pv_rub == pytest.approx(e.pv_rub, rel=1e-9) and v.accrued_rub == pytest.approx(e.accrued_rub)  # today's
     for curve in ("RUB OFZ", "RUB RUONIA"):
         assert v.risk()[curve] == pytest.approx(e.risk()[curve], rel=1e-6, abs=1e-9)
     kbd = v.risk()["RUB OFZ"]
@@ -96,6 +98,7 @@ def test_fixed_bond_is_valued_and_carried_from_cores_value(ctx, untraded, today)
     assert o.reason == ("no_quote" if today is None else "no_price") and o.core_result is not None
     assert v.quality == "stale_price" and "valued by core at this price" in v.assumptions
     assert v.pv_rub == pytest.approx(e.pv_rub, rel=1e-6) and v.dv01_rub == pytest.approx(e.dv01_rub, rel=1e-6)
+    assert v.face_rub == pytest.approx(e.face_rub) and v.accrued_rub == pytest.approx(e.accrued_rub, abs=1e-6)
     (c,) = orch.horizon(ctx, [(RZD, Q)], ctx.business_date + timedelta(days=30))[0]
     assert c.reason is None and c.carry.method == "core" and c.carry.coupon > 0
     assert c.carry.pv_start == pytest.approx(v.pv_rub, abs=1e-6)  # the forward carry's base check (scenario.carry)
@@ -106,3 +109,23 @@ def test_only_a_missing_price_is_priced_by_the_ladder(ctx, reason):  # noqa: F81
     t = ctx.static.bonds[KEY]
     o = Outcome(KEY, t, ctx.market.quote(t), reason=reason)
     assert at_last_price(ctx, "p", o, Q, FallbackContext.build(ctx)) is None
+
+
+def test_a_core_refusal_at_the_last_price_is_said(ctx, untraded, monkeypatch):  # noqa: F811
+    """Core refuses the bond at the last price (here: every request of the batch): the ladder's own rung, and the
+    refusal in its first assumption."""
+    from desk.valuation.bonds import Rejected
+
+    untraded(RZD, {"bid": Decimal(99)})
+    real = orch.value_bonds
+
+    def refuse_at_price(market, reqs, **kw):
+        if any(r.terms.secid == RZD and r.quote.prices_pct == {"bid": Decimal(99)} for r in reqs):
+            return {r.position_id: Rejected("core_calculation_failed", "Z-spread root is not bracketed") for r in reqs}, []
+        return real(market, reqs, **kw)
+
+    monkeypatch.setattr(orch, "value_bonds", refuse_at_price)
+    (o,) = orch.value(ctx, [(RZD, Q)])
+    assert o.valuation.quality == "stale_price" and o.core_result is None
+    assert o.valuation.assumptions[0] == ("not exact: no_price: bases present: ['bid']; core at the last price refused: "
+                                          "core_calculation_failed (Z-spread root is not bracketed)")

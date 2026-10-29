@@ -207,7 +207,7 @@ def bond_carry(ctx: EodContext, rows: Sequence[Mapping[str, Any]], hdate: date) 
            for r in rows]
     todo = []
     for p, r in zip(out, rows):
-        if p.quality not in CARRIED or p.quality not in REPRICED and p.secid is None:  # a price rung: bonds only
+        if p.quality not in CARRIED or (p.quality not in REPRICED and p.secid is None):  # a price rung: bonds only
             p.code = p.quality or NOT_VALUED
         elif p.secid is None or r.get("quantity") is None:
             p.code = "not_a_bond"

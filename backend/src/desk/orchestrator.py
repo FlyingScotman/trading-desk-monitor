@@ -383,8 +383,11 @@ def value(ctx: EodContext, requests: list[tuple[str, float]], *, second_order: b
             by_pid = {p.position_id: r for r in results for p in r.positions}
             for pid, v in valued.items():
                 o, (_, quality, notes) = at_price[pid]
-                if isinstance(v, BondValuation):  # refused: the ladder's own rung below
+                if isinstance(v, BondValuation):
                     o.valuation, o.core_result = replace(v, quality=quality, assumptions=notes + v.assumptions), by_pid[pid]
+                else:  # the ladder's own rung below, saying core was tried
+                    o.detail = (f"{o.detail}; " if o.detail else "") + f"core at the last price refused: {v.reason}" \
+                        + (f" ({v.detail})" if v.detail else "")
         for o, (_, qty) in zip(out, requests):
             if o.valuation is None and o.terms is not None:
                 try:
