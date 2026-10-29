@@ -221,6 +221,20 @@ def test_scrubber_keeps_dates_versions_and_service_words_but_not_private_values(
     assert signature(sc, "step of 2026-10-16 for positions_20261016") == "step of <date> for <file>"
 
 
+@pytest.mark.parametrize("label", ["<position>", "<file>"])
+def test_scrubber_scrubs_lowercase_names_in_report_values_and_file_names(label):
+    """#157 (review of PR #492): only an explicit list of service words is kept, in any case; any other word of a
+    report's ``x_*`` field or a file name may be a person, a counterparty or a desk and is scrubbed, lowercase too."""
+    sc = Scrubber()
+    private = ("ivanov", "sbercap", "client_alpha", "dealer-x", "Petrov")
+    for v in (*private, "bond", "INSTRUMENT", "Floating", "2026-10-16", "3.11.x"):
+        sc.add(v, label)
+    text = "ivanov sbercap client_alpha dealer-x Petrov: bond INSTRUMENT Floating on 2026-10-16, python 3.11.x"
+    want = f"{label} {label} {label} {label} {label}: bond INSTRUMENT Floating on 2026-10-16, python 3.11.x"
+    assert sc.doc({"x": text}) == {"x": want} and sc.text(text) == want
+    assert set(private) <= set(sc.tokens)
+
+
 def test_scrubber_keeps_the_dates_of_the_autopilot_log(tmp_path):
     """#157: ``steps_by_day`` was one «day»: the dates of the autopilot log were scrubbed as file names."""
     from desk.settings import Settings

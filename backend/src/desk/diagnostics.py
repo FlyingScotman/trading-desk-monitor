@@ -123,31 +123,31 @@ SAFE_WORDS = frozenset((
 """Values never scrubbed as tokens: generic words a book id or a desk may happen to equal (a book coded ``OFZ``
 says nothing private, while scrubbing it would break the curve ``RUB OFZ`` in every line)."""
 SAFE_UPPER = frozenset(w.upper() for w in SAFE_WORDS) | frozenset((
-    "INSTRUMENT", "INSTRUMENTS", "POSITION", "POSITIONS", "FIXED", "FLOAT", "FLOATING", "COUPON", "REPO", "SWAP",
-    "CASH", "EQUITY", "SHARE", "FUTURE", "OPTION", "BUY", "SELL", "LONG", "SHORT", "ACTIVE", "CLOSED", "OPEN"))
+    "BONDS", "INSTRUMENT", "INSTRUMENTS", "POSITION", "POSITIONS", "SECURITY", "SECURITIES", "FIXED", "FLOAT",
+    "FLOATING", "FLOATER", "COUPON", "ZERO", "AMORTIZING", "REPO", "SWAP", "CASH", "EQUITY", "SHARE", "SHARES",
+    "FUTURE", "FUTURES", "OPTION", "OPTIONS", "DEAL", "DEALS", "TRADE", "TRADES", "BUY", "SELL", "LONG", "SHORT",
+    "ACTIVE", "CLOSED", "OPEN", "NEW", "CANCELLED", "MATURED", "REPORT", "REPORTS"))
+"""The service words kept (#157), in any case: ``SAFE_WORDS`` and the categories a report's ``x_*`` fields and file
+names hold (``bond``, ``instrument``). An explicit list: any other word may be a name or a counterparty."""
 HARMLESS = re.compile(r"(?:\d{4}-\d\d-\d\d(?:[T ]\d\d:\d\d(?::\d\d(?:[.,]\d+)?)?(?:Z|[+-]\d\d:?\d\d)?)?"
                       r"|\d\d\.\d\d\.\d{2,4}|v?\d{1,4}(?:\.\d{1,2}){2,3}|v?\d{1,4}(?:\.\d{1,2})*\.x)", re.IGNORECASE)
 """A date, a timestamp or a version (``2026-10-16``, ``16.10.2026``, ``3.11.4``, ``3.11.x``; not ``1234.56`` or
 ``1.234.567``, amounts): never a private value, kept (#157)."""
-GENERIC_LABELS = ("<position>", "<file>")
-"""Labels whose values (a report's free ``x_*`` fields, file names) may be service words: an all-lowercase word
-(``bond``, ``instrument``) is a category, not a private value, and is kept (#157)."""
 
 
 def _harmless(v: str, label: str) -> bool:
-    """A value the scrubber keeps (#157): a date, a version, an eight-digit date ``20261016``, a generic word; for
-    report values and file names also an all-lowercase word. Never for secrets, books and names."""
+    """A value the scrubber keeps (#157): a date, a version, an eight-digit date ``20261016``, a service word of
+    ``SAFE_UPPER`` (any case). Never for secrets, books and names; any other word is scrubbed."""
     if label in ("<secret>", "<book>", "<name>"):
         return False
     if HARMLESS.fullmatch(v) or v.upper() in SAFE_UPPER:
         return True
-    if len(v) == 8 and v.isdigit():
-        try:
-            return 1990 <= int(v[:4]) <= 2100 and bool(date.fromisoformat(f"{v[:4]}-{v[4:6]}-{v[6:]}"))
-        except ValueError:
-            return False
-    w = v.replace("_", "").replace("-", "")
-    return label in GENERIC_LABELS and len(v) <= 24 and w.isalpha() and v.islower()
+    if not (len(v) == 8 and v.isdigit()):
+        return False
+    try:
+        return 1990 <= int(v[:4]) <= 2100 and bool(date.fromisoformat(f"{v[:4]}-{v[4:6]}-{v[6:]}"))
+    except ValueError:
+        return False
 
 
 class Scrubber:
