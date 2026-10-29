@@ -14,7 +14,10 @@ every ``inbox_poll_seconds`` and on ``POST /api/v1/autopilot/run``):
    cache. The hub down (no answer or a 5xx after the client's retries, ``HubUnavailable``): the sync stops there, and
    the later steps of the cycle (intraday, history, backfill) do not ask it again (intraday: reason ``hub_error``)
    until the next cycle, so a cycle spends one retry series on a hub that is down (#147); no answer at all is the
-   hub's alone, a 5xx for a date's snapshot is that date's failure too (below: its retry waits). A date
+   hub's alone, a 5xx for a date's snapshot is that date's failure too (below: its retry waits). No answer for the
+   same date ``NO_ANSWER_CYCLES`` cycles in a row while the date list answers: the date is passed over and the next
+   date tells; it answers (or there is none): the date fails alone as below, so it backs off and the later dates
+   load; no answer for it either: the hub is down (#217). A date
    whose snapshot cannot be fetched (another hub error than 401/403/404, a body that does not verify)
    fails alone (#20): it is named in the step's detail and ``failed_dates`` and asked again next cycle, the other dates
    are synced and the later steps run; after ``MAX_DATE_FAILURES`` such dates the rest wait for the next cycle. A
@@ -155,6 +158,9 @@ POLL_LAG_S = 300              # slots start 5 min after the cut times (:05, :15,
 MAX_DATE_FAILURES = 2         # hub dates whose sync failed in a cycle before the rest wait for the next cycle (#20)
 # a hub date whose sync failed is asked again after these waits, by its failed attempts, the last one onwards (#146)
 RETRY_BACKOFF_S = (600, 1800, 7200, 21600)
+# a hub date whose bundle gets no answer at all this many cycles in a row, the date list answering: the next date
+# tells the date from the hub; when it answers (or there is none), the date fails and backs off as above (#217)
+NO_ANSWER_CYCLES = 3
 # the intraday step's ``reason`` (status ``steps[].reason``; the header shows why there is no run of today, #22)
 INTRADAY_REASONS = ("off", "before_open", "not_business_day", "no_positions", "no_cut_yet", "up_to_date", "ran",
                     "failed_before", "run_failed", "hub_error", "error")
@@ -322,6 +328,7 @@ class Autopilot:
         # hub date -> {"error", "attempts", "next_attempt" (MSK datetime)}: failed dates waiting for a retry (#146)
         self._sync_retry: dict[str, dict[str, Any]] = {}
         self._hub_first: str | None = None     # the hub's oldest date, when its whole list was read (#27)
+        self._no_answer: dict[str, int] = {}   # hub date -> cycles in a row its bundle got no answer at all (#217)
         self._inbox_waiting = 0                # files the last scan left waiting for a calendar (R22)
         self._history_dates: tuple[float, int, list[tuple[str, str]]] | None = None
         self._static_polled = float("-inf")    # monotonic time the hub's newest static was last asked for (R25)
@@ -708,6 +715,8 @@ class Autopilot:
             del self._missing[d]
         for d in [d for d in self._sync_retry if d not in wanted]:  # no longer wanted: no longer a problem
             del self._sync_retry[d]
+        for d in [d for d in self._no_answer if d not in wanted]:
+            del self._no_answer[d]
         wall = self._now()
         waiting = sorted(d for d, r in self._sync_retry.items() if d not in extra and wall < r["next_attempt"])
         cached = set(SnapshotDir(Path(settings.snapshot_cache)).market_dates())
@@ -719,6 +728,15 @@ class Autopilot:
         todo, later = due[:limit], len(due) - min(len(due), limit)
         self._sync_later = later
         pulled, missing = [], []
+        passed: tuple[str, Exception] | None = None  # a date passed over for its no answer, until the next tells (#217)
+
+        def answered() -> None:  # the hub answered for a date after the one passed over: that one fails alone (#217)
+            nonlocal passed
+            if passed is not None:
+                self._no_answer.pop(passed[0], None)
+                self._date_failed(*passed)
+                passed = None
+
         for i, d in enumerate(todo):
             if len(self._sync_failed) >= MAX_DATE_FAILURES:  # the hub fails date after date: the rest next cycle
                 self._sync_later = later = later + len(todo) - i
@@ -727,9 +745,18 @@ class Autopilot:
             try:
                 rows = cache.sync(client, Path(settings.snapshot_cache), [d])
             except HubError as e:
-                # the token: every date would fail; no answer after the retries: the hub is down, not the date (#147)
-                if e.status in (401, 403) or isinstance(e, HubUnavailable) and e.last_status is None:
+                if e.status in (401, 403):  # the token: every date would fail
                     raise
+                if isinstance(e, HubUnavailable) and e.last_status is None:
+                    # no answer after the retries: the hub is down, not the date (#147), unless the same date gets
+                    # none NO_ANSWER_CYCLES cycles in a row while the list answers: the next date tells (#217)
+                    n = self._no_answer[d] = self._no_answer.get(d, 0) + 1
+                    if passed is not None or n < NO_ANSWER_CYCLES:
+                        raise
+                    passed = (d, e)
+                    continue
+                self._no_answer.pop(d, None)
+                answered()
                 if isinstance(e, HubUnavailable):  # 5xx after the retries: the date fails (#146) and the hub is not
                     self._date_failed(d, e)  # asked again this cycle (#147): one retry series, the rest next cycle
                     self._hub_down = str(e)
@@ -740,8 +767,12 @@ class Autopilot:
                     continue
                 rows = []
             except (SnapshotError, OSError, ValueError) as e:  # this date's body: the other dates go on (#20)
+                self._no_answer.pop(d, None)
+                answered()
                 self._date_failed(d, e)
                 continue
+            self._no_answer.pop(d, None)
+            answered()
             self._sync_retry.pop(d, None)
             self._checked[d] = time.monotonic()
             if not rows or not rows[0].market_id:  # no snapshot for this date on the hub: not asked again soon
@@ -749,6 +780,7 @@ class Autopilot:
                 missing.append(d)
                 continue
             pulled += [rows[0].business_date] if rows[0].downloaded else []
+        answered()  # no later date to tell: the list answered this cycle, the date none NO_ANSWER_CYCLES in a row
         if todo:
             self._progress("sync", len(todo), len(todo), "")
         latest = hub_dates[0] if hub_dates else "none"
