@@ -17,7 +17,7 @@ positions valued at the report's figure. Each is flagged with its method (``reas
   ``desk-reported-v1``, flag «по отчёту»), all in ``other``. Trades of the day are inside it. None when the
   position had no reported value the day before, or the book's report was not renewed since then (its set is
   carried: the difference would be a false 0). When D-1 itself carried an older report (valid before D-1), the whole
-  gap between the two reports falls on D: the note says «разница отчётов с dd.mm» (the old report's valid date) and
+  gap between the two reports falls on D: the note says «reports gap since dd.mm» (the old report's valid date) and
   ``extra.report_from`` gives that date; ``prev_date`` stays D-1 (TDM#440).
 
 A report value says why its PnL is in ``other`` (``pnl.extra.other_reason``, TDM#442: ``no_terms`` for want of terms,
@@ -155,7 +155,7 @@ def _reported(prev: EodContext, ctx: EodContext, o: Outcome, p: Outcome | None, 
     gap = prev_valid if prev_valid is not None and prev_valid < prev.business_date else None
     return DirectPnl(REPORTED_METHOD, prev.business_date, ctx.business_date, total, other=total, flag=REPORTED_FLAG,
                      note=f"reported PV {v.pv_rub:,.2f} - {p.valuation.pv_rub:,.2f} RUB (trades of the day inside)"
-                          + (f"; разница отчётов с {gap:%d.%m}: отчёт D-1 действует с {gap:%d.%m.%Y}" if gap else ""),
+                          + (f"; reports gap since {gap:%d.%m}: the D-1 report is valid from {gap:%d.%m.%Y}" if gap else ""),
                      report_from=gap, other_reason=reported_reason(o))
 
 
