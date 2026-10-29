@@ -18,12 +18,14 @@ positions valued at the report's figure. Each is flagged with its method (``reas
   position had no reported value the day before, or the book's report was not renewed since then (its set is
   carried: the difference would be a false 0).
 
-Anything else valued without core keeps ``NoPnl("valued_without_core")``. A missing PnL is a reason, never 0.
+A report value says why its PnL is in ``other`` (``pnl.extra.other_reason``, TDM#442: ``no_terms`` for want of terms,
+else ``reported_value``), an FX deal by core ``fx_core_rest``. Anything else valued without core keeps
+``NoPnl("valued_without_core")``. A missing PnL is a reason, never 0.
 """
 
 from __future__ import annotations
 
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 from datetime import date
 from typing import TYPE_CHECKING, Any
 
@@ -31,13 +33,24 @@ from ..inbox.schema import norm_ccy
 from ..marketdata.adapter import bond_currency
 from ..valuation.fallback import SimplePnl, fx_rate, fx_rate_cbr
 from .flash import NoPnl
-from .reasons import CORE_FX_METHOD, FX_METHOD, REPORTED_METHOD
+from .reasons import (
+    CORE_FX_METHOD,
+    FX_CORE_REST,
+    FX_METHOD,
+    NO_TERMS,
+    REPORTED_METHOD,
+    REPORTED_VALUE,
+    other_reason,
+)
 
 if TYPE_CHECKING:
     from ..marketdata.adapter import BondTerms
     from ..orchestrator import EodContext, Outcome
     from ..store import PositionInputs
 
+NO_TERMS_ROW = "no_trade_terms"
+"""``valuation.positions.NO_TERMS``: an OTC or FX row no ``trade_terms`` row names (not imported: positions imports the
+orchestrator, which imports this module)."""
 REPORTED_FLAG = "по отчёту"
 FORWARD_FLAG = "форвард: по дельте спота, без форвардных пунктов"
 
@@ -63,6 +76,9 @@ class DirectPnl:
     fx_funding: float = 0.0
     """An unmapped foreign bond: the FX revaluation of its currency funding liability (``FlashPnl.fx_funding``)."""
     fx_funding_cbr: float | None = None
+    other_reason: dict[str, Any] | None = field(default=None, compare=False)
+    """Why the PnL is in ``other`` (``pnl.reasons``): ``reported_value`` / ``no_terms`` (a report value),
+    ``fx_core_rest`` (an FX deal by core); None for an FX row (all of it in ``fx_gross``)."""
 
     @property
     def explained(self) -> float:
@@ -76,7 +92,8 @@ class DirectPnl:
 
     def extra(self) -> dict[str, Any]:
         return {"method": self.method, "prev_date": self.prev_date.isoformat(), "total": self.total,
-                "note": self.note, **({"flag": self.flag} if self.flag else {})}
+                "note": self.note, **({"flag": self.flag} if self.flag else {}),
+                **({"other_reason": self.other_reason} if self.other_reason else {})}
 
 
 def split_fx(pnl: SimplePnl, prev: EodContext, ctx: EodContext, terms: BondTerms) -> SimplePnl:
@@ -128,7 +145,20 @@ def _reported(prev: EodContext, ctx: EodContext, o: Outcome, p: Outcome | None, 
         raise NoPnl("no_prev_report", f"no reported value on {prev.business_date}")
     total = v.pv_rub - p.valuation.pv_rub
     return DirectPnl(REPORTED_METHOD, prev.business_date, ctx.business_date, total, other=total, flag=REPORTED_FLAG,
-                     note=f"reported PV {v.pv_rub:,.2f} - {p.valuation.pv_rub:,.2f} RUB (trades of the day inside)")
+                     note=f"reported PV {v.pv_rub:,.2f} - {p.valuation.pv_rub:,.2f} RUB (trades of the day inside)",
+                     other_reason=reported_reason(o))
+
+
+def reported_reason(o: Outcome) -> dict[str, Any]:
+    """``no_terms`` for a report value for want of terms (a bond the static does not know, ``unmapped_instrument``; an
+    OTC or FX deal no ``trade_terms`` row names, ``positions.NO_TERMS``), else ``reported_value`` (a bond without a
+    number of bonds, an asset class core does not value, terms core could not value: the reason in ``detail``)."""
+    why = (o.reason or "").split(":")[0]
+    nv = o.core_not_valued[0] if o.core_not_valued else None
+    if why == "unmapped_instrument" or nv == NO_TERMS_ROW:
+        return other_reason(NO_TERMS, "bond not in the static snapshot" if why == "unmapped_instrument"
+                            else "no trade_terms row names this position")
+    return other_reason(REPORTED_VALUE, nv or why or "", why=nv or why or None)
 
 
 def _core_fx(prev: EodContext, ctx: EodContext, o: Outcome, p: Outcome | None) -> DirectPnl:
@@ -151,6 +181,7 @@ def _core_fx(prev: EodContext, ctx: EodContext, o: Outcome, p: Outcome | None) -
         parts.append(f"{delta:,.2f} {ccy} x ({r1[0]:g} - {r0[0]:g})")
     return DirectPnl(CORE_FX_METHOD, prev.business_date, ctx.business_date, total, fx_gross=fx, other=total - fx,
                      fx_gross_cbr=cbr if pv.fx_delta else None,
+                     other_reason=other_reason(FX_CORE_REST, "rates, points and time: not the FX delta"),
                      note=f"PV {v.pv_rub:,.2f} - {pv.pv_rub:,.2f} RUB; fx_gross = FX delta D-1 "
                           + ("; ".join(parts) or "0"))
 

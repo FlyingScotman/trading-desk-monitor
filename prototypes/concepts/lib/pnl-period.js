@@ -704,61 +704,103 @@
     return out.sort((a, b) => rank(a.factor) - rank(b.factor) || Math.abs(b.rates) - Math.abs(a.rates));
   }
 
-  // ---------- F · Необъяснённое (TDM#436): /checks unexplainedBy ----------
-  // a colour per method group, the same in the bars, the daily columns and the table
+  // ---------- F · Необъяснённое (TDM#436, TDM#442): /checks unexplainedBy ----------
+  // first by reason (pnl.extra.other_reason.code), then by method group; a colour per reason and per method group, the
+  // same in the bars, the daily columns and the tables
   const UNEXPL_COLOR = { exact: 'pnl:other', simple: 'pal:6', yield: 'pal:8', reported: 'pal:10', fx: 'pnl:fx', other: '--fg-3' };
   const UNEXPL_TIP = {
     mixed: 'У позиции за период методы разных групп (например, точный flash в одни дни и простой PnL в другие): по записям её необъяснённое делит экран F.',
     exact: 'Точный flash (пересчёт ядром): остаток, который позиция D−1 не объясняет на рынке D — сменилось расписание, цена и НКД расходятся.',
-    simple: 'desk-flash-simple-v1: бумага не оценена точно на обе даты (нет потоков, модельная или старая цена) — весь PnL q × Δ грязной цены, без разложения.',
+    simple: 'desk-flash-simple-v1: бумага не оценена ядром на обе даты (запасная оценка, смена кривой дисконтирования) — весь PnL q × Δ грязной цены, без разложения.',
     yield: 'desk-flash-yield-v1: кэрри по доходности бумаги; изменение доходности без кривой в валюте — в «Прочем».',
     reported: 'desk-reported-v1: разница отчётных стоимостей, сделки могут быть внутри.',
     fx: 'FX-сделки: прочие эффекты ставок, пунктов и времени.',
     other: 'Метод не из перечня или не сохранён в записи.',
   };
-  // bars by method group, daily stacked columns, the top table; sums as the API gives them (they add up to total)
+  // the reasons of the unexplained (pnl.reasons.OTHER_REASON_TEXT and pnl_checks.UNRECORDED, in their order; the
+  // labels as the API gives them win), tested against the backend (tests/js/pnl_period_factors.test.js)
+  const REASON_LABEL = {
+    no_curve_on_date: 'нет кривой на дату', discount_curve_switch: 'смена кривой дисконтирования', core_refused: 'ядро отказало',
+    no_terms: 'нет условий бумаги или сделки', fallback_price: 'запасная оценка', price_source_switch: 'смена источника цены: модель ↔ рынок',
+    yield_no_curve: 'валютная бумага без кривой: изменение доходности', reported_value: 'оценка по отчёту', fx_core_rest: 'FX-сделка: прочие эффекты',
+    flash_residual: 'остаток точного flash', unrecorded: 'причина не записана (прогон до версии 23)', mixed: 'позиции с несколькими причинами',
+  };
+  const REASON_ORDER = ['no_curve_on_date', 'discount_curve_switch', 'core_refused', 'no_terms', 'fallback_price', 'price_source_switch',
+    'yield_no_curve', 'reported_value', 'fx_core_rest', 'flash_residual', 'unrecorded', 'mixed'];
+  const REASON_COLOR = { no_curve_on_date: 'pal:3', discount_curve_switch: 'pal:2', core_refused: 'pal:12', no_terms: 'pal:4', fallback_price: 'pal:6',
+    price_source_switch: 'pal:1', yield_no_curve: 'pal:8', reported_value: 'pal:10', fx_core_rest: 'pnl:fx', flash_residual: 'pnl:other', unrecorded: '--fg-3', mixed: '--fg-2' };
+  const REASON_TIP = {
+    no_curve_on_date: 'Ядро не оценило бумагу: на дату нет нужной кривой (флоатер в день без RUONIA OIS). Бумага на запасной ступени, PnL без разложения.',
+    discount_curve_switch: 'Бумага дисконтирована по разным кривым на D−1 и D (КБД в день без RUONIA): спреды к разным кривым, PnL без разложения.',
+    core_refused: 'Ядро отказало (код в примечании), бумага на запасной ступени: PnL без разложения.',
+    no_terms: 'Оценка по отчёту: нет условий бумаги (нет в справочнике) или сделки (нет trade_terms).',
+    fallback_price: 'Запасная оценка без ядра (нет цены, условия, которые ядро не берёт): PnL q × Δ грязной цены, без разложения.',
+    price_source_switch: 'Модельная цена на одну дату и рыночная на другую: шаг спреда между моделью и рынком — открытие цены, а не движение рынка.',
+    yield_no_curve: 'Валютная бумага без кривой в валюте: кэрри по доходности, изменение доходности — в «Прочем».',
+    reported_value: 'Разница отчётных стоимостей; сделки дня могут быть внутри.',
+    fx_core_rest: 'FX-сделка ядром: всё, что не объясняет FX-дельта (ставки, пункты, время).',
+    flash_residual: 'Остаток точного flash: сменилось расписание или горизонт, цена и НКД расходятся с позицией D−1.',
+    unrecorded: 'Запись прогона до версии расчёта 23: причина не сохранялась; после пересчёта истории появится.',
+    mixed: 'У позиции за период разные причины: по записям её необъяснённое делит экран F.',
+  };
+  const reasonOf = r => ({ color: REASON_COLOR[r.key] || '--fg-3', tip: REASON_TIP[r.key] || '', label: r.label || REASON_LABEL[r.key] || r.key });
+  // bars by reason and by method group, daily stacked columns by reason, the top table; sums as the API gives them (they
+  // add up to total). A response before TDM#442 has no reasons: the method groups alone (reasons empty)
   function unexplainedView(ck) {
     const u = ck && ck.unexplainedBy;
     if (!u || u.total == null) return null;
     const groups = (u.groups || []).map(g => Object.assign({}, g, { color: UNEXPL_COLOR[g.key] || '--fg-3', tip: UNEXPL_TIP[g.key] || '' }));
-    const series = groups.map(g => ({ key: g.key, label: g.label, color: g.color, vals: (u.byDate && u.byDate[g.key]) || u.dates.map(() => null) }));
-    const shown = sumAvail(groups.map(g => g.total)), ql = new Map((u.quality || []).map(q => [q.quality, q.label]));
-    return { total: u.total, other: u.other, reported: u.reported, rows: u.rows, groups, dates: u.dates || [], series,
-      gap: shown == null ? null : u.total - shown, methods: u.methods || [], quality: u.quality || [],
+    const reasons = (u.reasons || []).map(r => Object.assign({}, r, reasonOf(r), {
+      methods: (r.methods || []).map(m => Object.assign({}, m, { color: UNEXPL_COLOR[m.group] || '--fg-3', label: UNEXPL_LABEL[m.group] || m.group })) }));
+    const dates = u.dates || [];
+    const series = groups.map(g => ({ key: g.key, label: g.label, color: g.color, vals: (u.byDate && u.byDate[g.key]) || dates.map(() => null) }));
+    const reasonSeries = reasons.map(r => ({ key: r.key, label: r.label, color: r.color, vals: (u.byReasonDate && u.byReasonDate[r.key]) || dates.map(() => null) }));
+    const shown = sumAvail(groups.map(g => g.total)), byReason = sumAvail(reasons.map(r => r.total)), ql = new Map((u.quality || []).map(q => [q.quality, q.label]));
+    return { total: u.total, other: u.other, reported: u.reported, rows: u.rows, groups, reasons, dates, series, reasonSeries,
+      gap: shown == null ? null : u.total - shown, reasonGap: byReason == null ? null : u.total - byReason, methods: u.methods || [], quality: u.quality || [],
       qualityLabel: q => ql.get(q) || q || 'не указано',
-      top: (u.top || []).map(t => Object.assign({}, t, { color: UNEXPL_COLOR[t.group] || '--fg-3' })), topTotal: num(u.topTotal) ? u.topTotal : (u.top || []).length };
+      top: (u.top || []).map(t => Object.assign({}, t, { color: UNEXPL_COLOR[t.group] || '--fg-3', reasonColor: REASON_COLOR[t.reason] || '--fg-3',
+        reasonLabel: t.reasonLabel || (t.reason ? REASON_LABEL[t.reason] || t.reason : null) })),
+      topTotal: num(u.topTotal) ? u.topTotal : (u.top || []).length };
   }
 
-  // A · the unexplained bar by method group (TDM#436 on A): the method → group map and the labels of /checks
-  // (pnl_checks.METHOD_GROUP, UNEXPL_GROUPS); any other code or none — «other»
+  // A · the unexplained bar by reason, then by method group (TDM#436, TDM#442 on A): the method → group map and the
+  // labels of /checks (pnl_checks.METHOD_GROUP, UNEXPL_GROUPS; tested against the backend); any other code or none — «other»
   const METHOD_GROUP = { 'desk-flash-exact-v1': 'exact', 'desk-flash-exact-v2': 'exact', 'desk-flash-exact-fx-v1': 'exact', 'desk-flash-simple-v1': 'simple',
     'desk-flash-yield-v1': 'yield', 'desk-reported-v1': 'reported', 'desk-fx-spot-v1': 'fx', 'desk-fx-core-v1': 'fx' };
-  const UNEXPL_LABEL = { exact: 'остаток точного flash', simple: 'без разложения: нет потоков / модельная цена', yield: 'по доходности', reported: 'по отчёту',
+  const UNEXPL_LABEL = { exact: 'остаток точного flash', simple: 'без разложения: нет потоков ядра', yield: 'по доходности', reported: 'по отчёту',
     fx: 'FX-сделки: прочие эффекты', other: 'другой метод или не указан', mixed: 'позиции с несколькими методами' };
   const UNEXPL_ORDER = ['exact', 'simple', 'yield', 'reported', 'fx', 'other', 'mixed'];
   const methodGroup = m => METHOD_GROUP[m] || 'other';
-  // the split of «Необъяснённое / прочее» (key 'other') or «Разница PV по отчётам» ('reported') by method group. With
-  // the /checks answer of the same period and filter at hand (F's cache) — its unexplainedBy, by row (source 'checks');
-  // else from /period: a position whose methods are one group gives it its whole value, a position with methods of
-  // several groups is «mixed» (by row — only on F; source 'period'). n — rows (checks) or positions (period); missing — null
+  // the split of «Необъяснённое / прочее» (key 'other') or «Разница PV по отчётам» ('reported'): by reason (reasons) and
+  // by method group (groups). With the /checks answer of the same period and filter at hand (F's cache) — its
+  // unexplainedBy, by row (source 'checks'); else from /period: a position whose codes are one reason (methods one
+  // group) gives it its whole value, a position with several is «mixed» (by row — only on F; source 'period'); a
+  // position without codes — «unrecorded» (reasons) or «other» (methods). n — rows (checks) or positions (period);
+  // missing — null
   function unexplainedSplit(positions, def, ck) {
     const key = def && def.k === 'reported' ? 'reported' : 'other', V = unexplainedView(ck);
     if (V) {
       const groups = V.groups.filter(g => num(g[key])).map(g => ({ key: g.key, label: g.label, color: g.color, tip: g.tip, total: g[key], n: g.rows }));
-      if (groups.length) return { source: 'checks', key, total: V[key], groups };
+      const reasons = V.reasons.filter(r => num(r[key])).map(r => ({ key: r.key, label: r.label, color: r.color, tip: r.tip, total: r[key], n: r.rows }));
+      if (groups.length) return { source: 'checks', key, total: V[key], groups, reasons };
     }
-    const m = new Map();
+    const m = new Map(), rs = new Map();
+    const add = (map, g, v) => { const x = map.get(g) || { total: 0, n: 0 }; x.total += v; x.n++; map.set(g, x); };
     (positions || []).forEach(p => {
       const v = def.v(p);
       if (!num(v) || v === 0) return;
-      const gs = new Set((p.methods || []).map(methodGroup)), g = gs.size > 1 ? 'mixed' : gs.size ? [...gs][0] : 'other';
-      const x = m.get(g) || { total: 0, n: 0 }; x.total += v; x.n++; m.set(g, x);
+      const gs = new Set((p.methods || []).map(methodGroup)), why = new Set(p.reasons || []);
+      add(m, gs.size > 1 ? 'mixed' : gs.size ? [...gs][0] : 'other', v);
+      add(rs, why.size > 1 ? 'mixed' : why.size ? [...why][0] : 'unrecorded', v);
     });
     if (!m.size) return null;
     const groups = UNEXPL_ORDER.filter(g => m.has(g)).map(g => ({ key: g, label: UNEXPL_LABEL[g], color: g === 'mixed' ? '--fg-2' : UNEXPL_COLOR[g] || '--fg-3', tip: UNEXPL_TIP[g] || '', total: m.get(g).total, n: m.get(g).n }));
-    return { source: 'period', key, total: sumAvail(groups.map(g => g.total)), groups };
+    const order = [...REASON_ORDER.filter(r => rs.has(r)), ...[...rs.keys()].filter(r => !REASON_ORDER.includes(r)).sort()];
+    const reasons = order.map(r => Object.assign({ key: r, total: rs.get(r).total, n: rs.get(r).n }, reasonOf({ key: r })));
+    return { source: 'period', key, total: sumAvail(groups.map(g => g.total)), groups, reasons };
   }
 
   Object.assign(api, { METHOD_GROUP, UNEXPL_LABEL, methodGroup, unexplainedSplit, FACTOR_NAMES, FACTOR_TIPS, factorOrder, factorName, factorShade, factorAgg, hasFactors, factorList, factorRows, factorGrids,
-    factorLinVsExact, factorSeries, factorPositions, UNEXPL_COLOR, UNEXPL_TIP, unexplainedView });
+    factorLinVsExact, factorSeries, factorPositions, UNEXPL_COLOR, UNEXPL_TIP, unexplainedView, REASON_LABEL, REASON_ORDER, REASON_COLOR, REASON_TIP });
 })(typeof window === 'object' ? window : globalThis);

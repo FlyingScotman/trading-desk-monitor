@@ -140,7 +140,12 @@ RUONIA-часть ОФЗ; «Базис ОФЗ (КБД − RUONIA)» — ОФЗ �
                   methods: [{method, group, total, rows, quality: {quality: rub}}],
                   quality: [{quality, label, total, rows}],
                   dates: [date], byDate: {groupKey: [rub|null по dates]},
+                  reasons: [{key, label, total, other, reported, rows, positions,     // TDM#442: по причине
+                             methods: [{method, group, total, rows}],
+                             top: [{ref, book, positionId, name, total, rows}]}],
+                  byReasonDate: {reasonKey: [rub|null по dates]},
                   top: [{ref, book, positionId, name, total, other, reported, rows, group, groupLabel,
+                         reason, reasonLabel, reasons, reasonDetails,
                          methods, quality, notes, noPnl: [{reason, text, days}]}], topTotal} }
 ```
 
@@ -215,7 +220,9 @@ API (TDM#407: `backend/src/desk/api/pnl_period.py`, `pnl_checks.py`). Поля �
   валютные облигации — целиком в `rates` до TDM#418), `rates_exact_lin` — Σ `rates` тех же строк; `m` обоих — строки без
   линейной оценки. В `keys` — только когда есть в выборке, после `carry_pull` и после `rates`. В `/position` дни получают
   `carry_nosplit` (линейные ставки у дня свои — `ratesLinear`).
-- **Pos сверх контракта:** `methods` — методы строк позиции (`pnl.extra.method`, по алфавиту), `noPnlReasons` —
+- **Pos сверх контракта:** `methods` — методы строк позиции (`pnl.extra.method`, по алфавиту), `reasons` — коды
+  причин необъяснённого её строк (`pnl.extra.other_reason.code`, по алфавиту; строка с `other`/`reported` без кода —
+  `unrecorded`; TDM#442), `noPnlReasons` —
   `{reason: число строк}` строк без PnL. Для списка «кто дал» на A (метод, причины «не посчитано»). Компоненты позиции
   за период — её `c`; отдельного списка «топ-N по компоненте» нет: `positions` уже содержит все позиции выборки.
 - **Сверх контракта в `/period`:** `cbrMeetings: [{date, effectiveDate, decision, ratePct, prevRatePct, estimated}]` —
@@ -263,7 +270,7 @@ API (TDM#407: `backend/src/desk/api/pnl_period.py`, `pnl_checks.py`). Поля �
   факторам по тому же правилу, что `factorExact`; сумма равна сумме `ratesByCurve`. `ratesByCurve` не менялся.
 - **`unexplainedBy` (TDM#436).** Σ `other` + `reported` строк периода (у строки есть одно из двух по методу) по группе
   метода `pnl.extra.method` (`METHOD_GROUP`): `exact` — «остаток точного flash» (`desk-flash-exact-*`), `simple` — «без
-  разложения: нет потоков / модельная цена» (`desk-flash-simple-v1`), `yield` — «по доходности»
+  разложения: нет потоков ядра» (`desk-flash-simple-v1`), `yield` — «по доходности»
   (`desk-flash-yield-v1`), `reported` — «по отчёту» (`desk-reported-v1`), `fx` — «FX-сделки: прочие эффекты»
   (`desk-fx-spot-v1`, `desk-fx-core-v1`), `other` — другой код или нет метода; `groups` — в этом порядке, только
   встретившиеся. Качество — `run_position.quality` даты D (`exact`, `assumed`, `market_value`, `stale_price`,
@@ -273,6 +280,17 @@ API (TDM#407: `backend/src/desk/api/pnl_period.py`, `pnl_checks.py`). Поля �
   `notes` — до 3 разных `pnl.extra.note` (по 200 знаков), `noPnl` — причины дней без PnL позиции (до 5) с текстом
   `NO_PNL_TEXT` и числом дней. Различных кодов метода и качества — не больше 40 (`UNEXPL_KEYS_CAP`), остальные — `…`.
   Нет ни одной строки с `other` или `reported` — `total` `null`, списки пустые.
+- **`unexplainedBy.reasons` (TDM#442).** Первый разрез: Σ `other` + `reported` по коду `pnl.extra.other_reason.code`
+  (ниже, «Причина необъяснённого»), в порядке `pnl.reasons.OTHER_REASON_TEXT`, неизвестный код — после них как есть,
+  последней — `unrecorded`: строка с ненулевым `other`/`reported` без кода, «причина не записана (прогон до версии 23)»
+  (`NO_REASON_TEXT`, `REASONS_SINCE`). Строка без кода с нулём (FX-строка: всё в `fx_gross`) — ни в какой причине: Σ
+  причин = `total`, Σ их `rows` ≤ `rows`. У причины — `methods` (второй разрез: метод и его группа `METHOD_GROUP`),
+  `positions` — число позиций, `top` — до 5 позиций (`UNEXPL_REASON_TOP`) с наибольшим |Σ| этой причины.
+  `byReasonDate[k][i]` — Σ причины на `dates[i]`. В `top` позиций: `reason` — причина с наибольшим |Σ| у позиции,
+  `reasons` — до 8 кодов в порядке строк, `reasonDetails` — до 3 разных `other_reason.detail`. Группы метода
+  (`groups`, `byDate`, `methods`) — как раньше, вторым разрезом. `METHOD_GROUP` берёт коды методов из их модулей
+  (`pnl.flash.METHOD` / `METHOD_FX`, `valuation.fallback.METHOD` / `YIELD_METHOD`, `pnl.reasons`; TDM#452).
+- **`/position` `days[].reason` (TDM#442).** `pnl.extra.other_reason` дня как есть, `null` без него.
 
 ## Уточнения реализации (экран)
 
@@ -356,11 +374,15 @@ API (TDM#407: `backend/src/desk/api/pnl_period.py`, `pnl_checks.py`). Поля �
   строит ставки из `P.factorRows(prep)` (строки `rates:f:<id>`), иначе — по кривым. Итог периода и столбцы «По периодам»
   — `P.factorAgg` дней (`P.prepare`, `P.sumAggs`); список «кто дал» и разбивка столбцов (TDM#431) — `ratesByFactor`
   позиций и сумм групп. Σ факторов = `rates`.
-- **A · «Необъяснённое» по методу (TDM#436).** Щелчок по столбцу «Необъяснённое / прочее» или «Разница PV по отчётам»
-  добавляет под списком «По методу расчёта» (`P.unexplainedSplit`): если ответ `/checks` этого периода и фильтра уже в
-  кеше экрана F — группы `unexplainedBy` по записям (своего запроса A не делает); иначе — по позициям из `/period`
-  (`Pos.methods` → группа как `pnl_checks.METHOD_GROUP`, у позиции с методами разных групп — строка «позиции с
-  несколькими методами»). Для части столбца (разбивка по группам) — только по позициям. Ссылка «подробнее — экран F».
+- **A · «Необъяснённое» по причине, затем по методу (TDM#436, TDM#442).** Щелчок по столбцу «Необъяснённое / прочее» или
+  «Разница PV по отчётам» добавляет под списком «По причине» и «По методу расчёта» (`P.unexplainedSplit`: `reasons` и
+  `groups`): если ответ `/checks` этого периода и фильтра уже в кеше экрана F — `unexplainedBy.reasons` и группы по
+  записям (своего запроса A не делает); иначе — по позициям из `/period` (`Pos.reasons`; `Pos.methods` → группа как
+  `pnl_checks.METHOD_GROUP`; у позиции с разными причинами — «позиции с несколькими причинами», с методами разных групп
+  — «позиции с несколькими методами», без кодов — «причина не записана»). Для части столбца (разбивка по группам) —
+  только по позициям. Ссылка «подробнее — экран F». Зеркало `METHOD_GROUP`, `UNEXPL_GROUPS` и названий причин в
+  `lib/pnl-period.js` (`P.METHOD_GROUP`, `P.UNEXPL_LABEL`, `P.REASON_LABEL`, `P.REASON_ORDER`) сверяет с исходниками
+  бэкенда тест `tests/js/pnl_period_factors.test.js` (TDM#452).
 - **D.** Сдвиг — bp со знаком («+12» / «−15», без бухгалтерских скобок); подсветка расходящаяся: зелёный — снижение
   ставок, длинный DV01 (< 0, DATA_CONTRACT), прибыль. Линейный PnL по срокам без `rates_linear_curves` — «нет данных» с
   покрытием `coverage.bucketRows`. Предупреждение «линейная против точной» — |разница| > 3 % линейной и > 1 млн RUB и
@@ -374,10 +396,37 @@ API (TDM#407: `backend/src/desk/api/pnl_period.py`, `pnl_checks.py`). Поля �
   0,1 млн; щелчок по клетке и по находке позиции открывает E на этот день. На карте не больше 60 позиций
   (`P.HEAT_ROWS`, наибольшие по |other|) с подписью «показаны 60 из N позиций с наибольшим необъяснённым»; N —
   `unexplained.refsTotal`, если сервер его отдаёт, иначе число позиций в ответе.
-- **F · Необъяснённое (TDM#436).** Блок «Необъяснённое: что внутри» после календаря (`P.unexplainedView`): полосы по
-  группам метода с числом записей и цветом группы (`P.UNEXPL_COLOR`), суммы по качеству оценки D, итог и проверка
-  «разбивка сходится с итогом»; столбцы по дням, сложенные по группам; таблица крупнейших позиций (метод, качество,
-  причина / примечание; щелчок — позиция на E). Нет `unexplainedBy` или `total` `null` — «нет данных».
+- **F · Необъяснённое (TDM#436, TDM#442).** Блок «Необъяснённое: что внутри» после календаря (`P.unexplainedView`):
+  полосы по причине (цвет `P.REASON_COLOR`; в подсказке — разбивка причины по методам и её крупнейшие позиции; щелчок —
+  в таблице только позиции с этой причиной, `state.ui.whyReason`), затем по группам метода (`P.UNEXPL_COLOR`), суммы по
+  качеству оценки D, итог и проверка «разбивка сходится с итогом» (по причинам; ответ без `reasons` — по методам);
+  столбцы по дням, сложенные по причинам (без `reasons` — по группам); таблица крупнейших позиций (причина, метод,
+  качество, примечание: `reasonDetails` и `notes`; щелчок — позиция на E). Нет `unexplainedBy` или `total` `null` —
+  «нет данных».
+
+## Причина необъяснённого (TDM#442)
+
+PnL, который нельзя разложить, остаётся в `other` (или `reported`), без приближений (решение владельца от 29.10.2026).
+Каждая запись с такой частью пишет в `pnl.extra.other_reason` `{code, detail, …}` (`pnl.reasons.other_reason`;
+определения — docstring `pnl/flash.py` и `pnl.reasons.OTHER_REASON_TEXT`). В копию extra у факта (`tdm_run.pnl_extra`)
+не попадает (`pnl.flash.STORE_ONLY_KEYS`). Записи до версии расчёта 23 кода не имеют.
+
+| `code` | Путь | Поля сверх `code`, `detail` |
+|---|---|---|
+| `flash_residual` | точный flash (`desk-flash-exact-v2`, `-fx-v1`): остаток `other` | — (`detail`: сменились горизонт или расписание, иначе цена и НКД D) |
+| `price_source_switch` | модельная цена на одну дату, рыночная на другую: на ядре — точные шаги, шаг спреда (Z модели против Z рынка) — открытие цены, в `other`; вне ядра — простой PnL | `spread_rub`, `residual_rub` (на ядре), `rung` (вне ядра) |
+| `discount_curve_switch` | кривая дисконтирования D−1 и D разная (КБД в день без RUONIA OIS): простой PnL | `curves` [D−1, D], `curve`, `date` — кривая, которой нет на дату, если известна |
+| `no_curve_on_date` | ядро отказало из-за кривой, которой нет на дату (флоатер в день без RUONIA OIS, `core_missing_market_data`): запасная ступень, простой PnL | `curve`, `date`, `rung`, `core_code` |
+| `core_refused` | ядро отказало по другой причине: запасная ступень, простой PnL | `core_code`, `rung`, `date` |
+| `fallback_price` | запасная ступень вне ядра по другой причине (нет цены, условия, которые ядро не берёт): простой PnL | `rung`, `why`, `date` |
+| `yield_no_curve` | валютная бумага без кривой в валюте: кэрри по доходности, изменение доходности в `other` (`desk-flash-yield-v1`) | `ccy` |
+| `reported_value` | разница отчётных стоимостей (`desk-reported-v1`) | `why` |
+| `no_terms` | то же, но оценка по отчёту из-за отсутствия условий: бумаги нет в справочнике, у сделки нет `trade_terms` | — |
+| `fx_core_rest` | FX-сделка ядром: всё, что не FX-дельта (`desk-fx-core-v1`) | — |
+
+Ступень, которую ядро оценило по её цене (`market_value`, `stale_price` — TDM#383, `model_price` — TDM#441), на обеих
+датах идёт точными шагами (`fallback.by_core`); модельная цена ядром даёт тот же Z, из которого построена
+(`MODEL_Z_TOLERANCE_BP`), поэтому перенесённый спред не дрейфует.
 
 ## Что сохраняет flash (TDM#406)
 
