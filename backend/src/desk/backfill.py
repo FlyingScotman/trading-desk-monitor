@@ -37,11 +37,16 @@ upgrade recomputes only the latest date. Nothing ever computed an older date.
    An error of the store or the network stops the run (the next dates would hit it too)
    and is not remembered as the date's failure; a date that hits one ``MAX_ATTEMPTS`` runs in a row no longer stops
    the queue: the run goes on past it, the date tried again every time.
-   **Stall** (TDM#447): the same such error (``stall_key``: what is down and the error's class) on two dates in a row,
-   no date run in between, is the environment's (the network, the proxy, the store), not the dates': their attempts
-   are not counted (no problem dates, one more a cycle), the backfill «stands» (``state["stall"]``: cause, error,
-   since, next attempt) and each later run tries two dates (the second checks that it is not the first date's own
-   trouble, #23) and stops; the autopilot's step waits ``STALL_BACKOFF_S`` between such runs. A date run clears it.
+   **Stall** (TDM#447): the same such error (``stall_key``: what is down, the error's class and status, and the
+   phase, the bundle's download or the run) on two dates in a row, no date passing that phase in between, is the
+   environment's (the network, the proxy, the store), not the dates': their attempts are not counted (no problem
+   dates, one more a cycle; the older transient ones dropped, and ``status`` shows none while it stands), the
+   backfill «stands» (``state["stall"]``: cause, error, since, next attempt). Each later run tries the oldest date,
+   then one not in the stall (the stall's other dates wait), and stops when that fails too; when it passes, the
+   stall is over and the dates that failed before it in the run failed on their own (``own``: they no longer hold the
+   queue nor start a streak, #23). A date run from the cache ends no stall of the downloads. The autopilot's step
+   waits ``STALL_BACKOFF_S`` between such runs. With one date left to run a network error cannot be told from the
+   date's own: it stays that date's trouble (a problem date after ``MAX_ATTEMPTS``), never a stall.
 
 The bundles of the backfilled dates stay in the snapshot cache (each date's market and static snapshot, several MB a
 date: ``--dry-run`` says how many are to be downloaded).
@@ -61,7 +66,7 @@ import re
 import socket
 import time
 import urllib.error
-from collections.abc import Callable
+from collections.abc import Callable, Iterable
 from dataclasses import dataclass, field
 from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
@@ -86,6 +91,8 @@ date (#23)."""
 STALL_BACKOFF_S = (600, 1800, 3600)
 """The autopilot's waits before it runs the backfill again while it stands (TDM#447), by the runs stopped on the
 stall, the last one onwards: 10 min, 30 min, then hourly (``desk backfill`` does not wait)."""
+STALL_STALE = timedelta(days=1)
+"""A stall whose last error is older than this is forgotten: the next error starts a new streak."""
 
 
 @dataclass
@@ -282,21 +289,30 @@ def transient(e: BaseException) -> bool:
 
 
 def stall_cause(e: BaseException) -> str:
-    """What a ``transient`` error says is down: ``store``, ``proxy`` (a 407 or a refused tunnel), ``access`` (the hub
-    refused the token: 401, 403), ``hub`` (no answer or a 5xx), ``network`` (no connection, timeout), ``disk``."""
+    """What a ``transient`` error says is down: ``store`` (no connection), ``store_slow`` (a query cancelled by the
+    statement timeout), ``proxy`` (a 407 or a refused tunnel), ``access`` (the hub refused the token: 401, 403, or no
+    token), ``setup`` (no hub address, no curl), ``hub`` (no answer or a 5xx, ``HubUnavailable``; another hub error
+    without a status), ``network`` (no connection, timeout), ``disk``."""
+    if isinstance(e, psycopg.errors.QueryCanceled):
+        return "store_slow"
     if isinstance(e, psycopg.OperationalError):
         return "store"
     if isinstance(e, TransportError):
         return "proxy" if e.proxy_status else "network"
     if isinstance(e, HubError):
-        return "proxy" if e.status == 407 else "access" if e.status in (401, 403) else "hub"
+        if e.status == 407:
+            return "proxy"
+        if e.status in (401, 403) or (e.status is None and "token" in str(e)):
+            return "access"
+        return "setup" if e.status is None and ("not configured" in str(e) or "no curl" in str(e)) else "hub"
     if isinstance(e, (TimeoutError, ConnectionError, socket.gaierror, urllib.error.URLError)):
         return "network"
     return "disk"
 
 
 def _code(e: BaseException) -> int | None:
-    return getattr(e, "status", None) or getattr(e, "proxy_status", None)
+    """The HTTP status of a hub or proxy error (``HubUnavailable``: its last attempt's 5xx), else None."""
+    return getattr(e, "status", None) or getattr(e, "last_status", None) or getattr(e, "proxy_status", None)
 
 
 def stall_key(e: BaseException) -> str:
@@ -305,19 +321,24 @@ def stall_key(e: BaseException) -> str:
     return f"{stall_cause(e)}:{type(e).__name__}" + (f":{_code(e)}" if _code(e) else "")
 
 
-def stalled(st: dict[str, Any]) -> dict[str, Any] | None:
+def stalled(st: dict[str, Any], todo: Iterable[str] | None = None) -> dict[str, Any] | None:
     """The stall of the state (module doc, TDM#447): the same store or network error on two dates in a row; None
-    while it is on one date only (perhaps that date's own, #23) or there is none."""
+    while it is on one date only (perhaps that date's own, #23) or there is none, or (``todo``: the dates to run)
+    none of its dates is still to run."""
     s = st.get("stall")
-    return s if s and len(s.get("dates") or []) >= 2 else None
+    if not s or len(s.get("dates") or []) < 2:
+        return None
+    return s if todo is None or set(s["dates"]) & set(todo) else None
 
 
 def _attempt(problems: dict[str, Any], day: Day, kind: str, error: str) -> int:
     """A date's ``kind`` of trouble once more (``state["problems"]``, the reason shown with a problem date); its
-    attempts in a row on the same inputs."""
+    attempts in a row on the same inputs (``own``, a transient error that is the date's own, kept with them)."""
     old = problems.get(day.date) or {}
-    n = old.get("attempts", 0) + 1 if old.get("kind") == kind and old.get("sig") == day.sig else 1
-    problems[day.date] = {"kind": kind, "why": day.why, "error": error, "attempts": n, "sig": day.sig}
+    same = old.get("kind") == kind and old.get("sig") == day.sig
+    n = old.get("attempts", 0) + 1 if same else 1
+    problems[day.date] = {"kind": kind, "why": day.why, "error": error, "attempts": n, "sig": day.sig,
+                          **({"own": True} if same and old.get("own") else {})}
     return n
 
 
@@ -344,10 +365,10 @@ def run(settings: Settings, p: Plan, *, store_url: str | None = None, client: An
         exclude: set[str] | frozenset[str] = frozenset(), now: datetime | None = None) -> dict[str, Any]:
     """Step 3 (module doc) over the plan's ``todo`` dates, oldest first, until ``budget_s`` seconds have passed
     (None: all), but ``exclude`` (the dates the autopilot's eod step ran or failed this cycle). ``client``: a
-    ``HubClient`` for the bundles not cached (None: only the cached dates run). ``now``: the time of a stall's
-    since and next attempt (default: the wall clock). Returns {done: [dates], failed: [(date, error)], unconverged:
-    [dates still stale after their run, tried again next time], skipped: [dates without a bundle], left: n, stall:
-    the stall this run stopped on (``stalled``) or None, seconds}."""
+    ``HubClient`` for the bundles not cached (None: only the cached dates run). ``now``: the run's start, for a
+    stall's since and next attempt (default: the wall clock). Returns {done: [dates], failed: [(date, error)],
+    unconverged: [dates still stale after their run, tried again next time], skipped: [dates without a bundle],
+    left: n, stall: the stall this run stopped on (``stalled``) or None, seconds}."""
     from .cli import ContextCache, eod_run
 
     t0 = time.monotonic()
@@ -362,23 +383,34 @@ def run(settings: Settings, p: Plan, *, store_url: str | None = None, client: An
     fails = st.setdefault("failed", {})
     problems = st.setdefault("problems", {})
     now = now or datetime.now(UTC)
-    hits = 0  # the dates of this run that hit the stall's error since the last date run
+    old = st.get("stall")
+    if old and (not set(old.get("dates") or []) & {d.date for d in p.todo}
+                or now - _when(old.get("at"), now) > STALL_STALE):
+        st.pop("stall")  # none of its dates is left, or it is old: a new outage is a new streak
+    hits = 0  # the dates of this run that joined the stall's streak (since a date passed its phase)
+    tried: list[tuple[str, str]] = []  # (date, phase) of this run's transient errors: a later date that passes the
+    # phase shows they are the dates' own (#23)
     con: psycopg.Connection | None = None  # the date planned again after its run
     try:
         for i, day in enumerate(todo):
             if budget_s is not None and done and time.monotonic() - t0 >= budget_s:
                 break
+            s = stalled(st)
+            if s and hits and day.date in s["dates"]:
+                continue  # the stall's other dates wait: the next one checks it is not their own trouble (#23)
             if progress is not None:
                 progress(i, len(todo), day.date)
-            still = None
+            still, phase, downloaded = None, "bundle", False
             try:
                 have = set(SnapshotDir(cache_dir).market_dates())
                 want = [x for x in (day.date, day.prev_date) if x and x not in have]
                 if want and client is not None:
                     cache.sync(client, cache_dir, want)
+                    downloaded = True
                 elif day.date in want:
                     skipped.append(day.date)
                     continue
+                phase = "run"
                 out(f"backfill {day.date}: {day.why}")
                 t1 = time.monotonic()
                 rid = eod_run(settings, day.date, snapshots=cache_dir, store_url=store_url, report_dir=None,
@@ -393,22 +425,27 @@ def run(settings: Settings, p: Plan, *, store_url: str | None = None, client: An
             except Exception as e:  # one date's bad data must not stop the others
                 if transient(e):  # the store or the network, not the date: not remembered as failed
                     err = f"{type(e).__name__}: {e}"
+                    own = (problems.get(day.date) or {}).get("own")
                     n = _attempt(problems, day, "transient", err)
                     failed.append((day.date, f"{err} (not the date's data: tried again next time)"))
-                    s, at = st.get("stall") or {}, now.isoformat(timespec="seconds")
-                    if s.get("key") != stall_key(e):  # another error than the last one: its streak starts here
-                        s, hits = {"key": stall_key(e), "dates": [], "since": at, "stops": 0}, 0
+                    tried.append((day.date, phase))
+                    if own:  # its own trouble before (a later date passed where it fails): it holds nothing (#23)
+                        log.warning("backfill %s interrupted again (%d in a row): %s", day.date, n, err)
+                        continue
+                    s, at, key = st.get("stall") or {}, _iso(now, t0), f"{phase}:{stall_key(e)}"
+                    if s.get("key") != key:  # another error than the last one: its streak starts here
+                        s, hits = {"key": key, "phase": phase, "dates": [], "since": at, "stops": 0}, 0
                     hits += 1
                     st["stall"] = s = {**s, "cause": stall_cause(e), "status": _code(e), "error": err, "at": at,
                                        "dates": [*[x for x in s["dates"] if x != day.date], day.date][-10:]}
                     if stalled(st):  # the same error on another date too: the environment's, not the dates' (#447)
-                        for x in s["dates"]:  # their attempts not counted: no problem dates
-                            if (problems.get(x) or {}).get("kind") == "transient":
+                        for x, r in list(problems.items()):  # no attempts counted, the older ones dropped
+                            if x != day.date and r.get("kind") == "transient" and not r.get("own"):
                                 problems.pop(x)
                         log.warning("backfill %s: stands on %s (%d dates in a row)", day.date, err, len(s["dates"]))
                         if hits >= 2:
                             break  # two dates of this run hit it: the rest waits for the next attempt
-                        continue  # one more date: the first one's own trouble must not hold the queue (#23)
+                        continue  # a date not in the stall: the first one's own trouble must not hold the queue (#23)
                     log.exception("backfill %s interrupted (%d in a row)", day.date, n)
                     if n < MAX_ATTEMPTS:
                         break  # the rest waits for next time
@@ -418,8 +455,19 @@ def run(settings: Settings, p: Plan, *, store_url: str | None = None, client: An
                 _attempt(problems, day, "failed", f"{type(e).__name__}: {e}")
                 failed.append((day.date, f"{type(e).__name__}: {e}"))
                 continue
-            st.pop("stall", None)  # a date ran: the store and the network work
-            hits = 0
+            # the date passed its phases: the run's earlier dates that failed in them failed on their own, and a
+            # stall in them is over (a date run from the cache says nothing of the bundles' downloads)
+            passed = {"run", "bundle"} if downloaded else {"run"}
+            for x, ph in tried:
+                if ph in passed and (problems.get(x) or {}).get("kind") == "transient":
+                    problems[x]["own"] = True
+            tried = [t for t in tried if t[1] not in passed]
+            s = st.get("stall")
+            if s and s.get("phase", "run") in passed:
+                st.pop("stall")
+                hits = 0
+            elif s:
+                s["dates"] = [x for x in s["dates"] if x != day.date]
             if rid is None:  # a run that created nothing (no positions for the date after all): the date's failure
                 log.warning("backfill %s: no run created", day.date)
                 fails[day.date] = day.sig
@@ -445,14 +493,33 @@ def run(settings: Settings, p: Plan, *, store_url: str | None = None, client: An
         if con is not None:
             con.close()
         stall = stalled(st) if hits else None
-        if stall is not None:  # the next attempt of the autopilot's step, later after each run stopped on it
+        if stall is not None:  # the next attempt of the autopilot's step from the run's end, later after each stop
             stall["stops"] = stall.get("stops", 0) + 1
             wait = STALL_BACKOFF_S[min(stall["stops"], len(STALL_BACKOFF_S)) - 1]
-            stall["next_attempt"] = (now + timedelta(seconds=wait)).isoformat(timespec="seconds")
+            stall["next_attempt"] = _iso(now, t0, wait)
         save_state(settings, st)
     left = len(todo) - len(done) - len(failed) - len(unconverged) - len(skipped)
     return {"done": done, "failed": failed, "unconverged": unconverged, "skipped": skipped, "left": left,
             "stall": stall, "seconds": round(time.monotonic() - t0, 1)}
+
+
+def _iso(now: datetime, t0: float, after_s: float = 0.0) -> str:
+    """The run's time now (``now`` at its start ``t0``, monotonic), ``after_s`` seconds on."""
+    return (now + timedelta(seconds=time.monotonic() - t0 + after_s)).isoformat(timespec="seconds")
+
+
+def _when(iso: str | None, default: datetime) -> datetime:
+    try:
+        return datetime.fromisoformat(iso) if iso else default
+    except (TypeError, ValueError):
+        return default
+
+
+def drop_stall(settings: Settings) -> None:
+    """Forget the stall (nothing left to run): a later outage is a new one (TDM#447)."""
+    st = state(settings)
+    if st.pop("stall", None) is not None:
+        save_state(settings, st)
 
 
 def status(con: psycopg.Connection, settings: Settings, today: date | None = None) -> dict[str, Any]:
@@ -465,24 +532,25 @@ def status(con: psycopg.Connection, settings: Settings, today: date | None = Non
     first = con.execute("SELECT min(valid_date) FROM position_set").fetchone()[0]
     st = state(settings)
     problems = st.get("problems", {})
+    # none of its dates left to run: nothing stands (the dates of a download stall are the hub's, not in this plan)
+    stall = stalled(st, None if (st.get("stall") or {}).get("phase") == "bundle" else [d.date for d in p.todo])
     probs = []  # the failed dates and those a store or network error keeps stopping on (#23), oldest first
     for d in p.days:
         r = problems.get(d.date) or {}
-        if d.status == "failed" or (d.status == "todo" and r.get("kind") == "transient"
-                                    and r.get("attempts", 0) >= MAX_ATTEMPTS):
+        if d.status == "failed" or (d.status == "todo" and r.get("kind") == "transient" and not stall
+                                    and (r.get("attempts", 0) >= MAX_ATTEMPTS or r.get("own"))):
             probs.append({"date": d.date, "why": d.why, "error": r.get("error"), "attempts": r.get("attempts"),
                           "kind": r.get("kind") or "failed"})
     sec = st.get("seconds_per_date")
     s = p.summary()
-    stall = stalled(st) if s["todo"] else None  # nothing left to run: nothing stands
     return {**s, "total": s["done"] + s["todo"] + s["failed"], "enabled": bool(getattr(settings, "backfill", True)),
             "oldest_run": oldest.isoformat() if oldest else None,
             "first_positions": first.isoformat() if first else None,
             "inbox_scanned_from": (st.get("inbox") or {}).get("from"),
             "failed_dates": sorted(st.get("failed", {}))[:20],
             "problem_dates": probs[:50],
-            "stall": {**{k: stall.get(k) for k in ("cause", "status", "error", "since", "at", "next_attempt", "stops")},
-                      "dates": len(stall["dates"])} if stall else None,
+            "stall": {**{k: stall.get(k) for k in ("cause", "status", "phase", "error", "since", "at", "next_attempt",
+                                                   "stops")}, "dates": len(stall["dates"])} if stall else None,
             "eta_s": round(s["todo"] * sec) if isinstance(sec, (int, float)) and s["todo"] else None}
 
 

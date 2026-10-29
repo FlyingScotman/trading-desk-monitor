@@ -86,7 +86,9 @@ every ``inbox_poll_seconds`` and on ``POST /api/v1/autopilot/run``):
    backlog drains (R22). The hub's date list is read once per ``RECHECK_S``, less the dates the sync step cannot load
    (its ``problem_dates``): no run and no previous close on them until they load. While the backfill stands (the
    same store or network error on two dates in a row, ``backfill.stalled``, TDM#447) the step runs it again only
-   after the stall's ``next_attempt`` (``backfill.STALL_BACKOFF_S``) and says so, status ``error``.
+   after the stall's ``next_attempt`` (``backfill.STALL_BACKOFF_S``) and says so, status ``error``; not in the
+   first cycle of the process or a cycle asked for (``trigger``, ``desk cycle``), nor when the store is the cause
+   (the plan has just read it) or the downloads are and the hub is off this cycle. Nothing left to run ends it.
 8. **status** (``status()``, the shape of ``GET /api/v1/autopilot/status``). While a cycle runs, ``message`` and
    ``progress`` ({"step": "sync"|"scan"|"eod"|"intraday"|"history"|"backfill", "done": int, "total": int|null, "detail": str})
    follow it live: hub dates fetched of those to fetch, report files done of those offered, EOD dates run of those
@@ -332,6 +334,7 @@ class Autopilot:
         self._static_polled = float("-inf")    # monotonic time the hub's newest static was last asked for (R25)
         self._backfill_rows: tuple[float, str, list[tuple[str, str]]] | None = None  # (listed at, from, hub rows)
         self._contexts: Any = None  # the backfill's prepared dates, kept between its runs (cli.ContextCache)
+        self._stall_now = True  # the backfill runs at once, its stall's wait left out: a start or a manual cycle (#447)
         self._eod_tried: set[str] = set()  # the dates the eod step ran, failed or left as failed before, this cycle
         # (listed at, depth, [(hub date, its current snapshot id)] newest first)
         self._poll_slot: tuple | None = None   # (date, cut, slot) the hub was last asked for a cut of today in
@@ -365,7 +368,9 @@ class Autopilot:
             self._thread.join(timeout)
 
     def trigger(self) -> None:
-        """Run a cycle now (after the running one, if any)."""
+        """Run a cycle now (after the running one, if any); the backfill does not wait for its stall's next attempt
+        (TDM#447: the proxy fixed, say)."""
+        self._stall_now = True
         self._wake.set()
 
     def _loop(self) -> None:
@@ -906,17 +911,24 @@ class Autopilot:
                 self._progress("backfill", 0, None, "список дат хаба")
                 self._backfill_rows = (now, d_from.isoformat(), backfill.hub_rows(client, d_from))
             # the hub dates the sync cannot load (#146) are left out: neither run nor anyone's previous close until
-            # they load, as in the eod step's runs on the cache (#163: they are shown with the dates that do not converge)
+            # they load, as in the eod step's runs on the cache (#163, #447: the header shows them as not loading)
             rows = [r for r in self._backfill_rows[2] if r[0] not in self._sync_retry]
         p = backfill.plan(con, settings, d_from, today, rows)
         s = p.summary()
         span = (f"{s['from']}..{s['to']}: {s['done']} of {s['dates'] - s['no_positions'] - s['no_market']} dates with "
                 f"positions have their run" + (f", {s['failed']} failed before" if s["failed"] else ""))
+        if not p.todo:
+            backfill.drop_stall(settings)  # nothing left to run: a later outage is a new one (TDM#447)
         if not [d for d in p.todo if d.date not in exclude]:
             return "ok", "; ".join(parts + [f"up to date ({span})"])
-        stall = backfill.stalled(backfill.state(settings))
-        if stall and stall.get("next_attempt") and self._now() < datetime.fromisoformat(stall["next_attempt"]):
-            # the same store or network error on two dates in a row (TDM#447): not tried again before its wait
+        # the same store or network error on two dates in a row (TDM#447): not tried again before its wait, unless the
+        # process started or the cycle was asked for, the store is the cause (the plan above just read it), or the
+        # downloads are and the hub is off this cycle (only the cached dates would run)
+        stall, now_ok, self._stall_now = (backfill.stalled(backfill.state(settings), [d.date for d in p.todo]),
+                                          self._stall_now, False)
+        if (stall and stall.get("next_attempt") and not now_ok and stall.get("cause") != "store"
+                and not (stall.get("phase") == "bundle" and client is None)
+                and self._now() < datetime.fromisoformat(stall["next_attempt"])):
             return "error", "; ".join(parts + [_stall_text(stall), span])
         if self._contexts is None:
             self._contexts = ContextCache()
