@@ -291,6 +291,57 @@ def test_unchanged_cached_dates_are_not_downloaded_again(tmp_path, cache, store_
     assert synced == []
 
 
+@pytest.mark.parametrize("hub_has_it", [False, True], ids=["cache_only", "hub_only"])
+def test_the_plan_and_the_run_pick_one_previous_close_when_the_hub_and_the_cache_differ(
+        tmp_path, store_url, monkeypatch, hub_has_it):
+    """#203: the hub's list and the cache differ on the previous close of 2026-10-14: the cache holds 2026-10-13 only
+    as an ``eod_preliminary``, and the hub lists no final of it (it does not load, or is not published) or does (not
+    synced yet). The plan, the autopilot's eod step and ``cli.eod_run`` pick it by one rule
+    (``bundle.previous_close``): the cache's preliminary close, else the hub's final, synced before the run. The date
+    converges on its first run, and the next plan has nothing to do."""
+    import shutil
+
+    from desk.autopilot import previous_close as autopilot_rule
+    from desk.marketdata.bundle import SnapshotDir, previous_close
+
+    assert autopilot_rule is previous_close and cli.previous_close is previous_close
+    c = tmp_path / "cache"
+    c.mkdir()
+    shutil.copy(FIX / f"{STATIC}.json.gz", c)
+    ids = {d: write(c, shifted(d, len(DATES) - i, light=False)) for i, d in enumerate(DATES) if d != "2026-10-13"}
+    pre = write(c, {**shifted("2026-10-13", 2, light=False), "cut_type": "eod_preliminary",
+                    "cut_ts": "2026-10-13T16:45:00Z", "supersedes": None})
+    if hub_has_it:
+        ids["2026-10-13"] = write(tmp_path / "hub", shifted("2026-10-13", 2, light=False))
+    synced: list[str] = []
+
+    def sync(client, cache_dir, dates):
+        for d in dates:
+            synced.append(d)
+            if d in ids and not (cache_dir / f"{ids[d]}.json.gz").exists():
+                shutil.copy(tmp_path / "hub" / f"{ids[d]}.json.gz", cache_dir)
+
+    monkeypatch.setattr(backfill.cache, "sync", sync)
+    rows = sorted(ids.items(), reverse=True)
+    want = ("2026-10-13", "eod_final", ids["2026-10-13"]) if hub_has_it else ("2026-10-13", "eod_preliminary", pre)
+    assert previous_close(SnapshotDir(c), "2026-10-14", dict(rows)) == want
+    load(store_url, tmp_path, "2026-10-12", 10)
+    s = settings(tmp_path, c, store_url)
+    with store.connect(store_url) as con:
+        p = backfill.plan(con, s, date(2026, 10, 1), date(2026, 10, 15), rows)
+        day = next(d for d in p.todo if d.date == "2026-10-14")
+        assert (day.prev_date, day.prev_cut, day.sig[2]) == want
+        res = backfill.run(s, p, store_url=store_url, client=object(), out=lambda line: None)
+        assert not res["unconverged"] and not res["failed"]
+        assert res["done"] == [d for d in DATES[1:] if hub_has_it or d != "2026-10-13"]
+        assert synced == (["2026-10-13"] if hub_has_it else [])  # a preliminary close is not the hub's to sync
+        runs = store.default_runs(con, date(2026, 10, 1))
+        assert runs[date(2026, 10, 14)]["prev_market_snapshot_id"] == want[2]
+        assert previous_close(SnapshotDir(c), "2026-10-14") == want  # the run's rule on the cache alone, after the sync
+        assert not backfill.plan(con, s, date(2026, 10, 1), date(2026, 10, 15), rows).todo
+    assert not backfill.state(s).get("problems")
+
+
 def test_autopilot_step_after_the_eod_step_within_its_budget(tmp_path, cache, store_url):
     load(store_url, tmp_path, "2026-10-12", 10)
     load(store_url, tmp_path, "2026-10-15", 11)

@@ -18,8 +18,9 @@ upgrade recomputes only the latest date. Nothing ever computed an older date.
    book whose report did not come that day is carried forward from its last report, as every run does; a date
    before the first report of every book has no positions and no run. A date needs a run when it has none, or its
    default run read other position sets or canonical private inputs, another market snapshot (a hub correction),
-   another previous close, read its inputs before an ``ocp`` report or ``cash_balances`` in force on the date were
-   recorded (``late_why``, TDM#181), or was
+   another previous close (``bundle.previous_close``: the newest close of the hub and the cache together, the one
+   the run picks once its bundle is synced, #203), read its inputs before an ``ocp`` report or ``cash_balances`` in
+   force on the date were recorded (``late_why``, TDM#181), or was
    made by another valuation or core version (``same_logic``: ``VALUATION_VERSION`` and the core version of
    ``logic_version()`` recompute the history; a new release or Windows bundle of the same computation does not). Otherwise it is skipped: nothing
    is computed twice.
@@ -30,7 +31,7 @@ upgrade recomputes only the latest date. Nothing ever computed an older date.
    (``store.carried_spreads``), so a date's run depends on the runs before it; dates in parallel would compute
    other numbers. A date that fails is not tried again on the same inputs (``STATE_FILE``). A run that created
    nothing is the date's failure too. After its run a date is planned again (the same ``plan``): still stale (a
-   reason that does not go away, e.g. a previous close the run picks differently from the plan), it is logged with
+   reason that does not go away, e.g. a hub date whose bundle does not come), it is logged with
    the differing field and tried again next time; after ``MAX_ATTEMPTS`` runs it is a problem date, not tried again
    on the same inputs (#23). A saved failed signature from before private input hashes were included is stale
    once: after one retry the new signature suppresses unchanged failures again.
@@ -69,7 +70,7 @@ import psycopg
 
 from . import logic_version, store
 from .marketdata import cache
-from .marketdata.bundle import SnapshotDir, previous_market
+from .marketdata.bundle import SnapshotDir, previous_close
 from .marketdata.hub import HubError, TransportError
 from .settings import Settings
 
@@ -94,7 +95,9 @@ class Day:
     market_id: str | None = None
     cached: bool = False
     prev_date: str | None = None
-    """The close before the date (the hub's, else the cache's): the flash PnL's basis."""
+    """The close before the date (``bundle.previous_close``, the run's too, #203): the flash PnL's basis."""
+    prev_cut: str | None = None
+    """Its cut: ``eod_final``, else a cached ``eod_preliminary`` (not synced from the hub)."""
 
 
 @dataclass
@@ -199,7 +202,6 @@ def plan(con: psycopg.Connection, settings: Settings, date_from: date, date_to: 
     cached = set(sd.market_dates())
     hub_ids = dict(hub or [])
     dates = sorted({d for d in (hub_ids if hub is not None else cached) if lo <= d <= hi})
-    all_dates = sorted(set(hub_ids) | cached)
     runs = store.default_runs(con, date_from)
     logic = logic_version()
     failed = state(settings).get("failed", {})
@@ -218,13 +220,8 @@ def plan(con: psycopg.Connection, settings: Settings, date_from: date, date_to: 
         if snap is None:
             days.append(Day(d, "no_market"))
             continue
-        before = [x for x in all_dates if x < d]
-        pd = before[-1] if before else None
-        if hub is not None and before:
-            prev = hub_ids.get(before[-1]) or (sd.market_id(before[-1]) if before[-1] in cached else None)
-        else:
-            pc = previous_market(sd, d)
-            prev = sd.market_id(*pc) if pc else None
+        pc = previous_close(sd, d, hub_ids)  # the run's previous close once the run synced it (#203)
+        pd, pcut, prev = pc if pc else (None, None, None)
         run = runs.get(date.fromisoformat(d))
         inputs_hash = store.positions_for(con, date.fromisoformat(d)).private_inputs_hash
         late = late_why(con, date.fromisoformat(d), run)
@@ -236,11 +233,11 @@ def plan(con: psycopg.Connection, settings: Settings, date_from: date, date_to: 
                or ("program updated" if not same_logic(run.get("logic_version"), logic) else None))
         sig = [ids, snap, prev, logic, inputs_hash, store.dataset_set_ids(con, date.fromisoformat(d))]
         if why is None:
-            days.append(Day(d, "done", market_id=snap, cached=is_cached, prev_date=pd))
+            days.append(Day(d, "done", market_id=snap, cached=is_cached, prev_date=pd, prev_cut=pcut))
         elif failed.get(d) == sig:
-            days.append(Day(d, "failed", why, sig, snap, is_cached, pd))
+            days.append(Day(d, "failed", why, sig, snap, is_cached, pd, pcut))
         else:
-            days.append(Day(d, "todo", why, sig, snap, is_cached, pd))
+            days.append(Day(d, "todo", why, sig, snap, is_cached, pd, pcut))
     return Plan(lo, hi, days, hub is not None, hub)
 
 
@@ -347,8 +344,11 @@ def run(settings: Settings, p: Plan, *, store_url: str | None = None, client: An
                 sd = SnapshotDir(cache_dir)
                 have = set(sd.market_dates())
                 # not cached, or cached under another snapshot than the hub's of the plan (the hub re-published the
-                # date or the previous close, #439): its bundle again; an unchanged cached date is not downloaded
-                planned = ((day.date, day.market_id), (day.prev_date, day.sig[2] if day.sig else None))
+                # date or the previous close, #439): its bundle again; an unchanged cached date is not downloaded.
+                # The previous close is the plan's, the one the run then picks (``bundle.previous_close``, #203);
+                # a cached eod_preliminary one is not the hub's to sync
+                planned = ((day.date, day.market_id),
+                           (day.prev_date if day.prev_cut == "eod_final" else None, day.sig[2] if day.sig else None))
                 want = [x for x, sid in planned
                         if x and (x not in have or (p.hub and sid and sd.market_id(x) != sid))]
                 if want and client is not None:

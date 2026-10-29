@@ -69,7 +69,7 @@ from . import store
 from .curves import fx as fxcurves
 from .marketdata import cache, history, reference, static_facts
 from .marketdata.adapter import MarketView
-from .marketdata.bundle import SnapshotDir, SnapshotError, previous_market
+from .marketdata.bundle import SnapshotDir, SnapshotError, previous_close
 from .marketdata.hub import HubClient, HubError, hub_check
 from .orchestrator import EodContext, attach_pnl, prepare, value
 from .pnl import direct as direct_pnl
@@ -178,7 +178,7 @@ def _cmd_eod_locked(a: argparse.Namespace) -> int:
 
 def pnl_basis(ctx: EodContext, prev: tuple[str, str] | None) -> dict[str, Any]:
     """What the flash PnL of ``ctx`` is measured against (R11; lineage ``pnl_basis``): ``prev_date``,
-    ``prev_cut_type`` (``bundle.previous_market``), ``expected_date`` (the previous business day of the
+    ``prev_cut_type`` (``bundle.previous_close``), ``expected_date`` (the previous business day of the
     settlement calendar) and ``label``: None when it is the expected day's ``eod_final``, else what the pages show
     («PnL от 15.10 (закрытие): нет закрытия 16.10»)."""
     expected: date | None = None
@@ -218,8 +218,8 @@ def eod_run(settings: Settings, d: str, *, snapshots: str | Path | None = None, 
     ``cut_type`` / ``market_snapshot_id``: another market cut of ``d`` than its ``eod_final`` (R11: the autopilot's
     intraday step values today's book on an ``intraday`` cut, ``run_type`` INTRADAY, or on ``eod_preliminary``).
     The flash PnL is measured against the newest earlier ``eod_final`` of the cache, else an ``eod_preliminary``
-    (``bundle.previous_market``); when that is not the previous business day's final, the run says so
-    (``pnl_basis``).
+    (``bundle.previous_close`` of the cache: the backfill's plan and the autopilot's steps pick it by the same rule,
+    #203); when that is not the previous business day's final, the run says so (``pnl_basis``).
 
     ``contexts`` (``desk backfill``, R23): prepared dates kept between calls, so that a run of consecutive dates
     prepares each date's market once (as the run's own date, then as the next date's previous one).
@@ -241,7 +241,8 @@ def eod_run(settings: Settings, d: str, *, snapshots: str | Path | None = None, 
     ctx = dataclasses.replace(ctx, reference=reference.facts(sd, ctx.static),
                               proxy_curves=bool(getattr(settings, "proxy_curves_for_risk", False)),
                               quote_curve_risk=bool(getattr(settings, "quote_curve_risk", False)))
-    prev_cut = None if on_close else previous_market(sd, d)
+    pc = None if on_close else previous_close(sd, d)
+    prev_cut = pc[:2] if pc else None
     prev_date = prev_cut[0] if prev_cut else None
     prev = MarketView(sd.market(*prev_cut)) if prev_cut else None
     basis = pnl_basis(ctx, prev_cut)
