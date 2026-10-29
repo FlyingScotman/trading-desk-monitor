@@ -182,6 +182,10 @@ def test_published_pnl_methods_and_honest_absence(ctx, prev, store_url):
     assert l1["available"] is False and l1["reason"] == "not_computed"
     cov = desk["pnlCoverage"]
     assert cov == {"withPnl": sum(p["pnl"]["available"] for p in desk["positions"]), "positions": len(ROWS)}
+    # TDM#106: no official PnL arrived (rows with one: test_official_label_106); the history's pnlOfficial is
+    # explained plus the FX basis, flagged as such
+    day = desk["history"][-1]
+    assert day["pnlOfficial"] is not None and day["officialReceived"] is False and desk["official"]["received"] is False
     assert 0 < cov["withPnl"] < cov["positions"]  # partial: the page says «частично: N из M позиций»
     # the run log of both stores carries the INFO lines per method
     log = c.get(f"/api/v1/runs/{rid}").json()["log"]
