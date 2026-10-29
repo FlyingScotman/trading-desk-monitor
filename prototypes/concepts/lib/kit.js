@@ -194,6 +194,21 @@
   // эмитента (рейтинги в статике есть), «нет данных» / «—» — рейтингов в данных нет вовсе
   K.RATINGS = ['AAA', 'AA+', 'AA', 'AA-', 'A+', 'A', 'A-', 'BBB+', 'BBB', 'BBB-', 'BB+', 'BB', 'BB-', 'B+', 'B', 'B-', 'CCC+', 'CCC', 'CCC-', 'CC', 'C', 'RD', 'SD', 'D'];
   K.RATING_BUCKETS = [['AAA', '#4c9dff'], ['AA', '#22c3d6'], ['A', '#3fb67a'], ['BBB', '#e3b341'], ['≤BB', '#f0645a'], ['б/р', '#8a96a3']];
+  // дефолтные и дистрессные выпуски (#111): доходность MOEX вида «29 574 %» — не уровень рынка. Признак — рейтинг
+  // дефолта (RD / SD / D), доходность от 50 % или G-спред шире 2000 б.п. (та же граница дистресса, что у медиан
+  // Z-спреда запасной оценки, backend desk/valuation/fallback.py Z_BAND_BP). Такие выпуски помечены, их доходность не
+  // показывается числом, в медианы и шкалы таблиц они не входят. b — выпуск рынка (ytm/ytmMoex, spread) или позиция (gspread)
+  K.DISTRESS = { ratings: ['RD', 'SD', 'D'], ytmPct: 50, spreadBp: 2000 };
+  K.distress = b => {
+    if (!b) return null;
+    const y = b.ytmMoex != null ? b.ytmMoex : b.ytm, sp = b.spread != null ? b.spread : b.gspread;
+    if (K.DISTRESS.ratings.includes(b.rating)) return { kind: 'default', text: 'дефолт', why: 'рейтинг ' + b.rating + ' — дефолт', ytm: y };
+    if (y != null && isFinite(y) && y >= K.DISTRESS.ytmPct) return { kind: 'distress', text: 'дистресс', why: 'доходность MOEX ' + K.f.pct(y) + ' (от ' + K.DISTRESS.ytmPct + ' %)', ytm: y };
+    if (sp != null && isFinite(sp) && sp > K.DISTRESS.spreadBp) return { kind: 'distress', text: 'дистресс', why: 'G-спред ' + K.f.bp(sp) + ' б.п. (шире ' + K.DISTRESS.spreadBp + ')', ytm: y };
+    return null;
+  };
+  // пометка вместо числа: подсказка говорит, почему и что выпуск не входит в медианы и шкалы
+  K.distressTag = d => '<span class="k-tag" style="border-color:var(--warn);color:var(--warn)" title="' + esc(d.why + ': доходность не показатель рынка, выпуск не входит в медианы и шкалы') + '">' + d.text + '</span>';
   K.ratingRank = r => { const i = K.RATINGS.indexOf(r); return i < 0 ? 99 : i; };
   K.ratingBucket = r => K.RATINGS.indexOf(r) < 0 ? 'б/р' : r === 'AAA' ? 'AAA' : /^AA[+-]?$/.test(r) ? 'AA' : /^A[+-]?$/.test(r) ? 'A' : /^BBB/.test(r) ? 'BBB' : '≤BB';
   K.ratingColor = r => (K.RATING_BUCKETS.find(b => b[0] === K.ratingBucket(r)) || K.RATING_BUCKETS[5])[1];
