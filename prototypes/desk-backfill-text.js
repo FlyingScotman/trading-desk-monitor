@@ -6,6 +6,7 @@
  *  T.dates(j)             — {conv, load}: даты, которые «не сходятся» (своя проблема расчёта) и «не загружаются»
  *                           (одна дата раз за разом упирается в сеть или базу — kind transient; даты хаба, и при
  *                           выключенной догрузке: их грузит шаг sync), без повторов;
+ *  T.n(n, one, many)      — «1 не сходится», «2 не сходятся»: число со своим словом;
  *  T.stall(j)             — {text, title} застоя или null: «стоит: <причина>, повтор в ЧЧ:ММ», в подсказке — с какого
  *                           времени, следующая попытка и ошибка целиком.
  * Подключается раньше kit.js (concepts/lib/boot.js) и в settings.html; window.DESK_BACKFILL_TEXT.
@@ -22,6 +23,7 @@
     var t = msk(iso), today = msk(now == null ? Date.now() : now);
     return (t.slice(0, 10) === today.slice(0, 10) ? '' : t.slice(8, 10) + '.' + t.slice(5, 7) + ' ') + t.slice(11, 16);
   };
+  T.n = function (n, one, many) { return n + (n % 10 === 1 && n % 100 !== 11 ? one : many); };
   T.dates = function (j) {
     var on = j && j.enabled !== false, seen = {}, conv = [], load = [];
     (on ? j.problem_dates || [] : []).forEach(function (p) { seen[p.date] = 1; (p.kind === 'transient' ? load : conv).push(p); });

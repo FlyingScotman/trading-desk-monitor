@@ -1383,7 +1383,7 @@ function renderSummary(){
   const b = SUM.bf, T = window.DESK_BACKFILL_TEXT;
   if (b) {
     const withPos = Math.max(0, (b.dates || 0) - (b.no_positions || 0) - (b.no_market || 0)), stall = T.stall(b), D = T.dates(b);
-    const bad = [D.conv.length ? D.conv.length + ' не сходятся' : '', D.load.length ? D.load.length + ' не загружаются' : ''].filter(Boolean).join(', ');
+    const bad = [D.conv.length ? T.n(D.conv.length, ' не сходится', ' не сходятся') : '', D.load.length ? T.n(D.load.length, ' не загружается', ' не загружаются') : ''].filter(Boolean).join(', ');
     if (!b.enabled) it('', '#bf', 'История прогонов', 'не считается', 'включается в «Автообновлении»');
     else if (stall) it('warn', '#bf', 'История прогонов', 'стоит — ' + stall.why, stall.title);
     else if (bad) it('warn', '#bf', 'История прогонов', b.done + ' из ' + withPos + ' · ' + bad, 'даты — в «Диагностика → История прогонов»');
@@ -1407,7 +1407,7 @@ function renderBfSum(){
   if (!b) { el.textContent = ''; return; }
   const withPos = Math.max(0, (b.dates || 0) - (b.no_positions || 0) - (b.no_market || 0)), stall = T.stall(b), D = T.dates(b);
   el.textContent = !b.enabled ? 'сейчас не считается' : 'посчитано ' + b.done + ' из ' + plural(withPos, 'даты', 'дат', 'дат') +
-    (D.conv.length ? ', ' + D.conv.length + ' не сходятся' : '') + (D.load.length ? ', ' + D.load.length + ' не загружаются' : '');
+    (D.conv.length ? ', ' + T.n(D.conv.length, ' не сходится', ' не сходятся') : '') + (D.load.length ? ', ' + T.n(D.load.length, ' не загружается', ' не загружаются') : '');
   // застой — строкой в карточке, со ссылкой на ход расчёта
   if (stall) { note.hidden = false; note.append('Догрузка ' + stall.text + '. ', h('a', {href:'#bf'}, 'подробнее →')); note.title = stall.title; }
 }

@@ -1212,7 +1212,7 @@
   const BT = () => window.DESK_BACKFILL_TEXT;
   K.BF_CAUSE = (BT() || {}).CAUSE || {};
   const bfWhen = iso => BT().when(iso);
-  const bfN = (n, one, many) => n + (n % 10 === 1 && n % 100 !== 11 ? one : many);
+  const bfN = (n, one, many) => BT().n(n, one, many);
   const bfList = (head, L) => L.length ? '\n' + head + ' (' + L.length + '):\n' + L.slice(0, 15).join('\n') + (L.length > 15 ? '\n… ещё ' + (L.length - 15) : '') + '\n' : '';
   K.backfillStatus = function (j) {
     if (!j) return null;

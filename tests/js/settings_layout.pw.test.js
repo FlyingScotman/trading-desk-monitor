@@ -221,7 +221,7 @@ test('настройки: главное сверху, редкое по кно�
       assert.strictEqual(await pg.locator('#st-sum a', { hasText: 'стоит' }).getAttribute('href'), '#bf');
       const note = await pg.locator('#bf-stall').innerText();
       assert.ok(/Догрузка стоит: прокси не пропускает, повтор в \d\d\.\d\d \d\d:\d\d|Догрузка стоит: прокси не пропускает, повтор в \d\d:\d\d/.test(note) && /подробнее/.test(note), note);
-      assert.ok(/1 не сходятся/.test(await pg.locator('#bf-sum').innerText()));
+      assert.ok(/1 не сходится/.test(await pg.locator('#bf-sum').innerText()));
       // путь папки изменён до сохранения: сведения прежней папки под ним не показываются
       await pg.goto(ORIGIN + '/settings.html#dirs');
       assert.ok(/не видит/.test(await pg.locator('#dirs .dir-found').first().innerText()));
