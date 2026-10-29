@@ -168,7 +168,9 @@ def unpack_python(archive: Path, stage: Path) -> None:
 
 def adapter_files(zip_bytes: bytes) -> dict[str, bytes]:
     """The private adapter zip as ``{bundle path under adapter/: bytes}``: its one top-level package (a folder
-    with ``__init__.py`` whose parent has none) as ``<package>/...``, plus README/LICENSE files at its root."""
+    with ``__init__.py`` inside no other such folder) as ``<package>/...``, plus README/LICENSE files at its root.
+    Packages nested deeper, also under a plain folder of it (the adapter's ``_acquisition/system2``), are its
+    resources, not other top-level packages."""
     with zipfile.ZipFile(io.BytesIO(zip_bytes)) as z:
         names = [n for n in z.namelist() if not n.endswith("/")]
         for n in names:
@@ -176,7 +178,7 @@ def adapter_files(zip_bytes: bytes) -> dict[str, bytes]:
             if n.startswith(("/", "\\")) or norm.startswith("..") or ":" in n or "\\" in n:
                 raise ValueError(f"unsafe path in the adapter zip: {n!r}")
         inits = {posixpath.dirname(n) for n in names if posixpath.basename(n) == "__init__.py"}
-        tops = sorted(d for d in inits if posixpath.dirname(d) not in inits)
+        tops = sorted(d for d in inits if not any(d.startswith(o + "/") for o in inits if o))
         if len(tops) != 1:
             raise ValueError(f"the adapter zip must hold exactly one top-level package, found {tops or 'none'}")
         top = tops[0]
