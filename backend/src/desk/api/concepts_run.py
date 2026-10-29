@@ -51,10 +51,10 @@ by which method."""
 EXTRA_KEYS_READ = ("assumptions", "core", "dm_bp", "funding", "g_spread_bp", "horizon_kind", "index_fixings",
                    "issue_size", "lat_name", "legs", "not_exact_reason", "offer_date", "offer_kind", "ofz_basis01",
                    "ofz_ruonia01", "pv_diff_rub", "quality", "quote", "reason", "reported", "reported_pv_rub", "repos",
-                   "spread_buckets", "swaps")
+                   "risk_problem", "spread_buckets", "swaps")
 """The keys of a position's ``extra`` (the row's own, passed through) that ``lib/real.js`` reads, some only on rows
 a plain bond book does not have: an FX deal's ``legs``, a rates-core trade's ``swaps`` / ``repos`` / ``core``, a
-not-valued row's ``reported``. ``tests/js/ui_pack6.test.js`` keeps it equal to what ``real.js`` reads (TDM#324)."""
+not-valued row's ``reported``, an impossible risk's ``risk_problem`` (TDM#170, TDM#460). ``tests/js/ui_pack6.test.js`` keeps it equal to what ``real.js`` reads (TDM#324)."""
 EXTRA_NESTED_KEYS = {
     "funding": ("amount_rub", "default_rate", "in_pnl", "lines", "reason", "rule_source", "state"),
     "funding.lines[]": ("base", "body_ccy", "ccy", "days", "default_rate", "interest_ccy", "interest_rub", "kind",
