@@ -500,16 +500,110 @@ def test_a_date_that_keeps_failing_on_the_network_stops_holding_the_queue(tmp_pa
             return backfill.run(s, backfill.plan(con, s, date(2026, 10, 1), date(2026, 10, 15)), store_url=store_url,
                                 out=lambda line: None)
 
-    assert run()["done"] == ["2026-10-13"]  # 15.10 waits: the hub may be down as a whole
     res = run()
-    assert res["done"] == ["2026-10-15"] and [d for d, _ in res["failed"]] == ["2026-10-14"]
+    assert res["done"] == ["2026-10-13"] and res["stalled"]["date"] == "2026-10-14"  # 15.10 waits: the hub may be down
     with store.connect(store_url) as con:
         st = backfill.status(con, s, today=date(2026, 10, 15))
-    assert st["todo"] == 1 and [(p["date"], p["attempts"]) for p in st["problem_dates"]] == [("2026-10-14", 2)]
+    assert st["problem_dates"] == [] and "502" in st["stalled"]["error"]  # not yet the date's: a stall (#447)
+    res = run()  # 14.10 passed over, 15.10 loads: the error is 14.10's own (#217), it does not hold the queue
+    assert res["done"] == ["2026-10-15"] and [d for d, _ in res["failed"]] == ["2026-10-14"] and not res["stalled"]
+    with store.connect(store_url) as con:
+        st = backfill.status(con, s, today=date(2026, 10, 15))
+    assert st["todo"] == 1 and [(p["date"], p["kind"], p["attempts"]) for p in st["problem_dates"]] == [
+        ("2026-10-14", "unreachable", 2)]
+    assert st["stalled"] is None
+    res = run()  # tried again every time, not a stall
+    assert [d for d, _ in res["failed"]] == ["2026-10-14"] and not res["stalled"]
     monkeypatch.setattr(cli, "eod_run", real)
     assert run()["done"] == ["2026-10-14"]
     with store.connect(store_url) as con:
         assert backfill.status(con, s, today=date(2026, 10, 15))["problem_dates"] == []
+
+
+@pytest.mark.parametrize(("error", "source"), [
+    pytest.param(lambda: TimeoutError("timed out"), "network", id="timeout"),
+    pytest.param(lambda: __import__("psycopg").OperationalError("connection to server on socket failed"), "store",
+                 id="store"),
+])
+def test_a_network_down_for_cycles_stalls_the_backfill_without_problem_dates(tmp_path, cache, store_url, monkeypatch,
+                                                                             error, source):
+    """#447: the network (or the store) down for hours added one «does not converge» date a cycle (each date passed
+    over after MAX_ATTEMPTS, the next one stopped on). The same error on the next date is the network's, not the
+    dates': no problem dates, the backfill stalls with its reason, since when and the next attempt; at most two dates
+    tried a cycle (#208); when the network is back, the dates run and the stall is gone."""
+    load(store_url, tmp_path, "2026-10-13", 10)
+    s = settings(tmp_path, cache, store_url)
+    real = cli.eod_run
+    tried: list[str] = []
+
+    def down(settings, d, **kw):
+        tried.append(d)
+        raise error()
+
+    monkeypatch.setattr(cli, "eod_run", down)
+
+    def run():
+        with store.connect(store_url) as con:
+            return backfill.run(s, backfill.plan(con, s, date(2026, 10, 1), date(2026, 10, 15)), store_url=store_url,
+                                out=lambda line: None)
+
+    since = None
+    for cycle in range(5):
+        tried.clear()
+        res = run()
+        assert not res["done"] and res["stalled"]["date"] == "2026-10-13" and res["stalled"]["source"] == source
+        assert tried == (["2026-10-13"] if cycle == 0 else ["2026-10-13", "2026-10-14"]), (cycle, tried)
+        with store.connect(store_url) as con:
+            st = backfill.status(con, s, today=date(2026, 10, 15))
+        assert st["problem_dates"] == [] and st["failed"] == 0 and st["todo"] == 3, (cycle, st["problem_dates"])
+        stall = st["stalled"]
+        assert type(error()).__name__ in stall["error"] and stall["date"] == "2026-10-13" and stall["next_attempt"]
+        since = since or stall["since"]
+        assert stall["since"] == since and stall["at"] >= since
+    monkeypatch.setattr(cli, "eod_run", real)
+    res = run()
+    assert res["done"] == ["2026-10-13", "2026-10-14", "2026-10-15"] and not res["failed"] and not res["stalled"]
+    with store.connect(store_url) as con:
+        st = backfill.status(con, s, today=date(2026, 10, 15))
+    assert st["stalled"] is None and st["problem_dates"] == [] and st["done"] == 3
+
+
+def test_a_date_failing_on_its_data_does_not_hold_the_queue_and_does_not_stall(tmp_path, cache, store_url,
+                                                                               monkeypatch):
+    """#23 kept by #447: a date that fails on its data (not the network) is failed at once, one still stale after
+    its run is a problem date after MAX_ATTEMPTS runs; neither holds the queue nor stalls the backfill, and the
+    status tells them («do not converge») from the dates that do not load."""
+    load(store_url, tmp_path, "2026-10-12", 10)
+    s = settings(tmp_path, cache, store_url)
+    tried = _stale_after_run(monkeypatch, "2026-10-12")
+    stale = cli.eod_run
+
+    def bad(settings, d, **kw):
+        if d == "2026-10-14":
+            tried.append(d)
+            raise ValueError("bad bundle")
+        return stale(settings, d, **kw)
+
+    monkeypatch.setattr(cli, "eod_run", bad)
+
+    def run():
+        with store.connect(store_url) as con:
+            return backfill.run(s, backfill.plan(con, s, date(2026, 10, 1), date(2026, 10, 15)), store_url=store_url,
+                                out=lambda line: None)
+
+    res = run()  # 14.10 failed at once, 12.10 tried again next time; the queue goes on
+    assert res["done"] == ["2026-10-13", "2026-10-15"] and res["unconverged"] == ["2026-10-12"]
+    assert [d for d, _ in res["failed"]] == ["2026-10-14"] and not res["stalled"]
+    res = run()  # 12.10 after MAX_ATTEMPTS runs: a problem date
+    assert [d for d, _ in res["failed"]] == ["2026-10-12"] and not res["stalled"]
+    res = run()  # neither tried again on the same inputs
+    assert not res["done"] and not res["failed"] and not res["stalled"]
+    assert tried.count("2026-10-12") == backfill.MAX_ATTEMPTS and tried.count("2026-10-14") == 1
+    with store.connect(store_url) as con:
+        st = backfill.status(con, s, today=date(2026, 10, 15))
+    assert [(p["date"], p["kind"]) for p in st["problem_dates"]] == [("2026-10-12", "unconverged"),
+                                                                     ("2026-10-14", "failed")]
+    assert st["stalled"] is None and st["done"] == 2 and st["todo"] == 0
 
 
 def test_backfill_status_route_lists_the_hub_problem_dates(tmp_path, cache, store_url, monkeypatch):
