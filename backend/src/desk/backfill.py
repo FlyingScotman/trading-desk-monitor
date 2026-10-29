@@ -23,8 +23,8 @@ upgrade recomputes only the latest date. Nothing ever computed an older date.
    made by another valuation or core version (``same_logic``: ``VALUATION_VERSION`` and the core version of
    ``logic_version()`` recompute the history; a new release or Windows bundle of the same computation does not). Otherwise it is skipped: nothing
    is computed twice.
-3. **runs**, oldest first: the date's bundle and the previous date's (flash PnL) from the hub when not cached
-   (``cache.sync``), then ``cli.eod_run``, the code path of every EOD run. The prepared market of a date is kept for
+3. **runs**, oldest first: the date's bundle and the previous date's (flash PnL) from the hub when not cached, or
+   cached under another snapshot than the hub's of the plan (a correction of an older date, #439) (``cache.sync``), then ``cli.eod_run``, the code path of every EOD run. The prepared market of a date is kept for
    the next one (its previous date: ``cli.ContextCache``), so each date's static snapshot and curves are built once.
    One date at a time: a model price carries its bond's spread from the latest earlier run
    (``store.carried_spreads``), so a date's run depends on the runs before it; dates in parallel would compute
@@ -402,12 +402,17 @@ def run(settings: Settings, p: Plan, *, store_url: str | None = None, client: An
                 progress(i, len(todo), day.date)
             still, phase, downloaded = None, "bundle", False
             try:
-                have = set(SnapshotDir(cache_dir).market_dates())
-                want = [x for x in (day.date, day.prev_date) if x and x not in have]
+                sd = SnapshotDir(cache_dir)
+                have = set(sd.market_dates())
+                # not cached, or cached under another snapshot than the hub's of the plan (the hub re-published the
+                # date or the previous close, #439): its bundle again; an unchanged cached date is not downloaded
+                planned = ((day.date, day.market_id), (day.prev_date, day.sig[2] if day.sig else None))
+                want = [x for x, sid in planned
+                        if x and (x not in have or (p.hub and sid and sd.market_id(x) != sid))]
                 if want and client is not None:
                     cache.sync(client, cache_dir, want)
                     downloaded = True
-                elif day.date in want:
+                elif day.date not in have:
                     skipped.append(day.date)
                     continue
                 phase = "run"

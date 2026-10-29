@@ -225,6 +225,72 @@ def test_a_date_not_cached_without_a_hub_is_skipped(tmp_path, cache, store_url):
     assert res["skipped"] == ["2026-10-16"] and res["done"] == ["2026-10-14", "2026-10-15"]
 
 
+def _hub(cache: Path, monkeypatch, hub_dir: Path) -> tuple[list[tuple[str, str]], list[str]]:
+    """The hub's rows (newest first): the cache's snapshot of each date, else ``hub_dir``'s (its re-published
+    dates); ``cache.sync`` copies a date's ``hub_dir`` bundle into the cache. Returns (rows, the dates synced)."""
+    import shutil
+
+    from desk.marketdata.bundle import SnapshotDir
+
+    ids = {d: SnapshotDir(cache).market_id(d) for d in DATES}
+    hub_ids = {d: SnapshotDir(hub_dir).market_id(d) for d in SnapshotDir(hub_dir).market_dates()} if hub_dir.exists() else {}
+    synced: list[str] = []
+
+    def sync(client, cache_dir, dates):
+        for d in dates:
+            synced.append(d)
+            if d in hub_ids:
+                shutil.copy(hub_dir / f"{hub_ids[d]}.json.gz", cache_dir)
+
+    monkeypatch.setattr(backfill.cache, "sync", sync)
+    return [(d, hub_ids.get(d, ids[d])) for d in reversed(DATES)], synced
+
+
+def test_a_hub_correction_of_a_cached_date_is_downloaded_and_converges(tmp_path, cache, store_url, monkeypatch):
+    """#439: the hub re-publishes a date already cached and run: the backfill downloads it, and the date (market
+    snapshot changed) and the next one (previous snapshot changed) are run on it and converge."""
+    from desk.marketdata.bundle import SnapshotDir
+
+    load(store_url, tmp_path, "2026-10-12", 10)
+    s = settings(tmp_path, cache, store_url)
+    with store.connect(store_url) as con:
+        assert backfill.run(s, backfill.plan(con, s, date(2026, 10, 1), date(2026, 10, 15)), store_url=store_url,
+                            out=lambda line: None)["done"] == DATES[1:]
+    old = SnapshotDir(cache).market_id("2026-10-13")
+    doc = shifted("2026-10-13", 7, known_at="2026-10-20T09:00:00Z", light=False)
+    doc["supersedes"] = old
+    new = write(tmp_path / "hub", doc)
+    rows, synced = _hub(cache, monkeypatch, tmp_path / "hub")
+    with store.connect(store_url) as con:
+        p = backfill.plan(con, s, date(2026, 10, 1), date(2026, 10, 15), rows)
+        assert [(d.date, d.why) for d in p.todo] == [("2026-10-13", "market snapshot changed"),
+                                                      ("2026-10-14", "previous snapshot changed")]
+        res = backfill.run(s, p, store_url=store_url, client=object(), out=lambda line: None)
+        assert res["done"] == ["2026-10-13", "2026-10-14"] and not res["unconverged"] and not res["failed"]
+        assert synced == ["2026-10-13"] and SnapshotDir(cache).market_id("2026-10-13") == new
+        runs = store.default_runs(con, date(2026, 10, 1))
+        assert runs[date(2026, 10, 13)]["market_snapshot_id"] == new
+        assert runs[date(2026, 10, 14)]["prev_market_snapshot_id"] == new
+        assert not backfill.plan(con, s, date(2026, 10, 1), date(2026, 10, 15), rows).todo
+    assert not backfill.state(s).get("problems")
+
+
+def test_unchanged_cached_dates_are_not_downloaded_again(tmp_path, cache, store_url, monkeypatch):
+    """#439: a date to run again (new positions) whose cached snapshots are the hub's is not downloaded: the
+    backfill does not fetch the whole history every cycle."""
+    load(store_url, tmp_path, "2026-10-12", 10)
+    s = settings(tmp_path, cache, store_url)
+    rows, synced = _hub(cache, monkeypatch, tmp_path / "hub")
+    with store.connect(store_url) as con:
+        p = backfill.plan(con, s, date(2026, 10, 1), date(2026, 10, 15), rows)
+        assert backfill.run(s, p, store_url=store_url, client=object(), out=lambda line: None)["done"] == DATES[1:]
+        load(store_url, tmp_path, "2026-10-14", 12)
+        p = backfill.plan(con, s, date(2026, 10, 1), date(2026, 10, 15), rows)
+        assert [d.why for d in p.todo] == ["positions changed"] * 2
+        assert backfill.run(s, p, store_url=store_url, client=object(), out=lambda line: None)["done"] == DATES[3:]
+    assert synced == []
+
+
 def test_autopilot_step_after_the_eod_step_within_its_budget(tmp_path, cache, store_url):
     load(store_url, tmp_path, "2026-10-12", 10)
     load(store_url, tmp_path, "2026-10-15", 11)
