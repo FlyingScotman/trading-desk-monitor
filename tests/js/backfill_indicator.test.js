@@ -24,6 +24,7 @@ function load() {
   ctx.window = ctx;
   vm.createContext(ctx);
   vm.runInContext(P('concepts/lib/mock.js'), ctx);
+  vm.runInContext(P('desk-backfill-text.js'), ctx);  // подключает lib/boot.js раньше kit.js
   vm.runInContext(P('concepts/lib/kit.js'), ctx);
   return ctx.window.KIT;
 }

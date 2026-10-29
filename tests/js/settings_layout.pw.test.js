@@ -48,7 +48,8 @@ function server() {
       fingerprint: 'cd'.repeat(32), config_dir: HOME + '\\adapter-config', describe: { contract: 'private/1.5', acquisition: { version: 1 } },
       config_files: [], settings_tabs: [], optional: [], actions: [], warnings: [], error: null };
     if (p === '/api/v1/autopilot/status') return { enabled: true, state: 'idle', steps: st.noSync ? [] : [{ name: 'sync', status: 'ok', detail: 'срезов: 1', at: '' }] };
-    if (p === '/api/v1/backfill/status') return { enabled: true, dates: 20, done: 10, todo: 5, no_positions: 4, no_market: 1, failed: 0 };
+    if (p === '/api/v1/backfill/status') return Object.assign({ enabled: true, dates: 20, done: 10, todo: 5, no_positions: 4, no_market: 1, failed: 0 }, st.bf || {});
+    if (p === '/api/v1/inbox/folders' && st.folders) return st.folders;
     if (p === '/api/v1/acquisition') return { available: false, code: 'runtime_unavailable', job: { state: 'idle', phase: 'idle', code: 'idle' } };
     return null;
   };
@@ -75,7 +76,7 @@ async function open(browser, st, hash, opts) {
   });
   await pg.goto(ORIGIN + '/settings.html' + hash);
   await pg.waitForSelector('#st-sum:not([hidden]) a');
-  await pg.waitForFunction(() => document.querySelector('#dirs-hint .sug'));
+  if (!(opts && opts.noHint)) await pg.waitForFunction(() => document.querySelector('#dirs-hint .sug'));
   return { pg, ctx, errors };
 }
 
@@ -86,7 +87,7 @@ test('настройки: главное сверху, редкое по кно�
       const st = server(), { pg, ctx, errors } = await open(browser, st, '#adapter');
       await pg.waitForFunction(() => /Адаптер/.test(document.getElementById('st-sum').innerText));
       const sum = await pg.locator('#st-sum').innerText();
-      assert.ok(/Требует внимания: 2/.test(sum) && /Токен:\s*не задан/.test(sum) && /Папки отчётов:\s*1 папка · подсказка/.test(sum), sum);
+      assert.ok(/Требует внимания: 2/.test(sum) && /Токен:\s*не задан/.test(sum) && /Папки с отчётами:\s*1 папка · подсказка/.test(sum), sum);
       assert.ok(/История прогонов:\s*10 из 15/.test(sum) && !/Адаптер:/.test(sum), sum);
       assert.deepStrictEqual(await pg.locator('#st-sum a.ok').allInnerTexts(), ['Хаб', 'Адаптер', 'Автообновление']);
       assert.strictEqual(await pg.locator('#st-sum a.ok', { hasText: 'Адаптер' }).getAttribute('title'), 'загружен · synthetic 0.9.0');
@@ -94,12 +95,13 @@ test('настройки: главное сверху, редкое по кно�
       assert.strictEqual(await pg.locator('label[for="hub_url"] .key').textContent(), 'hub_url');
       assert.strictEqual(await pg.locator('label[for="tls_cert"] .key').textContent(), 'tls_cert, tls_key');
       const hint = await pg.locator('#dirs-hint').innerText();
-      assert.ok(/options\.json → report_dirs\[1\]/.test(hint) && /D:\\Выгрузки/.test(hint) && /не просматривает/.test(hint), hint);
+      assert.ok(/D:\\Выгрузки/.test(hint) && /не просматривает/.test(hint) && !/report_dirs/.test(hint), hint);
+      assert.strictEqual(await pg.locator('#dirs-hint [title="options.json → report_dirs[1]"]').count(), 1, 'служебный ключ — в подсказке');
       assert.ok(/3 файла, последний за 21\.10\.2026/.test(hint) && /E:\\Старые/.test(hint), hint);
       await pg.locator('#dirs-hint button', { hasText: 'Добавить в папки с отчётами' }).click();
       assert.ok(await pg.locator('#savebar').isVisible());
       assert.ok(!/D:\\Выгрузки/.test(await pg.locator('#dirs-hint').innerText()), 'подсказка ушла: папка в списке');
-      assert.strictEqual(await pg.locator('#st-sum a.ok', { hasText: 'Папки отчётов' }).getAttribute('title'), '2 папки');
+      assert.strictEqual(await pg.locator('#st-sum a.ok', { hasText: 'Папки с отчётами' }).getAttribute('title'), '2 папки');
       await pg.locator('#save').click();
       await pg.waitForTimeout(300);
       assert.deepStrictEqual(st.puts[0].inbox_dirs.map(d => d.path), ['C:\\in', 'D:\\Выгрузки']);
@@ -140,7 +142,7 @@ test('настройки: главное сверху, редкое по кно�
     await t.test('определено автоматически: «изменить», «вернуть авто»; нет связи — прокси раскрыт; Python — подстановкой', async () => {
       const st = server(), { pg, ctx, errors } = await open(browser, st, '#adapter');
       const auto = pg.locator('.auto[data-auto="private_adapter_config"]');
-      assert.ok(/Определено автоматически:/.test(await auto.innerText()) && (await auto.innerText()).includes(HOME + '\\adapter-config'));
+      assert.ok(/^авто/.test(await auto.innerText()) && (await auto.innerText()).includes(HOME + '\\adapter-config'));
       // путь по умолчанию в settings.json не закрепляется: «изменить» только ставит курсор в поле
       await auto.locator('button', { hasText: 'изменить' }).click();
       assert.strictEqual(await pg.locator('#private_adapter_config').inputValue(), '');
@@ -201,6 +203,35 @@ test('настройки: главное сверху, редкое по кно�
       assert.strictEqual(await pg.locator('#https_proxy').inputValue(), '', 'замаскированный пароль в поле не попадает');
       assert.strictEqual(await pg.evaluate(() => document.activeElement.id), 'https_proxy');
       assert.ok(/сетевая, не проверялась/.test(await pg.locator('#dirs-hint').innerText()));
+      assert.deepStrictEqual(errors, []);
+      await ctx.close();
+    });
+    await t.test('застой догрузки (#447) и папка, которой сервер не видит (#445), — в сводке; «Обновить» обновляет сводку', async () => {
+      const st = server();
+      st.settings.hub_token_set = true;
+      st.detect.inbox = { from_adapter_config: [], from_accepted: [] };
+      st.bf = { stall: { cause: 'proxy', status: 407, error: 'Tunnel connection failed: 407', since: '2026-10-29T07:05:00Z', next_attempt: '2026-10-29T07:35:00Z' },
+        problem_dates: [{ date: '2026-03-02', kind: 'failed', why: 'no default run', error: 'x' }] };
+      st.folders = { folders: [{ path: 'C:\\in', scanned: true, exists: false }], entries: [{ path: 'C:\\in', folder: 0 }] };
+      const { pg, ctx, errors } = await open(browser, st, '#auto', { noHint: true });
+      await pg.waitForFunction(() => /стоит/.test(document.getElementById('st-sum').innerText) && /не видит/.test(document.getElementById('st-sum').innerText));
+      const sum = await pg.locator('#st-sum').innerText();
+      assert.ok(/Требует внимания: 2/.test(sum) && /История прогонов:\s*стоит — прокси не пропускает/.test(sum) && /Папки с отчётами:\s*1 папку сервер не видит/.test(sum), sum);
+      assert.ok(/Ошибка: Tunnel connection failed: 407/.test(await pg.locator('#st-sum a', { hasText: 'стоит' }).getAttribute('title')));
+      assert.strictEqual(await pg.locator('#st-sum a', { hasText: 'стоит' }).getAttribute('href'), '#bf');
+      const note = await pg.locator('#bf-stall').innerText();
+      assert.ok(/Догрузка стоит: прокси не пропускает, повтор в \d\d\.\d\d \d\d:\d\d|Догрузка стоит: прокси не пропускает, повтор в \d\d:\d\d/.test(note) && /подробнее/.test(note), note);
+      assert.ok(/1 не сходятся/.test(await pg.locator('#bf-sum').innerText()));
+      // путь папки изменён до сохранения: сведения прежней папки под ним не показываются
+      await pg.goto(ORIGIN + '/settings.html#dirs');
+      assert.ok(/не видит/.test(await pg.locator('#dirs .dir-found').first().innerText()));
+      await pg.locator('#dirs input.inp.mono').first().fill('C:\\other');
+      assert.strictEqual(await pg.locator('#dirs .dir-found').first().innerText(), '');
+      // «Обновить» в «Истории прогонов» — и сводка: застой прошёл
+      st.bf = {};
+      await pg.goto(ORIGIN + '/settings.html#bf');
+      await pg.locator('#bf-run').click();
+      await pg.waitForFunction(() => !/стоит/.test(document.getElementById('st-sum').innerText));
       assert.deepStrictEqual(errors, []);
       await ctx.close();
     });

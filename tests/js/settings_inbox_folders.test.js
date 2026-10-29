@@ -62,4 +62,11 @@ t('имена и коды экранируются', () => {
   assert.ok(!/<[xyzq]>/.test(h) && h.includes('&lt;y&gt;') && h.includes('&lt;q&gt; 1'), h);
 });
 
+t('для сводки настроек (#449): папки, которых сервер не видит, и прочитано ли хоть что-то', () => {
+  assert.strictEqual(F.count(null, ['C:\\Отчёты\\ОВП']), null, 'данных ещё нет');
+  assert.deepStrictEqual(JSON.parse(JSON.stringify(F.count(DOC, ['C:\\Отчёты\\ОВП', 'd:\\OVP\\', '~/x']))), { missing: 0, scanned: 1, read: 1 });
+  const gone = Object.assign({}, DOC, { folders: [fold({ exists: false, datasets: [] }), fold({ datasets: [] })] });
+  assert.deepStrictEqual(JSON.parse(JSON.stringify(F.count(gone, ['C:\\Отчёты\\ОВП', 'd:\\OVP\\']))), { missing: 1, scanned: 2, read: 0 });
+});
+
 console.log(n + ' tests passed');

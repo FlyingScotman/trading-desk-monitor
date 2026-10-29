@@ -418,7 +418,7 @@ details.sf-grp[open] > summary::before{content:"▾"}
             <tbody id="dirs"></tbody>
           </table>
         </div>
-        <div class="bd" style="padding-top:8px"><p class="hint" style="margin:0">Отчёты загружаются <b>только из этих папок</b>. Папка, указанная лишь в настройках адаптера (форма «Источники»), сюда не попадает — добавьте её здесь. Подпись — заметка для вас.</p>
+        <div class="bd" style="padding-top:8px"><p class="hint" style="margin:0">Отчёты загружаются <b>только из этих папок</b>.</p>
           <div id="dirs-hint"></div>
           <details class="adv" id="adv-dirs" data-fold><summary>Дополнительно <span class="mut3">— архив принятых файлов, папка результатов адаптера</span></summary>
           <p class="hint">Ещё всегда просматривается папка результатов действий адаптера <span class="mono" id="out-dir"></span>.</p>
@@ -621,6 +621,7 @@ details.sf-grp[open] > summary::before{content:"▾"}
       <div class="card">
         <div class="hd"><h2>История прогонов</h2><span class="mut3" id="bf-sum"></span><span class="sp"></span><a class="lnk" href="#bf">ход расчёта →</a></div>
         <div class="bd">
+          <div class="note warn" id="bf-stall" hidden></div>
           <div class="form">
             <label for="backfill">Считать прошлые даты</label>
             <div><label class="tgl"><input type="checkbox" id="backfill" data-key="backfill"><span class="tgl-s"></span><span id="backfill-lbl">включено</span></label>
@@ -985,6 +986,7 @@ details.sf-grp[open] > summary::before{content:"▾"}
 <script src="settings-forms.js"></script>
 <script src="settings-adapter.js"></script>
 <script src="settings-inbox-folders.js"></script>
+<script src="desk-backfill-text.js"></script>
 <script>
 'use strict';
 const $ = id => document.getElementById(id);
@@ -1193,13 +1195,13 @@ function tokenState(set, source){
 function renderDirs(){
   const tb = $('dirs'); tb.textContent = '';
   if (!S.dirs.length) tb.append(h('tr', {}, h('td', {colspan:4, class:'muted'}, 'Папки не заданы.')));
-  S.dirs.forEach((d, i) => tb.append(h('tr', {},
+  S.dirs.forEach((d, i) => { const found = DeskInboxFolders.node(d.path); tb.append(h('tr', {},
     h('td', {style:'width:55%'}, h('input', {class:'inp mono', value:d.path, placeholder:'C:\\Отчёты\\Позиции', 'aria-label':'Папка',
-      oninput:e => { d.path = e.target.value; }}), DeskInboxFolders.node(d.path)),  // что найдено в папке (TDM#445)
+      oninput:e => { d.path = e.target.value; DeskInboxFolders.retarget(found, d.path); }}), found),  // что найдено в папке (TDM#445)
     h('td', {}, h('input', {class:'inp', value:d.label, placeholder:'Позиции', 'aria-label':'Подпись', oninput:e => { d.label = e.target.value; }})),
     h('td', {}, h('label', {class:'chk'}, h('input', {type:'checkbox', checked:d.recursive, onchange:e => { d.recursive = e.target.checked; }}), 'включая подпапки')),
     h('td', {style:'width:1%'}, h('button', {class:'x del', type:'button', title:'Убрать папку', 'aria-label':'Убрать папку',
-      onclick:() => { S.dirs.splice(i, 1); renderDirs(); (S.dirtySecs = S.dirtySecs || new Set()).add('adapter'); setDirty(true); }}, '×')))));
+      onclick:() => { S.dirs.splice(i, 1); renderDirs(); (S.dirtySecs = S.dirtySecs || new Set()).add('adapter'); setDirty(true); }}, '×')))); });
 }
 $('dir-add').addEventListener('click', () => { S.dirs.push({path:'', label:'', recursive:false}); renderDirs(); (S.dirtySecs = S.dirtySecs || new Set()).add('adapter'); setDirty(true);
   const ins = $('dirs').querySelectorAll('input.inp.mono'); if (ins.length) ins[ins.length - 1].focus(); });
@@ -1277,14 +1279,14 @@ function renderAuto(only){
     if ((S.data.env_overrides || []).includes(k)) return;  // «задано переменной окружения» — уже помечено над полем
     const a = AUTO[k](); if (!a || !a.v) return;
     if (isAuto(el)) {
-      box.append(h('span', {class:'au'}, 'авто'), 'Определено автоматически:', h('span', {class:'v'}, a.v), a.how ? h('span', {class:'mut3'}, a.how) : null,
+      box.append(h('span', {class:'au', title:'определено автоматически: так работает пустое поле'}, 'авто'), h('span', {class:'v'}, a.v), a.how ? h('span', {class:'mut3'}, a.how) : null,
         h('button', {class:'lnk', type:'button', title:a.put ? 'Подставить в поле и поправить' : 'Ввести своё значение в поле', onclick:() => {
           if (a.put && el.tagName !== 'SELECT') { el.value = a.v; el.dispatchEvent(new Event('input', {bubbles:true})); }
           el.focus(); if (el.select && el.tagName !== 'SELECT') el.select();
         }}, 'изменить'));
       if (a.warn) box.append(h('span', {class:'warnmsg', style:'flex-basis:100%'}, a.warn));
     } else {
-      box.append(h('span', {class:'au man'}, 'вручную'), 'Само определилось бы:', h('span', {class:'v'}, a.v),
+      box.append(h('span', {class:'au man'}, 'вручную'), 'Без значения было бы:', h('span', {class:'v'}, a.v),
         h('button', {class:'lnk', type:'button', title:'Очистить поле: значение определится автоматически', onclick:() => {
           el.value = el.tagName === 'SELECT' ? 'auto' : ''; el.dispatchEvent(new Event('input', {bubbles:true}));
         }}, 'вернуть авто'));
@@ -1310,7 +1312,7 @@ function renderDetect(){
   if (D && !(S.data && (S.data.env_overrides || []).includes('inbox_dirs'))) {
     const sg = dirSuggestions();
     sg.cfg.forEach(x => box.append(h('div', {class:'sug'}, h('span', {class:'au', style:'font-size:11px'}, 'найдено'),
-      h('span', {}, 'Папка из настроек адаптера (', h('span', {class:'mono'}, x.file + ' → ' + x.key), '), монитор её не просматривает:'), h('span', {class:'v'}, x.path + (x.recursive ? '\\**' : '')),
+      h('span', {title:x.file + ' → ' + x.key}, 'Папка из настроек адаптера, монитор её не просматривает:'), h('span', {class:'v'}, x.path + (x.recursive ? '\\**' : '')),
       x.exists === null ? h('span', {class:'mut3'}, 'сетевая, не проверялась') : null,
       h('button', {class:'ibtn', type:'button', onclick:() => addDir(x.path, x.recursive)}, 'Добавить в папки с отчётами'))));
     sg.seen.forEach(x => box.append(h('div', {class:'sug'}, h('span', {class:'au', style:'font-size:11px'}, 'найдено'),
@@ -1371,15 +1373,20 @@ function renderSummary(){
   if (S.adapterError) it('bad', '#adapter', 'Адаптер', 'ошибка', S.adapterError);
   else if (a) it(a.loaded ? 'ok' : 'bad', '#adapter', 'Адаптер', a.loaded ? (a.reference ? 'эталонный (CSV)' : 'загружен') : 'не загружен', a.error || [a.name, a.version].filter(Boolean).join(' '));
   const nd = env.includes('inbox_dirs') ? (eff.inbox_dirs || []).length : S.dirs.filter(x => x.path.trim()).length, sg = dirSuggestions();
-  it(!nd ? 'bad' : sg.cfg.length ? 'warn' : 'ok', '#dirs', 'Папки отчётов', !nd ? 'не заданы — отчёты не загружаются'
-    : plural(nd, 'папка', 'папки', 'папок') + (sg.cfg.length ? ' · подсказка' : ''), sg.cfg.length ? 'в настройках адаптера указаны папки, которых монитор не просматривает' : '');
+  const fs = window.DeskInboxFolders && DeskInboxFolders.summary(S.dirs.map(x => x.path));  // что найдено в папках (#445)
+  const fwarn = fs && (fs.missing ? plural(fs.missing, 'папку', 'папки', 'папок') + ' сервер не видит' : fs.scanned && !fs.read ? 'ничего не прочитано' : '');
+  it(!nd ? 'bad' : sg.cfg.length || fwarn ? 'warn' : 'ok', '#dirs', 'Папки с отчётами', !nd ? 'не заданы — отчёты не загружаются'
+    : fwarn || plural(nd, 'папка', 'папки', 'папок') + (sg.cfg.length ? ' · подсказка' : ''),
+    fwarn ? 'подробности — под каждой папкой' : sg.cfg.length ? 'в настройках адаптера указаны папки, которых монитор не просматривает' : '');
   const ap = $('autopilot').checked;
   it(ap ? 'ok' : 'warn', '#autopilot', 'Автообновление', ap ? 'включено' : 'выключено');
-  const b = SUM.bf;
+  const b = SUM.bf, T = window.DESK_BACKFILL_TEXT;
   if (b) {
-    const withPos = Math.max(0, (b.dates || 0) - (b.no_positions || 0) - (b.no_market || 0));
+    const withPos = Math.max(0, (b.dates || 0) - (b.no_positions || 0) - (b.no_market || 0)), stall = T.stall(b), D = T.dates(b);
+    const bad = [D.conv.length ? D.conv.length + ' не сходятся' : '', D.load.length ? D.load.length + ' не загружаются' : ''].filter(Boolean).join(', ');
     if (!b.enabled) it('', '#bf', 'История прогонов', 'не считается', 'включается в «Автообновлении»');
-    else if (b.failed) it('warn', '#bf', 'История прогонов', 'не посчиталось ' + plural(b.failed, 'дата', 'даты', 'дат'), (b.failed_dates || []).join(', '));
+    else if (stall) it('warn', '#bf', 'История прогонов', 'стоит — ' + stall.why, stall.title);
+    else if (bad) it('warn', '#bf', 'История прогонов', b.done + ' из ' + withPos + ' · ' + bad, 'даты — в «Диагностика → История прогонов»');
     else if (b.todo) it('', '#bf', 'История прогонов', b.done + ' из ' + withPos, 'посчитано дат с позициями; остальные догружаются в фоне');
     else it('ok', '#bf', 'История прогонов', 'посчитана, ' + plural(b.done || 0, 'дата', 'даты', 'дат'));
   }
@@ -1395,15 +1402,22 @@ function renderSummary(){
   box.hidden = false;
 }
 function renderBfSum(){
-  const b = SUM.bf, el = $('bf-sum'); if (!b) { el.textContent = ''; return; }
-  const withPos = Math.max(0, (b.dates || 0) - (b.no_positions || 0) - (b.no_market || 0));
-  el.textContent = !b.enabled ? 'сейчас не считается' : 'посчитано ' + b.done + ' из ' + plural(withPos, 'даты', 'дат', 'дат') + (b.failed ? ', не посчиталось ' + b.failed : '');
+  const b = SUM.bf, el = $('bf-sum'), note = $('bf-stall'), T = window.DESK_BACKFILL_TEXT;
+  note.hidden = true; note.textContent = '';
+  if (!b) { el.textContent = ''; return; }
+  const withPos = Math.max(0, (b.dates || 0) - (b.no_positions || 0) - (b.no_market || 0)), stall = T.stall(b), D = T.dates(b);
+  el.textContent = !b.enabled ? 'сейчас не считается' : 'посчитано ' + b.done + ' из ' + plural(withPos, 'даты', 'дат', 'дат') +
+    (D.conv.length ? ', ' + D.conv.length + ' не сходятся' : '') + (D.load.length ? ', ' + D.load.length + ' не загружаются' : '');
+  // застой — строкой в карточке, со ссылкой на ход расчёта
+  if (stall) { note.hidden = false; note.append('Догрузка ' + stall.text + '. ', h('a', {href:'#bf'}, 'подробнее →')); note.title = stall.title; }
 }
 async function loadSummary(){
   const get = u => fetch(u, {headers:{'Accept':'application/json'}, cache:'no-store'}).then(r => r.ok ? r.json() : null, () => null);
   [SUM.ap, SUM.bf] = await Promise.all([get('/api/v1/autopilot/status'), get('/api/v1/backfill/status')]);
   renderSummary(); renderBfSum();
 }
+$('bf-run').addEventListener('click', loadSummary);  // «Обновить» в «Истории прогонов» — и сводку
+if (window.DeskInboxFolders) DeskInboxFolders.onLoad(renderSummary);  // что найдено в папках пришло — сводка папок
 
 /* ---------- сохранение settings.json ---------- */
 function collect(){
@@ -1460,6 +1474,7 @@ async function save(){
     toast('Настройки сохранены ' + new Date().toLocaleTimeString('ru-RU'), 'ok');
     loadAdapter(adapterChanged);
     loadDetect();
+    loadSummary();
     return true;
   } catch(e) {
     $('save-msg').className = 'err'; $('save-msg').textContent = 'Не сохранено: ' + e.message;
@@ -2115,20 +2130,16 @@ function mountTabs(a, reload){
         ['Посчитано', s.done + ' из ' + withPos + ' дат с позициями'],
         ['Осталось', s.todo ? s.todo + (s.next && s.next.length ? ' (ближайшие ' + s.next.map(dd).join(', ') + ')' : '') : '—'],
         ['Без позиций', s.no_positions + (s.first_positions ? ' (позиции в базе с ' + dd(s.first_positions) + ')' : '')],
-        ['Не посчитались', s.failed ? s.failed + ': ' + (s.failed_dates || []).map(dd).join(', ') + ' — повтор после изменения данных' : '—'],
+        ['Не сходятся', s.failed ? s.failed + ': ' + (s.failed_dates || []).map(dd).join(', ') + ' — повтор после изменения данных' : '—'],
         ['Самый ранний расчёт', dd(s.oldest_run)],
         ['Старые отчёты прочитаны с', dd(s.inbox_scanned_from)],
       ];
       // #447: одна и та же ошибка сети или базы на датах подряд — догрузка стоит (причина как в чипе шапки, время по МСК,
-      // ошибка — второй строкой); даты, которые не загружаются (сеть или база на одной дате, даты хаба)
-      const CAUSE = {network:'нет связи', proxy:'прокси не пропускает', access:'нет доступа к хабу (токен)', setup:'хаб не настроен',
-        hub:'хаб не отвечает', store:'база недоступна', store_slow:'база не успевает', disk:'ошибка диска'};
-      const msk = (t, o) => new Date(t).toLocaleString('ru-RU', Object.assign({timeZone:'Europe/Moscow'}, o));
-      const at = t => !t ? '—' : (msk(t, {dateStyle:'short'}) === msk(Date.now(), {dateStyle:'short'}) ? '' : msk(t, {day:'2-digit', month:'2-digit'}) + ' ')
-        + msk(t, {hour:'2-digit', minute:'2-digit'});
-      if (s.stall) rows.splice(4, 0, ['Догрузка стоит', 'с ' + at(s.stall.since) + ': ' + (CAUSE[s.stall.cause] || 'ошибка сети или базы') +
+      // ошибка — второй строкой); даты, которые не загружаются (сеть или база на одной дате, даты хаба) — desk-backfill-text.js
+      const T = window.DESK_BACKFILL_TEXT, at = t => T.when(t);
+      if (s.stall) rows.splice(4, 0, ['Догрузка стоит', 'с ' + at(s.stall.since) + ': ' + T.cause(s.stall.cause) +
         (s.stall.next_attempt ? '; следующая попытка ' + at(s.stall.next_attempt) : ''), s.stall.error]);
-      const nl = [...new Set([...(s.problem_dates || []).filter(p => p.kind === 'transient'), ...(s.hub_problem_dates || [])].map(p => p.date))].sort();
+      const nl = [...new Set(T.dates(s).load.map(p => p.date))].sort();
       if (nl.length) rows.splice(s.stall ? 7 : 6, 0, ['Не загружаются', nl.length + ': ' + nl.slice(0, 20).map(dd).join(', ') + (nl.length > 20 ? ' …' : '') + ' — повтор по расписанию']);
       if (s.step) rows.push(['Последний цикл', s.step.status + ': ' + s.step.detail]);
       const tb = $('bf-rows'); tb.textContent = '';

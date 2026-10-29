@@ -18,7 +18,7 @@
   const dm = s => { const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(s || ''); return m ? m[3] + '.' + m[2] : esc(s || ''); };
   const plural = (n, one, few, many) => { const a = Math.abs(n) % 100, b = a % 10; return a > 10 && a < 20 ? many : b === 1 ? one : b >= 2 && b <= 4 ? few : many; };
   W.LOST = { rejected: 'отклонён', failed: 'не прочитан', timed_out: 'не прочитан: не уложился в таймаут', match_failed: 'не распознан адаптером' };
-  W.SETTINGS = '../settings.html#adapter';
+  W.SETTINGS = '../settings.html#dirs';
 
   // причина одной фразой и вторая строка
   W.view = function (x, opt) {

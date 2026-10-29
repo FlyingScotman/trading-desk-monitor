@@ -24,7 +24,7 @@ t('файла нет: одна фраза с подсказкой про «Па�
   assert.strictEqual(sub(base()), '', 'второй строке нечего сказать — ссылка в конце первой');
   assert.ok(!W.html(base()).includes('class="mut3"'), 'одна строка');
   const admin = W.view(base({ settings_link: true }));
-  assert.ok(admin.html.includes('<a href="../settings.html#adapter">Настройки → Папки с отчётами</a>'));
+  assert.ok(admin.html.includes('<a href="../settings.html#dirs">Настройки → Папки с отчётами</a>'));
   assert.ok(!admin.sub.join('').includes('Настройки'), 'ссылка уже во фразе — второй раз не нужна');
   assert.ok(!W.view(base()).html.includes('settings.html'), 'зрителю — без ссылки (настройки ответят ему 403)');
   const html = W.html(base(), {});
