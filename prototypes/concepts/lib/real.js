@@ -445,6 +445,16 @@
     p.dv01ByCurve = {}; let tot = 0;
     M.curves.forEach(c => { const s = p.risk[c.id].reduce((a, v) => a + v, 0); p.dv01ByCurve[c.id] = s; if (c.kind === 'rate') tot += s; });
     p.dv01 = tot;
+    // невозможный риск (#170, #460: extra.risk_problem прогона — проблема прогона, причина в журнале): позиция без риска,
+    // как не оценённая по риску — его нет ни в одной сумме экранов (DV01 по кривым, CS01, базис), как в сводках прогона и
+    // таблице риска API (risk_missing implausible); MV, FX-дельта и PnL остаются. Причина — в карточке и «валюта × тип»
+    p.riskProblem = typeof ex.risk_problem === 'string' && ex.risk_problem ? ex.risk_problem : null;
+    if (p.riskProblem) {
+      M.curves.forEach(c => { p.risk[c.id] = zeros(); p.dv01ByCurve[c.id] = 0; });
+      p.dv01 = 0; p.cs01 = 0; p.basis01 = 0; p.ofzIn01 = 0; p.ofzRuo01 = null;
+      if (p.ofzSpr01 != null) p.ofzSpr01 = 0;
+      p.cs01b = zeros(); p.ofzSprb = zeros();
+    }
     p.fxDelta = p.fxDeltaBy[p.ccy] || 0;  // в валюте позиции; все валюты — p.fxDeltaBy (сумма разных валют — не мера)
     // PnL
     const e = d.pnl || {};
@@ -518,6 +528,9 @@
     if (UV.open) M.notes.push(UV.open + ' поз. не оценены: показаны без риска и MV — разбор по причинам ниже' + (UV.closed ? '; ещё ' + UV.closed + ' закрытых (нулевой объём) — не в счёте' : '') + (UV.fxMissing.length ? '; нет курса ' + UV.fxMissing.join(', ') + ' — суммы этих строк не в рублях' : ''));
     else M.notes.push(UV.closed + ' закрытых позиций (нулевой объём) в отчёте — не оценены, в счёт не входят');
   } else if (positions.some(p => p.notValued)) M.notes.push(positions.filter(p => p.notValued).length + ' поз. не оценены (нет данных): показаны без риска и MV');
+  // невозможный риск (#460): позиции показаны без риска, причина — в карточке позиции и в журнале прогона
+  const badRisk = positions.filter(p => p.riskProblem);
+  if (badRisk.length) M.notes.push(badRisk.length + ' поз. с невозможным риском (|DV01| не сходится с MV и номиналом): показаны без риска, не в суммах DV01, CS01 и базиса — ' + badRisk.slice(0, 3).map(p => p.id).join(', ') + (badRisk.length > 3 ? ' и ещё ' + (badRisk.length - 3) : '') + '; причина — в карточке позиции и журнале прогона');
 
   // ---------- история деска ----------
   const H = X.hist || {};

@@ -117,7 +117,9 @@ def _gamma(rows: list[list[Any]] | None) -> list[list[Any]]:
 def run_totals(rows) -> tuple[float | None, float | None, float, float]:
     """As tdm.writer.run_totals on rows (fact, pnl) of a run without funding deals: (official, explained,
     dv01, cs01). A position without official PnL counts its explained PnL plus the FX basis (CBR rates),
-    one without PnL nothing; official and explained are None (not 0) when no position has a PnL (R10)."""
+    one without PnL nothing; official and explained are None (not 0) when no position has a PnL (R10). A position
+    with an impossible risk (``extra.risk_problem``, TDM#170) is in neither DV01 nor CS01 (TDM#460), as in the run's
+    summary; its PnL is."""
     off, exp = [], []
     for r in rows:
         if q := r["pnl"]:
@@ -125,7 +127,8 @@ def run_totals(rows) -> tuple[float | None, float | None, float, float]:
             basis = (fx_net(q, cbr=True) or 0.0) - (fx_net(q) or 0.0)  # the net FX by the CBR rates - the market
             off.append(q["official"] if q.get("official") is not None else e + basis)
             exp.append(e)
-    facts = [r["fact"] for r in rows]  # SQLite SUM is compensated too
+    # SQLite SUM is compensated too
+    facts = [r["fact"] for r in rows if not (r["fact"].get("extra") or {}).get("risk_problem")]
     return (math.fsum(off) if off else None, math.fsum(exp) if exp else None,
             math.fsum(p.get("dv01") or 0.0 for p in facts),
             math.fsum(p.get("cs01") or 0.0 for p in facts))
@@ -368,7 +371,8 @@ def assemble(con, run: dict[str, Any]) -> dict[str, Any]:
                        (run["business_date"], HISTORY_DAYS - 1)).fetchall()[::-1]
     history, cum = [], 0.0
     for d, rows in [(h["business_date"].isoformat(), con.execute(
-            "SELECT jsonb_build_object('dv01', fact->'dv01', 'cs01', fact->'cs01') AS fact, pnl FROM run_position"
+            "SELECT jsonb_build_object('dv01', fact->'dv01', 'cs01', fact->'cs01', 'extra',"
+            " jsonb_build_object('risk_problem', fact->'extra'->'risk_problem')) AS fact, pnl FROM run_position"
             " WHERE run_id = %s AND fact IS NOT NULL", (h["run_id"],)).fetchall()) for h in hist] + [(as_of, prows)]:
         off, exp, dv01, cs01 = run_totals(rows)
         cum += off or 0.0

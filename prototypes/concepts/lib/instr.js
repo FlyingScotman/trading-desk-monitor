@@ -74,7 +74,8 @@
   I.ATTRIBUTION_DEFAULT = 'legs';  // предварительно: решение владельца (UI-02)
   I.RISK_KINDS = new Set(I.KINDS.filter(k => ['GOV', 'SUB', 'CORP'].includes(k[1])).map(k => k[0])
     .concat(['IRS', 'CCS', 'CDS', 'TRS', 'BOND_FUT', 'BOND_FWD', 'FX_FUT', 'FX_FWD', 'BOND_NA']));
-  I.MISSING_TEXT = { not_valued: 'не оценена', reported_no_risk: 'оценена по отчёту, риска в отчёте нет', no_risk: 'риск не посчитан' };
+  I.MISSING_TEXT = { not_valued: 'не оценена', reported_no_risk: 'оценена по отчёту, риска в отчёте нет', no_risk: 'риск не посчитан',
+    implausible: 'риск невозможен (|DV01| не сходится с MV и номиналом): не в суммах, причина в журнале прогона' };
 
   // тип позиции страниц (lib/real.js или lib/mock.js): api/concepts.instr_kind
   I.kindOf = function (p) {
@@ -98,6 +99,7 @@
   // причина, по которой у позиции нет риска (null — риск есть или по природе не нужен)
   I.missing = function (p, kind) {
     if (p.notValued) return 'not_valued';
+    if (p.riskProblem) return 'implausible';  // невозможный риск прогона (#460, lib/real.js): риска в суммах нет
     if (p.accrualOnly || !I.RISK_KINDS.has(kind || I.kindOf(p))) return null;  // HTM по начислению — без риска по правилу
     const any = Object.values(p.dv01ByCurve || {}).some(v => v) || p.cs01 || p.basis01 || p.ofzSpr01;
     if (any) return null;
@@ -141,6 +143,7 @@
       if (why) c.missing.push({ p, why });
       add(c, 'notional', p, own ? p.notional : p.notionalRub);
       add(c, 'mv', p, (p.mv || 0) * k(home));
+      if (why === 'implausible') return;  // как api/concepts.risk_table: номинал и MV, ни одной меры риска (и FX-дельты)
       add(c, 'cs01', p, (p.cs01 || 0) * k(home));
       add(c, 'basis', p, (p.basis01 || 0) * k(home));
       add(c, 'ofzSpr', p, (p.ofzSpr01 || 0) * k(home));

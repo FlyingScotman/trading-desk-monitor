@@ -13,7 +13,7 @@ from test_market_history import OFZ
 from test_r23_concepts import cache_11, desk, extras  # noqa: F401 - fixtures
 
 from desk import cli, store
-from desk.api import concepts, create_app
+from desk.api import compat, concepts, create_app
 from desk.publish import summary
 from desk.publish.summary import risk_problem
 
@@ -126,3 +126,41 @@ def test_the_run_log_names_the_position(store_url, tmp_path, monkeypatch):
         fact = con.execute("SELECT fact FROM run_position WHERE position_id = 'P1'").fetchone()[0]
     assert any(m.startswith("P1 ") and "невозможен" in m and "не в суммах" in m for m in log), log
     assert "невозможен" in fact["extra"]["risk_problem"]
+
+
+def test_book_totals_leave_an_impossible_risk_out(store_url, tmp_path, monkeypatch):
+    """TDM#460: the run's totals by book (``run.totals``, desk_run) and the pages' history sums (``compat.run_totals``)
+    leave a position with ``extra.risk_problem`` out of DV01 and CS01, as the run's summary does; its MV stays."""
+    from desk.publish import tdm_run
+    from desk.settings import Settings
+
+    real = tdm_run.risk_problem
+    monkeypatch.setattr(tdm_run, "risk_problem", lambda risk, dv01, pv, n, bond: "риск RUB RUONIA 1 ₽/бп невозможен: тест"
+                        if dv01 and abs(dv01) > 0 and n and abs(n) < 1e5 else real(risk, dv01, pv, n, bond))
+    cache, *_ = cache_11(tmp_path)
+    book = tmp_path / "book.csv"  # P1: one bond (flagged by the stub above), P2: a thousand (not)
+    book.write_text(f"position_id,book_id,secid,quantity_bonds\nP1,OFZ,{OFZ},1\nP2,OFZ,{OFZ},1000\n", encoding="utf-8")
+    lines: list[str] = []
+    assert cli.eod_run(Settings(home=tmp_path / "home", snapshot_cache=cache), "2026-10-15", store_url=store_url,
+                       book=str(book), out=lines.append), lines
+    with store.connect(store_url) as con:
+        totals = con.execute("SELECT totals FROM run").fetchone()[0]
+        facts = dict(con.execute("SELECT position_id, fact FROM run_position").fetchall())
+    assert "risk_problem" in facts["P1"]["extra"] and "risk_problem" not in facts["P2"]["extra"]
+    assert facts["P1"]["dv01"] and facts["P2"]["dv01"]  # each position keeps its own numbers
+    for b in ("OFZ", "_total"):
+        t = totals[b]
+        assert t["dv01_rub"] == pytest.approx(facts["P2"]["dv01"])
+        assert t["cs01_rub"] == pytest.approx(facts["P2"]["cs01"] or 0.0)
+        assert t["pv_rub"] == pytest.approx(facts["P1"]["mv_rub"] + facts["P2"]["mv_rub"])
+    _, _, dv01, cs01 = compat.run_totals([{"fact": facts[p], "pnl": None} for p in ("P1", "P2")])
+    assert dv01 == pytest.approx(facts["P2"]["dv01"]) and cs01 == pytest.approx(facts["P2"]["cs01"] or 0.0)
+
+
+def test_run_totals_leave_an_impossible_risk_out_and_keep_its_pnl():
+    rows = [{"fact": {"dv01": -100.0, "cs01": -10.0, "extra": {}}, "pnl": None},
+            {"fact": {"dv01": 1e11, "cs01": 7.0, "extra": {"risk_problem": "риск невозможен"}}, "pnl": {"official": 5.0}},
+            {"fact": {"dv01": -1.0, "cs01": None}, "pnl": None},  # a row without extra
+            {"fact": {"dv01": -2.0, "cs01": -3.0, "extra": {"risk_problem": None}}, "pnl": None}]  # the history's null
+    off, _, dv01, cs01 = compat.run_totals(rows)
+    assert dv01 == pytest.approx(-103.0) and cs01 == pytest.approx(-13.0) and off == pytest.approx(5.0)
