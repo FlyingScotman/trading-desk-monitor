@@ -10,7 +10,7 @@ __version__ = "0.2.12"
 # buckets, coverage). A run records ``logic_version()`` in its lineage; the autopilot recomputes the latest positions
 # date once when its default run was made by another logic version; the backfill (desk.backfill, R23) recomputes the
 # older dates in the background.
-VALUATION_VERSION = 23  # 2: risk per curve (R8); 3: static display fields (R9 D1-D6, D8: names, coupons, issuers);
+VALUATION_VERSION = 24  # 2: risk per curve (R8); 3: static display fields (R9 D1-D6, D8: names, coupons, issuers);
 # 4: RUB bonds discounted on RUONIA OIS + Z-spread, flash PnL on the bond's own curves;
 # 5: a key-rate floater on a fallback rung books its projection on RUB KEY, the run log names missing rates inputs
 # 6: a bond's offer, its next 18 months of flows and the day's quote (G-spread, volume) in extra (concept pages)
@@ -51,6 +51,8 @@ VALUATION_VERSION = 23  # 2: risk per curve (R8); 3: static display fields (R9 D
 # valued on both dates takes the exact flash steps (a model <-> market switch: its spread step in other, flagged); every
 # PnL with an unexplained part records why in pnl.extra.other_reason (pnl.reasons, TDM#442); a bond's extra.cashflows
 # go to maturity, past the 18 months and its offer (extra.cashflows_to, TDM#166)
+# 24: a position with an impossible risk (extra.risk_problem, TDM#170) is in no book's DV01 or CS01 of the run's totals
+# (TDM#460); the history recomputed gets the flag, so the pages leave its risk out on every date
 
 
 def logic_version() -> str:
