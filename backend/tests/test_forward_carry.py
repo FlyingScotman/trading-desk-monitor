@@ -75,6 +75,23 @@ def test_a_fixed_bonds_one_month_carry_is_its_coupon_accrual_and_its_pull(ctx):
     assert s.carry.total == pytest.approx(-c.total) and s.carry.coupon == pytest.approx(-c.coupon)
 
 
+def test_a_bond_on_a_price_rung_is_carried_a_report_row_is_not(ctx):
+    """TDM#383: a bond on ``market_value`` / ``stale_price`` is carried at its price (``orchestrator.horizon``,
+    ``fallback.at_last_price``); a row without a secid on a price rung (an FX row on its report value) and a model
+    price keep their quality as the code."""
+    q = 1000.0
+    v = value(ctx, [(CORP, q)], fallback=False)[0].valuation
+
+    def row(pid, secid, quality):
+        return {"position_id": pid, "book_id": "B", "secid": secid, "quantity": q, "quality": quality,
+                "pv_rub": v.pv_rub, "fact": {}}
+
+    stale, fx, model = carry.bond_carry(ctx, [row("s", CORP, "stale_price"), row("f", None, "market_value"),
+                                              row("m", CORP, "model_price")], H1M)
+    assert stale.carry is not None and stale.code is None and stale.method == "core"
+    assert (fx.carry, fx.code) == (None, "market_value") and (model.carry, model.code) == (None, "model_price")
+
+
 def test_a_coupon_paid_before_the_horizon_is_in_the_coupon_income(ctx):
     (o,), _ = horizon(ctx, [(OFZ, 1000.0)], date(2027, 4, 15))  # a 6M horizon over the 26238's coupon of 2026-11
     c = o.carry

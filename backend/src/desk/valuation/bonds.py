@@ -638,9 +638,11 @@ class BondRequest:
 
 
 def bond_request(position_id: str, terms: BondTerms, quote: BondQuote, settlement: date,
-                 quantity: float) -> BondRequest:
+                 quantity: float, price: tuple[str, float] | None = None) -> BondRequest:
+    """``price`` (basis, clean %): the price to value at instead of the quote's own (``select_price``): a fallback
+    rung's price (``fallback.at_last_price``)."""
     schedule = fixed_schedule(terms, quote.trade_date)  # valuation date: see the module docstring
-    basis, clean = select_price(quote)
+    basis, clean = price or select_price(quote)
     face = float(quote.face_value) if quote.face_value is not None else schedule.current_face
     if abs(face - schedule.current_face) > 0.01:
         raise Rejected("face_mismatch", f"quote face {face} vs static {schedule.current_face}")

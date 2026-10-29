@@ -104,9 +104,12 @@
    "carry",
    "carry_coupon",
    "carry_pull",
+   "carry_nosplit",
    "rolldown",
    "funding",
    "rates",
+   "rates_linear",
+   "rates_exact_lin",
    "spread",
    "convexity",
    "fx_gross",
@@ -147,40 +150,46 @@
   ],
   "summary": {
    "total": -6651643,
-   "rows": 60,
-   "noTotal": 0,
-   "partialRows": 22,
-   "grossCheck": 0,
+   "rows": 61,
+   "noTotal": 1,
+   "partialRows": 23,
+   "grossCheck": 4200,
    "grossCount": 60,
    "c": {
     "carry": 9556762,
-    "carry_coupon": 5105704,
-    "carry_pull": 216110,
     "rolldown": 596243,
-    "funding": -12391467,
     "rates": -6208763,
     "spread": 48986,
-    "convexity": 0,
     "fx_gross": -7345072,
     "fx_funding": 7124720,
+    "funding": -12391467,
+    "convexity": 0,
     "new_trades": 0,
     "other": 1966948,
-    "reported": null
+    "reported": null,
+    "carry_coupon": 5105704,
+    "carry_pull": 216110,
+    "carry_nosplit": 4234948,
+    "rates_linear": -4554694,
+    "rates_exact_lin": -4647645
    },
    "m": {
-    "carry": 0,
-    "carry_coupon": 22,
-    "carry_pull": 22,
-    "rolldown": 0,
-    "funding": 22,
-    "rates": 0,
-    "spread": 0,
-    "convexity": 0,
-    "fx_gross": 0,
-    "fx_funding": 0,
-    "new_trades": 0,
-    "other": 0,
-    "reported": 60
+    "carry": 1,
+    "rolldown": 1,
+    "rates": 1,
+    "spread": 1,
+    "fx_gross": 1,
+    "fx_funding": 1,
+    "funding": 23,
+    "convexity": 1,
+    "new_trades": 1,
+    "other": 1,
+    "reported": 61,
+    "carry_coupon": 23,
+    "carry_pull": 23,
+    "carry_nosplit": 0,
+    "rates_linear": 23,
+    "rates_exact_lin": 23
    }
   },
   "days": [
@@ -193,33 +202,39 @@
     "grossCount": 6,
     "c": {
      "carry": 1856452,
-     "carry_coupon": 1102022,
-     "carry_pull": 30034,
      "rolldown": 99379,
-     "funding": -2312297,
      "rates": 25737,
      "spread": 209986,
-     "convexity": 0,
      "fx_gross": 208810,
      "fx_funding": -202546,
+     "funding": -2312297,
+     "convexity": 0,
      "new_trades": 0,
      "other": 153477,
-     "reported": null
+     "reported": null,
+     "carry_coupon": 1102022,
+     "carry_pull": 30034,
+     "carry_nosplit": 724396,
+     "rates_linear": 192970,
+     "rates_exact_lin": 196909
     },
     "m": {
      "carry": 0,
-     "carry_coupon": 2,
-     "carry_pull": 2,
      "rolldown": 0,
-     "funding": 2,
      "rates": 0,
      "spread": 0,
-     "convexity": 0,
      "fx_gross": 0,
      "fx_funding": 0,
+     "funding": 2,
+     "convexity": 0,
      "new_trades": 0,
      "other": 0,
-     "reported": 6
+     "reported": 6,
+     "carry_coupon": 2,
+     "carry_pull": 2,
+     "carry_nosplit": 0,
+     "rates_linear": 2,
+     "rates_exact_lin": 2
     },
     "date": "2026-09-28",
     "prevDate": "2026-09-25",
@@ -227,6 +242,11 @@
     "ratesByCurve": {
      "RUB OFZ": 185926,
      "RUB RUONIA": -317588,
+     "": 157399
+    },
+    "ratesByFactor": {
+     "ruonia": -194448,
+     "basis": 62786,
      "": 157399
     }
    },
@@ -239,33 +259,39 @@
     "grossCount": 6,
     "c": {
      "carry": 618525,
-     "carry_coupon": 367914,
-     "carry_pull": 10119,
      "rolldown": 33256,
-     "funding": -771934,
      "rates": 2384633,
      "spread": 41043,
-     "convexity": 0,
      "fx_gross": 2499052,
      "fx_funding": -2424081,
+     "funding": -771934,
+     "convexity": 0,
      "new_trades": 0,
      "other": -17474,
-     "reported": null
+     "reported": null,
+     "carry_coupon": 367914,
+     "carry_pull": 10119,
+     "carry_nosplit": 240492,
+     "rates_linear": 2714471,
+     "rates_exact_lin": 2769868
     },
     "m": {
      "carry": 0,
-     "carry_coupon": 2,
-     "carry_pull": 2,
      "rolldown": 0,
-     "funding": 2,
      "rates": 0,
      "spread": 0,
-     "convexity": 0,
      "fx_gross": 0,
      "fx_funding": 0,
+     "funding": 2,
+     "convexity": 0,
      "new_trades": 0,
      "other": 0,
-     "reported": 6
+     "reported": 6,
+     "carry_coupon": 2,
+     "carry_pull": 2,
+     "carry_nosplit": 0,
+     "rates_linear": 2,
+     "rates_exact_lin": 2
     },
     "date": "2026-09-29",
     "prevDate": "2026-09-28",
@@ -273,6 +299,11 @@
     "ratesByCurve": {
      "RUB OFZ": 2757407,
      "RUB RUONIA": -362792,
+     "": -9982
+    },
+    "ratesByFactor": {
+     "ruonia": 1461409,
+     "basis": 933206,
      "": -9982
     }
    },
@@ -285,33 +316,39 @@
     "grossCount": 6,
     "c": {
      "carry": 617973,
-     "carry_coupon": 368675,
-     "carry_pull": 10196,
      "rolldown": 33360,
-     "funding": -772723,
      "rates": -1493166,
      "spread": 140163,
-     "convexity": 0,
      "fx_gross": -1710550,
      "fx_funding": 1659234,
+     "funding": -772723,
+     "convexity": 0,
      "new_trades": 0,
      "other": 71512,
-     "reported": null
+     "reported": null,
+     "carry_coupon": 368675,
+     "carry_pull": 10196,
+     "carry_nosplit": 239102,
+     "rates_linear": -860987,
+     "rates_exact_lin": -878558
     },
     "m": {
      "carry": 0,
-     "carry_coupon": 2,
-     "carry_pull": 2,
      "rolldown": 0,
-     "funding": 2,
      "rates": 0,
      "spread": 0,
-     "convexity": 0,
      "fx_gross": 0,
      "fx_funding": 0,
+     "funding": 2,
+     "convexity": 0,
      "new_trades": 0,
      "other": 0,
-     "reported": 6
+     "reported": 6,
+     "carry_coupon": 2,
+     "carry_pull": 2,
+     "carry_nosplit": 0,
+     "rates_linear": 2,
+     "rates_exact_lin": 2
     },
     "date": "2026-09-30",
     "prevDate": "2026-09-29",
@@ -319,6 +356,11 @@
     "ratesByCurve": {
      "RUB OFZ": -899392,
      "RUB RUONIA": -610515,
+     "": 16741
+    },
+    "ratesByFactor": {
+     "ruonia": -1204778,
+     "basis": -305129,
      "": 16741
     }
    },
@@ -331,33 +373,39 @@
     "grossCount": 6,
     "c": {
      "carry": 617222,
-     "carry_coupon": 369534,
-     "carry_pull": 10238,
      "rolldown": 33427,
-     "funding": -773047,
      "rates": -2572034,
      "spread": -37147,
-     "convexity": 0,
      "fx_gross": -2500236,
      "fx_funding": 2425229,
+     "funding": -773047,
+     "convexity": 0,
      "new_trades": 0,
      "other": 136276,
-     "reported": null
+     "reported": null,
+     "carry_coupon": 369534,
+     "carry_pull": 10238,
+     "carry_nosplit": 237450,
+     "rates_linear": -2842214,
+     "rates_exact_lin": -2900218
     },
     "m": {
      "carry": 0,
-     "carry_coupon": 2,
-     "carry_pull": 2,
      "rolldown": 0,
-     "funding": 2,
      "rates": 0,
      "spread": 0,
-     "convexity": 0,
      "fx_gross": 0,
      "fx_funding": 0,
+     "funding": 2,
+     "convexity": 0,
      "new_trades": 0,
      "other": 0,
-     "reported": 6
+     "reported": 6,
+     "carry_coupon": 2,
+     "carry_pull": 2,
+     "carry_nosplit": 0,
+     "rates_linear": 2,
+     "rates_exact_lin": 2
     },
     "date": "2026-10-01",
     "prevDate": "2026-09-30",
@@ -365,6 +413,11 @@
     "ratesByCurve": {
      "RUB OFZ": -2895523,
      "RUB RUONIA": 138318,
+     "": 185171
+    },
+    "ratesByFactor": {
+     "ruonia": -1772492,
+     "basis": -984713,
      "": 185171
     }
    },
@@ -377,33 +430,39 @@
     "grossCount": 6,
     "c": {
      "carry": 616353,
-     "carry_coupon": 370399,
-     "carry_pull": 10238,
      "rolldown": 33444,
-     "funding": -772870,
      "rates": 20705,
      "spread": -263843,
-     "convexity": 0,
      "fx_gross": 1655998,
      "fx_funding": -1606318,
+     "funding": -772870,
+     "convexity": 0,
      "new_trades": 0,
      "other": -106356,
-     "reported": null
+     "reported": null,
+     "carry_coupon": 370399,
+     "carry_pull": 10238,
+     "carry_nosplit": 235716,
+     "rates_linear": 134751,
+     "rates_exact_lin": 137502
     },
     "m": {
      "carry": 0,
-     "carry_coupon": 2,
-     "carry_pull": 2,
      "rolldown": 0,
-     "funding": 2,
      "rates": 0,
      "spread": 0,
-     "convexity": 0,
      "fx_gross": 0,
      "fx_funding": 0,
+     "funding": 2,
+     "convexity": 0,
      "new_trades": 0,
      "other": 0,
-     "reported": 6
+     "reported": 6,
+     "carry_coupon": 2,
+     "carry_pull": 2,
+     "carry_nosplit": 0,
+     "rates_linear": 2,
+     "rates_exact_lin": 2
     },
     "date": "2026-10-02",
     "prevDate": "2026-10-01",
@@ -411,6 +470,11 @@
     "ratesByCurve": {
      "RUB OFZ": 137404,
      "RUB RUONIA": -2883,
+     "": -113816
+    },
+    "ratesByFactor": {
+     "ruonia": 87692,
+     "basis": 46829,
      "": -113816
     }
    },
@@ -423,33 +487,39 @@
     "grossCount": 5,
     "c": {
      "carry": 1433176,
-     "carry_coupon": 690641,
-     "carry_pull": 40260,
      "rolldown": 99858,
-     "funding": -1917910,
      "rates": -816646,
      "spread": -41783,
-     "convexity": 0,
      "fx_gross": -3085166,
      "fx_funding": 2992611,
+     "funding": -1917910,
+     "convexity": 0,
      "new_trades": 0,
      "other": -68685,
-     "reported": null
+     "reported": null,
+     "carry_coupon": 690641,
+     "carry_pull": 40260,
+     "carry_nosplit": 702275,
+     "rates_linear": -971189,
+     "rates_exact_lin": -991009
     },
     "m": {
      "carry": 0,
-     "carry_coupon": 2,
-     "carry_pull": 2,
      "rolldown": 0,
-     "funding": 2,
      "rates": 0,
      "spread": 0,
-     "convexity": 0,
      "fx_gross": 0,
      "fx_funding": 0,
+     "funding": 2,
+     "convexity": 0,
      "new_trades": 0,
      "other": 0,
-     "reported": 5
+     "reported": 5,
+     "carry_coupon": 2,
+     "carry_pull": 2,
+     "carry_nosplit": 0,
+     "rates_linear": 2,
+     "rates_exact_lin": 2
     },
     "date": "2026-10-05",
     "prevDate": "2026-10-02",
@@ -457,6 +527,11 @@
     "ratesByCurve": {
      "RUB OFZ": -991009,
      "RUB RUONIA": 212394,
+     "": -38031
+    },
+    "ratesByFactor": {
+     "kbd": -991009,
+     "ruonia": 212394,
      "": -38031
     }
    },
@@ -469,33 +544,39 @@
     "grossCount": 5,
     "c": {
      "carry": 476801,
-     "carry_coupon": 230701,
-     "carry_pull": 13344,
      "rolldown": 33211,
-     "funding": -638126,
      "rates": 2654258,
      "spread": 84458,
-     "convexity": 0,
      "fx_gross": -1016234,
      "fx_funding": 985747,
+     "funding": -638126,
+     "convexity": 0,
      "new_trades": 0,
      "other": -40285,
-     "reported": null
+     "reported": null,
+     "carry_coupon": 230701,
+     "carry_pull": 13344,
+     "carry_nosplit": 232756,
+     "rates_linear": 2060480,
+     "rates_exact_lin": 2102531
     },
     "m": {
      "carry": 0,
-     "carry_coupon": 2,
-     "carry_pull": 2,
      "rolldown": 0,
-     "funding": 2,
      "rates": 0,
      "spread": 0,
-     "convexity": 0,
      "fx_gross": 0,
      "fx_funding": 0,
+     "funding": 2,
+     "convexity": 0,
      "new_trades": 0,
      "other": 0,
-     "reported": 5
+     "reported": 5,
+     "carry_coupon": 2,
+     "carry_pull": 2,
+     "carry_nosplit": 0,
+     "rates_linear": 2,
+     "rates_exact_lin": 2
     },
     "date": "2026-10-06",
     "prevDate": "2026-10-05",
@@ -503,6 +584,11 @@
     "ratesByCurve": {
      "RUB OFZ": 2102531,
      "RUB RUONIA": 574245,
+     "": -22518
+    },
+    "ratesByFactor": {
+     "ruonia": 1958332,
+     "basis": 718444,
      "": -22518
     }
    },
@@ -515,33 +601,39 @@
     "grossCount": 5,
     "c": {
      "carry": 951492,
-     "carry_coupon": 461286,
-     "carry_pull": 26494,
      "rolldown": 66202,
-     "funding": -1272743,
      "rates": 36825,
      "spread": 15173,
-     "convexity": 0,
      "fx_gross": -1561269,
      "fx_funding": 1514431,
+     "funding": -1272743,
+     "convexity": 0,
      "new_trades": 0,
      "other": 16154,
-     "reported": null
+     "reported": null,
+     "carry_coupon": 461286,
+     "carry_pull": 26494,
+     "carry_nosplit": 463712,
+     "rates_linear": -59373,
+     "rates_exact_lin": -60585
     },
     "m": {
      "carry": 0,
-     "carry_coupon": 2,
-     "carry_pull": 2,
      "rolldown": 0,
-     "funding": 2,
      "rates": 0,
      "spread": 0,
-     "convexity": 0,
      "fx_gross": 0,
      "fx_funding": 0,
+     "funding": 2,
+     "convexity": 0,
      "new_trades": 0,
      "other": 0,
-     "reported": 5
+     "reported": 5,
+     "carry_coupon": 2,
+     "carry_pull": 2,
+     "carry_nosplit": 0,
+     "rates_linear": 2,
+     "rates_exact_lin": 2
     },
     "date": "2026-10-08",
     "prevDate": "2026-10-06",
@@ -550,6 +642,11 @@
      "RUB OFZ": -60585,
      "RUB RUONIA": 18941,
      "": 78469
+    },
+    "ratesByFactor": {
+     "ruonia": -20937,
+     "basis": -20707,
+     "": 78469
     }
    },
    {
@@ -557,37 +654,43 @@
     "rows": 5,
     "noTotal": 0,
     "partialRows": 2,
-    "grossCheck": 0,
+    "grossCheck": 4200,
     "grossCount": 5,
     "c": {
      "carry": 474676,
-     "carry_coupon": 230046,
-     "carry_pull": 13140,
      "rolldown": 32965,
-     "funding": -634232,
      "rates": -3005743,
      "spread": -22436,
-     "convexity": 0,
      "fx_gross": -2342099,
      "fx_funding": 2271836,
+     "funding": -634232,
+     "convexity": 0,
      "new_trades": 0,
      "other": 1813579,
-     "reported": null
+     "reported": null,
+     "carry_coupon": 230046,
+     "carry_pull": 13140,
+     "carry_nosplit": 231490,
+     "rates_linear": -2348493,
+     "rates_exact_lin": -2396422
     },
     "m": {
      "carry": 0,
-     "carry_coupon": 2,
-     "carry_pull": 2,
      "rolldown": 0,
-     "funding": 2,
      "rates": 0,
      "spread": 0,
-     "convexity": 0,
      "fx_gross": 0,
      "fx_funding": 0,
+     "funding": 2,
+     "convexity": 0,
      "new_trades": 0,
      "other": 0,
-     "reported": 5
+     "reported": 5,
+     "carry_coupon": 2,
+     "carry_pull": 2,
+     "carry_nosplit": 0,
+     "rates_linear": 2,
+     "rates_exact_lin": 2
     },
     "date": "2026-10-09",
     "prevDate": "2026-10-08",
@@ -595,6 +698,11 @@
     "ratesByCurve": {
      "RUB OFZ": -2396422,
      "RUB RUONIA": -339565,
+     "": -269756
+    },
+    "ratesByFactor": {
+     "ruonia": -1917406,
+     "basis": -818581,
      "": -269756
     }
    },
@@ -607,33 +715,39 @@
     "grossCount": 5,
     "c": {
      "carry": 1421136,
-     "carry_coupon": 686932,
-     "carry_pull": 39105,
      "rolldown": 98460,
-     "funding": -1895828,
      "rates": -4778258,
      "spread": -194088,
-     "convexity": 0,
      "fx_gross": 1936826,
      "fx_funding": -1878721,
+     "funding": -1895828,
+     "convexity": 0,
      "new_trades": 0,
      "other": -15025,
-     "reported": null
+     "reported": null,
+     "carry_coupon": 686932,
+     "carry_pull": 39105,
+     "carry_nosplit": 695099,
+     "rates_linear": -3749336,
+     "rates_exact_lin": -3825853
     },
     "m": {
      "carry": 0,
-     "carry_coupon": 2,
-     "carry_pull": 2,
      "rolldown": 0,
-     "funding": 2,
      "rates": 0,
      "spread": 0,
-     "convexity": 0,
      "fx_gross": 0,
      "fx_funding": 0,
+     "funding": 2,
+     "convexity": 0,
      "new_trades": 0,
      "other": 0,
-     "reported": 5
+     "reported": 5,
+     "carry_coupon": 2,
+     "carry_pull": 2,
+     "carry_nosplit": 0,
+     "rates_linear": 2,
+     "rates_exact_lin": 2
     },
     "date": "2026-10-12",
     "prevDate": "2026-10-09",
@@ -642,44 +756,55 @@
      "RUB OFZ": -3825853,
      "RUB RUONIA": -890704,
      "": -61701
+    },
+    "ratesByFactor": {
+     "ruonia": -3411416,
+     "basis": -1305141,
+     "": -61701
     }
    },
    {
     "total": 1309135,
-    "rows": 5,
-    "noTotal": 0,
-    "partialRows": 2,
+    "rows": 6,
+    "noTotal": 1,
+    "partialRows": 3,
     "grossCheck": 0,
     "grossCount": 5,
     "c": {
      "carry": 472956,
-     "carry_coupon": 227554,
-     "carry_pull": 12942,
      "rolldown": 32681,
-     "funding": -629757,
      "rates": 1334926,
      "spread": 117460,
-     "convexity": 0,
      "fx_gross": -1430204,
      "fx_funding": 1387298,
+     "funding": -629757,
+     "convexity": 0,
      "new_trades": 0,
      "other": 23775,
-     "reported": null
+     "reported": null,
+     "carry_coupon": 227554,
+     "carry_pull": 12942,
+     "carry_nosplit": 232460,
+     "rates_linear": 1174226,
+     "rates_exact_lin": 1198190
     },
     "m": {
-     "carry": 0,
-     "carry_coupon": 2,
-     "carry_pull": 2,
-     "rolldown": 0,
-     "funding": 2,
-     "rates": 0,
-     "spread": 0,
-     "convexity": 0,
-     "fx_gross": 0,
-     "fx_funding": 0,
-     "new_trades": 0,
-     "other": 0,
-     "reported": 5
+     "carry": 1,
+     "rolldown": 1,
+     "rates": 1,
+     "spread": 1,
+     "fx_gross": 1,
+     "fx_funding": 1,
+     "funding": 3,
+     "convexity": 1,
+     "new_trades": 1,
+     "other": 1,
+     "reported": 6,
+     "carry_coupon": 3,
+     "carry_pull": 3,
+     "carry_nosplit": 0,
+     "rates_linear": 3,
+     "rates_exact_lin": 3
     },
     "date": "2026-10-13",
     "prevDate": "2026-10-12",
@@ -688,190 +813,15 @@
      "RUB OFZ": 1198190,
      "RUB RUONIA": 131046,
      "": 5690
+    },
+    "ratesByFactor": {
+     "ruonia": 921274,
+     "basis": 407962,
+     "": 5690
     }
    }
   ],
   "positions": [
-   {
-    "total": -10629815,
-    "rows": 11,
-    "noTotal": 0,
-    "partialRows": 0,
-    "grossCheck": 0,
-    "grossCount": 11,
-    "c": {
-     "carry": 4481708,
-     "carry_coupon": 4242683,
-     "carry_pull": 239025,
-     "rolldown": 334634,
-     "funding": -9859757,
-     "rates": -5773703,
-     "spread": 0,
-     "convexity": 0,
-     "fx_gross": 0,
-     "fx_funding": 0,
-     "new_trades": 0,
-     "other": 187303,
-     "reported": null
-    },
-    "m": {
-     "carry": 0,
-     "carry_coupon": 0,
-     "carry_pull": 0,
-     "rolldown": 0,
-     "funding": 0,
-     "rates": 0,
-     "spread": 0,
-     "convexity": 0,
-     "fx_gross": 0,
-     "fx_funding": 0,
-     "new_trades": 0,
-     "other": 0,
-     "reported": 11
-    },
-    "ref": "DEMO-A|OFZ-1",
-    "book": "DEMO-A",
-    "positionId": "OFZ-1",
-    "name": "Synthetic OFZ 1",
-    "instrument": "SYN-OFZ-1",
-    "ccy": "RUB",
-    "kind": "PD",
-    "group": "GOV",
-    "curve": "RUB OFZ",
-    "rating": null,
-    "issuer": "Synthetic sovereign",
-    "firstDate": "2026-09-28",
-    "lastDate": "2026-10-13",
-    "closed": false,
-    "pvAvg": 1212642740,
-    "calDays": 18,
-    "fundingRatePct": 16.5,
-    "buckets": [
-     -2582443,
-     -3640351,
-     -4407021
-    ]
-   },
-   {
-    "total": 3884596,
-    "rows": 11,
-    "noTotal": 0,
-    "partialRows": 0,
-    "grossCheck": 0,
-    "grossCount": 11,
-    "c": {
-     "carry": -1326865,
-     "carry_coupon": -1406080,
-     "carry_pull": 79215,
-     "rolldown": 110901,
-     "funding": 3267651,
-     "rates": 1882090,
-     "spread": 0,
-     "convexity": 0,
-     "fx_gross": 0,
-     "fx_funding": 0,
-     "new_trades": 0,
-     "other": -49181,
-     "reported": null
-    },
-    "m": {
-     "carry": 0,
-     "carry_coupon": 0,
-     "carry_pull": 0,
-     "rolldown": 0,
-     "funding": 0,
-     "rates": 0,
-     "spread": 0,
-     "convexity": 0,
-     "fx_gross": 0,
-     "fx_funding": 0,
-     "new_trades": 0,
-     "other": 0,
-     "reported": 11
-    },
-    "ref": "DEMO-B|OFZ-1",
-    "book": "DEMO-B",
-    "positionId": "OFZ-1",
-    "name": "Synthetic OFZ 1",
-    "instrument": "SYN-OFZ-1",
-    "ccy": "RUB",
-    "kind": "PD",
-    "group": "GOV",
-    "curve": "RUB OFZ",
-    "rating": null,
-    "issuer": "Synthetic sovereign",
-    "firstDate": "2026-09-28",
-    "lastDate": "2026-10-13",
-    "closed": false,
-    "pvAvg": -401935950,
-    "calDays": 18,
-    "fundingRatePct": 16.5,
-    "buckets": [
-     1050546,
-     1319763,
-     1514287
-    ]
-   },
-   {
-    "total": 504114,
-    "rows": 11,
-    "noTotal": 0,
-    "partialRows": 0,
-    "grossCheck": 0,
-    "grossCount": 11,
-    "c": {
-     "carry": 4678788,
-     "carry_coupon": null,
-     "carry_pull": null,
-     "rolldown": 47082,
-     "funding": -4855345,
-     "rates": -795713,
-     "spread": -373052,
-     "convexity": 0,
-     "fx_gross": 0,
-     "fx_funding": 0,
-     "new_trades": 0,
-     "other": 1802354,
-     "reported": null
-    },
-    "m": {
-     "carry": 0,
-     "carry_coupon": 11,
-     "carry_pull": 11,
-     "rolldown": 0,
-     "funding": 0,
-     "rates": 0,
-     "spread": 0,
-     "convexity": 0,
-     "fx_gross": 0,
-     "fx_funding": 0,
-     "new_trades": 0,
-     "other": 0,
-     "reported": 11
-    },
-    "ref": "DEMO-A|CORP-1",
-    "book": "DEMO-A",
-    "positionId": "CORP-1",
-    "name": "Synthetic Corp 1",
-    "instrument": "SYN-CORP-1",
-    "ccy": "RUB",
-    "kind": "FIX",
-    "group": "CORP",
-    "curve": "RUB OFZ",
-    "rating": "AA",
-    "issuer": "Synthetic issuer",
-    "firstDate": "2026-09-28",
-    "lastDate": "2026-10-13",
-    "closed": false,
-    "pvAvg": 596816624,
-    "calDays": 18,
-    "fundingRatePct": 16.5,
-    "buckets": [
-     -267828,
-     1377954,
-     -606012
-    ]
-   },
    {
     "total": 91953,
     "rows": 5,
@@ -881,33 +831,39 @@
     "grossCount": 5,
     "c": {
      "carry": 978343,
-     "carry_coupon": 1001228,
-     "carry_pull": -22885,
      "rolldown": 916,
-     "funding": -944016,
      "rates": 39681,
      "spread": 18410,
-     "convexity": 0,
      "fx_gross": 0,
      "fx_funding": 0,
+     "funding": -944016,
+     "convexity": 0,
      "new_trades": 0,
      "other": -1381,
-     "reported": null
+     "reported": null,
+     "carry_coupon": 1001228,
+     "carry_pull": -22885,
+     "carry_nosplit": null,
+     "rates_linear": 38887,
+     "rates_exact_lin": 39681
     },
     "m": {
      "carry": 0,
-     "carry_coupon": 0,
-     "carry_pull": 0,
      "rolldown": 0,
-     "funding": 0,
      "rates": 0,
      "spread": 0,
-     "convexity": 0,
      "fx_gross": 0,
      "fx_funding": 0,
+     "funding": 0,
+     "convexity": 0,
      "new_trades": 0,
      "other": 0,
-     "reported": 5
+     "reported": 5,
+     "carry_coupon": 0,
+     "carry_pull": 0,
+     "carry_nosplit": 0,
+     "rates_linear": 0,
+     "rates_exact_lin": 0
     },
     "ref": "DEMO-A|CLOSED",
     "book": "DEMO-A",
@@ -930,7 +886,164 @@
      91953,
      null,
      null
-    ]
+    ],
+    "methods": [
+     "desk-flash-exact-v2"
+    ],
+    "noPnlReasons": {},
+    "ratesByFactor": {
+     "ruonia": 39681
+    }
+   },
+   {
+    "total": 504114,
+    "rows": 11,
+    "noTotal": 0,
+    "partialRows": 0,
+    "grossCheck": 0,
+    "grossCount": 11,
+    "c": {
+     "carry": 4678788,
+     "rolldown": 47082,
+     "rates": -795713,
+     "spread": -373052,
+     "fx_gross": 0,
+     "fx_funding": 0,
+     "funding": -4855345,
+     "convexity": 0,
+     "new_trades": 0,
+     "other": 1802354,
+     "reported": null,
+     "carry_coupon": null,
+     "carry_pull": null,
+     "carry_nosplit": 4678788,
+     "rates_linear": -779798,
+     "rates_exact_lin": -795713
+    },
+    "m": {
+     "carry": 0,
+     "rolldown": 0,
+     "rates": 0,
+     "spread": 0,
+     "fx_gross": 0,
+     "fx_funding": 0,
+     "funding": 0,
+     "convexity": 0,
+     "new_trades": 0,
+     "other": 0,
+     "reported": 11,
+     "carry_coupon": 11,
+     "carry_pull": 11,
+     "carry_nosplit": 0,
+     "rates_linear": 0,
+     "rates_exact_lin": 0
+    },
+    "ref": "DEMO-A|CORP-1",
+    "book": "DEMO-A",
+    "positionId": "CORP-1",
+    "name": "Synthetic Corp 1",
+    "instrument": "SYN-CORP-1",
+    "ccy": "RUB",
+    "kind": "FIX",
+    "group": "CORP",
+    "curve": "RUB OFZ",
+    "rating": "AA",
+    "issuer": "Synthetic issuer",
+    "firstDate": "2026-09-28",
+    "lastDate": "2026-10-13",
+    "closed": false,
+    "pvAvg": 596816624,
+    "calDays": 18,
+    "fundingRatePct": 16.5,
+    "buckets": [
+     -267828,
+     1377954,
+     -606012
+    ],
+    "methods": [
+     "desk-flash-exact-v2",
+     "desk-flash-simple-v1"
+    ],
+    "noPnlReasons": {},
+    "ratesByFactor": {
+     "ruonia": -625820,
+     "kbd": -169893
+    }
+   },
+   {
+    "total": -10629815,
+    "rows": 11,
+    "noTotal": 0,
+    "partialRows": 0,
+    "grossCheck": 0,
+    "grossCount": 11,
+    "c": {
+     "carry": 4481708,
+     "rolldown": 334634,
+     "rates": -5773703,
+     "spread": 0,
+     "fx_gross": 0,
+     "fx_funding": 0,
+     "funding": -9859757,
+     "convexity": 0,
+     "new_trades": 0,
+     "other": 187303,
+     "reported": null,
+     "carry_coupon": 4242683,
+     "carry_pull": 239025,
+     "carry_nosplit": null,
+     "rates_linear": -5658230,
+     "rates_exact_lin": -5773703
+    },
+    "m": {
+     "carry": 0,
+     "rolldown": 0,
+     "rates": 0,
+     "spread": 0,
+     "fx_gross": 0,
+     "fx_funding": 0,
+     "funding": 0,
+     "convexity": 0,
+     "new_trades": 0,
+     "other": 0,
+     "reported": 11,
+     "carry_coupon": 0,
+     "carry_pull": 0,
+     "carry_nosplit": 0,
+     "rates_linear": 0,
+     "rates_exact_lin": 0
+    },
+    "ref": "DEMO-A|OFZ-1",
+    "book": "DEMO-A",
+    "positionId": "OFZ-1",
+    "name": "Synthetic OFZ 1",
+    "instrument": "SYN-OFZ-1",
+    "ccy": "RUB",
+    "kind": "PD",
+    "group": "GOV",
+    "curve": "RUB OFZ",
+    "rating": null,
+    "issuer": "Synthetic sovereign",
+    "firstDate": "2026-09-28",
+    "lastDate": "2026-10-13",
+    "closed": false,
+    "pvAvg": 1212642740,
+    "calDays": 18,
+    "fundingRatePct": 16.5,
+    "buckets": [
+     -2582443,
+     -3640351,
+     -4407021
+    ],
+    "methods": [
+     "desk-flash-exact-v2"
+    ],
+    "noPnlReasons": {},
+    "ratesByFactor": {
+     "ruonia": -2674515,
+     "basis": -1873979,
+     "kbd": -1225209
+    }
    },
    {
     "total": -1847251,
@@ -941,33 +1054,39 @@
     "grossCount": 11,
     "c": {
      "carry": -443840,
-     "carry_coupon": null,
-     "carry_pull": null,
      "rolldown": 71013,
-     "funding": null,
      "rates": -1488784,
      "spread": 0,
-     "convexity": 0,
      "fx_gross": 0,
      "fx_funding": 0,
+     "funding": null,
+     "convexity": 0,
      "new_trades": 0,
      "other": 14360,
-     "reported": null
+     "reported": null,
+     "carry_coupon": null,
+     "carry_pull": null,
+     "carry_nosplit": -443840,
+     "rates_linear": null,
+     "rates_exact_lin": null
     },
     "m": {
      "carry": 0,
-     "carry_coupon": 11,
-     "carry_pull": 11,
      "rolldown": 0,
-     "funding": 11,
      "rates": 0,
      "spread": 0,
-     "convexity": 0,
      "fx_gross": 0,
      "fx_funding": 0,
+     "funding": 11,
+     "convexity": 0,
      "new_trades": 0,
      "other": 0,
-     "reported": 11
+     "reported": 11,
+     "carry_coupon": 11,
+     "carry_pull": 11,
+     "carry_nosplit": 0,
+     "rates_linear": 11,
+     "rates_exact_lin": 11
     },
     "ref": "DEMO-B|IRS-1",
     "book": "DEMO-B",
@@ -990,44 +1109,203 @@
      -1320759,
      311606,
      -838098
-    ]
+    ],
+    "methods": [
+     "flash-v1"
+    ],
+    "noPnlReasons": {},
+    "ratesByFactor": {
+     "ruonia": -1488784
+    }
+   },
+   {
+    "ref": "DEMO-B|NEW-1",
+    "book": "DEMO-B",
+    "positionId": "NEW-1",
+    "name": "Synthetic New 1",
+    "instrument": "SYN-NEW-1",
+    "ccy": "RUB",
+    "kind": "FIX",
+    "group": "CORP",
+    "curve": "RUB OFZ",
+    "rating": "A",
+    "issuer": "Synthetic issuer",
+    "firstDate": "2026-10-13",
+    "lastDate": "2026-10-13",
+    "closed": false,
+    "pvAvg": 99500000,
+    "calDays": null,
+    "fundingRatePct": null,
+    "total": null,
+    "rows": 1,
+    "noTotal": 1,
+    "partialRows": 1,
+    "grossCheck": null,
+    "grossCount": 0,
+    "c": {
+     "carry": null,
+     "rolldown": null,
+     "rates": null,
+     "spread": null,
+     "fx_gross": null,
+     "fx_funding": null,
+     "funding": null,
+     "convexity": null,
+     "new_trades": null,
+     "other": null,
+     "reported": null,
+     "carry_coupon": null,
+     "carry_pull": null,
+     "carry_nosplit": null,
+     "rates_linear": null,
+     "rates_exact_lin": null
+    },
+    "m": {
+     "carry": 1,
+     "rolldown": 1,
+     "rates": 1,
+     "spread": 1,
+     "fx_gross": 1,
+     "fx_funding": 1,
+     "funding": 1,
+     "convexity": 1,
+     "new_trades": 1,
+     "other": 1,
+     "reported": 1,
+     "carry_coupon": 1,
+     "carry_pull": 1,
+     "carry_nosplit": 0,
+     "rates_linear": 1,
+     "rates_exact_lin": 1
+    },
+    "buckets": [
+     null,
+     null,
+     null
+    ],
+    "methods": [],
+    "noPnlReasons": {
+     "no_prev_report": 1
+    },
+    "ratesByFactor": {}
+   },
+   {
+    "total": 3884596,
+    "rows": 11,
+    "noTotal": 0,
+    "partialRows": 0,
+    "grossCheck": 0,
+    "grossCount": 11,
+    "c": {
+     "carry": -1326865,
+     "rolldown": 110901,
+     "rates": 1882090,
+     "spread": 0,
+     "fx_gross": 0,
+     "fx_funding": 0,
+     "funding": 3267651,
+     "convexity": 0,
+     "new_trades": 0,
+     "other": -49181,
+     "reported": null,
+     "carry_coupon": -1406080,
+     "carry_pull": 79215,
+     "carry_nosplit": null,
+     "rates_linear": 1844447,
+     "rates_exact_lin": 1882090
+    },
+    "m": {
+     "carry": 0,
+     "rolldown": 0,
+     "rates": 0,
+     "spread": 0,
+     "fx_gross": 0,
+     "fx_funding": 0,
+     "funding": 0,
+     "convexity": 0,
+     "new_trades": 0,
+     "other": 0,
+     "reported": 11,
+     "carry_coupon": 0,
+     "carry_pull": 0,
+     "carry_nosplit": 0,
+     "rates_linear": 0,
+     "rates_exact_lin": 0
+    },
+    "ref": "DEMO-B|OFZ-1",
+    "book": "DEMO-B",
+    "positionId": "OFZ-1",
+    "name": "Synthetic OFZ 1",
+    "instrument": "SYN-OFZ-1",
+    "ccy": "RUB",
+    "kind": "PD",
+    "group": "GOV",
+    "curve": "RUB OFZ",
+    "rating": null,
+    "issuer": "Synthetic sovereign",
+    "firstDate": "2026-09-28",
+    "lastDate": "2026-10-13",
+    "closed": false,
+    "pvAvg": -401935950,
+    "calDays": 18,
+    "fundingRatePct": 16.5,
+    "buckets": [
+     1050546,
+     1319763,
+     1514287
+    ],
+    "methods": [
+     "desk-flash-exact-v2"
+    ],
+    "noPnlReasons": {},
+    "ratesByFactor": {
+     "ruonia": 869062,
+     "basis": 608935,
+     "kbd": 404093
+    }
    },
    {
     "total": 1344760,
     "rows": 11,
     "noTotal": 0,
     "partialRows": 11,
-    "grossCheck": 0,
+    "grossCheck": 4200,
     "grossCount": 11,
     "c": {
      "carry": 1188628,
-     "carry_coupon": 1267873,
-     "carry_pull": -79245,
      "rolldown": 31697,
-     "funding": null,
      "rates": -72334,
      "spread": 403628,
-     "convexity": 0,
      "fx_gross": -7345072,
      "fx_funding": 7124720,
+     "funding": null,
+     "convexity": 0,
      "new_trades": 0,
      "other": 13493,
-     "reported": null
+     "reported": null,
+     "carry_coupon": 1267873,
+     "carry_pull": -79245,
+     "carry_nosplit": null,
+     "rates_linear": null,
+     "rates_exact_lin": null
     },
     "m": {
      "carry": 0,
-     "carry_coupon": 0,
-     "carry_pull": 0,
      "rolldown": 0,
-     "funding": 11,
      "rates": 0,
      "spread": 0,
-     "convexity": 0,
      "fx_gross": 0,
      "fx_funding": 0,
+     "funding": 11,
+     "convexity": 0,
      "new_trades": 0,
      "other": 0,
-     "reported": 11
+     "reported": 11,
+     "carry_coupon": 0,
+     "carry_pull": 0,
+     "carry_nosplit": 0,
+     "rates_linear": 11,
+     "rates_exact_lin": 11
     },
     "ref": "DEMO-B|USD-1",
     "book": "DEMO-B",
@@ -1050,7 +1328,14 @@
      883155,
      121124,
      340481
-    ]
+    ],
+    "methods": [
+     "desk-flash-yield-v1"
+    ],
+    "noPnlReasons": {},
+    "ratesByFactor": {
+     "": -72334
+    }
    }
   ],
   "catalogue": [
@@ -1119,6 +1404,17 @@
     "assetClass": "CORP",
     "issuer": "Synthetic issuer",
     "name": "Synthetic USD 1"
+   },
+   {
+    "book": "DEMO-B",
+    "positionId": "NEW-1",
+    "entity": "Synthetic entity",
+    "desk": "Synthetic desk",
+    "portfolio": "Hedge",
+    "ccy": "RUB",
+    "assetClass": "CORP",
+    "issuer": "Synthetic issuer",
+    "name": "Synthetic New 1"
    }
   ],
   "cbrMeetings": [
@@ -1152,7 +1448,7 @@
      "date": "2026-09-28",
      "prevDate": "2026-09-25",
      "runId": 1000,
-     "method": "flash-v1",
+     "method": "desk-flash-exact-v2",
      "note": null,
      "noPnl": null,
      "total": -531677,
@@ -1169,7 +1465,8 @@
       "other": 70230,
       "carry_coupon": 700274,
       "carry_pull": 39452,
-      "reported": null
+      "reported": null,
+      "carry_nosplit": null
      },
      "ratesLinear": 225920,
      "grossCheck": 0,
@@ -1194,7 +1491,7 @@
      "date": "2026-09-29",
      "prevDate": "2026-09-28",
      "runId": 1001,
-     "method": "flash-v1",
+     "method": "desk-flash-exact-v2",
      "note": null,
      "noPnl": null,
      "total": 3155673,
@@ -1211,7 +1508,8 @@
       "other": 15469,
       "carry_coupon": 234952,
       "carry_pull": 13237,
-      "reported": null
+      "reported": null,
+      "carry_nosplit": null
      },
      "ratesLinear": 3351110,
      "grossCheck": 0,
@@ -1236,7 +1534,7 @@
      "date": "2026-09-30",
      "prevDate": "2026-09-29",
      "runId": 1002,
-     "method": "flash-v1",
+     "method": "desk-flash-exact-v2",
      "note": null,
      "noPnl": null,
      "total": -1341456,
@@ -1253,7 +1551,8 @@
       "other": 54515,
       "carry_coupon": 236312,
       "carry_pull": 13313,
-      "reported": null
+      "reported": null,
+      "carry_nosplit": null
      },
      "ratesLinear": -1092759,
      "grossCheck": 0,
@@ -1278,7 +1577,7 @@
      "date": "2026-10-01",
      "prevDate": "2026-09-30",
      "runId": 1003,
-     "method": "flash-v1",
+     "method": "desk-flash-exact-v2",
      "note": null,
      "noPnl": null,
      "total": -3694767,
@@ -1295,7 +1594,8 @@
       "other": 174896,
       "carry_coupon": 237353,
       "carry_pull": 13372,
-      "reported": null
+      "reported": null,
+      "carry_nosplit": null
      },
      "ratesLinear": -3515764,
      "grossCheck": 0,
@@ -1320,7 +1620,7 @@
      "date": "2026-10-02",
      "prevDate": "2026-10-01",
      "runId": 1004,
-     "method": "flash-v1",
+     "method": "desk-flash-exact-v2",
      "note": null,
      "noPnl": null,
      "total": -170216,
@@ -1337,7 +1637,8 @@
       "other": -57419,
       "carry_coupon": 237962,
       "carry_pull": 13406,
-      "reported": null
+      "reported": null,
+      "carry_nosplit": null
      },
      "ratesLinear": 166675,
      "grossCheck": 0,
@@ -1362,7 +1663,7 @@
      "date": "2026-10-05",
      "prevDate": "2026-10-02",
      "runId": 1005,
-     "method": "flash-v1",
+     "method": "desk-flash-exact-v2",
      "note": null,
      "noPnl": null,
      "total": -2121008,
@@ -1379,7 +1680,8 @@
       "other": -46788,
       "carry_coupon": 714215,
       "carry_pull": 40238,
-      "reported": null
+      "reported": null,
+      "carry_nosplit": null
      },
      "ratesLinear": -1200705,
      "grossCheck": 0,
@@ -1404,7 +1706,7 @@
      "date": "2026-10-06",
      "prevDate": "2026-10-05",
      "runId": 1006,
-     "method": "flash-v1",
+     "method": "desk-flash-exact-v2",
      "note": null,
      "noPnl": null,
      "total": 2313797,
@@ -1421,7 +1723,8 @@
       "other": 215,
       "carry_coupon": 237670,
       "carry_pull": 13390,
-      "reported": null
+      "reported": null,
+      "carry_nosplit": null
      },
      "ratesLinear": 2544185,
      "grossCheck": 0,
@@ -1446,7 +1749,7 @@
      "date": "2026-10-08",
      "prevDate": "2026-10-06",
      "runId": 1007,
-     "method": "flash-v1",
+     "method": "desk-flash-exact-v2",
      "note": null,
      "noPnl": null,
      "total": -605074,
@@ -1463,7 +1766,8 @@
       "other": 32627,
       "carry_coupon": 473601,
       "carry_pull": 26681,
-      "reported": null
+      "reported": null,
+      "carry_nosplit": null
      },
      "ratesLinear": -73222,
      "grossCheck": 0,
@@ -1488,7 +1792,7 @@
      "date": "2026-10-09",
      "prevDate": "2026-10-08",
      "runId": 1008,
-     "method": "flash-v1",
+     "method": "desk-flash-exact-v2",
      "note": null,
      "noPnl": null,
      "total": -3228066,
@@ -1505,7 +1809,8 @@
       "other": 4181,
       "carry_coupon": 235559,
       "carry_pull": 13271,
-      "reported": null
+      "reported": null,
+      "carry_nosplit": null
      },
      "ratesLinear": -2893184,
      "grossCheck": 0,
@@ -1530,7 +1835,7 @@
      "date": "2026-10-12",
      "prevDate": "2026-10-09",
      "runId": 1009,
-     "method": "flash-v1",
+     "method": "desk-flash-exact-v2",
      "note": null,
      "noPnl": null,
      "total": -5618457,
@@ -1547,7 +1852,8 @@
       "other": -74111,
       "carry_coupon": 702250,
       "carry_pull": 39564,
-      "reported": null
+      "reported": null,
+      "carry_nosplit": null
      },
      "ratesLinear": -4615368,
      "grossCheck": 0,
@@ -1572,7 +1878,7 @@
      "date": "2026-10-13",
      "prevDate": "2026-10-12",
      "runId": 1010,
-     "method": "flash-v1",
+     "method": "desk-flash-exact-v2",
      "note": null,
      "noPnl": null,
      "total": 1211436,
@@ -1589,7 +1895,8 @@
       "other": 13488,
       "carry_coupon": 232535,
       "carry_pull": 13101,
-      "reported": null
+      "reported": null,
+      "carry_nosplit": null
      },
      "ratesLinear": 1444882,
      "grossCheck": 0,
@@ -1631,7 +1938,7 @@
      "date": "2026-09-28",
      "prevDate": "2026-09-25",
      "runId": 1000,
-     "method": "flash-v1",
+     "method": "desk-flash-exact-v2",
      "note": null,
      "noPnl": null,
      "total": 311087,
@@ -1648,7 +1955,8 @@
       "other": 42889,
       "carry_coupon": -237353,
       "carry_pull": 13372,
-      "reported": null
+      "reported": null,
+      "carry_nosplit": null
      },
      "ratesLinear": -76574,
      "grossCheck": 0,
@@ -1673,7 +1981,7 @@
      "date": "2026-09-29",
      "prevDate": "2026-09-28",
      "runId": 1001,
-     "method": "flash-v1",
+     "method": "desk-flash-exact-v2",
      "note": null,
      "noPnl": null,
      "total": -1038870,
@@ -1690,7 +1998,8 @@
       "other": -175,
       "carry_coupon": -79321,
       "carry_pull": 4469,
-      "reported": null
+      "reported": null,
+      "carry_nosplit": null
      },
      "ratesLinear": -1131347,
      "grossCheck": 0,
@@ -1715,7 +2024,7 @@
      "date": "2026-09-30",
      "prevDate": "2026-09-29",
      "runId": 1002,
-     "method": "flash-v1",
+     "method": "desk-flash-exact-v2",
      "note": null,
      "noPnl": null,
      "total": 468801,
@@ -1732,7 +2041,8 @@
       "other": -21449,
       "carry_coupon": -79357,
       "carry_pull": 4471,
-      "reported": null
+      "reported": null,
+      "carry_nosplit": null
      },
      "ratesLinear": 366966,
      "grossCheck": 0,
@@ -1757,7 +2067,7 @@
      "date": "2026-10-01",
      "prevDate": "2026-09-30",
      "runId": 1003,
-     "method": "flash-v1",
+     "method": "desk-flash-exact-v2",
      "note": null,
      "noPnl": null,
      "total": 1296698,
@@ -1774,7 +2084,8 @@
       "other": -16334,
       "carry_coupon": -79223,
       "carry_pull": 4463,
-      "reported": null
+      "reported": null,
+      "carry_nosplit": null
      },
      "ratesLinear": 1173484,
      "grossCheck": 0,
@@ -1799,7 +2110,7 @@
      "date": "2026-10-02",
      "prevDate": "2026-10-01",
      "runId": 1004,
-     "method": "flash-v1",
+     "method": "desk-flash-exact-v2",
      "note": null,
      "noPnl": null,
      "total": 12830,
@@ -1816,7 +2127,8 @@
       "other": -45930,
       "carry_coupon": -78933,
       "carry_pull": 4446,
-      "reported": null
+      "reported": null,
+      "carry_nosplit": null
      },
      "ratesLinear": -55288,
      "grossCheck": 0,
@@ -1841,7 +2153,7 @@
      "date": "2026-10-05",
      "prevDate": "2026-10-02",
      "runId": 1005,
-     "method": "flash-v1",
+     "method": "desk-flash-exact-v2",
      "note": null,
      "noPnl": null,
      "total": 723479,
@@ -1858,7 +2170,8 @@
       "other": -24332,
       "carry_coupon": -235559,
       "carry_pull": 13271,
-      "reported": null
+      "reported": null,
+      "carry_nosplit": null
      },
      "ratesLinear": 396011,
      "grossCheck": 0,
@@ -1883,7 +2196,7 @@
      "date": "2026-10-06",
      "prevDate": "2026-10-05",
      "runId": 1006,
-     "method": "flash-v1",
+     "method": "desk-flash-exact-v2",
      "note": null,
      "noPnl": null,
      "total": -764454,
@@ -1900,7 +2213,8 @@
       "other": -25997,
       "carry_coupon": -78028,
       "carry_pull": 4396,
-      "reported": null
+      "reported": null,
+      "carry_nosplit": null
      },
      "ratesLinear": -835265,
      "grossCheck": 0,
@@ -1925,7 +2239,7 @@
      "date": "2026-10-08",
      "prevDate": "2026-10-06",
      "runId": 1007,
-     "method": "flash-v1",
+     "method": "desk-flash-exact-v2",
      "note": null,
      "noPnl": null,
      "total": 237404,
@@ -1942,7 +2256,8 @@
       "other": -13255,
       "carry_coupon": -155023,
       "carry_pull": 8733,
-      "reported": null
+      "reported": null,
+      "carry_nosplit": null
      },
      "ratesLinear": 23968,
      "grossCheck": 0,
@@ -1967,7 +2282,7 @@
      "date": "2026-10-09",
      "prevDate": "2026-10-08",
      "runId": 1008,
-     "method": "flash-v1",
+     "method": "desk-flash-exact-v2",
      "note": null,
      "noPnl": null,
      "total": 1123334,
@@ -1984,7 +2299,8 @@
       "other": 45557,
       "carry_coupon": -77028,
       "carry_pull": 4339,
-      "reported": null
+      "reported": null,
+      "carry_nosplit": null
      },
      "ratesLinear": 946074,
      "grossCheck": 0,
@@ -2009,7 +2325,7 @@
      "date": "2026-10-12",
      "prevDate": "2026-10-09",
      "runId": 1009,
-     "method": "flash-v1",
+     "method": "desk-flash-exact-v2",
      "note": null,
      "noPnl": null,
      "total": 1887455,
@@ -2026,7 +2342,8 @@
       "other": 10268,
       "carry_coupon": -229892,
       "carry_pull": 12952,
-      "reported": null
+      "reported": null,
+      "carry_nosplit": null
      },
      "ratesLinear": 1510905,
      "grossCheck": 0,
@@ -2051,7 +2368,7 @@
      "date": "2026-10-13",
      "prevDate": "2026-10-12",
      "runId": 1010,
-     "method": "flash-v1",
+     "method": "desk-flash-exact-v2",
      "note": null,
      "noPnl": null,
      "total": -373168,
@@ -2068,7 +2385,8 @@
       "other": -423,
       "carry_coupon": -76363,
       "carry_pull": 4303,
-      "reported": null
+      "reported": null,
+      "carry_nosplit": null
      },
      "ratesLinear": -474487,
      "grossCheck": 0,
@@ -2110,7 +2428,7 @@
      "date": "2026-09-28",
      "prevDate": "2026-09-25",
      "runId": 1000,
-     "method": "flash-v1",
+     "method": "desk-flash-exact-v2",
      "note": null,
      "noPnl": null,
      "total": 67812,
@@ -2127,7 +2445,8 @@
       "other": -8607,
       "carry_coupon": null,
       "carry_pull": null,
-      "reported": null
+      "reported": null,
+      "carry_nosplit": 798369
      },
      "ratesLinear": 32861,
      "grossCheck": 0,
@@ -2152,7 +2471,7 @@
      "date": "2026-09-29",
      "prevDate": "2026-09-28",
      "runId": 1001,
-     "method": "flash-v1",
+     "method": "desk-flash-exact-v2",
      "note": null,
      "noPnl": null,
      "total": 532715,
@@ -2169,7 +2488,8 @@
       "other": -6955,
       "carry_coupon": null,
       "carry_pull": null,
-      "reported": null
+      "reported": null,
+      "carry_nosplit": 265150
      },
      "ratesLinear": 482496,
      "grossCheck": 0,
@@ -2194,7 +2514,7 @@
      "date": "2026-09-30",
      "prevDate": "2026-09-29",
      "runId": 1002,
-     "method": "flash-v1",
+     "method": "desk-flash-exact-v2",
      "note": null,
      "noPnl": null,
      "total": -47454,
@@ -2211,7 +2531,8 @@
       "other": 16264,
       "carry_coupon": null,
       "carry_pull": null,
-      "reported": null
+      "reported": null,
+      "carry_nosplit": 263760
      },
      "ratesLinear": -155611,
      "grossCheck": 0,
@@ -2236,8 +2557,8 @@
      "date": "2026-10-01",
      "prevDate": "2026-09-30",
      "runId": 1003,
-     "method": "flash-v1",
-     "note": null,
+     "method": "desk-flash-simple-v1",
+     "note": "simple PnL (model_price -> model_price): q x (dirty D - dirty D-1) + received, all in other",
      "noPnl": null,
      "total": -635869,
      "c": {
@@ -2253,7 +2574,8 @@
       "other": -350,
       "carry_coupon": null,
       "carry_pull": null,
-      "reported": null
+      "reported": null,
+      "carry_nosplit": 262108
      },
      "ratesLinear": -495333,
      "grossCheck": 0,
@@ -2278,8 +2600,8 @@
      "date": "2026-10-02",
      "prevDate": "2026-10-01",
      "runId": 1004,
-     "method": "flash-v1",
-     "note": null,
+     "method": "desk-flash-simple-v1",
+     "note": "simple PnL (model_price -> model_price): q x (dirty D - dirty D-1) + received, all in other",
      "noPnl": null,
      "total": -185032,
      "c": {
@@ -2295,7 +2617,8 @@
       "other": -6746,
       "carry_coupon": null,
       "carry_pull": null,
-      "reported": null
+      "reported": null,
+      "carry_nosplit": 260374
      },
      "ratesLinear": 23268,
      "grossCheck": 0,
@@ -2320,7 +2643,7 @@
      "date": "2026-10-05",
      "prevDate": "2026-10-02",
      "runId": 1005,
-     "method": "flash-v1",
+     "method": "desk-flash-exact-v2",
      "note": null,
      "noPnl": null,
      "total": -338700,
@@ -2337,7 +2660,8 @@
       "other": 5302,
       "carry_coupon": null,
       "carry_pull": null,
-      "reported": null
+      "reported": null,
+      "carry_nosplit": 776248
      },
      "ratesLinear": -166495,
      "grossCheck": 0,
@@ -2362,8 +2686,8 @@
      "date": "2026-10-06",
      "prevDate": "2026-10-05",
      "runId": 1006,
-     "method": "flash-v1",
-     "note": null,
+     "method": "desk-flash-simple-v1",
+     "note": "simple PnL (model_price -> model_price): q x (dirty D - dirty D-1) + received, all in other",
      "noPnl": null,
      "total": 357661,
      "c": {
@@ -2379,7 +2703,8 @@
       "other": -18167,
       "carry_coupon": null,
       "carry_pull": null,
-      "reported": null
+      "reported": null,
+      "carry_nosplit": 257414
      },
      "ratesLinear": 351560,
      "grossCheck": 0,
@@ -2404,7 +2729,7 @@
      "date": "2026-10-08",
      "prevDate": "2026-10-06",
      "runId": 1007,
-     "method": "flash-v1",
+     "method": "desk-flash-exact-v2",
      "note": null,
      "noPnl": null,
      "total": 34965,
@@ -2421,7 +2746,8 @@
       "other": -10944,
       "carry_coupon": null,
       "carry_pull": null,
-      "reported": null
+      "reported": null,
+      "carry_nosplit": 513027
      },
      "ratesLinear": -10119,
      "grossCheck": 0,
@@ -2449,8 +2775,8 @@
      "date": "2026-10-09",
      "prevDate": "2026-10-08",
      "runId": 1008,
-     "method": "flash-v1",
-     "note": null,
+     "method": "desk-flash-simple-v1",
+     "note": "simple PnL (model_price -> model_price): q x (dirty D - dirty D-1) + received, all in other",
      "noPnl": null,
      "total": 1324028,
      "c": {
@@ -2466,7 +2792,8 @@
       "other": 1798125,
       "carry_coupon": null,
       "carry_pull": null,
-      "reported": null
+      "reported": null,
+      "carry_nosplit": 256148
      },
      "ratesLinear": -401383,
      "grossCheck": 0,
@@ -2491,7 +2818,7 @@
      "date": "2026-10-12",
      "prevDate": "2026-10-09",
      "runId": 1009,
-     "method": "flash-v1",
+     "method": "desk-flash-exact-v2",
      "note": null,
      "noPnl": null,
      "total": -814307,
@@ -2508,7 +2835,8 @@
       "other": 15073,
       "carry_coupon": null,
       "carry_pull": null,
-      "reported": null
+      "reported": null,
+      "carry_nosplit": 769072
      },
      "ratesLinear": -644873,
      "grossCheck": 0,
@@ -2533,7 +2861,7 @@
      "date": "2026-10-13",
      "prevDate": "2026-10-12",
      "runId": 1010,
-     "method": "flash-v1",
+     "method": "desk-flash-exact-v2",
      "note": null,
      "noPnl": null,
      "total": 208295,
@@ -2550,7 +2878,8 @@
       "other": 19359,
       "carry_coupon": null,
       "carry_pull": null,
-      "reported": null
+      "reported": null,
+      "carry_nosplit": 257118
      },
      "ratesLinear": 203831,
      "grossCheck": 0,
@@ -2592,7 +2921,7 @@
      "date": "2026-09-28",
      "prevDate": "2026-09-25",
      "runId": 1000,
-     "method": "flash-v1",
+     "method": "desk-flash-exact-v2",
      "note": null,
      "noPnl": null,
      "total": 28798,
@@ -2609,7 +2938,8 @@
       "other": -7,
       "carry_coupon": 432725,
       "carry_pull": -9891,
-      "reported": null
+      "reported": null,
+      "carry_nosplit": null
      },
      "ratesLinear": 10763,
      "grossCheck": 0,
@@ -2634,7 +2964,7 @@
      "date": "2026-09-29",
      "prevDate": "2026-09-28",
      "runId": 1001,
-     "method": "flash-v1",
+     "method": "desk-flash-exact-v2",
      "note": null,
      "noPnl": null,
      "total": 19028,
@@ -2651,7 +2981,8 @@
       "other": -471,
       "carry_coupon": 143287,
       "carry_pull": -3275,
-      "reported": null
+      "reported": null,
+      "carry_nosplit": null
      },
      "ratesLinear": 12212,
      "grossCheck": 0,
@@ -2676,7 +3007,7 @@
      "date": "2026-09-30",
      "prevDate": "2026-09-29",
      "runId": 1002,
-     "method": "flash-v1",
+     "method": "desk-flash-exact-v2",
      "note": null,
      "noPnl": null,
      "total": 28743,
@@ -2693,7 +3024,8 @@
       "other": -579,
       "carry_coupon": 142394,
       "carry_pull": -3255,
-      "reported": null
+      "reported": null,
+      "carry_nosplit": null
      },
      "ratesLinear": 20417,
      "grossCheck": 0,
@@ -2718,7 +3050,7 @@
      "date": "2026-10-01",
      "prevDate": "2026-09-30",
      "runId": 1003,
-     "method": "flash-v1",
+     "method": "desk-flash-exact-v2",
      "note": null,
      "noPnl": null,
      "total": 8179,
@@ -2735,7 +3067,8 @@
       "other": -301,
       "carry_coupon": 141659,
       "carry_pull": -3238,
-      "reported": null
+      "reported": null,
+      "carry_nosplit": null
      },
      "ratesLinear": -4601,
      "grossCheck": 0,
@@ -2760,7 +3093,7 @@
      "date": "2026-10-02",
      "prevDate": "2026-10-01",
      "runId": 1004,
-     "method": "flash-v1",
+     "method": "desk-flash-exact-v2",
      "note": null,
      "noPnl": null,
      "total": 7205,
@@ -2777,7 +3110,8 @@
       "other": -23,
       "carry_coupon": 141163,
       "carry_pull": -3226,
-      "reported": null
+      "reported": null,
+      "carry_nosplit": null
      },
      "ratesLinear": 96,
      "grossCheck": 0,
@@ -2838,7 +3172,8 @@
       "other": 31323,
       "carry_coupon": null,
       "carry_pull": null,
-      "reported": null
+      "reported": null,
+      "carry_nosplit": -73973
      },
      "ratesLinear": -322000,
      "grossCheck": 0,
@@ -2880,7 +3215,8 @@
       "other": -21476,
       "carry_coupon": null,
       "carry_pull": null,
-      "reported": null
+      "reported": null,
+      "carry_nosplit": -24658
      },
      "ratesLinear": -367748,
      "grossCheck": 0,
@@ -2922,7 +3258,8 @@
       "other": 13060,
       "carry_coupon": null,
       "carry_pull": null,
-      "reported": null
+      "reported": null,
+      "carry_nosplit": -24658
      },
      "ratesLinear": -618722,
      "grossCheck": 0,
@@ -2964,7 +3301,8 @@
       "other": -17581,
       "carry_coupon": null,
       "carry_pull": null,
-      "reported": null
+      "reported": null,
+      "carry_nosplit": -24658
      },
      "ratesLinear": 140153,
      "grossCheck": 0,
@@ -3006,7 +3344,8 @@
       "other": 14045,
       "carry_coupon": null,
       "carry_pull": null,
-      "reported": null
+      "reported": null,
+      "carry_nosplit": -24658
      },
      "ratesLinear": -2921,
      "grossCheck": 0,
@@ -3048,7 +3387,8 @@
       "other": -11891,
       "carry_coupon": null,
       "carry_pull": null,
-      "reported": null
+      "reported": null,
+      "carry_nosplit": -73973
      },
      "ratesLinear": 208146,
      "grossCheck": 0,
@@ -3090,7 +3430,8 @@
       "other": 2103,
       "carry_coupon": null,
       "carry_pull": null,
-      "reported": null
+      "reported": null,
+      "carry_nosplit": -24658
      },
      "ratesLinear": 562760,
      "grossCheck": 0,
@@ -3132,7 +3473,8 @@
       "other": 16417,
       "carry_coupon": null,
       "carry_pull": null,
-      "reported": null
+      "reported": null,
+      "carry_nosplit": -49315
      },
      "ratesLinear": 18562,
      "grossCheck": 0,
@@ -3174,7 +3516,8 @@
       "other": -16050,
       "carry_coupon": null,
       "carry_pull": null,
-      "reported": null
+      "reported": null,
+      "carry_nosplit": -24658
      },
      "ratesLinear": -332774,
      "grossCheck": 0,
@@ -3216,7 +3559,8 @@
       "other": 13805,
       "carry_coupon": null,
       "carry_pull": null,
-      "reported": null
+      "reported": null,
+      "carry_nosplit": -73973
      },
      "ratesLinear": -872890,
      "grossCheck": 0,
@@ -3258,7 +3602,8 @@
       "other": -9395,
       "carry_coupon": null,
       "carry_pull": null,
-      "reported": null
+      "reported": null,
+      "carry_nosplit": -24658
      },
      "ratesLinear": 128425,
      "grossCheck": 0,
@@ -3300,7 +3645,7 @@
      "date": "2026-09-28",
      "prevDate": "2026-09-25",
      "runId": 1000,
-     "method": "flash-v1",
+     "method": "desk-flash-yield-v1",
      "note": null,
      "noPnl": null,
      "total": 522363,
@@ -3317,7 +3662,8 @@
       "other": 17649,
       "carry_coupon": 206376,
       "carry_pull": -12899,
-      "reported": null
+      "reported": null,
+      "carry_nosplit": null
      },
      "ratesLinear": 154251,
      "grossCheck": 0,
@@ -3342,7 +3688,7 @@
      "date": "2026-09-29",
      "prevDate": "2026-09-28",
      "runId": 1001,
-     "method": "flash-v1",
+     "method": "desk-flash-yield-v1",
      "note": null,
      "noPnl": null,
      "total": 111916,
@@ -3359,7 +3705,8 @@
       "other": -3866,
       "carry_coupon": 68996,
       "carry_pull": -4312,
-      "reported": null
+      "reported": null,
+      "carry_nosplit": null
      },
      "ratesLinear": -9782,
      "grossCheck": 0,
@@ -3384,7 +3731,7 @@
      "date": "2026-09-30",
      "prevDate": "2026-09-29",
      "runId": 1002,
-     "method": "flash-v1",
+     "method": "desk-flash-yield-v1",
      "note": null,
      "noPnl": null,
      "total": 76171,
@@ -3401,7 +3748,8 @@
       "other": 9701,
       "carry_coupon": 69326,
       "carry_pull": -4333,
-      "reported": null
+      "reported": null,
+      "carry_nosplit": null
      },
      "ratesLinear": 16406,
      "grossCheck": 0,
@@ -3426,7 +3774,7 @@
      "date": "2026-10-01",
      "prevDate": "2026-09-30",
      "runId": 1003,
-     "method": "flash-v1",
+     "method": "desk-flash-yield-v1",
      "note": null,
      "noPnl": null,
      "total": 250730,
@@ -3443,7 +3791,8 @@
       "other": -4054,
       "carry_coupon": 69745,
       "carry_pull": -4359,
-      "reported": null
+      "reported": null,
+      "carry_nosplit": null
      },
      "ratesLinear": 181468,
      "grossCheck": 0,
@@ -3468,7 +3817,7 @@
      "date": "2026-10-02",
      "prevDate": "2026-10-01",
      "runId": 1004,
-     "method": "flash-v1",
+     "method": "desk-flash-yield-v1",
      "note": null,
      "noPnl": null,
      "total": -78025,
@@ -3485,7 +3834,8 @@
       "other": -10283,
       "carry_coupon": 70207,
       "carry_pull": -4388,
-      "reported": null
+      "reported": null,
+      "carry_nosplit": null
      },
      "ratesLinear": -111540,
      "grossCheck": 0,
@@ -3510,7 +3860,7 @@
      "date": "2026-10-05",
      "prevDate": "2026-10-02",
      "runId": 1005,
-     "method": "flash-v1",
+     "method": "desk-flash-yield-v1",
      "note": null,
      "noPnl": null,
      "total": 193318,
@@ -3527,7 +3877,8 @@
       "other": 9024,
       "carry_coupon": 211985,
       "carry_pull": -13249,
-      "reported": null
+      "reported": null,
+      "carry_nosplit": null
      },
      "ratesLinear": -37270,
      "grossCheck": 0,
@@ -3552,7 +3903,7 @@
      "date": "2026-10-06",
      "prevDate": "2026-10-05",
      "runId": 1006,
-     "method": "flash-v1",
+     "method": "desk-flash-yield-v1",
      "note": null,
      "noPnl": null,
      "total": 77191,
@@ -3569,7 +3920,8 @@
       "other": 1561,
       "carry_coupon": 71059,
       "carry_pull": -4442,
-      "reported": null
+      "reported": null,
+      "carry_nosplit": null
      },
      "ratesLinear": -22068,
      "grossCheck": 0,
@@ -3594,7 +3946,7 @@
      "date": "2026-10-08",
      "prevDate": "2026-10-06",
      "runId": 1007,
-     "method": "flash-v1",
+     "method": "desk-flash-yield-v1",
      "note": null,
      "noPnl": null,
      "total": 105037,
@@ -3611,7 +3963,8 @@
       "other": -8691,
       "carry_coupon": 142708,
       "carry_pull": -8920,
-      "reported": null
+      "reported": null,
+      "carry_nosplit": null
      },
      "ratesLinear": 76900,
      "grossCheck": 0,
@@ -3636,7 +3989,7 @@
      "date": "2026-10-09",
      "prevDate": "2026-10-08",
      "runId": 1008,
-     "method": "flash-v1",
+     "method": "desk-flash-yield-v1",
      "note": null,
      "noPnl": null,
      "total": -254422,
@@ -3653,7 +4006,8 @@
       "other": -18234,
       "carry_coupon": 71515,
       "carry_pull": -4470,
-      "reported": null
+      "reported": null,
+      "carry_nosplit": null
      },
      "ratesLinear": -264361,
      "grossCheck": 4200,
@@ -3678,7 +4032,7 @@
      "date": "2026-10-12",
      "prevDate": "2026-10-09",
      "runId": 1009,
-     "method": "flash-v1",
+     "method": "desk-flash-yield-v1",
      "note": null,
      "noPnl": null,
      "total": 178847,
@@ -3695,7 +4049,8 @@
       "other": 19940,
       "carry_coupon": 214574,
       "carry_pull": -13411,
-      "reported": null
+      "reported": null,
+      "carry_nosplit": null
      },
      "ratesLinear": -60467,
      "grossCheck": 0,
@@ -3720,7 +4075,7 @@
      "date": "2026-10-13",
      "prevDate": "2026-10-12",
      "runId": 1010,
-     "method": "flash-v1",
+     "method": "desk-flash-yield-v1",
      "note": null,
      "noPnl": null,
      "total": 161634,
@@ -3737,7 +4092,8 @@
       "other": 746,
       "carry_coupon": 71382,
       "carry_pull": -4462,
-      "reported": null
+      "reported": null,
+      "carry_nosplit": null
      },
      "ratesLinear": 5576,
      "grossCheck": 0,
@@ -3757,6 +4113,72 @@
       "pv": 407098352.86475754
      },
      "events": []
+    }
+   ]
+  },
+  "DEMO-B|NEW-1": {
+   "position": {
+    "ref": "DEMO-B|NEW-1",
+    "book": "DEMO-B",
+    "positionId": "NEW-1",
+    "name": "Synthetic New 1",
+    "instrument": "SYN-NEW-1",
+    "ccy": "RUB",
+    "kind": "FIX",
+    "group": "CORP",
+    "curve": "RUB OFZ",
+    "rating": "A",
+    "issuer": "Synthetic issuer"
+   },
+   "days": [
+    {
+     "date": "2026-10-13",
+     "prevDate": "2026-10-12",
+     "runId": 1010,
+     "method": null,
+     "note": null,
+     "noPnl": {
+      "reason": "no_prev_report",
+      "detail": "synthetic"
+     },
+     "total": null,
+     "c": {
+      "carry": null,
+      "rolldown": null,
+      "rates": null,
+      "spread": null,
+      "fx_gross": null,
+      "fx_funding": null,
+      "funding": null,
+      "convexity": null,
+      "new_trades": null,
+      "other": null,
+      "reported": null,
+      "carry_coupon": null,
+      "carry_pull": null,
+      "carry_nosplit": null
+     },
+     "ratesLinear": null,
+     "grossCheck": null,
+     "inputs": {
+      "source": null,
+      "cleanPrev": null,
+      "clean": 99.5,
+      "ytmPrev": null,
+      "ytm": 15.1,
+      "zPrev": null,
+      "z": 180.0,
+      "dv01Prev": null,
+      "dv01": -20000,
+      "cs01": -18000,
+      "quantityPrev": null,
+      "quantity": 100,
+      "pv": 99500000
+     },
+     "events": [
+      "позиция появилась",
+      "нет PnL: no_prev_report"
+     ]
     }
    ]
   }
@@ -3830,18 +4252,18 @@
   },
   "linear": {
    "RUB OFZ": {
-    "1Y": null,
-    "2Y": null,
-    "3Y": null,
-    "5Y": null,
-    "7Y": null,
-    "10Y": null
+    "1Y": -199014,
+    "2Y": -597042,
+    "3Y": -995069,
+    "5Y": -1194083,
+    "7Y": -796056,
+    "10Y": -199014
    },
    "RUB RUONIA": {
-    "1Y": null,
-    "2Y": null,
-    "3Y": null,
-    "5Y": null,
+    "1Y": -391130,
+    "2Y": -606139,
+    "3Y": -621694,
+    "5Y": -414462,
     "7Y": null,
     "10Y": null
    }
@@ -3859,7 +4281,171 @@
   "coverage": {
    "rows": 60,
    "linearRows": 60,
-   "bucketRows": 0
+   "bucketRows": 49
+  },
+  "factors": [
+   {
+    "id": "ruonia",
+    "name": "RUONIA"
+   },
+   {
+    "id": "basis",
+    "name": "Базис ОФЗ (КБД − RUONIA)"
+   },
+   {
+    "id": "kbd",
+    "name": "КБД (нет RUONIA на дату)"
+   },
+   {
+    "id": "",
+    "name": "кривая не указана"
+   }
+  ],
+  "factorMove": {
+   "ruonia": {
+    "1Y": -20,
+    "2Y": -17,
+    "3Y": -14,
+    "5Y": -11,
+    "7Y": -8,
+    "10Y": -5
+   },
+   "basis": {
+    "1Y": 5,
+    "2Y": 5,
+    "3Y": 5,
+    "5Y": 5,
+    "7Y": 5,
+    "10Y": 5
+   },
+   "kbd": {
+    "1Y": -15,
+    "2Y": -12,
+    "3Y": -9,
+    "5Y": -6,
+    "7Y": -3,
+    "10Y": 0
+   },
+   "": {
+    "1Y": null,
+    "2Y": null,
+    "3Y": null,
+    "5Y": null,
+    "7Y": null,
+    "10Y": null
+   }
+  },
+  "factorDv01": {
+   "ruonia": {
+    "1Y": -92500,
+    "2Y": -185000,
+    "3Y": -277500,
+    "5Y": -370000,
+    "7Y": -462500,
+    "10Y": -555000
+   },
+   "basis": {
+    "1Y": -45000,
+    "2Y": -90000,
+    "3Y": -135000,
+    "5Y": -180000,
+    "7Y": -225000,
+    "10Y": -270000
+   },
+   "kbd": {
+    "1Y": -455,
+    "2Y": -909,
+    "3Y": -1364,
+    "5Y": -1818,
+    "7Y": -2273,
+    "10Y": -2727
+   },
+   "": {
+    "1Y": null,
+    "2Y": null,
+    "3Y": null,
+    "5Y": null,
+    "7Y": null,
+    "10Y": null
+   }
+  },
+  "factorLinear": {
+   "ruonia": {
+    "1Y": -666296,
+    "2Y": -1156471,
+    "3Y": -1309608,
+    "5Y": -1102377,
+    "7Y": -412749,
+    "10Y": -137583
+   },
+   "basis": {
+    "1Y": 45861,
+    "2Y": -137583,
+    "3Y": -458610,
+    "5Y": -687915,
+    "7Y": -504471,
+    "10Y": -91722
+   },
+   "kbd": {
+    "1Y": -48559,
+    "2Y": -145678,
+    "3Y": -242797,
+    "5Y": -291357,
+    "7Y": -194238,
+    "10Y": -48559
+   },
+   "": {
+    "1Y": null,
+    "2Y": null,
+    "3Y": null,
+    "5Y": null,
+    "7Y": null,
+    "10Y": null
+   }
+  },
+  "factorLinearRest": {
+   "ruonia": 946206,
+   "basis": 630804,
+   "kbd": null,
+   "": -70887
+  },
+  "factorLinearTotal": {
+   "ruonia": -3838878,
+   "basis": -1203636,
+   "kbd": -971188,
+   "": -70887
+  },
+  "factorExact": {
+   "ruonia": -3880376,
+   "basis": -1265044,
+   "kbd": -991009,
+   "": -72334
+  },
+  "factorCoverage": {
+   "ruonia": {
+    "rows": 46,
+    "linearRows": 46,
+    "bucketRows": 42,
+    "dates": 11
+   },
+   "basis": {
+    "rows": 20,
+    "linearRows": 20,
+    "bucketRows": 16,
+    "dates": 10
+   },
+   "kbd": {
+    "rows": 3,
+    "linearRows": 3,
+    "bucketRows": 3,
+    "dates": 1
+   },
+   "": {
+    "rows": 11,
+    "linearRows": 11,
+    "bucketRows": 0,
+    "dates": 11
+   }
   }
  },
  "checks": {
@@ -4375,6 +4961,298 @@
      746
     ]
    ]
+  },
+  "unexplainedBy": {
+   "total": 1966948,
+   "other": 1966948,
+   "reported": null,
+   "rows": 60,
+   "groups": [
+    {
+     "key": "exact",
+     "label": "остаток точного flash",
+     "total": 166233,
+     "other": 166233,
+     "reported": null,
+     "rows": 34
+    },
+    {
+     "key": "simple",
+     "label": "без разложения: нет потоков / модельная цена",
+     "total": 1772862,
+     "other": 1772862,
+     "reported": null,
+     "rows": 4
+    },
+    {
+     "key": "yield",
+     "label": "по доходности",
+     "total": 13493,
+     "other": 13493,
+     "reported": null,
+     "rows": 11
+    },
+    {
+     "key": "other",
+     "label": "другой метод или не указан",
+     "total": 14360,
+     "other": 14360,
+     "reported": null,
+     "rows": 11
+    }
+   ],
+   "methods": [
+    {
+     "method": "desk-flash-simple-v1",
+     "group": "simple",
+     "total": 1772862,
+     "rows": 4,
+     "quality": {
+      "model_price": 1772862
+     }
+    },
+    {
+     "method": "desk-flash-exact-v2",
+     "group": "exact",
+     "total": 166233,
+     "rows": 34,
+     "quality": {
+      "exact": 166233
+     }
+    },
+    {
+     "method": "flash-v1",
+     "group": "other",
+     "total": 14360,
+     "rows": 11,
+     "quality": {
+      "exact": 14360
+     }
+    },
+    {
+     "method": "desk-flash-yield-v1",
+     "group": "yield",
+     "total": 13493,
+     "rows": 11,
+     "quality": {
+      "market_value": 13493
+     }
+    }
+   ],
+   "quality": [
+    {
+     "quality": "model_price",
+     "label": "модельная цена",
+     "total": 1772862,
+     "rows": 4
+    },
+    {
+     "quality": "exact",
+     "label": "точная",
+     "total": 180593,
+     "rows": 45
+    },
+    {
+     "quality": "market_value",
+     "label": "рыночная цена",
+     "total": 13493,
+     "rows": 11
+    }
+   ],
+   "dates": [
+    "2026-09-28",
+    "2026-09-29",
+    "2026-09-30",
+    "2026-10-01",
+    "2026-10-02",
+    "2026-10-05",
+    "2026-10-06",
+    "2026-10-08",
+    "2026-10-09",
+    "2026-10-12",
+    "2026-10-13"
+   ],
+   "byDate": {
+    "exact": [
+     104505,
+     7868,
+     48751,
+     158261,
+     -103372,
+     -65818,
+     -25782,
+     8428,
+     49738,
+     -48770,
+     32424
+    ],
+    "simple": [
+     null,
+     null,
+     null,
+     -350,
+     -6746,
+     null,
+     -18167,
+     null,
+     1798125,
+     null,
+     null
+    ],
+    "yield": [
+     17649,
+     -3866,
+     9701,
+     -4054,
+     -10283,
+     9024,
+     1561,
+     -8691,
+     -18234,
+     19940,
+     746
+    ],
+    "other": [
+     31323,
+     -21476,
+     13060,
+     -17581,
+     14045,
+     -11891,
+     2103,
+     16417,
+     -16050,
+     13805,
+     -9395
+    ]
+   },
+   "top": [
+    {
+     "ref": "DEMO-A|CORP-1",
+     "book": "DEMO-A",
+     "positionId": "CORP-1",
+     "name": "Synthetic Corp 1",
+     "total": 1802354,
+     "other": 1802354,
+     "reported": null,
+     "rows": 11,
+     "group": "simple",
+     "groupLabel": "без разложения: нет потоков / модельная цена",
+     "methods": [
+      "desk-flash-exact-v2",
+      "desk-flash-simple-v1"
+     ],
+     "quality": [
+      "exact",
+      "model_price"
+     ],
+     "notes": [
+      "simple PnL (model_price -> model_price): q x (dirty D - dirty D-1) + received, all in other"
+     ],
+     "noPnl": []
+    },
+    {
+     "ref": "DEMO-A|OFZ-1",
+     "book": "DEMO-A",
+     "positionId": "OFZ-1",
+     "name": "Synthetic OFZ 1",
+     "total": 187303,
+     "other": 187303,
+     "reported": null,
+     "rows": 11,
+     "group": "exact",
+     "groupLabel": "остаток точного flash",
+     "methods": [
+      "desk-flash-exact-v2"
+     ],
+     "quality": [
+      "exact"
+     ],
+     "notes": [],
+     "noPnl": []
+    },
+    {
+     "ref": "DEMO-B|OFZ-1",
+     "book": "DEMO-B",
+     "positionId": "OFZ-1",
+     "name": "Synthetic OFZ 1",
+     "total": -49181,
+     "other": -49181,
+     "reported": null,
+     "rows": 11,
+     "group": "exact",
+     "groupLabel": "остаток точного flash",
+     "methods": [
+      "desk-flash-exact-v2"
+     ],
+     "quality": [
+      "exact"
+     ],
+     "notes": [],
+     "noPnl": []
+    },
+    {
+     "ref": "DEMO-B|IRS-1",
+     "book": "DEMO-B",
+     "positionId": "IRS-1",
+     "name": "Synthetic IRS pay",
+     "total": 14360,
+     "other": 14360,
+     "reported": null,
+     "rows": 11,
+     "group": "other",
+     "groupLabel": "другой метод или не указан",
+     "methods": [
+      "flash-v1"
+     ],
+     "quality": [
+      "exact"
+     ],
+     "notes": [],
+     "noPnl": []
+    },
+    {
+     "ref": "DEMO-B|USD-1",
+     "book": "DEMO-B",
+     "positionId": "USD-1",
+     "name": "Synthetic USD 1",
+     "total": 13493,
+     "other": 13493,
+     "reported": null,
+     "rows": 11,
+     "group": "yield",
+     "groupLabel": "по доходности",
+     "methods": [
+      "desk-flash-yield-v1"
+     ],
+     "quality": [
+      "market_value"
+     ],
+     "notes": [],
+     "noPnl": []
+    },
+    {
+     "ref": "DEMO-A|CLOSED",
+     "book": "DEMO-A",
+     "positionId": "CLOSED",
+     "name": "Synthetic Closed",
+     "total": -1381,
+     "other": -1381,
+     "reported": null,
+     "rows": 5,
+     "group": "exact",
+     "groupLabel": "остаток точного flash",
+     "methods": [
+      "desk-flash-exact-v2"
+     ],
+     "quality": [
+      "exact"
+     ],
+     "notes": [],
+     "noPnl": []
+    }
+   ],
+   "topTotal": 6
   }
  }
 }

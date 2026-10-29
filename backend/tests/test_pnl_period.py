@@ -366,3 +366,32 @@ def test_position_quantity_change_hides_previous_row():
     i = [d["inputs"] for d in out["days"]]
     assert i[1]["source"] == "previous_row" and i[1]["cleanPrev"] is None and i[1]["quantityPrev"] == 1.0
     assert i[2]["cleanPrev"] == 103.0 and out["days"][1]["events"] == ["количество изменилось"]
+
+
+def test_period_per_row_splits(period_client):
+    """TDM#432: the carry of rows without ``carry_coupon`` summed apart (never a missing component); TDM#435: linear
+    rates of RUB bonds and the exact rates of the same rows; a position's methods and reasons without PnL."""
+    c, _ids = period_client
+    p = get(c)
+    s, by = p["summary"], {x["ref"]: x for x in p["positions"]}
+    assert {"carry_nosplit", "rates_linear", "rates_exact_lin"} <= set(p["keys"])
+    a1, b1, u1, n1 = by["DEMO-A|A1"], by["DEMO-B|B1"], by["DEMO-B|U1"], by["DEMO-B|N1"]
+    assert a1["c"]["carry_nosplit"] is None and s["m"]["carry_nosplit"] == 0
+    for ref in ("DEMO-B|B1", "DEMO-A|C1", "DEMO-B|U1"):
+        assert by[ref]["c"]["carry_nosplit"] == pytest.approx(by[ref]["c"]["carry"]), ref
+    assert s["c"]["carry_coupon"] + s["c"]["carry_pull"] + s["c"]["carry_nosplit"] == pytest.approx(s["c"]["carry"])
+    assert n1["c"]["carry_nosplit"] is None
+    # a USD bond keeps its rates whole; the exact - linear of the others is the rates convexity
+    assert u1["c"]["rates_linear"] is None and u1["m"]["rates_linear"] == u1["rows"]
+    assert b1["c"]["rates_exact_lin"] == pytest.approx(b1["c"]["rates"])
+    assert b1["c"]["rates_exact_lin"] - b1["c"]["rates_linear"] == pytest.approx(1e6 - 2e5)
+    assert s["c"]["rates"] - s["c"]["rates_exact_lin"] == pytest.approx(u1["c"]["rates"])
+    assert s["m"]["rates_linear"] == u1["rows"] + 1  # and the row without PnL
+    for d in p["days"]:
+        assert d["c"]["rates_exact_lin"] == pytest.approx(fsum(x for k, x in d["ratesByCurve"].items() if k != "USD"))
+    assert a1["methods"] == ["desk-flash-v1"] and n1["methods"] == []
+    assert n1["noPnlReasons"] == {"no_prev_report": 1} and a1["noPnlReasons"] == {}
+    usd = get(c, ccy="USD")
+    assert "rates_linear" not in usd["keys"] and usd["summary"]["c"]["rates_linear"] is None
+    b = {d["date"]: d for d in get(c, "position", position_book="DEMO-B", position_id="B1")["days"]}
+    assert b["2026-10-01"]["c"]["carry_nosplit"] == pytest.approx(b["2026-10-01"]["c"]["carry"])

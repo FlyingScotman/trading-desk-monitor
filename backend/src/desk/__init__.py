@@ -10,7 +10,7 @@ __version__ = "0.2.12"
 # buckets, coverage). A run records ``logic_version()`` in its lineage; the autopilot recomputes the latest positions
 # date once when its default run was made by another logic version; the backfill (desk.backfill, R23) recomputes the
 # older dates in the background.
-VALUATION_VERSION = 21  # 2: risk per curve (R8); 3: static display fields (R9 D1-D6, D8: names, coupons, issuers);
+VALUATION_VERSION = 22  # 2: risk per curve (R8); 3: static display fields (R9 D1-D6, D8: names, coupons, issuers);
 # 4: RUB bonds discounted on RUONIA OIS + Z-spread, flash PnL on the bond's own curves;
 # 5: a key-rate floater on a fallback rung books its projection on RUB KEY, the run log names missing rates inputs
 # 6: a bond's offer, its next 18 months of flows and the day's quote (G-spread, volume) in extra (concept pages)
@@ -43,6 +43,9 @@ VALUATION_VERSION = 21  # 2: risk per curve (R8); 3: static display fields (R9 D
 # key-rate/RUONIA formula valued as a floater (TDM#401)
 # 21: the flash PnL keeps its breakdowns in pnl.extra (TDM#406): carry_coupon / carry_pull, rates_linear_curves,
 # curve_moves_bp, prev; the owner chose to recompute the history so old dates get them (TDM#417)
+# 22: a RUB bond without a price of its own today (an intraday cut before its first trade, a day it did not trade) is
+# valued and carried by core at the ladder's price (fallback.at_last_price, TDM#383): a floater's projection, OFZ basis
+# and tail instead of a duration estimate, core's accrued and value for every one (the forward carry's base)
 
 
 def logic_version() -> str:

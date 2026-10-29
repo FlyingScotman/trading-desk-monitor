@@ -16,8 +16,11 @@ test('fixture answers have the API shapes the screens read', () => {
     assert.equal(r.position.ref, ref);
     r.days.forEach(d => ['date', 'prevDate', 'runId', 'method', 'noPnl', 'total', 'c', 'ratesLinear', 'grossCheck', 'inputs', 'events'].forEach(k => assert.ok(k in d, ref + ' day.' + k)));
   }
-  // the cases: linear by term not saved yet (TDM#406), an FX finding without a position, a market day without a run
-  assert.equal(FX.curves.coverage.bucketRows, 0);
+  // the cases: linear by term saved by part of the rows (TDM#406), an FX finding without a position, a market day without a run
+  assert.ok(FX.curves.coverage.bucketRows > 0 && FX.curves.coverage.bucketRows < FX.curves.coverage.rows);
+  for (const k of ['factors', 'factorMove', 'factorDv01', 'factorLinear', 'factorLinearRest', 'factorLinearTotal', 'factorExact', 'factorCoverage']) assert.ok(k in FX.curves, 'curves.' + k);
+  for (const k of ['total', 'other', 'reported', 'rows', 'groups', 'methods', 'quality', 'dates', 'byDate', 'top', 'topTotal']) assert.ok(k in FX.checks.unexplainedBy, 'unexplainedBy.' + k);
+  FX.period.days.concat(FX.period.positions).forEach(a => assert.ok('ratesByFactor' in a));
   assert.ok(FX.checks.findings.some(x => x.check === 'fxrev' && x.ref === null && x.name === 'USD'));
   assert.deepEqual(FX.checks.coverage.missingRuns, ['2026-10-07']);
 });
@@ -42,10 +45,14 @@ test('D: curve grids — move, DV01 and linear by term; linear not saved is «н
   assert.equal(G.move.rows[0].sum, null, 'a sum of moves means nothing');
   assert.equal(G.dv01.rows[0].sum, FX.curves.buckets.reduce((s, b) => s + FX.curves.dv01['RUB OFZ'][b], 0));
   assert.equal(G.move.max, 20);
-  assert.equal(G.linear.rows.length, 0);
-  assert.equal(G.linearCover, 'нет данных');
+  assert.equal(G.linear.rows.length, 2);
+  assert.equal(G.linearCover, FX.curves.coverage.bucketRows + ' из ' + FX.curves.coverage.rows + ' записей');
+  const none = clone(FX.curves);
+  Object.values(none.linear).forEach(r => FX.curves.buckets.forEach(b => { r[b] = null; })); none.coverage.bucketRows = 0;
+  assert.equal(P.curveGrids(none).linear.rows.length, 0);
+  assert.equal(P.curveGrids(none).linearCover, 'нет данных');
   // partial: two buckets of one curve saved by some rows
-  const cv = clone(FX.curves);
+  const cv = clone(none);
   cv.linear['RUB OFZ']['1Y'] = 1.5e5; cv.linear['RUB OFZ']['5Y'] = -2.5e5; cv.coverage.bucketRows = 12;
   const G2 = P.curveGrids(cv);
   assert.deepEqual(G2.linear.rows.map(r => r.id), ['RUB OFZ']);
@@ -157,8 +164,10 @@ test('E: day rows — inputs D−1 / D, Δ yield and Δ spread in bp, the interv
   // the split rule of A–C: a day without PnL does not drop it, a day with carry but no split does
   const gap = clone(days); Object.keys(gap[1].c).forEach(k => { gap[1].c[k] = null; }); gap[1].total = null; gap[1].noPnl = { reason: 'no_price', detail: null };
   assert.deepEqual(P.dayColumns(gap).slice(0, 2), ['carry_coupon', 'carry_pull'], 'a no-PnL day keeps the split');
-  const part = clone(days); part[1].c.carry_coupon = null;
-  assert.equal(P.dayColumns(part)[0], 'carry', 'a day with carry but no coupon: carry whole');
+  // per day (TDM#432): a day with carry but no coupon keeps its carry apart, the others keep the split
+  const part = clone(days); part[1].c.carry_coupon = part[1].c.carry_pull = null; part[1].c.carry_nosplit = part[1].c.carry;
+  assert.deepEqual(P.dayColumns(part).slice(0, 3), ['carry_coupon', 'carry_pull', 'carry_nosplit']);
+  assert.ok(!P.dayColumns(days).includes('carry_nosplit'), 'every day split: no such column');
   const one = clone(days.slice(0, 2)); one[0].c.fx_gross = 5000; one[0].c.fx_funding = -4800;
   assert.equal(P.srcVal(one[0], 'fx'), 200);
 });
