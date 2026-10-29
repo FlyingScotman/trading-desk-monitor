@@ -51,6 +51,15 @@ def test_adapter_files_takes_the_one_package_and_its_readme():
     assert sorted(out) == ["README.md", "pkg/__init__.py", "pkg/m.json", "pkg/sub/__init__.py"]
 
 
+def test_adapter_files_keeps_packages_under_a_plain_folder_of_the_package():
+    # the adapter's acquisition helper: src/tda/_acquisition (no __init__.py) holds the packages system2, profiler
+    out = build.adapter_files(_zip({"src/tda/__init__.py": b"x", "src/tda/_acquisition/system2/__init__.py": b"",
+                                    "src/tda/_acquisition/system2/acquire.py": b"", "README_INSTALL.txt": b"r",
+                                    "src/tda/_acquisition/profiler/__init__.py": b""}))
+    assert sorted(out) == ["README_INSTALL.txt", "tda/__init__.py", "tda/_acquisition/profiler/__init__.py",
+                           "tda/_acquisition/system2/__init__.py", "tda/_acquisition/system2/acquire.py"]
+
+
 @pytest.mark.parametrize("files", [{"a/__init__.py": b"", "b/__init__.py": b""}, {"x.py": b""},
                                    {"../evil/__init__.py": b""}])
 def test_adapter_files_refuses(files):
