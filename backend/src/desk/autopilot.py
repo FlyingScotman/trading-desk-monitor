@@ -24,7 +24,9 @@ every ``inbox_poll_seconds`` and on ``POST /api/v1/autopilot/run``):
    ``desk cycle --date`` is asked anyway). Then the bundles of the cache not loaded yet go into the store's market history (``desk.marketdata.history``:
    the bond charts; one query when there is nothing new).
 2. **scan**: ``desk inbox scan`` (when inbox folders are set). Sync comes first: a ``start_of_day`` report needs a
-   cached calendar covering its date and the day before, otherwise it waits (``waiting_calendar``).
+   cached calendar covering its date and the day before, otherwise it waits (``waiting_calendar``); a report
+   before the hub's oldest date (known once the sync read the hub's whole date list) that still has no calendar
+   once the hub's oldest static snapshot is cached stops waiting: ``ignored_too_old``, ``before_hub_history`` (#27).
 3. **eod**: for each cached ``eod_final`` business date from ``min(today - WINDOW_DAYS, latest positions date)``
    on (at most ``MAX_EOD_DATES``, the latest positions date always) that has positions in the store, the EOD run of
    ``desk eod`` when the date has no default run, or its default run read other position sets (a new revision of a
@@ -319,6 +321,7 @@ class Autopilot:
         self._sync_later = 0                   # hub dates the sync left for the next cycle: no history step
         # hub date -> {"error", "attempts", "next_attempt" (MSK datetime)}: failed dates waiting for a retry (#146)
         self._sync_retry: dict[str, dict[str, Any]] = {}
+        self._hub_first: str | None = None     # the hub's oldest date, when its whole list was read (#27)
         self._inbox_waiting = 0                # files the last scan left waiting for a calendar (R22)
         self._history_dates: tuple[float, int, list[tuple[str, str]]] | None = None
         self._static_polled = float("-inf")    # monotonic time the hub's newest static was last asked for (R25)
@@ -690,6 +693,8 @@ class Autopilot:
             hub_dates.append(d)
             if (len(hub_dates) >= n and (floor is None or d < floor)) or len(hub_dates) >= MAX_HUB_DATES:
                 break
+        else:  # the whole list read: its last date is the hub's oldest; the scan retires reports before it (#27)
+            self._hub_first = hub_dates[-1] if hub_dates else None
         wanted = set(hub_dates[:n])
         for d in pos + extra:  # the date and the hub date before it (flash PnL)
             wanted.add(d)
@@ -933,7 +938,8 @@ class Autopilot:
         self._inbox_waiting = 0
         if not settings.scan_dirs:
             return "skipped", "no inbox folders (inbox_dirs)"
-        res = scan.scan(con, settings, progress=lambda done, total, detail: self._progress("scan", done, total, detail))
+        res = scan.scan(con, settings, progress=lambda done, total, detail: self._progress("scan", done, total, detail),
+                        history_from=self._hub_first)
         self._inbox_waiting = res.files.get("waiting_calendar", 0)
         detail = "; ".join(res.text().splitlines())
         if res.busy:

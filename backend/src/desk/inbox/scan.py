@@ -33,7 +33,11 @@ decided by the report date ``match`` gives (R22): a file whose report date is ol
 ``MTIME_SLACK_DAYS`` before the lookback starts is skipped on its modification time alone (``skipped: too_old``,
 not even matched): a report is written on or after its report date, so it cannot fall inside the window; a file ``waiting_calendar`` whose report date falls behind gets that status too, so it
 stops driving hub syncs. None of them is offered again while still too old, fingerprint change or not; after the
-lookback grows they are. ``desk backfill`` (R23) scans with the lookback starting on its own start date
+lookback grows they are. A file waiting for a calendar whose report date is before the hub's history
+(``scan(history_from=...)``: the hub's oldest date, which the autopilot's sync knows) gets that status too, with
+``error_code`` ``before_hub_history``, once no cached static snapshot has a calendar for it and the oldest one the
+hub can give is cached: the hub will never send one (#27); it is offered again only when the hub's history reaches
+back to its report date. ``desk backfill`` (R23) scans with the lookback starting on its own start date
 (``scan(since=...)``), so the older reports come in once.
 
 Speed (a folder holds thousands of old reports; a scan with nothing new must cost a folder listing, R22): the
@@ -112,6 +116,7 @@ log = logging.getLogger(__name__)
 SCAN_LOCK = 0x6465736C  # one scan at a time; the store migrator holds 0x6465736B
 REOFFER = ("ignored", "match_failed", "failed", "timed_out", "rejected")
 TOO_OLD = "ignored_too_old"
+BEFORE_HISTORY = "before_hub_history"  # the error_code of a TOO_OLD file the hub's history does not reach (#27)
 QUIET = (TOO_OLD,)  # statuses without an event (thousands of old files would flood the event log)
 UNREAD = ("ignored", TOO_OLD)  # what a new file never read becomes: a row of inbox_unread, not of the ledger
 READ_WORKERS_ENV = "DESK_INBOX_READ_WORKERS"
@@ -245,9 +250,10 @@ def _key(report_date: date, report_ts: datetime | None, seq: int | None, generat
 class _Scan:
     def __init__(self, con: psycopg.Connection, settings: Settings, h: AdapterHandle, res: ScanResult,
                  now: datetime, cutoff: date | None = None, progress: Progress | None = None,
-                 expected: tuple[str, str, frozenset[str]] | None = None) -> None:
+                 expected: tuple[str, str, frozenset[str]] | None = None, history_from: str | None = None) -> None:
         self.con, self.settings, self.h, self.res, self.now = con, settings, h, res, now
         self.cutoff, self._progress = cutoff, progress
+        self.history_from = history_from  # the hub's oldest date when known (#27)
         self.expected = expected
         self.cache = settings.snapshot_cache
         self.archive = Path(settings.inbox_archive)
@@ -272,6 +278,25 @@ class _Scan:
         if self.cutoff is None or report_date is None:
             return False
         return (report_date if isinstance(report_date, str) else report_date.isoformat()) < self.cutoff.isoformat()
+
+    def before_history(self, report_date: str | date | None) -> bool:
+        """A report date without a calendar (the caller found none) that the hub cannot give one for: before the hub's
+        oldest date, and the oldest static snapshot the hub can give is cached (#27)."""
+        if self.history_from is None or report_date is None:
+            return False
+        rd = report_date if isinstance(report_date, str) else report_date.isoformat()
+        if rd >= self.history_from:
+            return False
+        refs = static_snapshots(self.cache)
+        return bool(refs) and refs[0].business_date <= self.history_from
+
+    def reoffer_filter(self) -> str:
+        """The SQL condition on the latest status ``l`` that keeps a file found before the hub's history from being
+        offered again, until the hub's history reaches back to its report date (#27)."""
+        reach = f"l.report_date < '{date.fromisoformat(self.history_from).isoformat()}'::date" \
+            if self.history_from else "TRUE"
+        return (f"NOT (l.status = '{TOO_OLD}' AND l.error_code IS NOT DISTINCT FROM '{BEFORE_HISTORY}'"
+                f" AND ({reach}))")
 
     # ---- books and calendar
 
@@ -457,6 +482,27 @@ class _Scan:
             for sha, path, arch, src, rd, name, size, mtime in rows:
                 self._status(Offer(sha, path, name, size, mtime, False), TOO_OLD, None, source=src,
                              report_date=rd, archive_path=arch)
+
+    def retire_before_history(self) -> None:
+        """Files waiting for a calendar the hub cannot give (``before_history``): ``ignored_too_old`` with
+        ``error_code`` ``before_hub_history`` (no file access, the ledger only; #27)."""
+        if self.history_from is None:
+            return
+        rows = self.con.execute(
+            "SELECT l.sha256, l.path, l.archive_path, l.source, l.report_date, f.name, f.size_bytes, f.mtime"
+            " FROM (SELECT DISTINCT ON (sha256) * FROM inbox_file_status ORDER BY sha256, status_id DESC) l"
+            " JOIN inbox_file f USING (sha256) WHERE l.status = 'waiting_calendar' AND l.report_date < %s",
+            (date.fromisoformat(self.history_from),)).fetchall()
+        with self.con.transaction():
+            for sha, path, arch, src, rd, name, size, mtime in rows:
+                try:
+                    self.calendar(rd.isoformat())  # a calendar after all (a static snapshot came): it is offered
+                    continue
+                except CalendarUnavailable:
+                    pass
+                if self.before_history(rd):
+                    self._status(Offer(sha, path, name, size, mtime, False), TOO_OLD, None, source=src,
+                                 report_date=rd, archive_path=arch, error_code=BEFORE_HISTORY)
 
     # ---- processing
 
@@ -678,6 +724,9 @@ class _Scan:
         try:
             vd = self.valid_date(decl, hit["report_date"])
         except CalendarUnavailable:
+            if self.before_history(hit["report_date"]):  # the hub will never send its calendar: terminal (#27)
+                self._status(o, TOO_OLD, decl, error_code=BEFORE_HISTORY, **cols)
+                return
             last = con.execute("SELECT status, adapter_fingerprint FROM inbox_file_status WHERE sha256 = %s"
                                " ORDER BY status_id DESC LIMIT 1", (o.sha256,)).fetchone()
             if last == ("waiting_calendar", self.h.fingerprint):  # still waiting: no new status, no event
@@ -841,7 +890,7 @@ def _session(con: psycopg.Connection, settings: Settings, now: datetime | None,
              offers: Callable[[_Scan], list[Offer]], *, lookback: bool = False,
              progress: Progress | None = None, since: date | None = None,
              expected: tuple[str, str, frozenset[str]] | None = None,
-             handle: AdapterHandle | None = None) -> ScanResult:
+             handle: AdapterHandle | None = None, history_from: str | None = None) -> ScanResult:
     h = handle if handle is not None else adapter(settings)
     res = ScanResult(adapter_line(h))
     if not h.ok:
@@ -854,7 +903,7 @@ def _session(con: psycopg.Connection, settings: Settings, now: datetime | None,
         now = now or datetime.now(UTC)
         cutoff = since if since is not None else lookback_cutoff(settings, now.astimezone(MSK).date()) if lookback \
             else None
-        s = _Scan(con, settings, h, res, now, cutoff, progress, expected)
+        s = _Scan(con, settings, h, res, now, cutoff, progress, expected, history_from)
         with runner.pooled(read_workers()):  # workers start on the first call: an idle scan starts none
             s.run(offers(s))
             s.refresh_books()
@@ -864,16 +913,20 @@ def _session(con: psycopg.Connection, settings: Settings, now: datetime | None,
 
 
 def scan(con: psycopg.Connection, settings: Settings, *, now: datetime | None = None,
-         progress: Progress | None = None, since: date | None = None) -> ScanResult:
+         progress: Progress | None = None, since: date | None = None, history_from: str | None = None) -> ScanResult:
     """New stable files of the folders, files to re-offer after a fingerprint change, and those waiting for a
     calendar; within the lookback only (``ignored_too_old`` files again once the lookback covers them). ``since``
-    (``desk backfill``, R23): the lookback starts on this date instead, so the older reports are read too."""
+    (``desk backfill``, R23): the lookback starts on this date instead, so the older reports are read too.
+    ``history_from``: the hub's oldest date, when known; a file waiting for a calendar before it is terminal (#27)."""
     def offers(s: _Scan) -> list[Offer]:
         s.retire_too_old()
+        s.retire_before_history()
         again = ("waiting_calendar", TOO_OLD) if s.calendars_changed() else (TOO_OLD,)
         return s.new_files() + s.known(lambda st, fp: (st in REOFFER and fp != s.h.fingerprint) or st in again,
-                                       fresh=True, statuses=(*REOFFER, *again)) + s.transient()
-    res = _session(con, settings, now, offers, lookback=True, progress=progress, since=since)
+                                       fresh=True, statuses=(*REOFFER, *again), extra=s.reoffer_filter()) \
+            + s.transient()
+    res = _session(con, settings, now, offers, lookback=True, progress=progress, since=since,
+                   history_from=history_from)
     global last_scan
     last_scan = {"at": datetime.now(UTC).isoformat(), "files": dict(res.files), "skipped": dict(res.skipped),
                  "copies": dict(res.copies), "match": dict(res.match), "timings": dict(res.timings)}
@@ -1018,7 +1071,7 @@ LOSS_REASONS = {
     "rejected": "файл отклонён целиком при проверке",
     "waiting_calendar": "нет календаря на дату отчёта (ждёт снимок справочника с хаба)",
     "ignored": "адаптер не узнал файл (не его формат)",
-    "ignored_too_old": "дата отчёта старше окна загрузки (inbox_lookback_days)",
+    "ignored_too_old": "дата отчёта старше окна загрузки (inbox_lookback_days) или начала истории хаба (before_hub_history)",
     "unit_rejected": "книга в файле отклонена (ошибки в строках, см. коды)",
     "unit_superseded": "книга пришла в другом, более новом отчёте или от источника с большим приоритетом",
     "scope_conflict": "та же книга и дата от другого источника без приоритетов",
