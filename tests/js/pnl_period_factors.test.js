@@ -73,7 +73,7 @@ test('F: unexplained by method — groups, days and the top add up to the period
   const V = P.unexplainedView(FX.checks), u = FX.checks.unexplainedBy;
   assert.equal(V.total, FX.period.summary.c.other + (FX.period.summary.c.reported || 0));
   assert.deepEqual(V.groups.map(g => g.key), ['exact', 'simple', 'yield', 'other']);
-  assert.equal(V.groups.find(g => g.key === 'simple').label, 'без разложения: нет потоков / модельная цена');
+  assert.equal(V.groups.find(g => g.key === 'simple').label, 'без разложения: нет потоков ядра');
   near(sum(V.groups.map(g => g.total)), V.total, 1, 'groups');
   assert.equal(V.gap, 0);
   near(sum(V.series.flatMap(s => s.vals)), V.total, 1, 'days');
@@ -106,4 +106,71 @@ test('A: the unexplained bar by method — from /checks when at hand (by row), e
   // «Разница PV по отчётам»: no reported anywhere — nothing to split (null, not zero bars)
   assert.equal(P.unexplainedSplit(prep.positions, { k: 'reported', v: p => P.val(p, 'reported') }, null), null);
   assert.equal(P.unexplainedSplit(prep.positions, { k: 'reported', v: p => P.val(p, 'reported') }, FX.checks), null, 'unexplainedBy.reported null too');
+});
+
+test('F: unexplained by reason first — reasons, their methods, days and top add up; the method groups stay second', () => {
+  const V = P.unexplainedView(FX.checks), u = FX.checks.unexplainedBy;
+  assert.deepEqual(V.reasons.map(r => r.key), ['fallback_price', 'price_source_switch', 'yield_no_curve', 'flash_residual', 'unrecorded']);
+  assert.equal(V.reasons.find(r => r.key === 'unrecorded').label, 'причина не записана (прогон до версии 23)');
+  near(sum(V.reasons.map(r => r.total)), V.total, 1, 'reasons');
+  assert.equal(V.reasonGap, 0);
+  V.reasons.forEach(r => near(sum(r.methods.map(m => m.total)), r.total, 1, r.key + ' by method'));
+  near(sum(V.reasonSeries.flatMap(s => s.vals)), V.total, 1, 'days by reason');
+  assert.ok(V.reasonSeries.every(s => s.vals.length === V.dates.length));
+  assert.equal(V.reasons.find(r => r.key === 'flash_residual').color, P.REASON_COLOR.flash_residual);
+  assert.equal(V.reasons.find(r => r.key === 'fallback_price').methods[0].label, 'без разложения: нет потоков ядра');
+  assert.ok(V.reasons.every(r => r.tip), 'every reason has its tip');
+  const corp = V.top.find(t => t.ref === 'DEMO-A|CORP-1');
+  assert.equal(corp.reason, 'price_source_switch'); assert.equal(corp.reasonLabel, 'смена источника цены: модель ↔ рынок');
+  assert.equal(corp.reasonColor, P.REASON_COLOR.price_source_switch);
+  // a response before TDM#442: no reasons, the method groups alone
+  const old = P.unexplainedView({ unexplainedBy: Object.assign(clone(u), { reasons: undefined, byReasonDate: undefined }) });
+  assert.deepEqual(old.reasons, []); assert.deepEqual(old.reasonSeries, []); assert.equal(old.reasonGap, null);
+  assert.deepEqual(old.groups.map(g => g.key), V.groups.map(g => g.key));
+});
+
+test('A: the unexplained bar by reason, then by method — from /checks by row, else from /period codes by position', () => {
+  const prep = P.prepare(FX.period), other = P.rowsFor('explain', prep, { carry: 'net' }).find(d => d.k === 'other');
+  const C = P.unexplainedSplit(prep.positions, other, FX.checks);
+  assert.deepEqual(C.reasons.map(r => r.key), FX.checks.unexplainedBy.reasons.map(r => r.key));
+  near(sum(C.reasons.map(r => r.total)), other.total, 1, 'checks by reason');
+  near(sum(C.groups.map(g => g.total)), other.total, 1, 'checks by method');
+  const S = P.unexplainedSplit(prep.positions, other, null);
+  near(sum(S.reasons.map(r => r.total)), other.total, 1, 'period by reason');
+  const by = Object.fromEntries(S.reasons.map(r => [r.key, r]));
+  assert.equal(by.mixed.total, prep.positions.find(p => p.ref === 'DEMO-A|CORP-1').c.other, 'several reasons: mixed');
+  assert.equal(by.unrecorded.total, prep.positions.find(p => p.ref === 'DEMO-B|IRS-1').c.other, 'no code: unrecorded');
+  assert.equal(by.yield_no_curve.n, 1);
+  assert.deepEqual(S.reasons.map(r => r.key), ['yield_no_curve', 'flash_residual', 'unrecorded', 'mixed'], 'in the backend order');
+  assert.equal(by.unrecorded.label, P.REASON_LABEL.unrecorded);
+});
+
+// the frontend mirror of the method groups and the reasons against the backend source (TDM#452): a renamed method or
+// a new reason fails here, not silently in «другой метод»
+test('mirror: METHOD_GROUP, UNEXPL_LABEL and REASON_LABEL match the backend', () => {
+  const fs = require('node:fs'), path = require('node:path');
+  const src = f => fs.readFileSync(path.join(__dirname, '..', '..', 'backend', 'src', 'desk', ...f.split('/')), 'utf8');
+  const consts = text => Object.fromEntries([...text.matchAll(/^([A-Z][A-Z0-9_]*) = "([^"]*)"$/gm)].map(m => [m[1], m[2]]));
+  const mods = { 'pnl.flash': consts(src('pnl/flash.py')), 'valuation.fallback': consts(src('valuation/fallback.py')), 'pnl.reasons': consts(src('pnl/reasons.py')) };
+  const checks = src('api/pnl_checks.py');
+  // the names pnl_checks imports, by alias
+  const names = {};
+  for (const m of checks.matchAll(/^from \.\.(pnl\.flash|valuation\.fallback) import (\w+)(?: as (\w+))?$/gm)) names[m[3] || m[2]] = mods[m[1]][m[2]];
+  const block = checks.match(/^from \.\.pnl\.reasons import \(\n([\s\S]*?)\)/m)[1];
+  for (const n of block.match(/\w+/g)) if (mods['pnl.reasons'][n] != null) names[n] = mods['pnl.reasons'][n];
+  const at = k => checks.slice(checks.indexOf(k + ' = {'), checks.indexOf('}', checks.indexOf(k + ' = {')));
+  const py = Object.fromEntries([...at('METHOD_GROUP').matchAll(/(\w+): "(\w+)"/g)].map(m => { assert.ok(names[m[1]], 'resolved ' + m[1]); return [names[m[1]], m[2]]; }));
+  assert.deepEqual(P.METHOD_GROUP, py);
+  const labels = Object.fromEntries([...at('UNEXPL_GROUPS').matchAll(/"(\w+)": "([^"]+)"/g)].map(m => [m[1], m[2]]));
+  const { mixed, ...js } = P.UNEXPL_LABEL;
+  assert.deepEqual(js, labels); assert.ok(mixed);
+  const r = src('pnl/reasons.py'), rc = mods['pnl.reasons'];
+  const ot = r.slice(r.indexOf('OTHER_REASON_TEXT = {'), r.indexOf('}', r.indexOf('OTHER_REASON_TEXT = {')));
+  const reasons = Object.fromEntries([...ot.matchAll(/(\w+): "([^"]+)"/g)].map(m => [rc[m[1]], m[2]]));
+  const since = r.match(/^REASONS_SINCE = (\d+)$/m)[1];
+  reasons[rc.UNRECORDED] = r.match(/^NO_REASON_TEXT = f"([^"]+)"$/m)[1].replace('{REASONS_SINCE}', since);
+  const { mixed: m2, ...jr } = P.REASON_LABEL;
+  assert.deepEqual(jr, reasons); assert.ok(m2);
+  assert.deepEqual(P.REASON_ORDER.filter(k => k !== 'mixed'), Object.keys(reasons), 'the backend order');
+  assert.ok(P.REASON_ORDER.every(k => P.REASON_COLOR[k] && P.REASON_TIP[k]), 'a colour and a tip per reason');
 });

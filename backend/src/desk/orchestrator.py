@@ -41,7 +41,15 @@ from .marketdata.bundle import SnapshotDir, SnapshotError
 from .marketdata.reference import Reference
 from .marketdata.reference import facts as reference_of
 from .pnl.direct import split_fx
-from .pnl.flash import FlashCurves, FlashPnl, NoPnl, explain
+from .pnl.flash import FlashCurves, FlashPnl, NoPnl, explain, price_discovery
+from .pnl.reasons import (
+    CORE_REFUSED,
+    DISCOUNT_CURVE_SWITCH,
+    FALLBACK_PRICE,
+    NO_CURVE_ON_DATE,
+    PRICE_SOURCE_SWITCH,
+    other_reason,
+)
 from .valuation.bonds import (
     OFZ_SCHEME,
     OFZ_SCHEME_P,
@@ -56,13 +64,17 @@ from .valuation.bonds import (
     value_bonds,
 )
 from .valuation.fallback import (
+    MODEL_Z_TOLERANCE_BP,
     RUNGS,
     CarriedSpread,
     FallbackContext,
     approximate,
     at_last_price,
+    at_model_price,
+    by_core,
     fx_rate_cbr,
     market_fx,
+    model_notes,
     par_proxy,
     simple_pnl,
     yield_pnl,
@@ -355,8 +367,10 @@ def value(ctx: EodContext, requests: list[tuple[str, float]], *, second_order: b
     core cannot value gets a ``valuation.fallback`` rung (market value, stale or model price, par proxy)
     with its quality flag; ``reason``/``detail`` keep why it is not exact. Only a bond with no data at
     all stays without a valuation. ``carried_spreads`` (from the desk store) are the model spreads of
-    the latest earlier run: a model price reuses its bond's spread instead of the day's median.
-    ``scenarios`` (core ``PortfolioScenario``) are repriced by core: ``core_result.scenarios``."""
+    the latest earlier run: a model price reuses its bond's spread instead of the day's median. A RUB bond without a
+    price of its own is valued by core at the ladder's price (``fallback.at_last_price``, TDM#383) or at its model price
+    (``fallback.at_model_price``, TDM#441), its rung's quality kept; the ladder's own estimate stays for the bonds core
+    refuses there. ``scenarios`` (core ``PortfolioScenario``) are repriced by core: ``core_result.scenarios``."""
     pids = _pids(requests, position_ids)
     index = {p: i for i, p in enumerate(pids)}
     out, todo = bond_requests(ctx, requests, pids)
@@ -376,11 +390,7 @@ def value(ctx: EodContext, requests: list[tuple[str, float]], *, second_order: b
         at_price = {pid: (o, r) for pid, o, (_, qty) in zip(pids, out, requests) if o.valuation is None
                     and (r := at_last_price(ctx, pid, o, qty, fb)) is not None}
         if at_price:
-            valued, results = value_bonds(ctx.risk_market, [r[0] for _, r in at_price.values()],
-                                          second_order=second_order, cache=ctx.cache, scenarios=scenarios,
-                                          foreign=foreign_bond_curves(ctx), quote_curve_risk=ctx.quote_curve_risk,
-                                          ofz_basis=ctx.ofz_basis)
-            by_pid = {p.position_id: r for r in results for p in r.positions}
+            valued, by_pid = _core_at(ctx, [r[0] for _, r in at_price.values()], second_order, scenarios)
             for pid, v in valued.items():
                 o, (_, quality, notes) = at_price[pid]
                 if isinstance(v, BondValuation):
@@ -395,7 +405,34 @@ def value(ctx: EodContext, requests: list[tuple[str, float]], *, second_order: b
                 except Exception as e:  # one bond's bad data must not stop the run: the last rung, flagged
                     log.warning("fallback ladder failed for %s, valued at par proxy", o.secid, exc_info=True)
                     o.valuation = par_proxy(ctx, o, qty, f"fallback ladder failed: {type(e).__name__}: {e}")
+        # a model price: core at the model's price, its flows, risk and carry with it (TDM#441)
+        at_model = {pid: (o, r) for pid, o, (_, qty) in zip(pids, out, requests) if (m := o.valuation) is not None
+                    and m.quality == "model_price" and (r := at_model_price(ctx, pid, o, qty, m.clean_pct)) is not None}
+        if at_model:
+            valued, by_pid = _core_at(ctx, [r for _, r in at_model.values()], second_order, scenarios)
+            for pid, v in valued.items():
+                o, m = at_model[pid][0], at_model[pid][0].valuation
+                assert m is not None
+                if isinstance(v, BondValuation) and abs(v.z_spread_bp - m.z_spread_bp) <= MODEL_Z_TOLERANCE_BP:
+                    o.valuation = replace(v, quality="model_price", model_spread_source=m.model_spread_source,
+                                          assumptions=model_notes(m) + v.assumptions)
+                    o.core_result = by_pid[pid]
+                else:  # the ladder's own model price, saying core was tried
+                    why = (f"core at the model price refused: {v.reason}" + (f" ({v.detail})" if v.detail else "")
+                           if isinstance(v, Rejected) else f"core at the model price: Z {v.z_spread_bp:.4f} bp, not "
+                           f"the model's {m.z_spread_bp:.4f} bp: the ladder's model price")
+                    o.valuation = replace(m, assumptions=(*m.assumptions, why))
     return out
+
+
+def _core_at(ctx: EodContext, reqs: list[BondRequest], second_order: bool, scenarios: tuple
+             ) -> tuple[dict[str, BondValuation | Rejected], dict[str, PortfolioRiskResult]]:
+    """``value_bonds`` of fallback rungs' requests at their price (``at_last_price``, ``at_model_price``) on the run's
+    inputs, and the core result of each position."""
+    valued, results = value_bonds(ctx.risk_market, reqs, second_order=second_order, cache=ctx.cache, scenarios=scenarios,
+                                  foreign=foreign_bond_curves(ctx), quote_curve_risk=ctx.quote_curve_risk,
+                                  ofz_basis=ctx.ofz_basis)
+    return valued, {p.position_id: r for r in results for p in r.positions}
 
 
 @dataclass
@@ -440,22 +477,27 @@ def _pids(requests: list, position_ids: list[str] | None) -> list[str]:
 
 
 def horizon(ctx: EodContext, requests: list[tuple[str, float]], horizon_date: date, *,
-            position_ids: list[str] | None = None) -> tuple[list[CarryOutcome], PortfolioHorizonResult | None]:
+            position_ids: list[str] | None = None, model_prices: dict[str, float] | None = None
+            ) -> tuple[list[CarryOutcome], PortfolioHorizonResult | None]:
     """Carry and roll-down of (secid, quantity) ``requests`` from the context's date to ``horizon_date`` through core
     ``horizon_portfolio`` (``valuation.bonds.horizon_bonds``) on the inputs ``value`` values them on: the same
     backend checks, instruments, quotes, curves (``risk_market``) and policy. A RUB bond without a price of its own
     today is carried at the ladder's price (``fallback.at_last_price``, TDM#383: an intraday cut before its first
-    trade, a day it did not trade; ``detail`` says which); otherwise no fallback ladder: a bond core cannot value has no
-    carry, with its reason. ``position_ids`` as in ``value``. Returns one ``CarryOutcome`` per request and the core
-    result."""
+    trade, a day it did not trade; ``detail`` says which), else, without a price in the ladder's window, at the clean
+    price of ``model_prices`` (position ID -> clean %: its run's model price, ``fallback.at_model_price``, TDM#441);
+    otherwise no fallback ladder: a bond core cannot value has no carry, with its reason. ``position_ids`` as in
+    ``value``. Returns one ``CarryOutcome`` per request and the core result."""
     pids = _pids(requests, position_ids)
     pre, todo = bond_requests(ctx, requests, pids)
     out = [CarryOutcome(o.secid, reason=o.reason, detail=o.detail) for o in pre]
-    fb, at_price = FallbackContext.build(ctx), {}
+    fb, at_price, models = FallbackContext.build(ctx), {}, model_prices or {}
     for pid, o, (_, qty) in zip(pids, pre, requests):  # without a price today: at the ladder's price (TDM#383)
         if (r := at_last_price(ctx, pid, o, qty, fb)) is not None:
             todo.append(r[0])
             at_price[pid] = r
+        elif pid in models and (m := at_model_price(ctx, pid, o, qty, models[pid])) is not None:  # TDM#441
+            todo.append(m)
+            at_price[pid] = (m, "model_price", ("", "model price of the run", "valued by core at this price"))
     carried, result = horizon_bonds(ctx.risk_market, todo, horizon_date, cache=ctx.cache, foreign=foreign_bond_curves(ctx),
                                     quote_curve_risk=ctx.quote_curve_risk, ofz_basis=ctx.ofz_basis)
     index = {p: i for i, p in enumerate(pids)}
@@ -490,7 +532,10 @@ def with_cbr(pnl: FlashPnl, prev: EodContext, ctx: EodContext) -> FlashPnl:
 
 
 def attach_pnl(prev: EodContext, prev_outcomes: list[Outcome], ctx: EodContext, outcomes: list[Outcome]) -> None:
-    """Set ``pnl`` or ``no_pnl`` on every outcome of ``ctx`` priced today. Both lists are in request order."""
+    """Set ``pnl`` or ``no_pnl`` on every outcome of ``ctx`` priced today. Both lists are in request order. A bond valued
+    by core on both dates (``fallback.by_core``: exact, or a rung at its price) takes the exact flash steps; one on a
+    fallback rung off core on either date, or discounted on another curve on each, the simple PnL; each with why its PnL
+    is (partly) in ``other`` (``pnl.extra.other_reason``, ``ladder_reason``, ``curve_switch``; ``pnl.flash``)."""
     if len(prev_outcomes) != len(outcomes):
         raise ValueError("previous and current requests differ")
     curves = FlashCurves.build(prev.kbd, ctx.kbd, prev.curve, ctx.curve, prev_market=prev.core_market,
@@ -504,23 +549,69 @@ def attach_pnl(prev: EodContext, prev_outcomes: list[Outcome], ctx: EodContext, 
         if p.valuation is None:
             o.no_pnl = NoPnl("not_priced_prev", f"{prev.business_date}: {p.reason}{': ' + p.detail if p.detail else ''}")
             continue
+        pv, ov = p.valuation, o.valuation
         try:
-            if "par_proxy" in (p.valuation.quality, o.valuation.quality):  # a placeholder value: no PnL is better
-                d = prev.business_date if p.valuation.quality == "par_proxy" else ctx.business_date
+            if "par_proxy" in (pv.quality, ov.quality):  # a placeholder value: no PnL is better
+                d = prev.business_date if pv.quality == "par_proxy" else ctx.business_date
                 raise NoPnl("par_proxy", f"valued at par on {d}, no price")
-            # no cashflows to reprice: the dirty price move (a foreign bond's carry at its yield, ``yield_pnl``)
-            if o.valuation.quality in RUNGS or p.valuation.quality in RUNGS:
+            # no cashflows to reprice: the dirty price move (a foreign bond's carry at its yield, ``yield_pnl``); a
+            # rung core valued at its price on both dates has them (TDM#383, TDM#441)
+            if (ov.quality in RUNGS or pv.quality in RUNGS) and not (by_core(pv) and by_core(ov)):
                 assert o.terms is not None
-                o.pnl = split_fx(yield_pnl(p.valuation, o.valuation, o.terms, prev, ctx), prev, ctx, o.terms)
+                pnl = yield_pnl(pv, ov, o.terms, prev, ctx)
+                o.pnl = split_fx(pnl if pnl.other_reason else replace(pnl, other_reason=ladder_reason(prev, p, ctx, o)),
+                                 prev, ctx, o.terms)
                 continue
-            if p.valuation.discount_curve_id != o.valuation.discount_curve_id:  # a KBD (or foreign) fallback on one date
+            if pv.discount_curve_id != ov.discount_curve_id:  # a KBD (or foreign) fallback on one date
                 assert o.terms is not None
-                o.pnl = split_fx(replace(simple_pnl(p.valuation, o.valuation, o.terms, ctx), note=(
-                    f"simple PnL: discounted on {p.valuation.spread_curve} on {prev.business_date}, on "
-                    f"{o.valuation.spread_curve} on {ctx.business_date}: the spreads are to different curves, "
-                    "q x (dirty D - dirty D-1) + received, all in other")), prev, ctx, o.terms)
+                o.pnl = split_fx(replace(simple_pnl(pv, ov, o.terms, ctx), note=(
+                    f"simple PnL: discounted on {pv.spread_curve} on {prev.business_date}, on "
+                    f"{ov.spread_curve} on {ctx.business_date}: the spreads are to different curves, "
+                    "q x (dirty D - dirty D-1) + received, all in other"), other_reason=curve_switch(prev, pv, ctx, ov)),
+                                 prev, ctx, o.terms)
                 continue
-            # a foreign bond (core 0.34) in its currency on its own curve, the rate move in fx_gross
-            o.pnl = with_cbr(explain(p.valuation, o.valuation, curves, cache), prev, ctx)
+            # a foreign bond (core 0.34) in its currency on its own curve, the rate move in fx_gross; a model price on
+            # one date: its spread step is price discovery, in other (TDM#441)
+            o.pnl = with_cbr(price_discovery(explain(pv, ov, curves, cache), pv, ov), prev, ctx)
         except NoPnl as e:
             o.no_pnl = e
+
+
+def missing_curve(ctx: EodContext) -> str | None:
+    """The first published curve the date's market lacks (``rates.input_notes`` of its rates lineage), or None."""
+    return next((n["curve"] for n in rates.input_notes(ctx.rates, ctx.business_date) if n.get("curve")), None)
+
+
+def curve_switch(prev: EodContext, pv: BondValuation, ctx: EodContext, ov: BondValuation) -> dict[str, Any]:
+    """``discount_curve_switch`` (``pnl.reasons``): the curves of D-1 and D, and the one a date lacks if known (``date``:
+    the valuation date)."""
+    gone = next(((c, v.valuation_date) for d, v in ((ctx, ov), (prev, pv)) if (c := missing_curve(d))), (None, None))
+    return other_reason(DISCOUNT_CURVE_SWITCH, f"{pv.spread_curve} on {pv.valuation_date}, {ov.spread_curve} on "
+                        f"{ov.valuation_date}" + (f": no {gone[0]} on {gone[1]}" if gone[0] else ""),
+                        curves=[pv.spread_curve, ov.spread_curve], curve=gone[0],
+                        date=gone[1].isoformat() if gone[1] else None)
+
+
+def ladder_reason(prev: EodContext, p: Outcome, ctx: EodContext, o: Outcome) -> dict[str, Any]:
+    """Why the simple PnL of a bond on a fallback rung off core on either date is all in ``other`` (``pnl.reasons``): a
+    model price against a market one (``price_source_switch``), else the rung of D (of D-1 when D is on core) and why
+    the exact path refused it: a curve the date lacks (``no_curve_on_date``), another refusal of core
+    (``core_refused``), anything else (``fallback_price``: no price, terms core does not take). ``date``: the rung's
+    valuation date."""
+    assert p.valuation is not None and o.valuation is not None
+    qs = (p.valuation.quality, o.valuation.quality)
+    if "model_price" in qs and qs[0] != qs[1]:
+        way = "model -> market" if qs[0] == "model_price" else "market -> model"
+        return other_reason(PRICE_SOURCE_SWITCH, way, rung=qs[1] if qs[0] == "model_price" else qs[0])
+    side, d = (o, ctx) if not by_core(o.valuation) else (p, prev)
+    v = side.valuation
+    assert v is not None
+    why, on = side.reason or "", v.valuation_date
+    if why == "core_missing_market_data" and (curve := missing_curve(d)) is not None:
+        return other_reason(NO_CURVE_ON_DATE, f"{curve} not on {on}: {v.quality}", curve=curve, date=on.isoformat(),
+                            rung=v.quality, core_code=why)
+    if why.startswith("core_"):
+        return other_reason(CORE_REFUSED, f"{why}{': ' + side.detail if side.detail else ''}", core_code=why,
+                            rung=v.quality, date=on.isoformat())
+    return other_reason(FALLBACK_PRICE, f"{v.quality} on {on}" + (f" ({why})" if why else ""), rung=v.quality,
+                        why=why or None, date=on.isoformat())
