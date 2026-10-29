@@ -1,5 +1,5 @@
 // Мониторы в браузере (Playwright), без сервера: страницы prototypes/ отдаются из файлов через page.route, ответы
-// сервера подменяются.
+// сервера подменяются (для Ctrl-щелчка — те же ответы с HTTP-сервера теста на 127.0.0.1, #453).
 //  - #309: /concepts-run.js ответил 401, 500 или не дошёл (сеть) — монитор не показывает демо-цифры: вместо него полоса
 //    «данные не загрузились» (источник 'error') или переход на вход (401 при включённом входе); демо — только ?demo=1;
 //  - #319: прогона нет (CONCEPTS_RUN_EMPTY: no_runs, not_found) — тоже не демо: пустое состояние с причиной (источник
@@ -24,40 +24,107 @@ const PAGES = fs.readdirSync(path.join(ROOT, 'concepts')).filter(f => /^c\d\d-.*
 // data — то же для /concepts-data.js; auth — тело ответа /api/v1/auth/state, { status } или 'hang' (не отвечает);
 // store — localStorage до первой загрузки (один раз на контекст: ни перезагрузка, ни новая вкладка его не восстанавливают);
 // api — { путь: тело JSON } ответов /api/… (остальные — 404); viewport — размер окна. Подмена — на весь контекст
-// (ctx.route): новая вкладка (Ctrl-щелчок) открывается на тех же ответах
-async function open(browser, file, { run, data, auth, store, viewport, api = {}, query = '' } = {}) {
+// (ctx.route): новая вкладка открывается на тех же ответах. http: true — те же ответы отдаёт настоящий HTTP-сервер
+// на 127.0.0.1 (закрывается вместе с контекстом), без ctx.route: вкладку, которую открыл сам браузер (Ctrl-щелчок),
+// Playwright под нагрузкой иногда не подхватывает, и её запросы, перехваченные ctx.route, повисают (#453)
+async function open(browser, file, { run, data, auth, store, viewport, api = {}, query = '', http = false } = {}) {
   const ctx = await browser.newContext(viewport ? { viewport } : {}), pg = await ctx.newPage();
   if (store) await ctx.addInitScript(s => { if (localStorage.getItem('test.store')) return; localStorage.setItem('test.store', '1'); for (const k in s) localStorage.setItem(k, s[k]); }, store);
   const errors = [];
   pg.on('pageerror', e => errors.push('pageerror: ' + e.message));
   pg.on('console', m => { if (m.type() === 'error' && !/Failed to load resource/.test(m.text())) errors.push('console: ' + m.text()); });
-  await ctx.route('**/*', route => {
-    const u = new URL(route.request().url());
-    if (u.origin !== ORIGIN) return route.abort();
+  // ответ на запрос u: { status, contentType, body }, 'abort' (сеть) или 'hang' (не отвечает никогда)
+  const answer = u => {
     if (u.pathname === '/concepts-run.js') {
       const spec = typeof run === 'function' ? run(u) : run;
-      if (spec === 'abort') return route.abort('connectionrefused');
-      return route.fulfill(Object.assign({ status: 200, contentType: 'application/javascript' }, spec || { body: 'window.CONCEPTS_RUN = ' + RUN + ';' }));
+      if (spec === 'abort') return 'abort';
+      return Object.assign({ status: 200, contentType: 'application/javascript' }, spec || { body: 'window.CONCEPTS_RUN = ' + RUN + ';' });
     }
     if (u.pathname === '/concepts-data.js') {
-      if (data === 'abort') return route.abort('connectionrefused');
-      return route.fulfill(Object.assign({ status: 200, contentType: 'application/javascript', body: 'window.DESK_EXTRAS = { notes: [] };' }, data || {}));
+      if (data === 'abort') return 'abort';
+      return Object.assign({ status: 200, contentType: 'application/javascript', body: 'window.DESK_EXTRAS = { notes: [] };' }, data || {});
     }
     if (u.pathname === '/api/v1/auth/state') {
-      if (auth === 'hang') return;  // не отвечает никогда: страница не должна ждать
-      if (auth && auth.status) return route.fulfill({ status: auth.status, contentType: 'application/json', body: '{}' });
-      return route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(auth || { enabled: false, user: null }) });
+      if (auth === 'hang') return 'hang';  // не отвечает никогда: страница не должна ждать
+      if (auth && auth.status) return { status: auth.status, contentType: 'application/json', body: '{}' };
+      return { status: 200, contentType: 'application/json', body: JSON.stringify(auth || { enabled: false, user: null }) };
     }
-    if (api[u.pathname]) return route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(api[u.pathname]) });
-    if (u.pathname.startsWith('/api/')) return route.fulfill({ status: 404, contentType: 'application/json', body: '{"detail":"нет в тесте"}' });
-    if (u.pathname === '/login.html') return route.fulfill({ status: 200, contentType: 'text/html', body: '<!doctype html><title>Вход</title><p>вход</p>' });
+    if (api[u.pathname]) return { status: 200, contentType: 'application/json', body: JSON.stringify(api[u.pathname]) };
+    if (u.pathname.startsWith('/api/')) return { status: 404, contentType: 'application/json', body: '{"detail":"нет в тесте"}' };
+    if (u.pathname === '/login.html') return { status: 200, contentType: 'text/html', body: '<!doctype html><title>Вход</title><p>вход</p>' };
     const f = path.join(ROOT, decodeURIComponent(u.pathname));
-    if (!f.startsWith(ROOT) || !fs.existsSync(f) || fs.statSync(f).isDirectory()) return route.fulfill({ status: 404, body: '' });
-    return route.fulfill({ status: 200, contentType: TYPES[path.extname(f)] || 'application/octet-stream', body: fs.readFileSync(f) });
-  });
-  await pg.goto(ORIGIN + '/concepts/' + file + query);
+    if (!f.startsWith(ROOT) || !fs.existsSync(f) || fs.statSync(f).isDirectory()) return { status: 404, body: '' };
+    return { status: 200, contentType: TYPES[path.extname(f)] || 'application/octet-stream', body: fs.readFileSync(f) };
+  };
+  let origin = ORIGIN;
+  if (http) {
+    const srv = require('http').createServer((req, res) => {
+      const a = answer(new URL(req.url, 'http://127.0.0.1'));
+      if (a === 'abort') return req.socket.destroy();
+      if (a === 'hang') return;
+      res.writeHead(a.status, a.contentType ? { 'Content-Type': a.contentType } : {});
+      res.end(a.body);
+    });
+    await new Promise(r => srv.listen(0, '127.0.0.1', r));
+    ctx.on('close', () => { srv.closeAllConnections(); srv.close(); });
+    origin = 'http://127.0.0.1:' + srv.address().port;
+  } else {
+    await ctx.route('**/*', route => {
+      const u = new URL(route.request().url());
+      if (u.origin !== ORIGIN) return route.abort();
+      const a = answer(u);
+      if (a === 'abort') return route.abort('connectionrefused');
+      if (a === 'hang') return;
+      return route.fulfill(a);
+    });
+  }
+  await pg.goto(origin + '/concepts/' + file + query);
   await pg.waitForTimeout(400);
   return { pg, ctx, errors };
+}
+// вкладка, которую откроет сам браузер (Ctrl / Shift / средняя кнопка по ссылке на странице pg), — по событиям Target
+// браузера (CDP), а не по событию page Playwright: под нагрузкой Playwright иногда не подхватывает такую вкладку (нет
+// события page или у неё нет события load), хотя в браузере она открылась и загрузилась (#453). Подписка — до щелчка.
+// state(timeout) — первая новая вкладка контекста pg, когда она загрузилась (readyState complete, адрес не about:blank):
+// { href, ready, source: window.CONCEPTS_SOURCE, tabs: сколько новых вкладок }; не дождались за timeout — ошибка
+async function tabWatch(browser, pg) {
+  const cdp = await browser.newBrowserCDPSession(), own = await pg.context().newCDPSession(pg);
+  const me = (await own.send('Target.getTargetInfo')).targetInfo;
+  await own.detach();
+  const tabs = [];
+  cdp.on('Target.targetCreated', e => { const t = e.targetInfo; if (t.type === 'page' && t.browserContextId === me.browserContextId && t.targetId !== me.targetId) tabs.push(t.targetId); });
+  await cdp.send('Target.setDiscoverTargets', { discover: true });
+  let seq = 0;
+  // выражение во вкладке — своей сессией CDP без flatten (сессии Playwright не трогаем) → значение или null
+  const evalIn = async (targetId, expression) => {
+    const { sessionId } = await cdp.send('Target.attachToTarget', { targetId, flatten: false });
+    let on = null;
+    try {
+      const n = ++seq;
+      const got = new Promise(r => { on = e => { if (e.sessionId === sessionId) { const m = JSON.parse(e.message); if (m.id === n) r(m); } }; cdp.on('Target.receivedMessageFromTarget', on); });
+      await cdp.send('Target.sendMessageToTarget', { sessionId, message: JSON.stringify({ id: n, method: 'Runtime.evaluate', params: { expression, returnByValue: true } }) });
+      const m = await Promise.race([got, new Promise(r => setTimeout(() => r(null), 5000))]);
+      return m && m.result && m.result.result ? m.result.result.value : null;
+    } finally {
+      if (on) cdp.off('Target.receivedMessageFromTarget', on);
+      await cdp.send('Target.detachFromTarget', { sessionId }).catch(() => { });
+    }
+  };
+  return {
+    async state(timeout = 30000) {
+      const t0 = Date.now();
+      for (;;) {
+        if (tabs.length) {
+          const v = await evalIn(tabs[0], 'JSON.stringify({ href: location.href, ready: document.readyState, source: window.CONCEPTS_SOURCE == null ? null : window.CONCEPTS_SOURCE })').catch(() => null);
+          const s = v && JSON.parse(v);
+          if (s && s.ready === 'complete' && s.href !== 'about:blank') return Object.assign(s, { tabs: tabs.length });
+        }
+        if (Date.now() - t0 > timeout) throw new Error('новая вкладка не открылась или не загрузилась за ' + timeout + ' мс (новых вкладок: ' + tabs.length + ')');
+        await new Promise(r => setTimeout(r, 100));
+      }
+    },
+    close: () => cdp.detach().catch(() => { })
+  };
 }
 // ответ /concepts-run.js без прогона (api/concepts_run.py: empty_script)
 const EMPTY = (reason, message) => 'window.CONCEPTS_RUN_EMPTY = ' + JSON.stringify({ reason, message }) + ';';
@@ -248,12 +315,17 @@ test('#309 и #308 в браузере', { skip: pw ? false : 'нет Playwright
         for (const how of [{ modifiers: ['Control'] }, { modifiers: ['Shift'] }, { button: 'middle' }]) {
           const tag = sel + ' ' + JSON.stringify(how);
           const run = u => u.searchParams.get('run_id') === '7' ? spec : null;  // прогон #7 не отдаётся, последний — да
-          const { pg, ctx } = await open(browser, 'c01-cockpit.html', { run, query: '?run_id=7', store: { 'desk.run.v1': saved } });
+          // настоящий HTTP-сервер и вкладка по событиям браузера (#453): см. open и tabWatch
+          const { pg, ctx } = await open(browser, 'c01-cockpit.html', { run, query: '?run_id=7', store: { 'desk.run.v1': saved }, http: true });
           await pg.waitForLoadState('load'); await pg.evaluate(() => { window.__stay = 1; });
-          const [np] = await Promise.all([ctx.waitForEvent('page'), pg.click(sel + ' [data-a=latest]', how)]);
-          await np.waitForURL(u => u.pathname === '/concepts/c01-cockpit.html' && !u.searchParams.has('run_id'));
-          await np.waitForLoadState('load');
-          assert.strictEqual(await np.evaluate(() => window.CONCEPTS_SOURCE), 'real', tag + ': новая вкладка — последний прогон');
+          const tw = await tabWatch(browser, pg);
+          await pg.click(sel + ' [data-a=latest]', how);
+          const np = await tw.state();
+          await tw.close();
+          const nu = new URL(np.href);
+          assert.ok(nu.pathname === '/concepts/c01-cockpit.html' && !nu.searchParams.has('run_id'), tag + ': новая вкладка — без run_id: ' + np.href);
+          assert.strictEqual(np.source, 'real', tag + ': новая вкладка — последний прогон');
+          assert.strictEqual(np.tabs, 1, tag + ': открыта одна вкладка');
           assert.strictEqual(await pg.evaluate(() => window.__stay), 1, tag + ': вкладка не перезагрузилась');
           assert.ok(/run_id=7/.test(pg.url()), tag + ': адрес вкладки тот же');
           assert.strictEqual(await pg.evaluate(() => localStorage.getItem('desk.run.v1')), null, tag + ': выбор снят и для новой вкладки');

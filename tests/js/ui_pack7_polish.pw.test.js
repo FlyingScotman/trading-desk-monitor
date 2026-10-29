@@ -18,6 +18,8 @@ const test = require('node:test');
 const assert = require('assert');
 const path = require('path');
 const { pathToFileURL } = require('url');
+// настройки страницы в localStorage и ожидание отрисовки графиков (#453)
+const { themeInit, openWith, settle } = require('./fixtures/pw_pages');
 
 const pw = (() => { try { return require('playwright'); } catch (e) { return null; } })();
 const PAGE = f => pathToFileURL(path.join(__dirname, '..', '..', 'prototypes', 'concepts', f)).href;
@@ -97,7 +99,6 @@ const atEnd = (L, what, opt) => {
     assert.ok(x.lab.l >= -E && x.lab.r <= x.W + E && x.lab.t >= -E && x.lab.b <= x.H + E, s + ': подпись внутри графика');
   });
 };
-const settle = pg => pg.evaluate(() => new Promise(r => requestAnimationFrame(() => requestAnimationFrame(() => setTimeout(r, 400)))));
 const SIZES = [[1024, 768], [1280, 800], [1600, 1000], [390, 844]];
 
 for (const [w, h] of SIZES) for (const theme of ['dark', 'light']) for (const repr of ['RUB', 'USD']) {
@@ -105,16 +106,13 @@ for (const [w, h] of SIZES) for (const theme of ['dark', 'light']) for (const re
     const browser = await pw.chromium.launch();
     try {
       const ctx = await browser.newContext({ viewport: { width: w, height: h } });
-      await ctx.addInitScript(([t, r]) => { try { if (!sessionStorage.getItem('init')) { sessionStorage.setItem('init', '1'); localStorage.clear(); localStorage.setItem('concepts-theme', t); localStorage.setItem('concepts-repr', r); } } catch (e) { } }, [theme, repr]);
+      await themeInit(ctx, theme, repr);
       const pg = await ctx.newPage(), errors = [];
       pg.on('pageerror', e => errors.push('pageerror: ' + e.message));
       pg.on('console', m => { if (m.type() === 'error') errors.push('console: ' + m.text()); });
       const shot = async name => { if (SHOTS) await pg.screenshot({ path: path.join(SHOTS, name + '-' + w + '-' + repr + '-' + theme + '.png'), fullPage: w < 600 }); };
       const open = async (file, ready, store) => {
-        await pg.goto(PAGE(file));
-        await pg.evaluate(s => Object.entries(s).forEach(([k, v]) => localStorage.setItem(k, v)), store || {});
-        await pg.reload();
-        await pg.waitForFunction(ready);
+        await openWith(pg, PAGE(file), ready, store);
         await settle(pg);
         assert.strictEqual(await pg.evaluate(() => [KIT.theme(), KIT.repr].join()), theme + ',' + repr);
       };

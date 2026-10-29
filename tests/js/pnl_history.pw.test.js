@@ -463,7 +463,7 @@ test('C19 E: a day by the reports whose D−1 carried an older report shows «с
     const { pg, ctx, errors } = await open(browser);
     // CORP-1 as a report-valued position: on 13.10 the report of D−1 (12.10) was carried from 28.09
     const pos = JSON.parse(JSON.stringify(FX.position['DEMO-A|CORP-1'])), d = pos.days.find(x => x.date === '2026-10-13');
-    Object.assign(d, { method: 'desk-reported-v1', reportFrom: '2026-09-28', note: 'reported PV; разница отчётов с 28.09' });
+    Object.assign(d, { method: 'desk-reported-v1', reportFrom: '2026-09-28', note: 'reported PV; reports gap since 28.09' });
     await pg.route('**/api/v1/history/pnl/position?*', route => {
       const u = new URL(route.request().url()), ref = u.searchParams.get('position_book') + '|' + u.searchParams.get('position_id');
       return route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(ref === 'DEMO-A|CORP-1' ? pos : FX.position[ref]) }).catch(() => { });
