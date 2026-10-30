@@ -2,7 +2,7 @@
 // C19 «PnL за период» (TDM#408): pure helpers of lib/pnl-period.js on a synthetic fixture in the shape of
 // docs/architecture/briefs/PNL_PERIOD.md — two books, one instrument in both, a closed position, a market day without
 // a run, positions with and without the carry split (carry_coupon / carry_pull; carry_nosplit for the others), funding
-// null for a swap and a USD bond, linear rates of RUB bonds (rates_linear / rates_exact_lin), a new bond without PnL.
+// null for a swap and a USD bond, linear rates of bonds, the USD one too (rates_linear / rates_exact_lin), a new bond without PnL.
 // The /period answer is derived from the /position days of the same fixture.
 const test = require('node:test'), assert = require('node:assert/strict');
 const P = require('../../prototypes/concepts/lib/pnl-period.js');
@@ -163,16 +163,17 @@ test('attribution per row (TDM#432): price + coupon + carry without the split + 
   assert.equal(by('fx').l, fx.l); assert.equal(by('fx').color, fx.color);
 });
 
-test('rates of RUB bonds (TDM#435): linear + convexity for the rows with rates_linear, the rest whole; Σ = rates', () => {
+test('rates of bonds (TDM#435, TDM#418): linear + convexity for the rows with rates_linear, the rest whole; Σ = rates', () => {
   const p = prep(), s = p.summary, defs = P.rowsFor('explain', p, { carry: 'net' }), by = k => defs.find(d => d.k === k);
   assert.deepEqual(defs.filter(d => d.parts.includes('rates') || d.parts.includes('rates_linear')).map(d => d.k), ['ratesLin', 'ratesCvx', 'ratesRest']);
   assert.ok(!defs.some(d => d.k === 'rates'));
   near(P.sumAvail(['ratesLin', 'ratesCvx', 'ratesRest'].map(k => by(k).total)), s.c.rates, 'Σ = rates');
   near(by('ratesCvx').total, s.c.rates_exact_lin - s.c.rates_linear, 'convexity = exact − linear');
-  // the USD bond and the swap keep their rates whole
+  // the swap keeps its rates whole; the USD bond splits as the RUB ones (its linear rates at the D rate, TDM#418)
   const usd = pos(p, 'DEMO-B|USD-1'), irs = pos(p, 'DEMO-B|IRS-1'), ofz = pos(p, 'DEMO-A|OFZ-1');
-  near(by('ratesRest').total, usd.c.rates + irs.c.rates, 'rest = foreign bond + swap');
-  assert.equal(by('ratesLin').v(usd), null); near(by('ratesRest').v(usd), usd.c.rates, 'USD whole');
+  near(by('ratesRest').total, irs.c.rates, 'rest = swap');
+  near(by('ratesLin').v(usd), usd.c.rates_linear, 'USD linear'); near(by('ratesLin').v(usd) + by('ratesCvx').v(usd), usd.c.rates, 'USD');
+  assert.equal(by('ratesRest').v(usd), 0);
   near(by('ratesLin').v(ofz) + by('ratesCvx').v(ofz), ofz.c.rates, 'OFZ'); assert.equal(by('ratesRest').v(ofz), 0);
   assert.match(by('ratesLin').cover(s), /^\d+ из \d+ записей$/);
   near(P.sumAvail(defs.map(d => d.total)), s.total, 'Σ rows = total');
