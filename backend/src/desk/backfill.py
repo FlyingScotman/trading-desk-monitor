@@ -68,6 +68,7 @@ on) and the estimated time left (``eta_s``).
 
 from __future__ import annotations
 
+import errno
 import http.client
 import json
 import logging
@@ -288,24 +289,33 @@ def inbox(con: psycopg.Connection, settings: Settings, date_from: date, *, force
     return "inbox from " + date_from.isoformat() + ": " + "; ".join(res.text().splitlines())
 
 
+def _disk_full(e: BaseException) -> bool:
+    """No space left (``ENOSPC``) or over the quota (``EDQUOT``, where the platform has it): the host's trouble, which
+    ends when the disk is freed, not the date's data."""
+    return isinstance(e, OSError) and e.errno in {getattr(errno, n) for n in ("ENOSPC", "EDQUOT") if hasattr(errno, n)}
+
+
 def transient(e: BaseException) -> bool:
     """An error of the store connection, the network or the hub as a whole (unreachable, 429, 5xx, token or proxy
     refused), not of the date's data: such a date is not marked failed (a failed date is not tried again on the
     same inputs), and the run stops there, since the next dates would hit it too (``run``: the stall, #447).
     Network: ``TransportError`` (the hub client's, urllib or curl), ``TimeoutError``, ``ConnectionError``, DNS, TLS
-    (``ssl.SSLError``) and urllib/http.client errors. Store: ``psycopg.OperationalError``. Any other ``OSError`` (a missing or locked cache
-    file, permission, a full disk) is the date's own error, not a stall."""
+    (``ssl.SSLError``) and urllib/http.client errors. Store: ``psycopg.OperationalError``.
+    A full disk or an exceeded quota (``ENOSPC``, ``EDQUOT``) is a stall too (``disk``). Any other ``OSError`` (a missing or locked cache file,
+    permission) is the date's own error, not a stall."""
     if isinstance(e, HubError):
         return e.status is None or e.status >= 500 or e.status in (401, 403, 407, 429)
-    return isinstance(e, (psycopg.OperationalError, TransportError, TimeoutError, ConnectionError, socket.gaierror,
-                          ssl.SSLError, urllib.error.URLError, http.client.HTTPException))
+    return _disk_full(e) or isinstance(e, (
+        psycopg.OperationalError, TransportError, TimeoutError, ConnectionError, socket.gaierror, ssl.SSLError,
+        urllib.error.URLError, http.client.HTTPException))
 
 
 def stall_cause(e: BaseException) -> str:
     """What a ``transient`` error says is down: ``store`` (no connection), ``store_slow`` (a query cancelled by the
     statement timeout), ``proxy`` (a 407 or a refused tunnel), ``access`` (the hub refused the token: 401, 403, or no
     token), ``setup`` (no hub address, no curl), ``hub`` (no answer or a 5xx, ``HubUnavailable``; another hub error
-    without a status), ``network`` (no connection, timeout, TLS, a cut-off body); ``disk`` only in states saved before #447's fix."""
+    without a status), ``network`` (no connection, timeout, TLS, a cut-off body),
+    ``disk`` (no space or quota: ``ENOSPC``, ``EDQUOT``)."""
     if isinstance(e, psycopg.errors.QueryCanceled):
         return "store_slow"
     if isinstance(e, psycopg.OperationalError):
@@ -321,7 +331,7 @@ def stall_cause(e: BaseException) -> str:
     if isinstance(e, (TimeoutError, ConnectionError, socket.gaierror, ssl.SSLError, urllib.error.URLError,
                       http.client.HTTPException)):
         return "network"
-    return "network"  # no disk stall any more (a file error is the date's own); ``disk`` stays for old states
+    return "disk"
 
 
 def _code(e: BaseException) -> int | None:

@@ -1085,8 +1085,7 @@ def test_transient_tells_the_network_and_the_store_from_a_date_error():
 
     from desk.marketdata.hub import HubError, HubUnavailable, TransportError
 
-    for e in (FileNotFoundError("x.json"), PermissionError("cache"), OSError(28, "No space left on device"),
-              BlockingIOError("locked"), ValueError("bad"), HubError("bundle: 404", 404), HubError("bundle: 400", 400)):
+    for e in (FileNotFoundError("x.json"), PermissionError("cache"), BlockingIOError("locked"), ValueError("bad"), HubError("bundle: 404", 404), HubError("bundle: 400", 400)):
         assert not backfill.transient(e), e
     for e in (HubError("bundle: 429", 429), HubError("bundle: 503", 503), HubError("no answer"),
               HubUnavailable("down", 502), TransportError("timed out"), TimeoutError(), ConnectionResetError(),
@@ -1164,3 +1163,14 @@ def test_python_transport_turns_a_body_read_error_into_a_transport_error():
         t._opener = type("O", (), {"open": lambda self, req, timeout=None, e=err: Body(e)})()
         with pytest.raises(TransportError):
             t.get("https://hub.test/x", None)
+
+
+def test_a_full_disk_or_quota_is_a_stall_other_file_errors_are_not():
+    import errno
+
+    for n in ("ENOSPC", "EDQUOT"):
+        if hasattr(errno, n):
+            e = OSError(getattr(errno, n), "no space")
+            assert backfill.transient(e) and backfill.stall_cause(e) == "disk", n
+    for e in (FileNotFoundError("x"), PermissionError("x"), OSError(errno.EIO, "io")):
+        assert not backfill.transient(e), e
