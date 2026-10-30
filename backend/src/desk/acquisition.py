@@ -380,6 +380,18 @@ class Acquisition:
                         per_book[book] = {"eligible": info["eligible"], "products": info["products"]}
                     clean[-1]["policy"] = {"status": policy["status"],
                                            "excluded_products": policy["excluded_products"], "books": per_book}
+                    # Optional (newer adapters): deals of books with no derivative in the positions that the scope
+                    # leaves out. Only two counts are kept: those books are not in this window, so no codes, no sums.
+                    # A malformed one is dropped: it is not worth failing the whole inspection.
+                    skipped = policy.get("skipped")
+                    if isinstance(skipped, dict) and type(skipped.get("trades")) is int \
+                            and 0 <= skipped["trades"] <= 10000000 and isinstance(skipped.get("books"), dict) \
+                            and len(skipped["books"]) <= 10000:
+                        # ``n_books``: the full count (``books`` holds at most 100 codes); without it, the codes given.
+                        n_books = skipped.get("n_books")
+                        if type(n_books) is not int or not 0 <= n_books <= 10000000:
+                            n_books = len(skipped["books"])
+                        clean[-1]["policy"]["skipped"] = {"trades": skipped["trades"], "books": n_books}
                 self._update(state="complete", phase="complete", code="scope_ready", reports=clean,
                              adapter_fingerprint=p.handle.fingerprint)
             elif op == "check":

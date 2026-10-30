@@ -62,6 +62,8 @@
     if (!r) { buttons(); return; }
     const p = r.policy;
     target.append(el('p', 'Статус: ' + p.status + '. Исключены продукты: ' + (p.excluded_products.join(', ') || 'нет') + '.'));
+    if (p.skipped && p.skipped.trades > 0) target.append(el('p', 'Пропущено сделок: ' + p.skipped.trades + ' (книг: ' + p.skipped.books +
+      '). Это сделки книг, у которых в отчёте позиций нет деривативов; эти книги в списке не предлагаются.'));
     target.append(el('p', 'Все подходящие сделки выбранных книг из этого отчёта; состав не ограничивается позициями портфеля.'));
     for (const book of r.books) {
       const info = p.books[book], label = el('label'), check = el('input');
