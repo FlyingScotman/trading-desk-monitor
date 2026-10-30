@@ -219,7 +219,8 @@ class PythonTransport:
             except (OSError, http.client.HTTPException):
                 body = b""
             return Response(e.code, e.headers, body)
-        except (urllib.error.URLError, TimeoutError, ConnectionError) as e:
+        except (urllib.error.URLError, TimeoutError, ConnectionError, OSError, http.client.HTTPException) as e:
+            # OSError: a TLS drop (ssl.SSLError) or a reset while reading the body, HTTPException: a cut-off body
             reason = str(getattr(e, "reason", e))
             m = re.search(r"Tunnel connection failed: (\d{3})", reason)
             if m and self.proxy:

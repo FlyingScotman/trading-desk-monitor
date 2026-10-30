@@ -864,7 +864,7 @@ def test_stall_causes():
              (HubError("token rejected by hub.test (401)", 401), "access"),
              (HubError("hub address not configured; set DESK_HUB_URL"), "setup"),
              (HubError("bundle: 407", 407), "proxy"), (TransportError("tunnel refused", 407), "proxy"),
-             (TransportError("timed out"), "network"), (TimeoutError(), "network"), (OSError("disk full"), "disk")]
+             (TransportError("timed out"), "network"), (TimeoutError(), "network")]
     for e, cause in cases:
         assert backfill.transient(e) and backfill.stall_cause(e) == cause, (e, backfill.stall_cause(e))
     assert backfill._code(HubUnavailable("a", 502)) == 502 and backfill._code(TransportError("t", 407)) == 407
@@ -1053,3 +1053,114 @@ def test_only_the_owners_cycle_skips_the_stalls_wait(store_url):
     assert ap._stall_now is False
     ap.trigger(manual=True)
     assert ap._stall_now is True
+
+
+def test_budget_counts_failed_dates_but_tries_at_least_one(tmp_path, cache, store_url, monkeypatch):
+    """#447: when every date fails on its data, ``done`` stays empty; the cycle's time budget still stops the run
+    (after the first date tried), so the step does not walk the whole list holding the cycle lock."""
+    for d in ("2026-10-12", "2026-10-13", "2026-10-14"):
+        load(store_url, tmp_path, d, 10)
+    s = settings(tmp_path, cache, store_url)
+    tried: list[str] = []
+
+    def bad(settings, d, **kw):
+        tried.append(d)
+        raise ValueError("bad bundle")
+
+    monkeypatch.setattr(cli, "eod_run", bad)
+    with store.connect(store_url) as con:
+        p = backfill.plan(con, s, date(2026, 10, 1), date(2026, 10, 15))
+    res = backfill.run(s, p, store_url=store_url, budget_s=0.0, out=lambda line: None)
+    assert not res["done"] and len(tried) == 1 and len(res["failed"]) == 1 and not res["stalled"]
+    assert res["left"] == len(p.todo) - 1
+
+
+def test_transient_tells_the_network_and_the_store_from_a_date_error():
+    """#447: an OSError of the date (cache file missing, permission, locked, disk full) is not a stall; 429 and 5xx
+    of the hub, timeouts, connection errors and transport errors are the network, OperationalError the store."""
+    import http.client
+    import urllib.error
+
+    import psycopg
+
+    from desk.marketdata.hub import HubError, HubUnavailable, TransportError
+
+    for e in (FileNotFoundError("x.json"), PermissionError("cache"), OSError(28, "No space left on device"),
+              BlockingIOError("locked"), ValueError("bad"), HubError("bundle: 404", 404), HubError("bundle: 400", 400)):
+        assert not backfill.transient(e), e
+    for e in (HubError("bundle: 429", 429), HubError("bundle: 503", 503), HubError("no answer"),
+              HubUnavailable("down", 502), TransportError("timed out"), TimeoutError(), ConnectionResetError(),
+              urllib.error.URLError("dns"), http.client.RemoteDisconnected("closed")):
+        assert backfill.transient(e) and backfill.stall_cause(e) in ("hub", "network"), e
+    assert backfill.transient(psycopg.OperationalError("connection failed")) and \
+        backfill.stall_cause(psycopg.OperationalError("x")) == "store"
+
+
+@pytest.mark.parametrize("error", [FileNotFoundError("snap.json"), PermissionError("cache file")])
+def test_a_file_error_of_one_date_is_its_failure_not_a_stall(tmp_path, cache, store_url, monkeypatch, error):
+    load(store_url, tmp_path, "2026-10-12", 10)
+    load(store_url, tmp_path, "2026-10-13", 10)
+    s = settings(tmp_path, cache, store_url)
+    real = cli.eod_run
+
+    def flaky(settings, d, **kw):
+        if d == "2026-10-12":
+            raise error
+        return real(settings, d, **kw)
+
+    monkeypatch.setattr(cli, "eod_run", flaky)
+    with store.connect(store_url) as con:
+        res = backfill.run(s, backfill.plan(con, s, date(2026, 10, 1), date(2026, 10, 15)), store_url=store_url,
+                           out=lambda line: None)
+    assert [d for d, _ in res["failed"]] == ["2026-10-12"] and not res["stalled"] and "2026-10-13" in res["done"]
+
+
+def test_a_date_skipped_without_a_bundle_does_not_use_up_the_budget(tmp_path, cache, store_url):
+    """#447: the oldest date has no bundle (skipped, nothing tried); with a budget of 0 the next date is still tried."""
+    load(store_url, tmp_path, "2026-10-08", 10)
+    load(store_url, tmp_path, "2026-10-14", 10)
+    s = settings(tmp_path, cache, store_url)
+    with store.connect(store_url) as con:
+        p = backfill.plan(con, s, date(2026, 10, 1), date(2026, 10, 16),
+                          hub=[("2026-10-08", "a" * 64), *[(d, "") for d in reversed(DATES)]])
+    assert p.todo[0].date == "2026-10-08" and not p.todo[0].cached
+    res = backfill.run(s, p, store_url=store_url, budget_s=0.0, out=lambda line: None)
+    assert res["skipped"] == ["2026-10-08"] and (res["done"] or res["unconverged"])  # the next date was tried
+
+
+def test_tls_and_cut_off_body_errors_are_the_network():
+    import http.client
+    import ssl
+
+    for e in (http.client.IncompleteRead(b""), http.client.BadStatusLine("x"), ssl.SSLEOFError("eof"),
+              ssl.SSLError("tls")):
+        assert backfill.transient(e) and backfill.stall_cause(e) == "network", e
+
+
+def test_python_transport_turns_a_body_read_error_into_a_transport_error():
+    import http.client
+    import ssl
+
+    from desk.marketdata.hub import PythonTransport, TransportError
+
+    class Body:
+        def __init__(self, err):
+            self.err = err
+
+        status, headers = 200, {}
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+        def read(self):
+            raise self.err
+
+    for err in (ssl.SSLEOFError("eof"), http.client.IncompleteRead(b"x"), ConnectionResetError()):
+        t = object.__new__(PythonTransport)
+        t.timeout, t.proxy = 1, None
+        t._opener = type("O", (), {"open": lambda self, req, timeout=None, e=err: Body(e)})()
+        with pytest.raises(TransportError):
+            t.get("https://hub.test/x", None)
