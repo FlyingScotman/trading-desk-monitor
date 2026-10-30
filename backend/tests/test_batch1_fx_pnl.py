@@ -31,9 +31,9 @@ NEXT = "2026-10-16"
 FX_MOVE = Decimal("1.01")
 
 
-def _roll(doc: dict, d0: str, d1: str) -> dict:
+def _roll(doc: dict, d0: str, d1: str, fx_move: Decimal = FX_MOVE, quote_move: Decimal = Decimal("0.03")) -> dict:
     """``doc`` (a market snapshot of ``d0``) as of ``d1``: dates moved, prices -0.2 %, MOEX yields +5 bp, curve quotes
-    +3 bp, FX rates of the date x ``FX_MOVE``."""
+    + ``quote_move`` % (3 bp), FX rates of the date x ``fx_move``."""
     m = copy.deepcopy(doc)
     m["business_date"], m["known_at"] = d1, f"{d1}T18:00:00Z"
     data = m["data"]
@@ -55,7 +55,7 @@ def _roll(doc: dict, d0: str, d1: str) -> dict:
         for q in qs["quotes"]:
             for k in ("mid_pct", "bid_pct", "ask_pct"):
                 if q.get(k) is not None:
-                    q[k] = str(Decimal(q[k]) + Decimal("0.03"))
+                    q[k] = str(Decimal(q[k]) + quote_move)
     for k in ("fx_swaps", "futures_prices"):
         for r in data[k]:
             if r.get("trade_date") == d0:
@@ -71,7 +71,7 @@ def _roll(doc: dict, d0: str, d1: str) -> dict:
                     r[k] = d0
             for k in ("rate_rub_per_unit", "close_rub_per_unit", "waprice_rub_per_unit"):
                 if r.get(k) is not None:
-                    r[k] = str(Decimal(r[k]) * FX_MOVE)
+                    r[k] = str(Decimal(r[k]) * fx_move)
             rows.append(r)
     data["fx_rates"] = data["fx_rates"] + rows
     return m
