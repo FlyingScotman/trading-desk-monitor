@@ -17,6 +17,14 @@ MOSCOW. The calendars are bounded; core raises ``CalendarRangeError`` outside.
 2037-12-31 by fixed rules (``lineage["calendar"]["provisional_from"]`` says where the official days stop),
 so every tenor to 10Y is scheduled. A quote whose dates still fall outside is dropped with its reason in
 ``lineage["tenors_dropped"]``. The curve extrapolates flat-forward past its last node (``lineage["last_node"]``).
+
+**Past the last quote** (core 0.42 ``OisTail``, TDM#499): the RUONIA OIS quotes end at 10Y, so the built curve
+continues them with core's synthetic 15Y and 20Y par quotes (``ois_tail``): the KBD's par yield less the par spread at
+the last quote, or a flat zero rate without the KBD. The snapshot entry keeps the real quotes only: the core calls that
+publish risk name the tail in their policy (``ValuationPolicy.ois_tail``), so core adds the same quotes and its RUONIA
+buckets move them; the built curve is the one core builds from them (the flash PnL, the chart, the FX curves read it).
+``lineage["tail"]`` records the rule and its core model tag. The calendars reach 2079 (``adapter.CALENDAR_HORIZON``),
+past 20Y plus the spot lag.
 """
 
 from __future__ import annotations
@@ -28,6 +36,7 @@ from itertools import pairwise
 from typing import Any, Literal
 
 from rub_fixed_income import (
+    OIS_TAIL_MODELS,
     BusinessCalendar,
     CalendarRangeError,
     CurveBootstrapRequest,
@@ -42,8 +51,10 @@ from rub_fixed_income import (
     ZcycParameters,
     bootstrap_discount_curve,
     build_key_rate_forward_curve,
+    extend_ois_request,
     forward_curve,
     joint_calendar,
+    kbd_discount_curve,
     kbd_effective_yield,
     key_rate_projection_curve,
     ois_curve_convention,
@@ -139,7 +150,27 @@ def select_quote_set(market: Snapshot, dataset: str) -> tuple[ar.QuoteSet, dict[
         "alternatives": [{"quote_set_id": s.quote_set_id, "source": s.source} for s in dated if s is not best]}
 
 
-def ruonia_ois(market: Snapshot, static: Snapshot, curve_id: str = RUONIA_OIS_CURVE_ID) -> RatesCurve:
+def ois_tail(request: CurveBootstrapRequest, kbd: DiscountCurve | None) -> tuple[CurveBootstrapRequest, str]:
+    """``request`` continued past its last quote as core continues it under ``ValuationPolicy.ois_tail`` (core 0.42
+    ``extend_ois_request``): the synthetic 15Y / 20Y par quotes on ``kbd`` (the KBD built from its parameters, par
+    buckets as core's), a flat zero rate without it. Returns the request and the rule (``kbd`` or ``flat_zero``)."""
+    return extend_ois_request(request, kbd)
+
+
+def _kbd(market: Snapshot, bd: date) -> DiscountCurve | None:
+    """The KBD of the snapshot dated its business date (what core reads for the tail), else None (a flat zero tail)."""
+    try:
+        z = market.data["zcyc_params"][0]
+        params = zcyc_parameters(z["trade_date"], z["params"], market.id)
+    except (SnapshotError, KeyError, IndexError, ValueError):
+        return None
+    return kbd_discount_curve(params, zero_shock="annual_par") if params.trade_date == bd else None
+
+
+def ruonia_ois(market: Snapshot, static: Snapshot, curve_id: str = RUONIA_OIS_CURVE_ID, *,
+               tail: bool = True) -> RatesCurve:
+    """The RUONIA OIS curve of the snapshot: its entry (the real quotes as a bootstrap request), the built curve (with
+    ``tail``, past the last quote as ``ois_tail`` continues it) and the lineage."""
     bd = date.fromisoformat(market.business_date)
     qs, lineage = select_quote_set(market, "ruonia_ois")
     cal, cal_info = ois_calendar(static, bd)
@@ -159,11 +190,15 @@ def ruonia_ois(market: Snapshot, static: Snapshot, curve_id: str = RUONIA_OIS_CU
     if not quotes:
         raise RatesInputError(f"{market.business_date}: no usable RUONIA OIS quote in set {qs.quote_set_id}: {dropped}")
     request = CurveBootstrapRequest(bd, tuple(quotes), convention)
-    curve = bootstrap_discount_curve(request)
+    full, rule = ois_tail(request, _kbd(market, bd)) if tail else (request, None)
+    curve = bootstrap_discount_curve(full)
     lineage.update(spec_id=RUONIA_OIS_SPEC, curve_id=curve_id, curve_date=bd.isoformat(), calendar=cal_info,
                    tenors_used=[q.tenor for q in quotes], tenors_dropped=dropped,
                    last_node=curve.nodes[-1][0].isoformat(),
                    max_repricing_error_bp=curve.max_repricing_error_bp(quotes))
+    if rule is not None:
+        lineage["tail"] = {"rule": rule, "model": OIS_TAIL_MODELS[rule],
+                           "tenors": [q.tenor for q in full.quotes[len(quotes):]]}
     return RatesCurve(CurveEntry(curve_id, RUONIA_OIS_SPEC, request), curve, lineage)
 
 

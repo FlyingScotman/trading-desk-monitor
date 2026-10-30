@@ -26,6 +26,7 @@ from rub_fixed_income import (
 from run_checks import consistency, content, warnings
 
 import desk.orchestrator as orch
+from desk.curves import rates
 from desk.marketdata.adapter import KBD_CURVE_ID, KBD_SPEC, MarketView
 from desk.marketdata.bundle import SnapshotDir
 from desk.orchestrator import EodContext, Outcome, attach_pnl, prepare, value
@@ -86,7 +87,9 @@ def shifted_prev(ctx: EodContext, prev_date: date, shift_bp: float = SHIFT_BP, *
                     dataclasses.replace(q, maturity=resolve_tenor(prev_date, q.tenor, cal).end_date,
                                         par_rate=q.par_rate - shift_bp * 1e-4) for q in req.quotes))
                 quote_curves.append(dataclasses.replace(quoted[e.curve_id], curve=req))
-                curves.append(dataclasses.replace(e, curve=bootstrap_discount_curve(req)))
+                # built past the last quote as rates.ruonia_ois builds it (core's OisTail on the shifted KBD, TDM#499)
+                tail = rates.ois_tail(req, kbd_discount_curve(params, zero_shock="annual_par"))[0]
+                curves.append(dataclasses.replace(e, curve=bootstrap_discount_curve(tail)))
             else:
                 curves.append(dataclasses.replace(e, curve=shifted_curve(e.curve, prev_date, shift_bp)))
     fixings = tuple(FixingEntry(f.fixing_id, dataclasses.replace(
