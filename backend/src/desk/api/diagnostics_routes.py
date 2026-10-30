@@ -7,7 +7,9 @@ routes: the document has no private data, but it does describe this machine's se
 autopilot sync step's ``problem_dates`` (#163).
 
 ``GET /api/v1/inbox/reconcile`` (R22) is the settings page's «Загрузка позиций»: ``desk inbox reconcile`` as JSON,
-book ids and file names included (the owner's own machine, local only).
+book ids and file names included (the owner's own machine, local only). ``GET /api/v1/inbox/folders`` (TDM#445) is
+its «Папки с отчётами»: per folder what the inbox found there (``desk.daystatus.folders``), the folders' paths
+included, so local only too.
 """
 
 from __future__ import annotations
@@ -80,6 +82,24 @@ def get_reconcile(request: Request, on: str | None = None) -> Response:
                     headers={"Cache-Control": "no-store"})
 
 
+@router.get("/api/v1/inbox/folders")
+def get_inbox_folders(request: Request) -> Response:
+    """Per scanned folder what the inbox knows of its files: by source and status, the files never read, the latest
+    business date read per dataset (``daystatus.folders``, TDM#445)."""
+    import json
+
+    from .. import daystatus
+
+    try:
+        settings = load()
+    except SettingsError as e:
+        raise HTTPException(500, f"settings: {e}") from None
+    with store.connect(request.app.state.store_url or store.resolve_url(settings)) as con:
+        doc = daystatus.folders(con, settings)
+    return Response(json.dumps(doc, ensure_ascii=False, default=str), media_type="application/json; charset=utf-8",
+                    headers={"Cache-Control": "no-store"})
+
+
 @router.get("/api/v1/backfill/status")
 def get_backfill_status(request: Request) -> Response:
     """The history of runs: the range, dates with their run, to run, without positions, failed; the oldest run."""
@@ -98,7 +118,7 @@ def get_backfill_status(request: Request) -> Response:
     if ap is not None:
         doc["step"] = next((x for x in steps if x["name"] == "backfill"), None)
     # the hub dates the sync step cannot load, waiting for a retry (#146): the header counts them among the dates
-    # that do not converge (#163)
+    # that do not load (#163, #447)
     doc["hub_problem_dates"] = next((x.get("problem_dates") or [] for x in steps if x["name"] == "sync"), [])
     return Response(json.dumps(doc, ensure_ascii=False, default=str), media_type="application/json; charset=utf-8",
                     headers={"Cache-Control": "no-store"})

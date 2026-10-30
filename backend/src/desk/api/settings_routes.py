@@ -26,7 +26,7 @@ import psycopg
 from fastapi import APIRouter, Body, Depends, Request
 from psycopg.rows import dict_row
 
-from .. import funding_settings, settings_forms
+from .. import funding_settings, settings_detect, settings_forms
 from ..inbox import runner, scan
 from ..inbox.loader import CONFIG_NAME_RE, check_config_files, check_settings_tabs, load_adapter
 from ..marketdata import hubhistory
@@ -219,6 +219,25 @@ def test_hub() -> dict[str, Any]:
         return {"ok": False, "host": None, "health": None, "token_accepted": False, "latest": None, "error": str(e),
                 "transport": None}
     return hub_check(st, retries=1)
+
+
+@router.get("/api/v1/settings/detect")
+def detect_settings(request: Request) -> dict[str, Any]:
+    """What this computer tells by itself (``desk.settings_detect``, #449): the system proxy and certificates,
+    curl, Python interpreters for ``acquisition_python``, the default adapter folders and report folders to offer.
+    Local reads only: no request leaves the computer, nothing is written."""
+    st = _settings()
+    try:
+        stored = read_settings_json(desk_home())
+    except SettingsError:
+        stored = {}
+    rows: list[dict[str, Any]] = []
+    try:
+        with _store(request) as con:
+            rows = con.execute(settings_detect.ACCEPTED_FOLDERS).fetchall()
+    except psycopg.Error:
+        pass  # without the store: no folders of accepted files to offer
+    return settings_detect.detect(st, stored, accepted=rows)
 
 
 # ---- funding (#237) -------------------------------------------------------------------------------------------

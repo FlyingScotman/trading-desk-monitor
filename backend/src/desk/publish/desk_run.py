@@ -169,6 +169,8 @@ def _write(cur: psycopg.Cursor, run_id: int, positions: list[tuple[str, str, Out
         v, f = o.valuation, facts.get(pid)
         why = f"{o.reason}{': ' + o.detail if o.detail else ''}" if o.reason else None
         pv, dv01, cs01 = (f["mv_rub"], f["dv01"], f["cs01"]) if f else (None, None, None)
+        # TDM#460: an impossible risk (extra.risk_problem, TDM#170) is in no book's DV01 or CS01; its MV and PnL are
+        sums = (pv, None, None) if f and (f.get("extra") or {}).get("risk_problem") else (pv, dv01, cs01)
         fund = pnl_funding.get(pid) if o.pnl else None
         pnl = {**o.pnl.as_tdm(), **({"funding": fund} if fund is not None else {}), "extra": o.pnl.extra()} \
             if o.pnl else None
@@ -180,7 +182,7 @@ def _write(cur: psycopg.Cursor, run_id: int, positions: list[tuple[str, str, Out
             coverage[b][v.quality if v else "not_valued"] += 1
             coverage[b]["not_valued"] += 0
             t = totals[b]
-            for k, x in (("pv_rub", pv), ("dv01_rub", dv01), ("cs01_rub", cs01)):
+            for k, x in zip(("pv_rub", "dv01_rub", "cs01_rub"), sums):
                 t[k] += x or 0.0
             if o.pnl:
                 for k in PNL_KEYS:

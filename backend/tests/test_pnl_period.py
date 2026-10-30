@@ -366,6 +366,19 @@ def test_position_quantity_change_hides_previous_row():
     i = [d["inputs"] for d in out["days"]]
     assert i[1]["source"] == "previous_row" and i[1]["cleanPrev"] is None and i[1]["quantityPrev"] == 1.0
     assert i[2]["cleanPrev"] == 103.0 and out["days"][1]["events"] == ["количество изменилось"]
+    assert all(d["reportFrom"] is None for d in out["days"])
+
+
+def test_position_report_gap_date():
+    """TDM#440: a report-valued day whose D-1 carried an older report gives E that report's date (``reportFrom``)."""
+    extra = {"method": "desk-reported-v1", "prev_date": "2026-10-03", "note": "x; reports gap since 28.09",
+             "report_from": "2026-09-28"}
+    rows = [{"date": date(2026, 10, 4), "runId": 4, "book": "B", "positionId": "P", "name": "P", "instrument": None,
+             "ccy": "RUB", "quantity": 1.0, "pv": 1.0, "pnl": {"other": 5.0, "extra": extra},
+             "runPrevDate": date(2026, 10, 3)}]
+    (d,) = position_days(rows, [date(2026, 10, 4)])["days"]
+    assert d["reportFrom"] == date(2026, 9, 28) and d["prevDate"] == date(2026, 10, 3)
+    assert "reports gap since 28.09" in d["note"] and d["c"]["reported"] == 5.0
 
 
 def test_period_per_row_splits(period_client):

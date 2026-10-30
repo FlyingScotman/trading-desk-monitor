@@ -56,7 +56,7 @@ def masked(n: int) -> int | str:
 
 def list_entries(dirs: list[str]) -> list[tuple[str, os.stat_result]]:
     """Files of the folders (a folder ending in ``**`` recursively) with their ``stat``, without temp and hidden
-    files (08 §13), sorted by path. One directory listing per folder: on Windows the listing already carries each
+    files and without dot folders (08 §13), sorted by path. One directory listing per folder: on Windows the listing already carries each
     file's size and times, so a network share costs no request per file (R22)."""
     out: list[tuple[str, os.stat_result]] = []
 
@@ -69,7 +69,7 @@ def list_entries(dirs: list[str]) -> list[tuple[str, os.stat_result]]:
         for e in entries:
             try:
                 if e.is_dir(follow_symlinks=False):
-                    if recursive:
+                    if recursive and not e.name.startswith("."):  # a dot folder (the settings check's copy, TDM#130)
                         walk(e.path, True)
                     continue
                 if not e.is_file() or e.name.startswith(_SKIP_PREFIX) or e.name.endswith(_SKIP_SUFFIX):
@@ -85,7 +85,8 @@ def list_entries(dirs: list[str]) -> list[tuple[str, os.stat_result]]:
 
 
 def list_files(dirs: list[str]) -> list[str]:
-    """Files of the folders (a folder ending in ``**`` recursively), without temp and hidden files (08 §13)."""
+    """Files of the folders (a folder ending in ``**`` recursively), without temp and hidden files and dot folders
+    (08 §13)."""
     return [p for p, _ in list_entries(dirs)]
 
 

@@ -62,9 +62,10 @@ class Pages(unittest.TestCase):
         self.assertIn("'api/v1/events?after=' + cursor", live)
 
     def test_ocp_screen_reads_the_runs_ocp(self):
-        # C16 (#59): ОВП прогона из /api/v1/runs/{run_id}/ocp (backend publish/ocp_run.py); в галерее мониторов
+        # C16 (#59, #446): публикуемая ОВП по дням из /api/v1/history/ocp (backend api/ocp_history.py, блок ocp
+        # прогонов publish/ocp_run.py); в галерее мониторов
         src = (PROTO / "concepts" / "c16-ocp.html").read_text(encoding="utf-8")
-        self.assertIn("'../api/v1/runs/' + encodeURIComponent(M.run.id) + '/ocp'", src)
+        self.assertIn("'../api/v1/history/ocp' + (M.run.id != null ? '?run_id=' + encodeURIComponent(M.run.id) : '')", src)
         self.assertIn("const server = K.source === 'real'", src)
         self.assertIn("['c16-ocp', 'C16', 'ОВП'", (PROTO / "concepts" / "catalog.js").read_text(encoding="utf-8"))
         self.assertTrue((PROTO / "concepts" / "thumbs" / "c16-ocp.jpg").is_file())

@@ -50,9 +50,10 @@ from .bundle import Snapshot
 
 log = logging.getLogger(__name__)
 
-VERSION = 3
+VERSION = 4
 """Format of the rows written here: another value rebuilds them on the next load (2: an offer listed by two sources
-counted once; 3: the desk's rating of every bond, the sector by the bond class where the hub has none, R25)."""
+counted once; 3: the desk's rating of every bond, the sector by the bond class where the hub has none, R25; 4: a
+coupon not set yet listed with a zero amount is projected, TDM#166)."""
 KEEP = 4
 HORIZON_DAYS = 400
 BIG_RUB = 10e9
@@ -191,11 +192,14 @@ def bond_flows(cpns: list[dict], reds: list[dict], offers: list[dict], face: flo
                ) -> list[tuple[str, str, float | None, bool]]:
     """One bond's payments in ``(lo, hi]`` per bond, in its face currency: ``(date, kind, amount, est)`` (module
     doc: a coupon not fixed yet takes the last published amount scaled by the face; an offer is the face outstanding
-    on its date)."""
+    on its date). A zero amount of a coupon not ``known`` is one not set yet (MOEX lists them so, TDM#166), as
+    ``valuation.bonds`` and ``report.instruments`` read it: projected, not a zero payment."""
     out: list[tuple[str, str, float | None, bool]] = []
     last: tuple[float, float | None] | None = None  # (amount per bond, its face) of the last fixed coupon
     for c in sorted(cpns, key=lambda c: c["pay_date"]):
         amt = _num(c.get("amount_per_bond"))
+        if amt == 0 and c.get("status") != "known":
+            amt = None
         if amt is not None and amt > 0:
             last = (amt, _num(c.get("face_value")))
         if not (lo < c["pay_date"] <= hi):

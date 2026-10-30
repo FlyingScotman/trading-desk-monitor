@@ -405,6 +405,10 @@
     // кривая, к которой Z-спред (spreadBp ядра — к кривой дисконтирования: RUONIA, в день без неё — КБД); у флоатера это
     // Z-спред к RUONIA с купонами по прогнозу (R32), сравнимый с Z фикс-бумаг; DM — к кривой проекции
     p.spreadCurve = d.spreadCurve || null;
+    // прокси-кривая (#31, extra.curve_proxy прогона): в день без кривой RUONIA бумага на КБД (RUB OFZ) — пометка в
+    // таблицах и карточке (K.curveProxyTag, K.curveProxyNote); прогон без поля — пометки нет
+    const cp = ex.curve_proxy;
+    p.curveProxy = cp && typeof cp === 'object' ? String(cp.text || 'на прокси-кривой ' + (cp.curve || 'RUB OFZ') + ': кривой RUONIA за дату нет') : null;
     p.mdur = num(d.mdur); p.sprDur = num(d.sprDur);
     p.accrued = num(d.accrued) || 0;
     p.mv = num(d.mvRub); p.mvCcy = num(d.mv);
@@ -445,6 +449,16 @@
     p.dv01ByCurve = {}; let tot = 0;
     M.curves.forEach(c => { const s = p.risk[c.id].reduce((a, v) => a + v, 0); p.dv01ByCurve[c.id] = s; if (c.kind === 'rate') tot += s; });
     p.dv01 = tot;
+    // невозможный риск (#170, #460: extra.risk_problem прогона — проблема прогона, причина в журнале): позиция без риска,
+    // как не оценённая по риску — его нет ни в одной сумме экранов (DV01 по кривым, CS01, базис), как в сводках прогона и
+    // таблице риска API (risk_missing implausible); MV, FX-дельта и PnL остаются. Причина — в карточке и «валюта × тип»
+    p.riskProblem = typeof ex.risk_problem === 'string' && ex.risk_problem ? ex.risk_problem : null;
+    if (p.riskProblem) {
+      M.curves.forEach(c => { p.risk[c.id] = zeros(); p.dv01ByCurve[c.id] = 0; });
+      p.dv01 = 0; p.cs01 = 0; p.basis01 = 0; p.ofzIn01 = 0; p.ofzRuo01 = null;
+      if (p.ofzSpr01 != null) p.ofzSpr01 = 0;
+      p.cs01b = zeros(); p.ofzSprb = zeros();
+    }
     p.fxDelta = p.fxDeltaBy[p.ccy] || 0;  // в валюте позиции; все валюты — p.fxDeltaBy (сумма разных валют — не мера)
     // PnL
     const e = d.pnl || {};
@@ -518,6 +532,9 @@
     if (UV.open) M.notes.push(UV.open + ' поз. не оценены: показаны без риска и MV — разбор по причинам ниже' + (UV.closed ? '; ещё ' + UV.closed + ' закрытых (нулевой объём) — не в счёте' : '') + (UV.fxMissing.length ? '; нет курса ' + UV.fxMissing.join(', ') + ' — суммы этих строк не в рублях' : ''));
     else M.notes.push(UV.closed + ' закрытых позиций (нулевой объём) в отчёте — не оценены, в счёт не входят');
   } else if (positions.some(p => p.notValued)) M.notes.push(positions.filter(p => p.notValued).length + ' поз. не оценены (нет данных): показаны без риска и MV');
+  // невозможный риск (#460): позиции показаны без риска, причина — в карточке позиции и в журнале прогона
+  const badRisk = positions.filter(p => p.riskProblem);
+  if (badRisk.length) M.notes.push(badRisk.length + ' поз. с невозможным риском (|DV01| не сходится с MV и номиналом): показаны без риска, не в суммах DV01, CS01 и базиса — ' + badRisk.slice(0, 3).map(p => p.id).join(', ') + (badRisk.length > 3 ? ' и ещё ' + (badRisk.length - 3) : '') + '; причина — в карточке позиции и журнале прогона');
 
   // ---------- история деска ----------
   const H = X.hist || {};
@@ -537,6 +554,8 @@
     pnl: series(H.pnl, ['carry', 'funding', 'rates', 'spread', 'fx', 'trading', 'other', 'total'], k => positions.some(p => p.pnl[k] != null) ? sumBy(p => p.pnl[k]) : null),
   };
   if (!H.cs01) M.hist.cs01[n - 1] = sumBy(p => p.cs01);
+  // позиции с невозможным риском по датам (#170, сводка прогона riskBad): их риска в суммах нет — график отмечает дату
+  M.hist.riskBad = H.riskBad || null;
   // базис в истории — сводки прогонов (кривая «RUB OFZ» страниц: ofz_basis01 в прогоне 0.2.6+, ofzSpr01 до него);
   // в виде «КБД» — риск КБД, RUONIA без него
   // basis01 — без номинального прокси ОФЗ-ИН (basisIn01, #173): в «RUONIA + базис» он только в RUONIA, в «КБД» — на КБД
@@ -654,23 +673,28 @@
   };
 
   // ---------- все потоки позиции (лениво, карточка): /api/v1/positions/flows — график выпуска из статики хаба до
-  // погашения × бумаги позиции, оферты внутри. Промис {flows, reason, error}: flows — график; null — графика нет
-  // (карточка берёт потоки прогона), reason — почему его нет словами, error — сбой запроса (#288). «Графика нет» —
-  // ожидаемый ответ: сервер отдаёт 200 с пустым flows и кодом reason; 404 — нет позиции или прогона (у прежнего
-  // сервера — и нет графика). Сбой не запоминается: следующее открытие карточки спросит снова ----------
+  // погашения × бумаги позиции, оферты внутри; без файла статики в кэше — потоки прогона до погашения (source 'run',
+  // прогоны с #166). Промис {flows, reason, error, note}: flows — график; null — графика нет (карточка берёт потоки
+  // прогона), reason — почему его нет словами, error — сбой запроса (#288), note — откуда график, если не из статики.
+  // «Графика нет» — ожидаемый ответ: сервер отдаёт 200 с пустым flows и кодом reason; 404 — нет позиции или прогона
+  // (у прежнего сервера — и нет графика). Запоминается только график: ответ без него и сбой следующее открытие
+  // карточки спросит снова (#166) ----------
   const FLOW_REASON = { not_bond: 'не облигация — у позиции нет графика выпуска', not_valued: 'позиция не оценена в прогоне',
     no_static: 'нет статики хаба за дату прогона', no_schedule: 'в статике хаба нет графика этой бумаги', past: 'выплат после даты прогона нет' };
   const flowCache = {};
   M.posFlows = function (id) {  // повторно — из памяти
     if (!flowCache[id]) flowCache[id] = fetch('../api/v1/positions/flows?' + runQ + '&id=' + encodeURIComponent(id)).then(r => {
       if (r.status === 404) return { flows: null, reason: 'сервер не нашёл позицию или её график выпуска' };
-      if (!r.ok) { delete flowCache[id]; return { flows: null, error: 'ошибка сервера ' + r.status + (r.statusText ? ' ' + r.statusText : '') }; }
+      if (!r.ok) return { flows: null, error: 'ошибка сервера ' + r.status + (r.statusText ? ' ' + r.statusText : '') };
       return r.json().then(j => {
         if (!j || !Array.isArray(j.flows) || !j.flows.length) return { flows: null, reason: FLOW_REASON[j && j.reason] || FLOW_REASON.past };
         const k = (M.toRepr && M.toRepr[j.ccy]) || M.fx[j.ccy] || 1;  // в валюту отчёта, как и всё на страницах
-        return { flows: j.flows.map(([date, kind, amount, est]) => ({ date, pos: id, kind, amort: kind === 'amort', ccy: j.ccy, amount, est, amountRub: amount == null ? null : amount * k })) };
+        const out = { flows: j.flows.map(([date, kind, amount, est]) => ({ date, pos: id, kind, amort: kind === 'amort', ccy: j.ccy, amount, est, amountRub: amount == null ? null : amount * k })) };
+        if (j.source === 'run') out.note = 'график по условиям бумаги в прогоне' + (FLOW_REASON[j.reason] ? ' (' + FLOW_REASON[j.reason] + ')' : '') + ', из оферт — только та, к которой оценена бумага';
+        return out;
       });
-    }).catch(e => { delete flowCache[id]; return { flows: null, error: 'нет связи с сервером' + (e && e.message ? ': ' + e.message : '') }; });
+    }).catch(e => ({ flows: null, error: 'нет связи с сервером' + (e && e.message ? ': ' + e.message : '') }))
+      .then(x => { if (!x.flows) delete flowCache[id]; return x; });
     return flowCache[id];
   };
 

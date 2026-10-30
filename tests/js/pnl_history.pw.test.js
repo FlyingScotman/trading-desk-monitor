@@ -11,6 +11,12 @@ const pw = (() => { try { return require('/opt/node22/lib/node_modules/playwrigh
 const { TEXT: RUN } = require('./fixtures/concepts_run');
 const FX = require('./fixtures/pnl_period.json');
 const BASE = process.env.PNL_HISTORY_BASE, SHOTS = process.env.PNL_HISTORY_SHOTS;
+// an element of the page in a full-page shot, so the sticky header stays above it (SHOTS only)
+async function shotOf(pg, sel, name) {
+  await pg.evaluate(() => scrollTo(0, 0));
+  const clip = await pg.locator(sel).evaluate(e => { const r = e.getBoundingClientRect(); return { x: r.left + scrollX, y: r.top + scrollY, width: r.width, height: r.height }; });
+  await pg.screenshot({ path: path.join(SHOTS, name), fullPage: true, clip });
+}
 const ROOT = path.join(__dirname, '..', '..', 'prototypes'), ORIGIN = 'http://desk.test';
 const TYPES = { '.html': 'text/html', '.js': 'application/javascript', '.css': 'text/css', '.json': 'application/json' };
 const BAD = /\bNaN\b|\bnull\b|\bundefined\b/;
@@ -255,15 +261,17 @@ test('C19 A follow-ups: «Explain по кривым» by factor (TDM#437), the u
     await pg.waitForFunction(() => /Кто дал: Ставки · RUONIA/.test(document.getElementById('contribTitle').textContent));
     if (SHOTS) { fs.mkdirSync(SHOTS, { recursive: true }); await pg.evaluate(() => scrollTo(0, 0)); await pg.screenshot({ path: path.join(SHOTS, 'c19-A-curves-factors.png'), fullPage: true }); }
     assert.ok(!BAD.test(await pg.locator('#main').innerText()));
-    // «Необъяснённое / прочее»: the drill adds the split by method group — from /period while F has not been asked
+    // «Необъяснённое / прочее»: the drill adds the split by reason, then by method group (TDM#442) — from /period while F
+    // has not been asked
     await pg.locator('#wfBreak').selectOption('none');
     await pg.locator('#lensSeg button', { hasText: 'Explain' }).first().click();
     await clickBar(pg, 'Необъяснённое / прочее');
     await pg.waitForSelector('#contribMethods');
     const byPos = await pg.locator('#contrib').innerText();
+    assert.match(byPos, /По причине[\s\S]*остаток точного flash[\s\S]*причина не записана[\s\S]*позиции с несколькими причинами/i);
     assert.match(byPos, /По методу расчёта[\s\S]*остаток точного flash[\s\S]*позиции с несколькими методами/i);
     assert.match(byPos, /По позициям/); assert.match(byPos, /подробнее — экран F/);
-    if (SHOTS) await pg.screenshot({ path: path.join(SHOTS, 'c19-A-unexplained-by-position.png'), fullPage: true });
+    if (SHOTS) { await pg.screenshot({ path: path.join(SHOTS, 'c19-A-unexplained-by-position.png'), fullPage: true }); await shotOf(pg, '#contrib', 'c19-A-drill-by-reason-from-period.png'); }
     // after F: by row from its answer (no request of A's own), the groups of unexplainedBy
     await pg.locator('#contribToF').click();
     await pg.waitForSelector('#tabs [data-tab=control].on');
@@ -272,9 +280,10 @@ test('C19 A follow-ups: «Explain по кривым» by factor (TDM#437), the u
     await pg.waitForSelector('#contribMethods');
     const byRow = await pg.locator('#contrib').innerText();
     assert.match(byRow, /По записям периода/);
-    assert.match(byRow, /без разложения: нет потоков \/ модельная цена/);
+    assert.match(byRow, /По причине[\s\S]*запасная оценка[\s\S]*смена источника цены[\s\S]*По методу расчёта[\s\S]*без разложения: нет потоков ядра/i);
+    assert.doesNotMatch(byRow, /позиции с несколькими причинами/);
     assert.doesNotMatch(byRow, /позиции с несколькими методами/);
-    if (SHOTS) await pg.screenshot({ path: path.join(SHOTS, 'c19-A-unexplained-by-method.png'), fullPage: true });
+    if (SHOTS) { await pg.screenshot({ path: path.join(SHOTS, 'c19-A-unexplained-by-method.png'), fullPage: true }); await shotOf(pg, '#contrib', 'c19-A-drill-by-reason-from-checks.png'); }
     assert.ok(!BAD.test(await pg.locator('#main').innerText()));
     assert.deepEqual(errors, []);
     await ctx.close();
@@ -349,15 +358,25 @@ test('C19 D, E, F on the synthetic fixture: requests, missing data, F → E on i
     await pg.locator('#ckAll').click();
     assert.equal(await pg.locator('#ckList tbody tr').count(), FX.checks.findings.length);
     assert.equal(await pg.locator('#ckCal i.cal-norun').count(), 1);
-    // «Необъяснённое» by method (TDM#436): bars, daily columns by method, the top; sums with the period's other
+    // «Необъяснённое» by reason, then by method (TDM#436, TDM#442): bars, daily columns by reason, the top; sums with the
+    // period's other; a reason filters the top
     const why = await pg.locator('#ckWhy').innerText();
-    assert.match(why, /остаток точного flash[\s\S]*без разложения: нет потоков \/ модельная цена[\s\S]*по доходности/);
+    assert.match(why, /по причине[\s\S]*запасная оценка[\s\S]*смена источника цены[\s\S]*остаток точного flash[\s\S]*причина не записана \(прогон до версии 23\)/i);
+    assert.match(why, /по методу расчёта[\s\S]*остаток точного flash[\s\S]*без разложения: нет потоков ядра[\s\S]*по доходности/i);
     assert.match(why, /Разбивка сходится с итогом/);
     const wseries = await pg.evaluate(() => echarts.getInstanceByDom(document.getElementById('ckWhyDays')).getOption().series.map(s => [s.name, s.stack]));
-    assert.deepEqual(wseries.map(s => s[0]), FX.checks.unexplainedBy.groups.map(g => g.label));
+    assert.deepEqual(wseries.map(s => s[0]), FX.checks.unexplainedBy.reasons.map(r => r.label));
     assert.ok(wseries.every(s => s[1] === 'u'));
     assert.equal(await pg.locator('#ckWhyTop tbody tr').count(), FX.checks.unexplainedBy.top.length);
     assert.match(await pg.locator('#ckWhyTop').innerText(), /модельная цена/);
+    assert.match(await pg.locator('#ckWhyTop').innerText(), /смена источника цены: модель ↔ рынок/);
+    if (SHOTS) { fs.mkdirSync(SHOTS, { recursive: true }); await shotOf(pg, '#ckWhyPanel', 'c19-F-unexplained-by-reason.png'); }
+    await pg.locator('#ckWhy [data-reason=price_source_switch]').click();
+    assert.equal(await pg.locator('#ckWhyTop tbody tr').count(), 1);
+    assert.match(await pg.locator('#ckWhyTop').innerText(), /Synthetic Corp 1[\s\S]*Только причина «смена источника цены/);
+    if (SHOTS) await shotOf(pg, '#ckWhyPanel', 'c19-F-unexplained-reason-filter.png');
+    await pg.locator('#ckWhy [data-reason=price_source_switch]').click();
+    assert.equal(await pg.locator('#ckWhyTop tbody tr').count(), FX.checks.unexplainedBy.top.length);
     await pg.locator('#thrAbs').fill('1.5'); await pg.locator('#thrAbs').dispatchEvent('change');
     await pg.waitForSelector('#ckList table');
     assert.equal(last('/checks').searchParams.get('thr_abs'), '1500000');
@@ -433,6 +452,31 @@ test('C19 D, E, F: a held-back answer never shows for another slice; a failed re
     assert.equal(await pg.locator('#plist [aria-current=true]').getAttribute('data-ref'), 'DEMO-A|CORP-1');
     await tab(pg, 'curves');
     await pg.waitForFunction(() => /HTTP 500/.test(document.getElementById('cvBody').textContent));
+    assert.deepEqual(errors, []);
+    await ctx.close();
+  } finally { await browser.close(); }
+});
+
+test('C19 E: a day by the reports whose D−1 carried an older report shows «с dd.mm» of that report (TDM#440)', { skip: pw ? false : 'нет Playwright', timeout: 60000 }, async () => {
+  const browser = await pw.chromium.launch();
+  try {
+    const { pg, ctx, errors } = await open(browser);
+    // CORP-1 as a report-valued position: on 13.10 the report of D−1 (12.10) was carried from 28.09
+    const pos = JSON.parse(JSON.stringify(FX.position['DEMO-A|CORP-1'])), d = pos.days.find(x => x.date === '2026-10-13');
+    Object.assign(d, { method: 'desk-reported-v1', reportFrom: '2026-09-28', note: 'reported PV; reports gap since 28.09' });
+    await pg.route('**/api/v1/history/pnl/position?*', route => {
+      const u = new URL(route.request().url()), ref = u.searchParams.get('position_book') + '|' + u.searchParams.get('position_id');
+      return route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(ref === 'DEMO-A|CORP-1' ? pos : FX.position[ref]) }).catch(() => { });
+    });
+    await pg.evaluate(() => { location.hash = 'position'; });
+    await pg.waitForSelector('#plist [data-ref="DEMO-A|CORP-1"]');
+    await pg.locator('#plist [data-ref="DEMO-A|CORP-1"]').click();
+    await pg.waitForSelector('#pDays tr[data-d="2026-10-13"]');
+    const cell = pg.locator('#pDays tr[data-d="2026-10-13"] td.stick');
+    assert.match(await cell.innerText(), /13\.10\.26\s+с 28\.09/);
+    assert.match(await cell.locator('span').getAttribute('title'), /Разница отчётов: отчёт D−1 действует с 28\.09\.26/);
+    // a day by its own report of D−1 and the previous run a day before: no mark
+    assert.doesNotMatch(await pg.locator('#pDays tr[data-d="2026-10-12"] td.stick').innerText(), /с \d/);
     assert.deepEqual(errors, []);
     await ctx.close();
   } finally { await browser.close(); }

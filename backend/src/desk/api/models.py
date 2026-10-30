@@ -455,7 +455,7 @@ class Aggregates(BaseModel):
 
 
 class RiskMissing(BaseModel):
-    reason: Literal["not_valued", "reported_no_risk", "no_risk"]
+    reason: Literal["not_valued", "reported_no_risk", "no_risk", "implausible"]
     text: str
     n: int
 

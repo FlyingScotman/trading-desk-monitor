@@ -66,7 +66,7 @@ def test_planted_cases(checks_client):
                     ("DEMO-A|NEW1", "2026-10-12", "позиция появилась"),
                     ("DEMO-A|A1", "2026-10-12", "количество изменилось"),
                     ("DEMO-B|N1", "2026-10-13", "позиция появилась"),
-                    ("DEMO-B|N1", "2026-10-13", "нет PnL: no_prev_report"),
+                    ("DEMO-B|N1", "2026-10-13", "нет PnL: нет отчётной стоимости позиции за предыдущий день"),
                     ("DEMO-B|N1", "2026-10-13", "позиция закрыта: нет с 15.10.2026")}
     assert [f["sev"] for f in body["findings"]] == sorted((f["sev"] for f in body["findings"]),
                                                           key=["crit", "warn", "info"].index)
@@ -190,7 +190,8 @@ def test_heat_map_cap_and_folded_no_pnl(many_client):
     nopnl = [f for f in body["findings"] if f["check"] == "life" and f["ref"] == "DEMO-B|NP1"]
     assert sorted((f["date"], f["dateTo"] or "", f["text"]) for f in nopnl) == [
         (NO_PNL_DAYS[0], "", "позиция появилась"),
-        (NO_PNL_DAYS[0], NO_PNL_DAYS[-1], f"нет PnL: no_prev_report; дней подряд: {len(NO_PNL_DAYS)}"),
+        (NO_PNL_DAYS[0], NO_PNL_DAYS[-1],
+         f"нет PnL: нет отчётной стоимости позиции за предыдущий день; дней подряд: {len(NO_PNL_DAYS)}"),
         (NO_PNL_DAYS[-1], DAYS[8], "позиция закрыта: нет с 12.10.2026")]
 
 
@@ -224,6 +225,8 @@ def test_scan_memory_does_not_grow_with_positions():
 MIXED = {"X1": ("desk-flash-exact-v2", "exact", 2e5), "X2": ("desk-flash-simple-v1", "model_price", -4e6),
          "X3": ("desk-flash-yield-v1", "market_value", 3e5), "X4": ("desk-reported-v1", "reported_value", 1e6)}
 """Positions with one calculation method each: method, valuation quality, ``other`` per run (X4's is ``reported``)."""
+REASON = {"X1": "flash_residual", "X2": "fallback_price", "X3": "yield_no_curve", "X4": "reported_value"}
+"""Their ``other_reason`` (TDM#442) on every run but the second (an older run: none recorded)."""
 
 
 @pytest.fixture
@@ -234,8 +237,9 @@ def mixed_client(store_url):
     def more(con, rid, day):
         for j, (pid, (method, quality, v)) in enumerate(MIXED.items()):
             none = pid == "X2" and day == DAYS[0]
+            why = {} if DAYS.index(day) == 1 else {"other_reason": {"code": REASON[pid], "detail": "synthetic " + pid}}
             pnl = None if none else {"carry": 10.0, "other": v * (1 + DAYS.index(day) % 2),
-                                     "extra": {"method": method, "note": "synthetic " + method}}
+                                     "extra": {"method": method, "note": "synthetic " + method, **why}}
             con.execute(
                 "INSERT INTO run_position(run_id,position_id,ord,book_id,secid,quantity,quality,pv_rub,dv01_rub,"
                 "cs01_rub,fact,pnl,no_pnl) VALUES (%s,%s,%s,'DEMO-B','SYN-X',10,%s,1e6,-10,0,%s,%s,%s)",
@@ -258,7 +262,7 @@ def test_unexplained_by_method(mixed_client):
     assert u["dates"] == DAYS and all(len(s) == len(DAYS) for s in u["byDate"].values())
     groups = {g["key"]: g for g in u["groups"]}
     assert list(groups) == ["exact", "simple", "yield", "reported", "other"]
-    assert groups["simple"]["label"] == "без разложения: нет потоков / модельная цена"
+    assert groups["simple"]["label"] == "без разложения: нет потоков ядра"
     x2 = [i for i in range(len(DAYS)) if i]
     assert groups["simple"]["total"] == pytest.approx(math.fsum(-4e6 * (1 + i % 2) for i in x2))
     assert groups["simple"]["rows"] == len(DAYS) - 1
@@ -281,6 +285,58 @@ def test_unexplained_by_method(mixed_client):
     assert u["topTotal"] == len(top) == 7 + len(MIXED)  # A1 B1 U1 F1 S1 C1 NEW1 and the four
 
 
+def test_unexplained_by_reason(mixed_client):
+    """TDM#442: the reasons sum to the total, by date too, each split by method; rows without a code (the planted
+    history, the second run) are «причина не записана», last."""
+    u = get(mixed_client)["unexplainedBy"]
+    rs = {r["key"]: r for r in u["reasons"]}
+    assert list(rs) == ["fallback_price", "yield_no_curve", "reported_value", "flash_residual", "unrecorded"]
+    assert rs["unrecorded"]["label"] == "причина не записана (прогон до версии 23)"
+    assert rs["fallback_price"]["label"] == "запасная оценка"
+    assert math.fsum(r["total"] for r in u["reasons"]) == pytest.approx(u["total"])
+    assert math.fsum(r["rows"] for r in u["reasons"]) == u["rows"]
+    assert math.fsum(v for s in u["byReasonDate"].values() for v in s if v is not None) == pytest.approx(u["total"])
+    assert all(len(s) == len(DAYS) for s in u["byReasonDate"].values())
+    assert u["byReasonDate"]["flash_residual"][1] is None and u["byReasonDate"]["unrecorded"][1] is not None
+    x2 = [i for i in range(len(DAYS)) if i > 1]  # X2: no PnL on the first run, no code on the second
+    assert rs["fallback_price"]["total"] == pytest.approx(math.fsum(-4e6 * (1 + i % 2) for i in x2))
+    assert rs["fallback_price"]["methods"] == [{"method": "desk-flash-simple-v1", "group": "simple",
+                                                "total": pytest.approx(rs["fallback_price"]["total"]), "rows": len(x2)}]
+    assert rs["reported_value"]["reported"] == pytest.approx(rs["reported_value"]["total"])
+    for r in u["reasons"]:  # each split by method sums to the reason
+        assert math.fsum(m["total"] for m in r["methods"]) == pytest.approx(r["total"])
+        assert [abs(t["total"]) for t in r["top"]] == sorted((abs(t["total"]) for t in r["top"]), reverse=True)
+    assert rs["fallback_price"]["top"] == [{"ref": "DEMO-B|X2", "book": "DEMO-B", "positionId": "X2",
+                                            "name": "Synthetic X2", "total": pytest.approx(rs["fallback_price"]["total"]),
+                                            "rows": len(x2)}]
+    unrec = {m["method"] for m in rs["unrecorded"]["methods"]}
+    assert unrec == {"desk-flash-v1", *(m for m, *_ in MIXED.values())}
+    top = {t["ref"]: t for t in u["top"]}
+    assert top["DEMO-B|X2"]["reason"] == "fallback_price" and top["DEMO-B|X2"]["reasonLabel"] == "запасная оценка"
+    assert top["DEMO-B|X2"]["reasons"] == ["unrecorded", "fallback_price"]  # in the order of its rows
+    assert top["DEMO-B|X2"]["reasonDetails"] == ["synthetic X2"]
+    # /period: each position's codes (A's split without F's answer); /position: each day's reason
+    base = {"from": DAYS[0], "to": DAYS[-1], "gran": "week"}
+    period = mixed_client.get("/api/v1/history/pnl/period", params=base).json()
+    pos = {p["positionId"]: p for p in period["positions"]}
+    assert pos["X1"]["reasons"] == ["flash_residual", "unrecorded"] and pos["X4"]["reasons"] == ["reported_value",
+                                                                                                "unrecorded"]
+    days = mixed_client.get("/api/v1/history/pnl/position", params={**base, "position_book": "DEMO-B",
+                                                                    "position_id": "X3"}).json()["days"]
+    assert [d["reason"] and d["reason"]["code"] for d in days] == [
+        None if i == 1 else "yield_no_curve" for i in range(len(DAYS))]
+
+
+def test_a_row_without_a_code_and_without_unexplained_is_in_no_reason():
+    d = date(2026, 10, 1)
+    scan = Scan([1], [d])
+    scan.add([o(d, ref="B|FX", pnl={"fx_gross": 5.0, "other": 0.0, "extra": {"method": "desk-fx-spot-v1"}})])
+    scan.add([o(d, ref="B|C", pnl={"other": 0.0, "extra": {"method": "desk-flash-exact-v2", "other_reason": {
+        "code": "flash_residual", "detail": "x"}}})])
+    u = scan.result([], [])["unexplainedBy"]
+    assert [(r["key"], r["rows"]) for r in u["reasons"]] == [("flash_residual", 1)] and u["rows"] == 2
+
+
 def test_unexplained_top_capped_and_empty():
     days = [date(2026, 10, 1) + timedelta(days=i) for i in range(3)]
     scan = Scan(list(range(3)), days)
@@ -293,3 +349,4 @@ def test_unexplained_top_capped_and_empty():
     assert u["total"] == pytest.approx(3 * math.fsum(range(1, UNEXPL_TOP + 6)))
     none = evaluate([o(days[0], pnl=None)], [1], [days[0]], [days[0]], [(days[0], {})])["unexplainedBy"]
     assert none["total"] is None and none["groups"] == [] and none["top"] == [] and none["rows"] == 0
+    assert none["reasons"] == [] and none["byReasonDate"] == {}

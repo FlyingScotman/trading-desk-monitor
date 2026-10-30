@@ -106,7 +106,8 @@ t('#317: C03 — у «Δ цены» в CSV единица; C14/C16 — раск�
   const c03 = P('c03-blotter.html');
   assert.ok(c03.includes("chg: { label: 'Δ цены', num: true, val: r => r.price == null ? null : r.price - r.prevPrice, csvHead: 'Δ цены, % ном.',"));
   assert.ok(P('c14-day-status.html').includes("K.keepOpen(view, 'data-f', render)"));
-  assert.ok(P('c16-ocp.html').includes("K.keepOpen(view, 'data-r', () => render(last))"));
+  // C16 (TDM#446): раскрываемых строк нет — перерисовка из последнего ответа
+  assert.ok(P('c16-ocp.html').includes("K.on('numfmt', render);") && !P('c16-ocp.html').includes('aria-expanded'));
   // K.keepOpen: что было раскрыто до перерисовки, раскрывается щелчком после
   const { K } = load();
   const rows = (ids, open) => ids.map(id => ({ id, exp: open.includes(id), clicks: 0, getAttribute(a) { return a === 'aria-expanded' ? String(this.exp) : this.id; }, click() { this.clicks++; this.exp = !this.exp; } }));

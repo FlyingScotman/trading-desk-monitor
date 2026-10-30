@@ -105,9 +105,11 @@
   "assumptions",
   "calculation_id",
   "cashflows",
+  "cashflows_to",
   "core",
   "core_version",
   "coupon_basis",
+  "curve_proxy",
   "dm_bp",
   "funding",
   "fx_liability",
@@ -138,6 +140,7 @@
   "reported",
   "reported_pv_rub",
   "repos",
+  "risk_problem",
   "settlement",
   "short_name",
   "spread_buckets",
@@ -154,6 +157,7 @@
  "extraRead": [
   "assumptions",
   "core",
+  "curve_proxy",
   "dm_bp",
   "funding",
   "g_spread_bp",
@@ -174,10 +178,17 @@
   "reported",
   "reported_pv_rub",
   "repos",
+  "risk_problem",
   "spread_buckets",
   "swaps"
  ],
  "extraNested": {
+  "curve_proxy": [
+   "curve",
+   "instead_of",
+   "reason",
+   "text"
+  ],
   "funding": [
    "amount_rub",
    "default_rate",

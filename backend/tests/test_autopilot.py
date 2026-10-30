@@ -350,7 +350,7 @@ def test_status_shows_live_progress_of_a_running_cycle(tmp_path, store_url, monk
     c = TestClient(app)
     seen: list[dict] = []
 
-    def fake_scan(con, settings, *, progress=None, now=None, since=None):
+    def fake_scan(con, settings, *, progress=None, now=None, since=None, history_from=None):
         progress(0, None, "просмотр папок")
         seen.append(c.get("/api/v1/autopilot/status").json())
         progress(37, 412, "positions_20261016.csv")
@@ -423,11 +423,30 @@ def test_hub_sync_stays_within_the_lookback_caps_and_remembers_missing_dates(tmp
         detail = ap._hub_sync(s, con, [])
         assert asked == ["2026-10-19", "2026-10-16", "2026-10-15", "2026-10-14", "2026-10-13"], asked  # 2 + 3
         assert "1 next cycle" in detail and len(listed) < 20  # the hub's list read only down to the lookback
+        assert ap._hub_first is None  # the list not read to its end: the hub's oldest date unknown (#27)
         detail = ap._hub_sync(s, con, [])
         assert asked[5:] == ["2026-10-12"] and "no snapshot for 2026-10-12" in detail
         ap._hub_sync(s, con, [])
         assert len(asked) == 6  # the missing date is remembered, the others are cached
     assert min(asked) >= "2026-10-09"  # never a date behind the lookback (today - 10 days)
+
+
+def test_a_report_before_the_hub_history_stops_waiting_for_a_calendar(stub, tmp_path, store_url):
+    """#27: a report dated before the hub's oldest date (the lookback off: no limit) has no calendar, and the hub
+    will never send one. The sync reads the hub's whole date list, so it knows the oldest date and caches its static
+    snapshot; the scan then makes the file terminal with its reason instead of waiting every cycle."""
+    s = cfg(tmp_path, store_url, stub)
+    (tmp_path / "in").mkdir()
+    shutil.copy(PRIV / "positions_20261014.csv", tmp_path / "in" / "positions_20250110.csv")
+    ap = Autopilot(settings_loader=lambda: s, today=lambda: TODAY)
+    by = steps(ap.run_cycle())
+    assert by["sync"][0] == "ok" and ap._hub_first == "2026-10-15", by["sync"]
+    assert "ignored_too_old 1" in by["scan"][1] and ap._inbox_waiting == 0, by["scan"]
+    with store.connect(store_url) as con:
+        assert con.execute("SELECT status, error_code FROM inbox_file_status ORDER BY status_id DESC LIMIT 1"
+                           ).fetchone() == ("ignored_too_old", "before_hub_history")
+    by = steps(ap.run_cycle())
+    assert "ignored_too_old" not in by["scan"][1] and "waiting_calendar" not in by["scan"][1], by["scan"]
 
 
 HOLDER = """

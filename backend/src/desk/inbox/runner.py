@@ -138,6 +138,19 @@ def _import_new(spec: str) -> Any:
     return module
 
 
+def locate(spec: str) -> dict:
+    """Where the import of module ``spec`` would load it from (``{"file", "path"}`` as ``describe`` reports it),
+    found through ``sys.meta_path`` without running any of its code, its parent packages' included."""
+    name, path, found = "", None, None
+    for part in spec.split("."):
+        name = f"{name}.{part}" if name else part
+        found = next((s for f in sys.meta_path if (s := getattr(f, "find_spec", lambda *a: None)(name, path))), None)
+        if found is None:
+            raise FileNotFoundError(spec)
+        path = found.submodule_search_locations
+    return {"file": found.origin if found and found.has_location else None, "path": list(path or [])}
+
+
 def _plain(value: Any) -> Any:
     """``value`` if it survives strict JSON, else raises: plain data only (08 §3)."""
     json.dumps(value, allow_nan=False)
@@ -145,6 +158,11 @@ def _plain(value: Any) -> Any:
 
 
 def _handle(req: dict) -> dict:
+    if req["op"] == "locate":  # before any import: the parent fingerprints these files first (08 §2)
+        try:
+            return {"ok": True, "result": locate(req.get("adapter") or REFERENCE_ADAPTER)}
+        except Exception as e:  # noqa: BLE001 - a finder's failure is "cannot be located"
+            return {"ok": False, "load_error": "not_found", **_error(e)}
     try:
         mod = _import(req.get("adapter"))
     except _LoadError as e:
@@ -423,6 +441,12 @@ def _result(resp: dict) -> Any:
         return resp["result"]
     err = resp.get("error") or {"type": resp.get("load_error"), "frames": resp.get("frames", [])}
     raise AdapterFailure("failed", err["type"] or "error", err.get("frames", []))
+
+
+def call_locate(spec: str | None, timeout_s: float) -> dict:
+    """The child's raw answer where module ``spec`` would be imported from, nothing of it run:
+    ``{"ok": True, "result": {"file", "path"}}`` or ``{"ok": False, "load_error": "not_found", ...}``."""
+    return run({"op": "locate", "adapter": spec}, timeout_s)
 
 
 def call_describe(spec: str | None, config_dir: str | None, timeout_s: float,

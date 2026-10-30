@@ -18,10 +18,23 @@ from typing import Any
 
 from psycopg.rows import dict_row
 
-from ..pnl.reasons import CORE_FX_METHOD, FX_METHOD, REPORTED_METHOD, no_pnl_text
+from ..pnl.flash import METHOD as EXACT_METHOD
+from ..pnl.flash import METHOD_FX as EXACT_FX_METHOD
+from ..pnl.reasons import (
+    CORE_FX_METHOD,
+    EXACT_V1_METHOD,
+    FX_METHOD,
+    NO_REASON_TEXT,
+    OTHER_REASON_TEXT,
+    REPORTED_METHOD,
+    UNRECORDED,
+    no_pnl_text,
+)
 from ..publish.summary import FX_PARTS, fx_net
+from ..valuation.fallback import METHOD as SIMPLE_METHOD
+from ..valuation.fallback import YIELD_METHOD
 from .pnl_history import Sum, amounts, market_dates, period_runs, rows_query
-from .pnl_period import TRIMMED_PNL
+from .pnl_period import TRIMMED_PNL, no_pnl_why
 from .runs import PNL_KEYS
 
 THR_ABS = 3e6
@@ -41,16 +54,21 @@ LABELS = {"recon": "Сверка тождества", "unexpl": "Необъяс�
           "fsign": "Знак фондирования", "lin": "Ставки: линейно и точно", "fxrev": "Скачок курса",
           "outlier": "Выброс по позиции", "norun": "Нет прогона", "life": "Жизнь позиции"}
 SEV = {"crit": 0, "warn": 1, "info": 2}
-UNEXPL_GROUPS = {"exact": "остаток точного flash", "simple": "без разложения: нет потоков / модельная цена",
+UNEXPL_GROUPS = {"exact": "остаток точного flash", "simple": "без разложения: нет потоков ядра",
                  "yield": "по доходности", "reported": "по отчёту", "fx": "FX-сделки: прочие эффекты",
                  "other": "другой метод или не указан"}
 """``unexplainedBy`` (TDM#436): what ``other`` (and ``reported``) is, by the calculation method's group, in this order."""
-METHOD_GROUP = {"desk-flash-exact-v1": "exact", "desk-flash-exact-v2": "exact", "desk-flash-exact-fx-v1": "exact",
-                "desk-flash-simple-v1": "simple", "desk-flash-yield-v1": "yield", REPORTED_METHOD: "reported",
-                FX_METHOD: "fx", CORE_FX_METHOD: "fx"}
-"""``pnl.extra.method`` -> group: the exact flash's rest (a changed schedule, a price and accrued that disagree), the
-simple PnL of a bond not exact on both dates (all of q x Δdirty, ``valuation.fallback.simple_pnl``), the yield carry's
-yield change, the reports' PV difference, an FX deal's other effects; any other code (or none) — ``other``."""
+METHOD_GROUP = {EXACT_V1_METHOD: "exact", EXACT_METHOD: "exact", EXACT_FX_METHOD: "exact", SIMPLE_METHOD: "simple",
+                YIELD_METHOD: "yield", REPORTED_METHOD: "reported", FX_METHOD: "fx", CORE_FX_METHOD: "fx"}
+"""``pnl.extra.method`` -> group, the codes from their modules (TDM#452): the exact flash's rest (a changed schedule, a
+price and accrued that disagree), the simple PnL of a bond not on core on both dates (all of q x Δdirty,
+``valuation.fallback.simple_pnl``), the yield carry's yield change, the reports' PV difference, an FX deal's other
+effects; any other code (or none) — ``other``. The JS mirror (``pnl-period.js`` ``METHOD_GROUP``) is tested against it."""
+REASON_LABELS = {**OTHER_REASON_TEXT, UNRECORDED: NO_REASON_TEXT}
+"""``unexplainedBy.reasons`` (TDM#442): why ``other`` (and ``reported``) is unexplained, by ``other_reason.code``, in
+this order (an unknown code after them, by itself); the method groups are the second cut."""
+UNEXPL_REASON_TOP = 5
+"""``unexplainedBy.reasons[].top`` keeps this many positions per reason, the largest by |Σ| of that reason."""
 QUALITY_TEXT = {"exact": "точная", "assumed": "с допущениями", "market_value": "рыночная цена",
                 "stale_price": "старая цена", "model_price": "модельная цена", "par_proxy": "по номиналу",
                 "reported_value": "по отчёту"}
@@ -88,7 +106,17 @@ def observe(r: dict[str, Any]) -> Obs:
     return {"date": r["date"], "runId": r["runId"], "ref": f"{r['book']}|{r['positionId']}", "book": r["book"],
             "positionId": r["positionId"], "name": r.get("name"), "ccy": r.get("ccy"), "a": a,
             "ratesLinear": _num(extra.get("rates_linear")), "clean": r.get("clean"), "quality": r.get("quality"),
-            "dv01": r.get("dv01"), "pv": r.get("pv"), "quantity": r.get("quantity"), "noPnl": r.get("noPnl")}
+            "dv01": r.get("dv01"), "pv": r.get("pv"), "quantity": r.get("quantity"), "noPnl": r.get("noPnl"),
+            "reason": a["reason"]}
+
+
+def reason_key(o: Obs, v: float) -> str | None:
+    """The ``unexplainedBy.reasons`` key of a row with unexplained part ``v``: its ``other_reason.code``, else
+    ``UNRECORDED``; None for a row without a code whose part is 0 (an FX row: all of it in ``fx_gross``), in no reason."""
+    code = (o.get("reason") or {}).get("code")
+    if isinstance(code, str) and code:
+        return code
+    return UNRECORDED if v else None
 
 
 def unexplained_part(o: Obs) -> float | None:
@@ -99,9 +127,10 @@ def unexplained_part(o: Obs) -> float | None:
 
 
 class Unexplained:
-    """``unexplainedBy`` (TDM#436): Σ ``other`` and ``reported`` by method group, method, valuation quality and date, and
-    the UNEXPL_TOP positions with the largest |Σ|; fed one position at a time (``Scan``). Kept: sums by group x date
-    (dates of the period), by method x quality (capped codes) and the top heap."""
+    """``unexplainedBy`` (TDM#436, TDM#442): Σ ``other`` and ``reported`` by reason (``other_reason.code``: sums, rows,
+    by date, by method, the UNEXPL_REASON_TOP largest positions), then by method group, method, valuation quality and
+    date, and the UNEXPL_TOP positions with the largest |Σ|; fed one position at a time (``Scan``). Kept: sums by reason
+    and group x date (dates of the period), by reason x method and method x quality (capped codes), the top heaps."""
 
     def __init__(self) -> None:
         self.total, self.other, self.reported = Sum(), Sum(), Sum()
@@ -112,6 +141,8 @@ class Unexplained:
         self.days: dict[date, dict[str, Sum]] = {}
         self.top: list[tuple[float, int, dict[str, Any]]] = []
         self.top_total = 0
+        self.reasons: dict[str, dict[str, Any]] = {}  # code -> {total, other, reported, rows, methods, top, positions}
+        self.reason_days: dict[date, dict[str, Sum]] = {}
 
     @staticmethod
     def _key(seen: dict[str, Any], code: str) -> str:
@@ -124,6 +155,8 @@ class Unexplained:
         quality: dict[str, None] = {}
         notes: dict[str, None] = {}
         no_pnl: dict[str, int] = {}
+        by_reason: dict[str, list[Any]] = {}  # code -> [Sum, rows]
+        details: dict[str, None] = {}
         for o in rows:
             if o["noPnl"]:
                 reason = str(o["noPnl"].get("reason") or "not_computed")
@@ -161,6 +194,8 @@ class Unexplained:
                 quality[q] = None
             if a["note"] and len(notes) < 3:
                 notes[str(a["note"])[:200]] = None
+            if (code := reason_key(o, v)) is not None:
+                self._reason(o, code, v, c, method, by_reason, details)
         self.rows += n
         if not n:
             return
@@ -168,9 +203,21 @@ class Unexplained:
         total = pos_total.value() or 0.0
         main = max(by_group, key=lambda k: abs(by_group[k].value() or 0.0))
         first = rows[0]
+        ident = {"ref": first["ref"], "book": first["book"], "positionId": first["positionId"], "name": first["name"]}
+        for code, (s, k) in by_reason.items():
+            r = self.reasons[code]
+            r["positions"] += 1
+            entry = (abs(s.value() or 0.0), -r["positions"], {**ident, "total": s.value(), "rows": k})
+            if len(r["top"]) < UNEXPL_REASON_TOP:
+                heapq.heappush(r["top"], entry)
+            else:
+                heapq.heappushpop(r["top"], entry)
+        reason = max(by_reason, key=lambda k: abs(by_reason[k][0].value() or 0.0)) if by_reason else None
         item = {"ref": first["ref"], "book": first["book"], "positionId": first["positionId"], "name": first["name"],
                 "total": total, "other": pos_other.value(), "reported": pos_reported.value(), "rows": n,
                 "group": main, "groupLabel": UNEXPL_GROUPS[main], "methods": [m or None for m in methods],
+                "reason": reason, "reasonLabel": reason_label(reason) if reason else None,
+                "reasons": list(by_reason)[:8], "reasonDetails": list(details),
                 "quality": [q or None for q in quality], "notes": list(notes),
                 "noPnl": [{"reason": k, "text": no_pnl_text(k), "days": d} for k, d in list(no_pnl.items())[:5]]}
         entry = (abs(total), -self.top_total, item)
@@ -179,9 +226,46 @@ class Unexplained:
         else:
             heapq.heappushpop(self.top, entry)
 
+    def _reason(self, o: Obs, code: str, v: float, c: dict[str, Any], method: str, by_reason: dict[str, list[Any]],
+                details: dict[str, None]) -> None:
+        """One row into its reason: the period's sums, by method and date, and the position's (``by_reason``)."""
+        code = self._key(self.reasons, code)
+        r = self.reasons.setdefault(code, {"total": Sum(), "other": Sum(), "reported": Sum(), "rows": 0,
+                                           "methods": {}, "top": [], "positions": 0})
+        for s, x in ((r["total"], v), (r["other"], c.get("other")), (r["reported"], c.get("reported"))):
+            s.add(x)
+        r["rows"] += 1
+        rm = r["methods"].setdefault(self._key(r["methods"], method), [Sum(), 0])
+        rm[0].add(v)
+        rm[1] += 1
+        self.reason_days.setdefault(o["date"], {}).setdefault(code, Sum()).add(v)
+        pr = by_reason.setdefault(code, [Sum(), 0])
+        pr[0].add(v)
+        pr[1] += 1
+        if (d := (o.get("reason") or {}).get("detail")) and len(details) < 3:
+            details[str(d)[:200]] = None
+
+    def _reasons(self, dates: list[date]) -> tuple[list[dict[str, Any]], dict[str, list[float | None]]]:
+        keys = [k for k in REASON_LABELS if k in self.reasons and k != UNRECORDED]
+        keys += sorted(k for k in self.reasons if k not in REASON_LABELS)
+        keys += [UNRECORDED] if UNRECORDED in self.reasons else []
+        out = []
+        for k in keys:
+            r = self.reasons[k]
+            out.append({"key": k, "label": reason_label(k), "total": r["total"].value(), "other": r["other"].value(),
+                        "reported": r["reported"].value(), "rows": r["rows"], "positions": r["positions"],
+                        "methods": sorted(({"method": m or None, "group": METHOD_GROUP.get(m, "other"),
+                                            "total": x[0].value(), "rows": x[1]} for m, x in r["methods"].items()),
+                                          key=lambda x: -abs(x["total"] or 0.0)),
+                        "top": [h[2] for h in sorted(r["top"], key=lambda h: (-h[0], -h[1]))]})
+        by_date = {k: [self.reason_days[d][k].value() if k in self.reason_days.get(d, {}) else None for d in dates]
+                   for k in keys}
+        return out, by_date
+
     def result(self) -> dict[str, Any]:
         dates = sorted(self.days)
         groups = [k for k in UNEXPL_GROUPS if k in self.groups]
+        reasons, by_reason_date = self._reasons(dates)
         return {
             "total": self.total.value(), "other": self.other.value(), "reported": self.reported.value(),
             "rows": self.rows,
@@ -196,9 +280,15 @@ class Unexplained:
                               key=lambda x: -abs(x["total"] or 0.0)),
             "dates": dates,
             "byDate": {k: [self.days[d][k].value() if k in self.days[d] else None for d in dates] for k in groups},
+            "reasons": reasons, "byReasonDate": by_reason_date,
             "top": [h[2] for h in sorted(self.top, key=lambda h: (-h[0], -h[1]))],
             "topTotal": self.top_total,
         }
+
+
+def reason_label(code: str) -> str:
+    """The Russian label of an ``unexplainedBy.reasons`` key (``REASON_LABELS``); an unknown code as is."""
+    return REASON_LABELS.get(code, code)
 
 
 def finding(sev: str, check: str, o: Obs | None, value: float | None, text: str, *, day: date | None = None,
@@ -367,7 +457,7 @@ def _life(rows: list[Obs], index: dict[int, int], run_dates: list[date]) -> Part
         else:
             close("qty")
         if o["noPnl"]:
-            mark("nopnl", "нет PnL: " + str(o["noPnl"].get("reason") or "причина не указана"), o, None, adjacent)
+            mark("nopnl", "нет PnL: " + no_pnl_why(o["noPnl"]), o, None, adjacent)
         else:
             close("nopnl")
         nxt = rows[k + 1] if k + 1 < len(rows) else None

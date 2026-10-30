@@ -21,7 +21,7 @@ from test_market_history import shifted
 
 from desk import cli, store
 from desk.api import create_app
-from desk.autopilot import Autopilot
+from desk.autopilot import NO_ANSWER_CYCLES, Autopilot
 from desk.inbox import scan
 from desk.inbox.timesem import MSK
 from desk.marketdata import cache
@@ -506,6 +506,81 @@ def test_a_date_the_hub_always_answers_503_backs_off_and_the_other_dates_sync(st
     sync = next(x for x in st["steps"] if x["name"] == "sync")
     assert sync["failed_dates"] == ["2026-10-14"]
     assert [(p["attempts"], p["next_attempt"]) for p in sync["problem_dates"]] == [(2, "2026-10-16T09:41:00+03:00")]
+
+
+def test_a_date_whose_bundle_never_answers_backs_off_and_the_other_dates_sync(stub, tmp_path, store_url, monkeypatch):
+    """#217: the hub answers the date list, but one date's bundle gets no answer at all (a timeout, a reset) every
+    time. The first cycles take it for the hub down (#147: the sync stops there); after ``NO_ANSWER_CYCLES`` cycles
+    in a row on the same date the next date tells: it answers, so the date fails alone, waits for its retry, is in
+    ``problem_dates``, and the other dates load. The hub truly down (no answer for the next date either) stays so."""
+    s = cfg(tmp_path, store_url, stub)
+    put(tmp_path, "positions_20261016.csv")
+    bad = publish(stub, date(2026, 10, 14), "eod_final", "2026-10-14T05:00:00Z", -1)
+    good = [date(2026, 10, 13), date(2026, 10, 12)]  # older than the broken one: asked after it
+    for d, step in zip(good, (-2, -3), strict=True):
+        publish(stub, d, "eod_final", f"{d}T05:00:00Z", step)
+    get, refused = PythonTransport.get, []
+
+    def no_answer_for_bad(self, url, *a, **kw):
+        if f"/{bad}/" in url:
+            refused.append(url)
+            raise TransportError("connection reset")
+        return get(self, url, *a, **kw)
+
+    monkeypatch.setattr(PythonTransport, "get", no_answer_for_bad)
+
+    def cached() -> set[str]:
+        return set(SnapshotDir(tmp_path / "cache").market_dates())
+
+    clock = {"t": at(FRI, 9, 0)}
+    ap = Autopilot(settings_loader=lambda: s, now=lambda: clock["t"])
+    for k in range(NO_ANSWER_CYCLES - 1):  # the hub down as far as the sync can tell: no wait for the date (#147)
+        refused.clear()
+        clock["t"] = at(FRI, 9, k)
+        st = ap.run_cycle()
+        sync = next(x for x in st["steps"] if x["name"] == "sync")
+        assert sync["status"] == "error" and "unreachable after" in sync["detail"], sync
+        assert len(refused) == HubClient.retries + 1  # one retry series a cycle
+        assert sync["problem_dates"] == [] and not ({d.isoformat() for d in good} & cached())
+    refused.clear()
+    clock["t"] = at(FRI, 9, NO_ANSWER_CYCLES)
+    st = ap.run_cycle()  # the same date again: passed over, the next dates answer, so the date is the problem
+    sync = next(x for x in st["steps"] if x["name"] == "sync")
+    assert len(refused) == HubClient.retries + 1
+    assert {d.isoformat() for d in good} <= cached(), sync["detail"]
+    assert sync["failed_dates"] == ["2026-10-14"], sync
+    assert [(p["date"], p["attempts"]) for p in sync["problem_dates"]] == [("2026-10-14", 1)], sync
+    assert sync["problem_dates"][0]["error"].startswith("HubUnavailable: ")
+    assert not ap._hub_down  # the date's failure, not the hub's: the later steps ask the hub (#147)
+
+    refused.clear()
+    clock["t"] = at(FRI, 9, NO_ANSWER_CYCLES + 1)
+    st = ap.run_cycle()  # it waits for its retry: the hub is not asked for it
+    sync = next(x for x in st["steps"] if x["name"] == "sync")
+    assert not refused and sync["status"] == "ok" and [p["date"] for p in sync["problem_dates"]] == ["2026-10-14"]
+
+
+def test_no_answer_for_the_next_date_either_is_the_hub_down_not_the_date(stub, tmp_path, store_url, monkeypatch):
+    """#217: a date with no answer ``NO_ANSWER_CYCLES`` cycles in a row is passed over, but the next date gets no
+    answer either: the hub is down (#147), not the date; no date waits for a retry."""
+    s = cfg(tmp_path, store_url, stub)
+    put(tmp_path, "positions_20261016.csv")
+    sids = [publish(stub, d, "eod_final", f"{d}T05:00:00Z", -k)
+            for k, d in enumerate((date(2026, 10, 14), date(2026, 10, 13)), start=1)]
+    get = PythonTransport.get
+
+    def no_answer_for_bundles(self, url, *a, **kw):
+        if any(f"/{sid}/" in url for sid in sids):
+            raise TransportError("connection reset")
+        return get(self, url, *a, **kw)
+
+    monkeypatch.setattr(PythonTransport, "get", no_answer_for_bundles)
+    ap = Autopilot(settings_loader=lambda: s, now=lambda: at(FRI, 9, 0))
+    for _ in range(NO_ANSWER_CYCLES + 1):
+        st = ap.run_cycle()
+        sync = next(x for x in st["steps"] if x["name"] == "sync")
+        assert sync["status"] == "error" and "unreachable after" in sync["detail"], sync
+        assert sync["problem_dates"] == [] and not ap._sync_retry and ap._hub_down
 
 
 def morning_rows(store_url: str) -> list[tuple]:

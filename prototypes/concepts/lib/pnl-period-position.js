@@ -194,18 +194,21 @@
     const head = '<tr><th class="stick">Дата</th><th class="n" title="Календарных дней от предыдущего прогона">Дн.</th><th class="n">Цена D−1</th><th class="n">Цена D</th><th>Вход D−1</th><th class="n">Дох. Δ, bp</th><th class="n">Спред Δ, bp</th><th class="n">DV01, тыс/bp</th><th class="n">Итог</th>' +
       cols.map(k => '<th class="n" title="' + esc((P.BY_KEY[k] || {}).label || k) + '">' + esc(COL_LABEL[k] || k) + '</th>').join('') +
       '<th class="n" title="Линейная оценка ставок (pnl.extra.rates_linear)">Ставки лин.</th><th class="n" title="Итог метода минус сумма gross-компонент (grossCheck); должно быть 0">Переоц. − Σ</th><th>События / находки</th></tr>';
-    const mon = d => new Date(d + 'T00:00:00Z').getUTCDay() === 1;
+    const since = r => {
+      const s = P.daySince(r);
+      return !s ? '' : ' <span class="mut3" title="' + esc(s.report ? 'Разница отчётов: отчёт D−1 действует с ' + f.date(s.from) + ', весь разрыв между отчётами — в этом дне' : 'Интервал от предыдущего прогона') + '">с ' + esc(f.date(s.from).slice(0, 5)) + '</span>';
+    };
     const line = r => {
       const fs = I.on(cur.ref, ccy, r.date).filter(x => x.check !== 'life'), sev = P.worstSev(fs), src = SRC[r.src];
       const qty = r.src === 'previous_row' && r.quantityPrev != null && r.quantity != null && r.quantityPrev !== r.quantity;
       const gap = r.gap == null ? NA('нет проверки тождества') : Math.abs(r.gap) > 1e3 ? '<span class="sevtxt warn" title="' + esc(f.n(r.gap, 0)) + ' RUB">' + f.mn(r.gap, 3) + '</span>' : '<span class="mut3" title="' + esc(f.n(r.gap, 0)) + ' RUB">' + f.mn(r.gap, 3) + '</span>';
       return '<tr class="' + (sev === 'crit' ? 'critrow' : sev === 'warn' ? 'warnrow' : '') + (ui.pday === r.date ? ' sel' : '') + '" data-d="' + r.date + '">' +
-        '<td class="stick">' + f.date(r.date) + (r.cal > 1 && !(r.cal === 3 && mon(r.date)) ? ' <span class="mut3" title="Интервал от предыдущего прогона">с ' + esc(f.date(r.prevDate).slice(0, 5)) + '</span>' : '') + '</td>' +
+        '<td class="stick">' + f.date(r.date) + since(r) + '</td>' +
         '<td class="n">' + (r.cal == null ? NA() : r.cal) + '</td>' +
         '<td class="n">' + (r.cleanPrev == null ? NA(qty ? 'количество изменилось: поля D−1 не показываются' : 'нет входа D−1') : f.px(r.cleanPrev)) + '</td><td class="n">' + (r.clean == null ? NA() : f.px(r.clean)) + '</td>' +
         '<td class="mut">' + (src ? '<span title="' + esc(src[1]) + '">' + src[0] + '</span>' : NA('нет входов D−1')) + '</td>' +
         '<td class="n">' + (r.dy == null ? NA() : P.signedBp(r.dy, 1)) + '</td><td class="n">' + (r.dz == null ? NA() : P.signedBp(r.dz, 1)) + '</td><td class="n">' + (r.dv01 == null ? NA() : f.dv(r.dv01)) + '</td>' +
-        '<td class="n"><b>' + (r.total == null ? NA(r.noPnl ? 'нет PnL: ' + (r.noPnl.reason || '') : 'нет итога') : f.mn(r.total, 2)) + '</b></td>' +
+        '<td class="n"><b>' + (r.total == null ? NA(r.noPnl ? 'нет PnL: ' + (r.noPnl.text || r.noPnl.reason || '') : 'нет итога') : f.mn(r.total, 2)) + '</b></td>' +
         cols.map(k => '<td class="n">' + mn2(v(r, k)) + '</td>').join('') +
         '<td class="n mut">' + mn2(r.ratesLinear) + '</td><td class="n">' + gap + '</td>' +
         '<td class="ev">' + r.events.map(e => '<span class="st info">' + esc(e) + '</span> ').join('') +

@@ -10,7 +10,7 @@ __version__ = "0.2.12"
 # buckets, coverage). A run records ``logic_version()`` in its lineage; the autopilot recomputes the latest positions
 # date once when its default run was made by another logic version; the backfill (desk.backfill, R23) recomputes the
 # older dates in the background.
-VALUATION_VERSION = 22  # 2: risk per curve (R8); 3: static display fields (R9 D1-D6, D8: names, coupons, issuers);
+VALUATION_VERSION = 24  # 2: risk per curve (R8); 3: static display fields (R9 D1-D6, D8: names, coupons, issuers);
 # 4: RUB bonds discounted on RUONIA OIS + Z-spread, flash PnL on the bond's own curves;
 # 5: a key-rate floater on a fallback rung books its projection on RUB KEY, the run log names missing rates inputs
 # 6: a bond's offer, its next 18 months of flows and the day's quote (G-spread, volume) in extra (concept pages)
@@ -45,7 +45,16 @@ VALUATION_VERSION = 22  # 2: risk per curve (R8); 3: static display fields (R9 D
 # curve_moves_bp, prev; the owner chose to recompute the history so old dates get them (TDM#417)
 # 22: a RUB bond without a price of its own today (an intraday cut before its first trade, a day it did not trade) is
 # valued and carried by core at the ladder's price (fallback.at_last_price, TDM#383): a floater's projection, OFZ basis
-# and tail instead of a duration estimate, core's accrued and value for every one (the forward carry's base)
+# and tail instead of a duration estimate, core's accrued and value for every one (the forward carry's base); a
+# report-valued row whose D-1 carried an older report names that report's date (extra.report_from, TDM#440)
+# 23: a model price is valued and carried by core at that price (fallback.at_model_price, TDM#441); a price rung core
+# valued on both dates takes the exact flash steps (a model <-> market switch: its spread step in other, flagged); every
+# PnL with an unexplained part records why in pnl.extra.other_reason (pnl.reasons, TDM#442); a bond's extra.cashflows
+# go to maturity, past the 18 months and its offer (extra.cashflows_to, TDM#166)
+# 24: a position with an impossible risk (extra.risk_problem, TDM#170) is in no book's DV01 or CS01 of the run's totals
+# (TDM#460); the history recomputed gets the flag, so the pages leave its risk out on every date; a RUB bond on the KBD
+# for want of the RUONIA curve on its date is marked (extra.curve_proxy, TDM#31; unreleased 24, so the recomputed
+# history gets it too)
 
 
 def logic_version() -> str:
