@@ -70,6 +70,9 @@ class BookPlan:
     """The core result (v3) of the derivatives valued from their terms (``valuation.derivatives``), None without."""
     unlinked_terms: list[str] = field(default_factory=list)
     """``book|trade_id`` of the trade_terms trades no positions row names (not valued unless ``fx_unlinked_terms``)."""
+    unlinked_rates: list[str] = field(default_factory=list)
+    """``book|trade_id`` of the swap (irs, ois, ccs) trade_terms trades no positions row names: not valued, counted in
+    the run's log and lineage (TDM#468)."""
     added: list[str] = field(default_factory=list)
     """Position IDs of the trades added with ``fx_unlinked_terms`` (rows of their own, in ``order`` and ``direct``)."""
 
@@ -272,6 +275,7 @@ def _derivatives(ctx: EodContext, inputs: PositionInputs, p: BookPlan, second_or
             rows.append((pid, book, normalised(x)))
     linked, unlinked = dv.link(rows, inputs.trade_terms)
     p.unlinked_terms = sorted({f"{t.get('book_id')}|{t.get('trade_id')}" for t in unlinked})
+    p.unlinked_rates = dv.unlinked_rates(rows, inputs.trade_terms, ctx.business_date)
     reqs, out = [], {}
     qty = {pid: q for pid, _, _, q in inputs.rows}
     for pid, book, x in rows:

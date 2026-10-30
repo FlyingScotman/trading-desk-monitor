@@ -424,11 +424,9 @@ def request_of(position_id: str, book_id: str, row: dict[str, Any], terms: list[
     return Request(position_id, book_id, row, trades=trades)
 
 
-def link(rows: list[tuple[str, str, dict[str, Any]]], terms: list[dict[str, Any]]
-         ) -> tuple[dict[str, list[dict[str, Any]]], list[dict[str, Any]]]:
-    """position_id -> its trade_terms rows (``position_id`` of the terms, else ``trade_id`` = the row's ``deal_id`` or
-    ``position_id``, same book), for ``rows`` = (position_id, book_id, positions row) of the FX and OTC rows; and the
-    FX terms rows no row names (``fx_unlinked_terms``). Linked: the products of ``LINKED_KINDS``."""
+def _link(rows: list[tuple[str, str, dict[str, Any]]], terms: list[dict[str, Any]]
+          ) -> tuple[dict[str, list[dict[str, Any]]], list[dict[str, Any]]]:
+    """position_id -> its trade_terms rows, and the rows of ``LINKED_KINDS`` no positions row names."""
     by_pid: dict[tuple[str, str], list[dict]] = defaultdict(list)
     by_trade: dict[tuple[str, str], list[dict]] = defaultdict(list)
     for t in terms:
@@ -446,9 +444,39 @@ def link(rows: list[tuple[str, str, dict[str, Any]]], terms: list[dict[str, Any]
         if got:
             out[pid] = got
             used |= {id(t) for t in got}
-    unlinked = [t for ts in (*by_pid.values(), *by_trade.values()) for t in ts
-                if id(t) not in used and t.get("product_kind") in FX_KINDS]
-    return out, unlinked
+    return out, [t for ts in (*by_pid.values(), *by_trade.values()) for t in ts if id(t) not in used]
+
+
+def link(rows: list[tuple[str, str, dict[str, Any]]], terms: list[dict[str, Any]]
+         ) -> tuple[dict[str, list[dict[str, Any]]], list[dict[str, Any]]]:
+    """position_id -> its trade_terms rows (``position_id`` of the terms, else ``trade_id`` = the row's ``deal_id`` or
+    ``position_id``, same book), for ``rows`` = (position_id, book_id, positions row) of the FX and OTC rows; and the
+    FX terms rows no row names (``fx_unlinked_terms``). Linked: the products of ``LINKED_KINDS``."""
+    out, left = _link(rows, terms)
+    return out, [t for t in left if t.get("product_kind") in FX_KINDS]
+
+
+UNLINKED_RATES_KINDS = (*SWAP_KINDS, "ccs")
+"""Swap products whose terms without a positions row are accepted but not valued (TDM#468): counted, not valued."""
+
+
+def unlinked_rates(rows: list[tuple[str, str, dict[str, Any]]], terms: list[dict[str, Any]],
+                   on: date | None = None) -> list[str]:
+    """``book|trade_id`` of the swap trades (``UNLINKED_RATES_KINDS``) in ``terms`` that no positions row names: a trade
+    made after the report's cut. Not valued, not in risk or PnL; the run says how many and in which books. Terms are
+    carried forward, so with ``on`` (the business date) a trade matured before it (the last ``maturity_date`` of its
+    legs < ``on``) is not counted; one maturing on ``on`` is still alive."""
+    _, left = _link(rows, terms)
+    ends: dict[str, list[date | None]] = defaultdict(list)
+    for t in left:
+        if t.get("product_kind") in UNLINKED_RATES_KINDS:
+            try:
+                end = _day(t.get("maturity_date"))
+            except (TypeError, ValueError):
+                end = None
+            ends[f"{t.get('book_id')}|{t.get('trade_id')}"].append(end)
+    return sorted(k for k, es in ends.items()
+                  if on is None or None in es or max(e for e in es if e is not None) >= on)
 
 
 def _calendar_entry(ctx: Any, cid: str, ids: tuple[str, ...]) -> CalendarEntry:

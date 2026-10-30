@@ -74,7 +74,8 @@ def publish(con: psycopg.Connection, ctx: EodContext, positions: list[tuple[str,
             prev: MarketView | None, run_type: str = "EOD", inputs: PositionInputs,
             carried_from: dict[str, CarriedSpread] | None = None,
             pnl_basis: dict[str, Any] | None = None, core_results: list[Any] | None = None,
-            business_date: date | None = None, cut_type: str | None = None) -> tuple[int, str, list[str]]:
+            business_date: date | None = None, cut_type: str | None = None,
+            unlinked_rates: list[str] | None = None) -> tuple[int, str, list[str]]:
     """positions: (position_id, book_id, outcome) of ``inputs`` (``store.positions_for``); ``carried_from``:
     the carried spreads the valuation got; ``pnl_basis``: what the flash PnL is measured against
     (``desk.cli.pnl_basis``, lineage ``pnl_basis``); ``core_results``: core results of the run besides those its
@@ -89,6 +90,7 @@ def publish(con: psycopg.Connection, ctx: EodContext, positions: list[tuple[str,
     spreads = used_model_spreads(outcomes)
     carried = sum(1 for s in spreads if (c := (carried_from or {}).get(s.secid)) and c.z_spread_bp == s.z_spread_bp)
     bd = business_date or ctx.business_date
+    swaps = _unlinked_swaps(unlinked_rates)
     lineage = {
         **ctx.lineage(), "backend_version": BACKEND_VERSION, "backend_git_sha": git_sha(),
         "core_version": CORE_VERSION, "logic_version": logic_version(),
@@ -97,7 +99,8 @@ def publish(con: psycopg.Connection, ctx: EodContext, positions: list[tuple[str,
                       "carried_from": {b: d.isoformat() for b, d in inputs.valid_dates.items() if d < bd},
                       "known_at": inputs.known_at.isoformat(), "private_inputs_hash": inputs.private_inputs_hash,
                       "sources": inputs.sources,
-                      **({"trade_terms": inputs.trade_terms_units} if inputs.trade_terms_units else {})},
+                      **({"trade_terms": inputs.trade_terms_units} if inputs.trade_terms_units else {}),
+                      **({"unlinked_swap_terms": swaps} if swaps else {})},
         "core_results": [{"result_sha256": sha, "schema": r.schema_version, "label": r.run_id.rsplit("-", 1)[-1]}
                          for sha, r in results.items()],
         "model_spreads": {"carried": carried, "new": len(spreads) - carried},
@@ -108,6 +111,11 @@ def publish(con: psycopg.Connection, ctx: EodContext, positions: list[tuple[str,
     if bd != ctx.business_date:  # the morning run (#21): the close the book of ``bd`` is valued on
         lineage["market_close"] = {"date": ctx.business_date.isoformat(), "cut_type": ctx.market.snapshot.cut_type}
     content = run_content(ctx, positions, prev, lineage, inputs)
+    if swaps:
+        content.log.append(("WARN", (
+            f"условия свопов без строки позиций: сделок {swaps['trades']}, книги "
+            + ", ".join(f"{b} ({n})" for b, n in swaps["books"].items())
+            + "; не оцениваются, не входят в риск и PnL (сделка после среза отчёта позиций?)")))
     funding = funding_run.compute(con, bd, prev, ctx.market, content.rows, content.reference["books"], inputs,
                                   {pid: o.terms for pid, _, o in positions if o.terms is not None})
     funding.apply(content.rows, content.reference, content.log)
@@ -154,6 +162,14 @@ def publish(con: psycopg.Connection, ctx: EodContext, positions: list[tuple[str,
         store.run_event(con, "run.failed", [run_id])
         raise
     return run_id, "complete", [m for level, m in content.log if level == "WARN"]
+
+
+def _unlinked_swaps(keys: list[str] | None) -> dict[str, Any] | None:
+    """``{"trades": n, "books": {book: n}}`` of the ``book|trade_id`` keys (TDM#468), None without."""
+    if not keys:
+        return None
+    books = Counter(k.partition("|")[0] for k in set(keys))
+    return {"trades": sum(books.values()), "books": dict(sorted(books.items()))}
 
 
 def _write(cur: psycopg.Cursor, run_id: int, positions: list[tuple[str, str, Outcome]], inputs: PositionInputs,

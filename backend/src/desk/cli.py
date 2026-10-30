@@ -308,6 +308,9 @@ def eod_run(settings: Settings, d: str, *, snapshots: str | Path | None = None, 
             out(f"WARN trade_terms: {len(bp.unlinked_terms)} trade(s) no positions row names, "
                 + ("valued as rows of their own" if fx_options.unlinked_terms else "not valued (fx_unlinked_terms off)")
                 + ": " + ", ".join(bp.unlinked_terms[:10]))
+        if bp.unlinked_rates:
+            out(f"WARN trade_terms: {len(bp.unlinked_rates)} swap trade(s) no positions row names, not valued: "
+                + ", ".join(bp.unlinked_rates[:10]))
         outcomes = value(ctx, bp.requests, second_order=not no_gamma, position_ids=bp.position_ids,
                          carried_spreads=carried)
         if prev_cut and not no_pnl:
@@ -338,6 +341,7 @@ def eod_run(settings: Settings, d: str, *, snapshots: str | Path | None = None, 
         run_id, status, warnings = desk_run.publish(con, ctx, positions, prev=prev, run_type=run_type,
                                                     inputs=inputs, carried_from=carried, pnl_basis=basis,
                                                     core_results=[bp.core_result] if bp.core_result else None,
+                                                    unlinked_rates=bp.unlinked_rates,
                                                     **({"business_date": run_date, "cut_type": "prev_close"}
                                                        if on_close else {}))
         out(f"desk run {run_id}: {status}, {len(warnings)} warnings")
