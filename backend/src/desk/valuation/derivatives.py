@@ -55,6 +55,15 @@ delta), ``basis01`` (``FXBASIS|<ccy>``, RUB per bp), ``fixings`` (fixed / pendin
   ``maturity_date``) is not valued (``repo_open``: its assumed end is an owner's decision), nor a RUSFAR one (no
   RUSFAR fixings in the run). The security is a reference only: the bond is its own position.
 
+**Flows and the last day** (TDM#466): ``extra.flows`` lists what the row's trades pay or settle in the next
+``FLOW_DAYS`` days, signed as received (+) or paid (-): a swap's and a REPO's payments are core's projection (the
+``received_rub`` of ``horizon_portfolio`` at each payment date, a difference of two horizons); an FX leg's amounts per
+currency are its terms' (``out_on``: the first date core no longer counts it). ``None``: core's flows could not be read
+(a rejection). ``pnl.direct`` adds those of D-1 falling in (D-1, D] to the change of PV. A row whose trades have all
+paid their last flow, the last within ``FLOW_DAYS`` of the date, is valued as settled (``_settled_row``: PV 0, no
+risk, ``extra.settled``) instead of ``NotValued("settled")``, so that its last day has a PnL; when only some trades
+ended, the others are valued and the ended ones noted.
+
 Published for them: PV, ``risk`` per curve (``RUB RUONIA``, ``RUB KEY``), the Hessian; ``extra``: ``swaps`` / ``repos``
 (the terms and core's figures per trade), ``index_fixings``, ``core``, ``reported_pv_rub`` and ``pv_diff_rub``.
 """
@@ -64,7 +73,7 @@ from __future__ import annotations
 import math
 from collections import defaultdict
 from dataclasses import dataclass, field, replace
-from datetime import date
+from datetime import date, timedelta
 from decimal import Decimal
 from typing import Any
 
@@ -90,12 +99,15 @@ from rub_fixed_income import (
     RepoDayBasis,
     RepoInstrument,
     RepoTrade,
+    ShockedCurveCache,
     SwapInstrument,
     SwapLegSchedule,
     ValuationPolicy,
     XccyCurveBootstrapRequest,
+    horizon_portfolio,
     joint_calendar,
     swap_convention,
+    swap_schedule,
     value_portfolio,
 )
 from rub_fixed_income import __version__ as CORE_VERSION
@@ -130,12 +142,19 @@ REPO_BASIS = {"ACT/365": RepoDayBasis.ACT_365_FIXED, "ACT/360": RepoDayBasis.ACT
 REPO_OBSERVATION = {"RUONIA": "previous_settlement_day", "KEY_RATE": "calendar_day"}
 REPO_CALENDAR = "MOEX_STOCK"
 REPO_ROUNDING = 2
+FLOW_DAYS = 16
+"""How far ahead of the business date a valuation records the flows its trades pay or settle (``extra.flows``), and how
+long ago a trade's last flow may be for the row to be valued as settled (PV 0) rather than keep the report's rule: the
+longest gap between two runs (the New Year holidays, 11 days) with a margin. ``pnl.direct`` adds the flows of D-1 that
+fall in (D-1, D] to the change of PV."""
 
 
 class NotValued(Exception):
-    def __init__(self, reason: str, detail: str = "") -> None:
+    def __init__(self, reason: str, detail: str = "", last: date | None = None) -> None:
         super().__init__(f"{reason}: {detail}" if detail else reason)
         self.reason, self.detail = reason, detail
+        self.last = last
+        """``settled``: the date of the trade's last flow (a swap's last payment date, not its maturity)."""
 
 
 def _num(v: Any) -> float | None:
@@ -398,6 +417,8 @@ class Request:
     contracts: float | None = None
     trades: list[RatesTrade] = field(default_factory=list)
     """The swaps and REPOs of the row (``SwapTerms``, ``RepoTerms``), one core instrument each."""
+    partial: bool = False
+    """Some trades of the row have settled and are left out: the report's PV covers more than the valued ones."""
 
 
 def request_of(position_id: str, book_id: str, row: dict[str, Any], terms: list[dict[str, Any]]) -> Request:
@@ -516,14 +537,24 @@ def _swap_instrument(ctx: Any, s: SwapTerms, iid: str, calendars: dict[str, Cale
                      ) -> tuple[SwapInstrument, list[str]]:
     """Core's swap position of one ``SwapTerms`` (the module docstring); adds its calendar to ``calendars``."""
     bd = ctx.business_date
-    if s.maturity < bd:
-        raise NotValued("settled", f"swap {s.label} matured on {s.maturity}")
+    if s.maturity < bd - timedelta(days=FLOW_DAYS + 7):  # long ago, whatever the payment lag, weekends and holidays
+        raise NotValued("settled", f"swap {s.label} matured on {s.maturity}", s.maturity)
     swap, notes = s.core_swap()
     cid = SWAP_CALENDAR[s.index]
     if cid not in calendars:
         build = rates.ois_calendar(ctx.static.snapshot, bd) if s.index == "ruonia" else \
             rates.krs_calendar(ctx.static.snapshot)
         calendars[cid] = CalendarEntry(cid, build[0])
+    try:
+        sched = swap_schedule(swap, calendars[cid].calendar)
+    except (ValueError, CoreRejection):
+        if s.maturity < bd:  # its dates are outside the calendar of the run: it ended before it
+            raise NotValued("settled", f"swap {s.label} matured on {s.maturity}", s.maturity) from None
+        raise
+    last = max(p.payment_date for p in (*sched.fixed, *sched.floating))
+    if last <= bd:  # core: no flow after the valuation date. By the schedule, not the maturity: the last payment
+        # follows the adjusted end by the payment lag, over a weekend it is days after the maturity
+        raise NotValued("settled", f"swap {s.label} paid its last flow on {last}", last)
     projection = None
     if s.index == "key_rate":
         if KEY_RATE_SWAP_CURVE_ID not in {c.curve_id for c in ctx.swap_curves}:
@@ -546,7 +577,7 @@ def _repo_instrument(ctx: Any, r: RepoTerms, iid: str) -> tuple[RepoInstrument, 
         raise NotValued("repo_open", f"REPO {r.label} has no maturity_date: an open REPO needs an assumed end "
                                      "(not set)")
     if r.maturity <= bd:
-        raise NotValued("settled", f"REPO {r.label} ended on {r.maturity}")
+        raise NotValued("settled", f"REPO {r.label} ended on {r.maturity}", r.maturity)
     if r.day_count not in REPO_BASIS:
         raise NotValued("day_count_unsupported", f"REPO {r.label}: day_count {r.day_count}")
     basis = REPO_BASIS[r.day_count]
@@ -599,6 +630,8 @@ class _Acc:
     swaps: list[dict[str, Any]] = field(default_factory=list)
     repos: list[dict[str, Any]] = field(default_factory=list)
     fixing_ids: set[str] = field(default_factory=set)
+    flows: list[dict[str, Any]] | None = field(default_factory=list)
+    """``extra.flows`` of the row; None when core's flows could not be read (the PnL then says so)."""
 
     def add_risk(self, row: Any) -> None:
         self.pv += row.pv_rub
@@ -728,16 +761,35 @@ def value(ctx: Any, requests: list[Request], *, options: FxOptions, second_order
     instruments, positions, quotes, owner, calendars = [], [], [], {}, {}
     terms_of: dict[str, Any] = {}
     notes: dict[str, list[str]] = defaultdict(list)
+    flows: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    live_of: dict[str, Request] = {}
+    pay_dates: dict[str, tuple[date, ...]] = {}
     for r in requests:
         built: list[tuple[Any, str, Any, float]] = []
         try:
             if r.trades:
+                gone: list[tuple[Any, NotValued]] = []
                 for n, t in enumerate(r.trades):
                     iid = f"{r.position_id}#{n}"
-                    inst, more = (_swap_instrument(ctx, t, iid, calendars) if isinstance(t, SwapTerms)
-                                  else _repo_instrument(ctx, t, iid))
+                    try:
+                        inst, more = (_swap_instrument(ctx, t, iid, calendars) if isinstance(t, SwapTerms)
+                                      else _repo_instrument(ctx, t, iid))
+                    except NotValued as e:
+                        if e.reason != "settled":
+                            raise
+                        gone.append((t, e))
+                        continue
                     notes[r.position_id] += more
                     built.append((inst, "RUB", t, 1.0))
+                    pay_dates[iid] = _pay_dates(inst, t, calendars, bd)
+                if gone and not built:
+                    out[r.position_id] = _settled_row(ctx, r, [(t, e.last or _last_event(t)) for t, e in gone], gone[0][1],
+                                                      notes[r.position_id])
+                    continue
+                if gone:  # the others are valued, the settled ones' last flows are in the PnL (pnl.direct)
+                    notes[r.position_id].append("settled trades left out: " + ", ".join(t.label for t, _ in gone))
+                    dead = {id(t) for t, _ in gone}
+                    live_of[r.position_id] = replace(r, trades=[t for t in r.trades if id(t) not in dead], partial=True)
             elif r.future is not None:
                 iid = f"{r.position_id}#fut"
                 inst, ccy, q = _future(ctx, r, iid, curve_of)
@@ -745,11 +797,14 @@ def value(ctx: Any, requests: list[Request], *, options: FxOptions, second_order
                 quotes.append(q)
             else:
                 live = [t for t in r.legs if t.value_date >= bd]
-                gone = [t for t in r.legs if t.value_date < bd]
-                if gone:
-                    notes[r.position_id].append("settled legs left out: " + ", ".join(t.label for t in gone))
+                gone_legs = [t for t in r.legs if t.value_date < bd]
+                if gone_legs:
+                    notes[r.position_id].append("settled legs left out: " + ", ".join(t.label for t in gone_legs))
                 if not live:
-                    raise NotValued("settled", "every leg settled before the business date")
+                    out[r.position_id] = _settled_row(
+                        ctx, r, [(t, t.value_date) for t in gone_legs],
+                        NotValued("settled", "every leg settled before the business date"), notes[r.position_id])
+                    continue
                 for n, t in enumerate(live):
                     iid = f"{r.position_id}#{n}"
                     inst, ccy, more = core_legs(ctx, t, iid, options, curve_of)
@@ -758,6 +813,7 @@ def value(ctx: Any, requests: list[Request], *, options: FxOptions, second_order
                         calendars[inst.calendar_id] = _calendar_entry(
                             ctx, inst.calendar_id, (f"FX:{t.base}", f"FX:{t.quote}"))
                     built.append((inst, ccy, t, 1.0))
+                    flows[r.position_id] += _leg_flows(t, bd)
         except (NotValued, CoreRejection, ValueError) as e:
             out[r.position_id] = e if isinstance(e, NotValued) else NotValued("terms_invalid", str(e))
             continue
@@ -792,6 +848,7 @@ def value(ctx: Any, requests: list[Request], *, options: FxOptions, second_order
                              quote_curve_risk=ctx.quote_curve_risk and quoted)
     result = value_portfolio(run_id=f"desk-eod-{bd}-derivatives", as_of=ctx.core_market.known_at, snapshot=snap,
                              instruments=instruments, positions=positions, policy=policy, scenarios=scenarios)
+    unread = _rates_flows(snap, policy, instruments, positions, pay_dates, owner, terms_of, flows)
     acc: dict[str, _Acc] = defaultdict(_Acc)
     for rej in result.coverage.rejections:
         acc[owner[rej.position_id].position_id].rejected.append((rej.code, rej.message))
@@ -853,10 +910,126 @@ def value(ctx: Any, requests: list[Request], *, options: FxOptions, second_order
             code, msg = a.rejected[0]
             out[r.position_id] = NotValued(f"core_{code.lower()}", msg)
         elif r.trades:
-            out[r.position_id] = _rates_valuation(ctx, r, a, notes[r.position_id], result, snap)
+            a.flows = None if r.position_id in unread else flows[r.position_id]
+            out[r.position_id] = _rates_valuation(ctx, live_of.get(r.position_id, r), a, notes[r.position_id], result,
+                                                  snap)
         else:
+            a.flows = flows[r.position_id]
             out[r.position_id] = _valuation(ctx, r, a, notes[r.position_id], result)
     return out, result
+
+
+def _last_event(t: Any) -> date:
+    """The date of a trade's last flow as its terms state it: a leg's value date, a swap's or REPO's end."""
+    return t.value_date if isinstance(t, TermsLeg) else t.end
+
+
+def _side_text(t: Any) -> str:
+    """The side as ``tdm_run.rates_side`` reads it: ``PAY`` / ``REC`` for a swap, ``REPO`` / ``REVERSE_REPO``."""
+    return t.side.upper() if isinstance(t, RepoTerms) else "PAY" if t.side == "payer" else "REC"
+
+
+def _settled_row(ctx: Any, r: Request, gone_at: list[tuple[Any, date]], why: NotValued, notes: list[str]
+                 ) -> BondValuation | NotValued:
+    """A row whose every trade has paid its last flow by the business date, valued as settled (PV 0, no risk) when the
+    last flow is within ``FLOW_DAYS``: the day-over-day PnL of its last day is then the flows it paid, less its PV of
+    D-1 (``pnl.direct``), not nothing. A row settled earlier keeps ``why`` (the report's rule: nothing to carry)."""
+    bd, x = ctx.business_date, r.row
+    gone, ends = [t for t, _ in gone_at], {id(t): d for t, d in gone_at}
+    last = max(ends.values())
+    if last < bd - timedelta(days=FLOW_DAYS):
+        return why
+    rates = bool(r.trades)
+    if not rates and _num(x.get("amount_ccy")) not in (None, 0.0):
+        return why  # an FX row with an amount keeps the rule of cash (PV = amount x rate, FX delta, OCP): ``pnl.direct``
+        # takes the settled legs' flows beside it
+    labels = sorted({t.label for t in gone})
+    if rates:
+        product = "+".join(sorted({"repo" if isinstance(t, RepoTerms) else t.product for t in gone}))
+        amount, ccy = math.fsum(t.amount for t in gone), "RUB"
+    else:
+        product = "+".join(sorted({"fx_ndf" if t.ndf else "fx_swap" if t.leg_id else "fx_forward" for t in gone}))
+        ccy = str(x.get("ccy") or next((c for t in gone for c in (t.base, t.quote) if c != "RUB"), "RUB")).upper()
+        amount = float(x["amount_ccy"]) if x.get("amount_ccy") is not None else 0.0
+    spot = ctx.fx.rates.get(ccy, (1.0, ""))[0] if ccy != "RUB" else 1.0
+    why_text = f"settled on {last}: PV 0, the flows of the last day are in the day's PnL"
+    extra = {
+        "core": {"product": product, "trades": sorted({t.trade_id for t in gone}), "model_flags": ["settled"],
+                 "rub_curve": RISK_CURVES[RUONIA_OIS_CURVE_ID], "core_version": CORE_VERSION},
+        "settled": [{"trade_id": t.label, "date": ends[id(t)].isoformat()} for t in gone],
+        "flows": [],
+        **({"reported_pv_rub": reported} if (reported := _reported_pv(x, [t.pv_rub for t in gone])) is not None
+           else {}),
+        **({"rates_settled": [{"trade_id": t.label, "side": _side_text(t)} for t in gone]} if rates else
+           {"legs": [], "ocp_amount": {}, "fx_rates": {}}),
+    }
+    return BondValuation(
+        secid="", quantity=amount, valuation_date=bd, settlement=bd, horizon_date=bd,
+        horizon_kind="maturity" if rates else "value_date", price_basis="core", clean_pct=math.nan, accrued_rub=0.0,
+        face_rub=1.0 if rates else spot, current_coupon_pct=None, dirty_rub=math.nan, pv_rub=0.0, ytm_pct=math.nan,
+        macaulay_years=math.nan, modified_duration=math.nan, z_spread_bp=math.nan, spread_kind=product, dv01_rub=0.0,
+        buckets=dict.fromkeys(RISK_BUCKETS, 0.0), spread01_rub=0.0,
+        calculation_id=f"desk-derivatives:{bd}:{r.position_id}:settled", curve_buckets={}, hessian=[],
+        quality="assumed", assumptions=(*notes, why_text, f"trades: {', '.join(labels)}"), fx_delta={}, extra=extra)
+
+
+def _leg_flows(t: TermsLeg, bd: date) -> list[dict[str, Any]]:
+    """The cash an FX leg settles on its value date, signed as received (+) or paid (-) per currency; core stops
+    counting the leg from the day after (``out_on``). An NDF settles in cash at its fixing: its amount is not known."""
+    if (t.value_date - bd).days > FLOW_DAYS:
+        return []
+    base = {"trade_id": t.label, "kind": "fx", "date": t.value_date.isoformat(),
+            "out_on": (t.value_date + timedelta(days=1)).isoformat()}
+    if t.ndf:
+        return [{**base, "kind": "ndf", "ccy": None, "amount": None}]
+    return [{**base, "ccy": t.base, "amount": t.sign * t.n_base}, {**base, "ccy": t.quote, "amount": -t.sign * t.n_quote}]
+
+
+def _pay_dates(inst: Any, t: Any, calendars: dict[str, CalendarEntry], bd: date) -> tuple[date, ...]:
+    """The dates in (bd, bd + ``FLOW_DAYS``] on which a swap or REPO pays: the periods' payment dates, a REPO's
+    start (if still ahead) and end."""
+    if isinstance(inst, SwapInstrument):
+        sched = swap_schedule(inst.swap, calendars[inst.calendar_id].calendar)
+        days = {p.payment_date for p in (*sched.fixed, *sched.floating)}
+    else:
+        days = {t.start, t.end}
+    return tuple(sorted(d for d in days if bd < d <= bd + timedelta(days=FLOW_DAYS)))
+
+
+def _rates_flows(snap: Any, policy: ValuationPolicy, instruments: list[Any], positions: list[Position],
+                 pay_dates: dict[str, tuple[date, ...]], owner: dict[str, Request], terms_of: dict[str, Any],
+                 flows: dict[str, list[dict[str, Any]]]) -> set[str]:
+    """Add to ``flows`` the cash the swaps and REPOs pay in the next ``FLOW_DAYS`` days, as core projects it: the
+    ``received_rub`` of core's ``horizon_portfolio`` at each date a trade pays on is cumulative, so a payment is the
+    difference between two horizons. Returns the position IDs whose flows could not be read (a core rejection; the
+    PnL then says so, never 0)."""
+    inst_of = {i.instrument_id: i for i in instruments}
+    pos_of = {p.position_id: p for p in positions}
+    jobs = {iid: ds for iid, ds in pay_dates.items() if ds and iid in inst_of}
+    seen: dict[str, float] = {}
+    bad: set[str] = set()
+    cache = ShockedCurveCache()  # the curves are built once for all the horizons
+    for h in sorted({d for ds in jobs.values() for d in ds}):
+        sel = [iid for iid, ds in jobs.items() if iid not in bad and ds[0] <= h]
+        try:
+            res = horizon_portfolio(snapshot=snap, instruments=[inst_of[i] for i in sel],
+                                    positions=[pos_of[i] for i in sel], policy=policy, horizon_date=h,
+                                    curve_cache=cache)
+        except (CoreRejection, ValueError, LookupError, ArithmeticError):
+            bad |= set(sel)
+            continue
+        got = {row.position_id: row for row in (*res.swaps, *res.repos)}
+        for iid in sel:
+            row = got.get(iid)
+            if row is None:
+                bad.add(iid)
+                continue
+            amount, seen[iid] = row.received_rub - seen.get(iid, 0.0), row.received_rub
+            if amount:
+                flows[owner[iid].position_id].append({
+                    "trade_id": terms_of[iid].label, "kind": "swap" if isinstance(inst_of[iid], SwapInstrument) else "repo",
+                    "date": h.isoformat(), "out_on": h.isoformat(), "ccy": "RUB", "amount": amount})
+    return {owner[i].position_id for i in bad}
 
 
 def _risk(a: _Acc) -> tuple[dict[str, dict[str, float]], dict[str, float], dict[str, float]]:
@@ -900,7 +1073,8 @@ def _rates_valuation(ctx: Any, r: Request, a: _Acc, notes: list[str], result: An
                        f"fixing of {info['latest']} carried (declared, at most "
                        f"{info['max_unpublished_business_days']} business day)")
     amount = math.fsum(t.amount for t in r.trades)
-    reported = _reported_pv(x, [t.pv_rub for t in r.trades])
+    # the report's PV of a row with settled trades covers more than the valued ones: no difference then
+    reported = None if r.partial else _reported_pv(x, [t.pv_rub for t in r.trades])
     horizon = max(t.end for t in r.trades)
     product = "+".join(sorted(a.products))
     extra = {
@@ -910,6 +1084,7 @@ def _rates_valuation(ctx: Any, r: Request, a: _Acc, notes: list[str], result: An
         **({"swaps": a.swaps} if a.swaps else {}), **({"repos": a.repos} if a.repos else {}),
         **({"index_fixings": fixings} if fixings else {}),
         **({"reported_pv_rub": reported, "pv_diff_rub": a.pv - reported} if reported is not None else {}),
+        "flows": a.flows,
     }
     return BondValuation(
         secid="", quantity=amount, valuation_date=bd, settlement=bd, horizon_date=horizon, horizon_kind="maturity",
@@ -962,6 +1137,7 @@ def _valuation(ctx: Any, r: Request, a: _Acc, notes: list[str], result: Any) -> 
         "fx_rates": {c: ctx.fx.rates[c][0] for c in a.fx_delta if c in ctx.fx.rates},
         **({"basis01": basis} if basis else {}), **({"fixings": a.fixings} if a.fixings else {}),
         **({"reported_pv_rub": reported, "pv_diff_rub": a.pv - reported} if reported is not None else {}),
+        "flows": a.flows,
     }
     hessian = _hessian(a)
     return BondValuation(

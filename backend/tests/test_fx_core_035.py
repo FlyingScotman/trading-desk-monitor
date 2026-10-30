@@ -146,8 +146,11 @@ def test_book_through_core(valued):
     out, result = valued
     assert result.schema_version.endswith(".v3")
     ok = {k for k, v in out.items() if not isinstance(v, dv.NotValued)}
-    assert ok == {"P-T1", "P-T2", "P-T3", "P-T4", "P-T5", "P-T6"}
-    assert out["P-T7"].reason == "settled" and out["P-T8"].reason == "no_foreign_curve"
+    assert ok == {"P-T1", "P-T2", "P-T3", "P-T4", "P-T5", "P-T6", "P-T7"}
+    # T7 settled five days ago: within the flow window, so valued as settled (PV 0, TDM#466), not «settled»
+    t7 = out["P-T7"]
+    assert t7.pv_rub == 0.0 and t7.extra["core"]["model_flags"] == ["settled"] and t7.extra["flows"] == []
+    assert out["P-T8"].reason == "no_foreign_curve"
     t1 = out["P-T1"]
     assert abs(t1.pv_rub) < 1.0  # at the market outright: the implied curve reprices the future
     assert set(t1.curve_buckets) == {"RUB RUONIA", "CNY FX"} and t1.quality == "exact"
