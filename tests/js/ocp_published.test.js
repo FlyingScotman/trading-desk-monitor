@@ -224,19 +224,20 @@ ta('C16: день без курса — линия «Общая» пустая; 
 ta('C16: валюта без курса прогона — по курсу из отчёта ОВП, в общей ОВП, в ОВП книги и на линии; пометка «курса нет»', async () => {
   const s = JSON.parse(JSON.stringify(SRV));
   s.days[3].reportFx = { GBP: 100, USD: 81, CNY: 12 };  // курс прогона есть у USD и CNY — берётся он, не отчёта
-  s.days[1].fx = { CNY: { market: 11, cbr: 10 } };  // нет курса USD в прогоне: CNY прогона с USD отчёта не смешивается
-  s.days[1].reportFx = { USD: 82 };
+  s.days[1].fx = { CNY: { market: 11, cbr: 10 } };  // нет курса USD в прогоне: USD — из отчёта, CNY — прогона
+  s.days[1].reportFx = { USD: 82, CNY: 12 };
   const x = page16({ srv: s });
   await settle();
   let html = x.html();
   // GBP 1·100/80 = 1.25 (USD — курс прогона); общая 10 − 3.025 − 2.4 + 1.25 = 5.825
-  assert.ok(/data-ocp-total title="сумма USD-эквивалентов валют со знаком\. пересчитано по курсу из отчёта ОВП: GBP"><div class="l">Общая ОВП<\/div><div class="v"><span class="[^"]*">\+5\.8</.test(html), html);
-  assert.ok(/data-ocp-ccy="GBP"[\s\S]*?≈ \+1\.3 mm USD · <span title="пересчитано по курсу из отчёта ОВП">курса нет<\/span>/.test(html), html);
-  assert.ok(html.includes('<th class="n" title="курса нет: пересчитано по курсу из отчёта ОВП">GBP'), 'столбец валюты');
+  assert.ok(/data-ocp-total title="сумма USD-эквивалентов валют со знаком\. Пересчитано по курсу из отчёта ОВП: GBP"><div class="l">Общая ОВП<\/div><div class="v"><span class="[^"]*">\+5\.8</.test(html), html);
+  assert.ok(/data-ocp-ccy="GBP"[\s\S]*?≈ \+1\.3 mm USD · <span title="Пересчитано по курсу из отчёта ОВП">курса нет<\/span>/.test(html), html);
+  assert.ok(html.includes('<th class="n" title="Курса нет. Пересчитано по курсу из отчёта ОВП">GBP'), 'столбец валюты');
   assert.ok(/data-ocp-row="IC-BND">[\s\S]*?<td class="n"><span class="[^"]*">\(1\.1\)<\/span><\/td><\/tr>/.test(html), 'ОВП книги: −2.4 + 1.25');
   let by = Object.fromEntries(x.chart().series.map(z => [z.name, z.data]));
   near(by.GBP[2], 1.25, 'столбец GBP'); near(by['Общая'][2], 10 - 3.025 - 2.4 + 1.25, 'линия');
-  near(by.USD[0], -1, 'USD 19.10'); assert.strictEqual(by.CNY[0], null); assert.strictEqual(by['Общая'][0], null);
+  near(by.USD[0], -1, 'USD 19.10'); near(by.CNY[0], 88 * 11 / 82, 'CNY по курсу прогона, USD — отчёта');
+  near(by['Общая'][0], 88 * 11 / 82 - 1, 'общая 19.10');
   // нет курса ЦБ CNY в прогоне — CNY по курсу отчёта, USD — по курсу ЦБ прогона; пометка у CNY
   s.days[3].fx.CNY.cbr = null;
   const y = page16({ srv: s });
@@ -246,8 +247,8 @@ ta('C16: валюта без курса прогона — по курсу из 
   near(by.CNY[2], -22 * 12 / 79, 'CNY по курсу отчёта через рубль'); near(by.GBP[2], 100 / 79, 'GBP');
   near(by['Общая'][2], 10 - 22 * 12 / 79 - 2 * 95 / 79 + 100 / 79, 'общая');
   html = y.html();
-  assert.ok(/data-ocp-ccy="CNY"[\s\S]*?mm USD · <span title="пересчитано по курсу из отчёта ОВП">курса нет/.test(html), html);
-  assert.ok(html.includes('пересчитано по курсу из отчёта ОВП: CNY, GBP'), html);
+  assert.ok(/data-ocp-ccy="CNY"[\s\S]*?mm USD · <span title="Пересчитано по курсу из отчёта ОВП">курса нет/.test(html), html);
+  assert.ok(html.includes('Пересчитано по курсу из отчёта ОВП: CNY, GBP'), html);
   // нет курса USD в прогоне вовсе — USD тоже по курсу отчёта
   const z = JSON.parse(JSON.stringify(SRV));
   z.days[1].fx = {}; z.days[1].reportFx = { USD: 82, CNY: 11.5 };
@@ -255,6 +256,23 @@ ta('C16: валюта без курса прогона — по курсу из 
   await settle();
   by = Object.fromEntries(w.chart().series.map(q => [q.name, q.data]));
   near(by.CNY[0], 88 * 11.5 / 82, 'CNY и USD по отчёту'); near(by['Общая'][0], 88 * 11.5 / 82 - 1, 'общая 19.10');
+  // день без курса USD в прогоне (последний): у CNY и EUR курс прогона — входят по USD отчёта, без пометки
+  const u = JSON.parse(JSON.stringify(SRV));
+  delete u.days[3].fx.USD; u.days[3].reportFx = { USD: 82 }; u.days[3].lines = u.days[3].lines.filter(q => q.ccy !== 'GBP');
+  const v = page16({ srv: u });
+  await settle();
+  html = v.html();
+  assert.ok(/data-ocp-total title="сумма USD-эквивалентов валют со знаком"><div class="l">Общая ОВП<\/div><div class="v"><span class="[^"]*">\+4\.7</.test(html), html);
+  assert.ok(!html.includes('курса нет') && !html.includes('Пересчитано'), 'у CNY и EUR курс прогона есть — пометки нет');
+  by = Object.fromEntries(v.chart().series.map(q => [q.name, q.data]));
+  near(by['Общая'][2], 10 - 22 * 11 / 82 - 2 * 96 / 82, 'линия');
+  // и курса USD нет ни в прогоне, ни в отчёте — CNY и EUR без эквивалента, «курса нет», общая — без них
+  u.days[3].reportFx = {};
+  const q2 = page16({ srv: u });
+  await settle();
+  html = q2.html();
+  assert.ok(html.includes('Без курса, не входят: EUR, CNY') && /data-ocp-ccy="CNY"[\s\S]*?курса нет/.test(html), html);
+  assert.strictEqual(Object.fromEntries(q2.chart().series.map(q => [q.name, q.data]))['Общая'][2], null);
 });
 
 ta('C16: период «месяц» от конца месяца — без переполнения (31.03 − месяц = 28.02)', async () => {

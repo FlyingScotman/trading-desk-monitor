@@ -64,18 +64,16 @@
   // курс валюты, ₽ за единицу, выбранного источника на день; из отчёта ОВП (reportFx; старые прогоны — нет)
   const rate = (d, c) => { const x = (d.fx || {})[c]; return x ? x[S.rate] : null; };
   const repRate = (d, c) => (d.reportFx || {})[c] || null;
-  // USD-эквивалент (null — курса нет). Нет курса валюты в прогоне — по курсу отчёта ОВП через рубль; USD — по курсу
-  // прогона, нет его — тоже отчёта (владелец, 30.10.2026). Курс валюты из прогона с USD из отчёта не смешивается
+  // USD-эквивалент через рубль (null — курса нет): курс валюты и курс USD — прогона, нет его — из отчёта ОВП
+  // (владелец, 30.10.2026)
   const toUsd = (v, c, d) => {
     if (v == null) return null; if (c === 'USD') return v;
-    const a = rate(d, c), u = rate(d, 'USD');
-    if (a) return u ? v * a / u : null;
-    const ra = repRate(d, c), ru = u || repRate(d, 'USD');
-    return ra && ru ? v * ra / ru : null;
+    const a = rate(d, c) || repRate(d, c), u = rate(d, 'USD') || repRate(d, 'USD');
+    return a && u ? v * a / u : null;
   };
-  // валюта без курса прогона, пересчитанная по курсу отчёта ОВП
+  // валюта без курса прогона, пересчитанная по курсу отчёта ОВП (пометка «курса нет» — только у неё)
   const byReport = (c, d) => c !== 'USD' && !rate(d, c) && toUsd(1, c, d) != null;
-  const REP = 'пересчитано по курсу из отчёта ОВП';
+  const REP = 'Пересчитано по курсу из отчёта ОВП';
   const unitOf = c => 'mm ' + (S.unit === 'usd' ? 'USD' : c);
   const shown = (v, c, d) => S.unit === 'usd' ? toUsd(v, c, d) : v;
   const ccyOrder = (a, b) => ((M.ccyOrder || {})[a] ?? 99) - ((M.ccyOrder || {})[b] ?? 99) || a.localeCompare(b);
@@ -180,7 +178,7 @@
           : '<span title="книги: ' + esc((x.books || []).map(bookName).join(', ') || '—') + '">' + esc(entityName(x.entity)) + ' <span class="mut3">часть отчёта</span></span>' + tag;
       };
       bp.querySelector('.bd').innerHTML = '<table class="k-tbl" data-vk="c16-books" data-title="ОВП по книгам"><thead><tr><th>Книга</th>' +
-        C.map(c => '<th class="n"' + (byReport(c, d) ? ' title="курса нет: ' + REP + '"' : '') + '>' + esc(c) + '<span class="k-thu">' + unitOf(c) + '</span></th>').join('') + '<th class="n" title="сумма USD-эквивалентов валют строки со знаком">ОВП книги<span class="k-thu">mm USD</span></th></tr></thead><tbody>' +
+        C.map(c => '<th class="n"' + (byReport(c, d) ? ' title="Курса нет. ' + REP + '"' : '') + '>' + esc(c) + '<span class="k-thu">' + unitOf(c) + '</span></th>').join('') + '<th class="n" title="сумма USD-эквивалентов валют строки со знаком">ОВП книги<span class="k-thu">mm USD</span></th></tr></thead><tbody>' +
         rows.map(r => '<tr data-ocp-row="' + esc(r.x.book || r.x.entity) + '"><td>' + label(r) + '</td>' + C.map(c => cell(r.v[c], c)).join('') + '<td class="n"' + (r.g == null ? ' title="нет курса одной из валют строки"' : '') + '>' + fmt(mm(r.g)) + '</td></tr>').join('') +
         '<tr class="tot"><td>Итого</td>' + C.map(c => cell(T.by[c], c)).join('') + '<td></td></tr></tbody></table>';
     } else bp.querySelector('.bd').innerHTML = EMPTY;
