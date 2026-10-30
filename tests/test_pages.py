@@ -67,6 +67,12 @@ class Pages(unittest.TestCase):
         src = (PROTO / "concepts" / "c16-ocp.html").read_text(encoding="utf-8")
         self.assertIn("'../api/v1/history/ocp' + (M.run.id != null ? '?run_id=' + encodeURIComponent(M.run.id) : '')", src)
         self.assertIn("const server = K.source === 'real'", src)
+        # общая ОВП — нетто (владелец, 30.10.2026); валюта без курса прогона — по курсу отчёта ОВП (reportFx маршрута)
+        self.assertIn("const overall = usd => usd.reduce((a, v) => a + v, 0);", src)
+        self.assertIn("const repRate = (d, c) => (d.reportFx || {})[c] || null;", src)
+        self.assertNotIn("бо́льшая из сумм", src)
+        self.assertIn('"reportFx": _report_fx(', (ROOT / "backend" / "src" / "desk" / "api" / "ocp_history.py")
+                      .read_text(encoding="utf-8"))
         self.assertIn("['c16-ocp', 'C16', 'ОВП'", (PROTO / "concepts" / "catalog.js").read_text(encoding="utf-8"))
         self.assertTrue((PROTO / "concepts" / "thumbs" / "c16-ocp.jpg").is_file())
 
