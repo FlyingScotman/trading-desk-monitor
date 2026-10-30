@@ -913,10 +913,18 @@ const TREE = (function(){
     if (fl.length) { const f = D.fundingPnlByBook[b], fc = f.fxCbr != null ? f.fxCbr : f.fx; const r = Object.assign({kind:'fund', key:'f' + b, name:`Фондирование книги (${fl.length} ${fl.length === 1 ? 'строка' : fl.length < 5 ? 'строки' : 'строк'})`, sub:[...new Set(fl.map(x => x.type))].join(', ')}, zero()); r.fundCarry = f.carry; r.fx = f.fx; r.explained = f.carry + f.fx; r.fxBasis = fc - f.fx; r.official = f.carry + fc; kids.push(r); }
     const bn = Object.assign({kind:'book', key:'b' + b, book:b, name:meta.name, sub:meta.trader, children:kids}, zero());
     kids.forEach(k => addTo(bn, k));
-    let d = dmap[meta.desk]; if (!d) { d = dmap[meta.desk] = Object.assign({kind:'desk', key:'d' + meta.desk, name:meta.desk, children:[]}, zero()); desks.push(d); }
+    // TDM#489: официальный PnL приходит по книге целиком; книга с PnL, у позиций которой его нет, — без официального:
+    // её official и unexplained — «—», в unexplained итогов она не входит (у позиций без официального он 0)
+    const withPnl = kids.filter(k => k.kind === 'pos' && U.pnlOk(k.p));
+    bn.hasPnl = withPnl.length > 0;
+    bn.noOff = READY && bn.hasPnl && !withPnl.some(k => k.p.pnl.official != null);
+    if (bn.noOff) withPnl.forEach(k => { k.noOff = true; });
+    let d = dmap[meta.desk]; if (!d) { d = dmap[meta.desk] = Object.assign({kind:'desk', key:'d' + meta.desk, name:meta.desk, children:[], noOffBooks:[], cov:zero()}, zero()); desks.push(d); }
     d.children.push(bn); addTo(d, bn);
+    if (bn.noOff) d.noOffBooks.push(b); else addTo(d.cov, bn);  // cov — итоги только книг с официальным PnL
   });
-  const tot = zero(); desks.forEach(d => addTo(tot, d));
+  const tot = Object.assign(zero(), {noOffBooks:desks.flatMap(d => d.noOffBooks), cov:zero()}); desks.forEach(d => { addTo(tot, d); addTo(tot.cov, d.cov); });
+  tot.pnlBooks = desks.reduce((n, d) => n + d.children.filter(bn => bn.hasPnl).length, 0);
   // покрытие PnL узла: ни у одной позиции нет PnL (и нет фондирования книги) — «—»; не у всех — «частично»
   const cover = (n, ps, fund) => { const c = U.pnlCover(ps); n.none = c.none && !fund;
     n.cover = c.none && fund ? Object.assign({}, c, {partial: true, tip: 'Только фондирование книги. ' + c.tip}) : c; };
@@ -934,29 +942,46 @@ TREE.desks.forEach(d => S.open.add(d.key));
 // null — не посчитано (нет PnL ни у одной позиции, официальный ещё не пришёл): «—», а не 0.
 // officialReceived === false (TDM#106): официального PnL за день нет, pnlOfficial — флэш плюс курсы ЦБ («Explain ЦБ»),
 // его не называем официальным и unexplained по нему не считаем; поля нет (демо, старый сервер) — как раньше
-const hOffOk = h => h.officialReceived !== false;
+// officialState (TDM#489): официальный PnL приходит по книгам — у всех книг дня ('all'), у части ('partial') или ни у
+// одной ('none'). Частичный день — «частично официальный»: pnlOfficial — смесь (официальный по одним книгам, флэш плюс
+// курсы ЦБ по другим), unexplained — только по книгам с официальным (officialBooks), книги без него названы
+const hState = h => h.officialState || (h.officialReceived === false ? 'none' : 'all');
+const hOffOk = h => hState(h) === 'all';
+const hPart = h => hState(h) === 'partial';
 const hOff = h => hOffOk(h) ? h.pnlOfficial : null;
-const hUn = h => hOff(h) == null || h.pnlExplained == null ? null : hOff(h) - h.pnlExplained;
+const hPartOff = h => hPart(h) && h.officialBooks ? h.officialBooks.pnlOfficial : null;  // официальный книг, где он есть
+const hUn = h => hOffOk(h) ? (h.pnlOfficial == null || h.pnlExplained == null ? null : h.pnlOfficial - h.pnlExplained)
+  : hPartOff(h) == null || h.officialBooks.pnlExplained == null ? null : hPartOff(h) - h.officialBooks.pnlExplained;
+const hStatus = (h, v) => status(v, hOffOk(h) ? h.pnlOfficial : hPartOff(h), false);
 const OFF_NONE = 'Официального PnL за дату нет; «Explain ЦБ» — флэш плюс курсы ЦБ, не официальный';
+const bookName = b => D.BOOKS[b] ? D.BOOKS[b].name : String(b);
+const missText = part => part.missing.map(bookName).join(', ');
+const OFF_BOOK = 'Официального PnL по книге за дату нет — его можно запросить в финансах; unexplained по ней не считается';
+// сегодня: книги без официального — по позициям (TREE); прошлые дни — officialBooks сервера
+const TODAY_PART = READY && TREE.tot.noOffBooks.length ? {k:TREE.tot.pnlBooks - TREE.tot.noOffBooks.length, n:TREE.tot.pnlBooks, missing:TREE.tot.noOffBooks} : null;
+const hPartOf = h => hPart(h) && h.officialBooks ? {k:h.officialBooks.received, n:h.officialBooks.books, missing:h.officialBooks.missing || []} : null;
 function dayTotals(date){
-  if (date === TODAY) { const t = TREE.tot, no = t.none;
-    return {official:no || !READY ? null : t.official, explained:no ? null : t.explained, fxBasis:no ? null : t.fxBasis, unexplained:no || !READY ? null : t.unexplained, detail:true, cover:t.cover,
-      tip: no ? t.cover.tip : OFF_WAIT}; }
-  const h = D.history.find(x => x.date === date);
+  if (date === TODAY) { const t = TREE.tot, no = t.none, c = TODAY_PART ? t.cov : t;
+    return {official:no || !READY ? null : c.official, explained:no ? null : c.explained, fxBasis:no ? null : c.fxBasis, unexplained:no || !READY ? null : t.unexplained, detail:true, cover:t.cover,
+      part: no ? null : TODAY_PART, tip: no ? t.cover.tip : OFF_WAIT}; }
+  const h = D.history.find(x => x.date === date), part = hPartOf(h);
+  if (part) return {official:hPartOff(h), explained:h.officialBooks.pnlExplained, fxBasis:h.officialBooks.pnlExplained == null ? null : 0, unexplained:hUn(h), detail:false, part, tip:'PnL за ' + fdate(date) + ' не посчитан'};
   return {official:hOff(h), explained:h.pnlExplained, fxBasis:h.pnlExplained == null ? null : 0, unexplained:hUn(h), detail:false, noOfficial:!hOffOk(h), tip:'PnL за ' + fdate(date) + ' не посчитан'};
 }
-const dayChip = t => t.explained == null ? chip('info', 'PnL не посчитан') : t.official == null ? chip('info', t.noOfficial ? 'Официального нет' : 'Ожидается T+1') : chip(status(t.unexplained, t.official, false));
+const dayChip = t => t.explained == null ? chip('info', 'PnL не посчитан') : t.official == null ? chip('info', t.noOfficial ? 'Официального нет' : 'Ожидается T+1')
+  : (t.part ? chip('info', 'Частично официальный') + ' ' : '') + chip(status(t.unexplained, t.official, false));
 function renderRecon(){
   const t = dayTotals(S.date), pct = t.official && t.unexplained != null ? t.unexplained / Math.abs(t.official) * 100 : null;
   const val = (x, tip) => x == null ? na(tip) : smln(x) + '<small>млн ₽</small>', pc = t.detail ? t.cover : null;
   const opts = D.history.slice().reverse().map(h => `<option value="${h.date}"${h.date === S.date ? ' selected' : ''}>${fdate(h.date)}${h.date === TODAY ? ' · детализация' : ' · только итоги'}</option>`).join('');
   $('#recon').innerHTML = `<div class="datebox"><label class="lbl mono muted" for="ex-date" style="font:600 10px var(--font-mono);letter-spacing:.08em;text-transform:uppercase">Дата</label><select id="ex-date">${opts}</select></div>
-    <div class="kpi"><span class="lbl">Official PnL (ЦБ)</span><span class="val">${val(t.official, t.explained == null ? t.tip : t.noOfficial ? OFF_NONE : OFF_WAIT)}</span></div><span class="op">−</span>
-    <div class="kpi"><span class="lbl">Флэш (рынок)</span><span class="val">${val(t.explained, t.tip)}</span></div><span class="op">−</span>
+    <div class="kpi"><span class="lbl">Official PnL (ЦБ)${t.part ? ' · частично' : ''}</span><span class="val">${val(t.official, t.explained == null ? t.tip : t.noOfficial ? OFF_NONE : OFF_WAIT)}</span></div><span class="op">−</span>
+    <div class="kpi"><span class="lbl">Флэш (рынок)${t.part ? ' · книги с официальным' : ''}</span><span class="val">${val(t.explained, t.tip)}</span></div><span class="op">−</span>
     <div class="kpi"><span class="lbl">Курсы ЦБ − рынок</span><span class="val">${val(t.fxBasis, t.tip)}</span></div><span class="op">=</span>
     <div class="kpi"><span class="lbl">Unexplained</span><span class="val">${val(t.unexplained, t.explained == null ? t.tip : t.noOfficial ? OFF_NONE : OFF_WAIT)}</span></div>
     <div class="kpi"><span class="lbl">% unexplained</span><span class="val">${pct == null ? '—' : num(Math.abs(pct), 1) + '<small>%</small>'}</span></div>
     <div class="kpi"><span class="lbl">Статус</span>${dayChip(t)}<span class="muted" style="font-size:11px">порог условный: max(5% · |official|, 2 млн ₽)</span></div>
+    ${t.part ? `<div class="kpi" id="off-part" style="max-width:340px"><span class="lbl">Частично официальный</span><span style="font-size:12px">Официальный PnL по ${t.part.k} из ${t.part.n} книг. Нет по книгам: <b>${esc(missText(t.part))}</b> — запросить в финансах.</span><span class="muted" style="font-size:11px">Official, флэш и unexplained здесь — только по книгам с официальным PnL.</span></div>` : ''}
     ${pc && pc.partial ? `<div class="kpi" style="max-width:320px"><span class="lbl">Покрытие PnL</span>${U.pnlPartHtml(pc)}<span class="muted" style="font-size:11px">итоги — только по позициям с PnL. Без PnL: ${esc(pc.reasons.map(x => x[0] + ' — ' + x[1]).join('; '))}</span></div>` : ''}
     ${t.detail ? '' : '<div class="kpi" style="max-width:280px"><span class="lbl">Детализация</span><span class="muted" style="font-size:12px">За эту дату хранятся только итоги. Позиции и компоненты — только за ' + fdate(TODAY) + '.</span></div>'}`;
   $('#ex-date').addEventListener('change', e => { S.date = e.target.value; renderExplain(); });
@@ -980,19 +1005,25 @@ function renderWaterfall(){
     EXC.forEach(([k, n]) => { items.push({n, s:cum, e:cum + tot[k], v:tot[k], kind:'step'}); cum += tot[k]; });
     items.push({n:'= Флэш', s:0, e:tot.explained, v:tot.explained, kind:'total'});
     items.push({n:'Курсы ЦБ', s:tot.explained, e:tot.explained + tot.fxBasis, v:tot.fxBasis, kind:'step'});
-    if (READY) {
+    if (READY && TODAY_PART) {  // TDM#489: unexplained — только книги с официальным; итог — смесь, не «Official»
+      const end = tot.explained + tot.fxBasis + tot.unexplained;
+      items.push({n:'Unexplained', s:tot.explained + tot.fxBasis, e:end, v:tot.unexplained, kind:'un'});
+      items.push({n:'= Частично офиц.', s:0, e:end, v:end, kind:'total'});
+    } else if (READY) {
       items.push({n:'Unexplained', s:tot.explained + tot.fxBasis, e:tot.official, v:tot.unexplained, kind:'un'});
       items.push({n:'= Official', s:0, e:tot.official, v:tot.official, kind:'total'});
     } else items.push({n:'= Explain ЦБ', s:0, e:tot.explained + tot.fxBasis, v:tot.explained + tot.fxBasis, kind:'total'});
     $('#wf-hint').textContent = 'млн ₽ · ' + fdate(S.date) + ' · флэш по рыночным курсам, ' + (READY ? 'официальный — по курсам ЦБ' : 'официальный — T+1') +
+      (TODAY_PART ? ' · частично официальный: нет по ' + missText(TODAY_PART) + ', по ним — курсы ЦБ, unexplained не считается' : '') +
       (tot.cover.partial ? ' · ' + U.pnlPartText(tot.cover) : '');
   } else {
     items.push({n:'= Explained', s:0, e:t.explained, v:t.explained, kind:'total'});
     if (t.official != null) {
       items.push({n:'Unexplained', s:t.explained, e:t.official, v:t.unexplained, kind:'un'});
-      items.push({n:'= Official', s:0, e:t.official, v:t.official, kind:'total'});
+      items.push({n:t.part ? '= Official (часть)' : '= Official', s:0, e:t.official, v:t.official, kind:'total'});
     }
-    $('#wf-hint').textContent = 'млн ₽ · ' + fdate(S.date) + ' · только итоги, компонентов нет';
+    $('#wf-hint').textContent = 'млн ₽ · ' + fdate(S.date) + ' · только итоги, компонентов нет' +
+      (t.part ? ' · частично официальный: только книги с официальным, нет по ' + missText(t.part) : '');
   }
   const col = {pos:tok('--pos'), neg:tok('--neg'), tot:tok('--accent'), fg:tok('--fg'), fg2:tok('--fg-2'), line:tok('--line'), line2:tok('--line-strong')};
   const narrow = c.getWidth() < 640;
@@ -1002,7 +1033,7 @@ function renderWaterfall(){
     animation: !reduced, animationDuration: 300,
     grid:{left:56, right:12, top:24, bottom: narrow ? 64 : 34},
     tooltip: Object.assign({trigger:'item', formatter: p => { const it = items[p.dataIndex]; return `<b>${it.n}</b><br>${smln(it.v)} млн ₽` + (it.kind === 'step' ? `<br><span style="color:${col.fg2}">нарастающим: ${smln(it.e)} млн</span>` : ''); }}, ttStyle()),
-    xAxis:{type:'category', data: items.map(i => i.n), axisLine:{lineStyle:{color:col.line2}}, axisTick:{show:false}, axisLabel:Object.assign({}, bt, {color:col.fg2, interval:0, rotate: narrow ? 40 : 0, fontSize: narrow ? 9 : 10, formatter: v => narrow ? v : v.replace('Новые сделки', 'Новые\nсделки').replace('По отчёту', 'По\nотчёту').replace('Фонд. ДС carry', 'Фонд. ДС\ncarry').replace('= Флэш', '=\nФлэш').replace('Курсы ЦБ', 'Курсы\nЦБ').replace('= Official', '=\nOfficial')})},
+    xAxis:{type:'category', data: items.map(i => i.n), axisLine:{lineStyle:{color:col.line2}}, axisTick:{show:false}, axisLabel:Object.assign({}, bt, {color:col.fg2, interval:0, rotate: narrow ? 40 : 0, fontSize: narrow ? 9 : 10, formatter: v => narrow ? v : v.replace('Новые сделки', 'Новые\nсделки').replace('По отчёту', 'По\nотчёту').replace('Фонд. ДС carry', 'Фонд. ДС\ncarry').replace('= Флэш', '=\nФлэш').replace('Курсы ЦБ', 'Курсы\nЦБ').replace('= Official', '=\nOfficial').replace('= Частично офиц.', '=\nЧастично\nофиц.')})},
     yAxis:{type:'value', splitLine:{lineStyle:{color:col.line}}, axisLabel:Object.assign({}, bt, {formatter: v => num(v / 1e6, 0)})},
     series:[{type:'custom', data: items.map((it, i) => [i, it.s, it.e]), encode:{x:0, y:[1, 2]},
       renderItem: (params, api) => {
@@ -1027,23 +1058,27 @@ function renderHistory(){
   const tt = Object.assign({trigger:'axis', axisPointer:{type:'line', lineStyle:{color:line2}}}, ttStyle());
   const m = ch('h-main'), u = ch('h-un'), cu = ch('h-cum');
   // официальный PnL — только за дни, где он получен; остальные дни — линия «Explain ЦБ» (флэш + курсы ЦБ), TDM#106
-  const anyOff = H.some(h => hOffOk(h) && h.pnlOfficial != null), allOff = H.every(hOffOk);
-  const OFFN = 'Official', CBRN = 'Explain ЦБ';
-  $('#h-main-cap').textContent = anyOff ? (allOff ? 'Official vs explained, млн ₽' : 'Official (где получен), explain по курсам ЦБ и explained, млн ₽') : 'Explain по курсам ЦБ vs explained, млн ₽ · официального PnL нет';
-  $('#h-cum-cap').textContent = allOff ? 'Накопленный official PnL, млн ₽' : anyOff ? 'Накопленный PnL: official, где получен, иначе по курсам ЦБ, млн ₽' : 'Накопленный PnL по курсам ЦБ (не официальный), млн ₽';
-  m.setOption({animation:!reduced, grid:{left:46, right:10, top:26, bottom:18}, legend:{top:0, right:6, itemWidth:14, itemHeight:2, textStyle:{color:fg2, fontSize:11}, data:(anyOff ? [OFFN] : []).concat(allOff ? [] : [CBRN], ['Explained'])},
-    tooltip: Object.assign({}, tt, {formatter: ps => `<b>${fdate(H[ps[0].dataIndex].date)}</b><br>` + ps.map(p => `${p.marker}${p.seriesName}: ${p.value == null ? '— не посчитан' : smln(p.value) + ' млн'}`).join('<br>') + `<br>Unexplained: ${smlnN(hUn(H[ps[0].dataIndex]))} млн`}),
+  const anyOff = H.some(h => hOffOk(h) && h.pnlOfficial != null), allOff = H.every(hOffOk), anyPart = H.some(hPart), anyNone = H.some(h => hState(h) === 'none');
+  const OFFN = 'Official', PARTN = 'Частично официальный', CBRN = 'Explain ЦБ';
+  // частичный день (TDM#489) — своя линия: его pnlOfficial — смесь официального и курсов ЦБ
+  const partNote = h => { const p = hPartOf(h); return p ? `<br>Частично официальный: ${p.k} из ${p.n} книг; нет по: ${esc(missText(p))}. Unexplained — только по книгам с официальным` : ''; };
+  $('#h-main-cap').textContent = allOff ? 'Official vs explained, млн ₽' : !anyOff && !anyPart ? 'Explain по курсам ЦБ vs explained, млн ₽ · официального PnL нет'
+    : [anyOff && 'Official (где получен)', anyPart && 'частично официальный (не по всем книгам)', anyNone && 'explain по курсам ЦБ'].filter(Boolean).join(', ') + ' и explained, млн ₽';
+  $('#h-cum-cap').textContent = allOff ? 'Накопленный official PnL, млн ₽' : anyOff || anyPart ? 'Накопленный PnL: official, где получен, иначе по курсам ЦБ, млн ₽' : 'Накопленный PnL по курсам ЦБ (не официальный), млн ₽';
+  m.setOption({animation:!reduced, grid:{left:46, right:10, top:26, bottom:18}, legend:{top:0, right:6, itemWidth:14, itemHeight:2, textStyle:{color:fg2, fontSize:11}, data:(anyOff ? [OFFN] : []).concat(anyPart ? [PARTN] : [], anyNone ? [CBRN] : [], ['Explained'])},
+    tooltip: Object.assign({}, tt, {formatter: ps => `<b>${fdate(H[ps[0].dataIndex].date)}</b><br>` + ps.map(p => `${p.marker}${p.seriesName}: ${p.value == null ? '— не посчитан' : smln(p.value) + ' млн'}`).join('<br>') + `<br>Unexplained: ${smlnN(hUn(H[ps[0].dataIndex]))} млн` + partNote(H[ps[0].dataIndex])}),
     xAxis: ax(false), yAxis: ya(),
     series:(anyOff ? [{name:OFFN, type:'line', data:H.map(hOff), symbol:'circle', symbolSize:5, lineStyle:{width:2, color:tok('--c1')}, itemStyle:{color:tok('--c1')}, markLine:mark}] : [])
-      .concat(allOff ? [] : [{name:CBRN, type:'line', data:H.map(h => hOffOk(h) ? null : h.pnlOfficial), symbol:'emptyCircle', symbolSize:5, lineStyle:{width:2, color:tok('--c1'), type:'dotted'}, itemStyle:{color:tok('--c1')}, markLine: anyOff ? undefined : mark}]).concat([
+      .concat(anyPart ? [{name:PARTN, type:'line', data:H.map(h => hPart(h) ? h.pnlOfficial : null), symbol:'triangle', symbolSize:7, lineStyle:{width:2, color:tok('--c1'), type:'dashed'}, itemStyle:{color:tok('--c1')}, markLine: anyOff ? undefined : mark}] : [])
+      .concat(anyNone ? [{name:CBRN, type:'line', data:H.map(h => hState(h) === 'none' ? h.pnlOfficial : null), symbol:'emptyCircle', symbolSize:5, lineStyle:{width:2, color:tok('--c1'), type:'dotted'}, itemStyle:{color:tok('--c1')}, markLine: anyOff || anyPart ? undefined : mark}] : []).concat([
             {name:'Explained', type:'line', data:H.map(h => h.pnlExplained), symbol:'circle', symbolSize:5, lineStyle:{width:2, color:tok('--c2'), type:[4, 3]}, itemStyle:{color:tok('--c2')}}])}, true);
   u.setOption({animation:!reduced, grid:{left:46, right:10, top:8, bottom:18},
-    tooltip: Object.assign({}, tt, {axisPointer:{type:'shadow', shadowStyle:{color:'rgba(127,127,127,.12)'}}, formatter: ps => { const h = H[ps[0].dataIndex], v = hUn(h); return `<b>${fdate(h.date)}</b><br>Unexplained: ${smlnN(v)} млн<br>Статус: ${v == null ? (hOffOk(h) ? 'PnL не посчитан' : 'официального PnL нет') : ST_LBL[status(v, h.pnlOfficial, false)]}`; }}),
+    tooltip: Object.assign({}, tt, {axisPointer:{type:'shadow', shadowStyle:{color:'rgba(127,127,127,.12)'}}, formatter: ps => { const h = H[ps[0].dataIndex], v = hUn(h); return `<b>${fdate(h.date)}</b><br>Unexplained: ${smlnN(v)} млн<br>Статус: ${v == null ? (hState(h) === 'none' ? 'официального PnL нет' : 'PnL не посчитан') : ST_LBL[hStatus(h, v)]}` + partNote(h); }}),
     xAxis: ax(false), yAxis: ya(),
-    series:[{type:'bar', barWidth:'55%', data: H.map(h => { const v = hUn(h), st = v == null ? 'ok' : status(v, h.pnlOfficial, false); return {value:v, itemStyle:{color: st === 'crit' ? tok('--crit') : st === 'warn' ? tok('--warn') : tok('--fg-3'), borderRadius:1}}; }),
+    series:[{type:'bar', barWidth:'55%', data: H.map(h => { const v = hUn(h), st = v == null ? 'ok' : hStatus(h, v); return {value:v, itemStyle:{color: st === 'crit' ? tok('--crit') : st === 'warn' ? tok('--warn') : tok('--fg-3'), borderRadius:1}}; }),
       markLine:{silent:true, symbol:'none', lineStyle:{color:line2, type:'dashed'}, label:{show:false}, data:[{yAxis:2e6}, {yAxis:-2e6}, {xAxis:selI, lineStyle:{color:tok('--accent'), type:'solid'}}]}}]}, true);
   cu.setOption({animation:!reduced, grid:{left:46, right:10, top:8, bottom:22},
-    tooltip: Object.assign({}, tt, {formatter: ps => `<b>${fdate(H[ps[0].dataIndex].date)}</b><br>Накопленный: ${smlnN(ps[0].value)} млн<br>За день: ${H[ps[0].dataIndex].pnlOfficial == null ? '— не посчитан' : smln(H[ps[0].dataIndex].pnlOfficial) + ' млн' + (hOffOk(H[ps[0].dataIndex]) ? '' : ' (по курсам ЦБ, не официальный)')}`}),
+    tooltip: Object.assign({}, tt, {formatter: ps => `<b>${fdate(H[ps[0].dataIndex].date)}</b><br>Накопленный: ${smlnN(ps[0].value)} млн<br>За день: ${H[ps[0].dataIndex].pnlOfficial == null ? '— не посчитан' : smln(H[ps[0].dataIndex].pnlOfficial) + ' млн' + (hOffOk(H[ps[0].dataIndex]) ? '' : hPart(H[ps[0].dataIndex]) ? ' (частично официальный: по книгам без него — курсы ЦБ)' : ' (по курсам ЦБ, не официальный)')}`}),
     xAxis: ax(true), yAxis: ya(),
     series:[{type:'line', data:H.map(h => h.pnlCum), symbol:'none', lineStyle:{width:2, color:tok('--accent')}, areaStyle:{color:tok('--accent'), opacity:.12}, markLine:mark}]}, true);
   [m, u, cu].forEach(c => { c.group = 'hist'; });
@@ -1056,11 +1091,14 @@ function cellsFor(r){
   const tip = r.na || (r.none ? r.cover.tip : null);
   if (tip) return `<td class="n">${na(tip)}</td>`.repeat(NCOL);   // R10: PnL не посчитан — «—» во всех колонках, не 0
   const part = r.cover && r.cover.partial ? `<sup class="pm" title="${esc(r.cover.tip)}">*</sup>` : '';
-  const off = v => READY ? smln(v) : na(OFF_WAIT);
-  return NUMK.filter(k => k !== 'explained' && k !== 'fxBasis' && k !== 'official' && k !== 'unexplained').map(k => `<td class="n${r[k] === 0 ? ' z' : ''}">${r[k] === 0 ? '·' : smln(r[k])}</td>`).join('') + `<td class="n">${smln(r.explained)}${part}</td><td class="n${r.fxBasis ? '' : ' z'}">${r.fxBasis ? smln(r.fxBasis) : '·'}</td><td class="n">${off(r.official)}${READY ? part : ''}</td><td class="n uc">${r.kind === 'fund' ? '<span class="muted">·</span>' : off(r.unexplained)}</td>`;
+  const off = v => !READY ? na(OFF_WAIT) : r.noOff ? na(OFF_BOOK) : smln(v);
+  // TDM#489: у деска и итога с книгами без официального — official только книг с ним, со звёздочкой
+  const nob = r.noOffBooks && r.noOffBooks.length ? r.noOffBooks : null;
+  const offCell = nob && READY ? smln(r.cov.official) + `<sup class="pm" title="${esc('Только книги с официальным PnL; нет по: ' + nob.map(bookName).join(', '))}">*</sup>` : off(r.official) + (READY && !r.noOff ? part : '');
+  return NUMK.filter(k => k !== 'explained' && k !== 'fxBasis' && k !== 'official' && k !== 'unexplained').map(k => `<td class="n${r[k] === 0 ? ' z' : ''}">${r[k] === 0 ? '·' : smln(r[k])}</td>`).join('') + `<td class="n">${smln(r.explained)}${part}</td><td class="n${r.fxBasis ? '' : ' z'}">${r.fxBasis ? smln(r.fxBasis) : '·'}</td><td class="n">${offCell}</td><td class="n uc">${r.kind === 'fund' ? '<span class="muted">·</span>' : off(r.unexplained)}</td>`;
 }
 // статус строки: без PnL / до T+1 — «PnL не посчитан» / «Ожидается», иначе по unexplained
-const rowChip = (r, isRow) => r.na || r.none ? chip('info', 'PnL не посчитан') : !READY ? chip('info', 'Ожидается T+1') : chip(status(r.unexplained, r.official, isRow));
+const rowChip = (r, isRow) => r.na || r.none ? chip('info', 'PnL не посчитан') : !READY ? chip('info', 'Ожидается T+1') : r.noOff ? chip('info', 'Официального нет') : chip(status(r.unexplained, r.noOffBooks && r.noOffBooks.length ? r.cov.official : r.official, isRow));
 const CHEV = '<svg viewBox="0 0 10 10" aria-hidden="true"><path d="M3 1l5 4-5 4z"/></svg>';
 function renderHier(){
   const wrap = $('#hier-wrap');
@@ -1084,7 +1122,7 @@ function renderHier(){
       kids.forEach(r => {
         shown++;
         let st = r.kind === 'fund' || !READY ? 'ok' : status(r.unexplained, r.official, true); if (r.note && st === 'ok') st = 'warn';
-        rows += `<tr class="${r.kind}"><td class="l ind2">${esc(r.name)} <span class="psub">${esc(r.sub)}</span>${r.note ? `<div class="bnote"><svg viewBox="0 0 12 12" aria-hidden="true"><path d="M6 1 11.5 11H.5z"/></svg>${esc(r.note)}</div>` : ''}</td>${cellsFor(r)}<td class="l">${r.kind === 'fund' ? chip('info', 'Без explain') : r.na ? chip('info', 'PnL не посчитан') : !READY && !r.note ? chip('info', 'Ожидается T+1') : chip(st)}</td></tr>`;
+        rows += `<tr class="${r.kind}"><td class="l ind2">${esc(r.name)} <span class="psub">${esc(r.sub)}</span>${r.note ? `<div class="bnote"><svg viewBox="0 0 12 12" aria-hidden="true"><path d="M6 1 11.5 11H.5z"/></svg>${esc(r.note)}</div>` : ''}</td>${cellsFor(r)}<td class="l">${r.kind === 'fund' ? chip('info', 'Без explain') : r.na ? chip('info', 'PnL не посчитан') : !READY && !r.note ? chip('info', 'Ожидается T+1') : r.noOff ? chip('info', 'Официального нет') : chip(st)}</td></tr>`;
       });
     });
   });

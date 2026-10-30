@@ -15,7 +15,7 @@ from store_rows import insert_run
 from test_slice_s2 import shifted_prev
 
 from desk import store
-from desk.api import create_app
+from desk.api import compat, create_app
 from desk.marketdata.bundle import SnapshotDir
 from desk.orchestrator import Outcome, attach_pnl, prepare, value
 from desk.pnl import direct
@@ -192,6 +192,34 @@ def test_published_pnl_methods_and_honest_absence(ctx, prev, store_url):
     log = c.get(f"/api/v1/runs/{rid}").json()["log"]
     assert any("по курсу" in x["message"] and FX_METHOD in x["message"] for x in log)
     assert any("по отчёту" in x["message"] and REPORTED_METHOD in x["message"] for x in log)
+
+
+def test_partial_official_per_book(ctx, prev, store_url):
+    """TDM#489: the official PnL arrived for book TSY only (synthetic, set on the stored rows): the day is
+    ``partial``, not official; CORP is named as the book without it, and the unexplained is over TSY only."""
+    inp, bp = _direct(ctx, prev)
+    positions = merge(bp, value(ctx, bp.requests, position_ids=bp.position_ids))
+    with store.connect(store_url) as con:
+        rid, _, _ = desk_run.publish(con, ctx, positions, prev=prev.market, inputs=inp)
+        con.execute("ALTER TABLE run_position DISABLE TRIGGER USER")  # a published run is frozen
+        con.execute("UPDATE run_position SET pnl = pnl || jsonb_build_object('official', 1000.0 + ord)"
+                    " WHERE run_id = %s AND book_id = 'TSY' AND pnl IS NOT NULL", (rid,))
+        con.execute("ALTER TABLE run_position ENABLE TRIGGER USER")
+        rows = [{"fact": f, "pnl": q} for f, q in con.execute(
+            "SELECT fact, pnl FROM run_position WHERE run_id = %s AND fact IS NOT NULL", (rid,)).fetchall()]
+    tsy = [r for r in rows if r["fact"]["book_id"] == "TSY" and r["pnl"]]
+    assert tsy and any(r["fact"]["book_id"] == "CORP" and r["pnl"] for r in rows)
+    desk = TestClient(create_app(store_url)).get(f"/api/v1/compat/desk?run_id={rid}").json()
+    day = desk["history"][-1]
+    assert day["officialState"] == "partial" and day["officialReceived"] is False
+    b = day["officialBooks"]
+    assert (b["received"], b["books"], b["missing"]) == (1, 2, ["CORP"])
+    assert b["pnlOfficial"] == pytest.approx(sum(r["pnl"]["official"] for r in tsy))
+    assert b["pnlExplained"] == pytest.approx(compat.run_totals(tsy)[1])
+    assert day["pnlOfficial"] == pytest.approx(compat.run_totals(rows)[0])  # the day's total: TSY official + CORP
+    assert desk["official"]["state"] == "partial" and desk["official"]["missingBooks"] == ["CORP"]
+    ps = [p for p in desk["positions"] if p["book"] == "CORP" and p["pnl"]["available"]]
+    assert ps and all(p["pnl"]["official"] is None and p["pnl"]["unexplained"] == 0.0 for p in ps)
 
 
 def test_run_without_previous_market(ctx, store_url):

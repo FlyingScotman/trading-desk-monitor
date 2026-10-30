@@ -18,9 +18,22 @@ def line(book, ccy, amount, source="report", entity="ENT1", books=None, valid=No
             "reported": amount if source == "report" else None, "valid_date": valid}
 
 
-def block(status, lines, basis="report_plus_outside"):
-    return {"version": 2, "status": status, "text": "synthetic", "published": {"basis": basis, "by_ccy": {},
-            "by_book": lines}, "lines": [{"position_id": "P" + str(i)} for i in range(50)]}
+def block(status, lines, basis="report_plus_outside", reconciliation=None, max_age=None):
+    b = {"version": 2, "status": status, "text": "synthetic", "published": {"basis": basis, "by_ccy": {},
+         "by_book": lines}, "lines": [{"position_id": "P" + str(i)} for i in range(50)]}
+    if reconciliation is not None:
+        b["reconciliation"] = reconciliation
+    if max_age is not None:
+        b["policy"] = {"report_max_age_days": max_age}
+    return b
+
+
+def rec(ccy, rate, valid="2026-10-12", book="B1", amount=1.0, rub=None):
+    """A comparison of the block's reconciliation: the report's figures and rate of the currency (``reported``,
+    ``reported_rub``, ``reported_rate``) for a book's scope, or an entity's (``book`` None)."""
+    return {"level": "book" if book else "entity", "entity": "ENT1", "book_id": book, "ccy": ccy, "reported": amount,
+            "reported_rub": rub, "reported_rate": rate, "valid_date": valid, "components": {}, "break": 0.0,
+            "over": False}
 
 
 def insert(con, day, *, cut="eod_final", run_type="EOD", ocp=None, fx=None, books=None, status="complete"):
@@ -48,11 +61,18 @@ def seeded(store_url):
     with store.connect(store_url) as con:
         ids["d1"] = insert(con, "2026-10-12", ocp=block("computed", [
             line("B1", "USD", 1.5e6), line(None, "CNY", 20e6, books=["B2", "B3"]),
-            line("B4", "EUR", -2e6, source="derived", entity="ENT2")]),
+            line("B4", "EUR", -2e6, source="derived", entity="ENT2")], reconciliation=[
+            rec("USD", 80.25), rec("GBP", 101.5), rec("GBP", 99.0, valid="2026-10-09", book="B2"),
+            rec("EUR", 95.0, valid="2026-10-09"), rec("CNY", None, amount=1e6, rub=11.2e6),
+            rec("JPY", 55.0, amount=1e6, rub=0.55e6), rec("CHF", 100.0, amount=-1e6, rub=-101e6),
+            rec("KZT", None, amount=-1e6, rub=0.18e6), rec("SGD", 60.0, amount=-1e6, rub=60.5e6),
+            rec("HKD", 10.5, book=None), rec("HKD", 10.4, book="B3"), rec("HKD", 10.3, book="B2"),
+            rec("AED", -22.0, amount=1e6, rub=0.0), rec("RUB", 1.0), rec("TRY", 0.0)]),
             books=[{"book_id": "B1", "name": "Old name", "entity": "ENT1", "desk": "FX"},
                    {"book_id": "B9", "name": "Gone", "entity": "ENT1", "desk": "Credit"}])
         insert(con, "2026-10-13", cut="eod_preliminary", ocp=block("computed", [line("B1", "USD", 9e9)]))
-        ids["d2"] = insert(con, "2026-10-13", ocp=block("computed", [line("B1", "USD", 2e6)]), fx=[
+        ids["d2"] = insert(con, "2026-10-13", ocp=block("computed", [line("B1", "USD", 2e6)], basis="derived",
+                                                        reconciliation=[rec("GBP", 101.0, valid="2026-10-13")]), fx=[
             {"ccy": "USD", "rate": 81.0, "rate_source": "cbr"}, {"ccy": "CNY", "rate": 11.2, "rate_source": "cbr"}])
         ids["d3"] = insert(con, "2026-10-14")  # before B2: no block
         ids["d4"] = insert(con, "2026-10-15", ocp={"version": 1, "status": "computed", "text": "v1"})
@@ -60,7 +80,9 @@ def seeded(store_url):
         ids["d5"] = insert(con, "2026-10-19", ocp=block("no_report", [
             line("B1", "USD", 3e6, source="derived", valid=None)]), fx=[])
         ids["anchor"] = insert(con, "2026-10-20", cut="intraday", run_type="INTRADAY",
-                               ocp=block("computed", [line("B1", "USD", 4e6, valid="2026-10-19")]))
+                               ocp=block("computed", [line("B1", "USD", 4e6, valid="2026-10-19")], max_age=5,
+                                         reconciliation=[rec("EUR", 95.5, valid="2026-10-16"),
+                                                         rec("GBP", 100.0, valid="2026-10-14")]))
     return TestClient(create_app(store_url)), ids
 
 
@@ -92,6 +114,17 @@ def test_days_are_the_saved_published_ocp(seeded):
     # a run with no CBR rate at all (before R26) valued on the CBR rate: its rates for both, as the pages' FX_CBR
     assert days["2026-10-13"]["fx"] == {"USD": {"market": 81.0, "cbr": 81.0, "source": "cbr"},
                                         "CNY": {"market": 11.2, "cbr": 11.2, "source": "cbr"}}
+    # the report's own rates, ₽ per unit: its rate_rub_per_unit (USD; CHF, SGD: their scale agrees with
+    # |ocp_rub| / |ocp_ccy|, ocp_rub signed or not), without one the implied rate (CNY; KZT, short, ocp_rub unsigned);
+    # the newer unit's (GBP); at a tie a book's scope before an entity's, then the first book (HKD). Left out: a unit
+    # older than the policy's age (EUR of 09.10 under 0 days), a rate quoted per 100 units (JPY: 55 against 0.55 ₽ by
+    # the report's own figures), a negative rate without figures (AED), none, zero, RUB
+    assert d1["reportFx"] == {"CHF": 100.0, "CNY": 11.2, "GBP": 101.5, "HKD": 10.3, "KZT": 0.18, "SGD": 60.0,
+                              "USD": 80.25}
+    # published from positions only: no report rate; a block without them: {}
+    assert days["2026-10-13"]["reportFx"] == {} and days["2026-10-14"]["reportFx"] == {}
+    # the run's report_max_age_days: a unit 4 days old is published, one 6 days old is not
+    assert days["2026-10-20"]["reportFx"] == {"EUR": 95.5}
     # before B2, a v1 block: a day without lines, its state says why
     assert days["2026-10-14"]["state"] == "not_computed" and days["2026-10-14"]["lines"] == []
     assert days["2026-10-15"]["state"] == "computed" and days["2026-10-15"]["basis"] is None

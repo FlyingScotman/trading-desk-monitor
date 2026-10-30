@@ -41,7 +41,10 @@ def test_ruonia_ois_reprices_its_quotes_to_10y_on_provisional_calendars(ois):
     assert lin["calendar"]["valid_to"] == "2079-12-31" and lin["calendar"]["provisional_from"] == "2027-01-01"
     quotes = ois.entry.curve.quotes
     assert quotes[7].maturity == date(2027, 10, 18) and quotes[7].par_rate == pytest.approx(0.14415, abs=1e-12)
-    assert quotes[-1].maturity == date(2036, 10, 16) and lin["last_node"] == "2036-10-16"
+    # The entry keeps the real quotes; the built curve runs on to core's synthetic 20Y quote (TDM#499: core 0.42
+    # OisTail, the par spread to the KBD at 10Y), where the calendars reach too.
+    assert quotes[-1].maturity == date(2036, 10, 16) and lin["last_node"] == "2046-10-16"
+    assert lin["tail"] == {"rule": "kbd", "model": "ois-tail-kbd-par-spread-v1", "tenors": ["15Y", "20Y"]}
     for q in quotes:
         assert abs(ois.curve.quote_par_rate(q) - q.par_rate) * 1e4 < 1e-7, q.tenor
 
