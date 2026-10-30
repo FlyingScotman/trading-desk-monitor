@@ -168,30 +168,28 @@ t('#213 история позиции: «RUONIA + базис» — RUONIA и б�
 // на КБД), risk["RUB RUONIA"] — RUONIA минус базис. В «КБД» дисконт остаётся на RUONIA (RUONIA − базис), на КБД — базис:
 // сумма DV01 та же, что в «RUONIA + базис» (риск RUONIA флоатера); бессрочный КБД-ресет — на Python (test_perpetuals_never_called)
 const FB = [0, 0, 0, 0, 100.0, 300.0, 800.0, 2000.0, 400.0, 0, 0], FR = [0, 0, 0, 0, 1.5, 3.4, 9.0, 24.0, 52.0, 0, 0];  // базис, RUONIA
-const floater = () => (D, ctx) => {  // КБД-флоатер — по плавающему купону (couponType 'float')
+const floater = (D, ctx) => {  // КБД-флоатер — по плавающему купону (couponType 'float')
   const q = D.positions.find(p => p.assetClass === 'Корп RUB флоатер');
   q.couponType = 'float'; q.risk = { 'RUB OFZ': FB.slice(), 'RUB RUONIA': FR.map((v, k) => v - FB[k]) };
   q.extra = Object.assign({}, q.extra, { ofz_basis01: sum(FB), ofz_ruonia01: sum(FR), quality: 'exact', spread_buckets: null });
   ctx.FLT_ID = q.id;
 };
-[false].forEach(perp => {
-  t('#467 ОФЗ с фикс-купоном вне видов ОФЗ — не флоатер: в «КБД» RUONIA снимается' + (perp ? ' (бессрочный)' : ''), () => {
-    const c = {};
-    const K = load('kbd', 'ruonia_basis', (D, cc) => { floater(perp)(D, cc); const q = D.positions.find(p => p.id === cc.FLT_ID); q.couponType = 'fix'; c.id = q.id; }).M.pos[c.id];
-    K.risk['RUB RUONIA'].forEach((v, k) => near(v, 0, 'RUONIA ' + k));
-    near(K.dv01, sum(FB), 'DV01 = риск КБД');
-  });
-  t('#467 КБД-флоатер' + (perp ? ' (бессрочный)' : '') + ': «КБД» оставляет RUONIA − базис и базис на КБД, сумма DV01 как в «RUONIA + базис»', () => {
-    const c1 = {}, c2 = {};
-    const B = load(null, 'ruonia_basis', (D, c) => { floater(perp)(D, c); c1.id = c.FLT_ID; }).M.pos[c1.id];
-    const K = load('kbd', 'ruonia_basis', (D, c) => { floater(perp)(D, c); c2.id = c.FLT_ID; }).M.pos[c2.id];
-    FR.forEach((v, k) => near(B.risk['RUB RUONIA'][k], v, 'RUONIA (RUONIA + базис) ' + k));
-    FR.forEach((v, k) => { near(K.risk['RUB RUONIA'][k], v - FB[k], 'RUONIA − базис ' + k); near(K.risk['RUB OFZ'][k], FB[k], 'КБД ' + k); });
-    near(B.dv01, sum(FR), 'DV01 в «RUONIA + базис»');
-    near(K.dv01, sum(FR), 'DV01 в «КБД» (та же сумма)');
-    near(B.dv01, K.dv01, 'инвариант: сумма DV01 одна в обоих видах');
-    assert.strictEqual(K.basis01, 0);
-    near(B.basis01, sum(FB), 'базис01');
-  });
+t('#467 ОФЗ с фикс-купоном вне видов ОФЗ — не флоатер: в «КБД» RUONIA снимается', () => {
+  const c = {};
+  const K = load('kbd', 'ruonia_basis', (D, cc) => { floater(D, cc); const q = D.positions.find(p => p.id === cc.FLT_ID); q.couponType = 'fix'; c.id = q.id; }).M.pos[c.id];
+  K.risk['RUB RUONIA'].forEach((v, k) => near(v, 0, 'RUONIA ' + k));
+  near(K.dv01, sum(FB), 'DV01 = риск КБД');
+});
+t('#467 КБД-флоатер' + ': «КБД» оставляет RUONIA − базис и базис на КБД, сумма DV01 как в «RUONIA + базис»', () => {
+  const c1 = {}, c2 = {};
+  const B = load(null, 'ruonia_basis', (D, c) => { floater(D, c); c1.id = c.FLT_ID; }).M.pos[c1.id];
+  const K = load('kbd', 'ruonia_basis', (D, c) => { floater(D, c); c2.id = c.FLT_ID; }).M.pos[c2.id];
+  FR.forEach((v, k) => near(B.risk['RUB RUONIA'][k], v, 'RUONIA (RUONIA + базис) ' + k));
+  FR.forEach((v, k) => { near(K.risk['RUB RUONIA'][k], v - FB[k], 'RUONIA − базис ' + k); near(K.risk['RUB OFZ'][k], FB[k], 'КБД ' + k); });
+  near(B.dv01, sum(FR), 'DV01 в «RUONIA + базис»');
+  near(K.dv01, sum(FR), 'DV01 в «КБД» (та же сумма)');
+  near(B.dv01, K.dv01, 'инвариант: сумма DV01 одна в обоих видах');
+  assert.strictEqual(K.basis01, 0);
+  near(B.basis01, sum(FB), 'базис01');
 });
 console.log(n + ' tests passed');

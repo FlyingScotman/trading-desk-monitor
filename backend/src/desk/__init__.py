@@ -57,8 +57,7 @@ VALUATION_VERSION = 28  # 2: risk per curve (R8); 3: static display fields (R9 D
 # history gets it too)
 # 25: a foreign bond's linear rates (rates_linear, rates_linear_curves) in RUB at the D rate, as rates (TDM#418)
 # 26: core 0.42 (TDM#499): RUONIA OIS past its last quote on synthetic 15Y/20Y quotes (OisTail), core 0.41.1 accrued
-# 28 (after TDM#466's 27, merge #513 first): a KBD floater's linear rates PnL takes its RUONIA discounting term too:
-# rates_linear, its RUONIA/basis split and convexity (TDM#467)
+# 28: a KBD floater's linear rates PnL takes its RUONIA discounting term too: rates_linear, its RUONIA/basis split and convexity (TDM#467)
 
 
 def logic_version() -> str:

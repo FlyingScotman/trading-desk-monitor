@@ -420,7 +420,8 @@ def kbd_floater(pid, basis, ruonia, **kw):
                 extra={"ofz_basis01": basis, "ofz_ruonia01": ruonia, "quality": "exact"}, **kw)
 
 
-def test_kbd_floater_keeps_its_ruonia_discounting_in_the_kbd_view(pid="FLT5Y", basis=322.0, ruonia=11.0):
+def test_kbd_floater_keeps_its_ruonia_discounting_in_the_kbd_view():
+    pid, basis, ruonia = "FLT5Y", 322.0, 11.0
     flt = kbd_floater(pid, basis=basis, ruonia=ruonia)  # the KBD-reset perpetual: test_perpetuals_never_called
     b_view = concepts.risk_table([flt, COMPUTED], FX, ofz_view="basis")
     k_view = concepts.risk_table([flt, COMPUTED], FX, ofz_view="kbd")

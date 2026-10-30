@@ -159,6 +159,7 @@ def test_kbd_reset_perpetual_is_a_kbd_floater_in_both_risk_views(ctx):
     row = tdm_run.run_content(ctx, [("P1", "B", o)], None, {}).rows[0]
     ex = row["extra"]
     assert row["coupon_type"] == "float" and ex["ofz_basis01"] is not None and ex["ofz_ruonia01"] is not None
+    assert abs(ex["ofz_basis01"]) > 1  # a real basis risk, not a zero that passes the sums
     item = [{"position_id": "P1", "fact": row}]
     basis = concepts.risk_table(item, {}, ofz_view="basis")["total"]["dv01_by_curve_rub"]
     kbd = concepts.risk_table(item, {}, ofz_view="kbd")["total"]["dv01_by_curve_rub"]
