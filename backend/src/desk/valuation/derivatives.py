@@ -58,8 +58,10 @@ delta), ``basis01`` (``FXBASIS|<ccy>``, RUB per bp), ``fixings`` (fixed / pendin
 **Flows and the last day** (TDM#466): ``extra.flows`` lists what the row's trades pay or settle in the next
 ``FLOW_DAYS`` days, signed as received (+) or paid (-): a swap's and a REPO's payments are core's projection (the
 ``received_rub`` of ``horizon_portfolio`` at each payment date, a difference of two horizons); an FX leg's amounts per
-currency are its terms' (``out_on``: the first date core no longer counts it). ``None``: core's flows could not be read
-(a rejection). ``pnl.direct`` adds those of D-1 falling in (D-1, D] to the change of PV. A row whose trades have all
+currency are its terms' (``out_on``: the first date core no longer counts it). A flow of unknown amount (``amount``
+None: an NDF's cash, a date core refused) stops the PnL only when it falls in the window. A coupon is core's projection
+on D-1: the fixings between D-1 and the payment are forwards, so the difference to the coupon actually paid is in no
+day's PnL (not in the change of PV of D, which no longer holds the period). ``pnl.direct`` adds those of D-1 falling in (D-1, D] to the change of PV. A row whose trades have all
 paid their last flow, the last within ``FLOW_DAYS`` of the date, is valued as settled (``_settled_row``: PV 0, no
 risk, ``extra.settled``) instead of ``NotValued("settled")``, so that its last day has a PnL; when only some trades
 ended, the others are valued and the ended ones noted.
@@ -632,7 +634,7 @@ class _Acc:
     repos: list[dict[str, Any]] = field(default_factory=list)
     fixing_ids: set[str] = field(default_factory=set)
     flows: list[dict[str, Any]] | None = field(default_factory=list)
-    """``extra.flows`` of the row; None when core's flows could not be read (the PnL then says so)."""
+    """``extra.flows`` of the row; None only in tests (flows not recorded: the PnL says so)."""
 
     def add_risk(self, row: Any) -> None:
         self.pv += row.pv_rub
@@ -852,7 +854,7 @@ def value(ctx: Any, requests: list[Request], *, options: FxOptions, second_order
                              quote_curve_risk=ctx.quote_curve_risk and quoted, ois_tail=OIS_TAIL if tail else None)
     result = value_portfolio(run_id=f"desk-eod-{bd}-derivatives", as_of=ctx.core_market.known_at, snapshot=snap,
                              instruments=instruments, positions=positions, policy=policy, scenarios=scenarios)
-    unread = _rates_flows(snap, policy, instruments, positions, pay_dates, owner, terms_of, flows)
+    _rates_flows(snap, policy, instruments, positions, pay_dates, owner, terms_of, flows)
     acc: dict[str, _Acc] = defaultdict(_Acc)
     for rej in result.coverage.rejections:
         acc[owner[rej.position_id].position_id].rejected.append((rej.code, rej.message))
@@ -914,7 +916,7 @@ def value(ctx: Any, requests: list[Request], *, options: FxOptions, second_order
             code, msg = a.rejected[0]
             out[r.position_id] = NotValued(f"core_{code.lower()}", msg)
         elif r.trades:
-            a.flows = None if r.position_id in unread else flows[r.position_id]
+            a.flows = flows[r.position_id]
             out[r.position_id] = _rates_valuation(ctx, live_of.get(r.position_id, r), a, notes[r.position_id], result,
                                                   snap)
         else:
@@ -1002,38 +1004,49 @@ def _pay_dates(inst: Any, t: Any, calendars: dict[str, CalendarEntry], bd: date)
 
 def _rates_flows(snap: Any, policy: ValuationPolicy, instruments: list[Any], positions: list[Position],
                  pay_dates: dict[str, tuple[date, ...]], owner: dict[str, Request], terms_of: dict[str, Any],
-                 flows: dict[str, list[dict[str, Any]]]) -> set[str]:
+                 flows: dict[str, list[dict[str, Any]]]) -> None:
     """Add to ``flows`` the cash the swaps and REPOs pay in the next ``FLOW_DAYS`` days, as core projects it: the
     ``received_rub`` of core's ``horizon_portfolio`` at each date a trade pays on is cumulative, so a payment is the
-    difference between two horizons. Returns the position IDs whose flows could not be read (a core rejection; the
-    PnL then says so, never 0)."""
+    difference between two horizons. A date core refuses (a rejection, an error) is recorded as a flow of unknown
+    amount on that date only (and on the next payment of the trade, whose difference would hold it): the PnL
+    says so (``received_unknown``) when such a date falls in its window, never 0, and not otherwise."""
     inst_of = {i.instrument_id: i for i in instruments}
     pos_of = {p.position_id: p for p in positions}
     jobs = {iid: ds for iid, ds in pay_dates.items() if ds and iid in inst_of}
     seen: dict[str, float] = {}
-    bad: set[str] = set()
+    stale: set[str] = set()  # trades whose last horizon failed: their next difference holds an unread payment
     cache = ShockedCurveCache()  # the curves are built once for all the horizons
+
+    def add(iid: str, h: date, amount: float | None) -> None:
+        flows[owner[iid].position_id].append({
+            "trade_id": terms_of[iid].label, "kind": "swap" if isinstance(inst_of[iid], SwapInstrument) else "repo",
+            "date": h.isoformat(), "out_on": h.isoformat(), "ccy": "RUB" if amount is not None else None,
+            "amount": amount})
+
     for h in sorted({d for ds in jobs.values() for d in ds}):
-        sel = [iid for iid, ds in jobs.items() if iid not in bad and ds[0] <= h]
+        sel = [iid for iid, ds in jobs.items() if ds[0] <= h]
         try:
             res = horizon_portfolio(snapshot=snap, instruments=[inst_of[i] for i in sel],
                                     positions=[pos_of[i] for i in sel], policy=policy, horizon_date=h,
                                     curve_cache=cache)
+            got = {row.position_id: row for row in (*res.swaps, *res.repos)}
         except (CoreRejection, ValueError, LookupError, ArithmeticError):
-            bad |= set(sel)
-            continue
-        got = {row.position_id: row for row in (*res.swaps, *res.repos)}
+            got = {}
         for iid in sel:
             row = got.get(iid)
             if row is None:
-                bad.add(iid)
+                stale.add(iid)
+                if h in jobs[iid]:
+                    add(iid, h, None)
                 continue
             amount, seen[iid] = row.received_rub - seen.get(iid, 0.0), row.received_rub
+            if iid in stale:
+                stale.discard(iid)
+                if h in jobs[iid]:
+                    add(iid, h, None)
+                continue
             if amount:
-                flows[owner[iid].position_id].append({
-                    "trade_id": terms_of[iid].label, "kind": "swap" if isinstance(inst_of[iid], SwapInstrument) else "repo",
-                    "date": h.isoformat(), "out_on": h.isoformat(), "ccy": "RUB", "amount": amount})
-    return {owner[i].position_id for i in bad}
+                add(iid, h, amount)
 
 
 def _risk(a: _Acc) -> tuple[dict[str, dict[str, float]], dict[str, float], dict[str, float]]:

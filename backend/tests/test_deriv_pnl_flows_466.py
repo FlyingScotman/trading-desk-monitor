@@ -127,9 +127,9 @@ def test_the_last_day_of_a_swap_has_a_pnl(ctx, prev):
     row = tdm_run.direct_row(ctx, "IRB", "S1", o, {"asset_class": "otc", "ccy": "RUB"}, None)
     assert row["instr_type"] != "FX" and row["side"] == "PAY" and row["mv_rub"] == 0.0
     assert row["extra"]["pnl"]["received_rub"] == o.pnl.received_rub
-    # the next day: settled on both dates, nothing to carry, no jump
-    again, _ = day(prev, ctx, swap("S1", "2026-10-14"), "S1")
-    assert again.pnl.total == pytest.approx(o.pnl.total)
+    # the day after: settled on both dates (D-1 is the settled row itself), nothing to carry, no jump
+    nxt, _ = day(ctx, _at(ctx, date(2026, 10, 16)), swap("S1", "2026-10-14"), "S1")
+    assert nxt.valuation.extra["settled"] and nxt.pnl.total == 0.0 and nxt.pnl.received_rub == 0.0
 
 
 def test_the_last_day_of_a_repo(ctx, prev):
@@ -337,3 +337,19 @@ def test_the_settled_cash_row_moves_with_the_rate():
     assert pnl.received_rub == pytest.approx(10e6)  # 10m x 12.0 - 110m
     assert pnl.fx_gross == pytest.approx(10e6 * 0.5) and pnl.total == pytest.approx(0.0 + 5e6)  # trade 0, cash 5m
     assert pnl.other == pytest.approx(0.0) and pnl.explained == pytest.approx(pnl.total)
+
+
+def test_a_refused_horizon_stops_the_pnl_only_when_its_date_is_in_the_window(ctx, prev, monkeypatch):
+    """Core refuses the horizon of every payment date: the flows of the row record the dates as unknown. A payment on D
+    (in the window) gives no PnL with the reason; one due later (outside it) leaves the PnL as it is."""
+    def refused(**k):
+        raise ValueError("core refused the horizon")
+
+    monkeypatch.setattr(dv, "horizon_portfolio", refused)
+    o, p = day(prev, ctx, swap("S1"), "S1")  # pays on 15.10, in (14.10, 15.10]
+    assert o.pnl is None and o.no_pnl.reason == "received_unknown" and "15" in o.no_pnl.detail
+    assert [f["amount"] for f in p.valuation.extra["flows"]] == [None]
+    later = swap("S2", "2027-09-20", start_date="2026-09-20")  # pays on 21.10, after D
+    o, p = day(prev, ctx, later, "S2")
+    assert [(f["amount"], f["date"]) for f in p.valuation.extra["flows"]] == [(None, "2026-10-21")]
+    assert o.no_pnl is None and o.pnl.received_rub == 0.0 and abs(o.pnl.total) < 1e5

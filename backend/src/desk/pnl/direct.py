@@ -200,7 +200,7 @@ def _received(prev: EodContext, ctx: EodContext, pv: Any) -> tuple[float, dict[s
         if not prev.business_date < date.fromisoformat(f["out_on"]) <= ctx.business_date:
             continue
         if f["amount"] is None:
-            raise NoPnl("received_unknown", f"{f['trade_id']}: the cash of an NDF settled on {f['date']} is not known")
+            raise NoPnl("received_unknown", f"{f['trade_id']}: the cash of {f['date']} is not known (an NDF's amount, or a date core refused)")
         ccy, amount = f["ccy"], f["amount"]
         if ccy == "RUB":
             rub += amount
