@@ -18,9 +18,18 @@ def line(book, ccy, amount, source="report", entity="ENT1", books=None, valid=No
             "reported": amount if source == "report" else None, "valid_date": valid}
 
 
-def block(status, lines, basis="report_plus_outside"):
-    return {"version": 2, "status": status, "text": "synthetic", "published": {"basis": basis, "by_ccy": {},
-            "by_book": lines}, "lines": [{"position_id": "P" + str(i)} for i in range(50)]}
+def block(status, lines, basis="report_plus_outside", reconciliation=None):
+    b = {"version": 2, "status": status, "text": "synthetic", "published": {"basis": basis, "by_ccy": {},
+         "by_book": lines}, "lines": [{"position_id": "P" + str(i)} for i in range(50)]}
+    if reconciliation is not None:
+        b["reconciliation"] = reconciliation
+    return b
+
+
+def rec(ccy, rate, valid="2026-10-12", book="B1"):
+    """A comparison of the block's reconciliation: the report's rate of the currency (``reported_rate``)."""
+    return {"level": "book", "entity": "ENT1", "book_id": book, "ccy": ccy, "reported": 1.0, "reported_rate": rate,
+            "valid_date": valid, "components": {}, "break": 0.0, "over": False}
 
 
 def insert(con, day, *, cut="eod_final", run_type="EOD", ocp=None, fx=None, books=None, status="complete"):
@@ -48,7 +57,9 @@ def seeded(store_url):
     with store.connect(store_url) as con:
         ids["d1"] = insert(con, "2026-10-12", ocp=block("computed", [
             line("B1", "USD", 1.5e6), line(None, "CNY", 20e6, books=["B2", "B3"]),
-            line("B4", "EUR", -2e6, source="derived", entity="ENT2")]),
+            line("B4", "EUR", -2e6, source="derived", entity="ENT2")], reconciliation=[
+            rec("USD", 80.25), rec("GBP", 101.5), rec("GBP", 99.0, valid="2026-10-09", book="B2"),
+            rec("CNY", None), rec("RUB", 1.0), rec("EUR", 0.0)]),
             books=[{"book_id": "B1", "name": "Old name", "entity": "ENT1", "desk": "FX"},
                    {"book_id": "B9", "name": "Gone", "entity": "ENT1", "desk": "Credit"}])
         insert(con, "2026-10-13", cut="eod_preliminary", ocp=block("computed", [line("B1", "USD", 9e9)]))
@@ -92,6 +103,10 @@ def test_days_are_the_saved_published_ocp(seeded):
     # a run with no CBR rate at all (before R26) valued on the CBR rate: its rates for both, as the pages' FX_CBR
     assert days["2026-10-13"]["fx"] == {"USD": {"market": 81.0, "cbr": 81.0, "source": "cbr"},
                                         "CNY": {"market": 11.2, "cbr": 11.2, "source": "cbr"}}
+    # the report's own rates (rate_rub_per_unit, through the reconciliation): per currency, the newer unit's; none,
+    # zero and RUB left out; a block without them: {}
+    assert d1["reportFx"] == {"GBP": 101.5, "USD": 80.25}
+    assert days["2026-10-13"]["reportFx"] == {} and days["2026-10-14"]["reportFx"] == {}
     # before B2, a v1 block: a day without lines, its state says why
     assert days["2026-10-14"]["state"] == "not_computed" and days["2026-10-14"]["lines"] == []
     assert days["2026-10-15"]["state"] == "computed" and days["2026-10-15"]["basis"] is None

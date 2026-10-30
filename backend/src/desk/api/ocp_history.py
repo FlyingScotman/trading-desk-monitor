@@ -8,6 +8,11 @@ with its fallbacks, and the CBR rate). A line's ``book`` is null for an entity-l
 part's, ``books`` the books it holds; nothing is spread over them. A run without the block (before B2), with a v1
 block (no ``published``) or a failed one: the day has no lines and says why in ``state`` / ``basis``.
 
+The report's own rates (``reportFx``, owner, 30.10.2026): ₽ per unit of each currency as the bank's OCP report gives
+it (``rate_rub_per_unit`` of the ``ocp`` rows), from the block's reconciliation (``reported_rate`` per report scope and
+currency; ``published.by_book`` does not carry it): the pages value a currency the run has no rate of at it. Two
+scopes with different rates: the one of the newer ``valid_date``. A block without them (no report, before B2): ``{}``.
+
 The books of the period (``books``): name, entity and desk of each book from the latest run of the period that has
 it, for the pages' filter and labels when a book left the current run's reference.
 """
@@ -25,7 +30,10 @@ DEFAULT_DAYS = 92
 MAX_PERIOD_DAYS = 400
 
 SQL = ("SELECT run_id, kind, CASE WHEN kind = 'ocp' THEN jsonb_build_object("
-       "'status', data->'status', 'basis', data->'published'->'basis', 'lines', data->'published'->'by_book')"
+       "'status', data->'status', 'basis', data->'published'->'basis', 'lines', data->'published'->'by_book',"
+       " 'rates', (SELECT jsonb_agg(jsonb_build_object('ccy', c->'ccy', 'rate', c->'reported_rate',"
+       " 'valid', c->'valid_date')) FROM jsonb_array_elements(CASE WHEN jsonb_typeof(data->'reconciliation')"
+       " = 'array' THEN data->'reconciliation' ELSE '[]' END) c WHERE jsonb_typeof(c->'reported_rate') = 'number'))"
        " ELSE data END AS data FROM run_reference WHERE run_id = ANY(%s) AND kind IN ('ocp', 'fx', 'books')")
 
 
@@ -57,6 +65,16 @@ def _fx(rows: list[dict[str, Any]] | None) -> dict[str, dict[str, Any]]:
                        "source": r.get("rate_source")} for r in rows}
 
 
+def _report_fx(rows: list[dict[str, Any]] | None) -> dict[str, float]:
+    """currency -> the report's rate, ₽ per unit (the module docstring): of the newest ``valid_date``, a positive one."""
+    out: dict[str, tuple[str, float]] = {}
+    for r in rows or []:
+        ccy, rate, valid = r.get("ccy"), r.get("rate"), str(r.get("valid") or "")
+        if ccy and ccy != "RUB" and rate and rate > 0 and (ccy not in out or valid > out[ccy][0]):
+            out[ccy] = (valid, rate)
+    return {c: v for c, (_, v) in sorted(out.items())}
+
+
 def history(con, anchor: dict[str, Any], start: date, end: date) -> dict[str, Any]:
     """The published OCP of each day of ``start``..``end`` (see the module docstring)."""
     runs = period_runs(con, anchor, start, end)["runs"]
@@ -71,6 +89,7 @@ def history(con, anchor: dict[str, Any], start: date, end: date) -> dict[str, An
             books[b["book_id"]] = {"name": b.get("name"), "entity": b.get("entity"), "desk": b.get("desk")}
         days.append({"date": r["business_date"], "runId": r["run_id"], "runType": r["run_type"],
                      "state": block.get("status") or ocp_run.NOT_COMPUTED, "basis": block.get("basis"),
-                     "fx": _fx(x.get("fx")), "lines": [_line(y) for y in block.get("lines") or []]})
+                     "fx": _fx(x.get("fx")), "reportFx": _report_fx(block.get("rates")),
+                     "lines": [_line(y) for y in block.get("lines") or []]})
     return {"runId": anchor["run_id"], "asOf": anchor["business_date"], "from": start, "to": end,
             "days": days, "books": books}

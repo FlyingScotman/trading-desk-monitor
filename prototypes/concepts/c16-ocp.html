@@ -32,7 +32,8 @@
   'use strict';
   // «ОВП» (TDM#446, макет согласован владельцем 29.10.2026): ОВП книг фильтра шапки по валютам — в валюте или в
   // USD-эквиваленте по выбранному курсу (рыночный прогона: MOEX 19:00, иначе 14:00, закрытие CETS, ЦБ; или ЦБ на дату);
-  // общая ОВП в USD; книги × валюты; история по дням. Рублей нет, лимитов, дат расчётов, сверки и переноса ОВП нет.
+  // общая ОВП в USD — нетто (владелец, 30.10.2026); книги × валюты; история по дням. Валюта без курса прогона —
+  // по курсу из отчёта ОВП (reportFx), с пометкой «курса нет». Рублей нет, лимитов, дат расчётов, сверки и переноса нет.
   // Источник — публикуемая ОВП прогонов (TDM#416: отчёт ОВП организации + слагаемые вне отчёта из позиций, книги без
   // отчёта — из позиций): GET ../api/v1/history/ocp (backend desk/api/ocp_history.py) — по дням, из сохранённых
   // прогонов, без пересчёта; последний день — прогон страницы. Часть отчёта по юрлицу (без книги) — своей строкой, по
@@ -54,16 +55,27 @@
   let H = null;  // ответ /api/v1/history/ocp; смена фильтра, курса, формата перерисовывает его без нового запроса
   let chart = null;
 
-  // Общая ОВП: бо́льшая из сумм длинных и коротких позиций по валютам в USD-эквиваленте, со знаком преобладающей
-  // стороны (правило макета; владелец его ещё не подтвердил — меняется здесь)
-  const overall = usd => { let l = 0, s = 0; usd.forEach(v => { if (v > 0) l += v; else if (v < 0) s -= v; }); return l >= s ? l : -s; };
+  // Общая ОВП — нетто: сумма USD-эквивалентов валют со знаком (владелец, 30.10.2026; правило — здесь)
+  const overall = usd => usd.reduce((a, v) => a + v, 0);
   // общая ОВП набора валют: null, если у одной из них нет USD-эквивалента (курса) — неполная цифра не выглядит полной
   const total = usd => usd.some(v => v == null) ? null : overall(usd);
   const mm = v => v == null ? null : v / 1e6;
   const fmt = v => v == null ? '<span class="mut3">—</span>' : '<span class="' + f.cls(Math.round(v * 10)) + '">' + f.s(v, 1) + '</span>';
-  // курс валюты, ₽ за единицу, выбранного источника на день; USD-эквивалент (null — курса нет)
+  // курс валюты, ₽ за единицу, выбранного источника на день; из отчёта ОВП (reportFx; старые прогоны — нет)
   const rate = (d, c) => { const x = (d.fx || {})[c]; return x ? x[S.rate] : null; };
-  const toUsd = (v, c, d) => { if (v == null) return null; if (c === 'USD') return v; const a = rate(d, c), u = rate(d, 'USD'); return a && u ? v * a / u : null; };
+  const repRate = (d, c) => (d.reportFx || {})[c] || null;
+  // USD-эквивалент (null — курса нет). Нет курса валюты в прогоне — по курсу отчёта ОВП через рубль; USD — по курсу
+  // прогона, нет его — тоже отчёта (владелец, 30.10.2026). Курс валюты из прогона с USD из отчёта не смешивается
+  const toUsd = (v, c, d) => {
+    if (v == null) return null; if (c === 'USD') return v;
+    const a = rate(d, c), u = rate(d, 'USD');
+    if (a) return u ? v * a / u : null;
+    const ra = repRate(d, c), ru = u || repRate(d, 'USD');
+    return ra && ru ? v * ra / ru : null;
+  };
+  // валюта без курса прогона, пересчитанная по курсу отчёта ОВП
+  const byReport = (c, d) => c !== 'USD' && !rate(d, c) && toUsd(1, c, d) != null;
+  const REP = 'пересчитано по курсу из отчёта ОВП';
   const unitOf = c => 'mm ' + (S.unit === 'usd' ? 'USD' : c);
   const shown = (v, c, d) => S.unit === 'usd' ? toUsd(v, c, d) : v;
   const ccyOrder = (a, b) => ((M.ccyOrder || {})[a] ?? 99) - ((M.ccyOrder || {})[b] ?? 99) || a.localeCompare(b);
@@ -143,11 +155,12 @@
     (rs.querySelectorAll ? rs.querySelectorAll('button') : []).forEach((b, i) => { b.title = Object.values(RATES)[i].title; });
     if (!C.length) sp.querySelector('.bd').innerHTML = EMPTY;
     else {
-      const usd = C.map(c => toUsd(T.by[c], c, d)), noRate = C.filter((c, k) => usd[k] == null);
+      const usd = C.map(c => toUsd(T.by[c], c, d)), noRate = C.filter((c, k) => usd[k] == null), viaRep = C.filter(c => byReport(c, d));
       sp.querySelector('.bd').innerHTML = '<div class="c16-sum">' +
-        '<div class="k-kpi tot" data-ocp-total title="бо́льшая из сумм длинных и коротких позиций по валютам, USD-эквивалент; знак — преобладающей стороны' + (noRate.length ? '. Без курса, не входят: ' + esc(noRate.join(', ')) : '') + (T.notes.length ? '. ' + esc(T.notes.join('; ')) : '') + '"><div class="l">Общая ОВП</div><div class="v">' + fmt(mm(overall(usd.filter(v => v != null)))) + ' <span class="u">mm USD</span></div><div class="s">' + (noRate.length ? 'без ' + esc(noRate.join(', ')) : '&nbsp;') + '</div></div>' +
+        '<div class="k-kpi tot" data-ocp-total title="сумма USD-эквивалентов валют со знаком' + (viaRep.length ? '. ' + REP + ': ' + esc(viaRep.join(', ')) : '') + (noRate.length ? '. Без курса, не входят: ' + esc(noRate.join(', ')) : '') + (T.notes.length ? '. ' + esc(T.notes.join('; ')) : '') + '"><div class="l">Общая ОВП</div><div class="v">' + fmt(mm(overall(usd.filter(v => v != null)))) + ' <span class="u">mm USD</span></div><div class="s">' + (noRate.length ? 'без ' + esc(noRate.join(', ')) : '&nbsp;') + '</div></div>' +
         C.map((c, k) => '<div class="k-kpi" data-ocp-ccy="' + esc(c) + '"><div class="l"><i class="c" style="background:' + K.ccyColor(c) + '"></i>' + esc(c) + '</div><div class="v">' + fmt(mm(shown(T.by[c], c, d))) + ' <span class="u">' + unitOf(c) + '</span></div><div class="s">' +
-          (c === 'USD' ? '&nbsp;' : usd[k] == null ? 'курса нет' : S.unit === 'usd' ? f.s(mm(T.by[c]), 1) + ' mm ' + esc(c) : '≈ ' + f.s(mm(usd[k]), 1) + ' mm USD') + '</div></div>').join('') + '</div>';
+          (c === 'USD' ? '&nbsp;' : usd[k] == null ? 'курса нет' : (S.unit === 'usd' ? f.s(mm(T.by[c]), 1) + ' mm ' + esc(c) : '≈ ' + f.s(mm(usd[k]), 1) + ' mm USD') +
+            (viaRep.includes(c) ? ' · <span title="' + REP + '">курса нет</span>' : '')) + '</div></div>').join('') + '</div>';
     }
     wrap.appendChild(sp);
     if (d.state === 'no_report') wrap.appendChild(whyPanel(d.date));
@@ -167,7 +180,7 @@
           : '<span title="книги: ' + esc((x.books || []).map(bookName).join(', ') || '—') + '">' + esc(entityName(x.entity)) + ' <span class="mut3">часть отчёта</span></span>' + tag;
       };
       bp.querySelector('.bd').innerHTML = '<table class="k-tbl" data-vk="c16-books" data-title="ОВП по книгам"><thead><tr><th>Книга</th>' +
-        C.map(c => '<th class="n">' + esc(c) + '<span class="k-thu">' + unitOf(c) + '</span></th>').join('') + '<th class="n" title="бо́льшая из сумм длинных и коротких позиций строки, USD-эквивалент">ОВП книги<span class="k-thu">mm USD</span></th></tr></thead><tbody>' +
+        C.map(c => '<th class="n"' + (byReport(c, d) ? ' title="курса нет: ' + REP + '"' : '') + '>' + esc(c) + '<span class="k-thu">' + unitOf(c) + '</span></th>').join('') + '<th class="n" title="сумма USD-эквивалентов валют строки со знаком">ОВП книги<span class="k-thu">mm USD</span></th></tr></thead><tbody>' +
         rows.map(r => '<tr data-ocp-row="' + esc(r.x.book || r.x.entity) + '"><td>' + label(r) + '</td>' + C.map(c => cell(r.v[c], c)).join('') + '<td class="n"' + (r.g == null ? ' title="нет курса одной из валют строки"' : '') + '>' + fmt(mm(r.g)) + '</td></tr>').join('') +
         '<tr class="tot"><td>Итого</td>' + C.map(c => cell(T.by[c], c)).join('') + '<td></td></tr></tbody></table>';
     } else bp.querySelector('.bd').innerHTML = EMPTY;
@@ -211,19 +224,22 @@
   function DEMO() {
     const asOf = M.asOf || '2026-10-21', noReport = /no_report/.test((window.location || {}).hash || '');
     const dates = []; for (let x = new Date(asOf + 'T00:00:00Z'), lim = since(asOf, 'm3'); x.toISOString().slice(0, 10) > lim; x.setUTCDate(x.getUTCDate() - 1)) if (x.getUTCDay() % 6) dates.unshift(x.toISOString().slice(0, 10));
-    // ОВП строки на дату, mm в валюте; книги — демо-набора шапки; часть отчёта по юрлицу AM — без деления по книгам
+    // ОВП строки на дату, mm в валюте; книги — демо-набора шапки; часть отчёта по юрлицу AM — без деления по книгам;
+    // CHF — без курса прогона, по курсу отчёта ОВП
     const TODAY = [['BANK', 'FXCR-USD', null, 'USD', 12], ['BANK', 'FXCR-CNY', null, 'CNY', 150], ['BANK', 'FXB', null, 'CNY', -5],
       ['BANK', 'FXB-SWAP', null, 'USD', -8], ['BANK', 'FXB-SWAP', null, 'EUR', 3], ['BANK', 'FXB-SWAP', null, 'CNY', -60],
       ['BANK', 'FXB-FWD', null, 'USD', -2.5], ['BANK', 'FXB-FWD', null, 'EUR', -1], ['BANK', 'FXB-FWD', null, 'CNY', 20],
-      ['BANK', 'HTM', null, 'EUR', 2], ['IC', 'IC-BND', null, 'USD', 1.5, 'derived'], ['AM', null, ['AM-BOND', 'AM-CNY'], 'CNY', 40]];
+      ['BANK', 'FXB-SWAP', null, 'CHF', 0.8], ['BANK', 'HTM', null, 'EUR', 2], ['IC', 'IC-BND', null, 'USD', 1.5, 'derived'], ['AM', null, ['AM-BOND', 'AM-CNY'], 'CNY', 40]];
     let seed = 7; const rnd = () => { seed = (seed * 16807) % 2147483647; return seed / 2147483647; };
     const walk = TODAY.map(([, , , , v]) => { const a = new Array(dates.length); a[a.length - 1] = v; for (let i = a.length - 2; i >= 0; i--) a[i] = Math.round((a[i + 1] + v * 0.08 * (rnd() * 2 - 1)) * 10) / 10; return a; });
-    const cbr = { USD: 79.9, EUR: 95.9, CNY: 11.05 };
-    const fx = i => Object.fromEntries(['USD', 'EUR', 'CNY'].map(c => { const w = 1 + 0.004 * Math.sin(i / 5 + c.length + (c === 'CNY' ? 2 : 0)); return [c, { market: Math.round(M.fx[c] * w * 1e4) / 1e4, cbr: Math.round(cbr[c] * w * 1e4) / 1e4, source: 'demo' }]; }));
+    const cbr = { USD: 79.9, EUR: 95.9, CNY: 11.05, CHF: 99.2 };
+    const w = (i, c) => 1 + 0.004 * Math.sin(i / 5 + c.length + (c === 'CNY' ? 2 : 0));
+    const fx = i => Object.fromEntries(['USD', 'EUR', 'CNY'].map(c => [c, { market: Math.round(M.fx[c] * w(i, c) * 1e4) / 1e4, cbr: Math.round(cbr[c] * w(i, c) * 1e4) / 1e4, source: 'demo' }]));
+    const reportFx = i => Object.fromEntries(Object.keys(cbr).map(c => [c, Math.round(cbr[c] * w(i, c) * 1e4) / 1e4]));
     return { runId: null, asOf, from: dates[0], to: asOf, books: {},
       days: dates.map((date, i) => {
         const today = i === dates.length - 1, nr = today && noReport;
-        return { date, runId: null, runType: 'EOD', state: nr ? 'no_report' : 'computed', basis: 'report_plus_outside', fx: fx(i),
+        return { date, runId: null, runType: 'EOD', state: nr ? 'no_report' : 'computed', basis: 'report_plus_outside', fx: fx(i), reportFx: nr ? {} : reportFx(i),
           lines: TODAY.map(([entity, book, books, ccy, , src], k) => ({ entity, book, books: books || [book], ccy, amount: walk[k][i] * 1e6 * (nr ? 1.03 : 1), source: nr ? 'derived' : src || 'report', reported: null, validDate: null })) };
       }) };
   }
