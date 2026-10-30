@@ -14,11 +14,14 @@ with
 pages' DV01 is), ``basis`` the OFZ basis to RUONIA (``basis_of``), ``mv`` as the type series count it (a bond's PV in
 RUB, a derivative's or FX row's notional in RUB), ``pnl`` the day's total over the pages' factors (null without a flash
 PnL), ``dm_bp`` a floater's discount margin (core 0.33; null for a fixed bond and in a run before it), ``ofz_spr`` an
-OFZ's spread risk to the KBD (0.2.6, ``basis_of``; null in a run before it), ``ofz_ruo`` an OFZ's RUONIA risk computed
-apart from its basis (``extra.ofz_ruonia01``, TDM#213; null without it). Curves are the pages' ids (``CURVE_MAP``): the
+OFZ's spread risk to the KBD (0.2.6, ``basis_of``; null in a run before it), ``ofz_ruo`` what the KBD view takes off the
+position's RUONIA: an OFZ's RUONIA risk computed apart from its basis (``extra.ofz_ruonia01``, TDM#213; null without it),
+a KBD floater's basis. Curves are the pages' ids (``CURVE_MAP``): the
 «RUONIA + базис» view, an OFZ's RUONIA risk on RUONIA (its row's ``RUB RUONIA`` plus ``RUB OFZ``: the RUONIA risk; a
 row without ``ofz_ruonia01`` has its KBD risk there, the basis again: variant P). The KBD view is RUONIA minus the
-OFZ's RUONIA risk (``ofzRuo``: ``ofz_ruo``, else the basis) with the basis on the KBD.
+OFZ's RUONIA risk (``ofzRuo``: ``ofz_ruo``, else the basis) with the basis on the KBD. A KBD floater
+(``is_kbd_floater_row``, TDM#467) is discounted on RUONIA: what the KBD view takes off its RUONIA is only its basis (its
+``ofz_ruo`` and the ``ofzRuo`` sum hold the basis, not its RUONIA risk), its RUONIA less the basis stays on RUONIA.
 A position's ``basis`` is ``basis_of`` as it is, an OFZ-IN's nominal proxy included (the pages tell it by the position,
 ``ofz_in_proxy``); the run's sum ``basis`` leaves the proxies out, ``basisIn`` is their sum (TDM#173); ``ofzRuo`` sums the
 RUONIA risk of the OFZ whose basis is in ``basis`` (an OFZ-PK's basis is its own spread, it has none); it is null in a
@@ -197,6 +200,14 @@ def basis_of(x: dict[str, Any]) -> tuple[float, float | None]:
     return x["ofz"] or 0.0, None
 
 
+def is_kbd_floater_row(coupon_type: str | None, ofz_basis: float | None) -> bool:
+    """Whether a row is a KBD floater (``bonds.is_kbd_floater``, TDM#33, a KBD-reset perpetual included) valued in RUONIA +
+    basis: a floating coupon (``float``) with the OFZ basis (``extra.ofz_basis01``; only an OFZ of the KBD scheme or a KBD
+    floater has it, an OFZ-PK none). It projects its coupons on the KBD and is discounted on RUONIA. By the coupon type,
+    not the kind: the one rule of the summary, the risk table and (mirrored) ``lib/real.js`` (TDM#467)."""
+    return ofz_basis is not None and coupon_type == "float"
+
+
 def ofz_in_proxy(is_in: bool, ofz_basis: float | None, quality: str | None) -> bool:
     """Whether an OFZ's par-par basis (``basis_of``) is an OFZ-IN's nominal proxy (TDM#173): an OFZ-IN (``is_in``: kind
     ``("GOV", "IN")``, a linker) of the KBD scheme (``ofz_basis`` present) that core did not value (``quality`` not
@@ -285,7 +296,7 @@ def build(rows: Iterable[dict[str, Any]]) -> dict[str, Any]:
         g, k = kind_of(f)
         # what the KBD view takes off the position's RUONIA: an OFZ's RUONIA risk (the basis again without one, P); a KBD
         # floater's basis only (TDM#467): its RUONIA - basis, the discounting, stays on RUONIA
-        floater = x.get("ofz_basis") is not None and x.get("coupon_type") == "float"
+        floater = is_kbd_floater_row(x.get("coupon_type"), x.get("ofz_basis"))
         ruo_off = b if floater or x.get("ofz_ruo") is None else x["ofz_ruo"]
         if ofz_in_proxy((g, k) == ("GOV", "IN"), x.get("ofz_basis"), x.get("quality")):
             basis_in += b  # an OFZ-IN's nominal proxy: not a basis (TDM#173)

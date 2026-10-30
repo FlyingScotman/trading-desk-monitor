@@ -5,4 +5,5 @@ INSERT INTO scenario_def (scenario_id, name, kind, ord, definition) VALUES
 ('ofzbasis+25', 'Базис ОФЗ к RUONIA +25 б.п.', 'preset', 56,
  '{"curves": {"RUB OFZ": [25.0, 25.0, 25.0, 25.0, 25.0, 25.0, 25.0, 25.0, 25.0, 25.0, 25.0]}}'),
 ('ofzbasis-25', 'Базис ОФЗ к RUONIA −25 б.п.', 'preset', 57,
- '{"curves": {"RUB OFZ": [-25.0, -25.0, -25.0, -25.0, -25.0, -25.0, -25.0, -25.0, -25.0, -25.0, -25.0]}}');
+ '{"curves": {"RUB OFZ": [-25.0, -25.0, -25.0, -25.0, -25.0, -25.0, -25.0, -25.0, -25.0, -25.0, -25.0]}}')
+ON CONFLICT (scenario_id) DO NOTHING;

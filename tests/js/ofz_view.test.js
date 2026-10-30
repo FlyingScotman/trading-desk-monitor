@@ -166,16 +166,15 @@ t('#213 история позиции: «RUONIA + базис» — RUONIA и б�
 
 // #467: КБД-флоатер (проекция на КБД, дисконт по RUONIA; ядро 0.40) в RUONIA + базис: risk["RUB OFZ"] — базис (риск проекции
 // на КБД), risk["RUB RUONIA"] — RUONIA минус базис. В «КБД» дисконт остаётся на RUONIA (RUONIA − базис), на КБД — базис:
-// сумма DV01 та же, что в «RUONIA + базис» (риск RUONIA флоатера), — как у бессрочного КБД-флоатера
+// сумма DV01 та же, что в «RUONIA + базис» (риск RUONIA флоатера); бессрочный КБД-ресет — на Python (test_perpetuals_never_called)
 const FB = [0, 0, 0, 0, 100.0, 300.0, 800.0, 2000.0, 400.0, 0, 0], FR = [0, 0, 0, 0, 1.5, 3.4, 9.0, 24.0, 52.0, 0, 0];  // базис, RUONIA
-const floater = (perp) => (D, ctx) => {  // КБД-флоатер — по плавающему купону (couponType 'float')
+const floater = () => (D, ctx) => {  // КБД-флоатер — по плавающему купону (couponType 'float')
   const q = D.positions.find(p => p.assetClass === 'Корп RUB флоатер');
   q.couponType = 'float'; q.risk = { 'RUB OFZ': FB.slice(), 'RUB RUONIA': FR.map((v, k) => v - FB[k]) };
   q.extra = Object.assign({}, q.extra, { ofz_basis01: sum(FB), ofz_ruonia01: sum(FR), quality: 'exact', spread_buckets: null });
-  if (perp) q.maturity = null;
   ctx.FLT_ID = q.id;
 };
-[false, true].forEach(perp => {
+[false].forEach(perp => {
   t('#467 ОФЗ с фикс-купоном вне видов ОФЗ — не флоатер: в «КБД» RUONIA снимается' + (perp ? ' (бессрочный)' : ''), () => {
     const c = {};
     const K = load('kbd', 'ruonia_basis', (D, cc) => { floater(perp)(D, cc); const q = D.positions.find(p => p.id === cc.FLT_ID); q.couponType = 'fix'; c.id = q.id; }).M.pos[c.id];

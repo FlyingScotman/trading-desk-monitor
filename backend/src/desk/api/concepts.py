@@ -632,7 +632,8 @@ def positions_history(con, run: dict[str, Any], ids: list[str] | None = None, fr
             for k, j in (("notional", 0), ("dv01", 1), ("cs01", 2), ("basis", 3), ("mv", 4)):
                 s[k].append(last[j] if last else None)
             s["ofzSpr"].append(last[10] if last and len(last) > 10 else None)  # an OFZ's spread to the KBD (0.2.6)
-            s["ofzRuo"].append(last[11] if last and len(last) > 11 else None)  # its RUONIA risk apart (0.2.7, TDM#213)
+            s["ofzRuo"].append(last[11] if last and len(last) > 11 else None)  # what the KBD view takes off RUONIA (an OFZ's
+            # RUONIA risk, 0.2.7, TDM#213; a KBD floater's basis, TDM#467)
             for c in last[8] if last else ():
                 cv.setdefault(c, [None] * i)
             for c, arr in cv.items():
@@ -973,13 +974,6 @@ def _cell() -> dict[str, Any]:
             "missing": {}}
 
 
-def is_kbd_floater_row(f: dict[str, Any], ex: dict[str, Any]) -> bool:
-    """Whether a row is a KBD floater (``bonds.is_kbd_floater``, TDM#33) valued in RUONIA + basis: a floating coupon with the
-    OFZ basis (``extra.ofz_basis01``; only an OFZ of the KBD scheme or a KBD floater has it, an OFZ-PK none). Its coupons
-    project on the KBD, it is discounted on RUONIA. By the coupon type, not the kind: an OFZ outside the OFZ kinds is no floater."""
-    return ex.get("ofz_basis01") is not None and f.get("coupon_type") == "float"
-
-
 def _risk_curves(f: dict[str, Any], kbd: bool = False) -> dict[str, float]:
     """A fact's DV01 by the pages' curve (``CURVE_MAP``: the KBD's rate risk is RUONIA's; with ``kbd``, the «КБД» view,
     it stays on ``RUB OFZ``), finite and nonzero."""
@@ -1097,7 +1091,8 @@ def risk_table(items: list[dict[str, Any]], fx: dict[str, float | None],
         # «КБД»: the run's KBD risk of an OFZ of the KBD scheme stays on RUB OFZ (as lib/real.js: another row's, e.g. a
         # corporate's on a date without RUONIA, is on RUONIA in both views)
         curves = _risk_curves(f, kbd and ex.get("ofz_basis01") is not None)
-        if kbd and ex.get("ofz_ruonia01") is not None and not is_kbd_floater_row(f, ex):
+        floater = summary.is_kbd_floater_row(f.get("coupon_type"), ex.get("ofz_basis01"))
+        if kbd and ex.get("ofz_ruonia01") is not None and not floater:
             # RUONIA + basis: the row's RUB RUONIA is RUONIA - basis (bonds.ofz_levels), the KBD view keeps its basis, the
             # KBD's par risk. A KBD floater (TDM#467) keeps both: its RUONIA - basis is the discounting on RUONIA, its
             # basis the projection on the KBD, so the DV01 sums to its RUONIA risk in both views

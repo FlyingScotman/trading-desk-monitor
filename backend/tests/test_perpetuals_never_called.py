@@ -146,3 +146,30 @@ def test_key_rate_perpetual_projects_on_the_key_rate(ctx):
     v = o.valuation
     assert v.horizon_kind == "perpetual" and v.floater.tail is not None
     assert sum(v.risk()["RUB KEY"].values()) > 0 and v.modified_duration > 3
+
+
+def test_kbd_reset_perpetual_is_a_kbd_floater_in_both_risk_views(ctx):
+    """TDM#467: a KBD-reset perpetual (a floating ``ZCYC`` coupon, never called) is a KBD floater: its basis is the KBD
+    risk of the coupons beyond the reset, its RUONIA risk the discounting (negative) and the endless stream; the «КБД»
+    view keeps both, so the DV01 sums to its RUONIA risk in both views (the table, the summary history)."""
+    from desk.api import concepts
+    from desk.publish import summary, tdm_run
+
+    o = value_terms(ctx, reset_perpetual(ctx.static.bonds[ALFA]), 1000.0)
+    row = tdm_run.run_content(ctx, [("P1", "B", o)], None, {}).rows[0]
+    ex = row["extra"]
+    assert row["coupon_type"] == "float" and ex["ofz_basis01"] is not None and ex["ofz_ruonia01"] is not None
+    item = [{"position_id": "P1", "fact": row}]
+    basis = concepts.risk_table(item, {}, ofz_view="basis")["total"]["dv01_by_curve_rub"]
+    kbd = concepts.risk_table(item, {}, ofz_view="kbd")["total"]["dv01_by_curve_rub"]
+    assert basis["RUB RUONIA"] == pytest.approx(ex["ofz_ruonia01"])
+    assert kbd["RUB OFZ"] == pytest.approx(ex["ofz_basis01"])
+    assert kbd["RUB RUONIA"] == pytest.approx(ex["ofz_ruonia01"] - ex["ofz_basis01"]) and kbd["RUB RUONIA"] != 0
+    assert sum(kbd.values()) == pytest.approx(sum(basis.values()))
+    s = summary.build([{"position_id": "P1", "book_id": "B", "pv_rub": row["mv_rub"], "risk": row["risk"],
+                        "cs01": row["cs01"], "ofz": row["ofz_spr01"], "instr_type": "BOND", "segment": row["segment"],
+                        "asset_class": row["asset_class"], "coupon_type": row["coupon_type"], "ccy": "RUB",
+                        "notional": row["notional"], "notional_rub": row["notional_rub"], "price": row["price"],
+                        "spread_bp": row["spread_bp"], "dv01": row["dv01"], "dm_bp": ex.get("dm_bp"), "pnl": None,
+                        "ofz_basis": ex["ofz_basis01"], "quality": ex["quality"], "ofz_ruo": ex["ofz_ruonia01"]}])
+    assert s["ofzRuo"] == pytest.approx(ex["ofz_basis01"])  # the history's «КБД» takes off only the basis
