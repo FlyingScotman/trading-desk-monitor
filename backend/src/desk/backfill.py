@@ -68,10 +68,13 @@ on) and the estimated time left (``eta_s``).
 
 from __future__ import annotations
 
+import errno
+import http.client
 import json
 import logging
 import re
 import socket
+import ssl
 import time
 import urllib.error
 from collections.abc import Callable
@@ -286,20 +289,33 @@ def inbox(con: psycopg.Connection, settings: Settings, date_from: date, *, force
     return "inbox from " + date_from.isoformat() + ": " + "; ".join(res.text().splitlines())
 
 
+def _disk_full(e: BaseException) -> bool:
+    """No space left (``ENOSPC``) or over the quota (``EDQUOT``, where the platform has it): the host's trouble, which
+    ends when the disk is freed, not the date's data."""
+    return isinstance(e, OSError) and e.errno in {getattr(errno, n) for n in ("ENOSPC", "EDQUOT") if hasattr(errno, n)}
+
+
 def transient(e: BaseException) -> bool:
-    """An error of the store connection, the network, the disk or the hub as a whole (unreachable, 5xx, token or
-    proxy refused), not of the date's data: such a date is not marked failed (a failed date is not tried again on the
-    same inputs), and the run stops there, since the next dates would hit it too (``run``: the stall, #447)."""
+    """An error of the store connection, the network or the hub as a whole (unreachable, 429, 5xx, token or proxy
+    refused), not of the date's data: such a date is not marked failed (a failed date is not tried again on the
+    same inputs), and the run stops there, since the next dates would hit it too (``run``: the stall, #447).
+    Network: ``TransportError`` (the hub client's, urllib or curl), ``TimeoutError``, ``ConnectionError``, DNS, TLS
+    (``ssl.SSLError``) and urllib/http.client errors. Store: ``psycopg.OperationalError``.
+    A full disk or an exceeded quota (``ENOSPC``, ``EDQUOT``) is a stall too (``disk``). Any other ``OSError`` (a missing or locked cache file,
+    permission) is the date's own error, not a stall."""
     if isinstance(e, HubError):
-        return e.status is None or e.status >= 500 or e.status in (401, 403, 407)
-    return isinstance(e, (psycopg.OperationalError, TransportError, OSError))
+        return e.status is None or e.status >= 500 or e.status in (401, 403, 407, 429)
+    return _disk_full(e) or isinstance(e, (
+        psycopg.OperationalError, TransportError, TimeoutError, ConnectionError, socket.gaierror, ssl.SSLError,
+        urllib.error.URLError, http.client.HTTPException))
 
 
 def stall_cause(e: BaseException) -> str:
     """What a ``transient`` error says is down: ``store`` (no connection), ``store_slow`` (a query cancelled by the
     statement timeout), ``proxy`` (a 407 or a refused tunnel), ``access`` (the hub refused the token: 401, 403, or no
     token), ``setup`` (no hub address, no curl), ``hub`` (no answer or a 5xx, ``HubUnavailable``; another hub error
-    without a status), ``network`` (no connection, timeout), ``disk``."""
+    without a status), ``network`` (no connection, timeout, TLS, a cut-off body),
+    ``disk`` (no space or quota: ``ENOSPC``, ``EDQUOT``)."""
     if isinstance(e, psycopg.errors.QueryCanceled):
         return "store_slow"
     if isinstance(e, psycopg.OperationalError):
@@ -312,7 +328,8 @@ def stall_cause(e: BaseException) -> str:
         if e.status in (401, 403) or (e.status is None and "token" in str(e)):
             return "access"
         return "setup" if e.status is None and ("not configured" in str(e) or "no curl" in str(e)) else "hub"
-    if isinstance(e, (TimeoutError, ConnectionError, socket.gaierror, urllib.error.URLError)):
+    if isinstance(e, (TimeoutError, ConnectionError, socket.gaierror, ssl.SSLError, urllib.error.URLError,
+                      http.client.HTTPException)):
         return "network"
     return "disk"
 
@@ -422,6 +439,7 @@ def run(settings: Settings, p: Plan, *, store_url: str | None = None, client: An
     # run after run (#23)
     waiting: list[str] = []  # the date the last run stopped on, passed over this run: the next date tells (#447)
     stall: dict[str, Any] | None = None  # the store's or the network's error the run stopped on (#447)
+    tried = 0  # dates attempted this run (done or failed), for the time budget
     through = False  # the stall standing at the start is over: a date got past its phase
 
     def loads(phases: set[str]) -> None:  # a date got past the store and the network in ``phases`` (a date run from
@@ -441,12 +459,13 @@ def run(settings: Settings, p: Plan, *, store_url: str | None = None, client: An
 
     try:
         for i, day in enumerate(todo):
-            if budget_s is not None and done and time.monotonic() - t0 >= budget_s:
-                break
+            if budget_s is not None and tried and time.monotonic() - t0 >= budget_s:
+                break  # the budget counts every date tried, failed or not, but at least one is tried (#447)
             if (passed and live is not None and day.date == live.get("probe") and i < len(todo) - 1
                     and (problems.get(day.date) or {}).get("attempts", 0) >= MAX_ATTEMPTS):
                 waiting.append(day.date)  # stopped on it run after run as well: the next date tells (#447)
                 continue
+            tried += 1
             if progress is not None:
                 progress(i, len(todo), day.date)
             still, phase, downloaded = None, "bundle", False
@@ -466,6 +485,7 @@ def run(settings: Settings, p: Plan, *, store_url: str | None = None, client: An
                     downloaded = True
                 elif day.date not in have:
                     skipped.append(day.date)
+                    tried -= 1  # nothing was tried: no bundle, no time spent
                     continue
                 phase = "run"
                 out(f"backfill {day.date}: {day.why}")
