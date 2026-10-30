@@ -14,6 +14,8 @@
  * запомненный в localStorage (desk.run.v1, 12 часов).
  */
 (function () {
+  // слова догрузки истории (чип шапки kit.js) — общие с Настройками
+  document.write('<script src="../desk-backfill-text.js"><\/script>');
   var http = /^https?:$/.test(location.protocol), u = new URL(location.href), sel = {};
   ['run_id', 'as_of', 'demo'].forEach(function (k) { var v = u.searchParams.get(k); if (v) sel[k] = v; });
   if (http && !Object.keys(sel).length) {

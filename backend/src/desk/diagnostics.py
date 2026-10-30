@@ -1036,7 +1036,8 @@ def reconcile_summary(r: dict[str, Any]) -> dict[str, Any]:
             "issue_codes": dict(sum((Counter(b["issues"]) for b in r["books"]), Counter()).most_common(20)),
             "losses": {x["code"]: x["count"] for x in r["losses"]}, "files": r["files"],
             "file_errors": r["file_errors"],
-            "last_scan": {k: v for k, v in (r.get("last_scan") or {}).items() if k != "at"} or None}
+            "last_scan": {k: v for k, v in (r.get("last_scan") or {}).items()
+                          if k not in ("at", "dirs")} or None}  # dirs: keyed by the folders' paths (TDM#445)
 
 
 def positions_section(settings: Settings, con: psycopg.Connection, now: datetime) -> dict[str, Any]:

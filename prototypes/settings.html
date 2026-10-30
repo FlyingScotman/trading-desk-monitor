@@ -46,18 +46,18 @@ a{color:var(--accent)}
   .st-nav a{flex:none} .st-nav a.on::before{display:none}
   .st-main{padding:14px 16px 110px}
 }
-.sec-h{display:flex;align-items:flex-start;justify-content:space-between;gap:12px;flex-wrap:wrap;margin:0 0 14px}
+.sec-h{display:flex;align-items:flex-start;justify-content:space-between;gap:12px;flex-wrap:wrap;margin:0 0 12px}
 .sec-h h1{margin:0;font-size:20px;font-weight:650;letter-spacing:.005em}
 .sec-h p{margin:3px 0 0;color:var(--fg-2);max-width:760px}
 .sec-h .badges{display:flex;gap:6px;flex-wrap:wrap;align-items:center;padding-top:4px}
 section.sec{display:none} section.sec.on{display:block}
 
 /* ---------- карточки ---------- */
-.card{background:var(--panel);border:1px solid var(--line);border-radius:8px;margin:0 0 14px;min-width:0}
+.card{background:var(--panel);border:1px solid var(--line);border-radius:8px;margin:0 0 12px;min-width:0}
 .card > .hd{display:flex;align-items:center;gap:10px;flex-wrap:wrap;padding:10px 14px;border-bottom:1px solid var(--line)}
 .card > .hd h2{margin:0;font-size:12px;font-weight:600;text-transform:uppercase;letter-spacing:.06em;color:var(--fg-2)}
 .card > .hd .sp,.sp{flex:1}
-.card > .bd{padding:14px}
+.card > .bd{padding:12px 14px}
 .card > .bd.flush{padding:0}
 .note{border:1px solid var(--line-2);background:var(--panel-2);border-radius:6px;padding:9px 12px;color:var(--fg);margin:0 0 12px}
 .note.warn{border-color:var(--warn);background:var(--warn-bg)}
@@ -69,6 +69,48 @@ details.more summary{cursor:pointer;color:var(--accent);list-style:none;display:
 details.more summary::-webkit-details-marker{display:none}
 details.more[open] summary{margin-bottom:4px}
 details.more p{margin:4px 0}
+
+/* #449: сводка сверху — что работает, что требует внимания (ссылки на разделы) */
+.sum{display:flex;gap:5px;flex-wrap:wrap;align-items:center;margin:-6px 0 12px}
+.sum .lead{font-size:12px;color:var(--fg-2);margin-right:4px}
+.sum .lead.bad{color:var(--neg)} .sum .lead.warn{color:var(--warn)} .sum .lead.ok{color:var(--pos)}
+.sum a{display:inline-flex;align-items:center;gap:5px;font-size:11.5px;line-height:20px;padding:0 8px;border-radius:999px;border:1px solid var(--line-2);background:var(--panel);color:var(--fg);text-decoration:none;white-space:nowrap;max-width:100%;overflow:hidden;text-overflow:ellipsis}
+.sum a::before{content:"";width:7px;height:7px;border-radius:50%;flex:none;background:var(--fg-3)}
+.sum a.ok::before{background:var(--pos)} .sum a.unk::before{background:var(--fg-3)}
+.sum a.warn{border-color:var(--warn)} .sum a.warn::before{background:var(--warn)}
+.sum a.bad{border-color:var(--neg);background:var(--neg-bg)} .sum a.bad::before{background:var(--neg)}
+.sum a:hover{border-color:var(--accent)}
+.sum a .k{color:var(--fg-2)}
+/* редкое — по кнопке: «Дополнительно» внутри карточки и свёрнутые карточки (открытость помнит браузер) */
+details.adv{border-top:1px dashed var(--line-2);margin-top:10px;padding-top:7px}
+.adv-bd{padding-top:0!important} .adv-bd > details.adv{margin-top:0}
+details.adv > summary,details.card > summary{cursor:pointer;list-style:none}
+details.adv > summary{color:var(--accent);font-size:12.5px;display:flex;gap:6px;align-items:baseline;flex-wrap:wrap}
+details.adv > summary::-webkit-details-marker,details.card > summary::-webkit-details-marker{display:none}
+details.adv > summary::before,details.card > summary::before{content:"▸";color:var(--fg-3);width:10px;flex:none}
+details.adv[open] > summary::before,details.card[open] > summary::before{content:"▾"}
+details.adv > summary .mut3{color:var(--fg-3)}
+details.adv > .form,details.adv > .hint{margin-top:12px}
+details.card:not([open]) > .hd{border-bottom:0}
+details.card > summary.hd:hover h2{color:var(--fg)}
+.adv-n{font-size:11px;color:var(--accent);border:1px solid var(--accent);border-radius:4px;padding:0 5px}
+/* подпись поля: человеческое название, под ним мелко — ключ settings.json (для поддержки) */
+.form > label .key{display:block;font:10.5px/1.35 var(--mono);color:var(--fg-3);margin-top:1px;word-break:break-all;font-weight:400}
+.unit{color:var(--fg-2);font-size:12px;margin-left:4px}
+.cols2{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:0 12px;align-items:start}
+.cols2 .form{grid-template-columns:minmax(130px,170px) minmax(0,1fr)}
+@media (max-width:1180px){.cols2{grid-template-columns:minmax(0,1fr)}}
+/* «определено автоматически» и подсказки (GET /api/v1/settings/detect) */
+.auto{margin:4px 0 0;font-size:12px;color:var(--fg-2);display:flex;gap:4px 8px;flex-wrap:wrap;align-items:baseline}
+.auto:empty{display:none}
+.auto .au,.sug .au{font-size:10.5px;font-weight:600;padding:0 6px;border-radius:4px;border:1px solid var(--pos);color:var(--pos);white-space:nowrap}
+.auto .au.man{border-color:var(--line-2);color:var(--fg-2)}
+.auto .au.warn{border-color:var(--warn);color:var(--warn)}
+.auto .v{font-family:var(--mono);word-break:break-all;color:var(--fg)}
+.auto-list:empty{display:none}
+.auto-list{margin-top:6px;display:flex;flex-direction:column;gap:4px}
+.sug{border:1px solid var(--line-2);border-left:3px solid var(--accent);border-radius:6px;padding:7px 10px;margin:10px 0 0;background:var(--panel-2);font-size:12.5px;display:flex;gap:6px 10px;flex-wrap:wrap;align-items:baseline}
+.sug .v{font-family:var(--mono);word-break:break-all}
 
 /* значки состояния */
 .badge{display:inline-flex;align-items:center;gap:5px;font-size:11px;line-height:17px;padding:0 8px;border-radius:999px;border:1px solid var(--line-2);color:var(--fg-2);background:var(--panel-2);white-space:nowrap;font-weight:500}
@@ -82,7 +124,7 @@ details.more p{margin:4px 0}
 .st.ok::before{background:var(--pos)} .st.bad::before{background:var(--neg)} .st.wait::before{background:var(--warn)}
 
 /* формы */
-.form{display:grid;grid-template-columns:minmax(150px,210px) minmax(0,1fr);gap:12px 16px;align-items:start}
+.form{display:grid;grid-template-columns:minmax(150px,210px) minmax(0,1fr);gap:10px 16px;align-items:start}
 @media (max-width:700px){.form{grid-template-columns:1fr;gap:4px 0}.form > label{padding-top:8px}}
 .form > label{padding-top:6px;color:var(--fg-2)}
 .inp,.ta{width:100%;background:var(--bg);border:1px solid var(--line-2);border-radius:6px;padding:5px 9px;font-size:12.5px;color:var(--fg);min-width:0}
@@ -114,6 +156,7 @@ select.inp{padding:4px 6px}
 .err{color:var(--neg);font-size:12px}
 .okmsg{color:var(--pos);font-size:12px}
 .chk{display:inline-flex;align-items:center;gap:6px;cursor:pointer;white-space:nowrap;color:var(--fg-2)}
+.form .chk{white-space:normal} /* длинная подпись флажка в форме переносится (телефон) */
 .x{background:none;border:1px solid transparent;color:var(--fg-3);cursor:pointer;font-size:14px;line-height:1;padding:2px 6px;border-radius:4px}
 .x:hover{color:var(--fg);border-color:var(--line-2)} .x.del:hover{color:var(--neg)}
 
@@ -276,22 +319,20 @@ details.sf-grp[open] > summary::before{content:"▾"}
   </nav>
 
   <main class="st-main">
+    <div class="sum" id="st-sum" role="status" aria-label="Что работает и что требует внимания" hidden></div>
     <div class="note err" id="load-err" hidden></div>
     <div class="note warn" id="env-note" hidden></div>
 
     <!-- ========== Подключения ========== -->
     <section class="sec" id="sec-hub" data-sec="hub">
-      <div class="sec-h"><div><h1>Подключения</h1><p>Маркет-дата сервер (хаб): откуда монитор берёт котировки, кривые и фиксинги.</p></div>
+      <div class="sec-h"><div><h1>Подключения</h1><p>Маркет-дата сервер (хаб): откуда монитор берёт котировки, кривые и фиксинги. Обычно достаточно адреса и токена.</p></div>
         <div class="badges"><span class="badge st" id="token-st">токен …</span><span class="badge" id="hub-st" hidden></span></div></div>
       <div class="card">
-        <div class="hd"><h2>Маркет-дата сервер</h2><span class="sp"></span><button class="ibtn" id="test-hub" type="button">Проверить связь</button></div>
+        <div class="hd"><h2>Маркет-дата сервер</h2><span class="sp"></span><button class="btn" id="test-hub" type="button">Проверить связь</button></div>
         <div class="bd form">
           <label for="hub_url">Адрес сервера</label>
-          <div><input class="inp mono" id="hub_url" data-key="hub_url" placeholder="https://…" autocomplete="off">
-            <p class="hint">Только https:// (http — лишь для 127.0.0.1).</p></div>
-          <label for="hub_timeout_s">Ждать ответа, секунд</label>
-          <div><input class="inp mono num" id="hub_timeout_s" data-key="hub_timeout_s" inputmode="decimal" placeholder="60">
-            <p class="hint">Пусто — 60, на один запрос к серверу.</p></div>
+          <div><input class="inp mono" id="hub_url" data-key="hub_url" placeholder="https://hub.example" autocomplete="off">
+            <p class="hint">Даёт администратор хаба; только https://. Пусто — котировки не загружаются.</p></div>
           <label for="token">Токен</label>
           <div>
             <div class="row">
@@ -299,126 +340,141 @@ details.sf-grp[open] > summary::before{content:"▾"}
               <button class="ibtn" id="token-save" type="button">Сохранить токен</button>
               <button class="lnk" id="token-clear" type="button">удалить</button>
             </div>
-            <p class="hint">Хранится отдельно, в файле <span class="mono" id="token-file">hub_token</span>, и никогда не показывается. <span id="token-msg"></span></p>
+            <p class="hint">Даёт администратор хаба; без него данных нет. Хранится в файле <span class="mono" id="token-file">hub_token</span> и не показывается. <span id="token-msg"></span></p>
           </div>
           <label></label>
           <div class="res" id="hub-res" hidden></div>
         </div>
-      </div>
-      <div class="card">
-        <div class="hd"><h2>Прокси и сертификаты</h2><span class="mut3">нужны, только если хаб доступен через корпоративный прокси</span></div>
-        <div class="bd form">
-          <label for="https_proxy">Прокси</label>
-          <div><input class="inp mono" id="https_proxy" data-key="https_proxy" placeholder="http://proxy:3128 — пусто: без прокси или из системы" autocomplete="off"></div>
-          <label for="hub_transport">Способ подключения</label>
-          <div><select class="inp" id="hub_transport" data-key="hub_transport" style="max-width:240px">
-              <option value="auto">Авто</option><option value="python">Python</option><option value="curl">curl Windows</option>
-            </select>
-            <details class="more"><summary>Что выбрать</summary><p>Если прокси пускает по учётке Windows, логин и пароль не нужны: «curl Windows» входит текущим пользователем. «Авто» сам переходит на curl, если прокси требует вход.</p></details></div>
-          <label for="proxy_user">Логин прокси</label>
-          <div><input class="inp mono" id="proxy_user" data-key="proxy_user" placeholder="пусто — вход по учётке Windows (curl Windows)" autocomplete="off"></div>
-          <label for="proxy-pw">Пароль прокси</label>
-          <div>
-            <div class="row">
-              <input class="inp mono" id="proxy-pw" type="password" placeholder="пароль прокси" autocomplete="new-password">
-              <button class="ibtn" id="proxy-pw-save" type="button">Сохранить пароль</button>
-              <button class="lnk" id="proxy-pw-clear" type="button">удалить</button>
-            </div>
-            <p class="hint">Хранится отдельно, в файле <span class="mono">proxy_password</span>. <span id="proxy-pw-st"></span> <span id="proxy-pw-msg"></span></p>
-          </div>
-          <label for="no_proxy">Без прокси для</label>
-          <div><input class="inp mono" id="no_proxy" data-key="no_proxy" placeholder="localhost,127.0.0.1 — только вместе с прокси выше" autocomplete="off"></div>
-          <label for="hub_ca_bundle">Сертификат CA (PEM)</label>
-          <div><input class="inp mono" id="hub_ca_bundle" data-key="hub_ca_bundle" placeholder="пусто — системное хранилище сертификатов" autocomplete="off">
-            <p class="hint">Только если прокси подменяет сертификаты, а система их не знает.</p></div>
+        <div class="bd adv-bd">
+          <details class="adv" id="adv-hub" data-fold><summary>Дополнительно <span class="mut3">— время ожидания ответа</span></summary>
+          <div class="form">
+            <label for="hub_timeout_s">Ждать ответа хаба</label>
+            <div><input class="inp mono num" id="hub_timeout_s" data-key="hub_timeout_s" inputmode="decimal" placeholder="60"> <span class="unit">секунд</span>
+              <p class="hint">На один запрос. Пусто — 60. Увеличьте, если проверка пишет «таймаут».</p></div>
+          </div></details>
         </div>
       </div>
-      <div class="card">
-        <div class="hd"><h2>Срезы маркет-даты</h2><span class="mut3">где хранятся и откуда брать вручную</span></div>
+      <details class="card fold" id="proxy-card" data-fold>
+        <summary class="hd"><h2>Прокси и сертификаты</h2><span class="mut3" id="proxy-sum">обычно не нужны: берутся из Windows</span></summary>
+        <div class="bd">
+          <p class="hint" style="margin:0 0 12px">Нужны, только если «Проверить связь» пишет об ошибке прокси или сертификата. Пустые поля — как в Windows.</p>
+          <div class="form">
+            <label for="https_proxy">Адрес прокси</label>
+            <div><input class="inp mono" id="https_proxy" data-key="https_proxy" placeholder="http://proxy.example:3128" autocomplete="off">
+              <p class="auto" data-auto="https_proxy"></p>
+              <p class="hint">Пусто — прокси Windows, а без него — напрямую.</p></div>
+            <label for="hub_transport">Способ подключения</label>
+            <div><select class="inp" id="hub_transport" data-key="hub_transport" style="max-width:240px">
+                <option value="auto">Авто</option><option value="python">Python</option><option value="curl">curl Windows</option>
+              </select>
+              <p class="auto" data-auto="hub_transport"></p>
+              <details class="more"><summary>Что выбрать</summary><p>Если прокси пускает по учётке Windows, логин и пароль не нужны: «curl Windows» входит текущим пользователем. «Авто» сам переходит на curl, если прокси требует вход.</p></details></div>
+            <label for="proxy_user">Логин прокси</label>
+            <div><input class="inp mono" id="proxy_user" data-key="proxy_user" placeholder="ДОМЕН\пользователь" autocomplete="off">
+              <p class="hint">Если прокси просит логин. Пусто — вход под текущим пользователем Windows.</p></div>
+            <label for="proxy-pw">Пароль прокси</label>
+            <div>
+              <div class="row">
+                <input class="inp mono" id="proxy-pw" type="password" placeholder="пароль прокси" autocomplete="new-password">
+                <button class="ibtn" id="proxy-pw-save" type="button">Сохранить пароль</button>
+                <button class="lnk" id="proxy-pw-clear" type="button">удалить</button>
+              </div>
+              <p class="hint">Хранится в файле <span class="mono">proxy_password</span> и не показывается. <span id="proxy-pw-st"></span> <span id="proxy-pw-msg"></span></p>
+            </div>
+            <label for="no_proxy">Без прокси для</label>
+            <div><input class="inp mono" id="no_proxy" data-key="no_proxy" placeholder="localhost,127.0.0.1" autocomplete="off">
+              <p class="hint">Адреса через запятую — напрямую, мимо прокси выше. Пусто — всё через прокси.</p></div>
+            <label for="hub_ca_bundle">Сертификат CA (PEM)</label>
+            <div><input class="inp mono" id="hub_ca_bundle" data-key="hub_ca_bundle" placeholder="C:\Сертификаты\ca.pem" autocomplete="off">
+              <p class="auto" data-auto="hub_ca_bundle"></p>
+              <p class="hint">Если проверка пишет «сертификат не доверен». Пусто — сертификаты Windows.</p></div>
+          </div>
+        </div>
+      </details>
+      <details class="card fold" id="snap-card" data-fold>
+        <summary class="hd"><h2>Срезы маркет-даты</h2><span class="mut3">где хранятся; запасной путь, если хаб недоступен</span></summary>
         <div class="bd form">
           <label for="snapshot_cache">Папка срезов</label>
-          <div><input class="inp mono" id="snapshot_cache" data-key="snapshot_cache" placeholder="пусто — в папке данных" autocomplete="off">
-            <p class="hint">Проверенные срезы с сервера. Сменили папку — сервер загрузит срезы заново.</p></div>
+          <div><input class="inp mono" id="snapshot_cache" data-key="snapshot_cache" placeholder="C:\DeskMonitor\snapshots" autocomplete="off">
+            <p class="auto" data-auto="snapshot_cache"></p>
+            <p class="hint">Срезы с хаба. Сменили папку — загрузятся заново.</p></div>
           <label for="snapshot_drop">Папка ручной загрузки</label>
-          <div><input class="inp mono" id="snapshot_drop" data-key="snapshot_drop" placeholder="пусто — нет" autocomplete="off">
-            <p class="hint">Если сервер недоступен: срезы, положенные сюда вручную, берутся вместо него.</p></div>
+          <div><input class="inp mono" id="snapshot_drop" data-key="snapshot_drop" placeholder="C:\Срезы вручную" autocomplete="off">
+            <p class="hint">Если хаб недоступен: срезы (.json.gz), положенные сюда, берутся вместо него. Пусто — нет.</p></div>
         </div>
-      </div>
+      </details>
     </section>
 
     <!-- ========== Адаптер и источники ========== -->
     <section class="sec" id="sec-adapter" data-sec="adapter">
-      <div class="sec-h"><div><h1>Адаптер и источники</h1><p>Приватный адаптер читает отчёты банка из папок; здесь — где он и какие отчёты читать.</p></div>
+      <div class="sec-h"><div><h1>Адаптер и источники</h1><p>Какие папки с отчётами просматривает монитор и какой адаптер их читает; ниже — проверка, что отчёты читаются.</p></div>
         <div class="badges"><span class="badge st" id="ad-st">проверка…</span><button class="ibtn" id="ad-refresh" type="button">Обновить статус</button>
-          <label class="chk" title="Показывает сырой JSON файлов настроек адаптера — для того, чего нет в формах"><input type="checkbox" id="advanced"> Для опытных</label></div></div>
+          <label class="chk" title="Показывает сырой JSON файлов настроек адаптера — для того, чего нет в формах"><input type="checkbox" id="advanced"> Показать JSON (для опытных)</label></div></div>
       <div class="card">
-        <div class="hd"><h2>Адаптер</h2></div>
-        <div class="bd">
-          <div id="ad-res"></div>
-          <div class="form" style="margin-top:14px">
-            <label for="private_adapter">Папка адаптера</label>
-            <div><input class="inp mono" id="private_adapter" data-key="private_adapter" placeholder="пусто — эталонный адаптер (CSV)" autocomplete="off">
-              <p class="hint">Папка пакета приватного адаптера (с файлом __init__.py).</p>
-              <p class="hint" id="ad-default" hidden></p></div>
-            <label for="private_adapter_config">Папка настроек адаптера</label>
-            <div><input class="inp mono" id="private_adapter_config" data-key="private_adapter_config" autocomplete="off">
-              <p class="hint">Пусто — <span class="mono" id="cfg-default"></span> (создаётся сама). Здесь лежат файлы юрлиц, книг и фондирования.</p></div>
-            <label for="adapter_check_timeout_s">Проверка формы адаптером, секунд</label>
-            <div><input class="inp mono num" id="adapter_check_timeout_s" data-key="adapter_check_timeout_s" inputmode="decimal" placeholder="60">
-              <p class="hint">Пусто — 60. Сколько ждать адаптер, когда форма проверяет файл перед сохранением; сохранить можно и без проверки.</p></div>
-            <label for="private_adapter_sha256">Отпечаток адаптера</label>
-            <div><input class="inp mono" id="private_adapter_sha256" data-key="private_adapter_sha256" placeholder="пусто — не проверять" autocomplete="off">
-              <p class="hint">Если задан, сервер загружает адаптер только с этим отпечатком (SHA-256 файлов адаптера и папки его настроек; текущий — выше).</p></div>
-            <label for="acquisition_python">Python для получения данных</label>
-            <div><input class="inp mono" id="acquisition_python" data-key="acquisition_python" autocomplete="off">
-              <p class="hint">Полный путь к Python с библиотекой внутренней системы. Нужен только для запуска получения данных.</p></div>
-          </div>
-          <details class="more" style="margin-top:12px"><summary>Пределы времени и размера</summary>
-          <div class="form" style="margin-top:8px">
-            <label for="adapter_match_timeout_s">Распознавание файлов, секунд</label>
-            <div><input class="inp mono num" id="adapter_match_timeout_s" data-key="adapter_match_timeout_s" inputmode="decimal" placeholder="60">
-              <p class="hint">Пусто — 60, на пачку из 50 файлов.</p></div>
-            <label for="adapter_read_timeout_s">Чтение отчёта, секунд</label>
-            <div><input class="inp mono num" id="adapter_read_timeout_s" data-key="adapter_read_timeout_s" inputmode="decimal" placeholder="600">
-              <p class="hint">Пусто — 600, на файл.</p></div>
-            <label for="inbox_max_file_mb">Файл не больше, МБ</label>
-            <div><input class="inp mono num" id="inbox_max_file_mb" data-key="inbox_max_file_mb" inputmode="decimal" placeholder="500">
-              <p class="hint">Пусто — 500. Файлы больше адаптеру не передаются.</p></div>
-            <label for="adapter_kit_timeout_s">Проверка адаптера, секунд</label>
-            <div><input class="inp mono num" id="adapter_kit_timeout_s" data-key="adapter_kit_timeout_s" inputmode="decimal" placeholder="1800">
-              <p class="hint">Пусто — 1800. Вся «Проверка адаптера» ниже; дольше — останавливается.</p></div>
-            <label for="adapter_status_timeout_s">Состояние адаптера, секунд</label>
-            <div><input class="inp mono num" id="adapter_status_timeout_s" data-key="adapter_status_timeout_s" inputmode="decimal" placeholder="60">
-              <p class="hint">Пусто — 60.</p></div>
-            <label for="adapter_action_timeout_s">Действие адаптера, секунд</label>
-            <div><input class="inp mono num" id="adapter_action_timeout_s" data-key="adapter_action_timeout_s" inputmode="decimal" placeholder="900">
-              <p class="hint">Пусто — 900, на одно действие.</p></div>
-          </div></details>
-        </div>
-      </div>
-      <div class="card" id="ad-status" hidden>
-        <div class="hd"><h2>Состояние адаптера</h2><span class="mut3" id="ad-status-at"></span><span class="sp"></span><button class="ibtn" id="ad-status-refresh" type="button">Обновить</button></div>
-        <div class="bd" id="ad-status-bd"><p class="mut">Загрузка…</p></div>
-      </div>
-      <div class="card">
-        <div class="hd"><h2>Папки с отчётами</h2><span class="tag env" id="dirs-env" hidden>задано переменной окружения</span><span class="sp"></span><button class="ibtn" id="dir-add" type="button">+ Добавить папку</button></div>
+        <div class="hd"><h2>Папки с отчётами</h2><span class="mut3">их просматривает монитор</span><span class="tag env" id="dirs-env" hidden>задано переменной окружения</span><span class="sp"></span><button class="ibtn" id="dir-add" type="button">+ Добавить папку</button></div>
         <div class="bd flush">
           <table class="t dirs-t">
             <thead><tr><th>Папка</th><th>Подпись</th><th>Подпапки</th><th></th></tr></thead>
             <tbody id="dirs"></tbody>
           </table>
         </div>
-        <div class="bd" style="padding-top:8px"><p class="hint" style="margin:0">Сервер просматривает эти папки и передаёт новые файлы адаптеру. Подпись — заметка для вас («Позиции», «PnL»).
-          Ещё всегда просматривается папка результатов адаптера <span class="mono" id="out-dir"></span> — туда пишут файлы его действия; самому адаптеру она как папка отчётов не передаётся.</p>
+        <div class="bd" style="padding-top:8px"><p class="hint" style="margin:0">Отчёты загружаются <b>только из этих папок</b>.</p>
+          <div id="dirs-hint"></div>
+          <details class="adv" id="adv-dirs" data-fold><summary>Дополнительно <span class="mut3">— архив принятых файлов, папка результатов адаптера</span></summary>
+          <p class="hint">Ещё всегда просматривается папка результатов действий адаптера <span class="mono" id="out-dir"></span>.</p>
           <div class="form" style="margin-top:10px">
             <label for="inbox_archive">Архив принятых файлов</label>
-            <div><input class="inp mono" id="inbox_archive" data-key="inbox_archive" autocomplete="off" placeholder="пусто — в папке данных">
-              <p class="hint">Копия каждого узнанного файла (по его хэшу): по ней файл перечитывается, даже если исходный удалён.</p></div>
-          </div></div>
+            <div><input class="inp mono" id="inbox_archive" data-key="inbox_archive" autocomplete="off" placeholder="C:\DeskMonitor\inbox-archive">
+              <p class="auto" data-auto="inbox_archive"></p>
+              <p class="hint">Копии принятых файлов: отчёт перечитывается, даже если исходный удалён.</p></div>
+          </div></details></div>
       </div>
-      <div class="card" id="ad-actions" hidden>
-        <div class="hd"><h2>Действия адаптера</h2><span class="mut3">файлы действий — в <span class="mono" id="ad-actions-root"></span>, их читают входящие</span></div>
-        <div class="bd" id="ad-actions-bd"></div>
+      <div class="card">
+        <div class="hd"><h2>Адаптер</h2><span class="mut3">какой адаптер читает отчёты</span></div>
+        <div class="bd">
+          <div id="ad-res"></div>
+          <div class="form" style="margin-top:14px">
+            <label for="private_adapter">Папка адаптера</label>
+            <div><input class="inp mono" id="private_adapter" data-key="private_adapter" placeholder="C:\DeskMonitor\adapter" autocomplete="off">
+              <p class="auto" data-auto="private_adapter"></p>
+              <p class="hint">Указывайте, только чтобы заменить адаптер из комплекта (папка с __init__.py).</p></div>
+            <label for="private_adapter_config">Папка настроек адаптера</label>
+            <div><input class="inp mono" id="private_adapter_config" data-key="private_adapter_config" autocomplete="off">
+              <p class="auto" data-auto="private_adapter_config"></p>
+              <p class="hint">Файлы юрлиц, книг, фондирования и источников.</p></div>
+          </div>
+          <details class="adv" id="adv-adapter" data-fold><summary>Дополнительно <span class="mut3">— отпечаток адаптера, пределы времени и размера</span></summary>
+          <div class="form">
+            <label for="private_adapter_sha256">Отпечаток адаптера</label>
+            <div><input class="inp mono" id="private_adapter_sha256" data-key="private_adapter_sha256" placeholder="64 знака 0-9a-f" autocomplete="off">
+              <p class="hint">Если задан, загружается только адаптер с этим отпечатком (меняется при обновлении адаптера и правке его настроек). Пусто — не проверять. <button class="lnk" id="sha-cur" type="button" hidden>подставить текущий</button></p></div>
+            <label for="adapter_check_timeout_s">Проверка формы</label>
+            <div><input class="inp mono num" id="adapter_check_timeout_s" data-key="adapter_check_timeout_s" inputmode="decimal" placeholder="60"> <span class="unit">секунд</span>
+              <p class="hint">Проверка файла формой перед сохранением. Пусто — 60.</p></div>
+            <label for="adapter_match_timeout_s">Распознавание файлов</label>
+            <div><input class="inp mono num" id="adapter_match_timeout_s" data-key="adapter_match_timeout_s" inputmode="decimal" placeholder="60"> <span class="unit">секунд</span>
+              <p class="hint">На пачку из 50 файлов. Пусто — 60.</p></div>
+            <label for="adapter_read_timeout_s">Чтение одного отчёта</label>
+            <div><input class="inp mono num" id="adapter_read_timeout_s" data-key="adapter_read_timeout_s" inputmode="decimal" placeholder="600"> <span class="unit">секунд</span>
+              <p class="hint">Пусто — 600. Увеличьте при «таймауте чтения».</p></div>
+            <label for="inbox_max_file_mb">Файл не больше</label>
+            <div><input class="inp mono num" id="inbox_max_file_mb" data-key="inbox_max_file_mb" inputmode="decimal" placeholder="500"> <span class="unit">МБ</span>
+              <p class="hint">Крупнее — не читаются. Пусто — 500.</p></div>
+            <label for="adapter_kit_timeout_s">Проверка адаптера целиком</label>
+            <div><input class="inp mono num" id="adapter_kit_timeout_s" data-key="adapter_kit_timeout_s" inputmode="decimal" placeholder="1800"> <span class="unit">секунд</span>
+              <p class="hint">«Запустить проверку» ниже. Пусто — 1800.</p></div>
+            <label for="adapter_status_timeout_s">Состояние адаптера</label>
+            <div><input class="inp mono num" id="adapter_status_timeout_s" data-key="adapter_status_timeout_s" inputmode="decimal" placeholder="60"> <span class="unit">секунд</span>
+              <p class="hint">Карточка «Состояние адаптера». Пусто — 60.</p></div>
+            <label for="adapter_action_timeout_s">Одно действие адаптера</label>
+            <div><input class="inp mono num" id="adapter_action_timeout_s" data-key="adapter_action_timeout_s" inputmode="decimal" placeholder="900"> <span class="unit">секунд</span>
+              <p class="hint">«Запустить» в «Действиях адаптера». Пусто — 900.</p></div>
+          </div></details>
+        </div>
+      </div>
+      <div class="card" id="ad-status" hidden>
+        <div class="hd"><h2>Состояние адаптера</h2><span class="mut3" id="ad-status-at"></span><span class="sp"></span><button class="ibtn" id="ad-status-refresh" type="button">Обновить</button></div>
+        <div class="bd" id="ad-status-bd"><p class="mut">Загрузка…</p></div>
       </div>
       <div class="card" id="ad-check">
         <div class="hd"><h2>Проверка адаптера</h2><span class="mut3">как desk adapter check: только коды и числа, без значений ячеек</span><span class="sp"></span>
@@ -435,6 +491,10 @@ details.sf-grp[open] > summary::before{content:"▾"}
           <div id="ad-check-res" style="margin-top:8px"></div>
         </div>
       </div>
+      <div class="card" id="ad-actions" hidden>
+        <div class="hd"><h2>Действия адаптера</h2><span class="mut3">файлы действий — в <span class="mono" id="ad-actions-root"></span>, их читают входящие</span></div>
+        <div class="bd" id="ad-actions-bd"></div>
+      </div>
       <div id="tabs-adapter"></div>
       <div class="note" id="cf-hidden" hidden></div>
       <div class="card" id="acquisition-card">
@@ -450,6 +510,13 @@ details.sf-grp[open] > summary::before{content:"▾"}
           </div>
           <div class="row" style="margin-top:14px;flex-wrap:wrap"><button class="ibtn" id="acq-check" type="button">Проверить вход</button><button class="ibtn" id="acq-fetch" type="button" disabled>Получить и пересчитать</button><button class="ibtn" id="acq-cancel" type="button" disabled>Отменить</button></div>
           <p id="acq-status" role="status" aria-live="polite"></p><div id="acq-result"></div>
+          <details class="adv" id="adv-acq" data-fold><summary>Дополнительно <span class="mut3">— Python для получения данных</span></summary>
+          <div class="form">
+            <label for="acquisition_python">Python для получения данных</label>
+            <div><input class="inp mono" id="acquisition_python" data-key="acquisition_python" placeholder="C:\Python311\python.exe" autocomplete="off">
+              <p class="hint">python.exe с библиотекой внутренней системы. Пусто — получение условий недоступно.</p>
+              <div class="auto-list" id="py-found"></div></div>
+          </div></details>
         </div>
       </div>
       <div class="card" id="cf-card">
@@ -473,7 +540,7 @@ details.sf-grp[open] > summary::before{content:"▾"}
       <div class="card" id="fs-card">
         <div class="hd"><h2>Ставка по умолчанию и правила монитора</h2><span class="mut3" id="fs-st"></span><span class="sp"></span>
           <button class="lnk" id="fs-reset" type="button">вернуть умолчания</button><button class="ibtn" id="fs-save" type="button">Сохранить</button></div>
-        <div class="bd form">
+        <div class="bd"><div class="form">
           <label for="fs-kind">Рыночная ставка по умолчанию, рубль</label>
           <div><div class="row"><select class="inp" id="fs-kind" style="max-width:240px"></select>
               <input class="inp mono" id="fs-index" placeholder="индекс: RUONIA, KEY_RATE…" style="max-width:180px" autocomplete="off">
@@ -485,6 +552,9 @@ details.sf-grp[open] > summary::before{content:"▾"}
           <div><table class="t"><thead><tr><th>Валюта</th><th>Ставка</th><th>Индекс</th><th>Спред, б.п.</th><th>Ставка, %</th><th></th></tr></thead><tbody id="fs-ccy"></tbody></table>
             <button class="lnk" id="fs-ccy-add" type="button">+ валюта</button>
             <p class="hint">Рублёвая ставка к валютной позиции не применяется: валюта без строки здесь и без правила — проблема фондирования.</p></div>
+        </div>
+        <details class="adv" id="adv-fs" data-fold><summary>Правила и соглашения монитора <span class="mut3" id="fs-adv-n">— поверх правил адаптера; обычно не нужны</span></summary>
+        <div class="form">
           <label>Правила</label>
           <div style="overflow-x:auto"><table class="t"><thead><tr><th>Код</th><th>Тип книги</th><th>Юрлицо</th><th>Книга</th><th>Класс бумаг</th><th>Что</th><th>Валюта</th><th>Ставка</th><th>Индекс</th><th>Спред, б.п.</th><th>Ставка, %</th><th>База</th><th>Счёт дней</th><th>Бумага</th><th>С даты</th><th>Главнее адаптера</th><th>Действует</th><th>Заметка</th><th></th></tr></thead><tbody id="fs-rules"></tbody></table>
             <button class="lnk" id="fs-rule-add" type="button">+ правило</button>
@@ -492,97 +562,128 @@ details.sf-grp[open] > summary::before{content:"▾"}
           <label>Соглашения</label>
           <div><table class="t"><thead><tr><th>Соглашение</th><th>Значение</th></tr></thead><tbody id="fs-policy"></tbody></table>
             <p class="hint">Пусто — как в настройках адаптера, а без них — по умолчанию расчёта. Значения — коды соглашений фондирования (funding_policy).</p></div>
-        </div>
+        </div></details></div>
       </div>
       <div data-tab-slot="funding"></div>
     </section>
 
     <!-- ========== Автообновление ========== -->
     <section class="sec" id="sec-auto" data-sec="auto">
-      <div class="sec-h"><div><h1>Автообновление</h1><p>Что сервер делает сам: загрузка срезов, отчётов и пересчёт; история котировок и прошлых дат.</p></div></div>
+      <div class="sec-h"><div><h1>Автообновление</h1><p>Что сервер делает сам: загружает срезы с хаба и новые отчёты из папок, пересчитывает риски, догружает историю. Обычно всё включено и менять ничего не нужно.</p></div></div>
       <div class="card">
         <div class="hd"><h2>Цикл</h2></div>
-        <div class="bd form">
-          <label for="autopilot">Автообновление</label>
-          <div><label class="tgl"><input type="checkbox" id="autopilot" data-key="autopilot"><span class="tgl-s"></span><span id="ap-lbl">включено</span></label>
-            <p class="hint">Срезы с маркет-дата сервера, новые отчёты из папок, пересчёт рисков.</p></div>
-          <label for="intraday">Расчёт внутри дня</label>
-          <div><label class="tgl"><input type="checkbox" id="intraday" data-key="intraday"><span class="tgl-s"></span><span id="intraday-lbl">включено</span></label>
-            <details class="more"><summary>Как это работает</summary><p>В рабочие дни с 10:00 МСК портфель дня пересчитывается на свежем внутридневном срезе (не чаще раза в 30 минут), после 19:45 — на предварительном закрытии; PnL — к закрытию предыдущего рабочего дня. Утром его заменяет расчёт на окончательном закрытии. Хранится только последний внутридневной расчёт дня.</p></details></div>
-          <label for="inbox_poll_seconds">Период опроса, сек</label>
-          <div><input class="inp mono num" id="inbox_poll_seconds" data-key="inbox_poll_seconds" inputmode="decimal" placeholder="60"></div>
-          <label for="autopilot_sync_last">Загружать последних дат</label>
-          <div><input class="inp mono num" id="autopilot_sync_last" data-key="autopilot_sync_last" inputmode="numeric" placeholder="5"></div>
-          <label for="inbox_lookback_days">Отчёты не старше, дней</label>
-          <div><input class="inp mono num" id="inbox_lookback_days" data-key="inbox_lookback_days" inputmode="numeric" placeholder="35">
-            <p class="hint">Пусто — 35, 0 — без ограничения. Применяется со следующего цикла.</p>
-            <details class="more"><summary>Подробнее</summary><p>Возраст считается по дате отчёта (из имени или содержимого файла), а не по дате изменения файла: книга, по которой отчёт приходит раз в несколько недель, тоже загрузится. Более старые отчёты не читаются (папку с архивом за годы можно оставить, она просматривается один раз), снимки с маркет-дата сервера за более ранние даты не загружаются. Без ограничения — медленно на больших папках. Перезапуск сервера не нужен.</p></details></div>
+        <div class="bd">
+          <div class="form">
+            <label for="autopilot">Автообновление</label>
+            <div><label class="tgl"><input type="checkbox" id="autopilot" data-key="autopilot"><span class="tgl-s"></span><span id="ap-lbl">включено</span></label>
+              <p class="hint">Срезы, новые отчёты и пересчёт — сами, пока сервер запущен. Выключено — по кнопке «Обновить» в шапке.</p></div>
+            <label for="intraday">Расчёт внутри дня</label>
+            <div><label class="tgl"><input type="checkbox" id="intraday" data-key="intraday"><span class="tgl-s"></span><span id="intraday-lbl">включено</span></label>
+              <p class="hint">Выключено — только расчёт по закрытию.</p>
+              <details class="more"><summary>Как это работает</summary><p>В рабочие дни с 10:00 МСК портфель дня пересчитывается на свежем внутридневном срезе (не чаще раза в 30 минут), после 19:45 — на предварительном закрытии; PnL — к закрытию предыдущего рабочего дня. Утром его заменяет расчёт на окончательном закрытии. Хранится только последний внутридневной расчёт дня.</p></details></div>
+          </div>
+          <details class="adv" id="adv-cycle" data-fold><summary>Дополнительно <span class="mut3">— как часто и за сколько дней</span></summary>
+          <div class="form">
+            <label for="inbox_poll_seconds">Период опроса</label>
+            <div><input class="inp mono num" id="inbox_poll_seconds" data-key="inbox_poll_seconds" inputmode="decimal" placeholder="60"> <span class="unit">секунд</span>
+              <p class="hint">Как часто смотреть папки и хаб. Пусто — 60.</p></div>
+            <label for="autopilot_sync_last">Загружать последних дат</label>
+            <div><input class="inp mono num" id="autopilot_sync_last" data-key="autopilot_sync_last" inputmode="numeric" placeholder="5"> <span class="unit">рабочих дат</span>
+              <p class="hint">Пусто — 5.</p></div>
+            <label for="inbox_lookback_days">Отчёты не старше</label>
+            <div><input class="inp mono num" id="inbox_lookback_days" data-key="inbox_lookback_days" inputmode="numeric" placeholder="35"> <span class="unit">дней</span>
+              <p class="hint">По дате отчёта. Пусто — 35, 0 — без ограничения.</p>
+              <details class="more"><summary>Подробнее</summary><p>Возраст считается по дате отчёта (из имени или содержимого файла), а не по дате изменения файла: книга, по которой отчёт приходит раз в несколько недель, тоже загрузится. Более старые отчёты не читаются (папку с архивом за годы можно оставить, она просматривается один раз), снимки с маркет-дата сервера за более ранние даты не загружаются. Без ограничения — медленно на больших папках. Перезапуск сервера не нужен.</p></details></div>
+          </div></details>
         </div>
       </div>
+      <div class="cols2">
       <div class="card">
         <div class="hd"><h2>История котировок</h2><span class="mut3" id="hist-st"></span></div>
-        <div class="bd form">
-          <label for="history_days">Рабочих дней</label>
-          <div><input class="inp mono num" id="history_days" data-key="history_days" inputmode="numeric" placeholder="260">
-            <p class="hint">Пусто — 260 (около года), 0 — не догружать.</p>
-            <details class="more"><summary>Подробнее</summary><p>Для графиков цен и доходностей сервер понемногу, по нескольку дат за цикл, догружает котировки за прошлые дни. Если сервер отдаёт API истории (версия 0.2.0 и токен с правом read), история берётся оттуда — на годы назад, вместе с КБД, кривыми, фиксингами и курсами, и это число не действует (кроме 0 — выключено).</p></details></div>
-          <label for="history_bonds_from">Облигации с</label>
-          <div><input class="inp mono" id="history_bonds_from" data-key="history_bonds_from" placeholder="2024-01-03" autocomplete="off" style="max-width:170px">
-            <p class="hint">Пусто — 2024-01-03. Только для API истории.</p></div>
-          <label for="history_rates_from">Ставки и курсы с</label>
-          <div><input class="inp mono" id="history_rates_from" data-key="history_rates_from" placeholder="2010-01-01" autocomplete="off" style="max-width:170px">
-            <p class="hint">КБД, кривые RUONIA OIS и КС-свопов, фиксинги, курсы ЦБ и MOEX. Пусто — 2010-01-01.</p></div>
+        <div class="bd">
+          <div class="form">
+            <label for="history_days">Догружать за</label>
+            <div><input class="inp mono num" id="history_days" data-key="history_days" inputmode="numeric" placeholder="260"> <span class="unit">рабочих дней</span>
+              <p class="hint">Для графиков цен. Пусто — 260 (год), 0 — не догружать.</p>
+              <details class="more"><summary>Подробнее</summary><p>Для графиков цен и доходностей сервер понемногу, по нескольку дат за цикл, догружает котировки за прошлые дни. Если сервер отдаёт API истории (версия 0.2.0 и токен с правом read), история берётся оттуда — на годы назад, вместе с КБД, кривыми, фиксингами и курсами, и это число не действует (кроме 0 — выключено).</p></details></div>
+          </div>
+          <details class="adv" id="adv-hist" data-fold><summary>Дополнительно <span class="mut3">— с каких дат брать историю из API</span></summary>
+          <div class="form">
+            <label for="history_bonds_from">Облигации с</label>
+            <div><input class="inp mono" id="history_bonds_from" data-key="history_bonds_from" placeholder="2024-01-03" autocomplete="off" style="max-width:170px">
+              <p class="hint">ГГГГ-ММ-ДД. Пусто — 2024-01-03.</p></div>
+            <label for="history_rates_from">Ставки и курсы с</label>
+            <div><input class="inp mono" id="history_rates_from" data-key="history_rates_from" placeholder="2010-01-01" autocomplete="off" style="max-width:170px">
+              <p class="hint">КБД, кривые, фиксинги, курсы. Пусто — 2010-01-01.</p></div>
+          </div></details>
         </div>
       </div>
       <div class="card">
-        <div class="hd"><h2>История прогонов</h2><a class="lnk" href="#bf">ход расчёта →</a></div>
-        <div class="bd form">
-          <label for="backfill">Считать прошлые даты</label>
-          <div><label class="tgl"><input type="checkbox" id="backfill" data-key="backfill"><span class="tgl-s"></span><span id="backfill-lbl">включено</span></label>
-            <p class="hint">История риска, MV и PnL с начала месяца и года.</p>
-            <details class="more"><summary>Как это работает</summary><p>Сервер в фоне считает прошлые даты: по каждой рабочей дате с позициями (отчёт дня, а без него — последний предыдущий отчёт книги) — расчёт на окончательном закрытии. Сначала один раз читает старые отчёты из папок, потом считает даты от самой ранней, в конце каждого цикла и не дольше заданного времени. Уже посчитанные даты с теми же входными данными не пересчитываются. То же сразу целиком: <span class="mono">desk.bat backfill</span>.</p></details></div>
-          <label for="backfill_from">С даты</label>
-          <div><input class="inp mono" id="backfill_from" data-key="backfill_from" type="date" style="width:170px" placeholder="2026-01-05">
-            <p class="hint">Пусто — 05.01.2026, первое окончательное закрытие на сервере.</p></div>
-          <label for="backfill_budget_s">Секунд за цикл</label>
-          <div><input class="inp mono num" id="backfill_budget_s" data-key="backfill_budget_s" inputmode="numeric" placeholder="600">
-            <p class="hint">Пусто — 600. Начатая дата всегда досчитывается.</p></div>
+        <div class="hd"><h2>История прогонов</h2><span class="mut3" id="bf-sum"></span><span class="sp"></span><a class="lnk" href="#bf">ход расчёта →</a></div>
+        <div class="bd">
+          <div class="note warn" id="bf-stall" hidden></div>
+          <div class="form">
+            <label for="backfill">Считать прошлые даты</label>
+            <div><label class="tgl"><input type="checkbox" id="backfill" data-key="backfill"><span class="tgl-s"></span><span id="backfill-lbl">включено</span></label>
+              <p class="hint">История риска и PnL за прошлые даты — для графиков и периодов.</p>
+              <details class="more"><summary>Как это работает</summary><p>Сервер в фоне считает прошлые даты: по каждой рабочей дате с позициями (отчёт дня, а без него — последний предыдущий отчёт книги) — расчёт на окончательном закрытии. Сначала один раз читает старые отчёты из папок, потом считает даты от самой ранней, в конце каждого цикла и не дольше заданного времени. Уже посчитанные даты с теми же входными данными не пересчитываются. То же сразу целиком: <span class="mono">desk.bat backfill</span>.</p></details></div>
+          </div>
+          <details class="adv" id="adv-bf" data-fold><summary>Дополнительно <span class="mut3">— с какой даты и сколько времени за цикл</span></summary>
+          <div class="form">
+            <label for="backfill_from">С даты</label>
+            <div><input class="inp mono" id="backfill_from" data-key="backfill_from" type="date" style="width:170px" placeholder="2026-01-05">
+              <p class="hint">Пусто — 05.01.2026.</p></div>
+            <label for="backfill_budget_s">Время за цикл</label>
+            <div><input class="inp mono num" id="backfill_budget_s" data-key="backfill_budget_s" inputmode="numeric" placeholder="600"> <span class="unit">секунд</span>
+              <p class="hint">В каждом цикле. Пусто — 600.</p></div>
+          </div></details>
         </div>
+      </div>
       </div>
     </section>
 
     <!-- допущения расчёта (временные, DECISIONS.md: открытые вопросы); ключи settings.json, как остальные -->
     <section class="sec" id="sec-calc" data-sec="calc">
-      <div class="sec-h"><div><h1>Допущения расчёта</h1><p>Временные решения по валютным кривым, курсам и фьючерсам — пока по ним нет окончательного решения. Применяются со следующего прогона.</p></div></div>
+      <div class="sec-h"><div><h1>Допущения расчёта</h1><p>Временные решения по валютным кривым, курсам и фьючерсам — пока по ним нет окончательного решения. Применяются со следующего прогона; если не уверены — оставьте как есть.</p></div></div>
       <div class="card">
         <div class="hd"><h2>Кривые и курсы</h2></div>
         <div class="bd form">
           <label for="fx_foreign_curve">Кривая иностранной ноги</label>
           <div><select class="inp" id="fx_foreign_curve" data-key="fx_foreign_curve" style="max-width:320px"><option value="">по умолчанию (по своп-пунктам)</option><option value="fx_implied">по своп-пунктам и фьючерсам</option><option value="xccy">кросс-валютная (CNY)</option></select>
-            <p class="hint">Для валютных форвардов; другая — запасная, если этой нет.</p></div>
+            <p class="hint">Для валютных форвардов; другая — запасная.</p></div>
           <label for="fx_implied_futures">Фьючерсы продлевают кривые</label>
-          <div><label class="tgl"><input type="checkbox" id="fx_implied_futures" data-key="fx_implied_futures"><span class="tgl-s"></span><span>после последнего своп-пункта</span></label></div>
+          <div><label class="tgl"><input type="checkbox" id="fx_implied_futures" data-key="fx_implied_futures"><span class="tgl-s"></span><span>после последнего своп-пункта</span></label>
+            <p class="hint">По умолчанию включено.</p></div>
           <label for="fx_spot_source">Спот валютных форвардов</label>
           <div><select class="inp" id="fx_spot_source" data-key="fx_spot_source" style="max-width:320px"><option value="">по умолчанию (рыночный, как у облигаций)</option><option value="market">рыночный (MOEX 19:00)</option><option value="cets_tom">закрытие CETS TOM</option></select></div>
           <label for="proxy_curves_for_risk">Прокси-кривые USD/EUR в риске</label>
-          <div><label class="tgl"><input type="checkbox" id="proxy_curves_for_risk" data-key="proxy_curves_for_risk" data-default="false"><span class="tgl-s"></span><span>UST par / ECB AAA / Bund (не OIS)</span></label></div>
+          <div><label class="tgl"><input type="checkbox" id="proxy_curves_for_risk" data-key="proxy_curves_for_risk" data-default="false"><span class="tgl-s"></span><span>UST par / ECB AAA / Bund (не OIS)</span></label>
+            <p class="hint">По умолчанию выключено.</p></div>
           <label for="quote_curve_risk">Риск в котировках</label>
-          <div><label class="tgl"><input type="checkbox" id="quote_curve_risk" data-key="quote_curve_risk" data-default="false"><span class="tgl-s"></span><span>иностранные кривые — в пар-котировках, а не в нулевых ставках</span></label></div>
+          <div><label class="tgl"><input type="checkbox" id="quote_curve_risk" data-key="quote_curve_risk" data-default="false"><span class="tgl-s"></span><span>иностранные кривые — в пар-котировках, а не в нулевых ставках</span></label>
+            <p class="hint">По умолчанию выключено.</p></div>
         </div>
       </div>
       <div class="card">
         <div class="hd"><h2>Сделки</h2></div>
-        <div class="bd form">
-          <label for="fx_unlinked_terms">Условия без позиции</label>
-          <div><label class="tgl"><input type="checkbox" id="fx_unlinked_terms" data-key="fx_unlinked_terms" data-default="false"><span class="tgl-s"></span><span>оценивать сделку из условий, которой нет в позициях, отдельной строкой</span></label></div>
-          <label for="futures_by_ticker">Фьючерсы по тикеру</label>
-          <div><label class="tgl"><input type="checkbox" id="futures_by_ticker" data-key="futures_by_ticker" data-default="false"><span class="tgl-s"></span><span>валютный фьючерс FORTS по тикеру оценивает ядро</span></label></div>
-          <label for="ndf_fixing_sources">Источники фиксинга NDF</label>
-          <div><input class="inp mono" id="ndf_fixing_sources" data-key="ndf_fixing_sources" placeholder="по умолчанию: CBR=CBR,ЦБ=CBR,ЦБ РФ=CBR" autocomplete="off">
-            <p class="hint">Источник из отчёта = источник сервера, через запятую.</p></div>
-          <label for="report_dir">Отчёты проверки</label>
-          <div><input class="inp mono" id="report_dir" data-key="report_dir" placeholder="пусто — не сохранять" autocomplete="off">
-            <p class="hint">Папка для отчётов проверки прогонов (для разбора ошибок).</p></div>
+        <div class="bd">
+          <div class="form">
+            <label for="fx_unlinked_terms">Условия без позиции</label>
+            <div><label class="tgl"><input type="checkbox" id="fx_unlinked_terms" data-key="fx_unlinked_terms" data-default="false"><span class="tgl-s"></span><span>оценивать сделку из условий, которой нет в позициях, отдельной строкой</span></label>
+              <p class="hint">По умолчанию выключено.</p></div>
+            <label for="futures_by_ticker">Фьючерсы по тикеру</label>
+            <div><label class="tgl"><input type="checkbox" id="futures_by_ticker" data-key="futures_by_ticker" data-default="false"><span class="tgl-s"></span><span>валютный фьючерс FORTS по тикеру оценивает ядро</span></label>
+              <p class="hint">По умолчанию выключено.</p></div>
+          </div>
+          <details class="adv" id="adv-calc" data-fold><summary>Дополнительно <span class="mut3">— источники фиксинга NDF, отчёты проверки</span></summary>
+          <div class="form">
+            <label for="ndf_fixing_sources">Источники фиксинга NDF</label>
+            <div><input class="inp mono" id="ndf_fixing_sources" data-key="ndf_fixing_sources" placeholder="CBR=CBR,ЦБ=CBR,ЦБ РФ=CBR" autocomplete="off">
+              <p class="hint">«в отчёте=на хабе» через запятую. Пусто — как в примере.</p></div>
+            <label for="report_dir">Отчёты проверки</label>
+            <div><input class="inp mono" id="report_dir" data-key="report_dir" placeholder="C:\DeskMonitor\reports" autocomplete="off">
+              <p class="hint">Для разбора ошибок прогонов. Пусто — не сохранять.</p></div>
+          </div></details>
         </div>
       </div>
     </section>
@@ -610,20 +711,24 @@ details.sf-grp[open] > summary::before{content:"▾"}
       <div class="sec-h"><div><h1 id="h-up">Обновление программы</h1><p>Новая версия — с GitHub или из папки с архивами. Настройки и данные при обновлении не меняются.</p></div>
         <div class="badges"><span class="badge">установлена <span class="mono" id="up-ver">…</span></span></div></div>
       <div class="note warn" id="up-off" hidden></div>
-      <div class="card"><div class="hd"><h2>С GitHub</h2></div><div class="bd" id="up-gh"></div></div><!-- desk-updater.js -->
+      <div class="card"><div class="hd"><h2>С GitHub</h2></div><div class="bd" id="up-gh"></div><!-- desk-updater.js -->
+        <div class="bd adv-bd"><details class="adv" id="adv-up" data-fold><summary>Дополнительно <span class="mut3">— откуда брать обновления на GitHub</span></summary>
+          <div class="form">
+            <label for="update_repo">Репозиторий обновлений</label>
+            <div><input class="inp mono" id="update_repo" data-key="update_repo" placeholder="FlyingScotman/trading-desk-monitor" autocomplete="off" style="max-width:420px">
+              <p class="hint">Менять не нужно.</p></div>
+          </div></details></div></div>
       <div class="card">
         <div class="hd"><h2>Из папки или файла</h2><span class="sp"></span><button class="lnk" id="up-refresh" type="button">обновить список</button></div>
         <div class="bd">
           <div class="form">
-            <label for="up-dir">Папка с обновлениями</label>
+            <label for="up-dir">Папка с обновлениями<small class="key" title="ключ в settings.json">update_dir</small></label>
             <div>
               <div class="row">
-                <input class="inp mono" id="up-dir" placeholder="\\сервер\папка\DeskMonitor — пусто: только загрузка с компьютера" autocomplete="off">
+                <input class="inp mono" id="up-dir" placeholder="\\сервер\папка\DeskMonitor" autocomplete="off">
                 <button class="ibtn" id="up-dir-save" type="button">Сохранить папку</button>
               </div>
-              <p class="hint">Архивы DeskMonitor-….zip (полные) или DeskMonitor-patch-….zip (заплатки). <span id="up-dir-msg"></span></p>
-              <label class="mut" for="update_repo" style="display:block;margin-top:8px">Репозиторий обновлений на GitHub</label>
-              <input class="inp mono" id="update_repo" data-key="update_repo" placeholder="по умолчанию: FlyingScotman/trading-desk-monitor" autocomplete="off" style="max-width:420px">
+              <p class="hint">Куда выкладывают архивы DeskMonitor-….zip. Пусто — только загрузка zip ниже. <span id="up-dir-msg"></span></p>
             </div>
           </div>
         </div>
@@ -765,25 +870,27 @@ details.sf-grp[open] > summary::before{content:"▾"}
       </div>
       <div class="note warn" id="users-denied" hidden>Пользователями управляет администратор.</div>
       <div class="card" id="users-card"><section class="bd" data-desk-users></section></div>
-      <div class="card" id="sess-card">
-        <div class="hd"><h2>Сеансы и вход</h2><span class="mut3">действуют после перезапуска сервера</span></div>
+      <details class="card fold" id="sess-card" data-fold>
+        <summary class="hd"><h2>Сеансы и вход</h2><span class="mut3">сколько длится вход, блокировка, свой сертификат; действуют после перезапуска сервера</span></summary>
         <div class="bd form">
-          <label for="session_idle_minutes">Без действий, минут</label>
-          <div><input class="inp mono num" id="session_idle_minutes" data-key="session_idle_minutes" inputmode="numeric" placeholder="480">
-            <p class="hint">Пусто — 480: столько без запросов — и вход снова.</p></div>
-          <label for="session_max_hours">Сеанс не дольше, часов</label>
-          <div><input class="inp mono num" id="session_max_hours" data-key="session_max_hours" inputmode="numeric" placeholder="24"></div>
+          <label for="session_idle_minutes">Выход без действий</label>
+          <div><input class="inp mono num" id="session_idle_minutes" data-key="session_idle_minutes" inputmode="numeric" placeholder="480"> <span class="unit">минут</span>
+            <p class="hint">Без действий — вход снова. Пусто — 480.</p></div>
+          <label for="session_max_hours">Сеанс не дольше</label>
+          <div><input class="inp mono num" id="session_max_hours" data-key="session_max_hours" inputmode="numeric" placeholder="24"> <span class="unit">часов</span>
+            <p class="hint">Пусто — 24.</p></div>
           <label for="login_max_failures">Неверных паролей подряд</label>
-          <div><input class="inp mono num" id="login_max_failures" data-key="login_max_failures" inputmode="numeric" placeholder="5">
-            <p class="hint">Потом учётная запись блокируется на время ниже.</p></div>
-          <label for="login_lockout_minutes">Блокировка, минут</label>
-          <div><input class="inp mono num" id="login_lockout_minutes" data-key="login_lockout_minutes" inputmode="numeric" placeholder="15"></div>
+          <div><input class="inp mono num" id="login_max_failures" data-key="login_max_failures" inputmode="numeric" placeholder="5"> <span class="unit">раз</span>
+            <p class="hint">Потом блокировка. Пусто — 5.</p></div>
+          <label for="login_lockout_minutes">Блокировка</label>
+          <div><input class="inp mono num" id="login_lockout_minutes" data-key="login_lockout_minutes" inputmode="numeric" placeholder="15"> <span class="unit">минут</span>
+            <p class="hint">Пусто — 15.</p></div>
           <label for="tls_cert">Свой сертификат HTTPS</label>
-          <div><input class="inp mono" id="tls_cert" data-key="tls_cert" placeholder="пусто — созданный в «Доступ из сети» или без HTTPS" autocomplete="off">
-            <input class="inp mono" id="tls_key" data-key="tls_key" placeholder="ключ сертификата (PEM)" autocomplete="off" style="margin-top:6px">
-            <p class="hint">Файлы PEM сертификата и его ключа — оба или ни одного.</p></div>
+          <div><input class="inp mono" id="tls_cert" data-key="tls_cert" placeholder="C:\Сертификаты\desk.pem" autocomplete="off">
+            <input class="inp mono" id="tls_key" data-key="tls_key" placeholder="C:\Сертификаты\desk-key.pem — ключ сертификата" autocomplete="off" style="margin-top:6px" aria-label="Ключ сертификата HTTPS">
+            <p class="hint">PEM сертификата и ключа — оба или ни одного. Пусто — из «Доступ из сети».</p></div>
         </div>
-      </div>
+      </details>
     </section>
 
     <!-- ========== Диагностика ========== -->
@@ -860,10 +967,10 @@ details.sf-grp[open] > summary::before{content:"▾"}
       </div>
 
       <!-- Где лежат данные -->
-      <div class="card" id="eff-card">
-        <div class="hd"><h2>Где лежат данные</h2><span class="mut3">только чтение · действующие значения</span></div>
+      <details class="card fold" id="eff-card" data-fold>
+        <summary class="hd"><h2>Где лежат данные</h2><span class="mut3">только чтение · действующие значения всех настроек</span></summary>
         <div class="bd"><div class="kv" id="eff"></div></div>
-      </div>
+      </details>
     </section>
   </main>
 </div>
@@ -878,6 +985,8 @@ details.sf-grp[open] > summary::before{content:"▾"}
 <script src="desk-nav.js"></script>
 <script src="settings-forms.js"></script>
 <script src="settings-adapter.js"></script>
+<script src="settings-inbox-folders.js"></script>
+<script src="desk-backfill-text.js"></script>
 <script>
 'use strict';
 const $ = id => document.getElementById(id);
@@ -920,6 +1029,7 @@ const INNER = {dg:'diag', rc:'diag', bf:'diag', eff:'diag', 'eff-card':'diag', l
 function show(hash){
   let id = (hash || '').replace(/^#/, ''), inner = null;
   if (INNER[id]) { inner = id; id = INNER[id]; }
+  else if (id && !SECTIONS.includes(id) && $(id) && $(id).closest('section.sec')) { inner = id; id = $(id).closest('section.sec').dataset.sec; }
   if (!SECTIONS.includes(id)) { const tab = id.startsWith('tab-') ? id : null; id = tab ? 'adapter' : (store.get('settings.sec') || 'hub'); if (tab) inner = tab; }
   document.querySelectorAll('section.sec').forEach(s => s.classList.toggle('on', s.dataset.sec === id));
   document.querySelectorAll('.st-nav a[data-sec]').forEach(a => { a.classList.toggle('on', a.dataset.sec === id); if (a.dataset.sec === id) a.setAttribute('aria-current', 'page'); else a.removeAttribute('aria-current'); });
@@ -929,7 +1039,10 @@ function show(hash){
   if (id === 'adapter' && window.DeskAdapterTools) window.DeskAdapterTools.shown();  // «Состояние адаптера» — заново
   const cur = document.querySelector('.st-nav a.on');  // на телефоне разделы — полосой: выбранный виден
   if (cur && matchMedia('(max-width:860px)').matches) cur.parentNode.scrollLeft = cur.offsetLeft - 16;
-  if (inner && $(inner)) setTimeout(() => $(inner).scrollIntoView({block:'start', behavior:'smooth'}), 30);
+  if (inner && $(inner)) {  // #bf, #sess-card, #dirs…: свёрнутый блок по дороге раскрывается
+    const t = $(inner); unfold(t); if (t.tagName === 'DETAILS' && !t.open) { t.dataset.auto = '1'; t.open = true; }
+    setTimeout(() => t.scrollIntoView({block:'start', behavior:'smooth'}), 30);
+  }
   else window.scrollTo(0, 0);
 }
 /* ---------- Пользователи: раздел desk-users.js (только администратор; вход выключен — объяснение, как включить) ---------- */
@@ -966,6 +1079,35 @@ authState().then(st => {  // ссылка в навигации: при вклю
   document.querySelectorAll('[data-users-nav]').forEach(e => { e.hidden = !admin; });
   $('nav-auth').textContent = on ? 'вход' : '';
 });
+/* ---------- редкое — по кнопке (#449): «Дополнительно» в карточках и свёрнутые карточки (details[data-fold]);
+   открытость помнит браузер, а блок с ошибкой или незаполненным нужным полем раскрывается сам (это не запоминается) ---------- */
+const FOLD = 'settings.fold.';
+document.querySelectorAll('details[data-fold]').forEach(d => {
+  if (store.get(FOLD + d.id) === '1') d.open = true;
+  d.addEventListener('toggle', () => { if (d.dataset.auto) { delete d.dataset.auto; return; } store.set(FOLD + d.id, d.open ? '1' : '0'); });
+});
+function unfold(el){
+  for (let d = el && el.parentElement && el.parentElement.closest('details'); d; d = d.parentElement && d.parentElement.closest('details'))
+    if (!d.open) { d.dataset.auto = '1'; d.open = true; }
+}
+function foldCounts(){  // в заголовке свёрнутого блока — сколько полей в нём задано: ничего не спрятано незаметно
+  document.querySelectorAll('details[data-fold]').forEach(d => {
+    const n = [...d.querySelectorAll('[data-key]')].filter(el => el.type === 'checkbox' ? el.checked !== (el.dataset.default !== 'false')
+      : el.tagName === 'SELECT' ? el.selectedIndex > 0 : el.value.trim() !== '').length;
+    const sum = d.querySelector('summary'); let b = sum.querySelector('.adv-n');
+    if (!n) { if (b) b.remove(); return; }
+    if (!b) sum.append(b = h('span', {class:'adv-n', title:'полей с заданным значением (не по умолчанию)'}));
+    b.textContent = 'задано: ' + n;
+  });
+}
+/* подписи полей: под человеческим названием мелко — ключ settings.json (для поддержки) */
+document.querySelectorAll('[data-key]').forEach(el => {
+  const cell = el.closest('.form > div'), l = cell && cell.previousElementSibling;
+  if (!l || l.tagName !== 'LABEL') return;
+  let k = l.querySelector('.key');
+  if (!k) l.append(k = h('small', {class:'key', title:'ключ в settings.json'}));
+  k.textContent = k.textContent ? k.textContent + ', ' + el.dataset.key : el.dataset.key;
+});
 window.addEventListener('hashchange', () => show(location.hash));
 show(location.hash);
 
@@ -978,7 +1120,7 @@ const KIND = {inbox_poll_seconds:'pos', autopilot_sync_last:'posint', inbox_look
   adapter_kit_timeout_s:'pos', adapter_status_timeout_s:'pos', adapter_action_timeout_s:'pos', session_idle_minutes:'posint',
   session_max_hours:'posint', login_max_failures:'posint', login_lockout_minutes:'posint'};
 const LEGACY_FLAGS = ['autopilot', 'intraday', 'backfill'];  // пишутся всегда (true / false), как раньше
-function keyLabel(k){ const l = document.querySelector('label[for="' + k + '"]'); return l ? l.textContent.trim() : k; }
+function keyLabel(k){ const l = document.querySelector('label[for="' + k + '"]'); return l ? (l.firstChild ? l.firstChild.textContent : l.textContent).trim() : k; }
 
 function setDirty(v){
   S.dirty = v;
@@ -994,6 +1136,8 @@ function markDirty(e){
   if (!e.target.closest('[data-key], #dirs')) return;
   (S.dirtySecs = S.dirtySecs || new Set()).add(sec ? sec.dataset.sec : '');
   setDirty(true);
+  if (e.target.dataset.key && e.type === 'input') { renderAuto(e.target.dataset.key); foldCounts(); }  // не на change: он приходит при уходе из поля, щелчок по «вернуть авто» не должен потеряться
+  renderSummary();
 }
 document.addEventListener('input', markDirty);
 document.addEventListener('change', markDirty);
@@ -1024,22 +1168,18 @@ function render(d){
   $('intraday-lbl').textContent = $('intraday').checked ? 'включено' : 'выключено';
   $('backfill-lbl').textContent = $('backfill').checked ? 'включено' : 'выключено';
   navDot('auto', $('autopilot').checked ? 'ok' : 'warn', $('autopilot').checked ? 'автообновление включено' : 'автообновление выключено');
-  $('cfg-default').textContent = (d.home || '') + (d.home && d.home.includes('\\') ? '\\' : '/') + 'adapter-config';
   $('out-dir').textContent = eff.adapter_output_dir || '';
   $('token-file').textContent = eff.token_file || 'hub_token';
-  const byDefault = !!eff.private_adapter_default && !d.private_adapter && !env.includes('private_adapter');
-  $('private_adapter').placeholder = byDefault ? 'пусто — адаптер из комплекта программы' : 'пусто — эталонный адаптер (CSV)';
-  $('ad-default').hidden = !byDefault; $('ad-default').textContent = '';
-  if (byDefault) $('ad-default').append('Сейчас — адаптер из комплекта программы: ', h('span', {class:'mono'}, eff.private_adapter),
-    '. Другую папку указывайте, только чтобы его заменить.');
   tokenState(d.hub_token_set, eff.hub_token_source);
   proxyPwState(d.proxy_password_set);
   S.dirs = (Array.isArray(d.inbox_dirs) ? d.inbox_dirs : []).map(x => ({path:x.path || '', label:x.label || '', recursive:!!x.recursive}));
   $('dirs-env').hidden = !env.includes('inbox_dirs');
   renderDirs();
+  DeskInboxFolders.load();
   renderEffective(eff);
   S.dirtySecs = new Set();
   setDirty(false);
+  renderAuto(); renderDetect();
 }
 for (const [id, lbl] of [['autopilot','ap-lbl'], ['intraday','intraday-lbl'], ['backfill','backfill-lbl']])
   $(id).addEventListener('change', () => { $(lbl).textContent = $(id).checked ? 'включено' : 'выключено'; });
@@ -1055,13 +1195,13 @@ function tokenState(set, source){
 function renderDirs(){
   const tb = $('dirs'); tb.textContent = '';
   if (!S.dirs.length) tb.append(h('tr', {}, h('td', {colspan:4, class:'muted'}, 'Папки не заданы.')));
-  S.dirs.forEach((d, i) => tb.append(h('tr', {},
+  S.dirs.forEach((d, i) => { const found = DeskInboxFolders.node(d.path); tb.append(h('tr', {},
     h('td', {style:'width:55%'}, h('input', {class:'inp mono', value:d.path, placeholder:'C:\\Отчёты\\Позиции', 'aria-label':'Папка',
-      oninput:e => { d.path = e.target.value; }})),
+      oninput:e => { d.path = e.target.value; DeskInboxFolders.retarget(found, d.path); }}), found),  // что найдено в папке (TDM#445)
     h('td', {}, h('input', {class:'inp', value:d.label, placeholder:'Позиции', 'aria-label':'Подпись', oninput:e => { d.label = e.target.value; }})),
     h('td', {}, h('label', {class:'chk'}, h('input', {type:'checkbox', checked:d.recursive, onchange:e => { d.recursive = e.target.checked; }}), 'включая подпапки')),
     h('td', {style:'width:1%'}, h('button', {class:'x del', type:'button', title:'Убрать папку', 'aria-label':'Убрать папку',
-      onclick:() => { S.dirs.splice(i, 1); renderDirs(); (S.dirtySecs = S.dirtySecs || new Set()).add('adapter'); setDirty(true); }}, '×')))));
+      onclick:() => { S.dirs.splice(i, 1); renderDirs(); (S.dirtySecs = S.dirtySecs || new Set()).add('adapter'); setDirty(true); }}, '×')))); });
 }
 $('dir-add').addEventListener('click', () => { S.dirs.push({path:'', label:'', recursive:false}); renderDirs(); (S.dirtySecs = S.dirtySecs || new Set()).add('adapter'); setDirty(true);
   const ins = $('dirs').querySelectorAll('input.inp.mono'); if (ins.length) ins[ins.length - 1].focus(); });
@@ -1092,6 +1232,193 @@ function renderEffective(eff){
   });
 }
 
+/* ---------- определено автоматически (#449): GET /api/v1/settings/detect — только то, что видно на этом компьютере
+   (переменные окружения, реестр Windows, файлы на дисках, база); пустое поле уже работает с найденным значением ---------- */
+const plural = (n, one, few, many) => n + ' ' + (n % 10 === 1 && n % 100 !== 11 ? one : n % 10 >= 2 && n % 10 <= 4 && (n % 100 < 10 || n % 100 >= 20) ? few : many);
+const TRUST = {system:'сертификаты Windows (как у браузера)', python:'сертификаты Python', bundle:'файл выше'};
+const PY_SRC = {path:'в PATH', registry:'установлен', folder:'в папке установки', own:'Python самой программы — обычно без нужной библиотеки'};
+const PROXY_SRC = {windows:'из настроек Windows', environment:'из переменной HTTPS_PROXY'};
+// поле -> что действует, когда оно пустое: {v: значение, how: откуда, put: «изменить» подставляет его в поле, warn}.
+// Пути по умолчанию не подставляются: записанные в settings.json, они перестали бы следовать за программой
+// (адаптер из комплекта — DESK_DEFAULT_PRIVATE_ADAPTER, папка данных); прокси — только без замаскированного пароля
+const AUTO = {
+  https_proxy(){
+    const p = S.detect && S.detect.proxy; if (!p) return null;
+    if (p.system) return {v:p.system, how:PROXY_SRC[p.source], put:!/\*\*\*/.test(p.system),
+      warn:p.socks ? 'Это SOCKS-прокси: монитор с ним не работает — впишите HTTP-прокси' : null};
+    if (p.bypassed) return {v:'напрямую', how:'адрес хаба — в исключениях прокси (' + PROXY_SRC[p.source] + ')'};
+    return {v:'без прокси, напрямую', how:'в системе прокси не задан',
+      warn:p.pac ? 'Windows задаёт прокси сценарием (PAC), монитор его не читает: если связи нет, впишите адрес прокси' : null};
+  },
+  hub_transport(){
+    if (!S.detect) return null;
+    const c = S.detect.curl;
+    return {v:'Авто', how:c ? 'Python, при отказе прокси — curl (' + c + ')' : 'Python; curl на этом компьютере не найден'};
+  },
+  hub_ca_bundle(){ const t = S.detect && S.detect.trust; return S.detect ? {v:t && t.kind !== 'bundle' ? TRUST[t.kind] : TRUST.system} : null; },
+  snapshot_cache(){ return {v:dflt('snapshot_cache'), how:'в папке данных'}; },
+  inbox_archive(){ return {v:dflt('inbox_archive'), how:'в папке данных'}; },
+  private_adapter(){
+    const a = S.detect && S.detect.defaults, eff = (S.data && S.data.effective) || {};
+    const def = a ? a.private_adapter : (eff.private_adapter_default ? eff.private_adapter : null);
+    return def ? {v:def, how:'из комплекта программы'} : {v:'эталонный (читает CSV)', how:'в комплекте адаптера нет'};
+  },
+  private_adapter_config(){ return {v:dflt('private_adapter_config'), how:'в папке данных'}; },
+};
+function dflt(k){  // путь по умолчанию: пока поле пустое — действующий (effective), иначе — из detect.defaults
+  const eff = (S.data && S.data.effective) || {}, d = S.detect && S.detect.defaults;
+  return (S.data && !S.data[k] && eff[k]) || (d && d[k]) || '';
+}
+function isAuto(el){ return el.tagName === 'SELECT' ? el.value === 'auto' || el.value === '' : !el.value.trim(); }
+function renderAuto(only){
+  document.querySelectorAll('.auto[data-auto]').forEach(box => {
+    const k = box.dataset.auto, el = document.querySelector('[data-key="' + k + '"]');
+    if ((only && k !== only) || !el) return;
+    box.textContent = '';
+    if (!S.data || !AUTO[k]) return;
+    if ((S.data.env_overrides || []).includes(k)) return;  // «задано переменной окружения» — уже помечено над полем
+    const a = AUTO[k](); if (!a || !a.v) return;
+    if (isAuto(el)) {
+      box.append(h('span', {class:'au', title:'определено автоматически: так работает пустое поле'}, 'авто'), h('span', {class:'v'}, a.v), a.how ? h('span', {class:'mut3'}, a.how) : null,
+        h('button', {class:'lnk', type:'button', title:a.put ? 'Подставить в поле и поправить' : 'Ввести своё значение в поле', onclick:() => {
+          if (a.put && el.tagName !== 'SELECT') { el.value = a.v; el.dispatchEvent(new Event('input', {bubbles:true})); }
+          el.focus(); if (el.select && el.tagName !== 'SELECT') el.select();
+        }}, 'изменить'));
+      if (a.warn) box.append(h('span', {class:'warnmsg', style:'flex-basis:100%'}, a.warn));
+    } else {
+      box.append(h('span', {class:'au man'}, 'вручную'), 'Без значения было бы:', h('span', {class:'v'}, a.v),
+        h('button', {class:'lnk', type:'button', title:'Очистить поле: значение определится автоматически', onclick:() => {
+          el.value = el.tagName === 'SELECT' ? 'auto' : ''; el.dispatchEvent(new Event('input', {bubbles:true}));
+        }}, 'вернуть авто'));
+    }
+  });
+  foldCounts();
+}
+
+const normDir = p => String(p || '').trim().replace(/[\\/]\*\*$/, '').replace(/[\\/]+$/, '').replace(/\//g, '\\').toLowerCase();
+function addDir(path, recursive, label){
+  S.dirs.push({path, label:label || '', recursive:!!recursive}); renderDirs();
+  (S.dirtySecs = S.dirtySecs || new Set()).add('adapter'); setDirty(true); renderDetect(); renderSummary();
+  toast('Папка добавлена в список — нажмите «Сохранить настройки» внизу.', 'ok');
+}
+function dirSuggestions(){
+  const inb = (S.detect && S.detect.inbox) || {}, have = new Set(S.dirs.map(d => normDir(d.path)));
+  return {cfg:(inb.from_adapter_config || []).filter(x => !have.has(normDir(x.path))), seen:(inb.from_accepted || []).filter(x => !have.has(normDir(x.path)))};
+}
+function renderDetect(){
+  const D = S.detect;
+  // папки с отчётами: что указано в настройках адаптера и откуда уже принимались отчёты, но чего нет в списке
+  const box = $('dirs-hint'); box.textContent = '';
+  if (D && !(S.data && (S.data.env_overrides || []).includes('inbox_dirs'))) {
+    const sg = dirSuggestions();
+    sg.cfg.forEach(x => box.append(h('div', {class:'sug'}, h('span', {class:'au', style:'font-size:11px'}, 'найдено'),
+      h('span', {title:x.file + ' → ' + x.key}, 'Папка из настроек адаптера, монитор её не просматривает:'), h('span', {class:'v'}, x.path + (x.recursive ? '\\**' : '')),
+      x.exists === null ? h('span', {class:'mut3'}, 'сетевая, не проверялась') : null,
+      h('button', {class:'ibtn', type:'button', onclick:() => addDir(x.path, x.recursive)}, 'Добавить в папки с отчётами'))));
+    sg.seen.forEach(x => box.append(h('div', {class:'sug'}, h('span', {class:'au', style:'font-size:11px'}, 'найдено'),
+      h('span', {}, 'Отсюда раньше принимались отчёты (' + plural(x.files, 'файл', 'файла', 'файлов') + (x.last_report ? ', последний за ' + SF.fmtDate(x.last_report) : '') + '), папки нет в списке:'),
+      h('span', {class:'v'}, x.path), x.exists === false ? h('span', {class:'warnmsg'}, 'папки сейчас нет') : x.exists === null ? h('span', {class:'mut3'}, 'сетевая, не проверялась') : null,
+      h('button', {class:'ibtn', type:'button', onclick:() => addDir(x.path, false)}, 'Вернуть в список'))));
+  }
+  // Python для получения условий сделок: явный выбор (08 §2), найденные — только подсказка
+  const pf = $('py-found'); pf.textContent = '';
+  const acqCap = !!(S.adapter && S.adapter.describe && S.adapter.describe.acquisition), cur = $('acquisition_python').value.trim();
+  if (D) {
+    const ap = D.acquisition_python || {};
+    if (cur && ap.path && ap.exists === false) { pf.append(h('div', {class:'err'}, 'Файла нет: ' + ap.path + ' — получение условий сделок не запустится.')); unfold(pf); }
+    const list = (D.python || []).filter(x => x.path !== cur);
+    if (list.length) pf.append(h('div', {class:'mut'}, cur ? 'Другие Python на этом компьютере:' : 'Найдено на этом компьютере — выберите тот, где есть нужная библиотека:'));
+    list.forEach(x => pf.append(h('div', {class:'auto'}, h('button', {class:'lnk', type:'button', onclick:() => {
+      $('acquisition_python').value = x.path; $('acquisition_python').dispatchEvent(new Event('input', {bubbles:true})); renderDetect(); }}, 'подставить'),
+      h('span', {class:'v'}, x.path), h('span', {class:'mut3'}, (x.version ? 'Python ' + x.version + ' · ' : '') + PY_SRC[x.source]))));
+    if (!list.length && !cur) pf.append(h('div', {class:'mut'}, 'Python на этом компьютере не найден.'));
+  }
+  if (acqCap && !cur && !S.acqUnfolded) { S.acqUnfolded = true; unfold(pf); }  // нужен, а не задан: раскрыть один раз
+  // прокси и сертификаты: строка в заголовке свёрнутой карточки
+  const ps = $('proxy-sum'), d = S.data || {};
+  if (D && D.proxy) {
+    const p = D.proxy, mine = d.https_proxy || d.hub_ca_bundle || d.proxy_user || (d.hub_transport && d.hub_transport !== 'auto');
+    ps.className = 'mut3';
+    ps.textContent = mine ? 'задано вручную: ' + [d.https_proxy && 'прокси ' + d.https_proxy, d.proxy_user && 'логин', d.hub_ca_bundle && 'сертификат', d.hub_transport && d.hub_transport !== 'auto' && 'способ ' + d.hub_transport].filter(Boolean).join(', ')
+      : 'определено автоматически: ' + (p.system ? 'прокси ' + p.system + (p.source === 'windows' ? ' (Windows)' : ' (HTTPS_PROXY)') : 'напрямую') +
+        ' · сертификаты ' + (D.trust && D.trust.kind === 'python' ? 'Python' : 'Windows');
+    if (p.socks && !d.https_proxy) { ps.className = 'warnmsg'; ps.textContent = 'в Windows задан SOCKS-прокси, монитор с ним не работает — раскройте'; }
+    if (p.pac && !p.system && !d.https_proxy) { ps.className = 'warnmsg'; ps.textContent = 'Windows задаёт прокси сценарием (PAC) — монитор его не читает; раскройте, если нет связи'; }
+  }
+  const sha = $('sha-cur'), fp = S.adapter && S.adapter.fingerprint;
+  sha.hidden = !fp || $('private_adapter_sha256').value.trim() === fp;
+  sha.onclick = () => { $('private_adapter_sha256').value = fp; $('private_adapter_sha256').dispatchEvent(new Event('input', {bubbles:true})); sha.hidden = true; };
+  renderAuto();
+}
+async function loadDetect(){
+  try { S.detect = await api('GET', '/api/v1/settings/detect'); } catch(e) { S.detect = null; }
+  renderDetect(); renderSummary();
+}
+
+/* ---------- сводка сверху (#449): что работает, что требует внимания; каждый пункт ведёт в свой раздел ---------- */
+const SUM = {ap:null, bf:null};
+function renderSummary(){
+  const box = $('st-sum'), d = S.data;
+  if (!d) return;
+  const eff = d.effective || {}, env = d.env_overrides || [], items = [];
+  const it = (cls, href, k, text, title) => items.push({cls, href, k, text, title});
+  const sync = SUM.ap && (SUM.ap.steps || []).find(x => x.name === 'sync');
+  if (!(eff.hub_url || d.hub_url)) it('bad', '#hub_url', 'Хаб', 'адрес не задан', 'Подключения → «Адрес сервера»');
+  else if (S.hubTest) it(S.hubTest.ok ? 'ok' : 'bad', '#hub', 'Хаб', S.hubTest.ok ? 'связь есть' : 'нет связи', S.hubTest.error || '');
+  else if (sync && sync.status === 'error') it('bad', '#hub', 'Хаб', 'ошибка загрузки срезов', sync.detail);
+  else if (sync && sync.status === 'ok') it('ok', '#hub', 'Хаб', 'работает', 'срезы загружаются: ' + sync.detail);
+  else it('unk', '#hub', 'Хаб', 'не проверен', 'Подключения → «Проверить связь»');
+  it(d.hub_token_set ? 'ok' : 'bad', '#token', 'Токен', d.hub_token_set ? 'задан' : 'не задан');
+  const a = S.adapter;
+  if (S.adapterError) it('bad', '#adapter', 'Адаптер', 'ошибка', S.adapterError);
+  else if (a) it(a.loaded ? 'ok' : 'bad', '#adapter', 'Адаптер', a.loaded ? (a.reference ? 'эталонный (CSV)' : 'загружен') : 'не загружен', a.error || [a.name, a.version].filter(Boolean).join(' '));
+  const nd = env.includes('inbox_dirs') ? (eff.inbox_dirs || []).length : S.dirs.filter(x => x.path.trim()).length, sg = dirSuggestions();
+  const fs = window.DeskInboxFolders && DeskInboxFolders.summary(S.dirs.map(x => x.path));  // что найдено в папках (#445)
+  const fwarn = fs && (fs.missing ? plural(fs.missing, 'папку', 'папки', 'папок') + ' сервер не видит' : fs.scanned && !fs.read ? 'ничего не прочитано' : '');
+  it(!nd ? 'bad' : sg.cfg.length || fwarn ? 'warn' : 'ok', '#dirs', 'Папки с отчётами', !nd ? 'не заданы — отчёты не загружаются'
+    : fwarn || plural(nd, 'папка', 'папки', 'папок') + (sg.cfg.length ? ' · подсказка' : ''),
+    fwarn ? 'подробности — под каждой папкой' : sg.cfg.length ? 'в настройках адаптера указаны папки, которых монитор не просматривает' : '');
+  const ap = $('autopilot').checked;
+  it(ap ? 'ok' : 'warn', '#autopilot', 'Автообновление', ap ? 'включено' : 'выключено');
+  const b = SUM.bf, T = window.DESK_BACKFILL_TEXT;
+  if (b) {
+    const withPos = Math.max(0, (b.dates || 0) - (b.no_positions || 0) - (b.no_market || 0)), stall = T.stall(b), D = T.dates(b);
+    const bad = [D.conv.length ? T.n(D.conv.length, ' не сходится', ' не сходятся') : '', D.load.length ? T.n(D.load.length, ' не загружается', ' не загружаются') : ''].filter(Boolean).join(', ');
+    if (!b.enabled) it('', '#bf', 'История прогонов', 'не считается', 'включается в «Автообновлении»');
+    else if (stall) it('warn', '#bf', 'История прогонов', 'стоит — ' + stall.why + stall.retry, stall.title);
+    else if (bad) it('warn', '#bf', 'История прогонов', b.done + ' из ' + withPos + ' · ' + bad, 'даты — в «Диагностика → История прогонов»');
+    else if (b.todo) it('', '#bf', 'История прогонов', b.done + ' из ' + withPos, 'посчитано дат с позициями; остальные догружаются в фоне');
+    else it('ok', '#bf', 'История прогонов', 'посчитана, ' + plural(b.done || 0, 'дата', 'даты', 'дат'));
+  }
+  const rank = {bad:0, warn:1, unk:2, '':3, ok:4}, need = items.filter(x => x.cls === 'bad' || x.cls === 'warn').length;
+  const unk = items.filter(x => x.cls === 'unk').length;
+  items.sort((x, y) => rank[x.cls] - rank[y.cls]);
+  box.textContent = '';
+  box.append(h('span', {class:'lead ' + (items.some(x => x.cls === 'bad') ? 'bad' : need ? 'warn' : unk ? '' : 'ok')},
+    need ? 'Требует внимания: ' + need : unk ? 'Не всё проверено' : 'Всё работает'),
+    // в порядке — коротко, одним словом (подробность — в подсказке); что требует внимания — с пояснением
+    ...items.map(x => x.cls === 'ok' ? h('a', {class:'ok', href:x.href, title:x.text + (x.title ? ' · ' + x.title : '')}, x.k)
+      : h('a', {class:x.cls, href:x.href, title:x.title || null}, h('span', {class:'k'}, x.k + ':'), x.text)));
+  box.hidden = false;
+}
+function renderBfSum(){
+  const b = SUM.bf, el = $('bf-sum'), note = $('bf-stall'), T = window.DESK_BACKFILL_TEXT;
+  note.hidden = true; note.textContent = '';
+  if (!b) { el.textContent = ''; return; }
+  const withPos = Math.max(0, (b.dates || 0) - (b.no_positions || 0) - (b.no_market || 0)), stall = T.stall(b), D = T.dates(b);
+  el.textContent = !b.enabled ? 'сейчас не считается' : 'посчитано ' + b.done + ' из ' + plural(withPos, 'даты', 'дат', 'дат') +
+    (D.conv.length ? ', ' + T.n(D.conv.length, ' не сходится', ' не сходятся') : '') + (D.load.length ? ', ' + T.n(D.load.length, ' не загружается', ' не загружаются') : '');
+  // застой — строкой в карточке, со ссылкой на ход расчёта
+  if (stall) { note.hidden = false; note.append('Догрузка ' + stall.text + '. ', h('a', {href:'#bf'}, 'подробнее →')); note.title = stall.title; }
+}
+async function loadSummary(){
+  const get = u => fetch(u, {headers:{'Accept':'application/json'}, cache:'no-store'}).then(r => r.ok ? r.json() : null, () => null);
+  [SUM.ap, SUM.bf] = await Promise.all([get('/api/v1/autopilot/status'), get('/api/v1/backfill/status')]);
+  renderSummary(); renderBfSum();
+}
+$('bf-run').addEventListener('click', loadSummary);  // «Обновить» в «Истории прогонов» — и сводку
+if (window.DeskInboxFolders) DeskInboxFolders.onLoad(renderSummary);  // что найдено в папках пришло — сводка папок
+
 /* ---------- сохранение settings.json ---------- */
 function collect(){
   const body = {};
@@ -1103,14 +1430,15 @@ function collect(){
       continue;
     }
     const v = el.value.trim(), kind = KIND[k];
+    const bad = text => Object.assign(new Error(keyLabel(k) + ': ' + text), {key:k});
     if (!v) { body[k] = null; continue; }
     if (kind === 'pos' || kind === 'posint' || kind === 'int0') {
       const n = Number(v.replace(',', '.'));
-      if (!isFinite(n) || (kind === 'pos' && n <= 0)) throw new Error(keyLabel(k) + ': нужно положительное число');
-      if (kind !== 'pos' && (!Number.isInteger(n) || n < (kind === 'int0' ? 0 : 1))) throw new Error(keyLabel(k) + ': нужно целое число' + (kind === 'int0' ? ' (0 — без ограничения)' : ' не меньше 1'));
+      if (!isFinite(n) || (kind === 'pos' && n <= 0)) throw bad('нужно положительное число');
+      if (kind !== 'pos' && (!Number.isInteger(n) || n < (kind === 'int0' ? 0 : 1))) throw bad('нужно целое число' + (kind === 'int0' ? ' (0 — без ограничения)' : ' не меньше 1'));
       body[k] = n;
     } else if (kind === 'date') {
-      if (!/^\d{4}-\d{2}-\d{2}$/.test(v)) throw new Error(keyLabel(k) + ': дата в виде ГГГГ-ММ-ДД');
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(v)) throw bad('дата в виде ГГГГ-ММ-ДД');
       body[k] = v;
     } else body[k] = v;
   }
@@ -1118,9 +1446,26 @@ function collect(){
   body.inbox_dirs = dirs.length ? dirs : null;
   return body;
 }
+function goToField(k){  // поле с ошибкой: его раздел, раскрытый блок, курсор в поле (поле может быть и в другом разделе)
+  const el = document.querySelector('[data-key="' + k + '"]'); if (!el) return;
+  const sec = el.closest('section.sec');
+  if (sec && !sec.classList.contains('on')) { show('#' + el.id); try { history.replaceState(null, '', '#' + el.id); } catch(e) {} }
+  unfold(el); el.focus();
+}
+function keyOfError(msg){  // поле, которое называет ответ сервера: ключ settings.json или его переменная DESK_*
+  for (const el of document.querySelectorAll('[data-key]')) {
+    const k = el.dataset.key;
+    if (new RegExp('\\b(' + k + '|DESK_' + k.toUpperCase() + ')\\b').test(msg)) return k;
+  }
+  return null;
+}
 async function save(){
   let body;
-  try { body = collect(); } catch(e) { $('save-msg').className = 'err'; $('save-msg').textContent = e.message; return false; }
+  try { body = collect(); } catch(e) {
+    $('save-msg').className = 'err'; $('save-msg').textContent = e.message;
+    if (e.key) goToField(e.key);
+    return false;
+  }
   $('save').disabled = true;
   try {
     const d = await api('PUT', '/api/v1/settings', body);
@@ -1128,9 +1473,13 @@ async function save(){
     render(d);
     toast('Настройки сохранены ' + new Date().toLocaleTimeString('ru-RU'), 'ok');
     loadAdapter(adapterChanged);
+    loadDetect();
+    loadSummary();
     return true;
   } catch(e) {
     $('save-msg').className = 'err'; $('save-msg').textContent = 'Не сохранено: ' + e.message;
+    const k = keyOfError(e.message || '');
+    if (k) goToField(k);
     return false;
   } finally { $('save').disabled = false; }
 }
@@ -1184,7 +1533,8 @@ $('test-hub').addEventListener('click', async () => {
   try {
     const r = await api('POST', '/api/v1/settings/test-hub', {});
     box.textContent = ''; box.className = 'res ' + (r.ok ? 'ok' : 'bad');
-    S.hubTested = true;
+    S.hubTested = true; S.hubTest = r; renderSummary();
+    if (!r.ok) unfold($('https_proxy'));  // нет связи: прокси и сертификаты — следующее, что проверить
     navDot('hub', r.ok ? 'ok' : 'bad', r.ok ? 'связь с хабом есть' : 'нет связи с хабом');
     $('hub-st').hidden = false; $('hub-st').className = 'badge st ' + (r.ok ? 'ok' : 'bad'); $('hub-st').textContent = r.ok ? 'связь есть' : 'нет связи';
     const lines = [];
@@ -1224,10 +1574,10 @@ async function loadAdapter(reloadForms){
   let a;
   try { a = await api('GET', '/api/v1/adapter'); }
   catch(e) {
-    st.className = 'badge st bad'; st.textContent = 'ошибка'; navDot('adapter', 'bad', e.message);
+    st.className = 'badge st bad'; st.textContent = 'ошибка'; navDot('adapter', 'bad', e.message); S.adapterError = e.message; renderSummary();
     box.textContent = ''; box.append(h('div', {class:'note err'}, e.message)); renderConfigFiles(null); mountTabs(null); return;
   }
-  S.adapter = a;
+  S.adapter = a; S.adapterError = null;
   st.className = 'badge st ' + (a.loaded ? 'ok' : 'bad');
   st.textContent = a.loaded ? 'загружен' : 'ошибка загрузки';
   navDot('adapter', a.loaded ? 'ok' : 'bad', a.loaded ? 'адаптер загружен' : a.error);
@@ -1248,6 +1598,7 @@ async function loadAdapter(reloadForms){
   renderConfigFiles(a, tabFiles);
   mountTabs(a, reloadForms);
   if (window.DeskAdapterTools) { window.DeskAdapterTools.update(a); if (document.querySelector('section.sec.on[data-sec="adapter"]')) window.DeskAdapterTools.shown(); }
+  renderDetect(); renderSummary();
 }
 /* ---------- «Для опытных»: сырой JSON файлов адаптера (форм хватает для всего; это — на крайний случай) ---------- */
 SF.advanced = store.get('settings.advanced') === '1';
@@ -1350,6 +1701,9 @@ function fsRender(){
   FSX.ccy = Object.entries(e.default_rate_by_ccy || {}).map(([c, x]) => ({ccy:c, row:fsRateRow(x)}));
   FSX.rules = (e.rules || []).map(x => Object.assign({}, x));
   fsDrawCcy(); fsDrawRules(); fsDrawPolicy();
+  const nr = FSX.rules.length, np = Object.keys(FSX.policy || {}).length;
+  $('fs-adv-n').textContent = nr || np ? '— правил: ' + nr + (np ? ', соглашений: ' + np : '') : '— поверх правил адаптера; обычно не нужны';
+  if (nr || np) unfold($('fs-rules'));
 }
 function fsSyncMain(){ const v = $('fs-kind').value; $('fs-index').disabled = v !== 'index_spread'; $('fs-fixed').disabled = v !== 'fixed'; $('fs-spread').disabled = v === 'fixed' || v === 'none'; }
 $('fs-kind').addEventListener('change', fsSyncMain);
@@ -1503,6 +1857,8 @@ function mountTabs(a, reload){
   if (window.DeskAdapterTools) window.DeskAdapterTools.mount({api, toast, SF});
   loadAdapter(true);
   loadHistoryStatus();
+  loadDetect();
+  loadSummary();
 })();
 </script>
 <script>
@@ -1768,15 +2124,15 @@ function mountTabs(a, reload){
       if (!r.ok) throw new Error('HTTP ' + r.status);
       const s = await r.json();
       const withPos = s.dates - s.no_positions - s.no_market;
-      const at = t => t ? new Date(t).toLocaleString('ru-RU', {timeZone:'Europe/Moscow', day:'2-digit', month:'2-digit', hour:'2-digit', minute:'2-digit'}) + ' МСК' : '';
       // #447: «не сходятся» — даты, которые не считаются по своим данным; «не загружаются» — свои ошибки базы или сети
-      // даты (другие даты грузятся) и даты хаба шага sync; остановка на ошибке сети или базы — отдельной строкой
-      const probs = s.problem_dates || [], seen = {};
-      const conv = probs.filter(p => p.kind !== 'unreachable').map(p => (seen[p.date] = 1, dd(p.date) + ' — ' +
-        (p.error && p.error.indexOf('does not converge') === 0 ? 'не сходится после пересчёта' : (p.error || 'расчёт упал')) + (p.attempts ? ', попыток: ' + p.attempts : '')));
-      const nl = probs.filter(p => p.kind === 'unreachable').map(p => (seen[p.date] = 1, dd(p.date) + ' — ' + (p.error || 'ошибка') + (p.attempts ? ', попыток: ' + p.attempts : '')))
-        .concat((s.hub_problem_dates || []).filter(p => !seen[p.date]).map(p => dd(p.date) + ' — с хаба: ' + (p.error || 'ошибка') + ', попыток: ' + p.attempts + (p.next_attempt ? ', следующая попытка ' + at(p.next_attempt) : '')));
-      const st = s.stalled;
+      // даты (другие даты грузятся) и даты хаба шага sync; догрузка стоит на ошибке сети или базы — отдельной строкой
+      // (причина как в чипе шапки, время по МСК, ошибка — второй строкой). Слова и деление дат — desk-backfill-text.js
+      const T = window.DESK_BACKFILL_TEXT, at = t => T.when(t), D = T.dates(s), st = T.stall(s) && s.stalled;
+      const tries = p => p.attempts ? ', попыток: ' + p.attempts : '';
+      const conv = D.conv.map(p => dd(p.date) + ' — ' +
+        (p.error && p.error.indexOf('does not converge') === 0 ? 'не сходится после пересчёта' : (p.error || 'расчёт упал')) + tries(p));
+      const nl = D.load.map(p => dd(p.date) + ' — ' + (p.kind === 'unreachable' ? (p.error || 'ошибка') + tries(p)
+        : 'с хаба: ' + (p.error || 'ошибка') + tries(p) + (p.next_attempt ? ', следующая попытка ' + at(p.next_attempt) : '')));
       const rows = [
         ['Включено', s.enabled ? 'да' : 'нет (настройка в «Автообновлении»)'],
         ['Даты', dd(s.from) + ' — ' + dd(s.to) + ': ' + s.dates + ' рабочих дат' + (s.hub ? '' : ' (по загруженным срезам)')],
@@ -1789,11 +2145,13 @@ function mountTabs(a, reload){
         ['Самый ранний расчёт', dd(s.oldest_run)],
         ['Старые отчёты прочитаны с', dd(s.inbox_scanned_from)],
       ];
-      if (st) rows.splice(4, 0, ['Догрузка стоит', st.error + ' — ошибка ' + (st.source === 'store' ? 'базы' : 'сети или хаба') + ', а не данных дат (на ' + dd(st.date) + ')' +
-        (st.since ? '; с ' + at(st.since) : '') + '. Следующая попытка ' + (st.next_attempt ? '≈ ' + at(st.next_attempt) + ', в следующем цикле автопилота' : 'в следующем цикле автопилота') + '.']);
+      if (st) rows.splice(4, 0, ['Догрузка стоит', 'с ' + at(st.since) + ': ' + T.cause(st) + T.stall(s).retry,
+        st.error ? 'Ошибка' + (st.date ? ' на ' + dd(st.date) : '') + ': ' + st.error : '']);
       if (s.step) rows.push(['Последний цикл', s.step.status + ': ' + s.step.detail]);
       const tb = $('bf-rows'); tb.textContent = '';
-      rows.forEach(([k, v]) => { const tr = document.createElement('tr'); tr.innerHTML = '<td class="k"></td><td class="v" style="white-space:pre-wrap"></td>'; tr.children[0].textContent = k; tr.children[1].textContent = v; tb.append(tr); });
+      rows.forEach(([k, v, sub]) => { const tr = document.createElement('tr'); tr.innerHTML = '<td class="k"></td><td class="v" style="white-space:pre-wrap"></td>'; tr.children[0].textContent = k; tr.children[1].textContent = v;
+        if (sub) { const d = document.createElement('div'); d.className = 'hint'; d.textContent = sub; tr.children[1].append(d); }
+        tb.append(tr); });
       $('bf-msg').textContent = ''; $('bf-when').textContent = 'на ' + new Date().toLocaleTimeString('ru-RU');
     } catch (e) { $('bf-msg').textContent = 'не загрузилось: ' + e.message; }
   }

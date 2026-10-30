@@ -1212,46 +1212,45 @@
   };
 
   // ход «Истории прогонов» (сервер досчитывает прошлые даты от самой ранней, R23): пока есть даты к расчёту, чип
-  // в шапке говорит, сколько готово, — история риска, MTD/YTD и изменения позиций прошлых дат появляются по мере расчёта.
-  // #23/#163/#447: «догрузка истории N из M · стоит (сеть) · K не сходятся · L не загружаются» — K: даты, которые
-  // бэкфилл пометил проблемными по их данным (не сходятся после двух прогонов, расчёт упал); L: даты, которые не
-  // загружаются сами по себе (своя ошибка базы или сети, когда другие даты грузятся, kind unreachable), и даты хаба,
-  // которые не загружает шаг sync (problem_dates: ошибка, попытки, следующая попытка); «стоит» — догрузка
-  // остановилась на ошибке сети или базы (stalled: причина, с какого времени, следующая попытка), это не свойство дат
-  // и проблемных дат не добавляет. В подсказке — причина остановки, даты и причины. Серый — остались только такие даты.
-  // j — GET /api/v1/backfill/status; null — индикатора нет.
+  // в шапке говорит, сколько дат готово, — история риска, MTD/YTD и изменения позиций прошлых дат появляются по мере расчёта.
+  // #23/#163/#447: «догрузка истории N из M дат · K не сходятся · L не загружаются» — K: даты, которые бэкфилл пометил
+  // проблемными по их данным (упали, не сходятся после двух прогонов); L: даты, которые не загружаются сами по себе
+  // (своя ошибка базы или сети, когда другие даты грузятся, kind unreachable), и даты хаба, которые не грузит шаг sync
+  // (ошибка, попытки, следующая попытка). Догрузка остановилась на ошибке сети или базы (j.stalled) — это не свойство
+  // дат: коротко «⚠ догрузка стоит: <причина>, повтор в ЧЧ:ММ · N из M дат», в подсказке — с какого времени, ошибка
+  // целиком и проблемные даты. Время — МСК. Серый — остались только проблемные даты. j — GET /api/v1/backfill/status;
+  // null — индикатора нет.
   const dmy = iso => iso ? iso.slice(8, 10) + '.' + iso.slice(5, 7) + '.' + iso.slice(0, 4) : '';
   const BF_WHY = { 'no default run': 'нет прогона', 'positions changed': 'изменились позиции', 'market snapshot changed': 'исправлен рынок',
     'previous snapshot changed': 'изменилось прошлое закрытие', 'private inputs changed': 'изменились условия сделок', 'program updated': 'обновилась программа' };
+  // причина застоя, момент по МСК, «не сходятся» / «не загружаются», текст застоя — одни с Настройками (../desk-backfill-text.js,
+  // его подключает lib/boot.js раньше kit.js)
+  const BT = () => window.DESK_BACKFILL_TEXT;
+  K.BF_CAUSE = (BT() || {}).CAUSE || {};
+  const bfWhen = iso => BT().when(iso);
+  const bfN = (n, one, many) => BT().n(n, one, many);
+  const bfList = (head, L) => L.length ? '\n' + head + ' (' + L.length + '):\n' + L.slice(0, 15).join('\n') + (L.length > 15 ? '\n… ещё ' + (L.length - 15) : '') + '\n' : '';
   K.backfillStatus = function (j) {
     if (!j) return null;
-    const on = j.enabled !== false, todo = on ? j.todo || 0 : 0, seen = {}, conv = [], load = [];
-    const at = t => { const m = msk(t); return ddmm(m.iso) + ' ' + m.hm; };
-    (on ? j.problem_dates || [] : []).forEach(p => {
-      seen[p.date] = 1;
-      if (p.kind === 'unreachable') load.push(dmy(p.date) + ' — не загружается: ' + (p.error || 'ошибка') + (p.attempts ? ', попыток: ' + p.attempts : ''));
-      else conv.push(dmy(p.date) + ' — ' + (p.error && p.error.indexOf('does not converge') === 0 ? 'не сходится после пересчёта (' + (BF_WHY[p.why] || p.why) + ')'
-        : (BF_WHY[p.why] || p.why || 'расчёт упал') + (p.error ? ': ' + p.error : '')) + (p.attempts ? ', попыток: ' + p.attempts : ''));
-    });
-    (j.hub_problem_dates || []).forEach(p => {
-      if (seen[p.date]) return;
-      seen[p.date] = 1;
-      load.push(dmy(p.date) + ' — с хаба не загружается: ' + (p.error || 'ошибка') + ', попыток: ' + p.attempts + (p.next_attempt ? ', следующая попытка ' + at(p.next_attempt) : ''));
-    });
-    const nc = conv.length, nl = load.length, st = todo ? j.stalled : null;
-    if (!todo && !nc && !nl) return null;
+    const on = j.enabled !== false, todo = on ? j.todo || 0 : 0, D = BT().dates(j);
+    const conv = D.conv.map(p => dmy(p.date) + ' — ' + (p.error && p.error.indexOf('does not converge') === 0 ? 'не сходится после пересчёта (' + (BF_WHY[p.why] || p.why) + ')'
+      : (BF_WHY[p.why] || p.why || 'расчёт упал') + (p.error ? ': ' + p.error : '')) + (p.attempts ? ', попыток: ' + p.attempts : ''));
+    const load = D.load.map(p => dmy(p.date) + (p.kind === 'unreachable' ? ' — не загружается: ' + (p.error || 'ошибка') + (p.attempts ? ', попыток: ' + p.attempts : '')
+      : ' — с хаба не загружается: ' + (p.error || 'ошибка') + ', попыток: ' + p.attempts + (p.next_attempt ? ', следующая попытка ' + bfWhen(p.next_attempt) : '')));
+    const st = BT().stall(j);  // только пока есть даты к расчёту
+    if (!todo && !conv.length && !load.length) return null;
     const total = j.total != null ? j.total : (j.done || 0) + (j.todo || 0) + (j.failed || 0), grey = !todo;
+    const nm = (j.done || 0) + ' из ' + total + ' дат';
+    const lists = bfList('Не сходятся', conv) + bfList('Не загружаются', load) + 'Подробности — Настройки → «История прогонов».';
+    if (st) return { text: '⚠ догрузка ' + st.text + ' · ' + nm, title: st.title + '\nГотово ' + nm + '.\n' + lists, grey: false, stall: true };
     const eta = todo && j.eta_s ? (j.eta_s < 5400 ? Math.max(1, Math.round(j.eta_s / 60)) + ' мин' : Math.round(j.eta_s / 3600) + ' ч') : null;
-    const one = n => n % 10 === 1 && n % 100 !== 11, list = (head, l) => '\n' + head + ' (' + l.length + '):\n' + l.slice(0, 15).join('\n') + (l.length > 15 ? '\n… ещё ' + (l.length - 15) : '') + '\n';
-    const title = (grey ? 'Остались только даты, которые не сходятся или не загружаются: сервер пробует снова, когда изменятся данные или программа, а даты хаба — по расписанию. '
-      : (st ? 'Догрузка стоит: ' + st.error + ' — ошибка ' + (st.source === 'store' ? 'базы' : 'сети или хаба') + ', а не данных дат' +
-        (st.since ? '; с ' + at(st.since) : '') + '. Следующая попытка ' + (st.next_attempt ? '≈ ' + at(st.next_attempt) + ', в следующем цикле автопилота' : 'в следующем цикле автопилота') + '.\n' : '') +
-        'Сервер досчитывает прошлые даты с ' + dmy(j.from) + ', от самой ранней: история риска, PnL с начала месяца и года и позиции прошлых дат появляются по мере расчёта (обновите страницу). ' +
-        'Следующие: ' + (j.next || []).map(dmy).join(', ') + '.' + (eta ? ' Осталось расчёта ≈ ' + eta + ' (по одной дате за раз, между циклами автопилота).' : '') + ' ') +
-      (nc ? list('Не сходятся', conv) : '') + (nl ? list('Не загружаются', load) : '') +
-      'Подробности — Настройки → «История прогонов».';
-    return { text: '⟳ догрузка истории ' + (j.done || 0) + ' из ' + total + (st ? ' · стоит (' + (st.source === 'store' ? 'база' : 'сеть') + ')' : '') +
-      (nc ? ' · ' + nc + (one(nc) ? ' не сходится' : ' не сходятся') : '') + (nl ? ' · ' + nl + (one(nl) ? ' не загружается' : ' не загружаются') : ''), title, grey };
+    const title = (grey ? 'Остались только проблемные даты.' + (conv.length ? ' Не сходятся — сервер пересчитает их, когда изменятся данные или программа.' : '') +
+        (load.length ? ' Не загружаются — сервер пробует снова сам, по расписанию.' : '') + ' '
+      : 'Сервер досчитывает прошлые даты с ' + dmy(j.from) + ', от самой ранней: история риска, PnL с начала месяца и года и позиции прошлых дат появляются по мере расчёта (обновите страницу). ' +
+        'Следующие: ' + (j.next || []).map(dmy).join(', ') + '.' + (eta ? ' Осталось расчёта ≈ ' + eta + ' (по одной дате за раз, между циклами автопилота).' : '') + ' ') + lists;
+    const text = '⟳ догрузка истории ' + nm + (conv.length ? ' · ' + bfN(conv.length, ' не сходится', ' не сходятся') : '') +
+      (load.length ? ' · ' + bfN(load.length, ' не загружается', ' не загружаются') : '');
+    return { text, title, grey, stall: false };
   };
   function backfillChip(bar) {
     const ch = h('a', 'k-chip'); ch.href = '../settings.html#bf'; ch.style.cssText = 'display:none;text-decoration:none;border-color:var(--warn)';

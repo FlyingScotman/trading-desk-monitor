@@ -1,5 +1,6 @@
 // Настройки → «История прогонов» (#bf) в браузере (Playwright), сервер — заглушка маршрутов (TDM#447): остановка
-// догрузки на ошибке сети или базы — строкой «Догрузка стоит» с причиной и следующей попыткой; даты, которые не
+// догрузки на ошибке сети или базы — строкой «Догрузка стоит» с причиной (слова desk-backfill-text.js), с какого
+// времени и следующей попыткой, ошибка с датой — второй строкой; даты, которые не
 // сходятся по своим данным, и даты, которые не загружаются (своя ошибка сети, даты хаба), — разными строками.
 //   node --test tests/js/settings_backfill_447.pw.test.js
 // Нужен Playwright (как settings_adapter.pw.test.js); без него тест пропускается.
@@ -19,7 +20,7 @@ const STATUS = { enabled: true, from: '2026-01-05', to: '2026-10-23', dates: 210
   problem_dates: [{ date: '2026-02-10', kind: 'unconverged', why: 'program updated', error: 'does not converge: program updated after 2 runs', attempts: 2 },
     { date: '2026-02-12', kind: 'unreachable', why: 'no default run', error: 'HubError: bundle: 502 bad gateway', attempts: 3 }],
   hub_problem_dates: [{ date: '2026-02-20', error: 'SnapshotError: digest mismatch', attempts: 2, next_attempt: '2026-10-23T09:30:00+00:00' }],
-  stalled: { error: 'TimeoutError: timed out', date: '2026-03-02', source: 'network', since: '2026-10-23T06:00:00+00:00', at: '2026-10-23T09:00:00+00:00',
+  stalled: { error: 'TimeoutError: timed out', date: '2026-03-02', source: 'network', cause: 'network', since: '2026-10-23T06:00:00+00:00', at: '2026-10-23T09:00:00+00:00',
     next_attempt: '2026-10-23T09:01:00+00:00' } };
 
 async function open(browser, status) {
@@ -49,8 +50,8 @@ test('настройки: «История прогонов» — догрузк
     await t.test('остановка на сети: причина, с какого времени, следующая попытка; даты по видам', async () => {
       const { pg, ctx, errors } = await open(browser, STATUS);
       const stall = await row(pg, 'Догрузка стоит');
-      assert.ok(/TimeoutError: timed out/.test(stall) && /сети или хаба, а не данных дат/.test(stall) && /02\.03\.2026/.test(stall), stall);
-      assert.ok(/с 23\.10.*09:00 МСК/.test(stall) && /Следующая попытка ≈ 23\.10.*12:01 МСК/.test(stall), stall);
+      assert.ok(/^с 23\.10 09:00: нет связи\n/.test(stall), stall);  // время — МСК; время повтора прошло — без «повтор»
+      assert.ok(/Ошибка на 02\.03\.2026: TimeoutError: timed out/.test(stall) && !/null|undefined/.test(stall), stall);
       const conv = await row(pg, 'Не сходятся');
       assert.ok(/^1 /.test(conv) && /10\.02\.2026 — не сходится после пересчёта, попыток: 2/.test(conv) && !/12\.02|20\.02|Timeout/.test(conv), conv);
       const nl = await row(pg, 'Не загружаются');

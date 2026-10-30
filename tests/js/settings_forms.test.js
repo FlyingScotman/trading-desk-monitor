@@ -109,6 +109,11 @@ t('замечание адаптера → файл (у reference() в заме�
   assert.strictEqual(f('unknown_entity', 'funding_rules: entity not in entities'), 'funding.json');
   assert.strictEqual(f('bad_options', 'options.json: report_risk has the wrong type'), 'options.json');
   assert.strictEqual(f('bad_reference', 'reference() must return {books: [...], issues: [...]}'), null);
+  // папки адаптера и монитора (#449): сообщение адаптера — только количество, без путей
+  assert.strictEqual(f('report_dirs_not_scanned', '2 report_dirs are not scanned by the monitor'), 'options.json');
+  assert.strictEqual(f('report_dirs_override', 'report_dirs names none of the monitor folders'), 'options.json');
+  assert.ok(/не сканирует: добавьте их в «Папки с отчётами»/.test(SF.say({ code: 'report_dirs_not_scanned', message: 'x' }, S.sources)));
+  assert.ok(/нет ни одной папки монитора.*впишите все папки или очистите поле/.test(SF.say({ code: 'report_dirs_override', message: 'x' }, S.sources)));
 });
 
 t('ввод: суммы без потерь, коды книги, канонический вид', () => {
