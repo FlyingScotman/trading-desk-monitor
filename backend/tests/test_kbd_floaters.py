@@ -85,8 +85,9 @@ def test_kbd_floater_publishes_its_ofz_basis_and_its_ruonia_risk(ctx, out):
                         "notional": row["notional"], "notional_rub": row["notional_rub"], "price": row["price"],
                         "spread_bp": row["spread_bp"], "dv01": row["dv01"], "dm_bp": ex["dm_bp"], "pnl": None,
                         "ofz_basis": ex["ofz_basis01"], "quality": "exact", "ofz_ruo": ex["ofz_ruonia01"]}])
-    # «RUONIA + базис»: RUONIA its computed RUONIA risk, the basis the projection's KBD risk
-    assert s["basis"] == pytest.approx(ex["ofz_basis01"]) and s["ofzRuo"] == pytest.approx(ex["ofz_ruonia01"])
+    # «RUONIA + базис»: RUONIA its computed RUONIA risk, the basis the projection's KBD risk. The «КБД» history takes off
+    # RUONIA only the basis (TDM#467): the floater's RUONIA less the basis, the discounting, stays on RUONIA
+    assert s["basis"] == pytest.approx(ex["ofz_basis01"]) and s["ofzRuo"] == pytest.approx(ex["ofz_basis01"])
     assert s["dv01"]["RUB RUONIA"] == pytest.approx(ex["ofz_ruonia01"])
 
 
@@ -270,3 +271,28 @@ def test_margin_steps_by_the_spread_schedule(monkeypatch):
     # the price is the market's: richer coupons at the same price are a wider spread
     assert o1.valuation.pv_rub == pytest.approx(o0.valuation.pv_rub, rel=1e-9)
     assert o1.valuation.z_spread_bp > o0.valuation.z_spread_bp + 1.0
+
+
+def test_kbd_floater_flash_rates_are_split_into_ruonia_and_basis(ctx, out):
+    """TDM#467: the first order of a KBD floater is B dK + (R - B) dO (the projection on the KBD, the discounting on
+    RUONIA), so ``rates_linear`` is close to the exact ``rates`` (it was B dK alone: far from it, the discounting in the
+    convexity), RUONIA's part is R dO as for an OFZ and the basis's the rest, B (dK - dO)."""
+    import dataclasses
+    from datetime import timedelta
+
+    from test_pnl_compare import attach_pnl, prev_outcome, shifted_prev
+
+    prev = shifted_prev(ctx, ctx.business_date - timedelta(days=1))
+    prevs = [prev_outcome(prev, out)]
+    cur = [dataclasses.replace(out)]
+    attach_pnl(prev, prevs, ctx, cur)
+    p, pv = cur[0].pnl, prevs[0].valuation
+    assert p is not None and p.rates_linear_ofz is not None
+    ruonia, basis = p.rates_linear_ofz
+    assert abs(p.rates) > 1.0 and p.rates_linear == pytest.approx(p.rates, rel=0.1)
+    assert ruonia + basis == pytest.approx(p.rates_linear)
+    d_ois = {b: m for b, m in p.curve_moves_bp["RUB RUONIA"].items()}
+    assert ruonia == pytest.approx(math.fsum(x * d_ois[b] for b, x in pv.ofz_ruonia.items() if b in d_ois))
+    assert set(p.rates_linear_curves) == {"RUB OFZ", "RUB RUONIA"}  # the discounting is a term of its own
+    # the exact rates less RUONIA's part is the basis's, to the second order (the convexity, ~5 % of the rates here)
+    assert (p.rates - ruonia) - basis == pytest.approx(0.0, abs=0.1 * abs(p.rates))

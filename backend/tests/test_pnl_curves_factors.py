@@ -167,3 +167,21 @@ def test_factor_rules():
     assert risk_factors({OFZ: {"1Y": -2.0}, CURVE: {"1Y": -1.0}}, True) == {F_RUONIA: {"1Y": -3.0},
                                                                             F_BASIS: {"1Y": -2.0}}
     assert risk_factors({OFZ: {"1Y": -2.0}}, False) == {F_KBD: {"1Y": -2.0}}
+
+
+def test_kbd_floater_linear_factors_keep_the_discounting_in_the_basis():
+    """TDM#467: a KBD floater's terms hold the KBD's B dK and RUONIA's (R - B) dO (the discounting): RUONIA's factor is
+    R dO per bucket, the basis's B dK + (R - B) dO - R dO = B (dK - dO); together they are ``rates_linear``."""
+    from desk.api.pnl_period import F_BASIS, F_RUONIA, RUONIA_CURVE, exact_factors, linear_factors
+    b_, r_ = {"2Y": 300.0, "5Y": 22.0}, {"2Y": 10.0, "5Y": 3.0}  # the basis risk, the RUONIA risk (synthetic)
+    d_k, d_o = {"2Y": 2.0, "5Y": 1.0}, {"2Y": 1.5, "5Y": 0.5}
+    disc = {b: r_[b] - b_[b] for b in r_}
+    terms = {OFZ: {b: b_[b] * d_k[b] for b in b_}, RUONIA_CURVE: {b: disc[b] * d_o[b] for b in b_}}
+    lin = math.fsum(v for t in terms.values() for v in t.values())
+    ruo = math.fsum(r_[b] * d_o[b] for b in r_)
+    by_t, whole = linear_factors(OFZ, lin, terms, ruo, lin - ruo, r_, {OFZ: d_k, RUONIA_CURVE: d_o})
+    assert whole == {} and set(by_t) == {F_RUONIA, F_BASIS}
+    assert by_t[F_RUONIA] == pytest.approx({b: r_[b] * d_o[b] for b in r_})
+    assert by_t[F_BASIS] == pytest.approx({b: b_[b] * (d_k[b] - d_o[b]) for b in b_})
+    assert math.fsum(v for t in by_t.values() for v in t.values()) == pytest.approx(lin)
+    assert exact_factors(OFZ, lin + 5.0, ruo, lin - ruo)[F_RUONIA] == pytest.approx(ruo)
