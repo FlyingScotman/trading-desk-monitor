@@ -89,7 +89,7 @@ t('#276: C14 и C15 перерисовываются при смене «(1) / �
   for (const f of ['c14-day-status.html', 'c15-cash.html']) {
     assert.ok(P('concepts/' + f).includes("K.on('numfmt', () => { if (doc && (!on || doc.date === on) && view.querySelector('.k-grid')) " + redraw[f] + '; });'), f);
   }
-  assert.ok(P('concepts/c16-ocp.html').includes("K.on('numfmt', () => { if (last) K.keepOpen(view, 'data-r', () => render(last)); });"));
+  assert.ok(P('concepts/c16-ocp.html').includes("K.on('numfmt', render);"));
 });
 
 t('#277: CSV C03 — строки групп не выгружаются, «Цена 30д» — изменение за 30 дней числом с заголовком', () => {

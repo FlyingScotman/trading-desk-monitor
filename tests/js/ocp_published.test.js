@@ -118,38 +118,169 @@ t('C06: плитка «ОВП и курсы» — публикуемая ОВП 
   assert.ok(src.includes("K.fxMini(L), K.ocpNote())"), 'HUD: заметка под ОВП');
 });
 
-t('C16: панель публикуемой ОВП (по валютам с источниками, по книгам, добавлено из позиций) и чего не хватает', () => {
+// C16 (TDM#446): страница над ответом /api/v1/history/ocp; в демо — вымышленный ответ той же формы. srv — ответ сервера
+// (K.source 'real': fetch отдаёт его, а на /inbox/datasets/ocp — why), hash — адрес демо (#no_report), filter — шапки
+function page16(opt) {
+  opt = opt || {};
   const page = P('concepts/c16-ocp.html');
   const code = page.slice(page.lastIndexOf('<script>') + 8, page.lastIndexOf('</script>'));
-  const page16 = (src) => { const x = load(null); x.ctx.KIT.top = () => {}; x.ctx.KIT.tableToolsAll = () => {}; vm.runInContext(src, x.ctx); return dump(x.view); };
-  const html = page16(code);  // демо-набор страницы (не сервер); шапка страницы (K.top) — вне заглушки DOM
-  assert.ok(html.includes('Публикуемая ОВП') && html.includes('data-vk="c16-published"'), 'панель');
-  assert.ok(html.includes('data-pub="B2|USD"') && html.includes('data-pub="B3|USD"') && html.includes('прочее <span class="k-num">'), 'по книгам, «прочее» добавлено из позиций');
-  assert.ok(/c16-badge st-ok">отчёт</.test(html) && /c16-badge st-none">из позиций</.test(html), 'источник');
-  assert.ok(html.includes('Чего не хватает публикуемой ОВП') && html.includes('data-gap="books_outside_report"'));
-  assert.ok(html.includes('из настроек адаптера (ocp_policy): report_components'));
-  // прогон до TDM#416: блок без published — панели нет, остальное как раньше
-  const old = page.replace("published: { basis: 'report_plus_outside',", "published0: { basis: 'report_plus_outside',");
-  const h2 = page16(old.slice(old.lastIndexOf('<script>') + 8, old.lastIndexOf('</script>')));
-  assert.ok(!h2.includes('Публикуемая ОВП') && h2.includes('ОВП из позиций по валютам') && h2.includes('c16-recon'));
+  const x = load(null, opt.filter);
+  const K = x.ctx.KIT;
+  K.top = () => null; K.tableToolsAll = () => {};
+  let chart = null; K.chart = (el, fn) => { chart = fn(); return { dispose() {} }; };
+  const segs = {}; const seg0 = K.seg; K.seg = (el, items, cur, fn) => { segs[items[0][0]] = fn; return seg0(el, items, cur, fn); };
+  if (opt.hash) x.ctx.location.hash = opt.hash;
+  const asked = [];
+  if (opt.srv) {
+    K.source = 'real'; x.ctx.MOCK.run = { id: 42 }; x.ctx.MOCK.asOf = opt.srv.asOf;
+    x.ctx.fetch = u => { asked.push(u); const body = u.includes('/history/ocp') ? opt.srv : opt.why || {}; return Promise.resolve({ ok: true, status: 200, json: () => Promise.resolve(body) }); };
+  }
+  vm.runInContext(P('concepts/lib/inbox-why.js'), x.ctx);
+  vm.runInContext(code, x.ctx);
+  return Object.assign(x, { html: () => dump(x.view), chart: () => chart, segs, asked, code });
+}
+const settle = async () => { for (let i = 0; i < 6; i++) await new Promise(r => setTimeout(r, 0)); };
+const L = (entity, book, books, ccy, amount, source) => ({ entity, book, books, ccy, amount, source: source || 'report', reported: null, validDate: null });
+const FX = { USD: { market: 80, cbr: 79 }, EUR: { market: 96, cbr: 95 }, CNY: { market: 11, cbr: 10 } };
+const SRV = {
+  runId: 42, asOf: '2026-10-21', from: '2026-07-21', to: '2026-10-21', books: { OLD: { name: 'Старая книга', entity: 'BANK', desk: 'FX' } },
+  days: [
+    { date: '2026-09-15', runId: 1, state: 'not_computed', basis: null, fx: FX, lines: [] },
+    { date: '2026-10-19', runId: 2, state: 'computed', basis: 'report_plus_outside', fx: FX, lines: [L('BANK', 'FXB', ['FXB'], 'USD', -1e6), L('BANK', 'OLD', ['OLD'], 'CNY', 88e6)] },
+    { date: '2026-10-20', runId: 3, state: 'computed', basis: null, fx: FX, lines: [] },
+    { date: '2026-10-21', runId: 42, state: 'computed', basis: 'report_plus_outside', fx: FX, lines: [
+      L('BANK', 'FXB', ['FXB'], 'USD', 10e6), L('BANK', 'FXB', ['FXB'], 'CNY', -44e6, 'derived'),
+      L('AM', null, ['AM-BOND', 'AM-CNY'], 'CNY', 22e6), L('IC', 'IC-BND', ['IC-BND'], 'EUR', -2e6, 'derived'),
+      L('IC', 'IC-BND', ['IC-BND'], 'GBP', 1e6, 'derived')] }] };
+const asyncTests = [];
+const ta = (name, f) => asyncTests.push([name, f]);
+
+ta('C16: ОВП дня по валютам, общая ОВП в USD — бо́льшая из длинных и коротких, книги × валюты, часть отчёта своей строкой', async () => {
+  const x = page16({ srv: SRV });
+  await settle();
+  assert.deepStrictEqual(Array.from(x.asked), ['../api/v1/history/ocp?run_id=42']);
+  const html = x.html();
+  // USD 10, CNY (−44+22)·11/80 = −3.025, EUR −2·96/80 = −2.4; GBP без курса — не в общей. Длинные 10 > короткие 5.425
+  assert.ok(/data-ocp-total[^>]*Без курса, не входят: GBP"><div class="l">Общая ОВП<\/div><div class="v"><span class="[^"]*">\+10\.0</.test(html), html);
+  assert.ok(html.includes('data-ocp-ccy="CNY"') && html.includes('(22.0)</span> <span class="u">mm CNY') && html.includes('≈ (3.0) mm USD'));
+  assert.ok(html.includes('data-ocp-ccy="GBP"') && html.includes('курса нет'));
+  assert.ok(!html.includes('data-ocp-ccy="RUB"'));
+  assert.ok(html.includes('data-vk="c16-books"') && html.includes('data-ocp-row="AM"') && html.includes('часть отчёта') && html.includes('title="книги: Фонд облигаций, Фонд юаневых облигаций"'), 'часть отчёта по юрлицу — строкой, книги в подсказке');
+  assert.ok(html.includes('FX и XCCY</span> <span class="c16-src" title="из позиций: CNY">из позиций</span>'), 'источник строки, когда в таблице есть и отчёт, и из позиций; в CSV — через пробел');
+  assert.ok(/data-ocp-row="IC-BND">[\s\S]*?<td class="n" title="нет курса одной из валют строки"><span class="mut3">—<\/span><\/td><\/tr>/.test(html), 'ОВП строки без курса GBP — не считается');
+  assert.ok(!/Сверка|Перенос ОВП|брейк/.test(html), 'без сверки и переноса');
+  assert.ok(!html.includes('Почему отчёта ОВП нет'));
+  // история: дни позже месяца назад; день без публикуемой ОВП — пусто; линия — общая ОВП дня
+  const o = x.chart();
+  assert.deepStrictEqual(Array.from(o.xAxis.data), ['19 окт', '20 окт', '21 окт']);
+  assert.deepStrictEqual(Array.from(o.series, s => s.name), ['USD', 'EUR', 'CNY', 'GBP', 'Общая']);
+  const by = Object.fromEntries(o.series.map(s => [s.name, s.data]));
+  near(by.CNY[0], 88 * 11 / 80, 'книга, которой нет в прогоне, — по справочнику периода'); assert.strictEqual(by.CNY[1], null);
+  near(by['Общая'][0], 88 * 11 / 80, 'общая 19.10'); assert.strictEqual(by['Общая'][1], null);
+  assert.strictEqual(by['Общая'][2], null, '21.10: у GBP нет курса — неполная общая ОВП не рисуется');
+  assert.strictEqual(by.GBP[2], null, 'без курса — нет столбца');
+  x.segs.w2('m3');
+  assert.strictEqual(x.chart().xAxis.data.length, 4, '3 мес');
 });
 
-t('C16: «отчёта ОВП нет» — панель «Почему», по журналу входящих (TDM#445), только при no_report', () => {
+ta('C16: в USD и курс ЦБ; правило общей ОВП — одна функция', async () => {
+  const x = page16({ srv: SRV });
+  await settle();
+  // плитка «Общая ОВП» — по валютам с курсом (без курса — названы); строка книги и линия по дням — total: null без курса
+  assert.ok(x.code.includes('const overall = usd =>') && x.code.includes('const total = usd => usd.some(v => v == null) ? null : overall(usd);'));
+  assert.strictEqual((x.code.match(/overall\(/g) || []).length, 2);
+  assert.ok((x.code.match(/total\(/g) || []).length >= 2);
+  x.segs.ccy('usd');
+  let html = x.html();
+  assert.ok(html.includes('(3.0)</span> <span class="u">mm USD') && html.includes('(22.0) mm CNY'), 'в USD: подпись — в валюте');
+  x.segs.market('cbr');
+  html = x.html();
+  near(x.chart().series.find(s => s.name === 'CNY').data[2], -22 * 10 / 79, 'курс ЦБ');
+  assert.ok(html.includes('(2.8)</span> <span class="u">mm USD'), html);
+});
+
+ta('C16: день без курса — линия «Общая» пустая; курс ЦБ не подменяется рыночным; пустой период — «нет данных»', async () => {
+  const s = JSON.parse(JSON.stringify(SRV));
+  s.days[1].fx = {};  // старый прогон без курсов: USD входит своей суммой, CNY — без эквивалента
+  s.days[3].lines = s.days[3].lines.filter(x => x.ccy !== 'GBP');
+  s.days[3].fx.CNY.cbr = null;  // у прогона нет курса ЦБ этой валюты (сервер не подменяет его рыночным)
+  const x = page16({ srv: s });
+  await settle();
+  let by = Object.fromEntries(x.chart().series.map(z => [z.name, z.data]));
+  near(by.USD[0], -1, 'USD 19.10'); assert.strictEqual(by.CNY[0], null); assert.strictEqual(by['Общая'][0], null, 'без курса CNY — не по одному USD');
+  near(by['Общая'][2], 10, 'общая 21.10, все курсы есть');
+  x.segs.market('cbr');
+  by = Object.fromEntries(x.chart().series.map(z => [z.name, z.data]));
+  assert.strictEqual(by.CNY[2], null); assert.strictEqual(by['Общая'][2], null);
+  assert.ok(/data-ocp-ccy="CNY"[\s\S]*?курса нет/.test(x.html()), 'курс ЦБ CNY — «курса нет»');
+  const e = JSON.parse(JSON.stringify(SRV)); e.days.forEach(d => { d.state = 'not_computed'; d.basis = null; d.lines = []; });
+  const y = page16({ srv: e });
+  await settle();
+  assert.ok(y.html().includes('Нет данных за период') && y.chart() === null);
+});
+
+ta('C16: период «месяц» от конца месяца — без переполнения (31.03 − месяц = 28.02)', async () => {
+  const s = JSON.parse(JSON.stringify(SRV));
+  s.asOf = '2027-03-31';
+  s.days = ['2027-02-26', '2027-03-01', '2027-03-02', '2027-03-31'].map(date => Object.assign({}, SRV.days[3], { date }));
+  const x = page16({ srv: s });
+  await settle();
+  assert.deepStrictEqual(Array.from(x.chart().xAxis.data), ['1 мар', '2 мар', '31 мар']);
+});
+
+ta('C16: фильтр книг шапки — строки книг; часть отчёта по юрлицу — только целиком', async () => {
+  const one = page16({ srv: SRV, filter: { books: ['FXB'] } });
+  await settle();
+  let html = one.html();
+  assert.ok(html.includes('data-ocp-row="FXB"') && !html.includes('data-ocp-row="AM"') && !html.includes('data-ocp-ccy="EUR"'));
+  assert.ok(!html.includes('под фильтром — не вся'));
+  const part = page16({ srv: SRV, filter: { books: ['FXB', 'AM-CNY'] } });
+  await settle();
+  html = part.html();
+  assert.ok(!html.includes('data-ocp-row="AM"') && html.includes('под фильтром — не вся') && html.includes('учтена только целиком'));
+  // фильтр портфелей: ничего не исключено — без пометки «не вся», заметка — в подсказке общей ОВП
+  const ports = page16({ srv: SRV, filter: { portsOff: ['X'] } });
+  await settle();
+  html = ports.html();
+  assert.ok(!html.includes('под фильтром — не вся') && /data-ocp-total title="[^"]*фильтр портфелей к ОВП по книгам не применяется/.test(html), html);
+  const ent = page16({ srv: SRV, filter: { entity: 'AM' } });
+  await settle();
+  assert.ok(ent.html().includes('data-ocp-row="AM"') && !ent.html().includes('data-ocp-row="FXB"'));
+});
+
+ta('C16: день без публикуемой ОВП; отчёта ОВП нет — панель «Почему» (TDM#445)', async () => {
+  const none = JSON.parse(JSON.stringify(SRV)); none.days[3].state = 'not_computed'; none.days[3].basis = null;
+  const a = page16({ srv: none });
+  await settle();
+  assert.ok(a.html().includes('ОВП за 21.10.26 нет: прогон без расчёта ОВП'), a.html());
+  const nr = JSON.parse(JSON.stringify(SRV)); nr.days[3].state = 'no_report';
+  const why = { dataset: 'ocp', name: 'ОВП', on: nr.asOf, files: { total: 0, by_status: {}, later: { total: 0, by_status: {} } }, latest: null, unread: {}, folders: { count: 1, scanned: 1, missing: 0 } };
+  const b = page16({ srv: nr, why });
+  await settle();
+  const html = b.html();
+  assert.ok(html.includes('отчёта ОВП нет') && html.includes('Почему отчёта ОВП нет') && html.includes('data-why="ocp"'), html);
+  assert.deepStrictEqual(Array.from(b.asked), ['../api/v1/history/ocp?run_id=42', '../api/v1/inbox/datasets/ocp?on=2026-10-21']);
+  assert.ok(html.includes('data-ocp-ccy="USD"'), 'ОВП дня — из позиций — на месте');
+  b.segs.ccy('usd');
+  assert.strictEqual(b.asked.length, 2, 'перерисовка не спрашивает причину снова');
+});
+
+ta('C16: демо — вымышленный ответ той же формы; #no_report — панель «Почему» с демо-причиной', async () => {
   const page = P('concepts/c16-ocp.html');
-  assert.ok(page.includes('<script src="lib/inbox-why.js"></script>') && page.includes("'../api/v1/inbox/datasets/ocp'"), 'запрос и библиотека');
-  const page16 = (src) => {
-    const x = load(null); x.ctx.KIT.top = () => {}; x.ctx.KIT.tableToolsAll = () => {};
-    vm.runInContext(P('concepts/lib/inbox-why.js'), x.ctx); vm.runInContext(src, x.ctx); return dump(x.view);
-  };
-  const code = page.slice(page.lastIndexOf('<script>') + 8, page.lastIndexOf('</script>'));
-  assert.ok(!page16(code).includes('Почему отчёта ОВП нет'), 'отчёт есть — панели нет');
-  const none = code.replace("state: 'computed', text:", "state: 'no_report', text:");
-  assert.notStrictEqual(none, code);
-  const html = page16(none);  // демо: вымышленный ответ /api/v1/inbox/datasets/ocp той же формы
+  assert.ok(page.includes('<script src="lib/inbox-why.js"></script>') && page.includes("'../api/v1/inbox/datasets/ocp'") && page.includes("'../api/v1/history/ocp' + (M.run.id != null ? '?run_id='"));
+  const d = page16();
+  let html = d.html();
+  assert.ok(html.includes('Общая ОВП') && html.includes('data-ocp-row="AM"') && !html.includes('Почему отчёта ОВП нет'));
+  assert.ok(d.chart().xAxis.data.length > 15, 'месяц рабочих дней');
+  const n = page16({ hash: '#no_report' });
+  html = n.html();
   assert.ok(html.includes('Почему отчёта ОВП нет') && html.includes('<div data-why="ocp">'), 'панель');
   assert.ok(html.includes('Отчёт ОВП отклонён: книги нет в справочнике') && html.includes('title="unknown_book ×2"'), html);
   assert.ok(html.includes('ocp_demo.csv</span> · ещё 3 файла не распознано') && html.includes('href="c14-day-status.html?on='), html);
   assert.strictEqual((html.match(/Почему отчёта ОВП нет/g) || []).length, 1);
 });
 
-console.log(n + ' tests passed');
+(async () => {
+  for (const [name, f] of asyncTests) { await f(); n++; console.log('ok', name); }
+  console.log(n + ' tests passed');
+})().catch(e => { console.error(e); process.exit(1); });

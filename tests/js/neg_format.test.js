@@ -208,8 +208,8 @@ t('шапка: кнопка формата отрицательных чисел
 
 t('#262: C16 перерисовывается при смене формата отрицательных — из последнего ответа, без нового запроса', () => {
   const src = P('concepts/c16-ocp.html');
-  assert.ok(/function render\(d\) \{\n\s+last = d;/.test(src), 'render запоминает ответ');
-  assert.ok(src.includes("K.on('numfmt', () => { if (last) K.keepOpen(view, 'data-r', () => render(last)); });"), 'подписка на numfmt (раскрытые строки — #317)');
+  assert.ok(/function render\(\) \{\n\s+if \(!H\) return;/.test(src) && src.includes('.then(x => { H = x; render(); })'), 'render — из запомненного ответа');
+  assert.ok(src.includes("K.on('numfmt', render);"), 'подписка на numfmt');
   // подписчики 'numfmt' вызываются K.setNegFmt
   const { K } = load(new Map());
   let calls = 0; K.on('numfmt', () => calls++);
