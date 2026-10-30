@@ -27,7 +27,14 @@ from typing import Any
 from rub_fixed_income import RISK_BUCKETS, RISK_PILLARS
 
 from ..marketdata import ratings
-from ..pnl.reasons import METHOD_TEXT, REPORTED_METHOD, RUN_NO_POSITION_PNL, RUN_NO_PREV_MARKET, no_pnl_text
+from ..pnl.reasons import (
+    METHOD_TEXT,
+    REPORTED_METHOD,
+    RUN_NO_POSITION_PNL,
+    RUN_NO_PREV_MARKET,
+    no_pnl_reason_text,
+    no_pnl_text,
+)
 from ..publish.funding_run import NOT_COMPUTED, STATUS_TEXT
 from ..publish.summary import fx_net
 from .runs import PNL_KEYS, risk_notes, run_slice
@@ -48,14 +55,16 @@ PNL_AMOUNTS = ("carry", "rolldown", "rates", "spread", "fx", "funding", "convexi
 PNL_KEYS_READ = (*PNL_AMOUNTS, "available", "reasonText", "method", "methodText")
 """A position's ``pnl`` as the pages read it: the amounts (all null without PnL, R10), whether it has one, why not and
 by which method."""
-EXTRA_KEYS_READ = ("assumptions", "core", "dm_bp", "funding", "g_spread_bp", "horizon_kind", "index_fixings",
-                   "issue_size", "lat_name", "legs", "not_exact_reason", "offer_date", "offer_kind", "ofz_basis01",
-                   "ofz_ruonia01", "pv_diff_rub", "quality", "quote", "reason", "reported", "reported_pv_rub", "repos",
-                   "spread_buckets", "swaps")
+EXTRA_KEYS_READ = ("assumptions", "core", "curve_proxy", "dm_bp", "funding", "g_spread_bp", "horizon_kind",
+                   "index_fixings", "issue_size", "lat_name", "legs", "not_exact_reason", "offer_date", "offer_kind",
+                   "ofz_basis01", "ofz_ruonia01", "pv_diff_rub", "quality", "quote", "reason", "reported",
+                   "reported_pv_rub", "repos", "risk_problem", "spread_buckets", "swaps")
 """The keys of a position's ``extra`` (the row's own, passed through) that ``lib/real.js`` reads, some only on rows
 a plain bond book does not have: an FX deal's ``legs``, a rates-core trade's ``swaps`` / ``repos`` / ``core``, a
-not-valued row's ``reported``. ``tests/js/ui_pack6.test.js`` keeps it equal to what ``real.js`` reads (TDM#324)."""
+not-valued row's ``reported``, an impossible risk's ``risk_problem`` (TDM#170, TDM#460), a bond on the proxy curve's
+``curve_proxy`` (TDM#31). ``tests/js/ui_pack6.test.js`` keeps it equal to what ``real.js`` reads (TDM#324)."""
 EXTRA_NESTED_KEYS = {
+    "curve_proxy": ("curve", "instead_of", "reason", "text"),
     "funding": ("amount_rub", "default_rate", "in_pnl", "lines", "reason", "rule_source", "state"),
     "funding.lines[]": ("base", "body_ccy", "ccy", "days", "default_rate", "interest_ccy", "interest_rub", "kind",
                         "rate_expr", "rate_pct", "rule_id", "rule_source"),
@@ -64,8 +73,9 @@ EXTRA_NESTED_KEYS = {
                "quote_forward_rate", "rate_quote", "sell_amount", "sell_ccy", "settlement", "settlement_ccy",
                "trade_id", "value_date"),
 }
-"""The keys of the nested structures of a position's ``extra`` the pages read (TDM#337): ``funding`` an object
-(``publish.funding_run``: a position's state, amount and lines), ``funding.lines[]`` and ``legs[]`` (an FX deal's,
+"""The keys of the nested structures of a position's ``extra`` the pages read (TDM#337): ``curve_proxy`` an object
+(``publish.tdm_run.curve_proxy``, TDM#31), ``funding`` an object (``publish.funding_run``: a position's state, amount
+and lines), ``funding.lines[]`` and ``legs[]`` (an FX deal's,
 ``valuation.derivatives._ui_leg``) lists of objects. A test checks them against the golden answers and ``_ui_leg``."""
 CURVE_KINDS = ("bond", "swap")
 """``kind`` of an entry of ``CURVES``: ``publish.tdm_run.curves_reference`` gives a bond curve (the KBD, a proxy, a
@@ -108,11 +118,12 @@ def _fx_move(r: dict[str, Any], moved: bool) -> float | None:
     return r.get("move_pct")
 
 
-def no_pnl(code: str) -> dict[str, Any]:
+def no_pnl(code: str, detail: str | None = None) -> dict[str, Any]:
     """A position's ``pnl`` without PnL (R10): every amount null, not 0, and why (``pnl.reasons``; the pages read
-    only its text, not compat's ``reasonDetail``)."""
-    return {**dict.fromkeys(PNL_AMOUNTS), "available": False, "reasonText": no_pnl_text(code), "method": None,
-            "methodText": None}
+    only its text, not compat's ``reasonDetail``: ``no_pnl_reason_text`` says a change of discount curve with its
+    curves, TDM#31)."""
+    return {**dict.fromkeys(PNL_AMOUNTS), "available": False, "reasonText": no_pnl_reason_text(code, detail),
+            "method": None, "methodText": None}
 
 
 def _pnl(q: dict[str, Any]) -> dict[str, Any]:
@@ -128,11 +139,11 @@ def _pnl(q: dict[str, Any]) -> dict[str, Any]:
             "methodText": METHOD_TEXT.get(method, method) if method else None}
 
 
-def _no_pnl_code(stored: dict[str, Any] | None, prev_date: date | None) -> str:
-    """Why a valued position has no PnL: run_position.no_pnl, else the run's own reason."""
+def _no_pnl_code(stored: dict[str, Any] | None, prev_date: date | None) -> tuple[str, str | None]:
+    """Why a valued position has no PnL, (code, detail): run_position.no_pnl, else the run's own reason."""
     if stored:
-        return stored.get("reason") or "not_computed"
-    return RUN_NO_PREV_MARKET if prev_date is None else "not_computed"
+        return stored.get("reason") or "not_computed", stored.get("detail")
+    return (RUN_NO_PREV_MARKET if prev_date is None else "not_computed"), None
 
 
 def ocp_status(block: dict[str, Any] | None) -> dict[str, Any] | None:
@@ -294,7 +305,7 @@ def assemble(con, run: dict[str, Any]) -> dict[str, Any]:
             "fxDelta": {c: d for c, d in (p.get("fx_delta") or {}).items() if d},
             "counterparty": p.get("counterparty"), "newToday": bool(p.get("new_today")),
             "entity": books.get(p["book_id"], {}).get("entity", "—"), "portfolio": portfolio.get(pid),
-            "pnl": _pnl(q) if q else no_pnl(_no_pnl_code(row["no_pnl"], run["prev_date"])),
+            "pnl": _pnl(q) if q else no_pnl(*_no_pnl_code(row["no_pnl"], run["prev_date"])),
         }
         if p.get("accrual_only"):
             pos["accrualOnly"] = True

@@ -113,17 +113,43 @@ def test_a_crashing_match_is_isolated_and_offered_again_hours_later(con, tmp_pat
     assert r.files == {"match_failed": 1} and r.match == {"retried": 1}, r.text()
 
 
+def barrier_adapter(tmp_path: Path, name: str, parties: int, wait_s: float) -> tuple[str, Path]:
+    """The good adapter whose worker, on its first ``match`` call, leaves a mark and waits (at most ``wait_s``) for
+    the marks of ``parties`` workers, then notes whether they came. Every worker seeing them all means the last one
+    to come found the others still inside their first call: all of them held a batch at the same moment. Batches
+    handed out one after another leave the first worker waiting alone, so it notes that they did not come."""
+    d = Path(slow_adapter(tmp_path, name))
+    marks = tmp_path / f"{name}_marks"
+    marks.mkdir()
+    src = (d / "__init__.py").read_text(encoding="utf-8")
+    body = (f"    global _waited\n"
+            f"    if not _waited:\n"
+            f"        _waited = True\n"
+            f"        marks = {str(marks)!r}\n"
+            f"        open(os.path.join(marks, f'{{os.getpid()}}.in'), 'w').close()\n"
+            f"        end, met = time.monotonic() + {wait_s}, False\n"
+            f"        while time.monotonic() < end and not met:\n"
+            f"            met = len([n for n in os.listdir(marks) if n.endswith('.in')]) >= {parties}\n"
+            f"            time.sleep(0.01)\n"
+            f"        open(os.path.join(marks, f'{{os.getpid()}}.{{\"met\" if met else \"alone\"}}'), 'w').close()\n")
+    src = src.replace("def match(path, ctx):\n", "_waited = False\n\n\ndef match(path, ctx):\n" + body, 1)
+    (d / "__init__.py").write_text(src, encoding="utf-8")
+    return str(d), marks
+
+
 def test_match_batches_go_to_all_workers_at_once(con, tmp_path, monkeypatch):
     monkeypatch.setenv(scan.READ_WORKERS_ENV, "3")
     inbox = tmp_path / "in"
     inbox.mkdir()
-    for i in range(150):  # 3 batches of 50, 0.02 s a file: about 1 s each, in parallel about 1 s in all
+    for i in range(150):  # 3 batches of 50: one for each worker
         (inbox / f"old_{i:03d}.xls").write_bytes(b"x")
-    s = cfg(tmp_path, inbox, slow_adapter(tmp_path, "par", match_s=0.02))
-    t = datetime.now()
-    r = scan.scan(con, s)
+    # no wall-clock threshold (flaky under CPU load, #478): the workers wait for each other, with a wide margin
+    adapter, marks = barrier_adapter(tmp_path, "par", parties=3, wait_s=20.0)
+    r = scan.scan(con, s := cfg(tmp_path, inbox, adapter))
     assert r.files == {"ignored": 150}, r.text()
-    assert (datetime.now() - t).total_seconds() < 2.6 and r.timings["match_s"] < 2.4
+    assert s.adapter_match_timeout_s > 20.0 and "match_s" in r.timings
+    seen = Counter(n.split(".")[1] for n in os.listdir(marks))
+    assert seen == {"in": 3, "met": 3}, seen  # three workers, each in its first batch while the others were
 
 
 def test_warm_reports_workers_that_fail_to_start(tmp_path):
@@ -200,6 +226,27 @@ def test_one_listing_with_stats_skips_temp_hidden_and_linked_folders(tmp_path):
     assert [Path(p).name for p, _ in flat] == ["a.csv"] and flat[0][1].st_size == 1
     deep = [Path(p).relative_to(root).as_posix() for p in conformance.list_files([f"{root}/**"])]
     assert deep == ["a.csv", "sub/c.csv", "sub/deeper/d.csv"]  # a linked folder is not followed
+
+
+def test_a_recursive_listing_skips_dot_folders_such_as_the_settings_checks_copy(tmp_path):
+    """TDM#130: the settings page's check copies the config folder into ``.desk-settings-check-*`` beside it, with
+    its subfolders linked; a recursive inbox folder above it offers none of that, only the real files."""
+    root = tmp_path / "in"
+    cfg = root / "adapter-config"
+    (cfg / "reports").mkdir(parents=True)
+    (cfg / "options.json").write_text("{}", encoding="utf-8")
+    (cfg / "reports" / "r.csv").write_text("x", encoding="utf-8")
+    check = root / ".desk-settings-check-x"
+    (check / "deeper").mkdir(parents=True)
+    (check / "options.json").write_text("{}", encoding="utf-8")
+    (check / "deeper" / "d.csv").write_text("x", encoding="utf-8")
+    try:
+        os.symlink(cfg / "reports", check / "reports", target_is_directory=True)
+    except (OSError, NotImplementedError):
+        pass
+    deep = [Path(p).relative_to(root).as_posix() for p in conformance.list_files([f"{root}/**"])]
+    assert deep == ["adapter-config/options.json", "adapter-config/reports/r.csv"]
+    assert conformance.list_files([str(check)]) == [str(check / "options.json")]  # a folder named as such: listed
 
 
 def test_the_lookback_goes_by_report_date_not_by_modification_time(con, tmp_path):

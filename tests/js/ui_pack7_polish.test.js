@@ -152,7 +152,7 @@ t('#337: тест, внёсший в прогон согласованную о�
   // ключи валют и видов — из server-keys.json, его пишет бэкенд-тест (контракт CURVE_KINDS, EXTRA_NESTED_KEYS)
   assert.deepStrictEqual(SERVER_KEYS.ids.curveKinds, ['bond', 'swap']);
   assert.strictEqual(SERVER_KEYS.ids.ccyPattern, '^[A-Z]{3}$');
-  assert.deepStrictEqual(Object.keys(SERVER_KEYS.extraNested), ['funding', 'funding.lines[]', 'legs[]']);
+  assert.deepStrictEqual(Object.keys(SERVER_KEYS.extraNested), ['curve_proxy', 'funding', 'funding.lines[]', 'legs[]']);  // curve_proxy: #31
 });
 
 console.log(n + ' tests ok');

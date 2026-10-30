@@ -194,6 +194,21 @@
   // эмитента (рейтинги в статике есть), «нет данных» / «—» — рейтингов в данных нет вовсе
   K.RATINGS = ['AAA', 'AA+', 'AA', 'AA-', 'A+', 'A', 'A-', 'BBB+', 'BBB', 'BBB-', 'BB+', 'BB', 'BB-', 'B+', 'B', 'B-', 'CCC+', 'CCC', 'CCC-', 'CC', 'C', 'RD', 'SD', 'D'];
   K.RATING_BUCKETS = [['AAA', '#4c9dff'], ['AA', '#22c3d6'], ['A', '#3fb67a'], ['BBB', '#e3b341'], ['≤BB', '#f0645a'], ['б/р', '#8a96a3']];
+  // дефолтные и дистрессные выпуски (#111): доходность MOEX вида «29 574 %» — не уровень рынка. Признак — рейтинг
+  // дефолта (RD / SD / D), доходность от 50 % или G-спред шире 2000 б.п. (та же граница дистресса, что у медиан
+  // Z-спреда запасной оценки, backend desk/valuation/fallback.py Z_BAND_BP). Такие выпуски помечены, их доходность не
+  // показывается числом, в медианы и шкалы таблиц они не входят. b — выпуск рынка (ytm/ytmMoex, spread) или позиция (gspread)
+  K.DISTRESS = { ratings: ['RD', 'SD', 'D'], ytmPct: 50, spreadBp: 2000 };
+  K.distress = b => {
+    if (!b) return null;
+    const y = b.ytmMoex != null ? b.ytmMoex : b.ytm, sp = b.spread != null ? b.spread : b.gspread;
+    if (K.DISTRESS.ratings.includes(b.rating)) return { kind: 'default', text: 'дефолт', why: 'рейтинг ' + b.rating + ' — дефолт', ytm: y };
+    if (y != null && isFinite(y) && y >= K.DISTRESS.ytmPct) return { kind: 'distress', text: 'дистресс', why: 'доходность MOEX ' + K.f.pct(y) + ' (от ' + K.DISTRESS.ytmPct + ' %)', ytm: y };
+    if (sp != null && isFinite(sp) && sp > K.DISTRESS.spreadBp) return { kind: 'distress', text: 'дистресс', why: 'G-спред ' + K.f.bp(sp) + ' б.п. (шире ' + K.DISTRESS.spreadBp + ')', ytm: y };
+    return null;
+  };
+  // пометка вместо числа: подсказка говорит, почему и что выпуск не входит в медианы и шкалы
+  K.distressTag = d => '<span class="k-tag" style="border-color:var(--warn);color:var(--warn)" title="' + esc(d.why + ': доходность не показатель рынка, выпуск не входит в медианы и шкалы') + '">' + d.text + '</span>';
   K.ratingRank = r => { const i = K.RATINGS.indexOf(r); return i < 0 ? 99 : i; };
   K.ratingBucket = r => K.RATINGS.indexOf(r) < 0 ? 'б/р' : r === 'AAA' ? 'AAA' : /^AA[+-]?$/.test(r) ? 'AA' : /^A[+-]?$/.test(r) ? 'A' : /^BBB/.test(r) ? 'BBB' : '≤BB';
   K.ratingColor = r => (K.RATING_BUCKETS.find(b => b[0] === K.ratingBucket(r)) || K.RATING_BUCKETS[5])[1];
@@ -1198,12 +1213,13 @@
 
   // ход «Истории прогонов» (сервер досчитывает прошлые даты от самой ранней, R23): пока есть даты к расчёту, чип
   // в шапке говорит, сколько дат готово, — история риска, MTD/YTD и изменения позиций прошлых дат появляются по мере расчёта.
-  // #23/#163/#447: «догрузка истории N из M дат · K не сходятся · L не загружаются» — K: даты со своей проблемой (упали,
-  // не сходятся после двух прогонов); L: даты, которые не загружаются (одна дата раз за разом упирается в сеть или базу,
-  // kind transient; даты хаба, которые не грузит шаг sync: ошибка, попытки, следующая попытка). Одна и та же ошибка сети
-  // или базы на датах подряд — не даты, а окружение (j.stall): коротко «⚠ догрузка стоит: <причина>, повтор в ЧЧ:ММ ·
-  // N из M дат», в подсказке — с какого времени, ошибка целиком и проблемные даты. Время — МСК. Серый — остались
-  // только проблемные даты. j — GET /api/v1/backfill/status; null — индикатора нет.
+  // #23/#163/#447: «догрузка истории N из M дат · K не сходятся · L не загружаются» — K: даты, которые бэкфилл пометил
+  // проблемными по их данным (упали, не сходятся после двух прогонов); L: даты, которые не загружаются сами по себе
+  // (своя ошибка базы или сети, когда другие даты грузятся, kind unreachable), и даты хаба, которые не грузит шаг sync
+  // (ошибка, попытки, следующая попытка). Догрузка остановилась на ошибке сети или базы (j.stalled) — это не свойство
+  // дат: коротко «⚠ догрузка стоит: <причина>, повтор в ЧЧ:ММ · N из M дат», в подсказке — с какого времени, ошибка
+  // целиком и проблемные даты. Время — МСК. Серый — остались только проблемные даты. j — GET /api/v1/backfill/status;
+  // null — индикатора нет.
   const dmy = iso => iso ? iso.slice(8, 10) + '.' + iso.slice(5, 7) + '.' + iso.slice(0, 4) : '';
   const BF_WHY = { 'no default run': 'нет прогона', 'positions changed': 'изменились позиции', 'market snapshot changed': 'исправлен рынок',
     'previous snapshot changed': 'изменилось прошлое закрытие', 'private inputs changed': 'изменились условия сделок', 'program updated': 'обновилась программа' };
@@ -1219,17 +1235,14 @@
     const on = j.enabled !== false, todo = on ? j.todo || 0 : 0, D = BT().dates(j);
     const conv = D.conv.map(p => dmy(p.date) + ' — ' + (p.error && p.error.indexOf('does not converge') === 0 ? 'не сходится после пересчёта (' + (BF_WHY[p.why] || p.why) + ')'
       : (BF_WHY[p.why] || p.why || 'расчёт упал') + (p.error ? ': ' + p.error : '')) + (p.attempts ? ', попыток: ' + p.attempts : ''));
-    const load = D.load.map(p => dmy(p.date) + (p.kind === 'transient' ? ' — не загружается (сеть или база): ' + (p.error || 'ошибка') + (p.attempts ? ', попыток: ' + p.attempts : '')
+    const load = D.load.map(p => dmy(p.date) + (p.kind === 'unreachable' ? ' — не загружается: ' + (p.error || 'ошибка') + (p.attempts ? ', попыток: ' + p.attempts : '')
       : ' — с хаба не загружается: ' + (p.error || 'ошибка') + ', попыток: ' + p.attempts + (p.next_attempt ? ', следующая попытка ' + bfWhen(p.next_attempt) : '')));
-    const st = on ? j.stall : null;
-    if (!todo && !conv.length && !load.length && !st) return null;
-    const total = j.total != null ? j.total : (j.done || 0) + (j.todo || 0) + (j.failed || 0), grey = !todo && !st;
+    const st = BT().stall(j);  // только пока есть даты к расчёту
+    if (!todo && !conv.length && !load.length) return null;
+    const total = j.total != null ? j.total : (j.done || 0) + (j.todo || 0) + (j.failed || 0), grey = !todo;
     const nm = (j.done || 0) + ' из ' + total + ' дат';
     const lists = bfList('Не сходятся', conv) + bfList('Не загружаются', load) + 'Подробности — Настройки → «История прогонов».';
-    if (st) {
-      const s = BT().stall(j);
-      return { text: '⚠ догрузка ' + s.text + ' · ' + nm, title: s.title + '\nГотово ' + nm + '.\n' + lists, grey: false, stall: true };
-    }
+    if (st) return { text: '⚠ догрузка ' + st.text + ' · ' + nm, title: st.title + '\nГотово ' + nm + '.\n' + lists, grey: false, stall: true };
     const eta = todo && j.eta_s ? (j.eta_s < 5400 ? Math.max(1, Math.round(j.eta_s / 60)) + ' мин' : Math.round(j.eta_s / 3600) + ' ч') : null;
     const title = (grey ? 'Остались только проблемные даты.' + (conv.length ? ' Не сходятся — сервер пересчитает их, когда изменятся данные или программа.' : '') +
         (load.length ? ' Не загружаются — сервер пробует снова сам, по расписанию.' : '') + ' '
@@ -1464,6 +1477,42 @@
     const w = { on: (...a) => c.on(...a), setOption: (o, x) => c.setOption(o, x), raw: c, redraw: () => { if (typeof optFn === 'function') c.setOption(build(), true); }, dispose: () => { ro.disconnect(); c.dispose(); const i = K.charts.indexOf(w); if (i >= 0) K.charts.splice(i, 1); }, update: fn => { optFn = fn; c.setOption(build(), true); } };
     K.charts.push(w);
     return w;
+  };
+
+  // Выброс в истории (#170): одна дата на порядки выше соседних не задаёт шкалу графика. Масштаб даты — наибольший
+  // |ряд| на ней; значение ряда — выброс, если оно не конечно или больше SPIKE_X × медианы масштаба соседних дат и
+  // слева, и справа (по SPIKE_W дат, не меньше 2 с данными с каждой стороны; на краях истории — только неконечное).
+  // Ступень (книга выросла) не выброс: с одной стороны соседи такие же, в том числе на последних датах. Выброс в линии —
+  // разрыв, дата — пунктирной чертой, значение — в подсказке и примечании. rows — ряды по датам (null — нет точки);
+  // flag — { индекс даты: текст } (у прогона позиции с невозможным риском, M.hist.riskBad) — та же черта, без вырезания.
+  // → { data, idx, markLine, tip(i), note }
+  K.SPIKE_X = 10; K.SPIKE_W = 15;
+  K.spikes = function (rows, dates, names, fmt, flag) {
+    const n = dates.length, out = rows.map(r => (r || []).slice()), hit = {};
+    const scale = dates.map((_, i) => Math.max(0, ...rows.map(r => r && r[i] != null && isFinite(r[i]) ? Math.abs(r[i]) : 0)));
+    const has = dates.map((_, i) => rows.some(r => r && r[i] != null));
+    const med = a => { const s = a.slice().sort((x, y) => x - y), m = s.length >> 1; return s.length % 2 ? s[m] : (s[m - 1] + s[m]) / 2; };
+    for (let i = 0; i < n; i++) {
+      const L = [], R = [];
+      for (let j = Math.max(0, i - K.SPIKE_W); j < i; j++) if (has[j]) L.push(scale[j]);
+      for (let j = i + 1; j <= Math.min(n - 1, i + K.SPIKE_W); j++) if (has[j]) R.push(scale[j]);
+      // выше соседей и слева, и справа: ступень у края истории (самая свежая дата) не выброс — у неё одна сторона
+      const lim = L.length >= 2 && R.length >= 2 ? K.SPIKE_X * Math.max(med(L), med(R)) : Infinity;
+      const zero = L.length >= 2 && R.length >= 2 && !(med(L) && med(R));  // соседи нулевые: масштаба нет
+      rows.forEach((r, k) => {
+        const v = r && r[i];
+        if (v == null || (isFinite(v) && (zero || Math.abs(v) <= lim))) return;
+        (hit[i] = hit[i] || []).push(names[k] + ' ' + (isFinite(v) ? fmt(v) : String(v)));
+        out[k][i] = null;
+      });
+    }
+    const idx = Object.keys(hit).map(Number).sort((a, b) => a - b), fl = flag || {};
+    const marks = [...new Set(idx.concat(Object.keys(fl).map(Number)))].sort((a, b) => a - b);
+    const tip = i => (hit[i] ? 'выброс, не в шкале: ' + hit[i].join(', ') : '') + (hit[i] && fl[i] ? '; ' : '') + (fl[i] || '');
+    const markLine = marks.length ? { symbol: 'none', silent: true, animation: false, label: { show: false }, lineStyle: { type: 'dashed', width: 1, color: css('--warn') || '#e3b341' }, data: marks.map(i => ({ xAxis: dates[i] })) } : undefined;
+    const note = (idx.length ? 'выброс не в шкале (больше ' + K.SPIKE_X + '× соседних дат; пунктир): ' + idx.map(i => f.dshort(dates[i]) + ' ' + hit[i].join(', ')).join('; ') : '') +
+      (idx.length && Object.keys(fl).length ? ' · ' : '') + (Object.keys(fl).length ? Object.keys(fl).length + ' дат с позициями без риска в сумме (невозможный риск; пунктир)' : '');
+    return { data: out, idx, markLine, tip, note };
   };
 
   // Риск по бакетам: стек по кривым, ромб — итог бакета, линия — кумулятивный риск до срока.
@@ -2417,7 +2466,7 @@
   K.posCols = {
     // валюта и эмитент — обычные столбцы (R37): сортировка и фильтр по значениям, как у остальных
     issuer: { key: 'issuerName', label: 'Эмитент', filter: true, title: 'эмитент (у деривативов — контрагент)', fmt: (v, r) => '<b style="color:' + K.issuerColor(r.issuer) + '">●</b> ' + esc(v) },
-    name: { key: 'name', label: 'Бумага', fmt: (v, r) => K.nameCell(r, v) + (r.tradedToday ? ' <span class="k-tag" style="border-color:var(--warn);color:var(--warn)" title="сделки сегодня">сд</span>' : '') },
+    name: { key: 'name', label: 'Бумага', fmt: (v, r) => K.nameCell(r, v) + (r.tradedToday ? ' <span class="k-tag" style="border-color:var(--warn);color:var(--warn)" title="сделки сегодня">сд</span>' : '') + K.curveProxyTag(r) },
     isin: { key: 'isin', label: 'ISIN', fmt: v => '<span class="mono mut">' + esc(v || '—') + '</span>' },
     ccy: { key: 'ccy', label: 'Вал', fmt: (v, r) => K.ccyTag(r.ccy), val: r => M.ccyOrder[r.ccy] ?? 99, filter: r => r.ccy, fltOrder: (a, b) => ((M.ccyOrder[a] ?? 99) - (M.ccyOrder[b] ?? 99)) || a.localeCompare(b) },
     kind: { key: 'kind', label: 'Тип', filter: r => M.kindLabel[r.kind] || r.kind, fmt: (v, r) => '<span class="tagc" style="border-color:' + K.kindColor[v] + '55">' + esc(M.kindShort[v]) + '</span>' },
@@ -2656,8 +2705,20 @@
     const t = root && root.querySelector && root.querySelector(sel);
     if (t) K.tableTools(t, { viewKey: key, title: title + ': ' + K.htmlText(p.name), fileName: key + '_' + (p.isin || p.id) });
   });
-  // ссылка на прогнозное кэрри позиции (C17, #66): тот же прогон (run_id / as_of / demo из адреса)
-  K.carryLink = id => { const q = new URLSearchParams(); const u = new URLSearchParams(location.search); ['run_id', 'as_of', 'demo'].forEach(k => { if (u.get(k)) q.set(k, u.get(k)); }); q.set('pos', id); return 'c17-forward-carry.html?' + q.toString(); };
+  // ссылка на прогнозное кэрри позиции (C17, #66): тот же прогон (run_id / as_of / demo из адреса). Как в desk-nav.js
+  // (#30): выбор в адресе, совпавший с сохранённым в desk.run.v1 выбором старше 12 ч, дальше не переносится — ссылка
+  // ведёт на последний прогон; адрес считается в момент перехода (вкладка могла простоять открытой до истечения срока)
+  K.carryLink = id => {
+    const PARAMS = ['run_id', 'as_of', 'demo'], q = new URLSearchParams(), u = new URLSearchParams(location.search);
+    let s = null; try { s = JSON.parse(localStorage.getItem('desk.run.v1') || 'null'); } catch (e) { }
+    const expired = s && s.sel && Date.now() - s.at >= 12 * 3600e3 && PARAMS.every(k => (u.get(k) || undefined) === s.sel[k]);
+    if (!expired) PARAMS.forEach(k => { if (u.get(k)) q.set(k, u.get(k)); });
+    q.set('pos', id); return 'c17-forward-carry.html?' + q.toString();
+  };
+  ['click', 'auxclick'].forEach(ev => document.addEventListener(ev, e => {
+    const a = e.target && e.target.closest && e.target.closest('a[data-carry-pos]');
+    if (a) a.href = K.carryLink(a.getAttribute('data-carry-pos'));
+  }, true));
   K.card = function (id) {
     const p = M.pos[id]; if (!p) return;
     const o = drawer(true); o.title = p.name; o.charts = [];
@@ -2676,7 +2737,7 @@
       ['Ближайшее событие', p.event.date ? f.date(p.event.date) + ' <small>' + ev + ', ' + f.yrs(p.tenor) + '</small>' : '<span class="mut3">—</span> <small>' + ev + '</small>'], ['Погашение', f.date(p.maturity) + ' <small>' + f.yrs(p.yearsToMat) + '</small>'],
       ['DV01 ставки', K.d({ title: 'DV01 ' + p.name, unit: 'тыс ₽/бп', rows: [{ p, v: p.dv01 }] }, f.dv(p.dv01), '') + ' <small>тыс ₽/бп</small>', false, K.tips.dv01], ['CS01', f.dv(p.cs01) + ' <small>тыс ₽/бп</small>', false, K.tips.cs01],
       ['Базис ОФЗ01', p.basis01 ? f.dv(p.basis01) + ' <small>тыс ₽/бп</small>' : '—', false, K.tips.basis01],
-      ['Спред к КБД01', p.ofzSpr01 ? f.dv(p.ofzSpr01) + ' <small>тыс ₽/бп</small>' : '—', false, K.tips.ofzSpr01], ['Кэрри / день', '<span class="' + f.cls(p.carryDay) + '">' + f.k(p.carryDay) + '</span> <small>тыс ₽ · <a href="' + K.carryLink(p.id) + '" title="C17: кэрри, фондирование и нетто позиции до горизонта">прогноз →</a></small>', false, K.tips.carry],
+      ['Спред к КБД01', p.ofzSpr01 ? f.dv(p.ofzSpr01) + ' <small>тыс ₽/бп</small>' : '—', false, K.tips.ofzSpr01], ['Кэрри / день', '<span class="' + f.cls(p.carryDay) + '">' + f.k(p.carryDay) + '</span> <small>тыс ₽ · <a href="' + K.carryLink(p.id) + '" data-carry-pos="' + esc(String(p.id)) + '" title="C17: кэрри, фондирование и нетто позиции до горизонта">прогноз →</a></small>', false, K.tips.carry],
       ['Фондирование / день', K.fundingDayHtml(p) + ' <small>тыс ₽ · ставка ' + f.pct(p.fundRate) + '</small>', false, K.tips.funding + K.tips.fundRate],
       ['НКД', f.mn(p.accrued, 2) + ' <small>mm ₽</small>'], ['Рейтинг / сектор', '<span title="' + esc(K.ratingTip(p.rating, p.ratingInfo)) + '">' + esc(K.ratingText(p.rating, p.ratingInfo)) + '</span> <small>' + esc(p.sector) + '</small>'],
     ] : [
@@ -2696,10 +2757,12 @@
     const pn = p.pnl;
     o.bd.innerHTML = '<div class="k-tags">' + [p.desk, (M.entities.find(e => e.id === p.entity) || {}).name, p.rating !== '—' ? 'рейтинг ' + K.ratingText(p.rating, p.ratingInfo) : null, p.tradedToday ? 'сделки сегодня' : null, p.quality && p.quality !== 'exact' ? 'оценка: ' + p.quality : null].filter(t => t && t !== '—').map(t => '<span class="k-tag">' + esc(t) + '</span>').join('') + '</div>' +
       (p.notValued && p.estReason ? '<div class="k-note" style="overflow-wrap:anywhere;margin:8px 0"><b>Причина отсутствия оценки:</b> ' + esc(p.estReason) + '</div>' : '') +
+      (p.riskProblem ? '<div class="k-note risk-problem" style="overflow-wrap:anywhere;margin:8px 0;color:var(--warn)"><b>Риск не в суммах (невозможный риск):</b> ' + esc(p.riskProblem) + '</div>' : '') +
+      K.curveProxyNote(p) +
       '<div class="k-sec">Параметры</div>' + K.fieldsHtml(fields) +
       (p.legs && p.legs.length ? '<div class="k-sec">Ноги сделки <span class="sp"></span><span class="mut3" style="text-transform:none;letter-spacing:0">' + p.legs.length + '</span></div>' + K.legsHtml(p) : '') +
       '<div class="k-sec">PnL <span class="sp"></span><span class="mut3" style="text-transform:none;letter-spacing:0">тыс ₽</span></div>' +
-      '<div class="k-fields">' + [['Итого день', pn.total], ['Кэрри', pn.carry, K.tips.carry], ['Фондирование', pn.funding, K.tips.funding], ['Ставки', pn.rates], ['Спред', pn.spread], ['FX', pn.fx, K.tips.fx], ['Сделки', pn.trading], ['Прочее', pn.other], ['MTD', p.pnlMtd], ['YTD', p.pnlYtd]].map(([l, v, tip]) => '<div><div class="l">' + K.hint(l, tip) + '</div><div class="v ' + f.cls(v) + '">' + (v == null ? '<span class="mut3">—</span>' : Math.abs(v) >= 1e7 ? f.mns(v, 1) + ' <small>mm ₽</small>' : f.ks(v) + ' <small>тыс ₽</small>') + '</div></div>').join('') + '</div>' + K.fundingLine(p) +
+      K.pnlWhyNote(p) + '<div class="k-fields">' + [['Итого день', pn.total], ['Кэрри', pn.carry, K.tips.carry], ['Фондирование', pn.funding, K.tips.funding], ['Ставки', pn.rates], ['Спред', pn.spread], ['FX', pn.fx, K.tips.fx], ['Сделки', pn.trading], ['Прочее', pn.other], ['MTD', p.pnlMtd], ['YTD', p.pnlYtd]].map(([l, v, tip]) => '<div><div class="l">' + K.hint(l, tip) + '</div><div class="v ' + f.cls(v) + '">' + (v == null ? '<span class="mut3">—</span>' : Math.abs(v) >= 1e7 ? f.mns(v, 1) + ' <small>mm ₽</small>' : f.ks(v) + ' <small>тыс ₽</small>') + '</div></div>').join('') + '</div>' + K.fundingLine(p) +
       '<div class="k-sec">История <span class="sp"></span><span class="hunit" style="margin-right:6px"></span><span class="hseg"></span></div><div class="hchart" style="height:230px"></div><div class="hnote mut3" style="font-size:11.5px;line-height:1.45;margin:4px 0 0"></div>' +
       '<div class="k-sec">Риск по бакетам <span class="sp"></span><span class="mut3" style="text-transform:none;letter-spacing:0">тыс ₽/бп</span></div><div class="rchart" style="height:200px"></div>' +
       '<div class="k-sec">Риск по кривым и срокам <span class="sp"></span><span class="mut3" style="text-transform:none;letter-spacing:0">тыс ₽/бп · подпись — как считается</span></div>' + K.curveRiskTable(p) +
@@ -2767,6 +2830,13 @@
     });
     fire('alias'); fire('filter');
   };
+  // прокси-кривая (#31): в день без кривой RUONIA рублёвая бумага (RUONIA-флоатер, корпоратив) дисконтирована по КБД,
+  // спред и риск — к RUB OFZ (extra.curve_proxy прогона, p.curveProxy — lib/real.js); пометка в таблице и в карточке
+  K.curveProxyTag = r => r && r.curveProxy ? ' <span class="k-tag k-proxy" title="' + esc(r.curveProxy) + '">прокси RUB OFZ</span>' : '';
+  K.curveProxyNote = p => p && p.curveProxy ? '<div class="k-note curve-proxy" style="overflow-wrap:anywhere;margin:8px 0;color:var(--warn)"><b>Кривая:</b> ' + esc(p.curveProxy) + '</div>' : '';
+  // нет PnL позиции (R10, #31): причина сервера (pnl.reasonText; смена кривой дисконтирования — с кривыми вчера и сегодня)
+  K.pnlWhy = p => p && p.pnl && p.pnl.available === false ? p.pnl.reason || null : null;
+  K.pnlWhyNote = p => K.pnlWhy(p) ? '<div class="k-note pnl-why" style="overflow-wrap:anywhere;margin:4px 0 8px"><b>Нет PnL:</b> ' + esc(K.pnlWhy(p)) + '</div>' : '';
   // ячейка «Бумага»: у бумаги с алиасом биржевое имя — в подсказке
   K.nameCell = (r, v) => r && r.alias && r.exchName && r.exchName !== r.alias ? '<span title="' + esc('биржевое имя: ' + r.exchName) + '">' + esc(v == null ? r.name : v) + '</span>' : esc(v == null ? (r && r.name) : v);
   const canAlias = p => !!(p && p.isin && M.aliasApi);
@@ -2868,21 +2938,23 @@
     el.innerHTML = K.flowsTable(p, own(), !!M.posFlows);
     K.cardTableTools(el, p);
     if (M.posFlows) M.posFlows(p.id).then(x => {
-      if (!el.isConnected || el.dataset.pos !== p.id) return;
+      if (!el.isConnected || el.dataset.pos !== String(p.id)) return;
       x = x || {};
-      el.innerHTML = x.flows ? K.flowsTable(p, x.flows) : K.flowsTable(p, own(), false, x.error ? { error: x.error } : x.reason || null);
+      el.innerHTML = x.flows ? K.flowsTable(p, x.flows, false, null, x.note) : K.flowsTable(p, own(), false, x.error ? { error: x.error } : x.reason || null);
       K.cardTableTools(el, p);
     });
     el.dataset.pos = p.id;
   };
-  // why — почему нет всего графика выпуска (показаны потоки прогона или их тоже нет): текст причины или {error} — сбой
-  K.flowsTable = function (p, cf, loading, why) {
+  // why — почему нет всего графика выпуска (показаны потоки прогона или их тоже нет): текст причины или {error} — сбой;
+  // тогда прямо: «расписание до <дата>, полное недоступно: <причина>» (#166). note — откуда весь график, если не из статики
+  K.flowsTable = function (p, cf, loading, why, note) {
     const err = why && why.error;
     const offer = p.offer || p.yieldDate || null;
     const KIND = { cpn: 'купон', amort: 'амортизация', mat: 'погашение', put: 'пут-оферта', call: 'колл' };
     if (!cf.length) return '<div class="k-empty">' + (loading ? 'загрузка потоков…' : err ? 'потоки не загружены: ' + esc(err) : 'потоков нет' + (why ? ': ' + esc(why) : '')) + '</div>';
     const sum = cf.reduce((s, c) => s + (c.kind === 'put' || c.kind === 'call' || c.amountRub == null ? 0 : c.amountRub), 0);
-    return (why ? '<div class="mut" style="font-size:11px;margin-bottom:4px">' + (err ? 'Весь график выпуска не загружен: ' + esc(err) : 'Весь график выпуска недоступен: ' + esc(why)) + '. Показаны потоки прогона.</div>' : '') +
+    return (why ? '<div class="mut" style="font-size:11px;margin-bottom:4px">Расписание до ' + f.date(cf[cf.length - 1].date) + ', полное недоступно: ' + esc(err || why) + '. Показаны потоки прогона.</div>' : '') +
+      (note ? '<div class="mut3" style="font-size:11px;margin-bottom:4px">' + esc(note) + '</div>' : '') +
       '<div class="mut3" style="font-size:11px;margin-bottom:4px">' + (loading ? 'загрузка всех потоков… · ' : '') + cf.length + ' потоков до ' + f.date(cf[cf.length - 1].date) +
       (offer ? ' · после оферты ' + f.date(offer) + ' — бледнее' : '') + ' · оферта — номинал к предъявлению, в сумму не входит</div>' +
       '<div style="max-height:360px;overflow:auto"><table class="k-tbl k-cflows"><thead><tr><th>Дата</th><th>Тип</th><th class="n">Сумма, ' + p.ccy + '</th><th class="n">≈ mm ₽</th></tr></thead><tbody>' +

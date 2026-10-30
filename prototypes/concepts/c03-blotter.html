@@ -106,9 +106,11 @@ body { display: flex; flex-direction: column; height: 100vh; overflow: hidden; }
   // ---------- колонки ----------
   const hist = {}; const H = id => hist[id] || (hist[id] = M.posHistory(id));
   const evName = { put: 'пут', call: 'колл', mat: 'погаш' };
-  const pnlCol = (key, label, k, tip) => ({ label, num: true, nullable: k === 'funding', val: r => r.pnl[k], fmt: v => v == null ? '<span class="mut3">—</span>' : '<span class="' + f.cls(v) + '">' + f.k(v) + '</span>', sum: r => r.pnl[k], unit: 'тыс ₽', sfmt: f.k, title: tip ? 'тыс ₽. ' + tip : 'тыс ₽', tip: !!tip });
+  // «—» без PnL: причина сервера в подсказке (#31: смена кривой дисконтирования — с кривыми вчера и сегодня)
+  const pnlNa = r => '<span class="mut3"' + (K.pnlWhy(r) ? ' title="' + esc('нет PnL: ' + K.pnlWhy(r)) + '"' : '') + '>—</span>';
+  const pnlCol = (key, label, k, tip) => ({ label, num: true, nullable: k === 'funding', val: r => r.pnl[k], fmt: (v, r) => v == null ? pnlNa(r) : '<span class="' + f.cls(v) + '">' + f.k(v) + '</span>', sum: r => r.pnl[k], unit: 'тыс ₽', sfmt: f.k, title: tip ? 'тыс ₽. ' + tip : 'тыс ₽', tip: !!tip });
   const C = {
-    name: { label: 'Бумага', val: r => r.name, fmt: (v, r) => K.nameCell(r, v) + (r.tradedToday ? '<span class="k-tag sd" title="сделки сегодня">сд</span>' : '') },
+    name: { label: 'Бумага', val: r => r.name, fmt: (v, r) => K.nameCell(r, v) + (r.tradedToday ? '<span class="k-tag sd" title="сделки сегодня">сд</span>' : '') + K.curveProxyTag(r) },
     issuer: { label: 'Эмитент', filter: true, title: 'эмитент (у деривативов — контрагент)', val: r => r.issuerName, fmt: (v, r) => '<b style="color:' + K.issuerColor(r.issuer) + '">●</b> ' + esc(v) },
     issuerFull: { label: 'Эмитент (полн.)', filter: true, val: r => r.issuerFull, fmt: v => esc(v) },
     isin: { label: 'ISIN', val: r => r.isin, fmt: v => '<span class="mono mut3">' + esc(v || '—') + '</span>' },
@@ -149,7 +151,7 @@ body { display: flex; flex-direction: column; height: 100vh; overflow: hidden; }
     carry: { label: 'Кэрри/д', num: true, val: r => r.carryDay, fmt: v => '<span class="' + f.cls(v) + '">' + f.k(v) + '</span>', sum: r => r.carryDay, unit: 'тыс ₽', sfmt: f.k, title: 'тыс ₽ в день. ' + K.tips.carry, tip: true },
     funding: { label: 'Фондир./д', num: true, nullable: true, val: r => r.fundingDay, fmt: v => v == null ? '<span class="mut3">—</span>' : '<span class="' + f.cls(v) + '">' + f.k(v) + '</span>', sum: r => r.fundingDay, unit: 'тыс ₽', sfmt: f.k, title: 'Фондирование, тыс ₽ в день. ' + K.tips.funding, tip: true },
     pc: pnlCol('pc', 'Кэрри', 'carry', K.tips.carry), pfu: pnlCol('pfu', 'Фондирование', 'funding', K.tips.funding), pr: pnlCol('pr', 'Ставки', 'rates'), ps: pnlCol('ps', 'Спред', 'spread'), pf: pnlCol('pf', 'FX', 'fx'), pt: pnlCol('pt', 'Сделки', 'trading'), po: pnlCol('po', 'Прочее', 'other'),
-    pnl: { label: 'PnL дня', num: true, val: r => r.pnl.total, fmt: v => '<b class="' + f.cls(v) + '">' + f.k(v) + '</b>', sum: r => r.pnl.total, unit: 'тыс ₽', sfmt: f.k, title: 'тыс ₽' },
+    pnl: { label: 'PnL дня', num: true, val: r => r.pnl.total, fmt: (v, r) => v == null ? pnlNa(r) : '<b class="' + f.cls(v) + '">' + f.k(v) + '</b>', sum: r => r.pnl.total, unit: 'тыс ₽', sfmt: f.k, title: 'тыс ₽' },
     pnlMtd: { label: 'MTD', num: true, val: r => r.pnlMtd, fmt: v => '<span class="' + f.cls(v) + '">' + f.mn(v, 1) + '</span>', sum: r => r.pnlMtd, unit: 'mm ₽', sfmt: v => f.mn(v, 1), title: 'mm ₽' },
     pnlYtd: { label: 'YTD', num: true, val: r => r.pnlYtd, fmt: v => '<span class="' + f.cls(v) + '">' + f.mn(v, 1) + '</span>', sum: r => r.pnlYtd, unit: 'mm ₽', sfmt: v => f.mn(v, 1), title: 'mm ₽' },
     rating: { label: 'Рейтинг', filter: r => r.rating, val: r => K.ratingRank(r.rating), fmt: (v, r) => '<span class="mut" title="' + esc(K.ratingTip(r.rating, r.ratingInfo)) + '">' + esc(K.ratingText(r.rating, r.ratingInfo)) + '</span>' },
@@ -366,12 +368,12 @@ body { display: flex; flex-direction: column; height: 100vh; overflow: hidden; }
       ['Кэрри / день', '<span class="' + f.cls(p.carryDay) + '">' + f.k(p.carryDay) + '</span> <small>тыс ₽</small>', false, K.tips.carry],
       ['Фондирование / день', K.fundingDayHtml(p) + ' <small>тыс ₽</small>', false, K.tips.funding], ['Контрагент', esc(p.cpty || '—')],
     ]).concat(K.curveRiskFields(p));  // у облигаций тоже (R32)
-    $('.cd-fields').innerHTML = K.fieldsHtml(F) +
+    $('.cd-fields').innerHTML = K.curveProxyNote(p) + K.fieldsHtml(F) +
       (p.legs && p.legs.length ? '<div class="k-sec">Ноги сделки</div>' + K.legsHtml(p) : '');
     // PnL
     const pn = p.pnl, parts = K.PNL_FACTORS.map(([k, l]) => [l, pn[k], K.tips[k]]);
     const mx = Math.max(1, ...parts.map(x => Math.abs(x[1] || 0)));
-    $('.cd-pnl').innerHTML = parts.map(([l, v, tip]) => '<span class="mut">' + K.hint(l, tip) + '</span>' + K.bar(v || 0, mx) + '<span class="n ' + f.cls(v) + '">' + (v == null ? '—' : f.ks(v)) + '</span>').join('') +
+    $('.cd-pnl').innerHTML = (K.pnlWhy(p) ? '<span class="pnl-why" style="grid-column:1/-1;overflow-wrap:anywhere;color:var(--fg-3);font-size:11.5px"><b>Нет PnL:</b> ' + esc(K.pnlWhy(p)) + '</span>' : '') + parts.map(([l, v, tip]) => '<span class="mut">' + K.hint(l, tip) + '</span>' + K.bar(v || 0, mx) + '<span class="n ' + f.cls(v) + '">' + (v == null ? '—' : f.ks(v)) + '</span>').join('') +
       '<span class="tot">Итого</span><span class="tot mut3" style="font-size:11px">MTD ' + f.mns(p.pnlMtd, 1) + ' mm ₽ · YTD ' + f.mns(p.pnlYtd, 1) + ' mm ₽</span><span class="n tot ' + f.cls(pn.total) + '">' + f.ks(pn.total) + '</span>';
     // история: режимы зависят от типа
     const segKey = isBond + '/' + isFloat;

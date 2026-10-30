@@ -37,7 +37,14 @@ from typing import Any
 from rub_fixed_income import RISK_BUCKETS, RISK_PILLARS
 
 from ..marketdata import ratings
-from ..pnl.reasons import METHOD_TEXT, REPORTED_METHOD, RUN_NO_POSITION_PNL, RUN_NO_PREV_MARKET, no_pnl_text
+from ..pnl.reasons import (
+    METHOD_TEXT,
+    REPORTED_METHOD,
+    RUN_NO_POSITION_PNL,
+    RUN_NO_PREV_MARKET,
+    no_pnl_reason_text,
+    no_pnl_text,
+)
 from ..publish.funding_run import NOT_COMPUTED, STATUS_TEXT
 from ..publish.summary import fx_net
 from ..scenario.carry import HORIZONS as carry_horizons
@@ -117,7 +124,9 @@ def _gamma(rows: list[list[Any]] | None) -> list[list[Any]]:
 def run_totals(rows) -> tuple[float | None, float | None, float, float]:
     """As tdm.writer.run_totals on rows (fact, pnl) of a run without funding deals: (official, explained,
     dv01, cs01). A position without official PnL counts its explained PnL plus the FX basis (CBR rates),
-    one without PnL nothing; official and explained are None (not 0) when no position has a PnL (R10)."""
+    one without PnL nothing; official and explained are None (not 0) when no position has a PnL (R10). A position
+    with an impossible risk (``extra.risk_problem``, TDM#170) is in neither DV01 nor CS01 (TDM#460), as in the run's
+    summary; its PnL is."""
     off, exp = [], []
     for r in rows:
         if q := r["pnl"]:
@@ -125,10 +134,17 @@ def run_totals(rows) -> tuple[float | None, float | None, float, float]:
             basis = (fx_net(q, cbr=True) or 0.0) - (fx_net(q) or 0.0)  # the net FX by the CBR rates - the market
             off.append(q["official"] if q.get("official") is not None else e + basis)
             exp.append(e)
-    facts = [r["fact"] for r in rows]  # SQLite SUM is compensated too
+    # SQLite SUM is compensated too
+    facts = [r["fact"] for r in rows if not (r["fact"].get("extra") or {}).get("risk_problem")]
     return (math.fsum(off) if off else None, math.fsum(exp) if exp else None,
             math.fsum(p.get("dv01") or 0.0 for p in facts),
             math.fsum(p.get("cs01") or 0.0 for p in facts))
+
+
+def official_received(rows) -> bool:
+    """Whether any row (fact, pnl) of a run carries the official PnL itself (TDM#106), not the fallback of
+    ``run_totals`` (explained plus the FX basis at the CBR rates)."""
+    return any((r["pnl"] or {}).get("official") is not None for r in rows)
 
 
 NOT_VALUED_KIND = {"otc": ("OTC-деривативы", "Деривативы"), "other": ("Прочее", "Прочее"), "fx": ("Валюта", "FX")}
@@ -149,8 +165,8 @@ PNL_FIELDS = ("carry", "rolldown", "rates", "spread", "fx", "funding", "convexit
 def no_pnl(code: str, detail: str | None = None) -> dict[str, Any]:
     """A position's ``pnl`` without PnL (R10): every amount null, not 0, and why (``pnl.reasons``)."""
     return {**dict.fromkeys(PNL_FIELDS), "official": None, "breakNote": None, "available": False, "reason": code,
-            "reasonText": no_pnl_text(code), "reasonDetail": detail or None, "method": None, "methodText": None,
-            "flag": None}
+            "reasonText": no_pnl_reason_text(code, detail), "reasonDetail": detail or None, "method": None,
+            "methodText": None, "flag": None}
 
 
 def _json(v: Any) -> Any:
@@ -368,12 +384,15 @@ def assemble(con, run: dict[str, Any]) -> dict[str, Any]:
                        (run["business_date"], HISTORY_DAYS - 1)).fetchall()[::-1]
     history, cum = [], 0.0
     for d, rows in [(h["business_date"].isoformat(), con.execute(
-            "SELECT jsonb_build_object('dv01', fact->'dv01', 'cs01', fact->'cs01') AS fact, pnl FROM run_position"
+            "SELECT jsonb_build_object('dv01', fact->'dv01', 'cs01', fact->'cs01', 'extra',"
+            " jsonb_build_object('risk_problem', fact->'extra'->'risk_problem')) AS fact, pnl FROM run_position"
             " WHERE run_id = %s AND fact IS NOT NULL", (h["run_id"],)).fetchall()) for h in hist] + [(as_of, prows)]:
         off, exp, dv01, cs01 = run_totals(rows)
         cum += off or 0.0
+        # officialReceived (TDM#106): pnlOfficial is the official PnL only when one arrived; else it is the explained
+        # PnL plus the FX basis (run_totals), and the pages must not call it official
         history.append({"date": d, "pnlOfficial": off, "pnlExplained": exp, "pnlCum": cum, "dv01": dv01,
-                        "cs01": cs01})
+                        "cs01": cs01, "officialReceived": official_received(rows)})
     # no previous market: prevDate null (R10), the funding accrual still over the previous weekday
     prev = run["prev_date"] or _prev_weekday(run["business_date"])
     zero_book = {"carry": 0.0, "fx": 0.0, "fxCbr": 0.0, "fxAllocated": 0.0, "inPositions": 0.0}

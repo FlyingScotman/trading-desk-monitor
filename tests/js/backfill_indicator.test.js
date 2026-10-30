@@ -1,9 +1,9 @@
 // #23 / #163 / #447: индикатор догрузки истории в шапке мониторов (prototypes/concepts/lib/kit.js, K.backfillStatus по
 // GET /api/v1/backfill/status): «догрузка истории N из M дат · K не сходятся · L не загружаются», подсказка с датами и
-// причинами (не сходятся — свои проблемы дат; не загружаются — дата раз за разом упирается в сеть или базу и даты хаба:
-// ошибка, попытки, следующая попытка), серый, когда остались только проблемные даты; без проблемных дат — без них.
-// Застой (stall: одна и та же ошибка сети или базы на датах подряд) — «⚠ догрузка стоит: <причина>, повтор в ЧЧ:ММ», в подсказке
-// полный текст ошибки и следующая попытка; сетевые ошибки «не сходятся» не называются.
+// причинами (не сходятся — свои проблемы расчёта дат; не загружаются — своя ошибка сети или базы даты, kind unreachable,
+// и даты хаба: ошибка, попытки, следующая попытка), серый, когда остались только проблемные даты; без проблемных дат —
+// без них. Догрузка стоит на ошибке сети или базы (stalled) — «⚠ догрузка стоит: <причина>, повтор в ЧЧ:ММ», в
+// подсказке полный текст ошибки и следующая попытка; сетевые ошибки «не сходятся» не называются.
 //   node tests/js/backfill_indicator.test.js
 'use strict';
 const fs = require('fs'), path = require('path'), vm = require('vm'), assert = require('assert');
@@ -71,34 +71,42 @@ t('остались только проблемные даты — серый б
   assert.strictEqual(K.backfillStatus(bf({ enabled: false, problem_dates: prob })), null);  // бэкфилл выключен
 });
 
-t('#447: дата, которая раз за разом упирается в сеть (kind transient), — «не загружается», не «не сходится»', () => {
-  const s = K.backfillStatus(bf({ problem_dates: [prob[0], { date: '2026-10-09', why: 'no default run', kind: 'transient',
-    error: 'TransportError: timed out', attempts: 3 }] }));
-  assert.strictEqual(s.text, '⟳ догрузка истории 190 из 204 дат · 1 не сходится · 1 не загружается');
-  assert.ok(s.title.includes('09.10.2026 — не загружается (сеть или база): TransportError: timed out, попыток: 3'), s.title);
-  assert.strictEqual(s.stall, false);
+t('#447: дата, которая не загружается сама по себе (kind unreachable: другие грузятся), — «не загружается», не «не сходится»', () => {
+  const own = { date: '2026-10-14', kind: 'unreachable', why: 'no default run', error: 'HubError: bundle: 502 bad gateway', attempts: 2 };
+  const u = K.backfillStatus(bf({ problem_dates: [prob[1], own], hub_problem_dates: hub }));
+  assert.strictEqual(u.text, '⟳ догрузка истории 190 из 204 дат · 1 не сходится · 2 не загружаются');
+  assert.ok(/Не сходятся \(1\):\n13\.10\.2026/.test(u.title) && /Не загружаются \(2\):\n14\.10\.2026 — не загружается: HubError: bundle: 502 bad gateway, попыток: 2\n16\.10\.2026 — с хаба не загружается/.test(u.title), u.title);
+  assert.strictEqual(u.stall, false);
 });
 
 t('#447: застой — коротко «⚠ догрузка стоит: <причина>, повтор в ЧЧ:ММ · N из M дат», в подсказке с какого времени, ошибка, проблемные даты', () => {
   const day = new Date(Date.now() + 3 * 3600e3).toISOString().slice(0, 10);  // сегодня по МСК: время без даты
-  const stall = { cause: 'hub', status: 502, phase: 'bundle', error: 'HubUnavailable: hub.test unreachable after 3 attempts: 502 bad gateway', dates: 2, stops: 3,
+  const stalled = { cause: 'hub', source: 'network', status: 502, phase: 'bundle', date: '2026-10-09', dates: ['2026-10-09', '2026-10-12'], stops: 3,
+    error: 'HubUnavailable: hub.test unreachable after 3 attempts: 502 bad gateway',
     since: day + 'T06:00:00+00:00', at: day + 'T08:00:00+00:00', next_attempt: day + 'T09:00:00+00:00' };
-  const s = K.backfillStatus(bf({ done: 48, total: 206, todo: 156, failed: 0, stall, problem_dates: prob.slice(1), hub_problem_dates: hub }));
+  const s = K.backfillStatus(bf({ done: 48, total: 206, todo: 156, failed: 0, stalled, problem_dates: prob.slice(1), hub_problem_dates: hub }));
   assert.strictEqual(s.text, '⚠ догрузка стоит: хаб не отвечает, повтор в 12:00 · 48 из 206 дат');  // счётчики — в подсказке
-  assert.ok(s.title.startsWith('Стоит с 09:00: хаб не отвечает. Следующая попытка 12:00. Ошибка: HubUnavailable: hub.test unreachable after 3 attempts: 502 bad gateway\n'), s.title);
+  assert.ok(s.title.startsWith('Стоит с 09:00: хаб не отвечает. Следующая попытка 12:00. Ошибка на 09.10.2026: HubUnavailable: hub.test unreachable after 3 attempts: 502 bad gateway\n'), s.title);
   ['Готово 48 из 206 дат', 'Не сходятся (1)', '13.10.2026', 'Не загружаются (1)', '16.10.2026'].forEach(x => assert.ok(s.title.includes(x), x + ' нет в «' + s.title + '»'));
-  assert.ok(!s.title.includes('(код') && !s.title.includes('подряд'), s.title);
+  assert.ok(!s.title.includes('(код'), s.title);
   assert.strictEqual(s.grey, false);
   assert.strictEqual(s.stall, true);
   // код ответа, которого нет в тексте ошибки, — в подсказке, не в чипе; другие причины
-  const c = K.backfillStatus(bf({ stall: Object.assign({}, stall, { error: 'HubUnavailable: hub.test unreachable after 3 attempts' }) }));
+  const c = K.backfillStatus(bf({ stalled: Object.assign({}, stalled, { error: 'HubUnavailable: hub.test unreachable after 3 attempts' }) }));
   assert.ok(c.title.includes('(код 502)') && !c.text.includes('502'), c.text);
-  assert.ok(K.backfillStatus(bf({ stall: Object.assign({}, stall, { cause: 'store_slow' }) })).text.startsWith('⚠ догрузка стоит: база не успевает, повтор в 12:00'));
-  assert.ok(K.backfillStatus(bf({ stall: Object.assign({}, stall, { cause: 'access' }) })).text.startsWith('⚠ догрузка стоит: нет доступа к хабу (токен)'));
-  // не сегодня — с датой; дат к расчёту в кэше нет, а застой загрузки есть — чип есть
-  const o = K.backfillStatus(bf({ todo: 0, failed: 0, done: 204, stall: Object.assign({}, stall, { next_attempt: '2026-10-23T09:00:00+00:00' }) }));
-  assert.ok(o && o.text.startsWith('⚠ догрузка стоит: хаб не отвечает, повтор в 23.10 12:00') && !o.grey, o && o.text);
-  assert.strictEqual(K.backfillStatus(bf({ enabled: false, stall })), null);  // бэкфилл выключен
+  assert.ok(K.backfillStatus(bf({ stalled: Object.assign({}, stalled, { cause: 'store_slow' }) })).text.startsWith('⚠ догрузка стоит: база не успевает, повтор в 12:00'));
+  assert.ok(K.backfillStatus(bf({ stalled: Object.assign({}, stalled, { cause: 'access' }) })).text.startsWith('⚠ догрузка стоит: нет доступа к хабу (токен)'));
+  assert.ok(K.backfillStatus(bf({ stalled: Object.assign({}, stalled, { cause: 'proxy' }) })).text.startsWith('⚠ догрузка стоит: прокси не пропускает'));
+  // без причины (состояние прежней версии) — по источнику: база или сеть
+  assert.ok(K.backfillStatus(bf({ stalled: Object.assign({}, stalled, { cause: null, source: 'store' }) })).text.startsWith('⚠ догрузка стоит: база недоступна'));
+  assert.ok(K.backfillStatus(bf({ stalled: Object.assign({}, stalled, { cause: null }) })).text.startsWith('⚠ догрузка стоит: ошибка сети или хаба'));
+  // не сегодня — с датой; без следующей попытки (автопилот выключен) — без «повтор»
+  const o = K.backfillStatus(bf({ stalled: Object.assign({}, stalled, { next_attempt: '2026-10-23T09:00:00+00:00' }) }));
+  assert.ok(o.text.startsWith('⚠ догрузка стоит: хаб не отвечает, повтор в 23.10 12:00'), o.text);
+  assert.strictEqual(K.backfillStatus(bf({ stalled: Object.assign({}, stalled, { next_attempt: null }) })).text, '⚠ догрузка стоит: хаб не отвечает · 190 из 204 дат');
+  // без дат к расчёту и при выключенной догрузке застой не показывается
+  assert.strictEqual(K.backfillStatus(bf({ todo: 0, failed: 0, done: 204, stalled })), null);
+  assert.strictEqual(K.backfillStatus(bf({ enabled: false, stalled })), null);
 });
 
 let failed = 0;

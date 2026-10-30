@@ -329,3 +329,36 @@ def test_with_sign_in_the_tools_are_the_admins(home: Path, store_url: str) -> No
     c = TestClient(app, base_url="http://127.0.0.1:8000", client=("127.0.0.1", 50000))
     assert c.get("/api/v1/adapter/check").status_code == 401
     assert c.post("/api/v1/adapter/actions/sleepy/run", json={}).status_code in (401, 403)
+
+
+def test_a_job_seen_done_is_already_saved(tmp_path: Path, monkeypatch) -> None:
+    """A job is ``done`` to a poll only once its result is in its file (TDM#470): a slow write after the state flip lost
+    the result to a poll that came between and a restart (here ``reset``) right after."""
+    save = adapter_jobs._save
+
+    def slow_save(home: Path, key: str, job: dict) -> None:
+        time.sleep(0.5)
+        save(home, key, job)
+
+    monkeypatch.setattr(adapter_jobs, "_save", slow_save)
+    adapter_jobs.reset()
+    adapter_jobs._start(tmp_path, "check", "check", {}, lambda j: j.update(text="ok"))
+    t0 = time.monotonic()
+    while adapter_jobs.job(tmp_path, "check")["state"] == "running":
+        assert time.monotonic() - t0 < 10, "the job did not finish"
+        time.sleep(0.01)
+    adapter_jobs.reset()
+    j = adapter_jobs.job(tmp_path, "check")
+    assert j is not None and j["state"] == "done" and j["text"] == "ok"
+
+
+def test_a_job_whose_result_is_not_json_still_ends(tmp_path: Path) -> None:
+    """A result JSON can't hold is not saved, but the job still ends and frees its kind (TDM#470)."""
+    adapter_jobs.reset()
+    adapter_jobs._start(tmp_path, "check", "check", {}, lambda j: j.update(text={1, 2}))
+    t0 = time.monotonic()
+    while adapter_jobs.running("check"):
+        assert time.monotonic() - t0 < 10, "the job did not end"
+        time.sleep(0.01)
+    assert adapter_jobs.job(tmp_path, "check")["state"] == "done"
+    adapter_jobs.reset()

@@ -99,9 +99,13 @@
     }
     if (tab === 'hist') {
       const g = K.h('div', 'risk-grid'); view.appendChild(g);
-      const a = panel('DV01 по кривым, история'); g.appendChild(a);
+      // выброс одной даты не задаёт шкалу (#170): K.spikes — разрыв линии, пунктир на дате, значение в подсказке
+      const bad = Object.fromEntries((M.hist.riskBad || []).map((ids, i) => [i, ids]).filter(([, ids]) => ids && ids.length).map(([i, ids]) => [i, 'без риска в сумме (невозможный риск): ' + ids.join(', ')]));
+      const S = K.spikes(M.curves.map(c => M.hist.dv01[c.id]), M.histDates, M.curves.map(c => c.short), v => f.dv(v) + ' тыс ₽/бп', bad);
+      const a = panel('DV01 по кривым, история', S.note ? '<span class="k-note" style="color:var(--warn)">' + K.esc(S.note) + '</span>' : ''); g.appendChild(a);
       const e1 = K.h('div', 'chart'); a.querySelector('.bd').appendChild(e1);
-      K.chart(e1, () => ({ grid: { left: 6, right: 10, top: 28, bottom: 4, containLabel: true }, legend: { top: 0 }, tooltip: { trigger: 'axis', valueFormatter: v => f.dv(v) }, xAxis: { type: 'category', data: M.histDates, axisLabel: { formatter: f.dshort } }, yAxis: { type: 'value', unit: 'тыс ₽/бп', axisLabel: { formatter: v => K.tick(v, 1e3) } }, series: M.curves.map(c => ({ name: c.short, type: 'line', showSymbol: false, data: M.hist.dv01[c.id], color: K.curveColors[c.id] })) }));
+      const at = Object.fromEntries(M.histDates.map((d, i) => [d, i]));
+      K.chart(e1, () => ({ grid: { left: 6, right: 10, top: 28, bottom: 4, containLabel: true }, legend: { top: 0 }, tooltip: { trigger: 'axis', formatter: ps => { const i = at[(ps[0] || {}).axisValue]; if (i == null) return ''; const w = S.tip(i); return '<b>' + K.esc(f.date(M.histDates[i])) + '</b>' + ps.map(p => '<br>' + p.marker + K.esc(p.seriesName) + ': <b>' + f.dv(p.value) + '</b>').join('') + (w ? '<br><span style="color:var(--warn)">' + K.esc(w) + '</span>' : ''); } }, xAxis: { type: 'category', data: M.histDates, axisLabel: { formatter: f.dshort } }, yAxis: { type: 'value', unit: 'тыс ₽/бп', axisLabel: { formatter: v => K.tick(v, 1e3) } }, series: M.curves.map((c, k) => ({ name: c.short, type: 'line', showSymbol: false, data: S.data[k], color: K.curveColors[c.id], ...(k === 0 && S.markLine ? { markLine: S.markLine } : {}) })) }));
       const b = panel('Объём облигаций по типам, bn ₽'); g.appendChild(b);
       const e2 = K.h('div', 'chart'); b.querySelector('.bd').appendChild(e2);
       K.chart(e2, () => ({ grid: { left: 6, right: 10, top: 28, bottom: 4, containLabel: true }, legend: { top: 0, type: 'scroll' }, tooltip: { trigger: 'axis', valueFormatter: v => f.bn(v, 1) }, xAxis: { type: 'category', data: M.histDates, axisLabel: { formatter: f.dshort } }, yAxis: { type: 'value', unit: 'bn ₽', axisLabel: { formatter: v => K.tick(v, 1e9) } }, series: M.typeRows.filter(t => !M.deal(t)).map(t => ({ name: t.label, type: 'line', stack: 'm', areaStyle: { opacity: .5 }, showSymbol: false, data: M.hist.mvType[t.id], color: K.kindColor[t.kind] })) }));

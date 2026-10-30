@@ -71,23 +71,36 @@ from ..marketdata.bundle import SnapshotError
 from ..marketdata.static_facts import SECTOR_LABELS
 from ..orchestrator import EodContext, Outcome, market_rates
 from ..pnl.direct import DirectPnl
-from ..pnl.flash import BREAKDOWN_KEYS, METHOD
-from ..pnl.reasons import CORE_FX_METHOD, FX_METHOD, NO_PNL_TEXT, REPORTED_METHOD, RUN_NO_PREV_MARKET
+from ..pnl.flash import METHOD, STORE_ONLY_KEYS, FlashPnl
+from ..pnl.reasons import (
+    CORE_FX_METHOD,
+    FX_METHOD,
+    NO_PNL_TEXT,
+    OTHER_REASON_TEXT,
+    PROXIED_CURVE,
+    PROXY_CURVE,
+    PROXY_CURVE_TEXT,
+    REPORTED_METHOD,
+    RUN_NO_PREV_MARKET,
+)
 from ..settings import REPO_ROOT
 from ..store import PositionInputs
 from ..valuation.bonds import (
+    DISCOUNT_CURVE_ID,
+    KBD_CURVE_ID,
     OFZ_CURVE,
     OFZ_KBD_CLASSES,
     RISK_CURVES,
     BondValuation,
     coupon_view,
+    discount_curve,
     implied_frequency,
     is_kbd_floater,
 )
 from ..valuation.fallback import METHOD as SIMPLE_METHOD
 from ..valuation.fallback import QUALITIES, SimplePnl, fx_rate, market_fx
 from ..valuation.positions import normalised
-from .summary import MINFIN_CLASSES, MINFIN_INN, NOT_MINFIN_CLASSES
+from .summary import MINFIN_CLASSES, MINFIN_INN, NOT_MINFIN_CLASSES, risk_problem
 
 ASSET_CLASS = {"ofz_pd": "ОФЗ-ПД", "ofz_ad": "ОФЗ-АД", "ofz_pk": "ОФЗ-ПК", "ofz_in": "ОФЗ-ИН",
                "subfederal": "Субфедеральные", "municipal": "Муниципальные", "corporate": "Корпоративные"}
@@ -317,9 +330,9 @@ def _proxy_points(ctx: EodContext, prev: MarketView | None, ccy: str) -> tuple[s
 
 
 def pnl_extra(pnl: Any) -> dict[str, Any]:
-    """The fact's copy of a PnL's ``extra``: without the flash breakdowns of TDM#406 (``pnl.flash.BREAKDOWN_KEYS``),
-    which the store keeps in ``run_position.pnl`` only."""
-    return {k: v for k, v in pnl.extra().items() if k not in BREAKDOWN_KEYS}
+    """The fact's copy of a PnL's ``extra``: without the flash breakdowns of TDM#406 and the reason of the unexplained
+    (TDM#442; ``pnl.flash.STORE_ONLY_KEYS``), which the store keeps in ``run_position.pnl`` only."""
+    return {k: v for k, v in pnl.extra().items() if k not in STORE_ONLY_KEYS}
 
 
 def risk_by_curve(v: BondValuation) -> dict[str, dict[str, float]]:
@@ -465,7 +478,8 @@ def direct_row(ctx: EodContext, book: str, pid: str, o: Outcome, x: dict[str, An
 
 
 CASHFLOW_DAYS = 548
-"""How far ahead a position's ``extra.cashflows`` go (18 months): the payment calendars of the concept pages."""
+"""How far ahead the payment calendars of the concept pages read a position's ``extra.cashflows`` (18 months), up to
+the offer the bond is priced to (``concepts.calendar_flows``); the flows themselves go to maturity (TDM#166)."""
 
 
 def _per_bond(c: Any, face: float, freq: int | None, pct: float | None) -> tuple[float | None, bool]:
@@ -481,26 +495,34 @@ def _per_bond(c: Any, face: float, freq: int | None, pct: float | None) -> tuple
 
 def cashflows(t: Any, v: BondValuation, as_of: date, face_ccy: float, freq: int | None, pct: float | None
               ) -> list[list[Any]]:
-    """The position's flows of the next ``CASHFLOW_DAYS`` up to its horizon (the offer or call it is priced to, else
-    maturity): ``[date, kind, amount, forecast]`` with kind ``cpn`` / ``amort`` / ``put`` / ``call`` / ``mat``, the
-    amount in the face currency for the whole position (signed by the side). A coupon without a published amount or
+    """The position's flows after ``as_of`` to maturity (TDM#166: the position card's schedule when the hub's static is
+    not at hand; the calendars cut them, ``CASHFLOW_DAYS``): ``[date, kind, amount, forecast]`` with kind ``cpn`` /
+    ``amort`` / ``put`` / ``call`` / ``mat``, the amount in the face currency for the whole position (signed by the
+    side). The offer or call the bond is priced to is the face outstanding on its date (in the flows, not paid: the
+    bond is redeemed only if put); a never-called perpetual redeems nothing. A coupon without a published amount or
     rate is the current coupon on the face, a forecast; so is every floater's coupon after the next one (its rate is
     fixed later, whatever the schedule repeats)."""
-    end = min(as_of + timedelta(days=CASHFLOW_DAYS), v.horizon_date)
     q, out, floating, nth = v.quantity, [], t.coupon_type == "floating", 0
+    mat = t.maturity_date or (v.horizon_date if v.horizon_kind == "maturity" else None)
     for c in sorted(t.coupons, key=lambda c: c.pay_date):
-        if as_of < c.pay_date <= end:
+        if as_of < c.pay_date and (mat is None or c.pay_date <= mat):
             face = float(c.face) if c.face is not None else face_ccy
             amt, est = _per_bond(c, face, freq, pct)
             nth += 1
             if amt is not None:
                 out.append([c.pay_date.isoformat(), "cpn", amt * q, est or (floating and nth > 1)])
-    for r in t.redemptions:
-        if as_of < r.date < v.horizon_date and r.date <= end and r.value_per_bond is not None:
-            out.append([r.date.isoformat(), "amort", float(r.value_per_bond) * q, False])
-    if as_of < v.horizon_date <= as_of + timedelta(days=CASHFLOW_DAYS) and v.horizon_kind != "perpetual":
-        kind = {"offer": "put", "call": "call"}.get(v.horizon_kind, "mat")  # a never-called perpetual redeems nothing
-        out.append([v.horizon_date.isoformat(), kind, face_ccy * q, False])
+    amort = [(r.date, float(r.value_per_bond)) for r in t.redemptions
+             if as_of < r.date and (mat is None or r.date < mat) and r.value_per_bond is not None]
+    out += [[d.isoformat(), "amort", a * q, False] for d, a in amort]
+
+    def outstanding(d: date) -> float:  # the face per bond left on ``d``: today's less what is redeemed before
+        return face_ccy - sum(a for x, a in amort if x < d)
+
+    if v.horizon_kind in ("offer", "call") and as_of < v.horizon_date:
+        out.append([v.horizon_date.isoformat(), "call" if v.horizon_kind == "call" else "put",
+                     outstanding(v.horizon_date) * q, False])
+    if mat is not None and as_of < mat and v.horizon_kind != "perpetual" and not t.is_perpetual:
+        out.append([mat.isoformat(), "mat", outstanding(mat) * q, False])
     return sorted(out, key=lambda x: x[0])
 
 
@@ -551,6 +573,21 @@ def ofz_basis(t: Any, v: BondValuation) -> dict[str, Any]:
     if v.ofz_ruonia:
         out["ofz_ruonia01"] = math.fsum(v.ofz_ruonia.values()) + 0.0
     return out
+
+
+def curve_proxy(no_ruonia: bool, t: Any, v: BondValuation) -> dict[str, Any]:
+    """``curve_proxy`` (TDM#31) of a RUB bond normally discounted on RUONIA OIS, on a date whose market has no RUONIA
+    curve (``no_ruonia``: ``bonds.discount_curve`` is the KBD): it is discounted on the KBD (core or a rung with a
+    schedule) or its duration risk is on it (a rung without one: a RUONIA floater core refuses for its projection), so
+    its spread is to ``RUB OFZ`` and its risk on it -- the proxy of ``RUB RUONIA``; the pages mark the row
+    (``pnl.reasons.PROXY_CURVE_TEXT``). Empty for every other row, an OFZ on the KBD by rule
+    (``OFZ_KBD_CLASSES``) and a foreign bond included."""
+    if not no_ruonia or t.bond_class in OFZ_KBD_CLASSES or bond_currency(t) != "RUB":
+        return {}
+    if v.discount_curve_id != KBD_CURVE_ID and not (v.discount_curve_id is None and OFZ_CURVE in v.curve_buckets):
+        return {}
+    return {"curve_proxy": {"curve": PROXY_CURVE, "instead_of": PROXIED_CURVE, "reason": "no_ruonia_curve",
+                            "text": PROXY_CURVE_TEXT}}
 
 
 def _f(x: Any) -> float | None:
@@ -610,8 +647,10 @@ def position_row(ctx: EodContext, book: str, pid: str, o: Outcome, issuer: str,
             **({"lat_name": t.lat_name} if t.lat_name else {}),
             **({"issue_size": float(t.issue_size)} if t.issue_size is not None else {}),
             **({"rating": rating} if rating else {}),
-            "cashflows": cashflows(t, v, as_of, face_ccy, freq, cpn.pct), **_quote_extra(q, sa), **core_analytics(v),
+            "cashflows": cashflows(t, v, as_of, face_ccy, freq, cpn.pct), "cashflows_to": "maturity",
+            **_quote_extra(q, sa), **core_analytics(v),
             **ofz_basis(t, v),
+            **curve_proxy(discount_curve(ctx.core_market)[0] != DISCOUNT_CURVE_ID, t, v),
             **({"coupon_freq_source": "schedule"} if freq and not t.coupon_frequency else {}),
             **({"not_exact_reason": o.reason} if o.reason else {}),
             **({"fx_rate": fx[0], "fx_source": fx[1]} if fx else {}),
@@ -676,7 +715,7 @@ def run_content(ctx: EodContext, positions: list[tuple[str, str, Outcome]], prev
             continue
         if o.pnl is None and prev is not None:
             no_pnl.append(f"{pid} {o.secid}: нет PnL ({_why(o)})")
-        if isinstance(o.pnl, SimplePnl) and o.pnl.flag:
+        if isinstance(o.pnl, FlashPnl) and o.pnl.flag:
             no_pnl.append(f"{pid} {o.secid}: PnL {o.pnl.total:,.0f} ₽ с модельной ценой ({o.pnl.flag})")
         key, rec = _issuer_key(ctx, o)
         issuers[key] = rec
@@ -711,6 +750,12 @@ def run_content(ctx: EodContext, positions: list[tuple[str, str, Outcome]], prev
         log.append(("WARN", (f"PnL не посчитан: {NO_PNL_TEXT[RUN_NO_PREV_MARKET]} (нет среза eod_final раньше "
                              f"{ctx.business_date}); позиции без PnL, а не с нулём")))
     log += [("WARN", s) for s in skipped + approx + no_pnl]
+    for r in rows:  # TDM#170: an impossible risk is the run's problem, said here and kept out of every sum (summary)
+        if (why := risk_problem(r.get("risk"), r.get("dv01"), r.get("mv_rub"), r.get("notional_rub"),
+                                 r.get("instr_type") == "BOND")) is not None:
+            r["extra"]["risk_problem"] = why
+            log.append(("WARN", (f"{r['position_id']} {r.get('instrument_id') or r.get('name') or '—'}: {why}; "
+                                 "риск позиции не в суммах DV01 (сводка прогона, таблица риска)")))
     direct = [o.pnl for _, _, o in positions if isinstance(o.pnl, DirectPnl)]
     for method, flag in ((FX_METHOD, "по курсу"), (REPORTED_METHOD, "по отчёту"), (CORE_FX_METHOD, "ядром")):
         if xs := [x for x in direct if x.method == method]:
@@ -727,6 +772,14 @@ def run_content(ctx: EodContext, positions: list[tuple[str, str, Outcome]], prev
                     f"позиций {len(with_pnl)} (без разложения {len(simple)}): "
                     + ", ".join(f"{k} {v:,.0f}" for k, v in tot.items())
                     + f"; итог {sum(x.total for x in with_pnl):,.0f} ₽, макс. ошибка тождества {worst:.2e} ₽"))
+    reasons: dict[str, list[float]] = {}  # the unexplained by its reason (TDM#442): other, and reported's other
+    for x in [o.pnl for _, _, o in positions if o.pnl]:
+        if isinstance(r := x.other_reason, dict) and r.get("code") in OTHER_REASON_TEXT:
+            reasons.setdefault(r["code"], []).append(x.other)
+    if reasons:
+        log.append(("INFO", "необъяснённое по причинам: " + "; ".join(
+            f"{OTHER_REASON_TEXT[c]} — {len(reasons[c])} поз., {sum(reasons[c]):,.0f} ₽"
+            for c in OTHER_REASON_TEXT if c in reasons)))
     log.append(("WARN", "JTD не считается в слайсе S1 (нет решения по recovery): поле jtd = 0"))
     log.append(("INFO", f"опубликовано позиций: {len(rows)} (точно {quality['exact']}), не посчитано: {len(skipped)}"))
     return RunContent(rows, reference, log)

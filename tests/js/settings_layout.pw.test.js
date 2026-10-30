@@ -210,7 +210,7 @@ test('настройки: главное сверху, редкое по кно�
       const st = server();
       st.settings.hub_token_set = true;
       st.detect.inbox = { from_adapter_config: [], from_accepted: [] };
-      st.bf = { stall: { cause: 'proxy', status: 407, error: 'Tunnel connection failed: 407', since: '2026-10-29T07:05:00Z', next_attempt: '2026-10-29T07:35:00Z' },
+      st.bf = { stalled: { cause: 'proxy', source: 'network', status: 407, error: 'Tunnel connection failed: 407', since: '2026-10-29T07:05:00Z', next_attempt: '2026-10-29T07:35:00Z' },
         problem_dates: [{ date: '2026-03-02', kind: 'failed', why: 'no default run', error: 'x' }] };
       st.folders = { folders: [{ path: 'C:\\in', scanned: true, exists: false }], entries: [{ path: 'C:\\in', folder: 0 }] };
       const { pg, ctx, errors } = await open(browser, st, '#auto', { noHint: true });

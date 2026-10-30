@@ -2124,23 +2124,29 @@ function mountTabs(a, reload){
       if (!r.ok) throw new Error('HTTP ' + r.status);
       const s = await r.json();
       const withPos = s.dates - s.no_positions - s.no_market;
+      // #447: «не сходятся» — даты, которые не считаются по своим данным; «не загружаются» — свои ошибки базы или сети
+      // даты (другие даты грузятся) и даты хаба шага sync; догрузка стоит на ошибке сети или базы — отдельной строкой
+      // (причина как в чипе шапки, время по МСК, ошибка — второй строкой). Слова и деление дат — desk-backfill-text.js
+      const T = window.DESK_BACKFILL_TEXT, at = t => T.when(t), D = T.dates(s), st = T.stall(s) && s.stalled;
+      const tries = p => p.attempts ? ', попыток: ' + p.attempts : '';
+      const conv = D.conv.map(p => dd(p.date) + ' — ' +
+        (p.error && p.error.indexOf('does not converge') === 0 ? 'не сходится после пересчёта' : (p.error || 'расчёт упал')) + tries(p));
+      const nl = D.load.map(p => dd(p.date) + ' — ' + (p.kind === 'unreachable' ? (p.error || 'ошибка') + tries(p)
+        : 'с хаба: ' + (p.error || 'ошибка') + tries(p) + (p.next_attempt ? ', следующая попытка ' + at(p.next_attempt) : '')));
       const rows = [
         ['Включено', s.enabled ? 'да' : 'нет (настройка в «Автообновлении»)'],
         ['Даты', dd(s.from) + ' — ' + dd(s.to) + ': ' + s.dates + ' рабочих дат' + (s.hub ? '' : ' (по загруженным срезам)')],
         ['Посчитано', s.done + ' из ' + withPos + ' дат с позициями'],
         ['Осталось', s.todo ? s.todo + (s.next && s.next.length ? ' (ближайшие ' + s.next.map(dd).join(', ') + ')' : '') : '—'],
         ['Без позиций', s.no_positions + (s.first_positions ? ' (позиции в базе с ' + dd(s.first_positions) + ')' : '')],
-        ['Не сходятся', s.failed ? s.failed + ': ' + (s.failed_dates || []).map(dd).join(', ') + ' — повтор после изменения данных' : '—'],
+        ['Не сходятся', conv.length ? conv.length + ' — повтор после изменения данных или программы:\n' + conv.join('\n')
+          : s.failed ? s.failed + ': ' + (s.failed_dates || []).map(dd).join(', ') + ' — повтор после изменения данных' : '—'],
+        ['Не загружаются', nl.length ? nl.length + ':\n' + nl.join('\n') : '—'],
         ['Самый ранний расчёт', dd(s.oldest_run)],
         ['Старые отчёты прочитаны с', dd(s.inbox_scanned_from)],
       ];
-      // #447: одна и та же ошибка сети или базы на датах подряд — догрузка стоит (причина как в чипе шапки, время по МСК,
-      // ошибка — второй строкой); даты, которые не загружаются (сеть или база на одной дате, даты хаба) — desk-backfill-text.js
-      const T = window.DESK_BACKFILL_TEXT, at = t => T.when(t);
-      if (s.stall) rows.splice(4, 0, ['Догрузка стоит', 'с ' + at(s.stall.since) + ': ' + T.cause(s.stall.cause) +
-        (s.stall.next_attempt ? '; следующая попытка ' + at(s.stall.next_attempt) : ''), s.stall.error]);
-      const nl = [...new Set(T.dates(s).load.map(p => p.date))].sort();
-      if (nl.length) rows.splice(s.stall ? 7 : 6, 0, ['Не загружаются', nl.length + ': ' + nl.slice(0, 20).map(dd).join(', ') + (nl.length > 20 ? ' …' : '') + ' — повтор по расписанию']);
+      if (st) rows.splice(4, 0, ['Догрузка стоит', 'с ' + at(st.since) + ': ' + T.cause(st) + (st.next_attempt ? '; следующая попытка ' + at(st.next_attempt) : ''),
+        st.error ? 'Ошибка' + (st.date ? ' на ' + dd(st.date) : '') + ': ' + st.error : '']);
       if (s.step) rows.push(['Последний цикл', s.step.status + ': ' + s.step.detail]);
       const tb = $('bf-rows'); tb.textContent = '';
       rows.forEach(([k, v, sub]) => { const tr = document.createElement('tr'); tr.innerHTML = '<td class="k"></td><td class="v" style="white-space:pre-wrap"></td>'; tr.children[0].textContent = k; tr.children[1].textContent = v;

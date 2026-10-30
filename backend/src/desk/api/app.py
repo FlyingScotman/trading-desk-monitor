@@ -1055,6 +1055,32 @@ def listen_sockets(host: str, port: int) -> list:
     return out
 
 
+class ConnectionResetNoise(logging.Filter):
+    """The ``asyncio`` logger's ``ConnectionResetError`` / ``ConnectionAbortedError`` (a browser or a probe that closes
+    its connection first; on Windows hundreds a day, #157): the first one is logged, then one line every ``every``
+    with the count, so serve.log keeps the real errors readable."""
+
+    NOISE = (ConnectionResetError, ConnectionAbortedError)
+
+    def __init__(self, every: int = 500) -> None:
+        super().__init__()
+        self.every, self.count = every, 0
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        exc = record.exc_info[1] if record.exc_info else None
+        if not isinstance(exc, self.NOISE):
+            return True
+        self.count += 1
+        if self.count == 1:
+            return True
+        if self.count % self.every == 0:
+            record.msg, record.args, record.exc_info, record.exc_text = (
+                "%d client connection resets so far (%s), not each logged", (self.count, type(exc).__name__), None,
+                None)
+            return True
+        return False
+
+
 def server_loop() -> str:
     """uvicorn's ``loop``: on Windows the selector event loop. The default proactor loop closes a listening socket
     for good after one failed accept (a client that resets before it is accepted, WinError 64; asyncio
@@ -1103,6 +1129,9 @@ def serve(store_url: str, host: str = "127.0.0.1", port: int = 8100, static_dir:
     from ..update import restart_code
 
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s")
+    asyncio_log = logging.getLogger("asyncio")
+    if not any(isinstance(f, ConnectionResetNoise) for f in asyncio_log.filters):
+        asyncio_log.addFilter(ConnectionResetNoise())
     auth = auth or authn.AuthConfig()
     for w in authn.check_bind(host, auth=auth.enabled, tls=tls is not None, allow_plain_http=allow_plain_http):
         log.warning(w)

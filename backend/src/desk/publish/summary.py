@@ -22,7 +22,9 @@ OFZ's RUONIA risk (``ofzRuo``: ``ofz_ruo``, else the basis) with the basis on th
 A position's ``basis`` is ``basis_of`` as it is, an OFZ-IN's nominal proxy included (the pages tell it by the position,
 ``ofz_in_proxy``); the run's sum ``basis`` leaves the proxies out, ``basisIn`` is their sum (TDM#173); ``ofzRuo`` sums the
 RUONIA risk of the OFZ whose basis is in ``basis`` (an OFZ-PK's basis is its own spread, it has none); it is null in a
-run with no OFZ on the KBD (before 0.2.6), whose KBD view takes the basis off RUONIA as before."""
+run with no OFZ on the KBD (before 0.2.6), whose KBD view takes the basis off RUONIA as before.
+``riskBad``: position id -> why its rate risk is impossible (``risk_problem``, TDM#170); such a position's risk (DV01 by
+curve and by book, CS01, basis) is in no sum and its ``pos`` row has none: the run's problem, said, not a number."""
 
 from __future__ import annotations
 
@@ -40,11 +42,12 @@ from ..store import CURRENT_RUNS
 
 log = logging.getLogger("desk.publish.summary")
 
-VERSION = 8  # 2: a floater's discount margin (pos[9]); 3: the OFZ basis of the KBD scheme, the spread to the KBD;
+VERSION = 9  # 2: a floater's discount margin (pos[9]); 3: the OFZ basis of the KBD scheme, the spread to the KBD;
 # 4: an OFZ-IN's nominal proxy out of the run's basis (basisIn, TDM#173); 5: an OFZ's RUONIA risk apart from its basis
 # (ofzRuo, pos[11]; TDM#213); 6: the funding its own factor, the carry without it (TDM#168); 7: a legacy tdm swap
 # (IRS / XCCY / CDS) in DER, not OTH.OTH (mvType, ``LEGACY_DER``; TDM#336); 8: an OTC row of the product group ``repo``
-# is MM.REPO (money market and funding), not DER.OTC (mvType; the owner's decision in TDM#361)
+# is MM.REPO (money market and funding), not DER.OTC (mvType; the owner's decision in TDM#361); 9: a position with an
+# impossible risk (``risk_problem``) is in riskBad, its risk in no sum (TDM#170)
 CURVE_MAP = {"RUB OFZ": "RUB RUONIA", "USD": "USD SOFR", "EUR": "EUR ESTR", "CNY": "CNY XCCY"}
 """A run's risk curve -> the concept pages' curve (``desk.api.concepts`` re-exports it; ``lib/real.js`` mirrors it).
 ``RUB OFZ`` (the KBD: a fixed-coupon OFZ's rates risk since 0.2.6, its basis in RUONIA + basis since 0.2.7, every bond's
@@ -204,6 +207,47 @@ def ofz_in_proxy(is_in: bool, ofz_basis: float | None, quality: str | None) -> b
     return is_in and ofz_basis is not None and quality != "exact"
 
 
+RISK_MAX_YEARS = 50.0
+"""The plausibility bound of a bond's rate risk (TDM#170): its DV01 on a curve, a bucket of it or its sum, RUB per bp,
+is at most its size x ``RISK_MAX_YEARS`` x 1 bp; the size the larger of |PV| and |face| in RUB (a bond far below par).
+A bond's DV01 is PV x modified duration x 1e-4 and the longest rouble bonds mature in about 30 years (a 30-year zero's
+modified duration < 30); a floater's projection and discount legs each stay under its face x tenor. 50 years leaves a
+wide margin over every real bond, while a broken curve shift or a unit error is off by orders of magnitude."""
+RISK_MAX_RUB = 1e9
+"""The absolute bound of a position's DV01, RUB per bp (TDM#170): 10 years of duration on a trillion roubles. It
+catches what the bound by size cannot: a quantity in the wrong unit that scales the PV with it, a row without a PV or
+notional."""
+
+
+def risk_problem(risk: dict[str, dict[str, float | None]] | None, dv01: float | None, pv_rub: float | None,
+                 notional_rub: float | None, bond: bool) -> str | None:
+    """Why a position's rate risk is impossible (TDM#170), None when it is plausible: a value of its risk by curve
+    (``risk``: curve -> bucket -> RUB per bp), a curve's sum or ``dv01`` not finite, above ``RISK_MAX_RUB`` or, for a
+    ``bond``, above its size x ``RISK_MAX_YEARS`` x 1e-4 (``RISK_MAX_YEARS``; no size known: the absolute bound only).
+    A derivative's or FX row's size is not its risk's: a swap from the report has its MV as the notional
+    (``direct_row``: notional unknown), an FX forward's rate risk is on legs the row's notional does not show; for them
+    the absolute bound only. Such a position
+    is a problem of the run, its risk not in any sum (``build``, ``api.concepts.risk_table``), never a silent number."""
+    vals: list[tuple[str, float]] = []  # the curves first: the largest names its curve, not only the DV01
+    for curve, bk in (risk or {}).items():
+        bk = bk or {}
+        vals.append((curve, sum(v for v in bk.values() if v is not None)))
+        vals += [(f"{curve} {b}", v) for b, v in bk.items() if v is not None]
+    vals += [("DV01", dv01)] if dv01 is not None else []
+    sizes = [abs(v) for v in (pv_rub, notional_rub) if bond and v is not None and math.isfinite(v)]
+    size = max(sizes, default=0.0)
+    limit = min(RISK_MAX_RUB, size * RISK_MAX_YEARS * 1e-4) if size else RISK_MAX_RUB
+    for what, v in vals:
+        if not math.isfinite(v):
+            return f"риск {what} не конечен ({v})"
+    what, v = max(vals, key=lambda wv: abs(wv[1]), default=("DV01", 0.0))
+    if abs(v) > limit:
+        base = (f"больше {RISK_MAX_YEARS:.0f} лет дюрации на MV/номинал {size:,.0f} ₽" if limit < RISK_MAX_RUB
+                else f"больше {RISK_MAX_RUB:,.0f} ₽/бп")
+        return f"риск {what} {v:,.0f} ₽/бп невозможен: {base}"
+    return None
+
+
 def _r(v: float | None, nd: int) -> float | None:
     return None if v is None or not math.isfinite(v) else round(v, nd)
 
@@ -218,9 +262,15 @@ def build(rows: Iterable[dict[str, Any]]) -> dict[str, Any]:
     kbd_ofz = False  # a run before 0.2.6 has no OFZ on the KBD: its ofzRuo is null, not 0 (the pages read null)
     pnl: dict[str, float] | None = None
     pos: dict[str, list] = {}
+    bad: dict[str, str] = {}
     for x in rows:
         f = dict(x)
         curves: dict[str, float] = {}
+        why = risk_problem(x["risk"], x["dv01"], x["pv_rub"], x["notional_rub"], x["instr_type"] == "BOND")
+        if why is not None:
+            # TDM#170: an impossible risk is the run's problem (riskBad), none of its risk in the sums or the position
+            bad[x["position_id"]] = why
+            x = {**x, "risk": None, "dv01": None, "cs01": None, "ofz": None, "ofz_basis": None, "ofz_ruo": None}
         for curve, bk in (x["risk"] or {}).items():
             c = CURVE_MAP.get(curve, curve)
             curves[c] = curves.get(c, 0.0) + sum(v or 0.0 for v in bk.values())
@@ -260,7 +310,7 @@ def build(rows: Iterable[dict[str, Any]]) -> dict[str, Any]:
             "ofzRuo": ofz_ruo if kbd_ofz else None,
             "dv01Book": book,
             "mvType": mv_type,
-            "mvCcy": mv_ccy, "pnl": pnl, "pos": pos}
+            "mvCcy": mv_ccy, "pnl": pnl, "pos": pos, "riskBad": bad}
 
 
 def ensure(con: psycopg.Connection, run_ids: Iterable[int]) -> int:

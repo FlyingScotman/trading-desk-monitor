@@ -208,7 +208,7 @@
         '<td class="n">' + (r.cleanPrev == null ? NA(qty ? 'количество изменилось: поля D−1 не показываются' : 'нет входа D−1') : f.px(r.cleanPrev)) + '</td><td class="n">' + (r.clean == null ? NA() : f.px(r.clean)) + '</td>' +
         '<td class="mut">' + (src ? '<span title="' + esc(src[1]) + '">' + src[0] + '</span>' : NA('нет входов D−1')) + '</td>' +
         '<td class="n">' + (r.dy == null ? NA() : P.signedBp(r.dy, 1)) + '</td><td class="n">' + (r.dz == null ? NA() : P.signedBp(r.dz, 1)) + '</td><td class="n">' + (r.dv01 == null ? NA() : f.dv(r.dv01)) + '</td>' +
-        '<td class="n"><b>' + (r.total == null ? NA(r.noPnl ? 'нет PnL: ' + (r.noPnl.reason || '') : 'нет итога') : f.mn(r.total, 2)) + '</b></td>' +
+        '<td class="n"><b>' + (r.total == null ? NA(r.noPnl ? 'нет PnL: ' + (r.noPnl.text || r.noPnl.reason || '') : 'нет итога') : f.mn(r.total, 2)) + '</b></td>' +
         cols.map(k => '<td class="n">' + mn2(v(r, k)) + '</td>').join('') +
         '<td class="n mut">' + mn2(r.ratesLinear) + '</td><td class="n">' + gap + '</td>' +
         '<td class="ev">' + r.events.map(e => '<span class="st info">' + esc(e) + '</span> ').join('') +

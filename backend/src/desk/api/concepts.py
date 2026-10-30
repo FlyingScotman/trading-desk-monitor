@@ -7,7 +7,8 @@ and ``window.DESK``).
 market value by instrument type and currency, PnL by factor: each run's own sums, ``publish.summary``), per position
 of the run its PnL month and year to date over those runs (``pnlPeriods`` says from which date and whether a business
 day of the period has no run: then the sum is partial), the previous run's price and spread and what changed in its
-holding (a trade, a new position), its flows of the next 18 months (``extra.cashflows``), the market of the latest
+holding (a trade, a new position), its flows of the next 18 months up to the offer it is priced to
+(``extra.cashflows`` cut by ``calendar_flows``: they go to maturity, TDM#166), the market of the latest
 cached close not after the run (every quoted bond, ``universeRub`` and ``universeFx``, with the static snapshot's
 issuer, group, sector, outstanding face, coupon and frequency: ``marketdata.static_facts``; the day's movers) and the
 CBR meetings (``cbr``: the next one, the dates ahead, the past decisions). Issuer, group, sector and the desk's rating
@@ -231,10 +232,10 @@ def extras(con, run: dict[str, Any], writer: Writer = None) -> dict[str, Any]:
     flows = []
     held = set()
     for x in con.execute("SELECT position_id, fact->>'ccy' AS ccy, fact->>'instrument_id' AS secid,"
-                         " fact->'extra'->'cashflows' AS cf FROM run_position WHERE run_id = %s AND fact IS NOT NULL",
-                         (run["run_id"],)):
+                         " fact->'extra'->'cashflows' AS cf, fact->'extra'->>'offer_date' AS offer"
+                         " FROM run_position WHERE run_id = %s AND fact IS NOT NULL", (run["run_id"],)):
         held.add(x["secid"])
-        for d, kind, amount, est in x["cf"] or []:
+        for d, kind, amount, est in calendar_flows(x["cf"], as_of, x["offer"]):
             flows.append({"date": d, "pos": x["position_id"], "kind": kind, "ccy": x["ccy"] or "RUB",
                           "amount": amount, "est": bool(est)})
     if not flows and cur:
@@ -245,6 +246,12 @@ def extras(con, run: dict[str, Any], writer: Writer = None) -> dict[str, Any]:
     if (old := old_runs(con, runs)):
         notes.append(f"история: {old} из {n} дат посчитаны прошлой версией программы — в графиках истории позиции "
                      f"они пунктиром; пересчитать: {BACKFILL_LINK} (идёт в фоне, от ранних дат)")
+    if (bad := [(d, s["riskBad"]) for d, s in zip(dates, sums) if s.get("riskBad")]):  # TDM#170
+        notes.append(f"невозможный риск (|DV01| не сходится с MV и номиналом) — не в суммах DV01, CS01 и базиса: "
+                     f"{len(bad)} дат(ы), " + "; ".join(f"{d}: " + ", ".join(f"{p} ({w})" for p, w in list(b.items())[:3])
+                                                      + (f" и ещё {len(b) - 3}" if len(b) > 3 else "")
+                                                      for d, b in bad[-5:])
+                     + (f"; ещё {len(bad) - 5} дат раньше" if len(bad) > 5 else ""))
     flows.sort(key=lambda c: c["date"])
     market = universe(con, as_of, held)
     notes += market.pop("notes")
@@ -256,6 +263,7 @@ def extras(con, run: dict[str, Any], writer: Writer = None) -> dict[str, Any]:
                      "ofzSpr01": [s.get("ofzSpr", 0.0) for s in sums], "basisPk01": [s.get("basisPk", 0.0) for s in sums],
                      "basisIn01": [s.get("basisIn", 0.0) for s in sums],
                      "ofzRuo01": [s.get("ofzRuo") for s in sums],
+                     "riskBad": [sorted(s.get("riskBad") or ()) for s in sums],
                      "dv01Book": series("dv01Book"), "mvType": series("mvType"), "mvCcy": series("mvCcy"), "pnl": pnl},
             "histSource": "runs", "pnlPeriods": periods,
             "positions": positions, "cashflows": flows, **market,
@@ -414,16 +422,31 @@ def market_calendar(con, as_of: date, held: set[str] | None = None) -> dict[str,
     return cal
 
 
+def calendar_flows(cf: list[list[Any]] | None, as_of: date, offer: str | None) -> list[list[Any]]:
+    """A position's stored flows (``extra.cashflows``, to maturity since TDM#166) as the payment calendars read them:
+    the next ``tdm_run.CASHFLOW_DAYS`` up to the offer the bond is priced to (the offer itself in)."""
+    from ..publish.tdm_run import CASHFLOW_DAYS
+
+    end = (as_of + timedelta(days=CASHFLOW_DAYS)).isoformat()
+    if offer and offer < end:
+        end = offer
+    return [x for x in cf or [] if x[0] <= end]
+
+
 def position_flows(con, run: dict[str, Any], pid: str, snapshots: Path) -> dict[str, Any] | None:
     """A bond position's whole schedule after the run's date (``static_facts.schedule`` of the static snapshot the read
     model shows for the run, × the position's bonds): coupons, amortizations, maturity, and the put offers and calls
-    on the face outstanding then, in the face currency, signed by the side. The position card shows it; the stored
-    ``extra.cashflows`` stop at 18 months and at the offer the bond is priced to. None: no such position in the run.
-    No schedule is an answer, not an error (#288): empty ``flows`` and a ``reason`` — ``not_valued``, ``not_bond``,
-    ``no_static`` (the static or its bundle is missing) or ``no_schedule``; the card then shows the stored flows."""
+    on the face outstanding then, in the face currency, signed by the side. The position card shows it. None: no such
+    position in the run. No schedule is an answer, not an error (#288): empty ``flows`` and a ``reason`` —
+    ``not_valued``, ``not_bond``, ``no_static`` (the static or its bundle is missing) or ``no_schedule``; the card then
+    shows the stored flows. TDM#166: without the static's bundle (a cleared cache) or the bond in it, the run's own
+    flows when they go to maturity (``extra.cashflows_to``, the runs since then): ``source`` ``run`` and the
+    ``reason`` the static was not used; of the offers, only the one the bond is priced to."""
     row = con.execute("SELECT fact IS NOT NULL AS valued, fact->>'instrument_id' AS secid,"
                       " (fact->'extra'->>'quantity_bonds')::float8 AS q,"
-                      " fact->'extra'->>'offer_date' AS offer, fact->'extra'->>'offer_kind' AS offer_kind"
+                      " fact->'extra'->>'offer_date' AS offer, fact->'extra'->>'offer_kind' AS offer_kind,"
+                      " fact->>'ccy' AS ccy, fact->>'maturity' AS maturity,"
+                      " fact->'extra'->>'cashflows_to' AS cf_to, fact->'extra'->'cashflows' AS cf"
                       " FROM run_position WHERE run_id = %s AND position_id = %s",
                       (run["run_id"], pid)).fetchone()
     if row is None:
@@ -432,18 +455,26 @@ def position_flows(con, run: dict[str, Any], pid: str, snapshots: Path) -> dict[
         return {"flows": [], "reason": "not_valued"}
     if not row["secid"] or row["q"] is None:
         return {"flows": [], "reason": "not_bond"}
+
+    def own(reason: str) -> dict[str, Any]:  # the run's flows to maturity, else no schedule and why
+        if row.get("cf_to") != "maturity" or not row.get("cf"):
+            return {"flows": [], "reason": reason}
+        return {"source": "run", "reason": reason, "staticDate": None, "ccy": row["ccy"] or "RUB",
+                "maturity": row["maturity"], "offer": row["offer"], "offerKind": row["offer_kind"],
+                "flows": [list(x) for x in row["cf"]]}
+
     st = static_facts.static_for(con, run["business_date"])
     if st is None:
-        return {"flows": [], "reason": "no_static"}
+        return own("no_static")
     path = Path(snapshots) / f"{st['snapshot_id']}.json.gz"
     if not path.is_file() and st["snapshot_id"] not in static_facts._SCHEDULES:
-        return {"flows": [], "reason": "no_static"}
+        return own("no_static")
     sch = static_facts.schedule(st["snapshot_id"], lambda: read_bundle(path), row["secid"], run["business_date"])
     if sch is None:
-        return {"flows": [], "reason": "no_schedule"}
+        return own("no_schedule")
     q = row["q"]
-    return {"staticDate": st["business_date"].isoformat(), "ccy": sch["ccy"], "maturity": sch["maturity"],
-            "offer": row["offer"], "offerKind": row["offer_kind"],
+    return {"source": "static", "staticDate": st["business_date"].isoformat(), "ccy": sch["ccy"],
+            "maturity": sch["maturity"], "offer": row["offer"], "offerKind": row["offer_kind"],
             "flows": [[d, kind, None if amt is None else amt * q, est] for d, kind, amt, est in sch["flows"]]}
 
 
@@ -892,7 +923,9 @@ OFZ_VIEW_APPROX = ("a run before 0.2.6: its OFZ were on RUONIA, their KBD risk i
 OFZ_VIEW_P = ("{n} OFZ or KBD floaters without a computed RUONIA risk (a run of 0.2.6, an OFZ or a KBD floater off core):"
               " their RUONIA risk is their KBD risk and the basis the same risk again (core basis_view, variant P)")
 MISSING_TEXT = {"not_valued": "не оценена", "reported_no_risk": "оценена по отчёту, риска в отчёте нет",
-                "no_risk": "риск не посчитан"}
+                "no_risk": "риск не посчитан",
+                "implausible": "риск невозможен (|DV01| не сходится с MV и номиналом): не в суммах, причина в журнале "
+                               "прогона"}
 GROUPS = ("GOV", "SUB", "CORP", "DER", "MM", "OTH")
 
 
@@ -1038,6 +1071,13 @@ def risk_table(items: list[dict[str, Any]], fx: dict[str, float | None],
         legs = attribution == "legs" or kind not in CROSS_CCY_KINDS
         c = cell(home, kind)
         c["ids"].add(pid)
+        if summary.risk_problem(f.get("risk"), f.get("dv01"), f.get("mv_rub"), f.get("notional_rub"),
+                                f.get("instr_type") == "BOND"):
+            # TDM#170: an impossible risk is counted as missing, none of it in the sums (its MV and notional are)
+            for key, src in (("notional_ccy", "notional"), ("notional_rub", "notional_rub"), ("mv_rub", "mv_rub")):
+                c[key] += f.get(src) or 0.0
+            c["missing"]["implausible"] = c["missing"].get("implausible", 0) + 1
+            continue
         for key, src in (("notional_ccy", "notional"), ("notional_rub", "notional_rub"), ("mv_rub", "mv_rub"),
                          ("cs01", "cs01")):
             c[key] += f.get(src) or 0.0

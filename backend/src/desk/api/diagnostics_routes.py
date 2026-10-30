@@ -118,7 +118,7 @@ def get_backfill_status(request: Request) -> Response:
     if ap is not None:
         doc["step"] = next((x for x in steps if x["name"] == "backfill"), None)
     # the hub dates the sync step cannot load, waiting for a retry (#146): the header counts them among the dates
-    # that do not converge (#163)
+    # that do not load (#163, #447)
     doc["hub_problem_dates"] = next((x.get("problem_dates") or [] for x in steps if x["name"] == "sync"), [])
     return Response(json.dumps(doc, ensure_ascii=False, default=str), media_type="application/json; charset=utf-8",
                     headers={"Cache-Control": "no-store"})

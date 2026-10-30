@@ -322,6 +322,40 @@ def test_waiting_calendar_behind_the_lookback_becomes_terminal(con, tmp_path):
     assert scan.retry(con, s).files == {}  # not a retry status either
 
 
+def test_waiting_calendar_before_the_hub_history_becomes_terminal(con, tmp_path):
+    """#27: a report dated before the hub's oldest date waits for a calendar the hub will never send (the lookback
+    does not stop it when it is long). Once the hub's oldest date is known and its static snapshot is cached, the
+    file is ``ignored_too_old`` with the reason ``before_hub_history``, and not offered again until the hub's history
+    reaches back to its report date. A report the cached calendars cover is read as before."""
+    inbox = tmp_path / "in"
+    inbox.mkdir()
+    shutil.copy(PRIV / "positions_20261014.csv", inbox / "positions_20250110.csv")  # before the fixture's calendar
+    s = cfg(tmp_path, inbox)
+    assert scan.scan(con, s).files == {"waiting_calendar": 1}  # the hub's history unknown: it waits
+    scan._static_seen.clear()
+    assert scan.scan(con, s, history_from="2026-10-01").files == {"waiting_calendar": 1}  # the hub's oldest static
+    # snapshot (of 01.10) is not cached yet: a calendar for it may still come
+    scan._static_seen.clear()
+    assert scan.scan(con, s, history_from="2026-10-15").files == {"ignored_too_old": 1}
+    assert con.execute("SELECT status, error_code, report_date, archive_path IS NOT NULL FROM inbox_file_status"
+                       " ORDER BY status_id DESC LIMIT 1").fetchone() == (
+        "ignored_too_old", "before_hub_history", D("2025-01-10"), True)
+    for hf in ("2026-10-15", None):  # terminal: not offered again, the calendars changed or not
+        scan._static_seen.clear()
+        assert scan.scan(con, s, history_from=hf).files == {}
+    scan._static_seen.clear()  # the hub's history now reaches back to the report date: offered again
+    assert scan.scan(con, s, history_from="2024-01-01").files == {"waiting_calendar": 1}
+
+    shutil.copy(PRIV / "positions_20261015.csv", inbox / "positions_20250210.csv")  # a new file before the history
+    shutil.copy(PRIV / "positions_20261016.csv", inbox / "positions_20260210.csv")  # before it too, a calendar covers it
+    r = scan.scan(con, s, history_from="2026-10-15")
+    # the file of 10.01.2025 again (the history back at 15.10) and the new one at once, not waiting first
+    assert r.files.get("ignored_too_old") == 2 and "waiting_calendar" not in r.files, r.text()
+    rows = dict(con.execute("SELECT DISTINCT ON (sha256) report_date, status FROM inbox_file_status"
+                            " ORDER BY sha256, status_id DESC").fetchall())
+    assert rows[D("2026-02-10")] != "ignored_too_old" and rows[D("2025-02-10")] == "ignored_too_old", rows
+
+
 def test_interrupted_scan_resumes_without_redoing_finished_files(con, tmp_path, monkeypatch):
     inbox = tmp_path / "in"
     put(inbox, "positions_20261015.csv", "positions_20261016.csv", "positions_20261017.csv")

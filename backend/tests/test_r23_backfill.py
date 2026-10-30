@@ -291,6 +291,57 @@ def test_unchanged_cached_dates_are_not_downloaded_again(tmp_path, cache, store_
     assert synced == []
 
 
+@pytest.mark.parametrize("hub_has_it", [False, True], ids=["cache_only", "hub_only"])
+def test_the_plan_and_the_run_pick_one_previous_close_when_the_hub_and_the_cache_differ(
+        tmp_path, store_url, monkeypatch, hub_has_it):
+    """#203: the hub's list and the cache differ on the previous close of 2026-10-14: the cache holds 2026-10-13 only
+    as an ``eod_preliminary``, and the hub lists no final of it (it does not load, or is not published) or does (not
+    synced yet). The plan, the autopilot's eod step and ``cli.eod_run`` pick it by one rule
+    (``bundle.previous_close``): the cache's preliminary close, else the hub's final, synced before the run. The date
+    converges on its first run, and the next plan has nothing to do."""
+    import shutil
+
+    from desk.autopilot import previous_close as autopilot_rule
+    from desk.marketdata.bundle import SnapshotDir, previous_close
+
+    assert autopilot_rule is previous_close and cli.previous_close is previous_close
+    c = tmp_path / "cache"
+    c.mkdir()
+    shutil.copy(FIX / f"{STATIC}.json.gz", c)
+    ids = {d: write(c, shifted(d, len(DATES) - i, light=False)) for i, d in enumerate(DATES) if d != "2026-10-13"}
+    pre = write(c, {**shifted("2026-10-13", 2, light=False), "cut_type": "eod_preliminary",
+                    "cut_ts": "2026-10-13T16:45:00Z", "supersedes": None})
+    if hub_has_it:
+        ids["2026-10-13"] = write(tmp_path / "hub", shifted("2026-10-13", 2, light=False))
+    synced: list[str] = []
+
+    def sync(client, cache_dir, dates):
+        for d in dates:
+            synced.append(d)
+            if d in ids and not (cache_dir / f"{ids[d]}.json.gz").exists():
+                shutil.copy(tmp_path / "hub" / f"{ids[d]}.json.gz", cache_dir)
+
+    monkeypatch.setattr(backfill.cache, "sync", sync)
+    rows = sorted(ids.items(), reverse=True)
+    want = ("2026-10-13", "eod_final", ids["2026-10-13"]) if hub_has_it else ("2026-10-13", "eod_preliminary", pre)
+    assert previous_close(SnapshotDir(c), "2026-10-14", dict(rows)) == want
+    load(store_url, tmp_path, "2026-10-12", 10)
+    s = settings(tmp_path, c, store_url)
+    with store.connect(store_url) as con:
+        p = backfill.plan(con, s, date(2026, 10, 1), date(2026, 10, 15), rows)
+        day = next(d for d in p.todo if d.date == "2026-10-14")
+        assert (day.prev_date, day.prev_cut, day.sig[2]) == want
+        res = backfill.run(s, p, store_url=store_url, client=object(), out=lambda line: None)
+        assert not res["unconverged"] and not res["failed"]
+        assert res["done"] == [d for d in DATES[1:] if hub_has_it or d != "2026-10-13"]
+        assert synced == (["2026-10-13"] if hub_has_it else [])  # a preliminary close is not the hub's to sync
+        runs = store.default_runs(con, date(2026, 10, 1))
+        assert runs[date(2026, 10, 14)]["prev_market_snapshot_id"] == want[2]
+        assert previous_close(SnapshotDir(c), "2026-10-14") == want  # the run's rule on the cache alone, after the sync
+        assert not backfill.plan(con, s, date(2026, 10, 1), date(2026, 10, 15), rows).todo
+    assert not backfill.state(s).get("problems")
+
+
 def test_autopilot_step_after_the_eod_step_within_its_budget(tmp_path, cache, store_url):
     load(store_url, tmp_path, "2026-10-12", 10)
     load(store_url, tmp_path, "2026-10-15", 11)
@@ -500,16 +551,113 @@ def test_a_date_that_keeps_failing_on_the_network_stops_holding_the_queue(tmp_pa
             return backfill.run(s, backfill.plan(con, s, date(2026, 10, 1), date(2026, 10, 15)), store_url=store_url,
                                 out=lambda line: None)
 
-    assert run()["done"] == ["2026-10-13"]  # 15.10 waits: the hub may be down as a whole
     res = run()
-    assert res["done"] == ["2026-10-15"] and [d for d, _ in res["failed"]] == ["2026-10-14"]
+    assert res["done"] == ["2026-10-13"] and res["stalled"]["date"] == "2026-10-14"  # 15.10 waits: the hub may be down
     with store.connect(store_url) as con:
         st = backfill.status(con, s, today=date(2026, 10, 15))
-    assert st["todo"] == 1 and [(p["date"], p["attempts"]) for p in st["problem_dates"]] == [("2026-10-14", 2)]
+    assert st["problem_dates"] == [] and "502" in st["stalled"]["error"]  # not yet the date's: a stall (#447)
+    res = run()  # 14.10 passed over, 15.10 loads: the error is 14.10's own (#217), it does not hold the queue
+    assert res["done"] == ["2026-10-15"] and [d for d, _ in res["failed"]] == ["2026-10-14"] and not res["stalled"]
+    with store.connect(store_url) as con:
+        st = backfill.status(con, s, today=date(2026, 10, 15))
+    assert st["todo"] == 1 and [(p["date"], p["kind"], p["attempts"]) for p in st["problem_dates"]] == [
+        ("2026-10-14", "unreachable", 2)]
+    assert st["stalled"] is None
+    res = run()  # tried again every time, not a stall
+    assert [d for d, _ in res["failed"]] == ["2026-10-14"] and not res["stalled"]
     monkeypatch.setattr(cli, "eod_run", real)
     assert run()["done"] == ["2026-10-14"]
     with store.connect(store_url) as con:
         assert backfill.status(con, s, today=date(2026, 10, 15))["problem_dates"] == []
+
+
+@pytest.mark.parametrize(("error", "source"), [
+    pytest.param(lambda: TimeoutError("timed out"), "network", id="timeout"),
+    pytest.param(lambda: __import__("psycopg").OperationalError("connection to server on socket failed"), "store",
+                 id="store"),
+])
+def test_a_network_down_for_cycles_stalls_the_backfill_without_problem_dates(tmp_path, cache, store_url, monkeypatch,
+                                                                             error, source):
+    """#447: the network (or the store) down for hours added one «does not converge» date a cycle (each date passed
+    over after MAX_ATTEMPTS, the next one stopped on). The same error on the next date is the network's, not the
+    dates': no problem dates, the backfill stalls with its reason, since when and the next attempt; at most two dates
+    tried a cycle (#208); when the network is back, the dates run and the stall is gone."""
+    load(store_url, tmp_path, "2026-10-13", 10)
+    s = settings(tmp_path, cache, store_url)
+    real = cli.eod_run
+    tried: list[str] = []
+
+    def down(settings, d, **kw):
+        tried.append(d)
+        raise error()
+
+    monkeypatch.setattr(cli, "eod_run", down)
+
+    def run():
+        with store.connect(store_url) as con:
+            return backfill.run(s, backfill.plan(con, s, date(2026, 10, 1), date(2026, 10, 15)), store_url=store_url,
+                                out=lambda line: None)
+
+    since = None
+    for cycle in range(5):
+        tried.clear()
+        res = run()
+        assert not res["done"] and res["stalled"]["date"] == "2026-10-13" and res["stalled"]["source"] == source
+        # the oldest, then one date not in the stall yet (the others wait): two dates that fail each on its own do
+        # not hold the queue for ever (#447); all three in it, the oldest alone
+        want = [["2026-10-13"], ["2026-10-13", "2026-10-14"], ["2026-10-13", "2026-10-15"]]
+        assert tried == (want[cycle] if cycle < len(want) else ["2026-10-13"]), (cycle, tried)
+        with store.connect(store_url) as con:
+            st = backfill.status(con, s, today=date(2026, 10, 15))
+        assert st["problem_dates"] == [] and st["failed"] == 0 and st["todo"] == 3, (cycle, st["problem_dates"])
+        stall = st["stalled"]
+        assert type(error()).__name__ in stall["error"] and stall["date"] == "2026-10-13" and stall["next_attempt"]
+        since = since or stall["since"]
+        assert stall["since"] == since and stall["at"] >= since
+    monkeypatch.setattr(cli, "eod_run", real)
+    res = run()
+    assert res["done"] == ["2026-10-13", "2026-10-14", "2026-10-15"] and not res["failed"] and not res["stalled"]
+    with store.connect(store_url) as con:
+        st = backfill.status(con, s, today=date(2026, 10, 15))
+    assert st["stalled"] is None and st["problem_dates"] == [] and st["done"] == 3
+
+
+def test_a_date_failing_on_its_data_does_not_hold_the_queue_and_does_not_stall(tmp_path, cache, store_url,
+                                                                               monkeypatch):
+    """#23 kept by #447: a date that fails on its data (not the network) is failed at once, one still stale after
+    its run is a problem date after MAX_ATTEMPTS runs; neither holds the queue nor stalls the backfill, and the
+    status tells them («do not converge») from the dates that do not load."""
+    load(store_url, tmp_path, "2026-10-12", 10)
+    s = settings(tmp_path, cache, store_url)
+    tried = _stale_after_run(monkeypatch, "2026-10-12")
+    stale = cli.eod_run
+
+    def bad(settings, d, **kw):
+        if d == "2026-10-14":
+            tried.append(d)
+            raise ValueError("bad bundle")
+        return stale(settings, d, **kw)
+
+    monkeypatch.setattr(cli, "eod_run", bad)
+
+    def run():
+        with store.connect(store_url) as con:
+            return backfill.run(s, backfill.plan(con, s, date(2026, 10, 1), date(2026, 10, 15)), store_url=store_url,
+                                out=lambda line: None)
+
+    res = run()  # 14.10 failed at once, 12.10 tried again next time; the queue goes on
+    assert res["done"] == ["2026-10-13", "2026-10-15"] and res["unconverged"] == ["2026-10-12"]
+    assert [d for d, _ in res["failed"]] == ["2026-10-14"] and not res["stalled"]
+    res = run()  # 12.10 after MAX_ATTEMPTS runs: a problem date
+    assert [d for d, _ in res["failed"]] == ["2026-10-12"] and not res["stalled"]
+    res = run()  # neither tried again on the same inputs
+    assert not res["done"] and not res["failed"] and not res["stalled"]
+    assert tried.count("2026-10-12") == backfill.MAX_ATTEMPTS and tried.count("2026-10-14") == 1
+    with store.connect(store_url) as con:
+        st = backfill.status(con, s, today=date(2026, 10, 15))
+    assert [(p["date"], p["kind"]) for p in st["problem_dates"]] == [("2026-10-12", "unconverged"),
+                                                                     ("2026-10-14", "failed")]
+    assert st["stalled"] is None and st["done"] == 2 and st["todo"] == 0
 
 
 def test_backfill_status_route_lists_the_hub_problem_dates(tmp_path, cache, store_url, monkeypatch):
@@ -548,10 +696,10 @@ def _cycle(s: Settings, store_url: str, t: datetime, **kw) -> tuple[dict, dict]:
 
 
 def test_the_same_network_error_on_every_date_is_a_stall_not_problem_dates(tmp_path, cache, store_url, monkeypatch):
-    """TDM#447: the network down for every date used to add one problem date a cycle («48 of M · K do not converge»,
-    K growing, nothing done). The same transient error on two dates in a row is the environment's: the dates' attempts
-    are not counted, the status says the backfill stands (cause, error, since, next attempt), a run tries the oldest
-    date and one not in the stall yet; once the network is back the dates run again."""
+    """#447: the network down for every date used to add one problem date a cycle («48 of M · K do not converge», K
+    growing, nothing done). The backfill stalls instead: no problem dates, the status says what is down (``cause``),
+    the error, since when and the next attempt, later after each stop (``STALL_BACKOFF_S``); a run tries the oldest
+    date and one not in the stall yet, the others wait; once the network is back the dates run again."""
     from desk.marketdata.hub import TransportError
 
     load(store_url, tmp_path, "2026-10-12", 10)
@@ -567,7 +715,7 @@ def test_the_same_network_error_on_every_date_is_a_stall_not_problem_dates(tmp_p
     monkeypatch.setattr(cli, "eod_run", flaky)
     t0 = datetime(2026, 10, 20, 9, 0, tzinfo=UTC)
     res, st = _cycle(s, store_url, t0)
-    assert tried == ["2026-10-12"] and res["stall"] is None and st["stall"] is None  # one date: maybe its own (#23)
+    assert tried == ["2026-10-12"] and res["stalled"]["date"] == "2026-10-12" and st["problem_dates"] == []
     probes = [["2026-10-12", "2026-10-13"], ["2026-10-12", "2026-10-14"], ["2026-10-12", "2026-10-15"],
               ["2026-10-12"], ["2026-10-12"]]  # all four in the stall: only the oldest is tried
     for i, want in enumerate(probes, 1):
@@ -575,23 +723,24 @@ def test_the_same_network_error_on_every_date_is_a_stall_not_problem_dates(tmp_p
         res, st = _cycle(s, store_url, t0 + timedelta(hours=i))
         assert tried == want, (i, tried)
         assert st["problem_dates"] == [] and st["failed"] == 0 and st["todo"] == 4 and st["done"] == 0, (i, st)
-        stall = st["stall"]
-        assert stall["cause"] == "network" and stall["phase"] == "run" and stall["error"] == \
-            f"TransportError: bundle {want[-1]}: timed out after 30 s"
-        assert _near(stall["since"], t0) and stall["dates"] == min(i + 1, 4) and stall["stops"] == i
-        wait = backfill.STALL_BACKOFF_S[min(i, len(backfill.STALL_BACKOFF_S)) - 1]
+        stall = st["stalled"]
+        assert stall["cause"] == "network" and stall["phase"] == "run" and stall["date"] == "2026-10-12"
+        assert stall["error"] == f"TransportError: bundle {want[-1]}: timed out after 30 s"
+        assert _near(stall["since"], t0) and len(stall["dates"]) == min(i + 1, 4) and stall["stops"] == i + 1
+        wait = backfill.STALL_BACKOFF_S[min(i + 1, len(backfill.STALL_BACKOFF_S)) - 1]
         assert _near(stall["next_attempt"], t0 + timedelta(hours=i, seconds=wait))
-        assert res["stall"]["next_attempt"] == stall["next_attempt"] and not res["done"]
+        assert res["stalled"]["at"] == stall["at"] and not res["done"]
     down["on"] = False
     res, st = _cycle(s, store_url, t0 + timedelta(hours=6))
-    assert res["done"] == ["2026-10-12", *DATES[2:]] and res["stall"] is None
-    assert st["stall"] is None and st["problem_dates"] == [] and st["done"] == 4 and st["todo"] == 0
+    assert res["done"] == ["2026-10-12", *DATES[2:]] and res["stalled"] is None
+    assert st["stalled"] is None and st["problem_dates"] == [] and st["done"] == 4 and st["todo"] == 0
 
 
 def test_two_dates_failing_on_their_own_do_not_hold_the_queue(tmp_path, cache, store_url, monkeypatch):
-    """Review of TDM#447: 12.10 and 13.10 time out each on its own (big bundles through a slow proxy, say), 14.10 and
-    15.10 run. Their two errors in a row look like a stall; the next run tries a date outside it, which runs: the
-    stall is over, 12.10 failed on its own. The two become problem dates (``transient``), the queue goes on."""
+    """Review of #447: 12.10 and 13.10 time out each on its own (big bundles through a slow proxy, say), 14.10 and
+    15.10 run. Their errors in a row look like a stall; the next run passes over 12.10 and tries a date outside the
+    stall (13.10 waits), which runs: the stall is over, 12.10 and 13.10 failed on their own. The two do not load
+    (``unreachable``), tried every time, and hold neither the queue nor the backfill for ever."""
     load(store_url, tmp_path, "2026-10-12", 10)
     s = settings(tmp_path, cache, store_url)
     real, tried = cli.eod_run, []
@@ -606,23 +755,23 @@ def test_two_dates_failing_on_their_own_do_not_hold_the_queue(tmp_path, cache, s
     t0 = datetime(2026, 10, 20, 9, 0, tzinfo=UTC)
     _cycle(s, store_url, t0)
     res, st = _cycle(s, store_url, t0 + timedelta(hours=1))
-    assert st["stall"] is not None and st["stall"]["dates"] == 2  # as far as it can tell: the environment
+    assert st["stalled"] is not None and len(st["stalled"]["dates"]) == 2  # as far as it can tell: the environment
     tried.clear()
     res, st = _cycle(s, store_url, t0 + timedelta(hours=2))
     assert tried == ["2026-10-12", "2026-10-14", "2026-10-15"] and res["done"] == ["2026-10-14", "2026-10-15"]
-    assert st["stall"] is None
+    assert st["stalled"] is None
     for i in range(3, 9):
         tried.clear()
         res, st = _cycle(s, store_url, t0 + timedelta(hours=i))
-        assert st["stall"] is None and res["stall"] is None, (i, st["stall"])
+        assert st["stalled"] is None and res["stalled"] is None, (i, st["stalled"])
         assert set(tried) == {"2026-10-12", "2026-10-13"}, (i, tried)
     assert st["done"] == 2 and st["todo"] == 2
-    assert [(p["date"], p["kind"]) for p in st["problem_dates"]] == [("2026-10-12", "transient"),
-                                                                       ("2026-10-13", "transient")]
+    assert [(p["date"], p["kind"]) for p in st["problem_dates"]] == [("2026-10-12", "unreachable"),
+                                                                       ("2026-10-13", "unreachable")]
 
 
 def test_a_download_outage_is_not_ended_by_a_date_run_from_the_cache(tmp_path, cache, store_url, monkeypatch):
-    """TDM#447: the hub down (``HubUnavailable`` after its retries, the 502 of its last attempt) for the bundles to
+    """#447: the hub down (``HubUnavailable`` after its retries, the 502 of its last attempt) for the bundles to
     download; a date already cached runs meanwhile, which says nothing of the downloads: the stall stands, the dates
     that failed to download are not taken for their own trouble. Once the hub answers they download and run."""
     import shutil
@@ -654,19 +803,21 @@ def test_a_download_outage_is_not_ended_by_a_date_run_from_the_cache(tmp_path, c
     assert not res["done"] and [d for d, _ in res["failed"]] == ["2026-10-12"] and synced == [["2026-10-12"]]
     res, st = _cycle(s, store_url, t0 + timedelta(hours=1), rows=rows, client=object())
     # 12.10 a second time, 14.10 from the cache runs (not the downloads), 15.10 fails to download: it stands
-    assert res["done"] == ["2026-10-14"] and res["stall"] is not None and [d for d, _ in res["failed"]] == [
-        "2026-10-12", "2026-10-15"]
-    assert st["stall"]["cause"] == "hub" and st["stall"]["status"] == 502 and st["stall"]["phase"] == "bundle"
-    assert st["problem_dates"] == [] and backfill.state(s)["problems"].keys() == {"2026-10-15"}  # 12.10 not its own
+    assert res["done"] == ["2026-10-14"] and [d for d, _ in res["failed"]] == ["2026-10-12", "2026-10-15"]
+    stall = res["stalled"]
+    assert stall["cause"] == "hub" and stall["status"] == 502 and stall["phase"] == "bundle" and stall["stops"] == 2
+    assert stall["date"] == "2026-10-12" and stall["dates"] == ["2026-10-12", "2026-10-15"]
+    assert st["problem_dates"] == [] and not any(r.get("alone") for r in backfill.state(s)["problems"].values())
     down["on"] = False
     res, st = _cycle(s, store_url, t0 + timedelta(hours=2), rows=rows, client=object())
-    assert res["done"] == ["2026-10-12", "2026-10-15"] and st["stall"] is None and st["todo"] == 0
+    assert res["done"] == ["2026-10-12", "2026-10-15"] and res["stalled"] is None and st["todo"] == 0
+    assert "stall" not in backfill.state(s)
 
 
-def test_the_older_transient_problem_dates_go_and_an_old_stall_is_forgotten(tmp_path, cache, store_url, monkeypatch):
-    """TDM#447 after the upgrade: the transient problem dates the old program piled up go once the backfill stands
-    (none shown while it does); a stall on disk whose dates are no longer to run, or whose last error is old, is
-    forgotten: a new outage starts a new one (its since, its first wait)."""
+def test_an_old_stall_is_forgotten(tmp_path, cache, store_url, monkeypatch):
+    """#447: the transient problem dates the old program piled up are not shown (only a date's own error is, #217); a
+    stall on disk whose dates are no longer to run, or whose last error is older than a day, is forgotten: a new
+    outage starts a new one (its since, its first wait)."""
     from desk.marketdata.hub import TransportError
 
     load(store_url, tmp_path, "2026-10-12", 10)
@@ -677,25 +828,28 @@ def test_the_older_transient_problem_dates_go_and_an_old_stall_is_forgotten(tmp_
     st = backfill.state(s)
     st["problems"] = {d.date: {"kind": "transient", "why": d.why, "error": "TransportError: x", "attempts": 5,
                                "sig": d.sig} for d in p.todo}
-    st["stall"] = {"key": "run:network:TransportError", "phase": "run", "dates": ["2026-09-01", "2026-09-02"],
-                   "since": "2026-09-01T00:00:00+00:00", "stops": 7, "cause": "network", "error": "old",
+    st["stall"] = {"error": "old", "date": "2026-09-01", "dates": ["2026-09-01", "2026-09-02"], "source": "network",
+                   "cause": "network", "phase": "run", "since": "2026-09-01T00:00:00+00:00", "stops": 7,
                    "at": "2026-09-02T00:00:00+00:00", "next_attempt": "2026-09-02T01:00:00+00:00"}
     backfill.save_state(s, st)
     with store.connect(store_url) as con:
-        assert len(backfill.status(con, s, today=date(2026, 10, 15))["problem_dates"]) == 4
-        assert backfill.status(con, s, today=date(2026, 10, 15))["stall"] is None  # none of its dates to run
+        assert backfill.status(con, s, today=date(2026, 10, 15))["problem_dates"] == []
+        assert backfill.status(con, s, today=date(2026, 10, 15))["stalled"] is None  # none of its dates to run
     t0 = datetime(2026, 10, 20, 9, 0, tzinfo=UTC)
     res, st = _cycle(s, store_url, t0)
-    assert st["stall"]["stops"] == 1 and _near(st["stall"]["since"], t0) and st["problem_dates"] == []
-    assert backfill.state(s)["problems"].keys() == {"2026-10-13"}  # the last one tried
+    assert st["stalled"]["stops"] == 1 and _near(st["stalled"]["since"], t0) and st["problem_dates"] == []
+    assert st["stalled"]["dates"] == ["2026-10-12", "2026-10-13"]
     state = backfill.state(s)
     state["stall"]["at"] = (t0 - timedelta(days=2)).isoformat()
     backfill.save_state(s, state)
-    res, st = _cycle(s, store_url, t0 + timedelta(hours=1))
-    assert res["stall"] is None and st["stall"] is None  # old: forgotten, 12.10 starts a new streak
+    t1 = t0 + timedelta(hours=1)
+    res, st = _cycle(s, store_url, t1)  # old: forgotten, this run's error starts a new stall
+    assert res["stalled"]["stops"] == 1 and _near(res["stalled"]["since"], t1)
+    assert _near(res["stalled"]["next_attempt"], t1 + timedelta(seconds=backfill.STALL_BACKOFF_S[0]))
 
 
-def test_stall_causes_and_keys():
+def test_stall_causes():
+    """#447: what the stall says is down, for the chip's and the settings' words (``desk-backfill-text.js``)."""
     import psycopg
 
     from desk.marketdata.hub import HubError, HubUnavailable, TransportError
@@ -711,13 +865,12 @@ def test_stall_causes_and_keys():
              (TransportError("timed out"), "network"), (TimeoutError(), "network"), (OSError("disk full"), "disk")]
     for e, cause in cases:
         assert backfill.transient(e) and backfill.stall_cause(e) == cause, (e, backfill.stall_cause(e))
-    assert backfill.stall_key(HubUnavailable("a", 502)) == backfill.stall_key(HubUnavailable("b", 502)) == \
-        "hub:HubUnavailable:502"
-    assert backfill.stall_key(HubUnavailable("a", 502)) != backfill.stall_key(HubUnavailable("a", 503))
+    assert backfill._code(HubUnavailable("a", 502)) == 502 and backfill._code(TransportError("t", 407)) == 407
+    assert backfill._code(TimeoutError()) is None
 
 
-def test_autopilot_waits_while_the_backfill_stands(tmp_path, cache, store_url, monkeypatch):
-    """TDM#447: while the backfill stands the autopilot's step does not try the dates again before the stall's next
+def test_autopilot_waits_while_the_backfill_stalls(tmp_path, cache, store_url, monkeypatch):
+    """#447: while the backfill stalls the autopilot's step does not try the dates again before the stall's next
     attempt and says why (status ``error``), unless the cycle is asked for (``trigger``); after the wait, the network
     back, the dates run."""
     import desk
@@ -746,17 +899,16 @@ def test_autopilot_waits_while_the_backfill_stands(tmp_path, cache, store_url, m
     def step() -> dict:
         return next(x for x in ap.run_cycle(hub=False)["steps"] if x["name"] == "backfill")
 
-    step()
-    assert tried == ["2026-10-13"], tried
-    b = step()  # 13.10 a second time, then 14.10: the same error, the environment's
-    assert b["status"] == "error" and "stands since" in b["detail"], b["detail"]
+    b = step()  # the first cycle of the process: no wait; 13.10 stops it
+    assert tried == ["2026-10-13"] and b["status"] == "error" and "stands since" in b["detail"], (tried, b)
     assert "next attempt 2026-10-20T12:10:0" in b["detail"], b["detail"]
     tried.clear()
     b = step()
     assert tried == [] and b["status"] == "error" and "stands since" in b["detail"]  # waits
-    ap.trigger()  # a cycle asked for: no wait
+    ap.trigger()  # a cycle asked for: no wait; 13.10 passed over, 14.10 hits it too
     b = step()
-    assert tried == ["2026-10-13", "2026-10-15"] and "stands since" in b["detail"], tried
+    assert tried == ["2026-10-13", "2026-10-14"] and "stands since" in b["detail"], tried
+    assert "next attempt 2026-10-20T12:30:0" in b["detail"], b["detail"]
     clock[0] += timedelta(minutes=31)
     down["on"] = False
     b = step()

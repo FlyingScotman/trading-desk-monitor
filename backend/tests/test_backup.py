@@ -10,6 +10,7 @@ import json
 import os
 import shutil
 import subprocess
+import threading
 import time
 from datetime import date, datetime
 from pathlib import Path
@@ -326,6 +327,30 @@ def test_restore_replace_changes_nothing_unconfirmed_or_with_the_server_running(
         with pytest.raises(backup.BackupError, match="stop the server first"):
             backup.restore_replace(s, store_url, b.path, confirm=lambda r: pytest.fail("asked"))
     assert _count(store_url, "audit_log") == 5
+
+
+def test_a_connection_that_is_going_away_is_no_other_connection(store_url):
+    """A connection its client has closed stays in pg_stat_activity until its server process has exited; on a busy
+    machine that is long enough for the restore's check right after its own pg_dump to count it (#485). The check
+    waits for it, up to SESSION_GRACE_S; a connection that stays is still counted."""
+    assert backup.SESSION_GRACE_S >= 1
+    leaving = psycopg.connect(store_url)
+    leaving.execute("SELECT 1")
+    closer = threading.Timer(0.5, leaving.close)  # still listed when the check starts, gone during its grace
+    closer.start()
+    try:
+        t0 = time.monotonic()
+        assert backup.other_sessions(store_url) == 0
+        assert 0.4 < time.monotonic() - t0 < backup.SESSION_GRACE_S
+    finally:
+        closer.join()
+        leaving.close()
+    with psycopg.connect(store_url) as held:  # a client that stays is counted once the grace is over
+        held.execute("SELECT 1")
+        t0 = time.monotonic()
+        assert backup.other_sessions(store_url, grace_s=0.3) == 1
+        assert time.monotonic() - t0 >= 0.3
+    assert backup.other_sessions(store_url, grace_s=0) == 0
 
 
 def test_restore_replace_holds_the_backup_lock_while_it_waits_for_the_confirmation(store_url, tmp_path):
