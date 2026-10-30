@@ -155,7 +155,8 @@ def test_api_detect(home: Path, tmp_path: Path, monkeypatch) -> None:
     j = c.get("/api/v1/settings/detect").json()
     assert j["proxy"]["source"] in (None, "windows") and j["trust"]["kind"] in ("system", "python")
     assert j["defaults"] == {"snapshot_cache": str(home / "snapshots"), "inbox_archive": str(home / "inbox-archive"),
-                             "private_adapter_config": str(home / "adapter-config"), "private_adapter": None}
+                             "private_adapter_config": str(home / "adapter-config"), "private_adapter": None,
+                             "private_adapter_source": "reference"}
     assert [f["path"] for f in j["inbox"]["from_adapter_config"]] == [str(reports)]
     assert j["inbox"]["from_accepted"] == []  # no store: nothing to offer
     assert any(p["own"] for p in j["python"])
