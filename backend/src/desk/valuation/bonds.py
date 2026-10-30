@@ -95,6 +95,7 @@ from rub_fixed_income import (
     ObservationWindow,
     Offer,
     OfzBasisIds,
+    OisTail,
     ParYieldCurveRequest,
     PerpetualTail,
     PortfolioHorizonResult,
@@ -161,6 +162,11 @@ OFZ_BASIS_ID = "RUB_OFZ_BASIS"
 curve. It never reaches a row (``ofz_levels`` takes it to ``RUB OFZ``); a scenario names it (``scenario.exact``)."""
 OFZ_BASIS_IDS = OfzBasisIds(KBD_CURVE_ID, RUONIA_OIS_CURVE_ID, OFZ_BASIS_ID)
 """Core ``ValuationPolicy.ofz_basis`` of a core call that holds the RUONIA OIS curve as quotes (``value_bonds``)."""
+OIS_TAIL = OisTail(RUONIA_OIS_CURVE_ID, KBD_CURVE_ID)
+"""Core ``ValuationPolicy.ois_tail`` (core 0.42, TDM#499) of a core call that holds the RUONIA OIS curve as quotes:
+past its last quote (10Y) synthetic 15Y / 20Y par quotes at the par spread to the KBD there (a flat zero rate on a
+date without the KBD), so a RUONIA position past 10Y has its risk on 15Y / 20Y+, not swung between 7Y and 10Y. The
+same KBD as ``OFZ_BASIS_IDS`` (core requires it); ``curves.rates.ruonia_ois`` builds the run's curve with it."""
 
 
 def ccy_curve(ccy: str) -> str:
@@ -835,7 +841,8 @@ def inexact_accrual(r: BondRequest, inst: Instrument, after: date) -> str | None
 def value_bonds(market: MarketSnapshot, requests: list[BondRequest], *, second_order: bool = False,
                 cache: ShockedCurveCache | None = None, scenarios: tuple = (),
                 foreign: dict[str, tuple[str, ...]] | None = None, quote_curve_risk: bool = False,
-                ofz_basis: bool = True) -> tuple[dict[str, BondValuation | Rejected], list[PortfolioRiskResult]]:
+                ofz_basis: bool = True, ois_tail: bool = True
+                ) -> tuple[dict[str, BondValuation | Rejected], list[PortfolioRiskResult]]:
     """Value ``requests`` on ``market`` (a core snapshot without quotes, with the curves and fixings
     floaters need), in one core call (the spread kind per bond: ``spread_kinds``). Returns the valuation or the
     rejection per position ID, and the core results (one, or none without a valuable request). ``scenarios`` (core
@@ -849,10 +856,11 @@ def value_bonds(market: MarketSnapshot, requests: list[BondRequest], *, second_o
     when ``market`` holds the RUONIA OIS curve as its quotes (``EodContext.risk_market``); off, or on built curves (the
     fallback ladder's medians), on the KBD alone (variant P, ``OFZ_SCHEME_P``). Fixed flows take core's closed form
     (``risk_method`` and ``second_order_method`` ``analytic``): equal to the bumps up to their O(bump²) error, and the
-    RUONIA + basis Hessian by bumps is about 1 060 repricings per bond. The core inputs are ``core_call``'s, which
-    ``horizon_bonds`` shares."""
+    RUONIA + basis Hessian by bumps is about 1 060 repricings per bond. ``ois_tail``: the RUONIA OIS quotes continued
+    past the last one (``OIS_TAIL``) when ``market`` holds them; off only to compare. The core inputs are
+    ``core_call``'s, which ``horizon_bonds`` shares."""
     call = core_call(market, requests, second_order=second_order, foreign=foreign,
-                     quote_curve_risk=quote_curve_risk, ofz_basis=ofz_basis)
+                     quote_curve_risk=quote_curve_risk, ofz_basis=ofz_basis, ois_tail=ois_tail)
     out: dict[str, BondValuation | Rejected] = dict(call.out)
     results = []
     if call.policy is None:
@@ -896,11 +904,11 @@ class CoreCall:
 
 def core_call(market: MarketSnapshot, requests: list[BondRequest], *, second_order: bool = False,
               foreign: dict[str, tuple[str, ...]] | None = None, quote_curve_risk: bool = False,
-              ofz_basis: bool = True) -> CoreCall:
+              ofz_basis: bool = True, ois_tail: bool = True) -> CoreCall:
     """The core inputs of ``requests`` on ``market`` (see ``value_bonds`` for the parameters): the refusals before
     core, the instruments (a perpetual's ``ExerciseAssumption``: never called), the quotes, one position
     per request and the policy (the spread kind per bond, the KBD for ``OFZ_KBD_CLASSES``, the foreign curves, the
-    RUONIA + basis scheme when ``market`` holds the RUONIA OIS quotes)."""
+    RUONIA + basis scheme and the OIS tail when ``market`` holds the RUONIA OIS quotes)."""
     foreign = foreign or {}
     out: dict[str, Rejected] = {}
     disc, disc_note = discount_curve(market)
@@ -967,9 +975,13 @@ def core_call(market: MarketSnapshot, requests: list[BondRequest], *, second_ord
     # + basis, TDM#33)
     kbd_floaters = any(isinstance(i.coupon_leg, FloatingCouponLeg) and i.coupon_leg.projection_curve_id == KBD_CURVE_ID
                        for i in instruments.values())
-    if ofz_basis and (on_kbd or kbd_floaters) and disc == RUONIA_OIS_CURVE_ID and any(
-            c.curve_id == RUONIA_OIS_CURVE_ID and isinstance(c.curve, CurveBootstrapRequest) for c in snap.curves):
+    ois_quoted = any(c.curve_id == RUONIA_OIS_CURVE_ID and isinstance(c.curve, CurveBootstrapRequest)
+                     for c in snap.curves)
+    if ofz_basis and (on_kbd or kbd_floaters) and disc == RUONIA_OIS_CURVE_ID and ois_quoted:
         policy = replace(policy, ofz_basis=OFZ_BASIS_IDS)
+    # RUONIA past its last quote as the run's built curve (TDM#499): only on its quotes (core refuses built curves)
+    if ois_tail and ois_quoted:
+        policy = replace(policy, ois_tail=OIS_TAIL)
     policy = replace(policy, risk_method="analytic", second_order_method="analytic")
     return CoreCall(out, ok, instruments, positions, replace(snap, quotes=tuple(quotes.values())), policy, guard,
                     disc, disc_note, proxies)
@@ -1013,7 +1025,7 @@ class BondCarry:
 
 def horizon_bonds(market: MarketSnapshot, requests: list[BondRequest], horizon_date: date, *,
                   cache: ShockedCurveCache | None = None, foreign: dict[str, tuple[str, ...]] | None = None,
-                  quote_curve_risk: bool = False, ofz_basis: bool = True
+                  quote_curve_risk: bool = False, ofz_basis: bool = True, ois_tail: bool = True
                   ) -> tuple[dict[str, BondCarry | Rejected], PortfolioHorizonResult | None]:
     """Carry and roll-down of ``requests`` from ``market``'s business date to ``horizon_date``: one core
     ``horizon_portfolio`` call on the inputs ``value_bonds`` values them on (``core_call``), each spread calibrated
@@ -1021,7 +1033,8 @@ def horizon_bonds(market: MarketSnapshot, requests: list[BondRequest], horizon_d
     refuses (it carries a bond only while it has flows left after the horizon), is carried as cash by the backend
     (``_redeemed``, ``BondCarry.method`` ``redeemed``). Any other refusal before core or by core is a ``Rejected``
     (``core_<code>``). Returns the core result too (None without a request core takes)."""
-    call = core_call(market, requests, foreign=foreign, quote_curve_risk=quote_curve_risk, ofz_basis=ofz_basis)
+    call = core_call(market, requests, foreign=foreign, quote_curve_risk=quote_curve_risk, ofz_basis=ofz_basis,
+                     ois_tail=ois_tail)
     out: dict[str, BondCarry | Rejected] = dict(call.out)
     if call.policy is None:
         return out, None

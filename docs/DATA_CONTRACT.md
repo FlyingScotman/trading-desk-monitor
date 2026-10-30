@@ -724,7 +724,7 @@ SCENARIOS[{id,name,curves?,fx?,ofzSpread?,spreads?}], scenarioResults{id:{byPosi
 OFZ_SPREAD_MOVE?, JTD_RECOVERY, FUNDING_RULES[{bookType?,desk?,book?,entity?,instrument?,ccy,index?,spreadBp?,fixed?,note?}]
 OCP_TRANSFERS[{from,to,ccy,amount,before,rate,valueDate}], CBR_MEETINGS[{date,effective}]
 CARRY_SCENARIOS[{id,name,ks{mode,steps?,path?},on?,fundSpread?,hardCcy?}], CARRY_HORIZONS[[label,months]]
-official{asOf,received,basis:'CBR',receivedAt}
+official{asOf,received,state:'all'|'partial'|'none',missingBooks[],basis:'CBR',receivedAt}   (received — официальный есть хоть у одной позиции, #489)
 positions[{id,book,entity,portfolio,assetClass,segment,instrType,name,isin,issuer,issuerGroup,sector,rating,ccy,maturity,tenorY,
            couponType,coupon,index,margin,side,notional,notionalRub,price,mv,mvRub,ytm,spreadBp,mdur,sprDur,convexity,
            dv01,cs01,ofzSpr01,risk{curve:[11]},fxDelta{ccy:amt},jtd,wal,cpr,counterparty,newToday,
@@ -737,8 +737,12 @@ positions[{id,book,entity,portfolio,assetClass,segment,instrType,name,isin,issue
 funding[{id,book,kind,positionId,type,ccy,amount,amountRub,index,spreadBp,fixed,rate,rateExpr,ruleNote?,benchmark,dayBasis,
          start,maturity,tenorY,counterparty,collateral,fxDelta,pnl{carry,fx,fxCbr,fxGross,fxGrossCbr,fxAllocated,inPosition}}]
 fundingPnl{carry,fx,fxCbr}, fundingPnlByBook{book:{carry,fx,fxCbr,fxAllocated,inPositions}}   (итоги — только строки без positionId)
-history[{date,pnlOfficial,pnlExplained,pnlCum,dv01,cs01,officialReceived}]   (22 точки, последняя — текущий прогон;
-         officialReceived false — официального PnL за день нет, pnlOfficial = explained + fxBasis, не официальный, #106)
+history[{date,pnlOfficial,pnlExplained,pnlCum,dv01,cs01,officialReceived,officialState,
+         officialBooks{received,books,missing[],pnlOfficial,pnlExplained}}]   (22 точки, последняя — текущий прогон;
+         officialReceived false — официального PnL за день нет по всем книгам: по книгам без него pnlOfficial =
+         explained + fxBasis, не официальный, #106. Официальный приходит по книге целиком (#489): officialState
+         'all' | 'partial' | 'none'; officialBooks — книг с ним received из books (книги с PnL), missing — книги без
+         него, pnlOfficial / pnlExplained — итоги только книг с ним (unexplained частичного дня — их разность; null при 'none'))
 source{kind:'db'|'demo',runId,runType,publishedAt,libVersion,marketSnapshot,contractVersion}
 ```
 

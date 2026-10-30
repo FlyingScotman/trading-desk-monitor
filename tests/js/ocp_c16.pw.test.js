@@ -1,6 +1,7 @@
 // C16 «ОВП» in the browser on a run (Playwright; skipped without it), TDM#446: the run from
 // tests/js/fixtures/concepts_run.js, /api/v1/history/ocp answered by a synthetic history of the published OCP (books of the
-// fixture, an entity-level report part, a day before B2), /api/v1/inbox/datasets/ocp for «отчёта ОВП нет». Both themes,
+// fixture, an entity-level report part, a day before B2, GBP without a run rate at the OCP report's own rate),
+// /api/v1/inbox/datasets/ocp for «отчёта ОВП нет». Both themes,
 // 1366 and 1920 px, 390 px without a horizontal scroll, no NaN / undefined, no console errors; the switches and periods.
 //   node --test tests/js/ocp_c16.pw.test.js        C16_SHOTS=<dir> also saves screenshots
 'use strict';
@@ -25,9 +26,10 @@ function history(state) {
       : { entity, book, books, ccy, amount: amount * k, source: source || 'report', reported: null, validDate: null };
     days.unshift({ date, runId: 100 - i, runType: 'EOD', state: i === 0 && state ? state : i === 65 ? 'not_computed' : 'computed', basis: i === 65 ? null : 'report_plus_outside',
       fx: { USD: { market: 81.45, cbr: 81.12 }, EUR: { market: 94.62, cbr: 94.38 }, CNY: { market: 11.38, cbr: 10.95 } },
+      reportFx: nr ? {} : { USD: 81.12, EUR: 94.38, CNY: 10.95, GBP: 107.3 },
       lines: i === 65 ? [] : [L('Головной банк', 'CORP_FX', ['CORP_FX'], 'USD', 14e6), L('Головной банк', 'FXB', ['FXB'], 'USD', -9e6),
         L('Головной банк', 'FXB', ['FXB'], 'CNY', -120e6, 'derived'), L('Головной банк', null, ['SOV_FX', 'RATES'], 'EUR', 3.5e6),
-        L('Головной банк', 'SOV_FX', ['SOV_FX'], 'CNY', 260e6)] });
+        L('Головной банк', 'SOV_FX', ['SOV_FX'], 'CNY', 260e6), L('Головной банк', 'CORP_FX', ['CORP_FX'], 'GBP', -6e6)] });
   }
   return { runId: null, asOf: AS_OF, from: days[0].date, to: AS_OF, books: {}, days };
 }
@@ -72,6 +74,9 @@ test('C16 on a run: the published OCP of the books, switches, history, themes an
       assert.ok(text.includes('Общая ОВП') && text.includes('По книгам') && text.includes('По дням'));
       assert.equal(text.includes('часть отчёта'), !state, 'часть отчёта по юрлицу — своей строкой');
       assert.ok(!/Сверка|Перенос ОВП|RUB/.test(text), 'без сверки, переноса и рублей');
+      // GBP без курса прогона: по курсу отчёта ОВП — в общей ОВП, пометка «курса нет»; без отчёта — не входит
+      assert.ok((await pg.locator('[data-ocp-ccy="GBP"] .s').innerText()).includes('курса нет'));
+      assert.equal((await pg.locator('[data-ocp-total]').getAttribute('title')).includes('по курсу из отчёта ОВП: GBP'), !state);
       assert.equal(text.includes('Почему отчёта ОВП нет'), state === 'no_report');
       if (state === 'no_report') assert.ok(calls.includes('/api/v1/inbox/datasets/ocp?on=' + AS_OF), calls.join());
       if (SHOTS) { fs.mkdirSync(SHOTS, { recursive: true }); await pg.screenshot({ path: path.join(SHOTS, 'c16-run' + (state ? '-' + state : '') + '-' + theme + '-' + width + '.png'), fullPage: true }); }
