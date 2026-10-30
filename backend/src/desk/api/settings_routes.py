@@ -44,6 +44,7 @@ from ..settings import (
     mask_url,
     read_settings_json,
     update_settings_json,
+    write_github_token,
     write_hub_token,
     write_proxy_password,
 )
@@ -91,7 +92,8 @@ def _effective(st: Settings) -> dict[str, Any]:
         "store": mask_url(st.store_url) if st.store_url else f"embedded: {st.pg_dir}",
         "pg_dir": str(st.pg_dir), "report_dir": str(st.report_dir) if st.report_dir else None,
         "private_adapter": st.private_adapter or runner.REFERENCE_ADAPTER,
-        "private_adapter_default": st.private_adapter_default,
+        "private_adapter_default": st.private_adapter_default, "private_adapter_source": st.private_adapter_source,
+        "adapter_update_repo": st.adapter_update_repo, "github_token_source": _github_source(st),
         "private_adapter_config": str(st.private_adapter_config) if st.private_adapter_config else None,
         "private_adapter_sha256": st.private_adapter_sha256,
         "acquisition_python": str(st.acquisition_python) if st.acquisition_python else None,
@@ -111,6 +113,12 @@ def _effective(st: Settings) -> dict[str, Any]:
     }
 
 
+def _github_source(st: Settings) -> str:
+    """``env``, ``file`` or ``not set``: never the token, nor (for the env) where it came from."""
+    src = st.github_token_source
+    return "env" if src.startswith("DESK_GITHUB_TOKEN") else "file" if src.startswith("file") else "not set"
+
+
 def settings_payload() -> dict[str, Any]:
     """``GET /api/v1/settings``: the stored settings.json (I1 shape, unknown keys too) plus ``hub_token_set``,
     ``home``, ``effective``, ``env_overrides`` (keys the process environment overrides) and ``error``."""
@@ -128,6 +136,7 @@ def settings_payload() -> dict[str, Any]:
     if isinstance(stored.get("https_proxy"), str):  # its password, like the token's, is never sent back
         stored["https_proxy"] = mask_proxy(stored["https_proxy"])
     return {**stored, "hub_token_set": bool(st and st.hub_token), "proxy_password_set": bool(st and st.proxy_password),
+            "github_token_set": bool(st and st.github_token),
             "home": str(home),
             "effective": _effective(st) if st else None, "env_overrides": env_overrides(), "error": error}
 
@@ -144,6 +153,8 @@ def put_settings(body: JsonBody) -> dict[str, Any]:
         raise ApiError(422, "invalid_parameter", "the token is not a setting: PUT /api/v1/settings/hub-token")
     if "proxy_password" in body:
         raise ApiError(422, "invalid_parameter", "the proxy password is not a setting: PUT /api/v1/settings/proxy-password")
+    if "github_token" in body:
+        raise ApiError(422, "invalid_parameter", "the GitHub token is not a setting: PUT /api/v1/settings/github-token")
     try:
         stored = read_settings_json(desk_home()).get("https_proxy")
         if isinstance(stored, str) and body.get("https_proxy") == mask_proxy(stored) != stored:
@@ -182,6 +193,21 @@ def put_proxy_password(body: JsonBody) -> dict[str, Any]:
     except SettingsError as e:
         raise ApiError(422, "invalid_parameter", str(e)) from None
     return {"proxy_password_set": bool(st.proxy_password)}
+
+
+@router.put("/api/v1/settings/github-token")
+def put_github_token(body: JsonBody) -> dict[str, Any]:
+    """Store the GitHub token (the private adapter's releases) in ``<home>/github_token``; empty removes the file.
+    Never returned, never logged."""
+    token = body.get("token")
+    if token is not None and not isinstance(token, str):
+        raise ApiError(422, "invalid_parameter", "token must be a string")
+    try:
+        write_github_token(token, desk_home())
+        st = load()
+    except SettingsError as e:
+        raise ApiError(422, "invalid_parameter", str(e)) from None
+    return {"github_token_set": bool(st.github_token), "github_token_source": _github_source(st)}
 
 
 @router.post("/api/v1/settings/test-hub")
@@ -282,7 +308,8 @@ def get_adapter() -> dict[str, Any]:
     for f in files:
         f["exists"] = bool(cfg) and (cfg / f["name"]).is_file()
     return {"loaded": h.ok, "path": st.private_adapter or runner.REFERENCE_ADAPTER,
-            "reference": st.private_adapter is None, "default": st.private_adapter_default, "name": h.name, "version": h.version,
+            "reference": st.private_adapter is None, "default": st.private_adapter_default,
+            "source": st.private_adapter_source, "name": h.name, "version": h.version,
             "fingerprint": h.fingerprint, "config_dir": str(cfg) if cfg else None,
             "describe": h.describe or None, "config_files": files, "settings_tabs": tabs,
             "optional": list(h.optional), "actions": [a["id"] for a in h.actions],

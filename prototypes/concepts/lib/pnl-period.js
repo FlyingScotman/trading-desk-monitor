@@ -10,7 +10,7 @@
     { key: 'carry_nosplit', label: 'Кэрри без разбивки купона', color: 'pnl:carry', shade: 0.82, d: 'Кэрри записей без разбивки на купон и амортизацию (методы flash-simple, flash-yield, пересчёт без даты): целиком.' },
     { key: 'rolldown', label: 'Roll-down', color: 'pnl:carry', shade: 0.36, d: 'Сохранённый эффект скатывания по кривой.' },
     { key: 'funding', label: 'Фондирование', color: 'pnl:funding', d: 'Только записанное в PnL позиций; фондирование уровня книги не входит.' },
-    { key: 'rates', label: 'Ставки', color: 'pnl:rates', d: 'Точная переоценка на сдвиге кривых; нелинейность внутри. По рублёвым облигациям с линейной оценкой — «Ставки (линейно)» + «Выпуклость (ставки)».' },
+    { key: 'rates', label: 'Ставки', color: 'pnl:rates', d: 'Точная переоценка на сдвиге кривых; нелинейность внутри. По облигациям с линейной оценкой — «Ставки (линейно)» + «Выпуклость (ставки)».' },
     { key: 'spread', label: 'Кредитный спред', color: 'pnl:spread', d: 'Сохранённый эффект изменения спреда.' },
     { key: 'convexity', label: 'Выпуклость метода', color: 'pnl:rates', shade: 0.5, d: 'Отдельная выпуклость метода; во flash 0 (полная переоценка), поэтому при нуле не показывается: нелинейность ставок — «Выпуклость (ставки)».' },
     // FX only net (owner, 28.10.2026): the API keeps fx_gross and fx_funding apart, the page shows their sum
@@ -25,10 +25,10 @@
     carryGross: { label: 'Кэрри брутто', color: 'pnl:carry', d: 'Кэрри + roll-down, до фондирования.' },
     carryBase: { label: 'Кэрри без roll-down', color: 'pnl:carry', d: 'Кэрри + фондирование.' },
     price: { label: 'Цена (чистая)', color: 'pal:9', d: 'Итог − купон − FX нетто − фондирование − сделки. Внутри — ставки, спред, roll-down, амортизация и необъяснённое.' },
-    // rates of RUB bonds with pnl.extra.rates_linear (API rates_linear, rates_exact_lin; foreign bonds stay whole until TDM#418)
-    ratesLin: { label: 'Ставки (линейно)', color: 'pnl:rates', d: 'Линейная оценка ставок (Σ DV01 × сдвиг кривой, pnl.extra.rates_linear) — по рублёвым облигациям, где она сохранена.' },
+    // rates of bonds with pnl.extra.rates_linear (API rates_linear, rates_exact_lin; foreign bonds too, at the D rate: TDM#418)
+    ratesLin: { label: 'Ставки (линейно)', color: 'pnl:rates', d: 'Линейная оценка ставок (Σ DV01 × сдвиг кривой, pnl.extra.rates_linear) — по облигациям, где она сохранена; у валютных — в рублях по курсу D, как точная.' },
     ratesCvx: { label: 'Выпуклость (ставки)', color: 'pnl:rates', shade: 0.5, d: 'Точная переоценка ставок минус линейная оценка у тех же записей: выпуклость и нелинейность по сдвигу кривой.' },
-    ratesRest: { label: 'Ставки (без линейной оценки)', color: 'pnl:rates', shade: 0.72, d: 'Точная переоценка ставок записей без линейной оценки — валютные облигации (до исправления единиц, TDM#418), деривативы, старые прогоны: целиком.' },
+    ratesRest: { label: 'Ставки (без линейной оценки)', color: 'pnl:rates', shade: 0.72, d: 'Точная переоценка ставок записей без линейной оценки — деривативы, старые прогоны: целиком.' },
     gap: { label: 'Не сходится с итогом', color: '--neg', d: 'Итог минус сумма показанных компонент. Должно быть 0.' },
     total: { label: 'Итог', color: '--fg-2', d: 'Сумма сохранённых компонент (net-конвенция).' },
   };

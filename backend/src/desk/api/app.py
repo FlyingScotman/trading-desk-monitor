@@ -1000,6 +1000,7 @@ def create_app(store_url: str, static_dir: Path | None = None, app_dir: Path | N
 
     from .acquisition_routes import router as acquisition_router
     from .adapter_routes import router as adapter_router  # the settings page's adapter tools (TDM#421)
+    from .adapter_update_routes import router as adapter_update_router  # the private adapter's releases
     from .alias_routes import router as alias_router  # /api/v1/instruments/alias(es) (batch 1, item 3)
     from .backup_routes import router as backup_router  # /api/v1/backup: backups, restore drill (desk.backup)
     from .cash_routes import public as cash_router  # /api/v1/cash: balances and ledger breaks (B3, #61)
@@ -1015,6 +1016,7 @@ def create_app(store_url: str, static_dir: Path | None = None, app_dir: Path | N
     app.include_router(adapter_router, include_in_schema=False)
     app.include_router(update_router, include_in_schema=False)
     app.include_router(updater_router, include_in_schema=False)
+    app.include_router(adapter_update_router, include_in_schema=False)
     app.include_router(acquisition_router, include_in_schema=False)
     app.include_router(diagnostics_router, include_in_schema=False)
     app.include_router(server_router, include_in_schema=False)
