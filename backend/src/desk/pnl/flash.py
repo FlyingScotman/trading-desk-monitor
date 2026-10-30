@@ -82,7 +82,8 @@ Key                         Definition
                             curve's move; a foreign bond's at the D rate, as ``rates``), a bucket without a move left
                             out; they sum to ``rates_linear``. An OFZ in RUONIA + basis has only ``RUB OFZ`` (its
                             basis risk x the KBD's par move): its ``rates_linear_ruonia`` and ``rates_linear_basis``
-                            split the same total by factor, not by bucket
+                            split the same total by factor, not by bucket. A KBD floater (discounted on RUONIA) has
+                            also ``RUB RUONIA`` = its (RUONIA less basis) risk x RUONIA's own move (TDM#467)
 ``curve_moves_bp``          ``{published curve: {bucket: bp}}``: the moves those terms use, in the unit of the buckets
                             (``FlashCurves.zero_move_bp``); an OFZ in RUONIA + basis also RUONIA's OIS par move
 ``prev``                    the D-1 inputs the steps start from, at the quantity of D (the run revalues the D-1

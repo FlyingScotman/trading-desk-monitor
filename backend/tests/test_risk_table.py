@@ -467,3 +467,14 @@ def test_risk_table_flags_a_basis_not_split_without_a_ruonia_curve():
     assert "no RUONIA curve" in t["basis_not_split_note"] and t["basis_not_split_note"].startswith("basis not split: ")
     ok = concepts.risk_table([bond("C"), COMPUTED], FX)
     assert ok["n_basis_not_split"] == 0 and ok["basis_not_split_note"] is None
+
+
+def test_an_ofz_outside_the_ofz_kinds_is_no_kbd_floater():
+    # TDM#467: the floater is told by its floating coupon, not by the kind: a fixed-coupon OFZ row that lands in CORP
+    # (e.g. a class the table does not map) is an OFZ of the KBD scheme, the «КБД» view takes its RUONIA off as for any OFZ
+    row = bond("ODD", seg="Корп", ac="Прочее", cpn="fix", dv01=-3050.0, cs01=0.0,
+               risk={"RUB OFZ": {"3Y": -1000.0, "7Y": -2000.0}, "RUB RUONIA": {"3Y": -30.0, "7Y": -20.0}},
+               extra={"ofz_basis01": -3000.0, "ofz_ruonia01": -3050.0, "quality": "exact"})
+    t = concepts.risk_table([row], FX, ofz_view="kbd")
+    (c,) = (r for r in t["rows"] if r["level"] == "ccy" and r["ccy"] == "RUB")
+    assert c["dv01_by_curve_rub"] == pytest.approx({"RUB OFZ": -3000.0})

@@ -285,7 +285,7 @@ def build(rows: Iterable[dict[str, Any]]) -> dict[str, Any]:
         g, k = kind_of(f)
         # what the KBD view takes off the position's RUONIA: an OFZ's RUONIA risk (the basis again without one, P); a KBD
         # floater's basis only (TDM#467): its RUONIA - basis, the discounting, stays on RUONIA
-        floater = x.get("ofz_basis") is not None and (g, k) not in (("GOV", "PD"), ("GOV", "IN"), ("GOV", "PK"))
+        floater = x.get("ofz_basis") is not None and x.get("coupon_type") == "float"
         ruo_off = b if floater or x.get("ofz_ruo") is None else x["ofz_ruo"]
         if ofz_in_proxy((g, k) == ("GOV", "IN"), x.get("ofz_basis"), x.get("quality")):
             basis_in += b  # an OFZ-IN's nominal proxy: not a basis (TDM#173)

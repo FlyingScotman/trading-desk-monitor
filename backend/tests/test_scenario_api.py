@@ -295,7 +295,7 @@ def test_ofz_basis_preset_moves_the_basis_not_ruonia():
     # RUONIA risk minus it; synthetic) moves by its basis alone, a RUONIA-discounted corporate not at all
     from desk.scenario.taylor import run_taylor
     payload = {"factors": ["IR|RUB OFZ|5Y", "IR|RUB RUONIA|5Y"], "positions": [
-        {"position_id": "FLT", "book_id": "B", "delta": [[0, 322.0], [1, 11.0]], "gamma": []},
+        {"position_id": "FLT", "book_id": "B", "delta": [[0, 322.0], [1, -311.0]], "gamma": []},
         {"position_id": "CORP", "book_id": "B", "delta": [[1, -900.0]], "gamma": []}]}
     for bp in (25.0, -25.0):
         out = run_taylor(payload, normalize({"curves": {"RUB OFZ": [bp] * 11}}))

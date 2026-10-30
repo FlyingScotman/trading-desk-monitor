@@ -973,13 +973,11 @@ def _cell() -> dict[str, Any]:
             "missing": {}}
 
 
-OFZ_KBD_KINDS = ("OFZ_PD", "OFZ_PK", "OFZ_IN")
-
-
-def is_kbd_floater_row(kind: str, ex: dict[str, Any]) -> bool:
-    """Whether a row is a KBD floater (``bonds.is_kbd_floater``, TDM#33) valued in RUONIA + basis: it has the OFZ basis
-    (``extra.ofz_basis01``) but is no OFZ of the KBD scheme. Its coupons project on the KBD, it is discounted on RUONIA."""
-    return ex.get("ofz_basis01") is not None and kind not in OFZ_KBD_KINDS
+def is_kbd_floater_row(f: dict[str, Any], ex: dict[str, Any]) -> bool:
+    """Whether a row is a KBD floater (``bonds.is_kbd_floater``, TDM#33) valued in RUONIA + basis: a floating coupon with the
+    OFZ basis (``extra.ofz_basis01``; only an OFZ of the KBD scheme or a KBD floater has it, an OFZ-PK none). Its coupons
+    project on the KBD, it is discounted on RUONIA. By the coupon type, not the kind: an OFZ outside the OFZ kinds is no floater."""
+    return ex.get("ofz_basis01") is not None and f.get("coupon_type") == "float"
 
 
 def _risk_curves(f: dict[str, Any], kbd: bool = False) -> dict[str, float]:
@@ -1099,7 +1097,7 @@ def risk_table(items: list[dict[str, Any]], fx: dict[str, float | None],
         # «КБД»: the run's KBD risk of an OFZ of the KBD scheme stays on RUB OFZ (as lib/real.js: another row's, e.g. a
         # corporate's on a date without RUONIA, is on RUONIA in both views)
         curves = _risk_curves(f, kbd and ex.get("ofz_basis01") is not None)
-        if kbd and ex.get("ofz_ruonia01") is not None and not is_kbd_floater_row(kind, ex):
+        if kbd and ex.get("ofz_ruonia01") is not None and not is_kbd_floater_row(f, ex):
             # RUONIA + basis: the row's RUB RUONIA is RUONIA - basis (bonds.ofz_levels), the KBD view keeps its basis, the
             # KBD's par risk. A KBD floater (TDM#467) keeps both: its RUONIA - basis is the discounting on RUONIA, its
             # basis the projection on the KBD, so the DV01 sums to its RUONIA risk in both views

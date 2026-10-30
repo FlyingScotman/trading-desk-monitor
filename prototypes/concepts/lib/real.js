@@ -178,8 +178,8 @@
   ];
   const curveOf = c => CURVE_MAP[c] || c;
   const isPk = p => p.group === 'GOV' && p.kind === 'PK';  // ОФЗ-ПК: флоатер на RUONIA, её базис — спред к RUONIA
-  // КБД-флоатер (#467, bonds.is_kbd_floater): базис ОФЗ есть, но это не ОФЗ схемы КБД (ПД, ИН, ПК)
-  const isKbdFloater = (p, ex) => ex.ofz_basis01 != null && !(p.group === 'GOV' && ['PD', 'IN', 'PK'].includes(p.kind));
+  // КБД-флоатер (#467, bonds.is_kbd_floater): базис ОФЗ есть и купон плавающий (по типу купона, не по виду бумаги)
+  const isKbdFloater = (d, ex) => ex.ofz_basis01 != null && d.couponType === 'float';
   // ОФЗ-ИН схемы КБД без оценки ядром (#173; зеркало publish/summary.ofz_in_proxy): ядро линкеры пока не считает (#38),
   // её DV01 на КБД — номинальный прокси по дюрации, а не базис к RUONIA. В базис не входит (p.ofzIn01 — отдельно),
   // риск ставок — где вид держит КБД: в «RUONIA + базис» — в RUONIA, в «КБД» — на кривой КБД
@@ -444,7 +444,7 @@
         if (inProxy) p.risk['RUB OFZ'] = kbdb;  // ОФЗ-ИН: базиса нет, на КБД — её риск прогона
         // RUONIA ОФЗ: 0.2.7+ — её риск RUONIA (обе кривые строки: RUONIA − базис и базис), иначе — тот же риск КБД
         // КБД-флоатер (#467): дисконт по RUONIA остаётся (RUONIA − базис), на КБД — проекция (базис): сумма DV01 та же, что в «RUONIA + базис»
-        const flt = isKbdFloater(p, ex);
+        const flt = isKbdFloater(d, ex);
         const ruo = zeros(); if (p.ofzRuo01 != null && !flt) ['RUB RUONIA', 'RUB OFZ'].forEach(c => ((d.risk || {})[c] || []).forEach((v, k) => ruo[k] += v || 0));
         p.risk['RUB RUONIA'] = p.risk['RUB RUONIA'].map((v, k) => v - (p.ofzRuo01 != null && !flt ? ruo[k] : p.risk['RUB OFZ'][k]));
       }
