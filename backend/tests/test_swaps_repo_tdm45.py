@@ -261,11 +261,13 @@ def test_swap_terms_without_a_positions_row_are_counted_not_valued(ctx, store_ur
     other = [{**leg(t, "a", "pay", kind=k, index_code="RUONIA"), "book_id": b}
              for t, k, b in (("U1", "ois", "IRB"), ("U2", "irs", "IRB"), ("U3", "ccs", "IRC"))]
     other += [{**leg("U1", "b", "receive", kind="ois", fixed_rate_pct="15"), "book_id": "IRB"},  # a second leg: one trade
-              {**leg("U4", "a", "pay"), "position_id": "NOPE"}]  # names a position the report lacks: unlinked too
+              {**leg("U4", "a", "pay"), "position_id": "NOPE"},  # names a position the report lacks: unlinked too
+              leg("U5", "a", "pay", maturity_date="2026-10-14"),  # matured before the date: carried terms, not counted
+              leg("U6", "a", "pay", maturity_date="2026-10-15")]  # matures on the date: still alive
     base = pv1.plan(ctx, inputs())
     inp = inputs([*TERMS, *other])
     bp = pv1.plan(ctx, inp)
-    assert bp.unlinked_rates == ["IRB|U1", "IRB|U2", "IRB|U4", "IRC|U3"]
+    assert bp.unlinked_rates == ["IRB|U1", "IRB|U2", "IRB|U4", "IRB|U6", "IRC|U3"]
     assert bp.unlinked_terms == [] and base.unlinked_rates == []
     assert set(bp.direct) == set(base.direct) and bp.added == []
     for pid in ("S1", "K1", "R1"):  # the linked rows are valued as before
@@ -278,9 +280,9 @@ def test_swap_terms_without_a_positions_row_are_counted_not_valued(ctx, store_ur
                                                       unlinked_rates=base.unlinked_rates)
         lineage = con.execute("SELECT lineage FROM run WHERE run_id = %s", (rid,)).fetchone()[0]
         none_lineage = con.execute("SELECT lineage FROM run WHERE run_id = %s", (none_rid,)).fetchone()[0]
-    assert lineage["positions"]["unlinked_swap_terms"] == {"trades": 4, "books": {"IRB": 3, "IRC": 1}}
+    assert lineage["positions"]["unlinked_swap_terms"] == {"trades": 5, "books": {"IRB": 4, "IRC": 1}}
     line = [w for w in warnings if w.startswith("условия свопов без строки позиций")]
-    assert len(line) == 1 and "сделок 4" in line[0] and "IRB (3), IRC (1)" in line[0]
-    assert "15" not in line[0].replace("сделок 4", "") and "1000000000" not in line[0]  # no amounts or rates
+    assert len(line) == 1 and "сделок 5" in line[0] and "IRB (4), IRC (1)" in line[0]
+    assert "15" not in line[0].replace("сделок 5", "") and "1000000000" not in line[0]  # no amounts or rates
     assert "unlinked_swap_terms" not in none_lineage["positions"]
     assert not [w for w in none_warnings if w.startswith("условия свопов")]

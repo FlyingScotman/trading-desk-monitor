@@ -460,11 +460,23 @@ UNLINKED_RATES_KINDS = (*SWAP_KINDS, "ccs")
 """Swap products whose terms without a positions row are accepted but not valued (TDM#468): counted, not valued."""
 
 
-def unlinked_rates(rows: list[tuple[str, str, dict[str, Any]]], terms: list[dict[str, Any]]) -> list[str]:
+def unlinked_rates(rows: list[tuple[str, str, dict[str, Any]]], terms: list[dict[str, Any]],
+                   on: date | None = None) -> list[str]:
     """``book|trade_id`` of the swap trades (``UNLINKED_RATES_KINDS``) in ``terms`` that no positions row names: a trade
-    made after the report's cut. Not valued, not in risk or PnL; the run says how many and in which books."""
+    made after the report's cut. Not valued, not in risk or PnL; the run says how many and in which books. Terms are
+    carried forward, so with ``on`` (the business date) a trade matured before it (the last ``maturity_date`` of its
+    legs < ``on``) is not counted; one maturing on ``on`` is still alive."""
     _, left = _link(rows, terms)
-    return sorted({f"{t.get('book_id')}|{t.get('trade_id')}" for t in left if t.get("product_kind") in UNLINKED_RATES_KINDS})
+    ends: dict[str, list[date | None]] = defaultdict(list)
+    for t in left:
+        if t.get("product_kind") in UNLINKED_RATES_KINDS:
+            try:
+                end = _day(t.get("maturity_date"))
+            except (TypeError, ValueError):
+                end = None
+            ends[f"{t.get('book_id')}|{t.get('trade_id')}"].append(end)
+    return sorted(k for k, es in ends.items()
+                  if on is None or None in es or max(e for e in es if e is not None) >= on)
 
 
 def _calendar_entry(ctx: Any, cid: str, ids: tuple[str, ...]) -> CalendarEntry:

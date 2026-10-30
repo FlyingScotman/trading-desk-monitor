@@ -275,7 +275,7 @@ def _derivatives(ctx: EodContext, inputs: PositionInputs, p: BookPlan, second_or
             rows.append((pid, book, normalised(x)))
     linked, unlinked = dv.link(rows, inputs.trade_terms)
     p.unlinked_terms = sorted({f"{t.get('book_id')}|{t.get('trade_id')}" for t in unlinked})
-    p.unlinked_rates = dv.unlinked_rates(rows, inputs.trade_terms)
+    p.unlinked_rates = dv.unlinked_rates(rows, inputs.trade_terms, ctx.business_date)
     reqs, out = [], {}
     qty = {pid: q for pid, _, _, q in inputs.rows}
     for pid, book, x in rows:
