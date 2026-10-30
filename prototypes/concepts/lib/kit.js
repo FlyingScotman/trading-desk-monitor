@@ -3173,13 +3173,15 @@
   // все её книги; без книг (books пуст) — только без фильтра книг и деска;
   // частично покрытая не входит и называется в notes. Фильтр портфелей к ОВП по книгам не применяется (notes).
   // null — у прогона нет публикуемой ОВП (до v2 блока, демо): страницы берут сумму FX-дельт позиций, как раньше.
-  K.ocpScope = function () {
-    const O = M.ocp;
-    if (!O || !Array.isArray(O.byBook)) return null;
-    const F = K.filter, bk = id => M.book[id] || {};
+  // byBook, meta (C16, TDM#446): строки другого дня той же формы (/api/v1/history/ocp) и справочник его книг ({ книга:
+  // { entity, desk } }) — для книги, которой нет в M.book
+  K.ocpScope = function (byBook, meta) {
+    const B = byBook || (M.ocp && Array.isArray(M.ocp.byBook) ? M.ocp.byBook : null);
+    if (!B) return null;
+    const F = K.filter, bk = id => M.book[id] || (meta && meta[id]) || {};
     const bookOk = id => (!F.entity || bk(id).entity === F.entity) && (!F.desk || bk(id).desk === F.desk) && (!F.books || !F.books.length || F.books.includes(id));
     const lines = [], partial = [];
-    O.byBook.forEach(x => {
+    B.forEach(x => {
       if (F.ccy && x.ccy !== F.ccy) return;
       if (x.book) { if (bookOk(x.book)) lines.push(x); return; }
       if (F.entity && x.entity !== F.entity) return;  // часть отчёта другого юрлица

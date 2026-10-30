@@ -42,7 +42,7 @@ from ..settings import REPO_ROOT
 from ..settings import load as load_settings
 from ..store import CURRENT_RUNS, slice_label
 from . import auth as authn
-from . import compat, concepts, concepts_run, pnl_checks, pnl_history, pnl_period
+from . import compat, concepts, concepts_run, ocp_history, pnl_checks, pnl_history, pnl_period
 from .autopilot_routes import router as autopilot_router
 from .models import (
     COMPAT,
@@ -927,6 +927,21 @@ def create_app(store_url: str, static_dir: Path | None = None, app_dir: Path | N
         """Automatic checks of the period's saved PnL and their findings."""
         return JSONResponse(jsonable_encoder(pnl_checks.checks(con, scope["run"], scope["from"], scope["to"],
                                                                scope["filters"], thr_abs, thr_pct)), headers=NO_STORE)
+
+    @app.get("/api/v1/history/ocp", include_in_schema=False)
+    def ocp_history_route(con: Con, run_id: int | None = None, as_of: date | None = None,
+                          from_: Annotated[date | None, Query(alias="from")] = None, to: date | None = None):
+        """The published OCP by day (TDM#446, ``ocp_history``): per date of the period its default run's (the
+        anchor's on its date) published OCP lines per book or report part and the run's rates; three months back
+        from the run's date by default. From the saved runs only: nothing is recomputed."""
+        run = resolve_run(con, as_of, run_id)
+        if run is None:
+            raise ApiError(404, "not_found", "No complete run for the selected history")
+        try:
+            start, end = ocp_history.period(run, from_, to)
+        except ValueError as e:
+            raise ApiError(422, "invalid_parameter", str(e)) from None
+        return JSONResponse(jsonable_encoder(ocp_history.history(con, run, start, end)), headers=NO_STORE)
 
     @app.get("/api/v1/history/positions", include_in_schema=False)
     def positions_history(con: Con, request: Request, run_id: int | None = None, as_of: date | None = None,
