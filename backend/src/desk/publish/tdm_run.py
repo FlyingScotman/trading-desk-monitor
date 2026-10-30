@@ -409,6 +409,7 @@ def rates_side(extra: dict[str, Any]) -> str:
     ``REVERSE_REPO``; ``MIXED`` when its trades differ."""
     sides = {"PAY" if s["side"] == "payer" else "REC" for s in extra.get("swaps") or ()}
     sides |= {str(r["side"]).upper() for r in extra.get("repos") or ()}
+    sides |= {str(r["side"]) for r in extra.get("rates_settled") or ()}  # trades settled on the date (TDM#466)
     return sides.pop() if len(sides) == 1 else "MIXED"
 
 
@@ -435,7 +436,7 @@ def direct_row(ctx: EodContext, book: str, pid: str, o: Outcome, x: dict[str, An
         ccy, rate, amount = "RUB", 1.0, None  # the face is in the foreign currency: the notional is the MV
     core = bool(v.extra.get("core"))  # a derivative valued by core from its terms (valuation.derivatives)
     # a swap or a REPO valued by core: its notional (a REPO's signed cash) and its maturity are the terms'
-    rates_core = core and bool(v.extra.get("swaps") or v.extra.get("repos"))
+    rates_core = core and bool(v.extra.get("swaps") or v.extra.get("repos") or v.extra.get("rates_settled"))
     if rates_core:
         ccy, rate, amount = "RUB", 1.0, v.quantity
     if amount is None:
