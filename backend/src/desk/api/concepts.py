@@ -920,6 +920,8 @@ OFZ_VIEW_DEFAULT = "basis"
 when asked for by name."""
 OFZ_VIEW_APPROX = ("a run before 0.2.6: its OFZ were on RUONIA, their KBD risk in the «КБД» view is their basis to "
                    "RUONIA (ofz_spr01), moved off RUONIA")
+BASIS_NOT_SPLIT = ("basis not split: no RUONIA curve in the market of the run's date, {n} RUB bonds are discounted on the "
+                   "KBD (extra.curve_proxy), their risk is on RUB OFZ and the OFZ basis is in their CS01, not apart (TDM#467)")
 OFZ_VIEW_P = ("{n} OFZ or KBD floaters without a computed RUONIA risk (a run of 0.2.6, an OFZ or a KBD floater off core):"
               " their RUONIA risk is their KBD risk and the basis the same risk again (core basis_view, variant P)")
 MISSING_TEXT = {"not_valued": "не оценена", "reported_no_risk": "оценена по отчёту, риска в отчёте нет",
@@ -969,6 +971,15 @@ def _cell() -> dict[str, Any]:
     return {"ids": set(), "legs": set(), "notional_ccy": 0.0, "notional_rub": 0.0, "mv_rub": 0.0, "curves": {},
             "foreign": 0.0, "basis": 0.0, "in_proxy": 0.0, "ofz_spr": 0.0, "cs01": 0.0, "fx_delta_ccy": 0.0,
             "missing": {}}
+
+
+OFZ_KBD_KINDS = ("OFZ_PD", "OFZ_PK", "OFZ_IN")
+
+
+def is_kbd_floater_row(kind: str, ex: dict[str, Any]) -> bool:
+    """Whether a row is a KBD floater (``bonds.is_kbd_floater``, TDM#33) valued in RUONIA + basis: it has the OFZ basis
+    (``extra.ofz_basis01``) but is no OFZ of the KBD scheme. Its coupons project on the KBD, it is discounted on RUONIA."""
+    return ex.get("ofz_basis01") is not None and kind not in OFZ_KBD_KINDS
 
 
 def _risk_curves(f: dict[str, Any], kbd: bool = False) -> dict[str, float]:
@@ -1051,7 +1062,7 @@ def risk_table(items: list[dict[str, Any]], fx: dict[str, float | None],
         raise ValueError(f"unknown attribution {attribution!r}")
     if ofz_view not in OFZ_VIEWS:
         raise ValueError(f"unknown ofz_view {ofz_view!r}")
-    kbd, approx, n_p = ofz_view == "kbd", False, 0
+    kbd, approx, n_p, n_nb = ofz_view == "kbd", False, 0, 0
     cells: dict[tuple[str, str], dict[str, Any]] = {}
 
     def cell(ccy: str, kind: str) -> dict[str, Any]:
@@ -1082,12 +1093,17 @@ def risk_table(items: list[dict[str, Any]], fx: dict[str, float | None],
                          ("cs01", "cs01")):
             c[key] += f.get(src) or 0.0
         ex = f.get("extra") if isinstance(f.get("extra"), dict) else {}
+        cp = ex.get("curve_proxy")
+        n_nb += isinstance(cp, dict) and cp.get("reason") == "no_ruonia_curve"  # TDM#467: its basis is in the CS01
         b, spr = summary.basis_of({"ofz_basis": ex.get("ofz_basis01"), "ofz": f.get("ofz_spr01")})
         # «КБД»: the run's KBD risk of an OFZ of the KBD scheme stays on RUB OFZ (as lib/real.js: another row's, e.g. a
         # corporate's on a date without RUONIA, is on RUONIA in both views)
         curves = _risk_curves(f, kbd and ex.get("ofz_basis01") is not None)
-        if kbd and ex.get("ofz_ruonia01") is not None:  # RUONIA + basis: the row's RUB RUONIA is RUONIA - basis
-            curves.pop("RUB RUONIA", None)  # (bonds.ofz_levels), the KBD view keeps its basis, the KBD's par risk
+        if kbd and ex.get("ofz_ruonia01") is not None and not is_kbd_floater_row(kind, ex):
+            # RUONIA + basis: the row's RUB RUONIA is RUONIA - basis (bonds.ofz_levels), the KBD view keeps its basis, the
+            # KBD's par risk. A KBD floater (TDM#467) keeps both: its RUONIA - basis is the discounting on RUONIA, its
+            # basis the projection on the KBD, so the DV01 sums to its RUONIA risk in both views
+            curves.pop("RUB RUONIA", None)
         if summary.ofz_in_proxy(kind == "OFZ_IN", ex.get("ofz_basis01"), ex.get("quality")):
             c["in_proxy"] += b  # a linker's nominal DV01 on the KBD: in the DV01 (RUONIA or RUB OFZ), not a basis
         elif not kbd:
@@ -1195,6 +1211,7 @@ def risk_table(items: list[dict[str, Any]], fx: dict[str, float | None],
             "attribution_provisional": True, "cross_ccy_kinds": list(CROSS_CCY_KINDS),
             "ofz_view": ofz_view, "ofz_view_rule": OFZ_VIEWS[ofz_view],
             "ofz_view_note": OFZ_VIEW_APPROX if approx else OFZ_VIEW_P.format(n=n_p) if n_p else None,
+            "n_basis_not_split": n_nb, "basis_not_split_note": BASIS_NOT_SPLIT.format(n=n_nb) if n_nb else None,
             "kinds": [{"kind": k, "group": g, "label": lab} for k, g, lab in INSTR_KINDS],
             "measures": [{"measure": m, "label": lab, "across_ccys": a} for m, lab, a in MATRIX_MEASURES
                          if not (kbd and m == "ofz_basis")],

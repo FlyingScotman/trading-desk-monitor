@@ -602,8 +602,9 @@ def explain(prev: BondValuation, cur: BondValuation, curves: FlashCurves,
     linear, kbd = 0.0, RISK_CURVES[KBD_CURVE_ID]
     used: list[tuple[str, dict[str, float], dict[str, float]]] = []  # the same terms by bucket (TDM#406)
     for c, bs in prev.risk().items():
-        if prev.ofz_ruonia and c != kbd:  # an OFZ in RUONIA + basis: the KBD's own move is its first order (below)
-            continue
+        if prev.ofz_ruonia and c != kbd and fl is None:  # an OFZ in RUONIA + basis: the KBD's own move is its first order
+            continue  # (below). A KBD floater (TDM#467) is discounted on RUONIA: its RUB RUONIA (RUONIA less the basis,
+            # the discount) moves with RUONIA's own move, B dK + (R - B) dO, so the basis part is B (dK - dO), not B dK - R dO
         move = curves.zero_move_bp(PUBLISHED_TO_CORE.get(c, c))
         linear += sum(x * move.get(b, 0.0) for b, x in bs.items())
         used.append((c, bs, move))

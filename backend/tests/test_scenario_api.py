@@ -22,7 +22,7 @@ from desk.scenario.definition import RUB_CURVES, definition_hash, normalize
 from desk.settings import REPO_ROOT
 
 book = test_api.book  # the module fixture: every fixture bond, valued
-PRESETS = ["par+100", "par-100", "keyhike", "bullsteep", "bearflat", "basis", "ofzwide", "rubdep", "credit",
+PRESETS = ["par+100", "par-100", "keyhike", "bullsteep", "bearflat", "basis", "ofzbasis+25", "ofzbasis-25", "ofzwide", "rubdep", "credit",
            "sector", "stress22"]
 KEYHIKE = {"curves": {"RUB RUONIA": [200, 195, 180, 150, 105, 85, 65, 55, 45, 40, 35]}, "ofzSpread": 10,
            "spreads": {"_all": 25}}
@@ -47,9 +47,12 @@ def test_presets_listed_normalized(client):
     kh = next(s for s in sc if s["scenario_id"] == "keyhike")
     assert kh["definition"] == normalize(KEYHIKE_PRESET)
     assert next(s for s in sc if s["scenario_id"] == "ofzwide")["definition"] == {"ofzSpread": 40.0}
-    for s in sc:  # every curve preset moves the three RUB curves, except the basis (the key rate only)
-        assert set(s["definition"].get("curves", RUB_CURVES)) == ({"RUB KEY"} if s["scenario_id"] == "basis"
-                                                                  else set(RUB_CURVES))
+    only = {"basis": {"RUB KEY"}, "ofzbasis+25": {"RUB OFZ"}, "ofzbasis-25": {"RUB OFZ"}}
+    for s in sc:  # every curve preset moves the three RUB curves, except the basis (the key rate only) and the OFZ basis
+        assert set(s["definition"].get("curves", RUB_CURVES)) == only.get(s["scenario_id"], set(RUB_CURVES))
+    # TDM#467: the OFZ basis ±25 bp is the KBD's level alone, RUONIA held
+    for sid, bp in (("ofzbasis+25", 25.0), ("ofzbasis-25", -25.0)):
+        assert next(s for s in sc if s["scenario_id"] == sid)["definition"] == {"curves": {"RUB OFZ": [bp] * 11}}
 
 
 def test_risk_payload_and_compat_scenarios(store_url, book, client):
@@ -285,3 +288,16 @@ def test_app_mount_and_openapi_is_current(store_url, tmp_path):
     committed = json.loads((REPO_ROOT / "frontend" / "openapi.json").read_text(encoding="utf-8"))
     assert committed == create_app("postgresql://unused").openapi(), \
         "frontend/openapi.json is stale: desk openapi --out ../frontend/openapi.json"
+
+
+def test_ofz_basis_preset_moves_the_basis_not_ruonia():
+    # TDM#467: «Базис ОФЗ к RUONIA ±25 б.п.» shocks RUB OFZ only: a KBD floater (RUB OFZ = its basis risk, RUB RUONIA = its
+    # RUONIA risk minus it; synthetic) moves by its basis alone, a RUONIA-discounted corporate not at all
+    from desk.scenario.taylor import run_taylor
+    payload = {"factors": ["IR|RUB OFZ|5Y", "IR|RUB RUONIA|5Y"], "positions": [
+        {"position_id": "FLT", "book_id": "B", "delta": [[0, 322.0], [1, 11.0]], "gamma": []},
+        {"position_id": "CORP", "book_id": "B", "delta": [[1, -900.0]], "gamma": []}]}
+    for bp in (25.0, -25.0):
+        out = run_taylor(payload, normalize({"curves": {"RUB OFZ": [bp] * 11}}))
+        got = {p["position_id"]: p["rates"] for p in out["positions"]}
+        assert got == {"FLT": pytest.approx(322.0 * bp), "CORP": 0.0}

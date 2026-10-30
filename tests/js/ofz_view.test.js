@@ -163,4 +163,30 @@ t('#213 история позиции: «RUONIA + базис» — RUONIA и б�
   assert.deepStrictEqual(Array.from(k.curves['RUB OFZ']), [-500, -501]);
 });
 
+
+// #467: КБД-флоатер (проекция на КБД, дисконт по RUONIA; ядро 0.40) в RUONIA + базис: risk["RUB OFZ"] — базис (риск проекции
+// на КБД), risk["RUB RUONIA"] — RUONIA минус базис. В «КБД» дисконт остаётся на RUONIA (RUONIA − базис), на КБД — базис:
+// сумма DV01 та же, что в «RUONIA + базис» (риск RUONIA флоатера), — как у бессрочного КБД-флоатера
+const FB = [0, 0, 0, 0, 100.0, 300.0, 800.0, 2000.0, 400.0, 0, 0], FR = [0, 0, 0, 0, 1.5, 3.4, 9.0, 24.0, 52.0, 0, 0];  // базис, RUONIA
+const floater = (perp) => (D, ctx) => {
+  const q = D.positions.find(p => p.assetClass === 'Корп RUB флоатер');
+  q.risk = { 'RUB OFZ': FB.slice(), 'RUB RUONIA': FR.map((v, k) => v - FB[k]) };
+  q.extra = Object.assign({}, q.extra, { ofz_basis01: sum(FB), ofz_ruonia01: sum(FR), quality: 'exact', spread_buckets: null });
+  if (perp) q.maturity = null;
+  ctx.FLT_ID = q.id;
+};
+[false, true].forEach(perp => {
+  t('#467 КБД-флоатер' + (perp ? ' (бессрочный)' : '') + ': «КБД» оставляет RUONIA − базис и базис на КБД, сумма DV01 как в «RUONIA + базис»', () => {
+    const c1 = {}, c2 = {};
+    const B = load(null, 'ruonia_basis', (D, c) => { floater(perp)(D, c); c1.id = c.FLT_ID; }).M.pos[c1.id];
+    const K = load('kbd', 'ruonia_basis', (D, c) => { floater(perp)(D, c); c2.id = c.FLT_ID; }).M.pos[c2.id];
+    FR.forEach((v, k) => near(B.risk['RUB RUONIA'][k], v, 'RUONIA (RUONIA + базис) ' + k));
+    FR.forEach((v, k) => { near(K.risk['RUB RUONIA'][k], v - FB[k], 'RUONIA − базис ' + k); near(K.risk['RUB OFZ'][k], FB[k], 'КБД ' + k); });
+    near(B.dv01, sum(FR), 'DV01 в «RUONIA + базис»');
+    near(K.dv01, sum(FR), 'DV01 в «КБД» (та же сумма)');
+    near(B.dv01, K.dv01, 'инвариант: сумма DV01 одна в обоих видах');
+    assert.strictEqual(K.basis01, 0);
+    near(B.basis01, sum(FB), 'базис01');
+  });
+});
 console.log(n + ' tests passed');

@@ -2467,6 +2467,16 @@ export interface components {
              */
             ofz_view_note: string | null;
             /**
+             * N Basis Not Split
+             * @description RUB bonds discounted on the KBD for want of a RUONIA curve on the run's date (extra.curve_proxy): their basis is in the CS01, not apart
+             */
+            n_basis_not_split: number;
+            /**
+             * Basis Not Split Note
+             * @description set when n_basis_not_split is not 0: «basis not split: no RUONIA curve» (TDM#467)
+             */
+            basis_not_split_note: string | null;
+            /**
              * Kinds
              * @description the classification's kinds, in the table's order
              */

@@ -407,3 +407,63 @@ def test_the_run_summary_keeps_the_ofz_ruonia_risk():
     # before (0.0 would leave RUONIA whole and count the OFZ twice)
     early = summary.build([row("OLD", {"RUB RUONIA": {"7Y": -3000.0}}, None, None)])
     assert early["ofzRuo"] is None and early["dv01"] == pytest.approx({"RUB RUONIA": -3000.0})
+
+
+# TDM#467: a KBD floater (bonds.is_kbd_floater; core 0.40) projects on the KBD and is discounted on RUONIA. Its row is in
+# the scenarios' coordinates too: RUB OFZ the basis (the projection's KBD par risk), RUB RUONIA RUONIA minus it,
+# extra.ofz_ruonia01 the RUONIA risk. The «КБД» view keeps both (the discounting stays on RUONIA), so the DV01 sums to its
+# RUONIA risk in both views; for an OFZ it is the KBD par risk (the basis) and RUONIA is not there. Synthetic numbers.
+def kbd_floater(pid, basis, ruonia, **kw):
+    return bond(pid, cpn="float", cs01=-20.0, dv01=ruonia,
+                risk={"RUB OFZ": {"3Y": basis * 0.4, "5Y": basis * 0.6},
+                      "RUB RUONIA": {"3Y": (ruonia - basis) * 0.5, "5Y": (ruonia - basis) * 0.5}},
+                extra={"ofz_basis01": basis, "ofz_ruonia01": ruonia, "quality": "exact"}, **kw)
+
+
+@pytest.mark.parametrize(("pid", "basis", "ruonia"), [("FLT5Y", 322.0, 11.0), ("PERP", 580.0, 13.0)])
+def test_kbd_floater_keeps_its_ruonia_discounting_in_the_kbd_view(pid, basis, ruonia):
+    flt = kbd_floater(pid, basis=basis, ruonia=ruonia)  # a perpetual is the same row: no maturity changes no risk field
+    b_view = concepts.risk_table([flt, COMPUTED], FX, ofz_view="basis")
+    k_view = concepts.risk_table([flt, COMPUTED], FX, ofz_view="kbd")
+    b, k = (rows_of(t, "RUB")[("kind", "CORP", "CORP_FLT")] for t in (b_view, k_view))
+    assert b["dv01_by_curve_rub"] == pytest.approx({"RUB RUONIA": ruonia}) and b["ofz_basis_rub"] == pytest.approx(basis)
+    # «КБД»: the projection on the KBD (the basis), the discounting on RUONIA (RUONIA less the basis, negative here)
+    assert k["dv01_by_curve_rub"] == pytest.approx({"RUB OFZ": basis, "RUB RUONIA": ruonia - basis})
+    assert k["ofz_basis_rub"] == 0
+    assert b["dv01_rub"] == pytest.approx(k["dv01_rub"]) == pytest.approx(ruonia)  # the sum is the same in both views
+    # an OFZ next to it is as before: the KBD view has its KBD par risk only
+    o = rows_of(k_view, "RUB")[("kind", "GOV", "OFZ_PD")]
+    assert o["dv01_by_curve_rub"] == pytest.approx({"RUB OFZ": -3000.0})
+
+
+def test_run_summary_floater_ofz_ruo_is_its_basis():
+    from desk.publish import summary
+
+    def row(pid, ac, seg, cpn, risk, ofz_basis, ofz_ruo):
+        return {"position_id": pid, "book_id": "B", "pv_rub": 1e6, "risk": risk, "cs01": 0.0, "ofz": 0.0,
+                "instr_type": "BOND", "segment": seg, "asset_class": ac, "coupon_type": cpn, "ccy": "RUB",
+                "notional": 1e6, "notional_rub": 1e6, "price": 100.0, "spread_bp": 0.0, "dv01": None, "dm_bp": None,
+                "pnl": None, "ofz_basis": ofz_basis, "quality": "exact", "ofz_ruo": ofz_ruo}
+
+    s = summary.build([row("F", "Корпоративные", "Корп", "float", {"RUB OFZ": {"5Y": 322.0}, "RUB RUONIA": {"5Y": -311.0}},
+                           322.0, 11.0)])
+    # the «КБД» history takes off RUONIA (it holds RUONIA + the KBD's par risk here) only the basis: -311 stays
+    assert s["dv01"] == pytest.approx({"RUB RUONIA": 11.0}) and s["basis"] == pytest.approx(322.0)
+    assert s["ofzRuo"] == pytest.approx(322.0) and s["pos"]["F"][11] == pytest.approx(322.0)
+    # an OFZ: what the view takes off RUONIA is its RUONIA risk, as before
+    o = summary.build([row("O", "ОФЗ-ПД", "Гос", "fix", {"RUB OFZ": {"7Y": -3000.0}, "RUB RUONIA": {"7Y": -50.0}},
+                           -3000.0, -3050.0)])
+    assert o["ofzRuo"] == pytest.approx(-3050.0) and o["pos"]["O"][11] == pytest.approx(-3050.0)
+
+
+def test_risk_table_flags_a_basis_not_split_without_a_ruonia_curve():
+    # TDM#467: on a date with no RUONIA curve a RUB bond is on the KBD (extra.curve_proxy, bonds.discount_curve), the
+    # basis collapses into its CS01; the table says so, a run with the curve says nothing
+    proxy = {"reason": "no_ruonia_curve", "curve": "RUB OFZ", "instead_of": "RUB RUONIA", "text": "t"}
+    items = [bond("A", extra={"curve_proxy": proxy, "quality": "assumed"}), bond("B", extra={"curve_proxy": proxy}),
+             bond("C")]
+    t = concepts.risk_table(items, FX)
+    assert t["n_basis_not_split"] == 2 and "basis not split" in t["basis_not_split_note"]
+    assert "no RUONIA curve" in t["basis_not_split_note"] and t["basis_not_split_note"].startswith("basis not split: ")
+    ok = concepts.risk_table([bond("C"), COMPUTED], FX)
+    assert ok["n_basis_not_split"] == 0 and ok["basis_not_split_note"] is None

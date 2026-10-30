@@ -42,12 +42,13 @@ from ..store import CURRENT_RUNS
 
 log = logging.getLogger("desk.publish.summary")
 
-VERSION = 9  # 2: a floater's discount margin (pos[9]); 3: the OFZ basis of the KBD scheme, the spread to the KBD;
+VERSION = 10  # 2: a floater's discount margin (pos[9]); 3: the OFZ basis of the KBD scheme, the spread to the KBD;
 # 4: an OFZ-IN's nominal proxy out of the run's basis (basisIn, TDM#173); 5: an OFZ's RUONIA risk apart from its basis
 # (ofzRuo, pos[11]; TDM#213); 6: the funding its own factor, the carry without it (TDM#168); 7: a legacy tdm swap
 # (IRS / XCCY / CDS) in DER, not OTH.OTH (mvType, ``LEGACY_DER``; TDM#336); 8: an OTC row of the product group ``repo``
 # is MM.REPO (money market and funding), not DER.OTC (mvType; the owner's decision in TDM#361); 9: a position with an
-# impossible risk (``risk_problem``) is in riskBad, its risk in no sum (TDM#170)
+# impossible risk (``risk_problem``) is in riskBad, its risk in no sum (TDM#170); 10: a KBD floater's
+# ofzRuo is its basis, its RUONIA - basis stays on RUONIA (TDM#467)
 CURVE_MAP = {"RUB OFZ": "RUB RUONIA", "USD": "USD SOFR", "EUR": "EUR ESTR", "CNY": "CNY XCCY"}
 """A run's risk curve -> the concept pages' curve (``desk.api.concepts`` re-exports it; ``lib/real.js`` mirrors it).
 ``RUB OFZ`` (the KBD: a fixed-coupon OFZ's rates risk since 0.2.6, its basis in RUONIA + basis since 0.2.7, every bond's
@@ -282,13 +283,17 @@ def build(rows: Iterable[dict[str, Any]]) -> dict[str, Any]:
         ofz_spr += spr or 0.0
         book[x["book_id"]] = book.get(x["book_id"], 0.0) + (x["dv01"] or 0.0)
         g, k = kind_of(f)
+        # what the KBD view takes off the position's RUONIA: an OFZ's RUONIA risk (the basis again without one, P); a KBD
+        # floater's basis only (TDM#467): its RUONIA - basis, the discounting, stays on RUONIA
+        floater = x.get("ofz_basis") is not None and (g, k) not in (("GOV", "PD"), ("GOV", "IN"), ("GOV", "PK"))
+        ruo_off = b if floater or x.get("ofz_ruo") is None else x["ofz_ruo"]
         if ofz_in_proxy((g, k) == ("GOV", "IN"), x.get("ofz_basis"), x.get("quality")):
             basis_in += b  # an OFZ-IN's nominal proxy: not a basis (TDM#173)
         else:
             basis += b
             if x.get("ofz_basis") is not None:  # an OFZ on the KBD: its RUONIA risk, the basis again without one (P)
                 kbd_ofz = True
-                ofz_ruo += x["ofz_ruo"] if x.get("ofz_ruo") is not None else b
+                ofz_ruo += ruo_off
         if (g, k) == ("GOV", "PK"):  # an OFZ-PK's basis is its own spread to RUONIA, no KBD risk (the KBD view)
             basis_pk += b
         m = _mv(f, x["pv_rub"])
@@ -305,7 +310,8 @@ def build(rows: Iterable[dict[str, Any]]) -> dict[str, Any]:
         pos[x["position_id"]] = [_r(x["notional"], 2), _r(sum(curves.values()), 2), _r(x["cs01"], 2), _r(b, 2),
                                  _r(m, 0), _r(p["total"], 0) if p else None, _r(x["price"], 4),
                                  _r(x["spread_bp"], 2), {c: round(v, 2) for c, v in curves.items() if v},
-                                 _r(x.get("dm_bp"), 2), _r(spr, 2), _r(x.get("ofz_ruo"), 2)]
+                                 _r(x.get("dm_bp"), 2), _r(spr, 2),
+                                 _r(ruo_off if x.get("ofz_ruo") is not None else None, 2)]
     return {"dv01": dv01, "cs01": cs01, "basis": basis, "basisPk": basis_pk, "basisIn": basis_in, "ofzSpr": ofz_spr,
             "ofzRuo": ofz_ruo if kbd_ofz else None,
             "dv01Book": book,
