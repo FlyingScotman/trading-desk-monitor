@@ -96,3 +96,57 @@ test('#106: демо (поля officialReceived нет) — как раньше:
   assert.equal($('#h-main-cap').textContent, 'Official vs explained, млн ₽');
   assert.equal($('#h-cum-cap').textContent, 'Накопленный official PnL, млн ₽');
 });
+
+// #489: официальный PnL приходит по книгам целиком. Как сервер за день, где он пришёл не по всем книгам:
+// officialState 'partial', officialBooks — сколько книг с ним, каких нет и итоги только по книгам с ним
+const PART_DAY = 3;  // индекс дня истории (прошлый день)
+const partialDay = D => {
+  const h = D.history[PART_DAY];
+  Object.assign(h, { officialReceived: false, officialState: 'partial',
+    officialBooks: { received: 7, books: 8, missing: ['CORP_RUB'], pnlOfficial: 9e6, pnlExplained: 6.5e6 } });
+};
+
+test('#489: частичный день истории — «частично официальный», unexplained только по книгам с официальным', () => {
+  const { $, opt, D } = page(partialDay);
+  const h = D.history[PART_DAY], m = opt('h-main');
+  assert.deepEqual(names(m), ['Official', 'Частично официальный', 'Explained']);
+  const [off, part] = [m.series[0].data, m.series[1].data];
+  assert.equal(off[PART_DAY], null, 'частичный день не на линии Official');
+  assert.equal(part[PART_DAY], h.pnlOfficial);
+  D.history.forEach((x, i) => { if (i !== PART_DAY) assert.equal(part[i], null); });
+  assert.match($('#h-main-cap').textContent, /частично официальный/);
+  // unexplained — официальный минус флэш только книг с официальным, не от смеси pnlOfficial − pnlExplained
+  assert.equal(opt('h-un').series[0].data[PART_DAY].value, 9e6 - 6.5e6);
+  $('#ex-date').on.change({ target: { value: h.date } });
+  const recon = $('#recon').innerHTML;
+  assert.match(recon, /Частично официальный/);
+  assert.match(recon, /7 из 8 книг/);
+  assert.match(recon, /Корпы RUB/);  // книга без официального названа — его можно запросить в финансах
+  assert.match(recon, /запросить в финансах/);
+  assert.match(recon, /Official PnL \(ЦБ\) · частично/);
+  assert.match(opt('wf').xAxis.data.join('|'), /Unexplained/);
+});
+
+test('#489: сегодня официальный пришёл не по всем книгам — книга без него «—», unexplained без неё', () => {
+  const NO = 'CORP_RUB';
+  const { $, opt, D } = page(D => D.positions.forEach(p => {
+    if (p.book === NO && p.pnl && p.pnl.available !== false) { p.pnl.official = null; p.pnl.unexplained = 0; }
+  }));
+  const recon = $('#recon').innerHTML;
+  assert.match(recon, /Частично официальный/);
+  assert.match(recon, /Корпы RUB/);
+  const wf = opt('wf'), i = wf.xAxis.data.indexOf('Unexplained');
+  assert.ok(i >= 0 && wf.xAxis.data.includes('= Частично офиц.') && !wf.xAxis.data.includes('= Official'));
+  const [, s, e] = wf.series[0].data[i];
+  const expect = D.positions.filter(p => p.book !== NO && p.pnl && p.pnl.available !== false).reduce((a, p) => a + (p.pnl.unexplained || 0), 0);
+  assert.ok(Math.abs((e - s) - expect) < 1e-3, 'unexplained — только книги с официальным');
+  const hier = $('#hier-wrap').innerHTML;
+  assert.match(hier, /Официального нет/);
+  assert.match(hier, /нет по: Корпы RUB/);  // итог деска и деска Credit: official только книг с ним
+});
+
+test('#489: день, где официальный есть у всех книг, — как раньше Official', () => {
+  const { $, opt } = page(D => D.history.forEach(h => { h.officialReceived = true; h.officialState = 'all'; }));
+  assert.deepEqual(names(opt('h-main')), ['Official', 'Explained']);
+  assert.doesNotMatch($('#recon').innerHTML, /Частично официальный/);
+});

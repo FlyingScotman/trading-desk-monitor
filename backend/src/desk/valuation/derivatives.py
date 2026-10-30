@@ -82,6 +82,7 @@ from rub_fixed_income import (
     AccountingCategory,
     CalendarEntry,
     CoreRejection,
+    CurveBootstrapRequest,
     DayCount,
     FixedRepoRate,
     FloatingRepoRate,
@@ -115,7 +116,7 @@ from rub_fixed_income import __version__ as CORE_VERSION
 from ..curves import rates
 from ..curves.fx import FxOptions
 from ..curves.rates import KEY_RATE_CURVE_ID, KEY_RATE_SWAP_CURVE_ID, RUONIA_OIS_CURVE_ID
-from .bonds import RISK_CURVES, BondValuation
+from .bonds import OIS_TAIL, RISK_CURVES, BondValuation
 
 PUBLISHED_FACTORS = ("IR|", "FX|")
 """Factors of the published Hessian (the Taylor's vocabulary, ``scenario.taylor``); the basis goes to ``basis01``."""
@@ -825,7 +826,11 @@ def value(ctx: Any, requests: list[Request], *, options: FxOptions, second_order
             terms_of[inst.instrument_id] = t
     if not instruments:
         return out, None
-    used = {RUONIA_OIS_CURVE_ID, *curve_of.values(), *(a for _, a in fallbacks)}
+    market = ctx.fx_risk_market
+    # RUONIA past its last quote as the bonds' (bonds.OIS_TAIL, TDM#499): on its quotes, with the KBD it follows
+    tail = any(c.curve_id == RUONIA_OIS_CURVE_ID and isinstance(c.curve, CurveBootstrapRequest) for c in market.curves)
+    used = {RUONIA_OIS_CURVE_ID, *curve_of.values(), *(a for _, a in fallbacks),
+            *((OIS_TAIL.kbd_curve_id,) if tail else ())}
     used |= {c for i in instruments if isinstance(i, (SwapInstrument, RepoInstrument))
              and (c := i.projection_curve_id) is not None}
     fixing_ids = {f for i in instruments if isinstance(i, (SwapInstrument, RepoInstrument))
@@ -834,7 +839,6 @@ def value(ctx: Any, requests: list[Request], *, options: FxOptions, second_order
     # the CNY XCCY curve as its par quotes too (EodContext.fx_risk_market), rebuilt by core on every shock. The fixings
     # only a swap or a REPO reads (point-in-time, with RUONIA's declared unpublished day), so an FX book's inputs stay
     # as they were; the key-rate forward curve of a key-rate swap from EodContext.swap_curves
-    market = ctx.fx_risk_market
     snap = replace(market, quotes=(),
                    fixings=tuple(f for f in ctx.core_market.fixings if f.fixing_id in fixing_ids),
                    curves=(*(c for c in market.curves if c.curve_id in used),
@@ -845,7 +849,7 @@ def value(ctx: Any, requests: list[Request], *, options: FxOptions, second_order
     quoted = any(isinstance(c.curve, XccyCurveBootstrapRequest | ParYieldCurveRequest) for c in snap.curves)
     policy = ValuationPolicy(RUONIA_OIS_CURVE_ID, include_second_order=second_order,
                              fx_curve_fallbacks=tuple(fallbacks),
-                             quote_curve_risk=ctx.quote_curve_risk and quoted)
+                             quote_curve_risk=ctx.quote_curve_risk and quoted, ois_tail=OIS_TAIL if tail else None)
     result = value_portfolio(run_id=f"desk-eod-{bd}-derivatives", as_of=ctx.core_market.known_at, snapshot=snap,
                              instruments=instruments, positions=positions, policy=policy, scenarios=scenarios)
     unread = _rates_flows(snap, policy, instruments, positions, pay_dates, owner, terms_of, flows)
