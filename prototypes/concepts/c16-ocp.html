@@ -154,8 +154,10 @@
     if (!C.length) sp.querySelector('.bd').innerHTML = EMPTY;
     else {
       const usd = C.map(c => toUsd(T.by[c], c, d)), noRate = C.filter((c, k) => usd[k] == null), viaRep = C.filter(c => byReport(c, d));
+      // курс USD — из отчёта ОВП (в прогоне его нет), по нему пересчитана хоть одна валюта
+      const usdRep = !rate(d, 'USD') && C.some((c, k) => c !== 'USD' && usd[k] != null);
       sp.querySelector('.bd').innerHTML = '<div class="c16-sum">' +
-        '<div class="k-kpi tot" data-ocp-total title="сумма USD-эквивалентов валют со знаком' + (viaRep.length ? '. ' + REP + ': ' + esc(viaRep.join(', ')) : '') + (noRate.length ? '. Без курса, не входят: ' + esc(noRate.join(', ')) : '') + (T.notes.length ? '. ' + esc(T.notes.join('; ')) : '') + '"><div class="l">Общая ОВП</div><div class="v">' + fmt(mm(overall(usd.filter(v => v != null)))) + ' <span class="u">mm USD</span></div><div class="s">' + (noRate.length ? 'без ' + esc(noRate.join(', ')) : '&nbsp;') + '</div></div>' +
+        '<div class="k-kpi tot" data-ocp-total title="сумма USD-эквивалентов валют со знаком' + (viaRep.length ? '. ' + REP + ': ' + esc(viaRep.join(', ')) : '') + (usdRep ? '. Курс USD — из отчёта ОВП' : '') + (noRate.length ? '. Без курса, не входят: ' + esc(noRate.join(', ')) : '') + (T.notes.length ? '. ' + esc(T.notes.join('; ')) : '') + '"><div class="l">Общая ОВП</div><div class="v">' + fmt(mm(overall(usd.filter(v => v != null)))) + ' <span class="u">mm USD</span></div><div class="s">' + (noRate.length ? 'без ' + esc(noRate.join(', ')) : '&nbsp;') + '</div></div>' +
         C.map((c, k) => '<div class="k-kpi" data-ocp-ccy="' + esc(c) + '"><div class="l"><i class="c" style="background:' + K.ccyColor(c) + '"></i>' + esc(c) + '</div><div class="v">' + fmt(mm(shown(T.by[c], c, d))) + ' <span class="u">' + unitOf(c) + '</span></div><div class="s">' +
           (c === 'USD' ? '&nbsp;' : usd[k] == null ? 'курса нет' : (S.unit === 'usd' ? f.s(mm(T.by[c]), 1) + ' mm ' + esc(c) : '≈ ' + f.s(mm(usd[k]), 1) + ' mm USD') +
             (viaRep.includes(c) ? ' · <span title="' + REP + '">курса нет</span>' : '')) + '</div></div>').join('') + '</div>';

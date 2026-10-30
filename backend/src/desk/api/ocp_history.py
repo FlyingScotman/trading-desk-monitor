@@ -10,9 +10,10 @@ block (no ``published``) or a failed one: the day has no lines and says why in `
 
 The report's own rates (``reportFx``, owner, 30.10.2026): ₽ per unit of each currency by the bank's OCP report, from
 the block's reconciliation per report scope and currency (``published.by_book`` does not carry them): the pages value
-a currency the run has no rate of at it. Per scope the report's ``reported_rub / reported`` (₽ per unit as the report
-actually converts), else its ``rate_rub_per_unit`` (``reported_rate``); both and their ratio outside ``RATE_BAND`` (a
-rate quoted per 10 or 100 units, as JPY or KZT can be): no rate. Only the units the day publishes as the report: none
+a currency the run has no rate of at it. Per scope the report's ``rate_rub_per_unit`` (``reported_rate``), checked
+against ``|reported_rub| / |reported|`` (₽ per unit as the report actually converts; ``ocp_rub`` may come unsigned):
+their ratio outside ``RATE_BAND`` (a rate quoted per 10 or 100 units, as JPY or KZT can be): no rate. Without a rate,
+that implied one. Only the units the day publishes as the report: none
 under ``published`` ``derived``, none of a unit older than the policy's ``report_max_age_days`` (published from
 positions, ``derived_stale_report``). Two scopes: the newer ``valid_date``, then a book's scope before an entity's,
 then the first book. A block without them (no report, before B2): ``{}``.
@@ -81,15 +82,23 @@ def _num(x: Any) -> float | None:
     return float(x) if isinstance(x, int | float) and not isinstance(x, bool) and math.isfinite(x) else None
 
 
-def _unit_rate(r: dict[str, Any]) -> float | None:
-    """₽ per unit of one report scope (the module docstring), or None."""
-    rate, rub, amount = _num(r.get("rate")), _num(r.get("rub")), _num(r.get("amount"))
-    implied = rub / amount if rub is not None and amount else None
-    if implied is None:
-        return rate if rate and rate > 0 else None
-    if implied <= 0 or (rate is not None and not RATE_BAND[0] <= rate / implied <= RATE_BAND[1]):
+def _day(x: Any) -> date | None:
+    try:
+        return date.fromisoformat(str(x)[:10]) if x else None
+    except ValueError:
         return None
-    return implied
+
+
+def _unit_rate(r: dict[str, Any]) -> float | None:
+    """₽ per unit of one report scope (the module docstring), or None: the stated rate when its scale agrees with the
+    report's own figures (or they are not given), else the implied one when no rate is stated."""
+    rate, rub, amount = _num(r.get("rate")), _num(r.get("rub")), _num(r.get("amount"))
+    implied = abs(rub) / abs(amount) if rub and amount else None
+    if rate is None or rate <= 0:
+        return implied
+    if implied is not None and not RATE_BAND[0] <= rate / implied <= RATE_BAND[1]:
+        return None
+    return rate
 
 
 def _report_fx(block: dict[str, Any], on: date) -> dict[str, float]:
@@ -100,7 +109,7 @@ def _report_fx(block: dict[str, Any], on: date) -> dict[str, float]:
     age = age if isinstance(age, int) and not isinstance(age, bool) else O.PROVISIONAL_POLICY.report_max_age_days
     by: dict[str, list[tuple[str, bool, str, float]]] = {}
     for r in block.get("rates") or []:
-        ccy, valid = r.get("ccy"), O._day(r.get("valid"))
+        ccy, valid = r.get("ccy"), _day(r.get("valid"))
         if not ccy or ccy == O.PROVISIONAL_POLICY.reporting_ccy or (valid is not None and (on - valid).days > age):
             continue
         if (rate := _unit_rate(r)) is not None:

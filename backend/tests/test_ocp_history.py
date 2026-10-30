@@ -65,8 +65,9 @@ def seeded(store_url):
             rec("USD", 80.25), rec("GBP", 101.5), rec("GBP", 99.0, valid="2026-10-09", book="B2"),
             rec("EUR", 95.0, valid="2026-10-09"), rec("CNY", None, amount=1e6, rub=11.2e6),
             rec("JPY", 55.0, amount=1e6, rub=0.55e6), rec("CHF", 100.0, amount=-1e6, rub=-101e6),
+            rec("KZT", None, amount=-1e6, rub=0.18e6), rec("SGD", 60.0, amount=-1e6, rub=60.5e6),
             rec("HKD", 10.5, book=None), rec("HKD", 10.4, book="B3"), rec("HKD", 10.3, book="B2"),
-            rec("AED", None, amount=1e6, rub=-1e6), rec("RUB", 1.0), rec("TRY", 0.0)]),
+            rec("AED", -22.0, amount=1e6, rub=0.0), rec("RUB", 1.0), rec("TRY", 0.0)]),
             books=[{"book_id": "B1", "name": "Old name", "entity": "ENT1", "desk": "FX"},
                    {"book_id": "B9", "name": "Gone", "entity": "ENT1", "desk": "Credit"}])
         insert(con, "2026-10-13", cut="eod_preliminary", ocp=block("computed", [line("B1", "USD", 9e9)]))
@@ -113,11 +114,13 @@ def test_days_are_the_saved_published_ocp(seeded):
     # a run with no CBR rate at all (before R26) valued on the CBR rate: its rates for both, as the pages' FX_CBR
     assert days["2026-10-13"]["fx"] == {"USD": {"market": 81.0, "cbr": 81.0, "source": "cbr"},
                                         "CNY": {"market": 11.2, "cbr": 11.2, "source": "cbr"}}
-    # the report's own rates, ₽ per unit: ocp_rub / ocp_ccy where the report gives both (CNY, CHF), else its
-    # rate_rub_per_unit (USD); the newer unit's (GBP); at a tie a book's scope before an entity's, then the first book
-    # (HKD). Left out: a unit older than the policy's age (EUR of 09.10 under 0 days), a rate quoted per 100 units
-    # (JPY: 55 against 0.55 ₽ by the report's own figures), a negative implied rate (AED), none, zero, RUB
-    assert d1["reportFx"] == {"CHF": 101.0, "CNY": 11.2, "GBP": 101.5, "HKD": 10.3, "USD": 80.25}
+    # the report's own rates, ₽ per unit: its rate_rub_per_unit (USD; CHF, SGD: their scale agrees with
+    # |ocp_rub| / |ocp_ccy|, ocp_rub signed or not), without one the implied rate (CNY; KZT, short, ocp_rub unsigned);
+    # the newer unit's (GBP); at a tie a book's scope before an entity's, then the first book (HKD). Left out: a unit
+    # older than the policy's age (EUR of 09.10 under 0 days), a rate quoted per 100 units (JPY: 55 against 0.55 ₽ by
+    # the report's own figures), a negative rate without figures (AED), none, zero, RUB
+    assert d1["reportFx"] == {"CHF": 100.0, "CNY": 11.2, "GBP": 101.5, "HKD": 10.3, "KZT": 0.18, "SGD": 60.0,
+                              "USD": 80.25}
     # published from positions only: no report rate; a block without them: {}
     assert days["2026-10-13"]["reportFx"] == {} and days["2026-10-14"]["reportFx"] == {}
     # the run's report_max_age_days: a unit 4 days old is published, one 6 days old is not
