@@ -50,7 +50,7 @@ test('настройки: «История прогонов» — догрузк
     await t.test('остановка на сети: причина, с какого времени, следующая попытка; даты по видам', async () => {
       const { pg, ctx, errors } = await open(browser, STATUS);
       const stall = await row(pg, 'Догрузка стоит');
-      assert.ok(/^с 23\.10 09:00: нет связи; следующая попытка 23\.10 12:01\n/.test(stall), stall);  // время — МСК
+      assert.ok(/^с 23\.10 09:00: нет связи\n/.test(stall), stall);  // время — МСК; время повтора прошло — без «повтор»
       assert.ok(/Ошибка на 02\.03\.2026: TimeoutError: timed out/.test(stall) && !/null|undefined/.test(stall), stall);
       const conv = await row(pg, 'Не сходятся');
       assert.ok(/^1 /.test(conv) && /10\.02\.2026 — не сходится после пересчёта, попыток: 2/.test(conv) && !/12\.02|20\.02|Timeout/.test(conv), conv);

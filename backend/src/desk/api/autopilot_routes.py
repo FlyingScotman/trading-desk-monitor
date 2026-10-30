@@ -118,5 +118,5 @@ def autopilot_run(request: Request):
     ap = getattr(request.app.state, "autopilot", None)
     if ap is None or not ap.running:
         raise HTTPException(409, "autopilot is not running (desk serve --no-autopilot)")
-    ap.trigger()
+    ap.trigger(manual=True)  # the owner's «Обновить»: the backfill's stall does not wait (#447)
     return {"queued": True}

@@ -210,13 +210,13 @@ test('настройки: главное сверху, редкое по кно�
       const st = server();
       st.settings.hub_token_set = true;
       st.detect.inbox = { from_adapter_config: [], from_accepted: [] };
-      st.bf = { stalled: { cause: 'proxy', source: 'network', status: 407, error: 'Tunnel connection failed: 407', since: '2026-10-29T07:05:00Z', next_attempt: '2026-10-29T07:35:00Z' },
+      st.bf = { stalled: { cause: 'proxy', source: 'network', status: 407, error: 'Tunnel connection failed: 407', since: '2026-10-29T07:05:00Z', next_attempt: new Date(Date.now() + 3600e3).toISOString() },
         problem_dates: [{ date: '2026-03-02', kind: 'failed', why: 'no default run', error: 'x' }] };
       st.folders = { folders: [{ path: 'C:\\in', scanned: true, exists: false }], entries: [{ path: 'C:\\in', folder: 0 }] };
       const { pg, ctx, errors } = await open(browser, st, '#auto', { noHint: true });
       await pg.waitForFunction(() => /стоит/.test(document.getElementById('st-sum').innerText) && /не видит/.test(document.getElementById('st-sum').innerText));
       const sum = await pg.locator('#st-sum').innerText();
-      assert.ok(/Требует внимания: 2/.test(sum) && /История прогонов:\s*стоит — прокси не пропускает/.test(sum) && /Папки с отчётами:\s*1 папку сервер не видит/.test(sum), sum);
+      assert.ok(/Требует внимания: 2/.test(sum) && /История прогонов:\s*стоит — прокси не пропускает, повтор в (\d\d\.\d\d )?\d\d:\d\d/.test(sum) && /Папки с отчётами:\s*1 папку сервер не видит/.test(sum), sum);
       assert.ok(/Ошибка: Tunnel connection failed: 407/.test(await pg.locator('#st-sum a', { hasText: 'стоит' }).getAttribute('title')));
       assert.strictEqual(await pg.locator('#st-sum a', { hasText: 'стоит' }).getAttribute('href'), '#bf');
       const note = await pg.locator('#bf-stall').innerText();

@@ -1385,7 +1385,7 @@ function renderSummary(){
     const withPos = Math.max(0, (b.dates || 0) - (b.no_positions || 0) - (b.no_market || 0)), stall = T.stall(b), D = T.dates(b);
     const bad = [D.conv.length ? T.n(D.conv.length, ' не сходится', ' не сходятся') : '', D.load.length ? T.n(D.load.length, ' не загружается', ' не загружаются') : ''].filter(Boolean).join(', ');
     if (!b.enabled) it('', '#bf', 'История прогонов', 'не считается', 'включается в «Автообновлении»');
-    else if (stall) it('warn', '#bf', 'История прогонов', 'стоит — ' + stall.why, stall.title);
+    else if (stall) it('warn', '#bf', 'История прогонов', 'стоит — ' + stall.why + stall.retry, stall.title);
     else if (bad) it('warn', '#bf', 'История прогонов', b.done + ' из ' + withPos + ' · ' + bad, 'даты — в «Диагностика → История прогонов»');
     else if (b.todo) it('', '#bf', 'История прогонов', b.done + ' из ' + withPos, 'посчитано дат с позициями; остальные догружаются в фоне');
     else it('ok', '#bf', 'История прогонов', 'посчитана, ' + plural(b.done || 0, 'дата', 'даты', 'дат'));
@@ -2145,7 +2145,7 @@ function mountTabs(a, reload){
         ['Самый ранний расчёт', dd(s.oldest_run)],
         ['Старые отчёты прочитаны с', dd(s.inbox_scanned_from)],
       ];
-      if (st) rows.splice(4, 0, ['Догрузка стоит', 'с ' + at(st.since) + ': ' + T.cause(st) + (st.next_attempt ? '; следующая попытка ' + at(st.next_attempt) : ''),
+      if (st) rows.splice(4, 0, ['Догрузка стоит', 'с ' + at(st.since) + ': ' + T.cause(st) + T.stall(s).retry,
         st.error ? 'Ошибка' + (st.date ? ' на ' + dd(st.date) : '') + ': ' + st.error : '']);
       if (s.step) rows.push(['Последний цикл', s.step.status + ': ' + s.step.detail]);
       const tb = $('bf-rows'); tb.textContent = '';

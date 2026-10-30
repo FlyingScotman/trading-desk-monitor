@@ -17,12 +17,14 @@ function el() {
     appendChild(c) { this.children.push(c); return c; }, append(...c) { this.children.push(...c); },
     querySelector() { return null; }, querySelectorAll() { return []; }, addEventListener() {}, setAttribute() {}, remove() {} };
 }
+const NOW = Date.parse('2026-10-22T08:30:00Z');
 function load() {
   const document = { addEventListener() {}, createElement: el, documentElement: el(), body: el(), querySelector() { return null; }, querySelectorAll() { return []; }, getElementById: () => el() };
   const ctx = { window: {}, document, URLSearchParams, console, location: { href: 'http://x/', search: '', hostname: '127.0.0.1', protocol: 'file:' }, setTimeout,
     localStorage: { getItem() { return null; }, setItem() {} }, getComputedStyle: () => ({ getPropertyValue: () => '#888' }), MutationObserver: class { observe() {} } };
   ctx.window = ctx;
   vm.createContext(ctx);
+  vm.runInContext('Date.now = () => ' + NOW + ';', ctx);  // «сейчас» теста: 22.10 11:30 МСК
   vm.runInContext(P('concepts/lib/mock.js'), ctx);
   vm.runInContext(P('desk-backfill-text.js'), ctx);  // подключает lib/boot.js раньше kit.js
   vm.runInContext(P('concepts/lib/kit.js'), ctx);
@@ -80,13 +82,13 @@ t('#447: дата, которая не загружается сама по се
 });
 
 t('#447: застой — коротко «⚠ догрузка стоит: <причина>, повтор в ЧЧ:ММ · N из M дат», в подсказке с какого времени, ошибка, проблемные даты', () => {
-  const day = new Date(Date.now() + 3 * 3600e3).toISOString().slice(0, 10);  // сегодня по МСК: время без даты
+  const day = '2026-10-22';  // «сегодня» теста по МСК: время без даты
   const stalled = { cause: 'hub', source: 'network', status: 502, phase: 'bundle', date: '2026-10-09', dates: ['2026-10-09', '2026-10-12'], stops: 3,
     error: 'HubUnavailable: hub.test unreachable after 3 attempts: 502 bad gateway',
     since: day + 'T06:00:00+00:00', at: day + 'T08:00:00+00:00', next_attempt: day + 'T09:00:00+00:00' };
   const s = K.backfillStatus(bf({ done: 48, total: 206, todo: 156, failed: 0, stalled, problem_dates: prob.slice(1), hub_problem_dates: hub }));
   assert.strictEqual(s.text, '⚠ догрузка стоит: хаб не отвечает, повтор в 12:00 · 48 из 206 дат');  // счётчики — в подсказке
-  assert.ok(s.title.startsWith('Стоит с 09:00: хаб не отвечает. Следующая попытка 12:00. Ошибка на 09.10.2026: HubUnavailable: hub.test unreachable after 3 attempts: 502 bad gateway\n'), s.title);
+  assert.ok(s.title.startsWith('Стоит с 09:00: хаб не отвечает, повтор в 12:00. Ошибка на 09.10.2026: HubUnavailable: hub.test unreachable after 3 attempts: 502 bad gateway\n'), s.title);
   ['Готово 48 из 206 дат', 'Не сходятся (1)', '13.10.2026', 'Не загружаются (1)', '16.10.2026'].forEach(x => assert.ok(s.title.includes(x), x + ' нет в «' + s.title + '»'));
   assert.ok(!s.title.includes('(код'), s.title);
   assert.strictEqual(s.grey, false);
@@ -104,6 +106,9 @@ t('#447: застой — коротко «⚠ догрузка стоит: <п�
   const o = K.backfillStatus(bf({ stalled: Object.assign({}, stalled, { next_attempt: '2026-10-23T09:00:00+00:00' }) }));
   assert.ok(o.text.startsWith('⚠ догрузка стоит: хаб не отвечает, повтор в 23.10 12:00'), o.text);
   assert.strictEqual(K.backfillStatus(bf({ stalled: Object.assign({}, stalled, { next_attempt: null }) })).text, '⚠ догрузка стоит: хаб не отвечает · 190 из 204 дат');
+  // время повтора прошло (цикл идёт или автопилот стоит) — без «повтор»
+  const late = K.backfillStatus(bf({ stalled: Object.assign({}, stalled, { next_attempt: day + 'T08:00:00+00:00' }) }));
+  assert.ok(late.text === '⚠ догрузка стоит: хаб не отвечает · 190 из 204 дат' && !late.title.includes('повтор'), late.text + ' | ' + late.title);
   // без дат к расчёту и при выключенной догрузке застой не показывается
   assert.strictEqual(K.backfillStatus(bf({ todo: 0, failed: 0, done: 204, stalled })), null);
   assert.strictEqual(K.backfillStatus(bf({ enabled: false, stalled })), null);

@@ -8,9 +8,9 @@
  *                           «не загружаются» (своя ошибка сети или базы, когда другие даты грузятся, — kind
  *                           unreachable; даты хаба, и при выключенной догрузке: их грузит шаг sync), без повторов;
  *  T.n(n, one, many)      — «1 не сходится», «2 не сходятся»: число со своим словом;
- *  T.stall(j)             — {why, text, title} застоя или null (догрузка выключена, дат к расчёту нет): «стоит:
- *                           <причина>, повтор в ЧЧ:ММ», в подсказке — с какого времени, следующая попытка, дата и
- *                           ошибка целиком.
+ *  T.stall(j)             — {why, retry, text, title} застоя или null (догрузка выключена, дат к расчёту нет):
+ *                           «стоит: <причина>, повтор в ЧЧ:ММ» (retry — «, повтор в ЧЧ:ММ», пусто, когда время
+ *                           прошло или автопилот выключен), в подсказке — с какого времени, дата и ошибка целиком.
  * Подключается раньше kit.js (concepts/lib/boot.js) и в settings.html; window.DESK_BACKFILL_TEXT.
  */
 (function (root) {
@@ -39,9 +39,10 @@
   T.stall = function (j, now) {
     var st = j && j.enabled !== false && j.todo ? j.stalled : null;
     if (!st) return null;
-    var why = T.cause(st), err = st.error || '';
-    return { why: why, text: 'стоит: ' + why + (st.next_attempt ? ', повтор в ' + T.when(st.next_attempt, now) : ''),
-      title: 'Стоит с ' + T.when(st.since, now) + ': ' + why + '.' + (st.next_attempt ? ' Следующая попытка ' + T.when(st.next_attempt, now) + '.' : '') +
+    var why = T.cause(st), err = st.error || '', t = now == null ? Date.now() : +new Date(now);
+    var retry = st.next_attempt && +new Date(st.next_attempt) > t ? ', повтор в ' + T.when(st.next_attempt, now) : '';
+    return { why: why, retry: retry, text: 'стоит: ' + why + retry,
+      title: 'Стоит с ' + T.when(st.since, now) + ': ' + why + retry + '.' +
         (err ? ' Ошибка' + (st.date ? ' на ' + dmy(st.date) : '') + ': ' + err + (st.status && err.indexOf(String(st.status)) < 0 ? ' (код ' + st.status + ')' : '') : '') };
   };
   root.DESK_BACKFILL_TEXT = T;
