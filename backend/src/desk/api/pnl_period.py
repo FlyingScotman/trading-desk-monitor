@@ -37,8 +37,9 @@ NOSPLIT = "carry_nosplit"
 """Carry of the rows with carry but without ``carry_coupon`` (flash simple / yield, undated recompute): attribution and
 carry views split per row (TDM#432); never a missing component (``m`` stays 0), null when no such row."""
 RATES_SPLIT = ("rates_linear", "rates_exact_lin")
-"""``pnl.extra.rates_linear`` and the exact ``rates`` of the same rows, RUB bonds only (foreign ones stay whole in
-``rates`` until TDM#418): «Ставки (линейно)» and «Выпуклость (ставки)» = exact − linear (TDM#435)."""
+"""``pnl.extra.rates_linear`` and the exact ``rates`` of the same rows, bonds in any currency (a foreign bond's linear
+rates are in RUB at the D rate, as its ``rates``, from VALUATION_VERSION 25, TDM#418): «Ставки (линейно)» and
+«Выпуклость (ставки)» = exact − linear (TDM#435)."""
 EXTRA_KEYS = (*CARRY_SPLIT, NOSPLIT, *RATES_SPLIT)
 COMPONENTS = (*KEYS, *EXTRA_KEYS)
 ORDER = ("carry", "carry_coupon", "carry_pull", NOSPLIT, "rolldown", "funding", "rates", *RATES_SPLIT, "spread",
@@ -72,15 +73,15 @@ def _num(v: Any) -> float | None:
     return float(v) if isinstance(v, int | float) and not isinstance(v, bool) else None
 
 
-def _rub_bond(r: dict[str, Any]) -> bool:
-    """A rouble bond as ``summary.kind_of`` reads it (``instr_type`` BOND or none, currency RUB or none)."""
-    return r.get("instrType") in ("BOND", None) and (r.get("ccy") or "RUB") == "RUB"
+def _bond(r: dict[str, Any]) -> bool:
+    """A bond as ``summary.kind_of`` reads it (``instr_type`` BOND or none), in any currency (TDM#418)."""
+    return r.get("instrType") in ("BOND", None)
 
 
 def components(pnl: dict[str, Any] | None, row: dict[str, Any] | None = None
                ) -> tuple[dict[str, Any], dict[str, float | None]]:
     """``amounts`` of a row and its components with the carry split of ``pnl.extra`` (null when not saved), the carry
-    of a row without it (``NOSPLIT``) and, given the row, the linear rates of a RUB bond (``RATES_SPLIT``; a
+    of a row without it (``NOSPLIT``) and, given the row, the linear rates of a bond (``RATES_SPLIT``; a
     ``position`` day has ``ratesLinear`` of its own)."""
     a = amounts(pnl)
     extra = (pnl or {}).get("extra") or {}
@@ -88,7 +89,7 @@ def components(pnl: dict[str, Any] | None, row: dict[str, Any] | None = None
     carry = _num(comp["carry"])
     comp[NOSPLIT] = carry if carry is not None and comp["carry_coupon"] is None else None
     if row is not None:
-        lin, rates = _num(extra.get("rates_linear")) if _rub_bond(row) else None, _num(comp["rates"])
+        lin, rates = _num(extra.get("rates_linear")) if _bond(row) else None, _num(comp["rates"])
         comp.update(dict.fromkeys(RATES_SPLIT) if lin is None or rates is None else
                     {"rates_linear": lin, "rates_exact_lin": rates})
     return a, comp

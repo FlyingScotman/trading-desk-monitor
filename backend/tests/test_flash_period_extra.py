@@ -67,10 +67,10 @@ def check(f: FlashPnl, p) -> dict:
     lc, mv = ex["rates_linear_curves"], ex["curve_moves_bp"]
     assert math.fsum(x for bs in lc.values() for x in bs.values()) == pytest.approx(
         f.rates_linear, rel=1e-12, abs=1e-9)
-    risk = pv.risk()
+    risk, to_d = pv.risk(), (f.fx_rates[1] / f.fx_rates[0] if f.fx_rates else 1.0)  # at the D rate (TDM#418)
     for c, bs in lc.items():
         for b, x in bs.items():
-            assert x == risk[c][b] * mv[c][b]
+            assert x == risk[c][b] * to_d * mv[c][b]
     prev = ex["prev"]
     assert prev["clean_pct"] == pv.clean_pct and prev["accrued_per_bond_rub"] == pv.accrued_rub
     assert prev["dirty_per_bond_rub"] == pv.dirty_rub and prev["pv_rub"] == pv.pv_rub

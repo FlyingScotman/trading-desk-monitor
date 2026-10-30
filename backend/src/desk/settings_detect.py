@@ -14,7 +14,8 @@ the user takes with a click.
 * ``python``   Python interpreters found on this computer for ``acquisition_python``: offered, never chosen
                (08 §2: the acquisition runtime is explicit); none of them is run
 * ``defaults`` what an empty ``snapshot_cache``, ``inbox_archive``, ``private_adapter_config`` and
-               ``private_adapter`` (the bundle's adapter) give
+               ``private_adapter`` (the adapter release installed by the updater, else the bundle's adapter;
+               ``private_adapter_source`` says which: installed, bundle or reference) give
 * ``inbox``    folders to offer as report folders: absolute folder paths named in the adapter's config files (the
                adapter's own folder settings feed nothing to the inbox, #449) and folders whose files the inbox
                accepted before, both only when no report folder covers them yet
@@ -407,6 +408,10 @@ def detect(st: Settings, stored: dict[str, Any], *, environ: dict[str, str] | No
         dirs = [(str(d), False) for d in st.inbox_dirs]
     base = Settings(home=st.home)  # what an empty field gives
     acq = str(st.acquisition_python) if st.acquisition_python else None
+    from . import settings as _settings
+
+    # what an empty «Папка адаптера» gives: the release «Обновление адаптера» installed, else the bundle's adapter
+    auto_adapter, _, auto_source = _settings._resolve_adapter(env, {}, {}, None, st.home)
     return {
         "proxy": proxy(st.hub_url, env, exported, registry_proxy, pac_script()),
         "trust": trust(st),
@@ -415,7 +420,8 @@ def detect(st: Settings, stored: dict[str, Any], *, environ: dict[str, str] | No
         "acquisition_python": {"path": acq, "exists": disk.is_file(acq) if acq else None},
         "defaults": {"snapshot_cache": str(base.snapshot_cache), "inbox_archive": str(base.inbox_archive),
                      "private_adapter_config": str(st.home / ADAPTER_CONFIG_DIR),
-                     "private_adapter": st.private_adapter if st.private_adapter_default else None},
+                     "private_adapter": auto_adapter if auto_source in ("bundle", "installed") else None,
+                     "private_adapter_source": auto_source},
         "inbox": {"from_adapter_config": config_folders(st.private_adapter_config, dirs, disk),
                   "from_accepted": accepted_folders(accepted or [], st, dirs, disk)},
     }
