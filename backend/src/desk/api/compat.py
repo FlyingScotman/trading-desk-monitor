@@ -141,10 +141,32 @@ def run_totals(rows) -> tuple[float | None, float | None, float, float]:
             math.fsum(p.get("cs01") or 0.0 for p in facts))
 
 
+def official_state(rows) -> dict[str, Any]:
+    """Which books of a run (rows fact, pnl) have the official PnL (TDM#106, TDM#489). The official PnL comes per book:
+    a book has it whole or not at all, so a book with PnL counts as received when any of its rows carries the
+    official PnL itself, not the fallback of ``run_totals`` (explained plus the FX basis at the CBR rates).
+
+    ``state``: ``all`` (every book with PnL has it), ``partial`` or ``none`` (no book has it, or no PnL at all);
+    ``received`` of ``books`` books with PnL, ``missing``: the books with PnL but without the official PnL (to ask
+    finance for it); ``pnlOfficial`` / ``pnlExplained``: ``run_totals`` over the books with the official PnL only, so
+    the unexplained of a partial day is their difference and never mixes the official PnL with the fallback (both
+    None when no book has it)."""
+    books: dict[Any, bool] = {}
+    for r in rows:
+        if q := r["pnl"]:
+            b = r["fact"].get("book_id")
+            books[b] = books.get(b, False) or q.get("official") is not None
+    got = {b for b, has in books.items() if has}
+    missing = sorted((b for b in books if b not in got), key=lambda b: (b is None, str(b)))
+    off, exp = run_totals([r for r in rows if r["pnl"] and r["fact"].get("book_id") in got])[:2]
+    return {"state": "none" if not got else "partial" if missing else "all", "received": len(got),
+            "books": len(books), "missing": missing, "pnlOfficial": off, "pnlExplained": exp}
+
+
 def official_received(rows) -> bool:
-    """Whether any row (fact, pnl) of a run carries the official PnL itself (TDM#106), not the fallback of
-    ``run_totals`` (explained plus the FX basis at the CBR rates)."""
-    return any((r["pnl"] or {}).get("official") is not None for r in rows)
+    """Whether every book with PnL of a run (rows fact, pnl) has the official PnL itself (TDM#106, TDM#489): a day
+    with it for a part of the books is not an official day (``official_state``)."""
+    return official_state(rows)["state"] == "all"
 
 
 NOT_VALUED_KIND = {"otc": ("OTC-деривативы", "Деривативы"), "other": ("Прочее", "Прочее"), "fx": ("Валюта", "FX")}
@@ -384,15 +406,19 @@ def assemble(con, run: dict[str, Any]) -> dict[str, Any]:
                        (run["business_date"], HISTORY_DAYS - 1)).fetchall()[::-1]
     history, cum = [], 0.0
     for d, rows in [(h["business_date"].isoformat(), con.execute(
-            "SELECT jsonb_build_object('dv01', fact->'dv01', 'cs01', fact->'cs01', 'extra',"
+            "SELECT jsonb_build_object('book_id', fact->'book_id', 'dv01', fact->'dv01', 'cs01', fact->'cs01', 'extra',"
             " jsonb_build_object('risk_problem', fact->'extra'->'risk_problem')) AS fact, pnl FROM run_position"
             " WHERE run_id = %s AND fact IS NOT NULL", (h["run_id"],)).fetchall()) for h in hist] + [(as_of, prows)]:
         off, exp, dv01, cs01 = run_totals(rows)
         cum += off or 0.0
-        # officialReceived (TDM#106): pnlOfficial is the official PnL only when one arrived; else it is the explained
-        # PnL plus the FX basis (run_totals), and the pages must not call it official
+        # officialReceived (TDM#106): pnlOfficial is the official PnL only when it arrived for every book; else, for
+        # the books without it, it is the explained PnL plus the FX basis (run_totals), and the pages must not call it
+        # official. officialBooks (TDM#489): the official PnL comes per book; a partial day says which books lack it,
+        # and its unexplained is over the books with it only (officialBooks.pnlOfficial - officialBooks.pnlExplained)
+        st = official_state(rows)
         history.append({"date": d, "pnlOfficial": off, "pnlExplained": exp, "pnlCum": cum, "dv01": dv01,
-                        "cs01": cs01, "officialReceived": official_received(rows)})
+                        "cs01": cs01, "officialReceived": st["state"] == "all", "officialState": st["state"],
+                        "officialBooks": {k: v for k, v in st.items() if k != "state"}})
     # no previous market: prevDate null (R10), the funding accrual still over the previous weekday
     prev = run["prev_date"] or _prev_weekday(run["business_date"])
     zero_book = {"carry": 0.0, "fx": 0.0, "fxCbr": 0.0, "fxAllocated": 0.0, "inPositions": 0.0}
@@ -411,6 +437,7 @@ def assemble(con, run: dict[str, Any]) -> dict[str, Any]:
         "CBR_MEETINGS": cbr_meetings(con, run["business_date"]), "CARRY_SCENARIOS": DEFAULT_CARRY,
         "CARRY_HORIZONS": CARRY_HORIZONS,
         "official": {"asOf": as_of, "received": any(p["pnl"]["official"] is not None for p in positions),
+                     "state": history[-1]["officialState"], "missingBooks": history[-1]["officialBooks"]["missing"],
                      "basis": "CBR", "receivedAt": None},
         "positions": positions, "riskNotes": risk_notes(run),
         "funding": funding["lines"], "fundingPnl": funding["pnl"],
