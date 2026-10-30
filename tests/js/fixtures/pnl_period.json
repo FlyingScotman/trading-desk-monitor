@@ -170,8 +170,8 @@
     "carry_coupon": 5105704,
     "carry_pull": 216110,
     "carry_nosplit": 4234948,
-    "rates_linear": -4554694,
-    "rates_exact_lin": -4647645
+    "rates_linear": -4625581,
+    "rates_exact_lin": -4719979
    },
    "m": {
     "carry": 1,
@@ -188,8 +188,8 @@
     "carry_coupon": 23,
     "carry_pull": 23,
     "carry_nosplit": 0,
-    "rates_linear": 23,
-    "rates_exact_lin": 23
+    "rates_linear": 12,
+    "rates_exact_lin": 12
    }
   },
   "days": [
@@ -215,8 +215,8 @@
      "carry_coupon": 1102022,
      "carry_pull": 30034,
      "carry_nosplit": 724396,
-     "rates_linear": 192970,
-     "rates_exact_lin": 196909
+     "rates_linear": 347221,
+     "rates_exact_lin": 354308
     },
     "m": {
      "carry": 0,
@@ -233,8 +233,8 @@
      "carry_coupon": 2,
      "carry_pull": 2,
      "carry_nosplit": 0,
-     "rates_linear": 2,
-     "rates_exact_lin": 2
+     "rates_linear": 1,
+     "rates_exact_lin": 1
     },
     "date": "2026-09-28",
     "prevDate": "2026-09-25",
@@ -272,8 +272,8 @@
      "carry_coupon": 367914,
      "carry_pull": 10119,
      "carry_nosplit": 240492,
-     "rates_linear": 2714471,
-     "rates_exact_lin": 2769868
+     "rates_linear": 2704689,
+     "rates_exact_lin": 2759886
     },
     "m": {
      "carry": 0,
@@ -290,8 +290,8 @@
      "carry_coupon": 2,
      "carry_pull": 2,
      "carry_nosplit": 0,
-     "rates_linear": 2,
-     "rates_exact_lin": 2
+     "rates_linear": 1,
+     "rates_exact_lin": 1
     },
     "date": "2026-09-29",
     "prevDate": "2026-09-28",
@@ -329,8 +329,8 @@
      "carry_coupon": 368675,
      "carry_pull": 10196,
      "carry_nosplit": 239102,
-     "rates_linear": -860987,
-     "rates_exact_lin": -878558
+     "rates_linear": -844581,
+     "rates_exact_lin": -861817
     },
     "m": {
      "carry": 0,
@@ -347,8 +347,8 @@
      "carry_coupon": 2,
      "carry_pull": 2,
      "carry_nosplit": 0,
-     "rates_linear": 2,
-     "rates_exact_lin": 2
+     "rates_linear": 1,
+     "rates_exact_lin": 1
     },
     "date": "2026-09-30",
     "prevDate": "2026-09-29",
@@ -386,8 +386,8 @@
      "carry_coupon": 369534,
      "carry_pull": 10238,
      "carry_nosplit": 237450,
-     "rates_linear": -2842214,
-     "rates_exact_lin": -2900218
+     "rates_linear": -2660746,
+     "rates_exact_lin": -2715047
     },
     "m": {
      "carry": 0,
@@ -404,8 +404,8 @@
      "carry_coupon": 2,
      "carry_pull": 2,
      "carry_nosplit": 0,
-     "rates_linear": 2,
-     "rates_exact_lin": 2
+     "rates_linear": 1,
+     "rates_exact_lin": 1
     },
     "date": "2026-10-01",
     "prevDate": "2026-09-30",
@@ -443,8 +443,8 @@
      "carry_coupon": 370399,
      "carry_pull": 10238,
      "carry_nosplit": 235716,
-     "rates_linear": 134751,
-     "rates_exact_lin": 137502
+     "rates_linear": 23211,
+     "rates_exact_lin": 23686
     },
     "m": {
      "carry": 0,
@@ -461,8 +461,8 @@
      "carry_coupon": 2,
      "carry_pull": 2,
      "carry_nosplit": 0,
-     "rates_linear": 2,
-     "rates_exact_lin": 2
+     "rates_linear": 1,
+     "rates_exact_lin": 1
     },
     "date": "2026-10-02",
     "prevDate": "2026-10-01",
@@ -500,8 +500,8 @@
      "carry_coupon": 690641,
      "carry_pull": 40260,
      "carry_nosplit": 702275,
-     "rates_linear": -971189,
-     "rates_exact_lin": -991009
+     "rates_linear": -1008459,
+     "rates_exact_lin": -1029040
     },
     "m": {
      "carry": 0,
@@ -518,8 +518,8 @@
      "carry_coupon": 2,
      "carry_pull": 2,
      "carry_nosplit": 0,
-     "rates_linear": 2,
-     "rates_exact_lin": 2
+     "rates_linear": 1,
+     "rates_exact_lin": 1
     },
     "date": "2026-10-05",
     "prevDate": "2026-10-02",
@@ -557,8 +557,8 @@
      "carry_coupon": 230701,
      "carry_pull": 13344,
      "carry_nosplit": 232756,
-     "rates_linear": 2060480,
-     "rates_exact_lin": 2102531
+     "rates_linear": 2038412,
+     "rates_exact_lin": 2080013
     },
     "m": {
      "carry": 0,
@@ -575,8 +575,8 @@
      "carry_coupon": 2,
      "carry_pull": 2,
      "carry_nosplit": 0,
-     "rates_linear": 2,
-     "rates_exact_lin": 2
+     "rates_linear": 1,
+     "rates_exact_lin": 1
     },
     "date": "2026-10-06",
     "prevDate": "2026-10-05",
@@ -614,8 +614,8 @@
      "carry_coupon": 461286,
      "carry_pull": 26494,
      "carry_nosplit": 463712,
-     "rates_linear": -59373,
-     "rates_exact_lin": -60585
+     "rates_linear": 17527,
+     "rates_exact_lin": 17884
     },
     "m": {
      "carry": 0,
@@ -632,8 +632,8 @@
      "carry_coupon": 2,
      "carry_pull": 2,
      "carry_nosplit": 0,
-     "rates_linear": 2,
-     "rates_exact_lin": 2
+     "rates_linear": 1,
+     "rates_exact_lin": 1
     },
     "date": "2026-10-08",
     "prevDate": "2026-10-06",
@@ -671,8 +671,8 @@
      "carry_coupon": 230046,
      "carry_pull": 13140,
      "carry_nosplit": 231490,
-     "rates_linear": -2348493,
-     "rates_exact_lin": -2396422
+     "rates_linear": -2612854,
+     "rates_exact_lin": -2666178
     },
     "m": {
      "carry": 0,
@@ -689,8 +689,8 @@
      "carry_coupon": 2,
      "carry_pull": 2,
      "carry_nosplit": 0,
-     "rates_linear": 2,
-     "rates_exact_lin": 2
+     "rates_linear": 1,
+     "rates_exact_lin": 1
     },
     "date": "2026-10-09",
     "prevDate": "2026-10-08",
@@ -728,8 +728,8 @@
      "carry_coupon": 686932,
      "carry_pull": 39105,
      "carry_nosplit": 695099,
-     "rates_linear": -3749336,
-     "rates_exact_lin": -3825853
+     "rates_linear": -3809803,
+     "rates_exact_lin": -3887554
     },
     "m": {
      "carry": 0,
@@ -746,8 +746,8 @@
      "carry_coupon": 2,
      "carry_pull": 2,
      "carry_nosplit": 0,
-     "rates_linear": 2,
-     "rates_exact_lin": 2
+     "rates_linear": 1,
+     "rates_exact_lin": 1
     },
     "date": "2026-10-12",
     "prevDate": "2026-10-09",
@@ -785,8 +785,8 @@
      "carry_coupon": 227554,
      "carry_pull": 12942,
      "carry_nosplit": 232460,
-     "rates_linear": 1174226,
-     "rates_exact_lin": 1198190
+     "rates_linear": 1179802,
+     "rates_exact_lin": 1203880
     },
     "m": {
      "carry": 1,
@@ -803,8 +803,8 @@
      "carry_coupon": 3,
      "carry_pull": 3,
      "carry_nosplit": 0,
-     "rates_linear": 3,
-     "rates_exact_lin": 3
+     "rates_linear": 2,
+     "rates_exact_lin": 2
     },
     "date": "2026-10-13",
     "prevDate": "2026-10-12",
@@ -1304,8 +1304,8 @@
      "carry_coupon": 1267873,
      "carry_pull": -79245,
      "carry_nosplit": null,
-     "rates_linear": null,
-     "rates_exact_lin": null
+     "rates_linear": -70887,
+     "rates_exact_lin": -72334
     },
     "m": {
      "carry": 0,
@@ -1322,8 +1322,8 @@
      "carry_coupon": 0,
      "carry_pull": 0,
      "carry_nosplit": 0,
-     "rates_linear": 11,
-     "rates_exact_lin": 11
+     "rates_linear": 0,
+     "rates_exact_lin": 0
     },
     "ref": "DEMO-B|USD-1",
     "book": "DEMO-B",

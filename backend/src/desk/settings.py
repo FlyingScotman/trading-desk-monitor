@@ -8,8 +8,9 @@ server picks up edits without a restart. ``backend/.env.example`` lists every va
 ``<home>`` (``desk_home()``) is the per-user data folder, outside the install folder so that a new
 version unpacked anywhere finds the same settings and data: ``DESK_HOME`` (environment or env file),
 else ``%LOCALAPPDATA%\\DeskMonitor`` on Windows, else ``<repo>/.devdata`` in a git checkout (the dev
-layout), else ``~/.local/share/desk-monitor``. It holds ``settings.json``, ``hub_token``,
-``adapter-config/``, ``snapshots/``, ``inbox-archive/``, ``pg/`` (embedded store) and ``logs/``; the dev
+layout), else ``~/.local/share/desk-monitor``. It holds ``settings.json``, ``hub_token``, ``github_token``,
+``adapter-config/``, ``adapter-releases/`` (the adapter's updater), ``snapshots/``, ``inbox-archive/``, ``pg/``
+(embedded store) and ``logs/``; the dev
 checkout keeps its old names ``.devdata/inbox`` and ``.devdata/desk_pg``.
 
 * ``DESK_HUB_URL``         hub base URL, set per installation (no default: the address is
@@ -31,10 +32,15 @@ checkout keeps its old names ``.devdata/inbox`` and ``.devdata/desk_pg``.
 * ``DESK_STORE_URL``       desk store, a libpq URI ``postgresql://user:password@host:5432/desk``
                            (slice S5). Unset: an embedded server in ``<home>/pg`` (pgserver)
 * ``DESK_REPORT_DIR``      validation reports (none by default; ``<home>/reports`` is the usual place)
-* ``DESK_PRIVATE_ADAPTER`` the private adapter (08 §2): a package directory or a module name; unset: the
-                           folder in ``DESK_DEFAULT_PRIVATE_ADAPTER`` (process environment only, set by the
-                           Windows bundle's start script) if it exists, else the reference adapter
-                           ``desk.inbox.reference``
+* ``DESK_PRIVATE_ADAPTER`` the private adapter (08 §2): a package directory or a module name; set (environment,
+                           settings.json ``private_adapter`` or the env file) it always wins. Unset: the adapter the
+                           updater installed (``<home>/adapter-releases/current.json``, ``desk.updater.adapter``) or the
+                           folder in ``DESK_DEFAULT_PRIVATE_ADAPTER`` (process environment only, set by the Windows
+                           bundle's start script to its ``adapter\\`` package), whichever applies: the installed one
+                           when the bundle has none or its version (``__version__`` of the package, read as text) is
+                           not newer than the installed release's (unreadable: the installed one); else the reference
+                           adapter ``desk.inbox.reference``. ``Settings.private_adapter_source`` says which:
+                           ``env``, ``settings``, ``installed``, ``bundle`` or ``reference``
 * ``DESK_PRIVATE_ADAPTER_CONFIG``  the adapter's config folder (``ctx.config_dir``; fingerprinted; default
                            ``<home>/adapter-config``, created on demand)
 * ``DESK_PRIVATE_ADAPTER_SHA256``  the expected adapter fingerprint; loading fails on a mismatch
@@ -92,6 +98,11 @@ checkout keeps its old names ``.devdata/inbox`` and ``.devdata/desk_pg``.
                            ``python``, ``curl``, ``powershell``, or ``browser``: downloads by the browser only), the
                            folder the browser saves downloads to (default: the Windows «Загрузки» folder), and the
                            check for a new version when a page is opened (on; only in the Windows bundle)
+* ``DESK_ADAPTER_UPDATE_REPO``  the private adapter's releases (``desk.updater.adapter``, default
+                           ``FlyingScotman/trades-data-adapter``), read with
+* ``DESK_GITHUB_TOKEN``    a GitHub token (a fine-grained, read-only one for that repository: Contents read), else
+                           ``<home>/github_token`` (written by the settings page, never returned); sent only to
+                           ``api.github.com``, never logged
 * ``DESK_AUTH``, ``DESK_BIND_HOST``, ``DESK_PORT``, ``DESK_TLS_CERT``, ``DESK_TLS_KEY``, ``DESK_ALLOW_PLAIN_HTTP``,
   ``DESK_ADMIN_FROM_NETWORK``, ``DESK_SESSION_IDLE_MINUTES``, ``DESK_SESSION_MAX_HOURS``, ``DESK_LOGIN_MAX_FAILURES``,
   ``DESK_LOGIN_LOCKOUT_MINUTES``  users and network access (``desk.api.auth``, read when ``desk serve`` starts):
@@ -118,16 +129,22 @@ from urllib.parse import urlsplit
 
 from . import funding_settings
 from .inbox.runner import is_path_spec
+from .updater import adapter_store
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 BACKEND_ROOT = REPO_ROOT / "backend"
 DEV_HOME = REPO_ROOT / ".devdata"
 SETTINGS_FILE = "settings.json"
 TOKEN_FILE = "hub_token"
+GITHUB_TOKEN_FILE = "github_token"
 PROXY_PASSWORD_FILE = "proxy_password"
 HUB_TRANSPORTS = ("auto", "python", "curl")
 UPDATE_TRANSPORTS = ("auto", "python", "curl", "powershell", "browser")
 DEFAULT_UPDATE_REPO = "FlyingScotman/trading-desk-monitor"
+DEFAULT_ADAPTER_UPDATE_REPO = "FlyingScotman/trades-data-adapter"
+ADAPTER_SOURCES = ("env", "settings", "installed", "bundle", "reference")
+_SOURCE_LABELS = {"env": "environment", "settings": "settings.json", "installed": "installed release",
+                  "bundle": "bundle default", "reference": "reference"}
 _REPO_RE = re.compile(r"[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})/[A-Za-z0-9._-]{1,100}")
 ADAPTER_CONFIG_DIR = "adapter-config"
 ADAPTER_OUTPUT_DIR = "adapter-output"  # the files of the adapter's actions (08 §3 run_action), scanned as an inbox folder
@@ -176,6 +193,7 @@ JSON_KEYS: dict[str, tuple[str, str]] = {
     "update_transport": ("DESK_UPDATE_TRANSPORT", "str"),
     "update_downloads_dir": ("DESK_UPDATE_DOWNLOADS_DIR", "path"),
     "update_auto_check": ("DESK_UPDATE_AUTO_CHECK", "bool"),
+    "adapter_update_repo": ("DESK_ADAPTER_UPDATE_REPO", "str"),
     "history_days": ("DESK_HISTORY_DAYS", "int0"),
     "history_bonds_from": ("DESK_HISTORY_BONDS_FROM", "date"),
     "history_rates_from": ("DESK_HISTORY_RATES_FROM", "date"),
@@ -201,8 +219,8 @@ JSON_KEYS: dict[str, tuple[str, str]] = {
     "login_lockout_minutes": ("DESK_LOGIN_LOCKOUT_MINUTES", "int"),
 }
 PROXY_KEYS = {"https_proxy": "HTTPS_PROXY", "no_proxy": "NO_PROXY"}
-READ_ONLY_KEYS = ("hub_token", "hub_token_set", "proxy_password", "proxy_password_set", "home", "effective",
-                  "env_overrides", "error")
+READ_ONLY_KEYS = ("hub_token", "hub_token_set", "proxy_password", "proxy_password_set", "github_token",
+                  "github_token_set", "home", "effective", "env_overrides", "error")
 _TRUE, _FALSE = ("1", "true", "yes", "on"), ("0", "false", "no", "off")
 
 
@@ -282,11 +300,15 @@ class Settings:
     history_bonds_from: date = date(2024, 1, 3)  # the hub's history API: bonds from (its bond EOD starts here)
     history_rates_from: date = date(2010, 1, 1)  # the hub's history API: KBD, curves, fixings, FX from
     private_adapter_default: bool = False  # private_adapter came from DESK_DEFAULT_PRIVATE_ADAPTER
+    private_adapter_source: str = "reference"  # env, settings, installed (desk.updater.adapter), bundle, reference
     update_dir: Path | None = None  # update zips of the Windows bundle (desk.update)
     update_repo: str = DEFAULT_UPDATE_REPO  # GitHub Releases of the monitor (desk.updater)
     update_transport: str = "auto"  # how the server reaches GitHub; "browser": only the browser downloads
     update_downloads_dir: Path | None = None  # the browser's downloads folder; None: the Windows default
     update_auto_check: bool = True  # look for a new release when a page is opened (Windows bundle only)
+    adapter_update_repo: str = DEFAULT_ADAPTER_UPDATE_REPO  # GitHub Releases of the private adapter
+    github_token: str | None = field(default=None, repr=False)  # read-only token for adapter_update_repo
+    github_token_source: str = "not set"
     backfill: bool = True  # the autopilot computes the default runs of past dates (desk.backfill, R23)
     backfill_from: str = "2026-01-05"  # first date of the backfill (the hub's first eod_final close)
     backfill_budget_s: float = 600.0  # seconds of backfill runs per autopilot cycle (after every other step)
@@ -363,7 +385,7 @@ class Settings:
             ("snapshot_drop", str(self.snapshot_drop or "none")),
             ("store_url", mask_url(self.store_url) if self.store_url else f"not set: embedded store ({self.pg_dir})"),
             ("report_dir", str(self.report_dir or "none")),
-            ("private_adapter", (self.private_adapter + (" (bundle default)" if self.private_adapter_default else ""))
+            ("private_adapter", f"{self.private_adapter} ({_SOURCE_LABELS.get(self.private_adapter_source, '?')})"
              if self.private_adapter else "reference (desk.inbox.reference)"),
             ("private_adapter_config", str(self.private_adapter_config or "none")),
             ("private_adapter_sha256", self.private_adapter_sha256 or "not pinned"),
@@ -397,6 +419,8 @@ class Settings:
             ("update_transport", self.update_transport),
             ("update_downloads_dir", str(self.update_downloads_dir or "default (the Windows Downloads folder)")),
             ("update_auto_check", "on" if self.update_auto_check else "off"),
+            ("adapter_update_repo", self.adapter_update_repo),
+            ("github_token", "set (" + self.github_token_source + ")" if self.github_token else self.github_token_source),
             ("history_days", str(self.history_days) if self.history_days else "0 (off: the cached dates only)"),
             ("history_bonds_from", self.history_bonds_from.isoformat()),
             ("history_rates_from", self.history_rates_from.isoformat()),
@@ -613,6 +637,39 @@ def _token(proc: dict[str, str], file_env: dict[str, str], home: Path) -> tuple[
     return None, "not set"
 
 
+def _github_token(proc: dict[str, str], file_env: dict[str, str], home: Path) -> tuple[str | None, str]:
+    """DESK_GITHUB_TOKEN of the environment, then of the env file, then <home>/github_token."""
+    for layer, label in ((proc, "DESK_GITHUB_TOKEN"), (file_env, "DESK_GITHUB_TOKEN (env file)")):
+        if (layer.get("DESK_GITHUB_TOKEN") or "").strip():
+            return layer["DESK_GITHUB_TOKEN"].strip(), label
+    f = home / GITHUB_TOKEN_FILE
+    try:
+        t = f.read_text(encoding="utf-8-sig").strip() if f.is_file() else ""
+    except OSError:
+        t = ""
+    return (t, f"file {f}") if t else (None, "not set")
+
+
+def _resolve_adapter(proc: dict[str, str], doc: dict[str, Any], file_env: dict[str, str], explicit: str | None,
+                     home: Path) -> tuple[str | None, bool, str]:
+    """(private_adapter, from the bundle, source): see ``DESK_PRIVATE_ADAPTER`` in the module doc."""
+    if explicit is not None:
+        source = "env" if proc.get("DESK_PRIVATE_ADAPTER") else \
+            "settings" if isinstance(doc.get("private_adapter"), str) and doc["private_adapter"].strip() else "env"
+        return (str(_path(explicit)) if is_path_spec(explicit) else explicit), False, source
+    fallback = _path(proc.get("DESK_DEFAULT_PRIVATE_ADAPTER"))
+    bundle = fallback if fallback is not None and fallback.is_dir() else None
+    got = adapter_store.installed(home)
+    if got is not None:
+        pkg, version = got
+        bundle_version = adapter_store.package_version(bundle) if bundle is not None else None
+        if bundle is None or adapter_store.compare(version, bundle_version) != "older":
+            return str(pkg), False, "installed"
+    if bundle is not None:
+        return str(bundle), True, "bundle"  # the bundle's adapter, below every other layer
+    return None, False, "reference"
+
+
 def _build(proc: dict[str, str], doc: dict[str, Any], file_env: dict[str, str], home: Path) -> Settings:
     env: dict[str, str] = {}
     for layer in (file_env, _json_layer(doc, home), proc):  # lowest first
@@ -680,11 +737,7 @@ def _build(proc: dict[str, str], doc: dict[str, Any], file_env: dict[str, str], 
     else:
         inbox_dirs = dirs(file_env.get("DESK_INBOX_DIRS"))
 
-    adapter, adapter_default = get("DESK_PRIVATE_ADAPTER"), False
-    if adapter is not None and is_path_spec(adapter):
-        adapter = str(_path(adapter))
-    elif adapter is None and (fallback := _path(proc.get("DESK_DEFAULT_PRIVATE_ADAPTER"))) and fallback.is_dir():
-        adapter, adapter_default = str(fallback), True  # the bundle's adapter, below every other layer
+    adapter, adapter_default, adapter_source = _resolve_adapter(proc, doc, file_env, get("DESK_PRIVATE_ADAPTER"), home)
     backfill_from = (get("DESK_BACKFILL_FROM") or defaults.backfill_from).strip()
     if not _is_date(backfill_from):
         raise SettingsError(f"DESK_BACKFILL_FROM (backfill_from) must be a date YYYY-MM-DD, not {backfill_from!r}")
@@ -692,6 +745,11 @@ def _build(proc: dict[str, str], doc: dict[str, Any], file_env: dict[str, str], 
     if not _REPO_RE.fullmatch(update_repo):
         raise SettingsError(f"DESK_UPDATE_REPO (update_repo) must be owner/name of a GitHub repository, "
                             f"not {update_repo!r}")
+    adapter_update_repo = (get("DESK_ADAPTER_UPDATE_REPO") or defaults.adapter_update_repo).strip()
+    if not _REPO_RE.fullmatch(adapter_update_repo):
+        raise SettingsError(f"DESK_ADAPTER_UPDATE_REPO (adapter_update_repo) must be owner/name of a GitHub "
+                            f"repository, not {adapter_update_repo!r}")
+    github_token, github_token_source = _github_token(proc, file_env, home)
     update_transport = (get("DESK_UPDATE_TRANSPORT") or "auto").strip().lower()
     if update_transport not in UPDATE_TRANSPORTS:
         raise SettingsError(f"DESK_UPDATE_TRANSPORT (update_transport) must be one of "
@@ -757,11 +815,15 @@ def _build(proc: dict[str, str], doc: dict[str, Any], file_env: dict[str, str], 
         history_bonds_from=day("DESK_HISTORY_BONDS_FROM", defaults.history_bonds_from),
         history_rates_from=day("DESK_HISTORY_RATES_FROM", defaults.history_rates_from),
         private_adapter_default=adapter_default,
+        private_adapter_source=adapter_source,
         update_dir=_path(get("DESK_UPDATE_DIR")),
         update_repo=update_repo,
         update_transport=update_transport,
         update_downloads_dir=_path(get("DESK_UPDATE_DOWNLOADS_DIR")),
         update_auto_check=flag("DESK_UPDATE_AUTO_CHECK", defaults.update_auto_check),
+        adapter_update_repo=adapter_update_repo,
+        github_token=github_token,
+        github_token_source=github_token_source,
         backfill=flag("DESK_BACKFILL", defaults.backfill),
         backfill_from=backfill_from,
         backfill_budget_s=num("DESK_BACKFILL_BUDGET_S", defaults.backfill_budget_s),
@@ -854,6 +916,19 @@ def write_hub_token(token: str | None, home: Path | None = None) -> Path | None:
         return None
     if not token.isprintable() or any(c.isspace() for c in token):
         raise SettingsError("the token must be one line without spaces")
+    return atomic_write_text(path, token + "\n", private=True)
+
+
+def write_github_token(token: str | None, home: Path | None = None) -> Path | None:
+    """Store the GitHub token in ``<home>/github_token`` (0600 on POSIX); empty or None removes the file."""
+    path = (home or desk_home()) / GITHUB_TOKEN_FILE
+    token = (token or "").strip()
+    if not token:
+        path.unlink(missing_ok=True)
+        return None
+    if not re.fullmatch(r"[A-Za-z0-9_\-.]{20,400}", token):
+        raise SettingsError("Токен GitHub — одна строка из латинских букв, цифр и «_» (github_pat_… или ghp_…), "
+                            "без пробелов и кавычек.")
     return atomic_write_text(path, token + "\n", private=True)
 
 

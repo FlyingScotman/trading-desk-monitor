@@ -437,7 +437,7 @@ details.sf-grp[open] > summary::before{content:"▾"}
             <label for="private_adapter">Папка адаптера</label>
             <div><input class="inp mono" id="private_adapter" data-key="private_adapter" placeholder="C:\DeskMonitor\adapter" autocomplete="off">
               <p class="auto" data-auto="private_adapter"></p>
-              <p class="hint">Указывайте, только чтобы заменить адаптер из комплекта (папка с __init__.py).</p></div>
+              <p class="hint">Указывайте, только чтобы заменить адаптер из комплекта (папка с __init__.py). Пока поле заполнено, «Обновление адаптера» не используется.</p></div>
             <label for="private_adapter_config">Папка настроек адаптера</label>
             <div><input class="inp mono" id="private_adapter_config" data-key="private_adapter_config" autocomplete="off">
               <p class="auto" data-auto="private_adapter_config"></p>
@@ -471,6 +471,12 @@ details.sf-grp[open] > summary::before{content:"▾"}
               <p class="hint">«Запустить» в «Действиях адаптера». Пусто — 900.</p></div>
           </div></details>
         </div>
+      </div>
+      <!-- Обновление адаптера: выпуски закрытого репозитория адаптера по токену GitHub (desk-adapter-updater.js;
+           данные: /api/v1/update/adapter*) -->
+      <div class="card" id="ad-upd-card">
+        <div class="hd"><h2>Обновление адаптера</h2><span class="mut3">выпуски адаптера с GitHub — по токену или через браузер; ставится только по кнопке, без перезапуска</span></div>
+        <div class="bd" id="ad-upd"><span class="muted">Загрузка…</span></div>
       </div>
       <div class="card" id="ad-status" hidden>
         <div class="hd"><h2>Состояние адаптера</h2><span class="mut3" id="ad-status-at"></span><span class="sp"></span><button class="ibtn" id="ad-status-refresh" type="button">Обновить</button></div>
@@ -1211,7 +1217,7 @@ const EFF = [
   ['hub_token_source','Источник токена'], ['hub_ca_bundle','Сертификат CA'], ['hub_timeout_s','Таймаут запроса, сек'],
   ['https_proxy','Прокси'], ['proxy_user','Логин прокси'], ['proxy_password_set','Пароль прокси задан'], ['hub_transport','Способ подключения'], ['no_proxy','Без прокси для'], ['snapshot_cache','Срезы маркет-даты'], ['snapshot_drop','Папка ручной загрузки срезов'],
   ['store','Хранилище'], ['pg_dir','Встроенная PostgreSQL'], ['report_dir','Отчёты валидации'],
-  ['private_adapter','Адаптер'], ['private_adapter_default','Адаптер из комплекта'], ['private_adapter_config','Папка настроек адаптера'], ['private_adapter_sha256','Закреплённый отпечаток адаптера'],
+  ['private_adapter','Адаптер'], ['private_adapter_default','Адаптер из комплекта'], ['private_adapter_source','Откуда адаптер'], ['adapter_update_repo','Репозиторий выпусков адаптера'], ['github_token_source','Токен GitHub'], ['private_adapter_config','Папка настроек адаптера'], ['private_adapter_sha256','Закреплённый отпечаток адаптера'],
   ['acquisition_python','Python для получения данных'],
   ['inbox_dirs','Папки с отчётами'], ['inbox_archive','Архив принятых файлов'], ['inbox_poll_seconds','Период опроса, сек'], ['adapter_check_timeout_s','Проверка формы адаптером, сек'],
   ['autopilot','Автообновление'], ['intraday','Расчёт внутри дня'], ['autopilot_sync_last','Загружать последних дат'],
@@ -1260,8 +1266,10 @@ const AUTO = {
   inbox_archive(){ return {v:dflt('inbox_archive'), how:'в папке данных'}; },
   private_adapter(){
     const a = S.detect && S.detect.defaults, eff = (S.data && S.data.effective) || {};
-    const def = a ? a.private_adapter : (eff.private_adapter_default ? eff.private_adapter : null);
-    return def ? {v:def, how:'из комплекта программы'} : {v:'эталонный (читает CSV)', how:'в комплекте адаптера нет'};
+    const def = a ? a.private_adapter : (eff.private_adapter_default || eff.private_adapter_source === 'installed' ? eff.private_adapter : null);
+    const installed = (a ? a.private_adapter_source : eff.private_adapter_source) === 'installed';
+    return def ? {v:def, how:installed ? 'установлен «Обновлением адаптера»' : 'из комплекта программы'}
+      : {v:'эталонный (читает CSV)', how:'в комплекте адаптера нет'};
   },
   private_adapter_config(){ return {v:dflt('private_adapter_config'), how:'в папке данных'}; },
 };
@@ -2000,6 +2008,7 @@ function mountTabs(a, reload){
 })();
 </script>
 <script src="desk-updater.js" data-mode="panel"></script>
+<script src="desk-adapter-updater.js"></script>
 <script>
 'use strict';
 /* ---------- Диагностика (R13): /api/v1/diagnostics — JSON о работе программы здесь, без приватных данных;

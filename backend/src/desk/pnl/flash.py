@@ -79,10 +79,10 @@ Key                         Definition
 ``received_coupon_rub``,    ``received_rub`` split into the coupons and the principal (amortization, redemption) paid
 ``received_principal_rub``  in (D-1, D]; the coupons are also in ``carry_coupon``
 ``rates_linear_curves``     ``{published curve: {bucket: RUB}}``: the terms of ``rates_linear`` (D-1 bucket DV01 x that
-                            curve's move), a bucket without a move left out; they sum to ``rates_linear``. An OFZ in
-                            RUONIA + basis has only ``RUB OFZ`` (its basis risk x the KBD's par move): its
-                            ``rates_linear_ruonia`` and ``rates_linear_basis`` split the same total by factor, not by
-                            bucket
+                            curve's move; a foreign bond's at the D rate, as ``rates``), a bucket without a move left
+                            out; they sum to ``rates_linear``. An OFZ in RUONIA + basis has only ``RUB OFZ`` (its
+                            basis risk x the KBD's par move): its ``rates_linear_ruonia`` and ``rates_linear_basis``
+                            split the same total by factor, not by bucket
 ``curve_moves_bp``          ``{published curve: {bucket: bp}}``: the moves those terms use, in the unit of the buckets
                             (``FlashCurves.zero_move_bp``); an OFZ in RUONIA + basis also RUONIA's OIS par move
 ``prev``                    the D-1 inputs the steps start from, at the quantity of D (the run revalues the D-1
@@ -96,6 +96,12 @@ Key                         Definition
   ``proxy_curves_for_risk``; batch 1, item 5) takes the same steps in its currency on that curve (its flows, PV and
   Z-spread are in it); each component is converted at the D market rate, and the rate move on the D-1 PV,
   ``fx_delta_ccy x (rate_D - rate_D-1)``, is ``fx_gross`` (``orchestrator.with_cbr`` adds ``fx_gross_cbr``).
+- Units of the linear terms (TDM#418): ``prev.risk()`` (and ``prev.ofz_ruonia``) is core's bucket DV01 in RUB at the
+  D-1 market rate (core values a foreign bond in its currency and converts every sensitivity at its snapshot's rate,
+  ``fx_translated_factor_risk``; ``BondValuation.fx_rate``). ``rates_linear``, ``rates_linear_curves`` and
+  ``rates_linear_ruonia`` / ``_basis`` take it x ``rate_D / rate_D-1``: in RUB at the D rate, as ``rates``, so the
+  day's FX move is in ``fx_gross`` only, never in the linear rates. A RUB bond's factor is 1. ``prev.risk`` in
+  ``extra`` stays the D-1 fact's (RUB at the D-1 rate).
 
 Check: ``carry + rolldown + rates + spread + other (+ fx_gross) == q * (dirty_D - dirty_D-1) + received``,
 where both dirty prices come from the published valuations (RUB), not from the steps.
@@ -297,7 +303,8 @@ class FlashPnl:
     identity_error: float
     rates_linear: float
     """Σ over the curves of the D-1 bucket DV01 × that curve's zero move per pillar: the first-order estimate of
-    ``rates``."""
+    ``rates``. In RUB at the D rate, as ``rates``: a foreign bond's D-1 DV01 (RUB at the D-1 rate) x ``rate_D /
+    rate_D-1`` (module docstring, TDM#418)."""
     price_basis: tuple[str, str]
     fx_gross: float = 0.0
     """The FX revaluation of a foreign-face bond (``pnl.direct.split_fx``) at the market rates (MOEX 19:00,
@@ -599,21 +606,25 @@ def explain(prev: BondValuation, cur: BondValuation, curves: FlashCurves,
         v_spread = pv(s1, curves.cur_curves, cur.z_spread_bp, True) + received
     except (ValueError, RuntimeError, CoreRejection) as e:
         raise NoPnl("core_error", str(e)) from e
-    linear, kbd = 0.0, RISK_CURVES[KBD_CURVE_ID]
+    # The D-1 risk is in RUB at the D-1 rate (core converts a foreign bond's sensitivities at its snapshot's rate,
+    # ``fx_translated_factor_risk``; TDM#418): x f1 / f0 puts the linear terms at the D rate, as ``rates`` (1 for RUB).
+    linear, kbd, to_d = 0.0, RISK_CURVES[KBD_CURVE_ID], f1 / f0
     used: list[tuple[str, dict[str, float], dict[str, float]]] = []  # the same terms by bucket (TDM#406)
     for c, bs in prev.risk().items():
         if prev.ofz_ruonia and c != kbd and fl is None:  # an OFZ in RUONIA + basis: the KBD's own move is its first order
             continue  # (below). A KBD floater (TDM#467) is discounted on RUONIA: its RUB RUONIA (RUONIA less the basis,
             # the discount) moves with RUONIA's own move, B dK + (R - B) dO, so the basis part is B (dK - dO), not B dK - R dO
         move = curves.zero_move_bp(PUBLISHED_TO_CORE.get(c, c))
+        bs = {b: x * to_d for b, x in bs.items()}
         linear += sum(x * move.get(b, 0.0) for b, x in bs.items())
         used.append((c, bs, move))
     ofz, d_ois = None, None
-    if prev.ofz_ruonia:  # RUONIA + basis: the day moved the KBD itself (dK), so B dK; RUONIA's part R dO, the rest basis
+    ofz_ruonia = {b: x * to_d for b, x in prev.ofz_ruonia.items()}
+    if ofz_ruonia:  # RUONIA + basis: the day moved the KBD itself (dK), so B dK; RUONIA's part R dO, the rest basis
         d_ois = curves.zero_move_bp(RUONIA_OIS_CURVE_ID)
-        ruonia = math.fsum(x * d_ois.get(b, 0.0) for b, x in prev.ofz_ruonia.items())
+        ruonia = math.fsum(x * d_ois.get(b, 0.0) for b, x in ofz_ruonia.items())
         ofz = (ruonia, linear - ruonia)
-    terms, moves = _linear_terms(used, prev.ofz_ruonia, d_ois)
+    terms, moves = _linear_terms(used, ofz_ruonia, d_ois)
     coupon_received, coupon = _coupon_income(prev, fl, curves, s0, s1)
     v1 = q * cur.dirty_rub / f1 + received
     total = q * (cur.dirty_rub - prev.dirty_rub) + received * f1
