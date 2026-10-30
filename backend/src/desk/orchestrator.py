@@ -23,6 +23,7 @@ from rub_fixed_income import (
     KBD_MODEL_VERSION,
     BusinessCalendar,
     CoreRejection,
+    CurveBootstrapRequest,
     CurveEntry,
     DiscountCurve,
     MarketSnapshot,
@@ -206,8 +207,12 @@ class EodContext:
 
     def risk_curve(self, curve_id: str, built: DiscountCurve) -> Any:
         """The source core's risk engine takes for ``curve_id``: its bootstrap request when it is a quote curve,
-        else ``built``."""
-        return next((c.curve for c in self.quote_curves if c.curve_id == curve_id), built)
+        else ``built``. RUONIA's request is continued past its last quote as the core calls continue it
+        (``valuation.bonds.OIS_TAIL``, ``rates.ois_tail`` on the run's KBD, TDM#499), so its PV is ``built``'s."""
+        src = next((c.curve for c in self.quote_curves if c.curve_id == curve_id), built)
+        if curve_id == rates.RUONIA_OIS_CURVE_ID and isinstance(src, CurveBootstrapRequest):
+            return rates.ois_tail(src, self.curve)[0]
+        return src
 
     @property
     def discount(self) -> tuple[str, DiscountCurve, str | None]:
