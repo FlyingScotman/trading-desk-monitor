@@ -60,8 +60,9 @@ delta), ``basis01`` (``FXBASIS|<ccy>``, RUB per bp), ``fixings`` (fixed / pendin
 ``received_rub`` of ``horizon_portfolio`` at each payment date, a difference of two horizons); an FX leg's amounts per
 currency are its terms' (``out_on``: the first date core no longer counts it). A flow of unknown amount (``amount``
 None: an NDF's cash, a date core refused) stops the PnL only when it falls in the window. A coupon is core's projection
-on D-1: the fixings between D-1 and the payment are forwards, so the difference to the coupon actually paid is in no
-day's PnL (not in the change of PV of D, which no longer holds the period). ``pnl.direct`` adds those of D-1 falling in (D-1, D] to the change of PV. A row whose trades have all
+on D-1: with a payment lag of a business day or more it rests wholly on the fixings and equals the coupon paid
+(core's ``_compounded_known``); a difference is possible only at lag 0 (a day of forward) or when a fixing is revised,
+and it is in no day's PnL (the change of PV of D no longer holds the period). ``pnl.direct`` adds those of D-1 falling in (D-1, D] to the change of PV. A row whose trades have all
 paid their last flow, the last within ``FLOW_DAYS`` of the date, is valued as settled (``_settled_row``: PV 0, no
 risk, ``extra.settled``) instead of ``NotValued("settled")``, so that its last day has a PnL; when only some trades
 ended, the others are valued and the ended ones noted.
@@ -1035,8 +1036,8 @@ def _rates_flows(snap: Any, policy: ValuationPolicy, instruments: list[Any], pos
         for iid in sel:
             row = got.get(iid)
             if row is None:
-                stale.add(iid)
-                if h in jobs[iid]:
+                if h in jobs[iid]:  # its own payment is unread; a failure on another's date loses nothing of its:
+                    stale.add(iid)  # ``seen`` stays, and the next difference holds only its own payments
                     add(iid, h, None)
                 continue
             amount, seen[iid] = row.received_rub - seen.get(iid, 0.0), row.received_rub

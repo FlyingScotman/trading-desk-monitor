@@ -353,3 +353,45 @@ def test_a_refused_horizon_stops_the_pnl_only_when_its_date_is_in_the_window(ctx
     o, p = day(prev, ctx, later, "S2")
     assert [(f["amount"], f["date"]) for f in p.valuation.extra["flows"]] == [(None, "2026-10-21")]
     assert o.no_pnl is None and o.pnl.received_rub == 0.0 and abs(o.pnl.total) < 1e5
+
+
+def test_a_refusal_loses_only_the_payment_of_its_own_date(ctx, prev, monkeypatch):
+    """One row: swap A pays 15.10, swap B 20.10, a REPO R on 16.10 (start) and 28.10 (end). A horizon core refuses on
+    R's own date makes R's payment there unknown; the next success on another date moves ``seen`` past it, so R's later
+    payment is read right (had the next success been R's own date, its difference would hold both: unknown); one
+    refused on B's date leaves R's payments as they are with no refusal (``seen`` is not moved by a failure)."""
+    import desk.valuation.derivatives as mod
+
+    real = mod.horizon_portfolio
+    fail: set[date] = set()
+
+    def flaky(**k):
+        if k["horizon_date"] in fail:
+            raise ValueError("refused")
+        return real(**k)
+
+    monkeypatch.setattr(mod, "horizon_portfolio", flaky)
+    terms = [{**r, "position_id": "P"} for r in (
+        *swap("A", "2027-09-14"), *swap("B", "2027-09-19", start_date="2026-09-19"),
+        repo("R", "reverse_repo", "2026-10-16", "2026-10-28", fixed_rate_pct="16.1", day_count="ACT/365"))]
+
+    def flows():
+        _, p = day(prev, ctx, terms, "P")
+        return {(f["trade_id"], f["date"]): f["amount"] for f in p.valuation.extra["flows"]}
+
+    base = flows()
+    assert {k for k in base if k[0] == "R"} == {("R", "2026-10-16"), ("R", "2026-10-28")}
+    assert all(v is not None for v in base.values())
+    fail.add(date(2026, 10, 16))  # R's own date
+    own = flows()
+    assert own[("R", "2026-10-16")] is None
+    assert own[("R", "2026-10-28")] == pytest.approx(base[("R", "2026-10-28")])  # 20.10 read between: seen moved
+    assert own[("A", "2026-10-15")] == pytest.approx(base[("A", "2026-10-15")])
+    assert own[("B", "2026-10-20")] == pytest.approx(base[("B", "2026-10-20")])
+    fail.clear()
+    fail.add(date(2026, 10, 20))  # B's date: R is in the batch, but it is not its payment
+    other = flows()
+    assert other[("B", "2026-10-20")] is None
+    assert other[("R", "2026-10-16")] == pytest.approx(base[("R", "2026-10-16")])
+    assert other[("R", "2026-10-28")] == pytest.approx(base[("R", "2026-10-28")])
+    assert other[("A", "2026-10-15")] == pytest.approx(base[("A", "2026-10-15")])
