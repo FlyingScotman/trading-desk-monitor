@@ -52,7 +52,8 @@ def seeded(store_url):
             books=[{"book_id": "B1", "name": "Old name", "entity": "ENT1", "desk": "FX"},
                    {"book_id": "B9", "name": "Gone", "entity": "ENT1", "desk": "Credit"}])
         insert(con, "2026-10-13", cut="eod_preliminary", ocp=block("computed", [line("B1", "USD", 9e9)]))
-        ids["d2"] = insert(con, "2026-10-13", ocp=block("computed", [line("B1", "USD", 2e6)]))
+        ids["d2"] = insert(con, "2026-10-13", ocp=block("computed", [line("B1", "USD", 2e6)]), fx=[
+            {"ccy": "USD", "rate": 81.0, "rate_source": "cbr"}, {"ccy": "CNY", "rate": 11.2, "rate_source": "cbr"}])
         ids["d3"] = insert(con, "2026-10-14")  # before B2: no block
         ids["d4"] = insert(con, "2026-10-15", ocp={"version": 1, "status": "computed", "text": "v1"})
         insert(con, "2026-10-16", ocp=block("computed", [line("B1", "USD", 7e9)]), status="failed")
@@ -84,9 +85,13 @@ def test_days_are_the_saved_published_ocp(seeded):
          "reported": 20e6, "validDate": None},
         {"entity": "ENT2", "book": "B4", "books": ["B4"], "ccy": "EUR", "amount": -2e6, "source": "derived",
          "reported": None, "validDate": None}]
-    # rates: market and CBR; no CBR rate in the run: the market one, as the pages' FX_CBR
+    # rates: market and CBR; a currency without its CBR rate: none, never the market one (USD stays at the CBR
+    # rate: the equivalent would mix two sources)
     assert d1["fx"] == {"USD": {"market": 80.0, "cbr": 79.5, "source": "moex_1900"},
-                        "CNY": {"market": 11.0, "cbr": 11.0, "source": "moex_1900"}}
+                        "CNY": {"market": 11.0, "cbr": None, "source": "moex_1900"}}
+    # a run with no CBR rate at all (before R26) valued on the CBR rate: its rates for both, as the pages' FX_CBR
+    assert days["2026-10-13"]["fx"] == {"USD": {"market": 81.0, "cbr": 81.0, "source": "cbr"},
+                                        "CNY": {"market": 11.2, "cbr": 11.2, "source": "cbr"}}
     # before B2, a v1 block: a day without lines, its state says why
     assert days["2026-10-14"]["state"] == "not_computed" and days["2026-10-14"]["lines"] == []
     assert days["2026-10-15"]["state"] == "computed" and days["2026-10-15"]["basis"] is None

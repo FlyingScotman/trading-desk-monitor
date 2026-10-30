@@ -14,7 +14,7 @@
 .c16-badge { display: inline-block; padding: 1px 9px; border-radius: 999px; font-size: 12px; font-weight: 600; border: 1px solid var(--warn); color: var(--warn); background: color-mix(in srgb, var(--warn) 12%, transparent); white-space: nowrap; margin-left: 8px; }
 .c16-msg { padding: 24px; text-align: center; color: var(--fg-2); }
 .k-tbl tr.tot td { font-weight: 650; border-top: 1px solid var(--line-2); background: var(--panel-2); }
-.k-tbl .c16-src { font-size: 11px; color: var(--fg-3); margin-left: 6px; }
+.k-tbl .c16-src { font-size: 11px; color: var(--fg-3); margin-left: 2px; }
 @media (max-width: 720px) { .k-panel > .hd { flex-wrap: wrap; } }
 </style>
 </head>
@@ -57,6 +57,8 @@
   // Общая ОВП: бо́льшая из сумм длинных и коротких позиций по валютам в USD-эквиваленте, со знаком преобладающей
   // стороны (правило макета; владелец его ещё не подтвердил — меняется здесь)
   const overall = usd => { let l = 0, s = 0; usd.forEach(v => { if (v > 0) l += v; else if (v < 0) s -= v; }); return l >= s ? l : -s; };
+  // общая ОВП набора валют: null, если у одной из них нет USD-эквивалента (курса) — неполная цифра не выглядит полной
+  const total = usd => usd.some(v => v == null) ? null : overall(usd);
   const mm = v => v == null ? null : v / 1e6;
   const fmt = v => v == null ? '<span class="mut3">—</span>' : '<span class="' + f.cls(Math.round(v * 10)) + '">' + f.s(v, 1) + '</span>';
   // курс валюты, ₽ за единицу, выбранного источника на день; USD-эквивалент (null — курса нет)
@@ -69,7 +71,7 @@
   const bookName = id => ((M.book || {})[id] || (H.books || {})[id] || {}).name || id;
   // суммы дня под фильтром шапки: по валютам и по строкам (книга или часть отчёта)
   function slice(d) {
-    const sc = K.ocpScope(d.lines || [], H.books || {}) || { lines: [], notes: [] };
+    const sc = K.ocpScope(d.lines || [], H.books || {}) || { lines: [], notes: [], partial: false };
     const by = {}, rows = new Map();
     sc.lines.forEach(x => {
       if (x.ccy === 'RUB' || x.amount == null) return;
@@ -80,7 +82,7 @@
       if (x.validDate && x.validDate < d.date) r.valid = x.validDate;
       rows.set(k, r);
     });
-    return { by, rows: [...rows.values()], notes: sc.notes, ccys: Object.keys(by).sort(ccyOrder) };
+    return { by, rows: [...rows.values()], notes: sc.notes, partial: !!sc.partial, ccys: Object.keys(by).sort(ccyOrder) };
   }
   const usable = d => !!(d && d.basis && !NO_OCP[d.state]);
 
@@ -124,7 +126,7 @@
     if (chart) { chart.dispose(); chart = null; }
     const days = H.days || [], last = days[days.length - 1];
     const d = last && last.date === H.asOf ? last : { date: H.asOf, state: 'not_computed', basis: null, fx: {}, lines: [] };
-    const ok = usable(d), T = ok ? slice(d) : { by: {}, rows: [], notes: [], ccys: [] };
+    const ok = usable(d), T = ok ? slice(d) : { by: {}, rows: [], notes: [], partial: false, ccys: [] };
     const C = T.ccys;
     const EMPTY = '<div class="k-empty">' + (!ok ? 'ОВП за ' + f.date(d.date) + ' нет: ' + esc(NO_OCP[d.state] || 'прогон до публикуемой ОВП') : 'Нет валютной позиции') + '</div>';
     view.innerHTML = '';
@@ -134,7 +136,8 @@
     const sp = panel('ОВП на ' + f.dshort(d.date) + (d.state === 'no_report' ? '<span class="c16-badge" title="ОВП из позиций">отчёта ОВП нет</span>' : ''));
     const m = sp.querySelector('.m'); m.style.cssText = 'display:inline-flex;gap:6px;flex-wrap:wrap;align-items:center';
     const nt = h('span'), u = h('span'), r = h('span'); m.append(nt, u, r);
-    if (T.notes.length) nt.innerHTML = '<span class="mut3" title="' + esc(T.notes.join('; ')) + '">под фильтром — не вся</span>';
+    // часть отчёта по юрлицу не вошла из-за фильтра — пометка; прочие заметки фильтра (портфели) — в подсказке общей ОВП
+    if (T.partial) nt.innerHTML = '<span class="mut3" title="' + esc(T.notes.join('; ')) + '">под фильтром — не вся</span>';
     K.seg(u, [['ccy', 'в валюте'], ['usd', 'в USD']], S.unit, v => { S.unit = v; render(); });
     const rs = K.seg(r, Object.entries(RATES).map(([k, x]) => [k, 'курс ' + x.name]), S.rate, v => { S.rate = v; render(); });
     (rs.querySelectorAll ? rs.querySelectorAll('button') : []).forEach((b, i) => { b.title = Object.values(RATES)[i].title; });
@@ -142,7 +145,7 @@
     else {
       const usd = C.map(c => toUsd(T.by[c], c, d)), noRate = C.filter((c, k) => usd[k] == null);
       sp.querySelector('.bd').innerHTML = '<div class="c16-sum">' +
-        '<div class="k-kpi tot" data-ocp-total title="бо́льшая из сумм длинных и коротких позиций по валютам, USD-эквивалент; знак — преобладающей стороны' + (noRate.length ? '. Без курса, не входят: ' + esc(noRate.join(', ')) : '') + '"><div class="l">Общая ОВП</div><div class="v">' + fmt(mm(overall(usd.filter(v => v != null)))) + ' <span class="u">mm USD</span></div><div class="s">' + (noRate.length ? 'без ' + esc(noRate.join(', ')) : '&nbsp;') + '</div></div>' +
+        '<div class="k-kpi tot" data-ocp-total title="бо́льшая из сумм длинных и коротких позиций по валютам, USD-эквивалент; знак — преобладающей стороны' + (noRate.length ? '. Без курса, не входят: ' + esc(noRate.join(', ')) : '') + (T.notes.length ? '. ' + esc(T.notes.join('; ')) : '') + '"><div class="l">Общая ОВП</div><div class="v">' + fmt(mm(overall(usd.filter(v => v != null)))) + ' <span class="u">mm USD</span></div><div class="s">' + (noRate.length ? 'без ' + esc(noRate.join(', ')) : '&nbsp;') + '</div></div>' +
         C.map((c, k) => '<div class="k-kpi" data-ocp-ccy="' + esc(c) + '"><div class="l"><i class="c" style="background:' + K.ccyColor(c) + '"></i>' + esc(c) + '</div><div class="v">' + fmt(mm(shown(T.by[c], c, d))) + ' <span class="u">' + unitOf(c) + '</span></div><div class="s">' +
           (c === 'USD' ? '&nbsp;' : usd[k] == null ? 'курса нет' : S.unit === 'usd' ? f.s(mm(T.by[c]), 1) + ' mm ' + esc(c) : '≈ ' + f.s(mm(usd[k]), 1) + ' mm USD') + '</div></div>').join('') + '</div>';
     }
@@ -153,19 +156,19 @@
     const bp = panel('По книгам');
     bp.querySelector('.bd').classList.add('flush', 'scroll');
     if (C.length) {
-      const rows = T.rows.map(r => Object.assign(r, { g: overall(C.map(c => r.v[c] == null ? 0 : toUsd(r.v[c], c, d)).filter(v => v != null)) })).sort((a, z) => Math.abs(z.g) - Math.abs(a.g));
+      const rows = T.rows.map(r => Object.assign(r, { g: total(Object.keys(r.v).map(c => toUsd(r.v[c], c, d))) })).sort((a, z) => Math.abs(z.g || 0) - Math.abs(a.g || 0));
       const cell = (v, c) => '<td class="n">' + (v == null ? '<span class="mut3">—</span>' : fmt(mm(shown(v, c, d)))) + '</td>';
       // источник строки — только когда в таблице есть и отчёт, и не отчёт (иначе его говорит шапка или он один)
       const mixed = rows.some(r => r.src.has('report')) && rows.some(r => [...r.src].some(s => s !== 'report'));
       const label = r => {
         const x = r.x, src = mixed ? [...r.src].filter(s => s !== 'report') : [];
-        const tag = (src.length ? '<span class="c16-src" title="' + esc(src.map(s => (SRC[s] || s) + ': ' + r.by[s].join(', ')).join('; ')) + '">' + esc(src.map(s => SRC[s] || s).join(', ')) + '</span>' : '') + (r.valid ? '<span class="c16-src">отчёт от ' + f.date(r.valid) + '</span>' : '');
+        const tag = (src.length ? ' <span class="c16-src" title="' + esc(src.map(s => (SRC[s] || s) + ': ' + r.by[s].join(', ')).join('; ')) + '">' + esc(src.map(s => SRC[s] || s).join(', ')) + '</span>' : '') + (r.valid ? ' <span class="c16-src">отчёт от ' + f.date(r.valid) + '</span>' : '');
         return x.book ? '<span title="' + esc(x.book) + '">' + esc(bookName(x.book)) + '</span>' + tag
           : '<span title="книги: ' + esc((x.books || []).map(bookName).join(', ') || '—') + '">' + esc(entityName(x.entity)) + ' <span class="mut3">часть отчёта</span></span>' + tag;
       };
       bp.querySelector('.bd').innerHTML = '<table class="k-tbl" data-vk="c16-books" data-title="ОВП по книгам"><thead><tr><th>Книга</th>' +
         C.map(c => '<th class="n">' + esc(c) + '<span class="k-thu">' + unitOf(c) + '</span></th>').join('') + '<th class="n" title="бо́льшая из сумм длинных и коротких позиций строки, USD-эквивалент">ОВП книги<span class="k-thu">mm USD</span></th></tr></thead><tbody>' +
-        rows.map(r => '<tr data-ocp-row="' + esc(r.x.book || r.x.entity) + '"><td>' + label(r) + '</td>' + C.map(c => cell(r.v[c], c)).join('') + '<td class="n">' + fmt(mm(r.g)) + '</td></tr>').join('') +
+        rows.map(r => '<tr data-ocp-row="' + esc(r.x.book || r.x.entity) + '"><td>' + label(r) + '</td>' + C.map(c => cell(r.v[c], c)).join('') + '<td class="n"' + (r.g == null ? ' title="нет курса одной из валют строки"' : '') + '>' + fmt(mm(r.g)) + '</td></tr>').join('') +
         '<tr class="tot"><td>Итого</td>' + C.map(c => cell(T.by[c], c)).join('') + '<td></td></tr></tbody></table>';
     } else bp.querySelector('.bd').innerHTML = EMPTY;
     wrap.appendChild(bp);
@@ -181,6 +184,7 @@
     const D = days.filter(x => x.date > since(H.asOf, S.period));
     const sl = D.map(x => usable(x) ? slice(x) : null);
     const HC = [...new Set(sl.flatMap(s => s ? s.ccys : []))].sort(ccyOrder);
+    if (!HC.length) { hp.querySelector('.bd').innerHTML = '<div class="k-empty">Нет данных за период</div>'; return; }
     const usdOf = (s, c, x) => s && s.by[c] != null ? mm(toUsd(s.by[c], c, x)) : null;
     const css = K.css;
     chart = K.chart(hp.querySelector('.c16-chart'), () => ({
@@ -189,13 +193,17 @@
       xAxis: { type: 'category', data: D.map(x => f.dshort(x.date)) },
       yAxis: { type: 'value', unit: 'mm USD', axisLabel: { formatter: v => K.tick(v, 1) } },
       series: HC.map(c => ({ name: c, type: 'bar', stack: 'o', barMaxWidth: 28, data: D.map((x, i) => usdOf(sl[i], c, x)), itemStyle: { color: K.ccyColor(c) } }))
-        .concat([{ name: 'Общая', type: 'line', data: D.map((x, i) => sl[i] && sl[i].ccys.length ? mm(overall(sl[i].ccys.map(c => toUsd(sl[i].by[c], c, x)).filter(v => v != null))) : null), showSymbol: false, lineStyle: { width: 2 }, color: css('--fg') }]),
+        .concat([{ name: 'Общая', type: 'line', data: D.map((x, i) => sl[i] && sl[i].ccys.length ? mm(total(sl[i].ccys.map(c => toUsd(sl[i].by[c], c, x)))) : null), showSymbol: false, lineStyle: { width: 2 }, color: css('--fg') }]),
     }));
   }
   // начало периода: дни позже этой даты
   function since(iso, p) {
     const x = new Date(iso + 'T00:00:00Z');
-    if (p === 'w2') x.setUTCDate(x.getUTCDate() - 14); else x.setUTCMonth(x.getUTCMonth() - (p === 'm3' ? 3 : 1));
+    if (p === 'w2') x.setUTCDate(x.getUTCDate() - 14);
+    else {
+      const dd = x.getUTCDate(); x.setUTCDate(1); x.setUTCMonth(x.getUTCMonth() - (p === 'm3' ? 3 : 1));
+      x.setUTCDate(Math.min(dd, new Date(Date.UTC(x.getUTCFullYear(), x.getUTCMonth() + 1, 0)).getUTCDate()));
+    }
     return x.toISOString().slice(0, 10);
   }
 

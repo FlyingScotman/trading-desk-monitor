@@ -166,7 +166,8 @@ ta('C16: ОВП дня по валютам, общая ОВП в USD — бо́�
   assert.ok(html.includes('data-ocp-ccy="GBP"') && html.includes('курса нет'));
   assert.ok(!html.includes('data-ocp-ccy="RUB"'));
   assert.ok(html.includes('data-vk="c16-books"') && html.includes('data-ocp-row="AM"') && html.includes('часть отчёта') && html.includes('title="книги: Фонд облигаций, Фонд юаневых облигаций"'), 'часть отчёта по юрлицу — строкой, книги в подсказке');
-  assert.ok(html.includes('FX и XCCY</span><span class="c16-src" title="из позиций: CNY">из позиций</span>'), 'источник строки, когда в таблице есть и отчёт, и из позиций');
+  assert.ok(html.includes('FX и XCCY</span> <span class="c16-src" title="из позиций: CNY">из позиций</span>'), 'источник строки, когда в таблице есть и отчёт, и из позиций; в CSV — через пробел');
+  assert.ok(/data-ocp-row="IC-BND">[\s\S]*?<td class="n" title="нет курса одной из валют строки"><span class="mut3">—<\/span><\/td><\/tr>/.test(html), 'ОВП строки без курса GBP — не считается');
   assert.ok(!/Сверка|Перенос ОВП|брейк/.test(html), 'без сверки и переноса');
   assert.ok(!html.includes('Почему отчёта ОВП нет'));
   // история: дни позже месяца назад; день без публикуемой ОВП — пусто; линия — общая ОВП дня
@@ -175,7 +176,8 @@ ta('C16: ОВП дня по валютам, общая ОВП в USD — бо́�
   assert.deepStrictEqual(Array.from(o.series, s => s.name), ['USD', 'EUR', 'CNY', 'GBP', 'Общая']);
   const by = Object.fromEntries(o.series.map(s => [s.name, s.data]));
   near(by.CNY[0], 88 * 11 / 80, 'книга, которой нет в прогоне, — по справочнику периода'); assert.strictEqual(by.CNY[1], null);
-  near(by['Общая'][0], 88 * 11 / 80, 'общая 19.10'); assert.strictEqual(by['Общая'][1], null); near(by['Общая'][2], 10, 'общая 21.10');
+  near(by['Общая'][0], 88 * 11 / 80, 'общая 19.10'); assert.strictEqual(by['Общая'][1], null);
+  assert.strictEqual(by['Общая'][2], null, '21.10: у GBP нет курса — неполная общая ОВП не рисуется');
   assert.strictEqual(by.GBP[2], null, 'без курса — нет столбца');
   x.segs.w2('m3');
   assert.strictEqual(x.chart().xAxis.data.length, 4, '3 мес');
@@ -184,7 +186,10 @@ ta('C16: ОВП дня по валютам, общая ОВП в USD — бо́�
 ta('C16: в USD и курс ЦБ; правило общей ОВП — одна функция', async () => {
   const x = page16({ srv: SRV });
   await settle();
-  assert.ok(x.code.includes('const overall = usd =>') && (x.code.match(/overall\(/g) || []).length >= 3);
+  // плитка «Общая ОВП» — по валютам с курсом (без курса — названы); строка книги и линия по дням — total: null без курса
+  assert.ok(x.code.includes('const overall = usd =>') && x.code.includes('const total = usd => usd.some(v => v == null) ? null : overall(usd);'));
+  assert.strictEqual((x.code.match(/overall\(/g) || []).length, 2);
+  assert.ok((x.code.match(/total\(/g) || []).length >= 2);
   x.segs.ccy('usd');
   let html = x.html();
   assert.ok(html.includes('(3.0)</span> <span class="u">mm USD') && html.includes('(22.0) mm CNY'), 'в USD: подпись — в валюте');
@@ -192,6 +197,35 @@ ta('C16: в USD и курс ЦБ; правило общей ОВП — одна 
   html = x.html();
   near(x.chart().series.find(s => s.name === 'CNY').data[2], -22 * 10 / 79, 'курс ЦБ');
   assert.ok(html.includes('(2.8)</span> <span class="u">mm USD'), html);
+});
+
+ta('C16: день без курса — линия «Общая» пустая; курс ЦБ не подменяется рыночным; пустой период — «нет данных»', async () => {
+  const s = JSON.parse(JSON.stringify(SRV));
+  s.days[1].fx = {};  // старый прогон без курсов: USD входит своей суммой, CNY — без эквивалента
+  s.days[3].lines = s.days[3].lines.filter(x => x.ccy !== 'GBP');
+  s.days[3].fx.CNY.cbr = null;  // у прогона нет курса ЦБ этой валюты (сервер не подменяет его рыночным)
+  const x = page16({ srv: s });
+  await settle();
+  let by = Object.fromEntries(x.chart().series.map(z => [z.name, z.data]));
+  near(by.USD[0], -1, 'USD 19.10'); assert.strictEqual(by.CNY[0], null); assert.strictEqual(by['Общая'][0], null, 'без курса CNY — не по одному USD');
+  near(by['Общая'][2], 10, 'общая 21.10, все курсы есть');
+  x.segs.market('cbr');
+  by = Object.fromEntries(x.chart().series.map(z => [z.name, z.data]));
+  assert.strictEqual(by.CNY[2], null); assert.strictEqual(by['Общая'][2], null);
+  assert.ok(/data-ocp-ccy="CNY"[\s\S]*?курса нет/.test(x.html()), 'курс ЦБ CNY — «курса нет»');
+  const e = JSON.parse(JSON.stringify(SRV)); e.days.forEach(d => { d.state = 'not_computed'; d.basis = null; d.lines = []; });
+  const y = page16({ srv: e });
+  await settle();
+  assert.ok(y.html().includes('Нет данных за период') && y.chart() === null);
+});
+
+ta('C16: период «месяц» от конца месяца — без переполнения (31.03 − месяц = 28.02)', async () => {
+  const s = JSON.parse(JSON.stringify(SRV));
+  s.asOf = '2027-03-31';
+  s.days = ['2027-02-26', '2027-03-01', '2027-03-02', '2027-03-31'].map(date => Object.assign({}, SRV.days[3], { date }));
+  const x = page16({ srv: s });
+  await settle();
+  assert.deepStrictEqual(Array.from(x.chart().xAxis.data), ['1 мар', '2 мар', '31 мар']);
 });
 
 ta('C16: фильтр книг шапки — строки книг; часть отчёта по юрлицу — только целиком', async () => {
@@ -204,6 +238,11 @@ ta('C16: фильтр книг шапки — строки книг; часть 
   await settle();
   html = part.html();
   assert.ok(!html.includes('data-ocp-row="AM"') && html.includes('под фильтром — не вся') && html.includes('учтена только целиком'));
+  // фильтр портфелей: ничего не исключено — без пометки «не вся», заметка — в подсказке общей ОВП
+  const ports = page16({ srv: SRV, filter: { portsOff: ['X'] } });
+  await settle();
+  html = ports.html();
+  assert.ok(!html.includes('под фильтром — не вся') && /data-ocp-total title="[^"]*фильтр портфелей к ОВП по книгам не применяется/.test(html), html);
   const ent = page16({ srv: SRV, filter: { entity: 'AM' } });
   await settle();
   assert.ok(ent.html().includes('data-ocp-row="AM"') && !ent.html().includes('data-ocp-row="FXB"'));

@@ -208,7 +208,10 @@ t('#184: таблицы карточки позиции и разбора — CS
   assert.ok(/K\.cardTableTools\(card, p\);/.test(c03), 'карточка C03');
   assert.ok(/K\.tableTools\(body, \{ viewKey: 'drill-' \+ dim,/.test(kit), 'разбор: ключ ширины — свой у каждого разреза');
   // C16 «По книгам» (TDM#446): числа — в своих столбцах, ручная таблица с выгрузкой CSV
-  assert.ok(P('concepts/c16-ocp.html').includes('<table class="k-tbl" data-vk="c16-books" data-title="ОВП по книгам">'));
+  const c16 = P('concepts/c16-ocp.html');
+  assert.ok(c16.includes('<table class="k-tbl" data-vk="c16-books" data-title="ОВП по книгам">'));
+  // суммы в валютах и «ОВП книги» — числовые ячейки td.n (в CSV — числами со знаком)
+  assert.ok(c16.includes("const cell = (v, c) => '<td class=\"n\">'") && c16.includes("'<td class=\"n\"' + (r.g == null"));
 });
 
 t('#131 + #105: CSV ручной таблицы — единица второй строкой шапки через запятую, без повтора; валюта отчёта', () => {

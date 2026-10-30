@@ -48,14 +48,13 @@ def _line(x: dict[str, Any]) -> dict[str, Any]:
 
 
 def _fx(rows: list[dict[str, Any]] | None) -> dict[str, dict[str, Any]]:
-    """currency -> {market, cbr, source}: the CBR rate falls back to the market one when the run has none (a run
-    before R26 valued on the CBR rate), as ``concepts_run``'s ``FX_CBR``."""
-    out = {}
-    for r in rows or []:
-        if r.get("ccy") and r.get("ccy") != "RUB" and r.get("rate") is not None:
-            out[r["ccy"]] = {"market": r["rate"], "cbr": r["rate_cbr"] if r.get("rate_cbr") is not None else r["rate"],
-                             "source": r.get("rate_source")}
-    return out
+    """currency -> {market, cbr, source}. A run with no CBR rate at all (before R26) valued on the CBR rate: its
+    rates are the CBR ones too, as ``concepts_run``'s ``FX_CBR``. A run with CBR rates for some currencies only: a
+    currency without one has ``cbr`` null, never its market rate (the USD equivalent would mix the two sources)."""
+    rows = [r for r in rows or [] if r.get("ccy") and r.get("ccy") != "RUB" and r.get("rate") is not None]
+    before_cbr = not any(r.get("rate_cbr") is not None for r in rows)
+    return {r["ccy"]: {"market": r["rate"], "cbr": r["rate"] if before_cbr else r.get("rate_cbr"),
+                       "source": r.get("rate_source")} for r in rows}
 
 
 def history(con, anchor: dict[str, Any], start: date, end: date) -> dict[str, Any]:
