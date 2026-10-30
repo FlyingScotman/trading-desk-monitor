@@ -29,7 +29,7 @@ async function setup(browser, {mode = 'success', width = 1440, multiple = false}
       assert.strictEqual(req.headers()['content-type'], 'application/x-www-form-urlencoded');
       assert.strictEqual(u.search, '');
       const p = new URLSearchParams(req.postData()); requests.push(p);
-      if (p.get('op') === 'inspect') job = {state:'complete', phase:'complete', code:'scope_ready', adapter_fingerprint:'d'.repeat(64), reports:multiple ? [REPORT, {...REPORT,id:'c'.repeat(64),name:'Synthetic_other_20261015.csv'}] : [REPORT]};
+      if (p.get('op') === 'inspect') job = {state:'complete', phase:'complete', code:'scope_ready', adapter_fingerprint:'d'.repeat(64), reports:multiple ? [REPORT, {...REPORT,id:'c'.repeat(64),name:'Synthetic_other_20261015.csv',policy:{...REPORT.policy,skipped:{trades:3,books:2}}}] : [REPORT]};
       else if (mode === 'auth') job = {state:'error', phase:'acquiring', code:'auth_failed'};
       else if (mode === 'running' || mode === 'status_gap') job = {state:'running', phase:'acquiring', code:'acquiring'};
       else job = {state:'partial', phase:'complete', code:'completed', run_id:17,
@@ -102,6 +102,7 @@ test('explicit local acquisition in Settings', {skip: pw ? false : 'нет Playw
         assert.ok(await pg.locator('#acq-fetch').isDisabled());
         await pg.locator('#acq-report').selectOption('c'.repeat(64));
         await pg.locator('#acq-books input').waitFor();
+        assert.match(await pg.locator('#acq-books').innerText(), /Пропущено сделок: 3 \(книг: 2\)/);
         await pg.locator('#acq-date').fill('2026-10-16');
         assert.strictEqual(await pg.locator('#acq-books input').count(), 0);
         assert.ok(await pg.locator('#acq-fetch').isDisabled());

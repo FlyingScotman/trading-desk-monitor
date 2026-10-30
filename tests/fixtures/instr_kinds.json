@@ -401,6 +401,76 @@
    "table": "FX_FWD"
   },
   {
+   "name": "FX, группа продукта fx_forward",
+   "fact": {
+    "instr_type": "FX",
+    "segment": "FX",
+    "asset_class": "Валюта",
+    "ccy": "USD",
+    "extra": {
+     "reported": {
+      "x": {
+       "x_product_group": "fx_forward"
+      }
+     }
+    }
+   },
+   "row": {
+    "instrType": "FX",
+    "segment": "FX",
+    "assetClass": "Валюта",
+    "couponType": null,
+    "ccy": "USD",
+    "extra": {
+     "reported": {
+      "x": {
+       "x_product_group": "fx_forward"
+      }
+     }
+    }
+   },
+   "kindOf": [
+    "DER",
+    "FX"
+   ],
+   "table": "FX_FWD"
+  },
+  {
+   "name": "OTC, группа продукта fx_swap",
+   "fact": {
+    "instr_type": "OTC",
+    "segment": "FX",
+    "asset_class": "Валюта",
+    "ccy": "USD",
+    "extra": {
+     "reported": {
+      "x": {
+       "x_product_group": "fx_swap"
+      }
+     }
+    }
+   },
+   "row": {
+    "instrType": "OTC",
+    "segment": "FX",
+    "assetClass": "Валюта",
+    "couponType": null,
+    "ccy": "USD",
+    "extra": {
+     "reported": {
+      "x": {
+       "x_product_group": "fx_swap"
+      }
+     }
+    }
+   },
+   "kindOf": [
+    "DER",
+    "OTC"
+   ],
+   "table": "FX_FWD"
+  },
+  {
    "name": "OTC без группы продукта",
    "fact": {
     "instr_type": "OTC",
