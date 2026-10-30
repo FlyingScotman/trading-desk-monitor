@@ -15,7 +15,7 @@ from fastapi.testclient import TestClient
 from test_autopilot import CONFIG, PRIV, SNAPS, TODAY, cfg, put
 from test_slice_s3 import TOKEN
 
-from desk import cli, diagnostics
+from desk import cli, diagnostics, store
 from desk.api import create_app
 from desk.autopilot import Autopilot
 from desk.diagnostics import Scrubber, signature
@@ -135,6 +135,21 @@ def test_diagnostics_sections_and_no_private_data(diag_run, tmp_path, stub):
     assert err["exception"] == "ValueError"
     assert err["text"] == "read failed for <ISIN> (<ISIN>) in <path>, <path>: PnL # RUB for <book>"
     assert doc["db"]["migration_level"] and doc["db"]["tables"]["run"] == 1
+
+
+def test_diagnostics_run_says_the_swap_terms_without_a_positions_row(diag_run, stub):
+    """TDM#468: ``lineage.positions.unlinked_swap_terms`` (numbers only) is in the run's block."""
+    s, ap = diag_run
+    last = diagnostics.build(s, store_url=s.store_url, autopilot=ap, hub=False, now=NOW)["runs"]["last"][0]
+    assert last["unlinked_swap_terms"] is None
+    with store.connect(s.store_url) as con:
+        con.execute("ALTER TABLE run DISABLE TRIGGER USER")  # a published run is frozen
+        con.execute("UPDATE run SET lineage = jsonb_set(lineage, '{positions,unlinked_swap_terms}',"
+                    " '{\"trades\": 2, \"books\": {\"IRB\": 2}}') WHERE run_id = %s", (last["run_id"],))
+    last = diagnostics.build(s, store_url=s.store_url, autopilot=ap, hub=False, now=NOW)["runs"]["last"][0]
+    assert last["unlinked_swap_terms"] == {"trades": 2, "books": 1}
+    doc = diagnostics.build(s, store_url=s.store_url, autopilot=ap, hub=False, now=NOW)
+    assert "IRB" not in json.dumps(doc, ensure_ascii=False)  # numbers only: no book code in the export
 
 
 def test_diagnostics_api_and_cli(diag_run, tmp_path, monkeypatch, capsys, stub):

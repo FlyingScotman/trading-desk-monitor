@@ -249,3 +249,38 @@ def test_publish_swaps_through_the_store_and_the_api(ctx, store_url):
     pos = {p["position_id"]: p for p in c.get(f"/api/v1/runs/{rid}/positions").json()["positions"]}
     assert set(pos["K1"]["fact"]["risk"]) == {"RUB RUONIA", "RUB KEY"}
     assert c.get(f"/api/v1/runs/{rid}/risk").status_code == 200
+
+
+def test_swap_terms_without_a_positions_row_are_counted_not_valued(ctx, store_url):
+    """TDM#468: irs, ois and ccs terms no positions row names (a trade after the report's cut) are not valued, but the
+    run says how many and in which books (WARN line, lineage), without amounts. Linked terms are not counted, the FX
+    ones keep ``unlinked_terms``, and the valuation of the linked rows does not change."""
+    from desk import store
+    from desk.publish import desk_run
+
+    other = [{**leg(t, "a", "pay", kind=k, index_code="RUONIA"), "book_id": b}
+             for t, k, b in (("U1", "ois", "IRB"), ("U2", "irs", "IRB"), ("U3", "ccs", "IRC"))]
+    other += [{**leg("U1", "b", "receive", kind="ois", fixed_rate_pct="15"), "book_id": "IRB"},  # a second leg: one trade
+              {**leg("U4", "a", "pay"), "position_id": "NOPE"}]  # names a position the report lacks: unlinked too
+    base = pv1.plan(ctx, inputs())
+    inp = inputs([*TERMS, *other])
+    bp = pv1.plan(ctx, inp)
+    assert bp.unlinked_rates == ["IRB|U1", "IRB|U2", "IRB|U4", "IRC|U3"]
+    assert bp.unlinked_terms == [] and base.unlinked_rates == []
+    assert set(bp.direct) == set(base.direct) and bp.added == []
+    for pid in ("S1", "K1", "R1"):  # the linked rows are valued as before
+        assert bp.direct[pid].valuation.pv_rub == pytest.approx(base.direct[pid].valuation.pv_rub)
+    with store.connect(store_url) as con:
+        rid, _, warnings = desk_run.publish(con, ctx, pv1.merge(bp, []), prev=None, inputs=inp,
+                                            core_results=[bp.core_result], unlinked_rates=bp.unlinked_rates)
+        none_rid, _, none_warnings = desk_run.publish(con, ctx, pv1.merge(base, []), prev=None, inputs=inputs(),
+                                                      core_results=[base.core_result],
+                                                      unlinked_rates=base.unlinked_rates)
+        lineage = con.execute("SELECT lineage FROM run WHERE run_id = %s", (rid,)).fetchone()[0]
+        none_lineage = con.execute("SELECT lineage FROM run WHERE run_id = %s", (none_rid,)).fetchone()[0]
+    assert lineage["positions"]["unlinked_swap_terms"] == {"trades": 4, "books": {"IRB": 3, "IRC": 1}}
+    line = [w for w in warnings if w.startswith("условия свопов без строки позиций")]
+    assert len(line) == 1 and "сделок 4" in line[0] and "IRB (3), IRC (1)" in line[0]
+    assert "15" not in line[0].replace("сделок 4", "") and "1000000000" not in line[0]  # no amounts or rates
+    assert "unlinked_swap_terms" not in none_lineage["positions"]
+    assert not [w for w in none_warnings if w.startswith("условия свопов")]

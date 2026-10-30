@@ -1226,6 +1226,9 @@ def run_summary(con: psycopg.Connection, r: dict[str, Any], scrub: Scrubber) -> 
                 "basis_label": basis.get("label"), "basis_prev_date": basis.get("prev_date"),
                 "basis_expected_date": basis.get("expected_date")},
         "log_levels": levels,
+        # TDM#468: swap terms no positions row names (not valued): numbers only, no book codes
+        "unlinked_swap_terms": ({"trades": u.get("trades"), "books": len(u.get("books") or {})}
+                                if (u := pos.get("unlinked_swap_terms")) else None),
     })
     return out
 

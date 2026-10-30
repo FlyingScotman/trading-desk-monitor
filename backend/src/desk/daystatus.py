@@ -393,7 +393,8 @@ LOST = ("rejected", "failed", "timed_out", "match_failed")
 def _facts_empty() -> dict[str, Any]:
     return {"inputs": {}, "files_lost": 0, "stale_copies": 0, "runs": 0, "runs_failed": 0, "default_run_id": None,
             "current_run_id": None, "default_set_ids": None, "eod_final": False, "positions_in_force": False,
-            "run_behind": False, "late_inputs": [], "books_no_positions": 0, "books_rows_differ": 0}
+            "run_behind": False, "late_inputs": [], "books_no_positions": 0, "books_rows_differ": 0,
+            "unlinked_swaps": 0}
 
 
 ROWS_DIFFER_SQL = (
@@ -466,8 +467,10 @@ def _facts(con: psycopg.Connection, settings: Settings, lo: date, hi: date, *,
         x["books_no_positions"] = sum(1 for b in store.current_books(con, d) if b.get("active", True)
                                       and (first_set.get(b["book_id"]) is None or first_set[b["book_id"]] > d))
         if x["default_run_id"]:
-            ids, known = con.execute("SELECT position_set_ids, positions_known_at FROM run WHERE run_id = %s",
-                                     (x["default_run_id"],)).fetchone()
+            ids, known, swaps = con.execute(
+                "SELECT position_set_ids, positions_known_at, lineage #>> '{positions,unlinked_swap_terms,trades}'"
+                " FROM run WHERE run_id = %s", (x["default_run_id"],)).fetchone()
+            x["unlinked_swaps"] = int(swaps or 0)  # TDM#468: swap terms no positions row names, not valued
             x["default_set_ids"] = sorted(ids or [])
             x["run_behind"] = x["default_set_ids"] != store.current_sets(con, d)[0]
             x["late_inputs"] = store.late_inputs(con, d, known)
@@ -508,6 +511,8 @@ def _rate(x: dict[str, Any]) -> dict[str, Any]:
         warn.append(f"книг без позиций: {x['books_no_positions']}")
     if x["books_rows_differ"]:
         warn.append(f"в прогоне не все строки позиций: книг {x['books_rows_differ']}")
+    if x.get("unlinked_swaps"):
+        warn.append(f"условия свопов без строки позиций, не оцениваются: сделок {x['unlinked_swaps']}")
     if not x["eod_final"]:
         warn.append("нет окончательного закрытия хаба")
     return {"state": "bad" if bad else "warn" if warn else "ok", "problems": bad, "warnings": warn}
