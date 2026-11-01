@@ -570,6 +570,10 @@ class RiskTable(BaseModel):
     ofz_view_note: str | None = Field(description="set when the view is approximate (a run before 0.2.6 in 'kbd'; in "
                                                   "'basis' an OFZ whose RUONIA risk is its basis again: a run of 0.2.6, "
                                                   "an OFZ off core)")
+    n_basis_not_split: int = Field(description="RUB bonds discounted on the KBD for want of a RUONIA curve on the run's "
+                                               "date (extra.curve_proxy): their basis is in the CS01, not apart")
+    basis_not_split_note: str | None = Field(description="set when n_basis_not_split is not 0: «basis not split: no "
+                                                         "RUONIA curve» (TDM#467)")
     kinds: list[RiskTableKind] = Field(description="the classification's kinds, in the table's order")
     measures: list[RiskTableMeasure] = Field(description="the matrix's measures (one shown at a time)")
     fx: dict[str, float | None]

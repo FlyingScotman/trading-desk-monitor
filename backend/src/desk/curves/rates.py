@@ -404,9 +404,11 @@ RATES_DATASETS = ("ruonia_ois", "key_rate_swap")
 INPUT_CODE = {"missing": "curve_missing", "error": "curve_error", "no_discount": "curve_unbuilt"}
 INPUT_TEXT = {
     "curve_missing:ruonia_ois": "нет кривой RUONIA в срезе хаба за {d} (нет котировок RUONIA OIS) — облигации "
-                                "дисконтированы по КБД, риск отнесён на ОФЗ (RUB OFZ)",
+                                "дисконтированы по КБД, риск отнесён на ОФЗ (RUB OFZ); базис не разложен: "
+                                "нет кривой RUONIA",
     "curve_error:ruonia_ois": "кривая RUONIA за {d} не построена из котировок RUONIA OIS — облигации дисконтированы "
-                              "по КБД, риск отнесён на ОФЗ (RUB OFZ)",
+                              "по КБД, риск отнесён на ОФЗ (RUB OFZ); базис не разложен: "
+                              "нет кривой RUONIA",
     "curve_missing:key_rate_swap": "нет кривой ключевой ставки в срезе хаба за {d} (нет котировок IRS KEYRATE) — "
                                    "флоатеры на КС оценены запасной ступенью, риск КС по дюрации",
     "curve_error:key_rate_swap": "кривая ключевой ставки за {d} не построена из котировок IRS KEYRATE — флоатеры на "

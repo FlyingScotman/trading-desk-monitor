@@ -544,7 +544,7 @@ Every other position is unchanged from S4. MIX-08 now keeps Z 281 bp from 09.10;
 
 Built by the orchestrating session with three agents (scenario engine; store, jobs and API; frontend), against a plan with frozen interfaces. Integrated, then reviewed independently; the findings are fixed (below).
 
-**Scenario definitions** (`desk.scenario.definition`, `migrations/0002_scenarios.sql`). Table `scenario_def` with ten presets on the curve "RUB OFZ": `par+100`, `par-100`, `keyhike`, `bullsteep`, `bearflat`, `ofzwide`, `rubdep`, `credit`, `sector`, `stress22`.
+**Scenario definitions** (`desk.scenario.definition`, `migrations/0002_scenarios.sql`). Table `scenario_def` with presets on the curve "RUB OFZ" (and `ofzbasis+25`, `ofzbasis-25` since 0022: the OFZ basis, "RUB OFZ" alone): `par+100`, `par-100`, `keyhike`, `bullsteep`, `bearflat`, `ofzwide`, `rubdep`, `credit`, `sector`, `stress22`.
 - The definition keeps the prototype shape, so the prototype's `runScenario` reads it. `basis` is dropped: runs publish only the KBD curve. `ofzSpread` is the OFZ Z-spread to the KBD.
 - A definition has a normalized form and a sha256 hash of it.
 - The own spread shock of a position: an OFZ gets `ofzSpread`; a credit gets `_all` + (`_mult` − 1) · `spread_bp` + sector + issuer + rating. A null `spread_bp` adds 0.

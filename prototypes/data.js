@@ -839,6 +839,8 @@
     { id: 'bullsteep', name: 'Bull steepener (смягчение ДКП)', curves: { 'RUB RUONIA': [-160, -150, -130, -105, -75, -60, -45, -35, -25, -20, -15], 'RUB KEY': [-160, -150, -130, -105, -75, -60, -45, -35, -25, -20, -15] }, ofzSpread: 5 },
     { id: 'bearflat', name: 'Bear flattener', curves: { 'RUB RUONIA': [110, 100, 90, 75, 50, 35, 20, 12, 8, 5, 5], 'RUB KEY': [110, 100, 90, 75, 50, 35, 20, 12, 8, 5, 5] }, ofzSpread: 5 },
     { id: 'basis', name: 'Базис КС − RUONIA +50 б.п.', curves: { 'RUB KEY': [50, 50, 45, 40, 30, 25, 20, 15, 10, 10, 10] } },
+    { id: 'ofzbasis+25', name: 'Базис ОФЗ к RUONIA +25 б.п.', curves: { 'RUB OFZ': [25, 25, 25, 25, 25, 25, 25, 25, 25, 25, 25] } },
+    { id: 'ofzbasis-25', name: 'Базис ОФЗ к RUONIA −25 б.п.', curves: { 'RUB OFZ': [-25, -25, -25, -25, -25, -25, -25, -25, -25, -25, -25] } },
     { id: 'ofzwide', name: 'Спред ОФЗ к RUONIA +40 б.п.', ofzSpread: 40 },
     { id: 'rubdep', name: 'Ослабление рубля −15%', fx: { USD: 15, CNY: 15, EUR: 15, CHF: 15 }, curves: { 'RUB RUONIA': 50, 'RUB KEY': 50 }, ofzSpread: 10 },
     { id: 'credit', name: 'Кредитный стресс: спреды ×2', spreads: { _mult: 2 }, ofzSpread: 40 },

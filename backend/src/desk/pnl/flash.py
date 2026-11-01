@@ -82,7 +82,8 @@ Key                         Definition
                             curve's move; a foreign bond's at the D rate, as ``rates``), a bucket without a move left
                             out; they sum to ``rates_linear``. An OFZ in RUONIA + basis has only ``RUB OFZ`` (its
                             basis risk x the KBD's par move): its ``rates_linear_ruonia`` and ``rates_linear_basis``
-                            split the same total by factor, not by bucket
+                            split the same total by factor, not by bucket. A KBD floater (discounted on RUONIA) has
+                            also ``RUB RUONIA`` = its (RUONIA less basis) risk x RUONIA's own move (TDM#467)
 ``curve_moves_bp``          ``{published curve: {bucket: bp}}``: the moves those terms use, in the unit of the buckets
                             (``FlashCurves.zero_move_bp``); an OFZ in RUONIA + basis also RUONIA's OIS par move
 ``prev``                    the D-1 inputs the steps start from, at the quantity of D (the run revalues the D-1
@@ -611,8 +612,9 @@ def explain(prev: BondValuation, cur: BondValuation, curves: FlashCurves,
     linear, kbd, to_d = 0.0, RISK_CURVES[KBD_CURVE_ID], f1 / f0
     used: list[tuple[str, dict[str, float], dict[str, float]]] = []  # the same terms by bucket (TDM#406)
     for c, bs in prev.risk().items():
-        if prev.ofz_ruonia and c != kbd:  # an OFZ in RUONIA + basis: the KBD's own move is its first order (below)
-            continue
+        if prev.ofz_ruonia and c != kbd and fl is None:  # an OFZ in RUONIA + basis: the KBD's own move is its first order
+            continue  # (below). A KBD floater (TDM#467) is discounted on RUONIA: its RUB RUONIA (RUONIA less the basis,
+            # the discount) moves with RUONIA's own move, B dK + (R - B) dO, so the basis part is B (dK - dO), not B dK - R dO
         move = curves.zero_move_bp(PUBLISHED_TO_CORE.get(c, c))
         bs = {b: x * to_d for b, x in bs.items()}
         linear += sum(x * move.get(b, 0.0) for b, x in bs.items())

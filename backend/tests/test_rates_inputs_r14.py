@@ -115,7 +115,8 @@ def test_the_run_log_and_the_risk_pages_say_what_is_missing(tmp_path, store_url)
     assert "флоатеры по индексам: KEY_RATE: market_value (core_missing_market_data) 1" in info
     desk = TestClient(create_app(store_url)).get("/api/v1/compat/desk").json()
     assert [n["code"] for n in desk["riskNotes"]] == lineage
-    assert desk["riskNotes"][0]["text"].endswith("облигации дисконтированы по КБД, риск отнесён на ОФЗ (RUB OFZ)")
+    assert desk["riskNotes"][0]["text"].endswith("облигации дисконтированы по КБД, риск отнесён на ОФЗ (RUB OFZ); "
+                                                  "базис не разложен: нет кривой RUONIA")
     assert set(desk["CURVES"]) == {"RUB OFZ", "RUB KEY"}  # no RUB RUONIA curve: the note says why
 
 

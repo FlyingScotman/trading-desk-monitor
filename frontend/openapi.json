@@ -7194,6 +7194,23 @@
             "title": "Ofz View Note",
             "description": "set when the view is approximate (a run before 0.2.6 in 'kbd'; in 'basis' an OFZ whose RUONIA risk is its basis again: a run of 0.2.6, an OFZ off core)"
           },
+          "n_basis_not_split": {
+            "type": "integer",
+            "title": "N Basis Not Split",
+            "description": "RUB bonds discounted on the KBD for want of a RUONIA curve on the run's date (extra.curve_proxy): their basis is in the CS01, not apart"
+          },
+          "basis_not_split_note": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Basis Not Split Note",
+            "description": "set when n_basis_not_split is not 0: «basis not split: no RUONIA curve» (TDM#467)"
+          },
           "kinds": {
             "items": {
               "$ref": "#/components/schemas/RiskTableKind"
@@ -7261,6 +7278,8 @@
           "ofz_view",
           "ofz_view_rule",
           "ofz_view_note",
+          "n_basis_not_split",
+          "basis_not_split_note",
           "kinds",
           "measures",
           "fx",

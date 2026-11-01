@@ -426,11 +426,15 @@ def linear_factors(curve: str | None, linear: float | None, terms: Any, ruonia: 
                    ruonia_risk: Any, moves: Any) -> tuple[dict[str, dict[str, float]] | None, dict[str, float]]:
     """``rates_linear`` of a row by factor: by term (``rates_linear_curves``) where it can be, else one sum per factor
     (the second value). An OFZ in RUONIA + basis: RUONIA's term per bucket is its D-1 RUONIA risk x RUONIA's OIS move
-    (``prev.ofz_ruonia_risk``, ``curve_moves_bp``), the basis's the KBD's term less it; without them, or when they do
+    (``prev.ofz_ruonia_risk``, ``curve_moves_bp``), the basis's the KBD's term (a KBD floater's: with its discounting on
+    RUONIA, TDM#467) less it; without them, or when they do
     not add up to its ``rates_linear_ruonia``, ``rates_linear_ruonia`` and ``rates_linear_basis`` whole."""
     terms = terms if isinstance(terms, dict) else None
     if ruonia is not None and basis is not None:
         kbd = (terms or {}).get(OFZ_CURVE)
+        disc = (terms or {}).get(RUONIA_CURVE)  # a KBD floater (TDM#467): its discounting on RUONIA, RUONIA less the basis
+        if isinstance(kbd, dict) and isinstance(disc, dict):  # (the scenarios' coordinates): the KBD's term is B dK, the
+            kbd = {b: (_num(kbd.get(b)) or 0.0) + (_num(disc.get(b)) or 0.0) for b in {*kbd, *disc}}  # row's first order
         d_ois = moves.get(RUONIA_CURVE) if isinstance(moves, dict) else None
         if isinstance(kbd, dict) and isinstance(ruonia_risk, dict) and isinstance(d_ois, dict):
             ruo = {b: x * m for b, v in ruonia_risk.items()
@@ -439,7 +443,7 @@ def linear_factors(curve: str | None, linear: float | None, terms: Any, ruonia: 
                 out = {F_RUONIA: ruo, F_BASIS: {b: (_num(kbd.get(b)) or 0.0) - ruo.get(b, 0.0)
                                                 for b in [*kbd, *(b for b in ruo if b not in kbd)]}}
                 for c, bs in (terms or {}).items():
-                    if c != OFZ_CURVE:
+                    if c not in (OFZ_CURVE, RUONIA_CURVE):  # the KBD's term holds a floater's RUONIA discounting
                         _add_terms(out, factor_of(c), bs)
                 return out, {}
         return None, {F_RUONIA: ruonia, F_BASIS: basis}
