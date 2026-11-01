@@ -224,3 +224,33 @@ def test_a_reaped_run_writes_run_failed(con):
     assert e["text"] == f"Прогон закрытия #{rid} за 15.10 (закрытие предв.) не удался"
     d = daystatus._runs(con, D("2026-10-15"))
     assert d[0]["status"] == "failed" and d[0]["error"].startswith("orphaned")
+
+
+def test_swap_terms_without_a_positions_row_warn_on_the_date_and_in_the_strip(store_url, tmp_path, monkeypatch):
+    """TDM#468: the default run's ``lineage.positions.unlinked_swap_terms`` is a warning of the day status (headline and
+    strip), with the number of trades and no amounts."""
+    inbox = tmp_path / "in"
+    put(inbox, "positions_20261016.csv")
+    for k, v in {"DESK_ENV_FILE": str(tmp_path / "none.env"), "DESK_STORE_URL": store_url,
+                 "DESK_INBOX_DIRS": str(inbox), "DESK_INBOX_ARCHIVE": str(tmp_path / "arch"),
+                 "DESK_SNAPSHOT_CACHE": str(SNAPS), "DESK_PRIVATE_ADAPTER_CONFIG": str(CONFIG),
+                 "DESK_INBOX_POLL_SECONDS": "0", "DESK_INBOX_LOOKBACK_DAYS": "0", "DESK_HOME": str(tmp_path / "h")}.items():
+        monkeypatch.setenv(k, v)
+    assert cli.main(["inbox", "scan"]) == 0
+    assert cli.main(["eod", "--date", "2026-10-15", "--snapshots", str(SNAPS)]) == 0
+    client = TestClient(create_app(store_url), base_url="http://127.0.0.1:8000", client=("127.0.0.1", 50000))
+
+    def both() -> tuple[dict, dict]:
+        day = client.get("/api/v1/inbox", params={"on": "2026-10-15"}).json()
+        (row,) = client.get("/api/v1/inbox/days", params={"to": "2026-10-15", "n": 1}).json()["days"]
+        return day["summary"], row
+
+    head, row = both()
+    assert not any("свопов" in w for w in head["warnings"] + row["warnings"])
+    with store.connect(store_url) as con:
+        con.execute("ALTER TABLE run DISABLE TRIGGER USER")  # a published run is frozen
+        con.execute("UPDATE run SET lineage = jsonb_set(lineage, '{positions,unlinked_swap_terms}',"
+                    " '{\"trades\": 2, \"books\": {\"IRB\": 2}}') WHERE run_id = 1")
+    head, row = both()
+    want = "условия свопов без строки позиций, не оцениваются: сделок 2"
+    assert want in head["warnings"] and head["warnings"] == row["warnings"] and head["state"] == row["state"] == "warn"
