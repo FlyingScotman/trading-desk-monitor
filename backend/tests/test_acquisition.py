@@ -78,6 +78,15 @@ if op == 'inspect':
     report = {'id':'a'*64, 'sha256':'b'*64, 'name':'Synthetic_20261015.csv', 'books':['OFZ'],
               'policy':{'status':'VERIFIED', 'excluded_products':['Cash'],
                         'books':{'OFZ':{'eligible':1,'products':['FX']}}}}
+    if mode == 'skipped':
+        report['policy']['skipped'] = {'reason': 'book_without_derivatives_in_positions', 'trades': 3,
+                                       'books': {'SYNTH_A': 2, 'SYNTH_B': 1}}
+    if mode == 'skipped_n_books':
+        report['policy']['skipped'] = {'trades': 300, 'n_books': 250, 'books': {'SYNTH_A': 2}}
+    if mode == 'skipped_bad_n_books':
+        report['policy']['skipped'] = {'trades': 3, 'n_books': -1, 'books': {'SYNTH_A': 2, 'SYNTH_B': 1}}
+    if mode == 'skipped_bad':
+        report['policy']['skipped'] = {'trades': 'many', 'books': {}}
     result = {'state':'complete', 'code':'scope_ready', 'date':p['date'][0], 'reports':[report]}
 elif op == 'check':
     result = {'state':'complete', 'code':'connected'}
@@ -177,6 +186,36 @@ def test_process_failures_and_environment_are_safe(configured, monkeypatch, capl
     no_secrets(status)
     no_secrets(caplog.text)
     assert service._proc is None
+    service.close()
+
+
+@pytest.mark.parametrize("mode,skipped", [("success", None), ("skipped", {"trades": 3, "books": 2}),
+                                          ("skipped_n_books", {"trades": 300, "books": 250}),
+                                          ("skipped_bad_n_books", {"trades": 3, "books": 2})])
+def test_inspect_keeps_only_counts_of_skipped_deals(configured, mode, skipped):
+    """TDA#96: the optional ``policy.skipped`` is kept as two counts (no reason text, no book codes); an adapter
+    without it gives the old reply."""
+    st = configured
+    (st.private_adapter_config / "mode").write_text(mode)
+    service = aq.Acquisition(lambda: st, "", timeout_s=10)
+    service.start(fields("inspect"))
+    status = wait(service)
+    assert status["code"] == "scope_ready", status
+    policy = status["reports"][0]["policy"]
+    assert policy.get("skipped") == skipped
+    assert policy["status"] == "VERIFIED" and policy["excluded_products"] == ["Cash"]
+    assert "SYNTH_A" not in json.dumps(status)
+    service.close()
+
+
+def test_inspect_drops_malformed_skipped(configured):
+    st = configured
+    (st.private_adapter_config / "mode").write_text("skipped_bad")
+    service = aq.Acquisition(lambda: st, "", timeout_s=10)
+    service.start(fields("inspect"))
+    status = wait(service)
+    assert status["code"] == "scope_ready", status
+    assert "skipped" not in status["reports"][0]["policy"]
     service.close()
 
 

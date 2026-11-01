@@ -40,6 +40,14 @@ def test_the_three_classifications_agree(case):
         assert group == case["kindOf"][0], "the table's group is kind_of's"
 
 
+def test_deliverable_fx_groups_are_fx_forward_kind():
+    """TDA#96: the adapter's fx_forward (FX row) and fx_swap (OTC row) are FX_FWD (DER), as fx_ndf; the table has no
+    swap kind of its own, and without the key an OTC fx_swap row would be UNCLASSIFIED."""
+    for pg, it in (("fx_ndf", "FX"), ("fx_forward", "FX"), ("fx_swap", "OTC")):
+        row = {"instr_type": it, "extra": {"reported": {"x": {"x_product_group": pg}}}}
+        assert concepts.PRODUCT_KIND[pg] == "FX_FWD" and concepts.instr_kind(row) == "FX_FWD", pg
+
+
 def test_every_instr_type_and_product_group_is_a_case():
     seen = {c["fact"].get("instr_type") for c in CASES if not c.get("unvalued")}
     assert seen == set(DOC["instrTypes"])

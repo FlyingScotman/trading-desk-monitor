@@ -70,7 +70,9 @@ checkout keeps its old names ``.devdata/inbox`` and ``.devdata/desk_pg``.
                            the other is the fallback when absent. ``DESK_FX_IMPLIED_FUTURES`` (on): futures extend the
                            implied curves past the last swap. ``DESK_FX_SPOT_SOURCE`` (``market``: the MOEX 19:00 chain
                            of the bonds and the OCP; ``cets_tom``: the CETS TOM close). ``DESK_FX_UNLINKED_TERMS`` (off): a
-                           trade_terms trade no positions row names is valued as a row of its own.
+                           trade_terms trade no positions row names is valued as a row of its own. If the same deal has a row in
+                           the positions in another book or under another deal id, it is counted twice: see the
+                           ``trade_terms`` warning in the run log (TDA#96).
                            ``DESK_NDF_FIXING_SOURCES`` (``CBR=CBR,ЦБ=CBR,ЦБ РФ=CBR``): the report's NDF fixing source ->
                            the hub's. ``DESK_FUTURES_BY_TICKER`` (off): a non-bond row naming a FORTS FX future by
                            ticker is valued by core. All provisional (curves.fx.FxOptions; DECISIONS.md open questions)
@@ -292,7 +294,7 @@ class Settings:
     fx_foreign_curve: str = "fx_implied"  # an FX forward's foreign leg: fx_implied (swap points) or xccy (CNY)
     fx_implied_futures: bool = True  # FORTS FX futures past the last swap point extend the FX-implied curves
     fx_spot_source: str = "market"  # FX forwards' spot: market (MOEX 19:00 chain, as bonds) or cets_tom
-    fx_unlinked_terms: bool = False  # value a trade_terms trade no positions row names as a row of its own
+    fx_unlinked_terms: bool = False  # value a trade_terms trade no positions row names as a row of its own (double count if its row is in another book)
     ndf_fixing_sources: str = "CBR=CBR,ЦБ=CBR,ЦБ РФ=CBR"  # the report's NDF fixing source -> the hub's
     futures_by_ticker: bool = False  # a non-bond row naming a FORTS FX future by ticker is valued by core (P3)
     inbox_lookback_days: int = 35  # report dates at most this many days old (R22); 0: no limit

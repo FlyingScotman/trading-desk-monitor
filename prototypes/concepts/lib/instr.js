@@ -45,7 +45,7 @@
     ['IRS', 'DER', 'Процентные свопы (IRS / OIS)'], ['CCS', 'DER', 'Валютно-процентные свопы (CCS)'],
     ['CDS', 'DER', 'CDS'], ['TRS', 'DER', 'TRS'],
     ['BOND_FUT', 'DER', 'Фьючерсы на облигации'], ['BOND_FWD', 'DER', 'Форварды на облигации'],
-    ['FX_FUT', 'DER', 'Валютные фьючерсы'], ['FX_FWD', 'DER', 'FX форварды / NDF'],
+    ['FX_FUT', 'DER', 'Валютные фьючерсы'], ['FX_FWD', 'DER', 'FX форварды / свопы / NDF'],
     ['FX', 'DER', 'Валюта (спот, прочие FX)'], ['OCP', 'DER', 'Перенос ОВП'],
     ['OTC', 'DER', 'Внебиржевые без группы продукта'],
     ['REPO', 'MM', 'РЕПО'],
@@ -60,9 +60,9 @@
   // короткие подписи для столбцов матрицы «валюта × тип» (R38); полная — I.label, в подсказке
   I.SHORT = { OFZ_PD: 'ОФЗ-ПД', OFZ_PK: 'ОФЗ-ПК', OFZ_IN: 'ОФЗ-ИН', MINFIN_FX: 'Минфин вал.', SUBFED: 'Субфед.', MUNI: 'Муницип.',
     CORP_FIX: 'Корп. фикс', CORP_FLT: 'Корп. флоат.', SECUR: 'ИЦБ / ABS', IRS: 'IRS / OIS', CCS: 'CCS', CDS: 'CDS', TRS: 'TRS',
-    BOND_FUT: 'Фьюч. обл.', BOND_FWD: 'Форв. обл.', FX_FUT: 'FX фьюч.', FX_FWD: 'FX форв. / NDF', FX: 'FX спот', OCP: 'Перенос ОВП', OTC: 'OTC прочие',
+    BOND_FUT: 'Фьюч. обл.', BOND_FWD: 'Форв. обл.', FX_FUT: 'FX фьюч.', FX_FWD: 'FX форв. / своп / NDF', FX: 'FX спот', OCP: 'Перенос ОВП', OTC: 'OTC прочие',
     REPO: 'РЕПО', EQUITY: 'Акции', BOND_NA: 'Без класса', UNCLASSIFIED: 'Не классиф.' };
-  I.PRODUCT_KIND = { irs: 'IRS', ccs: 'CCS', cds: 'CDS', trs: 'TRS', bond_future: 'BOND_FUT', bond_forward: 'BOND_FWD', fx_future: 'FX_FUT', fx_ndf: 'FX_FWD', equity: 'EQUITY', repo: 'REPO' };
+  I.PRODUCT_KIND = { irs: 'IRS', ccs: 'CCS', cds: 'CDS', trs: 'TRS', bond_future: 'BOND_FUT', bond_forward: 'BOND_FWD', fx_future: 'FX_FUT', fx_ndf: 'FX_FWD', fx_forward: 'FX_FWD', fx_swap: 'FX_FWD', equity: 'EQUITY', repo: 'REPO' };
   I.LEGACY_KIND = { IRS: 'IRS', XCCY: 'CCS', CDS: 'CDS' };
   I.DEMO_KIND = { IRS: 'IRS', KSW: 'IRS', BAS: 'IRS', FXF: 'FX_FWD', XCCY: 'CCS' };
   I.BOND_KIND = { 'GOV.PD': 'OFZ_PD', 'GOV.PK': 'OFZ_PK', 'GOV.IN': 'OFZ_IN', 'GOV.SOVFX': 'MINFIN_FX', 'CORP.FIX': 'CORP_FIX', 'CORP.FLT': 'CORP_FLT' };

@@ -854,7 +854,7 @@ INSTR_KINDS: tuple[tuple[str, str, str], ...] = (
     ("IRS", "DER", "Процентные свопы (IRS / OIS)"), ("CCS", "DER", "Валютно-процентные свопы (CCS)"),
     ("CDS", "DER", "CDS"), ("TRS", "DER", "TRS"),
     ("BOND_FUT", "DER", "Фьючерсы на облигации"), ("BOND_FWD", "DER", "Форварды на облигации"),
-    ("FX_FUT", "DER", "Валютные фьючерсы"), ("FX_FWD", "DER", "FX форварды / NDF"),
+    ("FX_FUT", "DER", "Валютные фьючерсы"), ("FX_FWD", "DER", "FX форварды / свопы / NDF"),
     ("FX", "DER", "Валюта (спот, прочие FX)"), ("OCP", "DER", "Перенос ОВП"),
     ("OTC", "DER", "Внебиржевые без группы продукта"),
     ("REPO", "MM", "РЕПО"),
@@ -877,8 +877,8 @@ here may be named apart from ``kind_of``'s (``CCS`` is its ``XCCY``, ``CDS`` its
 KIND_GROUP = {k: g for k, g, _ in INSTR_KINDS}
 KIND_LABEL = {k: lab for k, _, lab in INSTR_KINDS}
 PRODUCT_KIND = {"irs": "IRS", "ccs": "CCS", "cds": "CDS", "trs": "TRS", "bond_future": "BOND_FUT",
-                "bond_forward": "BOND_FWD", "fx_future": "FX_FUT", "fx_ndf": "FX_FWD", "equity": "EQUITY",
-                "repo": "REPO"}
+                "bond_forward": "BOND_FWD", "fx_future": "FX_FUT", "fx_ndf": "FX_FWD", "fx_forward": "FX_FWD",
+                "fx_swap": "FX_FWD", "equity": "EQUITY", "repo": "REPO"}
 """The private adapter's ``x_product_group`` (``extra.reported.x``, ``product_group``) -> kind. ``bond`` and ``bond_custom`` are bonds:
 classified by the bond's own fields."""
 LEGACY_KIND = {"IRS": "IRS", "XCCY": "CCS", "CDS": "CDS"}
