@@ -10,7 +10,7 @@ __version__ = "0.2.12"
 # buckets, coverage). A run records ``logic_version()`` in its lineage; the autopilot recomputes the latest positions
 # date once when its default run was made by another logic version; the backfill (desk.backfill, R23) recomputes the
 # older dates in the background.
-VALUATION_VERSION = 26  # 2: risk per curve (R8); 3: static display fields (R9 D1-D6, D8: names, coupons, issuers);
+VALUATION_VERSION = 27  # 2: risk per curve (R8); 3: static display fields (R9 D1-D6, D8: names, coupons, issuers);
 # 4: RUB bonds discounted on RUONIA OIS + Z-spread, flash PnL on the bond's own curves;
 # 5: a key-rate floater on a fallback rung books its projection on RUB KEY, the run log names missing rates inputs
 # 6: a bond's offer, its next 18 months of flows and the day's quote (G-spread, volume) in extra (concept pages)
@@ -57,6 +57,9 @@ VALUATION_VERSION = 26  # 2: risk per curve (R8); 3: static display fields (R9 D
 # history gets it too)
 # 25: a foreign bond's linear rates (rates_linear, rates_linear_curves) in RUB at the D rate, as rates (TDM#418)
 # 26: core 0.42 (TDM#499): RUONIA OIS past its last quote on synthetic 15Y/20Y quotes (OisTail), core 0.41.1 accrued
+# 27: the PnL of a derivative valued by core takes the cash its trades paid or settled in (D-1, D]: a swap's coupon, a
+# REPO's end, an FX leg's settlement (extra.flows of the D-1 valuation, pnl.extra.received_rub); a trade that ended is
+# valued on its last day as settled (PV 0, extra.settled), so that day has a PnL too, not a jump (TDM#466)
 
 
 def logic_version() -> str:
