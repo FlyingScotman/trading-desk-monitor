@@ -20,6 +20,16 @@ positions valued at the report's figure. Each is flagged with its method (``reas
   gap between the two reports falls on D: the note says «reports gap since dd.mm» (the old report's valid date) and
   ``extra.report_from`` gives that date; ``prev_date`` stays D-1 (TDM#440).
 
+- Derivative valued by core on both dates (``_core_fx``): PV D - PV D-1 + the cash its trades paid or settled in
+  (D-1, D] (TDM#466). Core counts a swap flow up to its payment date and an FX leg up to its value date, so the
+  coupon paid on D, a leg that settled and the last flow of a trade that ended are in PV D-1 and not in PV D: without
+  the cash the change of PV shows them as a loss (and the coupon as a false PnL in ``other``). The cash is the D-1
+  valuation's ``extra.flows`` (``valuation.derivatives``: core's projection of a swap's and a REPO's payments, an FX
+  leg's amounts from its terms), kept apart as ``received_rub`` as a bond's (info, inside ``total`` and ``other``). A
+  trade that ended is valued on D as settled (PV 0), so its last day has a PnL. The FX part is the D-1 FX delta less
+  the legs settled, x the rate move: the cash of a settled leg is taken at the D-1 rate and its later moves are the
+  cash row's. A cash-settled NDF's amount is not recorded: ``received_unknown``.
+
 A report value says why its PnL is in ``other`` (``pnl.extra.other_reason``, TDM#442: ``no_terms`` for want of terms,
 else ``reported_value``), an FX deal by core ``fx_core_rest``. Anything else valued without core keeps
 ``NoPnl("valued_without_core")``. A missing PnL is a reason, never 0.
@@ -33,6 +43,7 @@ from typing import TYPE_CHECKING, Any
 
 from ..inbox.schema import norm_ccy
 from ..marketdata.adapter import bond_currency
+from ..valuation.derivatives import FLOW_DAYS
 from ..valuation.fallback import SimplePnl, fx_rate, fx_rate_cbr
 from .flash import NoPnl
 from .reasons import (
@@ -83,6 +94,9 @@ class DirectPnl:
     ``fx_core_rest`` (an FX deal by core); None for an FX row (all of it in ``fx_gross``)."""
     report_from: date | None = None
     """A report-valued row whose D-1 carried an older report: that report's valid date (``extra.report_from``)."""
+    received_rub: float | None = None
+    """A derivative valued by core: the cash its trades paid or settled in (D-1, D], in ``total`` (``extra.received_rub``,
+    as a bond's); None for a row without core."""
 
     @property
     def explained(self) -> float:
@@ -98,7 +112,8 @@ class DirectPnl:
         return {"method": self.method, "prev_date": self.prev_date.isoformat(), "total": self.total,
                 "note": self.note, **({"flag": self.flag} if self.flag else {}),
                 **({"other_reason": self.other_reason} if self.other_reason else {}),
-                **({"report_from": self.report_from.isoformat()} if self.report_from else {})}
+                **({"report_from": self.report_from.isoformat()} if self.report_from else {}),
+                **({"received_rub": self.received_rub} if self.received_rub is not None else {})}
 
 
 def split_fx(pnl: SimplePnl, prev: EodContext, ctx: EodContext, terms: BondTerms) -> SimplePnl:
@@ -171,29 +186,76 @@ def reported_reason(o: Outcome) -> dict[str, Any]:
     return other_reason(REPORTED_VALUE, nv or why or "", why=nv or why or None)
 
 
-def _core_fx(prev: EodContext, ctx: EodContext, o: Outcome, p: Outcome | None) -> DirectPnl:
-    """A derivative valued by core on both dates: PV D minus PV D-1, of which the FX delta of D-1 per currency x the
-    market rate move is ``fx_gross`` (x the CBR move: ``fx_gross_cbr``), the rest (rates, points, time) ``other``."""
+def _received(prev: EodContext, ctx: EodContext, pv: Any) -> tuple[float, dict[str, float], list[str]]:
+    """The cash the D-1 valuation's trades paid or settled in (D-1, D]: (RUB, the foreign amounts by currency, text).
+    A flow counts when core stops counting it in that window (``out_on``); a foreign amount is in RUB at the D-1 rate.
+    Raises ``NoPnl`` for flows that could not be read, a cash-settled NDF, or a window longer than the flows kept."""
+    flows = pv.extra.get("flows", [])
+    if flows is None:
+        raise NoPnl("received_unknown", f"core's flows of {prev.business_date} could not be read")
+    if (ctx.business_date - prev.business_date).days > FLOW_DAYS:
+        raise NoPnl("received_unknown", f"{prev.business_date} to {ctx.business_date}: flows are kept for {FLOW_DAYS} days")
+    rub, foreign, parts = 0.0, {}, []
+    for f in flows:
+        if not prev.business_date < date.fromisoformat(f["out_on"]) <= ctx.business_date:
+            continue
+        if f["amount"] is None:
+            raise NoPnl("received_unknown", f"{f['trade_id']}: the cash of {f['date']} is not known (an NDF's amount, or a date core refused)")
+        ccy, amount = f["ccy"], f["amount"]
+        if ccy == "RUB":
+            rub += amount
+        else:
+            r0 = fx_rate(prev, ccy)
+            if r0 is None:
+                raise NoPnl("no_prev_fx_rate", f"{ccy} on {prev.business_date}")
+            rub += amount * r0[0]
+            foreign[ccy] = foreign.get(ccy, 0.0) + amount
+        parts.append(f"{amount:,.2f} {ccy} {f['trade_id']} {f['date']}")
+    return rub, foreign, parts
+
+
+def _core_fx(prev: EodContext, ctx: EodContext, o: Outcome, p: Outcome | None, pv_now: float | None = None
+             ) -> DirectPnl:
+    """A derivative valued by core on both dates: PV D minus PV D-1 plus the cash paid or settled in (D-1, D]
+    (``_received``), of which the FX delta of D-1 (less the legs settled) per currency x the market rate move is
+    ``fx_gross`` (x the CBR move: ``fx_gross_cbr``), the rest (rates, points, time, the coupons) ``other``.
+    ``pv_now``: the PV of the trades on D where the row's valuation is not theirs (settled: 0)."""
     v = o.valuation
     assert v is not None
+    now = v.pv_rub if pv_now is None else pv_now
     pv = p.valuation if p is not None else None
     if pv is None or not pv.extra.get("core"):
         raise NoPnl("valued_differently", f"not valued by core from its terms on {prev.business_date}")
-    total = v.pv_rub - pv.pv_rub
+    received, settled, flows = _received(prev, ctx, pv)
+    total = now - pv.pv_rub + received
+    delta = {c: (pv.fx_delta or {}).get(c, 0.0) - settled.get(c, 0.0) for c in {*(pv.fx_delta or {}), *settled}}
     fx, cbr, parts = 0.0, 0.0, []
-    for ccy, delta in (pv.fx_delta or {}).items():
+    for ccy, d in delta.items():
         r0, r1 = fx_rate(prev, ccy), fx_rate(ctx, ccy)
         if r0 is None or r1 is None:
             raise NoPnl("no_prev_fx_rate", f"{ccy} on {prev.business_date if r0 is None else ctx.business_date}")
-        fx += delta * (r1[0] - r0[0])
+        fx += d * (r1[0] - r0[0])
         c0, c1 = fx_rate_cbr(prev, ccy), fx_rate_cbr(ctx, ccy)
-        cbr = cbr + delta * (c1[0] - c0[0]) if c0 and c1 and cbr is not None else None  # type: ignore[operator]
-        parts.append(f"{delta:,.2f} {ccy} x ({r1[0]:g} - {r0[0]:g})")
+        cbr = cbr + d * (c1[0] - c0[0]) if c0 and c1 and cbr is not None else None  # type: ignore[operator]
+        parts.append(f"{d:,.2f} {ccy} x ({r1[0]:g} - {r0[0]:g})")
     return DirectPnl(CORE_FX_METHOD, prev.business_date, ctx.business_date, total, fx_gross=fx, other=total - fx,
-                     fx_gross_cbr=cbr if pv.fx_delta else None,
+                     fx_gross_cbr=cbr if delta else None, received_rub=received,
                      other_reason=other_reason(FX_CORE_REST, "rates, points and time: not the FX delta"),
-                     note=f"PV {v.pv_rub:,.2f} - {pv.pv_rub:,.2f} RUB; fx_gross = FX delta D-1 "
-                          + ("; ".join(parts) or "0"))
+                     note=f"PV {now:,.2f} - {pv.pv_rub:,.2f} RUB"
+                          + (f" + received {received:,.2f} RUB ({'; '.join(flows)})" if flows else "")
+                          + "; fx_gross = FX delta D-1 " + ("; ".join(parts) or "0"))
+
+
+def _settled_cash(prev: EodContext, ctx: EodContext, o: Outcome, p: Outcome | None, x: dict[str, Any]) -> DirectPnl:
+    """An FX row whose trades have all settled and which keeps the rule of cash (PV = amount x rate, FX delta = the
+    amount; ``derivatives._settled_row`` leaves it): the trades' PnL (PV 0 on D, the legs' flows) and, beside it, the
+    cash's own FX move (``_fx_row``), so the cash is not counted twice (the flows are at the D-1 rate)."""
+    t = _core_fx(prev, ctx, o, p, pv_now=0.0)
+    c = _fx_row(prev, ctx, o, x)
+    return replace(t, total=t.total + c.total, fx_gross=t.fx_gross + c.fx_gross,
+                   fx_gross_cbr=None if (t.fx_gross_cbr is None and t.fx_gross) or (c.fx_gross_cbr is None and c.fx_gross)
+                   else (t.fx_gross_cbr or 0.0) + (c.fx_gross_cbr or 0.0),
+                   note=f"{t.note}; cash row: {c.note}")
 
 
 def attach(prev: EodContext, ctx: EodContext, direct: dict[str, Outcome], inputs: PositionInputs,
@@ -212,6 +274,10 @@ def attach(prev: EodContext, ctx: EodContext, direct: dict[str, Outcome], inputs
         try:
             if v.extra.get("core"):  # a derivative valued by core from its terms (valuation.derivatives)
                 o.pnl = _core_fx(prev, ctx, o, prev_direct.get(pid))  # type: ignore[assignment]
+            elif (kind == "fx" and (o.core_not_valued or ("",))[0] == "settled"
+                  and (pp := prev_direct.get(pid)) is not None and pp.valuation is not None
+                  and pp.valuation.extra.get("core")):  # the legs settled, the row is cash (TDM#466)
+                o.pnl = _settled_cash(prev, ctx, o, pp, x)  # type: ignore[assignment]
             elif v.quality == "reported_value":
                 o.pnl = _reported(prev, ctx, o, prev_direct.get(pid),  # type: ignore[assignment]
                                   vd if vd is not None and vd <= prev.business_date else None,

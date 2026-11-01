@@ -57,6 +57,9 @@ VALUATION_VERSION = 28  # 2: risk per curve (R8); 3: static display fields (R9 D
 # history gets it too)
 # 25: a foreign bond's linear rates (rates_linear, rates_linear_curves) in RUB at the D rate, as rates (TDM#418)
 # 26: core 0.42 (TDM#499): RUONIA OIS past its last quote on synthetic 15Y/20Y quotes (OisTail), core 0.41.1 accrued
+# 27: the PnL of a derivative valued by core takes the cash its trades paid or settled in (D-1, D]: a swap's coupon, a
+# REPO's end, an FX leg's settlement (extra.flows of the D-1 valuation, pnl.extra.received_rub); a trade that ended is
+# valued on its last day as settled (PV 0, extra.settled), so that day has a PnL too, not a jump (TDM#466)
 # 28: a KBD floater's linear rates PnL takes its RUONIA discounting term too: rates_linear, its RUONIA/basis split and convexity (TDM#467)
 
 
