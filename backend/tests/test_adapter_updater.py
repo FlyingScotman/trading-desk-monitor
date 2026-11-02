@@ -723,7 +723,8 @@ def test_reinstalling_the_same_release_reuses_its_folder(home, tmp_path, monkeyp
     c = client()
     z = zip_bytes(tmp_path, "0.5.0")
     assert _install(c, z).status_code == 200
-    (home / "adapter-releases/0.5.0" / PKG / "__pycache__").mkdir()  # left by an older version's children
+    assert (home / "adapter-releases/0.5.0" / PKG / "__pycache__").is_dir()  # the installer's bytecode
+    (home / "adapter-releases/0.5.0" / PKG / "__pycache__/old.cpython-311.pyc").write_bytes(b"x")  # and a stray one
     unpacked = []
     monkeypatch.setattr(adapter, "_unpack", lambda *a: unpacked.append(a))
     r = _install(c, z, allow_older=True)
@@ -797,14 +798,73 @@ def test_the_switch_ends_the_warm_child_and_the_next_call_uses_the_new_folder(ho
     assert "0.5.0" not in _folders(home)
 
 
-def test_the_adapter_children_write_nothing_into_its_folder(home, tmp_path):
-    from desk.inbox import runner
+def _snapshot(folder: Path) -> dict[str, tuple[int, int]]:
+    return {str(p.relative_to(folder)): (p.stat().st_mtime_ns, p.stat().st_size) for p in folder.rglob("*")}
+
+
+def test_the_installer_precompiles_and_the_children_write_nothing_into_the_folder(home, tmp_path):
+    from desk.inbox import loader, runner
 
     c = client()
-    assert _install(c, zip_bytes(tmp_path, "0.5.0")).status_code == 200  # the loader's check ran its child there
+    assert _install(c, zip_bytes(tmp_path, "0.5.0")).status_code == 200
+    folder = home / "adapter-releases/0.5.0"
+    pkg = folder / PKG
+    sources = sorted(p for p in pkg.rglob("*.py"))
+    assert sources and all(list(p.parent.glob(f"__pycache__/{p.stem}.*.pyc")) for p in sources)  # precompiled
+    before = _snapshot(folder)
+    h = scan.adapter(load())
+    runner.call_reference(h, None, 30)  # a one-shot child, and a worker, import the adapter from there
+    w = runner.Worker()
+    try:
+        runner.call_reference(h, None, 30, worker=w)
+    finally:
+        w.close()
+    assert _snapshot(folder) == before  # read, never written
+    assert h.fingerprint == loader.fingerprint(str(pkg), None)  # __pycache__ is not the adapter's files
+    for d in list(pkg.rglob("__pycache__")):  # a folder without bytecode (an older install, the bundle's adapter):
+        shutil.rmtree(d)                       # the children compile in memory and write nothing either
+    scan.forget_adapters()
     runner.call_reference(scan.adapter(load()), None, 30)
-    assert not list((home / "adapter-releases").rglob("__pycache__"))
-    assert not list((home / "adapter-releases").rglob("*.pyc"))
+    assert not list(folder.rglob("__pycache__")) and not list(folder.rglob("*.pyc"))
+
+
+def test_a_failed_precompile_is_logged_and_the_install_goes_on(home, tmp_path, monkeypatch):
+    real = subprocess.run
+
+    def run(cmd, *a, **kw):
+        if "compileall" in cmd:
+            return subprocess.CompletedProcess(cmd, 1)
+        return real(cmd, *a, **kw)
+
+    monkeypatch.setattr(subprocess, "run", run)
+    assert _install(client(), zip_bytes(tmp_path, "0.5.0")).status_code == 200
+    assert adapter_store.read_current(home)["version"] == "0.5.0"
+    assert "предкомпиляция не удалась (код 1)" in (home / "logs/update.log").read_text(encoding="utf-8")
+
+
+def test_prune_after_an_install_keeps_the_new_and_previous_folders_whatever_current_json_reads(
+        home, tmp_path, monkeypatch):
+    c = client()
+    assert _install(c, zip_bytes(tmp_path, "0.5.0")).status_code == 200
+    assert _install(c, zip_bytes(tmp_path, "0.5.1")).status_code == 200
+    for i, v in enumerate(("0.6.0", "0.7.0", "0.8.0")):  # newer by time: the newest three are these
+        (home / "adapter-releases" / v).mkdir()
+        os.utime(home / "adapter-releases" / v, (time.time() + 100 + i, time.time() + 100 + i))
+    real_write, real_read = adapter._write_current, adapter_store.read_current
+    gone = {"now": False}
+
+    def write(h, doc):
+        real_write(h, doc)
+        gone["now"] = True  # from here on current.json does not read (a moment's sharing violation)
+
+    monkeypatch.setattr(adapter, "_write_current", write)
+    monkeypatch.setattr(adapter_store, "read_current", lambda h: None if gone["now"] else real_read(h))
+    r = _install(c, zip_bytes(tmp_path, "0.5.2"))
+    assert r.status_code == 200, r.text
+    monkeypatch.undo()
+    assert _folders(home) == ["0.5.1", "0.5.2", "0.6.0", "0.7.0", "0.8.0"]  # 0.5.0 pruned, current and previous kept
+    cur = adapter_store.read_current(home)
+    assert cur["package"] == f"0.5.2/{PKG}" and cur["previous_package"] == f"0.5.1/{PKG}"
 
 
 def test_a_server_download_held_by_an_antivirus_never_fails_the_install(home, tmp_path, monkeypatch, pauses):

@@ -56,6 +56,8 @@ import json
 import os
 import shutil
 import stat
+import subprocess
+import sys
 import threading
 import time
 import urllib.parse
@@ -91,6 +93,7 @@ ROOT_KEEP = ("readme", "license")  # root files of the zip copied next to the pa
 ACTIVE = ("starting", "downloading", "verifying", "waiting_browser", "installing")
 BUSY_WAIT_S = 15.0  # how long a file operation is retried while Windows says the file or folder is in use
 BUSY_WINERRORS = (5, 32, 33)  # access denied, sharing violation, lock violation
+COMPILE_TIMEOUT_S = 120.0  # the precompile of a new release folder (``_precompile``)
 
 _lock = threading.RLock()
 _install_lock = threading.Lock()
@@ -650,12 +653,13 @@ def _mtime(p: Path) -> float:
         return 0.0
 
 
-def prune(home: Path, keep: int = KEEP) -> list[str]:
+def prune(home: Path, keep: int = KEEP, protect: tuple[str, ...] = ()) -> list[str]:
     """Remove all but the newest ``keep`` release folders (never the current or the previous one, nor one in use:
     ``_protected``; one that cannot be renamed aside at once is left for the next time), and stale temporary
-    folders; the folders removed."""
+    folders; the folders removed. ``protect``: folder names kept whatever ``current.json`` reads now (the install
+    passes the ones it has just made current and previous: a moment's failure to read it removes neither)."""
     rd = adapter_store.releases_dir(home)
-    protect = _protected(home, adapter_store.read_current(home))
+    protect = (*protect, *_protected(home, adapter_store.read_current(home)))
     try:
         entries = [p for p in rd.iterdir() if p.is_dir()]
     except OSError:
@@ -669,6 +673,27 @@ def prune(home: Path, keep: int = KEEP) -> list[str]:
         if p.name not in protect and _discard(p):
             removed.append(p.name)
     return removed
+
+
+def _precompile(st: Settings, pkg: Path) -> None:
+    """The bytecode of a new release folder, written once by the installer before anything uses the folder: the
+    adapter's children run with ``-B`` (they never write into a folder in use) and read these ``__pycache__`` files
+    instead of compiling the adapter on every start. ``compileall`` in a child of the same Python (``-I``, as the
+    adapter's children; it compiles, it runs none of the adapter's code); a failure only costs that speed, so it is
+    logged and the install goes on. ``__pycache__`` is outside the release check (``_intact``: the manifest's files
+    only) and the fingerprint (``desk.inbox.loader``)."""
+    from ..inbox import runner
+
+    cmd = [sys.executable, "-I", "-m", "compileall", "-q", "-q", str(pkg)]
+    try:
+        r = subprocess.run(cmd, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                           env=runner.child_env(), timeout=COMPILE_TIMEOUT_S, check=False)
+        why = f"код {r.returncode}" if r.returncode else None
+    except (OSError, subprocess.SubprocessError) as e:
+        why = type(e).__name__
+    if why:
+        log(st, f"Адаптер {pkg.parent.name}: предкомпиляция не удалась ({why}); адаптер работает, только медленнее "
+                "стартует")
 
 
 def install_zip(st: Settings, path: Path, *, source: str, allow_older: bool = False,
@@ -717,6 +742,7 @@ def install_zip(st: Settings, path: Path, *, source: str, allow_older: bool = Fa
             except BaseException:
                 _discard(dest)
                 raise
+            _precompile(st, dest / name)  # not in use yet: the only moment anything writes into it
         rel = adapter_store.package_rel(dest.name, name)
         h = _check_loads(st, dest / name)
         if not h.ok:
@@ -740,7 +766,8 @@ def install_zip(st: Settings, path: Path, *, source: str, allow_older: bool = Fa
                     f"{os_code(e)}")
             raise AdapterUpdateError(busy_message(e, f"записать {adapter_store.CURRENT_FILE}", rd)) from None
         _forget()
-        removed = prune(home)
+        prev_pkg = adapter_store.safe_package(home, previous_pkg)  # by name for a current.json of 0.2.13
+        removed = prune(home, protect=(dest.name, prev_pkg.parent.name if prev_pkg else previous or ""))
         log(st, f"Адаптер {version} установлен ({source}, sha256 {info['sha256'][:12]}"
                 + (f", папка {dest.name}" if dest.name != version else "") + "); прежний: "
                 f"{previous or 'из комплекта'}" + (f"; удалены старые версии: {', '.join(removed)}" if removed else ""))
