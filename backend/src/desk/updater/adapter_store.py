@@ -4,9 +4,14 @@ import of the adapter, nothing from ``desk.settings`` (which imports this module
 Layout in the data folder::
 
     <home>/adapter-releases/
-        current.json            {"version", "package": "<version>/<name>", "previous", "installed_at", "source", "sha256"}
-        <version>/<name>/       the adapter package (``__init__.py`` ...) of that release
-        <version>/ADAPTER_RELEASE.json, README*   from the release zip
+        current.json            {"version", "package": "<folder>/<name>", "previous", "previous_package",
+                                 "installed_at", "source", "sha256"}
+        <folder>/<name>/        the adapter package (``__init__.py`` ...) of that release
+        <folder>/ADAPTER_RELEASE.json, README*   from the release zip
+
+``<folder>`` is the version (``0.5.3``), or the version and ``+`` and 8 to 32 hex digits (``0.5.3+1a2b3c4d``) when a
+folder of that version was already there with other files or could not be replaced: the updater never writes into a
+folder that may be in use (TDM#519).
 
 ``installed`` answers the package folder ``current.json`` points to when it exists; ``package_version`` reads a
 package's ``__version__ = "..."`` as text (the bundle's adapter is compared by it, never imported here).
@@ -26,6 +31,7 @@ VERSION_RE = re.compile(r"[0-9]+(?:\.[0-9]+)*(?:[.-][0-9A-Za-z]+)*")
 _NUMS = re.compile(r"([0-9]+(?:\.[0-9]+)*)(.*)")
 _INIT_VERSION = re.compile(r"""^__version__\s*(?::\s*str\s*)?=\s*["']([^"'\r\n]{1,100})["']""", re.MULTILINE)
 _NAME = re.compile(r"[A-Za-z_][A-Za-z0-9_]{0,99}")
+_FOLDER_SUFFIX = re.compile(r"\+[0-9a-f]{8,32}")
 
 
 def releases_dir(home: Path) -> Path:
@@ -40,16 +46,29 @@ def valid_version(v: object) -> bool:
     return isinstance(v, str) and len(v) <= 100 and VERSION_RE.fullmatch(v) is not None
 
 
-def package_rel(version: str, name: str) -> str:
-    return f"{version}/{name}"
+def valid_folder(name: object) -> bool:
+    """A release folder's name: ``<version>`` or ``<version>+<8 to 32 hex digits>``."""
+    if not isinstance(name, str):
+        return False
+    version, plus, suffix = name.partition("+")
+    return valid_version(version) and (not plus or _FOLDER_SUFFIX.fullmatch(plus + suffix) is not None)
+
+
+def folder_version(name: str) -> str:
+    """The version of a release folder's name (``0.5.3+1a2b3c4d`` -> ``0.5.3``)."""
+    return name.partition("+")[0]
+
+
+def package_rel(folder: str, name: str) -> str:
+    return f"{folder}/{name}"
 
 
 def safe_package(home: Path, rel: object) -> Path | None:
-    """``<releases>/<version>/<name>`` for a ``current.json`` ``package`` value; None when it is anything else."""
+    """``<releases>/<folder>/<name>`` for a ``current.json`` ``package`` value; None when it is anything else."""
     if not isinstance(rel, str):
         return None
     parts = rel.split("/")
-    if len(parts) != 2 or not valid_version(parts[0]) or not _NAME.fullmatch(parts[1]):
+    if len(parts) != 2 or not valid_folder(parts[0]) or not _NAME.fullmatch(parts[1]):
         return None
     return releases_dir(home) / parts[0] / parts[1]
 

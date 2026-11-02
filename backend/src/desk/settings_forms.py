@@ -235,6 +235,16 @@ def _close_worker() -> None:
         w.close()
 
 
+def release_worker() -> None:
+    """Ends the warm child after the adapter was switched (``desk.updater.adapter``), unless a check is running
+    on it now: that check's next run ends it anyway, as the adapter's files changed (``_worker``). Never waits."""
+    if _lock.acquire(blocking=False):
+        try:
+            _close_worker()
+        finally:
+            _lock.release()
+
+
 atexit.register(reset)
 
 

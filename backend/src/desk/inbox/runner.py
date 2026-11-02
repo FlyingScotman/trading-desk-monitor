@@ -15,6 +15,11 @@ A worker that times out or crashes is killed like a one-shot child, and the next
 ``call_warm`` starts every worker of the pool and has it import the adapter and load the index under a budget of
 its own (R22), so the start-up of a slow adapter never eats the timeout of the ``match`` calls that follow.
 
+The child runs with ``-B``: it never writes ``__pycache__`` into the adapter's folder (the bundle's ``adapter\\`` or
+an installed release), which must stay untouched while the adapter is in use and can be replaced (TDM#519). The parent
+keeps the adapter of each running one-shot child and each live worker (``specs_in_use``): the updater never removes
+those folders.
+
 Exceptions cross as their type and (file, line, function) frames, never the message, which can hold a cell
 value (08 §6.8). With ``DESK_PRIVATE_ADAPTER_DEBUG=1`` the child prints the full traceback to stderr and the
 parent lets stderr through, for local debugging only.
@@ -266,13 +271,42 @@ def _spawn(entry: str) -> subprocess.Popen:
     boot = f"import sys; sys.path[:0] = [{_DESK_ROOT!r}]; from desk.inbox.runner import {entry}; {entry}()"
     debug = os.environ.get(DEBUG_ENV) == "1"
     group = {"creationflags": subprocess.CREATE_NEW_PROCESS_GROUP} if os.name == "nt" else {"start_new_session": True}
-    return subprocess.Popen([sys.executable, "-I", "-c", boot], stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+    # -B: no __pycache__ written into the adapter's folder (-I ignores PYTHONDONTWRITEBYTECODE)
+    return subprocess.Popen([sys.executable, "-I", "-B", "-c", boot], stdin=subprocess.PIPE, stdout=subprocess.PIPE,
                             stderr=None if debug else subprocess.DEVNULL, env=child_env(), **group)
+
+
+_in_use: dict[object, str] = {}  # a running one-shot child or a live worker -> the adapter spec it was given
+_in_use_lock = threading.Lock()
+
+
+def _mark(owner: object, spec: object) -> None:
+    with _in_use_lock:
+        if isinstance(spec, str) and spec:
+            _in_use[owner] = spec
+        else:
+            _in_use.pop(owner, None)
+
+
+def specs_in_use() -> set[str]:
+    """The adapter specs of this process's children now: a one-shot call running, a worker started and not ended
+    (an inbox scan's pool, the settings forms' warm child). The updater never removes their folders."""
+    with _in_use_lock:
+        return set(_in_use.values())
 
 
 def run(request: dict, timeout_s: float) -> dict:
     """One child process, one request; raises ``AdapterFailure`` on timeout, crash or garbage output. Never
     hangs: on timeout the process tree is killed and the wait for it is bounded too."""
+    owner = object()
+    _mark(owner, request.get("adapter"))
+    try:
+        return _run(request, timeout_s)
+    finally:
+        _mark(owner, None)
+
+
+def _run(request: dict, timeout_s: float) -> dict:
     p = _spawn("main")
     try:
         stdout, _ = p.communicate(json.dumps(request).encode("utf-8"), timeout=timeout_s)
@@ -319,6 +353,8 @@ class Worker:
 
     def call(self, request: dict, timeout_s: float) -> dict:
         p = self._p if self._p is not None and self._p.poll() is None else self._start()
+        if "adapter" in request:
+            _mark(self, request["adapter"])  # what it imports: until close()
         try:
             p.stdin.write(json.dumps(request).encode("utf-8") + b"\n")  # type: ignore[union-attr]
             p.stdin.flush()  # type: ignore[union-attr]
@@ -342,6 +378,7 @@ class Worker:
     def close(self) -> None:
         """Ends the child: stdin closed (its loop returns), killed with its tree if it does not exit at once."""
         p, self._p = self._p, None
+        _mark(self, None)
         if p is None:
             return
         try:

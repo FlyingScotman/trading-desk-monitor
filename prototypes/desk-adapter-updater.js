@@ -255,6 +255,8 @@
     row.append(file, el('button', { type: 'button', 'class': 'ibtn', disabled: P.busy || st.pinned, onclick: function () { file.click(); } }, 'Загрузить tda-adapter.zip'),
       el('span', { 'class': 'mut3' }, 'или перетащите архив сюда'));
     b.append(row);
+    if (st.bundle) b.append(el('div', { 'class': 'mut3', style: 'margin-top:4px' }, 'Новую версию адаптера ставьте здесь, без перезапуска. ' +
+      'Папку adapter комплекта при запущенной программе вручную не перезаписывайте: Windows ответит «папка занята».'));
     b.append(el('div', { 'class': 'au-msg muted', style: 'margin-top:4px' }));
     var jb = jobBox(st.job); if (jb) b.append(jb);
     var sb = scanBox(); if (sb) b.append(sb);
