@@ -18,9 +18,10 @@ Files, all ``;``-separated UTF-8 with BOM, header = canonical field names (``x_*
   column gives each row's date (08 §6.1); an empty cell is the date in the name.
 * ``trades`` (private/1.6), ``intraday``, scope ``book_id``: ``trades_YYYYMMDD_HHMM.csv`` is the day's cumulative
   export cut at HH:MM Moscow time (source ``trades_csv``, ``full_snapshot``, ``covers=listed``: it replaces the trades
-  of the books it lists), ``trades_delta_YYYYMMDD_HHMM.csv`` the trades booked or amended since the previous cut
-  (source ``trades_delta_csv``, ``increment``: its rows add to the day's, the highest ``trade_version`` of a
-  ``trade_id`` current). The suffix is the hit's ``report_ts``, not a ``seq``; without it the file is the day's
+  of the books it lists), ``trades_delta_YYYYMMDD_HHMM.csv`` deltas (source ``trades_delta_csv``, ``increment``:
+  its rows add to the earlier deltas of the book and date, the highest ``trade_version`` of a ``trade_id``
+  current). The two are separate sources, so one book and date takes either cumulative cuts or deltas: a delta
+  for a book that already has a cumulative cut that date is a ``scope_conflict`` (08 §6.6). The suffix is the hit's ``report_ts``, not a ``seq``; without it the file is the day's
   final cut (23:59:59), an invalid time is not matched.
 * ``books.csv`` in ``ctx.config_dir``: ``reference()["books"]``, its unreadable lines in ``["issues"]``. Without a
   config folder there are no books, so the backend rejects every unit with ``unknown_book``: positions are never

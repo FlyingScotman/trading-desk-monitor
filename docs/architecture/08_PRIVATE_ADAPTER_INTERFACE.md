@@ -629,7 +629,10 @@ How the backend keeps them (S13a, TDM#525): every accepted unit is a `dataset_se
 current set from the newest back to its newest full snapshot (a cumulative export replaces the unit's earlier sets;
 an `increment` set newer than it adds), then across the date's units the row of each `trade_id`'s highest
 `trade_version` (an equal or absent version: the newer set's), so a trade amended into another book moves with it.
-An `increment` unit is never `superseded`: a delta that arrives late is stored and still adds; one equal to a stored
+A source has one `completeness` and a unit of a date comes from one source (§6.6), so a cumulative source and a
+delta source on the same book and date conflict (`scope_conflict`): a book is fed either by cumulative cuts or by
+deltas, not both. The "newest full snapshot, then newer increments" walk above therefore runs within one source's
+sets. An `increment` unit is never `superseded`: a delta that arrives late is stored and still adds; one equal to a stored
 delta stores nothing. A flow: never carried forward. Served at `GET /api/v1/trades?date=&book_id=` and on the
 monitors' screen «Сделки дня» (C20). Not valued yet: the book as opening positions plus trades, and new-trade PnL,
 are the rest of S13 (TDM#29).
