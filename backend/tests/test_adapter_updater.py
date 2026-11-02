@@ -566,3 +566,261 @@ def test_routes_are_local_only(home, tmp_path):
                       headers={"Content-Type": "text/plain"}).status_code in (403, 415)  # not a zip type
     assert local.post("/api/v1/update/adapter/rollback", json={"to": "bundle"},
                       headers={"Origin": "https://evil.example"}).status_code == 403
+
+
+# ---- a folder or file in use on Windows (TDM#519), simulated --------------------------------------------------
+
+
+def win_busy(code: int = 32, filename: str | None = None) -> PermissionError:
+    """What Windows raises for a file an antivirus, the indexer or an Explorer window holds."""
+    e = PermissionError(13, "The process cannot access the file because it is being used by another process", filename)
+    e.winerror = code  # type: ignore[attr-defined]
+    return e
+
+
+def _raise(e: BaseException):
+    raise e
+
+
+@pytest.fixture
+def pauses(monkeypatch) -> list[float]:
+    slept: list[float] = []
+    monkeypatch.setattr(adapter, "_sleep", slept.append)
+    return slept
+
+
+def _other_build(tmp_path: Path, version: str = "0.5.0") -> bytes:
+    """The same version with other files: another build, or what a failed attempt left."""
+    return make_zip(tmp_path / f"other-{version}" / adapter.ZIP_NAME,
+                    {**pkg_files(version), f"src/{PKG}/extra.py": b"y = 2\n"}, version=version).read_bytes()
+
+
+def _folders(home: Path) -> list[str]:
+    return sorted(p.name for p in (home / "adapter-releases").iterdir() if p.is_dir())
+
+
+def test_retry_waits_while_busy_and_gives_up_after_the_budget(pauses):
+    calls = []
+
+    def flaky():
+        calls.append(1)
+        if len(calls) <= 3:
+            raise win_busy()
+        return "ok"
+
+    assert adapter.retry(flaky) == "ok" and len(calls) == 4 and pauses == [0.1, 0.2, 0.4]
+    with pytest.raises(FileNotFoundError):  # not "in use": no retry
+        adapter.retry(lambda: _raise(FileNotFoundError(2, "gone")))
+    pauses.clear()
+    with pytest.raises(PermissionError):
+        adapter.retry(lambda: _raise(win_busy(5)))
+    assert abs(sum(pauses) - adapter.BUSY_WAIT_S) < 1e-6 and max(pauses) <= 2.0
+    e = win_busy()
+    assert adapter.busy(e) and adapter.os_code(e) == "PermissionError WinError 32"
+    assert adapter.busy(OSError(16, "busy")) and not adapter.busy(OSError(2, "gone"))
+
+
+def test_a_busy_current_json_is_retried_and_the_install_goes_through(home, tmp_path, monkeypatch, pauses):
+    real = os.replace
+    left = {"n": 3}
+
+    def replace(src, dst, *a, **kw):
+        if str(dst).endswith(adapter_store.CURRENT_FILE) and left["n"] > 0:
+            left["n"] -= 1
+            raise win_busy()  # the settings read current.json at that moment, an antivirus scans it
+        return real(src, dst, *a, **kw)
+
+    monkeypatch.setattr(os, "replace", replace)
+    r = _install(client(), zip_bytes(tmp_path, "0.5.0"))
+    assert r.status_code == 200, r.text
+    assert left["n"] == 0 and pauses == [0.1, 0.2, 0.4]
+    assert adapter_store.read_current(home)["package"] == f"0.5.0/{PKG}"
+    assert not list((home / "adapter-releases").glob(".current.json.*"))  # no temporary file left
+
+
+def test_when_it_stays_busy_the_page_says_what_and_what_to_do(home, tmp_path, monkeypatch, pauses):
+    c = client()
+    assert _install(c, zip_bytes(tmp_path, "0.5.0")).status_code == 200
+    before = adapter_store.current_path(home).read_text(encoding="utf-8")
+    real_write = adapter.atomic_write_text
+    monkeypatch.setattr(adapter, "atomic_write_text", lambda *a, **kw: _raise(win_busy()))
+    r = _install(c, zip_bytes(tmp_path, "0.5.1"))
+    assert r.status_code == 422
+    msg = r.json()["message"]
+    assert "заняты" in msg and "WinError 32" in msg and "Проводника" in msg and "stop.bat" in msg
+    assert "start.bat" in msg and "Работает прежний адаптер" in msg
+    assert abs(sum(pauses) - adapter.BUSY_WAIT_S) < 1e-6
+    assert adapter_store.current_path(home).read_text(encoding="utf-8") == before
+    assert load().private_adapter.endswith(f"0.5.0{os.sep}{PKG}")
+    log = (home / "logs/update.log").read_text(encoding="utf-8")
+    assert "current.json не записан — PermissionError WinError 32" in log and str(home) not in log
+    monkeypatch.setattr(adapter, "atomic_write_text", real_write)  # free again: what was unpacked is used
+    unpacked = []
+    monkeypatch.setattr(adapter, "_unpack", lambda *a: unpacked.append(a))
+    assert _install(c, zip_bytes(tmp_path, "0.5.1")).json()["version"] == "0.5.1" and not unpacked
+    assert _folders(home) == ["0.5.0", "0.5.1"]
+
+
+def test_an_unpack_failure_says_what_is_busy_and_the_next_try_works(home, tmp_path, monkeypatch, pauses):
+    c = client()
+    real = adapter._unpack
+
+    def busy_unpack(path, info, dest):
+        (dest / PKG).mkdir(parents=True)
+        (dest / PKG / "__init__.py").write_bytes(b"half")
+        raise win_busy(filename=str(dest / PKG / "__init__.py"))
+
+    monkeypatch.setattr(adapter, "_unpack", busy_unpack)
+    r = _install(c, zip_bytes(tmp_path, "0.5.0"))
+    msg = r.json()["message"]
+    assert r.status_code == 422 and "заняты" in msg and "распаковать" in msg
+    assert f"Занят: {home / 'adapter-releases/0.5.0' / PKG / '__init__.py'}." in msg  # which file
+    assert adapter_store.read_current(home) is None and _folders(home) == []  # the half folder went
+    assert "распаковка в adapter-releases/0.5.0 — PermissionError WinError 32" in \
+        (home / "logs/update.log").read_text(encoding="utf-8")
+    monkeypatch.setattr(adapter, "_unpack", real)
+    assert _install(c, zip_bytes(tmp_path, "0.5.0")).status_code == 200
+
+
+def test_a_folder_that_never_frees_is_left_and_the_release_goes_beside_it(home, tmp_path, monkeypatch, pauses):
+    c = client()
+    assert _install(c, zip_bytes(tmp_path, "0.5.0")).status_code == 200
+    held = home / "adapter-releases/0.5.0"
+    real_rename = Path.rename
+
+    def rename(self, target):
+        if Path(self) == held:
+            raise win_busy()  # an Explorer window, a scan's child, an antivirus: never let go
+        return real_rename(self, target)
+
+    monkeypatch.setattr(Path, "rename", rename)
+    z = _other_build(tmp_path)
+    assert _install(c, z).status_code == 409  # the same version: only when asked
+    r = _install(c, z, allow_older=True)
+    assert r.status_code == 200, r.text
+    folder = f"0.5.0+{sha(z)[:8]}"
+    cur = adapter_store.read_current(home)
+    assert cur["version"] == "0.5.0" and cur["package"] == f"{folder}/{PKG}"
+    assert cur["previous"] == "0.5.0" and cur["previous_package"] == f"0.5.0/{PKG}"
+    assert (home / "adapter-releases" / folder / PKG / "extra.py").is_file()
+    assert not (held / PKG / "extra.py").exists() and (held / PKG / "__init__.py").is_file()  # untouched
+    s = load()
+    assert s.private_adapter == str(home / "adapter-releases" / folder / PKG)
+    assert s.private_adapter_source == "installed"
+    page = c.get("/api/v1/update/adapter").json()
+    assert page["previous_available"]
+    assert {"version": "0.5.0", "folder": folder} in [{k: v[k] for k in ("version", "folder")} for v in page["versions"]]
+    for i, v in enumerate(("0.5.1", "0.5.2", "0.5.3")):  # 0.5.0 is old now, but still held: prune skips it quietly
+        assert _install(c, zip_bytes(tmp_path, v)).status_code == 200
+        os.utime(home / "adapter-releases" / v, (time.time() + i + 1, time.time() + i + 1))
+    assert "0.5.0" in _folders(home) and folder not in _folders(home)
+    monkeypatch.setattr(Path, "rename", real_rename)
+    adapter.prune(home)
+    assert _folders(home) == ["0.5.1", "0.5.2", "0.5.3"]  # freed: gone at the next prune
+
+
+def test_reinstalling_the_same_release_reuses_its_folder(home, tmp_path, monkeypatch):
+    c = client()
+    z = zip_bytes(tmp_path, "0.5.0")
+    assert _install(c, z).status_code == 200
+    (home / "adapter-releases/0.5.0" / PKG / "__pycache__").mkdir()  # left by an older version's children
+    unpacked = []
+    monkeypatch.setattr(adapter, "_unpack", lambda *a: unpacked.append(a))
+    r = _install(c, z, allow_older=True)
+    assert r.status_code == 200 and r.json()["version"] == "0.5.0" and not unpacked
+    cur = adapter_store.read_current(home)
+    assert cur["package"] == f"0.5.0/{PKG}" and cur["previous"] is None and _folders(home) == ["0.5.0"]
+
+
+def test_an_install_right_after_a_failed_attempt(home, tmp_path):
+    c = client()
+    assert _install(c, zip_bytes(tmp_path, "0.5.0")).status_code == 200
+    left = home / "adapter-releases/0.5.1"  # a failed attempt's leftover: a file missing
+    shutil.copytree(home / "adapter-releases/0.5.0", left)
+    man = json.loads((left / adapter.MANIFEST).read_text(encoding="utf-8"))
+    man["version"] = "0.5.1"
+    (left / adapter.MANIFEST).write_text(json.dumps(man), encoding="utf-8")
+    (left / PKG / "_acquisition/system2/run.py").unlink()
+    r = _install(c, zip_bytes(tmp_path, "0.5.1"))
+    assert r.status_code == 200, r.text
+    pkg = adapter_store.installed(home)[0]
+    assert pkg.parent.name.startswith("0.5.1+") and (pkg / "_acquisition/system2/run.py").is_file()
+    h = scan.adapter(load())
+    assert h.ok and h.version == "0.5.1"
+    assert c.post("/api/v1/update/adapter/rollback", json={"to": "previous"}).json()["version"] == "0.5.0"
+    cur = adapter_store.read_current(home)
+    assert cur["package"] == f"0.5.0/{PKG}" and cur["previous_package"] == f"{pkg.parent.name}/{PKG}"
+    assert c.post("/api/v1/update/adapter/rollback", json={"to": "previous"}).json()["version"] == "0.5.1"
+    assert adapter_store.installed(home)[0] == pkg
+
+
+def test_a_current_json_of_the_older_version_still_rolls_back(home, tmp_path):
+    c = client()
+    _install(c, zip_bytes(tmp_path, "0.5.0"))
+    _install(c, zip_bytes(tmp_path, "0.5.1"))
+    doc = json.loads(adapter_store.current_path(home).read_text(encoding="utf-8"))
+    del doc["previous_package"]  # written by 0.2.13
+    adapter_store.current_path(home).write_text(json.dumps(doc), encoding="utf-8")
+    assert c.get("/api/v1/update/adapter").json()["previous_available"]
+    assert c.post("/api/v1/update/adapter/rollback", json={"to": "previous"}).json()["version"] == "0.5.0"
+
+
+def test_the_switch_ends_the_warm_child_and_the_next_call_uses_the_new_folder(home, tmp_path):
+    from desk import settings_forms
+    from desk.inbox import runner
+
+    c = client()
+    assert _install(c, zip_bytes(tmp_path, "0.5.0")).status_code == 200
+    old = scan.adapter(load())
+    assert old.ok and old.spec.endswith(f"0.5.0{os.sep}{PKG}")
+    w = runner.Worker()  # the settings forms' warm child, on the old adapter
+    assert runner.call_reference(old, None, 30, worker=w) == {"books": []}
+    settings_forms._warm.update(worker=w, key=("old",), used=time.monotonic())
+    assert old.spec in runner.specs_in_use()
+    scan_child = runner.Worker()  # an inbox scan still running on the old adapter: never ended by the switch
+    runner.call_reference(old, None, 30, worker=scan_child)
+    try:
+        assert _install(c, zip_bytes(tmp_path, "0.5.1")).status_code == 200
+        assert settings_forms._warm["worker"] is None and w._p is None  # ended
+        assert scan_child._p is not None and scan_child._p.poll() is None  # still running
+        new = scan.adapter(load())
+        assert new.ok and new.version == "0.5.1" and new.spec.endswith(f"0.5.1{os.sep}{PKG}")
+        assert runner.call_reference(new, None, 30) == {"books": []}
+        for i, v in enumerate(("0.5.2", "0.5.3", "0.5.4")):  # 0.5.0: neither current nor previous, but in use
+            assert _install(c, zip_bytes(tmp_path, v)).status_code == 200
+            os.utime(home / "adapter-releases" / v, (time.time() + i + 1, time.time() + i + 1))
+        assert "0.5.0" in _folders(home) and "0.5.1" not in _folders(home)
+    finally:
+        scan_child.close()
+    assert old.spec not in runner.specs_in_use()
+    adapter.prune(home)
+    assert "0.5.0" not in _folders(home)
+
+
+def test_the_adapter_children_write_nothing_into_its_folder(home, tmp_path):
+    from desk.inbox import runner
+
+    c = client()
+    assert _install(c, zip_bytes(tmp_path, "0.5.0")).status_code == 200  # the loader's check ran its child there
+    runner.call_reference(scan.adapter(load()), None, 30)
+    assert not list((home / "adapter-releases").rglob("__pycache__"))
+    assert not list((home / "adapter-releases").rglob("*.pyc"))
+
+
+def test_a_server_download_held_by_an_antivirus_never_fails_the_install(home, tmp_path, monkeypatch, pauses):
+    FakeGitHub(monkeypatch, zip_bytes(tmp_path))
+    monkeypatch.setenv("DESK_GITHUB_TOKEN", TOKEN)
+    c = client()
+    c.post("/api/v1/update/adapter/check", json={})
+    real_unlink = Path.unlink
+
+    def unlink(self, missing_ok=False):
+        if self.name.startswith("tda-adapter-"):
+            raise win_busy()  # still scanned after the install read it
+        return real_unlink(self, missing_ok=missing_ok)
+
+    monkeypatch.setattr(Path, "unlink", unlink)
+    assert c.post("/api/v1/update/adapter/install", json={}).status_code == 202
+    j = _wait()
+    assert j["state"] == "done", j
+    assert adapter_store.read_current(home)["version"] == "0.5.0"

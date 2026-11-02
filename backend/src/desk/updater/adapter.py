@@ -24,13 +24,23 @@ zip also comes from the page (``install_zip`` of an upload) or from «Найти
 Every zip, whatever its way in, is checked by ``verify_zip`` against its inner ``ADAPTER_RELEASE.json``: every member
 listed with its SHA-256, nothing more, nothing missing, safe paths (relative, no ``..``, backslash, drive or
 reserved name), no links, no encryption, size limits, exactly one top-level package (a folder with ``__init__.py``
-not inside another one). ``install_zip`` unpacks it into ``<home>/adapter-releases/<version>/`` (the package at
-``<version>/<name>/``, with ``ADAPTER_RELEASE.json`` and the README files) through a temporary folder and a rename,
-loads it with the monitor's own loader (``desk.inbox.loader.load_adapter``: an adapter for a newer contract or SPI
-is refused there, before anything switches), and only then writes ``current.json`` (``adapter_store``) and drops
-the loaded handles (``desk.inbox.scan.forget_adapters``): the settings resolve the new package on their next read,
-every adapter call runs in a fresh child process, so no restart is needed. A pinned fingerprint
+not inside another one). ``install_zip`` unpacks it into a new folder ``<home>/adapter-releases/<version>/`` (the
+package at ``<version>/<name>/``, with ``ADAPTER_RELEASE.json`` and the README files), loads it with the monitor's own
+loader (``desk.inbox.loader.load_adapter``: an adapter for a newer contract or SPI is refused there, before anything
+switches), and only then writes ``current.json`` (``adapter_store``) and drops the loaded handles
+(``desk.inbox.scan.forget_adapters``) and the settings forms' warm child: the settings resolve the new package on
+their next read, every adapter call starts a child process of it, so no restart is needed. A pinned fingerprint
 (``private_adapter_sha256``) refuses the install: the new files could never load under it.
+
+On Windows a folder or file is often "in use" for a moment: an antivirus or the indexer reads the files just
+written, an Explorer window is open in the folder (TDM#519). So the install never renames, replaces or writes into a
+folder that exists: a folder of that version with the same files (checked by SHA-256) is used as it is, otherwise
+the release goes into a new folder ``<version>+<hex>`` (``adapter_store``). Replacing ``current.json`` and removing
+files are retried for up to ``BUSY_WAIT_S`` with growing pauses; when it still fails, the page says what is busy and
+what to do, ``update.log`` gets the error's type and code, and the adapter in use stays. An inbox scan already
+running finishes with the adapter it started with (its children are never killed: that would fail its files); the
+next scan starts the new one. Its folder stays: ``prune`` never removes the current or the previous folder, nor one
+that a child of this process uses (``desk.inbox.runner.specs_in_use``), nor one it cannot rename aside at once.
 
 Only a newer version than the one in use is installed unless ``allow_older``. The newest ``KEEP`` version folders
 stay (never the current or the previous one). ``rollback("previous")`` switches back to the previous release,
@@ -40,6 +50,7 @@ logged to ``<home>/logs/update.log``; the token never is.
 
 from __future__ import annotations
 
+import errno
 import hashlib
 import json
 import os
@@ -78,6 +89,8 @@ WATCH_TIMEOUT_S = service.WATCH_TIMEOUT_S
 WATCH_POLL_S = service.WATCH_POLL_S
 ROOT_KEEP = ("readme", "license")  # root files of the zip copied next to the package (and ADAPTER_RELEASE.json)
 ACTIVE = ("starting", "downloading", "verifying", "waiting_browser", "installing")
+BUSY_WAIT_S = 15.0  # how long a file operation is retried while Windows says the file or folder is in use
+BUSY_WINERRORS = (5, 32, 33)  # access denied, sharing violation, lock violation
 
 _lock = threading.RLock()
 _install_lock = threading.Lock()
@@ -97,6 +110,51 @@ class AdapterUpdateError(ValueError):
 
 def now() -> str:
     return datetime.now().isoformat(timespec="seconds")
+
+
+_sleep = time.sleep  # tests: no real pauses
+
+
+def busy(e: OSError) -> bool:
+    """Windows' "the file or folder is in use" (or POSIX's EACCES / EBUSY): worth another try a moment later."""
+    return (isinstance(e, PermissionError) or getattr(e, "winerror", None) in BUSY_WINERRORS
+            or e.errno in (errno.EACCES, errno.EBUSY))
+
+
+def retry(fn: Any, budget_s: float | None = None) -> Any:
+    """``fn()``, again while it fails with ``busy``: pauses from 0.1 s doubling up to 2 s, ``budget_s``
+    (``BUSY_WAIT_S``) in all; then the last error."""
+    budget = BUSY_WAIT_S if budget_s is None else budget_s
+    pause, waited = 0.1, 0.0
+    while True:
+        try:
+            return fn()
+        except OSError as e:
+            if not busy(e) or waited >= budget:
+                raise
+            d = min(pause, budget - waited)
+            _sleep(d)
+            waited, pause = waited + d, min(pause * 2, 2.0)
+
+
+def os_code(e: OSError) -> str:
+    """The error's type and code for the log and the page, without its path: ``PermissionError WinError 32``."""
+    w = getattr(e, "winerror", None)
+    code = f"WinError {w}" if w else f"errno {e.errno}" if e.errno else ""
+    return f"{type(e).__name__} {code}".strip()
+
+
+def busy_message(e: OSError, what: str, folder: Path) -> str:
+    """What the owner reads when ``what`` failed on a file or folder in use, and what to do."""
+    if not busy(e):
+        return f"Новый адаптер не установлен: не удалось {what} ({os_code(e)}: {e.strerror or e}). " \
+               "Работает прежний."
+    held = f" Занят: {e.filename}." if e.filename else ""
+    return (f"Новый адаптер не установлен: не удалось {what} — Windows отвечает, что файл или папка заняты другой "
+            f"программой ({os_code(e)}).{held} Закройте окна Проводника, открытые в папке {folder}, подождите "
+            "минуту и установите ещё раз. Не помогло — перезапустите программу (stop.bat, затем start.bat) и "
+            "установите снова. Папку adapter комплекта при запущенной программе вручную не перезаписывайте. "
+            "Работает прежний адаптер.")
 
 
 def log(st: Settings, msg: str) -> None:
@@ -404,19 +462,26 @@ def verify_zip(path: Path) -> dict[str, Any]:
             "files": sorted(files), "size": size, "version": man["version"]}
 
 
+def _targets(info: dict[str, Any], dest: Path) -> list[tuple[str, Path]]:
+    """(zip name, path under ``dest``) of every file the install writes: the package and the README / LICENSE files."""
+    pkg, name = info["package"], info["name"]
+    out = []
+    for n in info["files"]:
+        if _under(n, pkg):
+            out.append((n, dest / name / n[len(pkg) + 1:]))
+        elif n.lower().startswith(ROOT_KEEP):
+            out.append((n, dest / n))
+    return out
+
+
 def _unpack(path: Path, info: dict[str, Any], dest: Path) -> None:
-    """The package and the README / LICENSE files of the checked zip into ``dest`` (created), every file's
-    SHA-256 checked again as it is written."""
-    pkg, name, listed = info["package"], info["name"], info["manifest"]["files"]
-    dest.mkdir(parents=True)
+    """The package and the README / LICENSE files of the checked zip into ``dest`` (created if needed), every
+    file's SHA-256 checked again as it is written; ``ADAPTER_RELEASE.json`` last, so a folder with it holds every
+    file."""
+    listed = info["manifest"]["files"]
+    dest.mkdir(parents=True, exist_ok=True)
     with zipfile.ZipFile(path) as z:
-        for n in info["files"]:
-            if _under(n, pkg):
-                target = dest / name / n[len(pkg) + 1:]
-            elif n.lower().startswith(ROOT_KEEP):
-                target = dest / n
-            else:
-                continue
+        for n, target in _targets(info, dest):
             target.parent.mkdir(parents=True, exist_ok=True)
             h = hashlib.sha256()
             with z.open(n) as src, open(target, "wb") as out:
@@ -474,51 +539,143 @@ def _check_loads(st: Settings, pkg: Path) -> Any:
 
 
 def _forget() -> None:
+    """After a switch: the loaded handles dropped (the next scan, check or page loads the new package) and the
+    settings forms' warm child ended (unless a check runs on it now). A running scan keeps its children."""
+    from .. import settings_forms
     from ..inbox import scan
 
     scan.forget_adapters()
+    settings_forms.release_worker()
 
 
-def _same_files(folder: Path, man: dict[str, Any]) -> bool:
+def _intact(folder: Path, info: dict[str, Any]) -> bool:
+    """``folder`` holds exactly this release: its ``ADAPTER_RELEASE.json`` lists the same files and every file the
+    install would write is there with its SHA-256 (``__pycache__`` or other extras do not matter)."""
     try:
         old = json.loads((folder / MANIFEST).read_text(encoding="utf-8-sig"))
     except (OSError, ValueError):
         return False
-    return isinstance(old, dict) and old.get("files") == man.get("files") and old.get("package") == man.get("package")
+    man = info["manifest"]
+    if not isinstance(old, dict) or old.get("files") != man.get("files") or old.get("package") != man.get("package"):
+        return False
+    for n, target in _targets(info, folder):
+        try:
+            if downloads.sha256_of(target) != man["files"][n].lower():
+                return False
+        except OSError:
+            return False
+    return True
+
+
+def _target(rd: Path, info: dict[str, Any]) -> tuple[Path, bool]:
+    """(folder, reused): the release's folder ``<version>`` when it is free or holds exactly this release; else
+    ``<version>+<zip's SHA-256, 8 hex>`` the same way; else a fresh ``<version>+<16 hex>``. An existing folder
+    with other files is never written into, renamed or removed here: it may be in use (TDM#519)."""
+    version = info["version"]
+    for name in (version, f"{version}+{info['sha256'][:8]}"):
+        folder = rd / name
+        if not folder.exists():
+            return folder, False
+        if _intact(folder, info) and (folder / info["name"] / "__init__.py").is_file():
+            return folder, True
+    return rd / f"{version}+{info['sha256'][:8]}{uuid.uuid4().hex[:8]}", False
+
+
+def _discard(folder: Path) -> bool:
+    """Remove ``folder`` when nothing holds it: renamed aside first (one try, an atomic step: a folder in use
+    stays whole), then deleted; True when it is gone from its place. Never raises."""
+    aside = folder.with_name(f".old-{folder.name}-{uuid.uuid4().hex[:8]}")
+    try:
+        folder.rename(aside)
+    except OSError:
+        return False
+    shutil.rmtree(aside, ignore_errors=True)  # what an antivirus still reads goes with the next prune
+    return True
 
 
 def _write_current(home: Path, doc: dict[str, Any]) -> None:
-    atomic_write_text(adapter_store.current_path(home), json.dumps(doc, ensure_ascii=False, indent=1) + "\n")
+    text = json.dumps(doc, ensure_ascii=False, indent=1) + "\n"
+    retry(lambda: atomic_write_text(adapter_store.current_path(home), text))
+
+
+def _runner_specs() -> set[str]:
+    from ..inbox import runner
+
+    return runner.specs_in_use()
+
+
+def _protected(home: Path, cur: dict[str, Any] | None) -> set[str]:
+    """The folder names prune leaves alone: the current and the previous release's, and every folder a child of
+    this process imports the adapter from now (an inbox scan still running on the previous one)."""
+    out: set[str] = set()
+    if cur:
+        out |= {v for v in (cur.get("version"), cur.get("previous")) if isinstance(v, str)}
+        for key in ("package", "previous_package"):
+            if (pkg := adapter_store.safe_package(home, cur.get(key))) is not None:
+                out.add(pkg.parent.name)
+    try:
+        base = os.path.normcase(str(adapter_store.releases_dir(home).resolve()))
+    except OSError:
+        return out
+    for spec in _runner_specs():
+        try:
+            folder = Path(spec).resolve().parent
+        except (OSError, ValueError):
+            continue
+        if os.path.normcase(str(folder.parent)) == base:
+            out.add(folder.name)
+    return out
+
+
+def previous_package(home: Path, cur: dict[str, Any] | None) -> Path | None:
+    """The previous release's package folder when it is still there: ``previous_package`` of ``current.json``, or
+    (``current.json`` of an older version) the one package of the folder named ``previous``."""
+    if not cur or not cur.get("previous"):
+        return None
+    if cur.get("previous_package"):
+        pkg = adapter_store.safe_package(home, cur["previous_package"])
+        return pkg if pkg is not None and (pkg / "__init__.py").is_file() else None
+    prev = cur["previous"]
+    folder = adapter_store.releases_dir(home) / str(prev)
+    if not adapter_store.valid_version(prev) or not folder.is_dir():
+        return None
+    pkgs = sorted(p for p in folder.iterdir() if (p / "__init__.py").is_file())
+    return pkgs[0] if len(pkgs) == 1 else None
+
+
+def _mtime(p: Path) -> float:
+    try:
+        return p.stat().st_mtime
+    except OSError:
+        return 0.0
 
 
 def prune(home: Path, keep: int = KEEP) -> list[str]:
-    """Remove all but the newest ``keep`` version folders (never the current or the previous one), and stale
-    temporary folders; the versions removed."""
+    """Remove all but the newest ``keep`` release folders (never the current or the previous one, nor one in use:
+    ``_protected``; one that cannot be renamed aside at once is left for the next time), and stale temporary
+    folders; the folders removed."""
     rd = adapter_store.releases_dir(home)
-    cur = adapter_store.read_current(home) or {}
-    protect = {cur.get("version"), cur.get("previous")}
+    protect = _protected(home, adapter_store.read_current(home))
     try:
         entries = [p for p in rd.iterdir() if p.is_dir()]
     except OSError:
         return []
     for p in entries:
-        if p.name.startswith((".tmp-", ".old-")) and time.time() - p.stat().st_mtime > 3600:
+        if p.name.startswith((".tmp-", ".old-")) and time.time() - _mtime(p) > 3600:
             shutil.rmtree(p, ignore_errors=True)
-    versions = sorted((p for p in entries if adapter_store.valid_version(p.name)), key=lambda p: p.stat().st_mtime,
-                      reverse=True)
+    folders = sorted((p for p in entries if adapter_store.valid_folder(p.name)), key=_mtime, reverse=True)
     removed = []
-    for p in versions[keep:]:
-        if p.name not in protect:
-            shutil.rmtree(p, ignore_errors=True)
+    for p in folders[keep:]:
+        if p.name not in protect and _discard(p):
             removed.append(p.name)
     return removed
 
 
 def install_zip(st: Settings, path: Path, *, source: str, allow_older: bool = False,
                 expect_sha256: str | None = None) -> dict[str, Any]:
-    """Check ``path`` (a ``tda-adapter.zip``), unpack it as ``<home>/adapter-releases/<version>/``, load it, and only
-    then make it the current adapter; the result for the page. AdapterUpdateError when anything fails: the adapter
-    in use stays."""
+    """Check ``path`` (a ``tda-adapter.zip``), unpack it into a new folder of ``<home>/adapter-releases/``
+    (``_target``), load it, and only then make it the current adapter; the result for the page.
+    AdapterUpdateError when anything fails: the adapter in use stays."""
     home = st.home
     if not _install_lock.acquire(blocking=False):
         raise AdapterUpdateError("Адаптер уже устанавливается: дождитесь конца.")
@@ -538,49 +695,54 @@ def install_zip(st: Settings, path: Path, *, source: str, allow_older: bool = Fa
             raise AdapterUpdateError(f"Адаптер {version}: {why} ({base}). Установить можно только явно.",
                                      needs_confirm=True, version=version, compare=cmp)
         cur = adapter_store.read_current(home)
-        protected = {cur.get("version"), cur.get("previous")} if cur else set()
         rd = adapter_store.releases_dir(home)
-        rd.mkdir(parents=True, exist_ok=True)
-        dest = rd / version
-        tmp = rd / f".tmp-{uuid.uuid4().hex[:12]}"
-        created = False
         try:
-            if dest.exists() and _same_files(dest, man) and (dest / name / "__init__.py").is_file():
-                pass  # the same release unpacked before: used as it is
-            elif dest.exists() and version in protected:
-                raise AdapterUpdateError(f"Версия {version} уже установлена другой сборкой (её файлы отличаются). "
-                                         "Сначала вернитесь к другой версии или к адаптеру из комплекта.")
-            else:
-                _unpack(path, info, tmp)
-                if dest.exists():
-                    aside = rd / f".old-{version}-{uuid.uuid4().hex[:8]}"
-                    dest.replace(aside)
-                    shutil.rmtree(aside, ignore_errors=True)
-                tmp.replace(dest)
-                created = True
+            retry(lambda: rd.mkdir(parents=True, exist_ok=True))
         except OSError as e:
-            raise AdapterUpdateError(f"Не удалось распаковать адаптер в {dest}: {e}") from None
-        finally:
-            shutil.rmtree(tmp, ignore_errors=True)
-        pkg = dest / name
-        h = _check_loads(st, pkg)
+            log(st, f"Адаптер {version} не установлен: папка {rd.name} не создаётся — {os_code(e)}")
+            raise AdapterUpdateError(busy_message(e, "создать папку выпусков адаптера", rd)) from None
+        dest, reused = _target(rd, info)
+        if not reused:
+            try:
+                retry(dest.mkdir)  # a new folder: FileExistsError when another one appeared meanwhile
+            except OSError as e:
+                log(st, f"Адаптер {version} не установлен: папка {rd.name}/{dest.name} не создаётся — {os_code(e)}")
+                raise AdapterUpdateError(busy_message(e, f"создать папку {dest}", rd)) from None
+            try:
+                _unpack(path, info, dest)
+            except OSError as e:
+                _discard(dest)
+                log(st, f"Адаптер {version} не установлен: распаковка в {rd.name}/{dest.name} — {os_code(e)}")
+                raise AdapterUpdateError(busy_message(e, f"распаковать адаптер в {dest}", rd)) from None
+            except BaseException:
+                _discard(dest)
+                raise
+        rel = adapter_store.package_rel(dest.name, name)
+        h = _check_loads(st, dest / name)
         if not h.ok:
-            if created:
-                shutil.rmtree(dest, ignore_errors=True)
+            if not reused:
+                _discard(dest)
             log(st, f"Адаптер {version} не установлен: загрузчик ответил {h.error}")
             raise AdapterUpdateError(_loader_message(h.error or "load_failed"))
-        if cur and cur.get("version") != version:
-            previous = cur["version"]
+        if cur and cur.get("package") != rel:
+            previous, previous_pkg = cur["version"], cur["package"]
         else:
             previous = cur.get("previous") if cur else None
-        doc = {"version": version, "package": adapter_store.package_rel(version, name), "previous": previous,
+            previous_pkg = cur.get("previous_package") if cur else None
+        doc = {"version": version, "package": rel, "previous": previous, "previous_package": previous_pkg,
                "installed_at": now(), "source": source, "sha256": info["sha256"], "commit": man.get("commit"),
                "contract": man.get("contract"), "spi": man.get("spi"),
                "adapter": {"name": h.name, "version": h.version, "fingerprint": h.fingerprint}}
-        _write_current(home, doc)
+        try:
+            _write_current(home, doc)
+        except OSError as e:
+            log(st, f"Адаптер {version} не установлен: {rd.name}/{adapter_store.CURRENT_FILE} не записан — "
+                    f"{os_code(e)}")
+            raise AdapterUpdateError(busy_message(e, f"записать {adapter_store.CURRENT_FILE}", rd)) from None
         _forget()
         removed = prune(home)
-        log(st, f"Адаптер {version} установлен ({source}, sha256 {info['sha256'][:12]}); прежний: "
+        log(st, f"Адаптер {version} установлен ({source}, sha256 {info['sha256'][:12]}"
+                + (f", папка {dest.name}" if dest.name != version else "") + "); прежний: "
                 f"{previous or 'из комплекта'}" + (f"; удалены старые версии: {', '.join(removed)}" if removed else ""))
         return {"installed": True, "version": version, "previous": previous, "source": source,
                 "adapter": doc["adapter"], "explicit": st.private_adapter_source in ("env", "settings"),
@@ -596,7 +758,13 @@ def rollback(st: Settings, to: str) -> dict[str, Any]:
     cur = adapter_store.read_current(home)
     with _install_lock:
         if to == "bundle":
-            adapter_store.current_path(home).unlink(missing_ok=True)
+            try:
+                retry(lambda: adapter_store.current_path(home).unlink(missing_ok=True))
+            except OSError as e:
+                log(st, f"Адаптер: возврат к адаптеру из комплекта не сделан — {os_code(e)}")
+                raise AdapterUpdateError(busy_message(e, f"удалить {adapter_store.CURRENT_FILE}",
+                                                      adapter_store.releases_dir(home))
+                                         .replace("Новый адаптер не установлен", "Адаптер не переключён")) from None
             _forget()
             log(st, f"Адаптер: возврат к адаптеру из комплекта (был {cur['version'] if cur else 'он же'})")
             return {"version": None, "message": "Используется адаптер из комплекта программы (или эталонный, если "
@@ -606,24 +774,31 @@ def rollback(st: Settings, to: str) -> dict[str, Any]:
         prev = cur.get("previous") if cur else None
         if not prev:
             raise AdapterUpdateError("Предыдущей установленной версии нет: можно вернуться к адаптеру из комплекта.")
-        folder = adapter_store.releases_dir(home) / prev
-        pkgs = sorted(p for p in folder.iterdir() if (p / "__init__.py").is_file()) if folder.is_dir() else []
-        if not adapter_store.valid_version(prev) or len(pkgs) != 1:
+        pkg = previous_package(home, cur)
+        if pkg is None:
             raise AdapterUpdateError(f"Папки версии {prev} больше нет: установите её заново из архива.")
         if st.private_adapter_sha256:
             raise AdapterUpdateError(PINNED)
-        h = _check_loads(st, pkgs[0])
+        h = _check_loads(st, pkg)
         if not h.ok:
             raise AdapterUpdateError(_loader_message(h.error or "load_failed"))
         try:
-            man = json.loads((folder / MANIFEST).read_text(encoding="utf-8-sig"))
+            man = json.loads((pkg.parent / MANIFEST).read_text(encoding="utf-8-sig"))
         except (OSError, ValueError):
             man = {}
-        doc = {"version": prev, "package": adapter_store.package_rel(prev, pkgs[0].name), "previous": cur["version"],
+        assert cur is not None  # previous_package found one
+        doc = {"version": prev, "package": adapter_store.package_rel(pkg.parent.name, pkg.name),
+               "previous": cur["version"], "previous_package": cur["package"],
                "installed_at": now(), "source": "rollback", "sha256": None,
                "commit": man.get("commit") if isinstance(man, dict) else None,
                "adapter": {"name": h.name, "version": h.version, "fingerprint": h.fingerprint}}
-        _write_current(home, doc)
+        try:
+            _write_current(home, doc)
+        except OSError as e:
+            log(st, f"Адаптер: возврат {cur['version']} -> {prev} не сделан — {os_code(e)}")
+            raise AdapterUpdateError(busy_message(e, f"записать {adapter_store.CURRENT_FILE}",
+                                                  adapter_store.releases_dir(home))
+                                     .replace("Новый адаптер не установлен", "Адаптер не переключён")) from None
         _forget()
         log(st, f"Адаптер: возврат {cur['version']} -> {prev}")
         return {"version": prev, "message": f"Возвращён адаптер {prev}."}
@@ -668,7 +843,7 @@ def _server_download(st: Settings, rel: dict[str, Any]) -> Path | None:
                 break
             continue
         if r.size != asset["size"] or downloads.sha256_of(r.path) != asset["sha256"]:
-            r.path.unlink(missing_ok=True)
+            _remove_file(r.path)
             attempts.append({"ok": False, "layer": layer, "code": "checksum", "what": "файл не совпал с релизом",
                              "message": "размер или SHA-256 не те, что в релизе (страница прокси?)"})
             _job_update(attempts=attempts)
@@ -676,9 +851,21 @@ def _server_download(st: Settings, rel: dict[str, Any]) -> Path | None:
         attempts.append({"ok": True, "layer": layer, "ms": int((time.monotonic() - t0) * 1000)})
         _job_update(attempts=attempts)
         named = r.path.with_name(f"tda-adapter-{rel['version']}.zip")  # messages name the file the owner knows
-        os.replace(r.path, named)
+        try:
+            retry(lambda src=r.path, dst=named: os.replace(src, dst))
+        except OSError as e:  # an antivirus still reads the fresh download: installed under its own name
+            log(st, f"Адаптер {rel['version']}: скачанный архив не переименован — {os_code(e)}")
+            return r.path
         return named
     return None
+
+
+def _remove_file(path: Path) -> None:
+    """Best effort: a file still read by an antivirus stays, never failing what was done (TDM#519)."""
+    try:
+        retry(lambda: path.unlink(missing_ok=True), budget_s=3.0)
+    except OSError:
+        pass
 
 
 def candidates(folder: Path, since: float | None = None) -> list[Path]:
@@ -767,7 +954,7 @@ def _run(st: Settings, rel: dict[str, Any] | None, browser_first: bool, allow_ol
             return
         finally:
             if source == "server":
-                path.unlink(missing_ok=True)
+                _remove_file(path)
         _job_update(state="done", message=out["message"], version=out["version"], finished_at=now())
         write_state(home, {"last_install": {"at": now(), "version": out["version"], "source": source}})
     except Exception as e:  # noqa: BLE001 - the job reports, the server lives on
@@ -862,11 +1049,12 @@ def uploads_dir(home: Path) -> Path:
 def versions(home: Path) -> list[dict[str, Any]]:
     rd = adapter_store.releases_dir(home)
     try:
-        dirs = [p for p in rd.iterdir() if p.is_dir() and adapter_store.valid_version(p.name)]
+        dirs = [p for p in rd.iterdir() if p.is_dir() and adapter_store.valid_folder(p.name)]
     except OSError:
         return []
-    return [{"version": p.name, "modified": datetime.fromtimestamp(p.stat().st_mtime).isoformat(timespec="seconds")}
-            for p in sorted(dirs, key=lambda p: p.stat().st_mtime, reverse=True)]
+    return [{"version": adapter_store.folder_version(p.name), "folder": p.name,
+             "modified": datetime.fromtimestamp(_mtime(p)).isoformat(timespec="seconds")}
+            for p in sorted(dirs, key=_mtime, reverse=True)]
 
 
 def status(st: Settings) -> dict[str, Any]:
@@ -883,7 +1071,6 @@ def status(st: Settings) -> dict[str, Any]:
                       bver if st.private_adapter_source == "bundle" else
                       adapter_store.package_version(Path(st.private_adapter)) if st.private_adapter
                       and Path(st.private_adapter).is_dir() else None)
-    prev = cur.get("previous") if cur else None
     folder = downloads.downloads_dir(st.update_downloads_dir)
     explicit = st.private_adapter_source in ("env", "settings")
     return {
@@ -901,7 +1088,7 @@ def status(st: Settings) -> dict[str, Any]:
         if cur else None,
         "bundle": {"version": bver, "path": str(bundle)} if bundle is not None else None,
         "base_version": base, "versions": versions(st.home),
-        "previous_available": bool(prev and (adapter_store.releases_dir(st.home) / prev).is_dir()),
+        "previous_available": previous_package(st.home, cur) is not None,
         "checked_at": s.get("checked_at") if same else None, "check": s.get("check") if same else None,
         "release": rel, "no_release": bool(s.get("no_release")) and same, "compare": cmp,
         "update_available": cmp == "newer", "job": job(),
