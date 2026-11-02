@@ -1,4 +1,4 @@
-# Private input contract v1 (`private/1.5`)
+# Private input contract v1 (`private/1.6`)
 
 The rows a private adapter emits, one JSON Schema per dataset (`<dataset>.schema.json`) and per reference table of
 `reference()`, authoritative over the design tables of [08 §10](../../../docs/architecture/08_PRIVATE_ADAPTER_INTERFACE.md):
@@ -11,26 +11,28 @@ The rows a private adapter emits, one JSON Schema per dataset (`<dataset>.schema
 | `cash_balances` | cash balances per book, account and ledger (stock; a file may hold a history, 08 §6.1) | 1.2 |
 | `pnl_official` | the official daily PnL, one row per report line (flow) | 1.2 |
 | `trade_terms` | economic terms of OTC trades: FX forwards, NDFs, FX swap legs (stock) | 1.2 (1.4: IRS, OIS and CCS legs, REPO, HTM purchases) |
+| `trades` | the day's trades, one row per trade version: a cumulative export per book or deltas (flow; a file may hold several dates, 08 §6.1) | 1.6 |
 | `entities` | `reference()["entities"]`: legal entities and their funding scheme (optional) | 1.2 |
 | `funding_rules` | `reference()["funding_rules"]`: funding basis and rate per selectors, with history (optional) | 1.2 |
 | `funding_policy` | `reference()["funding_policy"]`: the funding conventions that are not a rate (HTM base, timing, REPO policy, write-off), with history (optional) | 1.3 |
 | `ocp_policy` | `reference()["ocp_policy"]`: the OCP conventions (which components the bank's OCP report holds, what is published, the amount basis, NDFs, cash, settlement window, tolerance, report age), with history (optional) | 1.5 |
 
-`trades` and `internal_market` are declared in 08 but have no schema yet: they come with their slices.
+`internal_market` is declared in 08 but has no schema yet: it comes with its slice (S10).
 
 Amounts are a finite JSON number or a decimal string, integers (`trade_version`) a JSON integer or a string of
-digits, dates are `YYYY-MM-DD`, an optional field may be absent or `null` (the same thing), `""` is invalid
+digits, dates are `YYYY-MM-DD`, timestamps (`trades.trade_ts`) ISO 8601 `YYYY-MM-DDTHH:MM[:SS[.ffffff]][Z|+HH:MM]` (without an offset: Moscow time), an optional field may be absent or `null` (the same thing), `""` is invalid
 everywhere, currency codes are upper-cased (`RUR` is `RUB`), raw firm values go in `x_*` keys and `_src` (the row's
 location, no sheet names) is required. The backend validates with its own standard-library validator
 (`desk.inbox.schema`), so the schemas use only `type`, `enum`, `required`, `properties`, `patternProperties`,
-`additionalProperties`, `pattern`, `minLength`, `format: date`, `default` and local `$ref`. A rule across fields (a
+`additionalProperties`, `pattern`, `minLength`, `format: date`, `format: date-time` (1.6), `default` and local `$ref`. A rule across fields (a
 bond needs a size, an FX trade its legs, a funding rule of `index_spread` its index) is checked in
 `desk.inbox.validate` and listed in 08 §10.
 
 Each `<name>.csv` is the canonical CSV template of a schema (header only, `;`, UTF-8 with BOM, CRLF, as
-`contract/csv/`), read by the reference adapter `desk.inbox.reference`: `<dataset>_YYYYMMDD.csv` in the inbox,
-`books.csv`, `entities.csv`, `funding_rules.csv`, `funding_policy.csv`, `ocp_policy.csv` in the adapter config folder. The backend ships the schemas as
-package data (`backend/src/desk/inbox/schemas/v1/`); a test keeps that copy byte-identical to this one, so change
+`contract/csv/`), read by the reference adapter `desk.inbox.reference`: `<dataset>_YYYYMMDD.csv` in the inbox
+(`trades`: `trades_YYYYMMDD[_HHMM].csv`, a cumulative export cut at HH:MM, and `trades_delta_YYYYMMDD[_HHMM].csv`,
+deltas), `books.csv`, `entities.csv`, `funding_rules.csv`, `funding_policy.csv`, `ocp_policy.csv` in the adapter
+config folder. The backend ships the schemas as package data (`backend/src/desk/inbox/schemas/v1/`); a test keeps that copy byte-identical to this one, so change
 both.
 
 Optional risk fields of `positions`, minor 1.1 (all optional, so a `private/1.0` adapter stays valid and is
@@ -70,3 +72,12 @@ OCP conventions (`report_components`, the components the bank's OCP report holds
 `report_max_age_days`; 08 §10). The run publishes the report plus the components outside it, derived from positions,
 and the derived OCP where no report unit covers a book. A 1.0–1.4 adapter stays valid; its runs use the OCP engine's
 provisional conventions and say so (`policy.provisional` of the run's OCP block).
+
+Minor 1.6 (S13a, TDM#525) is additive: the schema of the dataset `trades`, declared since 1.0 and rejected with
+`dataset_not_supported` until now. One row per trade version (08 §10): the current row of a `trade_id` is its highest
+`trade_version`; a cancelled trade stays with `status` `cancelled`; a late booking (`trade_date` before the report
+date) is a trade of the date. A source is a cumulative export (`full_snapshot`, scope `book_id`: it replaces the
+book's trades of the date, ordered by `report_ts`) or deltas (`increment`: they add). Quantities and amounts are
+unsigned (`side` gives the direction; a negative one is `bad_value`). A 1.0–1.5 adapter stays valid; one that emits
+`trades` needs a backend on 1.6 (an older one rejects those sources with `dataset_not_supported`). The backend stores
+and serves them (`GET /api/v1/trades`); valuing them and new-trade PnL come with the rest of S13.

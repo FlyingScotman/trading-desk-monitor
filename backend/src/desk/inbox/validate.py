@@ -362,6 +362,8 @@ TERMS_SIDES = {"fx_forward": ("buy", "sell"), "fx_swap": ("buy", "sell"), "irs":
                "bond_purchase": ("buy",)}
 """``trade_terms.side`` per ``product_kind`` (private/1.4): a value of another product is ``bad_value``."""
 UNSIGNED_TERMS = ("notional_ccy", "quantity", "face_amount_ccy")
+UNSIGNED_TRADES = ("quantity", "face_amount_ccy", "amount_ccy")
+"""``trades`` sizes (private/1.6): unsigned, ``side`` gives the direction; a negative one is ``bad_value``."""
 
 
 def _terms_rules(row: dict) -> list[tuple[str, str, str]]:
@@ -444,6 +446,11 @@ def _row_rules(dataset: str, row: dict) -> list[tuple[str, str, str]]:
                         "pnl_daily_rub differs from pnl_pl_daily_rub + pnl_oci_daily_rub"))
     elif dataset == "trade_terms":
         out += _terms_rules(row)
+    elif dataset == "trades":
+        for f in UNSIGNED_TRADES:
+            a = amount(row[f]) if f in row else None
+            if a is not None and a < 0:
+                out.append(("error", "bad_value", f"{f} is unsigned (side gives the direction)"))
     return out
 
 

@@ -26,7 +26,12 @@ from typing import Any
 import psycopg
 from psycopg.types.json import Jsonb
 
-from ..inbox.spi import DATASET_KEYS, REFERENCE_KEYS, STOCK_DATASETS  # standard library only, no cycle
+from ..inbox.spi import (  # stdlib only, no cycle
+    DATASET_KEYS,
+    REFERENCE_KEYS,
+    STOCK_DATASETS,
+    VERSIONED_DATASETS,
+)
 from ..settings import REPO_ROOT, Settings, SettingsError
 from ..valuation.fallback import CarriedSpread
 
@@ -391,20 +396,24 @@ def dataset_unit_sets(con: psycopg.Connection, dataset: str, scope: dict, valid_
 def store_dataset_set(con: psycopg.Connection, *, dataset: str, scope: dict, valid_date: date, rows: list[dict],
                       source: str, priority: int | None, report_date: date, report_ts: datetime | None,
                       seq: int | None, generated_at: datetime | None, file_mtime: datetime, file_name: str,
-                      sha256: str, adapter_fingerprint: str, unit_hash: str) -> int:
+                      sha256: str, adapter_fingerprint: str, unit_hash: str, completeness: str | None = None) -> int:
     """One accepted unit of a dataset other than positions as a ``dataset_set`` (revision = the previous one of the
     unit + 1) with its rows. ``rows``: validated contract rows (``desk.inbox.validate``); ``_src`` and ``x_*`` are
-    kept beside the canonical fields. Returns the set id. The caller decides that the unit is a new revision."""
+    kept beside the canonical fields. ``completeness``: the source's (08 §4), what a read of a ``VERSIONED_DATASETS``
+    dataset needs (an ``increment`` set adds, a ``full_snapshot`` one replaces; None reads as a full snapshot).
+    Returns the set id. The caller decides that the unit is a new revision."""
     sk = scope_key(scope)
     set_id = con.execute(
         "INSERT INTO dataset_set (dataset, scope, scope_key, valid_date, revision, source, priority, report_date,"
         " report_ts, seq, generated_at, file_mtime, inbox_file_sha256, source_name, adapter_fingerprint, unit_hash,"
-        " row_count) VALUES (%(ds)s, %(scope)s, %(sk)s, %(d)s, (SELECT coalesce(max(revision), 0) + 1 FROM dataset_set"
-        " WHERE dataset = %(ds)s AND scope_key = %(sk)s AND valid_date = %(d)s), %(src)s, %(prio)s, %(rd)s, %(ts)s,"
-        " %(seq)s, %(gen)s, %(mtime)s, %(sha)s, %(name)s, %(fp)s, %(uh)s, %(n)s) RETURNING set_id",
+        " row_count, completeness) VALUES (%(ds)s, %(scope)s, %(sk)s, %(d)s, (SELECT coalesce(max(revision), 0) + 1"
+        " FROM dataset_set WHERE dataset = %(ds)s AND scope_key = %(sk)s AND valid_date = %(d)s), %(src)s, %(prio)s,"
+        " %(rd)s, %(ts)s, %(seq)s, %(gen)s, %(mtime)s, %(sha)s, %(name)s, %(fp)s, %(uh)s, %(n)s, %(cpl)s)"
+        " RETURNING set_id",
         {"ds": dataset, "scope": Jsonb(scope), "sk": sk, "d": valid_date, "src": source, "prio": priority,
          "rd": report_date, "ts": report_ts, "seq": seq, "gen": generated_at, "mtime": file_mtime, "sha": sha256,
-         "name": file_name, "fp": adapter_fingerprint, "uh": unit_hash, "n": len(rows)}).fetchone()[0]
+         "name": file_name, "fp": adapter_fingerprint, "uh": unit_hash, "n": len(rows),
+         "cpl": completeness}).fetchone()[0]
     keys = DATASET_KEYS.get(dataset, ())
 
     def row_key(r: dict) -> str:
@@ -438,8 +447,11 @@ def dataset_rows(con: psycopg.Connection, dataset: str, on: date, *, known_at: d
                  scope: dict | None = None) -> DatasetInputs:
     """The rows of ``dataset`` for business date ``on`` as known at ``known_at`` (default now), 08 §6.7: a stock
     (``spi.STOCK_DATASETS``: ocp, cash_balances, trade_terms) takes per unit the current set with the latest valid
-    date <= ``on``; a flow (pnl_official) only units of valid date ``on``, never carried forward. ``scope``: only
-    units whose scope contains these key/values (``{"book_id": "B1"}``)."""
+    date <= ``on``; a flow (pnl_official, trades) only units of valid date ``on``, never carried forward. ``scope``:
+    only units whose scope contains these key/values (``{"book_id": "B1"}``); for ``trades`` (``versioned_rows``)
+    only rows with these values."""
+    if dataset in VERSIONED_DATASETS:
+        return versioned_rows(con, dataset, on, known_at=known_at, where=scope)
     known_at = known_at or con.execute("SELECT now()").fetchone()[0]
     when = "valid_date <= %(on)s" if dataset in STOCK_DATASETS else "valid_date = %(on)s"
     sets = con.execute(
@@ -458,6 +470,53 @@ def dataset_rows(con: psycopg.Connection, dataset: str, on: date, *, known_at: d
             (list(by_set),)):
         rows.append({**data, "_src": src, **({"x": x} if x else {}), "_valid_date": by_set[sid]["valid_date"],
                      "_set_id": sid})
+    return DatasetInputs(dataset, on, rows, units)
+
+
+def versioned_rows(con: psycopg.Connection, dataset: str, on: date, *, known_at: datetime | None = None,
+                   where: dict | None = None) -> DatasetInputs:
+    """The rows in force on ``on`` of a dataset of ``spi.VERSIONED_DATASETS`` (``trades``, private/1.6, 08 §10): a flow,
+    valid date ``on`` only, as known at ``known_at`` (default now).
+
+    Per unit (scope unit, date) the sets of the source of its current set (``CURRENT_SET``: a higher priority, then the
+    later report key) are read from the newest back to its newest full snapshot (a cumulative export replaces the
+    unit's earlier sets), every ``increment`` set newer than that snapshot added. Then, across the date's units (a
+    trade amended into another book moves), each record key keeps the row of its highest integer version; an equal or
+    absent version: the row of the newer set. A cancelled trade stays, with its status; a late booking (``trade_date``
+    before the date) is a trade of the date like any other. ``where``: only the current rows with these field values
+    (``{"book_id": "B1"}``), applied after the merge. ``units`` lists the sets read, with ``completeness``."""
+    key_field, version_field = VERSIONED_DATASETS[dataset]
+    known_at = known_at or con.execute("SELECT now()").fetchone()[0]
+    sets = con.execute(  # newest first within a unit; age: the set's place in the date's CURRENT_SET order
+        "SELECT set_id, scope_key, scope, valid_date, source, report_date, report_ts, inbox_file_sha256, source_name,"
+        f" row_count, coalesce(completeness, 'full_snapshot'), row_number() OVER (ORDER BY {CURRENT_SET}) AS age"
+        f" FROM dataset_set WHERE dataset = %s AND valid_date = %s AND recorded_at <= %s"
+        f" ORDER BY scope_key, {CURRENT_SET}", (dataset, on, known_at)).fetchall()
+    read: list[tuple] = []
+    unit, unit_source, done = None, None, False
+    for sid, sk, sc, vd, src, rd, ts, sha, name, cnt, cpl, age in sets:
+        if sk != unit:
+            unit, unit_source, done = sk, src, False
+        if done or src != unit_source:
+            continue
+        read.append((sid, sc, vd, src, rd, ts, sha, name, cnt, cpl, age))
+        done = cpl != "increment"
+    units = [{"scope": sc, "valid_date": vd, "set_id": sid, "source": src, "report_date": rd, "report_ts": ts,
+              "inbox_file_sha256": sha, "file_name": name, "row_count": cnt, "completeness": cpl}
+             for sid, sc, vd, src, rd, ts, sha, name, cnt, cpl, _ in read]
+    by_set, age_of = {u["set_id"]: u for u in units}, {r[0]: r[-1] for r in read}
+    current: dict[str, tuple[tuple, dict]] = {}
+    for sid, data, src, x in con.execute(
+            "SELECT set_id, data, src, x FROM dataset_row WHERE set_id = ANY(%s) ORDER BY set_id, row_no",
+            (list(by_set),)):
+        v = data.get(version_field)
+        rank = (-1 if v is None else int(v), -age_of[sid])
+        k = str(data.get(key_field))
+        if k not in current or rank > current[k][0]:
+            current[k] = (rank, {**data, "_src": src, **({"x": x} if x else {}), "_valid_date": by_set[sid]["valid_date"],
+                                 "_set_id": sid})
+    rows = [r for _, r in current.values() if not where or all(r.get(f) == v for f, v in where.items())]
+    rows.sort(key=lambda r: (str(r.get("book_id")), str(r.get("trade_ts") or ""), str(r.get(key_field))))
     return DatasetInputs(dataset, on, rows, units)
 
 

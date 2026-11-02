@@ -8,10 +8,10 @@ from importlib.resources import files
 
 SPI_VERSION = 1
 SPI_MAJORS = frozenset({1})            # majors this backend can call (08 §9)
-CONTRACT_MAJOR, CONTRACT_MINOR = 1, 5  # private/1.5 (08 §9: 1.1 positions risk fields; 1.2 FUTURES books, ocp,
+CONTRACT_MAJOR, CONTRACT_MINOR = 1, 6  # private/1.6 (08 §9: 1.1 positions risk fields; 1.2 FUTURES books, ocp,
 #                                        cash_balances, pnl_official, trade_terms, reference entities and funding_rules;
 #                                        1.3 reference funding_policy, positions purchase_accrued_ccy; 1.4 trade_terms
-#                                        of swaps, REPO and HTM purchases; 1.5 reference ocp_policy)
+#                                        of swaps, REPO and HTM purchases; 1.5 reference ocp_policy; 1.6 trades)
 CONTRACT = f"private/{CONTRACT_MAJOR}.{CONTRACT_MINOR}"
 _CONTRACT_RE = re.compile(r"^private/([0-9]+)\.([0-9]+)$")
 
@@ -19,7 +19,7 @@ CODE_RE = re.compile(r"^[a-z][a-z0-9_]{1,40}$")
 AMOUNT_RE = re.compile(r"-?[0-9]+(\.[0-9]+)?")  # fullmatch: "123\n" is not an amount
 
 # §10: every dataset of the contract; only those with a schema file can be validated by this backend yet
-# (trades and internal_market have none: their sources are rejected with dataset_not_supported).
+# (internal_market has none: its sources are rejected with dataset_not_supported; trades since private/1.6).
 DATASETS = frozenset({"positions", "ocp", "cash_balances", "pnl_official", "trade_terms", "trades",
                       "internal_market"})
 DATASETS_WITH_BOOK = DATASETS - {"internal_market"}   # a source emitting these needs reference() (§7)
@@ -33,6 +33,10 @@ DATASET_KEYS: dict[str, tuple[str, ...]] = {
     "trade_terms": ("trade_id", "leg_id"),
     "trades": ("trade_id", "trade_version"),
 }
+VERSIONED_DATASETS: dict[str, tuple[str, str]] = {"trades": ("trade_id", "trade_version")}
+"""Datasets whose rows are versions of one record (08 §10 ``trades``, private/1.6): (record key, integer version). The
+current row of a key is the one with the highest version; an ``increment`` source's units add to the date's rows
+instead of replacing them (``store.dataset_rows``)."""
 
 # §7, §10: the reference tables of reference(ctx); each has a schema file. ``books`` is required when a source
 # emits book_id, the others are optional (entities, funding_rules: 1.2; funding_policy: 1.3; ocp_policy: 1.5). A row

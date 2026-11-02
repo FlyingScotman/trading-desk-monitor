@@ -1,0 +1,147 @@
+<!doctype html>
+<html lang="ru" data-run="optional">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="icon" href="data:,">
+<title>C20 · Сделки дня</title>
+<link rel="stylesheet" href="lib/kit.css">
+<style>
+.c20-days { display: flex; gap: 6px; overflow-x: auto; padding-bottom: 2px; align-items: stretch; }
+.c20-day { flex: none; min-width: 74px; border: 1px solid var(--line-2); border-radius: 6px; background: var(--panel); padding: 4px 8px 5px; cursor: pointer; text-align: left; color: var(--fg); }
+.c20-day:hover { border-color: var(--accent); }
+.c20-day.on { border-color: var(--accent); background: var(--accent-bg); }
+.c20-day .d { font-weight: 600; font-variant-numeric: tabular-nums; }
+.c20-day .s { font-size: 11px; color: var(--fg-3); white-space: nowrap; }
+.c20-bar { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.c20-sum { display: flex; gap: 6px 16px; flex-wrap: wrap; font-size: 12.5px; color: var(--fg-2); }
+.c20-sum b { color: var(--fg); font-variant-numeric: tabular-nums; }
+.c20-msg { padding: 24px; text-align: center; color: var(--fg-2); }
+.k-tbl tr.cx td { opacity: .5; }
+.k-tbl tr.cx td.st { text-decoration: line-through; }
+.c20-tag { display: inline-block; padding: 0 6px; border-radius: 999px; font-size: 11px; border: 1px solid var(--line-2); color: var(--fg-2); white-space: nowrap; }
+.c20-tag.late { border-color: var(--warn); color: var(--warn); }
+.c20-files { font-size: 12px; color: var(--fg-3); }
+@media (max-width: 720px) { .k-panel > .hd { flex-wrap: wrap; } .c20-bar .k-input { min-width: 0; width: 100%; } }
+</style>
+</head>
+<body>
+<div class="k-page">
+  <div class="c20-days" id="days" aria-label="Даты"></div>
+  <div id="view"><div class="c20-msg">загрузка…</div></div>
+</div>
+<script src="lib/boot.js"></script>
+<script src="lib/kit.js"></script>
+<script src="lib/instr.js"></script>
+<script>
+(function () {
+  'use strict';
+  // «Сделки дня» (S13a, TDM#525): сделки даты из выгрузки частного адаптера (набор trades контракта, 08 §10) — текущая
+  // версия каждой сделки (наибольший trade_version), отменённые остаются со статусом, поздние проводки помечены.
+  // Без оценки и PnL новых сделок (остальное S13). Данные: GET ../api/v1/trades?date=&book_id= (backend desk/trades.py).
+  const K = KIT, f = K.f, esc = K.esc;
+  K.top({ title: 'C20 · Сделки дня', tag: 'сделки из выгрузки адаптера: версии, отмены, поздние проводки' });
+  const server = K.source === 'real' || K.source === 'empty';
+  const SIDE = { buy: 'покупка', sell: 'продажа' }, STATUS = { live: 'действует', cancelled: 'отменена' };
+  const view = document.getElementById('view'), daysEl = document.getElementById('days');
+  const u = new URL(location.href);
+  let on = u.searchParams.get('date') || null, book = u.searchParams.get('book_id') || '', doc = null, q = '';
+
+  function panel(title, extra) { const p = K.h('div', 'k-panel'); p.innerHTML = '<div class="hd"><h3>' + title + '</h3><span class="sp"></span>' + (extra || '') + '</div><div class="bd"></div>'; return p; }
+  function msg(t) { view.innerHTML = '<div class="k-panel"><div class="c20-msg">' + t + '</div></div>'; }
+  const num = (v, d) => v == null ? '<span class="mut3">—</span>' : f.n(v, d);
+
+  // ---------- данные: сервер или демо-набор ----------
+  function getJSON(path) {
+    return fetch('../' + path, { cache: 'no-store' }).then(r => {
+      if (r.status === 401 || r.status === 403) throw Object.assign(new Error('forbidden'), { forbidden: true });
+      if (!r.ok) throw new Error(r.status + ' ' + r.statusText);
+      return r.json();
+    });
+  }
+  function load() {
+    if (!server) { doc = DEMO(on); on = doc.date; render(); return Promise.resolve(); }
+    return getJSON('api/v1/trades?days=30' + (on ? '&date=' + on : '')).then(d => { doc = d; on = d.date; render(); }).catch(e => {
+      if (e.forbidden) return msg('Нужно войти в монитор: экран сделок открыт всем пользователям.');
+      msg('Не удалось загрузить сделки' + (on ? ' за ' + esc(on) : '') + ': ' + esc(e.message) + '.');
+    });
+  }
+  function setParam(k, v) { const x = new URL(location.href); v ? x.searchParams.set(k, v) : x.searchParams.delete(k); history.replaceState(null, '', x.toString()); }
+  function pick(d) { on = d; setParam('date', d); load(); }
+
+  // ---------- полоса дат: сколько сделок и отмен ----------
+  function renderDays(list) {
+    daysEl.innerHTML = list.map(x => '<button class="c20-day' + (x.date === on ? ' on' : '') + '" data-d="' + x.date + '"><div class="d">' + f.dshort(x.date) + '</div><div class="s">' + x.trades + ' сд.' + (x.cancelled ? ' · отм. ' + x.cancelled : '') + '</div></button>').join('') +
+      '<input class="k-input" type="date" id="pick" style="min-width:140px" title="Другая дата" value="' + esc(on || '') + '">';
+    daysEl.querySelectorAll('[data-d]').forEach(b => b.onclick = () => pick(b.dataset.d));
+    const ip = document.getElementById('pick'); ip.onchange = () => ip.value && pick(ip.value);
+    const sel = daysEl.querySelector('.on'); if (sel) sel.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+  }
+
+  // время сделки: ЧЧ:ММ из trade_ts как есть (без пересчёта поясов); поздняя проводка — с датой сделки
+  const time = r => {
+    const t = r.trade_ts ? String(r.trade_ts).slice(11, 16) : '';
+    return (t ? esc(t) : '<span class="mut3">—</span>') + (r.late ? ' <span class="c20-tag late" title="Поздняя проводка: дата сделки ' + esc(f.date(r.trade_date)) + '">' + esc(f.date(r.trade_date)) + '</span>' : '');
+  };
+  const size = r => r.quantity != null ? num(r.quantity, 0) + ' <span class="mut3">шт.</span>'
+    : r.face_amount_ccy != null ? num(r.face_amount_ccy, 0) + ' <span class="mut3">' + esc(r.ccy || '') + ' ном.</span>'
+      : r.amount_ccy != null ? num(r.amount_ccy, 2) + ' <span class="mut3">' + esc(r.ccy || '') + '</span>' : '<span class="mut3">—</span>';
+  const price = r => r.price_pct != null ? num(r.price_pct, 4) + ' <span class="mut3">%</span>' : r.fx_rate != null ? num(r.fx_rate, 4) : '<span class="mut3">—</span>';
+
+  // ---------- экран даты ----------
+  function render() {
+    const d = doc, s = d.summary;
+    renderDays(d.days || []);
+    view.innerHTML = '';
+    const wrap = K.h('div', 'k-grid');
+    const opts = '<option value="">все книги</option>' + d.books.map(b => '<option value="' + esc(b.book_id) + '"' + (b.book_id === book ? ' selected' : '') + '>' + esc(b.book_id) + ' · ' + b.trades + '</option>').join('');
+    const tp = panel('Сделки ' + f.date(d.date), '<span class="c20-bar"><select class="k-input" id="book" title="Книга">' + opts + '</select><input class="k-input" id="q" placeholder="сделка, инструмент" value="' + esc(q) + '" style="min-width:160px"></span>');
+    const ql = q.toLowerCase();
+    const rows = d.rows.filter(r => (!book || r.book_id === book) &&
+      (!ql || [r.trade_id, r.source_instrument_id, r.source_instrument_name, r.isin].some(x => x && String(x).toLowerCase().includes(ql))));
+    const sum = '<div class="c20-sum" style="padding:6px 12px">сделок <b>' + s.trades + '</b><span>действуют <b>' + s.live + '</b></span><span>отменены <b>' + s.cancelled + '</b></span>' +
+      '<span>поздние проводки <b>' + s.late + '</b></span><span>с поправками <b>' + s.versions + '</b></span><span>книг <b>' + s.books + '</b></span></div>';
+    const body = rows.length ? '<table class="k-tbl" data-vk="c20-trades" data-title="Сделки дня"><thead><tr><th>Время</th><th>Книга</th><th>Сделка</th><th>Инструмент</th><th>Сторона</th><th class="n">Количество</th><th class="n">Цена</th><th>Статус</th><th class="n">Версия</th></tr></thead><tbody>' +
+      rows.map(r => '<tr class="' + (r.status === 'cancelled' ? 'cx' : '') + '"' + (r.src ? ' title="Строка отчёта ' + esc(r.src) + '"' : '') + '><td>' + time(r) + '</td><td>' + esc(r.book_id) + '</td><td class="mono">' + esc(r.trade_id) + '</td>' +
+        '<td>' + esc(r.source_instrument_name || r.source_instrument_id) + (r.source_instrument_name ? ' <span class="mut3 mono">' + esc(r.source_instrument_id) + '</span>' : '') + '</td>' +
+        '<td>' + esc(SIDE[r.side] || r.side) + '</td><td class="n">' + size(r) + '</td><td class="n">' + price(r) + '</td>' +
+        '<td class="st">' + esc(STATUS[r.status] || r.status) + '</td><td class="n">' + (r.trade_version == null ? '<span class="mut3">—</span>' : esc(String(r.trade_version))) + '</td></tr>').join('') + '</tbody></table>'
+      : '<div class="k-empty">' + (d.rows.length ? 'Под фильтр ничего не попало' : 'Сделок на эту дату нет: выгрузка сделок не загружена') + '</div>';
+    const files = (d.files || []).length ? '<div class="c20-files" style="padding:6px 12px">файлы: ' + d.files.map(x => esc(x.file_name) + (x.completeness === 'increment' ? ' (дельта)' : '')).join(', ') + '</div>' : '';
+    tp.querySelector('.bd').classList.add('flush', 'scroll');
+    tp.querySelector('.bd').innerHTML = sum + body + files;
+    K.tableToolsAll(tp.querySelector('.bd'));
+    wrap.appendChild(tp);
+    view.appendChild(wrap);
+    const bs = document.getElementById('book'); bs.onchange = () => { book = bs.value; setParam('book_id', book); render(); };
+    const qi = document.getElementById('q');
+    qi.oninput = () => { q = qi.value; const pos = qi.selectionStart; render(); const n = document.getElementById('q'); n.focus(); n.setSelectionRange(pos, pos); };
+  }
+
+  // ---------- демо-набор (файл или ?demo=1): вымышленный, форма ответа /api/v1/trades ----------
+  function DEMO(want) {
+    const D = want === '2026-10-19' ? '2026-10-19' : '2026-10-20';
+    const t = (id, v, st, book, instr, side, qty, px, ts, extra) => Object.assign({ trade_id: id, trade_version: v, status: st, trade_date: D, trade_ts: D + 'T' + ts + ':00', book_id: book,
+      asset_class: 'bond', source_instrument_id: instr, source_instrument_name: null, side, quantity: qty, price_pct: px, ccy: 'RUB', late: false }, extra || {});
+    const rows = D === '2026-10-20' ? [
+      t('TR-10', 2, 'live', 'B1', 'SEC-1', 'buy', 1200, 98.5, '10:15', { source_instrument_name: 'Демо-облигация 1' }),
+      t('TR-11', 2, 'cancelled', 'B1', 'SEC-2', 'sell', 500, 101.2, '10:40'),
+      t('TR-13', 1, 'live', 'B1', 'SEC-1', 'sell', 300, 98.3, '18:30', { trade_date: '2026-10-19', trade_ts: '2026-10-19T18:30:00', late: true }),
+      t('TR-12', 1, 'live', 'B2', 'USDRUB', 'buy', null, null, '10:20', { asset_class: 'fx', amount_ccy: 1e6, fx_rate: 83.5, ccy: 'USD' }),
+    ] : [t('TR-01', 1, 'live', 'B1', 'SEC-1', 'buy', 400, 98.1, '11:05')];
+    const books = [...new Set(rows.map(r => r.book_id))].sort().map(b => { const L = rows.filter(r => r.book_id === b); return { book_id: b, trades: L.length, live: L.filter(r => r.status === 'live').length, cancelled: L.filter(r => r.status === 'cancelled').length }; });
+    return {
+      date: D, book_id: null, rows, books,
+      summary: { trades: rows.length, live: rows.filter(r => r.status === 'live').length, cancelled: rows.filter(r => r.status === 'cancelled').length,
+        late: rows.filter(r => r.late).length, books: books.length, versions: rows.filter(r => r.trade_version > 1).length },
+      files: [{ file_name: 'trades_' + D.replace(/-/g, '') + '_1500.csv', completeness: 'full_snapshot' }],
+      days: [{ date: '2026-10-20', trades: 4, cancelled: 1 }, { date: '2026-10-19', trades: 1, cancelled: 0 }],
+    };
+  }
+
+  K.on('numfmt', () => { if (doc && (!on || doc.date === on) && view.querySelector('.k-grid')) render(); });
+  load();
+})();
+</script>
+</body>
+</html>

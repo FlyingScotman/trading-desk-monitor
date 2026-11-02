@@ -419,15 +419,15 @@ The summary holds counts and codes only. It has no values and no sheet names, an
 - **Private input contract** (`describe()["contract"]`, `private/<major>.<minor>`): the dataset schemas of §10, versioned on their own, separate from the public results contract (1.3/1.4).
   - The backend accepts its own major with any minor. Fields from a newer minor are dropped with a `field_from_newer_contract` warning; the file is not rejected.
   - A new optional field is a minor version; a renamed, retyped or newly required field is a major one.
-  - Minors so far: 1.0 (S7a); 1.1 adds the optional `positions` fields `maturity_date`, `risk_dv01_rub`, `risk_cs01_rub`; 1.2 (22.10.2026) adds `book_type` `FUTURES`, the schemas of `ocp`, `cash_balances` (with the optional key field `ledger`), `pnl_official` and the new dataset `trade_terms`, the optional reference tables `entities` and `funding_rules`, the optional `describe()["settings_tabs"]`, and multi-date `cash_balances`; 1.3 (22.10.2026, wave B1) adds the optional reference table `funding_policy` and the optional `positions` field `purchase_accrued_ccy`; 1.4 (23.10.2026) adds to `trade_terms` the `product_kind` values `irs`, `ois`, `ccs`, `repo` and `bond_purchase`, the `side` values `pay`, `receive`, `repo` and `reverse_repo`, and their optional fields (§10); 1.5 (28.10.2026, TDM#180, TDM#416) adds the optional reference table `ocp_policy`. The backend supports 1.5 and accepts 1.0–1.4 adapters unchanged (a 1.2 adapter without `funding_policy` gets the funding engine's provisional conventions, an adapter before 1.5 without `ocp_policy` the OCP engine's; each run says which). A 1.4 adapter that emits the new products needs a backend on 1.4: an older one rejects those `trade_terms` units (`bad_value` of `product_kind`), as with `FUTURES`.
+  - Minors so far: 1.0 (S7a); 1.1 adds the optional `positions` fields `maturity_date`, `risk_dv01_rub`, `risk_cs01_rub`; 1.2 (22.10.2026) adds `book_type` `FUTURES`, the schemas of `ocp`, `cash_balances` (with the optional key field `ledger`), `pnl_official` and the new dataset `trade_terms`, the optional reference tables `entities` and `funding_rules`, the optional `describe()["settings_tabs"]`, and multi-date `cash_balances`; 1.3 (22.10.2026, wave B1) adds the optional reference table `funding_policy` and the optional `positions` field `purchase_accrued_ccy`; 1.4 (23.10.2026) adds to `trade_terms` the `product_kind` values `irs`, `ois`, `ccs`, `repo` and `bond_purchase`, the `side` values `pay`, `receive`, `repo` and `reverse_repo`, and their optional fields (§10); 1.5 (28.10.2026, TDM#180, TDM#416) adds the optional reference table `ocp_policy`; 1.6 (02.11.2026, TDM#525) the schema of the dataset `trades` (its sources were rejected with `dataset_not_supported` before). The backend supports 1.6 and accepts 1.0–1.5 adapters unchanged (a 1.2 adapter without `funding_policy` gets the funding engine's provisional conventions, an adapter before 1.5 without `ocp_policy` the OCP engine's; each run says which). A 1.4 adapter that emits the new products needs a backend on 1.4: an older one rejects those `trade_terms` units (`bad_value` of `product_kind`), as with `FUTURES`.
   - A new enum value (`FUTURES`) is a minor too: old adapters stay valid. An adapter that emits it needs a backend on 1.2; an older one rejects that book (`bad_value`), never silently re-types it.
 - The adapter's README states the lowest backend version it needs. `desk adapter check` prints the backend version, the SPI, the contract and the adapter fingerprint.
 
-## 10 Private input contract v1 (`private/1.5`)
+## 10 Private input contract v1 (`private/1.6`)
 
-The schemas live in `contract/private/v1/` (one per dataset and reference table, with a header-only CSV template each). The tables below are the design; the schema files are authoritative once written (S7a; `ocp`, `cash_balances`, `pnl_official`, `trade_terms`, `entities`, `funding_rules` since 1.2, and a test keeps each table equal to its schema). They extend contract 1.3 ([DATA_REQUIREMENTS](../DATA_REQUIREMENTS.md) §4) and supersede its templates (below). A dataset without a schema (`trades`, `internal_market`) is declared but its sources are rejected with `dataset_not_supported` until its slice.
+The schemas live in `contract/private/v1/` (one per dataset and reference table, with a header-only CSV template each). The tables below are the design; the schema files are authoritative once written (S7a; `ocp`, `cash_balances`, `pnl_official`, `trade_terms`, `entities`, `funding_rules` since 1.2, `trades` since 1.6, and a test keeps each table equal to its schema). They extend contract 1.3 ([DATA_REQUIREMENTS](../DATA_REQUIREMENTS.md) §4) and supersede its templates (below). A dataset without a schema (`internal_market`) is declared but its sources are rejected with `dataset_not_supported` until its slice.
 
-**Storage.** `positions` units are position sets (S7a). Every other dataset with a schema is stored generically, so a new dataset needs a schema and no code: one `dataset_set` per accepted unit (dataset, scope unit, business date) with the revision rules of §6.6, its rows in `dataset_row` (canonical fields as JSON, `_src` and `x_*` beside), typed views `ocp_row`, `cash_balance_row`, `pnl_official_row`, `trade_terms_row` over every revision, and `store.dataset_rows(dataset, D)` for the rows in force (§6.7: stocks carried forward, flows on D only).
+**Storage.** `positions` units are position sets (S7a). Every other dataset with a schema is stored generically, so a new dataset needs a schema and no code: one `dataset_set` per accepted unit (dataset, scope unit, business date) with the revision rules of §6.6, its rows in `dataset_row` (canonical fields as JSON, `_src` and `x_*` beside), typed views `ocp_row`, `cash_balance_row`, `pnl_official_row`, `trade_terms_row`, `trade_row` (1.6) over every revision, and `store.dataset_rows(dataset, D)` for the rows in force (§6.7: stocks carried forward, flows on D only; `trades` merged by version, below).
 
 **Common rules.**
 - Units are in field names, as in the hub's wire format: `_pct`, `_bp`, `_rub`, `_ccy` (in the row's `ccy`), `_rpt` (in the report's own unit, not confirmed). Prices are clean, in % of the current face. FX is RUB per unit.
@@ -600,24 +600,39 @@ day or week frequencies are not valued. The funding of REPO and HTM lots from te
 (FlyingScotman/trading-desk-monitor#55). The typed view `trade_terms_row` has the 1.4 fields as columns after the 1.2
 ones (migration 0020); every field is also in its `data`.
 
-### `trades` — flow; `full_snapshot` per book for cumulative exports, or `increment` for deltas; `time_basis = intraday`
+### `trades` — flow; `full_snapshot` per book for cumulative exports, or `increment` for deltas; `time_basis = intraday` (since 1.6)
 
-Key: `trade_id`. The current row is the one with the highest integer `trade_version`. A cumulative export replaces the book's trades of `valid_date`, ordered by `report_ts`. Rows with `trade_date` ≠ `report_date` (late bookings) are allowed and kept.
+Key: `trade_id`. The current row is the one with the highest integer `trade_version`. A cumulative export replaces the book's trades of `valid_date`, ordered by `report_ts`. Rows with `trade_date` ≠ `report_date` (late bookings) are allowed and kept. One row per trade version: a file may carry several versions of a trade (its dataset key in a file is (`trade_id`, `trade_version`), a repeat is `duplicate_key`); a trade without `trade_version` is one version. Quantities and amounts are unsigned: `side` gives the direction.
 
 | Field | Type | Meaning |
 |---|---|---|
-| `trade_id` ● | str | |
-| `trade_version` | int | |
-| `status` ● | enum | `live`, `cancelled` |
+| `trade_id` ● | str | The trade's id in the booking system |
+| `trade_version` | int | As reported; the highest is current, absent sorts below any number |
+| `status` ● | enum | `live`, `cancelled`; a cancelled trade is kept with its status, never dropped |
 | `trade_date` ● | date | |
-| `trade_ts` | ts | |
-| `book_id` ●, `position_id` ● | str | `position_id` by the `positions` rule |
+| `trade_ts` | ts | ISO 8601 `YYYY-MM-DDTHH:MM[:SS[.ffffff]][Z\|+HH:MM]`; one without an offset is Moscow time (§6.5) |
+| `book_id` ● | str | |
+| `position_id` ● | str | By the `positions` rule |
 | `asset_class` ● | enum | As in `positions` |
-| `source_instrument_id` ●, `source_instrument_name`, `isin`, `regnum`, `moex_secid`, `instrument_id` | str | |
+| `source_instrument_id` ● | str | As in the report (§6.1) |
+| `source_instrument_name`, `isin`, `regnum`, `moex_secid`, `instrument_id` | str | As in `positions` |
 | `side` ● | enum | `buy`, `sell` |
-| `quantity`, `face_amount_ccy`, `amount_ccy` | num | Unsigned |
+| `quantity`, `face_amount_ccy`, `amount_ccy` | num | Unsigned; a negative one is `bad_value` |
 | `price_pct`, `fx_rate` | num | Clean price, or the FX rate |
-| `accrued_ccy`, `settle_date`, `counterparty_id`, `ccy` | | |
+| `accrued_ccy` | num | Accrued interest of the trade |
+| `settle_date` | date | |
+| `counterparty_id` | str | As in the report or the adapter's mapping |
+| `ccy` | str | The currency of the amounts |
+
+How the backend keeps them (S13a, TDM#525): every accepted unit is a `dataset_set` that records the source's
+`completeness`. The trades of date D (`store.dataset_rows("trades", D)`) are, per unit, the sets of the source of its
+current set from the newest back to its newest full snapshot (a cumulative export replaces the unit's earlier sets;
+an `increment` set newer than it adds), then across the date's units the row of each `trade_id`'s highest
+`trade_version` (an equal or absent version: the newer set's), so a trade amended into another book moves with it.
+An `increment` unit is never `superseded`: a delta that arrives late is stored and still adds; one equal to a stored
+delta stores nothing. A flow: never carried forward. Served at `GET /api/v1/trades?date=&book_id=` and on the
+monitors' screen «Сделки дня» (C20). Not valued yet: the book as opening positions plus trades, and new-trade PnL,
+are the rest of S13 (TDM#29).
 
 ### `internal_market` — observation; `full_snapshot`, scope `["kind"]`, `time_basis = end_of_day`
 
@@ -774,7 +789,7 @@ prototype `tdm`; for the backend the private contract replaces them:
 | `funding.csv` (REPO and funding deals) | `trade_terms` (REPO since 1.4) |
 | `trades.csv` | `trades` |
 
-### Drafts (not in 1.5)
+### Drafts (not in 1.6)
 
 Designs agreed in direction, without a schema yet; each becomes a minor with its slice:
 
@@ -788,7 +803,8 @@ Designs agreed in direction, without a schema yet; each becomes a minor with its
 - Extra spreads by bond class for `funding_rules` (the engine's `ExtraSpread`): a new table or selector, once the
   rules are settled. (The REPO policy, the security's rate or the contract rate from a term threshold, is
   `funding_policy` since 1.3; the REPO deals themselves are `trade_terms` `repo` since 1.4.)
-- `trades`, `internal_market`: as designed above, with S13 and S10.
+- Done in 1.6: `trades` (above, S13a: schema, acceptance and storage).
+- `internal_market`: as designed above, with S10.
 
 The backend's current `desk load-positions` CSV (`position_id, book_id, secid, quantity_bonds`) stays for the synthetic books. The reference adapter reads canonical v1 CSV.
 
@@ -801,7 +817,7 @@ The backend's current `desk load-positions` CSV (`position_id, book_id, secid, q
 | **I3 Official PnL** | S8 | A3 | YTD by book equals pnl_tool on the same files |
 | **I4 OCP and cash** | S9 | A4 | reported OCP vs OCP derived from positions |
 | **I5 Internal market data** | S10 | A5 | EOD-internal run and the diff screen |
-| **I6 Trades** | S13 | A6 | intraday book = opening positions + trades |
+| **I6 Trades** | S13: `trades` schema, acceptance, storage, `GET /api/v1/trades` and the screen «Сделки дня» (S13a, 1.6); the intraday book and new-trade PnL later | A6 | the day's trades equal the export; then intraday book = opening positions + trades |
 | **I7 Settings and rules** | `settings_tabs` (§4) on the settings page; `reference()` `entities`, `funding_rules` (1.2) and `funding_policy` (1.3) validated and stored (§7); the generic funding engine reads them in every run (B1: `publish.funding_run`) | A7: the tabs, `entities.json`, `funding.json` (rules and the `funding_policy` conventions), FUTURES books, `purchase_accrued_ccy` of HTM rows | the tabs open and save; the engine's funding of a synthetic book on synthetic rules equals a hand calculation (`test_funding_run.py`) |
 | **I8 Cash balances** | `cash_balances` schema, storage and multi-date history (§6.1, 1.2); funding of cash-funded books (S9) | A8 | a day's balances equal the report; a history file fills the past dates; two ledgers side by side |
 | **I9 Trade terms** | `trade_terms` schema and storage (1.2, FX; 1.4 swaps, REPO, HTM purchases); valuation from terms by core (S14) | A9 | PV of FX forwards from terms vs `pv_rub`; the currency PV of legs enters the derived OCP |
@@ -813,6 +829,9 @@ Status 22.10.2026: I1 and I2 are live. The backend has the schemas and the stora
 (`ocp`), I7 (reference tables, settings tabs as a contract), I8 and I9; the screens and calculations on them come
 with their slices (S8, S9, S11, S14) and the funding engine. The reference adapter reads all of them from canonical
 CSV (`desk.inbox.reference`), so the backend builds on them before the private adapter emits them.
+Since 02.11.2026 (S13a, TDM#525) also I6's acceptance: the `trades` schema and storage, read by the reference adapter
+as `trades_YYYYMMDD[_HHMM].csv` (a cumulative export) and `trades_delta_YYYYMMDD[_HHMM].csv` (deltas), the cut time
+in the name.
 
 ## 12 Who does what
 
