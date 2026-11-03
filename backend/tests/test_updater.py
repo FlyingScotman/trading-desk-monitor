@@ -843,6 +843,33 @@ def test_release_assets_publishes_one_mirror_zip_and_its_patches_and_refuses_the
         release_assets.collect(dist, f"v{version}")
 
 
+def test_release_assets_refuses_a_mirror_zip_or_patch_that_holds_a_third_party_wheel(tmp_path):
+    """DEC15 (AGENTS.md «Поставка на рабочую машину»): a released zip holds only our wheels (monitor, core); a
+    third-party wheel stops the release even when the zip is named and marked as the mirror kind."""
+    assert release_assets.OUR_WHEELS == tu.build.OUR_DISTS
+    version = release_assets.backend_version()
+    v, old = f"{version}-20261022-eeeeeee", "0.0.1-20261001-aaaaaaa"
+    ours = {**MIRROR, "wheelhouse/rub_fixed_income_core-0.1.0-py3-none-any.whl": b"core",
+            "python/Lib/ensurepip/_bundled/pip-24.0-py3-none-any.whl": b"pip"}  # the runtime's own pip: allowed
+    assert release_assets.third_party_wheels(tu.bundle(v, ours)) == []
+    foreign = {**ours, "wheelhouse/numpy-2.1.0-cp311-cp311-win_amd64.whl": b"numpy"}
+    assert release_assets.third_party_wheels(tu.bundle(v, foreign)) == [
+        "wheelhouse/numpy-2.1.0-cp311-cp311-win_amd64.whl"]
+    dist = tmp_path / "dist"
+    dist.mkdir()
+    full_zip(stage_dir(tmp_path / "bad", tu.bundle(v, foreign)), dist / f"DeskMonitorMirror-{v}.zip")
+    with pytest.raises(SystemExit, match="third-party wheels.*numpy"):
+        release_assets.collect(dist, f"v{version}")
+    # a patch lists the whole new bundle in its manifest: a foreign wheel there is refused too
+    mstage = stage_dir(tmp_path / "m", tu.bundle(v, ours))
+    full_zip(mstage, dist / f"DeskMonitorMirror-{v}.zip")
+    assert release_assets.collect(dist, f"v{version}")[0] == v
+    old_mirror = full_zip(stage_dir(tmp_path / "om", tu.bundle(old, ours)), tmp_path / "om.zip")
+    tu.build.write_patch(old_mirror, stage_dir(tmp_path / "pm", tu.bundle(v, foreign)), v, dist, tu.STAMP)
+    with pytest.raises(SystemExit, match=f"DeskMonitorMirror-patch-{old}-to-{v}.zip: holds third-party wheels"):
+        release_assets.collect(dist, f"v{version}")
+
+
 def test_a_release_with_the_mirror_kind_only_tells_a_full_installation_to_change_the_kind_by_hand():
     mfull = _a(f"DeskMonitorMirror-{NEW}.zip")
     rel = _rel(NEW, [mfull, _a(f"DeskMonitorMirror-patch-{OLD}-to-{NEW}.zip")])

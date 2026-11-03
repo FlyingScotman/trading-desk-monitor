@@ -11,6 +11,9 @@ releases by that version and the commit date (``desk.update.compare``), so every
 from the pip index of the PC) and its patches ``DeskMonitorMirror-patch-<old>-to-<version>.zip``. Since the owner's
 decision of 03.11.2026 (#530) the full offline bundle ``DeskMonitor-<version>.zip`` and its patches are not
 released: a full zip in ``--dist`` is refused (it would otherwise be uploaded by a glob), not silently left out.
+No zip may hold a third-party wheel: the bundle it makes (its manifest) lists in ``wheelhouse/`` only our own
+wheels, the monitor and the core (``OUR_WHEELS``, the same as ``build_windows_bundle.OUR_DISTS``); the other
+packages come from the PC's pip mirror (AGENTS.md «Поставка на рабочую машину», DEC15).
 None with the private adapter: a public release never carries it; each zip reads as an update zip,
 ``desk.update.read_contents``, and is of the kind its name says. Writes next to them
 ``SHA256SUMS``, ``release.json`` (``desk.updater.release.release_doc``: what the updater reads first) and
@@ -33,6 +36,16 @@ sys.path.insert(0, str(REPO / "backend" / "src"))
 
 from desk import update
 from desk.updater import release
+
+# wheel file name prefixes (normalized) of our own wheels, the only ones a released zip may hold
+OUR_WHEELS = ("desk_backend", "rub_fixed_income_core")
+
+
+def third_party_wheels(manifest: dict[str, str]) -> list[str]:
+    """The wheels of ``wheelhouse/`` in ``manifest`` (paths of a bundle) that are not ours: a release without
+    packages has none. The pip wheel of the bundled Python (``python/Lib/ensurepip``) is part of the runtime."""
+    return sorted(rel for rel in manifest if rel.startswith("wheelhouse/") and rel.lower().endswith(".whl")
+                  and rel.rsplit("/", 1)[-1].split("-")[0].lower() not in OUR_WHEELS)
 
 
 def backend_version() -> str:
@@ -86,6 +99,9 @@ def collect(dist: Path, tag: str) -> tuple[str, list[tuple[str, int, str]]]:
             raise SystemExit(f"{p.name}: holds adapter/ (the private adapter): never published")
         if c.version != kind[1] or c.kind != kind[0] or c.flavor != kind[3]:
             raise SystemExit(f"{p.name}: its VERSION / kind / flavor is {c.version} / {c.kind} / {c.flavor}")
+        if foreign := third_party_wheels(c.manifest):
+            raise SystemExit(f"{p.name}: holds third-party wheels ({', '.join(foreign)}); a release carries only "
+                             "our wheels, the others come from the PC's pip mirror (DEC15)")
         if kind[0] == "full":
             mirrors.append(c.version)
         files.append((p.name, p.stat().st_size, sha256(p)))

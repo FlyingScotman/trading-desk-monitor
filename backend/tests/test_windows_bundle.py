@@ -7,6 +7,7 @@ import importlib.util
 import io
 import json
 import os
+import re
 import shutil
 import subprocess
 import types
@@ -774,6 +775,16 @@ def test_release_workflow_builds_and_publishes_the_mirror_bundle_only():
     assert "dist/DeskMonitorMirror-*.zip" in wf  # the glob that uploads the mirror zip and its patches
     # the full bundle and its patches are neither downloaded as bases nor uploaded
     assert "dist/DeskMonitor-*.zip" not in wf and "prev/DeskMonitor-*.zip" not in wf and "'DeskMonitor-*.zip'" not in wf
+    # DEC15: the upload list is exactly the mirror zips and the two manifests (no wider glob such as dist/*.zip)
+    assets = re.findall(r"^\s*assets=\((.*)\)\s*$", wf, re.MULTILINE)
+    assert assets == ["dist/DeskMonitorMirror-*.zip dist/SHA256SUMS dist/release.json"]
+    uploads = re.findall(r"gh release (?:upload|create)[^\n]*", wf.replace("\\\n", " "))
+    files = [re.sub(r"--notes-file \S+", "", u) for u in uploads]  # the notes are text, not an asset
+    assert len(uploads) == 2 and all('"${assets[@]}"' in f and "dist/" not in f for f in files)
+    # every build of the workflow is --mirror-only, and release_assets checks dist/ before the publish step
+    builds = re.findall(r"build_windows_bundle\.py[^\n]*", wf)
+    assert builds and all("--mirror-only" in b for b in builds)
+    assert wf.index("release_assets.py write") < wf.index("- name: Publish the release")
     # the tag logic of #539 is untouched
     assert "MAKE_TAG" in wf and "--target" in wf and "--verify-tag" in wf and "Release tag" in wf
 
