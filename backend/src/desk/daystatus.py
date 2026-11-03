@@ -24,6 +24,7 @@ SSE stream of #28 sends: ``id:`` = ``event_id``, a reconnect resumes from ``Last
 
 from __future__ import annotations
 
+import json
 import os
 from collections import Counter, defaultdict
 from datetime import UTC, date, datetime, timedelta
@@ -36,9 +37,9 @@ from psycopg.rows import dict_row
 from . import store
 from .settings import Settings
 
-DATASETS = ("positions", "ocp", "cash_balances", "pnl_official", "trade_terms")
+DATASETS = ("positions", "ocp", "cash_balances", "pnl_official", "trade_terms", "trades")
 DATASET_NAMES = {"positions": "Позиции", "ocp": "ОВП", "cash_balances": "Остатки на счетах",
-                 "pnl_official": "Официальный PnL", "trade_terms": "Условия сделок"}
+                 "pnl_official": "Официальный PnL", "trade_terms": "Условия сделок", "trades": "Сделки дня"}
 
 FILE_STATUS = {
     "accepted": "принят",
@@ -252,6 +253,9 @@ def _inputs(con: psycopg.Connection, day: date) -> list[dict[str, Any]]:
             f" FROM dataset_set WHERE valid_date = %s ORDER BY dataset, scope_key, {store.CURRENT_SET}) s GROUP BY 1",
             (day,)):
         stored[ds] = (n, int(rows or 0))
+    if "trades" in stored:  # deltas add up and versions collapse (private/1.6): the trades in force, not the last sets
+        t = store.dataset_rows(con, "trades", day)
+        stored["trades"] = (len({json.dumps(u["scope"], sort_keys=True) for u in t.units}), len(t.rows))
     out = []
     for ds in [*DATASETS, *sorted(set(units) - set(DATASETS))]:
         u = units.get(ds) or {"n": Counter(), "rows": Counter(), "sources": set()}

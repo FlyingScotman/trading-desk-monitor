@@ -1,0 +1,7 @@
+﻿trade_id;trade_version;status;trade_date;trade_ts;book_id;position_id;asset_class;source_instrument_id;source_instrument_name;side;quantity;price_pct;amount_ccy;fx_rate;ccy;settle_date;x_desk_ref
+TR-10;1;live;2026-10-20;2026-10-20T10:15:00;T1;T1|SEC-26238;bond;SEC-26238;SYN BOND 1;buy;1000;98.5;;;RUB;2026-10-21;A1
+TR-10;2;live;2026-10-20;2026-10-20T10:15:00;T1;T1|SEC-26238;bond;SEC-26238;SYN BOND 1;buy;1200;98.5;;;RUB;2026-10-21;A1
+TR-11;2;cancelled;2026-10-20;2026-10-20T10:40:00;T1;T1|SEC-29008;bond;SEC-29008;SYN BOND 2;sell;500;101.2;;;RUB;2026-10-21;
+TR-13;1;live;2026-10-19;2026-10-19T18:30:00;T1;T1|SEC-26238;bond;SEC-26238;SYN BOND 1;sell;300;98.3;;;RUB;2026-10-21;
+TR-12;1;live;2026-10-20;2026-10-20T10:20:00+03:00;D1;D1|USD|2026-10-22;fx;USDRUB_TOM;;buy;;;1000000;83.5;USD;2026-10-21;
+TR-14;1;live;2026-10-20;2026-10-20T14:05:00;D1;D1|CNY|2026-10-22;fx;CNYRUB_TOM;;sell;;;5000000;11.4;CNY;2026-10-21;
