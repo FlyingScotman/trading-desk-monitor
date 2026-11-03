@@ -147,9 +147,9 @@
     if ((d.feeds || []).length) {
       const FEED_ST = { complete: ['получено', 'st-ok'], partial: ['получено частично', 'st-warn'], skipped: ['нечего загружать', ''], blocked: ['остановлено', 'st-warn'], error: ['ошибка', 'st-bad'], cancelled: ['отменено', ''] };
       const login = d.feeds.filter(x => x.needs_login);
-      const sp = panel('Фоновая загрузка', '<span class="k-note">сервисы адаптера · настройка — Настройки → Адаптер и источники</span>');
+      const sp = panel('Фоновая загрузка', '<span class="k-note">сервисы адаптера · настройка — <a href="../settings.html#adapter/services">Настройки → Адаптер и источники → Сервисы</a></span>');
       sp.querySelector('.bd').classList.add('flush', 'scroll');
-      sp.querySelector('.bd').innerHTML = (login.length ? '<div class="c14-msg" style="color:var(--warn)">Нужен вход: ' + login.map(x => esc(x.title)).join(', ') + '. Откройте настройки и выполните вход в блоке «Подключение к сервисам».</div>' : '') +
+      sp.querySelector('.bd').innerHTML = (login.length ? '<div class="c14-msg" style="color:var(--warn)">Нужен вход: ' + login.map(x => esc(x.title)).join(', ') + '. Откройте <a href="../settings.html#adapter/services">настройки</a> и выполните вход в блоке «Подключение к сервисам».</div>' : '') +
         '<table class="k-tbl" data-vk="c14-feeds" data-title="Фоновая загрузка"><thead><tr><th>Данные</th><th>Состояние</th><th>Последний запуск</th><th>Следующий</th></tr></thead><tbody>' +
         d.feeds.map(x => {
           const [t, c] = x.needs_login ? ['нужен вход', 'st-warn'] : !x.enabled ? ['выключено', ''] : (FEED_ST[x.state] || [x.state ? esc(x.state) : 'ещё не запускалось', '']);

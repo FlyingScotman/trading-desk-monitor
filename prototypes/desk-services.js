@@ -9,7 +9,7 @@
   const TEXT = {
     capability_invalid: 'Адаптер описывает подключение к сервисам в несовместимом виде. Нужен совместимый комплект адаптера.',
     helper_unavailable: 'В комплекте адаптера нет модуля подключения к сервисам.',
-    runtime_unavailable: 'Укажите и сохраните «Python для получения данных» (ниже, «Получить условия сделок» → «Дополнительно»).',
+    runtime_unavailable: 'Укажите и сохраните «Python для получения данных» (подраздел «Условия сделок» → «Дополнительно»).',
     adapter_changed: 'Адаптер или его настройки только что изменились. Нажмите «Обновить».',
     settings_invalid: 'Проверьте настройки программы.', local_only: 'Подключение к сервисам настраивается только на компьютере с программой.',
     origin_invalid: 'Откройте настройки по локальному адресу программы.', status_unknown: 'Нет связи с программой. Обновите страницу.',
@@ -207,12 +207,41 @@
     t.append(head, tb); host.replaceChildren(t);
   }
 
+  // место «Сервисы» на странице настроек (settings-nav.js): блок виден — открыто место и пункт подраздела, скрыт — нет
+  function place(hidden) {
+    const DS = window.DeskSettings;
+    if (!DS) return;
+    if (hidden) { DS.unslot('services'); DS.status('services', null); DS.dot('adapter/services', '', ''); } else DS.slot('services');
+    const line = document.getElementById('svc-line');
+    if (line && hidden) line.textContent = '';
+  }
+  // что важно на виду: сводка сверху, точка подраздела, строка в «Обзоре» адаптера
+  function summarize() {
+    const DS = window.DeskSettings, feeds = (data && data.feeds) || [];
+    const login = feeds.filter(f => f.last && f.last.needs_login).map(f => f.title);
+    const failed = feeds.filter(f => f.enabled && f.last && f.last.state === 'error' && !f.last.needs_login).map(f => f.title);
+    let cls = 'ok', text = 'работают', title = 'Подключение к сервисам работает';
+    if (!data.available) { cls = 'warn'; text = 'не готово'; title = TEXT[data.code] || data.code || ''; }
+    else if (login.length) { cls = 'warn'; text = 'нужен вход: ' + login.join(', '); }
+    else if (failed.length) { cls = 'warn'; text = 'ошибка загрузки: ' + failed.join(', '); }
+    const line = document.getElementById('svc-line');
+    if (line) {
+      line.textContent = 'Подключение к сервисам: ' + text + ' ';
+      const a = el('a', 'открыть →'); a.href = '#adapter/services'; line.append(a);
+    }
+    if (!DS) return;
+    DS.status('services', {cls, href: '#adapter/services', k: 'Сервисы', text, title});
+    DS.dot('adapter/services', cls === 'ok' ? '' : cls, text === 'работают' ? '' : text);
+  }
+
   function render() {
     const card = $('card');
     if (!data) return;
     // без возможности в адаптере (или без адаптера) блока нет: о сервисах монитор ничего не знает
     card.hidden = !data.available && ['services_unavailable', 'adapter_unavailable', undefined].includes(data.code);
+    place(card.hidden);
     if (card.hidden) return;
+    summarize();
     $('sub').textContent = data.available && data.name ? data.name + (data.version ? ' ' + data.version : '') : '';
     renderPanel(); renderFeeds();
     const job = data.job;
@@ -231,7 +260,7 @@
   async function refresh() {
     try {
       const res = await fetch('/api/v1/adapter-services', {cache: 'no-store'});
-      if (res.status === 403) { $('card').hidden = true; return; }
+      if (res.status === 403) { $('card').hidden = true; place(true); return; }
       if (!res.ok) { status(TEXT.status_unknown); return; }
       const before = data && data.job && data.job.id, was = before && ACTIVE.includes(data.job.state);
       data = await res.json();

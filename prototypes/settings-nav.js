@@ -83,6 +83,10 @@
     var a = sec && sub && sec.querySelector('.subnav a[data-sub-link="' + sub + '"]');
     return !!(a && a.hidden && a.hasAttribute('data-slot-nav'));
   };
+  function keepVisible(nav, a) {  // выбранный подраздел виден в полосе (телефон)
+    if (nav.scrollWidth > nav.clientWidth && (a.offsetLeft < nav.scrollLeft || a.offsetLeft + a.offsetWidth > nav.scrollLeft + nav.clientWidth))
+      nav.scrollLeft = Math.max(0, a.offsetLeft - 16);
+  }
   // открыть подраздел; вернуть открытый (null — у раздела нет подразделов); {remember:false} — не запоминать выбор
   N.sub = function (sec, asked, opts) {
     var nav = sec && sec.querySelector('.subnav');
@@ -94,8 +98,7 @@
       var on = a.getAttribute('data-sub-link') === sub;
       a.classList.toggle('on', on);
       if (on) a.setAttribute('aria-current', 'page'); else a.removeAttribute('aria-current');
-      if (on && nav.scrollWidth > nav.clientWidth && (a.offsetLeft < nav.scrollLeft || a.offsetLeft + a.offsetWidth > nav.scrollLeft + nav.clientWidth))
-        nav.scrollLeft = Math.max(0, a.offsetLeft - 16);  // выбранный подраздел виден в полосе (телефон)
+      if (on) keepVisible(nav, a);
     });
     if (sub && !(opts && opts.remember === false)) O.store.set(key, sub);
     return sub;
@@ -138,6 +141,8 @@
     var dirty = p && (p.hasAttribute('data-dirty') || p.hasAttribute('data-form-dirty'));
     a.className = 'dot ' + (dirty ? 'dirty' : (a.getAttribute('data-base') || ''));
     N.rollup(secName);
+    var cur = a.closest('.subnav') && a.closest('.subnav').querySelector('a.on');
+    if (cur) keepVisible(cur.parentNode, cur);  // точка расширила пункт — выбранный не уезжает за край
   };
   // пометить панель подраздела «изменено»: kind 'dirty' (поля settings.json) или 'form-dirty' (формы адаптера)
   N.subDirty = function (panel, kind, on) {
@@ -283,6 +288,7 @@
       if (!el) return null;
       el.hidden = false;
       Array.prototype.forEach.call(document.querySelectorAll('[data-slot-nav="' + name + '"]'), function (x) { x.hidden = false; });
+      Array.prototype.forEach.call(document.querySelectorAll('.subnav a[data-sub-link].on'), function (a) { keepVisible(a.parentNode, a); });  // пункт вставлен слева — выбранный не уезжает
       // раздел или подраздел из адреса мог ждать этот блок (модуль загрузился после первого show): show() не трогал адрес
       var sec = el.closest('section.sec'), sub = el.closest('[data-sub]'), s = N.split(location.hash);
       if (O && sec && s.id === sec.getAttribute('data-sec') && (!sec.classList.contains('on') || (sub && s.sub === sub.getAttribute('data-sub') && !sub.classList.contains('on'))))

@@ -66,6 +66,11 @@ function server() {
     if (p === '/api/v1/adapter/check') return { running: false, timeout_s: 1800, options: [{ path: 'C:\\in', kind: 'inbox', exists: true }],
       job: { state: 'done', started_at: '2026-11-02T10:00:00+03:00', finished_at: '2026-11-02T10:01:00+03:00', seconds: 60, request: { dirs: ['C:\\in'] }, report: REPORT, text: 'check: OK', ok: true } };
     if (p === '/api/v1/update/adapter') return ADAPTER_UPDATE;
+    if (p === '/api/v1/adapter-services' && st.services) return { available: true, code: 'available', name: 'synthetic', version: '0.1', running: null, scheduler: true,
+      job: { state: 'idle', code: 'idle' }, panel: { title: 'Тестовые сервисы', status: ['Среда: тест'], sections: [{ id: 'c', title: 'Подключение', help: '',
+        fields: [{ key: 'url', label: 'Адрес', type: 'url', value: 'https://synthetic.invalid', help: '', placeholder: '' }], actions: [{ id: 'check', label: 'Проверить', confirm: '', long: false }] }] },
+      feeds: [{ id: 'eodpos', title: 'Позиции', dataset: 'positions', source: 's2', enabled: true, enabled_default: false, ready: true, why_not_ready: '', schedule: { daily_at: ['08:30'] },
+        after_positions: false, running: false, queued: false, next_run: null, last: { last_started: '2026-10-16T08:30:00+03:00', state: 'blocked', code: 'login_required', needs_login: true, failures: 0 } }] };
     if (p === '/api/v1/autopilot/status') return { enabled: true, state: 'idle', steps: [{ name: 'sync', status: 'ok', detail: 'срезов: 1' }] };
     if (p === '/api/v1/backfill/status') return { enabled: true, dates: 10, done: 10, todo: 0, no_positions: 0, no_market: 0 };
     if (p === '/api/v1/acquisition') return { available: false, code: 'runtime_unavailable', job: { state: 'idle', phase: 'idle', code: 'idle' } };
@@ -285,7 +290,7 @@ test('настройки: подразделы, «Дополнительно», 
       assert.strictEqual(await onSec(pg), 'hub', 'место без модуля не открывается');
       assert.ok(!(await pg.locator('.st-nav a[data-sec="ovp"]').isVisible()) && !(await pg.locator('.subnav a[data-sub-link="services"]').isVisible()));
       await pg.evaluate(() => {
-        const a = window.DeskSettings.slot('services'); a.textContent = 'Подключение к сервисам';
+        const a = window.DeskSettings.slot('services'); a.append(Object.assign(document.createElement('p'), { textContent: 'Подключение к сервисам' }));
         const b = window.DeskSettings.slot('ovp-types'); b.textContent = 'Типы строк';
         window.DeskSettings.slot('reread').textContent = 'Перечитать';
         window.DeskSettings.slot('books-extra').textContent = 'Только ОВП';
@@ -313,7 +318,7 @@ test('настройки: подразделы, «Дополнительно», 
       assert.deepStrictEqual(await onSub(pg), ['overview'], 'пока модуля нет — открыт запасной');
       assert.strictEqual(await pg.evaluate(() => location.hash), '#adapter/services', 'адрес не переписан');
       assert.strictEqual(await pg.evaluate(() => localStorage.getItem('settings.sub.adapter')), null, 'запасной подраздел не запомнен');
-      await pg.evaluate(() => setTimeout(() => { window.DeskSettings.slot('services').textContent = 'Подключение к сервисам'; }, 200));
+      await pg.evaluate(() => setTimeout(() => { window.DeskSettings.slot('services'); }, 200));
       await pg.waitForFunction(() => { const x = document.querySelector('#sec-adapter .sub.on'); return x && x.dataset.sub === 'services'; });
       assert.ok(await pg.locator('[data-slot="services"]').isVisible());
       // раздел-место: #ovp после других адресов
@@ -351,7 +356,7 @@ test('настройки: подразделы, «Дополнительно», 
       await pg.waitForFunction(() => document.querySelector('section.sec.on').dataset.sec === 'adapter');
       assert.strictEqual(await pg.evaluate(() => window.__ev.length), n, 'после отписки событий нет');
       // unslot: открытое место скрывается, открывается запасной подраздел
-      await pg.evaluate(() => { window.DeskSettings.slot('services').textContent = 'Сервисы'; });
+      await pg.evaluate(() => { window.DeskSettings.slot('services'); });
       await pg.locator('.subnav a[data-sub-link="services"]').click();
       assert.deepStrictEqual(await onSub(pg), ['services']);
       await pg.evaluate(() => window.DeskSettings.unslot('services'));
@@ -461,12 +466,13 @@ test('настройки: подразделы, «Дополнительно», 
     });
 
     await t.test('телефон 390 px: без горизонтальной прокрутки, выбранный подраздел виден', async () => {
-      const st = server();
-      for (const hash of ['#adapter/actions', '#adapter/check', '#adapter/expert', '#up', '#hub']) {
+      const st = server(); st.services = true;
+      for (const hash of ['#adapter/services', '#adapter/actions', '#adapter/check', '#adapter/expert', '#up', '#hub']) {
         const { pg, ctx, errors } = await open(browser, st, hash, { viewport: { width: 390, height: 800 } });
         await pg.waitForTimeout(300);
         const over = await pg.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth);
         assert.ok(over <= 1, hash + ': лишняя ширина ' + over);
+        if (hash === '#adapter/services') assert.ok(await pg.locator('#svc-card').isVisible(), 'блок «Сервисы» виден');
         if (hash.startsWith('#adapter')) {
           const box = await pg.locator('.subnav a.on').boundingBox();
           assert.ok(box && box.x >= 0 && box.x + box.width <= 391, hash + ': подраздел виден ' + JSON.stringify(box));
