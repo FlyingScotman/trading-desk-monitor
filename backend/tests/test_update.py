@@ -632,7 +632,7 @@ def test_a_zip_is_of_the_mirror_kind_when_its_manifest_lists_mirror_json(old_new
     _, new, _ = old_new
     full = full_zip(new, tmp_path / f"DeskMonitor-{NEW}.zip")
     mirror_stage = stage_dir(tmp_path / "m", bundle(NEW, MIRROR))
-    mirror = full_zip(mirror_stage, tmp_path / f"DeskMonitor-{NEW}-mirror.zip")
+    mirror = full_zip(mirror_stage, tmp_path / f"DeskMonitorMirror-{NEW}.zip")
     with update.open_zip(full) as z:
         assert update.read_contents(z).flavor == "full"
     with update.open_zip(mirror) as z:  # no third-party wheels in the zip: still a complete update zip
@@ -641,9 +641,9 @@ def test_a_zip_is_of_the_mirror_kind_when_its_manifest_lists_mirror_json(old_new
     assert update.describe(mirror, None, OLD)["flavor"] == "mirror"
     assert update.describe(full, None, OLD)["flavor"] == "full"
     # a patch of the mirror kind: its manifest is the new bundle's, mirror.json in it
-    old_m = full_zip(stage_dir(tmp_path / "om", bundle(OLD, MIRROR)), tmp_path / f"DeskMonitor-{OLD}-mirror.zip")
+    old_m = full_zip(stage_dir(tmp_path / "om", bundle(OLD, MIRROR)), tmp_path / f"DeskMonitorMirror-{OLD}.zip")
     patch = build.write_patch(old_m, mirror_stage, NEW, tmp_path, STAMP)
-    assert patch.name == f"DeskMonitor-mirror-patch-{OLD}-to-{NEW}.zip"
+    assert patch.name == f"DeskMonitorMirror-patch-{OLD}-to-{NEW}.zip"
     with update.open_zip(patch) as z:
         pc = update.read_contents(z)
     assert pc.kind == "patch" and pc.flavor == "mirror" and pc.base == OLD
@@ -671,7 +671,7 @@ def test_a_zip_of_the_other_kind_is_refused_both_ways_and_the_same_kind_installs
     # mirror installed: the full zip and the full patch are refused
     for z in (new_full, full_patch):
         err = update.describe(z, mirror_root, OLD)["error"]
-        assert "полный (с пакетами)" in err and "установлена сборка без пакетов" in err
+        assert "полной сборки (с пакетами)" in err and "установлена сборка без пакетов" in err
     # the same kind fits, patch or not
     for root, z in ((full_root, new_full), (full_root, full_patch), (mirror_root, new_mirror),
                     (mirror_root, mirror_patch)):

@@ -4,9 +4,11 @@ The release workflow (``.github/workflows/release.yml``) publishes, for a tag ``
 
 * ``DeskMonitor-<version>.zip``                    the full Windows bundle, never with the private adapter
 * ``DeskMonitor-patch-<old>-to-<version>.zip``     a patch from the previous release's bundle (when there is one)
-* ``DeskMonitor-<version>-mirror.zip``             the bundle "without packages" (third-party packages come from the
-                                                   pip index of the PC), and its patches
-                                                   ``DeskMonitor-mirror-patch-<old>-to-<version>.zip``; an asset's
+* ``DeskMonitorMirror-<version>.zip``              the bundle "without packages" (third-party packages come from
+                                                   the pip index of the PC), and its patches
+                                                   ``DeskMonitorMirror-patch-<old>-to-<version>.zip`` (not
+                                                   ``DeskMonitor-...``: the updaters of 0.2.14 and before take every
+                                                   ``DeskMonitor-<x>.zip`` for a full bundle); an asset's
                                                    ``flavor`` is ``full`` or ``mirror``, and ``choose`` takes the
                                                    flavor that is installed (``DESK_BUNDLE_KIND``)
 * ``SHA256SUMS``                                   ``<sha256>  <asset name>`` of every zip (``sha256sum`` format)
@@ -43,9 +45,9 @@ SUMS_NAME = "SHA256SUMS"
 SCHEMA = 1
 _SHA = re.compile(r"[0-9a-f]{64}")
 _SUM_LINE = re.compile(r"^([0-9a-fA-F]{64}) [ *]?(\S+)\s*$")
-_FULL = re.compile(r"DeskMonitor-(?!(?:mirror-)?patch-)(?P<v>[0-9A-Za-z][0-9A-Za-z._+-]*?)"
-                   r"(?P<mirror>-mirror)?(?:-with-adapter)?\.zip")
-_PATCH = re.compile(r"DeskMonitor-(?:(?P<mirror>mirror)-)?patch-(?P<base>[0-9A-Za-z][0-9A-Za-z._+-]*?)-to-"
+_FULL = re.compile(r"DeskMonitor(?P<mirror>Mirror)?-(?!patch-)(?P<v>[0-9A-Za-z][0-9A-Za-z._+-]*?)"
+                   r"(?:-with-adapter)?\.zip")
+_PATCH = re.compile(r"DeskMonitor(?P<mirror>Mirror)?-patch-(?P<base>[0-9A-Za-z][0-9A-Za-z._+-]*?)-to-"
                     r"(?P<v>[0-9A-Za-z][0-9A-Za-z._+-]*)\.zip")
 FLAVORS = ("full", "mirror")
 _ASSET_NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9._+-]{0,199}")
@@ -162,7 +164,7 @@ def _digest(value: object) -> str | None:
 
 def classify_name(name: str) -> tuple[str, str, str | None, str] | None:
     """(kind, version, base, flavor) of an update zip's name, None for any other asset. ``kind`` is full or patch,
-    ``flavor`` full or mirror (``-mirror`` in the name of a full zip, ``mirror-`` before ``patch``)."""
+    ``flavor`` full or mirror (``DeskMonitorMirror-`` instead of ``DeskMonitor-``)."""
     if m := _PATCH.fullmatch(name):
         return "patch", m["v"], m["base"], "mirror" if m["mirror"] else "full"
     if m := _FULL.fullmatch(name):
@@ -351,7 +353,9 @@ def choose(rel: Release, current: str, allow_older: bool = False, flavor: str | 
     full zip. A release that is not newer is offered only with ``allow_older`` (and then the full zip). Only zips of
     the installed flavor are taken (``flavor``, else ``DESK_BUNDLE_KIND``: full or mirror): a bundle never turns into
     the other kind through an update."""
-    flavor = flavor if flavor in FLAVORS else update.bundle_kind()
+    if flavor not in FLAVORS:
+        root = update.bundle_root()
+        flavor = update.installed_kind(root) if root is not None else update.bundle_kind()
     cmp = update.compare(rel.version, current)
     if cmp == "same":
         return Choice(cmp, None, f"Установлена последняя версия ({current}).", False)
@@ -370,10 +374,11 @@ def choose(rel: Release, current: str, allow_older: bool = False, flavor: str | 
     if asset is None:
         other = [a for a in rel.assets if a.kind == "full" and a.version == rel.version]
         if other:
-            have = "без пакетов (mirror)" if flavor == "mirror" else "полный (с пакетами)"
-            return Choice(cmp, None, f"В релизе нет архива вашего вида ({have}): установлена сборка этого вида, "
-                                     "а переход между видами возможен только распаковкой нового архива вручную.",
-                          needs)
+            have = ("сборка без пакетов (с зеркала pip)" if flavor == "mirror"
+                    else "полная сборка (с пакетами)")
+            return Choice(cmp, None, f"В релизе нет архива для вашей сборки: установлена {have}, а в релизе только "
+                                     "архивы другого вида. Сменить вид можно только вручную, новым архивом в чистой "
+                                     "папке (данные и настройки сохранятся).", needs)
         return Choice(cmp, None, "В релизе нет подходящего архива.", needs)
     if asset.sha256 is None:
         return Choice(cmp, None, f"У {asset.name} нет опубликованной контрольной суммы (SHA256SUMS): не устанавливаю.",

@@ -589,17 +589,17 @@ def test_the_mirror_stage_holds_only_our_wheels_requirements_and_mirror_json(tmp
     assert header == build.parse_manifest((stage / "MANIFEST.sha256").read_text())[0]
     assert (build.base_from_zip(_zip_of(mirror, tmp_path)).flavor, build.base_from_zip(_zip_of(stage, tmp_path)).flavor) \
         == ("mirror", "full")
-    # the zips are named with -mirror, with and without the adapter
+    # the zips are named DeskMonitorMirror-..., with and without the adapter
     stamp = build.zip_stamp(1_760_000_000)
-    (public,) = build.write_bundles(mirror, "DeskMonitor-1.1-b-mirror", False, tmp_path / "dist", stamp)
-    assert public.name == "DeskMonitor-1.1-b-mirror.zip"
+    (public,) = build.write_bundles(mirror, "DeskMonitorMirror-1.1-b", False, tmp_path / "dist", stamp)
+    assert public.name == "DeskMonitorMirror-1.1-b.zip"
     with update_module.open_zip(public) as z:
         c = update_module.read_contents(z)
     assert c.flavor == "mirror" and c.kind == "full"
     (mirror / "adapter/pkg").mkdir(parents=True)
     (mirror / "adapter/pkg/__init__.py").write_bytes(b"private")
-    public2, private = build.write_bundles(mirror, "DeskMonitor-1.1-b-mirror", True, tmp_path / "dist2", stamp)
-    assert private.name == "DeskMonitor-1.1-b-mirror-with-adapter.zip"
+    public2, private = build.write_bundles(mirror, "DeskMonitorMirror-1.1-b", True, tmp_path / "dist2", stamp)
+    assert private.name == "DeskMonitorMirror-1.1-b-with-adapter.zip"
     assert public2.read_bytes() == public.read_bytes()  # the public zip has no adapter/
 
 
@@ -644,15 +644,15 @@ def test_patches_of_the_mirror_kind_come_from_the_mirror_stage(tmp_path):
     for d in ("o", "o2", "o3"):
         (tmp_path / d).mkdir()
     both = build.write_patches(bases, {"full": new_stage, "mirror": new_mirror}, "1.1-b", tmp_path / "o", stamp)
-    assert sorted(p.name for p in both) == ["DeskMonitor-mirror-patch-1.0-a-to-1.1-b.zip",
-                                            "DeskMonitor-patch-1.0-a-to-1.1-b.zip"]
+    assert sorted(p.name for p in both) == ["DeskMonitor-patch-1.0-a-to-1.1-b.zip",
+                                            "DeskMonitorMirror-patch-1.0-a-to-1.1-b.zip"]
     by_name = {p.name: p for p in both}
-    with zipfile.ZipFile(by_name["DeskMonitor-mirror-patch-1.0-a-to-1.1-b.zip"]) as z:
+    with zipfile.ZipFile(by_name["DeskMonitorMirror-patch-1.0-a-to-1.1-b.zip"]) as z:
         names = {n.removeprefix("DeskMonitor/") for n in z.namelist()}
         manifest = z.read("DeskMonitor/MANIFEST.sha256").decode()
         readme = z.read("DeskMonitor/PATCH_README.txt").decode("utf-8-sig")
     assert "app/deskctl.py" in names and not [n for n in names if n.endswith(".whl")]  # same wheels as the base
-    assert "wheelhouse/mirror.json" in manifest and "DeskMonitor-1.1-b-mirror.zip" in readme and "зеркала" in readme
+    assert "wheelhouse/mirror.json" in manifest and "DeskMonitorMirror-1.1-b.zip" in readme and "зеркала" in readme
     with zipfile.ZipFile(by_name["DeskMonitor-patch-1.0-a-to-1.1-b.zip"]) as z:
         assert "mirror.json" not in z.read("DeskMonitor/MANIFEST.sha256").decode()
         assert "DeskMonitor-1.1-b.zip" in z.read("DeskMonitor/PATCH_README.txt").decode("utf-8-sig")
@@ -678,13 +678,13 @@ def test_from_bundle_of_a_mirror_zip_makes_the_mirror_with_adapter_zip(tmp_path)
     import argparse
 
     _, mirror, _ = _full_and_mirror_stage(tmp_path)
-    public = tmp_path / "DeskMonitor-1.1-b-mirror.zip"
+    public = tmp_path / "DeskMonitorMirror-1.1-b.zip"
     build.write_zip(public, build.bundle_entries(mirror, adapter=False), build.zip_stamp(1_760_000_000))
     a = argparse.Namespace(from_bundle=public, out=tmp_path / "out")
     assert build.from_bundle(a, {"pkg/__init__.py": b"private"}, []) == 0
-    private = tmp_path / "out" / "DeskMonitor-1.1-b-mirror-with-adapter.zip"
+    private = tmp_path / "out" / "DeskMonitorMirror-1.1-b-with-adapter.zip"
     assert private.is_file() and not (tmp_path / "out" / "DeskMonitor-1.1-b-with-adapter.zip").exists()
-    build.check_public_private(tmp_path / "out" / "DeskMonitor-1.1-b-mirror.zip", private)
+    build.check_public_private(tmp_path / "out" / "DeskMonitorMirror-1.1-b.zip", private)
     with zipfile.ZipFile(private) as z:
         assert z.read("DeskMonitor/adapter/pkg/__init__.py") == b"private"
         assert b"wheelhouse/mirror.json" in z.read("DeskMonitor/MANIFEST.sha256")
@@ -692,5 +692,5 @@ def test_from_bundle_of_a_mirror_zip_makes_the_mirror_with_adapter_zip(tmp_path)
 
 def test_release_workflow_builds_and_publishes_the_mirror_bundle():
     wf = (REPO / ".github/workflows/release.yml").read_text(encoding="utf-8")
-    assert "--mirror" in wf and "DeskMonitor-mirror-patch-*.zip" in wf and "DeskMonitor-patch-*.zip" in wf
+    assert "--mirror" in wf and "DeskMonitorMirror-patch-*.zip" in wf and "DeskMonitor-patch-*.zip" in wf
     assert "dist/DeskMonitor-*.zip" in wf  # the glob that uploads the mirror zip and its patches too

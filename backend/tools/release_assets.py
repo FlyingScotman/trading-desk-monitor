@@ -7,7 +7,7 @@
 releases by that version and the commit date (``desk.update.compare``), so every release bumps the version.
 
 ``write``: checks the zips ``build_windows_bundle.py`` left in ``--dist`` (exactly one full
-``DeskMonitor-<version>.zip`` of the tag's version, at most one ``DeskMonitor-<version>-mirror.zip`` (the bundle
+``DeskMonitor-<version>.zip`` of the tag's version, at most one ``DeskMonitorMirror-<version>.zip`` (the bundle
 without packages, built with ``--mirror``; optional so that a release can be rebuilt without it), patches and mirror
 patches to that version, none with the private adapter: a public release never carries it; each zip reads as an
 update zip, ``desk.update.read_contents``, and is of the kind its name says) and writes next to them
@@ -65,7 +65,7 @@ def sha256(p: Path) -> str:
 
 def collect(dist: Path, tag: str) -> tuple[str, list[tuple[str, int, str]]]:
     """(the release's bundle version, [(name, size, sha256)] of its zips), every zip checked."""
-    zips = sorted(p for p in dist.glob("DeskMonitor-*.zip") if p.is_file())
+    zips = sorted(p for p in dist.glob("DeskMonitor*.zip") if p.is_file())
     fulls: dict[str, str] = {}  # flavor -> version of its full zip
     files = []
     for p in zips:
@@ -115,9 +115,10 @@ SHA-256:
 
 
 MIRROR_NOTE = """\
-- DeskMonitor-{version}-mirror.zip — сборка без пакетов: сторонние пакеты она берёт с зеркала pip компьютера
+- DeskMonitorMirror-{version}.zip — сборка без пакетов: сторонние пакеты она берёт с зеркала pip компьютера
   (pip.ini, PIP_INDEX_URL), поэтому нужен доступ к нему; обновляется только архивами своего вида
-  (DeskMonitor-mirror-patch-…), «Обновление программы» другой вид не ставит.
+  (DeskMonitorMirror-patch-…). «Обновление программы» другой вид не ставит: сменить вид можно, распаковав новый
+  архив в новую, чистую папку (данные и настройки сохранятся).
 """
 
 
@@ -144,7 +145,7 @@ def write(dist: Path, tag: str, repo: str | None, commit: str | None) -> dict:
     sums = release.sums_text(files)
     core = core_pin()
     changes = changelog(tag.removeprefix("v"))
-    mirror = MIRROR_NOTE.format(version=version) if any(n.endswith("-mirror.zip") for n, _, _ in files) else ""
+    mirror = MIRROR_NOTE.format(version=version) if any(n.startswith("DeskMonitorMirror-") and "-patch-" not in n for n, _, _ in files) else ""
     notes = NOTES.format(version=version, core=core, commit=commit or "?", sums=sums, mirror=mirror,
                          changes=changes + "\n\n---\n\n" if changes else "")
     doc = release.release_doc(tag, version, files, commit=commit, core=core,
