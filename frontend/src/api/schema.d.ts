@@ -1949,6 +1949,17 @@ export interface components {
              * @default false
              */
             partial?: boolean;
+            /**
+             * No Pv
+             * @description No position of the kind has a PV (all at a notional or not valued)
+             * @default false
+             */
+            no_pv?: boolean;
+            /**
+             * Note
+             * @description «PV на базу неизвестен»: B's run has no PV of its own (another basis)
+             */
+            note?: string | null;
         };
         /**
          * OcpGap
@@ -2150,6 +2161,11 @@ export interface components {
              * @description Kinds apart whose positions are partly without a PV (gap derivatives_partial_pv)
              */
             partial_pv?: string[];
+            /**
+             * No Pv
+             * @description Kinds apart none of whose positions has a PV («PV нет ни у одной позиции»)
+             */
+            no_pv?: string[];
             /**
              * Base Older
              * @description The base is older than the previous business day (the run's calendar)

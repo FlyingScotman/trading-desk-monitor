@@ -325,20 +325,47 @@ def test_adapter_before_1_7_keeps_the_nominal_and_adds_no_pv():
 
 
 def test_forward_traded_after_b_already_in_positions():
-    """A forward D1 traded on D that the positions of D already hold: its trade is left out and its PV is in the
-    derivatives, whether the report gives fx_forward apart or not (a report before 1.7: the forward is not in the
-    report on B either), never lost and never twice."""
+    """A forward D1 traded on D that the positions of D already hold: where the report gives fx_forward apart, its PV
+    is in the derivatives and its trade left out. Under a report before 1.7 it is not in the report on B either: new
+    since B (not in B's run) its PV is added and the trade left out; not known to be new (no run of B, no terms) its
+    trade counts at its nominal. Never lost, never twice."""
     new = core_row("D1|NEW", "D1", {"USD": 99_000.0})
     trades = [{"trade_id": "F9", "status": "live", "trade_date": "2026-10-16", "book_id": "D1",
                "position_id": "D1|NEW", "asset_class": "fx", "side": "buy", "amount_ccy": "100000", "ccy": "USD",
                "settle_date": "2026-12-16"}]
-    days = {B: O.BaseDay(B, run_id=7, trade_rows=trades)}
+    base_run = {"D1|FWD", "D1|OPT", "T1|UST", "X1|FWD"}
+    days = {B: O.BaseDay(B, run_id=7, trade_rows=trades, base_positions=base_run)}
     d1 = pub(run(on=D, rows=[*ROWS, new], days=days, valid_dates={"D1": D}))[("D1", "USD")]
     assert d1["parts"]["derivatives"] == 490_000 + 99_000 and d1["parts"]["trades"] == 0
     old = [{k: v for k, v in x.items() if k != "derivatives_ccy"} for x in REPORT]
     d1 = pub(run(on=D, rows=[*ROWS, new], report=old, days=days, valid_dates={"D1": D}))[("D1", "USD")]
     assert d1["parts"]["derivatives"] == 99_000 and d1["parts"]["trades"] == 0
     assert d1["contributions"]["derivatives"]["items"][0]["note"] == "сделка после базы"
+    unknown = {B: O.BaseDay(B, trade_rows=trades)}
+    d1 = pub(run(on=D, rows=[*ROWS, new], report=old, days=unknown, valid_dates={"D1": D}))[("D1", "USD")]
+    assert d1["parts"]["derivatives"] == 0 and d1["parts"]["trades"] == 100_000
+
+
+def test_trade_into_a_position_held_before_b_keeps_the_trade_nominal():
+    """Reproduced in review: base 200 (an older forward in the report, fx_forward not apart), a trade of 100 after B
+    into the same position (FX positions are keyed by book, currency and value date; core rows hold several trades),
+    its PV now 295: the whole PV on top of the base gave 495. The position was in B's run: not new, the base keeps the
+    older part at its nominal and the after-B trade adds its own nominal: 300."""
+    pos = core_row("D1|USD|2026-12-16", "D1", {"USD": 295.0})
+    rep = [{"entity": "ENT1", "book_id": "D1", "ccy": "USD", "ocp_ccy": "200", "_set_id": 11, "_src": "L2"}]
+    trades = [{"trade_id": "F2", "status": "live", "trade_date": "2026-10-16", "book_id": "D1",
+               "position_id": "D1|USD|2026-12-16", "asset_class": "fx", "side": "buy", "amount_ccy": "100",
+               "ccy": "USD", "settle_date": "2026-12-16"}]
+    days = {B: O.BaseDay(B, run_id=7, trade_rows=trades, base_positions={"D1|USD|2026-12-16"})}
+    d1 = pub(run(on=D, rows=[pos], report=rep, units=UNITS[:1], days=days, valid_dates={"D1": D}))[("D1", "USD")]
+    assert d1["amount"] == 300 and d1["parts"] == {"base": 200, "derivatives": 0, "bonds": 0, "trades": 100,
+                                                   "outside": 0}
+    # its terms say every trade is after B: new, whatever B's run held
+    terms = [{"trade_id": "F2", "position_id": "D1|USD|2026-12-16", "product_kind": "fx_forward",
+              "trade_date": "2026-10-16", "value_date": "2026-12-16"}]
+    d1 = pub(run(on=D, rows=[pos], report=rep, units=UNITS[:1], days=days, valid_dates={"D1": D},
+                 terms=terms))[("D1", "USD")]
+    assert d1["amount"] == 495 and d1["parts"]["trades"] == 0
 
 
 def test_fx_swap_leg_without_terms_is_an_fx_swap_and_coverage_is_flagged():
@@ -405,6 +432,43 @@ def test_derivative_held_after_its_trade_is_never_counted_twice():
     assert r.per_position["D1|XFER"]["component"] == "transfers"
     d1 = pub(r)[("D1", "USD")]
     assert d1["amount"] == -300 and d1["parts"]["derivatives"] == 0
+
+
+def test_a_derivative_outside_the_report_is_counted_once_and_has_no_fallback():
+    """A derivative of kind ``other`` whose own line is ``fx_legs`` while the report holds ``other`` but not
+    ``fx_legs``: in ``outside`` (its line's component), never in the derivatives too. A transfer deal with
+    ``transfers`` outside the report: in ``outside``, and the report's nominal of its kind is not put back."""
+    odd = core_row("D1|ODD", "D1", {"USD": 70.0}, "exotic")
+    pol = replace(POLICY, report_components=(POLICY.report_components | {"other"}) - {"fx_legs"})
+    rep = [{"entity": "ENT1", "book_id": "D1", "ccy": "USD", "ocp_ccy": "0", "derivatives_ccy": {"other": "70"},
+            "_set_id": 11, "_src": "L2"}]
+    assert O.derivative_kind(odd, []) == "other"
+    d1 = pub(run(rows=[odd], report=rep, units=UNITS[:1], policy=pol))[("D1", "USD")]
+    assert d1["amount"] == 70 and d1["parts"]["outside"] == 70 and d1["parts"]["derivatives"] == 0
+    books = {**BOOKS, "D1": {**BOOKS["D1"], "ocp_to": "X1"}}
+    xfer = core_row("D1|XFER", "D1", {"USD": -300.0})
+    terms = [{"trade_id": "XF", "position_id": "D1|XFER", "product_kind": "fx_forward", "trade_date": "2026-10-01",
+              "value_date": "2026-12-16", "counterparty_id": "X1"}]
+    rep = [{**rep[0], "derivatives_ccy": {"fx_forward": "-300"}}]
+    no_xfer = replace(POLICY, report_components=POLICY.report_components - {"transfers"})
+    r = O.compute_ocp([xfer], books, B, terms=terms, report_rows=rep, report_units=UNITS[:1], policy=no_xfer)
+    d1 = pub(r)[("D1", "USD")]
+    assert d1["amount"] == -300 and d1["fallback"] == [] and d1["parts"]["outside"] == -300
+
+
+def test_no_position_of_the_kind_with_a_pv_is_said_so():
+    leg = {"position_id": "D1|SWL", "book_id": "D1", "instr_type": "FX", "fx_delta": {"USD": 300.0},
+           "extra": {"reported": {"asset_class": "fx", "value_date": "2026-12-16", "x_product_group": "fx_swap"},
+                     "fx_delta_basis": "notional (no trade terms: undiscounted)"}}
+    rep = [{"entity": "ENT1", "book_id": "D1", "ccy": "USD", "ocp_ccy": "0", "derivatives_ccy": {"fx_swap": "300"},
+            "_set_id": 11, "_src": "L2"}]
+    r = run(rows=[leg], report=rep, units=UNITS[:1])
+    d1 = pub(r)[("D1", "USD")]
+    assert d1["no_pv"] == ["fx_swap"] and d1["partial_pv"] == []
+    assert {g["code"]: g for g in r.gaps}["derivatives_partial_pv"]["items"] == [
+        "книга D1 USD: валютные свопы (PV нет ни у одной позиции)"]
+    chk = r.derivatives_check[0]
+    assert (chk["no_pv"], chk["partial"]) == (True, False)
 
 
 def test_bond_sold_out_after_b_is_subtracted_once():
@@ -663,3 +727,22 @@ def test_run_on_the_base_date_then_inside_the_next_day(store_url, ctx, tmp_path)
     day = {x["date"]: x for x in hist["days"]}["2026-10-16"]
     line = next(x for x in day["lines"] if x["book"] == "D1" and x["ccy"] == "USD")
     assert line["baseDate"] == "2026-10-15" and line["parts"]["trades"] == 200_000 and line["setId"]
+
+
+def test_pv_on_a_base_published_on_another_basis_is_unknown(store_url):
+    """The first base day after the switch: B's run was published on report_plus_outside, its block has no
+    derivatives' PV of its own (``derivatives_pv`` []). Not a PV of 0 (every check row a diff of the whole nominal,
+    WARN lines): unknown, «PV на базу неизвестен»."""
+    from test_ocp_history import insert
+
+    with store.connect(store_url) as con:
+        old = insert(con, "2026-10-15", ocp={"version": 3, "status": "computed", "derivatives_pv": [],
+                                             "published": {"basis": "report_plus_outside", "by_book": []}})
+        new = insert(con, "2026-10-14", ocp={"version": 3, "status": "computed", "derivatives_pv": [
+            {"book_id": "D1", "ccy": "USD", "kind": "fx_forward", "amount": 495.0}],
+            "published": {"basis": "report_base_plus_day", "by_book": []}})
+        assert ocp_run._pv_base(con, old) is None
+        assert ocp_run._pv_base(con, new) == {("D1", "USD", "fx_forward"): 495.0}
+    r = run(on=D, days={B: O.BaseDay(B, run_id=old, pv_base=None, trade_rows=[])})
+    chk = {(x["book_id"], x["ccy"], x["kind"]): x for x in r.derivatives_check}[("D1", "USD", "fx_forward")]
+    assert (chk["pv"], chk["diff"], chk["over"], chk["note"]) == (None, None, False, "PV на базу неизвестен")

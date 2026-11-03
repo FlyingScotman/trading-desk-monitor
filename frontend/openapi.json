@@ -5748,6 +5748,24 @@
             "title": "Partial",
             "description": "Some positions of the kind have a PV, some not: the PV is partial",
             "default": false
+          },
+          "no_pv": {
+            "type": "boolean",
+            "title": "No Pv",
+            "description": "No position of the kind has a PV (all at a notional or not valued)",
+            "default": false
+          },
+          "note": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Note",
+            "description": "«PV на базу неизвестен»: B's run has no PV of its own (another basis)"
           }
         },
         "type": "object",
@@ -6183,6 +6201,14 @@
             "type": "array",
             "title": "Partial Pv",
             "description": "Kinds apart whose positions are partly without a PV (gap derivatives_partial_pv)"
+          },
+          "no_pv": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "No Pv",
+            "description": "Kinds apart none of whose positions has a PV («PV нет ни у одной позиции»)"
           },
           "base_older": {
             "type": "boolean",

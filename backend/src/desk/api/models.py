@@ -368,6 +368,8 @@ class OcpDerivativesCheck(BaseModel):
     positions: int = Field(0, description="The run's positions of the kind in the scope and currency")
     without_pv: int = Field(0, description="Of them valued at a notional (no terms) or not at all")
     partial: bool = Field(False, description="Some positions of the kind have a PV, some not: the PV is partial")
+    no_pv: bool = Field(False, description="No position of the kind has a PV (all at a notional or not valued)")
+    note: str | None = Field(None, description="«PV на базу неизвестен»: B's run has no PV of its own (another basis)")
 
 
 class OcpTransferDeal(BaseModel):
@@ -433,6 +435,8 @@ class OcpPublishedLine(BaseModel):
                                                                      "for this line (their PV is added)")
     partial_pv: list[str] = Field(default_factory=list, description="Kinds apart whose positions are partly without "
                                                                     "a PV (gap derivatives_partial_pv)")
+    no_pv: list[str] = Field(default_factory=list, description="Kinds apart none of whose positions has a PV "
+                                                               "(«PV нет ни у одной позиции»)")
     base_older: bool = Field(False, description="The base is older than the previous business day (the run's "
                                                 "calendar)")
 

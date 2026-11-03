@@ -851,37 +851,46 @@ class DerivLine:
     kind: str
     last_flow: date | None
     basis: str
+    component: str = ""
+    """The position's own OCP component (``classify``): the derivatives' term takes it only when that is a derivative
+    component the report holds; one outside the report is in ``outside`` (never both), a ``transfers`` or ``cash``
+    one in the report's base."""
+    first_trade: date | None = None
+    """The earliest trade date of its terms; None: no terms."""
 
     @property
-    def component(self) -> str:
-        return KIND_COMPONENT[self.kind]
+    def in_term(self) -> bool:
+        return self.component in DERIVATIVE_COMPONENTS
 
 
 def derivative_lines(rows: Sequence[Mapping[str, Any]], books: Mapping[str, Mapping[str, Any]],
                      terms: Mapping[str, Sequence[Mapping[str, Any]]], on: date,
                      policy: OcpPolicy = PROVISIONAL_POLICY) -> list[DerivLine]:
-    """The run's derivatives (``derivative_kind``) that enter the OCP in a derivative component (``classify``: an NDF
-    left out by ``include_ndf`` has none; an OCP transfer deal is ``transfers``, a spot leg ``cash``: never a
-    derivative here), each currency of its PV (``fx_delta``: core's spot equivalent; a row without terms: its notional,
-    basis ``notional``) and its last value date. A derivative with no FX amount at all is one line with ``ccy`` ""
-    and basis ``none``: it counts for the coverage of its kind (``published_day``), never in an amount."""
+    """The run's derivatives (``derivative_kind``) that enter the OCP (``classify`` gives them a component: an NDF left
+    out by ``include_ndf`` has none), each currency of its PV (``fx_delta``: core's spot equivalent; a row without
+    terms: its notional, basis ``notional``), its last value date, its own component (an OCP transfer deal is
+    ``transfers``, a swap's spot leg ``cash``: ``in_term`` false) and its first trade date. A derivative with no FX
+    amount at all is one line with ``ccy`` "" and basis ``none``: it counts for the coverage of its kind
+    (``published_day``), never in an amount."""
     out = []
     for r in rows:
         pid = r["position_id"]
         t = terms.get(pid, ())
         comp, _, _, _ = classify(r, t, books, on, policy)
-        kind = derivative_kind(r, t, policy, comp) if comp in DERIVATIVE_COMPONENTS else None
+        kind = derivative_kind(r, t, policy, comp) if comp is not None else None
         if kind is None:
             continue
         dates = _value_dates(r, t)
+        tds = [d for x in t if (d := _day(x.get("trade_date")))]
+        last, first = (max(dates) if dates else None), (min(tds) if tds else None)
         core = bool((r.get("extra") or {}).get("core"))
         entity = str((books.get(r["book_id"]) or {}).get("entity") or "—")
         amounts = {c: a for c, a in sorted(_amounts(r.get("fx_delta"), policy).items()) if a}
         for ccy, a in amounts.items():
-            out.append(DerivLine(pid, str(r["book_id"]), entity, ccy, a, kind, max(dates) if dates else None,
-                                 "spot_equivalent" if core else "notional"))
+            out.append(DerivLine(pid, str(r["book_id"]), entity, ccy, a, kind, last,
+                                 "spot_equivalent" if core else "notional", comp, first))
         if not amounts:
-            out.append(DerivLine(pid, str(r["book_id"]), entity, "", 0.0, kind, max(dates) if dates else None, "none"))
+            out.append(DerivLine(pid, str(r["book_id"]), entity, "", 0.0, kind, last, "none", comp, first))
     return out
 
 
@@ -946,8 +955,10 @@ class BaseDay:
     trades_unknown_book: list[str] = field(default_factory=list)
     """Trades after B of a book the books reference lacks: ``trade_id`` (``book_id``), not counted."""
     new_positions: set[str] = field(default_factory=set)
-    """Position ids of derivatives traded after B that the run's positions hold: never in the report on B, their PV is
-    added whatever kind the report gives apart."""
+    """Position ids the run's positions hold that a trade after B landed in (``trade_flows``)."""
+    base_positions: set[str] | None = None
+    """Position ids of B's run (None: no run of B): a derivative in it is not new since B, even when a trade after B
+    landed in it (an FX position keyed by book, currency and value date, a core row of several trades)."""
 
 
 @dataclass
@@ -1205,7 +1216,7 @@ def published_day(comparisons: Sequence[Mapping[str, Any]], outside_report: Sequ
         where = f"книга {sc['book_id']}" if sc["absent"] else _scope_text(sc["scope"] or {"book_id": sc["book_id"]})
         # the kinds whose PV this scope adds: those its report gives apart (a book absent from it: every kind), whose
         # component the report holds (one outside it is in ``outside``)
-        kinds = {k for k in sc["kinds"] if KIND_COMPONENT[k] in policy.report_components}
+        kinds = set(sc["kinds"])
         split = bool(sc["kinds"])
         if not split:
             issues["report_without_derivatives_split"].append(where)
@@ -1239,41 +1250,53 @@ def published_day(comparisons: Sequence[Mapping[str, Any]], outside_report: Sequ
                                           "note": "книга со своей частью отчёта: вычтена из итога юрлица"})
                     for k, v in (lc.get("reported_derivatives") or {}).items():
                         nominal[k] -= v
-            fallback, partial = [], []
+            fallback, partial, no_pv = [], [], []
+            in_pv: set[str] = set()  # derivatives whose whole PV this line counts (the term or outside)
             new = day.new_positions if day is not None else set()
+            base_pos = day.base_positions if day is not None else None
+            mine = [x for k in DERIVATIVE_KINDS for c_ in (ccy, "") for x in by_kind.get((c_, k), ())
+                    if x.book_id in won]
+            # a derivative whose own component is outside the report is in ``outside`` (whole), never here too
+            outside_kinds = {x.kind for x in mine if x.component not in policy.report_components}
             for k in DERIVATIVE_KINDS:
-                if KIND_COMPONENT[k] not in policy.report_components:
-                    continue  # outside the report: its PV is in ``outside``
+                term = [x for x in by_kind.get((ccy, k), ()) if x.book_id in won and x.in_term
+                        and x.component in policy.report_components]
                 if k not in kinds:
-                    # not apart: its nominal stays in the base; only a derivative traded after B that the positions
-                    # hold is not in it (its trade is left out: ``trade_flows``)
-                    pv = [x for x in by_kind.get((ccy, k), ()) if x.book_id in won and x.position_id in new]
+                    # not apart: its nominal stays in the base. A derivative traded after B that the positions hold
+                    # is added only when it is new since B (not in B's run, or every trade of its terms after B);
+                    # one that already held trades before B keeps its after-B trade at its nominal (``trades``)
+                    pv = [x for x in term if x.position_id in new and (
+                        (base_pos is not None and x.position_id not in base_pos)
+                        or (x.first_trade is not None and b0 is not None and x.first_trade > b0))]
                 else:
-                    pv = [x for x in by_kind.get((ccy, k), ()) if x.book_id in won
-                          and (x.last_flow is None or b0 is None or x.last_flow > b0)]
+                    pv = [x for x in term if x.last_flow is None or b0 is None or x.last_flow > b0]
                     issues["derivatives_unknown_last_flow"] += [x.position_id for x in pv if x.last_flow is None]
                     # coverage: positions of the kind valued at their notional (no terms) or with no amount at all
-                    held = {x.position_id for x in by_kind.get((ccy, k), ()) if x.book_id in won} | {
-                        x.position_id for x in by_kind.get(("", k), ()) if x.book_id in won}
+                    held = {x.position_id for x in mine if x.kind == k and x.in_term}
                     bare = {x.position_id for x in pv if x.basis != "spot_equivalent"} | {
-                        x.position_id for x in by_kind.get(("", k), ()) if x.book_id in won}
+                        x.position_id for x in mine if x.kind == k and x.in_term and x.basis == "none"}
                     if pv and bare:
-                        partial.append(k)
+                        (no_pv if bare >= held else partial).append(k)
                         issues["derivatives_partial_pv"].append(
-                            f"{where} {ccy}: {KIND_TEXT[k]} ({len(bare)} из {len(held)} позиций без PV)")
+                            f"{where} {ccy}: {KIND_TEXT[k]} ("
+                            + ("PV нет ни у одной позиции" if bare >= held else
+                               f"{len(bare)} из {len(held)} позиций без PV") + ")")
+                in_pv |= {x.position_id for x in pv}
                 if pv:
                     items["derivatives"] += [{"kind": "position", "position_id": x.position_id, "book_id": x.book_id,
                                               "derivative": k, "component": x.component, "basis": x.basis,
                                               "last_flow": _iso(x.last_flow), "amount": x.amount,
                                               **({"note": "сделка после базы"} if k not in kinds else {})}
                                              for x in pv]
-                elif k in kinds and nominal.get(k) and not (k == "ndf" and not policy.include_ndf):
+                elif (k in kinds and nominal.get(k) and KIND_COMPONENT[k] in policy.report_components
+                      and k not in outside_kinds and not (k == "ndf" and not policy.include_ndf)):
                     items["derivatives"].append({"kind": "report_nominal", "derivative": k,
                                                  "component": KIND_COMPONENT[k], "set_id": sc["set_id"],
                                                  "book_id": sc["book_id"], "amount": nominal[k],
                                                  "marker": "номинал, PV нет"})
                     fallback.append(k)
                     issues["derivatives_nominal_fallback"].append(f"{where} {ccy}: {KIND_TEXT[k]}")
+            in_pv |= {x.position_id for x in mine if x.component not in policy.report_components}
             if day is not None and "bonds" in policy.report_components:
                 items["bonds"] += [{"kind": "position", "position_id": m.position_id, "book_id": m.book_id,
                                     "mv_base": m.mv_base, "mv_now": m.mv_now, "paid": m.paid, "amount": m.amount,
@@ -1284,7 +1307,7 @@ def published_day(comparisons: Sequence[Mapping[str, Any]], outside_report: Sequ
                                      "trade_date": t.trade_date, "amount": t.amount,
                                      **({"note": t.note} if t.note else {})}
                                     for t in day.trades or () if t.book_id in won and t.ccy == ccy and t.amount
-                                    and t.pv_kind is None]  # a derivative the positions hold: in their PV
+                                    and not (t.pv_kind and t.position_id in in_pv)]  # its position's whole PV is counted
             added: dict[str, float] = defaultdict(float)
             for b in sorted(won):
                 for x in by_bc.get((b, ccy), ()):
@@ -1301,7 +1324,7 @@ def published_day(comparisons: Sequence[Mapping[str, Any]], outside_report: Sequ
                  base_date=_iso(sc["valid_date"]),
                  set_id=sc["set_id"], base_kind=BASE_ABSENT if sc["absent"] else BASE_SPLIT if split else BASE_WHOLE,
                  parts=parts, contributions={p: _bounded(v) for p, v in items.items() if v}, fallback=fallback,
-                 split_kinds=sorted(sc["kinds"]) if not sc["absent"] else [], partial_pv=partial,
+                 split_kinds=sorted(sc["kinds"]) if not sc["absent"] else [], partial_pv=partial, no_pv=no_pv,
                  base_older=b0 is not None and business_days_between(b0, on, is_business_day) > 1)
     covered = {b for sc in scopes.values() for b in sc["books"]}
     for x in outside_report:
@@ -1322,8 +1345,9 @@ DAY_GAP_TEXT = {
                             "отчёт — полный срез юрлица, их база 0",
     "report_without_derivatives_split": "отчёт ОВП без разметки деривативов (адаптер до private/1.7): база держит "
                                         "будущие потоки деривативов по номиналу, их PV не добавлен",
-    "derivatives_partial_pv": "часть позиций вида без PV (нет условий сделки или ядро не оценило): их номинал в "
-                              "отчёте по позициям не делится, взят только PV оценённых — проверьте сверку номинала",
+    "derivatives_partial_pv": "позиции вида без PV (нет условий сделки или ядро не оценило; у части или у всех): их "
+                              "номинал в отчёте по позициям не делится, взята оценка по номиналу сделки — проверьте "
+                              "сверку номинала",
     "derivatives_unknown_last_flow": "у дериватива нет даты последнего потока: считается, что поток после базы есть",
     "derivatives_nominal_fallback": "PV дериватива нет (нет условий сделки или ядро не оценило): взят номинал "
                                     "из отчёта ОВП",
@@ -1351,7 +1375,7 @@ def derivatives_pv(derivs: Iterable[DerivLine], after: date) -> dict[tuple[str, 
     run reads as the PV on this run's date (``derivatives_check``)."""
     out: dict[tuple[str, str, str], float] = defaultdict(float)
     for d in derivs:
-        if d.ccy and (d.last_flow is None or d.last_flow > after):
+        if d.ccy and d.in_term and (d.last_flow is None or d.last_flow > after):
             out[(d.book_id, d.ccy, d.kind)] += d.amount
     return dict(out)
 
@@ -1389,14 +1413,17 @@ def derivatives_check(comparisons: Sequence[Mapping[str, Any]], derivs: Sequence
                 continue
             diff = n - pv if pv is not None else None
             # coverage now (the run's positions): how many of the kind have no PV (valued at a notional or not at all)
-            held = {d.position_id for d in derivs if d.kind == k and d.book_id in books_in and d.ccy in (c["ccy"], "")}
-            bare = {d.position_id for d in derivs if d.kind == k and d.book_id in books_in and d.ccy in (c["ccy"], "")
-                    and d.basis != "spot_equivalent"}
+            held = {d.position_id for d in derivs if d.kind == k and d.in_term and d.book_id in books_in
+                    and d.ccy in (c["ccy"], "")}
+            bare = {d.position_id for d in derivs if d.kind == k and d.in_term and d.book_id in books_in
+                    and d.ccy in (c["ccy"], "") and d.basis != "spot_equivalent"}
             out.append({"entity": c["entity"], "book_id": c.get("book_id"), "books": list(books_in), "ccy": c["ccy"],
                         "kind": k, "component": KIND_COMPONENT[k], "nominal": n, "pv": pv,
                         "pv_date": b0.isoformat() if b0 else None, "pv_source": src, "diff": diff,
                         "set_id": c.get("set_id"), "over": diff is not None and abs(diff) > policy.tolerance_ccy,
-                        "positions": len(held), "without_pv": len(bare), "partial": bool(bare) and len(bare) < len(held)})
+                        "positions": len(held), "without_pv": len(bare), "partial": bool(bare) and len(bare) < len(held),
+                        "no_pv": bool(held) and bare >= held,
+                        **({"note": "PV на базу неизвестен"} if pv is None else {})})
     return out
 
 

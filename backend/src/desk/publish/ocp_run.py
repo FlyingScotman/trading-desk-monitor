@@ -400,12 +400,15 @@ def bond_moves(rows: list[dict[str, Any]], before: Mapping[str, Mapping[str, Any
 
 def _pv_base(con: psycopg.Connection, run_id: int | None) -> dict[tuple[str, str, str], float] | None:
     """(book, currency, kind) -> the derivatives' PV on a stored run's date (its ``ocp`` block's ``derivatives_pv``,
-    v3; always the PV whatever ``amount_basis``); None without the run or for an older block."""
+    v3; always the PV whatever ``amount_basis``); None without the run, for an older block or for a run published on
+    another basis than ``report_base_plus_day`` (its ``derivatives_pv`` is empty: the check says the PV on B is
+    unknown, never a diff of the whole nominal)."""
     if run_id is None:
         return None
-    row = con.execute("SELECT data->'derivatives_pv' FROM run_reference WHERE run_id = %s AND kind = %s",
-                      (run_id, KIND)).fetchone()
-    if not row or not isinstance(row[0], list):
+    row = con.execute("SELECT data->'derivatives_pv', data->'published'->>'basis' FROM run_reference"
+                      " WHERE run_id = %s AND kind = %s", (run_id, KIND)).fetchone()
+    # a run published on another basis (the first base day after the switch) has no PV of its own: unknown, not 0
+    if not row or not isinstance(row[0], list) or row[1] != O.PublishedBasis.REPORT_BASE_PLUS_DAY.value:
         return None
     out: dict[tuple[str, str, str], float] = defaultdict(float)
     for x in row[0]:
@@ -437,7 +440,8 @@ def base_days(con: psycopg.Connection, on: date, known_at: Any, units: list[dict
         rid, facts, _ = funding_run._previous_rows(con, b0)
         moves = bond_moves(rows, {f["position_id"]: f for f in facts}, books, terms, b0, on,
                            O.current_trades(trade_rows, b0)) if rid else []
-        out[b0] = O.BaseDay(b0, rid, moves, None, [], _pv_base(con, rid), trade_rows if loaded else None)
+        out[b0] = O.BaseDay(b0, rid, moves, None, [], _pv_base(con, rid), trade_rows if loaded else None,
+                            base_positions={f["position_id"] for f in facts} if rid else None)
     return out
 
 
