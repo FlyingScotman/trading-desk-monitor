@@ -43,12 +43,12 @@ OUR_WHEELS = ("desk_backend", "rub_fixed_income_core")
 
 def third_party_wheels(manifest: dict[str, str]) -> list[str]:
     """Every wheel of ``manifest`` (paths of a bundle) that is not allowed: a release without packages holds wheels
-    only in two places. Ours (``OUR_WHEELS``) in ``wheelhouse/``, and the pip wheel of the bundled Python in
-    ``python/Lib/ensurepip/_bundled/`` (part of the runtime). Any other ``.whl`` is refused wherever it lies,
+    only in two places. Ours (``OUR_WHEELS``) in ``wheelhouse/``, and the pip and setuptools wheels of the bundled
+    Python in ``python/Lib/ensurepip/_bundled/`` (part of the runtime). Any other ``.whl`` is refused wherever it lies,
     also a foreign one in ``app/`` or ``wheelhouse/`` and even one of our own outside ``wheelhouse/``."""
     def allowed(rel: str) -> bool:
         if rel.startswith("python/Lib/ensurepip/_bundled/"):
-            return True
+            return rel.rsplit("/", 1)[-1].lower().startswith(("pip-", "setuptools-"))
         return rel.startswith("wheelhouse/") and rel.rsplit("/", 1)[-1].split("-")[0].lower() in OUR_WHEELS
 
     return sorted(rel for rel in manifest if rel.lower().endswith(".whl") and not allowed(rel))
