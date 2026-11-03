@@ -99,11 +99,11 @@
       return st.auto_check ? browserReport(st) : st;
     }).then(function (st) {
       var bar = document.querySelector('#desk-nav .dn-st');
-      if (!bar || !st || !st.update_available) return;
+      if (!bar || !st || !(st.update_available || st.manual_update)) return;
       if (navBox) navBox.remove();
       var settings = /settings\.html$/.test(location.pathname);
       navBox = el('a', { href: settings ? '#up' : root + 'settings.html#up', 'class': 'dn-upd',
-        title: 'Доступна версия ' + st.release.version + ' (установлена ' + st.current_version + '). Настройки → «Обновление программы»',
+        title: 'Доступна версия ' + st.release.version + ' (установлена ' + st.current_version + '). Настройки → «Обновление программы»' + (st.update_available ? '' : ': нужен ручной переход, шаги там'),
         style: 'color:var(--n-acc);border:1px solid var(--n-acc);border-radius:2px;padding:0 6px;white-space:nowrap' },
         'Новая версия ' + st.release.version.split('-')[0]);
       bar.insertBefore(navBox, bar.firstChild);
@@ -312,6 +312,13 @@
     return 'GitHub проверен ' + when(at) + ' (' + via + '): ' + what;
   }
 
+  function manualNote(ch) {
+    if (!ch || !ch.manual || !ch.reason) return [];
+    var out = [el('div', { 'class': 'note warn ug-manual', style: 'margin-top:8px;white-space:pre-line' }, ch.reason)];
+    if (ch.manual_url) out.push(el('div', { style: 'margin-top:4px' }, el('a', { href: ch.manual_url, target: '_blank', rel: 'noopener' }, 'Скачать со страницы релиза')));
+    return out;
+  }
+
   function render(st) {
     P.st = st;
     var b = P.box;
@@ -341,9 +348,13 @@
     }
     if (st.browser && st.browser.error && !(chk && chk.ok)) b.append(el('div', { 'class': 'err' }, st.browser.error));
 
+    // прежний полный комплект, а в релизе только «без пакетов»: переход вручную один раз — обычное состояние, не ошибка
+    manualNote(ch).forEach(function (n) { b.append(n); });
     var row = el('div', { 'class': 'row', style: 'margin-top:8px;gap:6px;flex-wrap:wrap' });
     var running = st.job && ACTIVE[st.job.state];
-    if (ch && ch.asset && ch.compare === 'newer') {
+    if (ch && ch.manual) {
+      // шаги выше
+    } else if (ch && ch.asset && ch.compare === 'newer') {
       row.append(act('Обновить до ' + rel.version.split('-')[0] + ' (' + (ch.asset.kind === 'patch' ? 'заплатка' : 'полный архив') + ', ' + mb(ch.asset.size) + ')',
         function () { install(false); }, true, !st.can_install || running, st.unavailable || null));
     } else if (ch && ch.needs_confirm && rel) {
@@ -386,6 +397,6 @@
   }
 
   function runMode(m) { if (m === 'panel') panel(); else nav(); }
-  window.DESK_UPDATER = { run: runMode, nav: nav, panel: panel, _test: { ghFetch: ghFetch, browserCheck: browserCheck, due: due, lastCheck: lastCheck } };
+  window.DESK_UPDATER = { run: runMode, nav: nav, panel: panel, _test: { ghFetch: ghFetch, browserCheck: browserCheck, due: due, lastCheck: lastCheck, manualNote: manualNote } };
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', function () { runMode(mode); }); else runMode(mode);
 })();
