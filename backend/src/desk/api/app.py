@@ -1016,6 +1016,7 @@ def create_app(store_url: str, static_dir: Path | None = None, app_dir: Path | N
     from .daystatus_routes import public as daystatus_router  # /api/v1/inbox, /inbox/days, /events (S7b, #25)
     from .diagnostics_routes import router as diagnostics_router
     from .market_history import router as market_history_router  # /api/v1/history/market, /status (R24)
+    from .replay_routes import router as replay_router  # /api/v1/inbox/replay: read a source again (TDM#553)
     from .server_routes import router as server_router  # /api/v1/server: restart, network (settings page)
     from .settings_routes import router as settings_router  # here: it imports ApiError from this module
     from .trades_routes import public as trades_router  # /api/v1/trades: the day's trades (S13a, TDM#525)
@@ -1031,6 +1032,7 @@ def create_app(store_url: str, static_dir: Path | None = None, app_dir: Path | N
     app.include_router(adapter_services_router, include_in_schema=False)
     app.include_router(diagnostics_router, include_in_schema=False)
     app.include_router(server_router, include_in_schema=False)
+    app.include_router(replay_router, include_in_schema=False)  # before daystatus: /inbox/replay is not a dataset
     app.include_router(daystatus_router, include_in_schema=False)
     app.include_router(cash_router, include_in_schema=False)
     app.include_router(trades_router, include_in_schema=False)

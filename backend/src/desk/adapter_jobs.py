@@ -261,6 +261,8 @@ def start_action(st: Settings, decl: dict, params: dict, store_url: str | None, 
             j.update(state="failed", error=str(e), error_code="bad_result")
             return
         files = res.pop("files")
+        if res.get("choices"):  # what the tab's file was when the adapter built them (a save checks it, TDM#554)
+            res["choices"]["file_sha256"] = choices_file_sha(st, h, res["choices"])
         j.update(result=res, files=[], written=False)
         if not res["ok"] or not (files or decl["output_dir"]):
             return  # nothing to write; ok false keeps the action's previous files
@@ -274,6 +276,27 @@ def start_action(st: Settings, decl: dict, params: dict, store_url: str | None, 
         j["scan"] = _scan(st, store_url, autopilot) if paths else None
 
     return _start(st.home, "action", f"action:{aid}", {"action": aid, "params": params}, work)
+
+
+def choices_file(st: Settings, h: Any, choices: dict) -> tuple[dict | None, Path | None]:
+    """(the settings tab, its file in the adapter's config folder) a ``choices`` result saves into; (None, None) for
+    a tab the adapter does not declare or no config folder."""
+    from .inbox.loader import check_settings_tabs
+
+    tab = next((t for t in check_settings_tabs(h.describe)[0] if t["id"] == choices["save"]["tab"]), None)
+    cfg = adapter_config_dir(st)
+    return (tab, cfg / tab["file"]) if tab and cfg else (None, None)
+
+
+def choices_file_sha(st: Settings, h: Any, choices: dict) -> str | None:
+    """The SHA-256 of the file ``choices`` saves into as it is now; None while it is missing."""
+    import hashlib
+
+    path = choices_file(st, h, choices)[1]
+    try:
+        return hashlib.sha256(path.read_text(encoding="utf-8-sig").encode("utf-8")).hexdigest() if path else None
+    except OSError:
+        return None
 
 
 def _scan(st: Settings, store_url: str | None, autopilot: Any) -> dict:

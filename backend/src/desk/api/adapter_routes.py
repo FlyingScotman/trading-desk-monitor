@@ -16,6 +16,15 @@ by hand.
   while an action runs.
 * ``GET /api/v1/adapter/actions/{id}``: its last job; the files written carry their inbox outcome (``inbox``) from
   the store.
+* ``GET /api/v1/adapter/choices/{kind}`` (TDM#554): the screen of a ``choices`` kind (``desk.inbox.tools.CHOICE_KINDS``):
+  the action that declares it, its last job's ``choices`` (rows, options, what to read again), whether the settings
+  file changed since the action built them (``stale``: the page runs the action again) and the replay job.
+* ``POST /api/v1/adapter/choices/{kind}`` ``{"values": {row key: option value | null}, "replay": true,
+  "base_sha256"?}``: writes the values into the settings tab's object the choices name (``save``: a value sets the
+  row's key, null removes it, and the row's ``replaces`` spellings go), as a form save of that tab (its schema checked,
+  a revision ``via`` form), then, with ``replay``, starts reading the source again (``desk.inbox_replay``, the period
+  the choices give). 409: no choices yet, or the file changed since ``base_sha256``; 422: a key or a value the choices
+  do not have, or the tab's schema refuses the file.
 
 The guard is the settings routes' (``settings_routes.local_only``: this computer while sign-in is off, else an admin;
 a write needs JSON). Nothing here imports adapter code: every call goes through ``desk.inbox.runner``.
@@ -23,15 +32,17 @@ a write needs JSON). Nothing here imports adapter code: every call goes through 
 
 from __future__ import annotations
 
+import json
+from datetime import date
 from typing import Annotated, Any
 
 from fastapi import APIRouter, Body, Depends, Request
 
-from .. import adapter_jobs, settings_forms
+from .. import adapter_jobs, inbox_replay, settings_forms
 from ..inbox import scan
 from ..settings import Settings, SettingsError, load
 from .app import ApiError
-from .settings_routes import local_only
+from .settings_routes import _blocking, _config_payload, _read, _sha, _write, local_only
 
 router = APIRouter(dependencies=[Depends(local_only)])
 # settings_forms' codes of a key outside ``additionalProperties: false``: warnings in a form, errors for an action
@@ -142,3 +153,107 @@ def run_action(action_id: str, body: JsonBody, request: Request) -> dict[str, An
         raise ApiError(409, "invalid_parameter", f"an action is running ({str(b).removeprefix('action:')}): "
                                                  "wait for its result") from None
     return get_action(action_id, request)
+
+
+# ---- choices (TDM#554): a screen of dropdowns over an action's result, saved into a settings tab ----------------------
+
+
+def _choice_action(st: Settings, kind: str) -> tuple[Any, dict]:
+    h = scan.adapter(st)
+    decl = next((a for a in h.actions if a.get("choices") == kind), None)
+    if decl is None:
+        raise ApiError(404, "not_found", f"the adapter has no action for {kind}: update the adapter")
+    return h, decl
+
+
+def _choices(st: Settings, decl: dict) -> tuple[dict | None, dict | None]:
+    j = adapter_jobs.job(st.home, f"action:{decl['id']}")
+    res = (j or {}).get("result") or {}
+    return j, res.get("choices")
+
+
+@router.get("/api/v1/adapter/choices/{kind}")
+def get_choices(kind: str) -> dict[str, Any]:
+    st = _settings()
+    h, decl = _choice_action(st, kind)
+    j, ch = _choices(st, decl)
+    now = adapter_jobs.choices_file_sha(st, h, ch) if ch else None
+    return {"action": decl, "running": adapter_jobs.running("action") == f"action:{decl['id']}",
+            "job": {k: v for k, v in (j or {}).items() if k != "result"} if j else None,
+            "ok": ((j or {}).get("result") or {}).get("ok"),
+            "summary": ((j or {}).get("result") or {}).get("summary") or [],
+            "choices": ch, "file_sha256": now, "stale": bool(ch) and now != ch.get("file_sha256"),
+            "replay": inbox_replay.job(st), "replay_running": inbox_replay.running()}
+
+
+def merge_choices(data: dict, choices: dict, values: dict) -> tuple[dict, int]:
+    """``data`` (the tab's file) with ``values`` written into its object ``choices["save"]["key"]`` (module doc) and
+    the number of entries changed. An object that is missing or not an object (a list form of an older adapter) is
+    started afresh."""
+    key = choices["save"]["key"]
+    obj = data.get(key)
+    obj = dict(obj) if isinstance(obj, dict) else {}
+    rows = {r["key"]: r for r in choices["rows"]}
+    before = dict(obj)
+    for k, v in values.items():
+        for old in rows[k]["replaces"]:
+            if old != k:
+                obj.pop(old, None)
+        if v is None:
+            obj.pop(k, None)
+        else:
+            obj[k] = v
+    changed = sum(1 for k in set(before) | set(obj) if before.get(k) != obj.get(k))
+    return {**data, key: obj}, changed
+
+
+@router.post("/api/v1/adapter/choices/{kind}")
+def save_choices(kind: str, body: JsonBody, request: Request) -> dict[str, Any]:
+    st = _settings()
+    h, decl = _choice_action(st, kind)
+    _j, ch = _choices(st, decl)
+    if not ch:
+        raise ApiError(409, "invalid_parameter", f"run «{decl['title']}» first: there is nothing to save yet")
+    values = body.get("values")
+    if not isinstance(values, dict):
+        raise ApiError(422, "invalid_parameter", "values must be an object row key -> option value")
+    rows = {r["key"] for r in ch["rows"]}
+    opts = [o["value"] for o in ch["options"]]
+    bad = [k for k, v in values.items() if k not in rows or v not in opts]
+    if bad:
+        raise ApiError(422, "invalid_parameter", f"{len(bad)} values are not rows or options of the choices",
+                       {"keys": bad[:20]})
+    tab, path = adapter_jobs.choices_file(st, h, ch)
+    if tab is None:
+        raise ApiError(409, "invalid_parameter", f"the adapter declares no settings tab {ch['save']['tab']} "
+                                                 "or no config folder is set")
+    text = _read(path)
+    base = body.get("base_sha256", ch.get("file_sha256"))
+    if base is not None and base != _sha(text):
+        raise ApiError(409, "invalid_parameter", f"{path.name} was changed meanwhile: the table is built again, "
+                                                 "repeat the choice")
+    try:
+        data = json.loads(text) if text is not None else {}
+    except ValueError:
+        raise ApiError(409, "invalid_parameter", f"{path.name} is not valid JSON: fix it on its tab first") from None
+    if not isinstance(data, dict):
+        raise ApiError(409, "invalid_parameter", f"{path.name} does not hold an object: fix it on its tab first")
+    data, changed = merge_choices(data, ch, values)
+    issues = settings_forms.check_schema(tab["schema"], data)
+    if any(_blocking(i) for i in issues):
+        raise ApiError(422, "invalid_parameter", f"{tab['file']}: the form has errors", {"issues": issues})
+    saved = _write(request, path, settings_forms.file_text(data), "form", tab["id"]) if changed else \
+        _config_payload(path.name, path)
+    replay: dict[str, Any] | None = None
+    if body.get("replay") is True and ch.get("replay"):
+        r = ch["replay"]
+        lo, hi = date.fromisoformat(r["from"]), date.fromisoformat(r["to"])
+        try:
+            inbox_replay.start(st, r["source"], lo, hi, getattr(request.app.state, "store_url", None),
+                               getattr(request.app.state, "autopilot", None), reason=f"сохранено: {decl['title']}")
+            replay = {"started": True, "source": r["source"], "from": r["from"], "to": r["to"]}
+        except adapter_jobs.Busy:
+            replay = {"started": False, "error": "a replay is running: start it again when it ends",
+                      "source": r["source"], "from": r["from"], "to": r["to"]}
+    return {"saved": saved, "changed": changed, "schema": issues, "replay": replay,
+            "replay_job": inbox_replay.job(st)}

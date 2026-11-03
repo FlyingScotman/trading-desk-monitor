@@ -19,6 +19,10 @@ Shapes (08 §3):
   replaces its previous files even with an empty list, one that does not only when it returns some. A file name is a plain name (no folder, at most
   ``MAX_NAME`` characters, none of ``BAD_NAME_CHARS``, not hidden), the texts together at most ``MAX_OUTPUT_BYTES``
   of UTF-8.
+* an action may declare ``"choices": "<kind>"`` (since 03.11.2026, TDM#554): its result may then carry ``choices``, a
+  table of rows the owner gives a value from a dropdown on a screen of the monitor (``CHOICE_KINDS``), saved into an
+  object of one of the adapter's settings tabs (``check_choices``). A broken ``choices`` is left out with a warning:
+  the action itself stands.
 """
 
 from __future__ import annotations
@@ -27,12 +31,18 @@ import os
 import re
 import shutil
 import uuid
+from datetime import date
 from pathlib import Path
 from typing import Any
 
 from desk.inbox.validate import _issue_ok
 
 ACTION_ID_RE = re.compile(r"^[a-z0-9_]{1,40}$")
+TAB_ID_RE = re.compile(r"^[a-z][a-z0-9_]{1,40}$")  # a settings tab's id (desk.inbox.loader.check_settings_tabs)
+CHOICE_KINDS = ("ocp_derivative_types",)
+"""The screens a ``choices`` result feeds: ``ocp_derivative_types`` — «ОВП: типы строк отчёта» (TDM#554), the report's
+row types and the derivative kind of each (contract private/1.7 ``derivatives_ccy``)."""
+MAX_CHOICE_ROWS, MAX_CHILDREN, MAX_OPTIONS, MAX_CHOICE_COLUMNS = 2000, 200, 50, 20
 LEVELS = ("ok", "info", "warning", "error")
 MAX_PANELS, MAX_LINES, MAX_TEXT = 50, 200, 2000          # panels, lines per panel or summary, characters per line
 MAX_COLUMNS, MAX_ROWS = 50, 5000                           # of a table
@@ -75,10 +85,14 @@ def check_actions(desc: object, has_run_action: bool) -> tuple[list[dict], list[
         for key, want in (("title", str), ("description", str), ("output_dir", bool)):
             if a.get(key) is not None and not isinstance(a[key], want):
                 warnings.append(f"actions[{i}]: {key} must be {want.__name__}")
+        choices = a.get("choices")
+        if choices is not None and choices not in CHOICE_KINDS:
+            warnings.append(f"actions[{i}]: choices must be one of {', '.join(CHOICE_KINDS)}, ignored")
+            choices = None
         out.append({"id": aid, "title": a["title"] if isinstance(a.get("title"), str) else aid,
                     "description": a["description"] if isinstance(a.get("description"), str) else "",
                     "params": params or {"type": "object", "properties": {}},
-                    "output_dir": a.get("output_dir") is True})
+                    "output_dir": a.get("output_dir") is True, "choices": choices})
     return out, warnings
 
 
@@ -199,9 +213,133 @@ def check_action_result(result: Any, decl: dict) -> dict:
     if total > MAX_OUTPUT_BYTES:
         raise BadResult(f"files: more than {MAX_OUTPUT_BYTES // 1024 // 1024} MB together")
     warnings: list[str] = []
+    choices = None
+    if result.get("choices") is not None:
+        if decl.get("choices") is None:
+            warnings.append("choices: the action does not declare choices, ignored")
+        else:
+            try:
+                choices = check_choices(result["choices"], decl["choices"])
+            except BadResult as e:
+                warnings.append(f"{e}; choices ignored")
     return {"ok": result["ok"], "summary": _lines(result.get("summary"), "summary"),
             "table": check_table(result.get("table")), "issues": _issues(result.get("issues")),
-            "files": [{"name": f["name"], "text": f["text"]} for f in files], "warnings": warnings}
+            "files": [{"name": f["name"], "text": f["text"]} for f in files], "warnings": warnings,
+            **({"choices": choices} if choices is not None else {})}
+
+
+def _cells(v: Any, cols: set[str], where: str) -> dict:
+    if v is None:
+        return {}
+    if not isinstance(v, dict):
+        raise BadResult(f"{where}: an object column -> value")
+    out = {}
+    for k, c in v.items():
+        if k not in cols:
+            raise BadResult(f"{where}.{k}: not a column")
+        if c is not None and (isinstance(c, bool) or not isinstance(c, (str, int, float))):
+            raise BadResult(f"{where}.{k}: a string, a number or null")
+        out[k] = c[:MAX_TEXT] if isinstance(c, str) else c
+    return out
+
+
+def _opt_text(v: Any, where: str) -> str | None:
+    return None if v is None else _text(v, where)
+
+
+def check_choices(c: Any, kind: str) -> dict:
+    """The ``choices`` of an action's result (module doc) as the screen gets it, or ``BadResult``::
+
+        {"kind": <the action's declared kind>, "title"?: str,
+         "save": {"tab": <settings tab id>, "key": <a top-level key of its file: an object label -> value>},
+         "options": [{"value": str | null, "title": str}],        # the dropdown; null: remove the label's entry
+         "columns": [{"id": str, "title": str}],                   # what each row shows besides its label
+         "rows": [{"key": str, "label": str, "value": <an option value>, "suggested"?: <an option value>,
+                   "hint"?: str, "new"?: bool, "future"?: int >= 0, "cells"?: {column: str | number | null},
+                   "replaces"?: [str],                             # other spellings of the key in the file, removed
+                   "children"?: [{"label": str, "cells"?: {...}}]}],
+         "risky_unset"?: [<option values>],   # a row left at null whose suggested value is one of these, or is chosen
+                                              # on another row, while it has future lines: a warning on the screen
+         "replay"?: {"source": str, "from": date, "to": date},    # what to read again after a save
+         "notes"?: [str]}
+
+    Texts are bounded as the rest; labels are the adapter's own texts, shown on the local page only."""
+    if not isinstance(c, dict):
+        raise BadResult("choices: must be an object")
+    if c.get("kind") != kind:
+        raise BadResult(f"choices.kind: must be the declared {kind}")
+    save = c.get("save")
+    if not (isinstance(save, dict) and isinstance(save.get("tab"), str) and TAB_ID_RE.match(save["tab"])
+            and isinstance(save.get("key"), str) and save["key"].strip() and not save["key"].startswith("_")):
+        raise BadResult("choices.save: {tab: a settings tab id, key: a top-level key of its file}")
+    opts = c.get("options")
+    if not isinstance(opts, list) or not 1 <= len(opts) <= MAX_OPTIONS:
+        raise BadResult(f"choices.options: 1 to {MAX_OPTIONS} {{value, title}}")
+    options, values = [], []
+    for i, o in enumerate(opts):
+        if not isinstance(o, dict) or not (o.get("value") is None or isinstance(o.get("value"), str)):
+            raise BadResult(f"choices.options[{i}]: {{value: a string or null, title}}")
+        if o.get("value") in values:
+            raise BadResult(f"choices.options[{i}]: the value repeats")
+        values.append(o.get("value"))
+        options.append({"value": o.get("value"), "title": _text(o.get("title"), f"choices.options[{i}].title")})
+    cols_in = c.get("columns") or []
+    if not isinstance(cols_in, list) or len(cols_in) > MAX_CHOICE_COLUMNS:
+        raise BadResult(f"choices.columns: at most {MAX_CHOICE_COLUMNS} {{id, title}}")
+    columns = [{"id": _text(x.get("id") if isinstance(x, dict) else None, f"choices.columns[{i}].id"),
+                "title": _text(x.get("title") if isinstance(x, dict) else None, f"choices.columns[{i}].title")}
+               for i, x in enumerate(cols_in)]
+    col_ids = {x["id"] for x in columns}
+    rows_in = c.get("rows")
+    if not isinstance(rows_in, list) or len(rows_in) > MAX_CHOICE_ROWS:
+        raise BadResult(f"choices.rows: a list of at most {MAX_CHOICE_ROWS}")
+    rows, keys = [], set()
+    for i, r in enumerate(rows_in):
+        w = f"choices.rows[{i}]"
+        if not isinstance(r, dict):
+            raise BadResult(f"{w}: must be an object")
+        key = _text(r.get("key"), f"{w}.key")
+        if not key.strip() or key.startswith("_") or key in keys:
+            raise BadResult(f"{w}.key: non-empty, not starting with _, unique")
+        keys.add(key)
+        if r.get("value") not in values or r.get("suggested") not in values:
+            raise BadResult(f"{w}: value and suggested are option values")
+        fut = r.get("future", 0)
+        if isinstance(fut, bool) or not isinstance(fut, int) or fut < 0:
+            raise BadResult(f"{w}.future: an integer, 0 or more")
+        rep = r.get("replaces") or []
+        if not isinstance(rep, list) or not all(isinstance(x, str) and x for x in rep):
+            raise BadResult(f"{w}.replaces: a list of keys")
+        kids = r.get("children") or []
+        if not isinstance(kids, list):
+            raise BadResult(f"{w}.children: a list")
+        rows.append({"key": key, "label": _text(r.get("label", key), f"{w}.label"), "value": r.get("value"),
+                     "suggested": r.get("suggested"), "hint": _opt_text(r.get("hint"), f"{w}.hint"),
+                     "new": r.get("new") is True, "future": fut, "cells": _cells(r.get("cells"), col_ids, f"{w}.cells"),
+                     "replaces": [x[:MAX_TEXT] for x in rep[:20]],
+                     "children": [{"label": _text(k.get("label") if isinstance(k, dict) else None,
+                                                  f"{w}.children[{j}].label"),
+                                   "cells": _cells(k.get("cells"), col_ids, f"{w}.children[{j}].cells")}
+                                  for j, k in enumerate(kids[:MAX_CHILDREN])],
+                     "children_more": max(0, len(kids) - MAX_CHILDREN)})
+    risky = c.get("risky_unset") or []
+    if not isinstance(risky, list) or any(x not in values or x is None for x in risky):
+        raise BadResult("choices.risky_unset: option values")
+    replay = c.get("replay")
+    if replay is not None:
+        try:
+            if not isinstance(replay, dict) or not isinstance(replay.get("source"), str) or not replay["source"]:
+                raise ValueError
+            lo, hi = (date.fromisoformat(replay[k]) for k in ("from", "to"))
+            if lo > hi:
+                raise ValueError
+        except (KeyError, TypeError, ValueError):
+            raise BadResult("choices.replay: {source, from, to} with from <= to") from None
+        replay = {"source": replay["source"], "from": lo.isoformat(), "to": hi.isoformat()}
+    return {"kind": kind, "title": _opt_text(c.get("title"), "choices.title"), "save": {"tab": save["tab"],
+            "key": save["key"]}, "options": options, "columns": columns, "rows": rows, "risky_unset": list(risky),
+            "replay": replay, "notes": _lines(c.get("notes"), "choices.notes"),
+            "truncated": len(rows_in) > MAX_CHOICE_ROWS}
 
 
 # ---- the output folder -------------------------------------------------------------------------------------------
