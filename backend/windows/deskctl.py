@@ -1,17 +1,34 @@
 """Desk Monitor launcher of the Windows bundle: stdlib only, run by the bundled Python (``-I``).
 
-    python\\python.exe -I app\\deskctl.py start [--port N]  install if needed, desk serve, open the browser
+    python\\python.exe -I app\\deskctl.py start [--port N] [--strict-mirror]  install if needed, desk serve, open the browser
     python\\python.exe -I app\\deskctl.py stop               stop this bundle's desk processes and the embedded store
     python\\python.exe -I app\\deskctl.py cycle [args]       install if needed, then desk cycle (hub, inbox, EOD)
     python\\python.exe -I app\\deskctl.py desk [args]        install if needed, then any desk command
+    (``--strict-mirror`` in start / cycle / desk / reinstall: the "no packages" bundle installs exactly the lock versions)
     python\\python.exe -I app\\deskctl.py firewall add|remove|show [--port N]   the Windows firewall rule for colleagues
                                                           (also: desk.bat firewall add, as administrator)
 
 The bundle folder (``DeskMonitor\\``, anywhere): ``python\\`` the runtime, ``wheelhouse\\`` every wheel and
-``requirements.txt``, ``app\\`` this file, the prototypes and the built frontend, ``adapter\\`` the private adapter
-when the build had one, ``VERSION``. The venv ``env\\`` is made from the runtime and the wheelhouse, offline,
-whenever ``env\\desk-bundle.json`` does not name this version and this folder (a venv cannot move); when only some
-wheels changed, just those are reinstalled. Data and settings live in DESK_HOME (default
+``requirements.txt``, ``app\\`` this file and ``mirror_install.py``, the prototypes and the built frontend,
+``adapter\\`` the private adapter when the build had one, ``VERSION``. The venv ``env\\`` is made from the runtime
+and the wheelhouse whenever ``env\\desk-bundle.json`` does not name this version and this folder (a venv cannot
+move); when only some wheels changed, just those are reinstalled.
+
+Two kinds of bundle, told apart by ``wheelhouse\\mirror.json``. The full one (no such file) holds every wheel and is
+installed offline. The "no packages" one (``kind`` "mirror") holds only our own wheels, ``requirements.txt`` and
+``mirror.json``; its third-party packages come from the pip index of this machine (an internal mirror: pip.ini,
+PIP_INDEX_URL, ... as pip is configured here) through ``app\\mirror_install.py``, which writes its journals to
+``<DESK_HOME>\\logs\\`` and keeps the downloaded wheels in ``<DESK_HOME>\\cache\\mirror-wheels\\``. Its settings are
+``mirror.ini`` (section ``[mirror]``: ``index_url``, ``extra_index_url``, ``strict``), the first found of the bundle
+folder and DESK_HOME; ``--strict-mirror`` forces the strict mode over the file. Only the installer's pip runs with the
+machine's pip settings (``pip_environ``: pip.ini and PIP_* stay, except the variables that break an install into a
+venv, see ``PIP_BREAKING``); every other process of desk keeps ``PIP_CONFIG_FILE`` empty. A new ``env\\`` of that
+kind is made atomically: the old one is renamed to ``env.old\\``, the new is built as ``env\\``, and ``env.old\\`` is
+deleted once the installer, ``import desk.api`` and ``desk db-migrate`` succeeded; on a failure the new ``env\\`` is
+deleted and ``env.old\\`` is put back. A start that finds ``env.old\\`` (the last run was cut off) deletes the
+unfinished ``env\\`` and puts ``env.old\\`` back when ``env\\`` has no complete marker, else just deletes
+``env.old\\``. ``env\\desk-bundle.json`` also holds ``kind`` and the SHA-256 of ``mirror.json``; a marker without
+``kind`` is a full one. Data and settings live in DESK_HOME (default
 ``%LOCALAPPDATA%\\DeskMonitor``, or ``C:\\DeskMonitorData`` when that path is not plain ASCII, see ``default_home``),
 outside the bundle, so they survive updates.
 The .bat files only find a Python and call this; the logic is here, away from cmd.exe quoting.
@@ -46,6 +63,7 @@ outcome for the page.
 
 from __future__ import annotations
 
+import dataclasses
 import hashlib
 import http.client
 import json
@@ -72,6 +90,40 @@ WIN = os.name == "nt"  # elsewhere only to test the launcher
 SCRIPTS = ENV / ("Scripts" if WIN else "bin")
 EXE = ".exe" if WIN else ""
 MARKER = ENV / "desk-bundle.json"
+# Machine-wide PIP_* variables that would break an install into the bundle's venv (the installer's pip keeps all the
+# others: index, extra index, cert, proxy, trusted host, cache, ...): a user / target / prefix / root install, a
+# virtualenv requirement, no index at all, ignoring or skipping dependencies, another interpreter or platform
+# than the venv's, a source / binary policy that contradicts the installer's own --only-binary. Also: PIP_QUIET (at
+# a lower verbosity ``pip index versions`` prints nothing, and the installer would read it as "no versions"),
+# PIP_REQUIRE_HASHES (every requirement of the installer's resolver runs would need a hash), PIP_PRE (pre-releases
+# the lock does not hold would enter the candidates) and PIP_ISOLATED_MODE (it ignores the machine's pip.ini and
+# PIP_* variables, that is, the very index configuration the installer exists to use).
+PIP_BREAKING = frozenset({
+    "PIP_USER", "PIP_TARGET", "PIP_PREFIX", "PIP_ROOT", "PIP_REQUIRE_VIRTUALENV", "PIP_PYTHON", "PIP_NO_INDEX",
+    "PIP_NO_DEPS", "PIP_IGNORE_INSTALLED", "PIP_PLATFORM", "PIP_ABI", "PIP_IMPLEMENTATION", "PIP_PYTHON_VERSION",
+    "PIP_NO_BINARY", "PIP_ONLY_BINARY", "PIP_DRY_RUN", "PIP_REPORT", "PIP_REQUIREMENT", "PIP_CONSTRAINT",
+    "PIP_EDITABLE", "PIP_SRC", "PIP_BREAK_SYSTEM_PACKAGES", "PIP_FORCE_REINSTALL", "PIP_UPGRADE",
+    "PIP_QUIET", "PIP_REQUIRE_HASHES", "PIP_PRE", "PIP_ISOLATED_MODE"})
+RENAME_TRIES = 5
+RENAME_PAUSE_S = 1.0
+
+
+def _pause(seconds: float) -> None:
+    time.sleep(seconds)  # a function of its own: the tests replace it
+
+
+def rename_retry(src: Path, dst: Path) -> None:
+    """``src.rename(dst)`` with up to ``RENAME_TRIES`` attempts, ``RENAME_PAUSE_S`` apart, on OSError: on Windows an
+    antivirus or the search indexer holds freshly written files for a moment and the rename of their folder fails."""
+    for attempt in range(1, RENAME_TRIES + 1):
+        try:
+            src.rename(dst)
+            return
+        except OSError:
+            if attempt == RENAME_TRIES:
+                raise
+            _pause(RENAME_PAUSE_S)
+STRICT_MIRROR = False  # --strict-mirror of this run
 # exit codes of a server that was stopped, not failed: Ctrl+C (ours, STATUS_CONTROL_C_EXIT), stop.bat (15)
 STOPPED = (0, 130, 15, -15, 0xC000013A, -1073741510)
 # desk serve's exit code asking for a restart, an update staged or not (desk.update reads DESK_RESTART_CODE)
@@ -100,6 +152,19 @@ def version() -> str:
         return (ROOT / "VERSION").read_text(encoding="utf-8").strip()
     except OSError:
         return "unknown"
+
+
+def bundle_kind() -> str:
+    """``mirror`` (the "no packages" bundle: ``wheelhouse\\mirror.json`` exists) or ``full``."""
+    return "mirror" if (WHEELHOUSE / "mirror.json").is_file() else "full"
+
+
+def take_strict(args: list[str]) -> list[str]:
+    """Remove ``--strict-mirror`` from the arguments (it is the launcher's, not desk's) and remember it."""
+    global STRICT_MIRROR
+    if "--strict-mirror" in args:
+        STRICT_MIRROR = True
+    return [a for a in args if a != "--strict-mirror"]
 
 
 def adapter_package() -> Path | None:
@@ -138,12 +203,50 @@ def desk_environ() -> dict[str, str]:
         env.setdefault("DESK_DEFAULT_PRIVATE_ADAPTER", str(pkg))
     if (home / "desk.env").is_file():
         env.setdefault("DESK_ENV_FILE", str(home / "desk.env"))
+    env["DESK_BUNDLE_KIND"] = bundle_kind()  # desk.update / desk.updater pick the update of the same kind
     env["PYTHONUTF8"] = "1"
     env["PYTHONUNBUFFERED"] = "1"
     env["PIP_DISABLE_PIP_VERSION_CHECK"] = "1"
     env["PIP_CONFIG_FILE"] = os.devnull  # no pip.ini of this machine: the install is offline
     env["PIP_NO_INPUT"] = "1"
     return env
+
+
+def pip_environ(env: dict[str, str]) -> dict[str, str]:
+    """The environment of the installer's pip: ``env`` without the empty pip config (``PIP_CONFIG_FILE=devnull``),
+    with this machine's PIP_* from ``os.environ`` (index, certificate, proxy, ...) except ``PIP_BREAKING``."""
+    out = dict(env)
+    if out.get("PIP_CONFIG_FILE") == os.devnull:
+        del out["PIP_CONFIG_FILE"]
+    for k, v in os.environ.items():
+        if k.upper().startswith("PIP_") and k.upper() not in PIP_BREAKING:
+            out[k] = v
+    for k in [k for k in out if k.upper() in PIP_BREAKING]:
+        del out[k]
+    out["PIP_DISABLE_PIP_VERSION_CHECK"] = "1"
+    out["PIP_NO_INPUT"] = "1"
+    return out
+
+
+def load_mirror():
+    """``mirror_install.py`` from the folder of this file (``app\\``; the checkout's backend/windows in tests). Loaded
+    by path: this launcher runs with ``-I``, so its folder is not on ``sys.path``."""
+    import importlib.util
+    mod = sys.modules.get("mirror_install")
+    if mod is not None and getattr(mod, "__file__", None):
+        return mod
+    path = Path(__file__).resolve().parent / "mirror_install.py"
+    spec = importlib.util.spec_from_file_location("mirror_install", path)
+    if spec is None or spec.loader is None or not path.is_file():
+        raise Fail(f"Не найден установщик пакетов {path}. Распакуйте комплект заново.")
+    mod = importlib.util.module_from_spec(spec)
+    sys.modules["mirror_install"] = mod
+    try:
+        spec.loader.exec_module(mod)
+    except Exception:
+        sys.modules.pop("mirror_install", None)
+        raise
+    return mod
 
 
 def home_dir(env: dict[str, str]) -> Path:
@@ -361,29 +464,177 @@ def sha256(p: Path) -> str:
 
 
 def env_marker() -> dict:
-    """What ``env\\`` is made of: the version and folder it belongs to, the runtime, requirements.txt, each wheel."""
+    """What ``env\\`` is made of: the version and folder it belongs to, the runtime, requirements.txt, the kind of bundle
+    (and the SHA-256 of mirror.json), each wheel."""
     req = WHEELHOUSE / "requirements.txt"
     return {"version": version(), "root": str(ROOT), "python": f"{sys.executable} {sys.version}",
             "requirements": sha256(req) if req.is_file() else None,
+            "kind": bundle_kind(), "mirror": sha256(WHEELHOUSE / "mirror.json") if bundle_kind() == "mirror" else None,
             "wheels": {p.name: sha256(p) for p in sorted(WHEELHOUSE.glob("*.whl"))}}
 
 
 def changed_wheels(have: object, want: dict) -> list[str] | None:
     """The wheels to reinstall (``--no-deps``) into the venv ``have`` describes when only their bytes changed: the
-    same folder, runtime, requirements.txt and wheel names (requirements.txt pins every package, so the same pins
-    and names mean the same set of packages); None when the venv must be made anew."""
+    same folder, runtime, requirements.txt, kind of bundle, mirror.json and wheel names (requirements.txt pins every
+    package, so the same pins and names mean the same set of packages); None when the venv must be made anew. A marker
+    without ``kind`` is a full bundle's (made before the "no packages" kind existed)."""
     if not isinstance(have, dict) or not isinstance(have.get("wheels"), dict):
         return None
     if any(have.get(k) != want[k] for k in ("root", "python", "requirements")) or set(have["wheels"]) != set(want["wheels"]):
         return None
+    if have.get("kind", "full") != want["kind"] or have.get("mirror") != want["mirror"]:
+        return None
     return [name for name, digest in want["wheels"].items() if have["wheels"][name] != digest]
+
+
+def env_old() -> Path:
+    """``env.old\\``: the previous venv while a new one is built (mirror bundle), next to ``env\\``."""
+    return ENV.with_name(ENV.name + ".old")
+
+
+def env_complete() -> bool:
+    """``env\\`` has a complete marker: it was written last, after the install and the migration succeeded."""
+    try:
+        have = json.loads(MARKER.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return False
+    return isinstance(have, dict) and "version" in have and "root" in have and desk_exe().is_file()
+
+
+def settle_env_old(env: dict[str, str]) -> None:
+    """A start that finds ``env.old\\`` (the last install was cut off, or its cleanup failed): with a complete
+    ``env\\`` just delete ``env.old\\``; otherwise delete the unfinished ``env\\`` and put ``env.old\\`` back."""
+    old = env_old()
+    if not old.exists():
+        return
+    if env_complete():
+        try:
+            _rmtree(old)
+        except OSError as e:
+            say(f"Предупреждение: не удалось удалить остатки прошлой установки {old}: {e}. Удалите папку вручную.")
+        return
+    if bundle_processes()[0]:
+        raise Fail("Desk Monitor из этой папки ещё работает. Закройте его окно (или запустите stop.bat) "
+                   "и запустите снова.")
+    say(f"Прошлая установка не закончилась: возвращаю прежнее окружение из {old} ...")
+    if ENV.exists():
+        stop_store(env)
+        try:
+            _rmtree(ENV)
+        except OSError as e:
+            raise Fail(f"Не удалось удалить недостроенное окружение {ENV}: {e}\n"
+                       "Закройте окна Desk Monitor и программы, открывшие файлы в этой папке, и повторите.") from e
+    try:
+        rename_retry(old, ENV)
+    except OSError as e:
+        raise Fail(f"Не удалось вернуть прежнее окружение {old} -> {ENV}: {e}") from e
+
+
+def mirror_settings(env: dict[str, str]):
+    """``mirror.ini`` of the bundle folder or DESK_HOME (the first found), ``--strict-mirror`` on top."""
+    mi = load_mirror()
+    try:
+        settings = mi.load_settings(ROOT / "mirror.ini", Path(env["DESK_HOME"]) / "mirror.ini")
+    except mi.InstallError as e:
+        raise Fail(str(e)) from e
+    if STRICT_MIRROR and not settings.strict:
+        settings = dataclasses.replace(settings, strict=True)
+    return settings
+
+
+def install_mirror(env: dict[str, str], marker: dict) -> None:
+    """A new ``env\\`` of the "no packages" bundle, atomically: the old ``env\\`` becomes ``env.old\\``; on a failure
+    the new one is deleted and ``env.old\\`` comes back."""
+    home = Path(env["DESK_HOME"])
+    logs = home / "logs"
+    old = env_old()
+    mi = load_mirror()
+    settings = mirror_settings(env)
+    say(f"Устанавливаю Desk Monitor {marker['version']} в {ENV}")
+    say("  (один раз после распаковки или обновления; ставлю пакеты с зеркала pip этой машины, "
+        "1-5 минут)" + ("; строгий режим: только проверенные версии" if settings.strict else "") + " ...")
+    had = ENV.exists()
+    if had:
+        stop_store(env)
+        legacy = ENV / ".devdata"
+        if legacy.is_dir():  # data of a build before DESK_HOME: keep it, never delete
+            keep = home / f"legacy-devdata-{datetime.now():%Y%m%d-%H%M%S}"
+            keep.parent.mkdir(parents=True, exist_ok=True)
+            shutil.move(str(legacy), str(keep))
+            say(f"  старые данные из env\\.devdata перенесены в {keep}")
+        try:
+            if old.exists():
+                _rmtree(old)
+            rename_retry(ENV, old)
+        except OSError as e:
+            raise Fail(f"Не удалось убрать прежнее окружение {ENV}: {e}\n"
+                       "Закройте окна Desk Monitor и программы, открывшие файлы в этой папке, и повторите.") from e
+    try:
+        base = Path(sys.executable)
+        r = subprocess.run([str(base), "-I", "-m", "venv", str(ENV)], env=env, check=False)
+        py = SCRIPTS / f"python{EXE}"
+        if r.returncode or not py.is_file():
+            raise Fail(f"Не удалось создать окружение Python в {ENV} ({base}).")
+        cache = home / "cache" / "mirror-wheels"
+        cache.mkdir(parents=True, exist_ok=True)
+        logs.mkdir(parents=True, exist_ok=True)
+        try:
+            mi.install(python=py, wheelhouse=WHEELHOUSE, log_dir=logs, settings=settings, pip_env=pip_environ(env),
+                       cache=cache, say=say)
+        except mi.InstallError as e:
+            raise Fail(f"Пакеты не установлены: {e}") from e
+        if not desk_exe().is_file():
+            raise Fail("После установки пакетов нет команды desk.")
+        r = subprocess.run([str(py), "-c", "import desk.api"], env=env, capture_output=True, text=True, check=False)
+        if r.returncode:
+            raise Fail(f"Установленный пакет desk не импортируется:\n{r.stderr}")
+        migrate_store(env)
+        MARKER.write_text(json.dumps(marker, ensure_ascii=False), encoding="utf-8")  # last: the env is complete
+    except BaseException as e:
+        restored = _undo_mirror(env, had)
+        if isinstance(e, Fail):
+            back = ("" if not had else " Прежнее окружение возвращено." if restored else
+                    " Прежнее окружение не удалось вернуть сейчас; его вернёт следующий запуск start.bat.")
+            raise Fail(f"{e}\nНовое окружение не собрано.{back} Журналы установки: {logs}") from e
+        if isinstance(e, Exception):
+            raise Fail(f"Установка не удалась: {type(e).__name__}: {e}\nЖурналы установки: {logs}") from e
+        raise
+    if old.exists():
+        try:
+            _rmtree(old)
+        except OSError as e:
+            say(f"Предупреждение: не удалось удалить прежнее окружение {old}: {e}. "
+                "Его уберёт следующий запуск или удалите папку вручную.")
+    say("Установка завершена.")
+
+
+def _undo_mirror(env: dict[str, str], had: bool) -> bool:
+    """Delete the unfinished new ``env\\`` and put ``env.old\\`` back (if it exists). True when the previous
+    environment is back (or there was none to bring back), False when that failed: the next start does it."""
+    old = env_old()
+    try:
+        stop_store(env)
+    except OSError as e:  # best effort: the new venv may be half made
+        say(f"Не удалось остановить встроенный PostgreSQL: {e}")
+    try:
+        if ENV.exists():
+            _rmtree(ENV)
+        if had and old.exists():
+            rename_retry(old, ENV)
+    except OSError as e:
+        say(f"Не удалось вернуть прежнее окружение ({e}). Закройте окна Desk Monitor и запустите start.bat ещё раз: "
+            f"он вернёт {old} сам.")
+        return False
+    return True
 
 
 def ensure_env(env: dict[str, str], *, force: bool = False) -> None:
     """Create ``env\\`` from the bundled runtime and the wheelhouse unless it already belongs to this bundle; when only
-    some wheels changed (a new desk build), reinstall just those."""
+    some wheels changed (a new desk build), reinstall just those. The "no packages" bundle (``mirror.json``) takes its
+    third-party packages from the pip index of this machine (``install_mirror``, atomic with ``env.old\\``)."""
     apply_patch_delete()
     check_paths(env)
+    settle_env_old(env)
     want = {"version": version(), "root": str(ROOT)}
     try:
         have = json.loads(MARKER.read_text(encoding="utf-8"))
@@ -402,6 +653,9 @@ def ensure_env(env: dict[str, str], *, force: bool = False) -> None:
         MARKER.write_text(json.dumps(marker, ensure_ascii=False), encoding="utf-8")
         migrate_store(env)
         say("Окружение обновлено.")
+        return
+    if marker["kind"] == "mirror":
+        install_mirror(env, marker)
         return
     say(f"Устанавливаю Desk Monitor {want['version']} в {ENV}")
     say("  (один раз после распаковки или обновления, без интернета, 1-3 минуты) ...")
@@ -849,7 +1103,8 @@ def hot_update(env: dict[str, str], args: list[str]) -> int | None:
         return None
     update_log(env, f"Файлы обновлены; запускаю Desk Monitor {target} ...")
     child_env = {**os.environ, "DESK_LAUNCHER_PIDS": ",".join(map(str, sorted(_launchers())))}
-    rc = run_child([sys.executable, "-I", "-X", "utf8", str(APP / "deskctl.py"), "start", "--verify-update", *args],
+    rc = run_child([sys.executable, "-I", "-X", "utf8", str(APP / "deskctl.py"), "start", "--verify-update", *args,
+                    *(["--strict-mirror"] if STRICT_MIRROR else [])],
                    child_env)
     if not (upd / "applying.json").exists():
         return rc  # the new version answered and ran until it was stopped
@@ -868,7 +1123,7 @@ def hot_update(env: dict[str, str], args: list[str]) -> int | None:
 
 def cmd_start(args: list[str]) -> int:
     verify = "--verify-update" in args  # the new launcher of a hot update: confirm once the server answers
-    args = [a for a in args if a != "--verify-update"]
+    args = take_strict([a for a in args if a != "--verify-update"])
     env = desk_environ()
     home = home_dir(env)
     addr = serve_settings(env, home)  # bind_host, port, tls of the settings (desk serve reads the same)
@@ -1136,6 +1391,7 @@ def cmd_stop(_args: list[str]) -> int:
 
 
 def cmd_cycle(args: list[str]) -> int:
+    args = take_strict(args)
     env = desk_environ()
     home = home_dir(env)
     ensure_env(env)
@@ -1148,6 +1404,7 @@ def cmd_cycle(args: list[str]) -> int:
 def cmd_desk(args: list[str]) -> int:
     if args[:1] == ["firewall"]:  # desk.bat firewall add: the launcher's, not a desk command
         return cmd_firewall(args[1:])
+    args = take_strict(args)
     env = desk_environ()
     home_dir(env)
     ensure_env(env)
@@ -1156,7 +1413,7 @@ def cmd_desk(args: list[str]) -> int:
 
 def main(argv: list[str]) -> int:
     cmds = {"start": cmd_start, "stop": cmd_stop, "cycle": cmd_cycle, "desk": cmd_desk, "firewall": cmd_firewall,
-            "reinstall": lambda a: ensure_env(desk_environ(), force=True) or 0}
+            "reinstall": lambda a: (take_strict(a), ensure_env(desk_environ(), force=True))[1] or 0}
     if not argv or argv[0] not in cmds:
         say(__doc__.split("\n\n")[1])
         return 2
