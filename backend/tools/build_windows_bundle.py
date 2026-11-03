@@ -37,7 +37,10 @@ the lock's versions and who requires what by which specifier, markers evaluated 
 win_amd64, extras included) that ``app/mirror_install.py`` fetches from the machine's pip index at the first start
 (``mirror.json``'s presence is what makes a bundle a mirror one). Before packing, ``check_mirror`` proves that
 ``mirror.json`` and our wheels cover ``requirements.txt`` exactly, that every module of ``imports`` is in a wheel, and
-that the lock's own versions satisfy every ``requires`` of the others. The full bundle is unchanged, byte for byte,
+that the lock's own versions satisfy every ``requires`` of the others. Each third-party package of ``mirror.json``
+also names ``file`` and ``sha256``: the wheel of the lock set (win_amd64 / cp311) in the full bundle's wheelhouse; the
+installer downloads that very hash (a swapped file of the same version is refused), and ``check_mirror`` proves the
+hashes equal the files of the full stage. The full bundle is unchanged, byte for byte,
 except for ``app/mirror_install.py``.
 
 Reproducible: the same commit gives the same files, byte for byte, here or on CI. Third-party wheels come from
@@ -101,11 +104,13 @@ from pathlib import Path
 try:  # PEP 440 / 508; the build machine's pip carries a copy when the package itself is not installed
     from packaging.requirements import Requirement
     from packaging.specifiers import SpecifierSet
-    from packaging.utils import canonicalize_name
+    from packaging.utils import canonicalize_name, parse_wheel_filename
+    from packaging.version import Version
 except ImportError:  # pragma: no cover
     from pip._vendor.packaging.requirements import Requirement
     from pip._vendor.packaging.specifiers import SpecifierSet
-    from pip._vendor.packaging.utils import canonicalize_name
+    from pip._vendor.packaging.utils import canonicalize_name, parse_wheel_filename
+    from pip._vendor.packaging.version import Version
 
 REPO = Path(__file__).resolve().parents[2]
 # what the bundle needs from the repository; the rest (tests, docs, tools) stays at home
@@ -708,14 +713,16 @@ def mirror_doc(wheels: list[Path], local: list[str], python_version: str = "3.11
     package its lock version and who requires it by which specifier (Requires-Dist of the wheels, markers evaluated
     for ``windows_env(python_version)``, extras followed from the requirements that name them). Every package is a source of
     requirements (what the lock holds is what is installed), so a package nobody requires (pgserver) has ``requires``
-    empty. ``"exact": true`` marks the packages the installer may not replace (``MIRROR_EXACT``; optional, an older
+    empty. ``"file"`` and ``"sha256"`` of each package are the wheel of the lock set (win_amd64 / cp311) that lies in
+    the full bundle's wheelhouse: the installer binds its downloads to that hash and so catches a file of the lock
+    version that was swapped on the mirror. ``"exact": true`` marks the packages the installer may not replace (``MIRROR_EXACT``; optional, an older
     file without it is read as before). SystemExit when a requirement is not in the wheels, a module of ``MIRROR_IMPORTS`` is in none of them,
     or a version of the lock does not satisfy a specifier. Deterministic: sorted, no time, no path."""
     env = windows_env(python_version)
     meta = {}
     for w in sorted(wheels):
         name, version, reqs = wheel_meta(w)
-        meta[name] = (version, reqs)
+        meta[name] = (version, reqs, w)
     local_names = {canonicalize_name(Requirement(p).name) for p in local}
     extras: dict[str, set[str]] = {n: {""} for n in meta}  # "" is the package without extras
     requires: dict[str, set[tuple[str, str]]] = {}
@@ -745,7 +752,8 @@ def mirror_doc(wheels: list[Path], local: list[str], python_version: str = "3.11
             sys.exit(f"no wheel holds the module {module} (imports of mirror.json)")
     def package(n: str) -> dict:
         reqs = sorted(requires.get(n, ()))
-        info: dict = {"lock": meta[n][0], "requires": [{"by": b, "spec": s} for b, s in reqs]}
+        info: dict = {"lock": meta[n][0], "requires": [{"by": b, "spec": s} for b, s in reqs],
+                      "file": meta[n][2].name, "sha256": sha256(meta[n][2])}
         pinned_by_requirer = any(s.lstrip().startswith("==") for _b, s in reqs)
         if n in MIRROR_EXACT and not (n != "pgserver" and pinned_by_requirer):
             info["exact"] = True
@@ -760,10 +768,12 @@ def mirror_json_text(doc: dict) -> str:
     return json.dumps(doc, ensure_ascii=False, indent=1, sort_keys=True) + "\n"
 
 
-def check_mirror(wh: Path) -> None:
+def check_mirror(wh: Path, full: Path | None = None) -> None:
     """The wheelhouse of a mirror stage is consistent (SystemExit otherwise): only our two wheels, ``mirror.json``'s
     packages and ``local`` are exactly the pins of ``requirements.txt`` with the lock's versions, our wheels are the
-    ``local`` ones, and the lock set satisfies every ``requires`` of ``mirror.json``."""
+    ``local`` ones, and the lock set satisfies every ``requires`` of ``mirror.json``. Every package has ``file`` (the
+    wheel of that name and lock version) and ``sha256``; with ``full`` (the wheelhouse of the full stage) they are
+    proved to be exactly the third-party wheels there, byte for byte."""
     doc = json.loads((wh / "mirror.json").read_text(encoding="utf-8"))
     pins = dict(pinned(ln) for ln in (wh / "requirements.txt").read_text(encoding="utf-8").splitlines() if ln.strip())
     local = dict(pinned(p) for p in doc["local"])
@@ -788,6 +798,25 @@ def check_mirror(wh: Path) -> None:
                 sys.exit(f"mirror.json: {r['by']} requires {n}{r['spec']}, the lock has {versions[n]}")
     if doc["imports"] != MIRROR_IMPORTS:  # their presence in the third-party wheels is proved by mirror_doc
         sys.exit(f"mirror.json: imports {doc['imports']}, expected {MIRROR_IMPORTS}")
+    for n, p in doc["packages"].items():
+        file, digest = p.get("file"), p.get("sha256")
+        if not isinstance(file, str) or not isinstance(digest, str) or not re.fullmatch(r"[0-9a-f]{64}", digest):
+            sys.exit(f"mirror.json: {n} has no file / sha256 (a wheel name and 64 hex digits)")
+        try:
+            wname, wver, _build, _tags = parse_wheel_filename(file)
+        except ValueError:
+            sys.exit(f"mirror.json: {n} file {file!r} is not a wheel name")
+        if canonicalize_name(wname) != n or wver != Version(p["lock"]):
+            sys.exit(f"mirror.json: {n} file {file} is not the wheel of {n} {p['lock']}")
+    if full is not None:
+        held = {w.name: w for w in full.glob("*.whl") if w.name.split("-")[0] not in OUR_DISTS}
+        listed = {p["file"]: p["sha256"] for p in doc["packages"].values()}
+        if set(held) != set(listed):
+            sys.exit("mirror.json: its files differ from the third-party wheels of the full wheelhouse: "
+                     f"{sorted(set(held) ^ set(listed))}")
+        for file, digest in sorted(listed.items()):
+            if sha256(held[file]) != digest:
+                sys.exit(f"mirror.json: {file} sha256 {digest}, the full wheelhouse holds {sha256(held[file])}")
 
 
 def make_mirror_stage(stage: Path, dest: Path, doc: dict, header: str) -> Path:
@@ -802,7 +831,7 @@ def make_mirror_stage(stage: Path, dest: Path, doc: dict, header: str) -> Path:
 
     shutil.copytree(stage, dest, ignore=ignore, copy_function=shutil.copyfile)
     (dest / MIRROR_JSON).write_text(mirror_json_text(doc), encoding="utf-8", newline="\n")
-    check_mirror(dest / "wheelhouse")
+    check_mirror(dest / "wheelhouse", wheelhouse)
     write_manifest(dest, header)
     return dest
 

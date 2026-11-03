@@ -8,8 +8,11 @@ touches the network itself, every request is a ``python -m pip`` subprocess run 
     InstallError                                a message for a person (Russian) with the path of the logs
 
 Inputs: ``wheelhouse\\mirror.json`` (``schema`` 1: ``local`` our own wheels as ``name==version``, ``packages`` every
-other pinned package with its lock version, who requires it under which PEP 440 specifier and optionally
+other pinned package with its lock version, who requires it under which PEP 440 specifier, ``"file"`` and
+``"sha256"`` (the wheel of the lock set for win_amd64 / cp311: its name and SHA-256) and optionally
 ``"exact": true``, ``imports`` the modules to import afterwards), ``wheelhouse\\requirements.txt`` (must agree with it) and our wheels in the wheelhouse.
+An older ``mirror.json`` without ``file`` / ``sha256`` is read as before: nothing is compared with the lock, every
+package is ``lock_check: "not_checked"`` and the journal carries a warning.
 ``python`` is the interpreter of a new, empty venv (it must have pip).
 
 Algorithm (only wheels, ``--only-binary=:all:``, nothing is built):
@@ -40,13 +43,26 @@ Algorithm (only wheels, ``--only-binary=:all:``, nothing is built):
    wheelhouse only (``--no-index``), ``pip check`` runs and the ``imports`` are imported in the new venv.
 5. ``install-<YYYYMMDD-HHMMSS>.log`` (Russian, for a person) and ``.json`` (for programs) in ``log_dir``: Python,
    pip, index addresses, mode, and for each package ``required``, ``tried``, ``available``, ``installed``, ``url``,
-   ``sha256``, ``status`` (``as_lock`` / ``differs`` / ``not_found`` / ``added``), the summary and ``ok`` / ``failed``.
+   ``sha256``, ``status`` (``as_lock`` / ``differs`` / ``not_found`` / ``added`` / ``hash_mismatch``), the summary and ``ok`` / ``failed``.
    They are written on a refusal too. Index addresses and everything quoted from pip are masked: ``user:pass@``
    becomes ``***@`` and the values of secret-looking query parameters (token, password, key, secret, auth, ...)
    become ``***``. ``available`` of an ``as_lock`` package found by step 1 holds just the lock version (it is all
    that was asked of the index).
+Binding to the lock: a package that stays at its lock version is downloaded with ``name==ver --hash=sha256:<lock>``
+(``pip download -r``), so among several files of that version on the index pip takes exactly the one with that hash
+and refuses anything else. When the index has only another file of that version (or serves other bytes), that is
+not a missing package but a swapped file: the status is ``hash_mismatch``, the install is refused in the flexible
+mode too (the package is never replaced by another version), and the journals hold the expected and the received
+SHA-256. A cached wheel of the lock version whose SHA-256 differs from the lock is deleted from the cache, with a
+note. Per package the journal has ``lock_check`` (``ok`` hash equals the lock's, ``mismatch``, ``not_checked`` a
+version other than the lock's, a package outside the lock or an old ``mirror.json``, ``not_applicable`` ours),
+``lock_sha256`` and ``source`` (``index``, ``cache``, ``bundle`` for our wheels, with their own SHA-256 and
+``wheelhouse\\<file>`` as ``url``). The summary counts ``lock_ok`` / ``lock_not_checked`` / ``lock_mismatch``.
+An index address with ``http://`` (any of ``mirror.ini``, pip configuration, ``PIP_*``) is a warning in the summary
+and the journals (``warnings``), not a refusal.
 The final install is ``--require-hashes`` over a staging folder holding exactly the logged files (ours included), and
-a downloaded file must match the file name and hash of pip's resolver report. An unreachable index or a refused
+a downloaded file must match the file name and hash of pip's resolver report (a file bound to the lock hash is
+checked against that hash instead). An unreachable index or a refused
 login (pip's network error words, or no version of any package at all) is reported as such, package status
 ``index_error``, not as missing versions.
 Machine pip configuration is never disabled here; ``Settings.index_url`` / ``extra_index_url``, when set, are
@@ -87,11 +103,17 @@ MAX_ATTEMPTS = 25
 PIP_TIMEOUT_S = 1800
 INDEX_QUERY_WORKERS = 6
 TAIL_LINES = 25
+SHOWN_NAMES = 8
 SECRET_QUERY_WORDS = ("token", "password", "passwd", "pwd", "key", "secret", "auth", "sig", "credential",
                       "session", "bearer")
 _QUERY_SECRET_RE = re.compile(
     r"(?i)([?&;][^=&\s'\"]*(?:" + "|".join(SECRET_QUERY_WORDS) + r")[^=&\s'\"]*=)[^&\s'\"]*")
 _USERINFO_RE = re.compile(r"(?i)\b([a-z][a-z0-9+.\-]*://)[^/\s'\"]+@")
+LOCK_CHECK_WORDS = {"ok": "сверено с lock", "not_checked": "не сверено с lock",
+                    "mismatch": "НЕСОВПАДЕНИЕ ХЭША С LOCK", "not_applicable": "наше колесо"}
+SOURCE_WORDS = {"index": "индекс", "cache": "кэш", "bundle": "комплект"}
+_HASH_MISMATCH_RE = re.compile(r"(?i)do not match the hashes")
+_HASH_GOT_RE = re.compile(r"(?i)\bgot\s+([0-9a-f]{64})\b")
 _NETWORK_MARKERS = (
     "could not fetch url", "max retries exceeded", "newconnectionerror", "connection refused", "connectionerror",
     "failed to establish a new connection", "sslerror", "proxyerror", "certificate_verify_failed",
@@ -123,6 +145,9 @@ class Result:
     installed: list[str] = field(default_factory=list)      # "name==version", ours included
     not_found: list[str] = field(default_factory=list)      # packages with no usable version on the index
     deviations: list[str] = field(default_factory=list)     # what differs from the lock, one line each
+    hash_mismatch: list[str] = field(default_factory=list)  # files that differ from the lock's hash, one line each
+    not_checked: list[str] = field(default_factory=list)    # packages not compared with the lock
+    warnings: list[str] = field(default_factory=list)       # e.g. an index over http://
     log_path: Path | None = None
     json_path: Path | None = None
     ok: bool = False
@@ -182,6 +207,23 @@ def is_network_failure(output: str) -> bool:
     lines = [ln for ln in output.lower().splitlines() if "404 client error" not in ln]
     text = "\n".join(lines)
     return any(m in text for m in _NETWORK_MARKERS)
+
+
+def insecure_index_urls(urls: Iterable[str]) -> list[str]:
+    """The addresses of ``urls`` that are plain ``http://`` (in the order given, each once)."""
+    out: list[str] = []
+    for url in urls:
+        if url.strip().lower().startswith("http://") and url not in out:
+            out.append(url)
+    return out
+
+
+def http_index_warning(urls: Iterable[str], lock_hashes: bool) -> str:
+    """The warning for an index open over ``http://`` (``urls`` already masked)."""
+    tail = ("Подмену файлов загрузчик ловит по хэшам из lock, но версии, отличные от lock, проверить нечем."
+            if lock_hashes else "В этом комплекте нет хэшей lock, поэтому подмену файлов проверить нечем.")
+    return (f"{', '.join(urls)}: индекс открыт по http:// без шифрования; попросите ИТ перевести его на "
+            f"https://. {tail}")
 
 
 def _same_version(a: str, b: str) -> bool:
@@ -276,7 +318,8 @@ class _Journal:
         self.started = datetime.now()
         self.data: dict = {"schema": SCHEMA, "started": self.started.isoformat(timespec="seconds"),
                            "mode": "strict" if strict else "flexible", "python": "", "pip": "", "index": [],
-                           "packages": {}, "summary": {}, "status": "failed", "error": "", "notes": []}
+                           "packages": {}, "summary": {}, "status": "failed", "error": "", "notes": [],
+                           "warnings": [], "lock_hashes": False}
 
     def mask(self, text: str) -> str:
         return mask_text(text, self.secrets)
@@ -286,6 +329,7 @@ class _Journal:
         versions and hashes are never touched."""
         d = json.loads(json.dumps(self.data))
         d["error"] = self.mask(d["error"])
+        d["warnings"] = [self.mask(w) for w in d["warnings"]]
         for item in d["index"]:
             item["url"] = mask_url(item["url"])
         for p in d["packages"].values():
@@ -303,7 +347,8 @@ class _Journal:
     def pkg(self, name: str) -> dict:
         return self.data["packages"].setdefault(name, {"required": None, "tried": [], "available": [],
                                                         "installed": None, "url": None, "sha256": None,
-                                                        "status": None})
+                                                        "status": None, "source": None, "lock_check": None,
+                                                        "lock_sha256": None, "lock_file": None})
 
     def write(self) -> None:
         self.data["finished"] = datetime.now().isoformat(timespec="seconds")
@@ -326,15 +371,31 @@ class _Journal:
         for name, p in sorted(d["packages"].items()):
             line = (f"  {name}: по lock {p['required'] or '-'}, установлено {p['installed'] or '-'}, "
                     f"статус {p['status'] or '-'}")
+            if p["lock_check"] in LOCK_CHECK_WORDS:
+                line += f" [{LOCK_CHECK_WORDS[p['lock_check']]}]"
             out.append(line)
             if p["status"] != "as_lock" or p["tried"]:
                 out.append(f"      перебрано: {', '.join(p['tried']) or '-'}; "
                            f"на индексе: {', '.join(p['available']) or '-'}")
-            if p["url"]:
-                out.append(f"      {p['url']}  sha256 {p['sha256'] or '-'}")
+            if p["status"] == "hash_mismatch":
+                out.append(f"      ФАЙЛ НА ЗЕРКАЛЕ ОТЛИЧАЕТСЯ ОТ ПРОВЕРЕННОГО У НАС: ожидался SHA-256 "
+                           f"{p['lock_sha256'] or '-'}, на зеркале {p['sha256'] or 'не удалось узнать'}")
+            elif p["url"] or p["sha256"]:
+                src = SOURCE_WORDS.get(p["source"] or "", "")
+                out.append(f"      {p['url'] or '-'}  sha256 {p['sha256'] or '-'}" + (f"  ({src})" if src else ""))
+        if d["warnings"]:
+            out.append("ПРЕДУПРЕЖДЕНИЯ:")
+            out += [f"  {w}" for w in d["warnings"]]
         s = d["summary"]
         out += ["Итог:", f"  установлено: {len(s.get('installed', []))}",
-                f"  не установлено: {', '.join(s.get('not_installed', [])) or 'нет'}"]
+                f"  не установлено: {', '.join(s.get('not_installed', [])) or 'нет'}",
+                ("  сверка с lock: " f"сверено {s.get('lock_ok', 0)}, не сверено {s.get('lock_not_checked', 0)}, "
+                 f"несовпадение хэша {s.get('lock_mismatch', 0)}")]
+        if s.get("hash_mismatch"):
+            out.append("  ФАЙЛ НА ЗЕРКАЛЕ ОТЛИЧАЕТСЯ ОТ ПРОВЕРЕННОГО У НАС:")
+            out += [f"    {x}" for x in s["hash_mismatch"]]
+        if s.get("not_checked"):
+            out.append(f"  не сверено с lock: {', '.join(s['not_checked'])}")
         if s.get("deviations"):
             out.append("  ОТКЛОНЕНИЯ ОТ LOCK:")
             out += [f"    {x}" for x in s["deviations"]]
@@ -528,8 +589,36 @@ def _save_hashes(cache: Path, hashes: dict[str, dict[str, str]]) -> None:
     os.replace(tmp, cache / "sha256.json")
 
 
-def _cached_wheel(cache: Path, hashes: dict[str, dict[str, str]], name: str, version: str, tags: set) -> Path | None:
-    """A wheel of ``cache`` for name==version that fits this interpreter and whose SHA-256 is the recorded one."""
+def _purge_foreign(ctx: _Ctx, cache: Path, hashes: dict[str, dict[str, str]], lock: dict[str, str],
+                   lock_sha: dict[str, str]) -> None:
+    """A cached wheel of a package's lock version whose SHA-256 is not the lock's is not used: it is deleted from the
+    cache (and its record), with a note in the journal."""
+    changed = False
+    for name, sha in sorted(lock_sha.items()):
+        want = Version(lock[name])
+        for path in sorted(cache.glob("*.whl")):
+            try:
+                wname, wver, _build, _tags = parse_wheel_filename(path.name)
+            except ValueError:
+                continue
+            if canonicalize_name(wname) != name or wver != want:
+                continue
+            got = _sha256(path)
+            if got == sha:
+                continue
+            ctx.journal.note(f"кэш: {path.name}", f"файл версии из lock в кэше не сверен с lock (SHA-256 {got}, в lock "
+                                                  f"{sha}); он удалён из кэша и не используется")
+            path.unlink(missing_ok=True)
+            hashes.pop(path.name, None)
+            changed = True
+    if changed:
+        _save_hashes(cache, hashes)
+
+
+def _cached_wheel(cache: Path, hashes: dict[str, dict[str, str]], name: str, version: str, tags: set,
+                  want_sha: str = "") -> Path | None:
+    """A wheel of ``cache`` for name==version that fits this interpreter and whose SHA-256 is the recorded one (and,
+    with ``want_sha``, the lock's)."""
     want = Version(version)
     for path in sorted(cache.glob("*.whl")):
         try:
@@ -538,24 +627,58 @@ def _cached_wheel(cache: Path, hashes: dict[str, dict[str, str]], name: str, ver
             continue
         if canonicalize_name(wname) != name or wver != want or not (set(wtags) & tags):
             continue
-        if hashes.get(path.name, {}).get("sha256") == _sha256(path):
+        digest = _sha256(path)
+        if hashes.get(path.name, {}).get("sha256") == digest and (not want_sha or digest == want_sha):
             return path
     return None
 
 
+def _hash_mismatch(ctx: _Ctx, name: str, version: str, expected: str, got: str, output: str) -> InstallError:
+    """The mirror serves a file of the lock version that is not the one we checked: a swap, not a missing package."""
+    j = ctx.journal
+    p = j.pkg(name)
+    p.update(status="hash_mismatch", lock_check="mismatch", lock_sha256=expected, sha256=got or None, source="index")
+    j.note(f"pip download {name}=={version} (хэш lock)", output)
+    seen = f"на зеркале {got}" if got else "на зеркале другой файл (его SHA-256 определить не удалось)"
+    return _fail(ctx, f"{name}=={version}: файл на зеркале отличается от проверенного у нас: ожидался SHA-256 "
+                      f"{expected}, {seen}. Установка остановлена, версия не заменяется другой: это признак "
+                      "подмены файла на зеркале, а не отсутствия пакета. Обратитесь в ИБ/ИТ и не запускайте "
+                      "программу, пока причина не выяснена.")
+
+
+def _downloaded_url(output: str, filename: str) -> str:
+    """The address pip printed for ``filename`` (``Downloading <url>``; pip prints just the file name for files of
+    PyPI's own storage, then there is none)."""
+    for m in re.finditer(r"(?:Downloading|Using cached)\s+(\S+)", output):
+        if "://" in m.group(1) and Path(unquote(urlsplit(m.group(1)).path)).name == filename:
+            return m.group(1)
+    return ""
+
+
 def _download(ctx: _Ctx, cache: Path, hashes: dict[str, dict[str, str]], name: str, version: str, tags: set,
-              url: str = "", report_sha: str = "") -> tuple[Path, bool]:
+              url: str = "", report_sha: str = "", want_sha: str = "") -> tuple[Path, bool]:
     """``url`` is pip's report URL (raw) of the file the resolver chose, ``report_sha`` its hash when pip gave one:
-    the file ``pip download`` fetched must be the same."""
-    hit = _cached_wheel(cache, hashes, name, version, tags)
+    the file ``pip download`` fetched must be the same. ``want_sha`` (the lock's hash of a package at its lock
+    version) binds the download to that file: ``name==version --hash=sha256:<lock>`` in a requirements file, so pip
+    takes exactly that file among the files of the version and refuses any other (``hash_mismatch``)."""
+    hit = _cached_wheel(cache, hashes, name, version, tags, want_sha)
     if hit is not None:
         return hit, True
     part = cache / f".part-{name}"
     shutil.rmtree(part, ignore_errors=True)
     part.mkdir(parents=True)
+    target = [f"{name}=={version}"]
+    if want_sha:
+        pin = ctx.work / f"pin-{name}.txt"
+        pin.write_text(f"{name}=={version} --hash=sha256:{want_sha}\n", encoding="utf-8")
+        target = ["-r", str(pin)]
     cp = _pip(ctx, "download", "--no-deps", "--only-binary=:all:", "--dest", str(part),
-              *_index_args(ctx.settings), f"{name}=={version}")
+              *_index_args(ctx.settings), *target)
     wheels = sorted(part.glob("*.whl"))
+    if want_sha and cp.returncode != 0 and _HASH_MISMATCH_RE.search(_output(cp)):
+        shutil.rmtree(part, ignore_errors=True)
+        got = _HASH_GOT_RE.search(_output(cp))
+        raise _hash_mismatch(ctx, name, version, want_sha, got.group(1).lower() if got else "", _output(cp))
     if cp.returncode != 0 or len(wheels) != 1:
         shutil.rmtree(part, ignore_errors=True)
         if is_network_failure(_output(cp)):
@@ -563,7 +686,14 @@ def _download(ctx: _Ctx, cache: Path, hashes: dict[str, dict[str, str]], name: s
         ctx.journal.note(f"pip download {name}=={version}", _output(cp))
         raise _fail(ctx, f"Не удалось скачать {name}=={version} с индекса (код pip {cp.returncode}).")
     digest = _sha256(wheels[0])
-    if url:
+    if want_sha:
+        if digest != want_sha:  # pip checked it already; this is the belt to its braces
+            shutil.rmtree(part, ignore_errors=True)
+            raise _hash_mismatch(ctx, name, version, want_sha, digest, _output(cp))
+        if not url or Path(unquote(urlsplit(url).path)).name != wheels[0].name:
+            url = _downloaded_url(_output(cp), wheels[0].name)  # the resolver may have meant another file
+            ctx.journal.secrets.extend(_secret_parts(url))
+    elif url:
         reported = Path(unquote(urlsplit(url).path)).name
         if reported != wheels[0].name or (report_sha and report_sha != digest):
             ctx.journal.note(f"сверка {name}=={version}", f"отчёт pip: файл {reported} sha256 {report_sha or '-'}; "
@@ -583,9 +713,9 @@ def _download(ctx: _Ctx, cache: Path, hashes: dict[str, dict[str, str]], name: s
 
 
 def _load_manifest(wheelhouse: Path) -> tuple[dict[str, str], dict[str, str], dict[str, list[str]], list[str],
-                                              set[str]]:
+                                              set[str], dict[str, tuple[str, str]]]:
     """(local pins, third-party lock pins, name -> requirer specs, imports, names that must be exactly the lock
-    version) of ``mirror.json``."""
+    version, name -> (file, sha256) of the lock set's wheel for the packages that have them) of ``mirror.json``."""
     path = wheelhouse / "mirror.json"
     try:
         data = json.loads(path.read_text(encoding="utf-8-sig"))
@@ -595,14 +725,19 @@ def _load_manifest(wheelhouse: Path) -> tuple[dict[str, str], dict[str, str], di
         for pin in data.get("local", []):
             name, _, ver = str(pin).partition("==")
             local[str(canonicalize_name(name))] = ver.strip()
-        lock, specs, exact = {}, {}, set()
+        lock, specs, exact, files = {}, {}, set(), {}
         for name, info in data["packages"].items():
             key = str(canonicalize_name(name))
             lock[key] = str(info["lock"])
+            if info.get("sha256") is not None:  # an older mirror.json has neither file nor sha256
+                digest = str(info["sha256"]).strip().lower()
+                if not re.fullmatch(r"[0-9a-f]{64}", digest):
+                    raise ValueError(f"sha256 пакета {name} не похож на SHA-256")
+                files[key] = (str(info.get("file") or ""), digest)
             if info.get("exact") is True:
                 exact.add(key)
             specs[key] = [str(r.get("spec", "")) for r in info.get("requires", [])]
-        return local, lock, specs, [str(m) for m in data.get("imports", [])], exact
+        return local, lock, specs, [str(m) for m in data.get("imports", [])], exact, files
     except (OSError, ValueError, KeyError, TypeError, AttributeError) as exc:
         raise InstallError(f"Не удалось прочитать {path}: {exc}. Распакуйте комплект заново.") from exc
 
@@ -648,14 +783,37 @@ def _summarize(journal: _Journal, result: Result) -> None:
         else f"{n}: нет на индексе ({', '.join(p['tried']) or 'ничего подходящего'}), lock {p['required']}"
         if p["status"] == "not_found" else f"{n}: добавлен {p['installed'] or '-'}, его нет в lock"
         for n, p in sorted(pk.items()) if p["status"] in ("differs", "not_found", "added")]
+    result.hash_mismatch = [
+        f"{n}=={p['required']}: файл на зеркале отличается от проверенного у нас: ожидался SHA-256 "
+        f"{p['lock_sha256'] or '-'}, на зеркале {p['sha256'] or 'не удалось узнать'}"
+        for n, p in sorted(pk.items()) if p["status"] == "hash_mismatch"]
+    result.not_checked = sorted(n for n, p in pk.items() if p["lock_check"] == "not_checked")
+    result.warnings = list(journal.data["warnings"])
+    count = {k: sum(1 for p in pk.values() if p["lock_check"] == k) for k in ("ok", "not_checked", "mismatch")}
     journal.data["summary"] = {
         "installed": result.installed, "not_installed": sorted(n for n, p in pk.items() if not p["installed"]),
-        "deviations": result.deviations}
+        "deviations": result.deviations, "hash_mismatch": result.hash_mismatch, "not_checked": result.not_checked,
+        "lock_ok": count["ok"], "lock_not_checked": count["not_checked"], "lock_mismatch": count["mismatch"]}
 
 
 def _print_summary(journal: _Journal, result: Result, say: Callable[[str], None]) -> None:
     ok = journal.data["status"] == "ok"
     say(f"Зависимости: {'установлено' if ok else 'НЕ установлено'} ({len(result.installed)} пакетов).")
+    for line in result.hash_mismatch:
+        say("!!! ОСТАНОВЛЕНО: " + line)
+    if result.hash_mismatch:
+        say("!!! Файл пакета на зеркале заменён или изменён. Обратитесь в ИБ/ИТ, не запускайте программу, пока "
+            "причина не выяснена.")
+    s = journal.data["summary"]
+    if s["lock_ok"] or s["lock_not_checked"] or s["lock_mismatch"]:
+        say(f"Сверка с lock: сверено {s['lock_ok']}, не сверено {s['lock_not_checked']}, "
+            f"несовпадение хэша {s['lock_mismatch']}.")
+    if result.not_checked:
+        shown = ", ".join(result.not_checked[:SHOWN_NAMES]) + (
+            f" и ещё {len(result.not_checked) - SHOWN_NAMES}" if len(result.not_checked) > SHOWN_NAMES else "")
+        say(f"  не сверено с lock: {shown}")
+    for text in result.warnings:
+        say(f"ВНИМАНИЕ: {text}")
     if result.deviations:
         say("ВНИМАНИЕ: версии отличаются от проверенных (lock):")
         for line in result.deviations:
@@ -665,7 +823,8 @@ def _print_summary(journal: _Journal, result: Result, say: Callable[[str], None]
 
 def _install(ctx: _Ctx, cache: Path, result: Result, say: Callable[[str], None]) -> None:
     j, st = ctx.journal, ctx.settings
-    local, lock, specs, imports, exact = _load_manifest(ctx.wheelhouse)
+    local, lock, specs, imports, exact, lock_files = _load_manifest(ctx.wheelhouse)
+    lock_sha = {n: sha for n, (_file, sha) in lock_files.items()}
     req_file = ctx.wheelhouse / "requirements.txt"
     if req_file.is_file():
         reqs = _read_pins(req_file)
@@ -676,7 +835,15 @@ def _install(ctx: _Ctx, cache: Path, result: Result, say: Callable[[str], None])
                                  f"({reqs.get(name) or 'нет'} / {want.get(name) or 'нет'}). "
                                  "Распакуйте комплект заново.")
     for name, ver in lock.items():
-        j.pkg(name)["required"] = ver
+        p = j.pkg(name)
+        p["required"] = ver
+        if name in lock_files:
+            p["lock_file"], p["lock_sha256"] = lock_files[name][0] or None, lock_files[name][1]
+    j.data["lock_hashes"] = bool(lock) and set(lock_sha) == set(lock)
+    if not j.data["lock_hashes"]:
+        j.data["warnings"].append(
+            "В mirror.json нет хэшей lock (комплект собран старой версией сборки): файлы с индекса не сверяются с "
+            "lock, подмену файла той же версии загрузчик не заметит. Возьмите свежий комплект.")
 
     py = _run_checked(ctx, [str(ctx.python), "-c", "import platform;print(platform.python_version())"])
     j.data["python"] = py.strip()
@@ -686,15 +853,19 @@ def _install(ctx: _Ctx, cache: Path, result: Result, say: Callable[[str], None])
         raise _fail(ctx, "В новом окружении нет рабочего pip. Удалите папку env и запустите установку заново.")
     j.data["pip"] = cp.stdout.strip().splitlines()[0] if cp.stdout.strip() else ""
     j.data["index"] = _index_addresses(ctx)
+    plain = insecure_index_urls(i["url"] for i in j.data["index"])
+    if plain:
+        j.data["warnings"].append(http_index_warning(plain, j.data["lock_hashes"]))
     say(f"Установка зависимостей с индекса pip ({'строгий' if st.strict else 'гибкий'} режим)...")
 
     cache.mkdir(parents=True, exist_ok=True)
     hashes = _load_hashes(cache)
     tags = set(sys_tags())
+    _purge_foreign(ctx, cache, hashes, lock, lock_sha)
 
     # 1. everything as the lock says; when every lock wheel is in the cache (a rerun) the resolver runs offline
     first = None
-    offline = all(_cached_wheel(cache, hashes, n, v, tags) for n, v in lock.items())
+    offline = all(_cached_wheel(cache, hashes, n, v, tags, lock_sha.get(n, "")) for n, v in lock.items())
     if offline:
         first = _resolve(ctx, lock, local, offline=cache)
         if not first.ok or _extras(first, lock, local):
@@ -737,12 +908,16 @@ def _install(ctx: _Ctx, cache: Path, result: Result, say: Callable[[str], None])
     # 2. download into the cache, then install from the cache and the wheelhouse only
     staged: dict[str, Path] = {}
     for name, ver in sorted(final.items()):
-        path, cached = _download(ctx, cache, hashes, name, ver, tags, *reports.get(name, ("", "")))
+        want = lock_sha.get(name, "") if name in lock and _same_version(ver, lock[name]) else ""
+        path, cached = _download(ctx, cache, hashes, name, ver, tags, *reports.get(name, ("", "")), want_sha=want)
         staged[name] = path
         p = j.pkg(name)
         p["sha256"] = hashes[path.name]["sha256"]
-        p["url"] = urls.get(name) or hashes[path.name]["url"] or None
-        say(f"  {name}=={ver}" + (" (из кэша)" if cached else ""))
+        # bound to the lock hash the resolver's file may be another one: only the address of the file taken counts
+        p["url"] = (hashes[path.name]["url"] if want else urls.get(name) or hashes[path.name]["url"]) or None
+        p["source"] = "cache" if cached else "index"
+        p["lock_check"] = "ok" if want else "not_checked"
+        say(f"  {name}=={ver}" + (" (из кэша)" if cached else "") + ("" if want else " [не сверено с lock]"))
     stage = ctx.work / "stage"          # exactly the files logged, so --require-hashes can name them
     stage.mkdir()
     digests: dict[str, str] = {n: hashes[p.name]["sha256"] for n, p in staged.items()}
@@ -752,6 +927,8 @@ def _install(ctx: _Ctx, cache: Path, result: Result, say: Callable[[str], None])
             raise _fail(ctx, f"В комплекте нет колеса {name}=={ver}. Распакуйте комплект заново.")
         staged[name] = wheel
         digests[name] = _sha256(wheel)
+        j.pkg(name).update(required=ver, sha256=digests[name], source="bundle", status="as_lock",
+                           url="wheelhouse\\" + wheel.name, lock_check="not_applicable")
     for path in staged.values():
         shutil.copy2(path, stage / path.name)
     pins = j.log_path.with_suffix(".requirements.txt")
@@ -765,7 +942,7 @@ def _install(ctx: _Ctx, cache: Path, result: Result, say: Callable[[str], None])
     for name, ver in final.items():
         j.pkg(name)["installed"] = ver
     for name, ver in local.items():
-        j.pkg(name).update(required=ver, installed=ver, status="as_lock")
+        j.pkg(name)["installed"] = ver
 
     # 3. checks
     cp = _pip(ctx, "check")

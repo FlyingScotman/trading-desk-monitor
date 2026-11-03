@@ -111,23 +111,28 @@ def test_load_settings_rejects_a_bad_boolean(tmp_path):
 # --- fixtures: wheels, index, venv ----------------------------------------------------------------------------------
 
 
-def make_wheel(directory: Path, name: str, version: str, requires: tuple[str, ...] = ()) -> Path:
-    """A tiny pure-Python wheel: module ``<name with _>`` with ``__version__``, METADATA, WHEEL, RECORD."""
+def make_wheel(directory: Path, name: str, version: str, requires: tuple[str, ...] = (), *, build: str = "",
+               payload: bytes = b"") -> Path:
+    """A tiny pure-Python wheel: module ``<name with _>`` with ``__version__``, METADATA, WHEEL, RECORD. The bytes
+    depend only on the arguments (a fixed time), so a wheel made twice has one SHA-256; ``payload`` makes another
+    file of the same name and version (a swapped one), ``build`` a build tag in its name."""
     mod = name.replace("-", "_")
     info = f"{mod}-{version}.dist-info"
     meta = f"Metadata-Version: 2.1\nName: {name}\nVersion: {version}\n"
     meta += "".join(f"Requires-Dist: {r}\n" for r in requires)
     files = {f"{mod}/__init__.py": f"__version__ = {version!r}\n".encode(), f"{info}/METADATA": meta.encode(),
              f"{info}/WHEEL": b"Wheel-Version: 1.0\nGenerator: test\nRoot-Is-Purelib: true\nTag: py3-none-any\n"}
+    if payload:
+        files[f"{mod}/payload.bin"] = payload
     record = "".join(
         f"{n},sha256={base64.urlsafe_b64encode(hashlib.sha256(d).digest()).rstrip(b'=').decode()},{len(d)}\n"
         for n, d in files.items()) + f"{info}/RECORD,,\n"
     files[f"{info}/RECORD"] = record.encode()
-    path = directory / f"{mod}-{version}-py3-none-any.whl"
+    path = directory / f"{mod}-{version}{'-' + build if build else ''}-py3-none-any.whl"
     directory.mkdir(parents=True, exist_ok=True)
     with zipfile.ZipFile(path, "w", zipfile.ZIP_DEFLATED) as z:
         for n, d in files.items():
-            z.writestr(n, d)
+            z.writestr(zipfile.ZipInfo(n, (2020, 1, 1, 0, 0, 0)), d, zipfile.ZIP_DEFLATED)
     return path
 
 
@@ -186,8 +191,8 @@ class FakeIndex:
     def url(self) -> str:
         return f"http://127.0.0.1:{self.port}/simple/"
 
-    def add(self, name: str, version: str, requires: tuple[str, ...] = ()) -> None:
-        make_wheel(self.root, name, version, requires)
+    def add(self, name: str, version: str, requires: tuple[str, ...] = (), **kw) -> Path:
+        return make_wheel(self.root, name, version, requires, **kw)
 
     def metadata(self, wheel: str) -> bytes | None:
         f = self.root / wheel
@@ -260,8 +265,15 @@ def pip_env(tmp_path: Path, url: str, **extra: str) -> dict[str, str]:
 LOCK_ALPHA, LOCK_BETA = "1.2.3", "2.3.4"
 
 
-def make_bundle(tmp_path: Path) -> Path:
-    """A wheelhouse as the build makes it: our wheel, requirements.txt and mirror.json."""
+def lock_sha(tmp_path: Path, name: str, version: str) -> str:
+    """The SHA-256 of the genuine wheel of ``name``==``version`` (the one the build records in mirror.json)."""
+    path = make_wheel(tmp_path / "genuine", name, version)
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def make_bundle(tmp_path: Path, hashes: bool = True) -> Path:
+    """A wheelhouse as the build makes it: our wheel, requirements.txt and mirror.json (``hashes=False``: the
+    older mirror.json without ``file`` and ``sha256``)."""
     wh = tmp_path / "wheelhouse"
     make_wheel(wh, "hm-app", "0.1.0", ("hm-alpha>=1", "hm-beta>=2.2,<3"))
     (wh / "requirements.txt").write_text(
@@ -271,6 +283,10 @@ def make_bundle(tmp_path: Path) -> Path:
                 "packages": {"hm-alpha": {"lock": LOCK_ALPHA, "requires": [{"by": "hm-app", "spec": ">=1"}]},
                              "hm-beta": {"lock": LOCK_BETA, "requires": [{"by": "hm-app", "spec": ">=2.2,<3"}]}},
                 "imports": ["hm_app", "hm_alpha", "hm_beta"]}
+    if hashes:
+        for name, version in (("hm-alpha", LOCK_ALPHA), ("hm-beta", LOCK_BETA)):
+            manifest["packages"][name].update(file=f"{name.replace('-', '_')}-{version}-py3-none-any.whl",
+                                              sha256=lock_sha(tmp_path, name, version))
     (wh / "mirror.json").write_text(json.dumps(manifest, sort_keys=True), encoding="utf-8")
     return wh
 
@@ -363,6 +379,14 @@ def test_no_suitable_version_is_refused_with_journal(tmp_path, venv_python, inde
     assert "Статус: failed" in exc.value.log_path.read_text(encoding="utf-8")
 
 
+def bind_lock(tmp_path: Path, name: str, wheel: Path) -> None:
+    """The lock of ``name`` in mirror.json is the hash of ``wheel`` (a lock wheel that differs from the plain one)."""
+    wh = make_bundle(tmp_path) if not (tmp_path / "wheelhouse").exists() else tmp_path / "wheelhouse"
+    doc = json.loads((wh / "mirror.json").read_text(encoding="utf-8"))
+    doc["packages"][name]["sha256"] = hashlib.sha256(wheel.read_bytes()).hexdigest()
+    (wh / "mirror.json").write_text(json.dumps(doc, sort_keys=True), encoding="utf-8")
+
+
 def _mark_exact(tmp_path: Path, *names: str) -> None:
     wh = make_bundle(tmp_path) if not (tmp_path / "wheelhouse").exists() else tmp_path / "wheelhouse"
     doc = json.loads((wh / "mirror.json").read_text(encoding="utf-8"))
@@ -443,7 +467,7 @@ def test_a_replacement_pulling_outside_the_lock_loses_to_a_clean_one(tmp_path, v
 
 def test_strict_mode_refuses_a_lock_version_that_pulls_outside_the_lock(tmp_path, venv_python, index):
     index.add("hm-alpha", LOCK_ALPHA)
-    index.add("hm-beta", LOCK_BETA, ("hm-extra>=1",))
+    bind_lock(tmp_path, "hm-beta", index.add("hm-beta", LOCK_BETA, ("hm-extra>=1",)))
     index.add("hm-extra", "1.0")
     with pytest.raises(mi.InstallError, match="hm-extra"):
         run_install(tmp_path, venv_python, index, settings=mi.Settings(strict=True))
@@ -454,17 +478,26 @@ def test_strict_mode_refuses_a_lock_version_that_pulls_outside_the_lock(tmp_path
     assert last_json(tmp_path)["packages"]["hm-extra"]["status"] == "added"
 
 
+def download_requirement(cmd: list[str]) -> str:
+    """The requirement a ``pip download`` command line names: its last argument, or the line of its ``-r`` file."""
+    return Path(cmd[-1]).read_text(encoding="utf-8").strip() if "-r" in cmd else cmd[-1]
+
+
 class PipSpy:
     """Records the ``pip download`` calls of the installer; ``fail`` names packages whose download fails."""
 
     def __init__(self, monkeypatch):
         self.downloads: list[str] = []
+        self.pins: list[str] = []      # the requirement lines of the hash-bound downloads (``-r`` files)
         self.fail: set[str] = set()
         real = mi._run
 
         def spy(cmd, env, cwd=None):
             if "download" in cmd:
-                spec = cmd[-1]
+                spec = download_requirement(cmd)
+                if "-r" in cmd:
+                    self.pins.append(spec)
+                    spec = spec.split()[0]
                 self.downloads.append(spec)
                 if spec.split("==")[0] in self.fail:
                     return subprocess.CompletedProcess(cmd, 1, "", "ERROR: simulated network failure")
@@ -617,6 +650,7 @@ def test_final_install_names_every_wheel_by_hash_ours_included(tmp_path, venv_py
 
 def test_downloaded_file_differing_from_pips_report_is_refused(tmp_path, venv_python, index, monkeypatch):
     serve_lock(index)
+    make_bundle(tmp_path, hashes=False)  # with the lock hash the download is bound to it instead of the report
     real = mi._resolve
 
     def lying(ctx, selection, local, offline=None):
@@ -703,7 +737,7 @@ def test_network_failure_of_a_download_is_noted_once(tmp_path, venv_python, inde
     real = mi._run
 
     def flaky(cmd, env, cwd=None):
-        if "download" in cmd and cmd[-1].startswith("hm-beta=="):
+        if "download" in cmd and download_requirement(cmd).startswith("hm-beta=="):
             return subprocess.CompletedProcess(cmd, 1, "", "WARNING: Max retries exceeded with url\nERROR: boom")
         return real(cmd, env, cwd)
 
@@ -712,3 +746,196 @@ def test_network_failure_of_a_download_is_noted_once(tmp_path, venv_python, inde
         run_install(tmp_path, venv_python, index)
     titles = [n["title"] for n in last_json(tmp_path)["notes"]]
     assert titles.count(f"pip download hm-beta=={LOCK_BETA}") == 1
+
+
+# --- binding to the lock: hashes in mirror.json, swapped files, the journal, the http:// warning ---------------------
+
+
+def alpha_hash(tmp_path: Path) -> str:
+    return lock_sha(tmp_path, "hm-alpha", LOCK_ALPHA)
+
+
+def test_downloads_of_lock_versions_are_bound_to_the_lock_hash(tmp_path, venv_python, index, spy):
+    serve_lock(index)
+    res = run_install(tmp_path, venv_python, index)
+    assert res.ok
+    assert sorted(spy.pins) == [f"hm-alpha=={LOCK_ALPHA} --hash=sha256:{alpha_hash(tmp_path)}",
+                                f"hm-beta=={LOCK_BETA} --hash=sha256:{lock_sha(tmp_path, 'hm-beta', LOCK_BETA)}"]
+    data = last_json(tmp_path)
+    alpha = data["packages"]["hm-alpha"]
+    assert alpha["lock_check"] == "ok" and alpha["lock_sha256"] == alpha["sha256"] == alpha_hash(tmp_path)
+    assert alpha["source"] == "index" and alpha["lock_file"] == f"hm_alpha-{LOCK_ALPHA}-py3-none-any.whl"
+    assert data["summary"]["lock_ok"] == 2 and data["summary"]["lock_not_checked"] == 0
+    assert data["summary"]["lock_mismatch"] == 0 and data["lock_hashes"] is True
+    log = res.log_path.read_text(encoding="utf-8")
+    assert "сверка с lock: сверено 2, не сверено 0, несовпадение хэша 0" in log and "[сверено с lock]" in log
+
+
+@pytest.mark.parametrize("strict", [False, True])
+def test_a_swapped_wheel_of_the_lock_version_is_refused_not_replaced(tmp_path, venv_python, index, strict):
+    serve_lock(index)
+    index.add("hm-alpha", "1.2.0")  # a perfectly good other version: it must not be taken instead
+    swapped = index.add("hm-alpha", LOCK_ALPHA, payload=b"evil")   # same name and version, other bytes
+    got = hashlib.sha256(swapped.read_bytes()).hexdigest()
+    said: list[str] = []
+    with pytest.raises(mi.InstallError) as exc:
+        run_install(tmp_path, venv_python, index, settings=mi.Settings(strict=strict), say=said.append)
+    text = str(exc.value)
+    assert "файл на зеркале отличается от проверенного у нас: ожидался SHA-256 " + alpha_hash(tmp_path) in text
+    assert f"на зеркале {got}" in text and "ИБ/ИТ" in text
+    assert venv_version(venv_python, "hm_alpha") is None and venv_version(venv_python, "hm_app") is None
+    data = last_json(tmp_path)
+    alpha = data["packages"]["hm-alpha"]
+    assert data["status"] == "failed" and alpha["status"] == "hash_mismatch" and alpha["lock_check"] == "mismatch"
+    assert alpha["lock_sha256"] == alpha_hash(tmp_path) and alpha["sha256"] == got and alpha["installed"] is None
+    assert data["summary"]["lock_mismatch"] == 1 and len(data["summary"]["hash_mismatch"]) == 1
+    log = exc.value.log_path.read_text(encoding="utf-8")
+    assert alpha_hash(tmp_path) in log and got in log and "НЕСОВПАДЕНИЕ ХЭША С LOCK" in log
+    screen = "\n".join(said)
+    assert "!!! ОСТАНОВЛЕНО" in screen and got in screen and "ИБ/ИТ" in screen
+    assert not list((tmp_path / "cache").glob("hm_alpha*.whl"))  # nothing of it was kept
+
+
+def test_a_swapped_wheel_already_in_the_cache_is_not_used(tmp_path, venv_python, index, spy):
+    serve_lock(index)
+    cache = tmp_path / "cache"
+    name = f"hm_alpha-{LOCK_ALPHA}-py3-none-any.whl"
+    swapped = make_wheel(tmp_path / "evil", "hm-alpha", LOCK_ALPHA, payload=b"evil")
+    cache.mkdir()
+    (cache / name).write_bytes(swapped.read_bytes())
+    digest = hashlib.sha256(swapped.read_bytes()).hexdigest()    # recorded as a good download of a former run
+    (cache / "sha256.json").write_text(json.dumps({name: {"sha256": digest, "url": ""}}), encoding="utf-8")
+    res = run_install(tmp_path, venv_python, index)              # the index holds the genuine file: it is fetched
+    assert res.ok and spy.downloads == [f"hm-alpha=={LOCK_ALPHA}", f"hm-beta=={LOCK_BETA}"]
+    assert hashlib.sha256((cache / name).read_bytes()).hexdigest() == alpha_hash(tmp_path)
+    data = last_json(tmp_path)
+    assert data["packages"]["hm-alpha"]["source"] == "index" and data["packages"]["hm-alpha"]["lock_check"] == "ok"
+    assert any(n["title"] == f"кэш: {name}" and digest in " ".join(n["tail"]) for n in data["notes"])
+
+
+def test_a_swapped_wheel_in_the_cache_and_on_the_index_is_refused_and_dropped(tmp_path, venv_python, index):
+    serve_lock(index)
+    swapped = index.add("hm-alpha", LOCK_ALPHA, payload=b"evil")
+    cache = tmp_path / "cache"
+    name = swapped.name
+    cache.mkdir()
+    (cache / name).write_bytes(swapped.read_bytes())
+    digest = hashlib.sha256(swapped.read_bytes()).hexdigest()
+    (cache / "sha256.json").write_text(json.dumps({name: {"sha256": digest, "url": ""}}), encoding="utf-8")
+    with pytest.raises(mi.InstallError, match="отличается от проверенного у нас"):
+        run_install(tmp_path, venv_python, index)
+    assert not (cache / name).exists() and name not in json.loads((cache / "sha256.json").read_text(encoding="utf-8"))
+    assert last_json(tmp_path)["packages"]["hm-alpha"]["status"] == "hash_mismatch"
+    assert venv_version(venv_python, "hm_alpha") is None
+
+
+def test_among_files_of_one_version_the_one_with_the_lock_hash_is_taken(tmp_path, venv_python, index):
+    serve_lock(index)
+    # a build tag is preferred by pip: without the hash binding the swapped file would win
+    swapped = index.add("hm-alpha", LOCK_ALPHA, build="1", payload=b"evil")
+    assert swapped.name == f"hm_alpha-{LOCK_ALPHA}-1-py3-none-any.whl"
+    res = run_install(tmp_path, venv_python, index)
+    assert res.ok and venv_version(venv_python, "hm_alpha") == LOCK_ALPHA
+    cached = sorted(p.name for p in (tmp_path / "cache").glob("hm_alpha*"))
+    assert cached == [f"hm_alpha-{LOCK_ALPHA}-py3-none-any.whl"]
+    alpha = last_json(tmp_path)["packages"]["hm-alpha"]
+    assert alpha["sha256"] == alpha_hash(tmp_path) and alpha["lock_check"] == "ok" and alpha["status"] == "as_lock"
+    assert alpha["url"].endswith(f"/files/hm_alpha-{LOCK_ALPHA}-py3-none-any.whl")
+
+
+def test_a_replaced_version_is_not_checked_against_the_lock_and_says_so(tmp_path, venv_python, index):
+    index.add("hm-alpha", "1.2.0")                 # the lock version 1.2.3 is not there
+    index.add("hm-beta", LOCK_BETA)
+    said: list[str] = []
+    res = run_install(tmp_path, venv_python, index, say=said.append)
+    assert res.ok and res.not_checked == ["hm-alpha"]
+    data = last_json(tmp_path)
+    assert data["packages"]["hm-alpha"]["status"] == "differs"
+    assert data["packages"]["hm-alpha"]["lock_check"] == "not_checked"
+    assert data["packages"]["hm-beta"]["lock_check"] == "ok"
+    summary = data["summary"]
+    assert (summary["lock_ok"], summary["lock_not_checked"], summary["lock_mismatch"]) == (1, 1, 0)
+    log = res.log_path.read_text(encoding="utf-8")
+    assert "hm-alpha: по lock 1.2.3, установлено 1.2.0, статус differs [не сверено с lock]" in log
+    assert "не сверено с lock: hm-alpha" in log
+    screen = "\n".join(said)
+    assert "Сверка с lock: сверено 1, не сверено 1, несовпадение хэша 0." in screen
+    assert "не сверено с lock: hm-alpha" in screen
+
+
+def test_our_wheels_are_logged_with_their_hash_and_the_bundle_as_source(tmp_path, venv_python, index):
+    serve_lock(index)
+    res = run_install(tmp_path, venv_python, index)
+    ours = tmp_path / "wheelhouse/hm_app-0.1.0-py3-none-any.whl"
+    app = last_json(tmp_path)["packages"]["hm-app"]
+    assert app["sha256"] == hashlib.sha256(ours.read_bytes()).hexdigest() and app["source"] == "bundle"
+    assert app["url"] == "wheelhouse\\hm_app-0.1.0-py3-none-any.whl" and app["lock_check"] == "not_applicable"
+    assert app["status"] == "as_lock" and app["installed"] == "0.1.0"
+    assert "(комплект)" in res.log_path.read_text(encoding="utf-8")
+
+
+def test_an_old_mirror_json_without_hashes_is_read_as_before_and_marked_not_checked(tmp_path, venv_python, index):
+    serve_lock(index)
+    index.add("hm-alpha", LOCK_ALPHA, payload=b"evil")   # nothing can notice it without a lock hash
+    wh = make_bundle(tmp_path, hashes=False)
+    assert mi._load_manifest(wh)[5] == {}
+    said: list[str] = []
+    res = run_install(tmp_path, venv_python, index, say=said.append)
+    assert res.ok and sorted(res.not_checked) == ["hm-alpha", "hm-beta"]
+    data = last_json(tmp_path)
+    assert data["lock_hashes"] is False and data["packages"]["hm-alpha"]["lock_check"] == "not_checked"
+    assert (data["summary"]["lock_ok"], data["summary"]["lock_not_checked"]) == (0, 2)
+    assert any("нет хэшей lock" in w for w in data["warnings"])
+    screen = "\n".join(said)
+    assert "не сверено 2" in screen and "нет хэшей lock" in screen
+    assert "статус as_lock [не сверено с lock]" in res.log_path.read_text(encoding="utf-8")
+
+
+def test_manifest_with_a_garbled_hash_is_refused(tmp_path):
+    wh = make_bundle(tmp_path)
+    doc = json.loads((wh / "mirror.json").read_text(encoding="utf-8"))
+    doc["packages"]["hm-beta"]["sha256"] = "xyz"
+    (wh / "mirror.json").write_text(json.dumps(doc), encoding="utf-8")
+    with pytest.raises(mi.InstallError, match="hm-beta"):
+        mi._load_manifest(wh)
+
+
+def test_an_index_over_http_is_a_warning_in_the_summary_and_the_journals_not_a_refusal(tmp_path, venv_python, index):
+    serve_lock(index)
+    assert index.url.startswith("http://")
+    said: list[str] = []
+    res = run_install(tmp_path, venv_python, index, say=said.append)
+    assert res.ok
+    (warning,) = last_json(tmp_path)["warnings"]
+    assert f"http://127.0.0.1:{index.port}/simple/" in warning
+    assert "индекс открыт по http:// без шифрования; попросите ИТ перевести его на https://." in warning
+    assert "Подмену файлов загрузчик ловит по хэшам из lock, но версии, отличные от lock, проверить нечем." in warning
+    assert any(line.startswith("ВНИМАНИЕ: ") and "открыт по http://" in line for line in said)
+    assert warning in res.log_path.read_text(encoding="utf-8") and res.warnings == [warning]
+
+
+def test_insecure_index_urls_finds_http_only():
+    urls = ["https://mirror.example/simple/", "http://plain.example/simple/", "HTTP://upper.example/s",
+            "http://plain.example/simple/", "https://***@secure.example/simple",
+            "https://pypi.org/simple (по умолчанию pip)"]
+    assert mi.insecure_index_urls(urls) == ["http://plain.example/simple/", "HTTP://upper.example/s"]
+    # an https address given in mirror.ini (and a masked one) raises no warning, an http extra index does
+    https = mi.Settings(index_url="https://user:pw@mirror.example/simple", extra_index_url="https://x.example/s")
+    shown = [mi.mask_url(https.index_url), *map(mi.mask_url, https.extra_index_url.split())]
+    assert mi.insecure_index_urls(shown) == []
+    mixed = mi.Settings(index_url="https://m.example/simple", extra_index_url="https://a.example/s http://b.example/s")
+    assert mi.insecure_index_urls([mixed.index_url, *mixed.extra_index_url.split()]) == ["http://b.example/s"]
+    assert mi.insecure_index_urls([]) == []
+
+
+def test_http_warning_text_without_lock_hashes_does_not_claim_a_hash_check():
+    text = mi.http_index_warning(["http://m.example/s"], lock_hashes=False)
+    assert "перевести его на https://" in text and "по хэшам из lock" not in text and "нет хэшей lock" in text
+
+
+def test_https_index_gives_no_warning_in_a_run(tmp_path, venv_python, index, monkeypatch):
+    """The addresses a run logs come from ``_index_addresses``; here it reports an https one only."""
+    serve_lock(index)
+    monkeypatch.setattr(mi, "_index_addresses", lambda ctx: [{"url": "https://mirror.example/simple/", "source": "x"}])
+    res = run_install(tmp_path, venv_python, index)
+    assert res.ok and last_json(tmp_path)["warnings"] == [] and res.warnings == []
