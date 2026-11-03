@@ -231,7 +231,7 @@
       else if (st.compare === 'same') line.append('Обновление адаптера: используется последний выпуск');
     }
     var DS = window.DeskSettings;
-    if (DS && DS.status) DS.status('adapter-update', has ? { cls: 'warn', href: '#ad-upd-card', k: 'Адаптер', text: 'есть обновление ' + st.release.version } : null);
+    if (DS && DS.status) DS.status('adapter-update', has ? { cls: 'warn', href: '#ad-upd-card', k: 'Обновление адаптера', text: 'есть выпуск ' + st.release.version } : null);
   }
 
   function render(st) {

@@ -172,7 +172,7 @@
   function renderFeeds() {
     const host = $('feeds'), feeds = (data && data.feeds) || [];
     if (!feeds.length) { host.replaceChildren(el('p', data && data.panel ? 'Адаптер не описывает фоновых загрузок.' : '', 'hint')); return; }
-    const t = el('table', null, 't'), hr = el('tr');
+    const t = el('table', null, 't svc-t'), hr = el('tr');
     ['Данные', 'Включено', 'Расписание', 'Последний запуск', 'Следующий', ''].forEach(c => hr.append(el('th', c)));
     const head = el('thead'); head.append(hr); const tb = el('tbody');
     for (const f of feeds) {
@@ -182,7 +182,7 @@
       box.setAttribute('aria-label', 'Фоновая загрузка «' + f.title + '»');
       lab.append(box, el('span', null, 'tgl-s')); sw.append(lab);
       box.addEventListener('change', () => enable(f.id, box.checked, box));
-      const lastTd = el('td');
+      const lastTd = el('td'); lastTd.dataset.l = 'Последний запуск'; sw.dataset.l = 'Включено'; 
       if (last.last_started) {
         const code = !last.code ? '' : RUN_CODE[last.code] || (['complete', 'partial'].includes(last.state) ? '' : last.code);
         lastTd.append(el('div', when(last.last_finished || last.last_started) + ' · ' + (f.running ? 'идёт' : (RUN[last.state] || last.state || '')) + (code && !f.running ? ' (' + code + ')' : '')));
@@ -193,7 +193,7 @@
         more.push(...(last.lines || []));
         if (more.length) { const d = el('details'); d.append(el('summary', 'подробнее', 'mut3')); d.append(...more.map(x => el('div', x, 'hint'))); lastTd.append(d); }
       } else lastTd.append(el('span', f.running ? 'идёт' : 'ещё не запускалось', 'mut3'));
-      const next = el('td');
+      const next = el('td'); next.dataset.l = 'Следующий';
       next.textContent = last.needs_login ? 'нужен вход: выполните вход в панели выше'
         : !f.ready ? 'не готово' + (f.why_not_ready ? ': ' + f.why_not_ready : '')
         : !f.enabled ? 'выключено' : f.queued ? 'в очереди' : f.next_run ? when(f.next_run) + (last.failures ? ' (повтор ' + last.failures + ')' : '') : '—';
@@ -202,7 +202,8 @@
       run.disabled = f.running || f.queued; run.addEventListener('click', () => runNow(f.id, run));
       act.append(run);
       if (f.running) { const stop = el('button', 'Остановить', 'lnk'); stop.type = 'button'; stop.addEventListener('click', () => cancel('feed')); act.append(stop); }
-      tr.append(name, sw, el('td', scheduleText(f.schedule, f.after_positions)), lastTd, next, act); tb.append(tr);
+      const sched = el('td', scheduleText(f.schedule, f.after_positions)); sched.dataset.l = 'Расписание';
+      tr.append(name, sw, sched, lastTd, next, act); tb.append(tr);
     }
     t.append(head, tb); host.replaceChildren(t);
   }

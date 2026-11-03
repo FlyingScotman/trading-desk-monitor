@@ -312,6 +312,14 @@ details.sf-grp[open] > summary::before{content:"▾"}
 .st-more .dot.bad{background:var(--neg)} .st-more .dot.warn{background:var(--warn)} .st-more .dot.dirty{background:var(--accent)}
 .st-more[aria-expanded="true"] .dot{display:none}
 .subnav{position:relative;display:flex;gap:2px;overflow-x:auto;border-bottom:1px solid var(--line);margin:0 0 14px;scrollbar-width:thin}
+@media (max-width:700px){  /* фоновая загрузка: на телефоне каждый фид — блок, а не строка таблицы */
+  #svc-feeds .svc-t thead{display:none} #svc-feeds .svc-t,#svc-feeds .svc-t tbody{display:block}
+  #svc-feeds .svc-t tr{display:block;border-bottom:1px solid var(--line);padding:10px 0}
+  #svc-feeds .svc-t td{display:block;border:0;padding:2px 0;white-space:normal}
+  #svc-feeds .svc-t td[data-l]::before{content:attr(data-l) ": ";color:var(--fg-3);font-size:12px}
+  #svc-feeds .svc-t td:first-child{font-weight:600}
+}
+@media (min-width:700px){.subnav{flex-wrap:wrap}}  /* на широком экране подразделы переносятся, на телефоне — полоса с прокруткой */
 .subnav a{display:inline-flex;align-items:center;gap:6px;padding:7px 12px;margin-bottom:-1px;border-bottom:2px solid transparent;color:var(--fg-2);text-decoration:none;white-space:nowrap;font-size:13px}
 .subnav a:hover{color:var(--fg)}
 .subnav a.on{color:var(--fg);border-bottom-color:var(--accent);font-weight:550}

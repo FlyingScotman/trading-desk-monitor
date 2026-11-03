@@ -57,7 +57,7 @@ function server() {
 }
 
 // подраздел «Адаптера и источников» (TDM#551): щелчок по его пункту, как у владельца
-const sub = (pg, name) => pg.locator('.subnav a[data-sub-link="' + name + '"]').click();
+const sub = async (pg, name) => { await pg.locator('.subnav a[data-sub-link="' + name + '"]').click(); await pg.locator('.sub.on[data-sub="' + name + '"]').waitFor(); };  // hashchange приходит позже щелчка
 
 async function open(browser, st, hash, opts) {
   const ctx = (opts && opts.ctx) || await browser.newContext(opts && opts.viewport ? { viewport: opts.viewport } : {});

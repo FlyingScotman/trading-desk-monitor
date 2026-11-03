@@ -139,10 +139,11 @@
     if (cls !== undefined) { a.setAttribute('data-base', cls || ''); a.title = title || ''; }
     var p = document.querySelector('section.sec[data-sec="' + secName + '"] [data-sub="' + sub + '"]');
     var dirty = p && (p.hasAttribute('data-dirty') || p.hasAttribute('data-form-dirty'));
+    var shown = function (c) { return /\b(ok|bad|warn|dirty)\b/.test(c); }, was = shown(a.className);
     a.className = 'dot ' + (dirty ? 'dirty' : (a.getAttribute('data-base') || ''));
     N.rollup(secName);
     var cur = a.closest('.subnav') && a.closest('.subnav').querySelector('a.on');
-    if (cur) keepVisible(cur.parentNode, cur);  // точка расширила пункт — выбранный не уезжает за край
+    if (cur && !was && shown(a.className)) keepVisible(cur.parentNode, cur);  // точка появилась и расширила пункт — выбранный не уезжает за край (не при каждой перерисовке)
   };
   // пометить панель подраздела «изменено»: kind 'dirty' (поля settings.json) или 'form-dirty' (формы адаптера)
   N.subDirty = function (panel, kind, on) {
@@ -287,8 +288,9 @@
       var el = document.querySelector('[data-slot="' + name + '"]');
       if (!el) return null;
       el.hidden = false;
-      Array.prototype.forEach.call(document.querySelectorAll('[data-slot-nav="' + name + '"]'), function (x) { x.hidden = false; });
-      Array.prototype.forEach.call(document.querySelectorAll('.subnav a[data-sub-link].on'), function (a) { keepVisible(a.parentNode, a); });  // пункт вставлен слева — выбранный не уезжает
+      var appeared = false;
+      Array.prototype.forEach.call(document.querySelectorAll('[data-slot-nav="' + name + '"]'), function (x) { if (x.hidden) appeared = true; x.hidden = false; });
+      if (appeared) Array.prototype.forEach.call(document.querySelectorAll('.subnav a[data-sub-link].on'), function (a) { keepVisible(a.parentNode, a); });  // пункт появился слева — выбранный не уезжает
       // раздел или подраздел из адреса мог ждать этот блок (модуль загрузился после первого show): show() не трогал адрес
       var sec = el.closest('section.sec'), sub = el.closest('[data-sub]'), s = N.split(location.hash);
       if (O && sec && s.id === sec.getAttribute('data-sec') && (!sec.classList.contains('on') || (sub && s.sub === sub.getAttribute('data-sub') && !sub.classList.contains('on'))))
@@ -353,6 +355,10 @@
       var same;
       if (a.hasAttribute('data-sub-link')) { var cur = sec.querySelector('.sub.on'); same = a.closest('section.sec') === sec && !!cur && cur.getAttribute('data-sub') === a.getAttribute('data-sub-link'); }
       else same = a.getAttribute('data-sec') === sec.getAttribute('data-sec');
+      // адрес указывает на другое место (ждёт модуль — открыт запасной): щелчок по открытому — это переход
+      var h = N.split(location.hash);
+      if (same && h.sub && a.hasAttribute('data-sub-link') && h.sub !== a.getAttribute('data-sub-link')) same = false;
+      if (same && document.querySelector('section.sec[data-sec="' + h.id + '"]') && h.id !== sec.getAttribute('data-sec')) same = false;
       if (!same) return;
       e.preventDefault(); window.scrollTo(0, 0);
     });

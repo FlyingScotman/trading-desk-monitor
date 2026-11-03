@@ -119,7 +119,10 @@ test('настройки: подразделы, «Дополнительно», 
       await pg.reload(); await pg.waitForSelector('#st-sum:not([hidden]) a');
       assert.deepStrictEqual(await onSub(pg), ['folders'], 'переживает обновление страницы');
       await pg.locator('.st-nav a[data-sec="hub"]').click();
+      await pg.waitForFunction(() => document.querySelector('section.sec.on').dataset.sec === 'hub');
       await pg.locator('.st-nav a[data-sec="adapter"]').click();
+      await pg.waitForFunction(() => document.querySelector('section.sec.on').dataset.sec === 'adapter');
+      await waitSub(pg, 'folders');
       assert.deepStrictEqual(await onSub(pg), ['folders'], 'без подраздела — последний открытый');
       await pg.goto(ORIGIN + '/settings.html#ad-check');
       await pg.waitForTimeout(100);
@@ -159,7 +162,7 @@ test('настройки: подразделы, «Дополнительно», 
       await pg.waitForFunction(() => /есть выпуск 0\.5\.0/.test(document.getElementById('ad-upd-line').textContent));
       assert.ok(/Обновление адаптера: есть выпуск 0\.5\.0/.test(await pg.locator('#ad-upd-line').innerText()), await pg.locator('#ad-upd-line').innerText());
       const item = pg.locator('#st-sum a[href="#ad-upd-card"]');
-      assert.ok(/Адаптер:\s*есть обновление 0\.5\.0/.test(await item.innerText()), 'строка в сводке сверху');
+      assert.ok(/Обновление адаптера:\s*есть выпуск 0\.5\.0/.test(await item.innerText()), 'строка в сводке сверху');
       await lnk.click();
       await pg.waitForTimeout(100);
       assert.strictEqual(await onSec(pg), 'up');
@@ -359,6 +362,7 @@ test('настройки: подразделы, «Дополнительно», 
       // unslot: открытое место скрывается, открывается запасной подраздел
       await pg.evaluate(() => { window.DeskSettings.slot('services'); });
       await pg.locator('.subnav a[data-sub-link="services"]').click();
+      await waitSub(pg, 'services');
       assert.deepStrictEqual(await onSub(pg), ['services']);
       await pg.evaluate(() => window.DeskSettings.unslot('services'));
       assert.deepStrictEqual(await onSub(pg), ['overview']);
@@ -467,6 +471,46 @@ test('настройки: подразделы, «Дополнительно», 
       assert.ok(/\bdirty\b/.test(await pg.locator('.st-nav .dot[data-nav="adapter"]').getAttribute('class')), 'и у раздела');
       await pg.locator('#save-undo').click();
       assert.ok(!/\bdirty\b/.test(await dot.getAttribute('class')), 'после «Отменить» снято');
+      assert.deepStrictEqual(errors, []);
+      await ctx.close();
+    });
+
+    await t.test('щелчок по подсвеченному подразделу, пока адрес ждёт место модуля, — переход', async () => {
+      const st = server(), { pg, ctx, errors } = await open(browser, st, '#adapter/services');
+      assert.deepStrictEqual(await onSub(pg), ['overview']);
+      await pg.locator('.subnav a[data-sub-link="overview"]').click();
+      await pg.waitForFunction(() => location.hash === '#adapter/overview');
+      assert.deepStrictEqual(await onSub(pg), ['overview']);
+      assert.deepStrictEqual(errors, []);
+      await ctx.close();
+    });
+
+    await t.test('подразделы: на 1024 px переносятся и видны все; на 390 px прокрутка полосы не отскакивает при перерисовке', async () => {
+      const st = server(); st.services = true;
+      let r = await open(browser, st, '#adapter/overview', { viewport: { width: 1024, height: 800 } });
+      await r.pg.waitForFunction(() => document.querySelector('.subnav a[data-sub-link="services"]').offsetParent);
+      const out = await r.pg.evaluate(() => [...document.querySelectorAll('.subnav a[data-sub-link]')].filter(a => a.offsetParent && a.getBoundingClientRect().right > innerWidth).length);
+      assert.strictEqual(out, 0, 'все подразделы в пределах окна: ' + out);
+      await r.ctx.close();
+      r = await open(browser, st, '#adapter/overview', { viewport: { width: 390, height: 800 } });
+      await r.pg.waitForFunction(() => document.querySelector('.subnav a[data-sub-link="services"]').offsetParent);
+      await r.pg.waitForTimeout(300);
+      const at = await r.pg.evaluate(() => { const n = document.querySelector('.subnav[data-subnav="adapter"]'); n.scrollLeft = 120; return n.scrollLeft; });
+      assert.ok(at > 0, 'полоса прокручена');
+      await r.pg.evaluate(() => { window.DeskSettings.dot('adapter/services', 'warn', 'x'); window.DeskSettings.slot('services'); window.DeskSettings.dot('adapter/services', 'warn', 'y'); });
+      await r.pg.waitForTimeout(100);
+      assert.strictEqual(await r.pg.evaluate(() => document.querySelector('.subnav[data-subnav="adapter"]').scrollLeft), at, 'прокрутка не изменилась');
+      assert.deepStrictEqual(r.errors, []);
+      await r.ctx.close();
+    });
+
+    await t.test('фоновая загрузка на 390 px: фид — блок, кнопка в пределах окна', async () => {
+      const st = server(); st.services = true;
+      const { pg, ctx, errors } = await open(browser, st, '#adapter/services', { viewport: { width: 390, height: 800 } });
+      await pg.locator('#svc-feeds tr[data-feed=eodpos]').waitFor();
+      const m = await pg.evaluate(() => { const b = document.querySelector('#svc-feeds tr[data-feed=eodpos] button').getBoundingClientRect(), t = document.querySelector('#svc-feeds table').getBoundingClientRect();
+        return { right: b.right, tableRight: t.right, over: document.documentElement.scrollWidth - document.documentElement.clientWidth }; });
+      assert.ok(m.right <= 391 && m.tableRight <= 391 && m.over <= 1, JSON.stringify(m));
       assert.deepStrictEqual(errors, []);
       await ctx.close();
     });
