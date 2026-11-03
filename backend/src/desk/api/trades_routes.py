@@ -17,6 +17,7 @@ from fastapi import APIRouter, HTTPException, Query, Request
 from fastapi.responses import JSONResponse
 
 from .. import store, trades
+from ..settings import load as load_settings
 
 public = APIRouter()
 
@@ -30,4 +31,5 @@ def get_trades(request: Request, date: str | None = None, book_id: str | None = 
     except ValueError:
         raise HTTPException(400, "date must be YYYY-MM-DD") from None
     with store.connect(request.app.state.store_url) as con:
-        return JSONResponse(trades.view(con, day, book_id or None, days), headers={"Cache-Control": "no-store"})
+        return JSONResponse(trades.view(con, day, book_id or None, days,
+                                         getattr(load_settings(), "intraday_trades", True)), headers={"Cache-Control": "no-store"})

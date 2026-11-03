@@ -695,6 +695,10 @@ def test_a_feed_of_the_owners_books_gets_them_as_a_repeated_field(tmp_path, stor
         assert (run["state"], run["code"]) == ("blocked", "no_books") and run["lines"] and run["retry_at"] is None
         assert [r for r in requests(st) if r["op"] == "feed"] == []
         load(store_url, tmp_path, "2026-10-15", 10)  # positions of the books OFZ and CORP
+        f = tmp_path / "old.csv"   # the inactive book has positions too: only the book list keeps it out
+        f.write_text("position_id,book_id,secid,quantity_bonds\nP9,OLD,SU26238RMFS4,3\n", encoding="utf-8")
+        with store.connect(store_url) as con:
+            cli._load(con, f, "2026-10-15", out=lambda _: None)
         books = [{"book_id": b, "name": b, "desk": "Test", "book_type": "TRADING", "entity": "TEST", "active": a}
                  for b, a in (("OFZ", True), ("CORP", True), ("OLD", False))]
         with store.connect(store_url) as con:

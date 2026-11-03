@@ -166,8 +166,8 @@ Trusted fields the monitor always adds: `adapter_root`, `config_dir`, repeated `
 empty `output_dir` (`<home>/adapter-services/out/<run id>/`; the folders of the last 20 runs are kept). A request
 never sets them: the routes accept only `f.<key>` of the cached panel, `action`, `arg` (and `date` for a feed run).
 For a `feed` of a FEED with `books: true` the monitor also adds a repeated `book`: the owner's books (the active books
-of the book list with a current position set on the day, sorted, 1 to 200 values of 1 to 200 characters each). The
-helper fetches only those. With none, the monitor does not call the feed: its outcome is `blocked`, `no_books`.
+of the book list whose current position set on the day has rows, sorted, 1 to 200 values of 1 to 200 characters each). The
+helper may export the whole environment: the books name which of them the adapter's source keeps when it reads the file. With none, the monitor does not call the feed: its outcome is `blocked`, `no_books`.
 
 **Operations** (field `op`):
 

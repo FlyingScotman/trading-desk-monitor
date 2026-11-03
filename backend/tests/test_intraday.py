@@ -700,7 +700,8 @@ def test_trades_of_the_day_go_into_the_intraday_book(stub, tmp_path, store_url):
     (tmp_path / "in" / "trades_20261016_1100.csv").write_text(
         TRADES_HEAD + "TR-1;1;live;2026-10-16;2026-10-16T10:30:00;B1;B1|SEC-26238;bond;SEC-26238;buy;1000;;RUB\n"
         "TR-2;1;live;2026-10-16;2026-10-16T10:40:00;B1;B1|USD;fx;USD;sell;;5000;USD\n"
-        "TR-3;1;cancelled;2026-10-16;2026-10-16T10:45:00;B1;B1|SEC-26238;bond;SEC-26238;sell;400;;RUB\n",
+        "TR-3;1;cancelled;2026-10-16;2026-10-16T10:45:00;B1;B1|SEC-26238;bond;SEC-26238;sell;400;;RUB\n"
+        "TR-4;1;live;2026-10-16;2026-10-16T10:50:00;B1;B1|NOPE;bond;NO-SUCH-BOND;buy;7;;RUB\n",
         encoding="utf-8")
     clock["t"] = at(FRI, 10, 12)  # the same hub slot: only the trades changed
     by = steps(ap.run_cycle())
@@ -709,10 +710,13 @@ def test_trades_of_the_day_go_into_the_intraday_book(stub, tmp_path, store_url):
         assert con.execute(q, ("B1|SEC-26238",)).fetchone()[0] == 13000
         lin = con.execute("SELECT lineage->'intraday_trades' FROM run WHERE run_type = 'INTRADAY'"
                           " ORDER BY run_id DESC LIMIT 1").fetchone()[0]
-        assert (lin["applied"], lin["skipped"], lin["trade_ids"]) == (1, {"cancelled": 1, "not_bond": 1}, ["TR-1"])
+        assert (lin["applied"], lin["skipped"], lin["trade_ids"]) == (
+            1, {"cancelled": 1, "no_instrument": 1, "not_bond": 1}, ["TR-1"])
         v = trades.view(con, FRI)
         assert {r["trade_id"]: r["intraday"] for r in v["rows"]} == {"TR-1": "applied", "TR-2": "not_bond",
-                                                                     "TR-3": "cancelled"}
+                                                                     "TR-3": "cancelled", "TR-4": "no_instrument"}
+        assert {r["trade_id"]: r["intraday"] for r in trades.view(con, FRI, intraday_trades=False)["rows"]} == {
+            "TR-1": "off", "TR-2": "not_bond", "TR-3": "cancelled", "TR-4": "off"}
         assert v["intraday"]["applied"] == 1
     clock["t"] = at(FRI, 10, 14)  # nothing new: no run
     assert steps(ap.run_cycle())["intraday"][1].startswith("up to date")

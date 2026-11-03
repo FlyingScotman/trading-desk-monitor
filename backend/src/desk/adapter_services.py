@@ -254,14 +254,21 @@ def clean_feeds(v: Any, h: AdapterHandle | None) -> list[dict]:
 MAX_BOOKS = 200  # the request's ``book`` values (08 §2.2)
 
 
-def owner_books(con: Any, on: date) -> list[str]:
-    """The owner's books for a feed with ``books`` (08 §2.2): the active books in force on ``on`` that have a current
-    position set on ``on``, sorted, at most ``MAX_BOOKS``. Empty when there are none (the feed is not called)."""
-    held = {b for (b,) in con.execute(
-        "SELECT DISTINCT ON (book_id) book_id FROM position_set WHERE valid_date <= %s"
-        f" ORDER BY book_id, {store.CURRENT_SET}", (on,))}
+def owner_books(con: Any, on: date) -> tuple[list[str], list[str]]:
+    """The owner's books for a feed with ``books`` (08 §2.2): the active books in force on ``on`` whose current
+    position set has rows, sorted; and the notes for the owner when some were left out (a book id over 200 characters,
+    more than ``MAX_BOOKS`` books: never silently). Empty books: the feed is not called."""
+    held = {r[1] for r in store.positions_for(con, on).rows}
     active = {b["book_id"] for b in store.current_books(con, on) if b.get("active", True) is not False}
-    return sorted(held & active)[:MAX_BOOKS]
+    books, notes = sorted(held & active), []
+    long_ = [b for b in books if len(b) > 200]
+    if long_:
+        books = [b for b in books if len(b) <= 200]
+        notes.append(f"Книг с идентификатором длиннее 200 символов пропущено: {len(long_)}.")
+    if len(books) > MAX_BOOKS:
+        notes.append(f"Книг с позициями {len(books)}, в запрос вошли первые {MAX_BOOKS}.")
+        books = books[:MAX_BOOKS]
+    return books, notes
 
 
 def clean_action(r: dict) -> dict:
@@ -923,13 +930,14 @@ class AdapterServices:
         started = self._now()
         seen = {"positions_seen": newest.isoformat()} if newest is not None else {}
         # recorded before the call: a restart in the middle does not fetch again at once
-        prev = self._record(st, f["id"], last_started=_iso(started), trigger=trigger, date=day, **seen)
+        prev = self._record(st, f["id"], last_started=_iso(started), trigger=trigger, date=day)
         outcome: dict[str, Any]
         books: list[str] = []
+        notes: list[str] = []
         if f.get("books"):  # a feed of the owner's books (TDM#557): none to ask for, nothing to call
             try:
                 with store.connect(self._url) as con:
-                    books = owner_books(con, self._today())
+                    books, notes = owner_books(con, date.fromisoformat(day) if day else self._today())
             except Exception:
                 log.exception("adapter services: books of feed %s not read", f["id"])
                 self._finish(st, f, prev, {"state": "error", "code": "operation_failed", "lines": []}, started)
@@ -938,6 +946,8 @@ class AdapterServices:
                 self._finish(st, f, prev, {"state": "blocked", "code": "no_books", "lines": [
                     "Нет книг владельца с позициями: загрузите позиции и отметьте книги активными."]}, started)
                 return
+        if seen:  # after the books check: a feed that had nothing to ask for has not seen these positions
+            self._record(st, f["id"], **seen)
         self._cancel.clear()
         with self._lock:
             self._running = {"kind": "feed", "feed": f["id"], "since": _iso(started), "phase": "waiting"}
@@ -965,8 +975,27 @@ class AdapterServices:
             drained = self._drain_pending(st, hp, f, prev.get("pending"))
             extra: dict[str, str | list[str]] = {"feed": f["id"], **({"date": day} if day else {}),
                                                  **({"book": books} if books else {})}
+            if books:  # the whole request within the protocol's limits before the call, the books cut with a note
+                asked = len(books)
+                base = len(st.inbox_dirs) + 8
+                books = books[:max(0, helper_proc.MAX_FIELDS - base)]
+                while books:
+                    try:
+                        helper_proc.encode({"op": "feed", **extra, "book": books, "adapter_root": str(hp.root),
+                                            "config_dir": hp.handle.config_dir or "", "state_dir": str(state_dir(st)),
+                                            "output_dir": str(out), "inbox_dir": [str(d) for d in st.inbox_dirs]})
+                        break
+                    except helper_proc.HelperFailure:
+                        books = books[:-max(1, len(books) // 10)]
+                extra["book"] = books
+                if len(books) < asked:
+                    notes.append(f"В запрос вошло книг: {len(books)} из {asked} (предел размера запроса).")
+                if not books:
+                    raise ServiceError("invalid_request", "error")
             r = clean_feed_result(self._call(st, hp, "feed", extra, out=out))
             outcome = {k: r[k] for k in ("state", "code", "lines", "dates")}
+            if notes:
+                outcome["lines"] = [*notes, *outcome["lines"]]
             if r["state"] in ("complete", "partial") and r["files"]:
                 if not f.get("source_declared", True):
                     raise ServiceError("feed_source_invalid", "error")  # files no declared source would read

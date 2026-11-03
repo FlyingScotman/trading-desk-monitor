@@ -58,11 +58,15 @@ def _moscow_today() -> date:
     return datetime.now(UTC).astimezone(store.MSK).date()
 
 
-SKIP_REASONS = ("cancelled", "not_bond", "other_trade_date", "no_quantity", "no_instrument", "units_mismatch")
+SKIP_REASONS = ("cancelled", "not_bond", "other_trade_date", "no_quantity", "no_instrument", "units_mismatch",
+                "other_book", "position_id_taken", "no_currency")
 """Why a trade of the day is not in the intraday book (``effect``; the screen shows them, the run counts them)."""
-SCALED = ("face_amount_ccy", "face_outstanding_ccy", "mv_rub", "book_value_rub", "accrued_ccy", "amount_ccy",
+SCALED = ("face_amount_ccy", "face_outstanding_ccy", "mv_rub", "accrued_ccy", "amount_ccy",
           "risk_dv01_rub", "risk_cs01_rub")
-"""The report's own figures of a position row that follow its quantity when a trade changes it."""
+"""The report's own figures of a position row that follow its quantity when trades change it."""
+COST_BASIS = ("book_value_rub", "purchase_accrued_ccy")
+"""Follow the quantity only when it falls (the average cost of what stays); a purchase has its own price, which the
+row does not take in: the figures stay and the row says so (``x.intraday_cost_basis``)."""
 
 
 def effect(r: dict[str, Any], on: date) -> str | None:
@@ -88,66 +92,141 @@ def _num(v: Any) -> float | None:
         return None
 
 
+def _times(t: dict[str, Any]) -> str:
+    v = t.get("trade_ts")
+    return v.isoformat() if hasattr(v, "isoformat") else str(v or "")
+
+
 def apply_intraday(con: psycopg.Connection, on: date,
                    inputs: store.PositionInputs) -> tuple[store.PositionInputs, dict[str, Any]]:
     """The positions of ``on`` with the day's trades applied (module doc) and the summary for the run's lineage
-    ``intraday_trades``: ``{"set_ids", "applied", "new_positions", "skipped": {reason: n}, "trade_ids"}``."""
+    ``intraday_trades``: ``{"set_ids", "applied", "new_positions", "skipped": {reason: n}, "trade_ids", "versions",
+    "skipped_ids"}`` (the ids and versions of the first 500).
+
+    The trades are first summed per position row, then the row's figures are scaled once by final / initial quantity
+    (so the order of the trades, a sale to zero and a later purchase, does not matter). Only books of the position
+    sets (``inputs.valid_dates``) take trades (else ``other_book``). A row that changes carries
+    ``x.intraday_start_qty`` (or ``_face``): its flash PnL of the day is still measured on the quantity after the
+    trades (previous close valued with today's quantity: bought bonds get the price move since that close, a bond
+    sold out has none), TDM#557 to be decided."""
     day = store.dataset_rows(con, "trades", on)
     summary: dict[str, Any] = {"set_ids": sorted({u["set_id"] for u in day.units}), "applied": 0,
-                               "new_positions": 0, "skipped": {}, "trade_ids": []}
+                               "new_positions": 0, "skipped": {}, "trade_ids": [], "versions": {},
+                               "skipped_ids": {}}
     if not day.rows:
         return inputs, summary
     rows = [list(r) for r in inputs.rows]
     extra = {pid: dict(x) for pid, x in inputs.extra.items()}
+    held = set(inputs.valid_dates)
+    taken = {r[0] for r in rows}
     by_pid = {(r[1], r[0]): i for i, r in enumerate(rows)}
     by_secid = {(r[1], r[2]): i for i, r in enumerate(rows) if r[2]}
+    ccy_of: dict[str, str] = {}
+    for r in rows:
+        c = (extra.get(r[0]) or {}).get("ccy")
+        if c and r[2]:
+            ccy_of.setdefault(r[2], c)
     skipped: Counter = Counter()
+    skip_ids: dict[str, str] = {}
     applied: list[dict] = []
-    for t in sorted(day.rows, key=lambda t: (str(t.get("trade_ts") or ""), str(t.get("trade_id")))):
+    groups: dict[int, dict[str, Any]] = {}   # row index -> {"mode": "qty"|"face", "d": float, "new": bool}
+
+    def skip(t: dict, why: str) -> None:
+        skipped[why] += 1
+        skip_ids[str(t.get("trade_id"))] = why
+
+    for t in sorted(day.rows, key=lambda t: (_times(t), str(t.get("trade_id")))):
         why = effect(t, on)
         if why:
-            skipped[why] += 1
+            skip(t, why)
             continue
         book, sign = str(t["book_id"]), 1.0 if t.get("side") == "buy" else -1.0
+        if book not in held:
+            skip(t, "other_book")
+            continue
         qty, face = _num(t.get("quantity")), _num(t.get("face_amount_ccy"))
+        mode = "qty" if qty is not None else "face"
+        amount = qty if qty is not None else face
+        if amount is None:
+            skip(t, "no_quantity")
+            continue
         i = by_pid.get((book, str(t.get("position_id"))))
         if i is None and t.get("instrument_id"):
             i = by_secid.get((book, t["instrument_id"]))
         if i is None:
             if not t.get("instrument_id"):
-                skipped["no_instrument"] += 1
+                skip(t, "no_instrument")
                 continue
             pid = str(t["position_id"])
-            rows.append([pid, book, t["instrument_id"], sign * qty if qty is not None else None])
-            x = {"asset_class": "bond", "x": {"intraday_trade": True}}
-            for k in ("isin", "source_instrument_id", "source_instrument_name", "ccy"):
+            if pid in taken:
+                skip(t, "position_id_taken")   # the id of a row of another book: its figures must not be replaced
+                continue
+            ccy = ccy_of.get(t["instrument_id"])   # the bond's own currency, as a row of the book list has it
+            if not ccy:
+                skip(t, "no_currency")
+                continue
+            rows.append([pid, book, t["instrument_id"], 0.0 if mode == "qty" else None])
+            x = {"asset_class": "bond", "ccy": ccy, "x": {"intraday_trade": True}}
+            for k in ("isin", "source_instrument_id", "source_instrument_name"):
                 if t.get(k) is not None:
                     x[k] = t[k]
-            if qty is None:
-                x["face_amount_ccy"] = sign * face  # type: ignore[operator]
+            if mode == "face":
+                x["face_amount_ccy"] = 0.0
             extra[pid] = x
-            by_pid[(book, pid)] = by_secid[(book, t["instrument_id"])] = len(rows) - 1
-            summary["new_positions"] += 1
+            taken.add(pid)
+            i = by_pid[(book, pid)] = by_secid[(book, t["instrument_id"])] = len(rows) - 1
+            groups[i] = {"mode": mode, "d": 0.0, "new": True}
         else:
-            pid, _, _, old = rows[i]
-            x = extra.get(pid)
-            if qty is not None and old is not None:
-                new = float(old) + sign * qty
-                if x is not None and float(old) != 0:
-                    k = new / float(old)
-                    for f in SCALED:
-                        if x.get(f) is not None:
-                            x[f] = float(x[f]) * k
-                rows[i][3] = new
-            elif qty is None and x is not None and x.get("face_amount_ccy") is not None and old is None:
-                x["face_amount_ccy"] = float(x["face_amount_ccy"]) + sign * face  # type: ignore[operator]
-            else:
-                skipped["units_mismatch"] += 1
+            x = extra.get(rows[i][0])
+            row_mode = "qty" if rows[i][3] is not None else "face"
+            if mode != row_mode or (row_mode == "face" and (
+                    x is None or x.get("face_amount_ccy") is None or not t.get("ccy") or x.get("ccy") != t.get("ccy"))):
+                skip(t, "units_mismatch")
                 continue
+            groups.setdefault(i, {"mode": mode, "d": 0.0, "new": False})
+        groups[i]["d"] += sign * amount
         applied.append({k: t.get(k) for k in ("trade_id", "trade_version", "book_id", "position_id", "side",
                                               "quantity", "face_amount_ccy", "instrument_id")})
+    drop: set[int] = set()
+    for i, g in groups.items():
+        pid = rows[i][0]
+        x = extra.get(pid)
+        qty_mode = g["mode"] == "qty"
+        old = float(rows[i][3] or 0.0) if qty_mode else float(x.get("face_amount_ccy") or 0.0)
+        final = old + g["d"]
+        if g["new"]:
+            if abs(final) < 1e-9:
+                drop.add(i)
+                continue
+            summary["new_positions"] += 1
+        elif x is not None and old != 0:
+            k = final / old
+            x["x"] = {**(x.get("x") or {}), "intraday_trade": True,
+                      "intraday_start_" + ("qty" if qty_mode else "face"): old}
+            for f in SCALED:
+                if x.get(f) is not None:
+                    x[f] = float(x[f]) * k
+            for f in COST_BASIS:
+                if x.get(f) is not None and k <= 1:
+                    x[f] = float(x[f]) * k
+                elif x.get(f) is not None:
+                    x["x"]["intraday_cost_basis"] = "stale"
+        elif x is not None:
+            x["x"] = {**(x.get("x") or {}), "intraday_trade": True,
+                      "intraday_start_" + ("qty" if qty_mode else "face"): 0}
+        if qty_mode:
+            rows[i][3] = final
+        else:
+            x["face_amount_ccy"] = final  # type: ignore[index]
+    if drop:   # a new row whose trades add up to nothing
+        for i in drop:
+            extra.pop(rows[i][0], None)
+        rows = [r for j, r in enumerate(rows) if j not in drop]
+    done = {str(a["trade_id"]) for a in applied}
     summary.update(applied=len(applied), skipped=dict(sorted(skipped.items())),
-                   trade_ids=[str(a["trade_id"]) for a in applied][:500])
+                   trade_ids=sorted(done)[:500],
+                   versions={str(a["trade_id"]): a["trade_version"] for a in applied[:500]},
+                   skipped_ids=dict(list(skip_ids.items())[:500]))
     if not applied:
         return inputs, summary
     canon = json.dumps([inputs.private_inputs_hash, applied], sort_keys=True, default=str, separators=(",", ":"))
@@ -168,13 +247,32 @@ def intraday_inputs(con: psycopg.Connection, day: date, settings: Any,
     return apply_intraday(con, day, inputs)
 
 
-def _row(r: dict[str, Any], on: date) -> dict[str, Any]:
+def _intraday_state(r: dict[str, Any], on: date, run: dict[str, Any] | None, enabled: bool) -> str:
+    """What the screen says of a trade: ``applied`` only when the latest run took exactly this version in (its
+    lineage), else the reason it is out, ``pending`` (no run since it arrived), ``eod`` (the latest run is a close:
+    the close is valued on the start-of-day positions) or ``off`` (the setting)."""
+    why = effect(r, on)
+    if why:
+        return why
+    if not enabled:
+        return "off"
+    if run is None:
+        return "pending"
+    if run["run_type"] != "INTRADAY":
+        return "eod"
+    tid = str(r.get("trade_id"))
+    if tid in run["trade_ids"] and str(run["versions"].get(tid)) == str(r.get("trade_version")):
+        return "applied"
+    return run["skipped_ids"].get(tid) or "pending"
+
+
+def _row(r: dict[str, Any], on: date, run: dict[str, Any] | None = None, enabled: bool = True) -> dict[str, Any]:
     out: dict[str, Any] = {f: r.get(f) for f in FIELDS}
     for f in AMOUNTS:
         if out[f] is not None:
             out[f] = float(Decimal(str(out[f])))
     out["late"] = out["trade_date"] is not None and out["trade_date"] < on.isoformat()
-    out["intraday"] = effect(r, on) or "applied"  # in the intraday book, or why not (TDM#557)
+    out["intraday"] = _intraday_state(r, on, run, enabled)  # in the intraday book, or why not (TDM#557)
     out["src"] = r.get("_src")
     if r.get("x"):
         out["x"] = r["x"]
@@ -182,14 +280,15 @@ def _row(r: dict[str, Any], on: date) -> dict[str, Any]:
 
 
 def view(con: psycopg.Connection, on: date | None = None, book_id: str | None = None,
-         days: int = 20) -> dict[str, Any]:
+         days: int = 20, intraday_trades: bool = True) -> dict[str, Any]:
     """The trades screen of ``on`` (default: the latest date with trades, else today, Moscow), of ``book_id`` only when
     given: see the module docstring. Amounts as the contract has them (unsigned; ``side`` gives the direction)."""
     if on is None:
         latest = trade_dates(con, _moscow_today(), 1)
         on = latest[0] if latest else _moscow_today()
     t = store.dataset_rows(con, "trades", on, scope={"book_id": book_id} if book_id else None)
-    rows = [_row(r, on) for r in t.rows]
+    run = _intraday_run(con, on)
+    rows = [_row(r, on, run, intraday_trades) for r in t.rows]
     books = {b["book_id"]: b for b in store.current_books(con, on)}
     per_book: dict[str, Counter] = {}
     for r in rows:
@@ -215,19 +314,20 @@ def view(con: psycopg.Connection, on: date | None = None, book_id: str | None = 
                    "completeness": u["completeness"], "rows": u["row_count"], "file_name": u["file_name"]}
                   for u in t.units if not book_id or u["scope"].get("book_id") in (None, book_id)],
         "days": strip,
-        "intraday": _intraday_run(con, on),
+        "intraday": ({k: v for k, v in run.items() if k not in ("versions", "skipped_ids")}
+                     | {"enabled": intraday_trades}) if run else None,
     }
 
 
 def _intraday_run(con: psycopg.Connection, on: date) -> dict[str, Any] | None:
-    """The latest complete INTRADAY run of ``on`` and what of the day's trades it took in (its lineage
-    ``intraday_trades``), or None."""
-    row = con.execute("SELECT run_id, cut_type, lineage->'intraday_trades' FROM run WHERE business_date = %s"
-                      " AND run_type = 'INTRADAY' AND status = 'complete' ORDER BY run_id DESC LIMIT 1",
-                      (on,)).fetchone()
+    """The latest complete run of ``on`` (an INTRADAY one, or the close after it: ``run_type`` ``EOD``) and what of the
+    day's trades it took in (its lineage ``intraday_trades``), or None. A close takes none in."""
+    row = con.execute("SELECT run_id, cut_type, run_type, lineage->'intraday_trades' FROM run WHERE business_date = %s"
+                      " AND status = 'complete' ORDER BY run_id DESC LIMIT 1", (on,)).fetchone()
     if not row:
         return None
-    t = row[2] or {}
-    return {"run_id": row[0], "cut_type": row[1], "applied": t.get("applied", 0),
+    t = row[3] or {}
+    return {"run_id": row[0], "cut_type": row[1], "run_type": row[2], "applied": t.get("applied", 0),
             "new_positions": t.get("new_positions", 0), "skipped": t.get("skipped", {}),
-            "trade_ids": t.get("trade_ids", [])}
+            "trade_ids": t.get("trade_ids", []), "versions": t.get("versions", {}),
+            "skipped_ids": t.get("skipped_ids", {})}
