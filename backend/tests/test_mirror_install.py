@@ -976,3 +976,35 @@ def test_an_overridden_http_index_gives_no_warning(tmp_path, venv_python, index,
         {"url": "https://mirror.example/simple/", "source": "mirror.ini: index_url"}])
     res = run_install(tmp_path, venv_python, index)
     assert res.ok and res.warnings == []
+
+
+def test_config_urls_decodes_the_repr_of_a_multi_line_pip_ini_value():
+    """``pip config list`` prints values with %r: a multi-line extra-index-url is one quoted string with literal \\n."""
+    value = "'\\nhttps://bob:PW2@one.example/simple\\nhttp://carol:PW3@two.example/simple'"
+    assert mi._config_urls(value) == ["https://bob:PW2@one.example/simple", "http://carol:PW3@two.example/simple"]
+    assert mi._config_urls("'https://a.example/s'") == ["https://a.example/s"]
+    assert mi._config_urls("https://a.example/s") == ["https://a.example/s"]
+    assert mi._config_urls("'unterminated") == ["unterminated"]
+
+
+def test_secrets_of_a_multi_line_extra_index_url_never_reach_journals_or_the_error(tmp_path, venv_python, index):
+    """Independent review of PR #540: passwords of a multi-line extra-index-url in pip.ini reached the .json journal
+    and the error text (screen, update.log). The http warning must see such an address too."""
+    import socket
+    with socket.socket() as sock:
+        sock.bind(("127.0.0.1", 0))
+        port = sock.getsockname()[1]
+    base = f"127.0.0.1:{port}/simple/"
+    config = (f"[global]\nindex-url = http://{base}\n"
+              f"extra-index-url =\n    https://bob:mlPASS22@{base}\n    http://carol:mlPASS33@{base}\n")
+    env = pip_env(tmp_path, f"http://{base}", PIP_RETRIES="0", PIP_TIMEOUT="5", config=config)
+    env.pop("PIP_INDEX_URL")  # the index comes from the pip.ini only, as on the owner's machine
+    with pytest.raises(mi.InstallError) as exc:
+        run_install(tmp_path, venv_python, index, env=env)
+    for secret in ("mlPASS22", "mlPASS33", "bob:", "carol:"):
+        assert secret not in str(exc.value)
+        assert secret not in _all_logs(tmp_path)
+    data = last_json(tmp_path)
+    assert f"https://***@{base}" in [i["url"] for i in data["index"]]
+    assert f"http://***@{base}" in [i["url"] for i in data["index"]]
+    assert any(f"http://***@{base}" in w for w in data["warnings"])

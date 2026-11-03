@@ -71,6 +71,7 @@ passed explicitly (``--index-url`` / ``--extra-index-url``).
 
 from __future__ import annotations
 
+import ast
 import configparser
 import hashlib
 import itertools
@@ -331,10 +332,10 @@ class _Journal:
         d["error"] = self.mask(d["error"])
         d["warnings"] = [self.mask(w) for w in d["warnings"]]
         for item in d["index"]:
-            item["url"] = mask_url(item["url"])
+            item["url"] = self.mask(mask_url(item["url"]))
         for p in d["packages"].values():
             if p["url"]:
-                p["url"] = mask_url(p["url"])
+                p["url"] = self.mask(mask_url(p["url"]))
         for n in d["notes"]:
             n["title"] = self.mask(n["title"])
             n["tail"] = [self.mask(x) for x in n["tail"]]
@@ -452,12 +453,27 @@ def _pip(ctx: _Ctx, *args: str) -> subprocess.CompletedProcess[str]:
 
 
 def _fail(ctx: _Ctx, message: str) -> InstallError:
+    message = ctx.journal.mask(message)  # its text reaches the screen, update.log and the update page
     ctx.journal.data["error"] = message
     return InstallError(message, ctx.journal.log_path, ctx.journal.json_path)
 
 
 def _output(cp: subprocess.CompletedProcess[str]) -> str:
     return (cp.stdout or "") + (cp.stderr or "")
+
+
+def _config_urls(value: str) -> list[str]:
+    """The addresses of one ``pip config list`` value. pip prints values with ``%r``, so a multi-line pip.ini value
+    (several extra indexes, one per line) arrives as ``'\\nhttps://a\\nhttps://b'`` with literal ``\\n``: decode it
+    as the Python literal it is, then split on whitespace."""
+    raw = value.strip()
+    try:
+        text = ast.literal_eval(raw)
+    except (ValueError, SyntaxError):
+        text = raw.strip("'\"")
+    if not isinstance(text, str):
+        text = raw.strip("'\"")
+    return text.split()
 
 
 def _index_addresses(ctx: _Ctx) -> list[dict]:
@@ -474,7 +490,7 @@ def _index_addresses(ctx: _Ctx) -> list[dict]:
         key = key.strip()
         if sep and key.endswith(("index-url", "index_url")):
             over = bool(ctx.settings.index_url) and not key.endswith("extra-index-url")
-            found += [(u, f"pip config: {key}", over) for u in value.strip().strip("'\"").split()]
+            found += [(u, f"pip config: {key}", over) for u in _config_urls(value)]
     for var in ("PIP_INDEX_URL", "PIP_EXTRA_INDEX_URL"):
         over = bool(ctx.settings.index_url) and var == "PIP_INDEX_URL"
         found += [(u, var, over) for u in ctx.env.get(var, "").split()]
@@ -772,10 +788,10 @@ def install(*, python: Path, wheelhouse: Path, log_dir: Path, settings: Settings
     except InstallError as exc:
         if exc.log_path is not None:
             raise
-        journal.data["error"] = str(exc)
-        raise InstallError(str(exc), journal.log_path, journal.json_path) from exc
+        journal.data["error"] = journal.mask(str(exc))
+        raise InstallError(journal.data["error"], journal.log_path, journal.json_path) from exc
     except Exception as exc:
-        journal.data["error"] = f"Непредвиденная ошибка: {type(exc).__name__}: {exc}"
+        journal.data["error"] = journal.mask(f"Непредвиденная ошибка: {type(exc).__name__}: {exc}")
         raise InstallError(journal.data["error"], journal.log_path, journal.json_path) from exc
     finally:
         _summarize(journal, result)
