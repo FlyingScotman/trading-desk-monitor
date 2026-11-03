@@ -423,7 +423,8 @@ def direct_row(ctx: EodContext, book: str, pid: str, o: Outcome, x: dict[str, An
     v = o.valuation
     assert v is not None
     x = normalised(x)
-    kind = (x.get("asset_class") or "bond").lower()
+    # a row without asset_class valued by core from its trade's terms is a derivative, not an unmapped bond (TDM#501)
+    kind = (x.get("asset_class") or ("otc" if v.extra.get("core") else "bond")).lower()
     fx = kind == "fx"
     itype, aclass, segment = DIRECT_KIND.get(kind, DIRECT_KIND["other"])
     why = list(v.assumptions)

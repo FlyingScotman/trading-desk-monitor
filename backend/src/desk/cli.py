@@ -317,7 +317,7 @@ def eod_run(settings: Settings, d: str, *, snapshots: str | Path | None = None, 
                 + ("valued as rows of their own" if fx_options.unlinked_terms else "not valued (fx_unlinked_terms off)")
                 + ": " + ", ".join(bp.unlinked_terms[:10]))
         if bp.unlinked_rates:
-            out(f"WARN trade_terms: {len(bp.unlinked_rates)} swap trade(s) no positions row names, not valued: "
+            out(f"WARN trade_terms: {len(bp.unlinked_rates)} swap or REPO trade(s) no positions row names, not valued: "
                 + ", ".join(bp.unlinked_rates[:10]))
         outcomes = value(ctx, bp.requests, second_order=not no_gamma, position_ids=bp.position_ids,
                          carried_spreads=carried)

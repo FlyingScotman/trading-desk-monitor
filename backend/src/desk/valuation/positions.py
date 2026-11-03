@@ -18,6 +18,8 @@ core (``direct``). ``merge`` puts the two back in the inputs' order for ``desk_r
   (``RUB RUONIA``, the foreign curve, ``RUB KEY``), FX delta per currency (core's spot equivalent), basis, fixing
   status. When core cannot (no curve, no spot, a fixing missing, a CCS), the row keeps the rule below with the reason
   first in its assumptions.
+- A row without ``asset_class`` but with a ``deal_id`` is linked like an OTC row (TDM#501): with its trade's terms it
+  is valued here (or, when core rejects them, by the OTC rule with the reason); without, it is a bond as before.
 - FX row without terms: its FX delta is the amount in currency (``tdm_run.direct_row``), no rates risk. Spot or cash
   (no ``value_date``, or one not after the business date): PV = ``amount_ccy`` x the rate of the business date
   (``fallback.fx_rate``; RUB at 1), quality ``market_value``. A forward (``value_date`` after the business date: an
@@ -268,11 +270,17 @@ def _derivatives(ctx: EodContext, inputs: PositionInputs, p: BookPlan, second_or
     ticker (setting ``futures_by_ticker``), and with ``fx_unlinked_terms`` the trades no row names (added to the
     plan as rows of their own). Returns per position ID the valuation or why core did not value it."""
     opts = ctx.fx_options
-    rows = []
+    rows, classless = [], set()
     for pid, book, _, _ in inputs.rows:
         x = inputs.extra.get(pid)
-        if x is not None and (x.get("asset_class") or "bond").lower() != "bond":
+        if x is None:
+            continue
+        if (x.get("asset_class") or "bond").lower() != "bond":
             rows.append((pid, book, normalised(x)))
+        elif not x.get("asset_class") and x.get("deal_id"):
+            # TDM#501: a row without asset_class but with a deal: its trade's terms link it, else it is a bond as before
+            rows.append((pid, book, normalised(x)))
+            classless.add(pid)
     linked, unlinked = dv.link(rows, inputs.trade_terms)
     p.unlinked_terms = sorted({f"{t.get('book_id')}|{t.get('trade_id')}" for t in unlinked})
     p.unlinked_rates = dv.unlinked_rates(rows, inputs.trade_terms, ctx.business_date)
@@ -284,7 +292,7 @@ def _derivatives(ctx: EodContext, inputs: PositionInputs, p: BookPlan, second_or
                 reqs.append(dv.request_of(pid, book, x, linked[pid]))
             except dv.NotValued as e:
                 out[pid] = e
-        elif opts.futures_by_ticker and (f := _future_row(ctx, x)) is not None:
+        elif pid not in classless and opts.futures_by_ticker and (f := _future_row(ctx, x)) is not None:
             n = qty.get(pid) if qty.get(pid) is not None else x.get("amount_ccy")
             if n is None:
                 out[pid] = dv.NotValued("no_quantity", f"future {f['secid']}: no number of contracts")
@@ -367,8 +375,9 @@ def plan(ctx: EodContext, inputs: PositionInputs, *, second_order: bool = True) 
             continue
         x = normalised(x)
         qty = None if qty is None else float(qty)
-        kind = (x.get("asset_class") or "bond").lower()
         core = by_core.get(pid)
+        # TDM#501: a row without asset_class that core did not value from its linked terms is a derivative, not a bond
+        kind = (x.get("asset_class") or ("otc" if core is not None else "bond")).lower()
         if isinstance(core, BondValuation):
             p.direct[pid] = _core_outcome(core, p.core_result)
             continue

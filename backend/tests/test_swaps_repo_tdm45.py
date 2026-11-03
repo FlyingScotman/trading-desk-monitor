@@ -281,8 +281,60 @@ def test_swap_terms_without_a_positions_row_are_counted_not_valued(ctx, store_ur
         lineage = con.execute("SELECT lineage FROM run WHERE run_id = %s", (rid,)).fetchone()[0]
         none_lineage = con.execute("SELECT lineage FROM run WHERE run_id = %s", (none_rid,)).fetchone()[0]
     assert lineage["positions"]["unlinked_swap_terms"] == {"trades": 5, "books": {"IRB": 4, "IRC": 1}}
-    line = [w for w in warnings if w.startswith("условия свопов без строки позиций")]
+    line = [w for w in warnings if w.startswith("условия свопов и РЕПО без строки позиций")]
     assert len(line) == 1 and "сделок 5" in line[0] and "IRB (4), IRC (1)" in line[0]
     assert "15" not in line[0].replace("сделок 5", "") and "1000000000" not in line[0]  # no amounts or rates
     assert "unlinked_swap_terms" not in none_lineage["positions"]
     assert not [w for w in none_warnings if w.startswith("условия свопов")]
+
+
+def test_a_position_id_on_one_leg_links_the_whole_swap(ctx):
+    """TDM#212: the legs are grouped by trade before they are linked: a ``position_id`` on the fixed leg only (the
+    floating one names no position) values the whole swap, as when no leg names it."""
+    legs = [{**leg("S1", "fix", "pay", fixed_rate_pct="15.5"), "position_id": "POS-S1"},
+            leg("S1", "flt", "receive", index_code="RUONIA")]
+    x = {"asset_class": "otc", "ccy": "RUB", "source_instrument_id": "POS-S1"}  # no deal_id: only the position names it
+    inp = PositionInputs([("POS-S1", "IRB", None, None)], [], {"IRB": BD}, datetime.now(UTC), "0" * 64,
+                         {"POS-S1": x}, trade_terms=legs)
+    bp = pv1.plan(ctx, inp)
+    v = bp.direct["POS-S1"].valuation
+    assert v.extra["core"]["product"] == "ois" and v.extra["core"]["trades"] == ["S1"], v.assumptions
+    whole = pv1.plan(ctx, inputs([leg("S1", "fix", "pay", fixed_rate_pct="15.5"),
+                                  leg("S1", "flt", "receive", index_code="RUONIA")], ("S1",)))
+    assert v.pv_rub == pytest.approx(whole.direct["S1"].valuation.pv_rub)
+    assert bp.unlinked_rates == []
+    # a leg naming another position stays with that one: the trade is incomplete under each, never doubled
+    other = [legs[0], {**legs[1], "position_id": "POS-X"}]
+    bp = pv1.plan(ctx, replace(inp, trade_terms=other))
+    assert bp.direct["POS-S1"].core_not_valued[0] == "terms_incomplete"
+
+
+def test_repo_terms_without_a_positions_row_are_counted(ctx):
+    """TDM#503: REPO terms no positions row names are counted with the swaps (not valued); a REPO that ended before
+    the date is not."""
+    extra = [repo("U7", "repo", "2026-10-14", "2026-11-16", fixed_rate_pct="15"),
+             repo("U8", "repo", "2026-10-01", "2026-10-14", fixed_rate_pct="15"),
+             repo("U9", "reverse_repo", "2026-10-14", None, fixed_rate_pct="15")]
+    bp = pv1.plan(ctx, inputs([*TERMS, *extra]))
+    assert bp.unlinked_rates == ["IRB|U7", "IRB|U9"]
+
+
+def test_a_row_without_asset_class_is_linked_to_its_terms(ctx):
+    """TDM#501: a swap row the report gives without ``asset_class`` (but with its deal) is linked to its terms and
+    valued by core, published as a derivative; one core rejects keeps the report's value with core's reason; a row
+    without class and without terms is a bond as before."""
+    terms = [leg("S1", "fix", "pay", fixed_rate_pct="15.5"), leg("S1", "flt", "receive", index_code="RUONIA"),
+             *TERMS[-2:]]  # B1: a basis swap, not valued by core
+    extra = {"S1": {"ccy": "RUB", "deal_id": "S1", "source_instrument_id": "S1", "mv_rub": 5.0},
+             "B1": {"ccy": "RUB", "deal_id": "B1", "source_instrument_id": "B1", "mv_rub": 7.0},
+             "Z": {"ccy": "RUB", "deal_id": "Z", "source_instrument_id": "Z", "mv_rub": 9.0}}
+    inp = PositionInputs([(p, "IRB", None, None) for p in extra], [], {"IRB": BD}, datetime.now(UTC), "0" * 64,
+                         extra, trade_terms=terms)
+    bp = pv1.plan(ctx, inp)
+    s1 = bp.direct["S1"]
+    assert s1.valuation.extra["core"]["product"] == "ois" and bp.unlinked_rates == []
+    row = tdm_run.direct_row(ctx, "IRB", "S1", s1, extra["S1"], None)
+    assert row["side"] == "PAY" and not row["name"].endswith(tdm_run.FROM_REPORT)
+    b1 = bp.direct["B1"]
+    assert b1.core_not_valued[0] == "basis_swap_unsupported" and b1.valuation.pv_rub == 7.0
+    assert "Z" not in bp.direct or bp.direct["Z"].core_not_valued is None  # no terms: the bond path, as before

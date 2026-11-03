@@ -450,25 +450,34 @@ def request_of(position_id: str, book_id: str, row: dict[str, Any], terms: list[
 
 def _link(rows: list[tuple[str, str, dict[str, Any]]], terms: list[dict[str, Any]]
           ) -> tuple[dict[str, list[dict[str, Any]]], list[dict[str, Any]]]:
-    """position_id -> its trade_terms rows, and the rows of ``LINKED_KINDS`` no positions row names."""
-    by_pid: dict[tuple[str, str], list[dict]] = defaultdict(list)
-    by_trade: dict[tuple[str, str], list[dict]] = defaultdict(list)
+    """position_id -> its trade_terms rows, and the rows of ``LINKED_KINDS`` no positions row names.
+
+    The legs are grouped by trade (book, ``trade_id``) first (TDM#212): a ``position_id`` on one leg of a swap links
+    the whole trade, its other legs too (those naming no position or the same one). A row takes the trades whose legs
+    name its ``position_id``; else the trade whose ``trade_id`` is its ``deal_id``, else its ``position_id`` (the legs
+    of that trade naming no other position)."""
+    legs: dict[tuple[str, str], list[dict]] = defaultdict(list)
+    named: dict[tuple[str, str], dict[tuple[str, str], None]] = defaultdict(dict)
     for t in terms:
         if t.get("product_kind") not in LINKED_KINDS:
             continue
-        b = str(t.get("book_id"))
+        k = (str(t.get("book_id")), str(t.get("trade_id")))
+        legs[k].append(t)
         if t.get("position_id"):
-            by_pid[(b, str(t["position_id"]))].append(t)
-        else:
-            by_trade[(b, str(t["trade_id"]))].append(t)
+            named[(k[0], str(t["position_id"]))][k] = None
+
+    def own(k: tuple[str, str], pid: str) -> list[dict]:
+        return [t for t in legs.get(k, ()) if not t.get("position_id") or str(t["position_id"]) == pid]
+
     out: dict[str, list[dict]] = {}
     used: set[int] = set()
     for pid, book, x in rows:
-        got = by_pid.get((book, pid)) or by_trade.get((book, str(x.get("deal_id")))) or by_trade.get((book, pid)) or []
+        got = [t for k in named.get((book, pid), ()) for t in own(k, pid)] \
+            or own((book, str(x.get("deal_id"))), pid) or own((book, pid), pid)
         if got:
             out[pid] = got
             used |= {id(t) for t in got}
-    return out, [t for ts in (*by_pid.values(), *by_trade.values()) for t in ts if id(t) not in used]
+    return out, [t for ts in legs.values() for t in ts if id(t) not in used]
 
 
 def link(rows: list[tuple[str, str, dict[str, Any]]], terms: list[dict[str, Any]]
@@ -480,13 +489,14 @@ def link(rows: list[tuple[str, str, dict[str, Any]]], terms: list[dict[str, Any]
     return out, [t for t in left if t.get("product_kind") in FX_KINDS]
 
 
-UNLINKED_RATES_KINDS = (*SWAP_KINDS, "ccs")
-"""Swap products whose terms without a positions row are accepted but not valued (TDM#468): counted, not valued."""
+UNLINKED_RATES_KINDS = (*SWAP_KINDS, "ccs", "repo")
+"""Swap and REPO products whose terms without a positions row are accepted but not valued (TDM#468, TDM#503):
+counted, not valued."""
 
 
 def unlinked_rates(rows: list[tuple[str, str, dict[str, Any]]], terms: list[dict[str, Any]],
                    on: date | None = None) -> list[str]:
-    """``book|trade_id`` of the swap trades (``UNLINKED_RATES_KINDS``) in ``terms`` that no positions row names: a trade
+    """``book|trade_id`` of the swap and REPO trades (``UNLINKED_RATES_KINDS``) in ``terms`` no positions row names: a trade
     made after the report's cut. Not valued, not in risk or PnL; the run says how many and in which books. Terms are
     carried forward, so with ``on`` (the business date) a trade matured before it (the last ``maturity_date`` of its
     legs < ``on``) is not counted; one maturing on ``on`` is still alive."""
