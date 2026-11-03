@@ -334,8 +334,33 @@ class OcpComparison(BaseModel):
     valid_date: date | None
     scope: dict[str, str] = Field(default_factory=dict, description="The report unit's scope (entity, book_id)")
     books: list[str] = Field(default_factory=list, description="The books the comparison sums (a run before v2: [])")
+    reported_base: float | None = Field(None, description="ocp_ccy as reported: without the derivatives when the "
+                                                          "unit gives them apart (private/1.7); before v3: null")
+    reported_derivatives: dict[str, float] = Field(default_factory=dict, description=(
+        "private/1.7 derivatives_ccy: component -> the nominal of the derivatives' future flows the report left out "
+        "of ocp_ccy (``reported`` = reported_base + their sum)"))
+    split: bool = Field(False, description="The unit gives the derivatives apart (private/1.7 derivatives_ccy)")
 
     model_config = ConfigDict(populate_by_name=True, serialize_by_alias=True)
+
+
+class OcpDerivativesCheck(BaseModel):
+    """The report's nominal of the derivatives' future flows against their PV on the report's date (TDM#531): seen
+    only, it never changes the published figure."""
+
+    entity: str
+    book_id: str | None
+    books: list[str]
+    ccy: str
+    component: str
+    nominal: float = Field(description="derivatives_ccy of the report (private/1.7)")
+    pv: float | None = Field(description="The derivatives' PV on pv_date (their OCP lines); null: unknown")
+    pv_date: date | None
+    pv_source: Literal["run", "base_run"] | None = Field(description="run: this run (it is of the report's date); "
+                                                                     "base_run: the default run of the report's date")
+    diff: float | None = Field(description="nominal - pv")
+    over: bool = Field(description="|diff| above the tolerance")
+    set_id: int | None
 
 
 class OcpTransferDeal(BaseModel):
@@ -380,8 +405,23 @@ class OcpPublishedLine(BaseModel):
                                           "unit covers); derived_stale_report: from positions, the unit is too old")
     components: list[str] = Field(description="The components outside the report added to it (source report)")
     outside: dict[str, float] = Field(description="Their amounts")
-    reported: float | None = Field(description="The report's figure (an entity's less the books published apart)")
+    reported: float | None = Field(description="The report's figure (an entity's less the books published apart); "
+                                               "report_base_plus_day: the base (the parts' base)")
     valid_date: date | None = Field(description="The report unit's date")
+    base_date: date | None = Field(None, description="report_base_plus_day: B, the date of the report the figure "
+                                                     "starts from")
+    set_id: int | None = Field(None, description="report_base_plus_day: the report unit's set (null: a book of a "
+                                                 "covered entity without a row)")
+    base_kind: Literal["without_derivatives", "with_derivatives", "book_absent"] | None = Field(None, description=(
+        "report_base_plus_day: the report without the derivatives' future flows (private/1.7), with them at their "
+        "nominal (an adapter before 1.7: their PV not added), a book of a covered entity without a row (base 0)"))
+    parts: dict[str, float] | None = Field(None, description=(
+        "report_base_plus_day: base, derivatives, bonds, trades, outside -> amount; they sum to ``amount``"))
+    contributions: dict[str, dict[str, Any]] | None = Field(None, description=(
+        "report_base_plus_day: per part {items: the largest contributions (kind report / report_part / "
+        "report_nominal / position / trade with its id and amount), rest: {count, amount} of the others or null}"))
+    fallback: list[str] = Field(default_factory=list, description="Derivative components taken at the report's "
+                                                                  "nominal: no PV line in the run")
 
 
 class OcpPublishedCcy(BaseModel):
@@ -389,13 +429,18 @@ class OcpPublishedCcy(BaseModel):
     rate: float | None
     total_rub: float | None
     by_source: dict[str, float] = Field(description="source -> amount")
+    by_part: dict[str, float] | None = Field(None, description="report_base_plus_day: part -> amount of its lines "
+                                                               "that start from a report")
 
 
 class OcpPublished(BaseModel):
-    """The OCP the run publishes (TDM#416): the bank's report where a unit covers plus the components outside it,
-    derived elsewhere. ``basis`` None: a run before v2 of the block (the pages show the derived OCP)."""
+    """The OCP the run publishes: ``report_base_plus_day`` (TDM#531, block v3: the report on its date B without the
+    derivatives' future flows + their PV + the bonds' revaluation and the trades since B + the components outside the
+    report), ``report_plus_outside`` (TDM#416: the report + the components outside it) or ``derived``; derived where no
+    report unit covers. ``basis`` None: a run before v2 of the block (the pages show the derived OCP)."""
 
-    basis: Literal["report_plus_outside", "derived"] | None = None
+    basis: Literal["report_base_plus_day", "report_plus_outside", "derived"] | None = None
+    base_date: date | None = Field(None, description="report_base_plus_day: the newest base date of its lines")
     by_ccy: dict[str, OcpPublishedCcy] = Field(default_factory=dict)
     by_book: list[OcpPublishedLine] = Field(default_factory=list)
 
@@ -403,7 +448,9 @@ class OcpPublished(BaseModel):
 class OcpGap(BaseModel):
     """What is missing for the published OCP to be trusted."""
 
-    code: Literal["no_report", "stale_report", "outside_without_terms", "books_outside_report", "outside_double_count"]
+    code: Literal["no_report", "stale_report", "outside_without_terms", "books_outside_report", "outside_double_count",
+                  "report_without_derivatives_split", "derivatives_nominal_fallback", "base_older",
+                  "trades_not_loaded", "no_base_run", "trades_not_valued", "carried_forward_unit"]
     text: str
     items: list[str] = Field(description="Scopes, books or position ids concerned (at most 50)")
 
@@ -430,6 +477,10 @@ class RunOcp(BaseModel):
     by_book: list[dict[str, Any]]
     lines: list[OcpLineOut]
     reconciliation: list[OcpComparison]
+    derivatives_check: list[OcpDerivativesCheck] = Field(default_factory=list, description=(
+        "report_base_plus_day (block v3): the report's derivative nominal against their PV on its date, per scope, "
+        "currency and component"))
+    parts: list[dict[str, str]] = Field(default_factory=list, description="part key -> its name on the pages (v3)")
     outside_report: list[dict[str, Any]] = Field(description="Derived OCP of books no report unit covers")
     transfers: list[OcpTransfer]
     report: dict[str, Any] = Field(description="The report's units in force and its number of rows")

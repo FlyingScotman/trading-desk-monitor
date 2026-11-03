@@ -198,7 +198,9 @@ def test_provisional_conventions():
 # ---- the published OCP (TDM#416) -----------------------------------------------------------------------------------
 
 IN_REPORT = frozenset({"cash", "futures", "options", "transfers"})
-COMPOSITION = O.OcpPolicy(report_components=IN_REPORT, include_ndf=False, bond_funding_liability=True)
+# the tests of the published OCP before TDM#531 pin its basis report_plus_outside (still accepted from ocp_policy)
+COMPOSITION = O.OcpPolicy(report_components=IN_REPORT, include_ndf=False, bond_funding_liability=True,
+                          published=O.PublishedBasis.REPORT_PLUS_OUTSIDE)
 """An invented composition for the tests: the report holds the cash, the futures, the options and the transfers, NDFs
 are left out of the OCP; the FX legs, bonds and funding are added from positions."""
 OPTION = fx_row("D1|OPT", "D1", {"USD": 70_000.0}, "2026-12-17", x_product_group="fx_option")
@@ -248,7 +250,8 @@ def test_published_is_report_plus_outside_components_and_derived_outside_the_rep
 
 def test_published_with_cash_and_ndfs_outside_the_report():
     # another invented composition: the report holds the FX legs, the futures and the transfers; NDFs enter the OCP
-    policy = O.OcpPolicy(report_components=frozenset({"fx_legs", "futures", "transfers"}), bond_funding_liability=True)
+    policy = O.OcpPolicy(report_components=frozenset({"fx_legs", "futures", "transfers"}), bond_funding_liability=True,
+                         published=O.PublishedBasis.REPORT_PLUS_OUTSIDE)
     r = published_run(report(520_000 - 620_000), policy)
     p = {(x["book_id"], x["ccy"]): x for x in r.published}
     d1 = p[("D1", "USD")]

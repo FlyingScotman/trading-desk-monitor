@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "private/1.3/ocp",
+  "$id": "private/1.7/ocp",
   "title": "ocp row",
   "description": "Private input contract v1 (docs/architecture/08_PRIVATE_ADAPTER_INTERFACE.md §10). One row as the adapter emits it. An optional field may be absent or null (the same thing); the empty string is invalid everywhere. Raw firm values go in x_* keys; _src is the row's location in the report, without sheet names.",
   "type": "object",
@@ -36,6 +36,28 @@
     },
     "rate_rub_per_unit": {
       "$ref": "#/$defs/amount"
+    },
+    "derivatives_ccy": {
+      "type": "object",
+      "description": "private/1.7: the monitor component (rules.ocp.DERIVATIVE_COMPONENTS) -> the signed nominal of the derivatives' future flows left out of ocp_ccy; present: ocp_ccy is without the derivatives",
+      "properties": {
+        "fx_legs": {
+          "$ref": "#/$defs/amount"
+        },
+        "ndf": {
+          "$ref": "#/$defs/amount"
+        },
+        "futures": {
+          "$ref": "#/$defs/amount"
+        },
+        "options": {
+          "$ref": "#/$defs/amount"
+        },
+        "other": {
+          "$ref": "#/$defs/amount"
+        }
+      },
+      "additionalProperties": false
     }
   },
   "patternProperties": {

@@ -323,9 +323,12 @@ export interface paths {
         };
         /**
          * Ocp
-         * @description The run's OCP (B2, TDM#59): the published OCP (TDM#416: the bank's OCP report + the components it does
-         *     not hold, derived from positions where no report unit covers; per currency and per book with the source of
-         *     each figure) and what it lacks (``gaps``); the OCP derived from positions by component (cash and to be
+         * @description The run's OCP (B2, TDM#59): the published OCP (TDM#531, ``report_base_plus_day``: the bank's OCP report on
+         *     its date B without the derivatives + their PV + the bonds' revaluation and the trades since B + the components
+         *     outside the report, each line with its ``parts`` and bounded ``contributions``, ``base_date``, the report's
+         *     derivative nominal against their PV on B in ``derivatives_check``; or TDM#416: the report + the components it
+         *     does not hold; derived from positions where no report unit covers; per currency and per book with the source
+         *     of each figure) and what it lacks (``gaps``); the OCP derived from positions by component (cash and to be
          *     settled, PV of the FX legs, NDF, futures, options, bonds, their funding liability, other, OCP transfers),
          *     reconciled per currency with the reported ``ocp`` at the report's level, the breaks with their explanation
          *     and the transfers per book; state ``no_report`` without a report in force, ``not_computed`` for a run before
@@ -1851,6 +1854,70 @@ export interface components {
              * @description The books the comparison sums (a run before v2: [])
              */
             books?: string[];
+            /**
+             * Reported Base
+             * @description ocp_ccy as reported: without the derivatives when the unit gives them apart (private/1.7); before v3: null
+             */
+            reported_base?: number | null;
+            /**
+             * Reported Derivatives
+             * @description private/1.7 derivatives_ccy: component -> the nominal of the derivatives' future flows the report left out of ocp_ccy (``reported`` = reported_base + their sum)
+             */
+            reported_derivatives?: {
+                [key: string]: number;
+            };
+            /**
+             * Split
+             * @description The unit gives the derivatives apart (private/1.7 derivatives_ccy)
+             * @default false
+             */
+            split?: boolean;
+        };
+        /**
+         * OcpDerivativesCheck
+         * @description The report's nominal of the derivatives' future flows against their PV on the report's date (TDM#531): seen
+         *     only, it never changes the published figure.
+         */
+        OcpDerivativesCheck: {
+            /** Entity */
+            entity: string;
+            /** Book Id */
+            book_id: string | null;
+            /** Books */
+            books: string[];
+            /** Ccy */
+            ccy: string;
+            /** Component */
+            component: string;
+            /**
+             * Nominal
+             * @description derivatives_ccy of the report (private/1.7)
+             */
+            nominal: number;
+            /**
+             * Pv
+             * @description The derivatives' PV on pv_date (their OCP lines); null: unknown
+             */
+            pv: number | null;
+            /** Pv Date */
+            pv_date: string | null;
+            /**
+             * Pv Source
+             * @description run: this run (it is of the report's date); base_run: the default run of the report's date
+             */
+            pv_source: ("run" | "base_run") | null;
+            /**
+             * Diff
+             * @description nominal - pv
+             */
+            diff: number | null;
+            /**
+             * Over
+             * @description |diff| above the tolerance
+             */
+            over: boolean;
+            /** Set Id */
+            set_id: number | null;
         };
         /**
          * OcpGap
@@ -1861,7 +1928,7 @@ export interface components {
              * Code
              * @enum {string}
              */
-            code: "no_report" | "stale_report" | "outside_without_terms" | "books_outside_report" | "outside_double_count";
+            code: "no_report" | "stale_report" | "outside_without_terms" | "books_outside_report" | "outside_double_count" | "report_without_derivatives_split" | "derivatives_nominal_fallback" | "base_older" | "trades_not_loaded" | "no_base_run" | "trades_not_valued" | "carried_forward_unit";
             /** Text */
             text: string;
             /**
@@ -1905,12 +1972,19 @@ export interface components {
         };
         /**
          * OcpPublished
-         * @description The OCP the run publishes (TDM#416): the bank's report where a unit covers plus the components outside it,
-         *     derived elsewhere. ``basis`` None: a run before v2 of the block (the pages show the derived OCP).
+         * @description The OCP the run publishes: ``report_base_plus_day`` (TDM#531, block v3: the report on its date B without the
+         *     derivatives' future flows + their PV + the bonds' revaluation and the trades since B + the components outside the
+         *     report), ``report_plus_outside`` (TDM#416: the report + the components outside it) or ``derived``; derived where no
+         *     report unit covers. ``basis`` None: a run before v2 of the block (the pages show the derived OCP).
          */
         OcpPublished: {
             /** Basis */
-            basis?: ("report_plus_outside" | "derived") | null;
+            basis?: ("report_base_plus_day" | "report_plus_outside" | "derived") | null;
+            /**
+             * Base Date
+             * @description report_base_plus_day: the newest base date of its lines
+             */
+            base_date?: string | null;
             /** By Ccy */
             by_ccy?: {
                 [key: string]: components["schemas"]["OcpPublishedCcy"];
@@ -1933,6 +2007,13 @@ export interface components {
             by_source: {
                 [key: string]: number;
             };
+            /**
+             * By Part
+             * @description report_base_plus_day: part -> amount of its lines that start from a report
+             */
+            by_part?: {
+                [key: string]: number;
+            } | null;
         };
         /**
          * OcpPublishedLine
@@ -1979,7 +2060,7 @@ export interface components {
             };
             /**
              * Reported
-             * @description The report's figure (an entity's less the books published apart)
+             * @description The report's figure (an entity's less the books published apart); report_base_plus_day: the base (the parts' base)
              */
             reported: number | null;
             /**
@@ -1987,6 +2068,42 @@ export interface components {
              * @description The report unit's date
              */
             valid_date: string | null;
+            /**
+             * Base Date
+             * @description report_base_plus_day: B, the date of the report the figure starts from
+             */
+            base_date?: string | null;
+            /**
+             * Set Id
+             * @description report_base_plus_day: the report unit's set (null: a book of a covered entity without a row)
+             */
+            set_id?: number | null;
+            /**
+             * Base Kind
+             * @description report_base_plus_day: the report without the derivatives' future flows (private/1.7), with them at their nominal (an adapter before 1.7: their PV not added), a book of a covered entity without a row (base 0)
+             */
+            base_kind?: ("without_derivatives" | "with_derivatives" | "book_absent") | null;
+            /**
+             * Parts
+             * @description report_base_plus_day: base, derivatives, bonds, trades, outside -> amount; they sum to ``amount``
+             */
+            parts?: {
+                [key: string]: number;
+            } | null;
+            /**
+             * Contributions
+             * @description report_base_plus_day: per part {items: the largest contributions (kind report / report_part / report_nominal / position / trade with its id and amount), rest: {count, amount} of the others or null}
+             */
+            contributions?: {
+                [key: string]: {
+                    [key: string]: unknown;
+                };
+            } | null;
+            /**
+             * Fallback
+             * @description Derivative components taken at the report's nominal: no PV line in the run
+             */
+            fallback?: string[];
         };
         /** OcpTransfer */
         OcpTransfer: {
@@ -3091,6 +3208,18 @@ export interface components {
             lines: components["schemas"]["OcpLineOut"][];
             /** Reconciliation */
             reconciliation: components["schemas"]["OcpComparison"][];
+            /**
+             * Derivatives Check
+             * @description report_base_plus_day (block v3): the report's derivative nominal against their PV on its date, per scope, currency and component
+             */
+            derivatives_check?: components["schemas"]["OcpDerivativesCheck"][];
+            /**
+             * Parts
+             * @description part key -> its name on the pages (v3)
+             */
+            parts?: {
+                [key: string]: string;
+            }[];
             /**
              * Outside Report
              * @description Derived OCP of books no report unit covers

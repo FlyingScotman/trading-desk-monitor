@@ -8,10 +8,11 @@ from importlib.resources import files
 
 SPI_VERSION = 1
 SPI_MAJORS = frozenset({1})            # majors this backend can call (08 §9)
-CONTRACT_MAJOR, CONTRACT_MINOR = 1, 6  # private/1.6 (08 §9: 1.1 positions risk fields; 1.2 FUTURES books, ocp,
+CONTRACT_MAJOR, CONTRACT_MINOR = 1, 7  # private/1.7 (08 §9: 1.1 positions risk fields; 1.2 FUTURES books, ocp,
 #                                        cash_balances, pnl_official, trade_terms, reference entities and funding_rules;
 #                                        1.3 reference funding_policy, positions purchase_accrued_ccy; 1.4 trade_terms
-#                                        of swaps, REPO and HTM purchases; 1.5 reference ocp_policy; 1.6 trades)
+#                                        of swaps, REPO and HTM purchases; 1.5 reference ocp_policy; 1.6 trades;
+#                                        1.7 ocp derivatives_ccy, ocp_policy report_base_plus_day, report_max_age_bd)
 CONTRACT = f"private/{CONTRACT_MAJOR}.{CONTRACT_MINOR}"
 _CONTRACT_RE = re.compile(r"^private/([0-9]+)\.([0-9]+)$")
 

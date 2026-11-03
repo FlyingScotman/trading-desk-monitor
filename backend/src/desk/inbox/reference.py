@@ -13,7 +13,8 @@ Files, all ``;``-separated UTF-8 with BOM, header = canonical field names (``x_*
   ``ocp_YYYYMMDD.csv`` (source ``ocp_csv``, scope ``entity``, ``book_id``), ``cash_balances_YYYYMMDD.csv``
   (``cash_balances_csv``, ``entity``, ``book_id``), ``pnl_official_YYYYMMDD.csv`` (``pnl_official_csv``,
   ``entity``, ``book_id``) and ``trade_terms_YYYYMMDD.csv`` (``trade_terms_csv``, ``book_id``; FX trades since
-  private/1.2, swap legs, REPO and HTM purchases since 1.4). A
+  private/1.2, swap legs, REPO and HTM purchases since 1.4). An ``ocp`` row's ``derivatives_ccy`` (private/1.7) is
+  written ``fx_legs=-1000000,futures=250000`` (``{}``: none, the report still without derivatives). A
   ``cash_balances``, ``pnl_official`` or ``trades`` file may hold several dates (a history): a ``_report_date``
   column gives each row's date (08 §6.1); an empty cell is the date in the name.
 * ``trades`` (private/1.6), ``intraday``, scope ``book_id``: ``trades_YYYYMMDD_HHMM.csv`` is the day's cumulative
@@ -65,6 +66,9 @@ _MULTI_DATE = {"cash_balances", "pnl_official", "trades"}
 _WITH_INSTRUMENT = {"positions", "pnl_official", "trades"}
 _CUT = re.compile(r"([01][0-9]|2[0-3])([0-5][0-9])")
 _BOOLEANS = {"active", "ndf", "include_ndf", "cash_from_balances"}
+_OBJECTS = {"derivatives_ccy"}
+"""Cells that hold an object (private/1.7 ``ocp.derivatives_ccy``): ``key=amount`` pairs separated by ``,``
+(``fx_legs=-1000000,futures=250000``), or ``{}`` for an empty one."""
 _REFERENCE = (("books", "books.csv"), ("entities", "entities.csv"), ("funding_rules", "funding_rules.csv"),
               ("funding_policy", "funding_policy.csv"), ("ocp_policy", "ocp_policy.csv"))
 _TRUE, _FALSE = {"1", "true", "yes"}, {"0", "false", "no"}
@@ -72,7 +76,7 @@ _TRUE, _FALSE = {"1", "true", "yes"}, {"0", "false", "no"}
 
 def describe() -> dict:
     return {
-        "name": "desk_reference", "version": "1.4.0", "spi": 1, "contract": "private/1.6",
+        "name": "desk_reference", "version": "1.5.0", "spi": 1, "contract": "private/1.7",
         "sources": [{"source": src, "dataset": _DATASET_OF.get(prefix, prefix), "time_basis": tb, "scope": scope,
                      **({"completeness": "increment"} if prefix in _INCREMENT else
                         {"completeness": "full_snapshot", "covers": "listed"})}
@@ -117,8 +121,23 @@ def _records(path: str) -> tuple[list[tuple[int, dict]], list[dict]]:
                 flag = rec[k].lower()
                 if flag in _TRUE or flag in _FALSE:
                     rec[k] = flag in _TRUE
+            for k in _OBJECTS & set(rec):
+                rec[k] = _object(rec[k])
             out.append((reader.line_num, rec))
     return out, issues
+
+
+def _object(cell: str) -> dict | str:
+    """An ``_OBJECTS`` cell as an object; a malformed one stays text, so the backend says ``bad_value``."""
+    if cell == "{}":
+        return {}
+    out = {}
+    for part in cell.split(","):
+        k, eq, v = part.partition("=")
+        if not eq or not k.strip() or not v.strip():
+            return cell
+        out[k.strip()] = v.strip()
+    return out
 
 
 def read(path: str, hit: dict, ctx) -> dict:
