@@ -127,6 +127,126 @@ rows using imported/missing/invalid values remain `partial`, with aggregate stat
 the new run. This proves data freshness, not real pricing acceptance. Errors after ingestion never claim rollback
 of accepted inputs or a fresh completed run. There is no polling acquisition scheduler or retry/fallback provider.
 
+**Today's runs on the new terms** (since 11.2026, TDM#547). Terms are a stock: those of D stay in force on the later
+dates. After the fresh EOD of D, and under the same cycle lock, today's current runs (the Moscow date) whose private
+inputs hash is no longer today's are made again on the same market snapshot: the latest INTRADAY run (an intraday cut,
+or the morning run on the previous close) while today has no EOD run, and a preliminary close while today has no final
+one (`desk.recompute.current_day`). The job reports them as `recomputed: [{run_id, business_date, label,
+previous_run_id}]` and a failed one as `recompute_failed: [{business_date, label, code}]`; such a failure does not fail
+the acquisition. The autopilot's intraday and morning steps notice the same change on their own ("private inputs
+changed"), so terms that arrive by an inbox folder update today's screen too. An acquisition job and a services
+operation (§2.2) never run at the same time (`desk.helper_proc.HELPER_LOCK`): `start` while a services helper runs is
+refused with `services_busy` (409).
+
+### 2.2 Optional services (version 1)
+
+Owner's decision 03.11.2026 (TDM#548): the connection to the organisation's internal services is set up inside the
+monitor's settings, and then the monitor fetches their data by itself, in the background, on a schedule. The monitor
+is public and knows nothing about the services: it renders what the adapter's helper returns and schedules the
+helper's **feeds**. Every piece of service knowledge stays in the private adapter.
+
+**Declaration.** `describe()["services"] = {"version": 1, "entry": "relative/path/helper.py"}`. The entry follows the
+containment rules of §2.1 (a relative POSIX path without `..` inside the fingerprinted package, resolving, symlinks too,
+to an existing `*.py` file). Absent: nothing new is shown. Malformed (another version, a bad entry): the capability is
+ignored and the adapter's status lists a `services: …` warning (`GET /api/v1/adapter` `warnings`); a missing or
+escaping entry file is `helper_unavailable`. The helper runs with the acquisition's Python (`acquisition_python`);
+without it the capability is `runtime_unavailable`.
+
+**Process** (as §2.1, `desk.helper_proc`). `[acquisition_python, -I, -B, contained_entry]`, its own process group,
+only PATH, SYSTEMROOT, WINDIR, TEMP, TMP, USERPROFILE, LOCALAPPDATA, APPDATA and PROGRAMDATA inherited. stdin: one
+UTF-8 `application/x-www-form-urlencoded` request until EOF (at most 65,536 bytes, 256 fields, values of at most 4,096
+characters); stdout: exactly one JSON object (at most 262,144 bytes); stderr discarded. Secrets are never in argv or
+the environment. Timeouts: `describe` and `save` 60 s, `action` 15 min (a browser login waits), `feed` 30 min.
+Cancellation, a timeout and shutdown kill the process tree. One services process at a time, in one worker thread of
+`desk serve` (`desk.adapter_services`): the owner's operation first, then feeds asked for by hand, then the scheduled
+feeds; never at the same time as an acquisition job (a services operation waits for it: `waiting_acquisition`).
+
+Trusted fields the monitor always adds: `adapter_root`, `config_dir`, repeated `inbox_dir`, `state_dir`
+(`<home>/adapter-services/`, persistent, for the helper's caches and its protected secrets) and, for `feed`, a fresh
+empty `output_dir` (`<home>/adapter-services/out/<run id>/`; the folders of the last 20 runs are kept). A request
+never sets them: the routes accept only `f.<key>` of the cached panel, `action`, `arg` (and `date` for a feed run).
+
+**Operations** (field `op`):
+
+| op | request | answer |
+|---|---|---|
+| `describe` | — | `{"state": "complete", "code": "described", "panel": PANEL, "feeds": [FEED, …]}` |
+| `save` | `f.<key>` per panel field; a secret only when typed (an empty one is not sent: unchanged) | as `describe` (fresh panel), or `{"state": "blocked", "code": "config_invalid", "field": "<key>"}` |
+| `action` | `action=<id>`, the panel's `f.<key>` as typed, optional `arg` | `{"state": "complete\|partial\|blocked\|error", "code", "lines", "table"?, "panel"?, "choices"?, "choose_action"?}` |
+| `feed` | `feed=<id>`, optional `date=YYYY-MM-DD`, `output_dir` | `{"state": "complete\|partial\|skipped\|blocked\|error", "code", "files": [{"file", "sha256"}], "dates": […], "lines"}` |
+
+`table` is `{"columns": […], "rows": [[…], …]}` (at most 500 rows); `choices` `[{"id", "label"}]` is shown as a pick
+list when the answer also names a `choose_action`, and picking calls `action=<choose_action>` with `arg=<id>` (only
+the `choose_action` of the last answer is accepted besides the panel's actions; without one there is no pick list).
+Action answers carry no feeds: every action, and a `save` whose answer has no `feeds`, is followed by a `describe`, so
+the panel and the feeds' `ready` are current. Field, action and feed ids match `[A-Za-z0-9][A-Za-z0-9_.-]{0,99}`
+(dotted keys such as `services.x.base_url` are sent as `f.services.x.base_url`). Unknown keys of an answer are
+ignored. The monitor relies on the JSON `state`, not the exit code; a non-zero exit with `complete`/`partial` is
+`helper_failed`. A `save` may change the adapter's config and so its fingerprint; the monitor then reloads the adapter
+for the inbox (and an acquisition login answer of §2.1 falls back to "required").
+Feed files are written atomically directly inside `output_dir`. `skipped` codes: `not_configured`, `feed_disabled`,
+`no_change`, `not_due`, `no_positions`; `blocked`: `login_required` (an interactive login in the panel is needed),
+`config_invalid`, `source_disabled`. Codes are closed snake_case identifiers (`[a-z][a-z0-9_]{0,63}`), never URLs,
+hosts, raw exception text, secrets or data values. `lines` are Russian text for the owner's own machine: they may
+name environments, report names and counts, never secrets.
+
+PANEL: `{"title", "status": [lines], "sections": [{"id", "title", "help", "fields": [{"key", "label", "type":
+"text|url|bool|select|secret|int", "value", "options": [{"value", "label"}], "help", "placeholder"}], "actions":
+[{"id", "label", "confirm"?, "long"}]}]}`. A secret field never carries a value back: the monitor blanks `value`
+whatever the helper sends and keeps only `"set": true|false`.
+
+FEED: `{"id", "title", "dataset", "source", "enabled", "ready", "why_not_ready", "schedule", "after_positions"}`.
+`source` names the adapter source that reads the feed's files. A feed may keep its data locally and return no files
+(`complete` with `files: []`); its `source` need not be among the adapter's `sources`. Files of a feed whose `source`
+is not declared for its `dataset` are refused (`feed_source_invalid`, an error), never read. `schedule`:
+`{"every_min": N, "from": "HH:MM", "to": "HH:MM", "weekdays_only": bool}` or `{"daily_at": ["HH:MM", …],
+"weekdays_only"?: bool}`; anything else is "no schedule" (by hand and `after_positions` only). Times are the work
+machine's local wall clock.
+
+**Scheduling** (`adapter_services.next_due`). `every_min`: inside the window, N minutes after the last start (at once
+when never run). `daily_at`: the first slot after the last start; a feed never run catches up today's slot already
+passed, once; slots missed while the monitor was off are one run, not many. `after_positions: true`: also once when a
+positions set for a newer business date than the feed last saw is in the store (the first sight only records it),
+with that date as `date`. A `trade_terms` feed run without a date (by its schedule or by hand) gets the latest
+positions business date of the store (the adapter has no holiday calendar). Only enabled feeds (the monitor's switch, default the feed's own `enabled`) that are ready
+run by themselves; «Запустить сейчас» runs any. `blocked`/`login_required` pauses the feed («нужен вход», in the block
+and in «Статус дня») until a `describe` after a successful `save`, `action` or describe says it is ready, or a run by
+hand succeeds. Errors (`error`, another `blocked`, a bad answer, a non-zero exit with a success state, an ingestion
+failure) retry after 5, 15, then every 60 minutes, never in a tight loop. `skipped`, `complete` and `partial` clear the
+failures. The switches and each feed's state (last start and end, outcome, files, recomputed runs, failures, next
+retry, the pause, the positions date seen) are persisted in `<home>/adapter-services/state.json` with the cached
+panel and feeds (never a secret), so a restart does not fetch again at once.
+
+**Ingestion.** Each file (named `[A-Za-z0-9][A-Za-z0-9_.-]*`, directly in `output_dir`, its SHA-256 as declared) goes
+through the ordinary scanner/contract/store path (`inbox.scan.ingest_feed`) under the cycle lock (waiting up to
+20 minutes for an autopilot cycle, else `calculation_busy` and a retry), attributed to the feed's `source`: a file the
+adapter matches to another source is `rejected` with `feed_source_mismatch` before it is read, and nothing is written.
+Source precedence, scopes and completeness are the ordinary ones; an identical file again is a copy (`duplicate`).
+All files rejected: `files_not_accepted`; some: `partial`.
+
+**Recompute.** After accepted units the affected runs are made again at once (`desk.recompute.after_inputs`), so the
+owner's screens update without any action: for each business date D of the accepted units the EOD run of D when the
+cache holds its final close, the store has positions for D and its default run is missing or read other position sets
+or another private inputs hash; then today's current runs as in §2.1 (TDM#547). The feed's state lists them
+(`recomputed`, `recompute_failed`). Other dates are the autopilot's, as usual.
+
+**HTTP** (`desk.api.adapter_services_routes`). The acquisition's rules (§2.1): admin and an actual loopback peer and
+`Host`, no forwarded peer headers, POST only same-origin `application/x-www-form-urlencoded` within the limits above;
+panel values and secrets only in POST bodies, never in a URL, a response, the audit (`adapter_services`, path only) or
+a log line. `GET /api/v1/adapter-services`: availability (`available`, `code`, adapter name and version), the cached
+`panel` and `feeds` (each with `enabled`, `last`, `next_run`, `running`, `queued`), the owner's `job` and what runs
+now; a missing or older-fingerprint cache asks the worker for a `describe`. `POST …/save`, `…/action`, `…/describe`:
+202 with the queued job (one at a time: `services_busy`, 409). `POST …/feeds/<id>/run` (optional `date`): 202 queued;
+`POST …/feeds/<id>/enabled` (`enabled=true|false`): the switch. `POST …/cancel` (`target=job|feed`): a queued job is
+dropped, a running process killed (not once its files are being taken in: `cancel_after_commit_unavailable`).
+
+**Settings and «Статус дня».** Settings → «Адаптер и источники» shows the block «Подключение к сервисам» only when
+the capability is declared: the panel rendered generically as text (fields by type, «Сохранить», action buttons with
+their confirmation, the progress of a long action, lines, a table, a pick list, status lines) and «Фоновая загрузка»
+(per feed: title, switch, schedule, last run with its files and recomputed runs, next run or «нужен вход»,
+«Запустить сейчас»). C14 «Статус дня» lists each feed's last run, state and «нужен вход» (`GET /api/v1/inbox`
+`feeds`: codes and times, no lines).
+
 ## 3 The module interface
 
 The package's top level exposes:

@@ -10,31 +10,26 @@ only while the current adapter fingerprint is that one. Absent, unknown or malfo
 from __future__ import annotations
 
 import json
-import os
 import re
-import subprocess
 import threading
-import time
 import uuid
 from collections import Counter
 from collections.abc import Callable
 from dataclasses import dataclass
-from datetime import date
-from pathlib import Path, PurePosixPath
-from urllib.parse import urlencode
+from datetime import date, datetime
+from pathlib import Path
 
-from . import store
+from . import helper_proc, recompute, store
 from .autopilot import CycleLock
-from .inbox import runner, scan
+from .helper_proc import MAX_REQUEST, MAX_RESPONSE  # noqa: F401 - the routes' and the tests' limits
+from .inbox import scan
 from .inbox.loader import AdapterHandle, fingerprint, load_adapter
+from .inbox.timesem import MSK
 from .settings import Settings
 
-MAX_REQUEST = 65536
-MAX_RESPONSE = 262144
 TIMEOUT_S = 1800.0
 _HEX = re.compile(r"[0-9a-f]{64}")
 _NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,199}")
-_BANK_ENV = ("PATH", "SYSTEMROOT", "WINDIR", "TEMP", "TMP", "USERPROFILE", "LOCALAPPDATA", "APPDATA", "PROGRAMDATA")
 _PROVIDER_CODES = frozenset((
     "invalid_request", "config_invalid", "source_disabled", "scope_report_missing", "scope_report_ambiguous",
     "scope_changed", "scope_book_missing", "scope_book_conflict", "scope_empty", "scope_too_large", "output_not_empty",
@@ -70,15 +65,15 @@ def provider(st: Settings) -> Provider:
     rel = cap.get("entry")
     source = cap.get("source")
     decl = h.source(source) if isinstance(source, str) else None
-    if not isinstance(rel, str) or "\\" in rel or PurePosixPath(rel).is_absolute() or ".." in PurePosixPath(rel).parts:
+    if not helper_proc.relative_entry(rel):
         raise FlowError("capability_invalid")
     if not decl or decl.get("dataset") != "trade_terms" or decl.get("scope") != ["book_id"] \
             or decl.get("covers") != "listed" or decl.get("completeness") != "full_snapshot" \
             or decl.get("time_basis") != "end_of_day":
         raise FlowError("capability_invalid")
     root = Path(h.package_dir).resolve()
-    entry = (root / rel).resolve()
-    if not entry.is_relative_to(root) or entry.suffix != ".py" or not entry.is_file():
+    entry = helper_proc.contained(root, rel)
+    if entry is None:
         raise FlowError("helper_unavailable")
     if fingerprint(str(root), h.config_dir) != h.fingerprint:
         raise FlowError("adapter_changed")
@@ -127,12 +122,14 @@ def login_mode(result: dict) -> str:
 
 
 class Acquisition:
-    def __init__(self, settings_loader: Callable[[], Settings], store_url: str, *, timeout_s: float = TIMEOUT_S):
+    def __init__(self, settings_loader: Callable[[], Settings], store_url: str, *, timeout_s: float = TIMEOUT_S,
+                 today: Callable[[], date] | None = None):
+        """``today``: the Moscow date whose current runs a fetch also recomputes (TDM#547); a clock for tests."""
         self._load, self._url, self._timeout = settings_loader, store_url, timeout_s
+        self._today = today or (lambda: datetime.now(MSK).date())
         self._lock = threading.Lock()
         self._cancel = threading.Event()
         self._thread: threading.Thread | None = None
-        self._proc: subprocess.Popen | None = None
         self._status: dict = {"state": "idle", "phase": "idle", "code": "idle"}
         # (adapter fingerprint, login mode) of the last successful inspection; never set from a client request
         self._login: tuple[str, str] | None = None
@@ -191,6 +188,10 @@ class Acquisition:
             if self._thread is not None and self._thread.is_alive():
                 params.clear()
                 raise FlowError("acquisition_busy")
+            # one helper job at a time: not while a services operation or feed runs (08 §2.2); released by _work
+            if not helper_proc.HELPER_LOCK.acquire(blocking=False):
+                params.clear()
+                raise FlowError("services_busy")
             if no_login:
                 params.pop("username", None)  # never forward empty credentials
                 params.pop("password", None)
@@ -199,7 +200,11 @@ class Acquisition:
                             "op": params["op"], "date": params.get("date"), "books": params.get("book", [])}
             self._thread = threading.Thread(target=self._work, args=(st, p, params), daemon=True,
                                             name="desk-acquisition")
-            self._thread.start()
+            try:
+                self._thread.start()
+            except BaseException:
+                helper_proc.HELPER_LOCK.release()
+                raise
             return dict(self._status)
 
     def cancel(self) -> dict:
@@ -224,83 +229,28 @@ class Acquisition:
         fields = {**{k: v for k, v in params.items() if k != "adapter_fingerprint"},
                   "adapter_root": str(p.root), "config_dir": p.handle.config_dir or "",
                   "inbox_dir": [str(d) for d in st.inbox_dirs], "output_dir": str(out)}
-        payload = urlencode(fields, doseq=True).encode("utf-8")
-        if len(payload) > MAX_REQUEST:
-            raise FlowError("invalid_request")
-        proc = None
-        chunks: list[bytes] = []
-        overflow = threading.Event()
-        write_failed = threading.Event()
-
-        def send(data):
-            try:
-                proc.stdin.write(data)
-                proc.stdin.close()
-            except (OSError, ValueError):
-                write_failed.set()
-
-        def drain():
-            data = proc.stdout.read(MAX_RESPONSE + 1)
-            if len(data) > MAX_RESPONSE:
-                overflow.set()
-            else:
-                chunks.append(data)
-
+        params.pop("username", None)
+        params.pop("password", None)
         try:
-            flags = {"creationflags": subprocess.CREATE_NEW_PROCESS_GROUP | subprocess.CREATE_NO_WINDOW} \
-                if os.name == "nt" else {"start_new_session": True}
-            proc = subprocess.Popen([str(st.acquisition_python), "-I", "-B", str(p.entry)],
-                                    stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
-                                    env={k: v for k, v in os.environ.items() if k.upper() in _BANK_ENV}, **flags)
-            self._proc = proc
-            reader = threading.Thread(target=drain, daemon=True)
-            reader.start()
-            until = time.monotonic() + self._timeout
-            writer = threading.Thread(target=send, args=(payload,), daemon=True)
-            writer.start()
-            del payload
-            fields.clear()
-            params.pop("username", None)
-            params.pop("password", None)
-            while proc.poll() is None:
-                if self._cancel.wait(0.05):
-                    raise FlowError("cancelled", "cancelled")
-                if time.monotonic() >= until:
-                    raise FlowError("acquisition_timeout", "error")
-                if overflow.is_set():
-                    raise FlowError("provider_response_invalid", "error")
-            reader.join(timeout=1)
-            writer.join(timeout=1)
-            if self._cancel.is_set():
-                raise FlowError("cancelled", "cancelled")
-            if reader.is_alive() or writer.is_alive() or write_failed.is_set() or overflow.is_set() or not chunks:
-                raise FlowError("provider_response_invalid", "error")
-            try:
-                result = json.loads(chunks[0])
-            except (ValueError, UnicodeError):
-                raise FlowError("provider_response_invalid", "error") from None
-            if not isinstance(result, dict):
-                raise FlowError("provider_response_invalid", "error")
-            if result.get("state") not in ("complete", "partial"):
-                code = result.get("code")
-                if code not in _PROVIDER_CODES:
-                    raise FlowError("provider_response_invalid", "error")
-                raise FlowError(code, "cancelled" if code == "cancelled" else "blocked"
-                                if result.get("state") == "blocked" else "error")
-            if proc.returncode != 0:
-                raise FlowError("provider_failed", "error")
-            return result
-        except OSError:
-            raise FlowError("runtime_unavailable", "error") from None
+            result, returncode = helper_proc.run(st.acquisition_python, p.entry, fields, timeout=self._timeout,
+                                                 cancel=self._cancel)
+        except helper_proc.HelperFailure as f:
+            raise {"cancelled": FlowError("cancelled", "cancelled"),
+                   "timeout": FlowError("acquisition_timeout", "error"),
+                   "request_invalid": FlowError("invalid_request"),
+                   "runtime_unavailable": FlowError("runtime_unavailable", "error")}.get(
+                f.code, FlowError("provider_response_invalid", "error")) from None
         finally:
             fields.clear()
-            if proc is not None:
-                runner._kill_tree(proc)
-                proc.wait(timeout=5)
-                for stream in (proc.stdin, proc.stdout):
-                    if stream is not None and not stream.closed:
-                        stream.close()
-            self._proc = None
+        if result.get("state") not in ("complete", "partial"):
+            code = result.get("code")
+            if code not in _PROVIDER_CODES:
+                raise FlowError("provider_response_invalid", "error")
+            raise FlowError(code, "cancelled" if code == "cancelled" else "blocked"
+                            if result.get("state") == "blocked" else "error")
+        if returncode != 0:
+            raise FlowError("provider_failed", "error")
+        return result
 
     def _preconditions(self, st: Settings, params: dict) -> None:
         from .marketdata.bundle import SnapshotDir, SnapshotError
@@ -374,9 +324,14 @@ class Acquisition:
                 counts = Counter(r["status"] for r in rows)
                 reasons = Counter(r["reason"] for r in rows if r.get("reason"))
                 incomplete = not rows or any(counts[k] for k in ("imported_only", "neither", "computed_invalid"))
+            # TDM#547: the terms are a stock, in force on the later dates too: today's current runs (the morning or
+            # intraday run, a preliminary close) that read other inputs are made again now, not at the next hub cut
+            later = recompute.current_day(st, self._url, self._today(), out=lambda _: None) \
+                if self._today() > day else {"runs": [], "failed": []}
             self._update(state="partial" if partial or incomplete else "complete", phase="complete", code="completed",
                          run_id=rid, private_inputs_hash=expected_hash,
-                         valuation={"counts": dict(counts), "reasons": dict(reasons)})
+                         valuation={"counts": dict(counts), "reasons": dict(reasons)},
+                         recomputed=later["runs"], recompute_failed=later["failed"])
 
     def _work(self, st: Settings, p: Provider, params: dict) -> None:
         op = params["op"]
@@ -460,3 +415,4 @@ class Acquisition:
                          .get(phase, "operation_failed"))
         finally:
             params.clear()
+            helper_proc.HELPER_LOCK.release()

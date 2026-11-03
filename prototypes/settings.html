@@ -503,6 +503,22 @@ details.sf-grp[open] > summary::before{content:"▾"}
       </div>
       <div id="tabs-adapter"></div>
       <div class="note" id="cf-hidden" hidden></div>
+      <!-- Подключение к сервисам: панель и фоновая загрузка, которые описывает помощник адаптера (08 §2.2, #548;
+           desk-services.js, данные: /api/v1/adapter-services). Монитор сам о сервисах ничего не знает. -->
+      <div class="card" id="svc-card" hidden>
+        <div class="hd"><h2 id="svc-title">Подключение к сервисам</h2><span class="mut3" id="svc-sub"></span><span class="sp"></span><button class="ibtn" id="svc-refresh" type="button">Обновить</button></div>
+        <div class="bd">
+          <p class="hint" style="margin-top:0">Настройки подключения хранит адаптер на этом компьютере. Пароли сюда не возвращаются: пустое поле пароля при сохранении оставляет прежний.</p>
+          <p id="svc-status" role="status" aria-live="polite"></p>
+          <ul class="at-lines" id="svc-lines"></ul>
+          <div id="svc-panel"></div>
+          <div class="row" style="margin-top:12px;flex-wrap:wrap"><button class="btn" id="svc-save" type="button" disabled>Сохранить</button><button class="ibtn" id="svc-cancel" type="button" hidden>Отменить</button></div>
+          <div id="svc-result" class="at-res"></div>
+          <h3 class="at-h4">Фоновая загрузка</h3>
+          <p class="hint">Монитор сам получает эти данные по расписанию и сразу пересчитывает затронутые расчёты. Выключатель хранится в мониторе.</p>
+          <div id="svc-feeds" style="overflow-x:auto"></div>
+        </div>
+      </div>
       <div class="card" id="acquisition-card">
         <div class="hd"><h2>Получить условия сделок</h2><button class="ibtn" id="acq-refresh" type="button">Обновить доступность</button></div>
         <div class="bd">
@@ -2226,3 +2242,4 @@ function mountTabs(a, reload){
 </script>
 <script src="desk-backup.js"></script>
 <script src="desk-acquisition.js"></script>
+<script src="desk-services.js"></script>

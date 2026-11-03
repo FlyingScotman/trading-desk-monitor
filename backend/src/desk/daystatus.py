@@ -6,7 +6,8 @@ event feed.
 cache, the report files that touched the date with their units and issue codes (a rejection says why), the copies
 (``stale_copy``: yesterday's file under today's name, 08 §13), the date's runs with what superseded what and what
 changed between them, its events, and per book where the positions went (``inbox.scan.reconcile``, reused, not
-repeated). ``days(con, settings, to, n)`` is ``GET /api/v1/inbox/days``: one line per date for the screen's strip.
+repeated). ``feeds``: the adapter services' background feeds (08 §2.2: last run, state, «нужен вход»). ``days(con, settings,
+to, n)`` is ``GET /api/v1/inbox/days``: one line per date for the screen's strip.
 Codes, counts, book ids, file names and sources, for every signed-in user (the owner's decision in #25); no row
 values and no issue messages (08 §6.8).
 
@@ -539,7 +540,18 @@ def day(con: psycopg.Connection, settings: Settings, on: date | None = None) -> 
             "inputs": inputs, "market": market, "runs": runs, "files": files, "copies": copies,
             "positions": {k: rec[k] for k in ("run_id", "since", "books", "totals", "losses")},
             "events": feed["events"], "events_more": feed["has_more"], "last_event_id": feed["last_id"],
-            "generated_at": datetime.now(UTC).isoformat()}
+            "feeds": _feeds(settings), "generated_at": datetime.now(UTC).isoformat()}
+
+
+def _feeds(settings: Settings) -> list[dict[str, Any]]:
+    """The adapter services' background feeds (08 §2.2): per feed its last run, state and «нужен вход»; empty
+    without the capability. Codes and times only, never the helper's lines."""
+    from .adapter_services import day_feeds
+
+    try:
+        return day_feeds(settings)
+    except Exception:  # noqa: BLE001 - a status block never fails the day
+        return []
 
 
 def days(con: psycopg.Connection, settings: Settings, to: date | None = None, n: int = 30) -> dict[str, Any]:

@@ -169,6 +169,21 @@ def check_config_files(desc: object) -> tuple[list[dict], list[str]]:
     return out, warnings
 
 
+def check_services(desc: object) -> tuple[dict | None, list[str]]:
+    """The optional ``describe()["services"]`` (08 §2.2): ``{"version": 1, "entry": "<relative .py path>"}`` and a
+    warning for a bad one (then ignored, never fatal). The entry's containment in the package is checked where it
+    is run (``desk.adapter_services``)."""
+    from desk.helper_proc import relative_entry
+
+    cap = desc.get("services") if isinstance(desc, dict) else None
+    if cap is None:
+        return None, []
+    if not isinstance(cap, dict) or type(cap.get("version")) is not int or cap["version"] != 1 \
+            or not relative_entry(cap.get("entry")) or not str(cap["entry"]).endswith(".py"):
+        return None, ["services: expected {\"version\": 1, \"entry\": \"<relative path>.py\"}, ignored"]
+    return {"version": 1, "entry": cap["entry"]}, []
+
+
 def check_settings_tabs(desc: object) -> tuple[list[dict], list[str]]:
     """The optional ``describe()["settings_tabs"]`` (08 §4, SPI 1, since private/1.2): forms over the adapter's
     ``config_files``, ``{id, title, file, schema, help}``. ``file`` names a usable ``config_files`` entry, ``schema`` is
@@ -308,5 +323,5 @@ def load_adapter(spec: str | None, config_dir: str | None, expected_sha256: str 
         str(Path(location["path"][0]).resolve()) if location.get("path") else None
     return AdapterHandle(spec, desc["name"], desc["version"], fp, desc, None, config_dir,
                          (*check_config_files(desc)[1], *check_settings_tabs(desc)[1],
-                          *check_actions(desc, "run_action" in optional)[1]), inbox_dirs,
+                          *check_actions(desc, "run_action" in optional)[1], *check_services(desc)[1]), inbox_dirs,
                          optional=optional, package_dir=package_dir)

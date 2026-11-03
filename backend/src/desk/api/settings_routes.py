@@ -313,7 +313,7 @@ def get_adapter() -> dict[str, Any]:
             "fingerprint": h.fingerprint, "config_dir": str(cfg) if cfg else None,
             "describe": h.describe or None, "config_files": files, "settings_tabs": tabs,
             "optional": list(h.optional), "actions": [a["id"] for a in h.actions],
-            "warnings": warnings + [w for w in h.warnings if w.startswith(("settings_tabs", "actions"))],
+            "warnings": warnings + [w for w in h.warnings if w.startswith(("settings_tabs", "actions", "services"))],
             "error": h.error}
 
 
