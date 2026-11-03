@@ -139,6 +139,7 @@ class FakeIndex:
         root.mkdir(parents=True, exist_ok=True)
         self.requests: list[str] = []
         self.blocked: set[str] = set()      # wheel file names answered with 404
+        self.status_all = 0                 # not 0: every request is answered with this status
         index = self
 
         class Handler(BaseHTTPRequestHandler):
@@ -149,6 +150,8 @@ class FakeIndex:
                 parts = urlsplit(self.path)
                 path = unquote(parts.path)
                 index.requests.append(path)
+                if index.status_all:
+                    return self._send(b"denied", "text/plain", index.status_all)
                 if path.startswith("/simple/") and parts.query:
                     return self._send(b"<html><body></body></html>", "text/html")
                 if path in ("/simple", "/simple/"):
@@ -524,3 +527,99 @@ def test_mismatching_requirements_txt_is_refused(tmp_path, venv_python, index):
     with pytest.raises(mi.InstallError, match="hm-alpha"):
         run_install(tmp_path, venv_python, index)
     assert last_json(tmp_path)["status"] == "failed"
+
+
+def test_unreachable_index_is_reported_as_such_not_as_missing_versions(tmp_path, venv_python, index):
+    import socket
+    with socket.socket() as sock:
+        sock.bind(("127.0.0.1", 0))
+        port = sock.getsockname()[1]
+    url = f"http://carol:cl0sedPW@127.0.0.1:{port}/simple/"
+    env = pip_env(tmp_path, url, PIP_RETRIES="1", PIP_TIMEOUT="5")
+    with pytest.raises(mi.InstallError) as exc:
+        run_install(tmp_path, venv_python, index, env=env)
+    assert "недоступен" in str(exc.value) and "нет подходящей версии" not in str(exc.value)
+    data = last_json(tmp_path)
+    assert data["status"] == "failed"
+    assert {p["status"] for p in data["packages"].values()} == {"index_error"}
+    assert data["notes"] and data["notes"][0]["tail"]
+    assert "cl0sedPW" not in _all_logs(tmp_path) and "carol" not in _all_logs(tmp_path)
+
+
+def test_index_refusing_access_is_reported_as_such(tmp_path, venv_python, index):
+    serve_lock(index)
+    index.status_all = 401
+    env = pip_env(tmp_path, f"http://dave:d4vePW@127.0.0.1:{index.port}/simple/", PIP_RETRIES="0")
+    with pytest.raises(mi.InstallError, match="отказал в доступе"):
+        run_install(tmp_path, venv_python, index, env=env)
+    data = last_json(tmp_path)
+    assert {p["status"] for p in data["packages"].values()} == {"index_error"}
+    assert "d4vePW" not in _all_logs(tmp_path)
+
+
+def test_first_resolver_output_is_kept_in_the_journal(tmp_path, venv_python, index):
+    index.add("hm-alpha", LOCK_ALPHA)
+    index.add("hm-beta", "3.0.0")
+    with pytest.raises(mi.InstallError):
+        run_install(tmp_path, venv_python, index)
+    titles = [n["title"] for n in last_json(tmp_path)["notes"]]
+    assert "pip install --dry-run (набор из lock)" in titles
+    first = last_json(tmp_path)["notes"][0]
+    assert first["tail"]  # pip's own words about the failed lock set
+
+
+def test_final_install_names_every_wheel_by_hash_ours_included(tmp_path, venv_python, index):
+    serve_lock(index)
+    res = run_install(tmp_path, venv_python, index)
+    pins = res.log_path.with_suffix(".requirements.txt").read_text(encoding="utf-8").splitlines()
+    assert len(pins) == 3 and all(" --hash=sha256:" in line for line in pins)
+    ours = hashlib.sha256((tmp_path / "wheelhouse/hm_app-0.1.0-py3-none-any.whl").read_bytes()).hexdigest()
+    assert f"hm-app==0.1.0 --hash=sha256:{ours}" in pins
+
+
+def test_downloaded_file_differing_from_pips_report_is_refused(tmp_path, venv_python, index, monkeypatch):
+    serve_lock(index)
+    real = mi._resolve
+
+    def lying(ctx, selection, local, offline=None):
+        res = real(ctx, selection, local, offline)
+        if res.ok and "hm-alpha" in res.items:
+            ver, url, _sha = res.items["hm-alpha"]
+            res.items["hm-alpha"] = (ver, url, "0" * 64)
+        return res
+
+    monkeypatch.setattr(mi, "_resolve", lying)
+    with pytest.raises(mi.InstallError, match="не совпадает"):
+        run_install(tmp_path, venv_python, index)
+    assert venv_version(venv_python, "hm_alpha") is None
+
+
+def test_requirements_txt_with_a_package_missing_from_mirror_json_is_refused(tmp_path, venv_python, index):
+    serve_lock(index)
+    wh = make_bundle(tmp_path)
+    with (wh / "requirements.txt").open("a", encoding="utf-8") as f:
+        f.write("hm-stray==1.0\n")
+    with pytest.raises(mi.InstallError, match="hm-stray"):
+        run_install(tmp_path, venv_python, index)
+
+
+def test_several_extra_indexes_become_separate_flags():
+    s = mi.Settings(index_url="https://a.example/simple", extra_index_url="https://b.example/s https://c.example/s")
+    assert mi._index_args(s) == ["--index-url", "https://a.example/simple", "--extra-index-url", "https://b.example/s",
+                                 "--extra-index-url", "https://c.example/s"]
+
+
+def test_versions_compare_as_versions_not_strings():
+    assert mi._same_version("1.2.3", "1.2.3.0") and not mi._same_version("1.2.3", "1.2.4")
+
+
+def test_mask_text_scrubs_known_secrets_before_patterns_even_with_an_at_sign():
+    url = "https://user:p@ss@host/simple/"
+    text = mi.mask_text(f"Looking in {url}", mi._secret_parts(url))
+    assert "p@ss" not in text and "ss@" not in text and "user" not in text
+
+
+def test_network_failure_detection():
+    assert mi.is_network_failure("WARNING: Retrying ... NewConnectionError('x')")
+    assert mi.is_network_failure("401 Client Error: Unauthorized for url: http://h/")
+    assert not mi.is_network_failure("WARNING: 404 Client Error: Not Found for url\nERROR: No matching distribution")

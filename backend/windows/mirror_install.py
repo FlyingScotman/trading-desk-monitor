@@ -42,6 +42,10 @@ Algorithm (only wheels, ``--only-binary=:all:``, nothing is built):
    becomes ``***@`` and the values of secret-looking query parameters (token, password, key, secret, auth, ...)
    become ``***``. ``available`` of an ``as_lock`` package found by step 1 holds just the lock version (it is all
    that was asked of the index).
+The final install is ``--require-hashes`` over a staging folder holding exactly the logged files (ours included), and
+a downloaded file must match the file name and hash of pip's resolver report. An unreachable index or a refused
+login (pip's network error words, or no version of any package at all) is reported as such, package status
+``index_error``, not as missing versions.
 Machine pip configuration is never disabled here; ``Settings.index_url`` / ``extra_index_url``, when set, are
 passed explicitly (``--index-url`` / ``--extra-index-url``).
 """
@@ -62,7 +66,7 @@ from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
-from urllib.parse import urlsplit, urlunsplit
+from urllib.parse import unquote, urlsplit, urlunsplit
 
 try:
     from pip._vendor.packaging.specifiers import InvalidSpecifier, SpecifierSet
@@ -84,7 +88,14 @@ SECRET_QUERY_WORDS = ("token", "password", "passwd", "pwd", "key", "secret", "au
                       "session", "bearer")
 _QUERY_SECRET_RE = re.compile(
     r"(?i)([?&;][^=&\s'\"]*(?:" + "|".join(SECRET_QUERY_WORDS) + r")[^=&\s'\"]*=)[^&\s'\"]*")
-_USERINFO_RE = re.compile(r"(?i)\b([a-z][a-z0-9+.\-]*://)[^/\s@'\"]+@")
+_USERINFO_RE = re.compile(r"(?i)\b([a-z][a-z0-9+.\-]*://)[^/\s'\"]+@")
+_NETWORK_MARKERS = (
+    "could not fetch url", "max retries exceeded", "newconnectionerror", "connection refused", "connectionerror",
+    "failed to establish a new connection", "sslerror", "proxyerror", "certificate_verify_failed",
+    "name or service not known", "temporary failure in name resolution", "getaddrinfo failed",
+    "connection timed out", "read timed out", "connect timeout", "connection reset", "remotedisconnected",
+    "unauthorized", "forbidden", "401 error", "403 error", "proxy authentication", "401 client error", "403 client error",
+    "407 client error", "server error")
 
 
 class InstallError(Exception):
@@ -157,11 +168,24 @@ def mask_url(url: str) -> str:
 
 def mask_text(text: str, secrets: Iterable[str] = ()) -> str:
     """Masks credentials in free text (pip output): userinfo, secret query values and the literal ``secrets``."""
-    text = _USERINFO_RE.sub(r"\1***@", text)
-    text = _QUERY_SECRET_RE.sub(r"\1***", text)
     for secret in sorted({s for s in secrets if s and len(s) >= 3}, key=len, reverse=True):
-        text = text.replace(secret, "***")
-    return text
+        text = text.replace(secret, "***")  # first: a password may itself hold "@" or "?"
+    text = _USERINFO_RE.sub(r"\1***@", text)
+    return _QUERY_SECRET_RE.sub(r"\1***", text)
+
+
+def is_network_failure(output: str) -> bool:
+    """True when pip's output says the index could not be reached or refused us (not just "no such version")."""
+    lines = [ln for ln in output.lower().splitlines() if "404 client error" not in ln]
+    text = "\n".join(lines)
+    return any(m in text for m in _NETWORK_MARKERS)
+
+
+def _same_version(a: str, b: str) -> bool:
+    try:
+        return Version(a) == Version(b)
+    except InvalidVersion:
+        return a == b
 
 
 def _secret_parts(url: str) -> list[str]:
@@ -251,6 +275,15 @@ class _Journal:
     def mask(self, text: str) -> str:
         return mask_text(text, self.secrets)
 
+    def _mask_obj(self, obj):
+        if isinstance(obj, str):
+            return self.mask(obj)
+        if isinstance(obj, list):
+            return [self._mask_obj(x) for x in obj]
+        if isinstance(obj, dict):
+            return {k: self._mask_obj(v) for k, v in obj.items()}
+        return obj
+
     def note(self, title: str, body: str) -> None:
         lines = self.mask(body).strip().splitlines()[-TAIL_LINES:]
         self.data["notes"].append({"title": title, "tail": lines})
@@ -262,7 +295,8 @@ class _Journal:
 
     def write(self) -> None:
         self.data["finished"] = datetime.now().isoformat(timespec="seconds")
-        self.json_path.write_text(json.dumps(self.data, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
+        masked = self._mask_obj(self.data)
+        self.json_path.write_text(json.dumps(masked, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
                                   encoding="utf-8")
         self.log_path.write_text(self.mask("\n".join(self._lines())) + "\n", encoding="utf-8")
 
@@ -274,7 +308,8 @@ class _Journal:
                f"Python: {d['python']}", f"pip: {d['pip']}",
                f"Режим: {'строгий (только версии из lock)' if strict else 'гибкий (допускается ближайшая версия)'}",
                "Индекс pip:"]
-        out += [f"  {i['url']}  ({i['source']})" for i in d["index"]] or ["  (не определён)"]
+        out += [f"  {i['url']}  ({i['source']}{'; переопределён mirror.ini' if i.get('overridden') else ''})"
+                for i in d["index"]] or ["  (не определён)"]
         out.append(f"Пакеты ({len(d['packages'])}):")
         for name, p in sorted(d["packages"].items()):
             line = (f"  {name}: по lock {p['required'] or '-'}, установлено {p['installed'] or '-'}, "
@@ -326,8 +361,8 @@ def _index_args(settings: Settings) -> list[str]:
     args: list[str] = []
     if settings.index_url:
         args += ["--index-url", settings.index_url]
-    if settings.extra_index_url:
-        args += ["--extra-index-url", settings.extra_index_url]
+    for url in settings.extra_index_url.split():
+        args += ["--extra-index-url", url]
     return args
 
 
@@ -350,38 +385,54 @@ def _output(cp: subprocess.CompletedProcess[str]) -> str:
     return (cp.stdout or "") + (cp.stderr or "")
 
 
-def _index_addresses(ctx: _Ctx) -> list[dict[str, str]]:
-    """The index addresses pip will use, masked: the settings, else ``pip config list`` (which also lists the PIP_*
-    environment) and the PIP_INDEX_URL / PIP_EXTRA_INDEX_URL of the environment."""
-    found: list[tuple[str, str]] = []
+def _index_addresses(ctx: _Ctx) -> list[dict]:
+    """The index addresses, masked: mirror.ini (passed to pip explicitly, so it overrides the pip index-url) and
+    always the machine configuration: ``pip config list`` (which also lists the PIP_* environment) and the
+    PIP_INDEX_URL / PIP_EXTRA_INDEX_URL of the environment. Every secret found is remembered for scrubbing."""
+    found: list[tuple[str, str, bool]] = []
     if ctx.settings.index_url:
-        found.append((ctx.settings.index_url, "mirror.ini: index_url"))
-    if ctx.settings.extra_index_url:
-        found += [(u, "mirror.ini: extra_index_url") for u in ctx.settings.extra_index_url.split()]
-    if not found:
-        cp = _pip(ctx, "config", "list")
-        for line in _output(cp).splitlines():
-            key, sep, value = line.partition("=")
-            key = key.strip()
-            if sep and key.endswith(("index-url", "index_url")):
-                for u in value.strip().strip("'\"").split():
-                    found.append((u, f"pip config: {key}"))
-        for var in ("PIP_INDEX_URL", "PIP_EXTRA_INDEX_URL"):
-            found += [(u, var) for u in ctx.env.get(var, "").split()]
-    out, seen = [], set()
-    for url, source in found:
+        found.append((ctx.settings.index_url, "mirror.ini: index_url", False))
+    found += [(u, "mirror.ini: extra_index_url", False) for u in ctx.settings.extra_index_url.split()]
+    cp = _pip(ctx, "config", "list")
+    for line in _output(cp).splitlines():
+        key, sep, value = line.partition("=")
+        key = key.strip()
+        if sep and key.endswith(("index-url", "index_url")):
+            over = bool(ctx.settings.index_url) and not key.endswith("extra-index-url")
+            found += [(u, f"pip config: {key}", over) for u in value.strip().strip("'\"").split()]
+    for var in ("PIP_INDEX_URL", "PIP_EXTRA_INDEX_URL"):
+        over = bool(ctx.settings.index_url) and var == "PIP_INDEX_URL"
+        found += [(u, var, over) for u in ctx.env.get(var, "").split()]
+    out: list[dict] = []
+    seen: set[str] = set()
+    for url, source, over in found:
         ctx.journal.secrets.extend(_secret_parts(url))
         masked = mask_url(url)
         if masked not in seen:
             seen.add(masked)
-            out.append({"url": masked, "source": source})
+            entry: dict = {"url": masked, "source": source}
+            if over:
+                entry["overridden"] = True
+            out.append(entry)
     return out or [{"url": "https://pypi.org/simple (по умолчанию pip)", "source": "default"}]
+
+
+def _index_failure(ctx: _Ctx, output: str, title: str) -> InstallError:
+    """The index is unreachable or refuses us: note pip's (masked) output, mark the packages, explain."""
+    j = ctx.journal
+    j.note(title, output)
+    for p in j.data["packages"].values():
+        if p["status"] is None:
+            p["status"] = "index_error"
+    where = ", ".join(i["url"] for i in j.data["index"]) or "адрес не определён"
+    return _fail(ctx, f"Индекс пакетов недоступен или отказал в доступе ({where}). Проверьте адрес индекса, "
+                      "логин и пароль, сертификат, прокси и сеть.")
 
 
 @dataclass
 class _Resolution:
     ok: bool
-    items: dict[str, tuple[str, str]] = field(default_factory=dict)   # canonical name -> (version, url)
+    items: dict[str, tuple[str, str, str]] = field(default_factory=dict)   # name -> (version, url, sha256)
     error: str = ""
 
 
@@ -408,12 +459,16 @@ def _resolve(ctx: _Ctx, selection: dict[str, str], local: dict[str, str], offlin
               *(["--no-index", "--find-links", str(offline)] if offline else _index_args(ctx.settings)),
               "-r", str(pins))
     if cp.returncode != 0 or not report.is_file():
+        if not offline and is_network_failure(_output(cp)):
+            raise _index_failure(ctx, _output(cp), "pip install --dry-run")
         return _Resolution(False, error=_output(cp))
-    items: dict[str, tuple[str, str]] = {}
+    items: dict[str, tuple[str, str, str]] = {}
     for item in json.loads(report.read_text(encoding="utf-8")).get("install", []):
         meta = item.get("metadata", {})
+        info = item.get("download_info", {})
         items[str(canonicalize_name(meta.get("name", "")))] = (
-            meta.get("version", ""), item.get("download_info", {}).get("url", ""))
+            meta.get("version", ""), info.get("url", ""),
+            (info.get("archive_info", {}).get("hashes", {}) or {}).get("sha256", ""))
     return _Resolution(True, items)
 
 
@@ -424,6 +479,8 @@ def _available(ctx: _Ctx, name: str, pre: bool) -> list[str]:
     cp = _pip(ctx, *args)
     text = _output(cp)
     if cp.returncode != 0:
+        if is_network_failure(text):
+            raise _index_failure(ctx, text, f"pip index versions {name}")
         if "no matching distribution" in text.lower() or "could not find a version" in text.lower():
             return []
         ctx.journal.note(f"pip index versions {name}", text)
@@ -475,7 +532,9 @@ def _cached_wheel(cache: Path, hashes: dict[str, dict[str, str]], name: str, ver
 
 
 def _download(ctx: _Ctx, cache: Path, hashes: dict[str, dict[str, str]], name: str, version: str, tags: set,
-              url: str = "") -> tuple[Path, bool]:
+              url: str = "", report_sha: str = "") -> tuple[Path, bool]:
+    """``url`` is pip's report URL (raw) of the file the resolver chose, ``report_sha`` its hash when pip gave one:
+    the file ``pip download`` fetched must be the same."""
     hit = _cached_wheel(cache, hashes, name, version, tags)
     if hit is not None:
         return hit, True
@@ -488,12 +547,22 @@ def _download(ctx: _Ctx, cache: Path, hashes: dict[str, dict[str, str]], name: s
     if cp.returncode != 0 or len(wheels) != 1:
         ctx.journal.note(f"pip download {name}=={version}", _output(cp))
         shutil.rmtree(part, ignore_errors=True)
+        if is_network_failure(_output(cp)):
+            raise _index_failure(ctx, _output(cp), f"pip download {name}=={version}")
         raise _fail(ctx, f"Не удалось скачать {name}=={version} с индекса (код pip {cp.returncode}).")
-    target = cache / wheels[0].name
     digest = _sha256(wheels[0])
+    if url:
+        reported = Path(unquote(urlsplit(url).path)).name
+        if reported != wheels[0].name or (report_sha and report_sha != digest):
+            ctx.journal.note(f"сверка {name}=={version}", f"отчёт pip: файл {reported} sha256 {report_sha or '-'}; "
+                                                         f"скачан: {wheels[0].name} sha256 {digest}")
+            shutil.rmtree(part, ignore_errors=True)
+            raise _fail(ctx, f"Скачанный файл {name}=={version} не совпадает с тем, что выбрал pip при проверке "
+                             "набора (имя или SHA-256). Установка отменена.")
+    target = cache / wheels[0].name
     os.replace(wheels[0], target)
     shutil.rmtree(part, ignore_errors=True)
-    hashes[target.name] = {"sha256": digest, "url": url}
+    hashes[target.name] = {"sha256": digest, "url": mask_url(url) if url else ""}
     _save_hashes(cache, hashes)
     return target, False
 
@@ -584,10 +653,12 @@ def _install(ctx: _Ctx, cache: Path, result: Result, say: Callable[[str], None])
     req_file = ctx.wheelhouse / "requirements.txt"
     if req_file.is_file():
         reqs = _read_pins(req_file)
-        for name, ver in {**lock, **local}.items():
-            if reqs.get(name) != ver:
+        want = {**lock, **local}
+        for name in sorted(set(want) | set(reqs)):
+            if name not in reqs or name not in want or not _same_version(reqs[name], want[name]):
                 raise _fail(ctx, f"requirements.txt и mirror.json расходятся в пакете {name} "
-                                 f"({reqs.get(name) or 'нет'} / {ver}). Распакуйте комплект заново.")
+                                 f"({reqs.get(name) or 'нет'} / {want.get(name) or 'нет'}). "
+                                 "Распакуйте комплект заново.")
     for name, ver in lock.items():
         j.pkg(name)["required"] = ver
 
@@ -614,7 +685,7 @@ def _install(ctx: _Ctx, cache: Path, result: Result, say: Callable[[str], None])
             first, offline = None, False
     if first is None:
         first = _resolve(ctx, lock, local)
-    extras: dict[str, tuple[str, str]] = {}
+    extras: dict[str, tuple[str, str, str]] = {}
     chosen = dict(lock)
     resolved = first
     if first.ok:
@@ -622,39 +693,56 @@ def _install(ctx: _Ctx, cache: Path, result: Result, say: Callable[[str], None])
         for name in lock:
             j.pkg(name)["available"] = [lock[name]]
     if not first.ok:
-        chosen, resolved, extras = _search(ctx, lock, local, specs)
+        chosen, resolved, extras = _search(ctx, lock, local, specs, first.error)
     for name, ver in chosen.items():
         p = j.pkg(name)
-        p["status"] = "as_lock" if ver == lock[name] else "differs"
-        if ver != lock[name] and ver not in p["tried"]:
+        same = _same_version(ver, lock[name])
+        p["status"] = "as_lock" if same else "differs"
+        if not same and ver not in p["tried"]:
             p["tried"].append(ver)
     if extras:
-        for name, (ver, _url) in sorted(extras.items()):
+        for name, (ver, _url, _sha) in sorted(extras.items()):
             p = j.pkg(name)
             p.update(required=None, status="added", tried=[ver], available=[ver])
         if st.strict:
             raise _fail(ctx, "Строгий режим: версии из lock тянут пакеты, которых в lock нет: "
                              + ", ".join(sorted(extras)) + ".")
-    final = {**chosen, **{n: v for n, (v, _u) in extras.items()}}
+    final = {**chosen, **{n: v for n, (v, _u, _s) in extras.items()}}
     urls: dict[str, str] = {}
-    for name, (_ver, url) in resolved.items.items():
+    reports: dict[str, tuple[str, str]] = {}
+    for name, (_ver, url, sha) in resolved.items.items():
         if name in final and url and not offline:
             urls[name] = mask_url(url)
+            reports[name] = (url, sha)
             j.secrets.extend(_secret_parts(url))
     if any(p["status"] in ("differs", "added") for p in j.data["packages"].values()):
         say("ВНИМАНИЕ: часть версий отличается от проверенных (lock), подробности в журнале.")
 
     # 2. download into the cache, then install from the cache and the wheelhouse only
+    staged: dict[str, Path] = {}
     for name, ver in sorted(final.items()):
-        path, cached = _download(ctx, cache, hashes, name, ver, tags, urls.get(name, ""))
+        path, cached = _download(ctx, cache, hashes, name, ver, tags, *reports.get(name, ("", "")))
+        staged[name] = path
         p = j.pkg(name)
         p["sha256"] = hashes[path.name]["sha256"]
         p["url"] = urls.get(name) or hashes[path.name]["url"] or None
         say(f"  {name}=={ver}" + (" (из кэша)" if cached else ""))
+    stage = ctx.work / "stage"          # exactly the files logged, so --require-hashes can name them
+    stage.mkdir()
+    digests: dict[str, str] = {n: hashes[p.name]["sha256"] for n, p in staged.items()}
+    for name, ver in local.items():
+        wheel = _local_wheel(ctx.wheelhouse, name, ver)
+        if wheel is None:
+            raise _fail(ctx, f"В комплекте нет колеса {name}=={ver}. Распакуйте комплект заново.")
+        staged[name] = wheel
+        digests[name] = _sha256(wheel)
+    for path in staged.values():
+        shutil.copy2(path, stage / path.name)
     pins = j.log_path.with_suffix(".requirements.txt")
-    pins.write_text("".join(f"{k}=={v}\n" for k, v in sorted({**final, **local}.items())), encoding="utf-8")
-    cp = _pip(ctx, "install", "--no-index", "--only-binary=:all:", "--find-links", str(cache),
-              "--find-links", str(ctx.wheelhouse), "-r", str(pins))
+    pins.write_text("".join(f"{k}=={v} --hash=sha256:{digests[k]}\n" for k, v in sorted({**final, **local}.items())),
+                    encoding="utf-8")
+    cp = _pip(ctx, "install", "--no-index", "--only-binary=:all:", "--require-hashes", "--find-links", str(stage),
+              "-r", str(pins))
     if cp.returncode != 0:
         j.note("pip install", _output(cp))
         raise _fail(ctx, f"pip не смог установить пакеты из кэша и комплекта (код {cp.returncode}).")
@@ -681,6 +769,17 @@ def _install(ctx: _Ctx, cache: Path, result: Result, say: Callable[[str], None])
             raise _fail(ctx, "Не импортируются модули: " + ", ".join(sorted(bad)) + ".")
 
 
+def _local_wheel(wheelhouse: Path, name: str, version: str) -> Path | None:
+    for path in sorted(wheelhouse.glob("*.whl")):
+        try:
+            wname, wver, _b, _t = parse_wheel_filename(path.name)
+        except ValueError:
+            continue
+        if canonicalize_name(wname) == name and wver == Version(version):
+            return path
+    return None
+
+
 def _run_checked(ctx: _Ctx, cmd: list[str]) -> str:
     try:
         cp = _run(cmd, ctx.env, ctx.work)
@@ -692,14 +791,15 @@ def _run_checked(ctx: _Ctx, cmd: list[str]) -> str:
     return cp.stdout
 
 
-def _extras(res: _Resolution, lock: dict[str, str], local: dict[str, str]) -> dict[str, tuple[str, str]]:
+def _extras(res: _Resolution, lock: dict[str, str], local: dict[str, str]) -> dict[str, tuple[str, str, str]]:
     return {n: v for n, v in res.items.items() if n not in lock and n not in local}
 
 
-def _search(ctx: _Ctx, lock: dict[str, str], local: dict[str, str], specs: dict[str, list[str]]
-            ) -> tuple[dict[str, str], _Resolution, dict[str, tuple[str, str]]]:
+def _search(ctx: _Ctx, lock: dict[str, str], local: dict[str, str], specs: dict[str, list[str]],
+            first_error: str = "") -> tuple[dict[str, str], _Resolution, dict[str, tuple[str, str, str]]]:
     """The lock set did not resolve: ask the index what exists, then try replacement candidates in order."""
     j, st = ctx.journal, ctx.settings
+    j.note("pip install --dry-run (набор из lock)", first_error)
 
     def ask(name: str) -> list[str]:
         return _available(ctx, name, Version(lock[name]).is_prerelease)
@@ -707,17 +807,21 @@ def _search(ctx: _Ctx, lock: dict[str, str], local: dict[str, str], specs: dict[
     names = sorted(lock)
     with ThreadPoolExecutor(max_workers=INDEX_QUERY_WORKERS) as pool:
         listed = dict(zip(names, pool.map(ask, names), strict=True))
+    if not any(listed.values()):
+        # pip is silent about a refused connection or a 401 at its default verbosity: no version of any package
+        # at all means the index is unreachable or closed to us, not that every version is gone
+        raise _index_failure(ctx, "pip index versions не вернул ни одной версии ни для одного пакета.\n"
+                                  + first_error, "индекс не вернул версий")
     missing: dict[str, list[str]] = {}
     for name in names:
         avail = listed[name]
         j.pkg(name)["available"] = avail
-        if lock[name] in avail:
+        if any(_same_version(v, lock[name]) for v in avail):
             continue
         j.pkg(name)["tried"].append(lock[name])
         missing[name] = [] if st.strict else [v for v in order_candidates(lock[name], avail, specs[name])
-                                                if v != lock[name]]
+                                                if not _same_version(v, lock[name])]
     if not missing:
-        j.note("pip install --dry-run (набор из lock)", "")
         raise _fail(ctx, "Все версии из lock есть на индексе, но pip не смог согласовать их зависимости.")
     dead = sorted(n for n, c in missing.items() if not c)
     if dead:
@@ -728,7 +832,7 @@ def _search(ctx: _Ctx, lock: dict[str, str], local: dict[str, str], specs: dict[
         raise _fail(ctx, what + ", ".join(f"{n} (lock {lock[n]})" for n in dead) + ".")
     fixed = {n: v for n, v in lock.items() if n not in missing}
     order = sorted(missing)
-    fallback: tuple[dict[str, str], _Resolution, dict[str, tuple[str, str]]] | None = None
+    fallback: tuple[dict[str, str], _Resolution, dict[str, tuple[str, str, str]]] | None = None
     last_error = ""
     for attempt, combo in enumerate(itertools.product(*(missing[n] for n in order))):
         if attempt >= MAX_ATTEMPTS:
