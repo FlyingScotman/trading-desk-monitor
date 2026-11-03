@@ -1,7 +1,7 @@
 # 08 Private adapter interface (SPI v1)
 
 As of 3 November 2026, revision 8 (private contract 1.7: the `ocp` row's optional `derivatives_ccy`, the report's
-derivatives apart, and `ocp_policy.published` `report_base_plus_day` with `report_max_age_bd`, for the published OCP of
+derivatives apart by kind, and `ocp_policy.published` `report_base_plus_day` with `report_max_age_bd`, for the published OCP of
 TDM#531; contract 1.6 of 2 November: the `trades` schema, TDM#525); revision 7 of 28 October (SPI 1 optional functions `status` and `run_action` with `describe()["actions"]`, the settings page's adapter tools of TDM#421, no contract change; revision 6, private contract 1.5: the `reference()` table `ocp_policy`, the organisation's OCP conventions, for the published OCP of TDM#416; revision 5 of 23 October, contract 1.4: `trade_terms` of interest rate and cross-currency swaps, REPO and HTM purchases, for the valuation of swaps by core and the funding of REPO and HTM lots; revision 4 of 22 October, contract 1.3: the `reference()` table `funding_policy` and
 `positions.purchase_accrued_ccy`, for the funding engine in the runs, wave B1; revision 3, contract 1.2: FUTURES books, the `ocp`, `cash_balances`, `pnl_official` and `trade_terms` schemas, `reference()` entities and funding rules, `describe()` settings tabs, multi-date cash history, adapter phases A7–A10; revision 2 of 19 October followed an independent review). Status: **accepted; both tracks build against it.** Decision: [ADR-008](adr/ADR-008-private-adapter-boundary.md). Owner of this document: the backend. A change here is a versioned change (§9).
 
@@ -473,31 +473,40 @@ An `otc` or `other` row is valued at its `mv_rub` (quality `reported_value`; wit
 
 The open currency position as the bank's system reports it. The backend derives OCP from positions too and compares the two **at the level the report has**: per entity, or per book (S9). Key: (`entity`, `book_id`, `ccy`). An entity unit is taken as the entity's total: a book that also has a unit of its own is published from that unit and subtracted from the entity's figure (TDM#214).
 
-What the run **publishes** follows `ocp_policy.published`. The default since 1.7 (owner, 03.11.2026, TDM#531, design
-[OCP_REPORT_BASE_PLUS_DAY](OCP_REPORT_BASE_PLUS_DAY.md)) is `report_base_plus_day`: per entity, book and currency the
-report of the latest date B ≤ D no older than `report_max_age_bd` business days, **without the derivatives' future
-flows**, plus their PV from positions, plus the foreign bonds' revaluation and the trades since B, plus the components
-the report does not hold. The report covers its entity: a book of a reported entity without a row has 0. A unit
-older than the limit is not published (its books derived). `report_plus_outside` (TDM#416) publishes `ocp_ccy` plus
-the components the report does not hold, with `report_max_age_days`.
+What the run **publishes** follows `ocp_policy.published`. Since 1.7 (owner, 03.11.2026, TDM#531, design
+[OCP_REPORT_BASE_PLUS_DAY](OCP_REPORT_BASE_PLUS_DAY.md)) the engine's default is `report_base_plus_day` for dates from
+03.11.2026: per entity, book and currency the report of the entity's latest date B ≤ D no older than
+`report_max_age_bd` business days (a full snapshot of the entity: a book of it without a unit on B, also one whose
+older unit is still carried forward by `covers: listed`, has 0), **without the derivative kinds the report gives
+apart**, plus their PV from positions, plus the foreign bonds' revaluation and the trades since B, plus the
+components the report does not hold. A unit older than the limit is not published (its books derived). A date before
+03.11.2026 whose `ocp_policy` gives no `published` keeps `report_plus_outside` (TDM#416: `ocp_ccy` plus the components
+the report does not hold, with `report_max_age_days`), so a date recomputed later keeps its basis; an `ocp_policy` row
+giving `published` applies from its `valid_from`.
 
-Since 1.7 the adapter gives the derivatives apart: it leaves the rows of derivative types whose value date is after the
-report's date out of `ocp_ccy` (and out of `ocp_rub`) and gives their nominal in `derivatives_ccy`, per monitor
-component (the adapter knows the row types; the monitor knows what replaces each component). A unit is "without
-derivatives" when any of its rows has `derivatives_ccy` (`{}`: none on that row); the reconciliation compares the whole
-report, `ocp_ccy` + Σ `derivatives_ccy`, with the derived OCP, and the run lists the nominal against the derivatives'
-PV on B per book and component. A unit without the field (an adapter before 1.7) holds the derivatives at their nominal
-in `ocp_ccy`: the run adds no PV for the components the report holds and says so in the gaps. The field is canonical:
-it is in the unit's change hash (§6.6).
+Since 1.7 the adapter gives derivatives apart **by kind**. For each derivative kind it maps report row types to, it
+leaves the report's lines of that kind with a value date after the report's date out of `ocp_ccy` (and out of
+`ocp_rub`) and gives their nominal in `derivatives_ccy[kind]`. A key present, even `"0"`, says the kind is apart; the
+adapter emits every kind it maps on every row of the file (zeros kept by the backend). The split is decided **per
+report file and kind**: a kind is apart for every unit of the file (also a unit without rows) when any row of the file
+has the key. For a kind apart the run adds the PV (core's FX delta, the spot equivalent, whatever `amount_basis`) of
+every position of that kind with a value date after B, or the file's nominal of a book without such a position
+(marked); a kind not apart adds nothing: its nominal stays in `ocp_ccy`, so a row type mapped to no kind is safe. The
+run classifies its positions into kinds from core's product, the report's product group and the trade terms; a spot
+(value date within `settle_window_bd` business days of the trade date) is never a derivative, and an equity, a fund, a
+deposit, a bond or a REPO never enters the PV. The reconciliation compares the whole report, `ocp_ccy` + Σ
+`derivatives_ccy`, with the derived OCP, and the run lists the nominal against the PV on B per book and kind. A file
+without the field (an adapter before 1.7) holds every derivative at its nominal in `ocp_ccy`, said in the gaps. The
+field is canonical: it is in the unit's change hash (§6.6).
 
 | Field | Type | Meaning |
 |---|---|---|
 | `entity` ● | str | |
 | `book_id` | str | When the report is per book |
 | `ccy` ● | str | |
-| `ocp_ccy` ● | num | Signed: `+` long the currency; since 1.7 without the derivatives when `derivatives_ccy` is given |
-| `ocp_rub`, `rate_rub_per_unit` | num | As reported (`ocp_rub` as `ocp_ccy`: without the derivatives when they are apart) |
-| `derivatives_ccy` | object | Since 1.7: monitor component (`fx_legs`, `ndf`, `futures`, `options`, `other`: `rules.ocp.DERIVATIVE_COMPONENTS`) → the signed nominal (units of `ccy`, `+` long) of the derivatives' future flows left out of `ocp_ccy`; another key is `bad_value`. In the reference adapter's CSV `fx_legs=-1000000,futures=250000`, `{}` for none |
+| `ocp_ccy` ● | num | Signed: `+` long the currency; since 1.7 without the derivative kinds the file gives apart |
+| `ocp_rub`, `rate_rub_per_unit` | num | As reported (`ocp_rub` as `ocp_ccy`: without the kinds apart) |
+| `derivatives_ccy` | object | Since 1.7: derivative kind → the signed nominal (units of `ccy`, `+` long) of the report's lines of that kind with a value date after the report's date, left out of `ocp_ccy`. Kinds (`rules.ocp.DERIVATIVE_KINDS`): `fx_forward` (outright forwards and non-spot crosses), `fx_swap`, `fx_future`, `ndf`, `fx_option`, `swap` (IRS, OIS, CCS with an FX exposure), `other` (any other derivative); another key is `bad_value`. A key with `"0"` still says the kind is apart. In the reference adapter's CSV `fx_forward=-1000000,ndf=0` (a key twice: the last value, warning `duplicate_object_key`), `{}` for none |
 
 ### `cash_balances` — stock; `full_snapshot`, scope `["entity", "book_id"]`
 

@@ -137,11 +137,18 @@
       const k = x.book ? 'b|' + x.book : 'e|' + x.entity + '|' + (x.books || []).join(',');
       const r = rows.get(k) || { x, v: {}, src: new Set(), by: {}, valid: null };
       r.v[x.ccy] = (r.v[x.ccy] || 0) + x.amount; r.src.add(x.source); (r.by[x.source] = r.by[x.source] || []).push(x.ccy);
-      if (x.validDate && x.validDate < d.date) r.valid = x.validDate;
+      // «база отчёта + день» (TDM#531): база — отчёт за прошлый рабочий день, это норма — дата только в подсказке;
+      // «отчёт от» — только у базы старше прошлого рабочего дня. Книга без строк в отчёте — «нет в отчёте»
+      if (d.basis === 'report_base_plus_day') {
+        if (x.baseDate) { if (x.baseDate < prevBd(d.date)) r.valid = x.baseDate; else r.base = x.baseDate; }
+        if (x.baseKind === 'book_absent') r.absent = true;
+      } else if (x.validDate && x.validDate < d.date) r.valid = x.validDate;
       rows.set(k, r);
     });
     return { by, rows: [...rows.values()], notes: sc.notes, partial: !!sc.partial, ccys: Object.keys(by).sort(ccyOrder) };
   }
+  // прошлый рабочий день даты YYYY-MM-DD (по будням: календаря прогона в истории нет)
+  const prevBd = s => { const t = new Date(s + 'T00:00:00Z'); do t.setUTCDate(t.getUTCDate() - 1); while (t.getUTCDay() === 0 || t.getUTCDay() === 6); return t.toISOString().slice(0, 10); };
   const usable = d => !!(d && d.basis && !NO_OCP[d.state]);
   const noOcp = d => 'ОВП нет: ' + (NO_OCP[d.state] || 'прогон до публикуемой ОВП');
   const portName = v => v === '—' ? 'без портфеля' : v;
@@ -256,9 +263,10 @@
       const mixed = rows.some(r => r.src.has('report')) && rows.some(r => [...r.src].some(s => s !== 'report'));
       const label = r => {
         const x = r.x, src = mixed ? [...r.src].filter(s => s !== 'report') : [];
-        const tag = (src.length ? ' <span class="c16-src" title="' + esc(src.map(s => (SRC[s] || s) + ': ' + r.by[s].join(', ')).join('; ')) + '">' + esc(src.map(s => SRC[s] || s).join(', ')) + '</span>' : '') + (r.valid ? ' <span class="c16-src">отчёт от ' + f.date(r.valid) + '</span>' : '');
-        return x.book ? '<span title="' + esc(x.book) + '">' + esc(bookName(x.book)) + '</span>' + tag
-          : '<span title="книги: ' + esc((x.books || []).map(bookName).join(', ') || '—') + '">' + esc(entityName(x.entity)) + ' <span class="mut3">часть отчёта</span></span>' + tag;
+        const tag = (src.length ? ' <span class="c16-src" title="' + esc(src.map(s => (SRC[s] || s) + ': ' + r.by[s].join(', ')).join('; ')) + '">' + esc(src.map(s => SRC[s] || s).join(', ')) + '</span>' : '') + (r.valid ? ' <span class="c16-src">отчёт от ' + f.date(r.valid) + '</span>' : '') + (r.absent ? ' <span class="c16-src" title="книги нет в отчёте ОВП на дату базы: база 0, к ней PV деривативов и изменения дня">нет в отчёте</span>' : '');
+        const base = r.base ? ' · база ' + r.base.slice(8, 10) + '.' + r.base.slice(5, 7) : '';
+        return x.book ? '<span title="' + esc(x.book + base) + '">' + esc(bookName(x.book)) + '</span>' + tag
+          : '<span title="книги: ' + esc(((x.books || []).map(bookName).join(', ') || '—') + base) + '">' + esc(entityName(x.entity)) + ' <span class="mut3">часть отчёта</span></span>' + tag;
       };
       bp.querySelector('.bd').innerHTML = '<table class="k-tbl" data-vk="c16-books" data-title="ОВП по книгам"><thead><tr><th>Книга</th>' +
         C.map(c => '<th class="n"' + (byReport(c, d) ? ' title="Курса нет. ' + REP + '"' : '') + '>' + esc(c) + '<span class="k-thu">' + unitOf(c) + '</span></th>').join('') + '<th class="n" title="сумма USD-эквивалентов валют строки со знаком">ОВП книги<span class="k-thu">mm USD</span></th></tr></thead><tbody>' +

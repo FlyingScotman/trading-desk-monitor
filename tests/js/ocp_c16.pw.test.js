@@ -27,13 +27,19 @@ function history(state, opt = {}) {
     const L = (entity, book, books, ccy, amount, source) => nr ? { entity, book: book || books[0], books: book ? books : books.slice(0, 1), ccy, amount: amount * k, source: 'derived', reported: null, validDate: null }
       : { entity, book, books, ccy, amount: amount * k, source: source || 'report', reported: null, validDate: null };
     const failed = opt.failedAt === i;  // TDM#534: день с ошибкой расчёта ОВП внутри периода
-    days.unshift({ date, runId: 100 - i, runType: 'EOD', state: i === 0 && state ? state : failed ? 'failed' : i === 65 ? 'not_computed' : 'computed', basis: i === 65 || failed ? null : 'report_plus_outside',
+    if (opt.bpd && i < 65) {  // TDM#531: «база отчёта + день»; FXB — база старше прошлого рабочего дня, NEWB — нет в отчёте
+      const prev = s => { const t = new Date(s + 'T00:00:00Z'); do t.setUTCDate(t.getUTCDate() - 1); while (!(t.getUTCDay() % 6)); return t.toISOString().slice(0, 10); };
+      opt.lines = ln => ln.map(x => Object.assign({}, x, { baseDate: x.book === 'FXB' ? prev(prev(date)) : prev(date), baseKind: 'without_derivatives', parts: { base: x.amount } }))
+        .concat([{ entity: 'Головной банк', book: 'NEWB', books: ['NEWB'], ccy: 'USD', amount: 1e6, source: 'report', reported: 0, validDate: prev(date), baseDate: prev(date), baseKind: 'book_absent', parts: { base: 0, derivatives: 1e6 } }]);
+    }
+    days.unshift({ date, runId: 100 - i, runType: 'EOD', state: i === 0 && state ? state : failed ? 'failed' : i === 65 ? 'not_computed' : 'computed', basis: i === 65 || failed ? null : opt.bpd ? 'report_base_plus_day' : 'report_plus_outside',
       fx: { USD: { market: 81.45, cbr: 81.12 }, EUR: { market: 94.62, cbr: 94.38 }, CNY: { market: 11.38, cbr: 10.95 } },
       reportFx: nr ? {} : { USD: 81.12, EUR: 94.38, CNY: 10.95, GBP: 107.3 },
       lines: i === 65 ? [] : [L('Головной банк', 'CORP_FX', ['CORP_FX'], 'USD', 14e6), L('Головной банк', 'FXB', ['FXB'], 'USD', -9e6),
         L('Головной банк', 'FXB', ['FXB'], 'CNY', -120e6, 'derived'), L('Головной банк', null, ['SOV_FX', 'RATES'], 'EUR', 3.5e6),
         L('Головной банк', 'SOV_FX', ['SOV_FX'], 'CNY', 260e6), L('Головной банк', 'CORP_FX', ['CORP_FX'], 'GBP', -6e6)]
-        .concat(opt.chf ? [L('Головной банк', 'FXB', ['FXB'], 'CHF', 1e6)] : []) });  // CHF: курса нет ни в прогоне, ни в отчёте
+        .concat(opt.chf ? [L('Головной банк', 'FXB', ['FXB'], 'CHF', 1e6)] : []) });
+    if (opt.lines && days[0].lines.length) days[0].lines = opt.lines(days[0].lines);  // CHF: курса нет ни в прогоне, ни в отчёте
   }
   return { runId: null, asOf: AS_OF, from: days[0].date, to: AS_OF, books: {}, days };
 }
@@ -153,6 +159,22 @@ test('C16: own book selection, the header filter named; the «Общая» line 
     const bad = await tipAt(fail);
     assert.ok(bad.includes("ОВП нет: ошибка расчёта ОВП"), JSON.stringify([bad, fail]));
     if (SHOTS) { fs.mkdirSync(SHOTS, { recursive: true }); await pg.screenshot({ path: path.join(SHOTS, 'c16-own-books.png'), fullPage: true }); }
+    assert.deepEqual(errors, []);
+    await ctx.close();
+  } finally { await browser.close(); }
+});
+
+test('C16 under «report base + day»: the base date only in the tooltip, «отчёт от» for an older base, «нет в отчёте» (TDM#531)', { skip: pw ? false : 'нет Playwright', timeout: 120000 }, async () => {
+  const browser = await pw.chromium.launch();
+  try {
+    const { pg, ctx, errors } = await open(browser, { hist: { bpd: true } });
+    const row = id => pg.locator('[data-ocp-row="' + id + '"] td').first();
+    const corp = await row('CORP_FX').innerText();
+    assert.ok(!corp.includes('отчёт от') && !corp.includes('нет в отчёте'), corp);
+    assert.match(await row('CORP_FX').locator('span').first().getAttribute('title'), /база \d\d\.\d\d/);
+    assert.ok((await row('FXB').innerText()).includes('отчёт от'), 'база старше прошлого рабочего дня названа');
+    assert.ok((await row('NEWB').innerText()).includes('нет в отчёте'));
+    assert.ok(!BAD.test(await pg.locator('#view').textContent()));
     assert.deepEqual(errors, []);
     await ctx.close();
   } finally { await browser.close(); }
