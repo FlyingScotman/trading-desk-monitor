@@ -3179,26 +3179,32 @@
   // null — у прогона нет публикуемой ОВП (до v2 блока, демо): страницы берут сумму FX-дельт позиций, как раньше.
   // byBook, meta (C16, TDM#446): строки другого дня той же формы (/api/v1/history/ocp) и справочник его книг ({ книга:
   // { entity, desk } }) — для книги, которой нет в M.book; flt (C16, TDM#533) — свой фильтр экрана той же формы, что
-  // K.filter ({ entity, desk, books, ccy, portsOff }), вместо фильтра шапки; без него — фильтр шапки, как раньше
+  // K.filter ({ entity, desk, books, ccy, portsOff }), вместо фильтра шапки; без него — фильтр шапки, как раньше.
+  // Со своим фильтром часть отчёта по юрлицу без книг под выбором книг тоже названа в notes и partial (без него — нет,
+  // как раньше)
+  // справочник книги ОВП: прогона (M.book), иначе периода (meta); юрлицо книги — только отсюда (K.ocpScope и выбор книг
+  // C16 — по одному правилу: книга без справочника под фильтром юрлица не входит и в выборе не предлагается)
+  K.ocpBook = (id, meta) => M.book[id] || (meta && meta[id]) || {};
   K.ocpScope = function (byBook, meta, flt) {
     const B = byBook || (M.ocp && Array.isArray(M.ocp.byBook) ? M.ocp.byBook : null);
     if (!B) return null;
-    const F = flt || K.filter, bk = id => M.book[id] || (meta && meta[id]) || {};
+    const F = flt || K.filter, bk = id => K.ocpBook(id, meta);
     const bookOk = id => (!F.entity || bk(id).entity === F.entity) && (!F.desk || bk(id).desk === F.desk) && (!F.books || !F.books.length || F.books.includes(id));
-    const lines = [], partial = [];
+    const lines = [], partial = [], bookless = [];
     B.forEach(x => {
       if (F.ccy && x.ccy !== F.ccy) return;
       if (x.book) { if (bookOk(x.book)) lines.push(x); return; }
       if (F.entity && x.entity !== F.entity) return;  // часть отчёта другого юрлица
       const books = x.books || [], ok = books.filter(bookOk);
       // без книг (остаток юрлица за вычетом частей по книгам, юрлицо без известных книг): только без фильтра книг и деска
-      if (!books.length) { if (!F.desk && !(F.books && F.books.length)) lines.push(x); return; }
+      if (!books.length) { if (!F.desk && !(F.books && F.books.length)) lines.push(x); else if (flt) bookless.push(x); return; }
       if (ok.length === books.length) lines.push(x);
       else if (ok.length) partial.push(x);
     });
-    const notes = [...new Set(partial.map(x => 'часть отчёта ОВП по юрлицу ' + x.entity + ' учтена только целиком: без фильтра книг или с фильтром на все её книги (' + (x.books || []).join(', ') + ')'))];
+    const notes = [...new Set(partial.map(x => 'часть отчёта ОВП по юрлицу ' + x.entity + ' учтена только целиком: без фильтра книг или с фильтром на все её книги (' + (x.books || []).join(', ') + ')')
+      .concat(bookless.map(x => 'часть отчёта ОВП по юрлицу ' + x.entity + ' без книг — только без выбора книг')))];
     if ((F.portsOff || []).length) notes.push('фильтр портфелей к ОВП по книгам не применяется');
-    return { lines, notes, partial: partial.length > 0 };
+    return { lines, notes, partial: partial.length + bookless.length > 0 };
   };
   // источник суммы валюты: отчёт / из позиций / отчёт + поз.
   K.ocpSrcMark = src => { const k = Object.keys(src || {}).filter(s => src[s]); const rep = k.includes('report'), der = k.some(s => s !== 'report'); return rep && der ? 'отчёт + поз.' : rep ? 'отчёт' : der ? 'из позиций' : ''; };

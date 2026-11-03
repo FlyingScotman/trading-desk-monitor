@@ -72,7 +72,12 @@
     if (s && typeof s === 'object') return { entity: typeof s.entity === 'string' ? s.entity : null, off: Array.isArray(s.off) ? s.off.filter(x => typeof x === 'string') : [] };
     const x = { entity: K.filter.entity || null, off: [] }; K.viewStore.set(SEL_KEY, x); return x;
   })();
-  const setSel = patch => { Object.assign(SEL, patch); K.viewStore.set(SEL_KEY, SEL); render(); };
+  // сохраняются только снятые книги, которые есть в ответе (всех юрлиц): ушедшие из истории не копятся
+  const setSel = patch => {
+    Object.assign(SEL, patch);
+    const all = new Set(bookList(null).map(b => b.id)); SEL.off = SEL.off.filter(b => all.has(b));
+    K.viewStore.set(SEL_KEY, SEL); render();
+  };
   const menuOpt = {};  // строка поиска меню книг между переоткрытиями
 
   // Общая ОВП — нетто: сумма USD-эквивалентов валют со знаком (владелец, 30.10.2026; правило — здесь)
@@ -100,22 +105,28 @@
   const ccyOrder = (a, b) => ((M.ccyOrder || {})[a] ?? 99) - ((M.ccyOrder || {})[b] ?? 99) || a.localeCompare(b);
   const entityName = e => ((M.entities || []).find(x => x.id === e) || {}).name || e;
   const bookName = id => ((M.book || {})[id] || (H.books || {})[id] || {}).name || id;
-  const bookMeta = id => (M.book || {})[id] || (H.books || {})[id] || {};
-  // книги ОВП выбранного юрлица за все дни ответа: книги строк и книги частей отчёта по юрлицу
-  function bookList() {
+  // справочник книги — по тому же правилу, что K.ocpScope (K.ocpBook): юрлицо книги — из справочника, не из строки
+  const bookMeta = id => K.ocpBook(id, H.books || {});
+  // юрлица ответа; юрлицо выбора — запомненное, если оно есть в ответе, иначе все (подмена не сохраняется: другой
+  // прогон или демо на том же адресе не стирают выбор). EN — на перерисовку
+  const entsOf = () => [...new Set((H.days || []).flatMap(d => (d.lines || []).map(x => x.entity)).filter(Boolean))].sort((a, z) => entityName(a).localeCompare(entityName(z), 'ru'));
+  let EN = null;
+  // книги ОВП юрлица ent (null — всех) за все дни ответа: книги строк и книги частей отчёта по юрлицу
+  function bookList(ent) {
     const m = new Map();
     (H.days || []).forEach(d => (d.lines || []).forEach(x => (x.book ? [x.book] : x.books || []).forEach(b => {
-      const e = bookMeta(b).entity || x.entity;
-      if (!m.has(b) && (!SEL.entity || e === SEL.entity)) m.set(b, e);
+      const e = bookMeta(b).entity;
+      if (!m.has(b) && (!ent || e === ent)) m.set(b, e);
     })));
     return [...m].map(([id, entity]) => ({ id, entity })).sort((a, z) => bookName(a.id).localeCompare(bookName(z.id), 'ru') || a.id.localeCompare(z.id));
   }
-  // фильтр для K.ocpScope из выбора экрана; null — не выбрано ни одной книги. SF — его значение на перерисовку
+  // фильтр для K.ocpScope из выбора экрана; null — не выбрано ни одной книги. Снятыми считаются только книги юрлица
+  // в ответе: снятая книга, которой нет (ушла из истории, другое юрлицо), выбор не сужает. SF — на перерисовку
   let SF = null;
   function scopeFilter() {
-    if (!SEL.off.length) return { entity: SEL.entity, books: null };
-    const on = bookList().map(b => b.id).filter(b => !SEL.off.includes(b));
-    return on.length ? { entity: SEL.entity, books: on } : null;
+    const L = bookList(EN).map(b => b.id), on = L.filter(b => !SEL.off.includes(b));
+    if (on.length === L.length) return { entity: EN, books: null };
+    return on.length ? { entity: EN, books: on } : null;
   }
   // суммы дня под выбором книг экрана: по валютам и по строкам (книга или часть отчёта)
   function slice(d) {
@@ -139,24 +150,24 @@
   // строка выбора книг над итогом: юрлицо, книги (меню с поиском) и пометка, что фильтр шапки здесь не действует
   function scopeBar() {
     const sb = h('div', 'c16-scope'); sb.setAttribute('data-c16-scope', '');
-    const ents = [...new Set((H.days || []).flatMap(d => (d.lines || []).map(x => x.entity)).filter(Boolean))].sort((a, z) => entityName(a).localeCompare(entityName(z), 'ru'));
-    const L = bookList(), off = L.filter(b => SEL.off.includes(b.id)), n = L.length - off.length;
+    const ents = entsOf();
+    const L = bookList(EN), off = L.filter(b => SEL.off.includes(b.id)), n = L.length - off.length;
     const blbl = !off.length ? 'все книги · ' + L.length : n ? 'книги: ' + n + ' из ' + L.length : 'книги не выбраны';
     const hf = K.filter, ports = (hf.portsOff || []).filter(Boolean);
-    const head = [hf.entity && entityName(hf.entity), hf.desk, hf.books && hf.books.length && (hf.books.length === 1 ? bookName(hf.books[0]) : hf.books.length + ' книг'), ports.length && 'без ' + ports.map(portName).join(', ')].filter(Boolean);
+    const head = [hf.entity && entityName(hf.entity), hf.desk, hf.ccy && 'валюта ' + hf.ccy, hf.books && hf.books.length && (hf.books.length === 1 ? bookName(hf.books[0]) : hf.books.length + ' книг'), ports.length && 'без ' + ports.map(portName).join(', ')].filter(Boolean);
     sb.innerHTML = '<span class="lb">Книги ОВП:</span>' +
-      '<span class="k-chip' + (SEL.entity ? ' on' : '') + '" data-c16="entity">' + esc(SEL.entity ? entityName(SEL.entity) : 'все юрлица') + ' ▾</span>' +
+      '<span class="k-chip' + (EN ? ' on' : '') + '" data-c16="entity">' + esc(EN ? entityName(EN) : 'все юрлица') + ' ▾</span>' +
       '<span class="k-chip' + (off.length ? ' on' : '') + '" data-c16="books" title="' + esc(off.length ? 'сняты: ' + off.map(b => bookName(b.id)).join(', ') : 'все книги юрлица, HTM входит') + '">' + esc(blbl) + ' ▾</span>' +
       '<span class="k-note" data-c16-note><b>Фильтр шапки здесь не действует</b>' + (head.length ? ' (в шапке: ' + esc(head.join(' · ')) + ')' : '') +
       ': ОВП считается по книгам целиком, портфели' + (ports.length ? ' (' + esc(ports.map(portName).join(', ')) + ')' : '') + ' не исключаются — свой выбор книг экрана.</span>';
     sb.querySelectorAll('[data-c16]').forEach(ch => ch.onclick = ev => {
       ev.stopPropagation();
       if (ch.dataset.c16 === 'entity') {
-        K.menu(ch, [{ v: null, t: 'все юрлица' }].concat(ents.map(e => ({ v: e, t: entityName(e) }))), SEL.entity, v => setSel({ entity: v }));
+        K.menu(ch, [{ v: null, t: 'все юрлица' }].concat(ents.map(e => ({ v: e, t: entityName(e) }))), EN, v => setSel({ entity: v }));
         return;
       }
       const reopen = () => { const c = document.querySelector('[data-c16=books]'); if (c) c.click(); };
-      const items = L.map(b => { const m = bookMeta(b.id), t = [b.id, m.desk && m.desk !== '—' ? m.desk : '', m.type && m.type !== '—' ? m.type : '', SEL.entity ? '' : entityName(b.entity)].filter(Boolean); return { v: b.id, t: bookName(b.id), sub: t.join(' · '), multi: true }; });
+      const items = L.map(b => { const m = bookMeta(b.id), t = [b.id, m.desk && m.desk !== '—' ? m.desk : '', m.type && m.type !== '—' ? m.type : '', EN || !b.entity ? '' : entityName(b.entity)].filter(Boolean); return { v: b.id, t: bookName(b.id), sub: t.join(' · '), multi: true }; });
       const keep = ids => SEL.off.filter(b => !ids.includes(b));
       K.menu(ch, items, L.map(b => b.id).filter(b => !SEL.off.includes(b)), v => setSel({ off: SEL.off.includes(v) ? keep([v]) : SEL.off.concat(v) }), 'c16-books',
         Object.assign(menuOpt, { reopen, all: ids => setSel({ off: keep(ids) }), none: ids => setSel({ off: keep(ids).concat(ids) }) }));
@@ -204,6 +215,7 @@
     if (chart) { chart.dispose(); chart = null; }
     const days = H.days || [], last = days[days.length - 1];
     const d = last && last.date === H.asOf ? last : { date: H.asOf, state: 'not_computed', basis: null, fx: {}, lines: [] };
+    const ents = entsOf(); EN = SEL.entity && ents.includes(SEL.entity) ? SEL.entity : null;
     SF = scopeFilter();
     const ok = usable(d), T = ok ? slice(d) : { by: {}, rows: [], notes: [], partial: false, ccys: [] };
     const C = T.ccys;
@@ -292,8 +304,9 @@
       xAxis: { type: 'category', data: D.map(x => f.dshort(x.date)) },
       yAxis: { type: 'value', unit: 'mm USD', axisLabel: { formatter: v => K.tick(v, 1) } },
       series: HC.map(c => ({ name: c, type: 'bar', stack: 'o', barMaxWidth: 28, data: D.map((x, i) => usdOf(sl[i], c, x)), itemStyle: { color: K.ccyColor(c) } }))
-        // точка без соседей (дни вокруг без ОВП) — кружком, иначе одиночную дату линии не видно
-        .concat([{ name: 'Общая', type: 'line', data: line, symbol: 'circle', symbolSize: (v, p) => line[p.dataIndex - 1] == null && line[p.dataIndex + 1] == null ? 5 : 0, lineStyle: { width: 2 }, color: css('--fg') }]),
+        // точка без соседей (дни вокруг без ОВП) — кружком, иначе одиночную дату линии не видно; showAllSymbol — чтобы
+        // ECharts не прореживал точки (3 мес, узкий экран) и кружок не пропадал
+        .concat([{ name: 'Общая', type: 'line', data: line, symbol: 'circle', showAllSymbol: true, symbolSize: (v, p) => line[p.dataIndex - 1] == null && line[p.dataIndex + 1] == null ? 5 : 0, lineStyle: { width: 2 }, color: css('--fg') }]),
     }));
   }
   // начало периода: дни позже этой даты

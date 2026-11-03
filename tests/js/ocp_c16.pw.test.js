@@ -115,7 +115,9 @@ test('C16: own book selection, the header filter named; the «Общая» line 
   try {
     // в шапке — фильтр книг и «без HTM»: к ОВП не применяются, пометка видна
     const HDR = JSON.stringify({ books: ['FXB'], portsOff: ['HTM'] });
-    const { pg, ctx, errors } = await open(browser, { store: { 'concepts-filter': HDR }, hist: { chf: true, failedAt: 3 } });
+    // в своём выборе запомнена снятая книга, которой в истории нет: выбор она не сужает, при сохранении отбрасывается
+    const OWN = JSON.stringify({ entity: null, off: ['GONE'] });
+    const { pg, ctx, errors } = await open(browser, { store: { 'concepts-filter': HDR, 'tdm.view.v1:c16:books': OWN }, hist: { chf: true, failedAt: 3 } });
     const note = pg.locator('[data-c16-note]');
     assert.ok(await note.isVisible(), 'пометка видна');
     const nt = await note.innerText();
@@ -124,13 +126,14 @@ test('C16: own book selection, the header filter named; the «Общая» line 
     assert.deepEqual((await rows()).sort(), ['CORP_FX', 'FXB', 'Головной банк', 'SOV_FX'].sort(), 'все книги, не только книга шапки');
     const books = pg.locator('[data-c16="books"]');
     assert.match(await books.innerText(), /все книги · 4/);
+    assert.ok(!(await pg.locator('#view').innerText()).includes('не вся'), 'снятая книга вне истории выбор не сужает');
     // снять книгу в своём выборе: пропадает из таблицы, запоминается отдельно, шапка не меняется
     await books.click();
     await pg.locator('.mi', { hasText: 'SOV_FX' }).first().click();
     assert.ok(!(await rows()).includes('SOV_FX') && !(await rows()).includes('Головной банк'), 'книга снята; часть отчёта с ней — только целиком');
     assert.match(await pg.locator('[data-c16="books"]').innerText(), /книги: 3 из 4/);
     const saved = await pg.evaluate(() => [localStorage.getItem('tdm.view.v1:c16:books'), localStorage.getItem('concepts-filter')]);
-    assert.deepEqual(JSON.parse(saved[0]).off, ['SOV_FX']);
+    assert.deepEqual(JSON.parse(saved[0]).off, ['SOV_FX'], 'GONE отброшена при сохранении');
     assert.equal(saved[1], HDR, 'фильтр шапки не тронут');
     await pg.mouse.click(5, 5);
     // CHF без курса: итог — без CHF; линия есть у каждой даты с ОВП, подсказка называет CHF; день с ошибкой — причина

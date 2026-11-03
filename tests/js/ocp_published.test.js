@@ -333,6 +333,49 @@ ta('C16: свой выбор книг (TDM#533): фильтр шапки не д
   assert.ok(one.K.ocpScope(SRV.days[3].lines, {}).notes.includes('фильтр портфелей к ОВП по книгам не применяется'));
 });
 
+ta('C16: часть отчёта по юрлицу без книг (books: []) — не теряется из-за снятых книг вне ответа и другого юрлица; под выбором — названа (ревью #538)', async () => {
+  // SRV + остаток юрлица BANK без книг (как rules/ocp.py при пустом books_at) и книга NEWBK без справочника
+  const s = JSON.parse(JSON.stringify(SRV));
+  s.days[3].lines.push(L('BANK', null, [], 'USD', 3e6), L('BANK', 'NEWBK', ['NEWBK'], 'USD', 1e6));
+  const KEY = 'tdm.view.v1:c16:books';
+  const usd = x => { const m = x.html().match(/data-ocp-ccy="USD"><div class="l">[\s\S]*?<div class="v"><span class="[^"]*">([^<]*)</); return m && m[1]; };
+  // все книги: часть без книг — своей строкой
+  const all = page16({ srv: s, store: { [KEY]: { entity: null, off: [] } } });
+  await settle();
+  assert.ok(all.html().includes('data-ocp-row="BANK"') && usd(all) === '+14.0', usd(all));
+  // A: снятая книга, которой в ответе нет, — выбор не сужает: «все книги», часть без книг на месте, без «не вся»
+  const gone = page16({ srv: s, store: { [KEY]: { entity: null, off: ['GONE'] } } });
+  await settle();
+  let html = gone.html();
+  assert.ok(html.includes('data-ocp-row="BANK"') && usd(gone) === '+14.0' && html.includes('все книги · 6') && !html.includes('не вся'), html);
+  near(Object.fromEntries(gone.chart().series.map(z => [z.name, z.data])).USD[2], 14, 'линия и столбец — с частью без книг');
+  // B: снята книга другого юрлица — у выбранного юрлица часть без книг на месте
+  const other = page16({ srv: s, store: { [KEY]: { entity: 'BANK', off: ['AM-BOND'] } } });
+  await settle();
+  html = other.html();
+  assert.ok(html.includes('data-ocp-row="BANK"') && html.includes('все книги · 2') && !html.includes('не вся'), html);
+  // выбор книг юрлица действительно сужен — часть без книг не входит и названа («под выбором книг — не вся»)
+  const part = page16({ srv: s, store: { [KEY]: { entity: 'BANK', off: ['FXB'] } } });
+  await settle();
+  html = part.html();
+  assert.ok(!html.includes('data-ocp-row="BANK"') && html.includes('под выбором книг — не вся') && html.includes('часть отчёта ОВП по юрлицу BANK без книг — только без выбора книг'), html);
+  // книга без справочника: под юрлицом не предлагается и не считается; без юрлица — и в выборе, и в итоге
+  assert.ok(!other.html().includes('data-ocp-row="NEWBK"'));
+  assert.ok(all.html().includes('data-ocp-row="NEWBK"'));
+  // запомненного юрлица в ответе нет — все юрлица, запомненное не стирается
+  const store = { [KEY]: { entity: 'NOPE', off: [] } };
+  const nope = page16({ srv: s, store });
+  await settle();
+  html = nope.html();
+  assert.ok(html.includes('все юрлица') && html.includes('data-ocp-row="FXB"') && html.includes('data-ocp-row="AM"') && !html.includes('Нет валютной позиции'), html);
+  assert.deepStrictEqual(store[KEY], { entity: 'NOPE', off: [] });
+  // валюта фильтра шапки — тоже названа; одиночные точки линии не прореживаются
+  const ccy = page16({ srv: s, filter: { ccy: 'USD' } });
+  await settle();
+  assert.ok(ccy.html().includes('(в шапке: валюта USD)') && ccy.html().includes('data-ocp-ccy="CNY"'), 'фильтр валюты шапки к ОВП не применяется');
+  assert.strictEqual(ccy.chart().series.find(z => z.name === 'Общая').showAllSymbol, true);
+});
+
 ta('C16: день без публикуемой ОВП; отчёта ОВП нет — панель «Почему» (TDM#445)', async () => {
   const none = JSON.parse(JSON.stringify(SRV)); none.days[3].state = 'not_computed'; none.days[3].basis = null;
   const a = page16({ srv: none });
