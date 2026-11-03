@@ -120,15 +120,29 @@ def test_face_only_row_scales_every_figure_and_wants_the_same_currency(monkeypat
     assert _inputs().extra["T1|FACE"]["x"] == {"keep": 1}   # the stored inputs are untouched
 
 
-def test_new_position_needs_a_free_id_and_a_known_currency(monkeypatch):
+def test_new_position_needs_a_free_id_and_a_face_amount_a_known_currency(monkeypatch):
     rows = [_trade(trade_id="A", position_id="T2|SEC2", book_id="T1", instrument_id="SEC2"),
             _trade(trade_id="B", position_id="T1|UNK", instrument_id="UNKNOWN")]
-    _, summary = _apply(monkeypatch, rows)
-    assert summary["skipped"] == {"no_currency": 1, "position_id_taken": 1}
+    out, summary = _apply(monkeypatch, rows)   # a first purchase of a bond no book holds: the core knows its currency
+    assert summary["skipped"] == {"position_id_taken": 1} and summary["new_positions"] == 1
+    assert "ccy" not in out.extra["T1|UNK"]
+    face = {"quantity": None, "face_amount_ccy": "10", "side": "buy"}
+    _, summary = _apply(monkeypatch, [_trade(trade_id="C", position_id="T1|U2", instrument_id="UNKNOWN", **face),
+                                      _trade(trade_id="D", position_id="T1|U3", instrument_id="SEC2", ccy="RUB", **face),
+                                      _trade(trade_id="E", position_id="T1|U4", instrument_id="SEC2", ccy="USD", **face)])
+    assert summary["skipped"] == {"no_currency": 1, "units_mismatch": 1} and summary["new_positions"] == 1
     # a new row that nets to nothing is not left behind
     out, summary = _apply(monkeypatch, [_trade(trade_id="C", position_id="T1|N", instrument_id="SEC2"),
                                         _trade(trade_id="D", position_id="T1|N", instrument_id="SEC2", side="sell")])
     assert "T1|N" not in {r[0] for r in out.rows} and summary["new_positions"] == 0 and summary["applied"] == 2
+
+
+def test_more_than_500_trades_are_all_listed_for_the_screen(monkeypatch):
+    rows = [_trade(trade_id=f"T{i:04d}", quantity="1", trade_ts=f"2026-11-03T10:{i % 60:02d}:00") for i in range(600)]
+    out, summary = _apply(monkeypatch, rows)
+    assert {r[0]: r for r in out.rows}["T1|SEC1"][3] == 1600.0 and len(summary["versions"]) == 600
+    run = {"run_type": "INTRADAY", **{k: summary[k] for k in ("versions", "skipped_ids", "truncated")}}
+    assert {trades._intraday_state(r, date(2026, 11, 3), run, True) for r in rows} == {"applied"}
 
 
 def test_a_growing_cut_with_the_same_trade_does_not_count_twice(monkeypatch):
@@ -137,18 +151,19 @@ def test_a_growing_cut_with_the_same_trade_does_not_count_twice(monkeypatch):
     a, _ = _apply(monkeypatch, first)
     b, summary = _apply(monkeypatch, again)
     assert {r[0]: r for r in a.rows}["T1|SEC1"][3] == 1200.0 and {r[0]: r for r in b.rows}["T1|SEC1"][3] == 1300.0
-    assert summary["trade_ids"] == ["TR1", "TR2"] and a.private_inputs_hash != b.private_inputs_hash
+    assert sorted(summary["versions"]) == ["TR1", "TR2"] and a.private_inputs_hash != b.private_inputs_hash
 
 
 def test_the_screen_says_what_the_run_took_in():
     day = date(2026, 11, 3)
     t = _trade(trade_version=2)
-    run = {"run_type": "INTRADAY", "trade_ids": ["TR1"], "versions": {"TR1": 2}, "skipped_ids": {"TR9": "no_instrument"}}
+    run = {"run_type": "INTRADAY", "versions": {"TR1": 2}, "skipped_ids": {"TR9": "no_instrument"}}
     state = trades._intraday_state
     assert state(t, day, run, True) == "applied"
     assert state(_trade(trade_version=3), day, run, True) == "pending"    # a newer version than the run took
     assert state(_trade(trade_id="TR9"), day, run, True) == "no_instrument"
     assert state(_trade(trade_id="TR5"), day, run, True) == "pending"
+    assert state(_trade(trade_id="TR5"), day, {**run, "truncated": True}, True) == "unknown"
     assert state(t, day, None, True) == "pending" and state(t, day, run, False) == "off"
     assert state(t, day, {**run, "run_type": "EOD"}, True) == "eod"        # the preliminary close: no trades
     assert state(_trade(status="cancelled"), day, run, True) == "cancelled"

@@ -943,10 +943,12 @@ class AdapterServices:
                 self._finish(st, f, prev, {"state": "error", "code": "operation_failed", "lines": []}, started)
                 return
             if not books:
+                if seen:  # seen all the same: a feed after the positions is not due again at every step
+                    self._record(st, f["id"], **seen)
                 self._finish(st, f, prev, {"state": "blocked", "code": "no_books", "lines": [
                     "Нет книг владельца с позициями: загрузите позиции и отметьте книги активными."]}, started)
                 return
-        if seen:  # after the books check: a feed that had nothing to ask for has not seen these positions
+        if seen:
             self._record(st, f["id"], **seen)
         self._cancel.clear()
         with self._lock:

@@ -64,6 +64,8 @@ SKIP_REASONS = ("cancelled", "not_bond", "other_trade_date", "no_quantity", "no_
 SCALED = ("face_amount_ccy", "face_outstanding_ccy", "mv_rub", "accrued_ccy", "amount_ccy",
           "risk_dv01_rub", "risk_cs01_rub")
 """The report's own figures of a position row that follow its quantity when trades change it."""
+MAX_LISTED = 20000
+"""Trades of the day the run's lineage lists one by one (versions taken in, reasons left out)."""
 COST_BASIS = ("book_value_rub", "purchase_accrued_ccy")
 """Follow the quantity only when it falls (the average cost of what stays); a purchase has its own price, which the
 row does not take in: the figures stay and the row says so (``x.intraday_cost_basis``)."""
@@ -100,8 +102,9 @@ def _times(t: dict[str, Any]) -> str:
 def apply_intraday(con: psycopg.Connection, on: date,
                    inputs: store.PositionInputs) -> tuple[store.PositionInputs, dict[str, Any]]:
     """The positions of ``on`` with the day's trades applied (module doc) and the summary for the run's lineage
-    ``intraday_trades``: ``{"set_ids", "applied", "new_positions", "skipped": {reason: n}, "trade_ids", "versions",
-    "skipped_ids"}`` (the ids and versions of the first 500).
+    ``intraday_trades``: ``{"set_ids", "applied", "new_positions", "skipped": {reason: n}, "versions": {trade_id:
+    version} of every trade taken in, "skipped_ids": {trade_id: reason} of every one left out}``; above ``MAX_LISTED``
+    trades the lists are cut and ``truncated`` is true (the screen then says "no information" for the rest).
 
     The trades are first summed per position row, then the row's figures are scaled once by final / initial quantity
     (so the order of the trades, a sale to zero and a later purchase, does not matter). Only books of the position
@@ -111,8 +114,7 @@ def apply_intraday(con: psycopg.Connection, on: date,
     sold out has none), TDM#557 to be decided."""
     day = store.dataset_rows(con, "trades", on)
     summary: dict[str, Any] = {"set_ids": sorted({u["set_id"] for u in day.units}), "applied": 0,
-                               "new_positions": 0, "skipped": {}, "trade_ids": [], "versions": {},
-                               "skipped_ids": {}}
+                               "new_positions": 0, "skipped": {}, "versions": {}, "skipped_ids": {}}
     if not day.rows:
         return inputs, summary
     rows = [list(r) for r in inputs.rows]
@@ -161,12 +163,12 @@ def apply_intraday(con: psycopg.Connection, on: date,
             if pid in taken:
                 skip(t, "position_id_taken")   # the id of a row of another book: its figures must not be replaced
                 continue
-            ccy = ccy_of.get(t["instrument_id"])   # the bond's own currency, as a row of the book list has it
-            if not ccy:
-                skip(t, "no_currency")
+            ccy = ccy_of.get(t["instrument_id"])   # the bond's own currency, as another row of the set has it
+            if mode == "face" and (not ccy or t.get("ccy") != ccy):   # a face amount needs it; a quantity does not:
+                skip(t, "no_currency" if not ccy else "units_mismatch")  # the core takes it from the reference
                 continue
             rows.append([pid, book, t["instrument_id"], 0.0 if mode == "qty" else None])
-            x = {"asset_class": "bond", "ccy": ccy, "x": {"intraday_trade": True}}
+            x = {"asset_class": "bond", **({"ccy": ccy} if ccy else {}), "x": {"intraday_trade": True}}
             for k in ("isin", "source_instrument_id", "source_instrument_name"):
                 if t.get(k) is not None:
                     x[k] = t[k]
@@ -222,11 +224,10 @@ def apply_intraday(con: psycopg.Connection, on: date,
         for i in drop:
             extra.pop(rows[i][0], None)
         rows = [r for j, r in enumerate(rows) if j not in drop]
-    done = {str(a["trade_id"]) for a in applied}
     summary.update(applied=len(applied), skipped=dict(sorted(skipped.items())),
-                   trade_ids=sorted(done)[:500],
-                   versions={str(a["trade_id"]): a["trade_version"] for a in applied[:500]},
-                   skipped_ids=dict(list(skip_ids.items())[:500]))
+                   versions={str(a["trade_id"]): a["trade_version"] for a in applied[:MAX_LISTED]},
+                   skipped_ids=dict(list(skip_ids.items())[:MAX_LISTED]),
+                   truncated=len(applied) > MAX_LISTED or len(skip_ids) > MAX_LISTED)
     if not applied:
         return inputs, summary
     canon = json.dumps([inputs.private_inputs_hash, applied], sort_keys=True, default=str, separators=(",", ":"))
@@ -261,9 +262,9 @@ def _intraday_state(r: dict[str, Any], on: date, run: dict[str, Any] | None, ena
     if run["run_type"] != "INTRADAY":
         return "eod"
     tid = str(r.get("trade_id"))
-    if tid in run["trade_ids"] and str(run["versions"].get(tid)) == str(r.get("trade_version")):
-        return "applied"
-    return run["skipped_ids"].get(tid) or "pending"
+    if tid in run["versions"]:
+        return "applied" if str(run["versions"][tid]) == str(r.get("trade_version")) else "pending"
+    return run["skipped_ids"].get(tid) or ("unknown" if run.get("truncated") else "pending")
 
 
 def _row(r: dict[str, Any], on: date, run: dict[str, Any] | None = None, enabled: bool = True) -> dict[str, Any]:
@@ -329,5 +330,5 @@ def _intraday_run(con: psycopg.Connection, on: date) -> dict[str, Any] | None:
     t = row[3] or {}
     return {"run_id": row[0], "cut_type": row[1], "run_type": row[2], "applied": t.get("applied", 0),
             "new_positions": t.get("new_positions", 0), "skipped": t.get("skipped", {}),
-            "trade_ids": t.get("trade_ids", []), "versions": t.get("versions", {}),
-            "skipped_ids": t.get("skipped_ids", {})}
+            "versions": t.get("versions", {}), "skipped_ids": t.get("skipped_ids", {}),
+            "truncated": bool(t.get("truncated"))}

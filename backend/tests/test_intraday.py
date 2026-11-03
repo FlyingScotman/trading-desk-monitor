@@ -710,7 +710,7 @@ def test_trades_of_the_day_go_into_the_intraday_book(stub, tmp_path, store_url):
         assert con.execute(q, ("B1|SEC-26238",)).fetchone()[0] == 13000
         lin = con.execute("SELECT lineage->'intraday_trades' FROM run WHERE run_type = 'INTRADAY'"
                           " ORDER BY run_id DESC LIMIT 1").fetchone()[0]
-        assert (lin["applied"], lin["skipped"], lin["trade_ids"]) == (
+        assert (lin["applied"], lin["skipped"], list(lin["versions"])) == (
             1, {"cancelled": 1, "no_instrument": 1, "not_bond": 1}, ["TR-1"])
         v = trades.view(con, FRI)
         assert {r["trade_id"]: r["intraday"] for r in v["rows"]} == {"TR-1": "applied", "TR-2": "not_bond",
