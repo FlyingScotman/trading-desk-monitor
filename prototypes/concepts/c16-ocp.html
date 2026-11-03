@@ -13,6 +13,10 @@
 .c16-chart { height: 300px; }
 .c16-badge { display: inline-block; padding: 1px 9px; border-radius: 999px; font-size: 12px; font-weight: 600; border: 1px solid var(--warn); color: var(--warn); background: color-mix(in srgb, var(--warn) 12%, transparent); white-space: nowrap; margin-left: 8px; }
 .c16-msg { padding: 24px; text-align: center; color: var(--fg-2); }
+.c16-scope { display: flex; flex-wrap: wrap; gap: 6px 8px; align-items: center; margin-bottom: 10px; font-size: 12px; }
+.c16-scope .lb { color: var(--fg-2); }
+.c16-scope .k-note { flex: 1 1 320px; min-width: 0; font-size: 12px; color: var(--fg-2); }
+.c16-scope .k-note b { font-weight: 600; color: var(--fg); }
 .k-tbl tr.tot td { font-weight: 650; border-top: 1px solid var(--line-2); background: var(--panel-2); }
 .k-tbl .c16-src { font-size: 11px; color: var(--fg-3); margin-left: 2px; }
 @media (max-width: 720px) { .k-panel > .hd { flex-wrap: wrap; } }
@@ -30,18 +34,24 @@
 <script>
 (function () {
   'use strict';
-  // «ОВП» (TDM#446, макет согласован владельцем 29.10.2026): ОВП книг фильтра шапки по валютам — в валюте или в
-  // USD-эквиваленте по выбранному курсу (рыночный прогона: MOEX 19:00, иначе 14:00, закрытие CETS, ЦБ; или ЦБ на дату);
-  // общая ОВП в USD — нетто (владелец, 30.10.2026); книги × валюты; история по дням. Валюта без курса прогона —
-  // по курсу из отчёта ОВП (reportFx), с пометкой «курса нет». Рублей нет, лимитов, дат расчётов, сверки и переноса нет.
+  // «ОВП» (TDM#446, макет согласован владельцем 29.10.2026): ОВП книг своего выбора экрана (TDM#533) по валютам —
+  // в валюте или в USD-эквиваленте по выбранному курсу (рыночный прогона: MOEX 19:00, иначе 14:00, закрытие CETS,
+  // ЦБ; или ЦБ на дату); общая ОВП в USD — нетто (владелец, 30.10.2026); книги × валюты; история по дням. Валюта без
+  // курса прогона — по курсу из отчёта ОВП (reportFx), с пометкой «курса нет». Рублей нет, лимитов, дат расчётов, сверки
+  // и переноса нет.
   // Источник — публикуемая ОВП прогонов (TDM#416: отчёт ОВП организации + слагаемые вне отчёта из позиций, книги без
   // отчёта — из позиций): GET ../api/v1/history/ocp (backend desk/api/ocp_history.py) — по дням, из сохранённых
   // прогонов, без пересчёта; последний день — прогон страницы. Часть отчёта по юрлицу (без книги) — своей строкой, по
-  // книгам не делится; под фильтром книг — только целиком (K.ocpScope). В демо — вымышленный ответ той же формы.
+  // книгам не делится; под выбором книг — только целиком (K.ocpScope). В демо — вымышленный ответ той же формы.
+  // Книги — свой выбор экрана (TDM#533): юрлицо и книги, по умолчанию все книги юрлица вместе с HTM; фильтр шапки
+  // (деск, книги, портфели) к C16 не применяется, об этом — строка над итогом. Выбор — в слое вида (K.viewStore,
+  // 'c16:books'), отдельно от фильтра шапки; действует на итог, таблицу и график.
   // Отчёта ОВП нет (no_report) — почему, по журналу входящих (TDM#445): GET ../api/v1/inbox/datasets/ocp, lib/inbox-why.js.
   const M = MOCK, K = KIT, f = K.f, esc = K.esc, h = K.h;
   const bar = K.top({ title: 'C16 · ОВП' });
   ['[data-a=ofzview]', '[data-a=repr]'].forEach(s => { const e = bar && bar.querySelector(s); if (e) e.style.display = 'none'; });
+  // фильтр шапки здесь не действует (TDM#533): чипы шапки приглушены, причина — в подсказке
+  { const fl = bar && bar.querySelector('.filters'); if (fl) { fl.style.opacity = '.55'; fl.title = 'Фильтр шапки к ОВП не применяется: у экрана свой выбор книг'; } }
   const server = K.source === 'real';
   const view = document.getElementById('view');
   const RATES = {
@@ -52,12 +62,25 @@
   const NO_OCP = { not_computed: 'прогон без расчёта ОВП', failed: 'ошибка расчёта ОВП' };
   const SRC = { derived: 'из позиций', derived_stale_report: 'отчёт устарел, из позиций' };
   const S = { unit: 'ccy', rate: 'market', period: 'm1' };
-  let H = null;  // ответ /api/v1/history/ocp; смена фильтра, курса, формата перерисовывает его без нового запроса
+  let H = null;  // ответ /api/v1/history/ocp; смена выбора книг, курса, формата перерисовывает его без нового запроса
   let chart = null;
+  // свой выбор книг (TDM#533): юрлицо (null — все) и снятые книги (off; новая книга — сразу в выборе). Первый раз —
+  // юрлицо шапки и все книги, дальше — своё, отдельно от шапки
+  const SEL_KEY = 'c16:books';
+  const SEL = (() => {
+    const s = K.viewStore.get(SEL_KEY);
+    if (s && typeof s === 'object') return { entity: typeof s.entity === 'string' ? s.entity : null, off: Array.isArray(s.off) ? s.off.filter(x => typeof x === 'string') : [] };
+    const x = { entity: K.filter.entity || null, off: [] }; K.viewStore.set(SEL_KEY, x); return x;
+  })();
+  // снятые книги хранятся как есть, без чистки по ответу: книга, которой в ответе нет (демо, другой прогон, ушла из
+  // истории), выбор не сужает (scopeFilter), а снятое в рабочем прогоне не теряется
+  const setSel = patch => { Object.assign(SEL, patch); K.viewStore.set(SEL_KEY, SEL); render(); };
+  const menuOpt = {};  // строка поиска меню книг между переоткрытиями
 
   // Общая ОВП — нетто: сумма USD-эквивалентов валют со знаком (владелец, 30.10.2026; правило — здесь)
   const overall = usd => usd.reduce((a, v) => a + v, 0);
-  // общая ОВП набора валют: null, если у одной из них нет USD-эквивалента (курса) — неполная цифра не выглядит полной
+  // ОВП строки книги: null, если у одной из её валют нет USD-эквивалента (курса) — неполная цифра не выглядит полной
+  // (итог и линия по дням — по валютам с курсом, без курса — названы)
   const total = usd => usd.some(v => v == null) ? null : overall(usd);
   const mm = v => v == null ? null : v / 1e6;
   const fmt = v => v == null ? '<span class="mut3">—</span>' : '<span class="' + f.cls(Math.round(v * 10)) + '">' + f.s(v, 1) + '</span>';
@@ -79,9 +102,34 @@
   const ccyOrder = (a, b) => ((M.ccyOrder || {})[a] ?? 99) - ((M.ccyOrder || {})[b] ?? 99) || a.localeCompare(b);
   const entityName = e => ((M.entities || []).find(x => x.id === e) || {}).name || e;
   const bookName = id => ((M.book || {})[id] || (H.books || {})[id] || {}).name || id;
-  // суммы дня под фильтром шапки: по валютам и по строкам (книга или часть отчёта)
+  // справочник книги — по тому же правилу, что K.ocpScope (K.ocpBook): юрлицо книги — из справочника, не из строки
+  const bookMeta = id => K.ocpBook(id, H.books || {});
+  // юрлица ответа; юрлицо выбора — запомненное, если оно есть в ответе, иначе все (подмена не сохраняется: другой
+  // прогон или демо на том же адресе не стирают выбор). EN — на перерисовку
+  const entsOf = () => [...new Set((H.days || []).flatMap(d => (d.lines || []).map(x => x.entity)).filter(Boolean))].sort((a, z) => entityName(a).localeCompare(entityName(z), 'ru'));
+  let EN = null;
+  // книги ОВП юрлица ent (null — всех) за все дни ответа: книги строк и книги частей отчёта по юрлицу
+  function bookList(ent) {
+    const m = new Map();
+    (H.days || []).forEach(d => (d.lines || []).forEach(x => (x.book ? [x.book] : x.books || []).forEach(b => {
+      const e = bookMeta(b).entity;
+      if (!m.has(b) && (!ent || e === ent)) m.set(b, e);
+    })));
+    return [...m].map(([id, entity]) => ({ id, entity })).sort((a, z) => bookName(a.id).localeCompare(bookName(z.id), 'ru') || a.id.localeCompare(z.id));
+  }
+  // фильтр для K.ocpScope из выбора экрана; null — не выбрано ни одной книги. Снятыми считаются только книги юрлица
+  // в ответе: снятая книга, которой нет (ушла из истории, другое юрлицо), выбор не сужает. offEntities — юрлица со
+  // снятыми книгами: остаток другого юрлица без книг остаётся (K.ocpScope). SF — на перерисовку
+  let SF = null;
+  function scopeFilter() {
+    const L = bookList(EN), on = L.filter(b => !SEL.off.includes(b.id)).map(b => b.id);
+    if (on.length === L.length) return { entity: EN, books: null };
+    const offEntities = [...new Set(L.filter(b => SEL.off.includes(b.id)).map(b => b.entity))];
+    return on.length ? { entity: EN, books: on, offEntities } : null;
+  }
+  // суммы дня под выбором книг экрана: по валютам и по строкам (книга или часть отчёта)
   function slice(d) {
-    const sc = K.ocpScope(d.lines || [], H.books || {}) || { lines: [], notes: [], partial: false };
+    const sc = (SF && K.ocpScope(d.lines || [], H.books || {}, SF)) || { lines: [], notes: [], partial: false };
     const by = {}, rows = new Map();
     sc.lines.forEach(x => {
       if (x.ccy === 'RUB' || x.amount == null) return;
@@ -95,6 +143,36 @@
     return { by, rows: [...rows.values()], notes: sc.notes, partial: !!sc.partial, ccys: Object.keys(by).sort(ccyOrder) };
   }
   const usable = d => !!(d && d.basis && !NO_OCP[d.state]);
+  const noOcp = d => 'ОВП нет: ' + (NO_OCP[d.state] || 'прогон до публикуемой ОВП');
+  const portName = v => v === '—' ? 'без портфеля' : v;
+
+  // строка выбора книг над итогом: юрлицо, книги (меню с поиском) и пометка, что фильтр шапки здесь не действует
+  function scopeBar() {
+    const sb = h('div', 'c16-scope'); sb.setAttribute('data-c16-scope', '');
+    const ents = entsOf();
+    const L = bookList(EN), off = L.filter(b => SEL.off.includes(b.id)), n = L.length - off.length;
+    const blbl = !off.length ? 'все книги · ' + L.length : n ? 'книги: ' + n + ' из ' + L.length : 'книги не выбраны';
+    const hf = K.filter, ports = (hf.portsOff || []).filter(Boolean);
+    const head = [hf.entity && entityName(hf.entity), hf.desk, hf.ccy && 'валюта ' + hf.ccy, hf.books && hf.books.length && (hf.books.length === 1 ? bookName(hf.books[0]) : hf.books.length + ' книг'), ports.length && 'без ' + ports.map(portName).join(', ')].filter(Boolean);
+    sb.innerHTML = '<span class="lb">Книги ОВП:</span>' +
+      '<span class="k-chip' + (EN ? ' on' : '') + '" data-c16="entity">' + esc(EN ? entityName(EN) : 'все юрлица') + ' ▾</span>' +
+      '<span class="k-chip' + (off.length ? ' on' : '') + '" data-c16="books" title="' + esc(off.length ? 'сняты: ' + off.map(b => bookName(b.id)).join(', ') : 'все книги юрлица, HTM входит') + '">' + esc(blbl) + ' ▾</span>' +
+      '<span class="k-note" data-c16-note><b>Фильтр шапки здесь не действует</b>' + (head.length ? ' (в шапке: ' + esc(head.join(' · ')) + ')' : '') +
+      ': ОВП считается по книгам целиком, портфели' + (ports.length ? ' (' + esc(ports.map(portName).join(', ')) + ')' : '') + ' не исключаются — свой выбор книг экрана.</span>';
+    sb.querySelectorAll('[data-c16]').forEach(ch => ch.onclick = ev => {
+      ev.stopPropagation();
+      if (ch.dataset.c16 === 'entity') {
+        K.menu(ch, [{ v: null, t: 'все юрлица' }].concat(ents.map(e => ({ v: e, t: entityName(e) }))), EN, v => setSel({ entity: v }));
+        return;
+      }
+      const reopen = () => { const c = document.querySelector('[data-c16=books]'); if (c) c.click(); };
+      const items = L.map(b => { const m = bookMeta(b.id), t = [b.id, m.desk && m.desk !== '—' ? m.desk : '', m.type && m.type !== '—' ? m.type : '', EN || !b.entity ? '' : entityName(b.entity)].filter(Boolean); return { v: b.id, t: bookName(b.id), sub: t.join(' · '), multi: true }; });
+      const keep = ids => SEL.off.filter(b => !ids.includes(b));
+      K.menu(ch, items, L.map(b => b.id).filter(b => !SEL.off.includes(b)), v => setSel({ off: SEL.off.includes(v) ? keep([v]) : SEL.off.concat(v) }), 'c16-books',
+        Object.assign(menuOpt, { reopen, all: ids => setSel({ off: keep(ids) }), none: ids => setSel({ off: keep(ids).concat(ids) }) }));
+    });
+    return sb;
+  }
 
   function panel(title) { const p = h('div', 'k-panel'); p.innerHTML = '<div class="hd"><h3>' + title + '</h3><span class="sp"></span><span class="m"></span></div><div class="bd"></div>'; return p; }
   function msg(t) { H = null; if (chart) { chart.dispose(); chart = null; } view.innerHTML = '<div class="k-panel"><div class="c16-msg">' + t + '</div></div>'; }
@@ -136,18 +214,21 @@
     if (chart) { chart.dispose(); chart = null; }
     const days = H.days || [], last = days[days.length - 1];
     const d = last && last.date === H.asOf ? last : { date: H.asOf, state: 'not_computed', basis: null, fx: {}, lines: [] };
+    const ents = entsOf(); EN = SEL.entity && ents.includes(SEL.entity) ? SEL.entity : null;
+    SF = scopeFilter();
     const ok = usable(d), T = ok ? slice(d) : { by: {}, rows: [], notes: [], partial: false, ccys: [] };
     const C = T.ccys;
-    const EMPTY = '<div class="k-empty">' + (!ok ? 'ОВП за ' + f.date(d.date) + ' нет: ' + esc(NO_OCP[d.state] || 'прогон до публикуемой ОВП') : 'Нет валютной позиции') + '</div>';
+    const EMPTY = '<div class="k-empty">' + (!ok ? 'ОВП за ' + f.date(d.date) + ' нет: ' + esc(NO_OCP[d.state] || 'прогон до публикуемой ОВП') : !SF ? 'Не выбрано ни одной книги' : 'Нет валютной позиции') + '</div>';
     view.innerHTML = '';
+    view.appendChild(scopeBar());
     const wrap = h('div', 'k-grid');
 
     // итог: дата, общая ОВП в USD, валюты
     const sp = panel('ОВП на ' + f.dshort(d.date) + (d.state === 'no_report' ? '<span class="c16-badge" title="ОВП из позиций">отчёта ОВП нет</span>' : ''));
     const m = sp.querySelector('.m'); m.style.cssText = 'display:inline-flex;gap:6px;flex-wrap:wrap;align-items:center';
     const nt = h('span'), u = h('span'), r = h('span'); m.append(nt, u, r);
-    // часть отчёта по юрлицу не вошла из-за фильтра — пометка; прочие заметки фильтра (портфели) — в подсказке общей ОВП
-    if (T.partial) nt.innerHTML = '<span class="mut3" title="' + esc(T.notes.join('; ')) + '">под фильтром — не вся</span>';
+    // часть отчёта по юрлицу не вошла из-за выбора книг — пометка
+    if (T.partial) nt.innerHTML = '<span class="mut3" title="' + esc(T.notes.join('; ')) + '">под выбором книг — не вся</span>';
     K.seg(u, [['ccy', 'в валюте'], ['usd', 'в USD']], S.unit, v => { S.unit = v; render(); });
     const rs = K.seg(r, Object.entries(RATES).map(([k, x]) => [k, 'курс ' + x.name]), S.rate, v => { S.rate = v; render(); });
     (rs.querySelectorAll ? rs.querySelectorAll('button') : []).forEach((b, i) => { b.title = Object.values(RATES)[i].title; });
@@ -186,7 +267,8 @@
     } else bp.querySelector('.bd').innerHTML = EMPTY;
     wrap.appendChild(bp);
 
-    // по дням: столбцы по валютам (USD-эквивалент), линия — общая ОВП; день без публикуемой ОВП — пусто
+    // по дням: столбцы по валютам (USD-эквивалент), линия — общая ОВП по валютам с курсом (без курса — названы в
+    // подсказке, как в итоге; TDM#534); день без публикуемой ОВП — пусто, причина — в подсказке
     const hp = panel('По дням');
     K.seg(hp.querySelector('.m'), PERIODS, S.period, v => { S.period = v; render(); });
     hp.querySelector('.bd').innerHTML = '<div class="c16-chart"></div>';
@@ -199,14 +281,31 @@
     const HC = [...new Set(sl.flatMap(s => s ? s.ccys : []))].sort(ccyOrder);
     if (!HC.length) { hp.querySelector('.bd').innerHTML = '<div class="k-empty">Нет данных за период</div>'; return; }
     const usdOf = (s, c, x) => s && s.by[c] != null ? mm(toUsd(s.by[c], c, x)) : null;
+    // общая ОВП дня: сумма валют с USD-эквивалентом; null — нет ни одной; без курса — названы в подсказке
+    const usdDay = D.map((x, i) => sl[i] ? sl[i].ccys.map(c => toUsd(sl[i].by[c], c, x)) : []);
+    const line = usdDay.map(u => u.some(v => v != null) ? mm(overall(u.filter(v => v != null))) : null);
+    const tip = D.map((x, i) => {
+      if (!sl[i]) return noOcp(x);
+      if (!sl[i].ccys.length) return 'нет валютной позиции';
+      const no = sl[i].ccys.filter((c, k) => usdDay[i][k] == null);
+      return no.length ? 'Общая — без ' + no.join(', ') + ': курса нет' : '';
+    });
     const css = K.css;
     chart = K.chart(hp.querySelector('.c16-chart'), () => ({
       animation: false, grid: { left: 6, right: 10, top: 30, bottom: 4, containLabel: true }, legend: { top: 0, left: 0 },
-      tooltip: { trigger: 'axis', axisPointer: { type: 'shadow' }, valueFormatter: v => v == null ? '—' : f.s(v, 1) + ' mm USD' },
+      tooltip: { trigger: 'axis', axisPointer: { type: 'shadow' }, formatter: ps => {
+        const i = (ps[0] || {}).dataIndex; if (i == null || !D[i]) return '';
+        // валюта дня без курса — «—»; валюты, которой в этот день нет, — не строкой
+        const rows = ps.filter(p => p.value != null || (sl[i] && sl[i].ccys.includes(p.seriesName)));
+        return '<b>' + esc(f.date(D[i].date)) + '</b>' + rows.map(p => '<br>' + p.marker + esc(p.seriesName) + ': <b>' + (p.value == null ? '—' : f.s(p.value, 1) + ' mm USD') + '</b>').join('') +
+          (tip[i] ? '<br><span style="color:var(--warn)" data-c16-tip>' + esc(tip[i]) + '</span>' : '');
+      } },
       xAxis: { type: 'category', data: D.map(x => f.dshort(x.date)) },
       yAxis: { type: 'value', unit: 'mm USD', axisLabel: { formatter: v => K.tick(v, 1) } },
       series: HC.map(c => ({ name: c, type: 'bar', stack: 'o', barMaxWidth: 28, data: D.map((x, i) => usdOf(sl[i], c, x)), itemStyle: { color: K.ccyColor(c) } }))
-        .concat([{ name: 'Общая', type: 'line', data: D.map((x, i) => sl[i] && sl[i].ccys.length ? mm(total(sl[i].ccys.map(c => toUsd(sl[i].by[c], c, x)))) : null), showSymbol: false, lineStyle: { width: 2 }, color: css('--fg') }]),
+        // точка без соседей (дни вокруг без ОВП) — кружком, иначе одиночную дату линии не видно; showAllSymbol — чтобы
+        // ECharts не прореживал точки (3 мес, узкий экран) и кружок не пропадал
+        .concat([{ name: 'Общая', type: 'line', data: line, symbol: 'circle', showAllSymbol: true, symbolSize: (v, p) => line[p.dataIndex - 1] == null && line[p.dataIndex + 1] == null ? 5 : 0, lineStyle: { width: 2 }, color: css('--fg') }]),
     }));
   }
   // начало периода: дни позже этой даты
@@ -252,7 +351,8 @@
     last_scan: { at: on + 'T07:00:00Z', files: { rejected: 1 }, skipped: {} } });
 
   K.commands && K.commands([{ label: 'ОВП: обновить', run: load }]);
-  // фильтр шапки и формат отрицательных «(1) / −1» (#153, #262): перерисовать из последнего ответа
+  // фильтр шапки (к ОВП не применяется — меняется только пометка «в шапке: …») и формат отрицательных «(1) / −1»
+  // (#153, #262): перерисовать из последнего ответа
   K.onFilter(render);
   K.on('numfmt', render);
   load();
