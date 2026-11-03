@@ -91,7 +91,7 @@ All market data used is properly licensed (owner, 16 October 2026). Record each 
 |---|---|
 | No real positions, results or internal files leave the network | Development uses public data and synthetic portfolios only |
 | Fixtures are public or synthetic | A CI check rejects private identifiers (book names, counterparty names, internal IDs) in `fixtures/` and test data |
-| Reproducible installs without internet | Build an offline **Windows wheelhouse for Python 3.11** outside (numpy and psycopg binary wheels included), transfer it with checksums, install pinned versions. Test on Windows before each release (program ADR08) |
+| Reproducible installs without third-party wheels in the delivery | Owner's decision 03.11.2026 (DEC15, §7.2): what goes onto the work machine carries **no third-party Python wheels**. Outside, the Windows / Python 3.11 wheel set is resolved and checked (numpy and psycopg binary wheels included) and its SHA-256 written to `mirror.json`; the bundle carries only our two wheels (monitor, core) and the installer takes the third-party ones from the PC's internal pip mirror, checked against those checksums, with an install log. The adapter ships as stdlib-only source. Test on Windows before each release (program ADR08) |
 | Versioned releases | Core released with tags; backend pins the exact core version; hub schema version pinned in the backend |
 | Code transfer | Git bundle or internal mirror, plus a release archive with checksums |
 

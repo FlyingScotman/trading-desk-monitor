@@ -25,7 +25,7 @@ hub snapshot files ──► desk.marketdata (bundle + adapter mdhub_v1)
 
 ## Run it locally
 
-Install on Windows (the work PC, offline bundle built at home): [`docs/INSTALL_BACKEND_WINDOWS.md`](../docs/INSTALL_BACKEND_WINDOWS.md).
+Install on Windows (the work PC; only the bundle without packages `DeskMonitorMirror-<version>.zip` is delivered, its third-party packages come from the PC's pip mirror, DEC15): [`docs/INSTALL_BACKEND_WINDOWS.md`](../docs/INSTALL_BACKEND_WINDOWS.md).
 
 Requirements:
 - [uv](https://docs.astral.sh/uv/). `uv sync` fetches core from its GitHub repository at the commit pinned in `pyproject.toml`; no core checkout is needed.
