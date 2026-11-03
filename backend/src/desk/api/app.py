@@ -424,8 +424,10 @@ def create_app(store_url: str, static_dir: Path | None = None, app_dir: Path | N
     ``/health/ready`` (``desk.inbox.scan.adapter_line``, loaded once per process); None: not reported.
     ``auth``: sign-in and roles (``desk.api.auth``); None: off, this computer only."""
     from ..acquisition import Acquisition
+    from ..adapter_services import AdapterServices
 
     acquisition = Acquisition(load_settings, store_url)
+    services = AdapterServices(load_settings, store_url)  # its scheduler starts in ``serve`` (08 §2.2)
 
     @asynccontextmanager
     async def lifespan(app):
@@ -433,6 +435,7 @@ def create_app(store_url: str, static_dir: Path | None = None, app_dir: Path | N
             yield
         finally:
             acquisition.close()
+            app.state.adapter_services.close()
 
     app = FastAPI(title="Desk API", version=__version__, description="Desk API v1 (docs/architecture/05 §2)",
                   lifespan=lifespan,
@@ -440,6 +443,7 @@ def create_app(store_url: str, static_dir: Path | None = None, app_dir: Path | N
 
     app.state.store_url = store_url
     app.state.acquisition = acquisition
+    app.state.adapter_services = services
     app.state.started_at = datetime.now(UTC)  # the diagnostics' uptime (R13)
     app.state.instance = uuid.uuid4().hex[:16]  # /health/live's X-Desk-Instance: the LAN self-check knows its server
     app.state.lan_probe = None  # desk.lan.probe_all once serve has started (the settings page's «Сеть»)
@@ -1004,6 +1008,7 @@ def create_app(store_url: str, static_dir: Path | None = None, app_dir: Path | N
 
     from .acquisition_routes import router as acquisition_router
     from .adapter_routes import router as adapter_router  # the settings page's adapter tools (TDM#421)
+    from .adapter_services_routes import router as adapter_services_router  # 08 §2.2 (TDM#548)
     from .adapter_update_routes import router as adapter_update_router  # the private adapter's releases
     from .alias_routes import router as alias_router  # /api/v1/instruments/alias(es) (batch 1, item 3)
     from .backup_routes import router as backup_router  # /api/v1/backup: backups, restore drill (desk.backup)
@@ -1023,6 +1028,7 @@ def create_app(store_url: str, static_dir: Path | None = None, app_dir: Path | N
     app.include_router(updater_router, include_in_schema=False)
     app.include_router(adapter_update_router, include_in_schema=False)
     app.include_router(acquisition_router, include_in_schema=False)
+    app.include_router(adapter_services_router, include_in_schema=False)
     app.include_router(diagnostics_router, include_in_schema=False)
     app.include_router(server_router, include_in_schema=False)
     app.include_router(daystatus_router, include_in_schema=False)
@@ -1170,6 +1176,7 @@ def serve(store_url: str, host: str = "127.0.0.1", port: int = 8100, static_dir:
     if autopilot is not None:
         app.state.autopilot = autopilot
         autopilot.start()
+    app.state.adapter_services.start()  # the services' feeds in the background (08 §2.2; idle without the capability)
     # the desk.api logger logs every request with its request id, so no uvicorn access log
     server = uvicorn.Server(uvicorn.Config(app, host=host, port=port, access_log=False, loop=server_loop(),
                                            ssl_certfile=str(tls[0]) if tls else None,

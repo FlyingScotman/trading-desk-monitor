@@ -15,7 +15,7 @@ from fastapi.testclient import TestClient
 from test_r23_backfill import cache, load  # noqa: F401 - existing synthetic market fixture
 
 from desk import acquisition as aq
-from desk import cli, store
+from desk import cli, helper_proc, store
 from desk.api import auth, create_app
 from desk.autopilot import CycleLock
 from desk.inbox import scan
@@ -193,7 +193,10 @@ def test_process_failures_and_environment_are_safe(configured, monkeypatch, capl
     assert status["code"] == code, status
     no_secrets(status)
     no_secrets(caplog.text)
-    assert service._proc is None
+    until = time.monotonic() + 5  # the job's end releases the shared helper lock (desk.helper_proc)
+    while helper_proc.HELPER_LOCK.locked() and time.monotonic() < until:
+        time.sleep(0.01)
+    assert not helper_proc.HELPER_LOCK.locked()
     service.close()
 
 

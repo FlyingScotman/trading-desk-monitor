@@ -252,11 +252,13 @@ def _key(report_date: date, report_ts: datetime | None, seq: int | None, generat
 class _Scan:
     def __init__(self, con: psycopg.Connection, settings: Settings, h: AdapterHandle, res: ScanResult,
                  now: datetime, cutoff: date | None = None, progress: Progress | None = None,
-                 expected: tuple[str, str, frozenset[str]] | None = None, history_from: str | None = None) -> None:
+                 expected: tuple[str, str, frozenset[str]] | None = None, history_from: str | None = None,
+                 only_source: str | None = None) -> None:
         self.con, self.settings, self.h, self.res, self.now = con, settings, h, res, now
         self.cutoff, self._progress = cutoff, progress
         self.history_from = history_from  # the hub's oldest date when known (#27)
         self.expected = expected
+        self.only_source = only_source  # a services feed's file (ingest_feed): only its declared source is read
         self.cache = settings.snapshot_cache
         self.archive = Path(settings.inbox_archive)
         self.archive.mkdir(parents=True, exist_ok=True)
@@ -628,7 +630,8 @@ class _Scan:
     def _prefetch(self, o: Offer, hit: Any) -> None:
         """Start the read ``process`` will ask for, when it will (the same checks, read-only)."""
         ok, decl, why = self._usable(hit)
-        if not ok or why or self.too_old(hit["report_date"]) or self._ex is None:
+        if not ok or why or self.too_old(hit["report_date"]) or self._ex is None \
+                or (self.only_source is not None and hit["source"] != self.only_source):
             return
         if o.sighting and self.con.execute("SELECT 1 FROM inbox_file_status WHERE sha256 = %s AND source IS NOT NULL"
                                            " LIMIT 1", (o.sha256,)).fetchone():
@@ -727,6 +730,11 @@ class _Scan:
             self._status(o, "match_failed", error_code="bad_hit")
             return
         assert decl is not None
+        if self.only_source is not None and hit["source"] != self.only_source:
+            # a feed's file is read only as the source the feed declares (08 §2.2): never read, nothing written
+            self._status(o, "rejected", decl, error_code="feed_source_mismatch", source=hit["source"],
+                         report_date=hit["report_date"])
+            return
         if self.too_old(hit["report_date"]):  # behind the lookback: ledgered once, never archived or read
             self._status(o, TOO_OLD, decl, source=hit["source"], report_date=hit["report_date"])
             return
@@ -906,7 +914,8 @@ def _session(con: psycopg.Connection, settings: Settings, now: datetime | None,
              offers: Callable[[_Scan], list[Offer]], *, lookback: bool = False,
              progress: Progress | None = None, since: date | None = None,
              expected: tuple[str, str, frozenset[str]] | None = None,
-             handle: AdapterHandle | None = None, history_from: str | None = None) -> ScanResult:
+             handle: AdapterHandle | None = None, history_from: str | None = None,
+             only_source: str | None = None) -> ScanResult:
     h = handle if handle is not None else adapter(settings)
     res = ScanResult(adapter_line(h))
     if not h.ok:
@@ -919,7 +928,7 @@ def _session(con: psycopg.Connection, settings: Settings, now: datetime | None,
         now = now or datetime.now(UTC)
         cutoff = since if since is not None else lookback_cutoff(settings, now.astimezone(MSK).date()) if lookback \
             else None
-        s = _Scan(con, settings, h, res, now, cutoff, progress, expected, history_from)
+        s = _Scan(con, settings, h, res, now, cutoff, progress, expected, history_from, only_source)
         with runner.pooled(read_workers()):  # workers start on the first call: an idle scan starts none
             s.run(offers(s))
             s.refresh_books()
@@ -983,6 +992,16 @@ def ingest_produced(con: psycopg.Connection, settings: Settings, path: Path, *, 
     st = path.stat()
     offer = Offer("", str(path), path.name, st.st_size, datetime.fromtimestamp(st.st_mtime, UTC), True)
     return _session(con, settings, None, lambda _: [offer], expected=(source, day.isoformat(), books), handle=handle)
+
+
+def ingest_feed(con: psycopg.Connection, settings: Settings, path: Path, *, source: str,
+                handle: AdapterHandle) -> ScanResult:
+    """One file a services feed produced (08 §2.2), through the ordinary read/validation/store pipeline as the
+    feed's declared ``source`` only: a file the adapter matches to another source is ``rejected``
+    (``feed_source_mismatch``) before it is read. No lookback, no unrelated files. The caller holds the cycle lock."""
+    st = path.stat()
+    offer = Offer("", str(path), path.name, st.st_size, datetime.fromtimestamp(st.st_mtime, UTC), True)
+    return _session(con, settings, None, lambda _: [offer], handle=handle, only_source=source)
 
 
 def retry(con: psycopg.Connection, settings: Settings, statuses: tuple[str, ...] = (*REOFFER, "waiting_calendar"),

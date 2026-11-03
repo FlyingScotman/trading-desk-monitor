@@ -26,7 +26,7 @@
     connection_failed: 'Не удалось подключиться. Проверьте подключение и настройки адаптера.',
     auth_failed: 'Вход во внутреннюю систему не выполнен.', connected: 'Вход проверен. Данные не загружались.',
     connected_open: 'Подключение проверено. Данные не загружались.',
-    acquisition_busy: 'Предыдущая операция ещё выполняется.', calculation_busy: 'Уже выполняется расчёт. Повторите после его завершения.',
+    acquisition_busy: 'Предыдущая операция ещё выполняется.', services_busy: 'Идёт операция подключения к сервисам или фоновая загрузка. Повторите после её окончания.', calculation_busy: 'Уже выполняется расчёт. Повторите после его завершения.',
     starting: 'Подготовка запуска…', acquiring: 'Получение данных…',
     ingesting: 'Проверка и загрузка полученных данных… Отмена уже недоступна.',
     valuating: 'Новый расчёт выбранной даты… Отмена уже недоступна.',
@@ -112,6 +112,11 @@
         $('result').append(el('p', (group === 'counts' ? 'Статусы: ' : 'Причины: ') +
           Object.entries(values).map(([key, count]) => key + ': ' + count).join(', ')));
       }
+      // #547: сегодняшние расчёты, пересчитанные на новых условиях (утренний или последний дневной)
+      if (Array.isArray(job.recomputed) && job.recomputed.length)
+        $('result').append(el('p', 'Пересчитаны также: ' + job.recomputed.map(r => r.label + ' (#' + r.run_id + ')').join(', ') + '.'));
+      if (Array.isArray(job.recompute_failed) && job.recompute_failed.length)
+        $('result').append(el('p', 'Не пересчитаны: ' + job.recompute_failed.map(r => r.label).join(', ') + '. Их пересчитает автопилот.'));
       if (Number.isSafeInteger(job.run_id)) {
         const link = el('a', 'Открыть новый расчёт'); link.href = '/concepts/c01-cockpit.html?run_id=' + job.run_id; $('result').append(link);
       }
