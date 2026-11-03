@@ -105,8 +105,8 @@ test('ОВП: типы строк отчёта и перечитывание (TD
   try {
     for (const width of [1024, 390]) {
       await t.test('экран типов строк, ' + width + ' px', async () => {
-        const st = server(), { pg, ctx, errors } = await page(browser, st, '/settings.html#ocptypes', width);
-        const box = pg.locator('[data-ocp-types]');
+        const st = server(), { pg, ctx, errors } = await page(browser, st, '/settings.html#ovp', width);
+        const box = pg.locator('[data-slot="ovp-types"]');
         await box.locator('.ot-row', { hasText: 'FAKE FX SWAP' }).waitFor();
         // по умолчанию — типы с будущими строками; кэш без будущих строк — в «Все»
         assert.strictEqual(await box.locator('.ot-row', { hasText: 'FAKE CASH SETTLEMENTS' }).count(), 0);
@@ -151,6 +151,18 @@ test('ОВП: типы строк отчёта и перечитывание (TD
         await box.locator('button', { hasText: 'Перечитать' }).click();
         await box.locator('.rp-res.ok', { hasText: 'новых ревизий — 1' }).waitFor({ timeout: 15000 });
         assert.deepStrictEqual(st.replayRuns[0], { source: 'ocp_cash', from: '2026-11-02', to: '2026-11-02' });
+        assert.deepStrictEqual(errors, []);
+        await ctx.close();
+      });
+    }
+    for (const width of [1024, 390]) {
+      await t.test('перечитывание в настройках: «Адаптер и источники → Папки», ' + width + ' px', async () => {
+        const st = server(), { pg, ctx, errors } = await page(browser, st, '/settings.html#adapter/folders', width);
+        const place = pg.locator('[data-slot="reread"]');
+        await place.locator('.rp-est', { hasText: 'Будет перечитано: 1 файл' }).waitFor();
+        assert.ok(await place.isVisible() && /перечитать отчёты за период/i.test(await place.innerText()));
+        assert.ok(await noHScroll(pg), 'без горизонтальной прокрутки');
+        if (SHOTS) await place.screenshot({ path: path.join(SHOTS, 'reread-settings-' + width + '.png') });
         assert.deepStrictEqual(errors, []);
         await ctx.close();
       });
