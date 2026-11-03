@@ -73,6 +73,9 @@ function server() {
   return st;
 }
 
+// подраздел «Адаптера и источников» (TDM#551): щелчок по его пункту, как у владельца
+const sub = async (pg, name) => { await pg.locator('.subnav a[data-sub-link="' + name + '"]').click(); await pg.locator('.sub.on[data-sub="' + name + '"]').waitFor(); };  // hashchange приходит позже щелчка
+
 async function open(browser, st) {
   const ctx = await browser.newContext(), pg = await ctx.newPage();
   await ctx.grantPermissions(['clipboard-read', 'clipboard-write'], { origin: ORIGIN });
@@ -105,21 +108,30 @@ test('настройки: инструменты адаптера и формы 
       const status = await pg.locator('#ad-status').innerText();
       assert.ok(/Папки отчётов/.test(status) && /нет выгрузки за 27\.10/.test(status) && /внимание/.test(status), status);
       // действие: дата обязательна — без неё не запускается
+      await sub(pg, 'actions');
       const card = pg.locator('#ad-action-export_rows');
       await card.locator('button', { hasText: 'Запустить' }).click();
       assert.ok(/Исправьте параметры/.test(await card.innerText()) && st.actionRuns === 0);
       await card.locator('input[type=date]').fill('2026-10-21');
       await card.locator('button', { hasText: 'Запустить' }).click();
+      await card.locator('details.at-last').waitFor();
+      assert.ok(!(await card.locator('details.at-last').evaluate(d => d.open)), 'итог после запуска свёрнут: раскрывается щелчком');
+      assert.ok(/Последний запуск[\s\S]*выполнено/.test(await card.locator('details.at-last > summary').innerText()), 'строка итога видна сразу');
+      await card.locator('details.at-last > summary').click();
       await card.locator('text=pnl_official_20261021.csv').waitFor();
       const done = await card.innerText();
       assert.ok(/Выполнено/.test(done) && /строк: 2/.test(done) && /принят/.test(done) && /2 КБ/.test(done), done);
       assert.deepStrictEqual(st.actionParams, { day: '2026-10-21' });
       // проверка адаптера: папка входящих отмечена, папки результатов нет — флажок недоступен
+      await sub(pg, 'check');
       const boxes = pg.locator('#ad-check-opts input[type=checkbox]');
       assert.strictEqual(await boxes.count(), 2);
       assert.ok(await boxes.nth(0).isChecked() && await boxes.nth(1).isDisabled());
       await pg.locator('#ad-check-dir').fill('D:\\archive\\**');
       await pg.locator('#ad-check-run').click();
+      await pg.locator('#ad-check-res details.at-check').waitFor({ timeout: 10000 });
+      assert.ok(!(await pg.locator('#ad-check-res details.at-check').evaluate(d => d.open)), 'подробности проверки свёрнуты после запуска');
+      await pg.locator('#ad-check-res details.at-check > summary').click();
       await pg.locator('#ad-check-res .k-tbl').waitFor({ timeout: 10000 });
       assert.deepStrictEqual(st.checkRuns[0], { dirs: ['C:\\in', 'D:\\archive\\**'], stub_ctx: false });
       const res = await pg.locator('#ad-check-res').innerText();
@@ -137,6 +149,7 @@ test('настройки: инструменты адаптера и формы 
     });
     await t.test('вкладка адаптера — формой (ключ → список, список папок), JSON — только «Для опытных»', async () => {
       const st = server(), { pg, ctx, errors } = await open(browser, st);
+      await sub(pg, 'sources');
       const form = pg.locator('#tab-sources');
       await form.locator('.sf-map').waitFor();
       assert.strictEqual(await form.locator('.sf-acts label', { hasText: 'JSON' }).count(), 0, 'без «Для опытных» — нет переключателя JSON');
@@ -149,8 +162,10 @@ test('настройки: инструменты адаптера и формы 
       await row.locator('.sf-list input').first().fill('^h_');
       assert.ok(/изменено/.test(await form.locator('.sf-head').innerText()));
       // «Для опытных»: JSON формы и файлы без формы
+      await sub(pg, 'expert');
       await pg.locator('#advanced').check();
       assert.ok(await pg.locator('#cf-card').isVisible());
+      await sub(pg, 'sources');
       await form.locator('.sf-acts label', { hasText: 'JSON' }).locator('input').check();
       const raw = await form.locator('textarea').inputValue();
       const doc = JSON.parse(raw);
@@ -160,6 +175,7 @@ test('настройки: инструменты адаптера и формы 
     });
     await t.test('поля settings.json, которых не было на странице: таймауты, допущения расчёта', async () => {
       const st = server(), { pg, ctx, errors } = await open(browser, st);
+      await sub(pg, 'expert');
       await pg.locator('#adapter_kit_timeout_s').evaluate(e => { e.closest('details').open = true; });
       await pg.locator('#adapter_kit_timeout_s').fill('600');
       await pg.goto(ORIGIN + '/settings.html#calc');

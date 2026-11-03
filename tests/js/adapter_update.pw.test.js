@@ -83,7 +83,7 @@ async function open(browser, st) {
     return route.fulfill({ status: 200, contentType: TYPES[path.extname(f)] || 'application/octet-stream', body: fs.readFileSync(f) });
   });
   pg.on('dialog', d => d.accept());
-  await pg.goto(ORIGIN + '/settings.html#adapter');
+  await pg.goto(ORIGIN + '/settings.html#up');
   await pg.waitForSelector('#ad-upd button[data-act=check]');
   return { pg, ctx, errors };
 }
@@ -93,6 +93,8 @@ test('настройки: обновление адаптера (TDM#427)', { sk
   try {
     await t.test('токен, проверка, установка с сервера', async () => {
       const st = server(), { pg, ctx, errors } = await open(browser, st);
+      assert.ok(await pg.locator('section.sec[data-sec=up] #ad-upd-card').isVisible(), 'карточка «Обновление адаптера» — в разделе «Обновления»');
+      assert.strictEqual(await pg.locator('#sec-adapter #ad-upd-card').count(), 0, 'в разделе адаптера её больше нет');
       const box = pg.locator('#ad-upd');
       let text = await box.innerText();
       assert.ok(/Используется: версия 0\.4\.0, из комплекта программы/.test(text) && /Токен GitHub: не задан/.test(text), text);

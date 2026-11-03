@@ -65,7 +65,7 @@ async function open(browser, st) {
     if (!f.startsWith(ROOT) || !fs.existsSync(f) || fs.statSync(f).isDirectory()) return route.fulfill({ status: 404, body: '' });
     return route.fulfill({ status: 200, contentType: TYPES[path.extname(f)] || 'application/octet-stream', body: fs.readFileSync(f) });
   });
-  await pg.goto(ORIGIN + '/settings.html#adapter');
+  await pg.goto(ORIGIN + '/settings.html#adapter/folders');
   await pg.locator('#dirs .dir-found >> text=Прочитано').waitFor();
   return { pg, ctx, errors };
 }
