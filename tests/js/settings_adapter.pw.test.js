@@ -114,6 +114,10 @@ test('настройки: инструменты адаптера и формы 
       assert.ok(/Исправьте параметры/.test(await card.innerText()) && st.actionRuns === 0);
       await card.locator('input[type=date]').fill('2026-10-21');
       await card.locator('button', { hasText: 'Запустить' }).click();
+      await card.locator('details.at-last').waitFor();
+      assert.ok(!(await card.locator('details.at-last').evaluate(d => d.open)), 'итог после запуска свёрнут: раскрывается щелчком');
+      assert.ok(/Последний запуск[\s\S]*выполнено/.test(await card.locator('details.at-last > summary').innerText()), 'строка итога видна сразу');
+      await card.locator('details.at-last > summary').click();
       await card.locator('text=pnl_official_20261021.csv').waitFor();
       const done = await card.innerText();
       assert.ok(/Выполнено/.test(done) && /строк: 2/.test(done) && /принят/.test(done) && /2 КБ/.test(done), done);
@@ -125,6 +129,9 @@ test('настройки: инструменты адаптера и формы 
       assert.ok(await boxes.nth(0).isChecked() && await boxes.nth(1).isDisabled());
       await pg.locator('#ad-check-dir').fill('D:\\archive\\**');
       await pg.locator('#ad-check-run').click();
+      await pg.locator('#ad-check-res details.at-check').waitFor({ timeout: 10000 });
+      assert.ok(!(await pg.locator('#ad-check-res details.at-check').evaluate(d => d.open)), 'подробности проверки свёрнуты после запуска');
+      await pg.locator('#ad-check-res details.at-check > summary').click();
       await pg.locator('#ad-check-res .k-tbl').waitFor({ timeout: 10000 });
       assert.deepStrictEqual(st.checkRuns[0], { dirs: ['C:\\in', 'D:\\archive\\**'], stub_ctx: false });
       const res = await pg.locator('#ad-check-res').innerText();

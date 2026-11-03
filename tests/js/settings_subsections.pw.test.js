@@ -271,9 +271,10 @@ test('настройки: подразделы, «Дополнительно», 
       assert.ok(csv.startsWith('\ufeffТип;Подтип;Строк\r\nТип 03;подтип 01;301'), csv.slice(0, 80));
       await last.locator('summary').click();
       assert.ok(!(await last.evaluate(d => d.open)));
-      // новый запуск: итог пришёл на этой странице — раскрыт
+      // новый запуск: итог остаётся свёрнутым, а строка «Последний запуск» обновляется сразу (новая дата)
       await card.locator('button', { hasText: 'Запустить' }).click();
-      await pg.waitForFunction(() => document.querySelector('#ad-action-row_types details.at-last[open]'), null, { timeout: 10000 });
+      await pg.waitForFunction(() => { const d = document.querySelector('#ad-action-row_types details.at-last'); return d && !/02\.11\.2026/.test(d.querySelector('summary').textContent); }, null, { timeout: 10000 });
+      assert.ok(!(await pg.locator('#ad-action-row_types details.at-last').evaluate(d => d.open)), 'после запуска итог свёрнут');
       assert.strictEqual(st.runs, 1);
       // проверка: вердикт на виду, подробности — по щелчку
       await pg.locator('.subnav a[data-sub-link="check"]').click();
@@ -414,26 +415,31 @@ test('настройки: подразделы, «Дополнительно», 
       await ctx.close();
     });
 
-    await t.test('итог действия и подробности проверки: свёрнутые читателем не раскрываются при «Обновить статус»', async () => {
+    await t.test('итог действия и подробности проверки: итоги всегда свёрнуты после запуска; выбор читателя не сбивается «Обновить статус»', async () => {
       const st = server(), { pg, ctx, errors } = await open(browser, st, '#adapter/actions');
       const last = pg.locator('#ad-action-row_types details.at-last');
       await last.waitFor();
       await pg.locator('#ad-action-row_types button', { hasText: 'Запустить' }).click();
-      await pg.waitForFunction(() => document.querySelector('#ad-action-row_types details.at-last[open]'), null, { timeout: 10000 });
-      await last.locator('summary').click();
-      assert.ok(!(await last.evaluate(d => d.open)));
-      await pg.locator('#ad-refresh').click();
-      await pg.waitForTimeout(500);
-      assert.ok(!(await pg.locator('#ad-action-row_types details.at-last').evaluate(d => d.open)), 'свёрнутый остался свёрнутым');
+      await pg.waitForFunction(() => { const d = document.querySelector('#ad-action-row_types details.at-last'); return d && !/02\.11\.2026/.test(d.querySelector('summary').textContent); }, null, { timeout: 10000 });
+      assert.ok(!(await pg.locator('#ad-action-row_types details.at-last').evaluate(d => d.open)), 'после запуска свёрнут, строка уже обновлена');
       await pg.locator('#ad-action-row_types details.at-last summary').click();
       await pg.locator('#ad-refresh').click();
       await pg.waitForTimeout(500);
       assert.ok(await pg.locator('#ad-action-row_types details.at-last').evaluate(d => d.open), 'раскрытый остался раскрытым');
+      await pg.locator('#ad-action-row_types details.at-last summary').click();
+      await pg.locator('#ad-refresh').click();
+      await pg.waitForTimeout(500);
+      assert.ok(!(await pg.locator('#ad-action-row_types details.at-last').evaluate(d => d.open)), 'свёрнутый остался свёрнутым');
       // проверка адаптера: то же
       await pg.locator('.subnav a[data-sub-link="check"]').click();
       await pg.locator('#ad-check-run').click();
-      await pg.waitForFunction(() => document.querySelector('#ad-check-res details.at-check[open]'), null, { timeout: 10000 });
+      await pg.locator('#ad-check-res details.at-check').waitFor();
+      assert.ok(!(await pg.locator('#ad-check-res details.at-check').evaluate(d => d.open)), 'после проверки подробности свёрнуты');
       assert.ok(/источников: 1, строк по датам: 1/.test(await pg.locator('#ad-check-res details.at-check > summary').innerText()), await pg.locator('#ad-check-res details.at-check > summary').innerText());
+      await pg.locator('#ad-check-res details.at-check > summary').click();
+      await pg.locator('#ad-refresh').click();
+      await pg.waitForTimeout(500);
+      assert.ok(await pg.locator('#ad-check-res details.at-check').evaluate(d => d.open), 'проверка: раскрытая осталась раскрытой');
       await pg.locator('#ad-check-res details.at-check > summary').click();
       await pg.locator('#ad-refresh').click();
       await pg.waitForTimeout(500);

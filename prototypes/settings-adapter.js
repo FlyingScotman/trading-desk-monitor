@@ -9,7 +9,7 @@
  *    сводка таблицей (версии, отпечаток, по источнику и дате: файлы, строки, принято / отклонено, коды замечаний с
  *    числом — без значений ячеек), «Скопировать сводку» (текст для чата), последний результат — до следующего запуска.
  *  - Результаты не висят на странице (TDM#552): итог действия и подробности проверки — строкой «Последний запуск»,
- *    раскрываются по щелчку (сразу после запуска на этой странице — раскрыты); длинные таблицы — DeskLongTable
+ *    раскрываются только по щелчку, в том числе после нового запуска (строка при этом обновляется сразу: дата, итог); длинные таблицы — DeskLongTable
  *    (первые строки, «Показать все», поиск, CSV); технические сведения — в «Подробностях».
  * Данные: /api/v1/adapter/check, /api/v1/adapter/status, /api/v1/adapter/actions (api/adapter_routes.py).
  * Чистая часть (DeskAdapterTools._test) проверяется tests/js/settings_adapter.test.js.
@@ -71,7 +71,7 @@
 
   /* ---------- DOM ---------- */
   var S = { api: null, toast: null, SF: null, h: null, adapter: null, statusBusy: false, check: null, checkTimer: null, actions: {}, actionTimer: null,
-    fresh: {}, checkFresh: false, open: {}, checkOpen: false };  // fresh: итог пришёл на этой странице после «Запустить» — раскрыт один раз; open/checkOpen: как оставил читатель (до перезагрузки страницы)
+    open: {}, checkOpen: false };  // open/checkOpen: раскрыл ли читатель итог (помним до перезагрузки страницы); сами итоги всегда свёрнуты
   function h() { return S.h.apply(null, arguments); }
   function $(id) { return document.getElementById(id); }
   function subdot(sub, cls, title) {  // точка у подраздела «Адаптер и источники» (settings-nav.js)
@@ -210,9 +210,7 @@
       else if (j.scan && j.scan.error) body.push(h('p', { class: 'hint' }, j.scan.error));
     }
     // строка «Последний запуск»: когда, итог, первая строка сводки; подробности — по щелчку
-    // раскрыт: итог только что пришёл (один раз) или читатель сам раскрыл; свёрнутый им — не раскрывается при «Обновить статус»
-    var openNow = !!S.fresh[id] || S.open[id] === true;
-    if (S.fresh[id]) { S.fresh[id] = false; S.open[id] = true; }
+    var openNow = S.open[id] === true;  // свёрнут, пока читатель сам не раскрыл (и после нового запуска)
     var first = (out.summary || [])[0], nFiles = j.written ? (j.files || []).length : null;
     res.append(lastRun([h('b', {}, 'Последний запуск'), ' ', A.when(j.finished_at || j.started_at), ' · ',
       h('span', { class: out.ok ? 'okmsg' : 'warnmsg' }, out.ok ? 'выполнено' : 'не выполнено'),
@@ -225,7 +223,6 @@
     clearTimeout(S.actionTimer);
     S.actionTimer = setTimeout(function () {
       S.api('GET', '/api/v1/adapter/actions/' + encodeURIComponent(id)).then(function (r) {
-        if (!r.running) S.fresh[id] = true;  // итог пришёл здесь — раскрыт
         drawAction(id, r);
         if (r.running) pollAction(id);
         else if (r.job && r.job.state === 'done' && S.toast) S.toast('Действие «' + (r.action.title || id) + '»: готово', 'ok');
@@ -300,8 +297,7 @@
       if (notes.length) body.push(h('p', { class: 'hint' }, 'Заметки: ' + notes.map(function (k) { return k + ' ' + A.n(rep.notes[k]); }).join(', ')));
     }
     body.push(h('details', { class: 'more' }, h('summary', {}, 'Текст сводки'), h('pre', { class: 'at-pre mono' }, j.text)));
-    var openNow = !!S.checkFresh || S.checkOpen === true;
-    if (S.checkFresh) { S.checkFresh = false; S.checkOpen = true; }
+    var openNow = S.checkOpen === true;
     var warnN = rows.reduce(function (s, x) { return s + x.issues.length; }, 0);
     res.append(lastRun([h('b', {}, 'Подробности проверки'), h('span', { class: 'mut3' }, ' · источников: ' + new Set(rows.map(function (x) { return x.source; })).size + ', строк по датам: ' + rows.length +
       (warnN ? ', кодов замечаний: ' + warnN : '') + ' · версии, таблица по источникам, текст сводки'), ' ', h('span', { class: 'lnk at-open', 'aria-hidden': 'true' })],
@@ -311,7 +307,7 @@
     clearTimeout(S.checkTimer);
     S.checkTimer = setTimeout(function () {
       S.api('GET', '/api/v1/adapter/check').then(function (r) {
-        S.check = r; if (!r.running) S.checkFresh = true;  // итог пришёл здесь — подробности раскрыты
+        S.check = r;
         drawCheck(r);
         if (r.running) pollCheck(); else if (S.toast) S.toast('Проверка адаптера: ' + (r.job && r.job.report ? (r.job.report.ok ? 'OK' : 'есть нарушения') : 'не удалась'), r.job && r.job.report && r.job.report.ok ? 'ok' : 'err');
       }, function () { pollCheck(); });
