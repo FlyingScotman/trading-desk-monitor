@@ -7,8 +7,10 @@
 releases by that version and the commit date (``desk.update.compare``), so every release bumps the version.
 
 ``write``: checks the zips ``build_windows_bundle.py`` left in ``--dist`` (exactly one full
-``DeskMonitor-<version>.zip`` of the tag's version, patches to that version, none with the private adapter: a public
-release never carries it; each zip reads as an update zip, ``desk.update.read_contents``) and writes next to them
+``DeskMonitor-<version>.zip`` of the tag's version, at most one ``DeskMonitor-<version>-mirror.zip`` (the bundle
+without packages, built with ``--mirror``; optional so that a release can be rebuilt without it), patches and mirror
+patches to that version, none with the private adapter: a public release never carries it; each zip reads as an
+update zip, ``desk.update.read_contents``, and is of the kind its name says) and writes next to them
 ``SHA256SUMS``, ``release.json`` (``desk.updater.release.release_doc``: what the updater reads first) and
 ``NOTES.md`` (the release notes, the checksums included: the browser reads them through the API). The notes start
 with the version's section of ``CHANGELOG.md`` (``## <backend version>``) when it has one.
@@ -64,7 +66,8 @@ def sha256(p: Path) -> str:
 def collect(dist: Path, tag: str) -> tuple[str, list[tuple[str, int, str]]]:
     """(the release's bundle version, [(name, size, sha256)] of its zips), every zip checked."""
     zips = sorted(p for p in dist.glob("DeskMonitor-*.zip") if p.is_file())
-    version, files = None, []
+    fulls: dict[str, str] = {}  # flavor -> version of its full zip
+    files = []
     for p in zips:
         kind = release.classify_name(p.name)
         if kind is None:
@@ -75,18 +78,19 @@ def collect(dist: Path, tag: str) -> tuple[str, list[tuple[str, int, str]]]:
             c = update.read_contents(z)
         if c.adapter:
             raise SystemExit(f"{p.name}: holds adapter/ (the private adapter): never published")
-        if c.version != kind[1] or c.kind != kind[0]:
-            raise SystemExit(f"{p.name}: its VERSION / kind is {c.version} / {c.kind}")
+        if c.version != kind[1] or c.kind != kind[0] or c.flavor != kind[3]:
+            raise SystemExit(f"{p.name}: its VERSION / kind / flavor is {c.version} / {c.kind} / {c.flavor}")
         if kind[0] == "full":
-            if version is not None:
-                raise SystemExit("more than one full bundle in --dist")
-            version = c.version
+            if kind[3] in fulls:
+                raise SystemExit(f"more than one {kind[3]} full bundle in --dist")
+            fulls[kind[3]] = c.version
         files.append((p.name, p.stat().st_size, sha256(p)))
+    version = fulls.get("full")
     if version is None:
         raise SystemExit(f"no full DeskMonitor-<version>.zip in {dist}")
     if not version.startswith(tag.removeprefix("v") + "-"):
         raise SystemExit(f"the bundle is {version}, the tag {tag}")
-    stray = [n for n, _, _ in files if release.classify_name(n)[1] != version]
+    stray = [n for n, _, _ in files if release.classify_name(n)[1] != version]  # the mirror zip's version too
     if stray:
         raise SystemExit(f"zips of another version in --dist: {', '.join(stray)}")
     return version, files
@@ -99,7 +103,7 @@ Desk Monitor {version}
 скачивает архив сервером или браузером, сверяет SHA-256 и перезапускается). Вручную: скачайте
 DeskMonitor-{version}.zip, распакуйте (INSTALL.txt внутри).
 
-- Приватный адаптер в этот архив не входит: при обновлении установленный адаптер сохраняется.
+{mirror}- Приватный адаптер в этот архив не входит: при обновлении установленный адаптер сохраняется.
 - Ядро расчётов: {core}.
 - Сборка из коммита {commit}.
 
@@ -107,6 +111,13 @@ SHA-256:
 
 ```text
 {sums}```
+"""
+
+
+MIRROR_NOTE = """\
+- DeskMonitor-{version}-mirror.zip — сборка без пакетов: сторонние пакеты она берёт с зеркала pip компьютера
+  (pip.ini, PIP_INDEX_URL), поэтому нужен доступ к нему; обновляется только архивами своего вида
+  (DeskMonitor-mirror-patch-…), «Обновление программы» другой вид не ставит.
 """
 
 
@@ -133,7 +144,8 @@ def write(dist: Path, tag: str, repo: str | None, commit: str | None) -> dict:
     sums = release.sums_text(files)
     core = core_pin()
     changes = changelog(tag.removeprefix("v"))
-    notes = NOTES.format(version=version, core=core, commit=commit or "?", sums=sums,
+    mirror = MIRROR_NOTE.format(version=version) if any(n.endswith("-mirror.zip") for n, _, _ in files) else ""
+    notes = NOTES.format(version=version, core=core, commit=commit or "?", sums=sums, mirror=mirror,
                          changes=changes + "\n\n---\n\n" if changes else "")
     doc = release.release_doc(tag, version, files, commit=commit, core=core,
                               published_at=datetime.now(UTC).isoformat(timespec="seconds"),

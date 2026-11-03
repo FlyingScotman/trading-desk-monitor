@@ -178,7 +178,8 @@ def scan_folder(folder: Path, extra: dict[str, str] | None = None) -> list[dict[
         st = p.stat()
         item: dict[str, Any] = {"file": p.name, "name": name, "path": str(p), "size": st.st_size,
                                 "modified": datetime.fromtimestamp(st.st_mtime).isoformat(timespec="seconds"),
-                                "kind": kind[0], "version": kind[1], "base_version": kind[2], "verified": False,
+                                "kind": kind[0], "flavor": kind[3], "version": kind[1], "base_version": kind[2],
+                                "verified": False,
                                 "sha256": None, "reason": None}
         want = sums.get(name)
         if want is None:

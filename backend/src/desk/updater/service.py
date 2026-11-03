@@ -352,7 +352,7 @@ def _finish(path: Path, asset: Asset, rel: Release, home: Path, restart, unavail
     try:
         out = _install(path, home, restart, unavailable)
     except update.UpdateError as e:
-        if asset.kind == "patch" and full_of(rel) is not None and retry_full:
+        if asset.kind == "patch" and full_of(rel, asset.flavor) is not None and retry_full:
             _job_update(message=f"Заплатка не подошла ({e}); беру полный архив…")
             return False
         _job_update(state="failed", message=str(e), finished_at=now())
@@ -436,7 +436,7 @@ def _obtain(st: Settings, asset: Asset, browser_first: bool) -> Path | None:
 
 
 def _run(st: Settings, rel: Release, asset: Asset, browser_first: bool, restart, unavailable) -> None:
-    full = full_of(rel)
+    full = full_of(rel, asset.flavor)
     plan = [asset] + ([full] if asset.kind == "patch" and full is not None else [])
     try:
         for i, a in enumerate(plan):

@@ -16,6 +16,8 @@ from pathlib import Path
 
 import pytest
 
+from desk import update as update_module
+
 REPO = Path(__file__).resolve().parents[2]
 
 
@@ -455,3 +457,240 @@ def test_a_patch_unpacked_by_hand_over_another_build_is_reported(monkeypatch, tm
         deskctl.apply_patch_delete()
         assert not (root / "DeskMonitor/PATCH_BASE.txt").exists()
     assert len(said) == 1 and "wheelhouse/a-1-py3-none-any.whl" in said[0] and "1.0-a (сборка" in said[0]
+
+
+# ---- the bundle without packages (--mirror): mirror.json, the mirror stage, names and patches ------------------------
+
+
+def _whl(folder: Path, dist: str, version: str, requires: list[str], modules: tuple[str, ...] = ()) -> Path:
+    """A wheel with METADATA (Name, Version, Requires-Dist) and empty modules, as the build reads them."""
+    folder.mkdir(parents=True, exist_ok=True)
+    path = folder / f"{dist.replace('-', '_')}-{version}-py3-none-any.whl"
+    meta = f"Metadata-Version: 2.1\nName: {dist}\nVersion: {version}\n" + "".join(f"Requires-Dist: {r}\n" for r in requires)
+    with zipfile.ZipFile(path, "w") as z:
+        for m in modules:
+            z.writestr(m, b"")
+        z.writestr(f"{dist.replace('-', '_')}-{version}.dist-info/METADATA", meta)
+    return path
+
+
+def _lock_set(folder: Path, backend_requires: tuple[str, ...] = ("psycopg[binary]>=3.2",)) -> list[Path]:
+    """The wheels of a small lock set: our two, psycopg with its binary extra, pgserver (nobody requires it)."""
+    return [
+        _whl(folder, "desk-backend", "0.2.14",
+             ["rub-fixed-income-core==0.42.0", *backend_requires, "fastapi>=0.115",
+              'colorama>=0.4; sys_platform == "win32"', 'uvloop>=0.19; sys_platform != "win32"',
+              'tomli>=2; python_version < "3.11"', 'pytest>=8; extra == "dev"'], ("desk/api/__init__.py",)),
+        _whl(folder, "rub_fixed_income_core", "0.42.0", ["numpy>=1.26"], ("rub_fixed_income/__init__.py",)),
+        _whl(folder, "Psycopg", "3.2.1", ['psycopg-binary==3.2.1; extra == "binary"',
+                                          'typing-extensions>=4.4; python_version < "3.13"',
+                                          'tzdata; sys_platform == "win32"'], ("psycopg/__init__.py",)),
+        _whl(folder, "psycopg_binary", "3.2.1", [], ("psycopg_binary/__init__.py",)),
+        _whl(folder, "typing_extensions", "4.12.2", []),
+        _whl(folder, "tzdata", "2024.1", []),
+        _whl(folder, "fastapi", "0.115.0", ["starlette>=0.37,<0.39", 'colorama; sys_platform == "linux"'], ()),
+        _whl(folder, "starlette", "0.38.2", ["anyio>=3.4,<5"]),
+        _whl(folder, "anyio", "4.4.0", ['colorama; sys_platform == "win32" and extra == "trio"']),
+        _whl(folder, "colorama", "0.4.6", []),
+        _whl(folder, "numpy", "1.26.4", []),
+        _whl(folder, "pgserver", "0.1.4", [], ("pgserver/__init__.py",)),
+    ]
+
+
+LOCAL = ["desk-backend==0.2.14", "rub-fixed-income-core==0.42.0"]
+
+
+def test_mirror_json_is_built_from_the_wheels_metadata_for_windows(tmp_path):
+    doc = build.mirror_doc(_lock_set(tmp_path / "w"), LOCAL)
+    assert doc["schema"] == 1 and doc["python"] == "3.11" and doc["platform"] == "win_amd64"
+    assert doc["local"] == LOCAL and doc["imports"] == ["desk.api", "rub_fixed_income", "pgserver", "psycopg"]
+    pk = doc["packages"]
+    # every third-party package, none of ours; names canonical (PEP 503)
+    assert sorted(pk) == ["anyio", "colorama", "fastapi", "numpy", "pgserver", "psycopg", "psycopg-binary",
+                          "starlette", "typing-extensions", "tzdata"]
+    assert pk["psycopg"] == {"lock": "3.2.1", "requires": [{"by": "desk-backend", "spec": ">=3.2"}]}
+    # markers are evaluated for Windows / Python 3.11: colorama and tzdata are needed, uvloop, tomli not; the "linux"
+    # colorama of fastapi and the "trio" extra of anyio do not count
+    assert pk["colorama"]["requires"] == [{"by": "desk-backend", "spec": ">=0.4"}]
+    assert pk["tzdata"]["requires"] == [{"by": "psycopg", "spec": ""}]
+    # python_version < "3.13" holds for 3.11; the extra of psycopg is asked by desk-backend, so psycopg-binary counts
+    assert pk["typing-extensions"]["requires"] == [{"by": "psycopg", "spec": ">=4.4"}]
+    assert pk["psycopg-binary"]["requires"] == [{"by": "psycopg", "spec": "==3.2.1"}]
+    assert pk["starlette"]["requires"] == [{"by": "fastapi", "spec": "<0.39,>=0.37"}]  # the specifier as packaging prints it
+    assert pk["numpy"]["requires"] == [{"by": "rub-fixed-income-core", "spec": ">=1.26"}]
+    assert pk["pgserver"] == {"lock": "0.1.4", "requires": []}  # added by the build: any version
+    # deterministic: the same wheels in any order give the same bytes
+    again = build.mirror_doc(list(reversed(_lock_set(tmp_path / "w2"))), list(reversed(LOCAL)))
+    assert build.mirror_json_text(doc) == build.mirror_json_text(again)
+    text = build.mirror_json_text(doc)
+    assert text.endswith("\n") and json.loads(text) == doc and list(json.loads(text)) == sorted(doc)
+
+
+def test_mirror_json_follows_extras_and_checks_what_the_lock_holds(tmp_path):
+    # without the extra nobody asks for psycopg-binary: it is a package of the lock that nothing requires
+    plain = build.mirror_doc(_lock_set(tmp_path / "a", ("psycopg>=3.2",)), LOCAL)
+    assert plain["packages"]["psycopg-binary"]["requires"] == []
+    # a requirement the wheels do not hold
+    needs = _lock_set(tmp_path / "b", ("psycopg>=3.2", "missing-pkg>=1"))
+    with pytest.raises(SystemExit, match="missing-pkg"):
+        build.mirror_doc(needs, LOCAL)
+    # the lock's own version does not satisfy a specifier
+    with pytest.raises(SystemExit, match=r"psycopg>=3.5.*lock has 3.2.1"):
+        build.mirror_doc(_lock_set(tmp_path / "c", ("psycopg>=3.5",)), LOCAL)
+    # a module of the imports that no wheel holds
+    wheels = [w for w in _lock_set(tmp_path / "d") if not w.name.startswith("pgserver")]
+    wheels.append(_whl(tmp_path / "d", "pgserver", "0.1.4", [], ("pgserver_other/__init__.py",)))
+    with pytest.raises(SystemExit, match="module pgserver"):
+        build.mirror_doc(wheels, LOCAL)
+    # the real names: the core's module is rub_fixed_income, not its distribution's name
+    assert "rub_fixed_income" in build.MIRROR_IMPORTS and "rub_fixed_income_core" not in build.MIRROR_IMPORTS
+
+
+MIRROR_STAGE_FILES = {"VERSION": b"1.1-b\n", "start.bat": b"@echo off\r\n", "app/deskctl.py": b"print()\n",
+                      "app/mirror_install.py": b"installer\n", "python/python.exe": b"MZ"}
+
+
+def _full_and_mirror_stage(tmp_path: Path, files: dict[str, bytes] | None = None) -> tuple[Path, Path, dict]:
+    """A full stage with the lock set's wheels and its mirror stage, as ``main`` makes them."""
+    stage = tmp_path / "full" / "DeskMonitor"
+    for rel, data in (files or MIRROR_STAGE_FILES).items():
+        (stage / rel).parent.mkdir(parents=True, exist_ok=True)
+        (stage / rel).write_bytes(data)
+    wheels = _lock_set(stage / "wheelhouse")
+    pins = ["psycopg==3.2.1", "psycopg-binary==3.2.1", "typing-extensions==4.12.2", "tzdata==2024.1", "fastapi==0.115.0",
+            "starlette==0.38.2", "anyio==4.4.0", "colorama==0.4.6", "numpy==1.26.4", "pgserver==0.1.4"]
+    (stage / "wheelhouse/requirements.txt").write_text("\n".join(pins + LOCAL) + "\n")
+    header = "# DeskMonitor 1.1-b, repository commit abc\n# no bundled Python (py -3.11)\n"
+    doc = build.mirror_doc(wheels, LOCAL)
+    mirror = build.make_mirror_stage(stage, tmp_path / "mirror" / "DeskMonitor", doc, header)
+    build.write_manifest(stage, header)
+    return stage, mirror, doc
+
+
+def test_the_mirror_stage_holds_only_our_wheels_requirements_and_mirror_json(tmp_path):
+    stage, mirror, doc = _full_and_mirror_stage(tmp_path)
+    names = {rel for rel, _ in build.stage_files(mirror)}
+    assert {rel for rel in names if rel.startswith("wheelhouse/")} == {
+        "wheelhouse/desk_backend-0.2.14-py3-none-any.whl", "wheelhouse/rub_fixed_income_core-0.42.0-py3-none-any.whl",
+        "wheelhouse/requirements.txt", "wheelhouse/mirror.json"}
+    # all but the wheelhouse is the full stage's; app/mirror_install.py is in both kinds
+    full_names = {rel for rel, _ in build.stage_files(stage)}
+    assert "app/mirror_install.py" in names and "app/mirror_install.py" in full_names
+    assert names - {"wheelhouse/mirror.json"} <= full_names and not [n for n in full_names if "mirror.json" in n]
+    assert full_names - names == {rel for rel in full_names if rel.startswith("wheelhouse/") and rel.endswith(".whl")
+                                  and "desk_backend" not in rel and "rub_fixed_income_core" not in rel}
+    for rel in ("wheelhouse/requirements.txt", "wheelhouse/desk_backend-0.2.14-py3-none-any.whl",
+                "wheelhouse/rub_fixed_income_core-0.42.0-py3-none-any.whl", "app/deskctl.py", "VERSION"):
+        assert (mirror / rel).read_bytes() == (stage / rel).read_bytes()  # byte for byte the full bundle's
+    assert (mirror / "wheelhouse/mirror.json").read_text(encoding="utf-8") == build.mirror_json_text(doc)
+    # its own manifest (it lists mirror.json, not the third-party wheels), same header
+    header, entries = build.parse_manifest((mirror / "MANIFEST.sha256").read_text())
+    assert "wheelhouse/mirror.json" in entries and "wheelhouse/psycopg-3.2.1-py3-none-any.whl" not in entries
+    assert header == build.parse_manifest((stage / "MANIFEST.sha256").read_text())[0]
+    assert (build.base_from_zip(_zip_of(mirror, tmp_path)).flavor, build.base_from_zip(_zip_of(stage, tmp_path)).flavor) \
+        == ("mirror", "full")
+    # the zips are named with -mirror, with and without the adapter
+    stamp = build.zip_stamp(1_760_000_000)
+    (public,) = build.write_bundles(mirror, "DeskMonitor-1.1-b-mirror", False, tmp_path / "dist", stamp)
+    assert public.name == "DeskMonitor-1.1-b-mirror.zip"
+    with update_module.open_zip(public) as z:
+        c = update_module.read_contents(z)
+    assert c.flavor == "mirror" and c.kind == "full"
+    (mirror / "adapter/pkg").mkdir(parents=True)
+    (mirror / "adapter/pkg/__init__.py").write_bytes(b"private")
+    public2, private = build.write_bundles(mirror, "DeskMonitor-1.1-b-mirror", True, tmp_path / "dist2", stamp)
+    assert private.name == "DeskMonitor-1.1-b-mirror-with-adapter.zip"
+    assert public2.read_bytes() == public.read_bytes()  # the public zip has no adapter/
+
+
+def _zip_of(stage: Path, tmp: Path) -> Path:
+    out = tmp / f"{stage.parent.name}.zip"
+    build.write_zip(out, build.bundle_entries(stage, adapter=False), build.zip_stamp(1_760_000_000))
+    return out
+
+
+def test_check_mirror_refuses_a_wheelhouse_that_does_not_match_requirements(tmp_path):
+    _, mirror, _ = _full_and_mirror_stage(tmp_path)
+    wh = mirror / "wheelhouse"
+    build.check_mirror(wh)  # as written: fine
+    req = (wh / "requirements.txt").read_text()
+    (wh / "requirements.txt").write_text(req + "extra-pkg==1\n")
+    with pytest.raises(SystemExit, match="different packages"):
+        build.check_mirror(wh)
+    (wh / "requirements.txt").write_text(req.replace("numpy==1.26.4", "numpy==1.26.5"))
+    with pytest.raises(SystemExit, match="numpy lock"):
+        build.check_mirror(wh)
+    (wh / "requirements.txt").write_text(req)
+    _whl(wh, "colorama", "0.4.6", [])  # a third-party wheel left behind
+    with pytest.raises(SystemExit, match="only our wheels"):
+        build.check_mirror(wh)
+    (wh / "colorama-0.4.6-py3-none-any.whl").unlink()
+    doc = json.loads((wh / "mirror.json").read_text())
+    doc["packages"]["numpy"]["requires"].append({"by": "x", "spec": ">=2"})
+    (wh / "mirror.json").write_text(json.dumps(doc))
+    with pytest.raises(SystemExit, match="numpy>=2"):
+        build.check_mirror(wh)
+
+
+def test_patches_of_the_mirror_kind_come_from_the_mirror_stage(tmp_path):
+    stamp = build.zip_stamp(1_760_000_000)
+    old_files = {**MIRROR_STAGE_FILES, "VERSION": b"1.0-a\n"}
+    old_stage, old_mirror, _ = _full_and_mirror_stage(tmp_path / "old", old_files)
+    new_stage, new_mirror, _ = _full_and_mirror_stage(tmp_path / "new", {**MIRROR_STAGE_FILES,
+                                                                         "app/deskctl.py": b"print(2)\n"})
+    full_base, mirror_base = _zip_of(old_stage, tmp_path), _zip_of(old_mirror, tmp_path)
+    bases = [build.base_from_zip(full_base), build.base_from_zip(mirror_base)]
+    assert [b.flavor for b in bases] == ["full", "mirror"]
+    for d in ("o", "o2", "o3"):
+        (tmp_path / d).mkdir()
+    both = build.write_patches(bases, {"full": new_stage, "mirror": new_mirror}, "1.1-b", tmp_path / "o", stamp)
+    assert sorted(p.name for p in both) == ["DeskMonitor-mirror-patch-1.0-a-to-1.1-b.zip",
+                                            "DeskMonitor-patch-1.0-a-to-1.1-b.zip"]
+    by_name = {p.name: p for p in both}
+    with zipfile.ZipFile(by_name["DeskMonitor-mirror-patch-1.0-a-to-1.1-b.zip"]) as z:
+        names = {n.removeprefix("DeskMonitor/") for n in z.namelist()}
+        manifest = z.read("DeskMonitor/MANIFEST.sha256").decode()
+        readme = z.read("DeskMonitor/PATCH_README.txt").decode("utf-8-sig")
+    assert "app/deskctl.py" in names and not [n for n in names if n.endswith(".whl")]  # same wheels as the base
+    assert "wheelhouse/mirror.json" in manifest and "DeskMonitor-1.1-b-mirror.zip" in readme and "зеркала" in readme
+    with zipfile.ZipFile(by_name["DeskMonitor-patch-1.0-a-to-1.1-b.zip"]) as z:
+        assert "mirror.json" not in z.read("DeskMonitor/MANIFEST.sha256").decode()
+        assert "DeskMonitor-1.1-b.zip" in z.read("DeskMonitor/PATCH_README.txt").decode("utf-8-sig")
+        assert "без интернета" in z.read("DeskMonitor/PATCH_README.txt").decode("utf-8-sig")
+    # only the full kind is built (no --mirror): a mirror base gives no patch, a full one does
+    only_full = build.write_patches(bases, new_stage, "1.1-b", tmp_path / "o2", stamp)
+    assert [p.name for p in only_full] == ["DeskMonitor-patch-1.0-a-to-1.1-b.zip"]
+    # a patch is of one kind: mixed bases, or a base of the other kind than the stage, are refused
+    with pytest.raises(ValueError, match="both"):
+        build.write_patch(bases, new_stage, "1.1-b", tmp_path / "o3", stamp)
+    with pytest.raises(ValueError, match="other one"):
+        build.write_patch([bases[1]], new_stage, "1.1-b", tmp_path / "o3", stamp)
+    # delivered records are of a kind too, and a zip is taken with the records of its own kind only
+    folder = tmp_path / "delivered"
+    build.record_delivered(full_base, folder)
+    rec_m = build.record_delivered(mirror_base, folder)
+    assert build.base_from_record(rec_m).flavor == "mirror"
+    assert [b.flavor for b in build.load_bases([str(mirror_base)], folder)] == ["mirror"]
+    assert sorted(b.flavor for b in build.load_bases(["1.0-a"], folder)) == ["full", "mirror"]
+
+
+def test_from_bundle_of_a_mirror_zip_makes_the_mirror_with_adapter_zip(tmp_path):
+    import argparse
+
+    _, mirror, _ = _full_and_mirror_stage(tmp_path)
+    public = tmp_path / "DeskMonitor-1.1-b-mirror.zip"
+    build.write_zip(public, build.bundle_entries(mirror, adapter=False), build.zip_stamp(1_760_000_000))
+    a = argparse.Namespace(from_bundle=public, out=tmp_path / "out")
+    assert build.from_bundle(a, {"pkg/__init__.py": b"private"}, []) == 0
+    private = tmp_path / "out" / "DeskMonitor-1.1-b-mirror-with-adapter.zip"
+    assert private.is_file() and not (tmp_path / "out" / "DeskMonitor-1.1-b-with-adapter.zip").exists()
+    build.check_public_private(tmp_path / "out" / "DeskMonitor-1.1-b-mirror.zip", private)
+    with zipfile.ZipFile(private) as z:
+        assert z.read("DeskMonitor/adapter/pkg/__init__.py") == b"private"
+        assert b"wheelhouse/mirror.json" in z.read("DeskMonitor/MANIFEST.sha256")
+
+
+def test_release_workflow_builds_and_publishes_the_mirror_bundle():
+    wf = (REPO / ".github/workflows/release.yml").read_text(encoding="utf-8")
+    assert "--mirror" in wf and "DeskMonitor-mirror-patch-*.zip" in wf and "DeskMonitor-patch-*.zip" in wf
+    assert "dist/DeskMonitor-*.zip" in wf  # the glob that uploads the mirror zip and its patches too
