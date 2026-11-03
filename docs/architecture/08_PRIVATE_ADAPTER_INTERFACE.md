@@ -324,7 +324,8 @@ issues (§6.3), nothing in them but the files of an action may hold a cell value
   recursive report folder (§13), so the files go through `match` / `read` like any report, and the page shows each
   file's outcome (accepted, rejected, …). `ctx.inbox_dirs` never includes that folder: the adapter does not read its
   own outputs as inputs. The adapter itself still writes no files (§2): the backend does.
-  - **`choices`** (optional, since 03.11.2026, TDM#554; only for an action that declares `choices`, §4): a table of
+  - **`choices`** (optional, since 03.11.2026, TDM#554; only for an action that declares `choices`, §4; not the pick
+    list `choices` of a service action, §2.2): a table of
     rows the owner gives a value from a dropdown on a screen of the monitor, saved into one object of a settings tab
     (`settings_tabs`, §4) — so a mapping the adapter needs (for example a report's row type → derivative kind) is
     chosen, never typed, and one button saves it and reads the affected reports again:
