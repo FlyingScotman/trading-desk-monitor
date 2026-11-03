@@ -470,10 +470,10 @@ def _whl(folder: Path, dist: str, version: str, requires: list[str], modules: tu
     folder.mkdir(parents=True, exist_ok=True)
     path = folder / f"{dist.replace('-', '_')}-{version}-py3-none-any.whl"
     meta = f"Metadata-Version: 2.1\nName: {dist}\nVersion: {version}\n" + "".join(f"Requires-Dist: {r}\n" for r in requires)
-    with zipfile.ZipFile(path, "w") as z:
+    with zipfile.ZipFile(path, "w") as z:  # a fixed time: the same wheel is the same bytes, so the same sha256
         for m in modules:
-            z.writestr(m, b"")
-        z.writestr(f"{dist.replace('-', '_')}-{version}.dist-info/METADATA", meta)
+            z.writestr(zipfile.ZipInfo(m, (2020, 1, 1, 0, 0, 0)), b"")
+        z.writestr(zipfile.ZipInfo(f"{dist.replace('-', '_')}-{version}.dist-info/METADATA", (2020, 1, 1, 0, 0, 0)), meta)
     return path
 
 
@@ -504,14 +504,16 @@ LOCAL = ["desk-backend==0.2.14", "rub-fixed-income-core==0.42.0"]
 
 
 def test_mirror_json_is_built_from_the_wheels_metadata_for_windows(tmp_path):
-    doc = build.mirror_doc(_lock_set(tmp_path / "w"), LOCAL)
+    wheels = {w.name.split("-")[0]: w for w in _lock_set(tmp_path / "w")}
+    doc = build.mirror_doc(list(wheels.values()), LOCAL)
     assert doc["schema"] == 1 and doc["python"] == "3.11" and doc["platform"] == "win_amd64"
     assert doc["local"] == LOCAL and doc["imports"] == ["desk.api", "rub_fixed_income", "pgserver", "psycopg"]
     pk = doc["packages"]
     # every third-party package, none of ours; names canonical (PEP 503)
     assert sorted(pk) == ["anyio", "colorama", "fastapi", "numpy", "pgserver", "psycopg", "psycopg-binary",
                           "starlette", "typing-extensions", "tzdata"]
-    assert pk["psycopg"] == {"lock": "3.2.1", "requires": [{"by": "desk-backend", "spec": ">=3.2"}]}
+    assert pk["psycopg"] == {"lock": "3.2.1", "requires": [{"by": "desk-backend", "spec": ">=3.2"}],
+                             "file": "Psycopg-3.2.1-py3-none-any.whl", "sha256": build.sha256(wheels["Psycopg"])}
     # markers are evaluated for Windows / Python 3.11: colorama and tzdata are needed, uvloop, tomli not; the "linux"
     # colorama of fastapi and the "trio" extra of anyio do not count
     assert pk["colorama"]["requires"] == [{"by": "desk-backend", "spec": ">=0.4"}]
@@ -522,7 +524,11 @@ def test_mirror_json_is_built_from_the_wheels_metadata_for_windows(tmp_path):
     assert pk["starlette"]["requires"] == [{"by": "fastapi", "spec": "<0.39,>=0.37"}]  # the specifier as packaging prints it
     assert pk["numpy"]["requires"] == [{"by": "rub-fixed-income-core", "spec": ">=1.26"}]
     # added by the build; the installer may not replace it (another PostgreSQL major version), so it is exact
-    assert pk["pgserver"] == {"lock": "0.1.4", "requires": [], "exact": True}
+    assert pk["pgserver"] == {"lock": "0.1.4", "requires": [], "exact": True, "file": "pgserver-0.1.4-py3-none-any.whl",
+                              "sha256": build.sha256(wheels["pgserver"])}
+    # every third-party package names the file of the lock set and its sha256; ours are in "local" only
+    for name, info in pk.items():
+        assert info["sha256"] == build.sha256(next(w for w in wheels.values() if w.name == info["file"])), name
     # psycopg-binary is pinned by psycopg's own "==", which the installer's candidate filter already honours
     assert "exact" not in pk["psycopg-binary"] and "exact" not in pk["psycopg"]
     # deterministic: the same wheels in any order give the same bytes
@@ -646,6 +652,62 @@ def test_check_mirror_refuses_a_wheelhouse_that_does_not_match_requirements(tmp_
     (wh / "mirror.json").write_text(json.dumps(doc))
     with pytest.raises(SystemExit, match="numpy>=2"):
         build.check_mirror(wh)
+
+
+def test_mirror_json_hashes_are_those_of_the_full_stage_wheels_and_are_checked(tmp_path):
+    stage, mirror, _ = _full_and_mirror_stage(tmp_path)
+    full_wh, wh = stage / "wheelhouse", mirror / "wheelhouse"
+    pk = json.loads((wh / "mirror.json").read_text(encoding="utf-8"))["packages"]
+    third = sorted(w.name for w in full_wh.glob("*.whl") if w.name.split("-")[0] not in build.OUR_DISTS)
+    assert sorted(p["file"] for p in pk.values()) == third and len(pk) == 10
+    for info in pk.values():
+        assert info["sha256"] == build.sha256(full_wh / info["file"])
+    build.check_mirror(wh, full_wh)  # as written: fine
+    original = (wh / "mirror.json").read_text(encoding="utf-8")
+
+    def change(mutate):
+        d = json.loads(original)
+        mutate(d["packages"])
+        (wh / "mirror.json").write_text(json.dumps(d), encoding="utf-8")
+
+    change(lambda p: p["numpy"].update(sha256="0" * 64))
+    with pytest.raises(SystemExit, match=r"numpy-1.26.4.*sha256"):
+        build.check_mirror(wh, full_wh)
+    build.check_mirror(wh)  # the format alone is fine without the full wheelhouse
+    change(lambda p: p["numpy"].update(file="numpy-1.26.5-py3-none-any.whl"))
+    with pytest.raises(SystemExit, match="not the wheel of numpy 1.26.4"):
+        build.check_mirror(wh, full_wh)
+    change(lambda p: p["numpy"].update(file="colorama-0.4.6-py3-none-any.whl"))
+    with pytest.raises(SystemExit, match="not the wheel of numpy"):
+        build.check_mirror(wh, full_wh)
+    change(lambda p: p["numpy"].pop("sha256"))
+    with pytest.raises(SystemExit, match="numpy has no file / sha256"):
+        build.check_mirror(wh)
+    change(lambda p: p["numpy"].update(sha256="ABC"))
+    with pytest.raises(SystemExit, match="numpy has no file / sha256"):
+        build.check_mirror(wh)
+    change(lambda p: p["numpy"].update(file="not-a-wheel.txt"))
+    with pytest.raises(SystemExit, match="is not a wheel name"):
+        build.check_mirror(wh)
+    change(lambda p: p.pop("numpy"))  # a package of the lock without a record at all
+    with pytest.raises(SystemExit, match="different packages"):
+        build.check_mirror(wh, full_wh)
+    (wh / "mirror.json").write_text(original, encoding="utf-8")
+    _whl(full_wh, "extra-pkg", "1.0", [])  # a third-party wheel of the full stage that mirror.json does not list
+    with pytest.raises(SystemExit, match="extra_pkg"):
+        build.check_mirror(wh, full_wh)
+
+
+def test_make_mirror_stage_refuses_a_document_whose_hashes_are_not_the_stage_wheels(tmp_path):
+    stage = tmp_path / "full" / "DeskMonitor"
+    wheels = _lock_set(stage / "wheelhouse")
+    pins = ["psycopg==3.2.1", "psycopg-binary==3.2.1", "typing-extensions==4.12.2", "tzdata==2024.1", "fastapi==0.115.0",
+            "starlette==0.38.2", "anyio==4.4.0", "colorama==0.4.6", "numpy==1.26.4", "pgserver==0.1.4"]
+    (stage / "wheelhouse/requirements.txt").write_text("\n".join(pins + LOCAL) + "\n")
+    doc = build.mirror_doc(wheels, LOCAL)
+    (stage / "wheelhouse/numpy-1.26.4-py3-none-any.whl").write_bytes(b"another file")  # changed after the document
+    with pytest.raises(SystemExit, match=r"numpy-1.26.4.*sha256"):
+        build.make_mirror_stage(stage, tmp_path / "mirror" / "DeskMonitor", doc, "# h\n")
 
 
 def test_patches_of_the_mirror_kind_come_from_the_mirror_stage(tmp_path):
