@@ -14,8 +14,15 @@ Files, all ``;``-separated UTF-8 with BOM, header = canonical field names (``x_*
   (``cash_balances_csv``, ``entity``, ``book_id``), ``pnl_official_YYYYMMDD.csv`` (``pnl_official_csv``,
   ``entity``, ``book_id``) and ``trade_terms_YYYYMMDD.csv`` (``trade_terms_csv``, ``book_id``; FX trades since
   private/1.2, swap legs, REPO and HTM purchases since 1.4). A
-  ``cash_balances`` or ``pnl_official`` file may hold several dates (a history): a ``_report_date`` column gives
-  each row's date (08 §6.1); an empty cell is the date in the name.
+  ``cash_balances``, ``pnl_official`` or ``trades`` file may hold several dates (a history): a ``_report_date``
+  column gives each row's date (08 §6.1); an empty cell is the date in the name.
+* ``trades`` (private/1.6), ``intraday``, scope ``book_id``: ``trades_YYYYMMDD_HHMM.csv`` is the day's cumulative
+  export cut at HH:MM Moscow time (source ``trades_csv``, ``full_snapshot``, ``covers=listed``: it replaces the trades
+  of the books it lists), ``trades_delta_YYYYMMDD_HHMM.csv`` deltas (source ``trades_delta_csv``, ``increment``:
+  its rows add to the earlier deltas of the book and date, the highest ``trade_version`` of a ``trade_id``
+  current). The two are separate sources, so one book and date takes either cumulative cuts or deltas: a delta
+  for a book that already has a cumulative cut that date is a ``scope_conflict`` (08 §6.6). The suffix is the hit's ``report_ts``, not a ``seq``; without it the file is the day's
+  final cut (23:59:59), an invalid time is not matched.
 * ``books.csv`` in ``ctx.config_dir``: ``reference()["books"]``, its unreadable lines in ``["issues"]``. Without a
   config folder there are no books, so the backend rejects every unit with ``unknown_book``: positions are never
   accepted for undefined books. ``entities.csv`` and ``funding_rules.csv`` there, when present, are
@@ -40,17 +47,23 @@ from datetime import datetime
 
 SPI_VERSION = 1
 SOURCE = "positions_csv"
-_FILE = re.compile(r"^(positions|ocp|cash_balances|pnl_official|trade_terms)_([0-9]{8})(?:_([0-9]+))?\.csv$")
-_DATASETS = {  # file prefix = dataset -> (source, time basis, scope)
+_FILE = re.compile(r"^(positions|ocp|cash_balances|pnl_official|trade_terms|trades|trades_delta)_([0-9]{8})"
+                   r"(?:_([0-9]+))?\.csv$")
+_DATASETS = {  # file prefix -> (source, time basis, scope); the prefix is the dataset, but for trades_delta
     "positions": (SOURCE, "start_of_day", ["book_id"]),
     "ocp": ("ocp_csv", "end_of_day", ["entity", "book_id"]),
     "cash_balances": ("cash_balances_csv", "end_of_day", ["entity", "book_id"]),
     "pnl_official": ("pnl_official_csv", "end_of_day", ["entity", "book_id"]),
     "trade_terms": ("trade_terms_csv", "end_of_day", ["book_id"]),
+    "trades": ("trades_csv", "intraday", ["book_id"]),
+    "trades_delta": ("trades_delta_csv", "intraday", ["book_id"]),
 }
-_BY_SOURCE = {src: ds for ds, (src, _, _) in _DATASETS.items()}
-_MULTI_DATE = {"cash_balances", "pnl_official"}
-_WITH_INSTRUMENT = {"positions", "pnl_official"}
+_DATASET_OF = {"trades_delta": "trades"}
+_INCREMENT = {"trades_delta"}
+_BY_SOURCE = {src: prefix for prefix, (src, _, _) in _DATASETS.items()}
+_MULTI_DATE = {"cash_balances", "pnl_official", "trades"}
+_WITH_INSTRUMENT = {"positions", "pnl_official", "trades"}
+_CUT = re.compile(r"([01][0-9]|2[0-3])([0-5][0-9])")
 _BOOLEANS = {"active", "ndf", "include_ndf", "cash_from_balances"}
 _REFERENCE = (("books", "books.csv"), ("entities", "entities.csv"), ("funding_rules", "funding_rules.csv"),
               ("funding_policy", "funding_policy.csv"), ("ocp_policy", "ocp_policy.csv"))
@@ -59,9 +72,11 @@ _TRUE, _FALSE = {"1", "true", "yes"}, {"0", "false", "no"}
 
 def describe() -> dict:
     return {
-        "name": "desk_reference", "version": "1.3.0", "spi": 1, "contract": "private/1.5",
-        "sources": [{"source": src, "dataset": ds, "time_basis": tb, "completeness": "full_snapshot",
-                     "scope": scope, "covers": "listed"} for ds, (src, tb, scope) in _DATASETS.items()],
+        "name": "desk_reference", "version": "1.4.0", "spi": 1, "contract": "private/1.6",
+        "sources": [{"source": src, "dataset": _DATASET_OF.get(prefix, prefix), "time_basis": tb, "scope": scope,
+                     **({"completeness": "increment"} if prefix in _INCREMENT else
+                        {"completeness": "full_snapshot", "covers": "listed"})}
+                    for prefix, (src, tb, scope) in _DATASETS.items()],
     }
 
 
@@ -73,7 +88,14 @@ def match(path: str, ctx) -> dict | None:
         day = datetime.strptime(m.group(2), "%Y%m%d").date()
     except ValueError:
         return None
-    return {"source": _DATASETS[m.group(1)][0], "report_date": day.isoformat(), "date_from": "name",
+    src, basis, _ = _DATASETS[m.group(1)]
+    if basis == "intraday":  # trades: the suffix is the cut's time, none the day's final cut
+        cut = _CUT.fullmatch(m.group(3) or "2359")
+        if cut is None:
+            return None
+        ts = f"{day.isoformat()}T{cut.group(1)}:{cut.group(2)}:{'59' if m.group(3) is None else '00'}+03:00"
+        return {"source": src, "report_date": day.isoformat(), "date_from": "name", "report_ts": ts, "seq": None}
+    return {"source": src, "report_date": day.isoformat(), "date_from": "name",
             "report_ts": None, "seq": int(m.group(3)) if m.group(3) else None}
 
 
@@ -100,8 +122,8 @@ def _records(path: str) -> tuple[list[tuple[int, dict]], list[dict]]:
 
 
 def read(path: str, hit: dict, ctx) -> dict:
-    dataset = _BY_SOURCE[hit["source"]]
-    scope_keys = _DATASETS[dataset][2]
+    prefix = _BY_SOURCE[hit["source"]]
+    dataset, scope_keys = _DATASET_OF.get(prefix, prefix), _DATASETS[prefix][2]
     records, issues = _records(path)
     rows, units = [], {}
     for line, rec in records:
@@ -122,7 +144,8 @@ def read(path: str, hit: dict, ctx) -> dict:
         rows.append({**rec, "_src": f"L{line}"})
     if not records:
         issues.append({"severity": "warning", "code": "empty_report", "message": "no rows and no markers"})
-    return {"rows": rows, "scopes": list(units.values()), "issues": issues, "controls": {}, "meta": {}}
+    scopes = [] if prefix in _INCREMENT else list(units.values())  # an increment lists no units: it replaces none
+    return {"rows": rows, "scopes": scopes, "issues": issues, "controls": {}, "meta": {}}
 
 
 def reference(ctx) -> dict:

@@ -1009,6 +1009,7 @@ def create_app(store_url: str, static_dir: Path | None = None, app_dir: Path | N
     from .market_history import router as market_history_router  # /api/v1/history/market, /status (R24)
     from .server_routes import router as server_router  # /api/v1/server: restart, network (settings page)
     from .settings_routes import router as settings_router  # here: it imports ApiError from this module
+    from .trades_routes import public as trades_router  # /api/v1/trades: the day's trades (S13a, TDM#525)
     from .update_routes import router as update_router
     from .updater_routes import router as updater_router  # GitHub Releases (desk.updater)
 
@@ -1022,6 +1023,7 @@ def create_app(store_url: str, static_dir: Path | None = None, app_dir: Path | N
     app.include_router(server_router, include_in_schema=False)
     app.include_router(daystatus_router, include_in_schema=False)
     app.include_router(cash_router, include_in_schema=False)
+    app.include_router(trades_router, include_in_schema=False)
     app.include_router(market_history_router, include_in_schema=False)
     app.include_router(autopilot_router)
     app.include_router(alias_router)

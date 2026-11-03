@@ -24,7 +24,8 @@ with the size and time already taken in is not hashed again. Then, per file:
   (sorts below the current revision by report key, or another source of higher priority has it), or a
   ``scope_conflict`` (another source, no priorities), or accepted, a new revision unless its ``unit_hash`` equals
   the current revision's: a position set for ``positions`` (per book), a ``dataset_set`` for every other dataset
-  with a schema (``ocp``, ``cash_balances``, ``pnl_official``, ``trade_terms``; private/1.2);
+  with a schema (``ocp``, ``cash_balances``, ``pnl_official``, ``trade_terms``; private/1.2; ``trades``, 1.6: an
+  ``increment`` unit of it is never superseded, deltas add up, and one equal to a stored delta stores nothing);
 * the file: ``accepted``, ``partially_accepted``, ``rejected`` or ``superseded`` (all its units).
 
 The lookback (``inbox_lookback_days``, ``scan`` only; ``retry`` and ``replay`` are explicit and take any date) is
@@ -97,7 +98,7 @@ from ..settings import Settings, adapter_config_dir
 from . import runner
 from .conformance import list_entries
 from .loader import AdapterHandle, load_adapter
-from .spi import DATASETS_WITH_BOOK, REFERENCE_KINDS, AdapterFailure, source_datasets
+from .spi import DATASETS_WITH_BOOK, REFERENCE_KINDS, VERSIONED_DATASETS, AdapterFailure, source_datasets
 from .static_index import (
     UNMAPPED_REASONS,
     CalendarUnavailable,
@@ -840,7 +841,11 @@ class _Scan:
         if any(p > prio for p in others):
             return "superseded", None, False, uvd
         own = [s for s in sets if s[1] == src]
-        if own:
+        adds = decl["completeness"] == "increment" and u["dataset"] in VERSIONED_DATASETS
+        if adds:  # deltas add up (private/1.6 trades): an older one arriving late is still stored; one seen is not
+            if same := next((s for s in own if s[8] == uh), None):
+                return "accepted", same[0], False, uvd
+        elif own:
             if key < _key(*own[0][3:8]):
                 return "superseded", None, False, uvd
             if own[0][8] == uh:
@@ -852,7 +857,8 @@ class _Scan:
         if positions:
             set_id = store.store_inbox_set(self.con, book_id=scope["book_id"], **common)  # type: ignore[arg-type]
         else:
-            set_id = store.store_dataset_set(self.con, dataset=u["dataset"], scope=scope, **common)  # type: ignore[arg-type]
+            set_id = store.store_dataset_set(self.con, dataset=u["dataset"], scope=scope,
+                                             completeness=decl["completeness"], **common)  # type: ignore[arg-type]
         self.res.revisions += 1
         return "accepted", set_id, True, uvd
 

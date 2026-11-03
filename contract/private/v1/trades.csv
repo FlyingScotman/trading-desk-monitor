@@ -1,0 +1,1 @@
+﻿trade_id;trade_version;status;trade_date;trade_ts;book_id;position_id;asset_class;source_instrument_id;source_instrument_name;isin;regnum;moex_secid;instrument_id;side;quantity;face_amount_ccy;amount_ccy;price_pct;fx_rate;accrued_ccy;settle_date;counterparty_id;ccy
