@@ -2,8 +2,20 @@
 
 The release workflow (``.github/workflows/release.yml``) publishes, for a tag ``v<backend version>``:
 
-* ``DeskMonitor-<version>.zip``                    the full Windows bundle, never with the private adapter
-* ``DeskMonitor-patch-<old>-to-<version>.zip``     a patch from the previous release's bundle (when there is one)
+Since the owner's decision of 03.11.2026 (#530) a release carries the mirror kind only; the full-kind names below are
+what releases up to 0.2.16 carry (and what the classifier still reads). An installation of the full kind that meets a
+mirror-only release is told how to change the kind by hand once (``Choice.manual``: a normal state, not an error).
+
+* ``DeskMonitor-<version>.zip``                    the full Windows bundle (releases before #530), never with the
+                                                   private adapter
+* ``DeskMonitor-patch-<old>-to-<version>.zip``     a patch from the previous release's bundle (releases before #530)
+* ``DeskMonitorMirror-<version>.zip``              the bundle "without packages" (third-party packages come from
+                                                   the pip index of the PC), and its patches
+                                                   ``DeskMonitorMirror-patch-<old>-to-<version>.zip`` (not
+                                                   ``DeskMonitor-...``: the updaters of 0.2.16 and before take every
+                                                   ``DeskMonitor-<x>.zip`` for a full bundle); an asset's
+                                                   ``flavor`` is ``full`` or ``mirror``, and ``choose`` takes the
+                                                   flavor that is installed (``DESK_BUNDLE_KIND``)
 * ``SHA256SUMS``                                   ``<sha256>  <asset name>`` of every zip (``sha256sum`` format)
 * ``release.json``                                 the same, machine-readable (``release_doc``), plus the version,
                                                    the commit and the core pin
@@ -38,9 +50,11 @@ SUMS_NAME = "SHA256SUMS"
 SCHEMA = 1
 _SHA = re.compile(r"[0-9a-f]{64}")
 _SUM_LINE = re.compile(r"^([0-9a-fA-F]{64}) [ *]?(\S+)\s*$")
-_FULL = re.compile(r"DeskMonitor-(?!patch-)(?P<v>[0-9A-Za-z][0-9A-Za-z._+-]*?)(?:-with-adapter)?\.zip")
-_PATCH = re.compile(r"DeskMonitor-patch-(?P<base>[0-9A-Za-z][0-9A-Za-z._+-]*?)-to-(?P<v>[0-9A-Za-z][0-9A-Za-z._+-]*)"
-                    r"\.zip")
+_FULL = re.compile(r"DeskMonitor(?P<mirror>Mirror)?-(?!patch-)(?P<v>[0-9A-Za-z][0-9A-Za-z._+-]*?)"
+                   r"(?:-with-adapter)?\.zip")
+_PATCH = re.compile(r"DeskMonitor(?P<mirror>Mirror)?-patch-(?P<base>[0-9A-Za-z][0-9A-Za-z._+-]*?)-to-"
+                    r"(?P<v>[0-9A-Za-z][0-9A-Za-z._+-]*)\.zip")
+FLAVORS = ("full", "mirror")
 _ASSET_NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9._+-]{0,199}")
 _TAG = re.compile(r"[A-Za-z0-9][A-Za-z0-9._+-]{0,99}")
 LIST_LIMIT = 10  # the releases the fallback looks through (newest first)
@@ -75,6 +89,7 @@ class Asset:
     size: int | None
     sha256: str | None  # None: no checksum published, never installed
     url: str
+    flavor: str = "full"  # "full" (with the packages) or "mirror" (without: the PC's pip index); old state files: full
 
     def public(self) -> dict[str, Any]:
         return asdict(self)
@@ -110,10 +125,12 @@ class Choice:
     asset: Asset | None
     reason: str | None
     needs_confirm: bool  # older or unordered: only when the owner asks explicitly
+    manual: bool = False  # a normal state, not an error: the update is done by hand once (``reason`` has the steps)
+    manual_url: str | None = None  # the zip to download by hand (or the release page)
 
     def public(self) -> dict[str, Any]:
         return {"compare": self.compare, "asset": self.asset.public() if self.asset else None, "reason": self.reason,
-                "needs_confirm": self.needs_confirm}
+                "needs_confirm": self.needs_confirm, "manual": self.manual, "manual_url": self.manual_url}
 
 
 # ---- checksums ----------------------------------------------------------------------------------------------
@@ -152,12 +169,13 @@ def _digest(value: object) -> str | None:
 # ---- names and addresses ------------------------------------------------------------------------------------
 
 
-def classify_name(name: str) -> tuple[str, str, str | None] | None:
-    """(kind, version, base) of an update zip's name, None for any other asset."""
+def classify_name(name: str) -> tuple[str, str, str | None, str] | None:
+    """(kind, version, base, flavor) of an update zip's name, None for any other asset. ``kind`` is full or patch,
+    ``flavor`` full or mirror (``DeskMonitorMirror-`` instead of ``DeskMonitor-``)."""
     if m := _PATCH.fullmatch(name):
-        return "patch", m["v"], m["base"]
+        return "patch", m["v"], m["base"], "mirror" if m["mirror"] else "full"
     if m := _FULL.fullmatch(name):
-        return "full", m["v"], None
+        return "full", m["v"], None, "mirror" if m["mirror"] else "full"
     return None
 
 
@@ -213,7 +231,7 @@ def _asset(repo: str, tag: str, name: object, size: object, sha: str | None, url
         check_asset_url(repo, url)
         if urllib.parse.unquote(str(url)).lower() != urllib.parse.unquote(want).lower():
             raise ReleaseError(f"{name}: адрес {url!r} не соответствует тегу {tag}")
-    return Asset(name, kind[0], kind[1], kind[2], size, sha, want)
+    return Asset(name, kind[0], kind[1], kind[2], size, sha, want, kind[3])
 
 
 def _tag(doc: dict[str, Any]) -> str:
@@ -337,9 +355,14 @@ def from_public(doc: object) -> Release | None:
 # ---- choosing ---------------------------------------------------------------------------------------------------
 
 
-def choose(rel: Release, current: str, allow_older: bool = False) -> Choice:
+def choose(rel: Release, current: str, allow_older: bool = False, flavor: str | None = None) -> Choice:
     """The zip to install over ``current``: a patch made from exactly ``current`` when the release has one, else the
-    full zip. A release that is not newer is offered only with ``allow_older`` (and then the full zip)."""
+    full zip. A release that is not newer is offered only with ``allow_older`` (and then the full zip). Only zips of
+    the installed flavor are taken (``flavor``, else ``DESK_BUNDLE_KIND``: full or mirror): a bundle never turns into
+    the other kind through an update."""
+    if flavor not in FLAVORS:
+        root = update.bundle_root()
+        flavor = update.installed_kind(root) if root is not None else update.bundle_kind()
     cmp = update.compare(rel.version, current)
     if cmp == "same":
         return Choice(cmp, None, f"Установлена последняя версия ({current}).", False)
@@ -351,11 +374,24 @@ def choose(rel: Release, current: str, allow_older: bool = False) -> Choice:
     if rel.adapter_included:
         return Choice(cmp, None, "В публичном релизе оказался приватный адаптер: такой релиз не устанавливается.",
                       needs)
-    patch = next((a for a in rel.assets if a.kind == "patch" and a.base == current and a.version == rel.version),
-                 None)
-    full = next((a for a in rel.assets if a.kind == "full" and a.version == rel.version), None)
+    patch = next((a for a in rel.assets if a.kind == "patch" and a.base == current and a.version == rel.version
+                  and a.flavor == flavor), None)
+    full = full_of(rel, flavor)
     asset = patch if patch is not None and not needs else full
     if asset is None:
+        other = [a for a in rel.assets if a.kind == "full" and a.version == rel.version]
+        if flavor == "full" and any(a.flavor == "mirror" for a in other):
+            # the owner's decision of 03.11.2026 (#530): from then on only the mirror kind is released
+            mirror = full_of(rel, "mirror")
+            url = mirror.url if mirror is not None else rel.html_url or None
+            return Choice(cmp, None, manual_switch_text(rel.version, mirror.name if mirror else None, url), needs,
+                          manual=True, manual_url=url)
+        if other:
+            have = ("сборка без пакетов (с зеркала pip)" if flavor == "mirror"
+                    else "полная сборка (с пакетами)")
+            return Choice(cmp, None, f"В релизе нет архива для вашей сборки: установлена {have}, а в релизе только "
+                                     "архивы другого вида. Сменить вид можно только вручную, новым архивом в чистой "
+                                     "папке (данные и настройки сохранятся).", needs)
         return Choice(cmp, None, "В релизе нет подходящего архива.", needs)
     if asset.sha256 is None:
         return Choice(cmp, None, f"У {asset.name} нет опубликованной контрольной суммы (SHA256SUMS): не устанавливаю.",
@@ -363,8 +399,29 @@ def choose(rel: Release, current: str, allow_older: bool = False) -> Choice:
     return Choice(cmp, asset, None, needs)
 
 
-def full_of(rel: Release) -> Asset | None:
-    return next((a for a in rel.assets if a.kind == "full" and a.version == rel.version), None)
+def manual_switch_text(version: str, zip_name: str | None, url: str | None) -> str:
+    """What «Обновление программы» tells an installation of the full kind when the release has the mirror kind only:
+    why, and the steps of the one manual change of kind, in the owner's words. No host names (a public repository)."""
+    short = version.split("-")[0]
+    name = zip_name or f"DeskMonitorMirror-{version}.zip"
+    # the page shows the link under the text (``manual_url``): the file itself, or the release page; the program is
+    # stopped in step 2, so the download comes first (the page is gone afterwards)
+    where = "по ссылке ниже" if url else "со страницы релиза на GitHub"
+    return (f"С версии {short} программа выходит только в виде «без пакетов»: библиотеки она ставит с зеркала pip "
+            "рабочей машины, а не берёт из архива. У вас стоит прежний, полный комплект, и обновить его из этой "
+            "страницы нельзя: перейти на новый вид нужно один раз вручную.\n"
+            f"1. Сначала скачайте {name} {where}: после остановки программы эта страница будет недоступна.\n"
+            "2. Остановите программу: запустите stop.bat из её папки.\n"
+            "3. Распакуйте архив в новую пустую папку, не поверх старой.\n"
+            "4. Если у вас стоял приватный адаптер, перенесите папку adapter из старой папки программы в новую.\n"
+            "5. Запустите start.bat в новой папке.\n"
+            "Данные и настройки остаются в той же папке данных (DESK_HOME), переносить их не нужно. Старую папку "
+            "можно удалить, когда убедитесь, что новая работает. Дальше «Обновление программы» работает как обычно.")
+
+
+def full_of(rel: Release, flavor: str = "full") -> Asset | None:
+    """The release's full zip of ``flavor`` (the one a patch of that flavor falls back to)."""
+    return next((a for a in rel.assets if a.kind == "full" and a.version == rel.version and a.flavor == flavor), None)
 
 
 # ---- writing (the release workflow) ------------------------------------------------------------------------------
@@ -380,8 +437,8 @@ def release_doc(tag: str, version: str, files: list[tuple[str, int, str]], *, co
             raise ReleaseError(f"{name}: не архив DeskMonitor")
         if kind[0] == "full" and name.endswith("-with-adapter.zip"):
             raise ReleaseError(f"{name}: архив с приватным адаптером не публикуется")
-        assets.append({"name": name, "kind": kind[0], "version": kind[1], "base": kind[2], "size": size,
-                       "sha256": sha})
+        assets.append({"name": name, "kind": kind[0], "version": kind[1], "base": kind[2], "flavor": kind[3],
+                       "size": size, "sha256": sha})
     return {"schema": SCHEMA, "tag": tag, "version": version, "commit": commit, "core": core,
             "published_at": published_at, "adapter_included": False, "notes": notes, "assets": assets}
 

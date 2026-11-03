@@ -352,7 +352,7 @@ def _finish(path: Path, asset: Asset, rel: Release, home: Path, restart, unavail
     try:
         out = _install(path, home, restart, unavailable)
     except update.UpdateError as e:
-        if asset.kind == "patch" and full_of(rel) is not None and retry_full:
+        if asset.kind == "patch" and full_of(rel, asset.flavor) is not None and retry_full:
             _job_update(message=f"Заплатка не подошла ({e}); беру полный архив…")
             return False
         _job_update(state="failed", message=str(e), finished_at=now())
@@ -436,7 +436,7 @@ def _obtain(st: Settings, asset: Asset, browser_first: bool) -> Path | None:
 
 
 def _run(st: Settings, rel: Release, asset: Asset, browser_first: bool, restart, unavailable) -> None:
-    full = full_of(rel)
+    full = full_of(rel, asset.flavor)
     plan = [asset] + ([full] if asset.kind == "patch" and full is not None else [])
     try:
         for i, a in enumerate(plan):
@@ -572,6 +572,7 @@ def status(st: Settings, can_install: bool, unavailable: str | None) -> dict[str
         "release": rel.public() if rel else None, "no_release": bool(s.get("no_release")) and same_repo,
         "choice": choice.public() if choice else None,
         "update_available": bool(choice and choice.asset is not None and choice.compare == "newer"),
+        "manual_update": bool(choice and choice.manual and choice.compare == "newer"),
         "job": job(), "rollback": {"version": point["version"]} if point else None,
         "diagnose": s.get("diagnose"), "prefer": s.get("prefer"), "download": s.get("download"),
         "layers": {la: net.available(la) for la in net.LAYERS},

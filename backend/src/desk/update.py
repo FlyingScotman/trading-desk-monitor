@@ -25,6 +25,12 @@ Rollback by hand (``stage_rollback``): the launcher keeps the files an update re
 ``<home>/updates/backup/<old version>/`` (the newest three); the backup made when the running version was installed
 is staged like an update back to the old version, through the same launcher (which backs up the current files in
 turn). The GitHub updater (``desk.updater``) downloads zips into the uploads folder and installs them the same way.
+
+Two kinds of bundle: the full one and the "mirror" one without third-party packages (its ``wheelhouse/`` holds only our
+wheels and ``mirror.json``: the packages come from the pip index of the PC). A zip is of the mirror kind when its
+manifest lists ``wheelhouse/mirror.json`` (``Contents.flavor``); the installed bundle is when that file is in its
+folder (``installed_kind``). A zip of the other kind is refused: a bundle changes kind only by unpacking a new
+archive by hand.
 """
 
 from __future__ import annotations
@@ -55,7 +61,9 @@ KEEP_UPLOADS = 5
 TOP_DIRS = ("app", "wheelhouse", "adapter", "python")
 REPLACED_DIRS = ("app", "wheelhouse")  # a full zip replaces these whole; adapter/ only when it brings one
 PATCH_NOTES = ("PATCH_README.txt", "PATCH_DELETE.txt", "PATCH_BASE.txt")  # describe a patch, never installed
-NEEDED = ("app/deskctl.py", "wheelhouse/requirements.txt", "start.bat", "VERSION")
+NEEDED = ("app/deskctl.py", "wheelhouse/requirements.txt", "start.bat", "VERSION")  # also in the mirror kind
+MIRROR_JSON = "wheelhouse/mirror.json"  # its presence makes a bundle (or a zip) of the mirror kind
+KINDS = ("full", "mirror")
 ROOT_FILE = re.compile(r"[A-Za-z0-9_-]+\.(?:bat|txt|md)|VERSION|MANIFEST\.sha256")
 VERSION_RE = re.compile(r"[0-9A-Za-z][0-9A-Za-z._+-]{0,99}")
 _RESERVED = re.compile(r"(?i)(?:con|prn|aux|nul|com[0-9]|lpt[0-9])(?:\..*)?")
@@ -91,6 +99,17 @@ def bundle_root() -> Path | None:
     value = os.environ.get("DESK_BUNDLE_ROOT")
     root = Path(value) if value else None
     return root if root is not None and (root / "VERSION").is_file() else None
+
+
+def bundle_kind() -> str:
+    """The kind of the running bundle as the launcher says it (``DESK_BUNDLE_KIND``): ``mirror`` or ``full``."""
+    value = os.environ.get("DESK_BUNDLE_KIND", "").strip().lower()
+    return value if value in KINDS else "full"
+
+
+def installed_kind(root: Path) -> str:
+    """``mirror`` when the bundle folder ``root`` holds ``wheelhouse/mirror.json``, else ``full``."""
+    return "mirror" if (root / MIRROR_JSON).is_file() else "full"
 
 
 def restart_code() -> int | None:
@@ -178,6 +197,7 @@ class Contents:
     manifest: dict[str, str]  # every file of the new bundle -> sha256
     delete: list[str]  # a patch: the files the new version no longer has
     base_builds: tuple[str, ...] = ()  # a patch: the build ids it was made from (PATCH_BASE.txt), when it names them
+    flavor: str = "full"  # "mirror": the bundle it makes lists wheelhouse/mirror.json (no third-party wheels)
 
     @property
     def adapter(self) -> bool:
@@ -269,7 +289,8 @@ def read_contents(z: zipfile.ZipFile) -> Contents:
         absent = sorted(set(manifest) - set(members))
         if absent:
             raise UpdateError(f"Архив неполный: нет {len(absent)} файлов из MANIFEST.sha256, например {absent[0]}.")
-    return Contents(version, "patch" if patch else "full", base, members, manifest, delete, builds)
+    return Contents(version, "patch" if patch else "full", base, members, manifest, delete, builds,
+                    "mirror" if MIRROR_JSON in manifest else "full")
 
 
 # ---- fitting it to the installed bundle ----------------------------------------------------------------------
@@ -300,6 +321,8 @@ def check_fits(c: Contents, root: Path) -> None:
     current = installed_version(root)
     if c.version == current:
         raise UpdateError(f"Версия {current} уже установлена.")
+    if c.flavor != installed_kind(root):
+        raise UpdateError(_other_kind(c.flavor))
     have = installed_manifest(root)
     python = [rel for rel in [*c.members, *c.delete] if rel.startswith("python/")]
     if c.kind == "full":
@@ -316,6 +339,19 @@ def check_fits(c: Contents, root: Path) -> None:
                  and (adapter or not rel.startswith(ADAPTER))]
         if stale:
             raise PatchBaseError(_mismatch(c, root, current, have, stale))
+
+
+def _other_kind(flavor: str) -> str:
+    """Why a zip of the other kind is refused, in the owner's words."""
+    this, that = (("сборки без пакетов (с зеркала pip)", "полная сборка (с пакетами)") if flavor == "mirror"
+                  else ("полной сборки (с пакетами)", "сборка без пакетов (с зеркала pip)"))
+    return (f"Это архив {this}, а установлена {that}: через «Обновление программы» вид сборки не меняется. "
+            "Нужен архив того же вида. Чтобы перейти на другой вид, остановите программу (stop.bat), распакуйте "
+            "новый архив в новую, чистую папку (не поверх старой: в ней остались бы файлы прежнего вида) и "
+            "запустите start.bat оттуда. Данные и настройки сохранятся: они лежат не в папке программы. "
+            "Но приватный адаптер лежит в папке программы (папка adapter), а в обычных архивах его нет: если он у "
+            "вас стоял, перенесите папку adapter из старой папки в новую (до запуска start.bat) или возьмите "
+            "архив «с адаптером». Старую папку потом можно удалить.")
 
 
 def _touches_adapter(c: Contents) -> bool:
@@ -485,7 +521,7 @@ _described: dict[tuple, dict[str, Any]] = {}  # (path, size, mtime, installed ve
 
 
 def describe(path: Path, root: Path | None, current: str) -> dict[str, Any]:
-    """A zip for the list: name, size, modified, version, kind, base_version, adapter, compare, and ``error`` (None
+    """A zip for the list: name, size, modified, version, kind, flavor, base_version, adapter, compare, and ``error`` (None
     when it can be installed here; ``root`` None checks the zip alone)."""
     st = path.stat()
     key = (str(path), st.st_size, st.st_mtime_ns, current, str(root))
@@ -493,12 +529,12 @@ def describe(path: Path, root: Path | None, current: str) -> dict[str, Any]:
         return dict(_described[key])
     item: dict[str, Any] = {"name": path.name, "size": st.st_size,
                             "modified": datetime.fromtimestamp(st.st_mtime).isoformat(timespec="seconds"),
-                            "version": None, "kind": None, "base_version": None, "adapter": None, "compare": None,
-                            "error": None}
+                            "version": None, "kind": None, "flavor": None, "base_version": None,
+                            "adapter": None, "compare": None, "error": None}
     try:
         with open_zip(path) as z:
             c = read_contents(z)
-            item.update(version=c.version, kind=c.kind, base_version=c.base, adapter=c.adapter,
+            item.update(version=c.version, kind=c.kind, flavor=c.flavor, base_version=c.base, adapter=c.adapter,
                         compare=compare(c.version, current))
             if root is not None:
                 check_fits(c, root)

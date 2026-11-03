@@ -286,6 +286,17 @@ def test_apply_backs_up_and_rolls_back(launcher, tmp_path):
     assert not (upd / "applying.json").exists() and not Path(doc["staged"]).exists() and tree(root) == tree(new)
 
 
+def test_hot_update_brings_app_mirror_install_py_to_a_bundle_that_lacks_it(launcher, tmp_path):
+    env, root, _ = launcher
+    assert not (root / "app/mirror_install.py").exists()  # a bundle of before the installer existed
+    new = stage_dir(tmp_path / "with-installer", bundle(NEW, {"app/mirror_install.py": b"installer\n"}))
+    doc = update.stage(full_zip(new, tmp_path / "n2.zip"), root, Path(env["DESK_HOME"]))
+    assert "app/mirror_install.py" in doc["files"]  # app/ is a replaced dir: new files of it are carried over
+    deskctl.apply_update(env, Path(doc["staged"]))
+    assert (root / "app/mirror_install.py").read_bytes() == b"installer\n"
+    assert deskctl.rollback_update(env) and not (root / "app/mirror_install.py").exists()
+
+
 def test_apply_refuses_unsafe_or_damaged_staging(launcher, tmp_path):
     env, root, _ = launcher
     old_tree = tree(root)
@@ -620,3 +631,71 @@ def test_patches_leave_the_installed_adapter_alone(old_new, tmp_path):
             dst.writestr(n, (new / "MANIFEST.sha256").read_bytes() if n.endswith("MANIFEST.sha256") else src.read(n))
     doc = update.stage(legacy, root, tmp_path / "home")
     assert not [r for r in [*doc["files"], *doc["delete"]] if r.startswith("adapter/")]
+
+
+# ---- the two kinds of bundle: full and mirror (without third-party packages) ------------------------------------
+
+
+MIRROR = {"wheelhouse/mirror.json": b'{"schema": 1}\n', "wheelhouse/requirements.txt": b"desk-backend==0.1.0\nx==1\n"}
+
+
+def test_a_zip_is_of_the_mirror_kind_when_its_manifest_lists_mirror_json(old_new, tmp_path):
+    _, new, _ = old_new
+    full = full_zip(new, tmp_path / f"DeskMonitor-{NEW}.zip")
+    mirror_stage = stage_dir(tmp_path / "m", bundle(NEW, MIRROR))
+    mirror = full_zip(mirror_stage, tmp_path / f"DeskMonitorMirror-{NEW}.zip")
+    with update.open_zip(full) as z:
+        assert update.read_contents(z).flavor == "full"
+    with update.open_zip(mirror) as z:  # no third-party wheels in the zip: still a complete update zip
+        c = update.read_contents(z)
+    assert c.flavor == "mirror" and c.kind == "full" and "wheelhouse/mirror.json" in c.members
+    assert update.describe(mirror, None, OLD)["flavor"] == "mirror"
+    assert update.describe(full, None, OLD)["flavor"] == "full"
+    # a patch of the mirror kind: its manifest is the new bundle's, mirror.json in it
+    old_m = full_zip(stage_dir(tmp_path / "om", bundle(OLD, MIRROR)), tmp_path / f"DeskMonitorMirror-{OLD}.zip")
+    patch = build.write_patch(old_m, mirror_stage, NEW, tmp_path, STAMP)
+    assert patch.name == f"DeskMonitorMirror-patch-{OLD}-to-{NEW}.zip"
+    with update.open_zip(patch) as z:
+        pc = update.read_contents(z)
+    assert pc.kind == "patch" and pc.flavor == "mirror" and pc.base == OLD
+
+
+def test_a_zip_of_the_other_kind_is_refused_both_ways_and_the_same_kind_installs(tmp_path):
+    full_root = tmp_path / "full" / "DeskMonitor"
+    shutil.copytree(stage_dir(tmp_path / "of", bundle(OLD)), full_root)
+    mirror_root = tmp_path / "mirror" / "DeskMonitor"
+    shutil.copytree(stage_dir(tmp_path / "om", bundle(OLD, MIRROR)), mirror_root)
+    assert update.installed_kind(full_root) == "full" and update.installed_kind(mirror_root) == "mirror"
+    new_full = full_zip(stage_dir(tmp_path / "nf", bundle(NEW)), tmp_path / "nf.zip")
+    new_mirror_stage = stage_dir(tmp_path / "nm", bundle(NEW, MIRROR))
+    new_mirror = full_zip(new_mirror_stage, tmp_path / "nm.zip")
+    old_full = full_zip(tmp_path / "of", tmp_path / "of.zip")
+    old_mirror = full_zip(tmp_path / "om", tmp_path / "om.zip")
+    mirror_patch = build.write_patch(old_mirror, new_mirror_stage, NEW, tmp_path, STAMP)
+    full_patch = build.write_patch(old_full, tmp_path / "nf", NEW, tmp_path, STAMP)
+    # full installed: the mirror full zip and the mirror patch are refused, with a reason the owner can act on
+    for z in (new_mirror, mirror_patch):
+        err = update.describe(z, full_root, OLD)["error"]
+        assert "без пакетов" in err and "вид сборки не меняется" in err and "stop.bat" in err
+        assert "папку adapter" in err and "«с адаптером»" in err  # the private adapter is not in public zips
+        with pytest.raises(update.UpdateError, match="вид сборки не меняется"):
+            update.stage(z, full_root, tmp_path / "home")
+    # mirror installed: the full zip and the full patch are refused
+    for z in (new_full, full_patch):
+        err = update.describe(z, mirror_root, OLD)["error"]
+        assert "полной сборки (с пакетами)" in err and "установлена сборка без пакетов" in err
+    # the same kind fits, patch or not
+    for root, z in ((full_root, new_full), (full_root, full_patch), (mirror_root, new_mirror),
+                    (mirror_root, mirror_patch)):
+        assert update.describe(z, root, OLD)["error"] is None, z.name
+    staged = update.stage(mirror_patch, mirror_root, tmp_path / "home")
+    assert staged["kind"] == "patch" and "VERSION" in staged["files"]
+
+
+def test_the_kind_of_the_running_bundle_comes_from_the_launcher(monkeypatch):
+    monkeypatch.delenv("DESK_BUNDLE_KIND", raising=False)
+    assert update.bundle_kind() == "full"
+    monkeypatch.setenv("DESK_BUNDLE_KIND", "mirror")
+    assert update.bundle_kind() == "mirror"
+    monkeypatch.setenv("DESK_BUNDLE_KIND", "other")
+    assert update.bundle_kind() == "full"
