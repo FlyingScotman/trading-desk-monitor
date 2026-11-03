@@ -72,12 +72,9 @@
     if (s && typeof s === 'object') return { entity: typeof s.entity === 'string' ? s.entity : null, off: Array.isArray(s.off) ? s.off.filter(x => typeof x === 'string') : [] };
     const x = { entity: K.filter.entity || null, off: [] }; K.viewStore.set(SEL_KEY, x); return x;
   })();
-  // сохраняются только снятые книги, которые есть в ответе (всех юрлиц): ушедшие из истории не копятся
-  const setSel = patch => {
-    Object.assign(SEL, patch);
-    const all = new Set(bookList(null).map(b => b.id)); SEL.off = SEL.off.filter(b => all.has(b));
-    K.viewStore.set(SEL_KEY, SEL); render();
-  };
+  // снятые книги хранятся как есть, без чистки по ответу: книга, которой в ответе нет (демо, другой прогон, ушла из
+  // истории), выбор не сужает (scopeFilter), а снятое в рабочем прогоне не теряется
+  const setSel = patch => { Object.assign(SEL, patch); K.viewStore.set(SEL_KEY, SEL); render(); };
   const menuOpt = {};  // строка поиска меню книг между переоткрытиями
 
   // Общая ОВП — нетто: сумма USD-эквивалентов валют со знаком (владелец, 30.10.2026; правило — здесь)
@@ -121,12 +118,14 @@
     return [...m].map(([id, entity]) => ({ id, entity })).sort((a, z) => bookName(a.id).localeCompare(bookName(z.id), 'ru') || a.id.localeCompare(z.id));
   }
   // фильтр для K.ocpScope из выбора экрана; null — не выбрано ни одной книги. Снятыми считаются только книги юрлица
-  // в ответе: снятая книга, которой нет (ушла из истории, другое юрлицо), выбор не сужает. SF — на перерисовку
+  // в ответе: снятая книга, которой нет (ушла из истории, другое юрлицо), выбор не сужает. offEntities — юрлица со
+  // снятыми книгами: остаток другого юрлица без книг остаётся (K.ocpScope). SF — на перерисовку
   let SF = null;
   function scopeFilter() {
-    const L = bookList(EN).map(b => b.id), on = L.filter(b => !SEL.off.includes(b));
+    const L = bookList(EN), on = L.filter(b => !SEL.off.includes(b.id)).map(b => b.id);
     if (on.length === L.length) return { entity: EN, books: null };
-    return on.length ? { entity: EN, books: on } : null;
+    const offEntities = [...new Set(L.filter(b => SEL.off.includes(b.id)).map(b => b.entity))];
+    return on.length ? { entity: EN, books: on, offEntities } : null;
   }
   // суммы дня под выбором книг экрана: по валютам и по строкам (книга или часть отчёта)
   function slice(d) {

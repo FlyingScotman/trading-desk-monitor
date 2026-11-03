@@ -359,6 +359,18 @@ ta('C16: часть отчёта по юрлицу без книг (books: []) �
   await settle();
   html = part.html();
   assert.ok(!html.includes('data-ocp-row="BANK"') && html.includes('под выбором книг — не вся') && html.includes('часть отчёта ОВП по юрлицу BANK без книг — только без выбора книг'), html);
+  // «все юрлица», снята книга BANK: остаток AM без книг (у AM ничего не снято) остаётся, «не вся» нет (ревью #538, 2)
+  const s2 = JSON.parse(JSON.stringify(SRV));
+  s2.days[3].lines.push(L('AM', null, [], 'USD', 2e6));
+  const am = page16({ srv: s2, store: { [KEY]: { entity: null, off: ['FXB'] } } });
+  await settle();
+  html = am.html();
+  assert.ok(!html.includes('data-ocp-row="FXB"') && usd(am) === '+2.0' && !html.includes('не вся') && html.includes('книги: 4 из 5'), usd(am) + html);
+  near(Object.fromEntries(am.chart().series.map(z => [z.name, z.data])).USD[2], 2, 'линия: остаток AM без книг');
+  // а остаток BANK без книг при снятой книге BANK — не входит и назван
+  const both = page16({ srv: s, store: { [KEY]: { entity: null, off: ['FXB'] } } });
+  await settle();
+  assert.ok(!both.html().includes('data-ocp-row="BANK"') && both.html().includes('под выбором книг — не вся'));
   // книга без справочника: под юрлицом не предлагается и не считается; без юрлица — и в выборе, и в итоге
   assert.ok(!other.html().includes('data-ocp-row="NEWBK"'));
   assert.ok(all.html().includes('data-ocp-row="NEWBK"'));
