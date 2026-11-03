@@ -508,6 +508,17 @@ def newest_delivered(folder: Path | None = None, flavor: str | None = None) -> s
     return max(versions, key=version_key, default=None)
 
 
+def readable_bases(records: list[Path]) -> list[Base]:
+    """The delivered records that can be read as bases; one that cannot is skipped with a warning on stderr."""
+    out: list[Base] = []
+    for rec in records:
+        try:
+            out.append(base_from_record(rec))
+        except (SystemExit, ValueError, OSError) as e:
+            print(f"warning: delivered record {rec} skipped: {e}", file=sys.stderr, flush=True)
+    return out
+
+
 def load_bases(args: list[str], folder: Path | None = None) -> list[Base]:
     """``--patch-base`` values as bases: a zip, a manifest / record file, or a delivered version (all its records).
     A zip of a version with delivered records is taken together with them: when the zip is another build of that
@@ -517,13 +528,13 @@ def load_bases(args: list[str], folder: Path | None = None) -> list[Base]:
         p = Path(arg)
         if p.is_file():
             b = base_from_zip(p) if zipfile.is_zipfile(p) else base_from_record(p)
-            records = [r for r in (base_from_record(x) for x in delivered(b.version, folder)) if r.flavor == b.flavor]
+            records = [r for r in readable_bases(delivered(b.version, folder)) if r.flavor == b.flavor]
             if records and b.build not in {r.build for r in records}:
                 print(f"warning: {p} is build {b.build} of {b.version}, delivered was "
                       f"{', '.join(r.build for r in records)}: the patch is made to fit each", flush=True)
             out += [b, *records]
         elif records := delivered(arg, folder):
-            out += [base_from_record(r) for r in records]
+            out += readable_bases(records)
         else:
             sys.exit(f"--patch-base {arg}: no such file, and no record in {folder or DELIVERED}/{arg}/")
     unique: dict[tuple[str, str], Base] = {}

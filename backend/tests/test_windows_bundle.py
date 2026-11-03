@@ -798,3 +798,13 @@ def test_a_broken_delivered_record_is_skipped_with_a_warning_not_a_release_failu
     assert build.newest_delivered(folder, "mirror") == "1.0-a"  # no SystemExit; the readable record wins
     err = capsys.readouterr().err
     assert "warning: delivered record" in err and "broken.sha256" in err
+
+
+def test_load_bases_skips_a_broken_record_beside_a_good_one(tmp_path, capsys):
+    _, old_mirror, _ = _full_and_mirror_stage(tmp_path / "old", {**MIRROR_STAGE_FILES, "VERSION": b"1.0-a\n"})
+    folder = tmp_path / "delivered"
+    good = build.record_delivered(_zip_of(old_mirror, tmp_path), folder)
+    (good.parent / "aaa-broken.sha256").write_text("not a manifest\n", encoding="utf-8")  # same version folder
+    bases = build.load_bases(["1.0-a"], folder)
+    assert [b.version for b in bases] == ["1.0-a"] and bases[0].build == build.base_from_record(good).build
+    assert "warning: delivered record" in capsys.readouterr().err
