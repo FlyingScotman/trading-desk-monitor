@@ -55,6 +55,8 @@ mode = (state / 'mode').read_text() if (state / 'mode').exists() else 'ok'
 with (state / 'requests.jsonl').open('a') as log:
     log.write(json.dumps({'op': one('op'), 'keys': sorted(p), 'feed': one('feed'), 'date': one('date'),
                           'action': one('action'), 'arg': one('arg'), 'inbox_dir': p.get('inbox_dir', []), 'book': p.get('book', []),
+                          'trades_file': p.get('trades_file', []),
+                          'req': json.loads(Path(p['trades_file'][0]).read_text()) if 'trades_file' in p else None,
                           'env': sorted(k for k in os.environ if k.startswith(('DESK_', 'AWS_')))}) + '\n')
 if 'f.password' in p:
     (state / 'secret.txt').write_text(one('f.password'))
@@ -79,6 +81,10 @@ def panel():
 def feeds():
     extra = [{"id": "owned", "title": "Сделки дня", "dataset": "trade_terms", "source": "trade_terms_csv",
               "enabled": True, "ready": True, "books": True, "schedule": None}] if mode == 'books_feed' else []
+    if mode == 'plan_feed':
+        extra += [{"id": "planned", "title": "Условия по списку", "dataset": "trade_terms",
+                   "source": "trade_terms_csv", "enabled": True, "ready": True, "trades_file": True,
+                   "schedule": None}]
     return extra + [{"id": "terms", "title": "Условия сделок", "dataset": "trade_terms", "source": "trade_terms_csv",
              "enabled": True, "ready": True, "after_positions": True,
              "schedule": {"every_min": 30, "from": "08:00", "to": "20:00", "weekdays_only": True}},
@@ -679,6 +685,57 @@ def test_routes_are_local_admin_same_origin_and_never_echo_secrets(tmp_path, sto
         rows = con.execute("SELECT action, target, detail FROM audit_log WHERE action = 'adapter_services'").fetchall()
     no_secret(rows, caplog.text, (svcs.state_dir(st) / "state.json").read_text(encoding="utf-8"))
     s.close()
+
+
+def _listing(st: Settings, tmp_path: Path, store_url: str, name: str, body: str, source: str) -> None:
+    f = tmp_path / "drop" / name
+    f.parent.mkdir(exist_ok=True)
+    f.write_text(body)
+    with store.connect(store_url) as con:
+        assert scan.ingest_feed(con, st, f, source=source, handle=scan.adapter(st)).files == {"accepted": 1}
+
+
+def test_a_terms_feed_gets_the_request_file_of_the_trade_list_561(tmp_path, store_url, cache):  # noqa: F811
+    """TDM#561: a ``trades_file`` feed gets, as its one extra field, a file with the live trades of the owner's
+    books marked as needed (new, changed) or not, and the owner's line of counts; without a list: as before."""
+    st = make(tmp_path, store_url=store_url)
+    mode(st, "plan_feed")
+    clock = {"t": datetime(2026, 10, 16, 9, 0, tzinfo=MSK)}
+    s = service(st, store_url, clock)
+    try:
+        submit(s, "describe")
+        assert [f["trades_file"] for f in svcs.read_state(st)["feeds"] if f["id"] == "planned"] == [True]
+        load(store_url, tmp_path, "2026-10-15", 10)
+        (svcs.state_dir(st) / "logged_in").write_text("1")
+        run = run_feed(s, st, "planned", clock)  # no list stored: the helper is called without the field
+        assert run["state"] == "complete" and "plan" not in run
+        assert requests(st)[-1]["trades_file"] == [] and requests(st)[-1]["op"] == "feed"
+        _listing(st, tmp_path, store_url, "trade_terms_20261015.csv", ";".join(TERMS_HEADER) + "\n"
+                 "T-1;OFZ;fx_forward;2026-10-01;2026-12-17;USD;RUB;buy;10;800;80\n"
+                 "T-2;OFZ;fx_forward;2026-10-01;2026-12-17;USD;RUB;buy;10;800;80\n"
+                 "T-3;OFZ;fx_forward;2026-10-01;2026-12-17;USD;RUB;buy;10;800;80\n", "trade_terms_csv")
+        _listing(st, tmp_path, store_url, "trade_list_20261015.csv",
+                 "trade_id;trade_version;book_id;status\nT-1;;OFZ;live\nT-2;;OFZ;live\nT-4;1;OFZ;live\n"
+                 "T-3;;OFZ;cancelled\nT-9;1;CORP;live\n", "trade_list_csv")
+        run = run_feed(s, st, "planned", clock)
+        assert run["state"] == "complete", run
+        sent = requests(st)[-1]
+        assert len(sent["trades_file"]) == 1 and sent["keys"].count("trades_file") == 1
+        req = sent["req"]
+        assert req["format"] == "terms-request" and req["version"] == 1 and req["date"] == "2026-10-15"
+        assert req["books"] == ["CORP", "OFZ"]
+        assert {t["trade_id"]: t["need"] for t in req["trades"]} == {"T-1": False, "T-2": False, "T-4": True,
+                                                                    "T-9": True}
+        assert run["plan"] == {"live": 4, "books": 2, "requested": 2, "new": 2, "changed": 0, "have": 2, "closed": 1}
+        assert run["lines"][0] == ("Список: сделок 4, книг 2; запрошено 2 (новых 2, изменённых 0), уже были 2, "
+                                   "закрыто 1.")
+        assert Path(sent["trades_file"][0]).parent == svcs.state_dir(st) / "requests"
+        for i in range(7):  # only the last KEEP_REQUESTS request files stay
+            run_feed(s, st, "planned", clock)
+        assert len(list((svcs.state_dir(st) / "requests").glob("*.json"))) == svcs.KEEP_REQUESTS
+        assert not list((svcs.state_dir(st) / "requests").glob("*.tmp"))
+    finally:
+        s.close()
 
 
 def test_a_feed_of_the_owners_books_gets_them_as_a_repeated_field(tmp_path, store_url, cache):  # noqa: F811

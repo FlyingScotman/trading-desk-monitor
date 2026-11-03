@@ -1,0 +1,6 @@
+﻿trade_id;trade_version;book_id;status;source_product;in_positions
+FX-1;2;D1;live;fx_forward;1
+FX-2;1;D1;live;fx_swap;1
+FX-3;3;D1;cancelled;ndf;0
+REPO-1;;T1;live;repo;0
+;;F1;;;

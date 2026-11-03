@@ -33,6 +33,11 @@ a job status, the state file, a log line or an error.
 catches up today's slot already passed, once; missed slots of days the monitor was off are one run, not many.
 ``books`` (TDM#557): the feed gets the owner's books as a repeated request field ``book`` (``owner_books``: active,
 with a current position set; at most ``MAX_BOOKS``); none: not called, ``blocked``/``no_books``.
+``trades_file`` (TDM#561): before such a feed (``trade_terms``) the monitor compares the stored ``trade_list`` of the
+owner's books with the terms it holds (``desk.terms_plan``) and, with a plan, writes the live trades of the list as
+``<state_dir>/requests/<run id>.json`` (``terms-request`` v1) and passes its path as the one field ``trades_file``;
+the adapter then asks for the terms of the new and changed trades only. The last ``KEEP_REQUESTS`` files are kept for
+diagnosis. The outcome gets a line of the counts. Without a plan the feed runs as before.
 ``after_positions``: also once when a positions set for a newer business date than the feed last saw is in the
 store (the first sight only records it), with that date as ``date``. Only enabled (the monitor's switch, default the
 feed's own ``enabled``) and ready feeds run by themselves. ``blocked``/``login_required`` pauses the feed («нужен
@@ -62,7 +67,7 @@ from datetime import time as dtime
 from pathlib import Path
 from typing import Any
 
-from . import helper_proc, recompute, store
+from . import helper_proc, recompute, store, terms_plan
 from .autopilot import CycleLock
 from .inbox import scan
 from .inbox.loader import AdapterHandle, check_services, fingerprint, load_adapter
@@ -78,6 +83,8 @@ TICK_S = 30.0
 RECHECK_S = 600.0          # the scheduler loads the adapter again this often: a new fingerprint is described again
 AVAILABILITY_S = 15.0      # GET's availability is reused this long (the settings page polls while a job runs)
 LOCK_WAIT_S = 1200.0       # a feed's files wait this long for the cycle lock (an autopilot cycle), then retry later
+KEEP_REQUESTS = 5          # the request files (``trades_file``) kept for diagnosis
+MAX_REQUEST_TRADES = 50000  # the adapter refuses a longer list (08 §2.2); the monitor then sends none
 KEEP_OUT = 20              # the output folders of the last feed runs kept (the archive keeps accepted files anyway)
 STATE_FILE = "state.json"
 
@@ -244,7 +251,8 @@ def clean_feeds(v: Any, h: AdapterHandle | None) -> list[dict]:
         feed = {"id": f["id"], "title": _str(f.get("title", f["id"]), 200), "dataset": _str(f.get("dataset"), 64),
                 "source": _str(f.get("source"), 100, empty=False), "enabled": f["enabled"], "ready": f["ready"],
                 "why_not_ready": _opt(f, "why_not_ready", 1000), "schedule": clean_schedule(f.get("schedule")),
-                "after_positions": f.get("after_positions") is True, "books": f.get("books") is True}
+                "after_positions": f.get("after_positions") is True, "books": f.get("books") is True,
+                "trades_file": f.get("trades_file") is True}
         decl = h.source(feed["source"]) if h is not None else None
         feed["source_declared"] = h is None or (decl is not None and decl.get("dataset") == feed["dataset"])
         out.append(feed)
@@ -392,6 +400,25 @@ def next_due(feed: dict, run: dict, now: datetime) -> datetime | None:
 
 def backoff(failures: int) -> timedelta:
     return timedelta(minutes=BACKOFF_MIN[min(max(failures, 1), len(BACKOFF_MIN)) - 1])
+
+
+def plan_line(c: dict) -> str:
+    """The owner's line about a terms plan (``terms_plan.plan`` counts)."""
+    return (f"Список: сделок {c['live']}, книг {c['books']}; запрошено {c['requested']} (новых {c['new']}, "
+            f"изменённых {c['changed']}), уже были {c['have']}, закрыто {c['closed']}.")
+
+
+def write_request(st: Settings, rid: str, plan: dict) -> Path:
+    """The terms request file of a plan (08 §2.2 ``trades_file``), atomically, UTF-8, under ``state_dir/requests``."""
+    d = state_dir(st) / "requests"
+    d.mkdir(parents=True, exist_ok=True)
+    doc = {"format": "terms-request", "version": 1, "date": plan["date"], "books": plan["books"],
+           "trades": plan["trades"]}
+    tmp = d / f"{rid}.json.tmp"
+    tmp.write_text(json.dumps(doc, ensure_ascii=False, separators=(",", ":")), encoding="utf-8")
+    final = d / f"{rid}.json"
+    os.replace(tmp, final)
+    return final
 
 
 # ---- persisted state -------------------------------------------------------------------------------------------------
@@ -968,7 +995,7 @@ class AdapterServices:
                 self._running = {"kind": "feed", "feed": f["id"], "since": _iso(started), "phase": "fetching"}
             out = state_dir(st) / "out" / rid
             out.mkdir(parents=True)
-            if day is None and f["dataset"] == "trade_terms":
+            if day is None and f["dataset"] in ("trade_terms", "trade_list"):
                 # the business date of the latest positions: the adapter has no holiday calendar of its own
                 newest_pos = self._newest_positions()
                 day = newest_pos.isoformat() if newest_pos else None
@@ -977,6 +1004,9 @@ class AdapterServices:
             drained = self._drain_pending(st, hp, f, prev.get("pending"))
             extra: dict[str, str | list[str]] = {"feed": f["id"], **({"date": day} if day else {}),
                                                  **({"book": books} if books else {})}
+            plan = self._terms_plan(st, f, rid, day) if f.get("trades_file") else None
+            if plan is not None:
+                extra["trades_file"] = str(plan[0])
             if books:  # the whole request within the protocol's limits before the call, the books cut with a note
                 asked = len(books)
                 base = len(st.inbox_dirs) + 8
@@ -998,6 +1028,8 @@ class AdapterServices:
             outcome = {k: r[k] for k in ("state", "code", "lines", "dates")}
             if notes:
                 outcome["lines"] = [*notes, *outcome["lines"]]
+            if plan is not None:
+                outcome["lines"] = [plan_line(plan[1]), *outcome["lines"]]
             if r["state"] in ("complete", "partial") and r["files"]:
                 if not f.get("source_declared", True):
                     raise ServiceError("feed_source_invalid", "error")  # files no declared source would read
@@ -1026,6 +1058,25 @@ class AdapterServices:
             helper_proc.HELPER_LOCK.release()
             self._prune(st)
         self._finish(st, f, prev, outcome, started)
+
+    def _terms_plan(self, st: Settings, f: dict, rid: str, day: str | None) -> tuple[Path, dict] | None:
+        """The request file of a ``trades_file`` feed and the plan's counts, or None (no list of the books stored, no
+        date, too long a list, any failure): the feed then runs as before. The counts are kept in the feed's state."""
+        try:
+            on = date.fromisoformat(day) if day else self._newest_positions()
+            if on is None:
+                return None
+            with store.connect(self._url) as con:
+                books, _ = owner_books(con, self._today())
+                plan = terms_plan.plan(con, on, books) if books else None
+            if plan is None or len(plan["trades"]) > MAX_REQUEST_TRADES:
+                return None
+            path = write_request(st, rid, plan)
+        except Exception:
+            log.exception("adapter services: terms plan of feed %s not made", f["id"])
+            return None
+        self._record(st, f["id"], plan=plan["counts"])
+        return path, plan["counts"]
 
     def _finish(self, st: Settings, f: dict, prev: dict, outcome: dict, started: datetime) -> None:
         now = self._now()
@@ -1135,3 +1186,10 @@ class AdapterServices:
             return
         for d in dirs[:-KEEP_OUT] if len(dirs) > KEEP_OUT else []:
             shutil.rmtree(d, ignore_errors=True)
+        try:
+            reqs = sorted((p for p in (state_dir(st) / "requests").iterdir() if p.is_file()),
+                          key=lambda p: p.stat().st_mtime)
+        except OSError:
+            return
+        for p in reqs[:-KEEP_REQUESTS]:
+            p.unlink(missing_ok=True)

@@ -1,0 +1,62 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "private/1.8/trade_list",
+  "title": "trade_list row",
+  "description": "Private input contract v1 (docs/architecture/08_PRIVATE_ADAPTER_INTERFACE.md §10; since 1.8). One live or cancelled trade of a book as the adapter lists it, without the trade's terms: the list the monitor compares with the terms it holds to ask only for the new and changed trades. A stock: in force until a newer list of the book. An optional field may be absent or null (the same thing); the empty string is invalid everywhere. Raw firm values go in x_* keys; _src is the row's location in the report, without sheet names.",
+  "type": "object",
+  "required": [
+    "_src",
+    "trade_id",
+    "book_id",
+    "status"
+  ],
+  "properties": {
+    "_src": {
+      "$ref": "#/$defs/str"
+    },
+    "_dataset": {
+      "enum": [
+        "trade_list"
+      ]
+    },
+    "trade_id": {
+      "$ref": "#/$defs/str"
+    },
+    "trade_version": {
+      "$ref": "#/$defs/int"
+    },
+    "book_id": {
+      "$ref": "#/$defs/str"
+    },
+    "status": {
+      "enum": [
+        "live",
+        "cancelled"
+      ]
+    },
+    "source_product": {
+      "$ref": "#/$defs/str"
+    },
+    "in_positions": {
+      "type": "boolean"
+    }
+  },
+  "patternProperties": {
+    "^x_": {}
+  },
+  "additionalProperties": false,
+  "$defs": {
+    "str": {
+      "type": "string",
+      "minLength": 1
+    },
+    "int": {
+      "type": [
+        "integer",
+        "string"
+      ],
+      "pattern": "^-?[0-9]+$",
+      "description": "an integer: a JSON integer or a string of digits; normalised to an integer"
+    }
+  }
+}
