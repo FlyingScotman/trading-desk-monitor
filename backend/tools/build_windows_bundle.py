@@ -297,7 +297,7 @@ REBUILD = {"full": "без интернета, ~1-2 минуты",
 
 def asset_prefix(flavor: str) -> str:
     """The name of a bundle's zips: ``DeskMonitor`` or, for the "no packages" kind, ``DeskMonitorMirror`` (a prefix
-    the updaters of 0.2.15 and before do not take for their own full zips; the folder inside stays ``DeskMonitor/``)."""
+    the updaters of 0.2.16 and before do not take for their own full zips; the folder inside stays ``DeskMonitor/``)."""
     return TOP + "Mirror" if flavor == "mirror" else TOP
 
 

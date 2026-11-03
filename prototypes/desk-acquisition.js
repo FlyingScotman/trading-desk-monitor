@@ -1,4 +1,6 @@
-/* Explicit local acquisition. Credentials never enter settings, storage, URLs or diagnostic output. */
+/* Explicit local acquisition. Credentials never enter settings, storage, URLs or diagnostic output.
+   A provider without a login: the server reports `login: "none"` (from its last inspection of this adapter);
+   then the login fields are hidden and check/fetch go without them. The server, not this page, decides. */
 (() => {
   'use strict';
   const $ = id => document.getElementById('acq-' + id);
@@ -23,6 +25,7 @@
     origin_invalid: 'Откройте настройки по локальному адресу программы.',
     connection_failed: 'Не удалось подключиться. Проверьте подключение и настройки адаптера.',
     auth_failed: 'Вход во внутреннюю систему не выполнен.', connected: 'Вход проверен. Данные не загружались.',
+    connected_open: 'Подключение проверено. Данные не загружались.',
     acquisition_busy: 'Предыдущая операция ещё выполняется.', calculation_busy: 'Уже выполняется расчёт. Повторите после его завершения.',
     starting: 'Подготовка запуска…', acquiring: 'Получение данных…',
     ingesting: 'Проверка и загрузка полученных данных… Отмена уже недоступна.',
@@ -45,9 +48,21 @@
     export_failed: 'Не удалось сохранить полученные данные.', export_invalid: 'Некорректные данные для выгрузки.',
     cache_invalid: 'Некорректный журнал выгрузки.', cache_invalidate_failed: 'Не удалось обновить локальную выгрузку.'
   };
-  let reports = [], scopeFingerprint = null, active = false, available = false, timer = null;
+  let reports = [], scopeFingerprint = null, active = false, available = false, timer = null, noLogin = false;
   const el = (tag, text) => { const n = document.createElement(tag); if (text !== undefined) n.textContent = text; return n; };
-  function message(code) { $('status').textContent = TEXT[code] || 'Операция не выполнена. Проверьте диагностику программы.'; }
+  function message(code) {
+    if (code === 'connected' && noLogin) code = 'connected_open';
+    $('status').textContent = TEXT[code] || 'Операция не выполнена. Проверьте диагностику программы.';
+  }
+  // Only the exact "none" hides the login; anything else (older backend, absent, unknown) keeps the fields.
+  function login(mode) {
+    noLogin = mode === 'none';
+    for (const n of [document.querySelector('label[for=acq-user]'), $('user'), document.querySelector('label[for=acq-password]'),
+      $('password').parentElement]) if (n) n.hidden = noLogin;
+    if ($('nologin')) $('nologin').hidden = !noLogin;
+    $('check').textContent = noLogin ? 'Проверить подключение' : 'Проверить вход';
+    if (noLogin) { $('user').value = ''; $('password').value = ''; }
+  }
   function selected() { return [...$('scope').querySelectorAll('input[type=checkbox]:checked')].map(n => n.value); }
   function report() { return reports.find(r => r.id === $('report')?.value); }
   function buttons() {
@@ -85,7 +100,9 @@
     if (rows.length === 1) select.value = rows[0].id;
     books();
   }
-  function show(job) {
+  // `current`: the status route's answer for the current adapter; it wins over the login an inspection job carries
+  function show(job, current) {
+    if (current !== undefined || job.code === 'scope_ready') login(current !== undefined ? current : job.login);
     active = job.state === 'running'; message(job.code); $('result').replaceChildren();
     if (job.code === 'scope_ready') { scopeFingerprint = job.adapter_fingerprint; scope(job.reports || []); }
     $('cancel').disabled = !active || ['ingesting', 'valuating'].includes(job.phase);
@@ -108,8 +125,8 @@
       const res = await fetch('/api/v1/acquisition', {cache:'no-store'});
       if (!res.ok) { available = false; message(res.status === 403 ? 'local_only' : 'status_unknown'); buttons(); return; }
       const data = await res.json(); available = !!data.available;
-      if (data.job.state === 'idle') { active = false; message(available ? 'idle' : data.code); buttons(); }
-      else show(data.job);
+      if (data.job.state === 'idle') { active = false; login(data.login); message(available ? 'idle' : data.code); buttons(); }
+      else show(data.job, data.login || 'required');  // unavailable adapter: no current answer, keep the login
     } catch (_) { message('status_unknown'); }
   }
   async function submit(op) {
@@ -121,7 +138,7 @@
       body.set('adapter_fingerprint', scopeFingerprint || '');
     }
     if (op !== 'inspect') {
-      body.set('username', $('user').value); body.set('password', $('password').value);
+      if (!noLogin) { body.set('username', $('user').value); body.set('password', $('password').value); }
       $('user').value = ''; $('password').value = '';
     }
     active = true; buttons(); message('starting');
@@ -129,7 +146,7 @@
       const res = await fetch('/api/v1/acquisition/start', {method:'POST', cache:'no-store',
         headers:{'Content-Type':'application/x-www-form-urlencoded'}, body});
       const job = await res.json();
-      if (!res.ok) { active = false; message(job.code); buttons(); } else show(job);
+      if (!res.ok) { active = false; if (job.code === 'credentials_required') login('required'); message(job.code); buttons(); } else show(job);
     } catch (_) { active = false; message('status_unknown'); buttons(); }
     finally { body.delete('username'); body.delete('password'); }
   }

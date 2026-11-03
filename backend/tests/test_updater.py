@@ -887,7 +887,7 @@ def test_the_check_of_a_mirror_only_release_is_a_manual_update_not_an_error(bund
 
 
 def _release_module_before_mirror():
-    """``desk/updater/release.py`` as it was before the mirror kind (what 0.2.15 and the versions before carry), kept
+    """``desk/updater/release.py`` as it was before the mirror kind (what 0.2.16 and the versions before carry), kept
     as ``fixtures/release_main_before_mirror.py.txt`` and loaded as a module of its own."""
     import sys
     import types
@@ -919,7 +919,7 @@ def test_an_installed_updater_reads_a_release_with_mirror_assets_and_takes_the_f
 
 
 def test_an_installed_updater_meets_a_release_with_the_mirror_kind_only_without_failing():
-    """0.2.15 and before take every ``DeskMonitor-<x>.zip`` for a full bundle and ignore ``DeskMonitorMirror-*``: a
+    """0.2.16 and before take every ``DeskMonitor-<x>.zip`` for a full bundle and ignore ``DeskMonitorMirror-*``: a
     release of the mirror kind only has, for them, no bundle. What they see (no crash):
     * release.json (read first): ReleaseError «в релизе нет архива DeskMonitor-<версия>.zip» (the check's «релиз не
       подходит»), and the check stops there: it is not an EmptyReleaseError, so no fallback to an earlier release;

@@ -12,7 +12,7 @@ const TYPES = {'.html':'text/html', '.js':'application/javascript', '.css':'text
 
 async function setup(browser, {mode = 'success', width = 1440, multiple = false} = {}) {
   const ctx = await browser.newContext({viewport:{width, height:1000}}), pg = await ctx.newPage(), errors = [], requests = [];
-  let job = {state:'idle', phase:'idle', code:'idle'}, statusGap = mode === 'status_gap';
+  let job = {state:'idle', phase:'idle', code:'idle'}, statusGap = mode === 'status_gap', login;  // no key: an older backend
   pg.on('pageerror', e => errors.push(e.message));
   await pg.route('**/*', route => {
     const req = route.request(), u = new URL(req.url());
@@ -23,13 +23,15 @@ async function setup(browser, {mode = 'success', width = 1440, multiple = false}
     if (u.pathname === '/api/v1/adapter') return json({loaded:false, name:'synthetic', error:'not loaded', config_files:[], settings_tabs:[]});
     if (u.pathname === '/api/v1/acquisition') {
       if (statusGap && job.state === 'running') { statusGap = false; return json({}, 503); }
-      return json({available:true, code:'available', job});
+      return json(login === undefined ? {available:true, code:'available', job} : {available:true, code:'available', login, job});
     }
     if (u.pathname === '/api/v1/acquisition/start') {
       assert.strictEqual(req.headers()['content-type'], 'application/x-www-form-urlencoded');
       assert.strictEqual(u.search, '');
       const p = new URLSearchParams(req.postData()); requests.push(p);
-      if (p.get('op') === 'inspect') job = {state:'complete', phase:'complete', code:'scope_ready', adapter_fingerprint:'d'.repeat(64), reports:multiple ? [REPORT, {...REPORT,id:'c'.repeat(64),name:'Synthetic_other_20261015.csv',policy:{...REPORT.policy,skipped:{trades:3,books:2}}}] : [REPORT]};
+      if (mode === 'stale' && p.get('op') !== 'inspect' && !p.has('username')) { login = 'required'; return json({state:'blocked', code:'credentials_required'}, 422); }
+      if (p.get('op') === 'inspect' && (mode === 'nologin' || mode === 'stale')) login = 'none';
+      if (p.get('op') === 'inspect') job = {state:'complete', phase:'complete', code:'scope_ready', adapter_fingerprint:'d'.repeat(64), reports:multiple ? [REPORT, {...REPORT,id:'c'.repeat(64),name:'Synthetic_other_20261015.csv',policy:{...REPORT.policy,skipped:{trades:3,books:2}}}] : [REPORT], ...(login ? {login} : {})};
       else if (mode === 'auth') job = {state:'error', phase:'acquiring', code:'auth_failed'};
       else if (mode === 'running' || mode === 'status_gap') job = {state:'running', phase:'acquiring', code:'acquiring'};
       else job = {state:'partial', phase:'complete', code:'completed', run_id:17,
@@ -125,6 +127,42 @@ test('explicit local acquisition in Settings', {skip: pw ? false : 'нет Playw
           assert.ok(!text.includes(USER) && !text.includes(PASSWORD)); assert.deepStrictEqual(errors, []);
         } finally { await ctx.close(); }
       }
+    });
+    await t.test('a provider without a login: fields hidden after the inspection, nothing sent', async () => {
+      const {ctx,pg,errors,requests} = await setup(browser,{mode:'nologin', width:390});
+      try {
+        assert.ok(await pg.locator('#acq-user').isVisible(), 'login is asked until the server says otherwise');
+        await scope(pg);
+        await pg.locator('#acq-user').waitFor({state:'hidden'});
+        assert.strictEqual(await pg.locator('#acq-password').isVisible(), false);
+        assert.ok(await pg.locator('#acq-nologin').isVisible());
+        assert.strictEqual(await pg.locator('#acq-check').innerText(), 'Проверить подключение');
+        await pg.locator('#acq-books input').check();
+        await pg.locator('#acq-fetch').click();
+        await pg.locator('#acq-result a').waitFor();
+        const p = requests.find(p => p.get('op') === 'fetch');
+        assert.ok(!p.has('username') && !p.has('password'), 'no credentials, not even empty ones');
+        assert.deepStrictEqual(p.getAll('book'), [BOOK]);
+        assert.deepStrictEqual(errors, []);
+      } finally { await ctx.close(); }
+    });
+    await t.test('the server asks for the login again: the fields come back', async () => {
+      const {ctx,pg,errors,requests} = await setup(browser,{mode:'stale'});
+      try {
+        await scope(pg);
+        await pg.locator('#acq-user').waitFor({state:'hidden'});
+        await pg.locator('#acq-check').click();
+        await pg.getByText('Введите логин и пароль для этого запуска.',{exact:true}).waitFor();
+        assert.ok(await pg.locator('#acq-user').isVisible() && await pg.locator('#acq-password').isVisible());
+        assert.strictEqual(await pg.locator('#acq-nologin').isVisible(), false);
+        assert.strictEqual(await pg.locator('#acq-check').innerText(), 'Проверить вход');
+        await pg.locator('#acq-user').fill(USER); await pg.locator('#acq-password').fill(PASSWORD);
+        await pg.locator('#acq-check').click();
+        await pg.locator('#acq-result a').waitFor();  // the synthetic server answers any accepted run as completed
+        const last = requests[requests.length - 1];
+        assert.strictEqual(last.get('username'), USER); assert.strictEqual(last.get('password'), PASSWORD);
+        assert.deepStrictEqual(errors, []);
+      } finally { await ctx.close(); }
     });
     await t.test('lost status connection preserves a manual status check without another acquisition', async () => {
       const {ctx,pg,requests,errors} = await setup(browser,{mode:'status_gap'});

@@ -3,7 +3,7 @@
 The release workflow (``.github/workflows/release.yml``) publishes, for a tag ``v<backend version>``:
 
 Since the owner's decision of 03.11.2026 (#530) a release carries the mirror kind only; the full-kind names below are
-what releases up to 0.2.15 carry (and what the classifier still reads). An installation of the full kind that meets a
+what releases up to 0.2.16 carry (and what the classifier still reads). An installation of the full kind that meets a
 mirror-only release is told how to change the kind by hand once (``Choice.manual``: a normal state, not an error).
 
 * ``DeskMonitor-<version>.zip``                    the full Windows bundle (releases before #530), never with the
@@ -12,7 +12,7 @@ mirror-only release is told how to change the kind by hand once (``Choice.manual
 * ``DeskMonitorMirror-<version>.zip``              the bundle "without packages" (third-party packages come from
                                                    the pip index of the PC), and its patches
                                                    ``DeskMonitorMirror-patch-<old>-to-<version>.zip`` (not
-                                                   ``DeskMonitor-...``: the updaters of 0.2.15 and before take every
+                                                   ``DeskMonitor-...``: the updaters of 0.2.16 and before take every
                                                    ``DeskMonitor-<x>.zip`` for a full bundle); an asset's
                                                    ``flavor`` is ``full`` or ``mirror``, and ``choose`` takes the
                                                    flavor that is installed (``DESK_BUNDLE_KIND``)
