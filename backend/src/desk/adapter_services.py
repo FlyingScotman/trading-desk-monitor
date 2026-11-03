@@ -35,7 +35,10 @@ catches up today's slot already passed, once; missed slots of days the monitor w
 store (the first sight only records it), with that date as ``date``. Only enabled (the monitor's switch, default the
 feed's own ``enabled``) and ready feeds run by themselves. ``blocked``/``login_required`` pauses the feed («нужен
 вход») until a describe after a successful save/action/describe says it is ready, or a manual run succeeds. Errors
-(``error``, another ``blocked``, a bad answer, an ingestion failure) retry after 5, 15, then every 60 minutes. Feed
+(``error``, another ``blocked``, a bad answer, an ingestion failure) retry after 5, 15, then every 60 minutes; a
+cancelled retry waits for its next step too. Files a run produced but could not take in (the cycle lock stayed busy,
+the store failed, a cancel) stay ``pending`` and are taken in at the feed's next run, before the helper is asked
+again: the adapter may answer ``no_change`` then and never produce them again. Feed
 state (last start/end, outcome, failures, next retry, the pause, the positions date seen) is persisted, so a restart
 does not fetch again at once.
 """
@@ -81,6 +84,7 @@ ID_RE = _ID  # a feed, field or action id (the routes check the feed id of their
 _CODE = re.compile(r"[a-z][a-z0-9_]{0,63}")
 _HHMM = re.compile(r"(?:[01]\d|2[0-3]):[0-5]\d")
 _HEX = re.compile(r"[0-9a-f]{64}")
+_RID = re.compile(r"[0-9a-f]{32}")  # a feed run's id: its output folder under ``out``
 _NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,199}")
 FIELD_TYPES = ("text", "url", "bool", "select", "secret", "int")
 ACTION_STATES = ("complete", "partial", "blocked", "error")
@@ -929,13 +933,25 @@ class AdapterServices:
                 day = newest_pos.isoformat() if newest_pos else None
                 if day:
                     self._record(st, f["id"], date=day)
+            drained = self._drain_pending(st, hp, f, prev.get("pending"))
             extra = {"feed": f["id"], **({"date": day} if day else {})}
             r = clean_feed_result(self._call(st, hp, "feed", extra, out=out))
             outcome = {k: r[k] for k in ("state", "code", "lines", "dates")}
             if r["state"] in ("complete", "partial") and r["files"]:
                 if not f.get("source_declared", True):
                     raise ServiceError("feed_source_invalid", "error")  # files no declared source would read
-                outcome.update(self._ingest(st, hp, f, out, r))
+                try:
+                    outcome.update(self._ingest(st, hp, f, out, r))
+                except Invalid:
+                    raise
+                except BaseException:
+                    # not taken in (the cycle lock, a store failure, a cancel): kept for the next run, since the
+                    # adapter may answer ``no_change`` then and never produce these files again
+                    self._record(st, f["id"], pending={"dir": rid, "files": r["files"], "state": r["state"],
+                                                       "code": r["code"]})
+                    raise
+            elif drained is not None:
+                outcome.update({k: drained[k] for k in ("files", "accepted_units", "recomputed", "recompute_failed")})
         except ServiceError as e:
             outcome = {"state": e.state, "code": e.code, "lines": []}
         except Invalid:
@@ -962,7 +978,8 @@ class AdapterServices:
         elif state in ("complete", "partial", "skipped"):
             rec.update(needs_login=False, failures=0, retry_at=None, last_ok=_iso(now))
         elif state == "cancelled":
-            rec.update(failures=prev.get("failures", 0))
+            n = int(prev.get("failures") or 0)  # a cancelled retry waits for its next step, never again at once
+            rec.update(failures=n, retry_at=_iso(now + backoff(n)) if n else None)
         else:
             n = int(prev.get("failures") or 0) + 1
             rec.update(failures=n, retry_at=_iso(now + backoff(n)))
@@ -1023,11 +1040,34 @@ class AdapterServices:
                 "files": files, "accepted_units": accepted, "recomputed": rec["runs"],
                 "recompute_failed": rec["failed"]}
 
+    def _drain_pending(self, st: Settings, hp: Helper, f: dict, pending: Any) -> dict | None:
+        """The files an earlier run produced but could not take in (``_feed``), taken in now, before the helper is
+        asked again; None when there are none. Gone or changed files are dropped; a failure again keeps them."""
+        if not isinstance(pending, dict) or not isinstance(pending.get("dir"), str) \
+                or not _RID.fullmatch(pending["dir"]) or not isinstance(pending.get("files"), list):
+            if pending is not None:
+                self._record(st, f["id"], pending=None)
+            return None
+        folder = state_dir(st) / "out" / pending["dir"]
+        try:
+            drained = self._ingest(st, hp, f, folder, {"files": pending["files"], "state": pending.get("state"),
+                                                       "code": pending.get("code")}) if folder.is_dir() else None
+        except Invalid:
+            drained = None
+        self._record(st, f["id"], pending=None)
+        with self._lock:
+            if self._running:
+                self._running["phase"] = "fetching"
+        return drained
+
     @staticmethod
     def _prune(st: Settings) -> None:
         base = state_dir(st) / "out"
+        keep = {r.get("pending", {}).get("dir") for r in read_state(st).get("runs", {}).values()
+                if isinstance(r, dict) and isinstance(r.get("pending"), dict)}
         try:
-            dirs = sorted((d for d in base.iterdir() if d.is_dir()), key=lambda d: d.stat().st_mtime)
+            dirs = sorted((d for d in base.iterdir() if d.is_dir() and d.name not in keep),
+                          key=lambda d: d.stat().st_mtime)
         except OSError:
             return
         for d in dirs[:-KEEP_OUT] if len(dirs) > KEEP_OUT else []:

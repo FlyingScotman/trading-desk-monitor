@@ -222,7 +222,10 @@ through the ordinary scanner/contract/store path (`inbox.scan.ingest_feed`) unde
 20 minutes for an autopilot cycle, else `calculation_busy` and a retry), attributed to the feed's `source`: a file the
 adapter matches to another source is `rejected` with `feed_source_mismatch` before it is read, and nothing is written.
 Source precedence, scopes and completeness are the ordinary ones; an identical file again is a copy (`duplicate`).
-All files rejected: `files_not_accepted`; some: `partial`.
+All files rejected: `files_not_accepted`; some: `partial` Files produced but not taken in (the cycle lock stayed busy, the store
+failed, a cancel) are kept as the feed's `pending` output and taken in at its next run, before the helper is asked
+again: a helper that remembers what it produced may answer `no_change` then. A cancelled retry keeps its failures and
+waits for its next backoff step.
 
 **Recompute.** After accepted units the affected runs are made again at once (`desk.recompute.after_inputs`), so the
 owner's screens update without any action: for each business date D of the accepted units the EOD run of D when the

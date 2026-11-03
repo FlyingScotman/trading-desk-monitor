@@ -125,6 +125,9 @@ elif op == 'feed':
     if mode == 'invalid':
         print('not json')
         sys.exit()
+    if mode == 'nochange':  # the adapter remembers what it produced: nothing new
+        print(json.dumps({"state": "skipped", "code": "no_change", "files": [], "dates": ['2026-10-15']}))
+        sys.exit()
     if one('feed') == 'archive':  # kept locally by the adapter: no files
         print(json.dumps({"state": "complete", "code": "archived", "files": [], "counts": {"rows": 3}}))
         sys.exit(0)
@@ -508,6 +511,62 @@ def test_feed_ingests_as_its_source_and_recomputes_the_eod_and_todays_run(tmp_pa
             assert con.execute("SELECT count(*) FROM inbox_file_status").fetchone()[0] == n_files
         # a trade_terms feed run without a date gets the latest positions business date
         assert next(r["date"] for r in requests(st) if r["op"] == "feed" and r["feed"] == "terms") == "2026-10-15"
+    finally:
+        s.close()
+
+
+def test_files_not_taken_in_are_taken_in_at_the_next_run(tmp_path, store_url, cache, monkeypatch):  # noqa: F811
+    st = make(tmp_path, snapshot_cache=cache, store_url=store_url)
+    load(store_url, tmp_path, "2026-10-15", 10)
+    clock = {"t": at(FRI, 9, 0)}
+    s = service(st, store_url, clock)
+    try:
+        submit(s, "describe")
+        submit(s, "action", action="login")
+        busy = {"n": 1}
+        real = s._wait_cycle_lock
+
+        def wait(st_):  # an autopilot cycle holds the lock too long, once
+            if busy["n"]:
+                busy["n"] -= 1
+                return None
+            return real(st_)
+
+        monkeypatch.setattr(s, "_wait_cycle_lock", wait)
+        run = run_feed(s, st, "terms", clock)
+        assert (run["state"], run["code"], run["failures"]) == ("error", "calculation_busy", 1)
+        assert run["pending"]["files"][0]["file"] == "trade_terms_20261015.csv"
+        with store.connect(store_url) as con:
+            assert not store.positions_for(con, FRI).trade_terms
+        for _ in range(svcs.KEEP_OUT + 2):  # the pending output survives the pruning
+            (svcs.state_dir(st) / "out" / os.urandom(16).hex()).mkdir()
+        svcs.AdapterServices._prune(st)
+        assert (svcs.state_dir(st) / "out" / run["pending"]["dir"]).is_dir()
+        mode(st, "nochange")  # the adapter will not produce them again
+        run = run_feed(s, st, "terms", clock)
+        assert (run["state"], run["code"], run["failures"], run["pending"]) == ("skipped", "no_change", 0, None)
+        assert run["files"] == [{"file": "trade_terms_20261015.csv", "status": "accepted"}]
+        assert [r["business_date"] for r in run["recomputed"]] == ["2026-10-15"]
+        with store.connect(store_url) as con:
+            assert store.positions_for(con, FRI).trade_terms
+        run = run_feed(s, st, "terms", clock)
+        assert (run["code"], run["files"], run["recomputed"]) == ("no_change", [], [])
+    finally:
+        s.close()
+
+
+def test_a_cancelled_retry_waits_for_its_next_step(tmp_path):
+    st = make(tmp_path)
+    clock = {"t": at(FRI, 9, 0)}
+    s = service(st, "", clock)
+    try:
+        submit(s, "describe")
+        f = next(x for x in svcs.read_state(st)["feeds"] if x["id"] == "terms")
+        prev = s._record(st, "terms", failures=2, retry_at=at(FRI, 8, 0).isoformat())
+        s._finish(st, f, prev, {"state": "cancelled", "code": "cancelled"}, clock["t"])
+        run = svcs.read_state(st)["runs"]["terms"]
+        assert (run["failures"], run["retry_at"]) == (2, at(FRI, 9, 15).isoformat())
+        assert svcs.next_due(f, run, clock["t"]) == at(FRI, 9, 15)
     finally:
         s.close()
 
