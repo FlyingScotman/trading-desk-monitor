@@ -138,17 +138,16 @@
       const r = rows.get(k) || { x, v: {}, src: new Set(), by: {}, valid: null };
       r.v[x.ccy] = (r.v[x.ccy] || 0) + x.amount; r.src.add(x.source); (r.by[x.source] = r.by[x.source] || []).push(x.ccy);
       // «база отчёта + день» (TDM#531): база — отчёт за прошлый рабочий день, это норма — дата только в подсказке;
-      // «отчёт от» — только у базы старше прошлого рабочего дня. Книга без строк в отчёте — «нет в отчёте»
+      // «отчёт от» — только у базы старше прошлого рабочего дня (baseOlder: сервер считает по календарю прогона).
+      // Книга без строк в отчёте — «нет в отчёте»
       if (d.basis === 'report_base_plus_day') {
-        if (x.baseDate) { if (x.baseDate < prevBd(d.date)) r.valid = x.baseDate; else r.base = x.baseDate; }
+        if (x.baseDate) { if (x.baseOlder) r.valid = x.baseDate; else r.base = x.baseDate; }
         if (x.baseKind === 'book_absent') r.absent = true;
       } else if (x.validDate && x.validDate < d.date) r.valid = x.validDate;
       rows.set(k, r);
     });
     return { by, rows: [...rows.values()], notes: sc.notes, partial: !!sc.partial, ccys: Object.keys(by).sort(ccyOrder) };
   }
-  // прошлый рабочий день даты YYYY-MM-DD (по будням: календаря прогона в истории нет)
-  const prevBd = s => { const t = new Date(s + 'T00:00:00Z'); do t.setUTCDate(t.getUTCDate() - 1); while (t.getUTCDay() === 0 || t.getUTCDay() === 6); return t.toISOString().slice(0, 10); };
   const usable = d => !!(d && d.basis && !NO_OCP[d.state]);
   const noOcp = d => 'ОВП нет: ' + (NO_OCP[d.state] || 'прогон до публикуемой ОВП');
   const portName = v => v === '—' ? 'без портфеля' : v;

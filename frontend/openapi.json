@@ -5730,6 +5730,24 @@
               }
             ],
             "title": "Set Id"
+          },
+          "positions": {
+            "type": "integer",
+            "title": "Positions",
+            "description": "The run's positions of the kind in the scope and currency",
+            "default": 0
+          },
+          "without_pv": {
+            "type": "integer",
+            "title": "Without Pv",
+            "description": "Of them valued at a notional (no terms) or not at all",
+            "default": 0
+          },
+          "partial": {
+            "type": "boolean",
+            "title": "Partial",
+            "description": "Some positions of the kind have a PV, some not: the PV is partial",
+            "default": false
           }
         },
         "type": "object",
@@ -5768,7 +5786,9 @@
               "no_base_run",
               "trades_not_valued",
               "carried_forward_unit",
-              "trades_unknown_book"
+              "trades_unknown_book",
+              "derivatives_partial_pv",
+              "derivatives_unknown_last_flow"
             ],
             "title": "Code"
           },
@@ -6155,6 +6175,20 @@
             "type": "array",
             "title": "Split Kinds",
             "description": "The derivative kinds the report gives apart for this line (their PV is added)"
+          },
+          "partial_pv": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Partial Pv",
+            "description": "Kinds apart whose positions are partly without a PV (gap derivatives_partial_pv)"
+          },
+          "base_older": {
+            "type": "boolean",
+            "title": "Base Older",
+            "description": "The base is older than the previous business day (the run's calendar)",
+            "default": false
           }
         },
         "type": "object",

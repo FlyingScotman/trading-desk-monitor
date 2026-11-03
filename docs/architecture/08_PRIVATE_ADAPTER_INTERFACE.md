@@ -496,8 +496,10 @@ older unit is still carried forward by `covers: listed`, has 0), **without the d
 apart**, plus their PV from positions, plus the foreign bonds' revaluation and the trades since B, plus the
 components the report does not hold. A unit older than the limit is not published (its books derived). A date before
 03.11.2026 whose `ocp_policy` gives no `published` keeps `report_plus_outside` (TDM#416: `ocp_ccy` plus the components
-the report does not hold, with `report_max_age_days`), so a date recomputed later keeps its basis; an `ocp_policy` row
-giving `published` applies from its `valid_from`.
+the report does not hold, with `report_max_age_days`), so a date recomputed later keeps its basis. An `ocp_policy` row
+giving `published` is in force as §7 says: a new revision of the same `policy_id` without `valid_from` applies from the
+Moscow day it is recorded, so the earlier dates, even recomputed, keep the basis they had; keep the `policy_id` (a
+new one, without `valid_from`, would apply to every past date and conflict with the old key).
 
 Since 1.7 the adapter gives derivatives apart **by kind**. For each derivative kind it maps report row types to, it
 leaves the report's lines of that kind with a value date after the report's date out of `ocp_ccy` (and out of

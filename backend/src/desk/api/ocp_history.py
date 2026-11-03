@@ -42,7 +42,7 @@ RATE_BAND = (0.5, 2.0)
 """``rate_rub_per_unit`` / (``ocp_rub`` / ``ocp_ccy``) of a report scope outside this: the scope gives no rate."""
 
 LINE_KEYS = ("entity", "book_id", "books", "ccy", "amount", "source", "reported", "valid_date", "base_date", "set_id",
-             "base_kind", "parts")
+             "base_kind", "parts", "base_older")
 """The keys of a published line the history reads: never its ``contributions`` (block v3), which stay in the run's
 ``/ocp``; the SQL picks them, so a long period does not carry them out of the store."""
 
@@ -81,7 +81,8 @@ def _line(x: dict[str, Any]) -> dict[str, Any]:
            "amount": x.get("amount"), "source": x.get("source"), "reported": x.get("reported"),
            "validDate": x.get("valid_date")}
     if x.get("parts") is not None:
-        out.update(baseDate=x.get("base_date"), setId=x.get("set_id"), baseKind=x.get("base_kind"), parts=x["parts"])
+        out.update(baseDate=x.get("base_date"), setId=x.get("set_id"), baseKind=x.get("base_kind"), parts=x["parts"],
+                   baseOlder=bool(x.get("base_older")))
     return out
 
 

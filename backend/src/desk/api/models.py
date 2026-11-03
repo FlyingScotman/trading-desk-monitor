@@ -365,6 +365,9 @@ class OcpDerivativesCheck(BaseModel):
     diff: float | None = Field(description="nominal - pv")
     over: bool = Field(description="|diff| above the tolerance")
     set_id: int | None
+    positions: int = Field(0, description="The run's positions of the kind in the scope and currency")
+    without_pv: int = Field(0, description="Of them valued at a notional (no terms) or not at all")
+    partial: bool = Field(False, description="Some positions of the kind have a PV, some not: the PV is partial")
 
 
 class OcpTransferDeal(BaseModel):
@@ -428,6 +431,10 @@ class OcpPublishedLine(BaseModel):
                                                                   "no position of the kind in the scope")
     split_kinds: list[str] = Field(default_factory=list, description="The derivative kinds the report gives apart "
                                                                      "for this line (their PV is added)")
+    partial_pv: list[str] = Field(default_factory=list, description="Kinds apart whose positions are partly without "
+                                                                    "a PV (gap derivatives_partial_pv)")
+    base_older: bool = Field(False, description="The base is older than the previous business day (the run's "
+                                                "calendar)")
 
 
 class OcpPublishedCcy(BaseModel):
@@ -457,7 +464,7 @@ class OcpGap(BaseModel):
     code: Literal["no_report", "stale_report", "outside_without_terms", "books_outside_report", "outside_double_count",
                   "report_without_derivatives_split", "derivatives_nominal_fallback", "base_older",
                   "trades_not_loaded", "no_base_run", "trades_not_valued", "carried_forward_unit",
-                  "trades_unknown_book"]
+                  "trades_unknown_book", "derivatives_partial_pv", "derivatives_unknown_last_flow"]
     text: str
     items: list[str] = Field(description="Scopes, books or position ids concerned (at most 50)")
 

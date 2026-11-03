@@ -1931,6 +1931,24 @@ export interface components {
             over: boolean;
             /** Set Id */
             set_id: number | null;
+            /**
+             * Positions
+             * @description The run's positions of the kind in the scope and currency
+             * @default 0
+             */
+            positions?: number;
+            /**
+             * Without Pv
+             * @description Of them valued at a notional (no terms) or not at all
+             * @default 0
+             */
+            without_pv?: number;
+            /**
+             * Partial
+             * @description Some positions of the kind have a PV, some not: the PV is partial
+             * @default false
+             */
+            partial?: boolean;
         };
         /**
          * OcpGap
@@ -1941,7 +1959,7 @@ export interface components {
              * Code
              * @enum {string}
              */
-            code: "no_report" | "stale_report" | "outside_without_terms" | "books_outside_report" | "outside_double_count" | "report_without_derivatives_split" | "derivatives_nominal_fallback" | "base_older" | "trades_not_loaded" | "no_base_run" | "trades_not_valued" | "carried_forward_unit" | "trades_unknown_book";
+            code: "no_report" | "stale_report" | "outside_without_terms" | "books_outside_report" | "outside_double_count" | "report_without_derivatives_split" | "derivatives_nominal_fallback" | "base_older" | "trades_not_loaded" | "no_base_run" | "trades_not_valued" | "carried_forward_unit" | "trades_unknown_book" | "derivatives_partial_pv" | "derivatives_unknown_last_flow";
             /** Text */
             text: string;
             /**
@@ -2127,6 +2145,17 @@ export interface components {
              * @description The derivative kinds the report gives apart for this line (their PV is added)
              */
             split_kinds?: string[];
+            /**
+             * Partial Pv
+             * @description Kinds apart whose positions are partly without a PV (gap derivatives_partial_pv)
+             */
+            partial_pv?: string[];
+            /**
+             * Base Older
+             * @description The base is older than the previous business day (the run's calendar)
+             * @default false
+             */
+            base_older?: boolean;
         };
         /** OcpTransfer */
         OcpTransfer: {

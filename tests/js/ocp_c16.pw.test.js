@@ -29,8 +29,9 @@ function history(state, opt = {}) {
     const failed = opt.failedAt === i;  // TDM#534: день с ошибкой расчёта ОВП внутри периода
     if (opt.bpd && i < 65) {  // TDM#531: «база отчёта + день»; FXB — база старше прошлого рабочего дня, NEWB — нет в отчёте
       const prev = s => { const t = new Date(s + 'T00:00:00Z'); do t.setUTCDate(t.getUTCDate() - 1); while (!(t.getUTCDay() % 6)); return t.toISOString().slice(0, 10); };
-      opt.lines = ln => ln.map(x => Object.assign({}, x, { baseDate: x.book === 'FXB' ? prev(prev(date)) : prev(date), baseKind: 'without_derivatives', parts: { base: x.amount } }))
-        .concat([{ entity: 'Головной банк', book: 'NEWB', books: ['NEWB'], ccy: 'USD', amount: 1e6, source: 'report', reported: 0, validDate: prev(date), baseDate: prev(date), baseKind: 'book_absent', parts: { base: 0, derivatives: 1e6 } }]);
+      // baseOlder — как его считает сервер (по календарю прогона); экран сам дни не считает
+      opt.lines = ln => ln.map(x => Object.assign({}, x, { baseDate: x.book === 'FXB' ? prev(prev(date)) : prev(date), baseOlder: x.book === 'FXB', baseKind: 'without_derivatives', parts: { base: x.amount } }))
+        .concat([{ entity: 'Головной банк', book: 'NEWB', books: ['NEWB'], ccy: 'USD', amount: 1e6, source: 'report', reported: 0, validDate: prev(date), baseDate: prev(date), baseOlder: false, baseKind: 'book_absent', parts: { base: 0, derivatives: 1e6 } }]);
     }
     days.unshift({ date, runId: 100 - i, runType: 'EOD', state: i === 0 && state ? state : failed ? 'failed' : i === 65 ? 'not_computed' : 'computed', basis: i === 65 || failed ? null : opt.bpd ? 'report_base_plus_day' : 'report_plus_outside',
       fx: { USD: { market: 81.45, cbr: 81.12 }, EUR: { market: 94.62, cbr: 94.38 }, CNY: { market: 11.38, cbr: 10.95 } },
