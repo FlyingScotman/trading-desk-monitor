@@ -34,6 +34,15 @@ const REPORT = { ok: true, backend: '0.2.17', spi: 1, name: 'synthetic', version
   instruments: 'stub', calendar: 'none', files: { matched: 3, ignored: 0, match_failed: 0 }, problems: {}, notes: {}, reference: {}, reference_issues: [],
   sources: [{ source: 'pos_csv', report_date: '2026-10-20', valid_date: '2026-10-19', files: 3, rows: 40, units: { accepted: 3 }, statuses: { accepted: 3 }, issues: [], controls: [], unmapped: 0 }] };
 
+// «Обновление адаптера» (форма ответа — как в adapter_update.pw.test.js): выпуск 0.5.0 новее используемого 0.4.0
+const ADAPTER_UPDATE = { repo: 'FlyingScotman/trades-data-adapter', token_set: true, token_source: 'file', token_file: HOME + '\\github_token',
+  source: 'bundle', explicit: false, explicit_note: null, pinned: false, pinned_note: null, in_use: { path: 'C:\\DM\\adapter\\tda', version: '0.4.0', source: 'bundle' },
+  installed: null, bundle: { version: '0.4.0', path: 'C:\\DM\\adapter\\tda' }, base_version: '0.4.0', versions: [], previous_available: false,
+  checked_at: '2026-11-03T08:00:00', check: { ok: true, at: '2026-11-03T08:00:00', layer: 'curl', attempts: [] },
+  release: { tag: 'v0.5.0', version: '0.5.0', published_at: '2026-10-29T08:00:00Z', notes: '', asset: { name: 'tda-adapter.zip', size: 120000, sha256: 'a'.repeat(64), id: 11, browser_url: 'https://example.test/tda-adapter.zip' } },
+  no_release: false, compare: 'newer', update_available: true, job: null, downloads_dir: 'C:\\Users\\u\\Downloads', downloads_dir_exists: true,
+  browser_url: 'https://example.test/tda-adapter.zip', releases_page: 'https://example.test/releases/latest', layers: {}, codes: {}, it_hints: {} };
+
 function server() {
   const st = { runs: 0 };
   st.settings = { home: HOME, hub_url: 'https://hub.example', inbox_dirs: [{ path: 'C:\\in', label: 'Позиции', recursive: false }], hub_token_set: true,
@@ -56,6 +65,7 @@ function server() {
     if (p === '/api/v1/adapter/actions/row_types') return { action: ACTION, running: false, job: Object.assign({}, DONE, { started_at: new Date().toISOString() }) };
     if (p === '/api/v1/adapter/check') return { running: false, timeout_s: 1800, options: [{ path: 'C:\\in', kind: 'inbox', exists: true }],
       job: { state: 'done', started_at: '2026-11-02T10:00:00+03:00', finished_at: '2026-11-02T10:01:00+03:00', seconds: 60, request: { dirs: ['C:\\in'] }, report: REPORT, text: 'check: OK', ok: true } };
+    if (p === '/api/v1/update/adapter') return ADAPTER_UPDATE;
     if (p === '/api/v1/autopilot/status') return { enabled: true, state: 'idle', steps: [{ name: 'sync', status: 'ok', detail: 'срезов: 1' }] };
     if (p === '/api/v1/backfill/status') return { enabled: true, dates: 10, done: 10, todo: 0, no_positions: 0, no_market: 0 };
     if (p === '/api/v1/acquisition') return { available: false, code: 'runtime_unavailable', job: { state: 'idle', phase: 'idle', code: 'idle' } };
@@ -85,6 +95,7 @@ async function open(browser, st, hash, opts) {
   return { pg, ctx, errors };
 }
 const onSub = pg => pg.evaluate(() => [...document.querySelectorAll('#sec-adapter .sub.on')].map(x => x.dataset.sub));
+const waitSub = (pg, name) => pg.waitForFunction(n => { const x = document.querySelector('#sec-adapter .sub.on'); return x && x.dataset.sub === n; }, name);  // hashchange приходит позже щелчка
 const onSec = pg => pg.evaluate(() => document.querySelector('section.sec.on').dataset.sec);
 
 test('настройки: подразделы, «Дополнительно», поиск, результаты по щелчку (TDM#551, TDM#552)', { skip: pw ? false : 'нет Playwright' }, async t => {
@@ -96,6 +107,7 @@ test('настройки: подразделы, «Дополнительно», 
       assert.strictEqual(await pg.evaluate(() => location.hash), '#adapter/overview', 'в адресе — подраздел');
       assert.ok(await pg.locator('#ad-res').isVisible() && !(await pg.locator('#dirs').isVisible()) && !(await pg.locator('#ad-check').isVisible()));
       await pg.locator('.subnav a[data-sub-link="folders"]').click();
+      await waitSub(pg, 'folders');
       assert.deepStrictEqual(await onSub(pg), ['folders']);
       assert.strictEqual(await pg.evaluate(() => location.hash), '#adapter/folders');
       assert.strictEqual(await pg.locator('.subnav a[aria-current="page"]').getAttribute('data-sub-link'), 'folders');
@@ -130,6 +142,25 @@ test('настройки: подразделы, «Дополнительно», 
       await pg.waitForTimeout(100);
       assert.deepStrictEqual(await onSub(pg), ['expert']);
       assert.strictEqual(await pg.evaluate(() => document.activeElement.id), 'adapter_read_timeout_s');
+      assert.deepStrictEqual(errors, []);
+      await ctx.close();
+    });
+
+    await t.test('«Обновление адаптера» — в «Обновлениях»; в «Обзоре» адаптера ссылка и строка состояния', async () => {
+      const st = server(), { pg, ctx, errors } = await open(browser, st, '#adapter/overview');
+      assert.strictEqual(await pg.locator('#sec-adapter #ad-upd-card').count(), 0, 'карточки в разделе адаптера нет');
+      const lnk = pg.locator('#ad-card .hd a[href="#ad-upd-card"]');
+      assert.ok(await lnk.isVisible(), 'ссылка в шапке карточки «Адаптер»');
+      await pg.waitForFunction(() => /есть выпуск 0\.5\.0/.test(document.getElementById('ad-upd-line').textContent));
+      assert.ok(/Обновление адаптера: есть выпуск 0\.5\.0/.test(await pg.locator('#ad-upd-line').innerText()), await pg.locator('#ad-upd-line').innerText());
+      const item = pg.locator('#st-sum a[href="#ad-upd-card"]');
+      assert.ok(/Адаптер:\s*есть обновление 0\.5\.0/.test(await item.innerText()), 'строка в сводке сверху');
+      await lnk.click();
+      await pg.waitForTimeout(100);
+      assert.strictEqual(await onSec(pg), 'up');
+      assert.ok(await pg.locator('section.sec[data-sec=up] #ad-upd-card').isVisible());
+      assert.ok(/Обновление программы и адаптера/.test(await pg.locator('#h-up').innerText()));
+      assert.ok(/Обновления/.test(await pg.locator('.st-nav a[data-sec="up"]').innerText()));
       assert.deepStrictEqual(errors, []);
       await ctx.close();
     });
@@ -277,9 +308,161 @@ test('настройки: подразделы, «Дополнительно», 
       await ctx.close();
     });
 
+    await t.test('прямая ссылка на место модуля не теряется до slot(): подраздел и раздел', async () => {
+      const st = server(), { pg, ctx, errors } = await open(browser, st, '#adapter/services');
+      assert.deepStrictEqual(await onSub(pg), ['overview'], 'пока модуля нет — открыт запасной');
+      assert.strictEqual(await pg.evaluate(() => location.hash), '#adapter/services', 'адрес не переписан');
+      assert.strictEqual(await pg.evaluate(() => localStorage.getItem('settings.sub.adapter')), null, 'запасной подраздел не запомнен');
+      await pg.evaluate(() => setTimeout(() => { window.DeskSettings.slot('services').textContent = 'Подключение к сервисам'; }, 200));
+      await pg.waitForFunction(() => { const x = document.querySelector('#sec-adapter .sub.on'); return x && x.dataset.sub === 'services'; });
+      assert.ok(await pg.locator('[data-slot="services"]').isVisible());
+      // раздел-место: #ovp после других адресов
+      await pg.goto(ORIGIN + '/settings.html#adapter/folders'); await pg.waitForTimeout(100);
+      await pg.goto(ORIGIN + '/settings.html#ovp'); await pg.waitForTimeout(100);
+      assert.strictEqual(await onSec(pg), 'adapter', 'запасной раздел — последний открытый');
+      assert.strictEqual(await pg.evaluate(() => location.hash), '#ovp');
+      assert.strictEqual(await pg.evaluate(() => localStorage.getItem('settings.sec')), 'adapter', 'запасной раздел не запомнен как выбранный');
+      await pg.evaluate(() => { window.DeskSettings.slot('ovp-types').textContent = 'Типы строк'; });
+      await pg.waitForFunction(() => document.querySelector('section.sec.on').dataset.sec === 'ovp');
+      await pg.reload(); await pg.waitForSelector('#st-sum:not([hidden]) a');
+      assert.notStrictEqual(await onSec(pg), 'ovp', 'после обновления модуль ещё не загрузился');
+      assert.strictEqual(await pg.evaluate(() => location.hash), '#ovp');
+      await pg.evaluate(() => { window.DeskSettings.slot('ovp-types'); });
+      await pg.waitForFunction(() => document.querySelector('section.sec.on').dataset.sec === 'ovp');
+      assert.deepStrictEqual(errors, []);
+      await ctx.close();
+    });
+
+    await t.test('onShow, unslot, поднятие точки подраздела к пункту раздела', async () => {
+      const st = server(), { pg, ctx, errors } = await open(browser, st, '#adapter/overview');
+      await pg.evaluate(() => { window.__ev = []; window.__off = window.DeskSettings.onShow(d => window.__ev.push([d.sec, d.sub, d.hash])); });
+      assert.deepStrictEqual(await pg.evaluate(() => window.__ev.map(e => e.slice(0, 2))), [['adapter', 'overview']], 'сразу — текущее состояние');
+      await pg.locator('.subnav a[data-sub-link="folders"]').click();
+      await waitSub(pg, 'folders');
+      assert.deepStrictEqual(await pg.evaluate(() => window.__ev.pop()), ['adapter', 'folders', '#adapter/folders']);
+      await pg.evaluate(() => window.DeskSettingsNav.go('adapter/expert'));  // переход из поиска
+      assert.deepStrictEqual(await pg.evaluate(() => window.__ev.pop().slice(0, 2)), ['adapter', 'expert']);
+      await pg.locator('.st-nav a[data-sec="hub"]').click();
+      await pg.waitForFunction(() => document.querySelector('section.sec.on').dataset.sec === 'hub');
+      assert.deepStrictEqual(await pg.evaluate(() => window.__ev.pop().slice(0, 2)), ['hub', null]);
+      await pg.evaluate(() => window.__off());
+      const n = await pg.evaluate(() => window.__ev.length);
+      await pg.locator('.st-nav a[data-sec="adapter"]').click();
+      await pg.waitForFunction(() => document.querySelector('section.sec.on').dataset.sec === 'adapter');
+      assert.strictEqual(await pg.evaluate(() => window.__ev.length), n, 'после отписки событий нет');
+      // unslot: открытое место скрывается, открывается запасной подраздел
+      await pg.evaluate(() => { window.DeskSettings.slot('services').textContent = 'Сервисы'; });
+      await pg.locator('.subnav a[data-sub-link="services"]').click();
+      assert.deepStrictEqual(await onSub(pg), ['services']);
+      await pg.evaluate(() => window.DeskSettings.unslot('services'));
+      assert.deepStrictEqual(await onSub(pg), ['overview']);
+      assert.ok(!(await pg.locator('.subnav a[data-sub-link="services"]').isVisible()) && !(await pg.locator('[data-slot="services"]').isVisible()));
+      assert.strictEqual(await pg.evaluate(() => location.hash), '#adapter/overview');
+      // точка подраздела поднимается к пункту раздела; убрали — снова своя
+      const navDot = pg.locator('.st-nav .dot[data-nav="adapter"]');
+      await pg.waitForFunction(() => document.querySelector('.st-nav .dot[data-nav="adapter"]').className === 'dot ok');
+      await pg.evaluate(() => window.DeskSettings.dot('adapter/services', 'bad', 'нет входа'));
+      assert.ok(/\bbad\b/.test(await navDot.getAttribute('class')));
+      await pg.evaluate(() => window.DeskSettings.dot('adapter/services', ''));
+      assert.strictEqual(await navDot.getAttribute('class'), 'dot ok');
+      await pg.evaluate(() => window.DeskSettings.dot('adapter/folders', 'warn', 'x'));
+      assert.ok(/\bwarn\b/.test(await navDot.getAttribute('class')));
+      await pg.evaluate(() => window.DeskSettings.dot('adapter/folders', ''));
+      assert.deepStrictEqual(errors, []);
+      await ctx.close();
+    });
+
+    await t.test('история: переход из поиска — новая запись; повторный щелчок по открытому не плодит записи', async () => {
+      const st = server(), { pg, ctx, errors } = await open(browser, st, '#hub');
+      const q = pg.locator('#st-q');
+      await q.fill('архив принятых');
+      await pg.locator('#st-q-res .st-q-it').first().waitFor();
+      await q.press('Enter');
+      await pg.waitForTimeout(150);
+      assert.strictEqual(await onSec(pg), 'adapter');
+      await pg.goBack();
+      await pg.waitForTimeout(150);
+      assert.strictEqual(await onSec(pg), 'hub', 'назад — на раздел, откуда искали');
+      await pg.goto(ORIGIN + '/settings.html#adapter/folders'); await pg.waitForTimeout(100);
+      const len = await pg.evaluate(() => history.length);
+      await pg.locator('.st-nav a[data-sec="adapter"]').click(); await pg.locator('.st-nav a[data-sec="adapter"]').click();
+      await pg.locator('.subnav a[data-sub-link="folders"]').click(); await pg.locator('.subnav a[data-sub-link="folders"]').click();
+      assert.strictEqual(await pg.evaluate(() => history.length), len, 'записей истории не прибавилось');
+      assert.deepStrictEqual(await onSub(pg), ['folders']);
+      assert.strictEqual(await pg.evaluate(() => location.hash), '#adapter/folders');
+      assert.deepStrictEqual(errors, []);
+      await ctx.close();
+    });
+
+    await t.test('поиск не находит поля разделов, скрытых от пользователя', async () => {
+      const st = server(), { pg, ctx, errors } = await open(browser, st, '#hub');
+      const q = pg.locator('#st-q');
+      await q.fill('Выход без действий');
+      await pg.locator('#st-q-res .st-q-it').first().waitFor();
+      assert.ok(/Выход без действий/.test(await pg.locator('#st-q-res').innerText()), 'администратору поле видно');
+      await pg.evaluate(() => document.querySelectorAll('[data-users-nav]').forEach(e => { e.hidden = true; }));
+      await q.fill('Выход без действий');
+      assert.ok(/Ничего не нашлось/.test(await pg.locator('#st-q-res').innerText()), await pg.locator('#st-q-res').innerText());
+      await q.fill('Адрес сервера');
+      assert.ok(/Адрес сервера/.test(await pg.locator('#st-q-res .st-q-it').first().innerText()));
+      assert.deepStrictEqual(errors, []);
+      await ctx.close();
+    });
+
+    await t.test('итог действия и подробности проверки: свёрнутые читателем не раскрываются при «Обновить статус»', async () => {
+      const st = server(), { pg, ctx, errors } = await open(browser, st, '#adapter/actions');
+      const last = pg.locator('#ad-action-row_types details.at-last');
+      await last.waitFor();
+      await pg.locator('#ad-action-row_types button', { hasText: 'Запустить' }).click();
+      await pg.waitForFunction(() => document.querySelector('#ad-action-row_types details.at-last[open]'), null, { timeout: 10000 });
+      await last.locator('summary').click();
+      assert.ok(!(await last.evaluate(d => d.open)));
+      await pg.locator('#ad-refresh').click();
+      await pg.waitForTimeout(500);
+      assert.ok(!(await pg.locator('#ad-action-row_types details.at-last').evaluate(d => d.open)), 'свёрнутый остался свёрнутым');
+      await pg.locator('#ad-action-row_types details.at-last summary').click();
+      await pg.locator('#ad-refresh').click();
+      await pg.waitForTimeout(500);
+      assert.ok(await pg.locator('#ad-action-row_types details.at-last').evaluate(d => d.open), 'раскрытый остался раскрытым');
+      // проверка адаптера: то же
+      await pg.locator('.subnav a[data-sub-link="check"]').click();
+      await pg.locator('#ad-check-run').click();
+      await pg.waitForFunction(() => document.querySelector('#ad-check-res details.at-check[open]'), null, { timeout: 10000 });
+      assert.ok(/источников: 1, строк по датам: 1/.test(await pg.locator('#ad-check-res details.at-check > summary').innerText()), await pg.locator('#ad-check-res details.at-check > summary').innerText());
+      await pg.locator('#ad-check-res details.at-check > summary').click();
+      await pg.locator('#ad-refresh').click();
+      await pg.waitForTimeout(500);
+      assert.ok(!(await pg.locator('#ad-check-res details.at-check').evaluate(d => d.open)), 'проверка: свёрнутая осталась свёрнутой');
+      assert.deepStrictEqual(errors, []);
+      await ctx.close();
+    });
+
+    await t.test('«Источники»: адаптер не загружен — заметка; точка «изменено» у подраздела', async () => {
+      const st = server(), real = st.handle;
+      st.handle = (u, m) => (u.pathname === '/api/v1/adapter' ? { loaded: false, error: 'нет адаптера', settings_tabs: [], optional: [], actions: [] } : real(u, m));
+      const { pg, ctx, errors } = await open(browser, st, '#adapter/sources');
+      const none = pg.locator('#tabs-none');
+      await none.waitFor();
+      assert.ok(/Адаптер не загружен — формы источников появятся/.test(await none.innerText()), await none.innerText());
+      assert.strictEqual(await none.locator('a').getAttribute('href'), '#adapter/overview');
+      assert.ok(await pg.locator('[data-sub="sources"] a[href="#advanced"]').isVisible(), 'ссылка на правку JSON');
+      await pg.locator('[data-sub="sources"] a[href="#advanced"]').click();
+      await pg.waitForTimeout(100);
+      assert.deepStrictEqual(await onSub(pg), ['expert']);
+      // изменили поле — у подраздела точка «изменено»; «Отменить» снимает
+      const dot = pg.locator('.subnav .dot[data-subdot="expert"]');
+      await pg.locator('#adapter_read_timeout_s').evaluate(e => { e.value = '12'; e.dispatchEvent(new Event('input', { bubbles: true })); });
+      assert.ok(/\bdirty\b/.test(await dot.getAttribute('class')));
+      assert.ok(/\bdirty\b/.test(await pg.locator('.st-nav .dot[data-nav="adapter"]').getAttribute('class')), 'и у раздела');
+      await pg.locator('#save-undo').click();
+      assert.ok(!/\bdirty\b/.test(await dot.getAttribute('class')), 'после «Отменить» снято');
+      assert.deepStrictEqual(errors, []);
+      await ctx.close();
+    });
+
     await t.test('телефон 390 px: без горизонтальной прокрутки, выбранный подраздел виден', async () => {
       const st = server();
-      for (const hash of ['#adapter/actions', '#adapter/check', '#adapter/expert', '#hub']) {
+      for (const hash of ['#adapter/actions', '#adapter/check', '#adapter/expert', '#up', '#hub']) {
         const { pg, ctx, errors } = await open(browser, st, hash, { viewport: { width: 390, height: 800 } });
         await pg.waitForTimeout(300);
         const over = await pg.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth);

@@ -71,12 +71,11 @@
 
   /* ---------- DOM ---------- */
   var S = { api: null, toast: null, SF: null, h: null, adapter: null, statusBusy: false, check: null, checkTimer: null, actions: {}, actionTimer: null,
-    fresh: {}, checkFresh: false };  // fresh: итог пришёл на этой странице после «Запустить» — раскрыт
+    fresh: {}, checkFresh: false, open: {}, checkOpen: false };  // fresh: итог пришёл на этой странице после «Запустить» — раскрыт один раз; open/checkOpen: как оставил читатель (до перезагрузки страницы)
   function h() { return S.h.apply(null, arguments); }
   function $(id) { return document.getElementById(id); }
   function subdot(sub, cls, title) {  // точка у подраздела «Адаптер и источники» (settings-nav.js)
-    var d = document.querySelector('.subnav .dot[data-subdot="' + sub + '"]');
-    if (d) { d.className = 'dot ' + (cls || ''); d.title = title || ''; }
+    if (root.DeskSettingsNav) root.DeskSettingsNav.paintSub('adapter', sub, cls || '', title);
   }
   function badge(cls, text, title) { return h('span', { class: 'badge ' + (cls || ''), title: title || null }, text); }
   function numCell(c) { return { class: A.isNum(c) ? 'n mono' : null, text: c == null ? '—' : A.isNum(c) ? A.n(c) : String(c) }; }
@@ -94,9 +93,10 @@
       t.truncated ? h('div', { class: 'hint' }, 'Показаны первые строки таблицы.') : null);
   }
   // «Последний запуск: …» — свёрнутый итог; open — раскрыт (итог только что пришёл)
-  function lastRun(summaryKids, bodyKids, open, cls) {
+  function lastRun(summaryKids, bodyKids, open, cls, onToggle) {
     var d = h('details', { class: 'at-last ' + (cls || '') }, h('summary', {}, summaryKids), h('div', { class: 'at-last-bd' }, bodyKids));
     d.open = !!open;
+    if (onToggle) d.addEventListener('toggle', function () { onToggle(d.open); });
     return d;
   }
   function issuesList(list) {
@@ -210,13 +210,16 @@
       else if (j.scan && j.scan.error) body.push(h('p', { class: 'hint' }, j.scan.error));
     }
     // строка «Последний запуск»: когда, итог, первая строка сводки; подробности — по щелчку
+    // раскрыт: итог только что пришёл (один раз) или читатель сам раскрыл; свёрнутый им — не раскрывается при «Обновить статус»
+    var openNow = !!S.fresh[id] || S.open[id] === true;
+    if (S.fresh[id]) { S.fresh[id] = false; S.open[id] = true; }
     var first = (out.summary || [])[0], nFiles = j.written ? (j.files || []).length : null;
     res.append(lastRun([h('b', {}, 'Последний запуск'), ' ', A.when(j.finished_at || j.started_at), ' · ',
       h('span', { class: out.ok ? 'okmsg' : 'warnmsg' }, out.ok ? 'выполнено' : 'не выполнено'),
       first ? h('span', { class: 'mut3' }, ' · ' + first) : null,
       out.table ? h('span', { class: 'mut3' }, ' · таблица: ' + ((out.table.rows || []).length).toLocaleString('ru-RU') + ' стр.') : null,
       nFiles != null ? h('span', { class: 'mut3' }, ' · файлов: ' + nFiles) : null,
-      h('span', { class: 'lnk at-open', 'aria-hidden': 'true' })], body, S.fresh[id]));
+      h('span', { class: 'lnk at-open', 'aria-hidden': 'true' })], body, openNow, '', function (v) { S.open[id] = v; }));
   }
   function pollAction(id) {
     clearTimeout(S.actionTimer);
@@ -297,10 +300,12 @@
       if (notes.length) body.push(h('p', { class: 'hint' }, 'Заметки: ' + notes.map(function (k) { return k + ' ' + A.n(rep.notes[k]); }).join(', ')));
     }
     body.push(h('details', { class: 'more' }, h('summary', {}, 'Текст сводки'), h('pre', { class: 'at-pre mono' }, j.text)));
+    var openNow = !!S.checkFresh || S.checkOpen === true;
+    if (S.checkFresh) { S.checkFresh = false; S.checkOpen = true; }
     var warnN = rows.reduce(function (s, x) { return s + x.issues.length; }, 0);
-    res.append(lastRun([h('b', {}, 'Подробности проверки'), h('span', { class: 'mut3' }, ' · источников: ' + rows.length +
+    res.append(lastRun([h('b', {}, 'Подробности проверки'), h('span', { class: 'mut3' }, ' · источников: ' + new Set(rows.map(function (x) { return x.source; })).size + ', строк по датам: ' + rows.length +
       (warnN ? ', кодов замечаний: ' + warnN : '') + ' · версии, таблица по источникам, текст сводки'), ' ', h('span', { class: 'lnk at-open', 'aria-hidden': 'true' })],
-      body, S.checkFresh, 'at-check'));
+      body, openNow, 'at-check', function (v) { S.checkOpen = v; }));
   }
   function pollCheck() {
     clearTimeout(S.checkTimer);

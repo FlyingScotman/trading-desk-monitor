@@ -113,8 +113,12 @@ test('настройки: главное сверху, редкое по кно�
     });
     await t.test('редкое свёрнуто, открытость помнится; блок с ошибкой и ссылки #bf, #sess-card раскрывают своё', async () => {
       const st = server(), { pg, ctx, errors } = await open(browser, st, '#adapter/expert');
-      assert.ok(!(await pg.locator('#adapter_kit_timeout_s').isVisible()) && !(await pg.locator('#inbox_archive').isVisible()));
+      assert.ok(!(await pg.locator('#adapter_kit_timeout_s').isVisible()), 'в «Для опытных» пределы времени свёрнуты');
       assert.ok(!(await pg.locator('#adv-adapter').evaluate(d => d.open)));
+      await sub(pg, 'folders');
+      assert.ok(await pg.locator('#dirs').isVisible() && !(await pg.locator('#inbox_archive').isVisible()), 'в «Папках» архив принятых свёрнут');
+      assert.ok(!(await pg.locator('#adv-dirs').evaluate(d => d.open)));
+      await sub(pg, 'expert');
       await pg.locator('#adv-adapter > summary').click();
       assert.ok(await pg.locator('#adapter_kit_timeout_s').isVisible());
       // неверное значение в свёрнутом блоке: при сохранении он раскрывается, поле — в фокусе

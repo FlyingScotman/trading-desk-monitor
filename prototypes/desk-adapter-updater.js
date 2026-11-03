@@ -221,8 +221,22 @@
     return box;
   }
 
+  // строка состояния в «Обзоре» адаптера и пункт сводки сверху: подробности — в разделе «Обновления»
+  function summary(st) {
+    var has = !!(st.release && st.update_available);
+    var line = document.getElementById('ad-upd-line');
+    if (line) {
+      line.textContent = '';
+      if (has) line.append('Обновление адаптера: есть выпуск ' + st.release.version + ' — ', el('a', { href: '#ad-upd-card' }, 'установить в «Обновлениях»'));
+      else if (st.compare === 'same') line.append('Обновление адаптера: используется последний выпуск');
+    }
+    var DS = window.DeskSettings;
+    if (DS && DS.status) DS.status('adapter-update', has ? { cls: 'warn', href: '#ad-upd-card', k: 'Адаптер', text: 'есть обновление ' + st.release.version } : null);
+  }
+
   function render(st) {
     P.st = st;
+    summary(st);
     var b = P.box;
     b.textContent = '';
     var head = el('div', { 'class': 'row', style: 'gap:6px 14px;flex-wrap:wrap' });

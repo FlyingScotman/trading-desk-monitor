@@ -59,6 +59,20 @@ test('длинная таблица: свёрнута после предела,
   assert.deepStrictEqual(L.filter(rows, ''), rows);
   assert.notStrictEqual(L.filter(rows, ''), rows, 'копия');
   assert.strictEqual(L.csv(['a', 'b'], [['x;y', 'он сказал "да"'], [null, 3]]), '﻿a;b\r\n"x;y";"он сказал ""да"""\r\n;3\r\n');
+  // CSV для русского Excel: число с запятой, защита от формул, коды с ведущими нулями и длинные номера
+  assert.strictEqual(L.cell(1.5), '1,5');
+  assert.strictEqual(L.cell(-3), '-3', 'число без префикса');
+  assert.strictEqual(L.cell(1234567), '1234567', 'без разделителя тысяч');
+  assert.strictEqual(L.cell('=SUM(A1)'), "'=SUM(A1)");
+  assert.strictEqual(L.cell('-x'), "'-x");
+  assert.strictEqual(L.cell('@a'), "'@a");
+  assert.strictEqual(L.cell('\tx'), "'\tx");
+  assert.strictEqual(L.cell('-1,5'), '-1,5', 'отформатированное отрицательное число — не формула');
+  assert.strictEqual(L.cell('007'), '="007"');
+  assert.strictEqual(L.cell('1234567890123456'), '="1234567890123456"');
+  assert.strictEqual(L.cell('123456789012345'), '123456789012345', '15 цифр Excel держит');
+  assert.strictEqual(L.cell('=a;b'), '"\'=a;b"', 'и кавычки после префикса');
+  assert.strictEqual(L.csv(['n'], [[1.5], ['=1+1']]), '\ufeffn\r\n1,5\r\n\'=1+1\r\n');
   assert.strictEqual(L.fileName('Типы строк отчёта'), 'типы_строк_отчета.csv');
   assert.strictEqual(L.fileName(''), 'таблица.csv');
   assert.strictEqual(L.plural(1, 'строка', 'строки', 'строк'), '1 строка');

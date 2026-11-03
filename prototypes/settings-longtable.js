@@ -3,7 +3,7 @@
  * Показаны сводка («N строк») и первые строки; «Показать все», поиск по строкам и «Скачать CSV» (файл собирается в
  * браузере из того, что уже на странице; на сервер ничего не уходит). Короткая таблица — как раньше, целиком.
  *   DeskLongTable.el({columns, rows, h, cls, title, limit, numeric}) → элемент.
- * Чистая часть (DeskLongTable._test: filter, csv, fold) проверяется tests/js/settings_longtable.test.js.
+ * Чистая часть (DeskLongTable._test: filter, csv, fold) проверяется tests/js/settings_nav.test.js.
  */
 (function (root) {
   'use strict';
@@ -31,8 +31,13 @@
     var lim = limit || L.FOLD;
     return { folded: n > lim, show: open || n <= lim ? n : Math.min(n, L.HEAD) };
   };
+  // ячейка CSV для русского Excel: число — с запятой; строка, похожая на формулу, — с «'»; код с ведущими нулями или длиннее
+  // 15 цифр — как формула ="…" (иначе Excel съест нули и точность)
   L.cell = function (v) {
+    if (typeof v === 'number') return String(v).replace('.', ',');
     var s = v == null ? '' : String(v);
+    if (/^0\d+$/.test(s) || /^\d{16,}$/.test(s)) return '="' + s + '"';
+    if (/^[=+\-@\t\r]/.test(s) && !/^[+-]?\d+([.,]\d+)?$/.test(s)) s = "'" + s;  // «-1,5» — обычное число, не формула
     return /[";\r\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s;
   };
   // CSV для Excel: «;» и BOM — кириллица открывается без мастера импорта

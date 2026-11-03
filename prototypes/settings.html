@@ -368,7 +368,7 @@ details.at-last .at-open::before{content:"показать"} details.at-last[ope
     <a href="#books" data-sec="books"><svg viewBox="0 0 16 16"><path d="M3 2.5h7.5a1.5 1.5 0 0 1 1.5 1.5v9.5H4.5A1.5 1.5 0 0 1 3 12zM3 12a1.5 1.5 0 0 1 1.5-1.5H12M6 5.5h3.5"/></svg><span class="lbl">Книги</span><span class="nb" data-count="books"></span><span class="dot" data-nav="books"></span></a>
     <a href="#funding" data-sec="funding"><svg viewBox="0 0 16 16"><path d="M12.5 3.5l-9 9M5 6.5a1.5 1.5 0 1 0 0-3 1.5 1.5 0 0 0 0 3zM11 12.5a1.5 1.5 0 1 0 0-3 1.5 1.5 0 0 0 0 3z"/></svg><span class="lbl">Фондирование</span><span class="nb" data-count="funding"></span><span class="dot" data-nav="funding"></span></a>
     <div class="grp">Программа</div>
-    <a href="#up" data-sec="up"><svg viewBox="0 0 16 16"><path d="M8 2.5v8M4.5 7 8 10.5 11.5 7M3 13.5h10"/></svg><span class="lbl">Обновление программы</span><span class="nb" id="nav-ver"></span></a>
+    <a href="#up" data-sec="up"><svg viewBox="0 0 16 16"><path d="M8 2.5v8M4.5 7 8 10.5 11.5 7M3 13.5h10"/></svg><span class="lbl">Обновления</span><span class="nb" id="nav-ver"></span></a>
     <!-- редкое (TDM#551): под кнопкой «Дополнительно»; открытость помнит браузер -->
     <button class="st-more" id="st-more" type="button" aria-expanded="false" aria-controls="st-more-l"><span class="lbl">Дополнительно</span><span class="dot"></span><span class="chev" aria-hidden="true"></span></button>
     <div class="st-more-l" id="st-more-l" hidden>
@@ -471,7 +471,7 @@ details.at-last .at-open::before{content:"показать"} details.at-last[ope
     </section>
 
     <!-- ========== Адаптер и источники: подразделы #adapter/<подраздел> (TDM#551; settings-nav.js) ==========
-         обзор — что за адаптер и в порядке ли он; ежедневное — папки, настройки источников, действия, условия сделок;
+         обзор — что за адаптер и в порядке ли он (обновление адаптера — в «Обновлениях», #up; здесь ссылка и строка состояния); ежедневное — папки, настройки источников, действия, условия сделок;
          проверка и «для опытных» (папка адаптера, пределы времени, JSON) — отдельно. Места для блоков других модулей:
          [data-slot="services"] (подключение к сервисам и фоновые фиды, TDM#548/#557), [data-slot="reread"]
          (перечитать отчёты за период, TDM#553) — DeskSettings.slot(имя). -->
@@ -489,21 +489,15 @@ details.at-last .at-open::before{content:"показать"} details.at-last[ope
         <a href="#adapter/expert" data-sub-link="expert">Для опытных<span class="dot" data-subdot="expert"></span></a>
       </nav>
 
-      <!-- Обзор: какой адаптер, его состояние (status), обновление -->
+      <!-- Обзор: какой адаптер, его состояние (status); обновление адаптера — в разделе «Обновления» (#up), здесь ссылка и строка состояния -->
       <div class="sub" data-sub="overview">
       <div class="card" id="ad-card">
-        <div class="hd"><h2>Адаптер</h2><span class="mut3">какой адаптер читает отчёты</span><span class="sp"></span><a class="lnk" href="#adapter/expert">заменить или настроить →</a></div>
-        <div class="bd"><div id="ad-res"></div></div>
+        <div class="hd"><h2>Адаптер</h2><span class="mut3">какой адаптер читает отчёты</span><span class="sp"></span><a class="lnk" href="#adapter/expert">заменить или настроить →</a> <a class="lnk" href="#ad-upd-card">обновление адаптера →</a></div>
+        <div class="bd"><div id="ad-res"></div><p class="hint" id="ad-upd-line"></p></div>
       </div>
       <div class="card" id="ad-status" hidden>
         <div class="hd"><h2>Состояние адаптера</h2><span class="mut3" id="ad-status-at"></span><span class="sp"></span><button class="ibtn" id="ad-status-refresh" type="button">Обновить</button></div>
         <div class="bd" id="ad-status-bd"><p class="mut">Загрузка…</p></div>
-      </div>
-      <!-- Обновление адаптера: выпуски закрытого репозитория адаптера по токену GitHub (desk-adapter-updater.js;
-           данные: /api/v1/update/adapter*) -->
-      <div class="card" id="ad-upd-card">
-        <div class="hd"><h2>Обновление адаптера</h2><span class="mut3">выпуски адаптера с GitHub — по токену или через браузер; ставится только по кнопке, без перезапуска</span></div>
-        <div class="bd" id="ad-upd"><span class="muted">Загрузка…</span></div>
       </div>
       </div>
 
@@ -556,6 +550,7 @@ details.at-last .at-open::before{content:"показать"} details.at-last[ope
       <div class="note" id="tabs-none" hidden>Адаптер не объявляет других форм настроек: юрлица, книги и фондирование — в своих разделах слева.</div>
       <div id="tabs-adapter"></div>
       <div class="note" id="cf-hidden" hidden></div>
+      <p class="hint">Нужного поля нет в форме? <a href="#advanced">Правка JSON — в «Для опытных»</a>.</p>
       </div>
 
       <!-- Действия адаптера: итог последнего запуска — строкой, по щелчку (TDM#552) -->
@@ -862,7 +857,7 @@ details.at-last .at-open::before{content:"показать"} details.at-last[ope
         #up #up-gh .row{margin-top:4px}
         @media (max-width:700px){ #up .up-t thead{display:none} #up .up-t td{display:block;border:0;padding:2px 8px} #up .up-t tr{display:block;border-bottom:1px solid var(--line);padding-block:6px} #up td.num{text-align:left} }
       </style>
-      <div class="sec-h"><div><h1 id="h-up">Обновление программы</h1><p>Новая версия — с GitHub или из папки с архивами. Настройки и данные при обновлении не меняются.</p></div>
+      <div class="sec-h"><div><h1 id="h-up">Обновление программы и адаптера</h1><p>Новая версия программы — с GitHub или из папки с архивами; адаптер — выпуском с GitHub. Настройки и данные при обновлении не меняются.</p></div>
         <div class="badges"><span class="badge">установлена <span class="mono" id="up-ver">…</span></span></div></div>
       <div class="note warn" id="up-off" hidden></div>
       <div class="card"><div class="hd"><h2>С GitHub</h2></div><div class="bd" id="up-gh"></div><!-- desk-updater.js -->
@@ -905,6 +900,12 @@ details.at-last .at-open::before{content:"показать"} details.at-last[ope
           </div>
           <div class="res" id="up-last" hidden></div>
         </div>
+      </div>
+      <!-- Обновление адаптера: выпуски закрытого репозитория адаптера по токену GitHub (desk-adapter-updater.js;
+           данные: /api/v1/update/adapter*) -->
+      <div class="card" id="ad-upd-card">
+        <div class="hd"><h2>Обновление адаптера</h2><span class="mut3">выпуски адаптера с GitHub — по токену или через браузер; ставится только по кнопке, без перезапуска</span></div>
+        <div class="bd" id="ad-upd"><span class="muted">Загрузка…</span></div>
       </div>
     </section>
 
@@ -1193,17 +1194,21 @@ function show(hash){
   let id = parts.id, inner = null, sub = parts.sub;
   if (INNER[id]) { inner = id; id = INNER[id]; }
   else if (id && !SECTIONS.includes(id) && $(id) && $(id).closest('section.sec')) { inner = id; id = $(id).closest('section.sec').dataset.sec; }
+  // место для модуля (#ovp) без модуля: открыт запасной раздел, но адрес и запомненный раздел не трогаем — slot() откроет нужный
+  const waitSec = SECTIONS.includes(id) && !available(id);
   if (!available(id)) { const tab = id.startsWith('tab-') ? id : null, last = store.get('settings.sec'); id = tab ? 'adapter' : (available(last) ? last : 'hub'); if (tab) inner = tab; sub = null; }
   document.querySelectorAll('section.sec').forEach(s => s.classList.toggle('on', s.dataset.sec === id));
   document.querySelectorAll('.st-nav a[data-sec]').forEach(a => { a.classList.toggle('on', a.dataset.sec === id); if (a.dataset.sec === id) a.setAttribute('aria-current', 'page'); else a.removeAttribute('aria-current'); });
-  store.set('settings.sec', id);
+  if (!waitSec) store.set('settings.sec', id);
   NAV.shown(id);  // раздел из «Дополнительно» — группа раскрыта
   // подраздел: из адреса; для элемента внутри (#dirs, #ad-check, #tab-sources) — его подраздел; иначе последний открытый
   const secEl = document.querySelector('section.sec[data-sec="' + id + '"]');
   const box = inner && $(inner) && $(inner).closest('[data-sub]');
   if (box && box.closest('section.sec') === secEl) sub = box.dataset.sub;
-  const opened = NAV.sub(secEl, sub);
-  if (opened && !inner && parts.sub !== opened) { try { history.replaceState(null, '', '#' + id + '/' + opened); } catch(e) {} }  // адрес — с подразделом
+  // подраздел-место (#adapter/services) без модуля: открыт запасной, адрес и запомненный подраздел не трогаем
+  const waitSub = !waitSec && !!sub && sub === parts.sub && NAV.pending(secEl, sub);
+  const opened = NAV.sub(secEl, sub, {remember: !waitSec && !waitSub});
+  if (opened && !inner && !waitSec && !waitSub && parts.sub !== opened) { try { history.replaceState(null, '', '#' + id + '/' + opened); } catch(e) {} }  // адрес — с подразделом
   if (id === 'users') usersSection();
   if (id === 'net') netSection();
   if (id === 'adapter' && window.DeskAdapterTools && opened === 'overview') window.DeskAdapterTools.shown();  // «Состояние адаптера» — заново
@@ -1214,6 +1219,8 @@ function show(hash){
     setTimeout(() => t.scrollIntoView({block:'start', behavior:'smooth'}), 30);
   }
   else window.scrollTo(0, 0);
+  // модули узнают, что раздел или подраздел открыт: DeskSettings.onShow(fn)
+  window.dispatchEvent(new CustomEvent('desk-settings:shown', {detail:{sec:id, sub:opened || null, hash:location.hash}}));
 }
 /* ---------- Пользователи: раздел desk-users.js (только администратор; вход выключен — объяснение, как включить) ---------- */
 let usersMounted = false;
@@ -1300,7 +1307,9 @@ function setDirty(v){
   for (const sec of ['hub', 'adapter', 'auto', 'calc']) {  // точка «изменено» у раздела, где правили settings.json
     const dot = document.querySelector('.dot[data-nav="' + sec + '"]');
     if (dot) dot.className = 'dot ' + (v && S.dirtySecs && S.dirtySecs.has(sec) ? 'dirty' : (dot.dataset.base || ''));
+    NAV.rollup(sec);
   }
+  if (!v) document.querySelectorAll('[data-sub][data-dirty]').forEach(p => NAV.subDirty(p, 'dirty', false));  // подразделам — их базовая точка
   NAV.moreDot();
 }
 function markDirty(e){
@@ -1308,6 +1317,7 @@ function markDirty(e){
   if (!e.target.closest('[data-key], #dirs')) return;
   (S.dirtySecs = S.dirtySecs || new Set()).add(sec ? sec.dataset.sec : '');
   setDirty(true);
+  NAV.subDirty(e.target.closest('[data-sub]'), 'dirty', true);  // точка «изменено» у подраздела
   if (e.target.dataset.key && e.type === 'input') { renderAuto(e.target.dataset.key); foldCounts(); }  // не на change: он приходит при уходе из поля, щелчок по «вернуть авто» не должен потеряться
   renderSummary();
 }
@@ -1316,13 +1326,11 @@ document.addEventListener('change', markDirty);
 window.addEventListener('beforeunload', e => { if (S.dirty || Object.values(FORMS).some(f => f.dirty())) { e.preventDefault(); e.returnValue = ''; } });
 function navDot(sec, cls, title){
   const d = document.querySelector('.dot[data-nav="' + sec + '"]'); if (!d) return;
-  d.dataset.base = cls || ''; d.className = 'dot ' + (cls || ''); d.title = title || '';
+  d.dataset.base = cls || ''; d.dataset.baseTitle = title || ''; d.className = 'dot ' + (cls || ''); d.title = title || '';
+  NAV.rollup(sec);
   NAV.moreDot();
 }
-function subDot(sec, sub, cls, title){  // точка у подраздела (#adapter/folders …)
-  const d = document.querySelector('section.sec[data-sec="' + sec + '"] .subnav .dot[data-subdot="' + sub + '"]'); if (!d) return;
-  d.className = 'dot ' + (cls || ''); d.title = title || '';
-}
+function subDot(sec, sub, cls, title){ NAV.paintSub(sec, sub, cls || '', title); }  // точка у подраздела (#adapter/folders …); базовый класс — в data-base, «изменено» его не затирает
 
 function render(d){
   S.data = d;
@@ -1549,8 +1557,8 @@ function renderSummary(){
   else it('unk', '#hub', 'Хаб', 'не проверен', 'Подключения → «Проверить связь»');
   it(d.hub_token_set ? 'ok' : 'bad', '#token', 'Токен', d.hub_token_set ? 'задан' : 'не задан');
   const a = S.adapter;
-  if (S.adapterError) it('bad', '#adapter', 'Адаптер', 'ошибка', S.adapterError);
-  else if (a) it(a.loaded ? 'ok' : 'bad', '#adapter', 'Адаптер', a.loaded ? (a.reference ? 'эталонный (CSV)' : 'загружен') : 'не загружен', a.error || [a.name, a.version].filter(Boolean).join(' '));
+  if (S.adapterError) it('bad', '#adapter/overview', 'Адаптер', 'ошибка', S.adapterError);
+  else if (a) it(a.loaded ? 'ok' : 'bad', '#adapter/overview', 'Адаптер', a.loaded ? (a.reference ? 'эталонный (CSV)' : 'загружен') : 'не загружен', a.error || [a.name, a.version].filter(Boolean).join(' '));
   const nd = env.includes('inbox_dirs') ? (eff.inbox_dirs || []).length : S.dirs.filter(x => x.path.trim()).length, sg = dirSuggestions();
   const fs = window.DeskInboxFolders && DeskInboxFolders.summary(S.dirs.map(x => x.path));  // что найдено в папках (#445)
   const fwarn = fs && (fs.missing ? plural(fs.missing, 'папку', 'папки', 'папок') + ' сервер не видит' : fs.scanned && !fs.read ? 'ничего не прочитано' : '');
@@ -1987,6 +1995,7 @@ function lists(){
   };
 }
 function navForms(){
+  NAV.subDirty(document.querySelector('[data-sub="sources"]'), 'form-dirty', Object.keys(FORMS).some(id => !SLOT[id] && FORMS[id].dirty()));  // формы «Источников»
   for (const id of ['entities', 'books', 'funding']) {
     const f = FORMS[id], cnt = document.querySelector('[data-count="' + id + '"]');
     if (!f || !f.data) { if (cnt) cnt.textContent = ''; navDot(id, '', ''); continue; }
@@ -2012,10 +2021,16 @@ function mountTabs(a, reload){
   const extra = $('tabs-adapter'); extra.textContent = '';
   for (const id of Object.keys(SLOT)) {
     const slot = document.querySelector('[data-tab-slot="' + id + '"]'); slot.textContent = '';
-    if (!tabs.some(t => t.id === id)) slot.append(h('div', {class:'note'}, !a ? 'Статус адаптера недоступен.' : !a.loaded ? 'Адаптер не загружен — см. «Адаптер и источники».'
-      : 'Адаптер «' + (a.name || '') + '» не описывает эту форму (describe()["settings_tabs"]). Его файлы настроек — в разделе ', h('a', {href:'#adapter'}, 'Адаптер и источники'), '.'));
+    if (!tabs.some(t => t.id === id)) slot.append(h('div', {class:'note'}, !a ? ['Статус адаптера недоступен — см. ', h('a', {href:'#adapter/overview'}, 'Адаптер и источники → Обзор'), '.']
+      : !a.loaded ? ['Адаптер не загружен — см. ', h('a', {href:'#adapter/overview'}, 'Адаптер и источники → Обзор'), '.']
+      : ['Адаптер «' + (a.name || '') + '» не описывает эту форму (describe()["settings_tabs"]). Его файлы настроек — в разделе ', h('a', {href:'#adapter/expert'}, 'Адаптер и источники → Для опытных'), '.']));
   }
-  $('tabs-none').hidden = !(a && a.loaded) || tabs.some(t => !SLOT[t.id]);
+  // «Источники»: адаптер не загружен или статус недоступен — заметка об этом; загружен, но других форм нет — прежний текст
+  const none = $('tabs-none'), loaded = !!(a && a.loaded);
+  none.hidden = loaded && tabs.some(t => !SLOT[t.id]);
+  none.textContent = '';
+  if (loaded) none.append('Адаптер не объявляет других форм настроек: юрлица, книги и фондирование — в своих разделах слева.');
+  else none.append('Адаптер не загружен — формы источников появятся, когда он загрузится (см. ', h('a', {href:'#adapter/overview'}, '«Обзор»'), ').');
   for (const t of tabs) {
     let el;
     if (SLOT[t.id]) el = document.querySelector('[data-tab-slot="' + t.id + '"]');

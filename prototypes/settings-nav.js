@@ -9,6 +9,13 @@
  *    адаптера — из того, что на странице (без сервера). Стрелки, Enter, Esc; «/» — в поиск.
  *  - Места для блоков других модулей: DeskSettings.slot(имя) открывает контейнер [data-slot] и его пункт навигации
  *    [data-slot-nav]; DeskSettings.status(ключ, пункт) — строка в сводке сверху; DeskSettings.dot(куда, cls, title).
+ *    Прямая ссылка на место, которого ещё нет (#adapter/services, #ovp), не теряется: до slot() открывается запасной
+ *    раздел или подраздел, адрес и запомненный выбор не меняются; slot() по тому же адресу открывает нужное.
+ *  - DeskSettings.onShow(fn) — подписка на открытие раздела или подраздела: fn({sec, sub, hash}) вызывается сразу с
+ *    текущим состоянием и при каждом показе (страница шлёт событие window 'desk-settings:shown' с тем же detail);
+ *    возвращает функцию отписки. DeskSettings.unslot(имя) — скрыть место обратно (если оно открыто — откроется запасное).
+ *  - Точка подраздела поднимается к пункту раздела в левом меню (N.rollup): bad или warn подраздела видны без захода;
+ *    «изменено» (dirty) раздела не затирается.
  * Чистая часть (DeskSettingsNav._test) проверяется tests/js/settings_nav.test.js.
  */
 (function (root) {
@@ -71,8 +78,13 @@
     return Array.prototype.filter.call(nav.querySelectorAll('a[data-sub-link]'), function (a) { return !a.hidden; })
       .map(function (a) { return a.getAttribute('data-sub-link'); });
   };
-  // открыть подраздел; вернуть открытый (null — у раздела нет подразделов)
-  N.sub = function (sec, asked) {
+  // подраздел существует, но его пункт скрыт местом для модуля (data-slot-nav): адрес ждёт, пока модуль вызовет slot()
+  N.pending = function (sec, sub) {
+    var a = sec && sub && sec.querySelector('.subnav a[data-sub-link="' + sub + '"]');
+    return !!(a && a.hidden && a.hasAttribute('data-slot-nav'));
+  };
+  // открыть подраздел; вернуть открытый (null — у раздела нет подразделов); {remember:false} — не запоминать выбор
+  N.sub = function (sec, asked, opts) {
     var nav = sec && sec.querySelector('.subnav');
     if (!nav) return null;
     var name = sec.getAttribute('data-sec'), key = 'settings.sub.' + name;
@@ -85,7 +97,7 @@
       if (on && nav.scrollWidth > nav.clientWidth && (a.offsetLeft < nav.scrollLeft || a.offsetLeft + a.offsetWidth > nav.scrollLeft + nav.clientWidth))
         nav.scrollLeft = Math.max(0, a.offsetLeft - 16);  // выбранный подраздел виден в полосе (телефон)
     });
-    if (sub) O.store.set(key, sub);
+    if (sub && !(opts && opts.remember === false)) O.store.set(key, sub);
     return sub;
   };
   function subnavKeys(nav) {  // стрелки влево / вправо — между подразделами
@@ -98,6 +110,42 @@
       links[j].focus();
     });
   }
+
+  // точка пункта раздела в левом меню: худшее из своей (data-base) и точек подразделов (bad / warn); dirty не затирается
+  N.rollup = function (secName) {
+    var d = document.querySelector('.st-nav .dot[data-nav="' + secName + '"]');
+    var sec = document.querySelector('section.sec[data-sec="' + secName + '"]');
+    if (!d || !sec || /\bdirty\b/.test(d.className)) return;
+    var base = d.getAttribute('data-base') || '', worst = '', why = '';
+    Array.prototype.forEach.call(sec.querySelectorAll('.subnav .dot'), function (x) {
+      var c = /\bbad\b/.test(x.className) ? 'bad' : /\bwarn\b/.test(x.className) ? 'warn' : '';
+      if (c && (!worst || (c === 'bad' && worst === 'warn'))) { worst = c; why = x.title || ''; }
+    });
+    var rank = { bad: 2, warn: 1 }, up = worst && (rank[worst] || 0) > (rank[base] || 0);
+    d.className = 'dot ' + (up ? worst : base);
+    if (up) d.title = why || 'в подразделе есть замечания';
+    else if (d.hasAttribute('data-base-title')) d.title = d.getAttribute('data-base-title');
+    N.moreDot();
+  };
+
+  // точка подраздела: базовый класс cls (undefined — только перерисовать) в data-base; «изменено» (панель помечена
+  // data-dirty / data-form-dirty) её перекрывает, но не затирает
+  N.paintSub = function (secName, sub, cls, title) {
+    var a = document.querySelector('section.sec[data-sec="' + secName + '"] .subnav .dot[data-subdot="' + sub + '"]');
+    if (!a) return;
+    if (cls !== undefined) { a.setAttribute('data-base', cls || ''); a.title = title || ''; }
+    var p = document.querySelector('section.sec[data-sec="' + secName + '"] [data-sub="' + sub + '"]');
+    var dirty = p && (p.hasAttribute('data-dirty') || p.hasAttribute('data-form-dirty'));
+    a.className = 'dot ' + (dirty ? 'dirty' : (a.getAttribute('data-base') || ''));
+    N.rollup(secName);
+  };
+  // пометить панель подраздела «изменено»: kind 'dirty' (поля settings.json) или 'form-dirty' (формы адаптера)
+  N.subDirty = function (panel, kind, on) {
+    var sec = panel && panel.closest('section.sec');
+    if (!sec) return;
+    if (on) panel.setAttribute('data-' + kind, '1'); else panel.removeAttribute('data-' + kind);
+    N.paintSub(sec.getAttribute('data-sec'), panel.getAttribute('data-sub'));
+  };
 
   // ---- «Дополнительно» в навигации ----
   var MORE = 'settings.more';
@@ -130,7 +178,11 @@
   }
   var seq = 0;
   function idOf(el) { if (!el.id) el.id = 'st-t' + (++seq); return el.id; }
-  function visibleFor(el) { return !el.closest('[hidden]'); }
+  function visibleFor(el) {
+    if (el.closest('[hidden]')) return false;
+    var sec = el.closest('section.sec'), a = sec && document.querySelector('.st-nav a[data-sec="' + sec.getAttribute('data-sec') + '"]');
+    return !(a && a.hidden);  // раздел скрыт от этого пользователя (data-users-nav) или ждёт модуль — его полей в поиске нет
+  }
   N.index = function () {
     var items = [];
     var add = function (kind, label, el, target, extra) {
@@ -169,8 +221,8 @@
   };
   N.go = function (target) {
     var el = $(target);
+    try { history.pushState(null, '', '#' + target); } catch (e) { /* файл */ }  // сначала запись истории: show() не должен подменить текущую
     O.show('#' + target);
-    try { history.pushState(null, '', '#' + target); } catch (e) { /* файл */ }
     if (el) {
       if (/^(INPUT|SELECT|TEXTAREA|BUTTON)$/.test(el.tagName)) setTimeout(function () { try { el.focus({ preventScroll: true }); } catch (e) { el.focus(); } }, 40);
       var box = el.closest('.form > div, .sf-grid > *, .card, .at-action') || el;
@@ -231,11 +283,32 @@
       if (!el) return null;
       el.hidden = false;
       Array.prototype.forEach.call(document.querySelectorAll('[data-slot-nav="' + name + '"]'), function (x) { x.hidden = false; });
-      // раздел или подраздел из адреса мог ждать этот блок (модуль загрузился после первого show)
+      // раздел или подраздел из адреса мог ждать этот блок (модуль загрузился после первого show): show() не трогал адрес
       var sec = el.closest('section.sec'), sub = el.closest('[data-sub]'), s = N.split(location.hash);
       if (O && sec && s.id === sec.getAttribute('data-sec') && (!sec.classList.contains('on') || (sub && s.sub === sub.getAttribute('data-sub') && !sub.classList.contains('on'))))
         O.show(location.hash);
       return el;
+    },
+    // скрыть место обратно: контейнер и пункты навигации; если оно было открыто — откроется запасное
+    unslot: function (name) {
+      var el = document.querySelector('[data-slot="' + name + '"]');
+      if (!el) return;
+      var sec = el.closest('section.sec'), sub = el.closest('[data-sub]');
+      var open = !!(sec && sec.classList.contains('on') && (!sub || sub.classList.contains('on')) && !el.hidden);
+      el.hidden = true;
+      Array.prototype.forEach.call(document.querySelectorAll('[data-slot-nav="' + name + '"]'), function (x) { x.hidden = true; });
+      if (!open || !O) return;
+      var secName = sec.getAttribute('data-sec'), placeSec = !!document.querySelector('.st-nav a[data-sec="' + secName + '"][data-slot-nav="' + name + '"]');
+      O.show('#' + secName);
+      if (placeSec) { var cur = document.querySelector('section.sec.on'); try { history.replaceState(null, '', '#' + (cur ? cur.getAttribute('data-sec') : '')); } catch (e) { /* файл */ } }
+    },
+    // подписка на показ раздела / подраздела; fn({sec, sub, hash}) сразу с текущим состоянием; вернуть функцию отписки
+    onShow: function (fn) {
+      var cb = function (e) { fn(e.detail); };
+      window.addEventListener('desk-settings:shown', cb);
+      var sec = document.querySelector('section.sec.on'), sb = sec && sec.querySelector('.sub.on');
+      fn({ sec: sec ? sec.getAttribute('data-sec') : null, sub: sb ? sb.getAttribute('data-sub') : null, hash: location.hash });
+      return function () { window.removeEventListener('desk-settings:shown', cb); };
     },
     // строка в сводке сверху: {cls: 'ok'|'warn'|'bad'|'unk'|'', href, k, text, title}; null — убрать
     status: function (key, item) { if (item) STATUS[key] = item; else delete STATUS[key]; if (statusHook) statusHook(); },
@@ -243,11 +316,12 @@
     // точка у раздела ('ovp') или подраздела ('adapter/services'): cls 'ok'|'warn'|'bad'|'dirty'|''
     dot: function (where, cls, title) {
       var s = N.split('#' + where);
-      var d = s.sub ? document.querySelector('section.sec[data-sec="' + s.id + '"] .subnav a[data-sub-link="' + s.sub + '"] .dot')
-        : document.querySelector('.st-nav .dot[data-nav="' + s.id + '"]');
+      if (s.sub) { N.paintSub(s.id, s.sub, cls || '', title); N.moreDot(); return; }
+      var d = document.querySelector('.st-nav .dot[data-nav="' + s.id + '"]');
       if (!d) return;
       d.className = 'dot ' + (cls || ''); d.title = title || '';
-      if (!s.sub) d.setAttribute('data-base', cls || '');
+      d.setAttribute('data-base', cls || ''); d.setAttribute('data-base-title', title || '');
+      N.rollup(s.id);
       N.moreDot();
     },
     show: function (hash) { if (O) O.show(hash); }
@@ -264,6 +338,18 @@
       b.addEventListener('click', function () { moreOpen($('st-more-l').hidden, true); });
     }
     Array.prototype.forEach.call(document.querySelectorAll('.subnav'), subnavKeys);
+    // повторный щелчок по открытому разделу или подразделу — не новая запись истории, а возврат наверх
+    document.addEventListener('click', function (e) {
+      if (e.defaultPrevented || e.button || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
+      var a = e.target && e.target.closest && e.target.closest('.st-nav a[data-sec], .subnav a[data-sub-link]');
+      var sec = document.querySelector('section.sec.on');
+      if (!a || !sec) return;
+      var same;
+      if (a.hasAttribute('data-sub-link')) { var cur = sec.querySelector('.sub.on'); same = a.closest('section.sec') === sec && !!cur && cur.getAttribute('data-sub') === a.getAttribute('data-sub-link'); }
+      else same = a.getAttribute('data-sec') === sec.getAttribute('data-sec');
+      if (!same) return;
+      e.preventDefault(); window.scrollTo(0, 0);
+    });
     mountSearch();
   };
 
