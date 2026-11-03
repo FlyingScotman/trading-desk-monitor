@@ -1,12 +1,13 @@
 """A standard-library validator for ``contract/private/v1/*.schema.json`` and the row normaliser.
 
 Only the JSON-Schema subset those files use: ``type``, ``enum``, ``required``, ``properties``,
-``patternProperties``, ``additionalProperties: false``, ``pattern``, ``minLength``, ``format: date`` and local
-``$ref``. Error codes are the 08 §6.3 ones and messages carry field names only, never values, because issues
-are shown and shared (08 §6.3). A validated row is normalised so that equal data hashes equally: amounts become
-plain decimal strings (a float through its shortest repr, so nothing is lost), integers (``type`` integer, since
-private/1.2) become ints, absent and null are the same (null keys are dropped), ``ccy`` and every field of the
-``#/$defs/ccy`` type is upper case (``RUR`` is ``RUB``) and ``""`` is invalid.
+``patternProperties``, ``additionalProperties: false``, ``pattern``, ``minLength``, ``format: date``,
+``format: date-time`` (since private/1.6: ``trades.trade_ts``) and local ``$ref``. Error codes are the 08 §6.3 ones
+and messages carry field names only, never values, because issues are shown and shared (08 §6.3). A validated row
+is normalised so that equal data hashes equally: amounts become plain decimal strings (a float through its shortest
+repr, so nothing is lost), integers (``type`` integer, since private/1.2) become ints, absent and null are the same
+(null keys are dropped), ``ccy`` and every field of the ``#/$defs/ccy`` type is upper case (``RUR`` is ``RUB``) and
+``""`` is invalid.
 """
 
 from __future__ import annotations
@@ -15,7 +16,7 @@ import json
 import math
 import re
 from dataclasses import dataclass
-from datetime import date
+from datetime import date, datetime
 from decimal import Decimal
 from functools import cache
 from typing import Any
@@ -26,6 +27,7 @@ _JSON_TYPES = {"string": str, "boolean": bool, "object": dict, "array": list}
 _CCY_ALIAS = {"RUR": "RUB"}
 _CCY_REF = "#/$defs/ccy"
 _INT_RE = re.compile(r"-?[0-9]+")
+_TS_RE = re.compile(r"[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}(:[0-9]{2}(\.[0-9]{1,6})?)?(Z|[+-][0-9]{2}:[0-9]{2})?")
 
 
 @dataclass(frozen=True)
@@ -90,6 +92,18 @@ def is_date(value: Any) -> bool:
     return True
 
 
+def is_ts(value: Any) -> bool:
+    """An ISO 8601 timestamp ``YYYY-MM-DDTHH:MM[:SS[.ffffff]][Z|+HH:MM]`` that is a real instant (08 §6.5: one without
+    an offset is Moscow time)."""
+    if not isinstance(value, str) or not _TS_RE.fullmatch(value):
+        return False
+    try:
+        datetime.fromisoformat(value)  # Python 3.11+: "Z" too
+    except ValueError:
+        return False
+    return True
+
+
 def _resolve(schema: dict, node: dict) -> dict:
     while "$ref" in node:
         ref = node["$ref"]
@@ -122,6 +136,8 @@ def _check_value(node: dict, value: Any) -> tuple[str | None, Any]:
         if value == "" or len(value) < node.get("minLength", 0):
             return "bad_value", None
         if node.get("format") == "date" and not is_date(value):
+            return "bad_date", None
+        if node.get("format") == "date-time" and not is_ts(value):
             return "bad_date", None
         if "pattern" in node and not re.search(node["pattern"], value):
             return "bad_value", None

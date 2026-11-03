@@ -248,9 +248,10 @@ test('#309 и #308 в браузере', { skip: pw ? false : 'нет Playwright
       s = await look(r.pg);
       assert.strictEqual(s.source, 'empty'); assert.strictEqual(s.fail, null); assert.ok(s.norun); assert.strictEqual(s.mock, false); await r.ctx.close();
     });
-    // #319: прогона нет — пустое состояние, не демо-набор. Мониторы — полоса с причиной и выходами, без цифр; C14 и C15
-    // (data-run="optional") прогон не нужен — работают своими запросами, в шапке нет даты, бейджа и заметок демо-набора
-    const OPTIONAL = ['c14-day-status.html', 'c15-cash.html'];
+    // #319: прогона нет — пустое состояние, не демо-набор. Мониторы — полоса с причиной и выходами, без цифр; C14, C15
+    // и C20 (data-run="optional") прогон не нужен — работают своими запросами, в шапке нет даты, бейджа и заметок
+    // демо-набора
+    const OPTIONAL = ['c14-day-status.html', 'c15-cash.html', 'c20-trades.html'];
     const emptyCases = [
       { name: 'no_runs', body: EMPTY('no_runs', 'нет опубликованных прогонов'), query: '', title: 'Прогонов ещё нет', latest: null, day: 'c14-day-status.html' },
       { name: 'not_found по run_id', body: EMPTY('not_found', 'прогон 999999 не найден'), query: '?run_id=999999', title: 'Прогон #999999 не найден', latest: true, day: 'c14-day-status.html', allow: /999999/g },

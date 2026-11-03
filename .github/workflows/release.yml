@@ -5,8 +5,11 @@ name: release
 # the bundle without packages DeskMonitorMirror-<version>.zip (--mirror), patches from the previous release's
 # published bundles (full and mirror: DeskMonitor-patch-*, DeskMonitorMirror-patch-*) and from the last delivered
 # build (backend/tools/delivered), SHA256SUMS, release.json and notes with the checksums.
-# Bump the version, commit, then:  git tag v0.3.0 && git push origin v0.3.0
-# Re-running for an existing tag (Actions -> release -> Run workflow) replaces its assets.
+# Bump the version, commit, then either push the tag:  git tag v0.3.0 && git push origin v0.3.0
+# or run Actions -> release -> «Run workflow» on main with the tag field empty: the tag v<backend version> is made by
+# the release itself on the commit it built (as the adapter's release, TDA#99), after lint and tests pass; refused if
+# that tag exists (bump the version first). A tag made with GITHUB_TOKEN does not start this workflow a second time.
+# Re-running for an existing tag (Run workflow with the tag filled in) replaces its assets.
 # Only a v-tag starts this workflow: a tag without v (or a release made by hand on GitHub) stays empty; tag-format.yml
 # fails on such a tag with what to do, and check-tag below rejects a non-v tag given to Run workflow.
 
@@ -16,8 +19,9 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: "existing tag to build and publish (v<backend version>)"
-        required: true
+        description: "existing tag to rebuild (v<backend version>); empty on main: make the tag v<backend version>"
+        required: false
+        default: ""
 
 permissions:
   contents: write
@@ -38,6 +42,20 @@ jobs:
         with:
           ref: ${{ github.event.inputs.tag || github.ref }}
           fetch-depth: 0
+      - name: Release tag («Run workflow» without a tag makes v<backend version> on main)
+        if: github.event_name == 'workflow_dispatch' && github.event.inputs.tag == ''
+        run: |
+          if [ "$GITHUB_REF" != "refs/heads/main" ]; then
+            echo "«Run workflow» without a tag releases main only, not $GITHUB_REF" >&2
+            exit 1
+          fi
+          TAG="v$(python3 -c 'import tomllib; print(tomllib.load(open("backend/pyproject.toml", "rb"))["project"]["version"])')"
+          if git ls-remote --exit-code --tags origin "refs/tags/$TAG" >/dev/null; then
+            echo "tag $TAG already exists; bump the version in backend/pyproject.toml first, or fill in the tag to rebuild it" >&2
+            exit 1
+          fi
+          echo "TAG=$TAG" >> "$GITHUB_ENV"
+          echo "MAKE_TAG=1" >> "$GITHUB_ENV"
       - uses: astral-sh/setup-uv@v5
       - name: Python 3.11 with pip (the bundle builder downloads win_amd64 / cp311 wheels with it)
         uses: actions/setup-python@v5
@@ -96,6 +114,8 @@ jobs:
             gh release upload "$TAG" --repo "$GITHUB_REPOSITORY" --clobber "${assets[@]}"
             gh release edit "$TAG" --repo "$GITHUB_REPOSITORY" --notes-file dist/NOTES.md
           else
-            gh release create "$TAG" --repo "$GITHUB_REPOSITORY" --verify-tag --latest \
+            # «Run workflow» without a tag: the release makes the tag on the commit that was built and tested
+            if [ "${MAKE_TAG:-}" = "1" ]; then WHERE=(--target "$GITHUB_SHA"); else WHERE=(--verify-tag); fi
+            gh release create "$TAG" --repo "$GITHUB_REPOSITORY" "${WHERE[@]}" --latest \
               --title "Desk Monitor $TAG" --notes-file dist/NOTES.md "${assets[@]}"
           fi

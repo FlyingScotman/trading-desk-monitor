@@ -27,7 +27,7 @@ DS_CONFIG, SNAPS = DS / "config", FIX / "mdhub_v1"
 DOC = REPO / "docs/architecture/08_PRIVATE_ADAPTER_INTERFACE.md"
 D = date.fromisoformat
 NEW = ("ocp", "cash_balances", "pnl_official", "trade_terms", "entities", "funding_rules", "funding_policy",
-       "ocp_policy")
+       "ocp_policy", "trades")
 BOOKS = [{"book_id": b, "name": b, "desk": "Rates", "book_type": t, "entity": e, "active": True}
          for b, t, e in (("T1", "TRADING", "ENT1"), ("D1", "DERIVS", "ENT1"), ("F1", "FUTURES", "ENT1"),
                          ("C1", "TRADING", "ENT2"))]
@@ -71,16 +71,16 @@ def test_new_schemas_equal_the_08_tables_and_their_templates(name: str) -> None:
     assert raw.startswith(b"\xef\xbb\xbf") and raw.endswith(b"\r\n") and raw.count(b"\n") == 1
     assert raw[3:].decode().strip().split(";") == schema_fields(name)[0]
     schema = json.loads((REPO / f"contract/private/v1/{name}.schema.json").read_text(encoding="utf-8"))
-    since = {"trade_terms": "1.4", "ocp_policy": "1.5"}.get(name, "1.3")  # the minor that last changed the schema
+    since = {"trade_terms": "1.4", "ocp_policy": "1.5", "trades": "1.6"}.get(name, "1.3")  # the minor that last changed the schema
     assert schema["$id"] == f"private/{since}/{name}" and schema["additionalProperties"] is False
 
 
-def test_contract_is_1_5_and_keys_are_schema_fields() -> None:
-    assert CONTRACT == "private/1.5" and "cash_balances" in MULTI_DATE_DATASETS and "ocp" not in MULTI_DATE_DATASETS
+def test_contract_is_1_6_and_keys_are_schema_fields() -> None:
+    assert CONTRACT == "private/1.6" and "cash_balances" in MULTI_DATE_DATASETS and "ocp" not in MULTI_DATE_DATASETS
     for ds, keys in DATASET_KEYS.items():
         fields = schema_fields(ds)[0]
-        assert not fields or set(keys) <= set(fields), ds  # trades: no schema yet
-    assert "## 10 Private input contract v1 (`private/1.5`)" in DOC.read_text(encoding="utf-8")
+        assert fields and set(keys) <= set(fields), ds
+    assert "## 10 Private input contract v1 (`private/1.6`)" in DOC.read_text(encoding="utf-8")
     for phase in ("A7", "A8", "A9", "A10"):
         assert phase in DOC.read_text(encoding="utf-8").split("## 11 Integration points", 1)[1].split("## 12", 1)[0]
 
@@ -292,9 +292,9 @@ def test_settings_tabs_are_checked_and_never_fatal() -> None:
 
 def test_reference_adapter_declares_every_dataset_and_reads_the_reference_tables(tmp_path: Path) -> None:
     h = load_adapter(None, str(DS_CONFIG), None)
-    assert h.ok and h.describe["contract"] == "private/1.5" and h.describe["sources"][0]["source"] == "positions_csv"
+    assert h.ok and h.describe["contract"] == "private/1.6" and h.describe["sources"][0]["source"] == "positions_csv"
     assert {s["dataset"] for s in h.describe["sources"]} == {"positions", "ocp", "cash_balances", "pnl_official",
-                                                            "trade_terms"}
+                                                            "trade_terms", "trades"}
     rep = conformance.check(None, [str(DS)], stub_ctx=True, config_dir=str(DS_CONFIG))
     assert rep.ok, rep.text()
     assert rep.reference == {"books": 4, "entities": 2, "funding_rules": 9, "funding_policy": 2, "ocp_policy": 2}
