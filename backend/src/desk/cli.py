@@ -66,6 +66,7 @@ from typing import Any
 import psycopg
 
 from . import store
+from . import trades as trades_mod
 from .curves import fx as fxcurves
 from .marketdata import cache, history, reference, static_facts
 from .marketdata.adapter import MarketView
@@ -292,6 +293,13 @@ def eod_run(settings: Settings, d: str, *, snapshots: str | Path | None = None, 
         if book:
             _load(con, Path(book), d, out=out)
         inputs = store.positions_for(con, date.fromisoformat(d), books=books)
+        intraday_trades = None
+        if run_type == "INTRADAY":  # the day's bond trades in today's book (desk.trades.intraday_inputs, TDM#557)
+            inputs, intraday_trades = trades_mod.intraday_inputs(con, run_date, settings, inputs)
+            if intraday_trades and (intraday_trades["applied"] or intraday_trades["skipped"]):
+                out(f"trades of {run_date}: {intraday_trades['applied']} in the book "
+                    f"({intraday_trades['new_positions']} new positions), left out "
+                    + (", ".join(f"{k} {v}" for k, v in intraday_trades["skipped"].items()) or "none"))
         if not inputs.rows:
             out(f"no positions in the store for {d}" + (f" (books {','.join(books)})" if books else ""))
             out(f"done in {time.perf_counter() - t0:.1f} s")
@@ -342,6 +350,7 @@ def eod_run(settings: Settings, d: str, *, snapshots: str | Path | None = None, 
                                                     inputs=inputs, carried_from=carried, pnl_basis=basis,
                                                     core_results=[bp.core_result] if bp.core_result else None,
                                                     unlinked_rates=bp.unlinked_rates,
+                                                    intraday_trades=intraday_trades,
                                                     **({"business_date": run_date, "cut_type": "prev_close"}
                                                        if on_close else {}))
         out(f"desk run {run_id}: {status}, {len(warnings)} warnings")

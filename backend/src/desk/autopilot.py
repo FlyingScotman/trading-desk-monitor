@@ -54,7 +54,8 @@ every ``inbox_poll_seconds`` and on ``POST /api/v1/autopilot/run``):
    times), and for the preliminary cut only until today has a run on it; a run is made
    only for a cut newer than the last run's, when the position sets changed, when the previous close it is measured
    against changed (the previous day's ``eod_final`` published late or corrected), or when its private inputs hash is
-   no longer today's (trade terms of an earlier date, a stock in force today, arrived after it: #547). The flash PnL is measured against
+   no longer today's (trade terms of an earlier date, a stock in force today, arrived after it: #547; for an
+   INTRADAY run the hash includes the day's bond trades, ``trades.intraday_inputs``, TDM#557). The flash PnL is measured against
    the previous business day's ``eod_final``, else the newest earlier final or preliminary close, and the run says
    which (``pnl_basis``). The step's status carries a machine-readable ``reason`` (``INTRADAY_REASONS``) next to its
    detail. Only the latest INTRADAY run of a date is kept (``store.prune_intraday``); intraday and
@@ -133,7 +134,7 @@ from typing import Any
 
 import psycopg
 
-from . import logic_version, store
+from . import logic_version, store, trades
 from .backfill import late_why, same_logic
 from .inbox.timesem import MSK
 from .marketdata import cache, history, hubhistory, static_facts
@@ -1180,7 +1181,10 @@ class Autopilot:
         prev_id = pc[2] if pc else None
         if target is None and last is not None and last[4] != prev_id:
             target = (last[1], "previous close changed")  # the previous close arrived (or was corrected) after it
-        inputs_hash = store.positions_for(con, today).private_inputs_hash if last is not None else None
+        inputs_hash = None
+        if last is not None:  # an INTRADAY run values the day's trades too (TDM#557), as cli.eod_run does
+            inputs_hash = (trades.intraday_inputs(con, today, settings)[0] if rtype == "INTRADAY"
+                           else store.positions_for(con, today)).private_inputs_hash
         if target is None and last is not None and last[5] != inputs_hash:
             target = (last[1], "private inputs changed")  # e.g. trade terms of an earlier date, in force today (#547)
         when = "asked the hub" if asked else "next hub check in the next 10-minute slot"
@@ -1275,7 +1279,7 @@ class Autopilot:
             " FROM run WHERE business_date = %s AND run_type = 'INTRADAY' AND cut_type = 'prev_close'"
             " AND status = 'complete' ORDER BY run_id DESC LIMIT 1", (today,)).fetchone()
         logic = logic_version()
-        inputs_hash = store.positions_for(con, today).private_inputs_hash if last is not None else None
+        inputs_hash = trades.intraday_inputs(con, today, settings)[0].private_inputs_hash if last is not None else None
         why = (f"no run of {today} yet" if last is None else "positions changed" if sorted(last[2]) != ids
                else "close changed" if last[1] != snap
                else "private inputs changed" if last[4] != inputs_hash  # trade terms in force today (#547)
