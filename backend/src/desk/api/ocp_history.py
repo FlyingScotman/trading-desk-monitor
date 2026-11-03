@@ -15,9 +15,9 @@ against ``|reported_rub| / |reported|`` (₽ per unit as the report actually con
 their ratio outside ``RATE_BAND`` (a rate quoted per 10 or 100 units, as JPY or KZT can be): no rate. Without a rate,
 that implied one (the figure without the derivatives when the report gives them apart, private/1.7: ``ocp_rub``
 follows ``ocp_ccy``). Only the units the day publishes as the report: none under ``published`` ``derived``, none of a
-unit older than the policy's ``report_max_age_days`` (``report_plus_outside``) or ``report_max_age_bd`` business days
-(``report_base_plus_day``, weekdays: the run's calendar is not saved) (published from positions,
-``derived_stale_report``). Two scopes: the newer ``valid_date``, then a book's scope before an entity's,
+unit older than the policy's ``report_max_age_days`` (``report_plus_outside``; published from positions,
+``derived_stale_report``); under ``report_base_plus_day`` the report sets the day's published lines start from
+(their ``set_id``, as the run chose its base on its own calendar). Two scopes: the newer ``valid_date``, then a book's scope before an entity's,
 then the first book. A block without them (no report, before B2): ``{}``.
 
 The books of the period (``books``): name, entity and desk of each book from the latest run of the period that has
@@ -41,12 +41,20 @@ MAX_PERIOD_DAYS = 400
 RATE_BAND = (0.5, 2.0)
 """``rate_rub_per_unit`` / (``ocp_rub`` / ``ocp_ccy``) of a report scope outside this: the scope gives no rate."""
 
+LINE_KEYS = ("entity", "book_id", "books", "ccy", "amount", "source", "reported", "valid_date", "base_date", "set_id",
+             "base_kind", "parts")
+"""The keys of a published line the history reads: never its ``contributions`` (block v3), which stay in the run's
+``/ocp``; the SQL picks them, so a long period does not carry them out of the store."""
+
 SQL = ("SELECT run_id, kind, CASE WHEN kind = 'ocp' THEN jsonb_build_object("
-       "'status', data->'status', 'basis', data->'published'->'basis', 'lines', data->'published'->'by_book',"
-       " 'max_age', data->'policy'->'report_max_age_days', 'max_age_bd', data->'policy'->'report_max_age_bd',"
+       "'status', data->'status', 'basis', data->'published'->'basis',"
+       " 'lines', (SELECT jsonb_agg(jsonb_build_object(" + ", ".join(f"'{k}', x->'{k}'" for k in LINE_KEYS) + "))"
+       " FROM jsonb_array_elements(CASE WHEN jsonb_typeof(data->'published'->'by_book') = 'array'"
+       " THEN data->'published'->'by_book' ELSE '[]' END) x),"
+       " 'max_age', data->'policy'->'report_max_age_days',"
        " 'rates', (SELECT jsonb_agg(jsonb_build_object('ccy', c->'ccy', 'rate', c->'reported_rate',"
        " 'rub', c->'reported_rub', 'amount', COALESCE(c->'reported_base', c->'reported'), 'valid', c->'valid_date',"
-       " 'book', c->'book_id'))"
+       " 'book', c->'book_id', 'set', c->'set_id'))"
        " FROM jsonb_array_elements(CASE WHEN jsonb_typeof(data->'reconciliation') = 'array'"
        " THEN data->'reconciliation' ELSE '[]' END) c WHERE jsonb_typeof(c->'reported_rate') = 'number'"
        " OR jsonb_typeof(c->'reported_rub') = 'number'))"
@@ -115,14 +123,17 @@ def _report_fx(block: dict[str, Any], on: date) -> dict[str, float]:
     basis = block.get("basis")
     if basis not in (O.PublishedBasis.REPORT_PLUS_OUTSIDE.value, O.PublishedBasis.REPORT_BASE_PLUS_DAY.value):
         return {}
-    days = basis == O.PublishedBasis.REPORT_PLUS_OUTSIDE.value
-    age = block.get("max_age" if days else "max_age_bd")
+    # report_base_plus_day: the report sets its published lines start from (their set_id), as the run decided them;
+    # report_plus_outside: the units no older than the policy's report_max_age_days
+    sets = {x.get("set_id") for x in block.get("lines") or [] if x.get("source") == O.REPORT and x.get("set_id")}
+    age = block.get("max_age")
     if not isinstance(age, int) or isinstance(age, bool):
-        age = O.PROVISIONAL_POLICY.report_max_age_days if days else O.PROVISIONAL_POLICY.report_max_age_bd
+        age = O.PROVISIONAL_POLICY.report_max_age_days
     by: dict[str, list[tuple[str, bool, str, float]]] = {}
     for r in block.get("rates") or []:
         ccy, valid = r.get("ccy"), _day(r.get("valid"))
-        old = valid is not None and ((on - valid).days if days else O.business_days_between(valid, on)) > age
+        old = r.get("set") not in sets if basis == O.PublishedBasis.REPORT_BASE_PLUS_DAY.value else \
+            valid is not None and (on - valid).days > age
         if not ccy or ccy == O.PROVISIONAL_POLICY.reporting_ccy or old:
             continue
         if (rate := _unit_rate(r)) is not None:

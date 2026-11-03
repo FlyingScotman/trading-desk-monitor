@@ -52,8 +52,8 @@ from __future__ import annotations
 
 import math
 from collections import defaultdict
-from collections.abc import Callable, Mapping
-from dataclasses import dataclass, field, fields
+from collections.abc import Callable, Mapping, Sequence
+from dataclasses import dataclass, field, fields, replace
 from datetime import date, timedelta
 from typing import Any
 
@@ -75,12 +75,19 @@ KIND = "ocp"
 BLOCK_VERSION = 3
 COMPUTED, NO_REPORT, FAILED, NOT_COMPUTED = "computed", "no_report", "failed", "not_computed"
 STATUS_TEXT = {
-    COMPUTED: "ОВП — отчёт ОВП (база) с PV деривативов и изменениями дня или со слагаемыми вне отчёта; сверено с ОВП "
-              "из позиций",
+    COMPUTED: "ОВП — отчёт ОВП и слагаемые вне отчёта из позиций; сверено с ОВП из позиций",
     NO_REPORT: "отчёта ОВП (ocp) на дату нет: ОВП посчитано только из позиций, сверки нет",
     FAILED: "ОВП не посчитано: ошибка расчёта",
     NOT_COMPUTED: "прогон без расчёта ОВП (до B2)",
 }
+COMPUTED_TEXT = {
+    O.PublishedBasis.REPORT_BASE_PLUS_DAY: "ОВП — отчёт ОВП юрлица за последний рабочий день без деривативов, которые "
+                                           "отчёт даёт отдельно, плюс их PV, переоценка облигаций и сделки после даты "
+                                           "отчёта, плюс слагаемые вне отчёта; сверено с ОВП из позиций",
+    O.PublishedBasis.REPORT_PLUS_OUTSIDE: STATUS_TEXT[COMPUTED],
+    O.PublishedBasis.DERIVED: "ОВП из позиций; отчёт ОВП только сверен",
+}
+"""The text of a computed block by the basis the run published on (``policy.published``)."""
 LOG_BREAKS = 50
 
 
@@ -121,6 +128,7 @@ def empty_block(status: str, text: str, on: date | None = None, **kw: Any) -> di
             "parts": [{"key": p, "name": O.PART_TEXT[p]} for p in O.PARTS],
             "policy": None, "published": {"basis": None, "base_date": None, "by_ccy": {}, "by_book": []}, "gaps": [],
             "by_ccy": {}, "by_book": [], "lines": [], "reconciliation": [], "derivatives_check": [],
+            "derivatives_pv": [],
             "outside_report": [], "transfers": [], "report": {"units": [], "rows": 0}, "totals": None, "notes": [],
             **kw}
 
@@ -163,12 +171,20 @@ def run_policy(con: psycopg.Connection, on: date, known_at: Any, base: O.OcpPoli
     """The OCP policy of the run of ``on``: ``base`` with the adapter's ``ocp_policy`` in force (private/1.5,
     ``rules.reference.apply_ocp_policy``); (policy, source per field, conflicts). A field's source:
     ``ocp_policy:<id>``, an owner decision (``rules.ocp.DECIDED``), ``provisional`` (``OPEN_DECISIONS``) or
-    ``default``."""
+    ``default``. ``published`` no row in force gives follows the date (``rules.ocp.default_published``): before
+    ``BASIS_SINCE`` the basis those dates were published on, ``report_plus_outside``, so a date recomputed later keeps
+    it."""
     s = apply_ocp_policy(store.current_reference(con, "ocp_policy", on, known_at), base)
+    policy = s.policy
     open_fields = {d.field for d in O.OPEN_DECISIONS}
     source = {f.name: s.source.get(f.name) or O.DECIDED.get(f.name)
               or ("provisional" if f.name in open_fields else "default") for f in fields(O.OcpPolicy)}
-    return s.policy, source, s.conflicts
+    if "published" not in s.source and base.published is O.PROVISIONAL_POLICY.published \
+            and (by_date := O.default_published(on)) is not policy.published:
+        policy = replace(policy, published=by_date)
+        source["published"] = (f"OQ-18 (владелец, 28.10.2026, TDM#416): дата до "
+                               f"{O.BASIS_SINCE:%d.%m.%Y}, ocp_policy базис не задаёт")
+    return policy, source, s.conflicts
 
 
 def compute(con: psycopg.Connection, on: date, market: MarketView | None, content_rows: list[dict[str, Any]],
@@ -242,7 +258,7 @@ def _compute(con: psycopg.Connection, on: date, market: MarketView | None, conte
         pub_ccy[ccy] = {**x, "rate": rates.get(ccy),
                         "total_rub": x["total"] * rates[ccy] if ccy in rates else None}
     block = empty_block(
-        status, STATUS_TEXT[status], on,
+        status, COMPUTED_TEXT[policy.published] if status == COMPUTED else STATUS_TEXT[status], on,
         policy={**policy.lineage(), "provisional": prov, "source": source, "conflicts": list(conflicts),
                 "decisions": [{"field": d.field, "ref": d.ref, "question": d.question, "provisional": d.provisional}
                               for d in O.OPEN_DECISIONS if d.field in prov]},
@@ -251,7 +267,7 @@ def _compute(con: psycopg.Connection, on: date, market: MarketView | None, conte
                    "by_ccy": pub_ccy, "by_book": res.published},
         gaps=res.gaps,
         by_ccy=by_ccy, by_book=by_book, lines=[x.as_json() for x in res.lines], reconciliation=res.comparisons,
-        derivatives_check=res.derivatives_check,
+        derivatives_check=res.derivatives_check, derivatives_pv=res.derivatives_pv,
         outside_report=res.outside_report, transfers=res.transfers,
         report={"units": [{k: (v.isoformat() if isinstance(v, date) else v) for k, v in u.items()}
                           for u in report.units], "rows": len(report.rows)},
@@ -266,7 +282,7 @@ def _compute(con: psycopg.Connection, on: date, market: MarketView | None, conte
     breaks = [c for c in res.comparisons if c["over"]]
     for c in [c for c in res.derivatives_check if c["over"]][:LOG_BREAKS]:
         log.append(("WARN", (f"ОВП: номинал деривативов отчёта против их PV на {c['pv_date']}: "
-                            f"{c['book_id'] or c['entity']} {c['ccy']} {O.COMPONENT_TEXT[c['component']]}: номинал "
+                            f"{c['book_id'] or c['entity']} {c['ccy']} {O.KIND_TEXT[c['kind']]}: номинал "
                             f"{c['nominal']:,.0f}, PV {c['pv']:,.0f}, разница {c['diff']:,.0f}")))
     for c in breaks[:LOG_BREAKS]:
         where = c["book_id"] or c["entity"]
@@ -310,36 +326,61 @@ def _foreign_bond(r: Mapping[str, Any]) -> bool:
         != O.PROVISIONAL_POLICY.reporting_ccy
 
 
-def paid_since(now: Mapping[str, Any] | None, before: Mapping[str, Any], terms: Any, b0: date, on: date
-               ) -> tuple[float, str]:
-    """(the coupons and principal a bond held on ``b0`` received in (``b0``, ``on``], in its currency, signed as the
-    position; a note when they are not known). The FX liability's coupons of the day (``publish.fx_liability``: the
-    flash PnL's received flows, else the schedule) when its last transfer is ``b0``; else the bond's schedule
-    (coupons' ``amount_per_bond``, redemptions' ``value_per_bond``) x the quantity on ``b0``."""
-    fl = ((now or {}).get("extra") or {}).get("fx_liability") or {}
-    if fl.get("state") == fx_liability.COMPUTED and fl.get("reference") == fx_liability.PREV \
-            and fl.get("reference_date") == b0.isoformat():
-        return float(fl.get("coupons_ccy") or 0.0), ""
+NO_TERMS_COUPONS = "условий бумаги нет: купоны дня валютного пассива, погашения не учтены"
+
+
+def paid_since(now: Mapping[str, Any] | None, before: Mapping[str, Any], terms: Any, b0: date, on: date,
+               trades: Sequence[Mapping[str, Any]] = ()) -> tuple[float, str]:
+    """(the coupons and principal a bond received in (``b0``, ``on``], in its currency, signed as the position; a note
+    when they are not fully known). From the bond's schedule: per payment date in (``b0``, ``on``] its coupon
+    (``amount_per_bond``) and its redemption or amortisation (``value_per_bond``) x the quantity held that day: the
+    quantity on ``b0`` + the bonds bought − sold by the trades of the position after ``b0`` dated before the payment.
+    Without the bond's terms: the FX liability's coupons of the day (``publish.fx_liability``) when its last transfer is
+    ``b0``, said: principal not known."""
+    q0 = fx_liability._qty(before)
     if terms is None:
+        fl = ((now or {}).get("extra") or {}).get("fx_liability") or {}
+        if fl.get("state") == fx_liability.COMPUTED and fl.get("reference") == fx_liability.PREV \
+                and fl.get("reference_date") == b0.isoformat():
+            return float(fl.get("coupons_ccy") or 0.0), NO_TERMS_COUPONS
         return 0.0, "условий бумаги нет: купоны и погашения после базы не учтены"
-    per_bond = math.fsum([*(float(c.amount_per_bond) for c in getattr(terms, "coupons", ())
-                            if b0 < c.pay_date <= on and getattr(c, "amount_per_bond", None) is not None),
-                          *(float(r.value_per_bond) for r in getattr(terms, "redemptions", ())
-                            if b0 < r.date <= on and getattr(r, "value_per_bond", None) is not None)])
-    if not per_bond:
-        return 0.0, ""
-    q = fx_liability._qty(before)
-    if q is None:
+    flows: list[tuple[date, float]] = []
+    missing = []
+    for c in getattr(terms, "coupons", ()):
+        if b0 < c.pay_date <= on:
+            if getattr(c, "amount_per_bond", None) is None:
+                missing.append(c.pay_date.isoformat())
+            else:
+                flows.append((c.pay_date, float(c.amount_per_bond)))
+    for r in getattr(terms, "redemptions", ()):
+        if b0 < r.date <= on and getattr(r, "value_per_bond", None) is not None:
+            flows.append((r.date, float(r.value_per_bond)))
+    why = ("купон " + ", ".join(missing) + " без суммы: не учтён") if missing else ""
+    if not flows:
+        return 0.0, why
+    if q0 is None:
         return 0.0, "количество бумаг на дату базы неизвестно: выплаты после базы не учтены"
-    return q * per_bond, ""
+    moves = []
+    for t in trades:
+        q, td = _f(t.get("quantity")), O._day(t.get("trade_date"))
+        if q is not None and td is not None and str(t.get("status") or "live") == "live":
+            moves.append((td, -abs(q) if str(t.get("side")) == "sell" else abs(q)))
+    total = math.fsum(per * (q0 + math.fsum(m for td, m in moves if td < d)) for d, per in flows)
+    return total, why
 
 
 def bond_moves(rows: list[dict[str, Any]], before: Mapping[str, Mapping[str, Any]], books: Mapping[str, Mapping],
-               terms: Mapping[str, Any], b0: date, on: date) -> list[O.BondMove]:
+               terms: Mapping[str, Any], b0: date, on: date,
+               trades: Sequence[Mapping[str, Any]] = ()) -> list[O.BondMove]:
     """The foreign-currency bonds' revaluation since ``b0`` (``rules.ocp.BondMove``): the run's rows against the rows
-    of the default run of ``b0`` (``before``, position_id -> its fact), the positions of either."""
+    of the default run of ``b0`` (``before``, position_id -> its fact), the positions of either; ``trades``: the trades
+    after ``b0`` (``rules.ocp.current_trades``), for the quantity held on each payment date (``paid_since``)."""
     now = {r["position_id"]: r for r in rows if _foreign_bond(r)}
     then = {pid: r for pid, r in before.items() if _foreign_bond(r)}
+    by_pos: dict[str, list[Mapping[str, Any]]] = defaultdict(list)
+    for t in trades:
+        if str(t.get("asset_class") or "").lower() == "bond":
+            by_pos[str(t.get("position_id"))].append(t)
     out = []
     for pid in sorted(set(now) | set(then)):
         r1, r0 = now.get(pid), then.get(pid)
@@ -349,7 +390,8 @@ def bond_moves(rows: list[dict[str, Any]], before: Mapping[str, Mapping[str, Any
         note = ""
         if r1 and r0 and (r0.get("ccy") or "") != (r1.get("ccy") or ""):
             mv0, note = None, f"на {b0} позиция в другой валюте: MV на дату базы не взята"
-        paid, why = paid_since(r1, r0, terms.get(pid), b0, on) if r0 and mv0 is not None else (0.0, "")
+        paid, why = paid_since(r1, r0, terms.get(pid), b0, on, by_pos.get(pid, ())) \
+            if r0 and mv0 is not None else (0.0, "")
         book = str(r["book_id"])
         out.append(O.BondMove(pid, book, str((books.get(book) or {}).get("entity") or "—"), str(r.get("ccy")),
                               mv0, mv1, paid, "; ".join(x for x in (note, why) if x)))
@@ -357,17 +399,18 @@ def bond_moves(rows: list[dict[str, Any]], before: Mapping[str, Mapping[str, Any
 
 
 def _pv_base(con: psycopg.Connection, run_id: int | None) -> dict[tuple[str, str, str], float] | None:
-    """(book, currency, component) -> the derivatives' OCP lines of a stored run (its ``ocp`` block); None without."""
+    """(book, currency, kind) -> the derivatives' PV on a stored run's date (its ``ocp`` block's ``derivatives_pv``,
+    v3; always the PV whatever ``amount_basis``); None without the run or for an older block."""
     if run_id is None:
         return None
-    row = con.execute("SELECT data->'lines' FROM run_reference WHERE run_id = %s AND kind = %s",
+    row = con.execute("SELECT data->'derivatives_pv' FROM run_reference WHERE run_id = %s AND kind = %s",
                       (run_id, KIND)).fetchone()
     if not row or not isinstance(row[0], list):
         return None
     out: dict[tuple[str, str, str], float] = defaultdict(float)
     for x in row[0]:
-        if x.get("component") in O.DERIVATIVE_COMPONENTS and (a := _f(x.get("amount"))) is not None:
-            out[(str(x.get("book_id")), str(x.get("ccy")), x["component"])] += a
+        if (a := _f(x.get("amount"))) is not None:
+            out[(str(x.get("book_id")), str(x.get("ccy")), str(x.get("kind")))] += a
     return dict(out)
 
 
@@ -375,16 +418,15 @@ def base_days(con: psycopg.Connection, on: date, known_at: Any, units: list[dict
               is_bd: Callable[[date], bool] | None, rows: list[dict[str, Any]], books: Mapping[str, Mapping],
               terms: Mapping[str, Any]) -> dict[date, O.BaseDay]:
     """Per base date B before ``on`` of a usable report unit (``report_base_plus_day``, TDM#531): B's default run, the
-    bonds' revaluation since it (``bond_moves``), the derivatives' PV on it (its OCP lines) and the ``trades`` of every
-    date of (B, ``on``] (``trade_rows``; none stored on any of them: not loaded)."""
+    ``trades`` of every date of (B, ``on``] (``trade_rows``; none stored on any of them: not loaded), the bonds'
+    revaluation since B (``bond_moves``, the quantity on each payment date from those trades) and the derivatives' PV
+    on B (B's block ``derivatives_pv``)."""
     out: dict[date, O.BaseDay] = {}
     if policy.published is not O.PublishedBasis.REPORT_BASE_PLUS_DAY:
         return out
     for b0 in sorted({u["valid_date"] for u in units}):
         if b0 >= on or O._stale(b0, on, policy, is_bd):
             continue
-        rid, facts, _ = funding_run._previous_rows(con, b0)
-        moves = bond_moves(rows, {f["position_id"]: f for f in facts}, books, terms, b0, on) if rid else []
         trade_rows: list[dict[str, Any]] = []
         loaded, d = False, b0
         while d < on:
@@ -392,6 +434,9 @@ def base_days(con: psycopg.Connection, on: date, known_at: Any, units: list[dict
             t = store.dataset_rows(con, "trades", d, known_at=known_at)
             loaded = loaded or bool(t.units)
             trade_rows += t.rows
+        rid, facts, _ = funding_run._previous_rows(con, b0)
+        moves = bond_moves(rows, {f["position_id"]: f for f in facts}, books, terms, b0, on,
+                           O.current_trades(trade_rows, b0)) if rid else []
         out[b0] = O.BaseDay(b0, rid, moves, None, [], _pv_base(con, rid), trade_rows if loaded else None)
     return out
 

@@ -1861,17 +1861,22 @@ export interface components {
             reported_base?: number | null;
             /**
              * Reported Derivatives
-             * @description private/1.7 derivatives_ccy: component -> the nominal of the derivatives' future flows the report left out of ocp_ccy (``reported`` = reported_base + their sum)
+             * @description private/1.7 derivatives_ccy: derivative kind -> the nominal of its future flows the report left out of ocp_ccy (``reported`` = reported_base + their sum)
              */
             reported_derivatives?: {
                 [key: string]: number;
             };
             /**
              * Split
-             * @description The unit gives the derivatives apart (private/1.7 derivatives_ccy)
+             * @description The report file gives some derivative kinds apart (private/1.7)
              * @default false
              */
             split?: boolean;
+            /**
+             * Split Kinds
+             * @description The derivative kinds the unit's report file gives apart (private/1.7 derivatives_ccy keys)
+             */
+            split_kinds?: string[];
         };
         /**
          * OcpDerivativesCheck
@@ -1887,7 +1892,15 @@ export interface components {
             books: string[];
             /** Ccy */
             ccy: string;
-            /** Component */
+            /**
+             * Kind
+             * @description The derivative kind (fx_forward, fx_swap, fx_future, ndf, fx_option, swap, other)
+             */
+            kind: string;
+            /**
+             * Component
+             * @description The OCP component the kind is shown in
+             */
             component: string;
             /**
              * Nominal
@@ -1928,7 +1941,7 @@ export interface components {
              * Code
              * @enum {string}
              */
-            code: "no_report" | "stale_report" | "outside_without_terms" | "books_outside_report" | "outside_double_count" | "report_without_derivatives_split" | "derivatives_nominal_fallback" | "base_older" | "trades_not_loaded" | "no_base_run" | "trades_not_valued" | "carried_forward_unit";
+            code: "no_report" | "stale_report" | "outside_without_terms" | "books_outside_report" | "outside_double_count" | "report_without_derivatives_split" | "derivatives_nominal_fallback" | "base_older" | "trades_not_loaded" | "no_base_run" | "trades_not_valued" | "carried_forward_unit" | "trades_unknown_book";
             /** Text */
             text: string;
             /**
@@ -1969,6 +1982,11 @@ export interface components {
             basis: string;
             /** Note */
             note: string;
+            /**
+             * Pv
+             * @description basis nominal: the PV (core's FX delta) of the amount
+             */
+            pv?: number | null;
         };
         /**
          * OcpPublished
@@ -2101,9 +2119,14 @@ export interface components {
             } | null;
             /**
              * Fallback
-             * @description Derivative components taken at the report's nominal: no PV line in the run
+             * @description Derivative kinds taken at the report's nominal: no position of the kind in the scope
              */
             fallback?: string[];
+            /**
+             * Split Kinds
+             * @description The derivative kinds the report gives apart for this line (their PV is added)
+             */
+            split_kinds?: string[];
         };
         /** OcpTransfer */
         OcpTransfer: {
@@ -3219,6 +3242,13 @@ export interface components {
              */
             parts?: {
                 [key: string]: string;
+            }[];
+            /**
+             * Derivatives Pv
+             * @description v3: the run's derivatives' PV per book, currency and kind with a value date after its date: the PV on the base date for a later run
+             */
+            derivatives_pv?: {
+                [key: string]: unknown;
             }[];
             /**
              * Outside Report

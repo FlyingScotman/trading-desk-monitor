@@ -84,12 +84,12 @@ unsigned (`side` gives the direction; a negative one is `bad_value`). A 1.0–1.
 and serves them (`GET /api/v1/trades`); valuing them and new-trade PnL come with the rest of S13.
 
 Minor 1.7 (TDM#531: the published OCP «report base + day») is additive: the optional `ocp` field `derivatives_ccy`,
-an object «monitor component → the signed nominal of the derivatives' future flows the adapter left out of `ocp_ccy`»
-(keys `fx_legs`, `ndf`, `futures`, `options`, `other`; amounts as everywhere; canonical, so in the unit's change
-hash); its presence on any row of a unit means the unit's `ocp_ccy` is without the derivatives. `ocp_policy.published`
-takes the value `report_base_plus_day` (the default of the engine since 1.7: the report on its date B without the
-derivatives + their PV + the bonds' revaluation and the trades since B + the components outside the report; 08 §10
-`ocp`) and the new optional `ocp_policy.report_max_age_bd` (business days, default 1). A 1.0–1.6 adapter stays valid:
-its `ocp` units hold the derivatives at their nominal, the run adds no PV for them and says so in its gaps. An adapter
-that emits `derivatives_ccy` needs a backend on 1.7 (an older one drops the field with `field_from_newer_contract` and
-reads `ocp_ccy` as the whole report).
+an object «derivative kind → the signed nominal of the report's lines of that kind with a value date after the
+report's date, left out of `ocp_ccy`». Kinds: `fx_forward`, `fx_swap`, `fx_future`, `ndf`, `fx_option`, `swap`,
+`other`; amounts as everywhere, a zero kept (a key, even `"0"`, says the kind is apart); canonical, so in the unit's
+change hash. The split is per report file and kind: a kind is apart for every unit of a file when any row of the file
+has its key. `ocp_policy.published` takes the value `report_base_plus_day` (the engine's default for dates from
+03.11.2026; 08 §10 `ocp`) and the new optional `ocp_policy.report_max_age_bd` (business days, default 1). A 1.0–1.6
+adapter stays valid: its `ocp` files hold every derivative at its nominal, the run adds no PV and says so in its gaps.
+An adapter that emits `derivatives_ccy` needs a backend on 1.7 (an older one drops the field with
+`field_from_newer_contract` and reads `ocp_ccy` as the whole report).

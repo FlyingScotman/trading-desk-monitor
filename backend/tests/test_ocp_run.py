@@ -147,32 +147,25 @@ def test_ocp_end_to_end_inbox_run_api(store_url, ctx, tmp_path):
     assert pos["D1|XFER"]["extra"]["ocp_transfer"] is True and pos["D1|XFER"]["extra"]["ocp"]["component"] == "transfers"
     assert pos["D1|USD"]["extra"]["ocp"] == {"component": "cash", "amounts": {"USD": 1_000_000.0}, "basis": "amount"}
     assert lin["ocp"]["status"] == "computed" and lin["ocp"]["breaks"] == 1
-    assert any(m.startswith("ОВП: USD 150,000 (отчёт 150,000)") and "ОВП из позиций: USD" in m for m in log)
+    assert any(m.startswith("ОВП: USD 1,050,000 (отчёт 150,000, из позиций 900,000)") and "ОВП из позиций: USD" in m
+               for m in log)
     assert [w for w in warnings if w.startswith("ОВП: брейк D1 USD")]
 
-    # the published OCP (TDM#531, the default report_base_plus_day): a run on the report's own date, the report
-    # without derivatives apart (an adapter before 1.7: its figure holds them at their nominal, their PV not added);
-    # the report covers ENT1, so X1, a book of ENT1 without a row, has base 0 (its transfer deal is in the report's
-    # composition, not a derivative)
+    # the published OCP (TDM#416): D1 = its report (the default policy: the report holds every component, nothing
+    # added), X1 outside every report unit = derived; the gaps say X1
     pub = o["published"]
-    assert pub["basis"] == "report_base_plus_day" and pub["base_date"] == "2026-10-15"
+    assert pub["basis"] == "report_plus_outside"
     lines = {(x["book_id"], x["ccy"]): x for x in pub["by_book"]}
-    d1 = lines[("D1", "USD")]
-    assert d1["source"] == "report" and d1["amount"] == 150_000 and d1["reported"] == 150_000
-    assert d1["base_kind"] == "with_derivatives" and d1["parts"] == {
-        "base": 150_000, "derivatives": 0, "bonds": 0, "trades": 0, "outside": 0}
-    assert d1["contributions"]["base"]["items"][0]["kind"] == "report" and d1["set_id"]
-    x1 = lines[("X1", "USD")]
-    assert (x1["source"], x1["amount"], x1["base_kind"], x1["reported"]) == ("report", 0, "book_absent", 0)
+    assert lines[("D1", "USD")]["source"] == "report" and lines[("D1", "USD")]["amount"] == 150_000
+    assert lines[("D1", "USD")]["components"] == [] and lines[("D1", "USD")]["reported"] == 150_000
+    assert lines[("X1", "USD")]["source"] == "derived" and lines[("X1", "USD")]["amount"] == 900_000
     usd = pub["by_ccy"]["USD"]
-    assert usd["total"] == 150_000 and usd["by_source"] == {"report": 150_000}
-    assert usd["by_part"]["base"] == 150_000
+    assert usd["total"] == 1_050_000 and usd["by_source"] == {"report": 150_000, "derived": 900_000}
     assert usd["rate"] and usd["total_rub"] == pytest.approx(usd["total"] * usd["rate"])
-    assert [(g["code"], g["items"]) for g in o["gaps"]] == [("report_without_derivatives_split", ["книга D1"])]
+    assert [(g["code"], g["items"]) for g in o["gaps"]] == [("books_outside_report", ["X1"])]
     assert o["policy"]["source"]["published"].startswith("OQ-18") and o["policy"]["source"]["report_components"] \
         == "provisional" and "published" not in o["policy"]["provisional"]
-    assert o["policy"]["report_max_age_bd"] == 1 and o["policy"]["source"]["report_max_age_bd"].startswith("OQ-18")
-    assert lin["ocp"]["published"] == {"USD": 150_000}
+    assert lin["ocp"]["published"] == {"USD": 1_050_000}
     # the FX delta of the positions does not change: the derived OCP is still the sum of the positions' lines
     assert o["by_ccy"]["USD"]["total"] == pytest.approx(1_050_000 + fwd + 900_000 - 900_000)
 
@@ -230,12 +223,11 @@ def test_adapter_policy_explains_the_break_and_publishes_report_plus_outside(sto
 
 
 def test_stale_report_is_not_published(store_url, ctx, tmp_path):
-    """The report of Tuesday the 13th carried into the run of Thursday the 15th (two business days, the limit is one):
-    reconciled, but the published OCP is derived."""
+    """The report of the 14th carried into the run of the 15th: reconciled, but the published OCP is derived."""
     with store.connect(store_url) as con:
         _scan(con, tmp_path, report=False)
         inbox = tmp_path / "in"
-        _csv(inbox / "ocp_20261013.csv", OCP)
+        _csv(inbox / "ocp_20261014.csv", OCP)
         s = Settings(snapshot_cache=SNAPS, inbox_dirs=(inbox,), inbox_archive=tmp_path / "archive",
                      private_adapter=None, private_adapter_config=tmp_path / "cfg", inbox_poll_seconds=0,
                      inbox_lookback_days=0)

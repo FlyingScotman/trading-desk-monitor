@@ -14,7 +14,7 @@ Files, all ``;``-separated UTF-8 with BOM, header = canonical field names (``x_*
   (``cash_balances_csv``, ``entity``, ``book_id``), ``pnl_official_YYYYMMDD.csv`` (``pnl_official_csv``,
   ``entity``, ``book_id``) and ``trade_terms_YYYYMMDD.csv`` (``trade_terms_csv``, ``book_id``; FX trades since
   private/1.2, swap legs, REPO and HTM purchases since 1.4). An ``ocp`` row's ``derivatives_ccy`` (private/1.7) is
-  written ``fx_legs=-1000000,futures=250000`` (``{}``: none, the report still without derivatives). A
+  written ``fx_forward=-1000000,ndf=0`` (``{}``: none). A
   ``cash_balances``, ``pnl_official`` or ``trades`` file may hold several dates (a history): a ``_report_date``
   column gives each row's date (08 §6.1); an empty cell is the date in the name.
 * ``trades`` (private/1.6), ``intraday``, scope ``book_id``: ``trades_YYYYMMDD_HHMM.csv`` is the day's cumulative
@@ -68,7 +68,7 @@ _CUT = re.compile(r"([01][0-9]|2[0-3])([0-5][0-9])")
 _BOOLEANS = {"active", "ndf", "include_ndf", "cash_from_balances"}
 _OBJECTS = {"derivatives_ccy"}
 """Cells that hold an object (private/1.7 ``ocp.derivatives_ccy``): ``key=amount`` pairs separated by ``,``
-(``fx_legs=-1000000,futures=250000``), or ``{}`` for an empty one."""
+(``fx_forward=-1000000,ndf=0``), or ``{}`` for an empty one."""
 _REFERENCE = (("books", "books.csv"), ("entities", "entities.csv"), ("funding_rules", "funding_rules.csv"),
               ("funding_policy", "funding_policy.csv"), ("ocp_policy", "ocp_policy.csv"))
 _TRUE, _FALSE = {"1", "true", "yes"}, {"0", "false", "no"}
@@ -122,22 +122,28 @@ def _records(path: str) -> tuple[list[tuple[int, dict]], list[dict]]:
                 if flag in _TRUE or flag in _FALSE:
                     rec[k] = flag in _TRUE
             for k in _OBJECTS & set(rec):
-                rec[k] = _object(rec[k])
+                rec[k], twice = _object(rec[k])
+                if twice:
+                    issues.append({"severity": "warning", "code": "duplicate_object_key", "src": f"L{reader.line_num}",
+                                   "message": f"{k} names a key twice: the last value kept"})
             out.append((reader.line_num, rec))
     return out, issues
 
 
-def _object(cell: str) -> dict | str:
-    """An ``_OBJECTS`` cell as an object; a malformed one stays text, so the backend says ``bad_value``."""
+def _object(cell: str) -> tuple[dict | str, bool]:
+    """(an ``_OBJECTS`` cell as an object, whether a key was given twice: the last value kept, said as a warning); a
+    malformed one stays text, so the backend says ``bad_value``."""
     if cell == "{}":
-        return {}
-    out = {}
+        return {}, False
+    out: dict = {}
+    twice = False
     for part in cell.split(","):
         k, eq, v = part.partition("=")
         if not eq or not k.strip() or not v.strip():
-            return cell
+            return cell, False
+        twice = twice or k.strip() in out
         out[k.strip()] = v.strip()
-    return out
+    return out, twice
 
 
 def read(path: str, hit: dict, ctx) -> dict:

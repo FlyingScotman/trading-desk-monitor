@@ -39,18 +39,24 @@
     },
     "derivatives_ccy": {
       "type": "object",
-      "description": "private/1.7: the monitor component (rules.ocp.DERIVATIVE_COMPONENTS) -> the signed nominal of the derivatives' future flows left out of ocp_ccy; present: ocp_ccy is without the derivatives",
+      "description": "private/1.7: derivative kind (rules.ocp.DERIVATIVE_KINDS) -> the signed nominal of the report's future-dated lines of that kind removed from ocp_ccy; a key, even 0, says the kind is apart for every unit of the report file",
       "properties": {
-        "fx_legs": {
+        "fx_forward": {
+          "$ref": "#/$defs/amount"
+        },
+        "fx_swap": {
+          "$ref": "#/$defs/amount"
+        },
+        "fx_future": {
           "$ref": "#/$defs/amount"
         },
         "ndf": {
           "$ref": "#/$defs/amount"
         },
-        "futures": {
+        "fx_option": {
           "$ref": "#/$defs/amount"
         },
-        "options": {
+        "swap": {
           "$ref": "#/$defs/amount"
         },
         "other": {

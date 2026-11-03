@@ -5579,13 +5579,21 @@
             },
             "type": "object",
             "title": "Reported Derivatives",
-            "description": "private/1.7 derivatives_ccy: component -> the nominal of the derivatives' future flows the report left out of ocp_ccy (``reported`` = reported_base + their sum)"
+            "description": "private/1.7 derivatives_ccy: derivative kind -> the nominal of its future flows the report left out of ocp_ccy (``reported`` = reported_base + their sum)"
           },
           "split": {
             "type": "boolean",
             "title": "Split",
-            "description": "The unit gives the derivatives apart (private/1.7 derivatives_ccy)",
+            "description": "The report file gives some derivative kinds apart (private/1.7)",
             "default": false
+          },
+          "split_kinds": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Split Kinds",
+            "description": "The derivative kinds the unit's report file gives apart (private/1.7 derivatives_ccy keys)"
           }
         },
         "type": "object",
@@ -5640,9 +5648,15 @@
             "type": "string",
             "title": "Ccy"
           },
+          "kind": {
+            "type": "string",
+            "title": "Kind",
+            "description": "The derivative kind (fx_forward, fx_swap, fx_future, ndf, fx_option, swap, other)"
+          },
           "component": {
             "type": "string",
-            "title": "Component"
+            "title": "Component",
+            "description": "The OCP component the kind is shown in"
           },
           "nominal": {
             "type": "number",
@@ -5724,6 +5738,7 @@
           "book_id",
           "books",
           "ccy",
+          "kind",
           "component",
           "nominal",
           "pv",
@@ -5752,7 +5767,8 @@
               "trades_not_loaded",
               "no_base_run",
               "trades_not_valued",
-              "carried_forward_unit"
+              "carried_forward_unit",
+              "trades_unknown_book"
             ],
             "title": "Code"
           },
@@ -5826,6 +5842,18 @@
           "note": {
             "type": "string",
             "title": "Note"
+          },
+          "pv": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Pv",
+            "description": "basis nominal: the PV (core's FX delta) of the amount"
           }
         },
         "type": "object",
@@ -6118,7 +6146,15 @@
             },
             "type": "array",
             "title": "Fallback",
-            "description": "Derivative components taken at the report's nominal: no PV line in the run"
+            "description": "Derivative kinds taken at the report's nominal: no position of the kind in the scope"
+          },
+          "split_kinds": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Split Kinds",
+            "description": "The derivative kinds the report gives apart for this line (their PV is added)"
           }
         },
         "type": "object",
@@ -8801,6 +8837,15 @@
             "type": "array",
             "title": "Parts",
             "description": "part key -> its name on the pages (v3)"
+          },
+          "derivatives_pv": {
+            "items": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "type": "array",
+            "title": "Derivatives Pv",
+            "description": "v3: the run's derivatives' PV per book, currency and kind with a value date after its date: the PV on the base date for a later run"
           },
           "outside_report": {
             "items": {

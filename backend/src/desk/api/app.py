@@ -365,7 +365,7 @@ def ocp_out(run_id: int, block: dict[str, Any] | None) -> RunOcp:
     """``RunOcp`` of a run's OCP block (``publish.ocp_run``); a run before B2 has none."""
     b = block or ocp_run.empty_block(ocp_run.NOT_COMPUTED, ocp_run.STATUS_TEXT[ocp_run.NOT_COMPUTED])
     # v2 of the block (TDM#416) and v3 (TDM#531): an older block has none of them, the model's defaults
-    keep = ("sources", "published", "gaps", "derivatives_check", "parts")
+    keep = ("sources", "published", "gaps", "derivatives_check", "parts", "derivatives_pv")
     return RunOcp(run_id=run_id, state=b["status"], **{k: b.get(k) for k in RunOcp.model_fields
                                                        if k not in ("run_id", "state") and (k in b or k not in keep)})
 
