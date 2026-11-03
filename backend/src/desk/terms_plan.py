@@ -29,13 +29,19 @@ def _version(v: Any) -> int | None:
 
 
 def plan(con: Any, day: date, books: list[str]) -> dict | None:
-    """The comparison for ``books`` on ``day``, or None when the store has no ``trade_list`` rows of those books."""
+    """The comparison for ``books`` on ``day``. None: the store holds no ``trade_list`` unit of those books.
+    ``{"stale": True, "date"}``: it does, but a unit is of an earlier day (``trade_list`` is a stock, carried forward;
+    the list of another day is no list of this one: the caller asks for the terms of the whole report). A book listed
+    with no trades (a marker) gives a plan with no trades."""
     wanted = set(books)
     listing = store.dataset_rows(con, "trade_list", day)
-    rows = [r for r in listing.rows if r.get("book_id") in wanted]
-    if not rows:
+    units = [u for u in listing.units if u["scope"].get("book_id") in wanted]
+    if not units:
         return None
-    listed_books = {u["scope"].get("book_id") for u in listing.units} & wanted | {r["book_id"] for r in rows}
+    if any(u["valid_date"] != day for u in units):
+        return {"stale": True, "date": day.isoformat()}
+    rows = [r for r in listing.rows if r.get("book_id") in wanted]
+    listed_books = {u["scope"]["book_id"] for u in units}
     live: dict[str, dict] = {}
     for r in sorted(rows, key=lambda r: (str(r["book_id"]), str(r["trade_id"]))):
         if r.get("status") != "live":

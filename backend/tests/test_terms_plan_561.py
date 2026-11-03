@@ -151,3 +151,14 @@ def test_plan_new_changed_have_closed_and_cancelled(con, tmp_path: Path, inbox: 
     assert both["books"] == ["D1", "T1"] and both["closed"] == ["CANC", "GONE", "OTHER"] and both["live"] == 6
     assert terms_plan.plan(con, D("2026-10-20"), ["C1"]) is None  # a book without a list
     assert terms_plan.plan(con, D("2026-10-19"), ["D1"]) is None  # before the list
+    # a stock carried to the next day is no list of that day: a stale marker, not a plan
+    assert terms_plan.plan(con, D("2026-10-21"), ["D1"]) == {"stale": True, "date": "2026-10-21"}
+    # a book listed with no trades (a marker only): a plan with no trades, its terms are all closed
+    _put(con, s, inbox, "trade_list_20261022.csv", "trade_id;trade_version;book_id;status\r\n;;D1;\r\n")
+    _put(con, s, inbox, "trade_terms_20261022.csv", TERMS + "GONE;D1;fx_forward;2026-10-01;2026-12-17;USD;RUB;"
+         "buy;10;800;80\n")
+    p = terms_plan.plan(con, D("2026-10-22"), ["D1"])
+    assert p["trades"] == [] and p["books"] == ["D1"] and p["closed"] == ["GONE"] and p["counts"]["live"] == 0
+    # one stale unit among fresh ones: stale as a whole
+    _put(con, s, inbox, "trade_list_20261023.csv", "trade_id;trade_version;book_id;status\r\nA;1;T1;live\r\n")
+    assert terms_plan.plan(con, D("2026-10-23"), ["D1", "T1"]) == {"stale": True, "date": "2026-10-23"}

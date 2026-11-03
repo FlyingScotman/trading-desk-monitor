@@ -953,6 +953,8 @@ class AdapterServices:
             return dict(run)
 
     def _feed(self, st: Settings, f: dict, trigger: str, day: str | None, newest: date | None) -> None:
+        if f.get("trades_file"):
+            self._ensure_list(st, f, day)
         rid = uuid.uuid4().hex
         started = self._now()
         seen = {"positions_seen": newest.isoformat()} if newest is not None else {}
@@ -1004,7 +1006,7 @@ class AdapterServices:
             drained = self._drain_pending(st, hp, f, prev.get("pending"))
             extra: dict[str, str | list[str]] = {"feed": f["id"], **({"date": day} if day else {}),
                                                  **({"book": books} if books else {})}
-            plan = self._terms_plan(st, f, rid, day) if f.get("trades_file") else None
+            plan, note = self._terms_plan(st, f, rid, day) if f.get("trades_file") else (None, None)
             if plan is not None:
                 extra["trades_file"] = str(plan[0])
             if books:  # the whole request within the protocol's limits before the call, the books cut with a note
@@ -1030,6 +1032,8 @@ class AdapterServices:
                 outcome["lines"] = [*notes, *outcome["lines"]]
             if plan is not None:
                 outcome["lines"] = [plan_line(plan[1]), *outcome["lines"]]
+            elif note:
+                outcome["lines"] = [note, *outcome["lines"]]
             if r["state"] in ("complete", "partial") and r["files"]:
                 if not f.get("source_declared", True):
                     raise ServiceError("feed_source_invalid", "error")  # files no declared source would read
@@ -1059,24 +1063,48 @@ class AdapterServices:
             self._prune(st)
         self._finish(st, f, prev, outcome, started)
 
-    def _terms_plan(self, st: Settings, f: dict, rid: str, day: str | None) -> tuple[Path, dict] | None:
-        """The request file of a ``trades_file`` feed and the plan's counts, or None (no list of the books stored, no
-        date, too long a list, any failure): the feed then runs as before. The counts are kept in the feed's state."""
+    def _plan_of(self, day: str | None) -> tuple[date | None, dict | None]:
+        on = date.fromisoformat(day) if day else self._newest_positions()
+        if on is None:
+            return None, None
+        with store.connect(self._url) as con:
+            books, _ = owner_books(con, on)
+            return on, terms_plan.plan(con, on, books) if books else None
+
+    def _ensure_list(self, st: Settings, f: dict, day: str | None) -> None:
+        """A ``trades_file`` feed needs the list of its date: when the store has none of that day, the enabled and
+        ready feed of the dataset ``trade_list`` runs first, in the same turn (module doc)."""
         try:
-            on = date.fromisoformat(day) if day else self._newest_positions()
+            on, plan = self._plan_of(day)
+            if on is None or (plan is not None and not plan.get("stale")):
+                return
+            doc = read_state(st)
+            tl = next((x for x in doc.get("feeds") or [] if x.get("dataset") == "trade_list" and x["id"] != f["id"]
+                       and x.get("ready") and _enabled(doc, x)), None)
+            if tl is not None:
+                self._feed(st, tl, "dependency", on.isoformat(), None)
+        except Exception:
+            log.exception("adapter services: list for feed %s not ensured", f["id"])
+
+    def _terms_plan(self, st: Settings, f: dict, rid: str, day: str | None
+                    ) -> tuple[tuple[Path, dict] | None, str | None]:
+        """(the request file of a ``trades_file`` feed and the plan's counts or None, a line for the outcome or None).
+        No file (no list of the date, too long a list, any failure): the feed runs as before, the whole report, and the
+        line says why. The counts are kept in the feed's state."""
+        try:
+            on, plan = self._plan_of(day)
             if on is None:
-                return None
-            with store.connect(self._url) as con:
-                books, _ = owner_books(con, self._today())
-                plan = terms_plan.plan(con, on, books) if books else None
-            if plan is None or len(plan["trades"]) > MAX_REQUEST_TRADES:
-                return None
+                return None, None
+            if plan is None or plan.get("stale"):
+                return None, (f"Список сделок за {on:%d.%m.%Y} не получен — условия запрошены полным проходом.")
+            if len(plan["trades"]) > MAX_REQUEST_TRADES:
+                return None, f"Заявка не построена: в списке больше {MAX_REQUEST_TRADES} сделок, полный проход."
             path = write_request(st, rid, plan)
         except Exception:
             log.exception("adapter services: terms plan of feed %s not made", f["id"])
-            return None
+            return None, "Заявка не построена: ошибка при сравнении со списком, полный проход."
         self._record(st, f["id"], plan=plan["counts"])
-        return path, plan["counts"]
+        return (path, plan["counts"]), None
 
     def _finish(self, st: Settings, f: dict, prev: dict, outcome: dict, started: datetime) -> None:
         now = self._now()
