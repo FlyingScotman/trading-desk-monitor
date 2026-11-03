@@ -8947,6 +8947,15 @@
             },
             "type": "array",
             "title": "Notes"
+          },
+          "books": {
+            "additionalProperties": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "type": "object",
+            "title": "Books",
+            "description": "TDM#556: name, desk, book_type and entity of the published OCP's books without positions in the run (a book only the OCP report knows); the run's reference books have the others"
           }
         },
         "type": "object",
