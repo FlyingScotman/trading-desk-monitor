@@ -78,6 +78,21 @@ must be explicit. The user chooses one report and books, without a hidden date, 
 default. `check` and `fetch` take transient `username`/`password`. `fetch` also takes the inspected `report`,
 `report_sha256`, `adapter_fingerprint` and repeated `book`; changed input/config/package requires a new inspection.
 
+**Provider without a login** (since 11.2026). The `inspect` result may carry an optional top-level
+`"login"`: `"none"` means the provider needs no login; `"system2"` or no key means a login is required (the
+behaviour of every earlier adapter). Only the exact string `"none"` counts: any other value or type is treated
+as "login required", never as an error, and the inspection itself still succeeds. The monitor keeps the answer
+of the last successful inspection in memory together with the inspected adapter fingerprint; it is reported as
+`login: "none"|"required"` in that inspection's job and in `GET /api/v1/acquisition` (for the current adapter;
+`"required"` before any inspection or after the package/config fingerprint changed). A `"none"` from an
+inspection during which that fingerprint changed is not kept (`"required"`). `check`/`fetch` without
+credentials are accepted only while that server-held answer is `"none"` for the current fingerprint; a client
+cannot skip the login on its own (`credentials_required`); the answer is checked under the same lock as the
+start, so an inspection still finishing cannot change it in between. Both credentials or neither: one of the two is
+`credentials_required`. Empty `username`/`password` fields are dropped and never forwarded, so a no-login child
+receives neither key; given credentials are forwarded unchanged. The Settings dialog hides the login fields
+while the server says `"none"` and shows them again on `credentials_required`.
+
 The monitor adds trusted `adapter_root`, `config_dir`, repeated `inbox_dir`, and a unique managed `output_dir`
 to child stdin. The helper runs as `[configured_python, -I, -B, contained_entry]`, in its own process group, with
 only PATH, SYSTEMROOT, WINDIR, TEMP, TMP, USERPROFILE, LOCALAPPDATA, APPDATA and PROGRAMDATA inherited. Store/hub
