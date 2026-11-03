@@ -8,6 +8,9 @@
  *  - «Проверка адаптера» — комплект проверки (desk adapter check, 08 §8) в фоне: папки входящих флажками и своя папка,
  *    сводка таблицей (версии, отпечаток, по источнику и дате: файлы, строки, принято / отклонено, коды замечаний с
  *    числом — без значений ячеек), «Скопировать сводку» (текст для чата), последний результат — до следующего запуска.
+ *  - Результаты не висят на странице (TDM#552): итог действия и подробности проверки — строкой «Последний запуск»,
+ *    раскрываются по щелчку (сразу после запуска на этой странице — раскрыты); длинные таблицы — DeskLongTable
+ *    (первые строки, «Показать все», поиск, CSV); технические сведения — в «Подробностях».
  * Данные: /api/v1/adapter/check, /api/v1/adapter/status, /api/v1/adapter/actions (api/adapter_routes.py).
  * Чистая часть (DeskAdapterTools._test) проверяется tests/js/settings_adapter.test.js.
  */
@@ -67,16 +70,34 @@
   A.inbox = function (x) { return x ? A.INBOX[x.status] || ['', x.status] : ['', 'ещё не прочитан']; };
 
   /* ---------- DOM ---------- */
-  var S = { api: null, toast: null, SF: null, h: null, adapter: null, statusBusy: false, check: null, checkTimer: null, actions: {}, actionTimer: null };
+  var S = { api: null, toast: null, SF: null, h: null, adapter: null, statusBusy: false, check: null, checkTimer: null, actions: {}, actionTimer: null,
+    fresh: {}, checkFresh: false };  // fresh: итог пришёл на этой странице после «Запустить» — раскрыт
   function h() { return S.h.apply(null, arguments); }
   function $(id) { return document.getElementById(id); }
+  function subdot(sub, cls, title) {  // точка у подраздела «Адаптер и источники» (settings-nav.js)
+    var d = document.querySelector('.subnav .dot[data-subdot="' + sub + '"]');
+    if (d) { d.className = 'dot ' + (cls || ''); d.title = title || ''; }
+  }
   function badge(cls, text, title) { return h('span', { class: 'badge ' + (cls || ''), title: title || null }, text); }
-  function table(t) {
-    if (!t) return null;
+  function numCell(c) { return { class: A.isNum(c) ? 'n mono' : null, text: c == null ? '—' : A.isNum(c) ? A.n(c) : String(c) }; }
+  // длинная таблица — свёрнута (первые строки, «Показать все», поиск, CSV); без settings-longtable.js — целиком
+  function longTable(columns, rows, title, td) {
+    var LT = root.DeskLongTable;
+    if (LT) return LT.el({ h: S.h, columns: columns, rows: rows, title: title, cls: 'k-tbl at-t', td: td || numCell });
     return h('div', { class: 'k-tbl-wrap' }, h('table', { class: 'k-tbl at-t' },
-      h('thead', {}, h('tr', {}, t.columns.map(function (c) { return h('th', {}, c); }))),
-      h('tbody', {}, t.rows.map(function (r) { return h('tr', {}, r.map(function (c) { return h('td', { class: A.isNum(c) ? 'n mono' : '' }, c == null ? '—' : A.isNum(c) ? A.n(c) : String(c)); })); }))),
+      h('thead', {}, h('tr', {}, columns.map(function (c) { return h('th', {}, c); }))),
+      h('tbody', {}, rows.map(function (r, ri) { return h('tr', {}, r.map(function (c, i) { var x = (td || numCell)(c, i, r, ri); return h('td', { class: x.class || null }, x.node != null ? x.node : x.text); })); }))));
+  }
+  function table(t, title) {
+    if (!t) return null;
+    return h('div', {}, longTable(t.columns || [], t.rows || [], title),
       t.truncated ? h('div', { class: 'hint' }, 'Показаны первые строки таблицы.') : null);
+  }
+  // «Последний запуск: …» — свёрнутый итог; open — раскрыт (итог только что пришёл)
+  function lastRun(summaryKids, bodyKids, open, cls) {
+    var d = h('details', { class: 'at-last ' + (cls || '') }, h('summary', {}, summaryKids), h('div', { class: 'at-last-bd' }, bodyKids));
+    d.open = !!open;
+    return d;
   }
   function issuesList(list) {
     if (!list || !list.length) return null;
@@ -99,13 +120,13 @@
       $('ad-status-at').textContent = r.at ? 'на ' + A.when(r.at) : '';
       if (!r.available) { card.hidden = true; return; }
       if (r.error) box.append(h('div', { class: 'note err' }, r.error_code === 'timeout'
-        ? 'Адаптер не ответил за ' + r.timeout_s + ' с (предел — «Состояние адаптера, секунд» ниже).' : 'Адаптер не смог ответить: ' + r.error));
+        ? 'Адаптер не ответил за ' + r.timeout_s + ' с (предел — «Состояние адаптера» в «Для опытных»).' : 'Адаптер не смог ответить: ' + r.error));
       (Array.isArray(r.panels) ? r.panels : []).forEach(function (p) {
         var lv = A.LEVEL[p.level] || ['', p.level];
         box.append(h('div', { class: 'at-panel lv-' + p.level },
           h('div', { class: 'at-ph' }, badge(lv[0], lv[1]), h('b', {}, p.title)),
           p.lines && p.lines.length ? h('ul', { class: 'at-lines' }, p.lines.map(function (l) { return h('li', {}, l); })) : null,
-          table(p.table)));
+          table(p.table, p.title)));
       });
       if (!(r.panels || []).length && !r.error) box.append(h('p', { class: 'mut' }, 'Адаптер ничего не сообщил.'));
       var iss = issuesList(r.issues);
@@ -169,31 +190,39 @@
       'запущено ' + A.when(j.started_at) + (j.seconds != null ? ', ' + String(j.seconds).replace('.', ',') + ' с' : ''));
     if (j.state === 'running') return;
     if (j.state !== 'done') { res.append(h('div', { class: 'note err' }, 'Не удалось: ' + A.failText(j))); return; }
-    var out = j.result || {};
+    var out = j.result || {}, body = [];
     // ok: false — обычный итог (нечего записать, данных не хватает): строки адаптера объясняют, прежние файлы остаются
-    res.append(h('div', { class: 'verdict ' + (out.ok ? 'ok' : 'warn') }, out.ok ? 'Выполнено.' : 'Не выполнено — причина в строках ниже; прежние файлы действия оставлены.'));
-    if ((out.summary || []).length) res.append(h('ul', { class: 'at-lines' }, out.summary.map(function (l) { return h('li', {}, l); })));
-    if (out.table) res.append(table(out.table));
-    var iss = issuesList(out.issues); if (iss) res.append(iss);
+    body.push(h('div', { class: 'verdict ' + (out.ok ? 'ok' : 'warn') }, out.ok ? 'Выполнено.' : 'Не выполнено — причина в строках ниже; прежние файлы действия оставлены.'));
+    if ((out.summary || []).length) body.push(h('ul', { class: 'at-lines' }, out.summary.map(function (l) { return h('li', {}, l); })));
+    if (out.table) body.push(table(out.table, x.decl.title || id));
+    body.push(issuesList(out.issues));
     if (j.written) {
-      res.append(h('h4', { class: 'at-h4' }, 'Файлы', h('span', { class: 'mut3' }, ' · папка ', h('span', { class: 'mono' }, j.output_dir || ''))));
-      if (!(j.files || []).length) res.append(h('p', { class: 'mut' }, 'Файлов нет: прежние файлы действия убраны.'));
-      else res.append(h('div', { class: 'k-tbl-wrap' }, h('table', { class: 'k-tbl at-t' },
-        h('thead', {}, h('tr', {}, h('th', {}, 'Файл'), h('th', { class: 'n' }, 'Размер'), h('th', {}, 'Входящие'), h('th', {}, 'Источник'), h('th', {}, 'Дата отчёта'))),
-        h('tbody', {}, j.files.map(function (f) {
-          var o = A.inbox(f.inbox);
-          return h('tr', {}, h('td', { class: 'mono' }, f.name), h('td', { class: 'n mono' }, A.kb(f.bytes)), h('td', {}, badge(o[0], o[1])),
-            h('td', { class: 'mono' }, (f.inbox && f.inbox.source) || '—'), h('td', { class: 'mono' }, (f.inbox && f.inbox.report_date) || '—'));
-        })))));
-      if (j.inbox_error) res.append(h('p', { class: 'hint' }, 'Что сделали входящие, не узнать: ' + j.inbox_error));
-      if (j.scan && j.scan.busy) res.append(h('p', { class: 'hint' }, 'Входящие были заняты: файлы прочтёт следующий цикл автообновления.'));
-      else if (j.scan && j.scan.error) res.append(h('p', { class: 'hint' }, j.scan.error));
+      body.push(h('h4', { class: 'at-h4' }, 'Файлы', h('span', { class: 'mut3' }, ' · папка ', h('span', { class: 'mono' }, j.output_dir || ''))));
+      if (!(j.files || []).length) body.push(h('p', { class: 'mut' }, 'Файлов нет: прежние файлы действия убраны.'));
+      else body.push(longTable(['Файл', 'Размер', 'Входящие', 'Источник', 'Дата отчёта'],
+        j.files.map(function (f) { var o = A.inbox(f.inbox); return [f.name, A.kb(f.bytes), o[1], (f.inbox && f.inbox.source) || '—', (f.inbox && f.inbox.report_date) || '—']; }),
+        (x.decl.title || id) + ' файлы', function (c, i, r, ri) {
+          if (i === 2) { var f = j.files.filter(function (y) { return y.name === r[0]; })[0], o = A.inbox(f && f.inbox); return { node: badge(o[0], o[1]) }; }
+          return { class: i === 1 ? 'n mono' : 'mono', text: c };
+        }));
+      if (j.inbox_error) body.push(h('p', { class: 'hint' }, 'Что сделали входящие, не узнать: ' + j.inbox_error));
+      if (j.scan && j.scan.busy) body.push(h('p', { class: 'hint' }, 'Входящие были заняты: файлы прочтёт следующий цикл автообновления.'));
+      else if (j.scan && j.scan.error) body.push(h('p', { class: 'hint' }, j.scan.error));
     }
+    // строка «Последний запуск»: когда, итог, первая строка сводки; подробности — по щелчку
+    var first = (out.summary || [])[0], nFiles = j.written ? (j.files || []).length : null;
+    res.append(lastRun([h('b', {}, 'Последний запуск'), ' ', A.when(j.finished_at || j.started_at), ' · ',
+      h('span', { class: out.ok ? 'okmsg' : 'warnmsg' }, out.ok ? 'выполнено' : 'не выполнено'),
+      first ? h('span', { class: 'mut3' }, ' · ' + first) : null,
+      out.table ? h('span', { class: 'mut3' }, ' · таблица: ' + ((out.table.rows || []).length).toLocaleString('ru-RU') + ' стр.') : null,
+      nFiles != null ? h('span', { class: 'mut3' }, ' · файлов: ' + nFiles) : null,
+      h('span', { class: 'lnk at-open', 'aria-hidden': 'true' })], body, S.fresh[id]));
   }
   function pollAction(id) {
     clearTimeout(S.actionTimer);
     S.actionTimer = setTimeout(function () {
       S.api('GET', '/api/v1/adapter/actions/' + encodeURIComponent(id)).then(function (r) {
+        if (!r.running) S.fresh[id] = true;  // итог пришёл здесь — раскрыт
         drawAction(id, r);
         if (r.running) pollAction(id);
         else if (r.job && r.job.state === 'done' && S.toast) S.toast('Действие «' + (r.action.title || id) + '»: готово', 'ok');
@@ -235,38 +264,50 @@
       : 'проверено ' + A.when(j.finished_at || j.started_at) + (j.seconds != null ? ', ' + String(j.seconds).replace('.', ',') + ' с' : '') +
         ' · папок: ' + ((j.request && j.request.dirs) || []).length);
     if (j.state === 'running') return;
-    if (j.state !== 'done' || !j.report) { res.append(h('div', { class: 'note err' }, 'Проверка не удалась: ' + A.failText(j))); return; }
-    var rep = j.report;
+    if (j.state !== 'done' || !j.report) { subdot('check', 'bad', 'проверка не удалась'); res.append(h('div', { class: 'note err' }, 'Проверка не удалась: ' + A.failText(j))); return; }
+    var rep = j.report, body = [];
+    subdot('check', rep.ok ? 'ok' : 'bad', rep.ok ? 'адаптер соответствует контракту' : 'адаптер не прошёл проверку');
+    // на виду — вердикт и нарушения; остальное (версии, таблица по источникам, текст) — «Подробности проверки» по щелчку
     res.append(h('div', { class: 'verdict ' + (rep.ok ? 'ok' : 'bad') }, rep.ok ? 'Адаптер соответствует контракту.' : 'Адаптер не прошёл проверку' + (rep.load_error ? ': не загружается (' + rep.load_error + ')' : ' — см. «Нарушения» ниже.')));
-    res.append(h('div', { class: 'kv', style: 'margin-top:10px' }, A.kitHead(rep).map(function (kv) { return h('div', {}, h('div', { class: 'l' }, kv[0]), h('div', { class: 'v mono' }, kv[1] == null ? '—' : String(kv[1]))); })));
-    if (rep.load_error) return;
-    res.append(h('p', { class: 'mut', style: 'margin:10px 0 6px' }, A.kitFiles(rep)));
-    if (rep.reference && Object.keys(rep.reference).length) {
-      res.append(h('p', { class: 'mut', style: 'margin:0 0 6px' }, 'Справочник адаптера: ' + Object.keys(rep.reference).map(function (k) { return k + ' ' + A.n(rep.reference[k]); }).join(', ')));
-      var ri = issuesList(rep.reference_issues); if (ri) res.append(ri);
-    }
-    var rows = A.kitRows(rep);
-    if (rows.length) {
-      res.append(h('div', { class: 'k-tbl-wrap' }, h('table', { class: 'k-tbl at-t' },
-        h('thead', {}, h('tr', {}, ['Источник', 'Дата отчёта → дата данных', 'Файлов', 'Строк', 'Единицы', 'Контроль', 'Без бумаги', 'Замечания'].map(function (c) { return h('th', {}, c); }))),
-        h('tbody', {}, rows.map(function (x) {
-          return h('tr', {}, h('td', { class: 'mono' }, x.source), h('td', { class: 'mono' }, x.report_date + ' → ' + x.valid_date),
-            h('td', { class: 'n mono' }, x.files), h('td', { class: 'n mono' }, x.rows), h('td', { title: x.statuses }, x.units), h('td', { class: 'mono' }, x.controls),
-            h('td', {}, x.unmapped), h('td', {}, x.issues.length ? x.issues.map(function (i) {
-              return h('div', {}, badge(i.severity === 'error' ? 'bad' : i.severity === 'warning' ? 'warn' : '', i.code), ' ' + i.count + (i.share ? ' (' + i.share + ')' : ''));
-            }) : '—'));
-        })))));
-    } else res.append(h('p', { class: 'mut' }, 'Ни одного файла адаптер не узнал.'));
     var probs = Object.keys(rep.problems || {}), notes = Object.keys(rep.notes || {});
     if (probs.length) res.append(h('div', { class: 'note err', style: 'margin-top:10px' }, h('b', {}, 'Нарушения контракта: '), probs.map(function (k) { return k + ' ' + A.n(rep.problems[k]); }).join(', ')));
-    if (notes.length) res.append(h('p', { class: 'hint' }, 'Заметки: ' + notes.map(function (k) { return k + ' ' + A.n(rep.notes[k]); }).join(', ')));
-    res.append(h('details', { class: 'more' }, h('summary', {}, 'Текст сводки'), h('pre', { class: 'at-pre mono' }, j.text)));
+    body.push(h('div', { class: 'kv', style: 'margin-top:4px' }, A.kitHead(rep).map(function (kv) { return h('div', {}, h('div', { class: 'l' }, kv[0]), h('div', { class: 'v mono' }, kv[1] == null ? '—' : String(kv[1]))); })));
+    var rows = rep.load_error ? [] : A.kitRows(rep);
+    if (!rep.load_error) {
+      body.push(h('p', { class: 'mut', style: 'margin:10px 0 6px' }, A.kitFiles(rep)));
+      if (rep.reference && Object.keys(rep.reference).length) {
+        body.push(h('p', { class: 'mut', style: 'margin:0 0 6px' }, 'Справочник адаптера: ' + Object.keys(rep.reference).map(function (k) { return k + ' ' + A.n(rep.reference[k]); }).join(', ')));
+        body.push(issuesList(rep.reference_issues));
+      }
+      if (rows.length) {
+        var arr = rows.map(function (x) {
+          var r = [x.source, x.report_date + ' → ' + x.valid_date, x.files, x.rows, x.units, x.controls, x.unmapped,
+            x.issues.map(function (i) { return i.code + ' ' + i.count + (i.share ? ' (' + i.share + ')' : ''); }).join(', ') || '—'];
+          r.x = x; return r;
+        });
+        body.push(longTable(['Источник', 'Дата отчёта → дата данных', 'Файлов', 'Строк', 'Единицы', 'Контроль', 'Без бумаги', 'Замечания'], arr, 'проверка адаптера', function (c, i, r) {
+          var x = r.x;
+          if (i === 7) return { node: x.issues.length ? x.issues.map(function (it) {
+            return h('div', {}, badge(it.severity === 'error' ? 'bad' : it.severity === 'warning' ? 'warn' : '', it.code), ' ' + it.count + (it.share ? ' (' + it.share + ')' : ''));
+          }) : '—' };
+          if (i === 4) return { node: h('span', { title: x.statuses }, c) };
+          return { class: i === 2 || i === 3 ? 'n mono' : i === 6 ? null : 'mono', text: c };
+        }));
+      } else body.push(h('p', { class: 'mut' }, 'Ни одного файла адаптер не узнал.'));
+      if (notes.length) body.push(h('p', { class: 'hint' }, 'Заметки: ' + notes.map(function (k) { return k + ' ' + A.n(rep.notes[k]); }).join(', ')));
+    }
+    body.push(h('details', { class: 'more' }, h('summary', {}, 'Текст сводки'), h('pre', { class: 'at-pre mono' }, j.text)));
+    var warnN = rows.reduce(function (s, x) { return s + x.issues.length; }, 0);
+    res.append(lastRun([h('b', {}, 'Подробности проверки'), h('span', { class: 'mut3' }, ' · источников: ' + rows.length +
+      (warnN ? ', кодов замечаний: ' + warnN : '') + ' · версии, таблица по источникам, текст сводки'), ' ', h('span', { class: 'lnk at-open', 'aria-hidden': 'true' })],
+      body, S.checkFresh, 'at-check'));
   }
   function pollCheck() {
     clearTimeout(S.checkTimer);
     S.checkTimer = setTimeout(function () {
       S.api('GET', '/api/v1/adapter/check').then(function (r) {
-        S.check = r; drawCheck(r);
+        S.check = r; if (!r.running) S.checkFresh = true;  // итог пришёл здесь — подробности раскрыты
+        drawCheck(r);
         if (r.running) pollCheck(); else if (S.toast) S.toast('Проверка адаптера: ' + (r.job && r.job.report ? (r.job.report.ok ? 'OK' : 'есть нарушения') : 'не удалась'), r.job && r.job.report && r.job.report.ok ? 'ok' : 'err');
       }, function () { pollCheck(); });
     }, POLL_MS);

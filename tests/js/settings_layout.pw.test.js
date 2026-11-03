@@ -56,6 +56,9 @@ function server() {
   return st;
 }
 
+// подраздел «Адаптера и источников» (TDM#551): щелчок по его пункту, как у владельца
+const sub = (pg, name) => pg.locator('.subnav a[data-sub-link="' + name + '"]').click();
+
 async function open(browser, st, hash, opts) {
   const ctx = (opts && opts.ctx) || await browser.newContext(opts && opts.viewport ? { viewport: opts.viewport } : {});
   const pg = await ctx.newPage(), errors = [];
@@ -84,7 +87,7 @@ test('настройки: главное сверху, редкое по кно�
   const browser = await pw.chromium.launch();
   try {
     await t.test('сводка, ключи полей, папка из настроек адаптера — одной кнопкой', async () => {
-      const st = server(), { pg, ctx, errors } = await open(browser, st, '#adapter');
+      const st = server(), { pg, ctx, errors } = await open(browser, st, '#adapter/folders');
       await pg.waitForFunction(() => /Адаптер/.test(document.getElementById('st-sum').innerText));
       const sum = await pg.locator('#st-sum').innerText();
       assert.ok(/Требует внимания: 2/.test(sum) && /Токен:\s*не задан/.test(sum) && /Папки с отчётами:\s*1 папка · подсказка/.test(sum), sum);
@@ -109,7 +112,7 @@ test('настройки: главное сверху, редкое по кно�
       await ctx.close();
     });
     await t.test('редкое свёрнуто, открытость помнится; блок с ошибкой и ссылки #bf, #sess-card раскрывают своё', async () => {
-      const st = server(), { pg, ctx, errors } = await open(browser, st, '#adapter');
+      const st = server(), { pg, ctx, errors } = await open(browser, st, '#adapter/expert');
       assert.ok(!(await pg.locator('#adapter_kit_timeout_s').isVisible()) && !(await pg.locator('#inbox_archive').isVisible()));
       assert.ok(!(await pg.locator('#adv-adapter').evaluate(d => d.open)));
       await pg.locator('#adv-adapter > summary').click();
@@ -140,7 +143,7 @@ test('настройки: главное сверху, редкое по кно�
       await ctx.close();
     });
     await t.test('определено автоматически: «изменить», «вернуть авто»; нет связи — прокси раскрыт; Python — подстановкой', async () => {
-      const st = server(), { pg, ctx, errors } = await open(browser, st, '#adapter');
+      const st = server(), { pg, ctx, errors } = await open(browser, st, '#adapter/expert');
       const auto = pg.locator('.auto[data-auto="private_adapter_config"]');
       assert.ok(/^авто/.test(await auto.innerText()) && (await auto.innerText()).includes(HOME + '\\adapter-config'));
       // путь по умолчанию в settings.json не закрепляется: «изменить» только ставит курсор в поле
@@ -153,12 +156,14 @@ test('настройки: главное сверху, редкое по кно�
       assert.strictEqual(await pg.locator('#private_adapter_config').inputValue(), '');
       assert.ok(/из комплекта программы/.test(await pg.locator('.auto[data-auto="private_adapter"]').innerText()));
       // у адаптера есть получение условий сделок, а Python не задан: блок раскрыт, найденный подставляется, не выбирается сам
+      await sub(pg, 'acq');
       assert.ok(await pg.locator('#adv-acq').evaluate(d => d.open));
       assert.strictEqual(await pg.locator('#acquisition_python').inputValue(), '');
       assert.ok(/обычно без нужной библиотеки/.test(await pg.locator('#py-found').innerText()));
       await pg.locator('#py-found button').first().click();
       assert.strictEqual(await pg.locator('#acquisition_python').inputValue(), PY);
       // отпечаток: «подставить текущий»
+      await sub(pg, 'expert');
       await pg.locator('#adv-adapter > summary').click();
       await pg.locator('#sha-cur').click();
       assert.strictEqual(await pg.locator('#private_adapter_sha256').inputValue(), 'cd'.repeat(32));
@@ -169,9 +174,10 @@ test('настройки: главное сверху, редкое по кно�
       assert.ok(await pg.locator('#sess-card').evaluate(d => d.open) && await pg.evaluate(() => document.activeElement.id) === 'tls_cert');
       assert.ok(await pg.locator('#sec-users').evaluate(x => x.classList.contains('on')), 'поле в другом разделе: раздел открыт');
       await pg.locator('#save-undo').click();
-      await pg.goto(ORIGIN + '/settings.html#adapter');
+      await pg.goto(ORIGIN + '/settings.html#adapter/acq');
       // Python раскрылся сам один раз: свернули — так и остаётся
       await pg.locator('#adv-acq > summary').click();
+      await sub(pg, 'folders');
       await pg.locator('#dirs-hint button').first().click();  // renderDetect ещё раз
       assert.ok(!(await pg.locator('#adv-acq').evaluate(d => d.open)), 'свёрнутый пользователем не раскрывается снова');
       // прокси и сертификаты: свёрнуто, в заголовке — что найдено; нет связи — раскрывается
@@ -202,6 +208,7 @@ test('настройки: главное сверху, редкое по кно�
       await pg.locator('.auto[data-auto="https_proxy"] button', { hasText: 'изменить' }).click();
       assert.strictEqual(await pg.locator('#https_proxy').inputValue(), '', 'замаскированный пароль в поле не попадает');
       assert.strictEqual(await pg.evaluate(() => document.activeElement.id), 'https_proxy');
+      await pg.goto(ORIGIN + '/settings.html#adapter/folders');
       assert.ok(/сетевая, не проверялась/.test(await pg.locator('#dirs-hint').innerText()));
       assert.deepStrictEqual(errors, []);
       await ctx.close();

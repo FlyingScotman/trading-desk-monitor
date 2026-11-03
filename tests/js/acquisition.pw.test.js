@@ -44,7 +44,7 @@ async function setup(browser, {mode = 'success', width = 1440, multiple = false}
     if (!file.startsWith(ROOT) || !fs.existsSync(file) || fs.statSync(file).isDirectory()) return route.fulfill({status:404,body:''});
     return route.fulfill({status:200,contentType:TYPES[path.extname(file)] || 'application/octet-stream', body:fs.readFileSync(file)});
   });
-  await pg.goto(ORIGIN + '/settings.html#adapter');
+  await pg.goto(ORIGIN + '/settings.html#adapter/acq');
   await pg.locator('#acquisition-card').waitFor({timeout:5000});
   await pg.waitForFunction(() => !document.getElementById('acq-inspect').disabled);
   return {ctx, pg, errors, requests};
