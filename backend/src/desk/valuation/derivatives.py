@@ -44,9 +44,20 @@ delta), ``basis01`` (``FXBASIS|<ccy>``, RUB per bp), ``fixings`` (fixed / pendin
   period has started reads the run's fixings of its index (``rates.fixing_entries``: point-in-time, RUONIA with one
   declared unpublished trailing business day); ``extra.index_fixings`` says which history it read, its latest fixing,
   the declared unpublished days (carried at the latest fixing) and any business day missing inside it (core rejects
-  a swap that reads one). Not valued (the report's rule, with the reason): a ``ccs`` (``ccs_unsupported``: no
-  cross-currency or basis swap in the monitor yet), two floating legs (``basis_swap_unsupported``), another index or
-  currency, a ``<n>D`` / ``<n>W`` frequency or ``30/360``, a matured swap.
+  a swap that reads one). Not valued (the report's rule, with the reason): two floating legs
+  (``basis_swap_unsupported``), another index or currency, a ``<n>D`` / ``<n>W`` frequency or ``30/360``, a matured
+  swap.
+- ``ccs`` (TDM#555): the two leg rows of a ``trade_id``, a RUB leg (fixed, or ``RUONIA`` compounded + ``spread_bp``)
+  against a leg in a foreign currency (fixed), are one core ``XccySwap`` (``XccyInstrument``): periods by the rule of
+  the MOEX XCS standard swap on the joint calendar of the RUONIA OIS and ``FX:<ccy>`` (a single period up to a year,
+  annual beyond, ACT/ACT ISDA, a business day's payment lag), a leg's ``payment_frequency`` / ``day_count`` instead
+  where stated; the exchanges as ``notional_exchange`` says (absent: initial and final, provisional, said); the RUB
+  leg discounted on ``RUB RUONIA`` (RUONIA projected on it, its fixings read once started), the foreign leg on the
+  currency's curve of the FX derivatives. Published: PV, ``risk`` on both curves, ``fx_delta`` of the currency (the
+  foreign leg's PV in it: the spot equivalent, what the OCP takes), ``basis01`` (``XCCYBASIS``), ``extra.swaps``
+  (``product`` ``ccs``, both legs' PV, ``side`` by the fixed leg). Not valued: a floating foreign leg
+  (``ccs_foreign_floating_unsupported``: no foreign index fixings in the run), two foreign legs or two RUB legs
+  (``ccs_ccy_unsupported``), a RUB leg on another index.
 - ``repo``: one core ``RepoTrade`` per row: ``repo`` borrows cash, ``reverse_repo`` lends it, ``notional_ccy`` the first
   leg's cash (RUB only), ``start_date`` / ``maturity_date`` its legs, fixed ``fixed_rate_pct`` or floating
   ``RUONIA`` / ``KEY_RATE`` + ``spread_bp`` (the MOEX observation rule; the key rate projected on
@@ -74,6 +85,7 @@ Published for them: PV, ``risk`` per curve (``RUB RUONIA``, ``RUB KEY``), the He
 from __future__ import annotations
 
 import math
+from calendar import monthrange
 from collections import defaultdict
 from dataclasses import dataclass, field, replace
 from datetime import date, timedelta
@@ -82,6 +94,7 @@ from typing import Any
 
 from rub_fixed_income import (
     RISK_BUCKETS,
+    RUONIA_OIS_COMPOUND,
     AccountingCategory,
     CalendarEntry,
     CoreRejection,
@@ -98,6 +111,7 @@ from rub_fixed_income import (
     FxFuturesContract,
     FxFuturesInstrument,
     InterestRateSwap,
+    OisSwapConvention,
     ParYieldCurveRequest,
     Position,
     RepoDayBasis,
@@ -108,11 +122,18 @@ from rub_fixed_income import (
     SwapLegSchedule,
     ValuationPolicy,
     XccyCurveBootstrapRequest,
+    XccyInstrument,
+    XccyLeg,
+    XccyPeriod,
+    XccySwap,
+    adjust_date,
     horizon_portfolio,
     joint_calendar,
+    notional_exchanges,
     swap_convention,
     swap_schedule,
     value_portfolio,
+    xcs_cnyrub_convention,
 )
 from rub_fixed_income import __version__ as CORE_VERSION
 
@@ -404,7 +425,98 @@ class RepoTerms:
                    _num(r.get("spread_bp")) or 0.0, _leg_field(r, "day_count"), _num(r.get("pv_rub")), sec)
 
 
-RatesTrade = SwapTerms | RepoTerms
+CCS_EXCHANGES = ("none", "final", "initial_and_final")
+
+
+@dataclass(frozen=True)
+class CcsLeg:
+    """One leg of a ``ccs`` trade as its terms row states it."""
+
+    ccy: str
+    side: str
+    """``pay`` or ``receive``: the desk pays (receives) the leg's interest and, with an exchange, its final notional."""
+    notional: float
+    fixed_rate_pct: float | None
+    index_code: str | None
+    spread_bp: float
+    frequency: str | None
+    day_count: str | None
+    exchange: str | None
+
+
+@dataclass(frozen=True)
+class CcsTerms:
+    """One ``ccs`` trade (TDM#555) from its two leg rows: a RUB leg (fixed, or RUONIA compounded) against a leg in a
+    foreign currency (fixed), one core ``XccySwap``."""
+
+    trade_id: str
+    product: str
+    book_id: str
+    rub: CcsLeg
+    foreign: CcsLeg
+    start: date
+    maturity: date
+    pv_rub: float | None
+
+    @property
+    def label(self) -> str:
+        return self.trade_id
+
+    @property
+    def amount(self) -> float:
+        """The RUB leg's notional."""
+        return self.rub.notional
+
+    @property
+    def end(self) -> date:
+        return self.maturity
+
+    @property
+    def side(self) -> str:
+        """``payer`` when the desk pays the fixed leg (the foreign one when both are fixed), else ``receiver``."""
+        fixed = self.foreign if self.foreign.fixed_rate_pct is not None else self.rub
+        return "payer" if fixed.side == "pay" else "receiver"
+
+    @classmethod
+    def of(cls, rows: list[dict[str, Any]]) -> CcsTerms:
+        tid = str(rows[0].get("trade_id"))
+        if len(rows) != 2:
+            raise NotValued("terms_incomplete", f"trade {tid}: a cross-currency swap needs two legs, has {len(rows)}")
+        legs = []
+        for r in rows:
+            side = str(r.get("side") or "").lower()
+            if side not in ("pay", "receive"):
+                raise NotValued("terms_incomplete", f"trade {tid}: leg side pay or receive")
+            if (r.get("fixed_rate_pct") is None) == (r.get("index_code") is None):
+                raise NotValued("terms_incomplete", f"trade {tid}: exactly one of fixed_rate_pct and index_code a leg")
+            n = _num(r.get("notional_ccy"))
+            if n is None or n <= 0:
+                raise NotValued("terms_incomplete", f"trade {tid}: a positive notional_ccy of each leg")
+            ex = str(r["notional_exchange"]).strip().lower() if r.get("notional_exchange") is not None else None
+            if ex is not None and ex not in CCS_EXCHANGES:
+                raise NotValued("terms_invalid", f"trade {tid}: notional_exchange {ex}")
+            legs.append(CcsLeg(_ccy(r.get("ccy")) or "", side, n, _num(r.get("fixed_rate_pct")),
+                               str(r["index_code"]).strip().upper() if r.get("index_code") is not None else None,
+                               _num(r.get("spread_bp")) or 0.0, _leg_field(r, "payment_frequency"),
+                               _leg_field(r, "day_count"), ex))
+        rub = [g for g in legs if g.ccy == "RUB"]
+        other = [g for g in legs if g.ccy != "RUB"]
+        if len(rub) != 1 or len(other) != 1:
+            raise NotValued("ccs_ccy_unsupported", f"trade {tid}: legs in {sorted(g.ccy for g in legs)}, a RUB leg "
+                                                   "against a foreign one only")
+        if {g.side for g in legs} != {"pay", "receive"}:
+            raise NotValued("terms_incomplete", f"trade {tid}: one pay and one receive leg")
+        starts, ends = {_day(r.get("start_date")) for r in rows}, {_day(r.get("maturity_date")) for r in rows}
+        if None in starts or None in ends:
+            raise NotValued("terms_incomplete", f"trade {tid}: start_date and maturity_date of both legs")
+        if len(starts) != 1 or len(ends) != 1:
+            raise NotValued("swap_dates_mismatch", f"trade {tid}: the legs' start or maturity dates differ")
+        pvs = [p for r in rows if (p := _num(r.get("pv_rub"))) is not None]
+        return cls(tid, "ccs", str(rows[0].get("book_id")), rub[0], other[0], starts.pop(), ends.pop(),  # type: ignore[arg-type]
+                   math.fsum(pvs) if pvs else None)
+
+
+RatesTrade = SwapTerms | RepoTerms | CcsTerms
 
 
 @dataclass
@@ -427,13 +539,10 @@ class Request:
 
 def request_of(position_id: str, book_id: str, row: dict[str, Any], terms: list[dict[str, Any]]) -> Request:
     """The request of a positions row from its linked trade_terms rows (``link``); raises ``NotValued`` for terms
-    core is not given (a CCS, FX and rates trades under one row, incomplete terms)."""
+    core is not given (FX and rates trades under one row, incomplete terms)."""
     kinds = {str(t.get("product_kind")) for t in terms}
     if kinds <= set(FX_KINDS):
         return Request(position_id, book_id, row, [TermsLeg.of(t) for t in terms])
-    if "ccs" in kinds:
-        raise NotValued("ccs_unsupported", "a cross-currency swap: not valued by core in the monitor yet "
-                                           "(no cross-currency or basis swap mapping), the report's PV")
     if kinds & set(FX_KINDS):
         raise NotValued("terms_mixed", f"FX and rates trades under one position: {sorted(kinds)}")
     by_trade: dict[str, list[dict[str, Any]]] = defaultdict(list)
@@ -443,6 +552,8 @@ def request_of(position_id: str, book_id: str, row: dict[str, Any], terms: list[
     for _, ts in sorted(by_trade.items()):
         if ts[0].get("product_kind") == "repo":
             trades += [RepoTerms.of(t) for t in ts]
+        elif {t.get("product_kind") for t in ts} == {"ccs"}:
+            trades.append(CcsTerms.of(ts))
         else:
             trades.append(SwapTerms.of(ts))
     return Request(position_id, book_id, row, trades=trades)
@@ -648,6 +759,157 @@ def _repo_instrument(ctx: Any, r: RepoTerms, iid: str) -> tuple[RepoInstrument, 
     return RepoInstrument(iid, trade, REPO_CALENDAR, RUONIA_OIS_CURVE_ID, projection, fixing), notes
 
 
+CCS_RUB_INDEX = {"RUONIA": RUONIA_OIS_COMPOUND}
+"""``index_code`` of a CCS's RUB floating leg -> core's compounded index (core values RUONIA only)."""
+
+
+def _ccs_convention(leg: CcsLeg, base: OisSwapConvention, label: str) -> tuple[OisSwapConvention, DayCount, bool]:
+    """The leg's period rule and day count: its ``payment_frequency`` and ``day_count`` where stated, else those of
+    the MOEX standard swap (``xcs_cnyrub_convention``: a single period up to a year, annual beyond, ACT/ACT ISDA, a
+    business day's payment lag); and whether the terms stated both."""
+    conv, dc = base, base.fixed_day_count
+    if leg.frequency is not None:
+        f = leg.frequency.upper()
+        if f == "TERM":
+            conv = replace(conv, single_period_max_months=1200, frequency_months=1200)
+        elif f[-1:] in ("M", "Y") and f[:-1].isdigit() and int(f[:-1]) > 0:
+            m = int(f[:-1]) * (12 if f[-1] == "Y" else 1)
+            conv = replace(conv, single_period_max_months=m, frequency_months=m)
+        else:
+            raise NotValued("swap_frequency_unsupported", f"{label}: payment_frequency {leg.frequency}")
+    if leg.day_count is not None:
+        if leg.day_count not in DAY_COUNTS:
+            raise NotValued("day_count_unsupported", f"{label}: day_count {leg.day_count}")
+        dc = DAY_COUNTS[leg.day_count]
+    return conv, dc, leg.frequency is not None and leg.day_count is not None
+
+
+def _add_months(d: date, months: int) -> date:
+    i = d.month - 1 + months
+    y, m = d.year + i // 12, i % 12 + 1
+    return date(y, m, min(d.day, monthrange(y, m)[1]))
+
+
+def _ccs_periods(conv: OisSwapConvention, start: date, unadjusted_end: date, end: date, notional: float
+                 ) -> tuple[tuple[XccyPeriod, ...], bool]:
+    """The leg's periods by the rule of core's ``OisSwapConvention.periods`` (``xccy_leg_periods``): a single period up
+    to ``single_period_max_months``, else rolled back from the unadjusted end, each date adjusted, the payment
+    ``payment_lag_business_days`` after each end. A date before the calendar's coverage (a seasoned swap: the run's
+    calendars start a year or so back) is kept unadjusted, its payment on it; such a period is in the past and core
+    leaves its flows out. Returns the periods and whether a date was left unadjusted."""
+    cal, bdc = conv.calendar, conv.business_day_convention
+    raw = False
+
+    def adj(d: date) -> date:
+        nonlocal raw
+        if cal.covers(d):
+            return adjust_date(d, bdc, cal)
+        raw = True
+        return d
+
+    if end <= start or unadjusted_end <= start:
+        raise NotValued("terms_invalid", "a CCS's maturity must be after its start")
+    bounds = [start]
+    if unadjusted_end > _add_months(start, conv.single_period_max_months):
+        rolls, k = [], 1
+        while (roll := _add_months(unadjusted_end, -conv.frequency_months * k)) > start:
+            rolls.append(roll)
+            k += 1
+        bounds += [a for r in reversed(rolls) if start < (a := adj(r)) < end]
+    bounds.append(end)
+    pay = [conv.calendar.add_business_days(e, conv.payment_lag_business_days) if cal.covers(e) else e
+           for e in bounds[1:]]
+    return tuple(XccyPeriod(a, b, p, notional) for a, b, p in zip(bounds[:-1], bounds[1:], pay, strict=True)), raw
+
+
+def _ccs_instrument(ctx: Any, c: CcsTerms, iid: str, curve_of: dict[str, str]
+                    ) -> tuple[XccyInstrument, list[str], tuple[date, ...]]:
+    """Core's cross-currency swap of one ``CcsTerms`` (TDM#555): the schedule on the joint calendar of the RUONIA OIS
+    and the foreign currency's settlement calendar, exchanges as the terms state them (absent: initial and final, the
+    standard swap's), the RUB leg discounted on ``RUB RUONIA`` (RUONIA projected on it), the foreign leg on the
+    currency's curve of the FX derivatives (``FxOptions``). Returns the instrument, the notes and every payment
+    date (coupons and exchanges)."""
+    bd, notes = ctx.business_date, []
+    ccy = c.foreign.ccy
+    if c.maturity < bd - timedelta(days=FLOW_DAYS + 7):
+        raise NotValued("settled", f"CCS {c.label} matured on {c.maturity}", c.maturity)
+    if c.foreign.index_code is not None:
+        raise NotValued("ccs_foreign_floating_unsupported", f"CCS {c.label}: the {ccy} leg floats on "
+                                                            f"{c.foreign.index_code} (no {ccy} index fixings in the run)")
+    if c.rub.index_code is not None and c.rub.index_code not in CCS_RUB_INDEX:
+        raise NotValued("swap_index_unsupported", f"CCS {c.label}: RUB leg on {c.rub.index_code} (RUONIA only)")
+    if ccy not in ctx.fx.spots:
+        raise NotValued("no_fx_spot", f"{ccy} on {bd}")
+    if ccy not in curve_of:
+        raise NotValued("no_foreign_curve", f"no {ccy} curve in the run")
+    cals = {e.calendar_id: e.calendar for e in ctx.core_market.calendars}
+    fx_cal = cals.get(f"FX:{ccy}")
+    if fx_cal is None:
+        raise NotValued("no_fx_calendar", f"FX:{ccy} not in the run")
+    ois = rates.ois_calendar(ctx.static.snapshot, bd)[0]
+    cal = joint_calendar([ois, fx_cal], version=f"{ois.version}+{fx_cal.version}")
+    base = xcs_cnyrub_convention(cal).swap
+    if not cal.covers(c.maturity):
+        if c.maturity < bd:
+            raise NotValued("settled", f"CCS {c.label} matured on {c.maturity}", c.maturity)
+        raise NotValued("no_fx_calendar", f"CCS {c.label}: maturity {c.maturity} outside the run's calendars")
+    start = adjust_date(c.start, base.business_day_convention, cal) if cal.covers(c.start) else c.start
+    end = adjust_date(c.maturity, base.business_day_convention, cal)
+    stated, unadjusted = True, not cal.covers(c.start)
+    legs = []
+    for g, rub in ((c.rub, True), (c.foreign, False)):
+        conv, dc, both = _ccs_convention(g, base, f"{c.label} {g.ccy}")
+        stated &= both
+        periods, raw = _ccs_periods(conv, start, c.maturity, end, g.notional)
+        unadjusted |= raw
+        ex = g.exchange or "initial_and_final"
+        exchanges = () if ex == "none" else notional_exchanges(
+            periods, initial_date=start if ex == "initial_and_final" else None, final_date=end)
+        legs.append(XccyLeg(g.ccy, g.side, dc, periods, exchanges,  # type: ignore[arg-type]
+                            fixed_rate=g.fixed_rate_pct / 100.0 if g.fixed_rate_pct is not None else None,
+                            index=CCS_RUB_INDEX[g.index_code] if rub and g.index_code else None,
+                            spread=g.spread_bp / 1e4 if g.index_code else 0.0))
+    if c.rub.exchange is None or c.foreign.exchange is None:
+        notes.append(f"{c.label}: notional_exchange not stated: initial and final exchanges assumed (provisional)")
+    if unadjusted:
+        notes.append(f"{c.label}: dates before {cal.valid_from} (the run's calendars) taken unadjusted (past periods)")
+    if not stated:
+        notes.append(f"{c.label}: the MOEX XCS convention (annual, ACT/ACT ISDA) where the terms state no payment "
+                     "frequency or day count (provisional)")
+    swap = XccySwap(c.label, legs[0], legs[1])
+    days = sorted({d for g in legs for d in (*(p.payment_date for p in g.periods),
+                                             *(e.payment_date for e in g.exchanges))})
+    if days[-1] <= bd:
+        raise NotValued("settled", f"CCS {c.label} paid its last flow on {days[-1]}", days[-1])
+    fixing = None
+    if c.rub.index_code is not None and start < bd:
+        fixing = FIXING_ID["ruonia"]
+        if fixing not in _fixing_ids(ctx):
+            raise NotValued("no_fixings", f"no {fixing} fixings in the run on {bd} for the started CCS {c.label}")
+    inst = XccyInstrument(iid, swap, RUONIA_OIS_CURVE_ID, curve_of[ccy], rub_fixing_id=fixing)
+    return inst, notes, tuple(d for d in days if bd < d <= bd + timedelta(days=FLOW_DAYS))
+
+
+def _ccs_fact(t: CcsTerms, row: Any) -> dict[str, Any]:
+    """A CCS of ``extra.swaps``: its terms and core's figures (RUB; the foreign leg also in its currency)."""
+    fixed = t.foreign if t.foreign.fixed_rate_pct is not None else t.rub
+    flt = t.rub if t.rub.index_code is not None else None
+    curves = dict(row.curve_ids)
+    return {"trade_id": t.trade_id, "product": "ccs", "index": flt.index_code if flt else None, "side": t.side,
+            "notional_rub": t.rub.notional, "foreign_ccy": t.foreign.ccy, "foreign_notional": t.foreign.notional,
+            "fixed_rate_pct": fixed.fixed_rate_pct, "spread_bp": flt.spread_bp if flt else None,
+            "rub_side": t.rub.side, "foreign_side": t.foreign.side,
+            "start_date": t.start.isoformat(), "maturity_date": t.maturity.isoformat(), "convention": "xccy",
+            "pv_rub": row.pv_rub, "rub_leg_pv_rub": row.rub_leg_pv_rub, "foreign_leg_pv": row.foreign_leg_pv,
+            "foreign_leg_pv_rub": row.foreign_leg_pv_rub, "spot_rate": row.spot_rate,
+            "par_rate_pct": row.foreign_leg_par_rate * 100.0 if row.foreign_leg_par_rate is not None else None,
+            "discount_curve": _curve(curves.get("rub_discount")),
+            "foreign_curve": _curve(curves.get("foreign_discount")),
+            "projection_curve": _curve(curves.get("rub_projection")) if flt else None,
+            "fixing_id": row.rub_fixing_id,
+            **({"reported_pv_rub": t.pv_rub} if t.pv_rub is not None else {})}
+
+
 def _published(name: str) -> str:
     if name.startswith("IR|"):
         _, c, b = name.split("|")
@@ -813,17 +1075,21 @@ def value(ctx: Any, requests: list[Request], *, options: FxOptions, second_order
                 gone: list[tuple[Any, NotValued]] = []
                 for n, t in enumerate(r.trades):
                     iid = f"{r.position_id}#{n}"
+                    days: tuple[date, ...] | None = None
                     try:
-                        inst, more = (_swap_instrument(ctx, t, iid, calendars) if isinstance(t, SwapTerms)
-                                      else _repo_instrument(ctx, t, iid))
+                        if isinstance(t, CcsTerms):
+                            inst, more, days = _ccs_instrument(ctx, t, iid, curve_of)
+                        else:
+                            inst, more = (_swap_instrument(ctx, t, iid, calendars) if isinstance(t, SwapTerms)
+                                          else _repo_instrument(ctx, t, iid))
                     except NotValued as e:
                         if e.reason != "settled":
                             raise
                         gone.append((t, e))
                         continue
                     notes[r.position_id] += more
-                    built.append((inst, "RUB", t, 1.0))
-                    pay_dates[iid] = _pay_dates(inst, t, calendars, bd)
+                    built.append((inst, t.foreign.ccy if isinstance(t, CcsTerms) else "RUB", t, 1.0))
+                    pay_dates[iid] = days if days is not None else _pay_dates(inst, t, calendars, bd)
                 if gone and not built:
                     out[r.position_id] = _settled_row(ctx, r, [(t, e.last or _last_event(t)) for t, e in gone], gone[0][1],
                                                       notes[r.position_id])
@@ -876,6 +1142,7 @@ def value(ctx: Any, requests: list[Request], *, options: FxOptions, second_order
              and (c := i.projection_curve_id) is not None}
     fixing_ids = {f for i in instruments if isinstance(i, (SwapInstrument, RepoInstrument))
                   and (f := i.fixing_id) is not None}
+    fixing_ids |= {f for i in instruments if isinstance(i, XccyInstrument) and (f := i.rub_fixing_id) is not None}
     # risk on RUONIA in its OIS par quotes, as the bonds' (EodContext.quote_curves); with the setting quote_curve_risk
     # the CNY XCCY curve as its par quotes too (EodContext.fx_risk_market), rebuilt by core on every shock. The fixings
     # only a swap or a REPO reads (point-in-time, with RUONIA's declared unpublished day), so an FX book's inputs stay
@@ -912,6 +1179,19 @@ def value(ctx: Any, requests: list[Request], *, options: FxOptions, second_order
         else:
             a.products.add("repo")
             a.repos.append(_repo_fact(t, row))
+    for row in result.xccy_swaps:  # TDM#555: rates risk on both curves, the basis, the FX delta of the foreign leg
+        r, t = owner[row.position_id], terms_of[row.position_id]
+        a = acc[r.position_id]
+        a.add_risk(row)
+        a.flags |= set(flags.get(row.position_id, ()))
+        a.curves |= {c for _, cid in row.curve_ids if (c := _curve(cid))}
+        if row.curve_fallback_from:
+            a.fallback_from.add(row.curve_fallback_from)
+        if row.rub_fixing_id:
+            a.fixing_ids.add(row.rub_fixing_id)
+        a.fx_delta[row.currency] += row.foreign_leg_pv  # the foreign leg's PV in its currency: the spot equivalent
+        a.products.add("ccs")
+        a.swaps.append(_ccs_fact(t, row))
     for row in (*result.fx_forwards, *result.fx_crosses, *result.fx_futures):
         r, t = owner[row.position_id], terms_of[row.position_id]
         a = acc[r.position_id]
@@ -1058,7 +1338,8 @@ def _rates_flows(snap: Any, policy: ValuationPolicy, instruments: list[Any], pos
 
     def add(iid: str, h: date, amount: float | None) -> None:
         flows[owner[iid].position_id].append({
-            "trade_id": terms_of[iid].label, "kind": "swap" if isinstance(inst_of[iid], SwapInstrument) else "repo",
+            "trade_id": terms_of[iid].label,
+            "kind": "swap" if isinstance(inst_of[iid], SwapInstrument | XccyInstrument) else "repo",
             "date": h.isoformat(), "out_on": h.isoformat(), "ccy": "RUB" if amount is not None else None,
             "amount": amount})
 
@@ -1068,7 +1349,7 @@ def _rates_flows(snap: Any, policy: ValuationPolicy, instruments: list[Any], pos
             res = horizon_portfolio(snapshot=snap, instruments=[inst_of[i] for i in sel],
                                     positions=[pos_of[i] for i in sel], policy=policy, horizon_date=h,
                                     curve_cache=cache)
-            got = {row.position_id: row for row in (*res.swaps, *res.repos)}
+            got = {row.position_id: row for row in (*res.swaps, *res.repos, *res.xccy_swaps)}
         except (CoreRejection, ValueError, LookupError, ArithmeticError):
             got = {}
         for iid in sel:
@@ -1096,8 +1377,9 @@ def _risk(a: _Acc) -> tuple[dict[str, dict[str, float]], dict[str, float], dict[
         if f.startswith("IR|"):
             _, c, b = f.split("|")
             by_curve.setdefault(c, dict.fromkeys(RISK_BUCKETS, 0.0))[b] += v
-        elif f.startswith("FXBASIS|") and v:
-            basis[f.split("|", 1)[1]] = v
+        elif f.startswith(("FXBASIS|", "XCCYBASIS|")) and v:  # the same form (core docs/xccy.md): one per currency
+            c = f.split("|", 1)[1]
+            basis[c] = basis.get(c, 0.0) + v
     by_curve = {c: bs for c, bs in by_curve.items() if any(bs.values())}  # a fixed NDF: no foreign curve risk
     buckets = {b: math.fsum(bs[b] for bs in by_curve.values()) for b in RISK_BUCKETS}
     return by_curve, buckets, basis
@@ -1119,8 +1401,10 @@ def _reported_pv(x: dict[str, Any], pvs: list[float | None]) -> float | None:
 def _rates_valuation(ctx: Any, r: Request, a: _Acc, notes: list[str], result: Any, snap: Any) -> BondValuation:
     """A row of swaps and REPOs valued by core: PV, rates risk per curve, the trades and the fixings read."""
     bd, x = ctx.business_date, r.row
-    by_curve, buckets, _ = _risk(a)
+    by_curve, buckets, basis = _risk(a)
     why = list(notes)
+    if a.fallback_from:
+        why.append("foreign curve absent: " + ", ".join(sorted(a.fallback_from)) + " replaced by the fallback")
     fixings = {}
     for fid in sorted(a.fixing_ids):
         info = fixings[fid] = index_fixings(snap, fid)
@@ -1142,6 +1426,11 @@ def _rates_valuation(ctx: Any, r: Request, a: _Acc, notes: list[str], result: An
         **({"reported_pv_rub": reported, "pv_diff_rub": a.pv - reported} if reported is not None else {}),
         "flows": a.flows,
     }
+    fx_delta = {c: v for c, v in a.fx_delta.items() if v}
+    if fx_delta:  # a CCS: the spots of its FX delta, its basis
+        extra["fx_rates"] = {c: ctx.fx.rates[c][0] for c in fx_delta if c in ctx.fx.rates}
+        if basis:
+            extra["basis01"] = basis
     return BondValuation(
         secid="", quantity=amount, valuation_date=bd, settlement=bd, horizon_date=horizon, horizon_kind="maturity",
         price_basis="core", clean_pct=math.nan, accrued_rub=0.0, face_rub=1.0, current_coupon_pct=None,
@@ -1150,7 +1439,7 @@ def _rates_valuation(ctx: Any, r: Request, a: _Acc, notes: list[str], result: An
         buckets=buckets, spread01_rub=0.0,
         calculation_id=a.calc_ids[0] if len(a.calc_ids) == 1 else f"desk-derivatives:{bd}:{r.position_id}",
         curve_buckets=by_curve, hessian=_hessian(a), quality="assumed" if why else "exact", assumptions=tuple(why),
-        fx_delta={}, extra=extra)
+        fx_delta=fx_delta, extra=extra)
 
 
 def _valuation(ctx: Any, r: Request, a: _Acc, notes: list[str], result: Any) -> BondValuation:

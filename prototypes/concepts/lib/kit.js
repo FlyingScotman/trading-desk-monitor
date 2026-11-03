@@ -2312,7 +2312,9 @@
   const RC_PROD = { irs: 'IRS', ois: 'OIS', repo: 'РЕПО', ccs: 'CCS' };
   K.RC_SIDE = { payer: 'плачу фикс', receiver: 'получаю фикс', repo: 'РЕПО (привлечение)', reverse_repo: 'обратное РЕПО (размещение)' };
   // причины, по которым ядро не оценило строку (backend valuation/derivatives.py NotValued; core_<код> — отказ ядра)
-  const RC_REASON = { ccs_unsupported: 'CCS ядром пока не оценивается', basis_swap_unsupported: 'базисный своп (две плавающие ноги) ядром пока не оценивается',
+  const RC_REASON = { ccs_unsupported: 'CCS ядром пока не оценивается',
+    ccs_foreign_floating_unsupported: 'CCS с плавающей валютной ногой ядром не оценивается (нет фиксингов валютного индекса)',
+    ccs_ccy_unsupported: 'CCS не «рубли против валюты»: ядром не оценивается', basis_swap_unsupported: 'базисный своп (две плавающие ноги) ядром пока не оценивается',
     repo_open: 'открытое РЕПО: нет даты окончания (её задаёт владелец)', no_fixings: 'нет фиксингов индекса в прогоне', pv_not_finite: 'ядро дало нечисловую оценку',
     repo_index_unsupported: 'индекс РЕПО не поддерживается', no_key_rate_curve: 'нет кривой КС в прогоне', no_rub_curve: 'нет кривой RUONIA OIS в прогоне',
     swap_dates_mismatch: 'даты начала или окончания ног свопа не совпадают', swap_notional_mismatch: 'номиналы ног свопа не совпадают',

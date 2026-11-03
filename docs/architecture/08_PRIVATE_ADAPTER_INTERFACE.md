@@ -795,8 +795,15 @@ Rules beyond the schema (`desk.inbox.validate`), each an `error` for the row's u
 Status 25.10.2026: the backend validates and stores the 1.4 rows (`dataset_rows`). Valuation
 (`valuation.derivatives`, FlyingScotman/trading-desk-monitor#45) reads the FX kinds, `irs` / `ois` on `RUONIA` or
 `KEY_RATE` in RUB (core's swap, risk per curve) and `repo` with a `maturity_date` (fixed, or `RUONIA` / `KEY_RATE`);
-a `ccs`, a swap with two floating legs, an open REPO and a REPO on another index keep the report's value with the
-reason (`ccs_unsupported`, `basis_swap_unsupported`, `repo_open`, `no_fixings`). A swap leg's `payment_frequency`
+since 03.11.2026 (FlyingScotman/trading-desk-monitor#555) a `ccs` of a RUB leg (fixed or `RUONIA`) against a fixed
+leg in a foreign currency (core's cross-currency swap: risk on both curves, the FX delta of the foreign leg, the
+basis; `notional_exchange` absent is read as `initial_and_final`, provisional); a `ccs` with a floating foreign leg,
+a swap with two floating legs, an open REPO and a REPO on another index keep the report's value with the
+reason (`ccs_foreign_floating_unsupported`, `basis_swap_unsupported`, `repo_open`, `no_fixings`). Terms of `irs`,
+`ois`, `ccs` and `repo` no positions row names are counted in the run, not valued (FlyingScotman/trading-desk-monitor#468);
+the legs of a trade are linked together, a `position_id` on one leg links all of them
+(FlyingScotman/trading-desk-monitor#212); a positions row without `asset_class` but with `deal_id` is linked like an
+OTC row (FlyingScotman/trading-desk-monitor#501). A swap leg's `payment_frequency`
 and `day_count` replace the exchange convention of its index (absent: that convention, provisional); `30/360` and
 day or week frequencies are not valued. The funding of REPO and HTM lots from terms comes with the funding engine
 (FlyingScotman/trading-desk-monitor#55). The typed view `trade_terms_row` has the 1.4 fields as columns after the 1.2

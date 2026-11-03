@@ -395,3 +395,27 @@ def test_a_refusal_loses_only_the_payment_of_its_own_date(ctx, prev, monkeypatch
     assert other[("R", "2026-10-16")] == pytest.approx(base[("R", "2026-10-16")])
     assert other[("R", "2026-10-28")] == pytest.approx(base[("R", "2026-10-28")])
     assert other[("A", "2026-10-15")] == pytest.approx(base[("A", "2026-10-15")])
+
+
+def test_a_ccs_coupon_paid_on_d_is_cash_not_a_loss(ctx, prev):
+    """TDM#555: a CCS (pay RUB fixed, receive CNY fixed, annual) pays both coupons on D: PV D lacks them, PV D-1 has
+    them. The flows of D-1 carry them (RUB, the CNY one at its RUB value as core projects it), and the day's PnL is
+    the change of PV plus them: no jump of a year's coupons."""
+    common = {"trade_id": "X1", "book_id": "IRB", "product_kind": "ccs", "trade_date": "2025-10-10",
+              "start_date": "2025-10-14", "maturity_date": "2027-10-14", "notional_exchange": "initial_and_final",
+              "payment_frequency": "1Y", "day_count": "ACT/365"}
+    terms = [{**common, "leg_id": "rub", "side": "pay", "ccy": "RUB", "notional_ccy": "1250000000",
+              "fixed_rate_pct": "15"},
+             {**common, "leg_id": "cny", "side": "receive", "ccy": "CNY", "notional_ccy": "100000000",
+              "fixed_rate_pct": "3"}]
+    o, p = day(prev, ctx, terms, "X1")
+    assert o.valuation.extra["core"]["product"] == "ccs" and p.valuation.extra["core"]["product"] == "ccs"
+    paid = [f for f in p.valuation.extra["flows"] if f["date"] == BD.isoformat()]
+    assert paid and all(f["kind"] == "swap" and f["amount"] is not None for f in paid)
+    cash = sum(f["amount"] for f in paid)
+    # a year (ACT/365, 14.10.2025-14.10.2026) of coupons: -15 % of 1.25bn RUB, +3 % of 100m CNY at the spot
+    assert cash == pytest.approx(-0.15 * 1.25e9 + 0.03 * 1e8 * 12.5141, rel=1e-9)
+    assert not [f for f in o.valuation.extra["flows"] if f["date"] == BD.isoformat()]  # paid: not in PV D either
+    jump = o.valuation.pv_rub - p.valuation.pv_rub
+    assert o.pnl.received_rub == pytest.approx(cash)
+    assert o.pnl.total == pytest.approx(jump + cash)  # the fixture's D-1 has another CNY curve: the rest is no carry

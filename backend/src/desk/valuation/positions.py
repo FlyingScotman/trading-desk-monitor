@@ -13,10 +13,10 @@ core (``direct``). ``merge`` puts the two back in the inputs' order for ``desk_r
   else ``mark_price_pct`` x face (+ ``accrued_ccy``) at the CBR rate; the report's risk (``reported_risk``) when it
   gives one, else none (DV01 and CS01 0). Nothing at all: not valued, reason ``unmapped_instrument``.
 - FX or OTC row with its trade's terms (private/1.2 ``trade_terms``: an FX forward, NDF, FX swap or cross; since 1.4
-  an IRS / OIS on RUONIA or the key rate, a REPO), or a FORTS FX future named by ticker (setting
+  an IRS / OIS on RUONIA or the key rate, a REPO; a CCS RUB against a foreign currency, TDM#555), or a FORTS FX future named by ticker (setting
   ``futures_by_ticker``): valued by core ``value_portfolio`` v3 (``valuation.derivatives``): PV, rates risk per curve
   (``RUB RUONIA``, the foreign curve, ``RUB KEY``), FX delta per currency (core's spot equivalent), basis, fixing
-  status. When core cannot (no curve, no spot, a fixing missing, a CCS), the row keeps the rule below with the reason
+  status. When core cannot (no curve, no spot, a fixing missing, a basis swap), the row keeps the rule below with the reason
   first in its assumptions.
 - A row without ``asset_class`` but with a ``deal_id`` is linked like an OTC row (TDM#501): with its trade's terms it
   is valued here (or, when core rejects them, by the OTC rule with the reason); without, it is a bond as before.
@@ -338,7 +338,7 @@ def _core_outcome(v: BondValuation, result: Any) -> Outcome:
 
 def _not_by_core(o: Outcome, e: dv.NotValued) -> Outcome:
     """A row core did not value from its terms: its earlier rule, the reason said. When that rule finds no value
-    either (``no_reported_value``: no mv_rub), the row's reason is core's (``ccs_unsupported``, ``repo_open``, ...):
+    either (``no_reported_value``: no mv_rub), the row's reason is core's (``basis_swap_unsupported``, ``repo_open``, ...):
     the terms are there, so «waiting for the terms» would be wrong (``api.coverage``); the report's gap goes in the
     detail."""
     note = f"trade terms not valued by core ({e.reason}{': ' + e.detail if e.detail else ''}): the report's rule"

@@ -9,7 +9,8 @@ RUONIA and key-rate fixings from 01.10) and synthetic trades (invented amounts a
 - a REPO (fixed and on the key rate) becomes a core ``RepoTrade``;
 - the run's RUONIA fixings reach the core request; a declared unpublished day is carried and said, a gap inside the
   history makes core reject the swap (the report's value, with the reason);
-- the parallel report (``derivatives_parallel``) shows them ``both``, a CCS ``imported_only`` with ``ccs_unsupported``.
+- the parallel report (``derivatives_parallel``) shows them ``both``, a CCS with a floating USD leg ``imported_only`` with
+  ``ccs_foreign_floating_unsupported`` (a CCS against a fixed foreign leg is valued: ``test_ccs_*``, TDM#555).
 """
 
 from __future__ import annotations
@@ -115,7 +116,7 @@ def test_at_par_rate_a_swap_is_worth_nothing(ctx, plan):
 
 
 def test_what_core_does_not_value_keeps_the_report(plan):
-    for pid, reason in (("C1", "ccs_unsupported"), ("B1", "basis_swap_unsupported"), ("R3", "repo_open")):
+    for pid, reason in (("C1", "ccs_foreign_floating_unsupported"), ("B1", "basis_swap_unsupported"), ("R3", "repo_open")):
         o = plan.direct[pid]
         assert o.core_not_valued[0] == reason, (pid, o.core_not_valued)
         assert o.valuation is None or o.valuation.assumptions[0].startswith(f"trade terms not valued by core ({reason}")
@@ -127,9 +128,10 @@ def test_unvalued_reason_is_cores_not_waiting_for_terms(plan):
     from desk.api import coverage
 
     c1 = plan.direct["C1"]  # a CCS without mv_rub
-    assert c1.valuation is None and c1.reason == "ccs_unsupported" and "no mv_rub" in c1.detail
+    assert c1.valuation is None and c1.reason == "ccs_foreign_floating_unsupported" and "no mv_rub" in c1.detail
     assert plan.direct["R3"].reason == "repo_open"  # an open REPO with mv_rub: the report's value, core's reason
-    for code in ("ccs_unsupported", "basis_swap_unsupported", "repo_open", "no_fixings", "no_key_rate_curve"):
+    for code in ("ccs_unsupported", "ccs_foreign_floating_unsupported", "ccs_ccy_unsupported", "basis_swap_unsupported",
+                 "repo_open", "no_fixings", "no_key_rate_curve"):
         key, why, todo = coverage.cause(code, "IRS", None, None)
         assert key == code and "trade_terms" not in why and todo
     assert "условий сделки" in coverage.cause("no_reported_value", "IRS", None, None)[1]  # no terms at all: as before
@@ -146,8 +148,8 @@ def test_parallel_report_both_and_imported_only(plan, ctx):
     assert s1["over"] == (abs(s1["diff_rub"]) > max(10_000.0, 0.01 * 14e6))
     assert (rows["K1"]["status"], rows["K1"]["product"]) == ("both", "irs")
     assert (rows["R1"]["status"], rows["R2"]["status"]) == ("both", "computed_only")
-    assert (rows["C1"]["status"], rows["C1"]["reason"], rows["C1"]["product"]) == ("imported_only", "ccs_unsupported",
-                                                                                   "ccs")
+    assert (rows["C1"]["status"], rows["C1"]["reason"], rows["C1"]["product"]) == (
+        "imported_only", "ccs_foreign_floating_unsupported", "ccs")
     assert rows["C1"]["imported_pv_rub"] == 250000.0  # the trades' pv_rub
     assert (rows["R3"]["status"], rows["R3"]["reason"], rows["R3"]["product"]) == ("imported_only", "repo_open",
                                                                                    "repo")
@@ -338,3 +340,86 @@ def test_a_row_without_asset_class_is_linked_to_its_terms(ctx):
     b1 = bp.direct["B1"]
     assert b1.core_not_valued[0] == "basis_swap_unsupported" and b1.valuation.pv_rub == 7.0
     assert "Z" not in bp.direct or bp.direct["Z"].core_not_valued is None  # no terms: the bond path, as before
+
+
+# --- cross-currency swaps (TDM#555) ------------------------------------------------------------------------------
+
+
+def ccs(tid, rub_side, rub_n, cny_n, start="2026-10-06", end="2028-10-06", exchange="initial_and_final", **kw):
+    """A CCS of two leg rows: RUB (``rub``: fixed or RUONIA, in ``kw``) against CNY fixed (``cny_rate``)."""
+    cny_side = "receive" if rub_side == "pay" else "pay"
+    rate = kw.pop("cny_rate", "3")
+    common = {"trade_id": tid, "book_id": "IRB", "product_kind": "ccs", "trade_date": "2026-10-02",
+              "start_date": start, "maturity_date": end, **({"notional_exchange": exchange} if exchange else {})}
+    return [{**common, "leg_id": "rub", "side": rub_side, "ccy": "RUB", "notional_ccy": str(rub_n), **kw},
+            {**common, "leg_id": "cny", "side": cny_side, "ccy": "CNY", "notional_ccy": str(cny_n),
+             "fixed_rate_pct": rate}]
+
+
+def ccs_plan(ctx, terms, pid="C1"):
+    x = {"asset_class": "otc", "ccy": "RUB", "source_instrument_id": pid, "deal_id": pid}
+    inp = PositionInputs([(pid, "IRB", None, None)], [], {"IRB": BD}, datetime.now(UTC), "0" * 64, {pid: x},
+                         trade_terms=terms)
+    return pv1.plan(ctx, inp), inp
+
+
+def test_ccs_valued_by_core_with_risk_on_both_curves_and_fx_delta(ctx):
+    """A seasoned CCS (pay RUONIA on 1.25bn RUB, receive 3 % on 100m CNY, both notionals exchanged) is one core
+    ``XccySwap``: PV, rates risk on ``RUB RUONIA`` and the CNY curve, the FX delta of the CNY leg (its PV in CNY), the
+    basis, the fixings it read; the published row is a swap with an FX delta (the OCP takes it)."""
+    from desk.rules import ocp as O
+
+    bp, inp = ccs_plan(ctx, ccs("C1", "pay", 1_250_000_000, 100_000_000, index_code="RUONIA"))
+    o = bp.direct["C1"]
+    v = o.valuation
+    assert o.core_not_valued is None and v.extra["core"]["product"] == "ccs", (o.reason, o.detail)
+    assert set(v.curve_buckets) == {"RUB RUONIA", "CNY FX"}
+    (fact,) = v.extra["swaps"]
+    assert (fact["product"], fact["side"], fact["rub_side"], fact["foreign_ccy"]) == ("ccs", "receiver", "pay", "CNY")
+    assert v.fx_delta["CNY"] == pytest.approx(fact["foreign_leg_pv"]) and 0.9e8 < v.fx_delta["CNY"] < 1.1e8
+    assert v.pv_rub == pytest.approx(fact["rub_leg_pv_rub"] + fact["foreign_leg_pv_rub"], rel=1e-9)
+    assert v.extra["fx_rates"] == {"CNY": 12.5141} and v.extra["basis01"]["CNY"] > 0  # receives CNY: long the basis
+    assert "RUONIA" in v.extra["index_fixings"] and fact["fixing_id"] == "RUONIA"
+    assert v.curve_buckets["CNY FX"]["2Y"] < 0  # receives CNY fixed: long a CNY bond
+    row = tdm_run.direct_row(ctx, "IRB", "C1", o, inp.extra["C1"], None)
+    assert row["instr_type"] != "FX" and row["fx_delta"] == {"CNY": v.fx_delta["CNY"]} and row["side"] == "REC"
+    assert set(row["risk"]) == {"RUB RUONIA", "CNY FX"}
+    assert O.derivative_kind(row, inp.trade_terms) == "swap"
+
+
+def test_ccs_with_only_a_final_exchange_and_no_coupons_is_an_fx_forward(ctx):
+    """Core's identity (docs/xccy.md): a CCS with only the final exchange and zero coupons is the FX forward of its
+    final amounts: the same PV and CNY delta as the deliverable forward valued from its own terms."""
+    end = "2027-10-20"
+    swap, _ = ccs_plan(ctx, ccs("C2", "pay", 1_300_000_000, 100_000_000, start="2026-10-20", end=end,
+                                exchange="final", fixed_rate_pct="0", cny_rate="0"), "C2")
+    fwd_terms = [{"trade_id": "F2", "book_id": "IRB", "product_kind": "fx_forward", "trade_date": "2026-10-02",
+                  "value_date": end, "base_ccy": "CNY", "quote_ccy": "RUB", "side": "buy",
+                  "notional_base": "100000000", "notional_quote": "1300000000"}]
+    x = {"asset_class": "fx", "ccy": "CNY", "amount_ccy": 1e8, "value_date": date(2027, 10, 20), "deal_id": "F2"}
+    fwd = pv1.plan(ctx, PositionInputs([("F2", "IRB", None, None)], [], {"IRB": BD}, datetime.now(UTC), "0" * 64,
+                                       {"F2": x}, trade_terms=fwd_terms))
+    s, f = swap.direct["C2"].valuation, fwd.direct["F2"].valuation
+    assert s.extra["core"]["product"] == "ccs" and f.extra["core"]["product"] == "fx_forward"
+    assert s.pv_rub == pytest.approx(f.pv_rub, rel=1e-9, abs=1e-3)
+    assert s.fx_delta["CNY"] == pytest.approx(f.fx_delta["CNY"], rel=1e-6)  # exact vs the forward engine's difference
+    for c in ("RUB RUONIA", "CNY FX"):
+        assert sum(s.curve_buckets[c].values()) == pytest.approx(sum(f.curve_buckets[c].values()), rel=1e-6)
+
+
+def test_ccs_core_does_not_value_keeps_the_report(ctx):
+    """A floating foreign leg (no foreign index fixings), two foreign legs, a key-rate RUB leg: the report's rule with
+    the reason; the defaults the terms leave out are said (provisional)."""
+    float_cny = ccs("C3", "pay", 1e9, 8e7, fixed_rate_pct="15")
+    float_cny[1] = {**float_cny[1], "fixed_rate_pct": None, "index_code": "SHIBOR"}
+    both_fx = ccs("C4", "pay", 1e9, 8e7, fixed_rate_pct="15")
+    both_fx[0] = {**both_fx[0], "ccy": "USD"}
+    key = ccs("C5", "pay", 1e9, 8e7, index_code="KEY_RATE")
+    for terms, pid, reason in ((float_cny, "C3", "ccs_foreign_floating_unsupported"),
+                               (both_fx, "C4", "ccs_ccy_unsupported"), (key, "C5", "swap_index_unsupported")):
+        bp, _ = ccs_plan(ctx, [{k: v for k, v in t.items() if v is not None} for t in terms], pid)
+        assert bp.direct[pid].core_not_valued[0] == reason, (pid, bp.direct[pid].core_not_valued)
+    bp, _ = ccs_plan(ctx, ccs("C6", "receive", 1e9, 8e7, exchange=None, fixed_rate_pct="15"), "C6")
+    v = bp.direct["C6"].valuation
+    assert v.quality == "assumed" and any("initial and final exchanges assumed" in a for a in v.assumptions)
+    assert v.fx_delta["CNY"] < 0  # pays CNY: short CNY
