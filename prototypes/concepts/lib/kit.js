@@ -738,23 +738,27 @@
     });
   }
   let openMenu = null;
-  // multi — ключ чипа шапки ('books', 'ports'), меню которого переоткрывается после щелчка; у книг — поиск и «все / снять»
-  function menu(anchor, items, cur, pick, multi) {
+  // multi — ключ чипа шапки ('books', 'ports'), меню которого переоткрывается после щелчка; у книг — поиск и «все / снять».
+  // opt — меню экрана, а не шапки (свой выбор книг C16, TDM#533): reopen() — переоткрыть после щелчка; all(v), none(v) —
+  // кнопки «все видимые» и «снять» над видимыми строками (v — их значения); с all — поиск, его строка — в opt.q
+  function menu(anchor, items, cur, pick, multi, opt) {
+    opt = opt || {};
     if (openMenu) openMenu.remove();
     const m = h('div', 'k-panel'); m.style.cssText = 'position:fixed;z-index:140;min-width:220px;max-height:60vh;overflow:auto;box-shadow:var(--shadow);padding:4px 0';
     const r = anchor.getBoundingClientRect(); m.style.left = Math.min(r.left, innerWidth - 300) + 'px'; m.style.top = (r.bottom + 4) + 'px';
-    let rowsBox = m, q = multi === 'books' ? (menu._q || '') : '';
-    const reopen = () => { m.remove(); openMenu = null; const nb = chipsBox.querySelector('[data-f=' + multi + ']'); if (nb) nb.click(); };
+    const search = multi === 'books' || !!opt.all;
+    let rowsBox = m, q = multi === 'books' ? (menu._q || '') : opt.all ? (opt.q || '') : '';
+    const reopen = () => { m.remove(); openMenu = null; if (opt.reopen) return opt.reopen(); const nb = chipsBox && chipsBox.querySelector('[data-f=' + multi + ']'); if (nb) nb.click(); };
     const vis = () => items.filter(it => !q || (it.t + ' ' + (it.sub || '')).toLowerCase().includes(q));
-    if (multi === 'books') {
+    if (search) {
       const tb = h('div'); tb.style.cssText = 'display:flex;gap:6px;padding:4px 8px 6px;border-bottom:1px solid var(--line);position:sticky;top:-4px;background:var(--panel)';
       const inp = h('input', 'k-input'); inp.placeholder = 'найти книгу…'; inp.value = q; inp.style.minWidth = '0'; inp.style.flex = '1';
       const all = h('button', 'k-btn', 'все видимые'), none = h('button', 'k-btn', 'снять');
       tb.append(inp, all, none); m.appendChild(tb); rowsBox = h('div'); m.appendChild(rowsBox);
-      inp.oninput = () => { q = menu._q = inp.value.toLowerCase(); paintRows(); };
+      inp.oninput = () => { q = inp.value.toLowerCase(); if (opt.all) opt.q = q; else menu._q = q; paintRows(); };
       inp.onclick = e => e.stopPropagation();
-      all.onclick = e => { e.stopPropagation(); K.setFilter({ books: [...new Set((filt.books || []).concat(vis().map(it => it.v)))] }); reopen(); };
-      none.onclick = e => { e.stopPropagation(); K.setFilter({ books: null }); reopen(); };
+      all.onclick = e => { e.stopPropagation(); if (opt.all) opt.all(vis().map(it => it.v)); else K.setFilter({ books: [...new Set((filt.books || []).concat(vis().map(it => it.v)))] }); reopen(); };
+      none.onclick = e => { e.stopPropagation(); if (opt.none) opt.none(vis().map(it => it.v)); else K.setFilter({ books: null }); reopen(); };
       setTimeout(() => inp.focus(), 0);
     }
     function paintRows() {
@@ -3174,11 +3178,12 @@
   // частично покрытая не входит и называется в notes. Фильтр портфелей к ОВП по книгам не применяется (notes).
   // null — у прогона нет публикуемой ОВП (до v2 блока, демо): страницы берут сумму FX-дельт позиций, как раньше.
   // byBook, meta (C16, TDM#446): строки другого дня той же формы (/api/v1/history/ocp) и справочник его книг ({ книга:
-  // { entity, desk } }) — для книги, которой нет в M.book
-  K.ocpScope = function (byBook, meta) {
+  // { entity, desk } }) — для книги, которой нет в M.book; flt (C16, TDM#533) — свой фильтр экрана той же формы, что
+  // K.filter ({ entity, desk, books, ccy, portsOff }), вместо фильтра шапки; без него — фильтр шапки, как раньше
+  K.ocpScope = function (byBook, meta, flt) {
     const B = byBook || (M.ocp && Array.isArray(M.ocp.byBook) ? M.ocp.byBook : null);
     if (!B) return null;
-    const F = K.filter, bk = id => M.book[id] || (meta && meta[id]) || {};
+    const F = flt || K.filter, bk = id => M.book[id] || (meta && meta[id]) || {};
     const bookOk = id => (!F.entity || bk(id).entity === F.entity) && (!F.desk || bk(id).desk === F.desk) && (!F.books || !F.books.length || F.books.includes(id));
     const lines = [], partial = [];
     B.forEach(x => {
