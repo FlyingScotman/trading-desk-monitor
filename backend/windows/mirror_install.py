@@ -189,14 +189,17 @@ def _same_version(a: str, b: str) -> bool:
 
 
 def _secret_parts(url: str) -> list[str]:
-    """The literal secrets inside a URL (password, user name, secret query values), to scrub wherever they leak."""
+    """The literal secrets inside a URL (the password, or a lone user part that is a token, and secret query values),
+    to scrub from free text. A user name next to a password is not scrubbed as a substring (it is masked inside URLs
+    only), so that it cannot damage names and versions."""
     out: list[str] = []
     try:
         parts = urlsplit(url.strip())
     except ValueError:
         return out
     if "@" in parts.netloc:
-        out.extend(p for p in parts.netloc.rpartition("@")[0].split(":") if p)
+        user, colon, password = parts.netloc.rpartition("@")[0].partition(":")
+        out.append(password if colon else user)
     for pair in re.split(r"[&;]", parts.query):
         key, _, value = pair.partition("=")
         if value and any(w in key.lower() for w in SECRET_QUERY_WORDS):
@@ -275,14 +278,20 @@ class _Journal:
     def mask(self, text: str) -> str:
         return mask_text(text, self.secrets)
 
-    def _mask_obj(self, obj):
-        if isinstance(obj, str):
-            return self.mask(obj)
-        if isinstance(obj, list):
-            return [self._mask_obj(x) for x in obj]
-        if isinstance(obj, dict):
-            return {k: self._mask_obj(v) for k, v in obj.items()}
-        return obj
+    def _masked_data(self) -> dict:
+        """The data for the .json: URLs through ``mask_url``, free text (error, pip output) through ``mask``; names,
+        versions and hashes are never touched."""
+        d = json.loads(json.dumps(self.data))
+        d["error"] = self.mask(d["error"])
+        for item in d["index"]:
+            item["url"] = mask_url(item["url"])
+        for p in d["packages"].values():
+            if p["url"]:
+                p["url"] = mask_url(p["url"])
+        for n in d["notes"]:
+            n["title"] = self.mask(n["title"])
+            n["tail"] = [self.mask(x) for x in n["tail"]]
+        return d
 
     def note(self, title: str, body: str) -> None:
         lines = self.mask(body).strip().splitlines()[-TAIL_LINES:]
@@ -295,7 +304,7 @@ class _Journal:
 
     def write(self) -> None:
         self.data["finished"] = datetime.now().isoformat(timespec="seconds")
-        masked = self._mask_obj(self.data)
+        masked = self._masked_data()
         self.json_path.write_text(json.dumps(masked, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
                                   encoding="utf-8")
         self.log_path.write_text(self.mask("\n".join(self._lines())) + "\n", encoding="utf-8")
@@ -417,7 +426,7 @@ def _index_addresses(ctx: _Ctx) -> list[dict]:
     return out or [{"url": "https://pypi.org/simple (по умолчанию pip)", "source": "default"}]
 
 
-def _index_failure(ctx: _Ctx, output: str, title: str) -> InstallError:
+def _index_failure(ctx: _Ctx, output: str, title: str, message: str = "") -> InstallError:
     """The index is unreachable or refuses us: note pip's (masked) output, mark the packages, explain."""
     j = ctx.journal
     j.note(title, output)
@@ -425,8 +434,8 @@ def _index_failure(ctx: _Ctx, output: str, title: str) -> InstallError:
         if p["status"] is None:
             p["status"] = "index_error"
     where = ", ".join(i["url"] for i in j.data["index"]) or "адрес не определён"
-    return _fail(ctx, f"Индекс пакетов недоступен или отказал в доступе ({where}). Проверьте адрес индекса, "
-                      "логин и пароль, сертификат, прокси и сеть.")
+    return _fail(ctx, message or f"Индекс пакетов недоступен или отказал в доступе ({where}). Проверьте адрес "
+                              "индекса, логин и пароль, сертификат, прокси и сеть.")
 
 
 @dataclass
@@ -545,10 +554,10 @@ def _download(ctx: _Ctx, cache: Path, hashes: dict[str, dict[str, str]], name: s
               *_index_args(ctx.settings), f"{name}=={version}")
     wheels = sorted(part.glob("*.whl"))
     if cp.returncode != 0 or len(wheels) != 1:
-        ctx.journal.note(f"pip download {name}=={version}", _output(cp))
         shutil.rmtree(part, ignore_errors=True)
         if is_network_failure(_output(cp)):
             raise _index_failure(ctx, _output(cp), f"pip download {name}=={version}")
+        ctx.journal.note(f"pip download {name}=={version}", _output(cp))
         raise _fail(ctx, f"Не удалось скачать {name}=={version} с индекса (код pip {cp.returncode}).")
     digest = _sha256(wheels[0])
     if url:
@@ -807,11 +816,15 @@ def _search(ctx: _Ctx, lock: dict[str, str], local: dict[str, str], specs: dict[
     names = sorted(lock)
     with ThreadPoolExecutor(max_workers=INDEX_QUERY_WORKERS) as pool:
         listed = dict(zip(names, pool.map(ask, names), strict=True))
-    if not any(listed.values()):
+    if lock and not any(listed.values()):
         # pip is silent about a refused connection or a 401 at its default verbosity: no version of any package
         # at all means the index is unreachable or closed to us, not that every version is gone
         raise _index_failure(ctx, "pip index versions не вернул ни одной версии ни для одного пакета.\n"
-                                  + first_error, "индекс не вернул версий")
+                                  + first_error, "индекс не вернул версий",
+                             "Индекс не вернул ни одной версии ни для одного пакета: он недоступен, отказал в "
+                             "доступе или на нём нет колёс для этого Python и платформы. Проверьте адрес индекса, "
+                             "логин и пароль, сертификат, прокси и сеть, а также что зеркало содержит колёса "
+                             "для Windows (win_amd64, Python 3.11).")
     missing: dict[str, list[str]] = {}
     for name in names:
         avail = listed[name]

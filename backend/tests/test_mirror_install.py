@@ -623,3 +623,54 @@ def test_network_failure_detection():
     assert mi.is_network_failure("WARNING: Retrying ... NewConnectionError('x')")
     assert mi.is_network_failure("401 Client Error: Unauthorized for url: http://h/")
     assert not mi.is_network_failure("WARNING: 404 Client Error: Not Found for url\nERROR: No matching distribution")
+
+
+def test_index_returning_no_version_at_all_has_its_own_message(tmp_path, venv_python, index):
+    serve_lock(index)
+    index.status_all = 401
+    env = pip_env(tmp_path, f"http://dave:d4vePW@127.0.0.1:{index.port}/simple/", PIP_RETRIES="0")
+    with pytest.raises(mi.InstallError) as exc:
+        run_install(tmp_path, venv_python, index, env=env)
+    assert "не вернул ни одной версии" in str(exc.value) and "win_amd64" in str(exc.value)
+
+
+def test_empty_lock_does_not_blame_the_index(tmp_path, venv_python, index):
+    wh = tmp_path / "wheelhouse"
+    make_wheel(wh, "hm-lonely", "0.1.0", ("hm-gone>=1",))   # needs a package nobody has
+    (wh / "requirements.txt").write_text("hm-lonely==0.1.0\n", encoding="utf-8")
+    manifest = {"schema": 1, "python": "3.11", "platform": "any", "local": ["hm-lonely==0.1.0"],
+                "packages": {}, "imports": []}
+    (wh / "mirror.json").write_text(json.dumps(manifest), encoding="utf-8")
+    with pytest.raises(mi.InstallError) as exc:
+        run_install(tmp_path, venv_python, index)
+    assert "не вернул ни одной версии" not in str(exc.value) and "недоступен" not in str(exc.value)
+    assert last_json(tmp_path)["status"] == "failed"
+
+
+def test_json_journal_keeps_names_and_urls_intact_when_the_login_is_a_name_part(tmp_path, venv_python, index):
+    serve_lock(index)
+    settings = mi.Settings(index_url=f"http://alpha:pw12345@127.0.0.1:{index.port}/simple/")
+    res = run_install(tmp_path, venv_python, index, settings=settings)
+    text = res.json_path.read_text(encoding="utf-8")
+    assert "hm-***" not in text and "pw12345" not in text
+    data = json.loads(text)
+    assert data["packages"]["hm-alpha"]["installed"] == LOCK_ALPHA
+    assert "/files/hm_alpha-1.2.3-py3-none-any.whl" in data["packages"]["hm-alpha"]["url"]
+    assert data["index"][0]["url"] == f"http://***@127.0.0.1:{index.port}/simple/"
+    assert "alpha:pw" not in res.log_path.read_text(encoding="utf-8")
+
+
+def test_network_failure_of_a_download_is_noted_once(tmp_path, venv_python, index, monkeypatch):
+    serve_lock(index)
+    real = mi._run
+
+    def flaky(cmd, env, cwd=None):
+        if "download" in cmd and cmd[-1].startswith("hm-beta=="):
+            return subprocess.CompletedProcess(cmd, 1, "", "WARNING: Max retries exceeded with url\nERROR: boom")
+        return real(cmd, env, cwd)
+
+    monkeypatch.setattr(mi, "_run", flaky)
+    with pytest.raises(mi.InstallError, match="недоступен"):
+        run_install(tmp_path, venv_python, index)
+    titles = [n["title"] for n in last_json(tmp_path)["notes"]]
+    assert titles.count(f"pip download hm-beta=={LOCK_BETA}") == 1
