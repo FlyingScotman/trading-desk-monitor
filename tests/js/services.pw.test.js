@@ -111,6 +111,8 @@ test('services block in Settings', {skip: pw ? false : 'нет Playwright'}, asy
         assert.strictEqual(await pg.locator('#savebar').isVisible(), false, 'the panel is not settings.json');
         await pg.locator('#svc-save').click();
         await pg.waitForFunction(() => !document.getElementById('svc-f-password').value);
+        // the save done: what was typed is forgotten, the panel is the server's again (else typing races the reset)
+        await pg.waitForFunction(() => document.getElementById('svc-f-env').value === 'test');
         p = posts.filter(x => x[0].endsWith('/save'))[1][1];
         assert.strictEqual(p.get('f.password'), SECRET); assert.strictEqual(p.get('f.env'), 'prod'); assert.strictEqual(p.get('f.verbose'), 'true');
 
