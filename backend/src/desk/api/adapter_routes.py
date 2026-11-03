@@ -39,7 +39,7 @@ from typing import Annotated, Any
 from fastapi import APIRouter, Body, Depends, Request
 
 from .. import adapter_jobs, inbox_replay, settings_forms
-from ..inbox import scan
+from ..inbox import scan, tools
 from ..settings import Settings, SettingsError, load
 from .app import ApiError
 from .settings_routes import _blocking, _config_payload, _read, _sha, _write, local_only
@@ -186,27 +186,6 @@ def get_choices(kind: str) -> dict[str, Any]:
             "replay": inbox_replay.job(st), "replay_running": inbox_replay.running()}
 
 
-def merge_choices(data: dict, choices: dict, values: dict) -> tuple[dict, int]:
-    """``data`` (the tab's file) with ``values`` written into its object ``choices["save"]["key"]`` (module doc) and
-    the number of entries changed. An object that is missing or not an object (a list form of an older adapter) is
-    started afresh."""
-    key = choices["save"]["key"]
-    obj = data.get(key)
-    obj = dict(obj) if isinstance(obj, dict) else {}
-    rows = {r["key"]: r for r in choices["rows"]}
-    before = dict(obj)
-    for k, v in values.items():
-        for old in rows[k]["replaces"]:
-            if old != k:
-                obj.pop(old, None)
-        if v is None:
-            obj.pop(k, None)
-        else:
-            obj[k] = v
-    changed = sum(1 for k in set(before) | set(obj) if before.get(k) != obj.get(k))
-    return {**data, key: obj}, changed
-
-
 @router.post("/api/v1/adapter/choices/{kind}")
 def save_choices(kind: str, body: JsonBody, request: Request) -> dict[str, Any]:
     st = _settings()
@@ -238,7 +217,7 @@ def save_choices(kind: str, body: JsonBody, request: Request) -> dict[str, Any]:
         raise ApiError(409, "invalid_parameter", f"{path.name} is not valid JSON: fix it on its tab first") from None
     if not isinstance(data, dict):
         raise ApiError(409, "invalid_parameter", f"{path.name} does not hold an object: fix it on its tab first")
-    data, changed = merge_choices(data, ch, values)
+    data, changed = tools.merge_choices(data, ch, values)
     issues = settings_forms.check_schema(tab["schema"], data)
     if any(_blocking(i) for i in issues):
         raise ApiError(422, "invalid_parameter", f"{tab['file']}: the form has errors", {"issues": issues})

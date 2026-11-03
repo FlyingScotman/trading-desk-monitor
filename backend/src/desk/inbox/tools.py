@@ -342,6 +342,29 @@ def check_choices(c: Any, kind: str) -> dict:
             "truncated": len(rows_in) > MAX_CHOICE_ROWS}
 
 
+def merge_choices(data: dict, choices: dict, values: dict) -> tuple[dict, int]:
+    """``data`` (the tab's file) with ``values`` written into its object ``choices["save"]["key"]`` (module doc) and
+    the number of entries changed. An object that is missing or not an object (a list form of an older adapter) is
+    started afresh; an entry whose value is null is no entry (the options' null) and is left out, so a tab whose
+    schema takes only option values accepts the file."""
+    key = choices["save"]["key"]
+    obj = data.get(key)
+    obj = dict(obj) if isinstance(obj, dict) else {}
+    rows = {r["key"]: r for r in choices["rows"]}
+    before = dict(obj)
+    for k, v in values.items():
+        for old in rows[k]["replaces"]:
+            if old != k:
+                obj.pop(old, None)
+        if v is None:
+            obj.pop(k, None)
+        else:
+            obj[k] = v
+    obj = {k: v for k, v in obj.items() if v is not None}  # a null entry means no entry (the options' null)
+    changed = sum(1 for k in set(before) | set(obj) if before.get(k) != obj.get(k))
+    return {**data, key: obj}, changed
+
+
 # ---- the output folder -------------------------------------------------------------------------------------------
 
 

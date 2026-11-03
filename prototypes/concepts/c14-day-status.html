@@ -46,11 +46,14 @@
 <div class="k-page">
   <div class="c14-days" id="days" aria-label="Даты"></div>
   <div id="view"><div class="c14-msg">загрузка…</div></div>
+  <!-- «Перечитать отчёты» (TDM#553, ../desk-replay.js): только этому компьютеру или администратору, иначе скрыт -->
+  <div class="k-panel" id="c14-replay" hidden><div class="hd"><h3>Перечитать отчёты</h3><span class="sp"></span><span class="mut3">после изменения настроек адаптера</span></div><div class="bd" data-desk-replay></div></div>
 </div>
 <div class="c14-toast" id="toast"></div>
 <script src="lib/boot.js"></script>
 <script src="lib/kit.js"></script>
 <script src="lib/instr.js"></script>
+<script src="../desk-replay.js"></script>
 <script>
 (function () {
   'use strict';
@@ -296,6 +299,9 @@
   // раскрытые строки файлов остаются раскрытыми (#317)
   K.on('numfmt', () => { if (doc && (!on || doc.date === on) && view.querySelector('.k-grid')) K.keepOpen(view, 'data-f', render); });
   load();
+  // «Перечитать отчёты» (TDM#553): с сервером; панель показывается, когда перечитывание этому пользователю доступно
+  const rp = document.getElementById('c14-replay');
+  if (server && window.DeskReplay) window.DeskReplay.mount(rp.querySelector('[data-desk-replay]'), { base: '../', box: rp });
 })();
 </script>
 </body>

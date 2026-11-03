@@ -2432,3 +2432,36 @@ function mountTabs(a, reload){
 <script src="desk-backup.js"></script>
 <script src="desk-acquisition.js"></script>
 <script src="desk-services.js"></script>
+<script src="settings-ocp-types.js"></script>
+<script src="desk-replay.js"></script>
+<script>
+/* Блоки потока ОВП в места settings-nav.js: «ОВП: типы строк отчёта» (TDM#554, settings-ocp-types.js) — раздел #ovp,
+   место 'ovp-types'; «Перечитать отчёты за период» (TDM#553, desk-replay.js) — место 'reread' в «Адаптер и источники →
+   Папки» (скрывается, когда перечитывание этому пользователю недоступно). */
+(function () {
+  const DS = window.DeskSettings;
+  if (!DS || !/^https?:$/.test(location.protocol)) return;
+  const card = (title, sub) => {
+    const c = document.createElement('div'); c.className = 'card';
+    c.innerHTML = title ? '<div class="hd"><h2></h2><span class="mut3"></span></div><div class="bd"></div>' : '<div class="bd"></div>';
+    if (title) { c.querySelector('h2').textContent = title; c.querySelector('.mut3').textContent = sub || ''; }
+    return c;
+  };
+  if (window.DeskOcpTypes) {
+    const place = DS.slot('ovp-types');
+    if (place) {
+      const c = card(); place.replaceChildren(c);
+      window.DeskOcpTypes.mount(c.querySelector('.bd'), {api, toast});
+      DS.onShow(s => { if (s.sec === 'ovp') window.DeskOcpTypes.shown(); });  // the types again on each opening
+    }
+  }
+  if (window.DeskReplay) {
+    const place = DS.slot('reread');
+    if (place) {
+      const c = card('Перечитать отчёты за период', 'после изменения настроек адаптера, которое меняет уже принятые отчёты');
+      place.replaceChildren(c);
+      window.DeskReplay.mount(c.querySelector('.bd'), {api, toast, box: place});
+    }
+  }
+})();
+</script>
