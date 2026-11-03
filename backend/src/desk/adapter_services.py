@@ -31,6 +31,8 @@ a job status, the state file, a log line or an error.
 "HH:MM", "weekdays_only": bool}``: inside the window, N minutes after the last start (at once when never run).
 ``{"daily_at": ["HH:MM", ...], "weekdays_only": bool}``: the first slot after the last start; a feed never run
 catches up today's slot already passed, once; missed slots of days the monitor was off are one run, not many.
+``books`` (TDM#557): the feed gets the owner's books as a repeated request field ``book`` (``owner_books``: active,
+with a current position set; at most ``MAX_BOOKS``); none: not called, ``blocked``/``no_books``.
 ``after_positions``: also once when a positions set for a newer business date than the feed last saw is in the
 store (the first sight only records it), with that date as ``date``. Only enabled (the monitor's switch, default the
 feed's own ``enabled``) and ready feeds run by themselves. ``blocked``/``login_required`` pauses the feed («нужен
@@ -242,11 +244,24 @@ def clean_feeds(v: Any, h: AdapterHandle | None) -> list[dict]:
         feed = {"id": f["id"], "title": _str(f.get("title", f["id"]), 200), "dataset": _str(f.get("dataset"), 64),
                 "source": _str(f.get("source"), 100, empty=False), "enabled": f["enabled"], "ready": f["ready"],
                 "why_not_ready": _opt(f, "why_not_ready", 1000), "schedule": clean_schedule(f.get("schedule")),
-                "after_positions": f.get("after_positions") is True}
+                "after_positions": f.get("after_positions") is True, "books": f.get("books") is True}
         decl = h.source(feed["source"]) if h is not None else None
         feed["source_declared"] = h is None or (decl is not None and decl.get("dataset") == feed["dataset"])
         out.append(feed)
     return out
+
+
+MAX_BOOKS = 200  # the request's ``book`` values (08 §2.2)
+
+
+def owner_books(con: Any, on: date) -> list[str]:
+    """The owner's books for a feed with ``books`` (08 §2.2): the active books in force on ``on`` that have a current
+    position set on ``on``, sorted, at most ``MAX_BOOKS``. Empty when there are none (the feed is not called)."""
+    held = {b for (b,) in con.execute(
+        "SELECT DISTINCT ON (book_id) book_id FROM position_set WHERE valid_date <= %s"
+        f" ORDER BY book_id, {store.CURRENT_SET}", (on,))}
+    active = {b["book_id"] for b in store.current_books(con, on) if b.get("active", True) is not False}
+    return sorted(held & active)[:MAX_BOOKS]
 
 
 def clean_action(r: dict) -> dict:
@@ -702,7 +717,8 @@ class AdapterServices:
                 return False
         return True
 
-    def _call(self, st: Settings, hp: Helper, op: str, extra: dict[str, str], *, out: Path | None = None) -> dict:
+    def _call(self, st: Settings, hp: Helper, op: str, extra: dict[str, str | list[str]], *,
+              out: Path | None = None) -> dict:
         fields: dict[str, str | list[str]] = {"op": op, **extra, "adapter_root": str(hp.root),
                                               "config_dir": hp.handle.config_dir or "",
                                               "inbox_dir": [str(d) for d in st.inbox_dirs],
@@ -909,6 +925,19 @@ class AdapterServices:
         # recorded before the call: a restart in the middle does not fetch again at once
         prev = self._record(st, f["id"], last_started=_iso(started), trigger=trigger, date=day, **seen)
         outcome: dict[str, Any]
+        books: list[str] = []
+        if f.get("books"):  # a feed of the owner's books (TDM#557): none to ask for, nothing to call
+            try:
+                with store.connect(self._url) as con:
+                    books = owner_books(con, self._today())
+            except Exception:
+                log.exception("adapter services: books of feed %s not read", f["id"])
+                self._finish(st, f, prev, {"state": "error", "code": "operation_failed", "lines": []}, started)
+                return
+            if not books:
+                self._finish(st, f, prev, {"state": "blocked", "code": "no_books", "lines": [
+                    "Нет книг владельца с позициями: загрузите позиции и отметьте книги активными."]}, started)
+                return
         self._cancel.clear()
         with self._lock:
             self._running = {"kind": "feed", "feed": f["id"], "since": _iso(started), "phase": "waiting"}
@@ -934,7 +963,8 @@ class AdapterServices:
                 if day:
                     self._record(st, f["id"], date=day)
             drained = self._drain_pending(st, hp, f, prev.get("pending"))
-            extra = {"feed": f["id"], **({"date": day} if day else {})}
+            extra: dict[str, str | list[str]] = {"feed": f["id"], **({"date": day} if day else {}),
+                                                 **({"book": books} if books else {})}
             r = clean_feed_result(self._call(st, hp, "feed", extra, out=out))
             outcome = {k: r[k] for k in ("state", "code", "lines", "dates")}
             if r["state"] in ("complete", "partial") and r["files"]:
@@ -975,6 +1005,8 @@ class AdapterServices:
                                "recompute_failed": outcome.get("recompute_failed", [])}
         if state == "blocked" and code == "login_required":
             rec.update(needs_login=True, failures=0, retry_at=None)
+        elif state == "blocked" and code == "no_books":
+            rec.update(needs_login=False, failures=0, retry_at=None)  # nothing to ask for yet: the next step tries again
         elif state in ("complete", "partial", "skipped"):
             rec.update(needs_login=False, failures=0, retry_at=None, last_ok=_iso(now))
         elif state == "cancelled":

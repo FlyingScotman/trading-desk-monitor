@@ -1,6 +1,6 @@
 # 08 Private adapter interface (SPI v1)
 
-As of 3 November 2026, revision 8 (private contract 1.7: the `ocp` row's optional `derivatives_ccy`, the report's
+As of 3 November 2026, revision 9 (services: the `feed` request's repeated `book` and the FEED flag `books`, and the day's bond trades in the intraday run, §10 `trades`, TDM#557; no contract change); revision 8 (private contract 1.7: the `ocp` row's optional `derivatives_ccy`, the report's
 derivatives apart by kind, and `ocp_policy.published` `report_base_plus_day` with `report_max_age_bd`, for the published OCP of
 TDM#531; contract 1.6 of 2 November: the `trades` schema, TDM#525); revision 7 of 28 October (SPI 1 optional functions `status` and `run_action` with `describe()["actions"]`, the settings page's adapter tools of TDM#421, no contract change; revision 6, private contract 1.5: the `reference()` table `ocp_policy`, the organisation's OCP conventions, for the published OCP of TDM#416; revision 5 of 23 October, contract 1.4: `trade_terms` of interest rate and cross-currency swaps, REPO and HTM purchases, for the valuation of swaps by core and the funding of REPO and HTM lots; revision 4 of 22 October, contract 1.3: the `reference()` table `funding_policy` and
 `positions.purchase_accrued_ccy`, for the funding engine in the runs, wave B1; revision 3, contract 1.2: FUTURES books, the `ocp`, `cash_balances`, `pnl_official` and `trade_terms` schemas, `reference()` entities and funding rules, `describe()` settings tabs, multi-date cash history, adapter phases A7–A10; revision 2 of 19 October followed an independent review). Status: **accepted; both tracks build against it.** Decision: [ADR-008](adr/ADR-008-private-adapter-boundary.md). Owner of this document: the backend. A change here is a versioned change (§9).
@@ -165,6 +165,9 @@ Trusted fields the monitor always adds: `adapter_root`, `config_dir`, repeated `
 (`<home>/adapter-services/`, persistent, for the helper's caches and its protected secrets) and, for `feed`, a fresh
 empty `output_dir` (`<home>/adapter-services/out/<run id>/`; the folders of the last 20 runs are kept). A request
 never sets them: the routes accept only `f.<key>` of the cached panel, `action`, `arg` (and `date` for a feed run).
+For a `feed` of a FEED with `books: true` the monitor also adds a repeated `book`: the owner's books (the active books
+of the book list with a current position set on the day, sorted, 1 to 200 values of 1 to 200 characters each). The
+helper fetches only those. With none, the monitor does not call the feed: its outcome is `blocked`, `no_books`.
 
 **Operations** (field `op`):
 
@@ -195,7 +198,8 @@ PANEL: `{"title", "status": [lines], "sections": [{"id", "title", "help", "field
 [{"id", "label", "confirm"?, "long"}]}]}`. A secret field never carries a value back: the monitor blanks `value`
 whatever the helper sends and keeps only `"set": true|false`.
 
-FEED: `{"id", "title", "dataset", "source", "enabled", "ready", "why_not_ready", "schedule", "after_positions"}`.
+FEED: `{"id", "title", "dataset", "source", "enabled", "ready", "why_not_ready", "schedule", "after_positions",
+"books"?}`. `books: true` (default false): the feed is for the owner's books and is called with the repeated `book`.
 `source` names the adapter source that reads the feed's files. A feed may keep its data locally and return no files
 (`complete` with `files: []`); its `source` need not be among the adapter's `sources`. Files of a feed whose `source`
 is not declared for its `dataset` are refused (`feed_source_invalid`, an error), never read. `schedule`:
@@ -803,8 +807,10 @@ delta source on the same book and date conflict (`scope_conflict`): a book is fe
 deltas, not both. The "newest full snapshot, then newer increments" walk above therefore runs within one source's
 sets. An `increment` unit is never `superseded`: a delta that arrives late is stored and still adds; one equal to a stored
 delta stores nothing. A flow: never carried forward. Served at `GET /api/v1/trades?date=&book_id=` and on the
-monitors' screen «Сделки дня» (C20). Not valued yet: the book as opening positions plus trades, and new-trade PnL,
-are the rest of S13 (TDM#29).
+monitors' screen «Сделки дня» (C20). An INTRADAY run counts the day's bond trades into its book
+(`desk.trades.apply_intraday`, setting `intraday_trades`, TDM#557); the run's private inputs hash covers the trades it
+applied, so a new cut of the trades makes the run again. Everything else, the valuation of the trades and new-trade
+PnL, is the rest of S13 (TDM#29).
 
 ### `internal_market` — observation; `full_snapshot`, scope `["kind"]`, `time_basis = end_of_day`
 

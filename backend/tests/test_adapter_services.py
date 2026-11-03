@@ -54,7 +54,7 @@ state = Path(one('state_dir'))
 mode = (state / 'mode').read_text() if (state / 'mode').exists() else 'ok'
 with (state / 'requests.jsonl').open('a') as log:
     log.write(json.dumps({'op': one('op'), 'keys': sorted(p), 'feed': one('feed'), 'date': one('date'),
-                          'action': one('action'), 'arg': one('arg'), 'inbox_dir': p.get('inbox_dir', []),
+                          'action': one('action'), 'arg': one('arg'), 'inbox_dir': p.get('inbox_dir', []), 'book': p.get('book', []),
                           'env': sorted(k for k in os.environ if k.startswith(('DESK_', 'AWS_')))}) + '\n')
 if 'f.password' in p:
     (state / 'secret.txt').write_text(one('f.password'))
@@ -77,7 +77,9 @@ def panel():
                             {"id": "pick", "label": "Найти", "long": False},
                             {"id": "list", "label": "Список", "long": False}]}]}
 def feeds():
-    return [{"id": "terms", "title": "Условия сделок", "dataset": "trade_terms", "source": "trade_terms_csv",
+    extra = [{"id": "owned", "title": "Сделки дня", "dataset": "trade_terms", "source": "trade_terms_csv",
+              "enabled": True, "ready": True, "books": True, "schedule": None}] if mode == 'books_feed' else []
+    return extra + [{"id": "terms", "title": "Условия сделок", "dataset": "trade_terms", "source": "trade_terms_csv",
              "enabled": True, "ready": True, "after_positions": True,
              "schedule": {"every_min": 30, "from": "08:00", "to": "20:00", "weekdays_only": True}},
             {"id": "eodpos", "title": "Позиции", "dataset": "positions", "source": "positions_csv", "enabled": False,
@@ -677,3 +679,33 @@ def test_routes_are_local_admin_same_origin_and_never_echo_secrets(tmp_path, sto
         rows = con.execute("SELECT action, target, detail FROM audit_log WHERE action = 'adapter_services'").fetchall()
     no_secret(rows, caplog.text, (svcs.state_dir(st) / "state.json").read_text(encoding="utf-8"))
     s.close()
+
+
+def test_a_feed_of_the_owners_books_gets_them_as_a_repeated_field(tmp_path, store_url, cache):  # noqa: F811
+    """TDM#557: ``books: true`` feeds are called with a repeated ``book`` (active books with positions, sorted);
+    with none, the feed is not called and says why."""
+    st = make(tmp_path, store_url=store_url)
+    mode(st, "books_feed")
+    clock = {"t": datetime(2026, 10, 16, 9, 0, tzinfo=MSK)}
+    s = service(st, store_url, clock)
+    try:
+        submit(s, "describe")
+        assert [f["books"] for f in svcs.read_state(st)["feeds"]][:2] == [True, False]
+        run = run_feed(s, st, "owned", clock)
+        assert (run["state"], run["code"]) == ("blocked", "no_books") and run["lines"] and run["retry_at"] is None
+        assert [r for r in requests(st) if r["op"] == "feed"] == []
+        load(store_url, tmp_path, "2026-10-15", 10)  # positions of the books OFZ and CORP
+        books = [{"book_id": b, "name": b, "desk": "Test", "book_type": "TRADING", "entity": "TEST", "active": a}
+                 for b, a in (("OFZ", True), ("CORP", True), ("OLD", False))]
+        with store.connect(store_url) as con:
+            store.store_books(con, books, "fp")
+        run = run_feed(s, st, "owned", clock)
+        assert run["code"] == "login_required"  # the helper asked for a login: it was called
+        (svcs.state_dir(st) / "logged_in").write_text("1")
+        run = run_feed(s, st, "owned", clock)
+        assert run["state"] == "complete", run
+        assert [r["book"] for r in requests(st) if r["op"] == "feed"] == [["CORP", "OFZ"]] * 2
+        run_feed(s, st, "terms", clock)
+        assert [r["book"] for r in requests(st) if r["op"] == "feed"][-1] == []
+    finally:
+        s.close()
