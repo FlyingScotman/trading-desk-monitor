@@ -91,6 +91,9 @@ async function open(browser, st, hash, opts) {
       return out ? route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(out) })
         : route.fulfill({ status: 404, contentType: 'application/json', body: '{"message":"нет в тесте"}' });
     }
+    // the places' own modules (the OCP stream's #ovp and «перечитать», TDM#554/#553) are left out: these tests open
+    // the places by hand, as a module loaded later would (their own test: ocp_types.pw.test.js)
+    if (['/settings-ocp-types.js', '/desk-replay.js'].includes(u.pathname)) return route.fulfill({ status: 200, contentType: 'application/javascript', body: '' });
     const f = path.join(ROOT, decodeURIComponent(u.pathname));
     if (!f.startsWith(ROOT) || !fs.existsSync(f) || fs.statSync(f).isDirectory()) return route.fulfill({ status: 404, body: '' });
     return route.fulfill({ status: 200, contentType: TYPES[path.extname(f)] || 'application/octet-stream', body: fs.readFileSync(f) });
