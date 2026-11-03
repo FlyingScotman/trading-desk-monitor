@@ -238,9 +238,11 @@ OCP_POLICY_FIELDS: dict[str, Callable[[Any], Any]] = {
     "settle_window_bd": int,
     "tolerance_ccy": _num,
     "report_max_age_days": int,
+    "report_max_age_bd": int,
 }
-"""The ``ocp_policy`` fields (08 §10, private/1.5) -> their ``OcpPolicy`` value (``report_components``: comma-separated
-component keys, ``rules.ocp.COMPONENTS``)."""
+"""The ``ocp_policy`` fields (08 §10, private/1.5; ``report_max_age_bd`` and ``published`` ``report_base_plus_day``
+since 1.7) -> their ``OcpPolicy`` value (``report_components``: comma-separated component keys,
+``rules.ocp.COMPONENTS``)."""
 
 
 @dataclass(frozen=True)
@@ -280,7 +282,7 @@ def apply_ocp_policy(rows: Iterable[Mapping[str, Any]], policy: OcpPolicy | None
     in force (``store.current_reference``, private/1.5). A field two rows give with different values is a conflict
     (``ambiguous_policy``): it keeps the previous value and is listed, never decided by row order. A
     ``report_components`` naming a component the engine does not have, and a negative ``settle_window_bd`` or
-    ``report_max_age_days`` (every report would be stale), keep the previous value too."""
+    ``report_max_age_days`` or ``report_max_age_bd`` (every report would be stale), keep the previous value too."""
     pol = policy or PROVISIONAL_POLICY
     wanted: dict[str, dict[Any, list[str]]] = {}
     conflicts: list[str] = []
@@ -296,7 +298,7 @@ def apply_ocp_policy(rows: Iterable[Mapping[str, Any]], policy: OcpPolicy | None
             except (ValueError, ArithmeticError):
                 conflicts.append(f"ocp_policy {pid}: {name} = {r[name]!r} не прочитано, взято прежнее значение")
                 continue
-            if name in ("settle_window_bd", "report_max_age_days") and value < 0:
+            if name in ("settle_window_bd", "report_max_age_days", "report_max_age_bd") and value < 0:
                 conflicts.append(f"ocp_policy {pid}: {name} = {value} отрицательное, взято прежнее значение")
                 continue
             if name == "report_components" and (bad := sorted(value - set(OCP_COMPONENTS))):

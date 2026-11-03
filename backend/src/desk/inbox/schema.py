@@ -1,6 +1,7 @@
 """A standard-library validator for ``contract/private/v1/*.schema.json`` and the row normaliser.
 
-Only the JSON-Schema subset those files use: ``type``, ``enum``, ``required``, ``properties``,
+Only the JSON-Schema subset those files use: ``type``, ``enum``, ``required``, ``properties`` (of a row and, since
+private/1.7, of an ``object`` field: ``ocp.derivatives_ccy``),
 ``patternProperties``, ``additionalProperties: false``, ``pattern``, ``minLength``, ``format: date``,
 ``format: date-time`` (since private/1.6: ``trades.trade_ts``) and local ``$ref``. Error codes are the 08 §6.3 ones
 and messages carry field names only, never values, because issues are shown and shared (08 §6.3). A validated row
@@ -115,10 +116,26 @@ def _resolve(schema: dict, node: dict) -> dict:
     return node
 
 
-def _check_value(node: dict, value: Any) -> tuple[str | None, Any]:
-    """(error code or None, normalised value) of one present, non-null value."""
+def _check_value(node: dict, value: Any, schema: dict | None = None) -> tuple[str | None, Any]:
+    """(error code or None, normalised value) of one present, non-null value. An ``object`` with ``properties``
+    (private/1.7: ``ocp.derivatives_ccy``) is checked key by key: a key it does not list is ``bad_value``, its values
+    are checked and normalised as fields are, a null one dropped."""
     types = node.get("type")
     types = [types] if isinstance(types, str) else (types or [])
+    if "object" in types and "properties" in node:
+        if not isinstance(value, dict):
+            return "bad_value", None
+        out = {}
+        for k, v in value.items():
+            if v is None:
+                continue
+            if k not in node["properties"]:
+                return "bad_value", None
+            code, norm = _check_value(_resolve(schema or {}, node["properties"][k]), v, schema)
+            if code:
+                return code, None
+            out[k] = norm
+        return None, out
     if "number" in types:  # amounts: number or decimal string (pattern applies to the string form)
         d = amount(value)
         return ("bad_number", None) if d is None else (None, amount_str(d))
@@ -162,7 +179,7 @@ def validate_row(dataset: str, row: dict, *, allow_newer: bool = False) -> tuple
         if value is None:
             continue
         if key in props:
-            code, norm = _check_value(_resolve(schema, props[key]), value)
+            code, norm = _check_value(_resolve(schema, props[key]), value, schema)
             if code:
                 errors.append(RowError(code, key))
             else:

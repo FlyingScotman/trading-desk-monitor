@@ -1,6 +1,7 @@
 """The published OCP by day (TDM#446, ``api.ocp_history``): the saved runs' ``ocp`` blocks, synthetic books only."""
 from __future__ import annotations
 
+import json
 from datetime import date, timedelta
 
 import pytest
@@ -10,6 +11,7 @@ from psycopg.types.json import Jsonb
 from desk import store
 from desk.api import create_app
 from desk.api.ocp_history import DEFAULT_DAYS, period
+from desk.rules import ocp as O
 
 
 def line(book, ccy, amount, source="report", entity="ENT1", books=None, valid=None):
@@ -163,3 +165,34 @@ def test_period_rule():
     assert period(anchor, date(2026, 10, 1), date(2026, 10, 2)) == (date(2026, 10, 1), date(2026, 10, 2))
     with pytest.raises(ValueError):
         period(anchor, None, date(2026, 10, 21))
+
+
+def test_base_plus_day_lines_without_contributions_and_a_bounded_blob(store_url):
+    """Block v3 (TDM#531) of a synthetic run with 1,000 book x currency lines, each with full contributions (the most
+    items, ``CONTRIBUTIONS_MAX``, and a rest for three parts): the history reads only the lines' keys it shows (``LINE_KEYS``: no contributions), and the
+    report's rate only of the report sets the day's lines start from (their ``set_id``)."""
+    parts = {"base": 1e6, "derivatives": 2e5, "bonds": 1e3, "trades": 5e4, "outside": 0.0}
+    lines = []
+    for i in range(500):
+        for ccy in ("USD", "CNY"):
+            contributions = {p: {"items": [{"kind": "position", "position_id": f"B{i:03d}|POS-{k:02d}",
+                                            "book_id": f"B{i:03d}", "component": "fx_legs", "amount": 1000.0 + k}
+                                           for k in range(O.CONTRIBUTIONS_MAX)], "rest": {"count": 7, "amount": 7000.0}}
+                             for p in ("derivatives", "bonds", "trades")}
+            lines.append({**line(f"B{i:03d}", ccy, 1.251e6, valid="2026-10-19"), "base_date": "2026-10-19",
+                          "set_id": 41, "base_kind": "without_derivatives", "parts": parts,
+                          "contributions": contributions, "split_kinds": ["fx_forward"], "fallback": []})
+    blk = block("computed", lines, basis="report_base_plus_day", reconciliation=[
+        {**rec("USD", 80.0, valid="2026-10-19"), "set_id": 41}, {**rec("GBP", 99.0, valid="2026-10-19"), "set_id": 40}])
+    blob = len(json.dumps(blk).encode())
+    with store.connect(store_url) as con:
+        rid = insert(con, "2026-10-20", ocp=blk)
+    r = TestClient(create_app(store_url)).get("/api/v1/history/ocp", params={"run_id": rid, "from": "2026-10-20"})
+    assert r.status_code == 200, r.text
+    day = r.json()["days"][0]
+    served = len(r.content)
+    print(f"block v3 with 1000 lines: {blob} bytes stored, history day served {served} bytes")
+    assert blob < 5_000_000 and served < 500_000  # the contributions stay in the store
+    assert len(day["lines"]) == 1000 and "contributions" not in day["lines"][0]
+    assert day["lines"][0]["parts"] == parts and day["lines"][0]["baseDate"] == "2026-10-19"
+    assert day["reportFx"] == {"USD": 80.0}  # GBP's set is not a base of the day

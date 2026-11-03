@@ -476,8 +476,9 @@ POLICY_FIRM_WIDE = ("htm_base", "mv_base_date", "cash_base_date", "new_positions
 
 
 OCP_POLICY_FIELDS = ("report_components", "published", "amount_basis", "include_ndf", "cash_from_balances", "settle_window_bd",
-                     "tolerance_ccy", "report_max_age_days")
-"""``ocp_policy`` fields (private/1.5): checked for two rows in force on one ``valid_from`` with different values."""
+                     "tolerance_ccy", "report_max_age_days", "report_max_age_bd")
+"""``ocp_policy`` fields (private/1.5; ``report_max_age_bd`` 1.7): checked for two rows in force on one ``valid_from``
+with different values."""
 
 
 FUNDING_SELECTORS = ("instrument_id", "book_id", "entity", "book_type", "ccy")
@@ -549,7 +550,8 @@ def check_reference_tables(result: Any) -> tuple[dict[str, list[dict] | None], l
                                              "ocp_policy: report_components names a component the backend has not"))
                 elif f == "tolerance_ccy":
                     v = amount(v)  # 1000 and 1000.0 are one tolerance
-                elif f in ("settle_window_bd", "report_max_age_days") and isinstance(v, int) and v < 0:
+                elif f in ("settle_window_bd", "report_max_age_days", "report_max_age_bd") and isinstance(v, int) \
+                        and v < 0:
                     issues.append(_issue("warning", "bad_policy_value", None, r.get("_src"),
                                          f"ocp_policy: {f} is negative, the engine keeps its default"))
                 ocp.setdefault((r.get("valid_from"), f), set()).add(v)

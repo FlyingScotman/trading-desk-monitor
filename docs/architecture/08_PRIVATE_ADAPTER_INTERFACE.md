@@ -1,6 +1,8 @@
 # 08 Private adapter interface (SPI v1)
 
-As of 28 October 2026, revision 7 (SPI 1 optional functions `status` and `run_action` with `describe()["actions"]`, the settings page's adapter tools of TDM#421, no contract change; revision 6, private contract 1.5: the `reference()` table `ocp_policy`, the organisation's OCP conventions, for the published OCP of TDM#416; revision 5 of 23 October, contract 1.4: `trade_terms` of interest rate and cross-currency swaps, REPO and HTM purchases, for the valuation of swaps by core and the funding of REPO and HTM lots; revision 4 of 22 October, contract 1.3: the `reference()` table `funding_policy` and
+As of 3 November 2026, revision 8 (private contract 1.7: the `ocp` row's optional `derivatives_ccy`, the report's
+derivatives apart by kind, and `ocp_policy.published` `report_base_plus_day` with `report_max_age_bd`, for the published OCP of
+TDM#531; contract 1.6 of 2 November: the `trades` schema, TDM#525); revision 7 of 28 October (SPI 1 optional functions `status` and `run_action` with `describe()["actions"]`, the settings page's adapter tools of TDM#421, no contract change; revision 6, private contract 1.5: the `reference()` table `ocp_policy`, the organisation's OCP conventions, for the published OCP of TDM#416; revision 5 of 23 October, contract 1.4: `trade_terms` of interest rate and cross-currency swaps, REPO and HTM purchases, for the valuation of swaps by core and the funding of REPO and HTM lots; revision 4 of 22 October, contract 1.3: the `reference()` table `funding_policy` and
 `positions.purchase_accrued_ccy`, for the funding engine in the runs, wave B1; revision 3, contract 1.2: FUTURES books, the `ocp`, `cash_balances`, `pnl_official` and `trade_terms` schemas, `reference()` entities and funding rules, `describe()` settings tabs, multi-date cash history, adapter phases A7–A10; revision 2 of 19 October followed an independent review). Status: **accepted; both tracks build against it.** Decision: [ADR-008](adr/ADR-008-private-adapter-boundary.md). Owner of this document: the backend. A change here is a versioned change (§9).
 
 The desk's own data (positions, OCP and cash, official PnL, trade terms, trades, internal market data, and the firm's own rules: entities, book types, funding) arrives as bank reports. The backend reads them through a **private adapter**: a Python package that lives outside this repository and is plugged in by a path in the settings. This document is the whole contract between the two. Neither side needs to read the other's code.
@@ -434,11 +436,11 @@ The summary holds counts and codes only. It has no values and no sheet names, an
 - **Private input contract** (`describe()["contract"]`, `private/<major>.<minor>`): the dataset schemas of §10, versioned on their own, separate from the public results contract (1.3/1.4).
   - The backend accepts its own major with any minor. Fields from a newer minor are dropped with a `field_from_newer_contract` warning; the file is not rejected.
   - A new optional field is a minor version; a renamed, retyped or newly required field is a major one.
-  - Minors so far: 1.0 (S7a); 1.1 adds the optional `positions` fields `maturity_date`, `risk_dv01_rub`, `risk_cs01_rub`; 1.2 (22.10.2026) adds `book_type` `FUTURES`, the schemas of `ocp`, `cash_balances` (with the optional key field `ledger`), `pnl_official` and the new dataset `trade_terms`, the optional reference tables `entities` and `funding_rules`, the optional `describe()["settings_tabs"]`, and multi-date `cash_balances`; 1.3 (22.10.2026, wave B1) adds the optional reference table `funding_policy` and the optional `positions` field `purchase_accrued_ccy`; 1.4 (23.10.2026) adds to `trade_terms` the `product_kind` values `irs`, `ois`, `ccs`, `repo` and `bond_purchase`, the `side` values `pay`, `receive`, `repo` and `reverse_repo`, and their optional fields (§10); 1.5 (28.10.2026, TDM#180, TDM#416) adds the optional reference table `ocp_policy`; 1.6 (02.11.2026, TDM#525) the schema of the dataset `trades` (its sources were rejected with `dataset_not_supported` before). The backend supports 1.6 and accepts 1.0–1.5 adapters unchanged (a 1.2 adapter without `funding_policy` gets the funding engine's provisional conventions, an adapter before 1.5 without `ocp_policy` the OCP engine's; each run says which). A 1.4 adapter that emits the new products needs a backend on 1.4: an older one rejects those `trade_terms` units (`bad_value` of `product_kind`), as with `FUTURES`.
+  - Minors so far: 1.0 (S7a); 1.1 adds the optional `positions` fields `maturity_date`, `risk_dv01_rub`, `risk_cs01_rub`; 1.2 (22.10.2026) adds `book_type` `FUTURES`, the schemas of `ocp`, `cash_balances` (with the optional key field `ledger`), `pnl_official` and the new dataset `trade_terms`, the optional reference tables `entities` and `funding_rules`, the optional `describe()["settings_tabs"]`, and multi-date `cash_balances`; 1.3 (22.10.2026, wave B1) adds the optional reference table `funding_policy` and the optional `positions` field `purchase_accrued_ccy`; 1.4 (23.10.2026) adds to `trade_terms` the `product_kind` values `irs`, `ois`, `ccs`, `repo` and `bond_purchase`, the `side` values `pay`, `receive`, `repo` and `reverse_repo`, and their optional fields (§10); 1.5 (28.10.2026, TDM#180, TDM#416) adds the optional reference table `ocp_policy`; 1.6 (02.11.2026, TDM#525) the schema of the dataset `trades` (its sources were rejected with `dataset_not_supported` before); 1.7 (03.11.2026, TDM#531) adds the optional `ocp` field `derivatives_ccy` (an object, the report's derivatives apart), the `ocp_policy.published` value `report_base_plus_day` and the optional `ocp_policy.report_max_age_bd`. The backend supports 1.7 and accepts 1.0–1.6 adapters unchanged (an `ocp` unit without `derivatives_ccy` is a report whose `ocp_ccy` holds the derivatives at their nominal: the run publishes it so and says it in the gaps) (a 1.2 adapter without `funding_policy` gets the funding engine's provisional conventions, an adapter before 1.5 without `ocp_policy` the OCP engine's; each run says which). A 1.4 adapter that emits the new products needs a backend on 1.4: an older one rejects those `trade_terms` units (`bad_value` of `product_kind`), as with `FUTURES`.
   - A new enum value (`FUTURES`) is a minor too: old adapters stay valid. An adapter that emits it needs a backend on 1.2; an older one rejects that book (`bad_value`), never silently re-types it.
 - The adapter's README states the lowest backend version it needs. `desk adapter check` prints the backend version, the SPI, the contract and the adapter fingerprint.
 
-## 10 Private input contract v1 (`private/1.6`)
+## 10 Private input contract v1 (`private/1.7`)
 
 The schemas live in `contract/private/v1/` (one per dataset and reference table, with a header-only CSV template each). The tables below are the design; the schema files are authoritative once written (S7a; `ocp`, `cash_balances`, `pnl_official`, `trade_terms`, `entities`, `funding_rules` since 1.2, `trades` since 1.6, and a test keeps each table equal to its schema). They extend contract 1.3 ([DATA_REQUIREMENTS](../DATA_REQUIREMENTS.md) §4) and supersede its templates (below). A dataset without a schema (`internal_market`) is declared but its sources are rejected with `dataset_not_supported` until its slice.
 
@@ -484,15 +486,44 @@ An `otc` or `other` row is valued at its `mv_rub` (quality `reported_value`; wit
 
 ### `ocp` — stock; `full_snapshot`, scope `["entity"]` or `["entity", "book_id"]`
 
-The open currency position as the bank's system reports it. The backend derives OCP from positions too and compares the two **at the level the report has**: per entity, or per book (S9). Key: (`entity`, `book_id`, `ccy`). Since TDM#416 the run **publishes** the report where a unit covers (its `ocp_ccy` plus the components the report does not hold, `ocp_policy.report_components`, derived from positions), the derived OCP elsewhere; a unit older than `ocp_policy.report_max_age_days` is not published. An entity unit is taken as the entity's total: a book that also has a unit of its own is published from that unit and subtracted from the entity's figure (TDM#214).
+The open currency position as the bank's system reports it. The backend derives OCP from positions too and compares the two **at the level the report has**: per entity, or per book (S9). Key: (`entity`, `book_id`, `ccy`). An entity unit is taken as the entity's total: a book that also has a unit of its own is published from that unit and subtracted from the entity's figure (TDM#214).
+
+What the run **publishes** follows `ocp_policy.published`. Since 1.7 (owner, 03.11.2026, TDM#531, design
+[OCP_REPORT_BASE_PLUS_DAY](OCP_REPORT_BASE_PLUS_DAY.md)) the engine's default is `report_base_plus_day` for dates from
+03.11.2026: per entity, book and currency the report of the entity's latest date B ≤ D no older than
+`report_max_age_bd` business days (a full snapshot of the entity: a book of it without a unit on B, also one whose
+older unit is still carried forward by `covers: listed`, has 0), **without the derivative kinds the report gives
+apart**, plus their PV from positions, plus the foreign bonds' revaluation and the trades since B, plus the
+components the report does not hold. A unit older than the limit is not published (its books derived). A date before
+03.11.2026 whose `ocp_policy` gives no `published` keeps `report_plus_outside` (TDM#416: `ocp_ccy` plus the components
+the report does not hold, with `report_max_age_days`), so a date recomputed later keeps its basis. An `ocp_policy` row
+giving `published` is in force as §7 says: a new revision of the same `policy_id` without `valid_from` applies from the
+Moscow day it is recorded, so the earlier dates, even recomputed, keep the basis they had; keep the `policy_id` (a
+new one, without `valid_from`, would apply to every past date and conflict with the old key).
+
+Since 1.7 the adapter gives derivatives apart **by kind**. For each derivative kind it maps report row types to, it
+leaves the report's lines of that kind with a value date after the report's date out of `ocp_ccy` (and out of
+`ocp_rub`) and gives their nominal in `derivatives_ccy[kind]`. A key present, even `"0"`, says the kind is apart; the
+adapter emits every kind it maps on every row of the file (zeros kept by the backend). The split is decided **per
+report file and kind**: a kind is apart for every unit of the file (also a unit without rows) when any row of the file
+has the key. For a kind apart the run adds the PV (core's FX delta, the spot equivalent, whatever `amount_basis`) of
+every position of that kind with a value date after B, or the file's nominal of a book without such a position
+(marked); a kind not apart adds nothing: its nominal stays in `ocp_ccy`, so a row type mapped to no kind is safe. The
+run classifies its positions into kinds from core's product, the report's product group and the trade terms; a spot
+(value date within `settle_window_bd` business days of the trade date) is never a derivative, and an equity, a fund, a
+deposit, a bond or a REPO never enters the PV. The reconciliation compares the whole report, `ocp_ccy` + Σ
+`derivatives_ccy`, with the derived OCP, and the run lists the nominal against the PV on B per book and kind. A file
+without the field (an adapter before 1.7) holds every derivative at its nominal in `ocp_ccy`, said in the gaps. The
+field is canonical: it is in the unit's change hash (§6.6).
 
 | Field | Type | Meaning |
 |---|---|---|
 | `entity` ● | str | |
 | `book_id` | str | When the report is per book |
 | `ccy` ● | str | |
-| `ocp_ccy` ● | num | Signed: `+` long the currency |
-| `ocp_rub`, `rate_rub_per_unit` | num | As reported |
+| `ocp_ccy` ● | num | Signed: `+` long the currency; since 1.7 without the derivative kinds the file gives apart |
+| `ocp_rub`, `rate_rub_per_unit` | num | As reported (`ocp_rub` as `ocp_ccy`: without the kinds apart) |
+| `derivatives_ccy` | object | Since 1.7: derivative kind → the signed nominal (units of `ccy`, `+` long) of the report's lines of that kind with a value date after the report's date, left out of `ocp_ccy`. Kinds (`rules.ocp.DERIVATIVE_KINDS`): `fx_forward` (outright forwards and non-spot crosses), `fx_swap`, `fx_future`, `ndf`, `fx_option`, `swap` (IRS, OIS, CCS with an FX exposure), `other` (any other derivative); another key is `bad_value`. A key with `"0"` still says the kind is apart. In the reference adapter's CSV `fx_forward=-1000000,ndf=0` (a key twice: the last value, warning `duplicate_object_key`), `{}` for none |
 
 ### `cash_balances` — stock; `full_snapshot`, scope `["entity", "book_id"]`
 
@@ -757,12 +788,13 @@ with different values is `ambiguous_policy` (warning) and also keeps the default
 The organisation's OCP conventions: which components of the OCP the bank's OCP report holds, what the run publishes
 and the settings the generic engine leaves open (`desk.rules.ocp.OcpPolicy`, `OPEN_DECISIONS`). Key: `policy_id`,
 with `valid_from`; every row is firm-wide. The run publishes the bank's report where a report unit covers a book or
-an entity, plus the components the report does not hold, derived from positions; a book no unit covers is derived
-from positions (owner, 28.10.2026, TDM#416). A field no row gives keeps the engine's value: the provisional default,
-listed in the run (`policy.provisional`), or the owner's decision (`published`); `policy.source` names where each
+an entity, as its base, with the derivatives' PV and the day's changes (`report_base_plus_day`, owner, 03.11.2026,
+TDM#531; `ocp` above) or plus the components the report does not hold (`report_plus_outside`, 28.10.2026, TDM#416); a
+book no unit covers is derived from positions. A field no row gives keeps the engine's value: the provisional default,
+listed in the run (`policy.provisional`), or the owner's decision (`published`, `report_max_age_bd`); `policy.source` names where each
 field came from (`ocp_policy:<policy_id>`). A field two rows in force give with different values is
 `ambiguous_policy` (warning) and keeps the engine's value; a `report_components` naming an unknown component is
-`unknown_component` (warning) and keeps it too, as does a negative `settle_window_bd` or `report_max_age_days`
+`unknown_component` (warning) and keeps it too, as does a negative `settle_window_bd`, `report_max_age_days` or `report_max_age_bd`
 (`bad_policy_value`, warning; `rules.reference.apply_ocp_policy`).
 
 | Field | Type | Meaning |
@@ -771,13 +803,14 @@ field came from (`ocp_policy:<policy_id>`). A field two rows in force give with 
 | `valid_from` | date | First business date the row applies (§7) |
 | `active` | bool | Default true; false retires the row from `valid_from` on |
 | `report_components` | str | The components the bank's OCP report holds, comma-separated keys of `cash`, `fx_legs`, `ndf`, `futures`, `options`, `bonds`, `funding`, `other`, `transfers` (`rules.ocp.COMPONENTS`); the others are added to the report from positions; absent: all of them (provisional) |
-| `published` | enum | `report_plus_outside` (the report + the components outside it; the owner's decision) or `derived` (every figure from positions, the report only reconciled) |
+| `published` | enum | `report_base_plus_day` (since 1.7, the owner's decision of 03.11.2026 and the default: the report on its date without the derivatives + their PV + the day's changes, `ocp` above), `report_plus_outside` (the report + the components outside it, TDM#416) or `derived` (every figure from positions, the report only reconciled) |
 | `amount_basis` | enum | `spot_equivalent` (core's FX delta, discounted) or `nominal` (the legs' nominal per currency) — the amount of an FX derivative valued from its terms in the derived OCP (OQ-11); the reconciliation compares the report with the components it holds on this basis. The published figure of a covered scope keeps the report's own amount for the components it holds; the components outside the report added to it follow this basis |
 | `include_ndf` | bool | Does an NDF enter the OCP (OQ-11) |
 | `cash_from_balances` | bool | Do the `cash_balances` enter the OCP beside the positions' FX rows |
 | `settle_window_bd` | int | Up to how many business days after the date an FX row without terms is cash to be settled, not a forward |
 | `tolerance_ccy` | num | The break threshold, units of the currency (DEC12) |
-| `report_max_age_days` | int | A report unit carried forward from more than this many calendar days before the run's date is not published: its books take the derived OCP, said in the run; absent: 0 (only the report of the date) |
+| `report_max_age_days` | int | `report_plus_outside`: a report unit carried forward from more than this many calendar days before the run's date is not published: its books take the derived OCP, said in the run; absent: 0 (only the report of the date) |
+| `report_max_age_bd` | int | Since 1.7, `report_base_plus_day`: a report unit more than this many business days before the run's date is not a base: its books take the derived OCP (`derived_stale_report`), said in the run; absent: 1 (Friday's report is Monday's base) |
 
 ### Differences from 1.3, settled here
 
@@ -807,7 +840,7 @@ prototype `tdm`; for the backend the private contract replaces them:
 | `funding.csv` (REPO and funding deals) | `trade_terms` (REPO since 1.4) |
 | `trades.csv` | `trades` |
 
-### Drafts (not in 1.6)
+### Drafts (not in 1.7)
 
 Designs agreed in direction, without a schema yet; each becomes a minor with its slice:
 

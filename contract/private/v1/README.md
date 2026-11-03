@@ -1,4 +1,4 @@
-# Private input contract v1 (`private/1.6`)
+# Private input contract v1 (`private/1.7`)
 
 The rows a private adapter emits, one JSON Schema per dataset (`<dataset>.schema.json`) and per reference table of
 `reference()`, authoritative over the design tables of [08 §10](../../../docs/architecture/08_PRIVATE_ADAPTER_INTERFACE.md):
@@ -7,7 +7,7 @@ The rows a private adapter emits, one JSON Schema per dataset (`<dataset>.schema
 |---|---|---|
 | `positions` | positions (stock) | 1.0 (1.1: risk fields; 1.3: `purchase_accrued_ccy`) |
 | `books` | `reference()["books"]` | 1.0 (1.2: `book_type` `FUTURES`) |
-| `ocp` | the open currency position as the bank reports it (stock) | 1.2 |
+| `ocp` | the open currency position as the bank reports it (stock) | 1.2 (1.7: `derivatives_ccy`) |
 | `cash_balances` | cash balances per book, account and ledger (stock; a file may hold a history, 08 §6.1) | 1.2 |
 | `pnl_official` | the official daily PnL, one row per report line (flow) | 1.2 |
 | `trade_terms` | economic terms of OTC trades: FX forwards, NDFs, FX swap legs (stock) | 1.2 (1.4: IRS, OIS and CCS legs, REPO, HTM purchases) |
@@ -15,7 +15,7 @@ The rows a private adapter emits, one JSON Schema per dataset (`<dataset>.schema
 | `entities` | `reference()["entities"]`: legal entities and their funding scheme (optional) | 1.2 |
 | `funding_rules` | `reference()["funding_rules"]`: funding basis and rate per selectors, with history (optional) | 1.2 |
 | `funding_policy` | `reference()["funding_policy"]`: the funding conventions that are not a rate (HTM base, timing, REPO policy, write-off), with history (optional) | 1.3 |
-| `ocp_policy` | `reference()["ocp_policy"]`: the OCP conventions (which components the bank's OCP report holds, what is published, the amount basis, NDFs, cash, settlement window, tolerance, report age), with history (optional) | 1.5 |
+| `ocp_policy` | `reference()["ocp_policy"]`: the OCP conventions (which components the bank's OCP report holds, what is published, the amount basis, NDFs, cash, settlement window, tolerance, report age), with history (optional) | 1.5 (1.7: `report_base_plus_day`, `report_max_age_bd`) |
 
 `internal_market` is declared in 08 but has no schema yet: it comes with its slice (S10).
 
@@ -24,7 +24,8 @@ digits, dates are `YYYY-MM-DD`, timestamps (`trades.trade_ts`) ISO 8601 `YYYY-MM
 everywhere, currency codes are upper-cased (`RUR` is `RUB`), raw firm values go in `x_*` keys and `_src` (the row's
 location, no sheet names) is required. The backend validates with its own standard-library validator
 (`desk.inbox.schema`), so the schemas use only `type`, `enum`, `required`, `properties`, `patternProperties`,
-`additionalProperties`, `pattern`, `minLength`, `format: date`, `format: date-time` (1.6), `default` and local `$ref`. A rule across fields (a
+`additionalProperties`, `pattern`, `minLength`, `format: date`, `format: date-time` (1.6), `default`, local `$ref`
+and, since 1.7, an `object` field with its own `properties` (`ocp.derivatives_ccy`). A rule across fields (a
 bond needs a size, an FX trade its legs, a funding rule of `index_spread` its index) is checked in
 `desk.inbox.validate` and listed in 08 §10.
 
@@ -81,3 +82,14 @@ book's trades of the date, ordered by `report_ts`) or deltas (`increment`: they 
 unsigned (`side` gives the direction; a negative one is `bad_value`). A 1.0–1.5 adapter stays valid; one that emits
 `trades` needs a backend on 1.6 (an older one rejects those sources with `dataset_not_supported`). The backend stores
 and serves them (`GET /api/v1/trades`); valuing them and new-trade PnL come with the rest of S13.
+
+Minor 1.7 (TDM#531: the published OCP «report base + day») is additive: the optional `ocp` field `derivatives_ccy`,
+an object «derivative kind → the signed nominal of the report's lines of that kind with a value date after the
+report's date, left out of `ocp_ccy`». Kinds: `fx_forward`, `fx_swap`, `fx_future`, `ndf`, `fx_option`, `swap`,
+`other`; amounts as everywhere, a zero kept (a key, even `"0"`, says the kind is apart); canonical, so in the unit's
+change hash. The split is per report file and kind: a kind is apart for every unit of a file when any row of the file
+has its key. `ocp_policy.published` takes the value `report_base_plus_day` (the engine's default for dates from
+03.11.2026; 08 §10 `ocp`) and the new optional `ocp_policy.report_max_age_bd` (business days, default 1). A 1.0–1.6
+adapter stays valid: its `ocp` files hold every derivative at its nominal, the run adds no PV and says so in its gaps.
+An adapter that emits `derivatives_ccy` needs a backend on 1.7 (an older one drops the field with
+`field_from_newer_contract` and reads `ocp_ccy` as the whole report).
