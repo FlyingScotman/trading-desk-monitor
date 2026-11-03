@@ -363,6 +363,44 @@ def test_no_suitable_version_is_refused_with_journal(tmp_path, venv_python, inde
     assert "Статус: failed" in exc.value.log_path.read_text(encoding="utf-8")
 
 
+def _mark_exact(tmp_path: Path, *names: str) -> None:
+    wh = make_bundle(tmp_path) if not (tmp_path / "wheelhouse").exists() else tmp_path / "wheelhouse"
+    doc = json.loads((wh / "mirror.json").read_text(encoding="utf-8"))
+    for n in names:
+        doc["packages"][n]["exact"] = True
+    (wh / "mirror.json").write_text(json.dumps(doc, sort_keys=True), encoding="utf-8")
+
+
+def test_exact_package_is_never_replaced_even_in_flexible_mode(tmp_path, venv_python, index):
+    index.add("hm-alpha", LOCK_ALPHA)
+    index.add("hm-beta", "2.3.1")  # a fine replacement for a plain package, forbidden for an exact one
+    _mark_exact(tmp_path, "hm-beta")
+    with pytest.raises(mi.InstallError) as exc:
+        run_install(tmp_path, venv_python, index)
+    assert "hm-beta (lock 2.3.4)" in str(exc.value) and "ровно этой версии" in str(exc.value)
+    data = last_json(tmp_path)
+    assert data["mode"] == "flexible" and data["status"] == "failed"
+    assert data["packages"]["hm-beta"]["status"] == "not_found" and data["packages"]["hm-beta"]["tried"] == ["2.3.4"]
+    assert venv_version(venv_python, "hm_beta") is None
+
+
+def test_exact_package_installs_when_the_lock_version_is_there_and_others_may_differ(tmp_path, venv_python, index):
+    index.add("hm-alpha", "1.5.0")  # alpha is replaceable, beta (exact) is on the index at the lock version
+    index.add("hm-beta", LOCK_BETA)
+    _mark_exact(tmp_path, "hm-beta")
+    res = run_install(tmp_path, venv_python, index)
+    assert res.ok and "hm-beta==2.3.4" in res.installed and "hm-alpha==1.5.0" in res.installed
+    assert last_json(tmp_path)["packages"]["hm-alpha"]["status"] == "differs"
+
+
+def test_mirror_json_without_the_exact_field_reads_as_before(tmp_path):
+    wh = make_bundle(tmp_path)
+    assert "exact" not in (wh / "mirror.json").read_text(encoding="utf-8")
+    assert mi._load_manifest(wh)[4] == set()
+    _mark_exact(tmp_path, "hm-alpha")
+    assert mi._load_manifest(wh)[4] == {"hm-alpha"}
+
+
 def test_strict_mode_refuses_any_difference(tmp_path, venv_python, index):
     index.add("hm-alpha", LOCK_ALPHA)
     index.add("hm-beta", "2.3.1")

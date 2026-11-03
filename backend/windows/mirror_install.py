@@ -8,8 +8,8 @@ touches the network itself, every request is a ``python -m pip`` subprocess run 
     InstallError                                a message for a person (Russian) with the path of the logs
 
 Inputs: ``wheelhouse\\mirror.json`` (``schema`` 1: ``local`` our own wheels as ``name==version``, ``packages`` every
-other pinned package with its lock version and who requires it under which PEP 440 specifier, ``imports`` the
-modules to import afterwards), ``wheelhouse\\requirements.txt`` (must agree with it) and our wheels in the wheelhouse.
+other pinned package with its lock version, who requires it under which PEP 440 specifier and optionally
+``"exact": true``, ``imports`` the modules to import afterwards), ``wheelhouse\\requirements.txt`` (must agree with it) and our wheels in the wheelhouse.
 ``python`` is the interpreter of a new, empty venv (it must have pip).
 
 Algorithm (only wheels, ``--only-binary=:all:``, nothing is built):
@@ -23,7 +23,10 @@ Algorithm (only wheels, ``--only-binary=:all:``, nothing is built):
    unless the lock itself is one, in this order (``order_candidates``; deterministic):
    the lock version, then the same ``major.minor`` as the lock (below it, nearest first, then above it, nearest
    first), then every older version (nearest first), then every newer version (nearest first).
-   Strict mode (``Settings.strict``) tries the lock version only and refuses on any difference.
+   Strict mode (``Settings.strict``) tries the lock version only and refuses on any difference. So does a package
+   marked ``"exact": true`` in ``mirror.json`` (pgserver: another version may be another major version of the
+   embedded PostgreSQL, which cannot open an existing cluster) even in flexible mode: no lock version on the
+   index means a refusal with status ``not_found``. A ``mirror.json`` without the field reads as before.
 3. The candidates of the replaced packages are tried in that order (the first replaced package varies slowest, at
    most ``MAX_ATTEMPTS`` resolver runs): a combination the resolver rejects, or that pulls in a package outside the
    lock, goes to the next. When none is clean, the first one that resolves is taken and what it pulled in is
@@ -579,8 +582,10 @@ def _download(ctx: _Ctx, cache: Path, hashes: dict[str, dict[str, str]], name: s
 # --- install -------------------------------------------------------------------------------------------------------
 
 
-def _load_manifest(wheelhouse: Path) -> tuple[dict[str, str], dict[str, str], dict[str, list[str]], list[str]]:
-    """(local pins, third-party lock pins, name -> requirer specs, imports) of ``mirror.json``."""
+def _load_manifest(wheelhouse: Path) -> tuple[dict[str, str], dict[str, str], dict[str, list[str]], list[str],
+                                              set[str]]:
+    """(local pins, third-party lock pins, name -> requirer specs, imports, names that must be exactly the lock
+    version) of ``mirror.json``."""
     path = wheelhouse / "mirror.json"
     try:
         data = json.loads(path.read_text(encoding="utf-8-sig"))
@@ -590,12 +595,14 @@ def _load_manifest(wheelhouse: Path) -> tuple[dict[str, str], dict[str, str], di
         for pin in data.get("local", []):
             name, _, ver = str(pin).partition("==")
             local[str(canonicalize_name(name))] = ver.strip()
-        lock, specs = {}, {}
+        lock, specs, exact = {}, {}, set()
         for name, info in data["packages"].items():
             key = str(canonicalize_name(name))
             lock[key] = str(info["lock"])
+            if info.get("exact") is True:
+                exact.add(key)
             specs[key] = [str(r.get("spec", "")) for r in info.get("requires", [])]
-        return local, lock, specs, [str(m) for m in data.get("imports", [])]
+        return local, lock, specs, [str(m) for m in data.get("imports", [])], exact
     except (OSError, ValueError, KeyError, TypeError, AttributeError) as exc:
         raise InstallError(f"Не удалось прочитать {path}: {exc}. Распакуйте комплект заново.") from exc
 
@@ -658,7 +665,7 @@ def _print_summary(journal: _Journal, result: Result, say: Callable[[str], None]
 
 def _install(ctx: _Ctx, cache: Path, result: Result, say: Callable[[str], None]) -> None:
     j, st = ctx.journal, ctx.settings
-    local, lock, specs, imports = _load_manifest(ctx.wheelhouse)
+    local, lock, specs, imports, exact = _load_manifest(ctx.wheelhouse)
     req_file = ctx.wheelhouse / "requirements.txt"
     if req_file.is_file():
         reqs = _read_pins(req_file)
@@ -702,7 +709,7 @@ def _install(ctx: _Ctx, cache: Path, result: Result, say: Callable[[str], None])
         for name in lock:
             j.pkg(name)["available"] = [lock[name]]
     if not first.ok:
-        chosen, resolved, extras = _search(ctx, lock, local, specs, first.error)
+        chosen, resolved, extras = _search(ctx, lock, local, specs, exact, first.error)
     for name, ver in chosen.items():
         p = j.pkg(name)
         same = _same_version(ver, lock[name])
@@ -805,7 +812,7 @@ def _extras(res: _Resolution, lock: dict[str, str], local: dict[str, str]) -> di
 
 
 def _search(ctx: _Ctx, lock: dict[str, str], local: dict[str, str], specs: dict[str, list[str]],
-            first_error: str = "") -> tuple[dict[str, str], _Resolution, dict[str, tuple[str, str, str]]]:
+            exact: set[str] = frozenset(), first_error: str = "") -> tuple[dict[str, str], _Resolution, dict[str, tuple[str, str, str]]]:
     """The lock set did not resolve: ask the index what exists, then try replacement candidates in order."""
     j, st = ctx.journal, ctx.settings
     j.note("pip install --dry-run (набор из lock)", first_error)
@@ -832,7 +839,7 @@ def _search(ctx: _Ctx, lock: dict[str, str], local: dict[str, str], specs: dict[
         if any(_same_version(v, lock[name]) for v in avail):
             continue
         j.pkg(name)["tried"].append(lock[name])
-        missing[name] = [] if st.strict else [v for v in order_candidates(lock[name], avail, specs[name])
+        missing[name] = [] if st.strict or name in exact else [v for v in order_candidates(lock[name], avail, specs[name])
                                                 if not _same_version(v, lock[name])]
     if not missing:
         raise _fail(ctx, "Все версии из lock есть на индексе, но pip не смог согласовать их зависимости.")
@@ -842,7 +849,14 @@ def _search(ctx: _Ctx, lock: dict[str, str], local: dict[str, str], specs: dict[
             j.pkg(n)["status"] = "not_found"
         what = ("Строгий режим: на индексе нет версии из lock для "
                 if st.strict else "На индексе нет подходящей версии для ")
-        raise _fail(ctx, what + ", ".join(f"{n} (lock {lock[n]})" for n in dead) + ".")
+        text = what + ", ".join(f"{n} (lock {lock[n]})" for n in dead) + "."
+        pinned = [n for n in dead if n in exact]
+        if pinned and not st.strict:
+            text += (" " + ", ".join(pinned) + (" должен быть ровно этой версии" if len(pinned) == 1
+                                                 else " должны быть ровно этих версий")
+                     + ": это встроенный PostgreSQL, другая основная версия не откроет уже созданную базу "
+                       "в DESK_HOME\\pg. Добавьте эту версию на зеркало.")
+        raise _fail(ctx, text)
     fixed = {n: v for n, v in lock.items() if n not in missing}
     order = sorted(missing)
     fallback: tuple[dict[str, str], _Resolution, dict[str, tuple[str, str, str]]] | None = None

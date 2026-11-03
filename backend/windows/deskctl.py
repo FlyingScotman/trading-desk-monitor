@@ -93,12 +93,36 @@ MARKER = ENV / "desk-bundle.json"
 # Machine-wide PIP_* variables that would break an install into the bundle's venv (the installer's pip keeps all the
 # others: index, extra index, cert, proxy, trusted host, cache, ...): a user / target / prefix / root install, a
 # virtualenv requirement, no index at all, ignoring or skipping dependencies, another interpreter or platform
-# than the venv's, a source / binary policy that contradicts the installer's own --only-binary.
+# than the venv's, a source / binary policy that contradicts the installer's own --only-binary. Also: PIP_QUIET (at
+# a lower verbosity ``pip index versions`` prints nothing, and the installer would read it as "no versions"),
+# PIP_REQUIRE_HASHES (every requirement of the installer's resolver runs would need a hash), PIP_PRE (pre-releases
+# the lock does not hold would enter the candidates) and PIP_ISOLATED_MODE (it ignores the machine's pip.ini and
+# PIP_* variables, that is, the very index configuration the installer exists to use).
 PIP_BREAKING = frozenset({
     "PIP_USER", "PIP_TARGET", "PIP_PREFIX", "PIP_ROOT", "PIP_REQUIRE_VIRTUALENV", "PIP_PYTHON", "PIP_NO_INDEX",
     "PIP_NO_DEPS", "PIP_IGNORE_INSTALLED", "PIP_PLATFORM", "PIP_ABI", "PIP_IMPLEMENTATION", "PIP_PYTHON_VERSION",
     "PIP_NO_BINARY", "PIP_ONLY_BINARY", "PIP_DRY_RUN", "PIP_REPORT", "PIP_REQUIREMENT", "PIP_CONSTRAINT",
-    "PIP_EDITABLE", "PIP_SRC", "PIP_BREAK_SYSTEM_PACKAGES", "PIP_FORCE_REINSTALL", "PIP_UPGRADE"})
+    "PIP_EDITABLE", "PIP_SRC", "PIP_BREAK_SYSTEM_PACKAGES", "PIP_FORCE_REINSTALL", "PIP_UPGRADE",
+    "PIP_QUIET", "PIP_REQUIRE_HASHES", "PIP_PRE", "PIP_ISOLATED_MODE"})
+RENAME_TRIES = 5
+RENAME_PAUSE_S = 1.0
+
+
+def _pause(seconds: float) -> None:
+    time.sleep(seconds)  # a function of its own: the tests replace it
+
+
+def rename_retry(src: Path, dst: Path) -> None:
+    """``src.rename(dst)`` with up to ``RENAME_TRIES`` attempts, ``RENAME_PAUSE_S`` apart, on OSError: on Windows an
+    antivirus or the search indexer holds freshly written files for a moment and the rename of their folder fails."""
+    for attempt in range(1, RENAME_TRIES + 1):
+        try:
+            src.rename(dst)
+            return
+        except OSError:
+            if attempt == RENAME_TRIES:
+                raise
+            _pause(RENAME_PAUSE_S)
 STRICT_MIRROR = False  # --strict-mirror of this run
 # exit codes of a server that was stopped, not failed: Ctrl+C (ours, STATUS_CONTROL_C_EXIT), stop.bat (15)
 STOPPED = (0, 130, 15, -15, 0xC000013A, -1073741510)
@@ -501,7 +525,7 @@ def settle_env_old(env: dict[str, str]) -> None:
             raise Fail(f"Не удалось удалить недостроенное окружение {ENV}: {e}\n"
                        "Закройте окна Desk Monitor и программы, открывшие файлы в этой папке, и повторите.") from e
     try:
-        old.rename(ENV)
+        rename_retry(old, ENV)
     except OSError as e:
         raise Fail(f"Не удалось вернуть прежнее окружение {old} -> {ENV}: {e}") from e
 
@@ -541,7 +565,7 @@ def install_mirror(env: dict[str, str], marker: dict) -> None:
         try:
             if old.exists():
                 _rmtree(old)
-            ENV.rename(old)
+            rename_retry(ENV, old)
         except OSError as e:
             raise Fail(f"Не удалось убрать прежнее окружение {ENV}: {e}\n"
                        "Закройте окна Desk Monitor и программы, открывшие файлы в этой папке, и повторите.") from e
@@ -567,9 +591,10 @@ def install_mirror(env: dict[str, str], marker: dict) -> None:
         migrate_store(env)
         MARKER.write_text(json.dumps(marker, ensure_ascii=False), encoding="utf-8")  # last: the env is complete
     except BaseException as e:
-        _undo_mirror(env, had)
+        restored = _undo_mirror(env, had)
         if isinstance(e, Fail):
-            back = " Прежнее окружение возвращено." if had else ""
+            back = ("" if not had else " Прежнее окружение возвращено." if restored else
+                    " Прежнее окружение не удалось вернуть сейчас; его вернёт следующий запуск start.bat.")
             raise Fail(f"{e}\nНовое окружение не собрано.{back} Журналы установки: {logs}") from e
         if isinstance(e, Exception):
             raise Fail(f"Установка не удалась: {type(e).__name__}: {e}\nЖурналы установки: {logs}") from e
@@ -583,8 +608,9 @@ def install_mirror(env: dict[str, str], marker: dict) -> None:
     say("Установка завершена.")
 
 
-def _undo_mirror(env: dict[str, str], had: bool) -> None:
-    """Delete the unfinished new ``env\\`` and put ``env.old\\`` back (if it exists)."""
+def _undo_mirror(env: dict[str, str], had: bool) -> bool:
+    """Delete the unfinished new ``env\\`` and put ``env.old\\`` back (if it exists). True when the previous
+    environment is back (or there was none to bring back), False when that failed: the next start does it."""
     old = env_old()
     try:
         stop_store(env)
@@ -594,10 +620,12 @@ def _undo_mirror(env: dict[str, str], had: bool) -> None:
         if ENV.exists():
             _rmtree(ENV)
         if had and old.exists():
-            old.rename(ENV)
+            rename_retry(old, ENV)
     except OSError as e:
         say(f"Не удалось вернуть прежнее окружение ({e}). Закройте окна Desk Monitor и запустите start.bat ещё раз: "
             f"он вернёт {old} сам.")
+        return False
+    return True
 
 
 def ensure_env(env: dict[str, str], *, force: bool = False) -> None:

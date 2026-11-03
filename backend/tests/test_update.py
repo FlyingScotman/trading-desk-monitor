@@ -286,6 +286,17 @@ def test_apply_backs_up_and_rolls_back(launcher, tmp_path):
     assert not (upd / "applying.json").exists() and not Path(doc["staged"]).exists() and tree(root) == tree(new)
 
 
+def test_hot_update_brings_app_mirror_install_py_to_a_bundle_that_lacks_it(launcher, tmp_path):
+    env, root, _ = launcher
+    assert not (root / "app/mirror_install.py").exists()  # a bundle of before the installer existed
+    new = stage_dir(tmp_path / "with-installer", bundle(NEW, {"app/mirror_install.py": b"installer\n"}))
+    doc = update.stage(full_zip(new, tmp_path / "n2.zip"), root, Path(env["DESK_HOME"]))
+    assert "app/mirror_install.py" in doc["files"]  # app/ is a replaced dir: new files of it are carried over
+    deskctl.apply_update(env, Path(doc["staged"]))
+    assert (root / "app/mirror_install.py").read_bytes() == b"installer\n"
+    assert deskctl.rollback_update(env) and not (root / "app/mirror_install.py").exists()
+
+
 def test_apply_refuses_unsafe_or_damaged_staging(launcher, tmp_path):
     env, root, _ = launcher
     old_tree = tree(root)
@@ -666,6 +677,7 @@ def test_a_zip_of_the_other_kind_is_refused_both_ways_and_the_same_kind_installs
     for z in (new_mirror, mirror_patch):
         err = update.describe(z, full_root, OLD)["error"]
         assert "без пакетов" in err and "вид сборки не меняется" in err and "stop.bat" in err
+        assert "папку adapter" in err and "«с адаптером»" in err  # the private adapter is not in public zips
         with pytest.raises(update.UpdateError, match="вид сборки не меняется"):
             update.stage(z, full_root, tmp_path / "home")
     # mirror installed: the full zip and the full patch are refused

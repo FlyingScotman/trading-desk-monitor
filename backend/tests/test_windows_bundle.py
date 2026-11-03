@@ -518,7 +518,10 @@ def test_mirror_json_is_built_from_the_wheels_metadata_for_windows(tmp_path):
     assert pk["psycopg-binary"]["requires"] == [{"by": "psycopg", "spec": "==3.2.1"}]
     assert pk["starlette"]["requires"] == [{"by": "fastapi", "spec": "<0.39,>=0.37"}]  # the specifier as packaging prints it
     assert pk["numpy"]["requires"] == [{"by": "rub-fixed-income-core", "spec": ">=1.26"}]
-    assert pk["pgserver"] == {"lock": "0.1.4", "requires": []}  # added by the build: any version
+    # added by the build; the installer may not replace it (another PostgreSQL major version), so it is exact
+    assert pk["pgserver"] == {"lock": "0.1.4", "requires": [], "exact": True}
+    # psycopg-binary is pinned by psycopg's own "==", which the installer's candidate filter already honours
+    assert "exact" not in pk["psycopg-binary"] and "exact" not in pk["psycopg"]
     # deterministic: the same wheels in any order give the same bytes
     again = build.mirror_doc(list(reversed(_lock_set(tmp_path / "w2"))), list(reversed(LOCAL)))
     assert build.mirror_json_text(doc) == build.mirror_json_text(again)
@@ -530,6 +533,7 @@ def test_mirror_json_follows_extras_and_checks_what_the_lock_holds(tmp_path):
     # without the extra nobody asks for psycopg-binary: it is a package of the lock that nothing requires
     plain = build.mirror_doc(_lock_set(tmp_path / "a", ("psycopg>=3.2",)), LOCAL)
     assert plain["packages"]["psycopg-binary"]["requires"] == []
+    assert plain["packages"]["psycopg-binary"]["exact"] is True  # nobody pins it: the build does
     # a requirement the wheels do not hold
     needs = _lock_set(tmp_path / "b", ("psycopg>=3.2", "missing-pkg>=1"))
     with pytest.raises(SystemExit, match="missing-pkg"):
@@ -544,6 +548,15 @@ def test_mirror_json_follows_extras_and_checks_what_the_lock_holds(tmp_path):
         build.mirror_doc(wheels, LOCAL)
     # the real names: the core's module is rub_fixed_income, not its distribution's name
     assert "rub_fixed_income" in build.MIRROR_IMPORTS and "rub_fixed_income_core" not in build.MIRROR_IMPORTS
+
+
+def test_the_build_copies_the_installer_unconditionally_into_the_one_app_of_both_kinds():
+    """main() builds the full stage (the mirror stage is cut from it): the copy of app/mirror_install.py is not
+    conditional, and its source exists in the repository."""
+    assert (build.REPO / build.MIRROR_INSTALLER).is_file()
+    lines = Path(build.__file__).read_text(encoding="utf-8").splitlines()
+    (at,) = [i for i, ln in enumerate(lines) if "app / \"mirror_install.py\"" in ln and "copyfile" in ln]
+    assert lines[at].startswith("        shutil.copyfile(") and "if " not in lines[at - 1].split("#")[0]
 
 
 MIRROR_STAGE_FILES = {"VERSION": b"1.1-b\n", "start.bat": b"@echo off\r\n", "app/deskctl.py": b"print()\n",

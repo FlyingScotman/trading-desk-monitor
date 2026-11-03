@@ -131,6 +131,10 @@ MIRROR_JSON = "wheelhouse/mirror.json"
 OUR_DISTS = ("desk_backend", "rub_fixed_income_core")  # wheel file name prefixes (normalized)
 # modules the installer imports in the new venv; the core's module is rub_fixed_income, not its distribution name
 MIRROR_IMPORTS = ["desk.api", "rub_fixed_income", "pgserver", "psycopg"]
+# Packages the mirror installer must never replace by another version (``"exact": true`` in mirror.json). pgserver
+# carries the embedded PostgreSQL: another major version cannot open an existing cluster in ``DESK_HOME\pg``. The
+# binary psycopg is pinned by psycopg's own ``==`` requirement; when nobody pins it that way it is exact too.
+MIRROR_EXACT = ("pgserver", "psycopg-binary")
 MIRROR_INSTALLER = "backend/windows/mirror_install.py"
 
 def windows_env(full_version: str = "3.11.17") -> dict[str, str]:
@@ -704,7 +708,8 @@ def mirror_doc(wheels: list[Path], local: list[str], python_version: str = "3.11
     package its lock version and who requires it by which specifier (Requires-Dist of the wheels, markers evaluated
     for ``windows_env(python_version)``, extras followed from the requirements that name them). Every package is a source of
     requirements (what the lock holds is what is installed), so a package nobody requires (pgserver) has ``requires``
-    empty. SystemExit when a requirement is not in the wheels, a module of ``MIRROR_IMPORTS`` is in none of them,
+    empty. ``"exact": true`` marks the packages the installer may not replace (``MIRROR_EXACT``; optional, an older
+    file without it is read as before). SystemExit when a requirement is not in the wheels, a module of ``MIRROR_IMPORTS`` is in none of them,
     or a version of the lock does not satisfy a specifier. Deterministic: sorted, no time, no path."""
     env = windows_env(python_version)
     meta = {}
@@ -738,10 +743,16 @@ def mirror_doc(wheels: list[Path], local: list[str], python_version: str = "3.11
     for module in MIRROR_IMPORTS:
         if not any(wheel_has_module(w, module) for w in wheels):
             sys.exit(f"no wheel holds the module {module} (imports of mirror.json)")
+    def package(n: str) -> dict:
+        reqs = sorted(requires.get(n, ()))
+        info: dict = {"lock": meta[n][0], "requires": [{"by": b, "spec": s} for b, s in reqs]}
+        pinned_by_requirer = any(s.lstrip().startswith("==") for _b, s in reqs)
+        if n in MIRROR_EXACT and not (n != "pgserver" and pinned_by_requirer):
+            info["exact"] = True
+        return info
+
     return {"schema": 1, "python": "3.11", "platform": "win_amd64", "local": sorted(local),
-            "packages": {n: {"lock": meta[n][0],
-                             "requires": [{"by": b, "spec": s} for b, s in sorted(requires.get(n, ()))]}
-                         for n in sorted(meta) if n not in local_names},
+            "packages": {n: package(n) for n in sorted(meta) if n not in local_names},
             "imports": list(MIRROR_IMPORTS)}
 
 
@@ -947,8 +958,8 @@ def main() -> int:
         (app / "examples").mkdir()
         shutil.copyfile(src / "backend/examples/test_book.csv", app / "examples/test_book.csv")
         shutil.copyfile(src / "backend/windows/deskctl.py", app / "deskctl.py")
-        if (src / MIRROR_INSTALLER).is_file():  # in both kinds: the one deskctl.py of both imports it
-            shutil.copyfile(src / MIRROR_INSTALLER, app / "mirror_install.py")
+        # in both kinds, and required: the one deskctl.py of both imports it (FileNotFoundError when it is missing)
+        shutil.copyfile(src / MIRROR_INSTALLER, app / "mirror_install.py")
         shutil.copyfile(src / "docs/INSTALL_BACKEND_WINDOWS.md", app / "INSTALL_BACKEND_WINDOWS.md")
         for rel, data in adapter.items():
             (stage / "adapter" / rel).parent.mkdir(parents=True, exist_ok=True)

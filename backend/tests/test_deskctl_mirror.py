@@ -309,3 +309,103 @@ def test_desk_environ_names_the_kind(m, monkeypatch):
     m.mirror_json()
     env = deskctl.desk_environ()
     assert env["DESK_BUNDLE_KIND"] == "mirror" and env["PIP_CONFIG_FILE"] == deskctl.os.devnull
+
+
+def test_pip_breaking_names_the_variables_that_change_what_the_installer_reads():
+    for k in ("PIP_QUIET", "PIP_REQUIRE_HASHES", "PIP_PRE", "PIP_ISOLATED_MODE"):
+        assert k in deskctl.PIP_BREAKING
+
+
+def test_keyboard_interrupt_in_the_loader_rolls_back_and_propagates(m):
+    m.mirror_json()
+    m.old_env()
+    m.install_error = KeyboardInterrupt()
+    with pytest.raises(KeyboardInterrupt):
+        deskctl.ensure_env(m.env)
+    assert (deskctl.ENV / "who").read_text() == "old-env" and not deskctl.env_old().exists()
+    assert json.loads(deskctl.MARKER.read_text())["version"] == "0.9-old"
+
+
+def test_hot_update_passes_strict_mirror_to_the_new_launcher(m, monkeypatch):
+    upd = deskctl.updates_dir(m.env)
+    upd.mkdir(parents=True)
+    commands: list[list[str]] = []
+    monkeypatch.setattr(deskctl, "wait_idle", lambda env, timeout: True)
+    monkeypatch.setattr(deskctl, "apply_update", lambda env, staged: None)
+    monkeypatch.setattr(deskctl, "run_child", lambda cmd, env: commands.append(cmd) or 0)
+    for strict in (True, False):
+        (upd / "pending.json").write_text(json.dumps({"version": "2.0", "staged": str(m.home / "staged")}))
+        monkeypatch.setattr(deskctl, "STRICT_MIRROR", strict)
+        assert deskctl.hot_update(m.env, ["--port", "8123"]) == 0
+    assert ("--strict-mirror" in commands[0]) and "--verify-update" in commands[0]
+    assert "--strict-mirror" not in commands[1] and commands[1][-2:] == ["--port", "8123"]
+
+
+@pytest.fixture
+def pauses(monkeypatch):
+    waited: list[float] = []
+    monkeypatch.setattr(deskctl, "_pause", waited.append)
+    return waited
+
+
+def _flaky_rename(monkeypatch, fail_times: int):
+    """Path.rename that raises OSError ``fail_times`` times (an antivirus holding the files), then works."""
+    real = Path.rename
+    state = {"left": fail_times, "calls": 0}
+
+    def rename(self, target):
+        state["calls"] += 1
+        if state["left"] > 0:
+            state["left"] -= 1
+            raise OSError("held by another process")
+        return real(self, target)
+
+    monkeypatch.setattr(Path, "rename", rename)
+    return state
+
+
+def test_rename_is_retried_with_a_pause_then_succeeds(m, monkeypatch, pauses):
+    m.mirror_json()
+    m.old_env()
+    state = _flaky_rename(monkeypatch, 4)  # the 5th attempt of ENV -> env.old goes through
+    deskctl.ensure_env(m.env)
+    assert pauses[:4] == [deskctl.RENAME_PAUSE_S] * 4 and deskctl.env_complete()
+    assert state["calls"] >= 5 and not deskctl.env_old().exists()
+
+
+def test_rename_gives_up_after_five_attempts(m, monkeypatch, pauses):
+    m.mirror_json()
+    m.old_env()
+    state = _flaky_rename(monkeypatch, 99)
+    with pytest.raises(deskctl.Fail, match="Не удалось убрать прежнее окружение"):
+        deskctl.ensure_env(m.env)
+    assert state["calls"] == deskctl.RENAME_TRIES == 5 and len(pauses) == 4
+    assert (deskctl.ENV / "who").read_text() == "old-env"
+
+
+def test_undo_reports_whether_the_previous_env_is_back(m, monkeypatch, pauses):
+    m.old_env().rename(deskctl.env_old())
+    deskctl.ENV.mkdir()
+    assert deskctl._undo_mirror(m.env, True) is True and (deskctl.ENV / "who").read_text() == "old-env"
+    assert deskctl._undo_mirror(m.env, False) is True  # nothing to bring back
+
+
+def test_undo_that_cannot_return_the_env_says_the_next_start_will(m, monkeypatch, pauses):
+    m.mirror_json()
+    m.old_env()
+    m.install_error = m.mi.InstallError("Нет пакета foo.", m.home / "logs/install-1.log")
+    real = Path.rename
+
+    def rename(self, target):
+        if self.name == "env.old":  # the swap back fails, the swap out worked
+            raise OSError("locked")
+        return real(self, target)
+
+    monkeypatch.setattr(Path, "rename", rename)
+    with pytest.raises(deskctl.Fail) as e:
+        deskctl.ensure_env(m.env)
+    text = str(e.value)
+    assert "Прежнее окружение не удалось вернуть сейчас; его вернёт следующий запуск start.bat" in text
+    assert "Прежнее окружение возвращено." not in text
+    assert deskctl.env_old().exists() and (deskctl.env_old() / "who").read_text() == "old-env"
+    assert deskctl._undo_mirror(m.env, True) is False
