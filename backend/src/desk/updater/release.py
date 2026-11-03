@@ -2,8 +2,13 @@
 
 The release workflow (``.github/workflows/release.yml``) publishes, for a tag ``v<backend version>``:
 
-* ``DeskMonitor-<version>.zip``                    the full Windows bundle, never with the private adapter
-* ``DeskMonitor-patch-<old>-to-<version>.zip``     a patch from the previous release's bundle (when there is one)
+Since the owner's decision of 03.11.2026 (#530) a release carries the mirror kind only; the full-kind names below are
+what releases up to 0.2.15 carry (and what the classifier still reads). An installation of the full kind that meets a
+mirror-only release is told how to change the kind by hand once (``Choice.manual``: a normal state, not an error).
+
+* ``DeskMonitor-<version>.zip``                    the full Windows bundle (releases before #530), never with the
+                                                   private adapter
+* ``DeskMonitor-patch-<old>-to-<version>.zip``     a patch from the previous release's bundle (releases before #530)
 * ``DeskMonitorMirror-<version>.zip``              the bundle "without packages" (third-party packages come from
                                                    the pip index of the PC), and its patches
                                                    ``DeskMonitorMirror-patch-<old>-to-<version>.zip`` (not
@@ -120,10 +125,12 @@ class Choice:
     asset: Asset | None
     reason: str | None
     needs_confirm: bool  # older or unordered: only when the owner asks explicitly
+    manual: bool = False  # a normal state, not an error: the update is done by hand once (``reason`` has the steps)
+    manual_url: str | None = None  # the zip to download by hand (or the release page)
 
     def public(self) -> dict[str, Any]:
         return {"compare": self.compare, "asset": self.asset.public() if self.asset else None, "reason": self.reason,
-                "needs_confirm": self.needs_confirm}
+                "needs_confirm": self.needs_confirm, "manual": self.manual, "manual_url": self.manual_url}
 
 
 # ---- checksums ----------------------------------------------------------------------------------------------
@@ -373,6 +380,12 @@ def choose(rel: Release, current: str, allow_older: bool = False, flavor: str | 
     asset = patch if patch is not None and not needs else full
     if asset is None:
         other = [a for a in rel.assets if a.kind == "full" and a.version == rel.version]
+        if flavor == "full" and any(a.flavor == "mirror" for a in other):
+            # the owner's decision of 03.11.2026 (#530): from then on only the mirror kind is released
+            mirror = full_of(rel, "mirror")
+            url = mirror.url if mirror is not None else rel.html_url or None
+            return Choice(cmp, None, manual_switch_text(rel.version, mirror.name if mirror else None, url), needs,
+                          manual=True, manual_url=url)
         if other:
             have = ("сборка без пакетов (с зеркала pip)" if flavor == "mirror"
                     else "полная сборка (с пакетами)")
@@ -384,6 +397,24 @@ def choose(rel: Release, current: str, allow_older: bool = False, flavor: str | 
         return Choice(cmp, None, f"У {asset.name} нет опубликованной контрольной суммы (SHA256SUMS): не устанавливаю.",
                       needs)
     return Choice(cmp, asset, None, needs)
+
+
+def manual_switch_text(version: str, zip_name: str | None, url: str | None) -> str:
+    """What «Обновление программы» tells an installation of the full kind when the release has the mirror kind only:
+    why, and the steps of the one manual change of kind, in the owner's words. No host names (a public repository)."""
+    short = version.split("-")[0]
+    name = zip_name or f"DeskMonitorMirror-{version}.zip"
+    where = f" ({url})" if url else ""
+    return (f"С версии {short} программа выходит только в виде «без пакетов»: библиотеки она ставит с зеркала pip "
+            "рабочей машины, а не берёт из архива. У вас стоит прежний, полный комплект, и обновить его из этой "
+            "страницы нельзя: перейти на новый вид нужно один раз вручную.\n"
+            "1. Остановите программу: запустите stop.bat из её папки.\n"
+            f"2. Скачайте {name} со страницы релиза{where}.\n"
+            "3. Распакуйте архив в новую пустую папку, не поверх старой.\n"
+            "4. Если у вас стоял приватный адаптер, перенесите папку adapter из старой папки программы в новую.\n"
+            "5. Запустите start.bat в новой папке.\n"
+            "Данные и настройки остаются в той же папке данных (DESK_HOME), переносить их не нужно. Старую папку "
+            "можно удалить, когда убедитесь, что новая работает. Дальше «Обновление программы» работает как обычно.")
 
 
 def full_of(rel: Release, flavor: str = "full") -> Asset | None:

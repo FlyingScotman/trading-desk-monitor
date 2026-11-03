@@ -572,6 +572,7 @@ def status(st: Settings, can_install: bool, unavailable: str | None) -> dict[str
         "release": rel.public() if rel else None, "no_release": bool(s.get("no_release")) and same_repo,
         "choice": choice.public() if choice else None,
         "update_available": bool(choice and choice.asset is not None and choice.compare == "newer"),
+        "manual_update": bool(choice and choice.manual and choice.compare == "newer"),
         "job": job(), "rollback": {"version": point["version"]} if point else None,
         "diagnose": s.get("diagnose"), "prefer": s.get("prefer"), "download": s.get("download"),
         "layers": {la: net.available(la) for la in net.LAYERS},

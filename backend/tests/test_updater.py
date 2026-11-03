@@ -707,33 +707,36 @@ def test_rollback_route(old_new, tmp_path, monkeypatch):
 release_assets = tu._load("release_assets", tu.REPO / "backend/tools/release_assets.py")
 
 
+MIRROR = {"wheelhouse/mirror.json": b'{"schema": 1}\n'}
+
+
 def test_release_assets_checks_the_zips_and_writes_the_manifests(tmp_path):
     dist = tmp_path / "dist"
     dist.mkdir()
     version = release_assets.backend_version()
     bundle_version = f"{version}-20261022-eeeeeee"
-    stage = stage_dir(tmp_path / "rel", tu.bundle(bundle_version))
-    full_zip(stage, dist / f"DeskMonitor-{bundle_version}.zip")
+    stage = stage_dir(tmp_path / "rel", tu.bundle(bundle_version, MIRROR))
+    full_zip(stage, dist / f"DeskMonitorMirror-{bundle_version}.zip")
     with pytest.raises(SystemExit, match="must be"):
         release_assets.check_tag("v9.9.9")
     with pytest.raises(SystemExit, match="has no 'v'"):
         release_assets.check_tag(version)
     doc = release_assets.write(dist, f"v{version}", REPO_NAME, "abc")
-    assert doc["version"] == bundle_version and doc["assets"][0]["kind"] == "full" and not doc["adapter_included"]
+    assert doc["version"] == bundle_version and doc["assets"][0]["kind"] == "full" and doc["assets"][0]["flavor"] == "mirror" and not doc["adapter_included"]
     sums = (dist / "SHA256SUMS").read_text()
-    assert release.parse_sums(sums)[f"DeskMonitor-{bundle_version}.zip"] == doc["assets"][0]["sha256"]
+    assert release.parse_sums(sums)[f"DeskMonitorMirror-{bundle_version}.zip"] == doc["assets"][0]["sha256"]
     assert sums.strip() in (dist / "NOTES.md").read_text()
     rel = release.from_release_json(json.loads((dist / "release.json").read_text()), REPO_NAME)
     assert rel.version == bundle_version
     # the notes alone (what the browser reads through the API) carry the checksums
-    api = api_doc({f"DeskMonitor-{bundle_version}.zip": (dist / f"DeskMonitor-{bundle_version}.zip").read_bytes()},
+    api = api_doc({f"DeskMonitorMirror-{bundle_version}.zip": (dist / f"DeskMonitorMirror-{bundle_version}.zip").read_bytes()},
                   tag=f"v{version}", digest=False, body=(dist / "NOTES.md").read_text())
     assert release.from_api(api, REPO_NAME).assets[0].sha256 == doc["assets"][0]["sha256"]
-    with_adapter = stage_dir(tmp_path / "ad", tu.bundle(bundle_version, {"adapter/tda/__init__.py": b""}))
-    full_zip(with_adapter, dist / f"DeskMonitor-{bundle_version}.zip")
+    with_adapter = stage_dir(tmp_path / "ad", tu.bundle(bundle_version, {**MIRROR, "adapter/tda/__init__.py": b""}))
+    full_zip(with_adapter, dist / f"DeskMonitorMirror-{bundle_version}.zip")
     with pytest.raises(SystemExit, match="adapter"):
         release_assets.write(dist, f"v{version}", REPO_NAME, "abc")
-    full_zip(stage, dist / f"DeskMonitor-{bundle_version}.zip")
+    full_zip(stage, dist / f"DeskMonitorMirror-{bundle_version}.zip")
     with pytest.raises(SystemExit, match="tag"):
         release_assets.collect(dist, "v0.0.1")
 
@@ -750,7 +753,7 @@ def test_release_notes_start_with_the_versions_changelog_section(tmp_path):
     dist = tmp_path / "dist"
     dist.mkdir()
     bundle_version = f"{version}-20261022-eeeeeee"
-    full_zip(stage_dir(tmp_path / "rel", tu.bundle(bundle_version)), dist / f"DeskMonitor-{bundle_version}.zip")
+    full_zip(stage_dir(tmp_path / "rel", tu.bundle(bundle_version, MIRROR)), dist / f"DeskMonitorMirror-{bundle_version}.zip")
     release_assets.write(dist, f"v{version}", REPO_NAME, "abc")
     notes = (dist / "NOTES.md").read_text(encoding="utf-8")
     assert notes.startswith(f"Desk Monitor {bundle_version}\n\n{section}\n\n---\n\n")
@@ -784,7 +787,7 @@ def test_a_patch_for_another_build_falls_back_to_the_full_zip(bundle_env, monkey
     assert pending["version"] == NEW and pending["kind"] == "full" and pending["source"] == fname
 
 
-def test_release_assets_takes_one_full_and_at_most_one_mirror_zip_and_their_patches(tmp_path):
+def test_release_assets_publishes_one_mirror_zip_and_its_patches_and_refuses_the_full_kind(tmp_path):
     dist = tmp_path / "dist"
     dist.mkdir()
     version = release_assets.backend_version()
@@ -792,31 +795,39 @@ def test_release_assets_takes_one_full_and_at_most_one_mirror_zip_and_their_patc
     mirror = {"wheelhouse/mirror.json": b'{"schema": 1}\n'}
     full = stage_dir(tmp_path / "f", tu.bundle(v))
     mstage = stage_dir(tmp_path / "m", tu.bundle(v, mirror))
-    full_zip(full, dist / f"DeskMonitor-{v}.zip")
     full_zip(mstage, dist / f"DeskMonitorMirror-{v}.zip")
     old_full = full_zip(stage_dir(tmp_path / "of", tu.bundle(old)), tmp_path / "of.zip")
     old_mirror = full_zip(stage_dir(tmp_path / "om", tu.bundle(old, mirror)), tmp_path / "om.zip")
-    tu.build.write_patch(old_full, full, v, dist, tu.STAMP)
+    # a full base gives no patch when only the mirror stage is built (--mirror-only); a mirror base does
+    assert tu.build.write_patches(tu.build.load_bases([str(old_full)]), {"mirror": mstage}, v, dist, tu.STAMP) == []
     tu.build.write_patch(old_mirror, mstage, v, dist, tu.STAMP)
     assert sorted(p.name for p in dist.glob("*.zip")) == sorted([
-        f"DeskMonitorMirror-patch-{old}-to-{v}.zip", f"DeskMonitor-patch-{old}-to-{v}.zip", f"DeskMonitorMirror-{v}.zip",
-        f"DeskMonitor-{v}.zip"])
+        f"DeskMonitorMirror-patch-{old}-to-{v}.zip", f"DeskMonitorMirror-{v}.zip"])
     doc = release_assets.write(dist, f"v{version}", REPO_NAME, "abc")
-    assert sorted((a["kind"], a["flavor"]) for a in doc["assets"]) == [("full", "full"), ("full", "mirror"),
-                                                                       ("patch", "full"), ("patch", "mirror")]
+    assert sorted((a["kind"], a["flavor"]) for a in doc["assets"]) == [("full", "mirror"), ("patch", "mirror")]
     sums = release.parse_sums((dist / "SHA256SUMS").read_text())
-    assert set(sums) == {p.name for p in dist.glob("*.zip")}  # every zip, the mirror ones too
+    assert set(sums) == {p.name for p in dist.glob("*.zip")}
     notes = (dist / "NOTES.md").read_text(encoding="utf-8")
-    assert all(sha in notes for sha in sums.values()) and f"DeskMonitorMirror-{v}.zip — сборка без пакетов" in notes
+    assert all(sha in notes for sha in sums.values()) and f"DeskMonitorMirror-{v}.zip — сборка «без пакетов»" in notes
+    assert "stop.bat" in notes and "adapter" in notes and "start.bat" in notes  # the one manual change of kind
+    assert f"DeskMonitor-{v}.zip" not in notes  # the full zip is not offered
     rel = release.from_release_json(json.loads((dist / "release.json").read_text()), REPO_NAME)
     assert rel.version == v and release.full_of(rel, "mirror").name == f"DeskMonitorMirror-{v}.zip"
-    # a release without the mirror zip is still a release (a workflow run without --mirror)
+    assert release.full_of(rel, "full") is None
+    # the full kind (the zip or a patch of it) is refused, not left out silently: a glob would upload it
+    full_zip(full, dist / f"DeskMonitor-{v}.zip")
+    with pytest.raises(SystemExit, match="not released any more"):
+        release_assets.collect(dist, f"v{version}")
+    (dist / f"DeskMonitor-{v}.zip").unlink()
+    tu.build.write_patch(old_full, full, v, dist, tu.STAMP)
+    with pytest.raises(SystemExit, match="not released any more"):
+        release_assets.collect(dist, f"v{version}")
+    (dist / f"DeskMonitor-patch-{old}-to-{v}.zip").unlink()
+    # no mirror zip at all: refused
     (dist / f"DeskMonitorMirror-{v}.zip").unlink()
-    (dist / f"DeskMonitorMirror-patch-{old}-to-{v}.zip").unlink()
-    assert "без пакетов" not in release_assets.write(dist, f"v{version}", REPO_NAME, "abc")["notes"]
-    assert "сборка без пакетов" not in (dist / "NOTES.md").read_text(encoding="utf-8")
-    # two mirror zips, or a mirror zip that is not of the mirror kind, or one of another version: refused
-    full_zip(mstage, dist / f"DeskMonitorMirror-{v}.zip")
+    with pytest.raises(SystemExit, match="no DeskMonitorMirror"):
+        release_assets.collect(dist, f"v{version}")
+    # a mirror zip that is not of the mirror kind, two of them, or one of another version: refused
     full_zip(full, dist / f"DeskMonitorMirror-{v}.zip")
     with pytest.raises(SystemExit, match="flavor"):
         release_assets.collect(dist, f"v{version}")
@@ -830,6 +841,44 @@ def test_release_assets_takes_one_full_and_at_most_one_mirror_zip_and_their_patc
     full_zip(mstage, dist / f"DeskMonitorMirror-{v}-with-adapter.zip")
     with pytest.raises(SystemExit, match="private adapter"):
         release_assets.collect(dist, f"v{version}")
+
+
+def test_a_release_with_the_mirror_kind_only_tells_a_full_installation_to_change_the_kind_by_hand():
+    mfull = _a(f"DeskMonitorMirror-{NEW}.zip")
+    rel = _rel(NEW, [mfull, _a(f"DeskMonitorMirror-patch-{OLD}-to-{NEW}.zip")])
+    c = release.choose(rel, OLD, flavor="full")
+    assert c.asset is None and c.manual and c.manual_url == mfull.url and not c.needs_confirm
+    for part in ("только в виде «без пакетов»", "зеркала pip", "один раз вручную", "stop.bat", mfull.name,
+                 "новую пустую папку", "папку adapter", "start.bat", "DESK_HOME"):
+        assert part in c.reason, part
+    assert c.public()["manual"] is True
+    # the same release is a normal update for a mirror installation, and nothing manual
+    ok = release.choose(rel, OLD, flavor="mirror")
+    assert ok.asset.name == f"DeskMonitorMirror-patch-{OLD}-to-{NEW}.zip" and not ok.manual
+    # the installed version needs nothing
+    assert release.choose(rel, NEW, flavor="full").manual is False
+    # a release of the full kind only is still a normal update for a full installation
+    assert release.choose(_rel(NEW, [_a(f"DeskMonitor-{NEW}.zip")]), OLD, flavor="full").asset is not None
+
+
+def test_the_check_of_a_mirror_only_release_is_a_manual_update_not_an_error(bundle_env, monkeypatch):
+    z = b"mirror-zip"
+    name = f"DeskMonitorMirror-{NEW}.zip"
+    doc = release.release_doc(TAG, NEW, [(name, len(z), sha(z))])
+    FakeNet(monkeypatch, {release.latest_url(REPO_NAME, release.RELEASE_JSON): json.dumps(doc).encode()}, {})
+    st = load()
+    chk = service.check(st)
+    assert chk["ok"] and chk["error"] is None and chk["found"] == TAG  # a normal check, no failure
+    s = service.status(st, True, None)
+    assert s["manual_update"] is True and s["update_available"] is False
+    assert s["choice"]["manual"] and s["choice"]["manual_url"] == gh(name) and "stop.bat" in s["choice"]["reason"]
+    with pytest.raises(update.UpdateError, match="один раз вручную"):  # the install button has nothing to do
+        service.start_install(st)
+    # a mirror installation of the same release updates as always
+    (bundle_env["root"] / "wheelhouse").mkdir(exist_ok=True)
+    (bundle_env["root"] / "wheelhouse/mirror.json").write_text("{}")
+    again = service.status(st, True, None)
+    assert again["update_available"] is True and again["manual_update"] is False
 
 
 # ---- the updaters that are already installed must not break on a release with mirror assets -------------------------
@@ -865,6 +914,31 @@ def test_an_installed_updater_reads_a_release_with_mirror_assets_and_takes_the_f
     assert api.version == NEW and old.choose(api, "0.0.1-20261001-aaaaaaa").asset.name == f"DeskMonitor-{NEW}.zip"
     rels, _ = old.first_usable([api_doc({n: n.encode() for n, _, _ in files})], REPO_NAME)
     assert rels is not None and rels.version == NEW
+
+
+def test_an_installed_updater_meets_a_release_with_the_mirror_kind_only_without_failing():
+    """0.2.15 and before take every ``DeskMonitor-<x>.zip`` for a full bundle and ignore ``DeskMonitorMirror-*``: a
+    release of the mirror kind only has, for them, no bundle. What they see (no crash):
+    * release.json (read first): ReleaseError «в релизе нет архива DeskMonitor-<версия>.zip» (the check's «релиз не
+      подходит»), and the check stops there: it is not an EmptyReleaseError, so no fallback to an earlier release;
+    * the API's document (no release.json): EmptyReleaseError, the newest earlier release with files is offered."""
+    old = _release_module_before_mirror()
+    files = [(f"DeskMonitorMirror-{NEW}.zip", 50, "e" * 64),
+             (f"DeskMonitorMirror-patch-{OLD}-to-{NEW}.zip", 5, "f" * 64)]
+    doc = json.loads(json.dumps(release.release_doc(TAG, NEW, files)))
+    with pytest.raises(old.ReleaseError, match=r"нет архива DeskMonitor-<версия>\.zip") as e:
+        old.from_release_json(doc, REPO_NAME)
+    assert not isinstance(e.value, old.EmptyReleaseError)
+    api = api_doc({n: n.encode() for n, _, _ in files})
+    with pytest.raises(old.EmptyReleaseError):
+        old.from_api(api, REPO_NAME)
+    previous = api_doc({f"DeskMonitor-{OLD}.zip": b"x"}, tag="v0.0.9")
+    rel, skipped = old.first_usable([api, previous], REPO_NAME)
+    assert rel is not None and rel.version == OLD and [x["tag"] for x in skipped] == [TAG]  # offers what it has
+    assert old.choose(rel, OLD).asset is None  # «Установлена последняя версия»: the old updater stays silent
+    assert old.first_usable([api], REPO_NAME)[0] is None
+    # the new reader takes the same documents as a release
+    assert release.from_release_json(doc, REPO_NAME).version == NEW and release.from_api(api, REPO_NAME).version == NEW
 
 
 def test_choose_without_a_flavor_follows_the_bundle_folder_then_the_environment(monkeypatch, tmp_path):

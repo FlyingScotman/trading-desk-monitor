@@ -1,10 +1,12 @@
 name: release
 
 # A version tag v<backend version> (backend/pyproject.toml) publishes a GitHub Release that the in-app updater
-# (backend/src/desk/updater) reads: the Windows bundle DeskMonitor-<version>.zip (never with the private adapter),
-# the bundle without packages DeskMonitorMirror-<version>.zip (--mirror), patches from the previous release's
-# published bundles (full and mirror: DeskMonitor-patch-*, DeskMonitorMirror-patch-*) and from the last delivered
-# build (backend/tools/delivered), SHA256SUMS, release.json and notes with the checksums.
+# (backend/src/desk/updater) reads: the Windows bundle without packages DeskMonitorMirror-<version>.zip (third-party
+# packages come from the pip index of the PC; never with the private adapter), patches DeskMonitorMirror-patch-* from
+# the previous release's published mirror bundle and from the last delivered mirror build (backend/tools/delivered),
+# SHA256SUMS, release.json and notes with the checksums. Only the mirror kind is released (owner, 03.11.2026, #530):
+# the full offline bundle DeskMonitor-<version>.zip is staged inside the CI (the mirror bundle is built from it) and
+# never published; a previous release that has only a full bundle gives no patch (the kind changes once, by hand).
 # Bump the version, commit, then either push the tag:  git tag v0.3.0 && git push origin v0.3.0
 # or run Actions -> release -> «Run workflow» on main with the tag field empty: the tag v<backend version> is made by
 # the release itself on the commit it built (as the adapter's release, TDA#99), after lint and tests pass; refused if
@@ -73,9 +75,10 @@ jobs:
           backend/.venv/bin/ruff check backend
           (cd backend && .venv/bin/python -m pytest -q -p no:cacheprovider)
           backend/.venv/bin/python -m pytest -q -p no:cacheprovider tests
-      - name: The previous release's full and mirror bundles, as published (bases of the patches)
+      - name: The previous release's mirror bundle, as published (base of the patches)
         # the patch is made against the bytes that were delivered, never a rebuild that only has the same version
-        # (v-tags only: a release with a tag without v was made by hand and has no bundle)
+        # (v-tags only: a release with a tag without v was made by hand and has no bundle). A previous release of
+        # the full kind (before #530) has no DeskMonitorMirror-*.zip: no base, no patch, the owner changes kind by hand
         run: |
           mkdir -p prev
           prev=$(gh release list --repo "$GITHUB_REPOSITORY" --exclude-drafts --exclude-pre-releases --limit 30 \
@@ -83,24 +86,25 @@ jobs:
           if [ -n "$prev" ]; then
             echo "previous release: $prev"
             if gh release download "$prev" --repo "$GITHUB_REPOSITORY" --dir prev \
-                 --pattern 'DeskMonitor-*.zip' --pattern 'DeskMonitorMirror-*.zip' --pattern SHA256SUMS; then
-              rm -f prev/DeskMonitor-patch-*.zip prev/DeskMonitorMirror-patch-*.zip prev/*-with-adapter.zip
+                 --pattern 'DeskMonitorMirror-*.zip' --pattern SHA256SUMS \
+               && compgen -G 'prev/DeskMonitorMirror-*.zip' >/dev/null; then
+              rm -f prev/DeskMonitorMirror-patch-*.zip prev/*-with-adapter.zip
               (cd prev && sha256sum --check --ignore-missing --strict SHA256SUMS)
             else
-              echo "::warning::no full zip of $prev downloaded: no patch from it (the updater installs the full zip)"
+              echo "::warning::no mirror zip of $prev downloaded (a release of the full kind?): no patch from it, the owner changes the kind by hand"
               rm -f prev/*
             fi
           fi
           ls -la prev
-      - name: Build the Windows bundles (full and mirror) and the patches from the previous release and the last delivered build
-        # --mirror: also the bundle without packages; every zip of prev/ is a base (a mirror one gives a mirror patch,
-        # a full one a full patch: build_windows_bundle.py tells them by wheelhouse/mirror.json in the manifest)
-        # --patch-from-delivered: also a patch from the newest backend/tools/delivered/<version>/ record (what the
-        # owner got outside the releases); one patch per base version and kind, made to fit every known build of it
+      - name: Build the Windows mirror bundle and the patches from the previous release and the last delivered build
+        # --mirror-only: the bundle without packages and its patches are written; the full stage is built inside (the
+        # mirror one is made from it, its wheelhouse is checked against mirror.json) but no full zip or patch is made
+        # --patch-from-delivered: also a patch from the newest backend/tools/delivered/<version>/ record of the mirror
+        # kind (what the owner got outside the releases); one patch per base version, made to fit every known build
         run: |
           bases=()
-          for z in prev/DeskMonitor-*.zip prev/DeskMonitorMirror-*.zip; do if [ -f "$z" ]; then bases+=(--patch-base "$z"); fi; done
-          python3.11 backend/tools/build_windows_bundle.py --out dist --mirror "${bases[@]}" --patch-from-delivered
+          for z in prev/DeskMonitorMirror-*.zip; do if [ -f "$z" ]; then bases+=(--patch-base "$z"); fi; done
+          python3.11 backend/tools/build_windows_bundle.py --out dist --mirror-only "${bases[@]}" --patch-from-delivered
           ls -la dist
       - name: SHA256SUMS, release.json, notes
         run: >
@@ -109,7 +113,7 @@ jobs:
       - name: Publish the release
         run: |
           shopt -s nullglob
-          assets=(dist/DeskMonitor-*.zip dist/DeskMonitorMirror-*.zip dist/SHA256SUMS dist/release.json)
+          assets=(dist/DeskMonitorMirror-*.zip dist/SHA256SUMS dist/release.json)
           if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
             gh release upload "$TAG" --repo "$GITHUB_REPOSITORY" --clobber "${assets[@]}"
             gh release edit "$TAG" --repo "$GITHUB_REPOSITORY" --notes-file dist/NOTES.md

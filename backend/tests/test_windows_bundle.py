@@ -706,7 +706,22 @@ def test_from_bundle_of_a_mirror_zip_makes_the_mirror_with_adapter_zip(tmp_path)
         assert b"wheelhouse/mirror.json" in z.read("DeskMonitor/MANIFEST.sha256")
 
 
-def test_release_workflow_builds_and_publishes_the_mirror_bundle():
+def test_release_workflow_builds_and_publishes_the_mirror_bundle_only():
     wf = (REPO / ".github/workflows/release.yml").read_text(encoding="utf-8")
-    assert "--mirror" in wf and "DeskMonitorMirror-patch-*.zip" in wf and "DeskMonitor-patch-*.zip" in wf
-    assert "dist/DeskMonitor-*.zip" in wf  # the glob that uploads the mirror zip and its patches too
+    assert "--mirror-only" in wf and "DeskMonitorMirror-patch-*.zip" in wf
+    assert "dist/DeskMonitorMirror-*.zip" in wf  # the glob that uploads the mirror zip and its patches
+    # the full bundle and its patches are neither downloaded as bases nor uploaded
+    assert "dist/DeskMonitor-*.zip" not in wf and "prev/DeskMonitor-*.zip" not in wf and "'DeskMonitor-*.zip'" not in wf
+    # the tag logic of #539 is untouched
+    assert "MAKE_TAG" in wf and "--target" in wf and "--verify-tag" in wf and "Release tag" in wf
+
+
+def test_mirror_only_takes_the_newest_delivered_version_of_the_mirror_kind(tmp_path):
+    old_files = {**MIRROR_STAGE_FILES, "VERSION": b"1.0-a\n"}
+    old_stage, old_mirror, _ = _full_and_mirror_stage(tmp_path / "old", old_files)
+    full_base, mirror_base = _zip_of(old_stage, tmp_path), _zip_of(old_mirror, tmp_path)
+    folder = tmp_path / "delivered"
+    build.record_delivered(full_base, folder)
+    assert build.newest_delivered(folder) == "1.0-a" and build.newest_delivered(folder, "mirror") is None
+    build.record_delivered(mirror_base, folder)
+    assert build.newest_delivered(folder, "mirror") == "1.0-a"

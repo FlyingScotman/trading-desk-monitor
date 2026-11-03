@@ -58,6 +58,12 @@ the base build, ``build_id``) and, when files were dropped, ``PATCH_DELETE.txt``
 start). It never touches ``adapter/`` (nor lists it in its manifest): the installed adapter stays as it is. Unpacked
 over the old folder it gives the new bundle's files exactly.
 
+``--mirror-only`` is what the release workflow runs (owner's decision of 03.11.2026, #530: only the bundle without
+packages is released): the full stage is still made (the mirror one is built from it, and its wheelhouse is checked
+against ``mirror.json``), but no full zip and no full patch is written; a full base (a zip, a delivered record, a
+version) only gives a warning, and ``--patch-from-delivered`` takes the newest version delivered as a mirror one. The
+owner changes from the full kind to the mirror one once, by hand (a new folder).
+
 A base of the mirror kind (its ``MANIFEST.sha256`` lists ``wheelhouse/mirror.json``) gives
 ``DeskMonitorMirror-patch-<old>-to-<new>.zip`` made from the mirror stage (needs ``--mirror``); one patch per base
 version and kind. ``--from-bundle`` takes a published mirror zip too and writes ``DeskMonitorMirror-<version>-with-adapter.zip``.
@@ -479,9 +485,13 @@ def delivered(version: str, folder: Path | None = None) -> list[Path]:
     return sorted(d.glob("*.sha256")) if d.is_dir() else []
 
 
-def newest_delivered(folder: Path | None = None) -> str | None:
+def newest_delivered(folder: Path | None = None, flavor: str | None = None) -> str | None:
+    """The newest version with delivered records (of the ``flavor`` kind when given: a release that publishes only
+    the mirror kind takes the newest version that was delivered as one, never a full record it would skip)."""
     root = folder or DELIVERED
-    versions = [d.name for d in root.iterdir() if d.is_dir() and delivered(d.name, root)] if root.is_dir() else []
+    versions = [d.name for d in root.iterdir() if d.is_dir() and any(
+        flavor is None or base_from_record(r).flavor == flavor for r in delivered(d.name, root))] \
+        if root.is_dir() else []
     return max(versions, key=version_key, default=None)
 
 
@@ -825,7 +835,9 @@ def finish(stages: dict[str, Path], version: str, adapter: bool, a: argparse.Nam
         print(f"{flavor}: version {version}, build {build_id({rel: sha256(p) for rel, p in listing})}; "
               f"adapter: {sum(rel.startswith(ADAPTER_DIR) for rel, _ in listing)} files; "
               f"longest path in the zip ({len(longest)}): {longest}")
-    write_patches(bases, stages, version, a.out, stamp)
+    write_patches(bases, stages, version, a.out, stamp,
+                  hint=" (a full bundle is not released any more: the owner changes the kind by hand)"
+                  if "full" not in stages else " (--mirror)")
     if adapter:
         print("\nafter handing a zip over: python3.11 backend/tools/build_windows_bundle.py --record-delivered "
               "<zip>, then commit backend/tools/delivered/")
@@ -875,13 +887,18 @@ def main() -> int:
     ap.add_argument("--mirror", action="store_true",
                     help="also the bundle without third-party packages (DeskMonitorMirror-<version>.zip, and the "
                          "mirror patches): they are fetched from the pip index of the PC at the first start")
+    ap.add_argument("--mirror-only", action="store_true",
+                    help="what a release publishes (owner, 03.11.2026): only the bundle without packages and its "
+                         "patches; the full bundle is still staged (the mirror one is made from it) but not written, "
+                         "and a full base (zip or delivered record) gives no patch. Implies --mirror")
     ap.add_argument("--no-repro-check", action="store_true", help="do not build our wheels a second time to compare")
     a = ap.parse_args()
+    a.mirror = a.mirror or a.mirror_only
     if a.record_delivered:
         for z in a.record_delivered:
             record_delivered(z)
         return 0
-    newest = newest_delivered() if a.patch_from_delivered else None
+    newest = newest_delivered(flavor="mirror" if a.mirror_only else None) if a.patch_from_delivered else None
     bases = load_bases([*a.patch_base, *([newest] if newest else [])])
     adapter = adapter_files(a.adapter_zip.read_bytes()) if a.adapter_zip else {}
     if a.from_bundle:
@@ -980,6 +997,8 @@ def main() -> int:
         if a.mirror:  # from the same files, before the full one's manifest exists (it is rewritten anyway)
             doc = mirror_doc(list(wh.glob("*.whl")), local, a.python_version)
             stages["mirror"] = make_mirror_stage(stage, tmp / "mirror" / TOP, doc, header)
+        if a.mirror_only:  # the full stage stays a source of the mirror one and is never written as a zip
+            stages.pop("full")
         write_manifest(stage, header)
         print(f"wheelhouse {n_whl} wheels; {py_line}")
         finish(stages, version, bool(adapter), a, zip_stamp(epoch), bases)

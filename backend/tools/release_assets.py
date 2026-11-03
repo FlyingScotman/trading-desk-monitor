@@ -6,11 +6,13 @@
 ``check-tag``: the tag must be ``v<backend version>`` (``backend/pyproject.toml``): the in-app updater orders
 releases by that version and the commit date (``desk.update.compare``), so every release bumps the version.
 
-``write``: checks the zips ``build_windows_bundle.py`` left in ``--dist`` (exactly one full
-``DeskMonitor-<version>.zip`` of the tag's version, at most one ``DeskMonitorMirror-<version>.zip`` (the bundle
-without packages, built with ``--mirror``; optional so that a release can be rebuilt without it), patches and mirror
-patches to that version, none with the private adapter: a public release never carries it; each zip reads as an
-update zip, ``desk.update.read_contents``, and is of the kind its name says) and writes next to them
+``write``: checks the zips ``build_windows_bundle.py --mirror-only`` left in ``--dist``: exactly one
+``DeskMonitorMirror-<version>.zip`` of the tag's version (the bundle without packages: third-party packages come
+from the pip index of the PC) and its patches ``DeskMonitorMirror-patch-<old>-to-<version>.zip``. Since the owner's
+decision of 03.11.2026 (#530) the full offline bundle ``DeskMonitor-<version>.zip`` and its patches are not
+released: a full zip in ``--dist`` is refused (it would otherwise be uploaded by a glob), not silently left out.
+None with the private adapter: a public release never carries it; each zip reads as an update zip,
+``desk.update.read_contents``, and is of the kind its name says. Writes next to them
 ``SHA256SUMS``, ``release.json`` (``desk.updater.release.release_doc``: what the updater reads first) and
 ``NOTES.md`` (the release notes, the checksums included: the browser reads them through the API). The notes start
 with the version's section of ``CHANGELOG.md`` (``## <backend version>``) when it has one.
@@ -64,9 +66,10 @@ def sha256(p: Path) -> str:
 
 
 def collect(dist: Path, tag: str) -> tuple[str, list[tuple[str, int, str]]]:
-    """(the release's bundle version, [(name, size, sha256)] of its zips), every zip checked."""
+    """(the release's bundle version, [(name, size, sha256)] of its zips), every zip checked. Only the mirror kind is
+    published: one ``DeskMonitorMirror-<version>.zip`` and its patches; a zip of the full kind is refused."""
     zips = sorted(p for p in dist.glob("DeskMonitor*.zip") if p.is_file())
-    fulls: dict[str, str] = {}  # flavor -> version of its full zip
+    mirrors: list[str] = []  # versions of the mirror kind's full zips
     files = []
     for p in zips:
         kind = release.classify_name(p.name)
@@ -74,6 +77,9 @@ def collect(dist: Path, tag: str) -> tuple[str, list[tuple[str, int, str]]]:
             raise SystemExit(f"{p.name}: not a DeskMonitor update zip name")
         if p.name.endswith("-with-adapter.zip"):
             raise SystemExit(f"{p.name}: a bundle with the private adapter is never published")
+        if kind[3] != "mirror":
+            raise SystemExit(f"{p.name}: the full offline bundle (and its patches) is not released any more, only "
+                             "DeskMonitorMirror-* (build_windows_bundle.py --mirror-only; owner, 03.11.2026)")
         with update.open_zip(p) as z:
             c = update.read_contents(z)
         if c.adapter:
@@ -81,16 +87,16 @@ def collect(dist: Path, tag: str) -> tuple[str, list[tuple[str, int, str]]]:
         if c.version != kind[1] or c.kind != kind[0] or c.flavor != kind[3]:
             raise SystemExit(f"{p.name}: its VERSION / kind / flavor is {c.version} / {c.kind} / {c.flavor}")
         if kind[0] == "full":
-            if kind[3] in fulls:
-                raise SystemExit(f"more than one {kind[3]} full bundle in --dist")
-            fulls[kind[3]] = c.version
+            mirrors.append(c.version)
         files.append((p.name, p.stat().st_size, sha256(p)))
-    version = fulls.get("full")
-    if version is None:
-        raise SystemExit(f"no full DeskMonitor-<version>.zip in {dist}")
+    if len(mirrors) > 1:
+        raise SystemExit(f"more than one mirror bundle in --dist: {', '.join(mirrors)}")
+    if not mirrors:
+        raise SystemExit(f"no DeskMonitorMirror-<version>.zip in {dist}")
+    version = mirrors[0]
     if not version.startswith(tag.removeprefix("v") + "-"):
         raise SystemExit(f"the bundle is {version}, the tag {tag}")
-    stray = [n for n, _, _ in files if release.classify_name(n)[1] != version]  # the mirror zip's version too
+    stray = [n for n, _, _ in files if release.classify_name(n)[1] != version]
     if stray:
         raise SystemExit(f"zips of another version in --dist: {', '.join(stray)}")
     return version, files
@@ -101,9 +107,17 @@ Desk Monitor {version}
 
 {changes}Установка из программы: Настройки → «Обновление программы» → «Обновить до …» (программа сама находит новую версию,
 скачивает архив сервером или браузером, сверяет SHA-256 и перезапускается). Вручную: скачайте
-DeskMonitor-{version}.zip, распакуйте (INSTALL.txt внутри).
+DeskMonitorMirror-{version}.zip, распакуйте (INSTALL.txt внутри).
 
-{mirror}- Приватный адаптер в этот архив не входит: при обновлении установленный адаптер сохраняется.
+- DeskMonitorMirror-{version}.zip — сборка «без пакетов»: сторонние библиотеки она при первом запуске ставит с зеркала
+  pip компьютера (pip.ini, PIP_INDEX_URL), поэтому нужен доступ к нему. Другого вида архива программа больше не
+  выпускает; обновляется архивами того же вида (DeskMonitorMirror-patch-…).
+- Если у вас стоял прежний, полный офлайн-комплект (DeskMonitor-<версия>.zip): «Обновление программы» его не
+  обновит, переход нужен один раз вручную. Остановите программу (stop.bat), распакуйте этот архив в новую пустую
+  папку (не поверх старой), перенесите в неё папку adapter из старой (если стоял приватный адаптер; в публичных
+  архивах его нет), запустите start.bat в новой папке. Данные и настройки лежат в отдельной папке данных
+  (DESK_HOME), их переносить не нужно. Старую папку потом можно удалить.
+- Приватный адаптер в этот архив не входит: при обновлении установленный адаптер сохраняется.
 - Ядро расчётов: {core}.
 - Сборка из коммита {commit}.
 
@@ -111,16 +125,6 @@ SHA-256:
 
 ```text
 {sums}```
-"""
-
-
-MIRROR_NOTE = """\
-- DeskMonitorMirror-{version}.zip — сборка без пакетов: сторонние пакеты она берёт с зеркала pip компьютера
-  (pip.ini, PIP_INDEX_URL), поэтому нужен доступ к нему; обновляется только архивами своего вида
-  (DeskMonitorMirror-patch-…). «Обновление программы» другой вид не ставит: сменить вид можно, распаковав новый
-  архив в новую, чистую папку (данные и настройки сохранятся). Приватный адаптер лежит в папке программы (adapter),
-  а в этих архивах его нет: если он стоял, перенесите папку adapter из старой папки в новую или возьмите архив
-  «с адаптером».
 """
 
 
@@ -147,8 +151,7 @@ def write(dist: Path, tag: str, repo: str | None, commit: str | None) -> dict:
     sums = release.sums_text(files)
     core = core_pin()
     changes = changelog(tag.removeprefix("v"))
-    mirror = MIRROR_NOTE.format(version=version) if any(n.startswith("DeskMonitorMirror-") and "-patch-" not in n for n, _, _ in files) else ""
-    notes = NOTES.format(version=version, core=core, commit=commit or "?", sums=sums, mirror=mirror,
+    notes = NOTES.format(version=version, core=core, commit=commit or "?", sums=sums,
                          changes=changes + "\n\n---\n\n" if changes else "")
     doc = release.release_doc(tag, version, files, commit=commit, core=core,
                               published_at=datetime.now(UTC).isoformat(timespec="seconds"),
