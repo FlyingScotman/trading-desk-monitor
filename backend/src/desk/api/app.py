@@ -364,7 +364,8 @@ def funding_out(run_id: int, block: dict[str, Any] | None) -> RunFunding:
 def ocp_out(run_id: int, block: dict[str, Any] | None) -> RunOcp:
     """``RunOcp`` of a run's OCP block (``publish.ocp_run``); a run before B2 has none."""
     b = block or ocp_run.empty_block(ocp_run.NOT_COMPUTED, ocp_run.STATUS_TEXT[ocp_run.NOT_COMPUTED])
-    keep = ("sources", "published", "gaps")  # v2 of the block (TDM#416): a v1 block has none, the model's defaults
+    # v2 of the block (TDM#416) and v3 (TDM#531): an older block has none of them, the model's defaults
+    keep = ("sources", "published", "gaps", "derivatives_check", "parts", "derivatives_pv")
     return RunOcp(run_id=run_id, state=b["status"], **{k: b.get(k) for k in RunOcp.model_fields
                                                        if k not in ("run_id", "state") and (k in b or k not in keep)})
 
@@ -600,9 +601,12 @@ def create_app(store_url: str, static_dir: Path | None = None, app_dir: Path | N
 
     @app.get("/api/v1/runs/{run_id}/ocp", response_model=RunOcp)
     def ocp(con: Con, run_id: int, request: Request):
-        """The run's OCP (B2, TDM#59): the published OCP (TDM#416: the bank's OCP report + the components it does
-        not hold, derived from positions where no report unit covers; per currency and per book with the source of
-        each figure) and what it lacks (``gaps``); the OCP derived from positions by component (cash and to be
+        """The run's OCP (B2, TDM#59): the published OCP (TDM#531, ``report_base_plus_day``: the bank's OCP report on
+        its date B without the derivatives + their PV + the bonds' revaluation and the trades since B + the components
+        outside the report, each line with its ``parts`` and bounded ``contributions``, ``base_date``, the report's
+        derivative nominal against their PV on B in ``derivatives_check``; or TDM#416: the report + the components it
+        does not hold; derived from positions where no report unit covers; per currency and per book with the source
+        of each figure) and what it lacks (``gaps``); the OCP derived from positions by component (cash and to be
         settled, PV of the FX legs, NDF, futures, options, bonds, their funding liability, other, OCP transfers),
         reconciled per currency with the reported ``ocp`` at the report's level, the breaks with their explanation
         and the transfers per book; state ``no_report`` without a report in force, ``not_computed`` for a run before

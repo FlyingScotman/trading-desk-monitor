@@ -151,7 +151,8 @@ def ocp_status(block: dict[str, Any] | None) -> dict[str, Any] | None:
     total, its rate and RUB equivalent and the amounts per source; per book (``book`` null: an entity-level report
     unit, ``books`` the books its figure holds) the amount, its source (``report``: the bank's report + the
     components outside it, ``components``; ``derived``: from positions; ``derived_stale_report``: from positions, the
-    report too old), the notes and the ``gaps``. None for a run without it (before v2, failed): the pages show the sum of
+    report too old; ``report_base_plus_day``, TDM#531: its ``baseDate`` and ``parts``), the notes and the ``gaps``. None
+    for a run without it (before v2, failed): the pages show the sum of
     the positions' FX delta, as before."""
     pub = (block or {}).get("published") or {}
     if not pub.get("basis"):
@@ -162,7 +163,8 @@ def ocp_status(block: dict[str, Any] | None) -> dict[str, Any] | None:
                       "bySource": x.get("by_source") or {}} for c, x in (pub.get("by_ccy") or {}).items()},
         "byBook": [{"entity": x.get("entity"), "book": x.get("book_id"), "books": x.get("books") or [],
                     "ccy": x.get("ccy"), "amount": x.get("amount"), "source": x.get("source"),
-                    "components": x.get("components") or [], "reported": x.get("reported")}
+                    "components": x.get("components") or [], "reported": x.get("reported"),
+                    **({"baseDate": x.get("base_date"), "parts": x["parts"]} if x.get("parts") is not None else {})}
                    for x in pub.get("by_book") or []],
         "notes": block.get("notes") or [],
         "gaps": [{"code": g.get("code"), "text": g.get("text"), "items": g.get("items") or []}

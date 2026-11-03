@@ -1250,7 +1250,7 @@
     "/api/v1/runs/{run_id}/ocp": {
       "get": {
         "summary": "Ocp",
-        "description": "The run's OCP (B2, TDM#59): the published OCP (TDM#416: the bank's OCP report + the components it does\nnot hold, derived from positions where no report unit covers; per currency and per book with the source of\neach figure) and what it lacks (``gaps``); the OCP derived from positions by component (cash and to be\nsettled, PV of the FX legs, NDF, futures, options, bonds, their funding liability, other, OCP transfers),\nreconciled per currency with the reported ``ocp`` at the report's level, the breaks with their explanation\nand the transfers per book; state ``no_report`` without a report in force, ``not_computed`` for a run before\nB2.",
+        "description": "The run's OCP (B2, TDM#59): the published OCP (TDM#531, ``report_base_plus_day``: the bank's OCP report on\nits date B without the derivatives + their PV + the bonds' revaluation and the trades since B + the components\noutside the report, each line with its ``parts`` and bounded ``contributions``, ``base_date``, the report's\nderivative nominal against their PV on B in ``derivatives_check``; or TDM#416: the report + the components it\ndoes not hold; derived from positions where no report unit covers; per currency and per book with the source\nof each figure) and what it lacks (``gaps``); the OCP derived from positions by component (cash and to be\nsettled, PV of the FX legs, NDF, futures, options, bonds, their funding liability, other, OCP transfers),\nreconciled per currency with the reported ``ocp`` at the report's level, the breaks with their explanation\nand the transfers per book; state ``no_report`` without a report in force, ``not_computed`` for a run before\nB2.",
         "operationId": "ocp_api_v1_runs__run_id__ocp_get",
         "parameters": [
           {
@@ -5560,6 +5560,40 @@
             "type": "array",
             "title": "Books",
             "description": "The books the comparison sums (a run before v2: [])"
+          },
+          "reported_base": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reported Base",
+            "description": "ocp_ccy as reported: without the derivatives when the unit gives them apart (private/1.7); before v3: null"
+          },
+          "reported_derivatives": {
+            "additionalProperties": {
+              "type": "number"
+            },
+            "type": "object",
+            "title": "Reported Derivatives",
+            "description": "private/1.7 derivatives_ccy: derivative kind -> the nominal of its future flows the report left out of ocp_ccy (``reported`` = reported_base + their sum)"
+          },
+          "split": {
+            "type": "boolean",
+            "title": "Split",
+            "description": "The report file gives some derivative kinds apart (private/1.7)",
+            "default": false
+          },
+          "split_kinds": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Split Kinds",
+            "description": "The derivative kinds the unit's report file gives apart (private/1.7 derivatives_ccy keys)"
           }
         },
         "type": "object",
@@ -5586,6 +5620,173 @@
         "title": "OcpComparison",
         "description": "The reported OCP against the OCP derived from positions, at the level of the report (a book or an entity)."
       },
+      "OcpDerivativesCheck": {
+        "properties": {
+          "entity": {
+            "type": "string",
+            "title": "Entity"
+          },
+          "book_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Book Id"
+          },
+          "books": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Books"
+          },
+          "ccy": {
+            "type": "string",
+            "title": "Ccy"
+          },
+          "kind": {
+            "type": "string",
+            "title": "Kind",
+            "description": "The derivative kind (fx_forward, fx_swap, fx_future, ndf, fx_option, swap, other)"
+          },
+          "component": {
+            "type": "string",
+            "title": "Component",
+            "description": "The OCP component the kind is shown in"
+          },
+          "nominal": {
+            "type": "number",
+            "title": "Nominal",
+            "description": "derivatives_ccy of the report (private/1.7)"
+          },
+          "pv": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Pv",
+            "description": "The derivatives' PV on pv_date (their OCP lines); null: unknown"
+          },
+          "pv_date": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Pv Date"
+          },
+          "pv_source": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "run",
+                  "base_run"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Pv Source",
+            "description": "run: this run (it is of the report's date); base_run: the default run of the report's date"
+          },
+          "diff": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Diff",
+            "description": "nominal - pv"
+          },
+          "over": {
+            "type": "boolean",
+            "title": "Over",
+            "description": "|diff| above the tolerance"
+          },
+          "set_id": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Set Id"
+          },
+          "positions": {
+            "type": "integer",
+            "title": "Positions",
+            "description": "The run's positions of the kind in the scope and currency",
+            "default": 0
+          },
+          "without_pv": {
+            "type": "integer",
+            "title": "Without Pv",
+            "description": "Of them valued at a notional (no terms) or not at all",
+            "default": 0
+          },
+          "partial": {
+            "type": "boolean",
+            "title": "Partial",
+            "description": "Some positions of the kind have a PV, some not: the PV is partial",
+            "default": false
+          },
+          "no_pv": {
+            "type": "boolean",
+            "title": "No Pv",
+            "description": "No position of the kind has a PV (all at a notional or not valued)",
+            "default": false
+          },
+          "note": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Note",
+            "description": "«PV на базу неизвестен»: B's run has no PV of its own (another basis)"
+          }
+        },
+        "type": "object",
+        "required": [
+          "entity",
+          "book_id",
+          "books",
+          "ccy",
+          "kind",
+          "component",
+          "nominal",
+          "pv",
+          "pv_date",
+          "pv_source",
+          "diff",
+          "over",
+          "set_id"
+        ],
+        "title": "OcpDerivativesCheck",
+        "description": "The report's nominal of the derivatives' future flows against their PV on the report's date (TDM#531): seen\nonly, it never changes the published figure."
+      },
       "OcpGap": {
         "properties": {
           "code": {
@@ -5595,7 +5796,17 @@
               "stale_report",
               "outside_without_terms",
               "books_outside_report",
-              "outside_double_count"
+              "outside_double_count",
+              "report_without_derivatives_split",
+              "derivatives_nominal_fallback",
+              "base_older",
+              "trades_not_loaded",
+              "no_base_run",
+              "trades_not_valued",
+              "carried_forward_unit",
+              "trades_unknown_book",
+              "derivatives_partial_pv",
+              "derivatives_unknown_last_flow"
             ],
             "title": "Code"
           },
@@ -5669,6 +5880,18 @@
           "note": {
             "type": "string",
             "title": "Note"
+          },
+          "pv": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Pv",
+            "description": "basis nominal: the PV (core's FX delta) of the amount"
           }
         },
         "type": "object",
@@ -5692,6 +5915,7 @@
               {
                 "type": "string",
                 "enum": [
+                  "report_base_plus_day",
                   "report_plus_outside",
                   "derived"
                 ]
@@ -5701,6 +5925,19 @@
               }
             ],
             "title": "Basis"
+          },
+          "base_date": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Base Date",
+            "description": "report_base_plus_day: the newest base date of its lines"
           },
           "by_ccy": {
             "additionalProperties": {
@@ -5719,7 +5956,7 @@
         },
         "type": "object",
         "title": "OcpPublished",
-        "description": "The OCP the run publishes (TDM#416): the bank's report where a unit covers plus the components outside it,\nderived elsewhere. ``basis`` None: a run before v2 of the block (the pages show the derived OCP)."
+        "description": "The OCP the run publishes: ``report_base_plus_day`` (TDM#531, block v3: the report on its date B without the\nderivatives' future flows + their PV + the bonds' revaluation and the trades since B + the components outside the\nreport), ``report_plus_outside`` (TDM#416: the report + the components outside it) or ``derived``; derived where no\nreport unit covers. ``basis`` None: a run before v2 of the block (the pages show the derived OCP)."
       },
       "OcpPublishedCcy": {
         "properties": {
@@ -5756,6 +5993,21 @@
             "type": "object",
             "title": "By Source",
             "description": "source -> amount"
+          },
+          "by_part": {
+            "anyOf": [
+              {
+                "additionalProperties": {
+                  "type": "number"
+                },
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "By Part",
+            "description": "report_base_plus_day: part -> amount of its lines that start from a report"
           }
         },
         "type": "object",
@@ -5838,7 +6090,7 @@
               }
             ],
             "title": "Reported",
-            "description": "The report's figure (an entity's less the books published apart)"
+            "description": "The report's figure (an entity's less the books published apart); report_base_plus_day: the base (the parts' base)"
           },
           "valid_date": {
             "anyOf": [
@@ -5852,6 +6104,117 @@
             ],
             "title": "Valid Date",
             "description": "The report unit's date"
+          },
+          "base_date": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Base Date",
+            "description": "report_base_plus_day: B, the date of the report the figure starts from"
+          },
+          "set_id": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Set Id",
+            "description": "report_base_plus_day: the report unit's set (null: a book of a covered entity without a row)"
+          },
+          "base_kind": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "without_derivatives",
+                  "with_derivatives",
+                  "book_absent"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Base Kind",
+            "description": "report_base_plus_day: the report without the derivatives' future flows (private/1.7), with them at their nominal (an adapter before 1.7: their PV not added), a book of a covered entity without a row (base 0)"
+          },
+          "parts": {
+            "anyOf": [
+              {
+                "additionalProperties": {
+                  "type": "number"
+                },
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Parts",
+            "description": "report_base_plus_day: base, derivatives, bonds, trades, outside -> amount; they sum to ``amount``"
+          },
+          "contributions": {
+            "anyOf": [
+              {
+                "additionalProperties": {
+                  "additionalProperties": true,
+                  "type": "object"
+                },
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Contributions",
+            "description": "report_base_plus_day: per part {items: the largest contributions (kind report / report_part / report_nominal / position / trade with its id and amount), rest: {count, amount} of the others or null}"
+          },
+          "fallback": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Fallback",
+            "description": "Derivative kinds taken at the report's nominal: no position of the kind in the scope"
+          },
+          "split_kinds": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Split Kinds",
+            "description": "The derivative kinds the report gives apart for this line (their PV is added)"
+          },
+          "partial_pv": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Partial Pv",
+            "description": "Kinds apart whose positions are partly without a PV (gap derivatives_partial_pv)"
+          },
+          "no_pv": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "No Pv",
+            "description": "Kinds apart none of whose positions has a PV («PV нет ни у одной позиции»)"
+          },
+          "base_older": {
+            "type": "boolean",
+            "title": "Base Older",
+            "description": "The base is older than the previous business day (the run's calendar)",
+            "default": false
           }
         },
         "type": "object",
@@ -8515,6 +8878,34 @@
             },
             "type": "array",
             "title": "Reconciliation"
+          },
+          "derivatives_check": {
+            "items": {
+              "$ref": "#/components/schemas/OcpDerivativesCheck"
+            },
+            "type": "array",
+            "title": "Derivatives Check",
+            "description": "report_base_plus_day (block v3): the report's derivative nominal against their PV on its date, per scope, currency and component"
+          },
+          "parts": {
+            "items": {
+              "additionalProperties": {
+                "type": "string"
+              },
+              "type": "object"
+            },
+            "type": "array",
+            "title": "Parts",
+            "description": "part key -> its name on the pages (v3)"
+          },
+          "derivatives_pv": {
+            "items": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "type": "array",
+            "title": "Derivatives Pv",
+            "description": "v3: the run's derivatives' PV per book, currency and kind with a value date after its date: the PV on the base date for a later run"
           },
           "outside_report": {
             "items": {

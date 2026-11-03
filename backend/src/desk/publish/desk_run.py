@@ -20,7 +20,10 @@ is ``fact.extra.fx_liability`` and the funding block's ``fx_liability``, its FX 
 
 OCP (B2, ``ocp_run``, TDM#59): computed after the FX liability on the same content (the bonds net of it); its block is the ``run_reference`` kind
 ``ocp`` (the derived OCP by component, the reconciliation with the reported ``ocp``, the transfers), its summary
-lineage ``ocp``, its lines in the run log, a position's ``fact.extra.ocp`` (and ``extra.ocp_transfer``).
+lineage ``ocp``, its lines in the run log, a position's ``fact.extra.ocp`` (and ``extra.ocp_transfer``). Under
+``report_base_plus_day`` (TDM#531) it reads the default run of the report's date (the bonds' MV and the derivatives'
+PV on it), the trades since it and the bonds' coupons from their terms, and counts the report's age on the run's
+calendar.
 
 Funding, the FX liability and the OCP each compute in a savepoint of their own (TDM#215): an SQL error inside one
 rolls back only its reads and leaves its block ``failed``; the run is still published, also inside a caller's
@@ -120,10 +123,12 @@ def publish(con: psycopg.Connection, ctx: EodContext, positions: list[tuple[str,
                                   {pid: o.terms for pid, _, o in positions if o.terms is not None})
     funding.apply(content.rows, content.reference, content.log)
     by_pid = {pid: o for pid, _, o in positions}
+    bond_terms = {pid: o.terms for pid, o in by_pid.items() if o.terms is not None}
     liab = fx_liability.compute(con, bd, prev, ctx.market, content.rows, content.reference["books"], inputs,
-                                {pid: o.terms for pid, o in by_pid.items() if o.terms is not None}, by_pid)
+                                bond_terms, by_pid)
     liab.apply(content.rows, content.reference, content.log, by_pid)
-    ocp = ocp_run.compute(con, bd, ctx.market, content.rows, content.reference, inputs)
+    ocp = ocp_run.compute(con, bd, ctx.market, content.rows, content.reference, inputs, terms=bond_terms,
+                          calendar=ctx.calendar)
     ocp.apply(content.rows, content.reference, content.log)
     try:  # a diagnostic: its failure is said in the run log, the run goes on without the block
         parallel = derivatives_parallel.compare(positions, inputs.extra, inputs.trade_terms)
