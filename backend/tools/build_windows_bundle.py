@@ -1,7 +1,7 @@
 """Build the offline Windows bundle of Desk Monitor (dev only, runs at home): one zip, unzip, start.bat.
 
     python3.11 backend/tools/build_windows_bundle.py [--out dist] [--adapter-zip PATH] [--allow-dirty]
-                                                     [--patch-base OLD_BUNDLE.zip]
+                                                     [--patch-base OLD_BUNDLE.zip] [--mirror]
 
 Needs uv, git, network to PyPI and GitHub, and a Python with pip (``python3.11 -m pip``). Writes
 ``dist/DeskMonitor-<version>[-with-adapter].zip``, version ``<backend version>-<commit date>-<short sha>``
@@ -14,7 +14,8 @@ Needs uv, git, network to PyPI and GitHub, and a Python with pip (``python3.11 -
                   embedded store), wheels of desk-backend and rub-fixed-income-core (the
                   commit pinned in ``[tool.uv.sources]``), ``requirements.txt``; proved complete for Windows by
                   an offline ``pip install --dry-run --platform win_amd64`` before zipping
-* ``app/``        ``deskctl.py`` (the launcher the .bat files call), ``prototypes/``, ``frontend/dist/``,
+* ``app/``        ``deskctl.py`` (the launcher the .bat files call), ``mirror_install.py`` (the installer of the
+                  "no packages" kind below, shipped in both kinds), ``prototypes/``, ``frontend/dist/``,
                   ``examples/test_book.csv``, ``INSTALL_BACKEND_WINDOWS.md``
 * ``adapter/``    the private adapter's package from ``--adapter-zip`` (never in this repository)
 * ``START_HERE.txt`` (the owner's short guide), ``start.bat``, ``stop.bat``, ``update_daily.bat``, ``desk.bat``,
@@ -27,6 +28,17 @@ byte-identical files outside ``adapter/`` (checked after writing; ``MANIFEST.sha
 lines), so every public patch applies on top of a with-adapter install. For a release the CI already published,
 ``--from-bundle DeskMonitor-<version>.zip --adapter-zip A.zip`` makes the with-adapter zip from the published one
 instead of rebuilding (no network).
+
+``--mirror`` also writes the "no packages" bundle (the "mirror" kind) from the same stage:
+``DeskMonitorMirror-<version>.zip`` (``-with-adapter.zip`` with ``--adapter-zip``). Everything is the same
+except ``wheelhouse/``, which holds only our two wheels (desk_backend, rub_fixed_income_core: the very bytes of the
+full bundle), the same ``requirements.txt`` and ``mirror.json``: the third-party packages (exact pins of the lock,
+the lock's versions and who requires what by which specifier, markers evaluated for Windows / CPython 3.11 /
+win_amd64, extras included) that ``app/mirror_install.py`` fetches from the machine's pip index at the first start
+(``mirror.json``'s presence is what makes a bundle a mirror one). Before packing, ``check_mirror`` proves that
+``mirror.json`` and our wheels cover ``requirements.txt`` exactly, that every module of ``imports`` is in a wheel, and
+that the lock's own versions satisfy every ``requires`` of the others. The full bundle is unchanged, byte for byte,
+except for ``app/mirror_install.py``.
 
 Reproducible: the same commit gives the same files, byte for byte, here or on CI. Third-party wheels come from
 PyPI as published; ours are built by ``uv build`` with the build backends pinned
@@ -46,6 +58,10 @@ the base build, ``build_id``) and, when files were dropped, ``PATCH_DELETE.txt``
 start). It never touches ``adapter/`` (nor lists it in its manifest): the installed adapter stays as it is. Unpacked
 over the old folder it gives the new bundle's files exactly.
 
+A base of the mirror kind (its ``MANIFEST.sha256`` lists ``wheelhouse/mirror.json``) gives
+``DeskMonitorMirror-patch-<old>-to-<new>.zip`` made from the mirror stage (needs ``--mirror``); one patch per base
+version and kind. ``--from-bundle`` takes a published mirror zip too and writes ``DeskMonitorMirror-<version>-with-adapter.zip``.
+
 ``--record-delivered ZIP...`` (no build): after handing a zip to the owner, write its record
 ``backend/tools/delivered/<version>/<build id>.sha256`` (its ``MANIFEST.sha256`` without ``adapter/``, every file
 checked) and commit it.
@@ -62,8 +78,10 @@ unless ``--allow-dirty``.
 from __future__ import annotations
 
 import argparse
+import email
 import hashlib
 import io
+import json
 import os
 import posixpath
 import re
@@ -79,6 +97,15 @@ import urllib.request
 import zipfile
 from datetime import UTC, datetime
 from pathlib import Path
+
+try:  # PEP 440 / 508; the build machine's pip carries a copy when the package itself is not installed
+    from packaging.requirements import Requirement
+    from packaging.specifiers import SpecifierSet
+    from packaging.utils import canonicalize_name
+except ImportError:  # pragma: no cover
+    from pip._vendor.packaging.requirements import Requirement
+    from pip._vendor.packaging.specifiers import SpecifierSet
+    from pip._vendor.packaging.utils import canonicalize_name
 
 REPO = Path(__file__).resolve().parents[2]
 # what the bundle needs from the repository; the rest (tests, docs, tools) stays at home
@@ -99,6 +126,19 @@ CONSTRAINTS = REPO / "backend/tools/bundle-build-constraints.txt"
 # what was delivered: <version>/<build id>.sha256, the bundle's MANIFEST.sha256 without adapter/
 DELIVERED = REPO / "backend/tools/delivered"
 ADAPTER_DIR = "adapter/"
+# the "no packages" kind: only our wheels in wheelhouse/, and mirror.json (its presence names the kind)
+MIRROR_JSON = "wheelhouse/mirror.json"
+OUR_DISTS = ("desk_backend", "rub_fixed_income_core")  # wheel file name prefixes (normalized)
+# modules the installer imports in the new venv; the core's module is rub_fixed_income, not its distribution name
+MIRROR_IMPORTS = ["desk.api", "rub_fixed_income", "pgserver", "psycopg"]
+MIRROR_INSTALLER = "backend/windows/mirror_install.py"
+
+def windows_env(full_version: str = "3.11.17") -> dict[str, str]:
+    """Marker environment of the target: Windows, CPython ``full_version`` (3.11.x), win_amd64."""
+    return {"os_name": "nt", "sys_platform": "win32", "platform_system": "Windows", "platform_machine": "AMD64",
+            "platform_release": "10", "platform_version": "10.0.19045", "platform_python_implementation": "CPython",
+            "implementation_name": "cpython", "implementation_version": full_version,
+            "python_version": ".".join(full_version.split(".")[:2]), "python_full_version": full_version}
 ZIP_MIN_EPOCH = 315532800  # zip dates start in 1980
 # our pure-Python wheels: the paths whose last commit gives SOURCE_DATE_EPOCH (the wheel stays byte-identical
 # from release to release while they do not change)
@@ -204,7 +244,7 @@ Desk Monitor: обновление {old} -> {new}
 Это небольшой архив-заплатка: только изменённые файлы. Старую папку программы не удаляйте.
 Она подходит только к сборке {old} с кодом {builds} (код установленной сборки виден
 в сообщении, если заплатка не подошла). Не подошла - поставьте полный архив
-DeskMonitor-{new}.zip (обновление с GitHub возьмёт его само). Папку adapter заплатка не трогает.
+{full_zip} (обновление с GitHub возьмёт его само). Папку adapter заплатка не трогает.
 
 Проще всего (если установленная версия уже умеет обновляться сама): Настройки ->
 «Обновление программы» -> «Загрузить zip с компьютера» (или положите zip в папку
@@ -219,7 +259,7 @@ DeskMonitor-{new}.zip (обновление с GitHub возьмёт его са
    Windows выберите «Заменить файлы в папке назначения».
    Проверка: в файле VERSION в папке программы теперь {new}.
 
-3) Запустите start.bat. Он пересоберёт окружение (без интернета, ~1-2 минуты);
+3) Запустите start.bat. Он пересоберёт окружение ({rebuild});
    настройки, токен и данные сохранятся.
 
 4) Откройте Настройки (http://127.0.0.1:8100/settings.html), раздел «Автообновление»,
@@ -234,6 +274,16 @@ DeskMonitor-{new}.zip (обновление с GitHub возьмёт его са
    написано «В базе пока нет прогонов»; как только посчитается первый день, данные появятся
    сами и в мониторах (http://127.0.0.1:8100/concepts/index.html).
 """
+
+
+REBUILD = {"full": "без интернета, ~1-2 минуты",
+           "mirror": "пакеты возьмёт с зеркала pip этого компьютера, нужен доступ к нему, несколько минут"}
+
+
+def asset_prefix(flavor: str) -> str:
+    """The name of a bundle's zips: ``DeskMonitor`` or, for the "no packages" kind, ``DeskMonitorMirror`` (a prefix
+    the updaters of 0.2.14 and before do not take for their own full zips; the folder inside stays ``DeskMonitor/``)."""
+    return TOP + "Mirror" if flavor == "mirror" else TOP
 
 
 def zip_stamp(epoch: int) -> tuple:
@@ -389,6 +439,11 @@ class Base:
     def build(self) -> str:
         return build_id(self.files)
 
+    @property
+    def flavor(self) -> str:
+        """``mirror`` for a bundle without third-party packages (it lists ``wheelhouse/mirror.json``), else ``full``."""
+        return "mirror" if MIRROR_JSON in self.files else "full"
+
 
 def base_from_zip(path: Path) -> Base:
     """A full bundle zip as a base: the sha256 of each file's own bytes (not of what its manifest says)."""
@@ -435,7 +490,7 @@ def load_bases(args: list[str], folder: Path | None = None) -> list[Base]:
         p = Path(arg)
         if p.is_file():
             b = base_from_zip(p) if zipfile.is_zipfile(p) else base_from_record(p)
-            records = [base_from_record(r) for r in delivered(b.version, folder)]
+            records = [r for r in (base_from_record(x) for x in delivered(b.version, folder)) if r.flavor == b.flavor]
             if records and b.build not in {r.build for r in records}:
                 print(f"warning: {p} is build {b.build} of {b.version}, delivered was "
                       f"{', '.join(r.build for r in records)}: the patch is made to fit each", flush=True)
@@ -491,15 +546,21 @@ def write_patch(bases, stage: Path, version: str, out_dir: Path, stamp: tuple) -
     old_version = bases[0].version
     if {b.version for b in bases} != {old_version}:
         raise ValueError(f"one patch per base version, got {sorted({b.version for b in bases})}")
+    flavor = bases[0].flavor
+    if {b.flavor for b in bases} != {flavor}:
+        raise ValueError("one patch per bundle kind: the bases are of both the full and the mirror kind")
     new = {rel: p for rel, p in stage_files(stage) if not rel.startswith(ADAPTER_DIR)}
+    if (MIRROR_JSON in new) != (flavor == "mirror"):
+        raise ValueError(f"the base is of the {flavor} kind, the stage of the other one")
     digest = {rel: sha256(p) for rel, p in new.items()}
     changed = [rel for rel in new if rel in ("VERSION", "MANIFEST.sha256")
                or any(b.files.get(rel) != digest[rel] for b in bases)]
     dropped = sorted({rel for b in bases for rel in b.files} - set(new))
     builds = ", ".join(sorted({b.build for b in bases}))
-    out = out_dir / f"{TOP}-patch-{old_version}-to-{version}.zip"
-    extra = {"PATCH_README.txt": crlf(PATCH_README.format(old=old_version, new=version, builds=builds).encode(),
-                                      bom=True),
+    out = out_dir / f"{asset_prefix(flavor)}-patch-{old_version}-to-{version}.zip"
+    readme = PATCH_README.format(old=old_version, new=version, builds=builds, rebuild=REBUILD[flavor],
+                                 full_zip=f"{asset_prefix(flavor)}-{version}.zip")
+    extra = {"PATCH_README.txt": crlf(readme.encode(), bom=True),
              "PATCH_BASE.txt": f"{old_version} (сборка {builds})\n".encode()}
     if dropped:
         extra["PATCH_DELETE.txt"] = ("".join(f"{rel}\n" for rel in dropped)).encode()
@@ -520,15 +581,21 @@ def write_patch(bases, stage: Path, version: str, out_dir: Path, stamp: tuple) -
     return out
 
 
-def write_patches(bases: list[Base], stage: Path, version: str, out_dir: Path, stamp: tuple) -> list[Path]:
-    """One patch per base version (never from the version being built)."""
-    by_version: dict[str, list[Base]] = {}
+def write_patches(bases: list[Base], stage: Path | dict[str, Path], version: str, out_dir: Path,
+                  stamp: tuple, hint: str = " (--mirror)") -> list[Path]:
+    """One patch per base version and kind (never from the version being built). ``stage``: the stage of the
+    bundle, or ``{kind: stage}`` of each kind built; a base of a kind that was not built gets no patch."""
+    stages = stage if isinstance(stage, dict) else {"full": stage}
+    groups: dict[tuple[str, str], list[Base]] = {}
     for b in bases:
         if b.version == version:
             print(f"warning: {b.source} is this very version {version}: no patch from it", flush=True)
-            continue
-        by_version.setdefault(b.version, []).append(b)
-    return [write_patch(group, stage, version, out_dir, stamp) for group in by_version.values()]
+        elif b.flavor not in stages:
+            print(f"warning: {b.source} is a {b.flavor} bundle and none is built{hint}: no patch from it",
+                  flush=True)
+        else:
+            groups.setdefault((b.version, b.flavor), []).append(b)
+    return [write_patch(group, stages[flavor], version, out_dir, stamp) for (_, flavor), group in groups.items()]
 
 
 def check_public_private(public: Path, private: Path) -> None:
@@ -598,6 +665,135 @@ def check_wheelhouse(wh: Path, env: dict) -> None:
             "x86_64-pc-windows-msvc", "--python-version", "3.11", "--target", target, *req, env=env)
 
 
+# ---- the "no packages" kind: mirror.json ------------------------------------------------------------------------
+
+
+def wheel_meta(whl: Path) -> tuple[str, str, list[Requirement]]:
+    """(canonical name, version, Requires-Dist) of a wheel, from its METADATA."""
+    with zipfile.ZipFile(whl) as z:
+        names = [n for n in z.namelist() if n.count("/") == 1 and n.endswith(".dist-info/METADATA")]
+        if len(names) != 1:
+            sys.exit(f"{whl.name}: no single .dist-info/METADATA")
+        msg = email.message_from_bytes(z.read(names[0]))
+    return (canonicalize_name(msg["Name"]), msg["Version"],
+            [Requirement(r) for r in msg.get_all("Requires-Dist") or []])
+
+
+def wheel_has_module(whl: Path, module: str) -> bool:
+    path = module.replace(".", "/")
+    with zipfile.ZipFile(whl) as z:
+        names = set(z.namelist())
+    return f"{path}/__init__.py" in names or f"{path}.py" in names
+
+
+def pinned(line: str) -> tuple[str, str]:
+    """(canonical name, version) of a ``name==version[ ; marker]`` line of requirements.txt."""
+    r = Requirement(line)
+    specs = list(r.specifier)
+    if len(specs) != 1 or specs[0].operator != "==":
+        sys.exit(f"requirements.txt: {line!r} is not an exact pin")
+    return canonicalize_name(r.name), specs[0].version
+
+
+def satisfies(spec: str, version: str) -> bool:
+    return SpecifierSet(spec).contains(version, prereleases=True)
+
+
+def mirror_doc(wheels: list[Path], local: list[str], python_version: str = "3.11.17") -> dict:
+    """``mirror.json`` of the wheels of the full bundle (``local``: the pins of our own two): per third-party
+    package its lock version and who requires it by which specifier (Requires-Dist of the wheels, markers evaluated
+    for ``windows_env(python_version)``, extras followed from the requirements that name them). Every package is a source of
+    requirements (what the lock holds is what is installed), so a package nobody requires (pgserver) has ``requires``
+    empty. SystemExit when a requirement is not in the wheels, a module of ``MIRROR_IMPORTS`` is in none of them,
+    or a version of the lock does not satisfy a specifier. Deterministic: sorted, no time, no path."""
+    env = windows_env(python_version)
+    meta = {}
+    for w in sorted(wheels):
+        name, version, reqs = wheel_meta(w)
+        meta[name] = (version, reqs)
+    local_names = {canonicalize_name(Requirement(p).name) for p in local}
+    extras: dict[str, set[str]] = {n: {""} for n in meta}  # "" is the package without extras
+    requires: dict[str, set[tuple[str, str]]] = {}
+    changed = True
+    while changed:
+        changed = False
+        for name in sorted(meta):
+            for r in meta[name][1]:
+                target = canonicalize_name(r.name)
+                for extra in sorted(extras[name]):
+                    if r.marker is not None and not r.marker.evaluate({**env, "extra": extra}):
+                        continue
+                    if target not in meta:
+                        sys.exit(f"{name} requires {r} (on Windows / Python 3.11), which the wheels do not hold")
+                    if target != name:
+                        requires.setdefault(target, set()).add((name, str(r.specifier)))
+                    want = {""} | {canonicalize_name(x) for x in r.extras}
+                    if not want <= extras[target]:
+                        extras[target] |= want
+                        changed = True
+    for target, pairs in requires.items():
+        for by, spec in pairs:
+            if not satisfies(spec, meta[target][0]):
+                sys.exit(f"{by} requires {target}{spec}, the lock has {meta[target][0]}")
+    for module in MIRROR_IMPORTS:
+        if not any(wheel_has_module(w, module) for w in wheels):
+            sys.exit(f"no wheel holds the module {module} (imports of mirror.json)")
+    return {"schema": 1, "python": "3.11", "platform": "win_amd64", "local": sorted(local),
+            "packages": {n: {"lock": meta[n][0],
+                             "requires": [{"by": b, "spec": s} for b, s in sorted(requires.get(n, ()))]}
+                         for n in sorted(meta) if n not in local_names},
+            "imports": list(MIRROR_IMPORTS)}
+
+
+def mirror_json_text(doc: dict) -> str:
+    return json.dumps(doc, ensure_ascii=False, indent=1, sort_keys=True) + "\n"
+
+
+def check_mirror(wh: Path) -> None:
+    """The wheelhouse of a mirror stage is consistent (SystemExit otherwise): only our two wheels, ``mirror.json``'s
+    packages and ``local`` are exactly the pins of ``requirements.txt`` with the lock's versions, our wheels are the
+    ``local`` ones, and the lock set satisfies every ``requires`` of ``mirror.json``."""
+    doc = json.loads((wh / "mirror.json").read_text(encoding="utf-8"))
+    pins = dict(pinned(ln) for ln in (wh / "requirements.txt").read_text(encoding="utf-8").splitlines() if ln.strip())
+    local = dict(pinned(p) for p in doc["local"])
+    if set(doc["packages"]) | set(local) != set(pins) or set(doc["packages"]) & set(local):
+        sys.exit("mirror.json and requirements.txt name different packages: "
+                 f"{sorted((set(doc['packages']) | set(local)) ^ set(pins))}")
+    for n, p in doc["packages"].items():
+        if p["lock"] != pins[n]:
+            sys.exit(f"mirror.json: {n} lock {p['lock']}, requirements.txt {pins[n]}")
+    if local != {n: pins[n] for n in local}:
+        sys.exit("mirror.json: local pins differ from requirements.txt")
+    wheels = sorted(p.name for p in wh.glob("*.whl"))
+    want = sorted(f"{n.replace('-', '_')}-{v}-" for n, v in local.items())
+    if len(wheels) != len(want) or not all(w.startswith(x) for w, x in zip(wheels, want, strict=True)):
+        sys.exit(f"the mirror wheelhouse holds {wheels}, expected only our wheels {want}")
+    if not all(w.endswith("-py3-none-any.whl") for w in wheels):
+        sys.exit(f"our wheels are not pure Python: {wheels}")
+    versions = {**pins}
+    for n, p in doc["packages"].items():
+        for r in p["requires"]:
+            if not satisfies(r["spec"], versions[n]):
+                sys.exit(f"mirror.json: {r['by']} requires {n}{r['spec']}, the lock has {versions[n]}")
+    if doc["imports"] != MIRROR_IMPORTS:  # their presence in the third-party wheels is proved by mirror_doc
+        sys.exit(f"mirror.json: imports {doc['imports']}, expected {MIRROR_IMPORTS}")
+
+
+def make_mirror_stage(stage: Path, dest: Path, doc: dict, header: str) -> Path:
+    """The "no packages" stage ``dest`` from ``stage``: its files, but ``wheelhouse/`` holds only our wheels and
+    ``requirements.txt`` plus ``mirror.json``; its own ``MANIFEST.sha256`` (``header`` as in the full one). Checked."""
+    wheelhouse = stage / "wheelhouse"
+
+    def ignore(folder: str, names: list[str]) -> list[str]:
+        if Path(folder) == wheelhouse:
+            return [n for n in names if n.endswith(".whl") and n.split("-")[0] not in OUR_DISTS]
+        return ["MANIFEST.sha256"] if Path(folder) == stage else []
+
+    shutil.copytree(stage, dest, ignore=ignore, copy_function=shutil.copyfile)
+    (dest / MIRROR_JSON).write_text(mirror_json_text(doc), encoding="utf-8", newline="\n")
+    check_mirror(dest / "wheelhouse")
+    write_manifest(dest, header)
+    return dest
 
 
 def last_change(paths: tuple[str, ...], fallback: int) -> int:
@@ -606,17 +802,19 @@ def last_change(paths: tuple[str, ...], fallback: int) -> int:
     return int(out) if out else fallback
 
 
-def finish(stage: Path, name: str, version: str, adapter: bool, a: argparse.Namespace, stamp: tuple,
+def finish(stages: dict[str, Path], version: str, adapter: bool, a: argparse.Namespace, stamp: tuple,
            bases: list[Base]) -> None:
-    zips = write_bundles(stage, name, adapter, a.out, stamp)
-    listing = stage_files(stage)
-    longest = max((f"{TOP}/{rel}" for rel, _ in listing), key=len)
-    for z in zips:
-        print(f"\n{z}  {z.stat().st_size / 1e6:.1f} MB, sha256 {sha256(z)}")
-    print(f"version {version}, build {build_id({rel: sha256(p) for rel, p in listing})}; "
-          f"adapter: {sum(rel.startswith(ADAPTER_DIR) for rel, _ in listing)} files; "
-          f"longest path in the zip ({len(longest)}): {longest}")
-    write_patches(bases, stage, version, a.out, stamp)
+    """The zips of each stage of ``stages`` (``full``, and ``mirror`` with ``--mirror``), then the patches."""
+    for flavor, stage in stages.items():
+        zips = write_bundles(stage, f"{asset_prefix(flavor)}-{version}", adapter, a.out, stamp)
+        listing = stage_files(stage)
+        longest = max((f"{TOP}/{rel}" for rel, _ in listing), key=len)
+        for z in zips:
+            print(f"\n{z}  {z.stat().st_size / 1e6:.1f} MB, sha256 {sha256(z)}")
+        print(f"{flavor}: version {version}, build {build_id({rel: sha256(p) for rel, p in listing})}; "
+              f"adapter: {sum(rel.startswith(ADAPTER_DIR) for rel, _ in listing)} files; "
+              f"longest path in the zip ({len(longest)}): {longest}")
+    write_patches(bases, stages, version, a.out, stamp)
     if adapter:
         print("\nafter handing a zip over: python3.11 backend/tools/build_windows_bundle.py --record-delivered "
               "<zip>, then commit backend/tools/delivered/")
@@ -632,14 +830,15 @@ def from_bundle(a: argparse.Namespace, adapter: dict[str, bytes], bases: list[Ba
             (stage / "adapter" / rel).write_bytes(data)
         write_manifest(stage, header)
         a.out.mkdir(parents=True, exist_ok=True)
-        public = a.out / f"{TOP}-{version}.zip"
+        flavor = "mirror" if (stage / MIRROR_JSON).is_file() else "full"
+        public = a.out / f"{asset_prefix(flavor)}-{version}.zip"
         if public.resolve() != a.from_bundle.resolve():
             shutil.copyfile(a.from_bundle, public)
-        private = a.out / f"{TOP}-{version}-with-adapter.zip"
+        private = a.out / f"{asset_prefix(flavor)}-{version}-with-adapter.zip"
         write_zip(private, bundle_entries(stage, adapter=True), stamp)
         check_public_private(public, private)
         print(f"\n{private}  {private.stat().st_size / 1e6:.1f} MB, sha256 {sha256(private)}")
-        write_patches(bases, stage, version, a.out, stamp)
+        write_patches(bases, {flavor: stage}, version, a.out, stamp, hint="")
     return 0
 
 
@@ -662,6 +861,9 @@ def main() -> int:
                     help="with --adapter-zip: make the with-adapter zip from this published full zip (no rebuild)")
     ap.add_argument("--record-delivered", type=Path, nargs="+", metavar="ZIP",
                     help="no build: record these delivered full zips in backend/tools/delivered/")
+    ap.add_argument("--mirror", action="store_true",
+                    help="also the bundle without third-party packages (DeskMonitorMirror-<version>.zip, and the "
+                         "mirror patches): they are fetched from the pip index of the PC at the first start")
     ap.add_argument("--no-repro-check", action="store_true", help="do not build our wheels a second time to compare")
     a = ap.parse_args()
     if a.record_delivered:
@@ -745,6 +947,8 @@ def main() -> int:
         (app / "examples").mkdir()
         shutil.copyfile(src / "backend/examples/test_book.csv", app / "examples/test_book.csv")
         shutil.copyfile(src / "backend/windows/deskctl.py", app / "deskctl.py")
+        if (src / MIRROR_INSTALLER).is_file():  # in both kinds: the one deskctl.py of both imports it
+            shutil.copyfile(src / MIRROR_INSTALLER, app / "mirror_install.py")
         shutil.copyfile(src / "docs/INSTALL_BACKEND_WINDOWS.md", app / "INSTALL_BACKEND_WINDOWS.md")
         for rel, data in adapter.items():
             (stage / "adapter" / rel).parent.mkdir(parents=True, exist_ok=True)
@@ -759,10 +963,15 @@ def main() -> int:
 
         py_line = (f"python-build-standalone {a.python_release} cpython {a.python_version} sha256 {runtime[1]}"
                    if runtime else "no bundled Python (py -3.11)")
-        write_manifest(stage, f"# {TOP} {version}, repository commit {commit}{' (dirty)' if dirty else ''}\n"
-                              f"# {py_line}\n")
+        header = (f"# {TOP} {version}, repository commit {commit}{' (dirty)' if dirty else ''}\n"
+                  f"# {py_line}\n")
+        stages = {"full": stage}
+        if a.mirror:  # from the same files, before the full one's manifest exists (it is rewritten anyway)
+            doc = mirror_doc(list(wh.glob("*.whl")), local, a.python_version)
+            stages["mirror"] = make_mirror_stage(stage, tmp / "mirror" / TOP, doc, header)
+        write_manifest(stage, header)
         print(f"wheelhouse {n_whl} wheels; {py_line}")
-        finish(stage, f"{TOP}-{version}", version, bool(adapter), a, zip_stamp(epoch), bases)
+        finish(stages, version, bool(adapter), a, zip_stamp(epoch), bases)
     return 0
 
 

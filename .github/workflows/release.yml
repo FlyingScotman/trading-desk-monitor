@@ -2,8 +2,9 @@ name: release
 
 # A version tag v<backend version> (backend/pyproject.toml) publishes a GitHub Release that the in-app updater
 # (backend/src/desk/updater) reads: the Windows bundle DeskMonitor-<version>.zip (never with the private adapter),
-# patches from the previous release's published bundle and from the last delivered build (backend/tools/delivered),
-# SHA256SUMS, release.json and notes with the checksums.
+# the bundle without packages DeskMonitorMirror-<version>.zip (--mirror), patches from the previous release's
+# published bundles (full and mirror: DeskMonitor-patch-*, DeskMonitorMirror-patch-*) and from the last delivered
+# build (backend/tools/delivered), SHA256SUMS, release.json and notes with the checksums.
 # Bump the version, commit, then:  git tag v0.3.0 && git push origin v0.3.0
 # Re-running for an existing tag (Actions -> release -> Run workflow) replaces its assets.
 # Only a v-tag starts this workflow: a tag without v (or a release made by hand on GitHub) stays empty; tag-format.yml
@@ -54,7 +55,7 @@ jobs:
           backend/.venv/bin/ruff check backend
           (cd backend && .venv/bin/python -m pytest -q -p no:cacheprovider)
           backend/.venv/bin/python -m pytest -q -p no:cacheprovider tests
-      - name: The previous release's full bundle, as published (base of the patch)
+      - name: The previous release's full and mirror bundles, as published (bases of the patches)
         # the patch is made against the bytes that were delivered, never a rebuild that only has the same version
         # (v-tags only: a release with a tag without v was made by hand and has no bundle)
         run: |
@@ -64,8 +65,8 @@ jobs:
           if [ -n "$prev" ]; then
             echo "previous release: $prev"
             if gh release download "$prev" --repo "$GITHUB_REPOSITORY" --dir prev \
-                 --pattern 'DeskMonitor-*.zip' --pattern SHA256SUMS; then
-              rm -f prev/DeskMonitor-patch-*.zip prev/*-with-adapter.zip
+                 --pattern 'DeskMonitor-*.zip' --pattern 'DeskMonitorMirror-*.zip' --pattern SHA256SUMS; then
+              rm -f prev/DeskMonitor-patch-*.zip prev/DeskMonitorMirror-patch-*.zip prev/*-with-adapter.zip
               (cd prev && sha256sum --check --ignore-missing --strict SHA256SUMS)
             else
               echo "::warning::no full zip of $prev downloaded: no patch from it (the updater installs the full zip)"
@@ -73,12 +74,15 @@ jobs:
             fi
           fi
           ls -la prev
-      - name: Build the Windows bundle (and the patches from the previous release and the last delivered build)
+      - name: Build the Windows bundles (full and mirror) and the patches from the previous release and the last delivered build
+        # --mirror: also the bundle without packages; every zip of prev/ is a base (a mirror one gives a mirror patch,
+        # a full one a full patch: build_windows_bundle.py tells them by wheelhouse/mirror.json in the manifest)
         # --patch-from-delivered: also a patch from the newest backend/tools/delivered/<version>/ record (what the
-        # owner got outside the releases); one patch per base version, made to fit every known build of it
+        # owner got outside the releases); one patch per base version and kind, made to fit every known build of it
         run: |
-          base=$(ls prev/DeskMonitor-*.zip 2>/dev/null | head -n 1 || true)
-          python3.11 backend/tools/build_windows_bundle.py --out dist ${base:+--patch-base "$base"} --patch-from-delivered
+          bases=()
+          for z in prev/DeskMonitor-*.zip prev/DeskMonitorMirror-*.zip; do if [ -f "$z" ]; then bases+=(--patch-base "$z"); fi; done
+          python3.11 backend/tools/build_windows_bundle.py --out dist --mirror "${bases[@]}" --patch-from-delivered
           ls -la dist
       - name: SHA256SUMS, release.json, notes
         run: >
@@ -87,7 +91,7 @@ jobs:
       - name: Publish the release
         run: |
           shopt -s nullglob
-          assets=(dist/DeskMonitor-*.zip dist/SHA256SUMS dist/release.json)
+          assets=(dist/DeskMonitor-*.zip dist/DeskMonitorMirror-*.zip dist/SHA256SUMS dist/release.json)
           if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
             gh release upload "$TAG" --repo "$GITHUB_REPOSITORY" --clobber "${assets[@]}"
             gh release edit "$TAG" --repo "$GITHUB_REPOSITORY" --notes-file dist/NOTES.md
