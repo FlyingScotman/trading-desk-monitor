@@ -377,7 +377,7 @@ def test_exact_package_is_never_replaced_even_in_flexible_mode(tmp_path, venv_py
     _mark_exact(tmp_path, "hm-beta")
     with pytest.raises(mi.InstallError) as exc:
         run_install(tmp_path, venv_python, index)
-    assert "hm-beta (lock 2.3.4)" in str(exc.value) and "ровно этой версии" in str(exc.value)
+    assert "hm-beta (lock 2.3.4)" in str(exc.value) and "ровно версии из lock" in str(exc.value)
     data = last_json(tmp_path)
     assert data["mode"] == "flexible" and data["status"] == "failed"
     assert data["packages"]["hm-beta"]["status"] == "not_found" and data["packages"]["hm-beta"]["tried"] == ["2.3.4"]

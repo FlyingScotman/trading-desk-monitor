@@ -852,10 +852,13 @@ def _search(ctx: _Ctx, lock: dict[str, str], local: dict[str, str], specs: dict[
         text = what + ", ".join(f"{n} (lock {lock[n]})" for n in dead) + "."
         pinned = [n for n in dead if n in exact]
         if pinned and not st.strict:
-            text += (" " + ", ".join(pinned) + (" должен быть ровно этой версии" if len(pinned) == 1
-                                                 else " должны быть ровно этих версий")
-                     + ": это встроенный PostgreSQL, другая основная версия не откроет уже созданную базу "
-                       "в DESK_HOME\\pg. Добавьте эту версию на зеркало.")
+            names = ", ".join(pinned)
+            text += (f" {names} должен быть ровно версии из lock" if len(pinned) == 1
+                     else f" {names} должны быть ровно версий из lock")
+            if "pgserver" in pinned:
+                text += (": pgserver - это встроенный PostgreSQL, другая основная версия не откроет уже созданную "
+                         "базу в DESK_HOME\\pg")
+            text += ". Добавьте эту версию на зеркало."
         raise _fail(ctx, text)
     fixed = {n: v for n, v in lock.items() if n not in missing}
     order = sorted(missing)
