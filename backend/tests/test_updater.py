@@ -872,6 +872,8 @@ def test_the_check_of_a_mirror_only_release_is_a_manual_update_not_an_error(bund
     s = service.status(st, True, None)
     assert s["manual_update"] is True and s["update_available"] is False
     assert s["choice"]["manual"] and s["choice"]["manual_url"] == gh(name) and "stop.bat" in s["choice"]["reason"]
+    why = s["choice"]["reason"]  # the page is gone once the program is stopped: the download comes first
+    assert "по ссылке ниже" in why and why.index("скачайте") < why.index("stop.bat")
     with pytest.raises(update.UpdateError, match="один раз вручную"):  # the install button has nothing to do
         service.start_install(st)
     # a mirror installation of the same release updates as always
@@ -885,7 +887,7 @@ def test_the_check_of_a_mirror_only_release_is_a_manual_update_not_an_error(bund
 
 
 def _release_module_before_mirror():
-    """``desk/updater/release.py`` as it was before the mirror kind (what 0.2.14 and the versions before carry), kept
+    """``desk/updater/release.py`` as it was before the mirror kind (what 0.2.15 and the versions before carry), kept
     as ``fixtures/release_main_before_mirror.py.txt`` and loaded as a module of its own."""
     import sys
     import types

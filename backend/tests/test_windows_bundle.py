@@ -787,3 +787,14 @@ def test_mirror_only_takes_the_newest_delivered_version_of_the_mirror_kind(tmp_p
     assert build.newest_delivered(folder) == "1.0-a" and build.newest_delivered(folder, "mirror") is None
     build.record_delivered(mirror_base, folder)
     assert build.newest_delivered(folder, "mirror") == "1.0-a"
+
+
+def test_a_broken_delivered_record_is_skipped_with_a_warning_not_a_release_failure(tmp_path, capsys):
+    _, old_mirror, _ = _full_and_mirror_stage(tmp_path / "old", {**MIRROR_STAGE_FILES, "VERSION": b"1.0-a\n"})
+    folder = tmp_path / "delivered"
+    build.record_delivered(_zip_of(old_mirror, tmp_path), folder)
+    (folder / "2.0-b").mkdir()
+    (folder / "2.0-b" / "broken.sha256").write_text("not a manifest\n", encoding="utf-8")  # newer, but unreadable
+    assert build.newest_delivered(folder, "mirror") == "1.0-a"  # no SystemExit; the readable record wins
+    err = capsys.readouterr().err
+    assert "warning: delivered record" in err and "broken.sha256" in err

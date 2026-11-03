@@ -12,7 +12,7 @@ mirror-only release is told how to change the kind by hand once (``Choice.manual
 * ``DeskMonitorMirror-<version>.zip``              the bundle "without packages" (third-party packages come from
                                                    the pip index of the PC), and its patches
                                                    ``DeskMonitorMirror-patch-<old>-to-<version>.zip`` (not
-                                                   ``DeskMonitor-...``: the updaters of 0.2.14 and before take every
+                                                   ``DeskMonitor-...``: the updaters of 0.2.15 and before take every
                                                    ``DeskMonitor-<x>.zip`` for a full bundle); an asset's
                                                    ``flavor`` is ``full`` or ``mirror``, and ``choose`` takes the
                                                    flavor that is installed (``DESK_BUNDLE_KIND``)
@@ -404,12 +404,14 @@ def manual_switch_text(version: str, zip_name: str | None, url: str | None) -> s
     why, and the steps of the one manual change of kind, in the owner's words. No host names (a public repository)."""
     short = version.split("-")[0]
     name = zip_name or f"DeskMonitorMirror-{version}.zip"
-    where = f" ({url})" if url else ""
+    # the page shows the link under the text (``manual_url``): the file itself, or the release page; the program is
+    # stopped in step 2, so the download comes first (the page is gone afterwards)
+    where = "по ссылке ниже" if url else "со страницы релиза на GitHub"
     return (f"С версии {short} программа выходит только в виде «без пакетов»: библиотеки она ставит с зеркала pip "
             "рабочей машины, а не берёт из архива. У вас стоит прежний, полный комплект, и обновить его из этой "
             "страницы нельзя: перейти на новый вид нужно один раз вручную.\n"
-            "1. Остановите программу: запустите stop.bat из её папки.\n"
-            f"2. Скачайте {name} со страницы релиза{where}.\n"
+            f"1. Сначала скачайте {name} {where}: после остановки программы эта страница будет недоступна.\n"
+            "2. Остановите программу: запустите stop.bat из её папки.\n"
             "3. Распакуйте архив в новую пустую папку, не поверх старой.\n"
             "4. Если у вас стоял приватный адаптер, перенесите папку adapter из старой папки программы в новую.\n"
             "5. Запустите start.bat в новой папке.\n"

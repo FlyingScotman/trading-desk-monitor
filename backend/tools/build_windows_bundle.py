@@ -297,7 +297,7 @@ REBUILD = {"full": "без интернета, ~1-2 минуты",
 
 def asset_prefix(flavor: str) -> str:
     """The name of a bundle's zips: ``DeskMonitor`` or, for the "no packages" kind, ``DeskMonitorMirror`` (a prefix
-    the updaters of 0.2.14 and before do not take for their own full zips; the folder inside stays ``DeskMonitor/``)."""
+    the updaters of 0.2.15 and before do not take for their own full zips; the folder inside stays ``DeskMonitor/``)."""
     return TOP + "Mirror" if flavor == "mirror" else TOP
 
 
@@ -492,11 +492,19 @@ def delivered(version: str, folder: Path | None = None) -> list[Path]:
 
 def newest_delivered(folder: Path | None = None, flavor: str | None = None) -> str | None:
     """The newest version with delivered records (of the ``flavor`` kind when given: a release that publishes only
-    the mirror kind takes the newest version that was delivered as one, never a full record it would skip)."""
+    the mirror kind takes the newest version that was delivered as one, never a full record it would skip; a
+    record that cannot be read is skipped with a warning on stderr)."""
     root = folder or DELIVERED
-    versions = [d.name for d in root.iterdir() if d.is_dir() and any(
-        flavor is None or base_from_record(r).flavor == flavor for r in delivered(d.name, root))] \
-        if root.is_dir() else []
+
+    def has_flavor(record: Path) -> bool:
+        try:
+            return base_from_record(record).flavor == flavor
+        except (SystemExit, ValueError, OSError) as e:  # a broken record must not stop the release: it is skipped, loudly
+            print(f"warning: delivered record {record} skipped: {e}", file=sys.stderr, flush=True)
+            return False
+
+    versions = [d.name for d in root.iterdir() if d.is_dir() and (
+        flavor is None or any(has_flavor(r) for r in delivered(d.name, root)))] if root.is_dir() else []
     return max(versions, key=version_key, default=None)
 
 
