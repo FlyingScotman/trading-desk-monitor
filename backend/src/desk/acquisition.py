@@ -2,6 +2,10 @@
 
 The file reader's offline authority does not change. Credentials exist only in the request/child stdin;
 neither job status nor persistent settings contain them. Provider output is never a diagnostic log.
+
+A provider that needs no login says so in its ``inspect`` result (``"login": "none"``). The service remembers that
+answer for the inspected adapter fingerprint only, in memory; ``check``/``fetch`` without credentials are accepted
+only while the current adapter fingerprint is that one. Absent, unknown or malformed ``login`` keeps the login.
 """
 from __future__ import annotations
 
@@ -99,8 +103,13 @@ def parameters(fields: dict[str, list[str]]) -> dict[str, str | list[str]]:
         raise FlowError("invalid_request") from None
     if p["op"] == "inspect" and (p.get("username") or p.get("password")):
         raise FlowError("invalid_request")
-    if p["op"] in ("check", "fetch") and (not p.get("username") or not p.get("password")):
+    if p["op"] in ("check", "fetch") and bool(p.get("username")) != bool(p.get("password")):
         raise FlowError("credentials_required")
+    # Empty credentials are never forwarded: both absent means "no login", which ``Acquisition.start`` accepts only
+    # when the last inspection of the current adapter said the provider needs none.
+    if not p.get("username"):
+        p.pop("username", None)
+        p.pop("password", None)
     if p["op"] == "fetch":
         if not p.get("book") or len(p["book"]) > 100 or any(not b or len(b) > 200 for b in p["book"]):
             raise FlowError("scope_empty")
@@ -111,6 +120,12 @@ def parameters(fields: dict[str, list[str]]) -> dict[str, str | list[str]]:
     return p
 
 
+def login_mode(result: dict) -> str:
+    """The inspect result's optional ``login``: ``"none"`` only when the provider says so exactly; absent (older
+    adapters), the login-needed value or anything unknown/malformed means a login is required, never a failure."""
+    return "none" if result.get("login") == "none" else "required"
+
+
 class Acquisition:
     def __init__(self, settings_loader: Callable[[], Settings], store_url: str, *, timeout_s: float = TIMEOUT_S):
         self._load, self._url, self._timeout = settings_loader, store_url, timeout_s
@@ -119,6 +134,12 @@ class Acquisition:
         self._thread: threading.Thread | None = None
         self._proc: subprocess.Popen | None = None
         self._status: dict = {"state": "idle", "phase": "idle", "code": "idle"}
+        # (adapter fingerprint, login mode) of the last successful inspection; never set from a client request
+        self._login: tuple[str, str] | None = None
+
+    def _login_for(self, fp: str) -> str:
+        with self._lock:
+            return self._login[1] if self._login is not None and self._login[0] == fp else "required"
 
     def status(self) -> dict:
         with self._lock:
@@ -132,7 +153,7 @@ class Acquisition:
         try:
             p = provider(self._load())
             return {"available": True, "code": "available", "source": p.source,
-                    "name": p.handle.name, "version": p.handle.version}
+                    "name": p.handle.name, "version": p.handle.version, "login": self._login_for(p.handle.fingerprint)}
         except FlowError as e:
             return {"available": False, "code": e.code}
         except Exception:  # noqa: BLE001 — settings/plugin errors must never expose external diagnostics
@@ -144,6 +165,12 @@ class Acquisition:
             p = provider(st)
             if params.get("op") == "fetch" and params.get("adapter_fingerprint") != p.handle.fingerprint:
                 raise FlowError("scope_changed")
+            if params.get("op") in ("check", "fetch") and not (params.get("username") and params.get("password")):
+                if params.get("username") or params.get("password") \
+                        or self._login_for(p.handle.fingerprint) != "none":
+                    raise FlowError("credentials_required")
+                params.pop("username", None)  # never forward empty credentials
+                params.pop("password", None)
         except FlowError:
             params.clear()
             raise
@@ -392,8 +419,11 @@ class Acquisition:
                         if type(n_books) is not int or not 0 <= n_books <= 10000000:
                             n_books = len(skipped["books"])
                         clean[-1]["policy"]["skipped"] = {"trades": skipped["trades"], "books": n_books}
+                login = login_mode(result)
+                with self._lock:
+                    self._login = (p.handle.fingerprint, login)
                 self._update(state="complete", phase="complete", code="scope_ready", reports=clean,
-                             adapter_fingerprint=p.handle.fingerprint)
+                             adapter_fingerprint=p.handle.fingerprint, login=login)
             elif op == "check":
                 if result.get("code") != "connected":
                     raise FlowError("provider_response_invalid", "error")

@@ -74,6 +74,9 @@ if mode == 'auth':
     print(json.dumps({'state':'error', 'code':'auth_failed'}))
     sys.exit(2)
 op = p['op'][0]
+if mode.startswith('login_'):  # which credential keys arrived (never their values) and whether they were non-empty
+    out.mkdir(parents=True, exist_ok=True)
+    (out / 'seen.json').write_text(json.dumps({k: bool(p[k][0]) for k in ('username', 'password') if k in p}))
 if op == 'inspect':
     report = {'id':'a'*64, 'sha256':'b'*64, 'name':'Synthetic_20261015.csv', 'books':['OFZ'],
               'policy':{'status':'VERIFIED', 'excluded_products':['Cash'],
@@ -88,10 +91,13 @@ if op == 'inspect':
     if mode == 'skipped_bad':
         report['policy']['skipped'] = {'trades': 'many', 'books': {}}
     result = {'state':'complete', 'code':'scope_ready', 'date':p['date'][0], 'reports':[report]}
+    if mode.startswith('login_'):
+        result['login'] = {'login_none':'none', 'login_system2':'system2', 'login_unknown':'anonymous',
+                           'login_type':7, 'login_case':'None'}[mode]
 elif op == 'check':
     result = {'state':'complete', 'code':'connected'}
 else:
-    out.mkdir(parents=True)
+    out.mkdir(parents=True, exist_ok=True)
     day = p['date'][0]
     prefix = 'positions_' if mode == 'wrong_dataset' else 'trade_terms_'
     named_day = '20261014' if mode == 'wrong_date' else day.replace('-', '')
@@ -428,5 +434,156 @@ def test_managed_two_book_validation_is_checked_before_any_unit_write(configured
                 assert {row[0]["book_id"] for row in sets} == {"CORP", "OFZ"}
                 assert result["run_id"] != old_run
                 assert result["private_inputs_hash"] == inputs.private_inputs_hash != before
+    finally:
+        service.close()
+
+
+# --- Provider without a login: the optional ``login`` of the inspect result (TDA second provider) ---
+
+def no_credentials(op="check", **kw):
+    p = fields(op, **kw)
+    p.pop("username", None)
+    p.pop("password", None)
+    return p
+
+
+def seen(st, service):
+    """Credential keys the helper received in the last run (True = non-empty), never their values."""
+    return json.loads((st.home / "acquisition" / service.status()["id"] / "seen.json").read_text())
+
+
+def inspect(st, service):
+    service.start(fields("inspect"))
+    status = wait(service)
+    assert status["code"] == "scope_ready", status
+    return status
+
+
+@pytest.mark.parametrize("result,mode", [({}, "required"), ({"login": "system2"}, "required"),
+                                         ({"login": "none"}, "none"), ({"login": "None"}, "required"),
+                                         ({"login": "anonymous"}, "required"), ({"login": 7}, "required"),
+                                         ({"login": None}, "required"), ({"login": ["none"]}, "required")])
+def test_login_mode_accepts_only_the_explicit_none(result, mode):
+    assert aq.login_mode(result) == mode
+
+
+def test_parameters_never_keep_empty_credentials():
+    def form(params):
+        return {k: v if isinstance(v, list) else [v] for k, v in params.items()}
+
+    for op in ("check", "fetch"):
+        extra = {"adapter_fingerprint": "c" * 64} if op == "fetch" else {}
+        p = aq.parameters(form(fields(op, **extra)))
+        assert p["username"] == USER and p["password"] == PASSWORD  # given credentials: unchanged
+        for blank in ({}, {"username": [""], "password": [""]}):
+            p = aq.parameters({**form(no_credentials(op, **extra)), **blank})
+            assert "username" not in p and "password" not in p
+        for half in ({"username": [USER]}, {"password": [PASSWORD]}, {"username": [USER], "password": [""]}):
+            with pytest.raises(aq.FlowError, match="credentials_required"):
+                aq.parameters({**form(no_credentials(op, **extra)), **half})
+
+
+@pytest.mark.parametrize("mode", ["success", "login_system2", "login_unknown", "login_type", "login_case"])
+def test_login_is_required_for_older_adapters_and_unknown_values(configured, mode):
+    """An adapter without ``login`` (older), with the login-needed value or with an invalid one: inspection works as
+    before and reports a login; check/fetch without credentials are refused before any process starts."""
+    st = configured
+    (st.private_adapter_config / "mode").write_text(mode)
+    service = aq.Acquisition(lambda: st, "", timeout_s=10)
+    try:
+        assert service.availability()["login"] == "required"
+        status = inspect(st, service)
+        assert status["login"] == "required"
+        assert service.availability()["login"] == "required"
+        for params in (no_credentials(), no_credentials("fetch", adapter_fingerprint=aq.provider(st).handle.fingerprint),
+                       {**no_credentials(), "username": "", "password": ""}):
+            with pytest.raises(aq.FlowError, match="credentials_required"):
+                service.start(params)
+            assert not params
+        assert service.status()["code"] == "scope_ready"  # nothing was started
+        service.start(fields())
+        assert wait(service)["code"] == "connected"
+        if mode != "success":
+            assert seen(st, service) == {"username": True, "password": True}
+    finally:
+        service.close()
+
+
+def test_provider_without_login_needs_no_credentials_and_gets_none(configured):
+    st = configured
+    (st.private_adapter_config / "mode").write_text("login_none")
+    service = aq.Acquisition(lambda: st, "", timeout_s=10)
+    try:
+        # Before an inspection the server does not know the login is optional: a client cannot skip it alone.
+        with pytest.raises(aq.FlowError, match="credentials_required"):
+            service.start(no_credentials())
+        status = inspect(st, service)
+        assert status["login"] == "none" and service.availability()["login"] == "none"
+        for params in (no_credentials(), {**no_credentials(), "username": "", "password": ""}):
+            service.start(params)
+            assert wait(service)["code"] == "connected"
+            assert seen(st, service) == {}  # neither key, not even empty strings
+        with pytest.raises(aq.FlowError, match="credentials_required"):
+            service.start({**no_credentials(), "username": USER})  # a half login is still an error
+        service.start(fields())  # credentials given: forwarded as before
+        assert wait(service)["code"] == "connected"
+        assert seen(st, service) == {"username": True, "password": True}
+        service.start(no_credentials("fetch", adapter_fingerprint=aq.provider(st).handle.fingerprint))
+        assert wait(service)["code"] == "market_missing"  # past the credential gate, to the fetch preconditions
+        # A changed adapter configuration is another adapter until it is inspected again.
+        (st.private_adapter_config / "extra.txt").write_text("changed")
+        assert service.availability()["login"] == "required"
+        with pytest.raises(aq.FlowError, match="credentials_required"):
+            service.start(no_credentials())
+        # The last inspection decides: a later one without ``login`` brings the login back.
+        (st.private_adapter_config / "mode").write_text("success")
+        inspect(st, service)
+        with pytest.raises(aq.FlowError, match="credentials_required"):
+            service.start(no_credentials())
+    finally:
+        service.close()
+
+
+def test_http_check_without_credentials_only_after_no_login_inspection(configured, store_url):
+    st = configured
+    (st.private_adapter_config / "mode").write_text("login_none")
+    service = aq.Acquisition(lambda: st, store_url, timeout_s=10)
+    app = create_app(store_url)
+    app.state.acquisition = service
+    try:
+        with TestClient(app, **LOOP) as c:
+            body = urlencode({"op": "check", "username": "", "password": ""})
+            r = c.post("/api/v1/acquisition/start", content=body, headers=FORM)
+            assert r.status_code == 422 and r.json()["code"] == "credentials_required"
+            assert c.get("/api/v1/acquisition").json()["login"] == "required"
+            assert c.post("/api/v1/acquisition/start", content=urlencode(fields("inspect")),
+                          headers=FORM).status_code == 202
+            assert wait(service)["login"] == "none"
+            state = c.get("/api/v1/acquisition").json()
+            assert state["login"] == "none" and state["job"]["login"] == "none"
+            for content in (body, urlencode({"op": "check"})):
+                r = c.post("/api/v1/acquisition/start", content=content, headers=FORM)
+                assert r.status_code == 202, r.json()
+                assert wait(service)["code"] == "connected"
+                assert seen(st, service) == {}
+            r = c.post("/api/v1/acquisition/start", content=urlencode({"op": "check", "password": PASSWORD}),
+                       headers=FORM)
+            assert r.status_code == 422 and r.json()["code"] == "credentials_required"
+            no_secrets(r.json())
+    finally:
+        service.close()
+
+
+def test_fetch_without_login_runs_the_pipeline_with_no_credentials(configured, store_url, cache, tmp_path):  # noqa: F811
+    st = replace(configured, snapshot_cache=cache, store_url=store_url)
+    load(store_url, tmp_path, DAY.isoformat(), 10)
+    (st.private_adapter_config / "mode").write_text("login_none")
+    service = aq.Acquisition(lambda: st, store_url)
+    try:
+        inspect(st, service)
+        service.start(no_credentials("fetch", adapter_fingerprint=aq.provider(st).handle.fingerprint))
+        result = wait(service)
+        assert result["code"] == "completed", result
+        assert seen(st, service) == {}
     finally:
         service.close()
