@@ -429,6 +429,9 @@ def test_a_tag_without_v_fails_its_own_workflow_and_v_tags_are_left_to_the_relea
     assert "!startsWith(github.event.release.tag_name, 'v')" in wf and "exit 1" in wf and "::error" in wf
     rel = (REPO / ".github/workflows/release.yml").read_text(encoding="utf-8")
     assert 'tags: ["v*"]' in rel and "check-tag" in rel
+    # «Run workflow» on main without a tag makes v<backend version> itself (on the built commit), never twice
+    assert "MAKE_TAG=1" in rel and '--target "$GITHUB_SHA"' in rel and "refs/heads/main" in rel
+    assert "git ls-remote --exit-code --tags origin" in rel
     script = wf.split("run: |\n", 1)[1]
     script = "\n".join(ln[10:] for ln in script.splitlines())
 
