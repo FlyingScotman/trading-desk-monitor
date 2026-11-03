@@ -126,7 +126,7 @@
       if (!res.ok) { available = false; message(res.status === 403 ? 'local_only' : 'status_unknown'); buttons(); return; }
       const data = await res.json(); available = !!data.available;
       if (data.job.state === 'idle') { active = false; login(data.login); message(available ? 'idle' : data.code); buttons(); }
-      else show(data.job, data.login);
+      else show(data.job, data.login || 'required');  // unavailable adapter: no current answer, keep the login
     } catch (_) { message('status_unknown'); }
   }
   async function submit(op) {

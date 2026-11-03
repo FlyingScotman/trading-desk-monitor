@@ -93,7 +93,9 @@ if op == 'inspect':
     result = {'state':'complete', 'code':'scope_ready', 'date':p['date'][0], 'reports':[report]}
     if mode.startswith('login_'):
         result['login'] = {'login_none':'none', 'login_system2':'system2', 'login_unknown':'anonymous',
-                           'login_type':7, 'login_case':'None'}[mode]
+                           'login_type':7, 'login_case':'None', 'login_none_changed':'none'}[mode]
+        if mode == 'login_none_changed':  # the adapter configuration changes while it is being inspected
+            (cfg / 'changed.txt').write_text('x')
 elif op == 'check':
     result = {'state':'complete', 'code':'connected'}
 else:
@@ -585,5 +587,40 @@ def test_fetch_without_login_runs_the_pipeline_with_no_credentials(configured, s
         result = wait(service)
         assert result["code"] == "completed", result
         assert seen(st, service) == {}
+    finally:
+        service.close()
+
+
+def test_no_login_answer_is_not_kept_when_the_adapter_changed_during_inspection(configured):
+    """The answer belongs to neither version: not to the inspected one (even after a revert), not to the new one."""
+    st = configured
+    (st.private_adapter_config / "mode").write_text("login_none_changed")
+    service = aq.Acquisition(lambda: st, "", timeout_s=10)
+    try:
+        assert inspect(st, service)["login"] == "required"
+        assert service.availability()["login"] == "required"
+        (st.private_adapter_config / "changed.txt").unlink()  # back to the inspected fingerprint
+        assert service.availability()["login"] == "required"
+        with pytest.raises(aq.FlowError, match="credentials_required"):
+            service.start(no_credentials())
+    finally:
+        service.close()
+
+
+def test_no_login_start_is_never_decided_while_an_inspection_runs(configured):
+    st = configured
+    (st.private_adapter_config / "mode").write_text("hang")
+    service = aq.Acquisition(lambda: st, "", timeout_s=10)
+    try:
+        service.start(fields("inspect"))
+        # A stored "none" for this very adapter (white-box: a slow helper cannot also answer an inspection), but an
+        # inspection is running and may still replace it: no start without credentials until it has finished.
+        service._login = (aq.provider(st).handle.fingerprint, "none")
+        params = no_credentials()
+        with pytest.raises(aq.FlowError, match="acquisition_busy"):
+            service.start(params)
+        assert not params
+        service.cancel()
+        assert wait(service)["code"] == "cancelled"
     finally:
         service.close()

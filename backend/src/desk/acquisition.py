@@ -141,6 +141,13 @@ class Acquisition:
         with self._lock:
             return self._login[1] if self._login is not None and self._login[0] == fp else "required"
 
+    @staticmethod
+    def _unchanged(p: Provider) -> bool:
+        try:
+            return fingerprint(str(p.root), p.handle.config_dir) == p.handle.fingerprint
+        except Exception:  # noqa: BLE001 — unreadable now: not the inspected adapter
+            return False
+
     def status(self) -> dict:
         with self._lock:
             return json.loads(json.dumps(self._status))
@@ -165,12 +172,10 @@ class Acquisition:
             p = provider(st)
             if params.get("op") == "fetch" and params.get("adapter_fingerprint") != p.handle.fingerprint:
                 raise FlowError("scope_changed")
-            if params.get("op") in ("check", "fetch") and not (params.get("username") and params.get("password")):
-                if params.get("username") or params.get("password") \
-                        or self._login_for(p.handle.fingerprint) != "none":
-                    raise FlowError("credentials_required")
-                params.pop("username", None)  # never forward empty credentials
-                params.pop("password", None)
+            no_login = params.get("op") in ("check", "fetch") \
+                and not (params.get("username") and params.get("password"))
+            if no_login and (params.get("username") or params.get("password")):
+                raise FlowError("credentials_required")
         except FlowError:
             params.clear()
             raise
@@ -178,9 +183,17 @@ class Acquisition:
             params.clear()
             raise FlowError("settings_invalid") from None
         with self._lock:
+            # Decided under the same lock as the start itself: an inspection that is still finishing cannot change
+            # the answer between this check and the start (while it runs, the start is refused anyway).
+            if no_login and self._login != (p.handle.fingerprint, "none"):
+                params.clear()
+                raise FlowError("credentials_required")
             if self._thread is not None and self._thread.is_alive():
                 params.clear()
                 raise FlowError("acquisition_busy")
+            if no_login:
+                params.pop("username", None)  # never forward empty credentials
+                params.pop("password", None)
             self._cancel.clear()
             self._status = {"id": uuid.uuid4().hex, "state": "running", "phase": "starting", "code": "starting",
                             "op": params["op"], "date": params.get("date"), "books": params.get("book", [])}
@@ -420,6 +433,8 @@ class Acquisition:
                             n_books = len(skipped["books"])
                         clean[-1]["policy"]["skipped"] = {"trades": skipped["trades"], "books": n_books}
                 login = login_mode(result)
+                if login == "none" and not self._unchanged(p):
+                    login = "required"  # the adapter changed while inspected: the answer belongs to neither version
                 with self._lock:
                     self._login = (p.handle.fingerprint, login)
                 self._update(state="complete", phase="complete", code="scope_ready", reports=clean,

@@ -82,9 +82,11 @@ behaviour of every earlier adapter). Only the exact string `"none"` counts: any 
 as "login required", never as an error, and the inspection itself still succeeds. The monitor keeps the answer
 of the last successful inspection in memory together with the inspected adapter fingerprint; it is reported as
 `login: "none"|"required"` in that inspection's job and in `GET /api/v1/acquisition` (for the current adapter;
-`"required"` before any inspection or after the package/config fingerprint changed). `check`/`fetch` without
+`"required"` before any inspection or after the package/config fingerprint changed). A `"none"` from an
+inspection during which that fingerprint changed is not kept (`"required"`). `check`/`fetch` without
 credentials are accepted only while that server-held answer is `"none"` for the current fingerprint; a client
-cannot skip the login on its own (`credentials_required`). Both credentials or neither: one of the two is
+cannot skip the login on its own (`credentials_required`); the answer is checked under the same lock as the
+start, so an inspection still finishing cannot change it in between. Both credentials or neither: one of the two is
 `credentials_required`. Empty `username`/`password` fields are dropped and never forwarded, so a no-login child
 receives neither key; given credentials are forwarded unchanged. The Settings dialog hides the login fields
 while the server says `"none"` and shows them again on `credentials_required`.
