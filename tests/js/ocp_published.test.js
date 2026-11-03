@@ -420,6 +420,40 @@ ta('C16: демо — вымышленный ответ той же формы; 
   assert.strictEqual((html.match(/Почему отчёта ОВП нет/g) || []).length, 1);
 });
 
+ta('C16: книга ОВП без позиций (TDM#556) — юрлицо и тип из справочника ОВП; выбор типа книги; часть отчёта без книг — только без типа', async () => {
+  const s = JSON.parse(JSON.stringify(SRV));
+  // OLDX — старая книга: позиций в прогоне нет (M.book её не знает), справочник — из блока ОВП (books, ocpOnly)
+  s.days[3].lines.push(L('BANK', 'OLDX', ['OLDX'], 'USD', 5e6), L('BANK', null, [], 'USD', 3e6));
+  s.books.OLDX = { name: 'Старая ОВП', entity: 'IC', desk: 'Legacy', type: 'HTM', ocpOnly: true };
+  const KEY = 'tdm.view.v1:c16:books';
+  const ic = page16({ srv: s, store: { [KEY]: { entity: 'IC', off: [] } } });
+  await settle();
+  let html = ic.html();
+  assert.ok(html.includes('data-ocp-row="OLDX"') && html.includes('data-ocp-row="IC-BND"'), 'книга без позиций — под своим юрлицом из настроек');
+  assert.ok(html.includes('data-c16="type"') && html.includes('все типы книг'), html);
+  const htm = page16({ srv: s, store: { [KEY]: { entity: null, type: 'HTM', off: [] } } });
+  await settle();
+  html = htm.html();
+  assert.ok(html.includes('data-ocp-row="OLDX"') && !html.includes('data-ocp-row="FXB"') && !html.includes('data-ocp-row="IC-BND"'), html);
+  assert.ok(html.includes('тип: HTM') && html.includes('все книги · 1'), html);
+  assert.ok(!html.includes('data-ocp-row="BANK"') && !html.includes('data-ocp-row="AM"'), 'части отчёта без книг и с книгами другого типа не входят');
+  const tr = page16({ srv: s, store: { [KEY]: { entity: null, type: 'TRADING', off: [] } } });
+  await settle();
+  html = tr.html();
+  assert.ok(html.includes('data-ocp-row="IC-BND"') && !html.includes('data-ocp-row="OLDX"'), html);
+  // запомненного типа нет у книг ответа — все типы (как с юрлицом)
+  const gone = page16({ srv: s, store: { [KEY]: { entity: null, type: 'FUTURES', off: [] } } });
+  await settle();
+  assert.ok(gone.html().includes('все типы книг') && gone.html().includes('data-ocp-row="OLDX"'));
+  // справочник прогона (M.ocp.books, concepts_run.ocp_status) — для итогов шапки: юрлицо книги без позиций
+  const one = load(D => { withOcp(D); D.OCP.byBook.push({ entity: HEAD, book: 'OLDX', books: ['OLDX'], ccy: 'USD', amount: 7e6, source: 'report', components: [], reported: 7e6 });
+    D.OCP.books = { OLDX: { name: 'Старая ОВП', entity: 'Дочерний банк', desk: 'Legacy', type: 'HTM', ocpOnly: true } }; });
+  assert.strictEqual(one.K.ocpBook('OLDX').entity, 'Дочерний банк');
+  const sub = one.K.ocpScope(null, null, { entity: 'Дочерний банк' });
+  assert.deepStrictEqual(Array.from(sub.lines, z => z.book).sort(), ['OLDX', 'SECUR']);
+  assert.deepStrictEqual(Array.from(one.K.ocpScope(null, null, { type: 'HTM' }).lines, z => z.book), ['OLDX']);
+});
+
 (async () => {
   for (const [name, f] of asyncTests) { await f(); n++; console.log('ok', name); }
   console.log(n + ' tests passed');

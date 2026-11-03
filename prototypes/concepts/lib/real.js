@@ -117,6 +117,8 @@
     byCcy: Object.fromEntries(Object.entries(OC.byCcy || {}).map(([c, x]) => [c, { total: num(x.total), rate: num(x.rate), totalRub: num(x.totalRub), bySource: x.bySource || {} }])),
     byBook: OC.byBook.map(x => Object.assign({}, x, { amount: num(x.amount) || 0, reported: num(x.reported), books: x.books || [], components: x.components || [] })),
     notes: OC.notes || [], gaps: OC.gaps || [], sourceNames: OC.sourceNames || {}, componentNames: OC.componentNames || {},
+    // книги ОВП без позиций в прогоне (TDM#556): справочник (юрлицо, деск, тип) для K.ocpBook
+    books: OC.books && typeof OC.books === 'object' ? OC.books : {},
   } : null;
   if (M.ocp && M.ocp.gaps.length) M.notes.push('ОВП: ' + M.ocp.gaps[0].text + (M.ocp.gaps.length > 1 ? '; ещё ' + (M.ocp.gaps.length - 1) + ' (C16)' : ''));
 

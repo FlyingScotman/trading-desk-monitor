@@ -187,7 +187,7 @@
 
   /* ---------- выпадающие списки: поле → список (по имени поля, общему у адаптера и контракта 08 §10) ---------- */
   // L: {entities: [{value, label}], books: [...], currencies: [...], indices: [...]}
-  SF.LIST_OF = { entity: 'entities', ocp_to: 'books', book_id: 'books', ccy: 'currencies', index_code: 'indices' };
+  SF.LIST_OF = { entity: 'entities', ocp_to: 'books', book_id: 'books', ccy: 'currencies', index_code: 'indices', desk: 'desks' };
   SF.optionsFor = function (col, L, table) {
     if (col.options) return col.options;
     if (col.enum) return col.enum.filter(function (v) { return v !== null; }).map(function (v) { return { value: v, label: String(v) }; });
@@ -644,7 +644,12 @@
     (issues || []).forEach(function (i) { var k = SF.pathKey(i.path); (by[k] = by[k] || []).push(i); });
   };
   E.errors = function () { return (this.issues || []).filter(function (i) { return i.severity === 'error'; }); };
-  E.lists = function () { return this.o.lists ? this.o.lists() : {}; };
+  E.lists = function () {
+    var L = this.o.lists ? this.o.lists() : {}, SOB = root.SETTINGS_OCP_BOOKS;
+    // деск книги — списком из десков файла и сервера (settings-ocp-books.js, TDM#556), если страница их не дала
+    if (SOB && !L.desks && this.data && Array.isArray(this.data.books)) L = Object.assign({}, L, { desks: SOB.desks(this.data.books, this.o.recent ? this.o.recent() : []) });
+    return L;
+  };
   E.ctlId = function (path) { return this.uid + '-' + (path || []).join('.').replace(/[^A-Za-z0-9_.-]/g, function (c) { return '_' + c.charCodeAt(0).toString(36); }); };
   // ошибки поля — под ним; обновляются после каждой проверки (refresh), без перерисовки полей (фокус остаётся)
   E.errsBox = function (path, cell) {
@@ -962,6 +967,8 @@
     var tbody = h('tbody');
     var groups = this.tab.id === 'funding' && t.key === 'rules' ? SF.ruleGroups(rows, today()) : null;
     var state = {};
+    // книги только из отчёта ОВП (TDM#556, settings-ocp-books.js): пометка у кода книги
+    var ocpOnly = this.tab.id === 'books' && root.SETTINGS_OCP_BOOKS && this.o.recent ? root.SETTINGS_OCP_BOOKS.ocpOnlyIds(this.o.recent()) : null;
     if (groups) groups.forEach(function (g) { g.rows.forEach(function (x) { state[x.i] = x; }); });
     var order = groups ? [].concat.apply([], groups.map(function (g) { return g.rows.map(function (x) { return x.i; }); })) : rows.map(function (_, i) { return i; });
     order.forEach(function (i) {
@@ -973,6 +980,7 @@
         var v = isObj(r) ? r[c.key] : undefined, bad = (self.byPath[t.key + '.' + i + '.' + c.key] || []).length || iss.some(function (x) { return x.field === c.key; });
         var td = h('td', { class: (bad ? 'bad ' : '') + (c.kind === 'enum' ? '' : c.kind === 'amount' || c.kind === 'number' || c.kind === 'integer' ? 'n mono' : c.key.indexOf('_id') > 0 || c.key === 'entity' ? 'mono' : '') },
           c.kind === 'enum' && v != null ? h('span', { class: 'tagc' }, String(v)) : SF.display(c, v));
+        if (ocpOnly && c.key === 'book_id' && ocpOnly[v]) td.append(' ', root.SETTINGS_OCP_BOOKS.badge(h));  // TDM#556
         if (bad) td.title = iss.filter(function (x) { return (x.path && x.path[2] === c.key) || x.field === c.key; }).map(function (x) { return SF.say(x, self.schema); }).join('\n');
         tr.append(td);
       });
@@ -999,15 +1007,16 @@
   SF.plural = plural;
 
   F.renderUnconfigured = function (tbody, span) {
-    var self = this, recent = this.o.recent ? this.o.recent() : [], miss = SF.unconfigured(this.data, recent);
+    var self = this, recent = this.o.recent ? this.o.recent() : [], miss = SF.unconfigured(this.data, recent), SOB = root.SETTINGS_OCP_BOOKS;
     if (!miss.length) return;
-    tbody.append(h('tr', { class: 'grp' }, h('td', { colspan: span }, 'Есть в позициях, не настроено — ' + miss.length,
-      h('span', { class: 'mut3' }, ' · книги последних позиций, которых нет в этом файле (ни по коду книги, ни по кодам отчётов)'),
+    tbody.append(h('tr', { class: 'grp' }, h('td', { colspan: span }, SOB ? SOB.groupTitle(miss) : 'Есть в позициях, не настроено — ' + miss.length,
+      h('span', { class: 'mut3' }, ' · книги последних позиций' + (SOB ? ' и отчёта ОВП' : '') + ', которых нет в этом файле (ни по коду книги, ни по кодам отчётов)'),
       miss.length > 1 ? h('button', { class: 'lnk', type: 'button', style: 'margin-left:10px', onclick: function () { miss.forEach(function (r) { self.data.books.push(SF.bookPrefill(r)); }); self.changed(); self.render(); } }, 'добавить все') : null)));
     miss.forEach(function (r) {
       tbody.append(h('tr', { class: 'unconf' },
         h('td', { colspan: span - 2 }, h('span', { class: 'mono' }, r.book_id), ' ', h('span', { class: 'badge warn' }, 'не настроено'),
-          h('span', { class: 'mut' }, ' позиции на ' + SF.fmtDate(r.last_date) + (r.positions != null ? ', ' + r.positions + ' ' + plural(r.positions, 'строка', 'строки', 'строк') : '') +
+          SOB && SOB.isOcpOnly(r) ? [' ', SOB.badge(h)] : null,
+          h('span', { class: 'mut' }, (SOB ? SOB.unconfiguredText(r, SF.fmtDate) : ' позиции на ' + SF.fmtDate(r.last_date) + (r.positions != null ? ', ' + r.positions + ' ' + plural(r.positions, 'строка', 'строки', 'строк') : '')) +
             (r.entity ? ' · юрлицо из отчёта: ' + r.entity : '') + (r.book_type ? ' · сейчас считается как ' + r.book_type : ''))),
         h('td', { colspan: 2, class: 'sf-rowacts' }, h('button', { class: 'ibtn', type: 'button', onclick: function () {
           self.data.books = self.data.books || []; self.data.books.push(SF.bookPrefill(r)); self.changed(); self.render();

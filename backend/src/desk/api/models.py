@@ -507,6 +507,9 @@ class RunOcp(BaseModel):
     report: dict[str, Any] = Field(description="The report's units in force and its number of rows")
     totals: dict[str, Any] | None
     notes: list[str]
+    books: dict[str, dict[str, Any]] = Field(default_factory=dict, description=(
+        "TDM#556: name, desk, book_type and entity of the published OCP's books without positions in the run (a book "
+        "only the OCP report knows); the run's reference books have the others"))
 
 
 class AggregateRow(BaseModel):
