@@ -105,12 +105,12 @@ try:  # PEP 440 / 508; the build machine's pip carries a copy when the package i
     from packaging.requirements import Requirement
     from packaging.specifiers import SpecifierSet
     from packaging.utils import canonicalize_name, parse_wheel_filename
-    from packaging.version import Version
+    from packaging.version import InvalidVersion, Version
 except ImportError:  # pragma: no cover
     from pip._vendor.packaging.requirements import Requirement
     from pip._vendor.packaging.specifiers import SpecifierSet
     from pip._vendor.packaging.utils import canonicalize_name, parse_wheel_filename
-    from pip._vendor.packaging.version import Version
+    from pip._vendor.packaging.version import InvalidVersion, Version
 
 REPO = Path(__file__).resolve().parents[2]
 # what the bundle needs from the repository; the rest (tests, docs, tools) stays at home
@@ -806,7 +806,11 @@ def check_mirror(wh: Path, full: Path | None = None) -> None:
             wname, wver, _build, _tags = parse_wheel_filename(file)
         except ValueError:
             sys.exit(f"mirror.json: {n} file {file!r} is not a wheel name")
-        if canonicalize_name(wname) != n or wver != Version(p["lock"]):
+        try:
+            same = wver == Version(p["lock"])
+        except InvalidVersion:
+            sys.exit(f"mirror.json: {n} lock {p['lock']!r} is not a PEP 440 version")
+        if canonicalize_name(wname) != n or not same:
             sys.exit(f"mirror.json: {n} file {file} is not the wheel of {n} {p['lock']}")
     if full is not None:
         held = {w.name: w for w in full.glob("*.whl") if w.name.split("-")[0] not in OUR_DISTS}

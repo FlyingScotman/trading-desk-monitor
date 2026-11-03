@@ -348,7 +348,8 @@ class _Journal:
         return self.data["packages"].setdefault(name, {"required": None, "tried": [], "available": [],
                                                         "installed": None, "url": None, "sha256": None,
                                                         "status": None, "source": None, "lock_check": None,
-                                                        "lock_sha256": None, "lock_file": None})
+                                                        "lock_sha256": None, "lock_file": None,
+                                                        "mirror_file": None})
 
     def write(self) -> None:
         self.data["finished"] = datetime.now().isoformat(timespec="seconds")
@@ -379,7 +380,8 @@ class _Journal:
                            f"на индексе: {', '.join(p['available']) or '-'}")
             if p["status"] == "hash_mismatch":
                 out.append(f"      ФАЙЛ НА ЗЕРКАЛЕ ОТЛИЧАЕТСЯ ОТ ПРОВЕРЕННОГО У НАС: ожидался SHA-256 "
-                           f"{p['lock_sha256'] or '-'}, на зеркале {p['sha256'] or 'не удалось узнать'}")
+                           f"{p['lock_sha256'] or '-'}, на зеркале {p['sha256'] or 'не удалось узнать'}; файл по lock "
+                           f"{p['lock_file'] or '-'}, скачан {p['mirror_file'] or '-'}")
             elif p["url"] or p["sha256"]:
                 src = SOURCE_WORDS.get(p["source"] or "", "")
                 out.append(f"      {p['url'] or '-'}  sha256 {p['sha256'] or '-'}" + (f"  ({src})" if src else ""))
@@ -637,11 +639,22 @@ def _hash_mismatch(ctx: _Ctx, name: str, version: str, expected: str, got: str, 
     """The mirror serves a file of the lock version that is not the one we checked: a swap, not a missing package."""
     j = ctx.journal
     p = j.pkg(name)
-    p.update(status="hash_mismatch", lock_check="mismatch", lock_sha256=expected, sha256=got or None, source="index")
+    names = [Path(unquote(urlsplit(m.group(1)).path)).name
+             for m in re.finditer(r"(?:Downloading|Using cached)\s+(\S+\.whl)", output)]
+    fetched = names[-1] if names else ""
+    p.update(status="hash_mismatch", lock_check="mismatch", lock_sha256=expected, sha256=got or None, source="index",
+             mirror_file=fetched or None)
     j.note(f"pip download {name}=={version} (хэш lock)", output)
     seen = f"на зеркале {got}" if got else "на зеркале другой файл (его SHA-256 определить не удалось)"
+    lock_file = p.get("lock_file") or ""
+    where = ""
+    if fetched:
+        where = f" Скачан файл {fetched}" + (f" (по lock ожидался {lock_file})" if lock_file else "") + "."
+        if lock_file and fetched != lock_file:
+            where += (f" На зеркале для этой версии лежит другой файл ({fetched}) вместо {lock_file}; возможно, "
+                      "зеркало не отдаёт хэши в индексе - сообщите ИТ.")
     return _fail(ctx, f"{name}=={version}: файл на зеркале отличается от проверенного у нас: ожидался SHA-256 "
-                      f"{expected}, {seen}. Установка остановлена, версия не заменяется другой: это признак "
+                      f"{expected}, {seen}.{where} Установка остановлена, версия не заменяется другой: это признак "
                       "подмены файла на зеркале, а не отсутствия пакета. Обратитесь в ИБ/ИТ и не запускайте "
                       "программу, пока причина не выяснена.")
 
@@ -853,7 +866,8 @@ def _install(ctx: _Ctx, cache: Path, result: Result, say: Callable[[str], None])
         raise _fail(ctx, "В новом окружении нет рабочего pip. Удалите папку env и запустите установку заново.")
     j.data["pip"] = cp.stdout.strip().splitlines()[0] if cp.stdout.strip() else ""
     j.data["index"] = _index_addresses(ctx)
-    plain = insecure_index_urls(i["url"] for i in j.data["index"])
+    # an address replaced by mirror.ini (``overridden``) is not used by this run, so it is no reason to warn
+    plain = insecure_index_urls(i["url"] for i in j.data["index"] if not i.get("overridden"))
     if plain:
         j.data["warnings"].append(http_index_warning(plain, j.data["lock_hashes"]))
     say(f"Установка зависимостей с индекса pip ({'строгий' if st.strict else 'гибкий'} режим)...")

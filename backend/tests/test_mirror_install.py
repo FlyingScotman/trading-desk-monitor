@@ -144,6 +144,7 @@ class FakeIndex:
         root.mkdir(parents=True, exist_ok=True)
         self.requests: list[str] = []
         self.blocked: set[str] = set()      # wheel file names answered with 404
+        self.no_hashes = False              # True: the links carry no #sha256= (a mirror that hides the hashes)
         self.status_all = 0                 # not 0: every request is answered with this status
         index = self
 
@@ -208,7 +209,8 @@ class FakeIndex:
                 continue
             digest = hashlib.sha256(f.read_bytes()).hexdigest()
             meta = hashlib.sha256(self.metadata(f.name) or b"").hexdigest()
-            links.append(f'<a href="/files/{f.name}#sha256={digest}" data-dist-info-metadata="sha256={meta}" '
+            frag = "" if self.no_hashes else f"#sha256={digest}"
+            links.append(f'<a href="/files/{f.name}{frag}" data-dist-info-metadata="sha256={meta}" '
                          f'data-core-metadata="sha256={meta}">{f.name}</a><br/>')
         return ("<html><body>" + "".join(links) + "</body></html>").encode()
 
@@ -939,3 +941,38 @@ def test_https_index_gives_no_warning_in_a_run(tmp_path, venv_python, index, mon
     monkeypatch.setattr(mi, "_index_addresses", lambda ctx: [{"url": "https://mirror.example/simple/", "source": "x"}])
     res = run_install(tmp_path, venv_python, index)
     assert res.ok and last_json(tmp_path)["warnings"] == [] and res.warnings == []
+
+
+def test_swapped_wheel_is_refused_when_the_index_shows_no_hashes(tmp_path, venv_python, index):
+    serve_lock(index)
+    index.no_hashes = True
+    index.add("hm-alpha", LOCK_ALPHA, payload=b"evil")
+    with pytest.raises(mi.InstallError) as exc:
+        run_install(tmp_path, venv_python, index)
+    alpha = last_json(tmp_path)["packages"]["hm-alpha"]
+    assert alpha["status"] == "hash_mismatch" and alpha["mirror_file"] == f"hm_alpha-{LOCK_ALPHA}-py3-none-any.whl"
+    assert "другой файл (" not in str(exc.value) and alpha_hash(tmp_path) in str(exc.value)
+
+
+def test_other_file_of_the_version_and_no_hashes_in_the_index_is_refused_naming_the_file(tmp_path, venv_python, index):
+    """Known behaviour: without hashes in the index pip cannot pick by hash and takes the build-tagged file."""
+    serve_lock(index)
+    index.no_hashes = True
+    index.add("hm-alpha", LOCK_ALPHA, build="1", payload=b"evil")
+    with pytest.raises(mi.InstallError) as exc:
+        run_install(tmp_path, venv_python, index)
+    lock_file, other = f"hm_alpha-{LOCK_ALPHA}-py3-none-any.whl", f"hm_alpha-{LOCK_ALPHA}-1-py3-none-any.whl"
+    assert f"На зеркале для этой версии лежит другой файл ({other}) вместо {lock_file}; возможно, зеркало не " \
+           "отдаёт хэши в индексе - сообщите ИТ." in str(exc.value)
+    alpha = last_json(tmp_path)["packages"]["hm-alpha"]
+    assert alpha["status"] == "hash_mismatch" and alpha["mirror_file"] == other and alpha["lock_file"] == lock_file
+    assert other in exc.value.log_path.read_text(encoding="utf-8")
+
+
+def test_an_overridden_http_index_gives_no_warning(tmp_path, venv_python, index, monkeypatch):
+    serve_lock(index)
+    monkeypatch.setattr(mi, "_index_addresses", lambda ctx: [
+        {"url": "http://old.example/simple/", "source": "PIP_INDEX_URL", "overridden": True},
+        {"url": "https://mirror.example/simple/", "source": "mirror.ini: index_url"}])
+    res = run_install(tmp_path, venv_python, index)
+    assert res.ok and res.warnings == []
