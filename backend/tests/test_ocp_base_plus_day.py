@@ -371,7 +371,8 @@ def test_trade_into_a_position_held_before_b_keeps_the_trade_nominal():
 def test_fx_swap_leg_without_terms_is_an_fx_swap_and_coverage_is_flagged():
     """Reproduced in review: an FX swap leg without terms (product group fx_swap, a value date after the settlement
     window) read as a forward put its notional under fx_forward and the report's fx_swap nominal came back as the
-    fallback: 300 -> 600. It is an fx_swap now: its notional, flagged as without PV, no fallback."""
+    fallback: 300 -> 600. It is an fx_swap now, and with no position of the kind valued the report's nominal of the kind
+    stands for it, marked (no terms bound: no PV, the owner, 03.11.2026), never the notional and the nominal both."""
     leg = {"position_id": "D1|SWL", "book_id": "D1", "instr_type": "FX", "fx_delta": {"USD": 300.0},
            "extra": {"reported": {"asset_class": "fx", "value_date": "2026-12-16", "x_product_group": "FX_SWAP"},
                      "fx_delta_basis": "notional (no trade terms: undiscounted)"}}
@@ -380,7 +381,7 @@ def test_fx_swap_leg_without_terms_is_an_fx_swap_and_coverage_is_flagged():
     assert O.derivative_kind(leg, [], POLICY, "fx_legs") == "fx_swap"
     r = run(rows=[leg], report=rep, units=UNITS[:1])
     d1 = pub(r)[("D1", "USD")]
-    assert d1["amount"] == 300 and d1["fallback"] == []
+    assert d1["amount"] == 300 and d1["fallback"] == ["fx_swap"] and d1["no_pv"] == ["fx_swap"]
     # one position of the kind valued by core, one at its notional: the PV is partial, said in the gaps and the check
     r = run(rows=[leg, core_row("D1|FXS", "D1", {"USD": 495.0}, "fx_swap")],
             report=[{**rep[0], "derivatives_ccy": {"fx_swap": "800"}}], units=UNITS[:1])
@@ -457,18 +458,38 @@ def test_a_derivative_outside_the_report_is_counted_once_and_has_no_fallback():
 
 
 def test_no_position_of_the_kind_with_a_pv_is_said_so():
+    """No position of a kind apart has a PV (no terms bound, core did not value it): the report's nominal of the kind,
+    marked, instead of the positions' notionals (or a silent zero for a position with no amount at all)."""
     leg = {"position_id": "D1|SWL", "book_id": "D1", "instr_type": "FX", "fx_delta": {"USD": 300.0},
            "extra": {"reported": {"asset_class": "fx", "value_date": "2026-12-16", "x_product_group": "fx_swap"},
                      "fx_delta_basis": "notional (no trade terms: undiscounted)"}}
-    rep = [{"entity": "ENT1", "book_id": "D1", "ccy": "USD", "ocp_ccy": "0", "derivatives_ccy": {"fx_swap": "300"},
+    rep = [{"entity": "ENT1", "book_id": "D1", "ccy": "USD", "ocp_ccy": "0", "derivatives_ccy": {"fx_swap": "310"},
             "_set_id": 11, "_src": "L2"}]
     r = run(rows=[leg], report=rep, units=UNITS[:1])
     d1 = pub(r)[("D1", "USD")]
-    assert d1["no_pv"] == ["fx_swap"] and d1["partial_pv"] == []
-    assert {g["code"]: g for g in r.gaps}["derivatives_partial_pv"]["items"] == [
-        "книга D1 USD: валютные свопы (PV нет ни у одной позиции)"]
+    assert d1["no_pv"] == ["fx_swap"] and d1["partial_pv"] == [] and d1["fallback"] == ["fx_swap"]
+    assert d1["parts"]["derivatives"] == 310 and d1["amount"] == 310
+    items = d1["contributions"]["derivatives"]["items"]
+    assert [(i["kind"], i["amount"], i["marker"]) for i in items] == [("report_nominal", 310.0, "номинал, PV нет")]
+    gaps = {g["code"]: g for g in r.gaps}
+    assert gaps["derivatives_partial_pv"]["items"] == [
+        "книга D1 USD: валютные свопы (PV нет ни у одной позиции: номинал отчёта)"]
+    assert gaps["derivatives_nominal_fallback"]["items"] == ["книга D1 USD: валютные свопы"]
     chk = r.derivatives_check[0]
     assert (chk["no_pv"], chk["partial"]) == (True, False)
+    # an FX future the core did not value and that has no FX amount at all (basis none): not a silent zero either
+    fut = {"position_id": "D1|FUT", "book_id": "D1", "instr_type": "FUTURE", "fx_delta": {},
+           "extra": {"core": None, "reported": {"asset_class": "fx", "value_date": "2026-12-16",
+                                                "x_product_group": "fx_future"}}}
+    rep = [{**rep[0], "derivatives_ccy": {"fx_future": "-45"}}]
+    assert O.derivative_lines([fut], BOOKS, {}, B, POLICY) == []  # no amount: not a position of the kind at all
+    d1 = pub(run(rows=[fut], report=rep, units=UNITS[:1]))[("D1", "USD")]
+    assert d1["amount"] == -45 and d1["fallback"] == ["fx_future"]
+    # the report has no nominal of the kind in that currency: the positions' notionals stay, marked
+    r = run(rows=[leg], report=[{**rep[0], "derivatives_ccy": {"fx_swap": "0"}}], units=UNITS[:1])
+    d1 = pub(r)[("D1", "USD")]
+    assert d1["amount"] == 300 and d1["fallback"] == [] and d1["no_pv"] == ["fx_swap"]
+    assert d1["contributions"]["derivatives"]["items"][0]["marker"] == "номинал позиции, PV нет"
 
 
 def test_bond_sold_out_after_b_is_subtracted_once():
@@ -701,13 +722,16 @@ def test_run_on_the_base_date_then_inside_the_next_day(store_url, ctx, tmp_path)
             rids.append(rid)
     c = TestClient(create_app(store_url))
     ob, od = (c.get(f"/api/v1/runs/{rid}/ocp").json() for rid in rids)
-    # the run of the 15th: the report without the forward (150k) + the forward's PV (no terms: its notional, 250k)
+    # the run of the 15th: the report without the forward (150k) + the forward's PV. It has no terms bound, so no PV:
+    # the report's nominal of the kind (260k), marked (the owner, 03.11.2026), not the position's own notional (250k)
     lb = {(x["book_id"], x["ccy"]): x for x in ob["published"]["by_book"]}[("D1", "USD")]
     assert ob["published"]["basis"] == "report_base_plus_day" and lb["base_kind"] == "without_derivatives"
     assert ob["text"] == ocp_run.COMPUTED_TEXT[O.PublishedBasis.REPORT_BASE_PLUS_DAY]
     assert lb["split_kinds"] == ["fx_forward", "ndf"]
-    assert lb["parts"]["base"] == 150_000 and lb["parts"]["derivatives"] == pytest.approx(250_000)
-    assert lb["parts"]["trades"] == 0 and lb["amount"] == pytest.approx(400_000)
+    assert lb["parts"]["base"] == 150_000 and lb["parts"]["derivatives"] == pytest.approx(260_000)
+    assert lb["fallback"] == ["fx_forward"] and lb["no_pv"] == ["fx_forward"]
+    assert lb["contributions"]["derivatives"]["items"][0]["marker"] == "номинал, PV нет"
+    assert lb["parts"]["trades"] == 0 and lb["amount"] == pytest.approx(410_000)
     rec = {(x["book_id"], x["ccy"]): x for x in ob["reconciliation"]}[("D1", "USD")]
     assert rec["reported"] == 410_000 and rec["reported_base"] == 150_000 and rec["split"]
     chk = [x for x in ob["derivatives_check"] if x["book_id"] == "D1"]
@@ -718,7 +742,7 @@ def test_run_on_the_base_date_then_inside_the_next_day(store_url, ctx, tmp_path)
     # the run of the 16th: the base of the 15th + the forward's PV + the spot trade of the 16th
     ld = {(x["book_id"], x["ccy"]): x for x in od["published"]["by_book"]}[("D1", "USD")]
     assert ld["base_date"] == "2026-10-15" and ld["parts"]["trades"] == 200_000
-    assert ld["amount"] == pytest.approx(600_000)
+    assert ld["amount"] == pytest.approx(610_000)
     assert ld["contributions"]["trades"]["items"][0]["trade_id"] == "TR-1"
     chk = [x for x in od["derivatives_check"] if x["book_id"] == "D1"]
     assert chk[0]["pv_source"] == "base_run" and chk[0]["pv_date"] == "2026-10-15"
