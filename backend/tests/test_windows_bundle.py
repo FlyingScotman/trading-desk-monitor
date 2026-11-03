@@ -782,7 +782,8 @@ def test_release_workflow_builds_and_publishes_the_mirror_bundle_only():
     files = [re.sub(r"--notes-file \S+", "", u) for u in uploads]  # the notes are text, not an asset
     assert len(uploads) == 2 and all('"${assets[@]}"' in f and "dist/" not in f for f in files)
     # every build of the workflow is --mirror-only, and release_assets checks dist/ before the publish step
-    builds = re.findall(r"build_windows_bundle\.py[^\n]*", wf)
+    # only command lines (a comment that names the script is not a build)
+    builds = re.findall(r"^\s*python[\d.]*\s+backend/tools/build_windows_bundle\.py[^\n]*", wf, re.MULTILINE)
     assert builds and all("--mirror-only" in b for b in builds)
     assert wf.index("release_assets.py write") < wf.index("- name: Publish the release")
     # the tag logic of #539 is untouched

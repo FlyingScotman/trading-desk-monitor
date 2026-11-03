@@ -855,8 +855,19 @@ def test_release_assets_refuses_a_mirror_zip_or_patch_that_holds_a_third_party_w
     foreign = {**ours, "wheelhouse/numpy-2.1.0-cp311-cp311-win_amd64.whl": b"numpy"}
     assert release_assets.third_party_wheels(tu.bundle(v, foreign)) == [
         "wheelhouse/numpy-2.1.0-cp311-cp311-win_amd64.whl"]
+    # a wheel outside wheelhouse/ is refused, ours too; only ensurepip's bundled one is the runtime's
+    elsewhere = {**ours, "app/x/foo-1.0-py3-none-any.whl": b"foo",
+                 "app/desk_backend-0.1.0-py3-none-any.whl": b"ours, but not in wheelhouse"}
+    assert release_assets.third_party_wheels(tu.bundle(v, elsewhere)) == [
+        "app/desk_backend-0.1.0-py3-none-any.whl", "app/x/foo-1.0-py3-none-any.whl"]
+    ensurepip_only = {**ours, "python/Lib/ensurepip/_bundled/setuptools-70.0-py3-none-any.whl": b"st"}
+    assert release_assets.third_party_wheels(tu.bundle(v, ensurepip_only)) == []
     dist = tmp_path / "dist"
     dist.mkdir()
+    full_zip(stage_dir(tmp_path / "app", tu.bundle(v, elsewhere)), dist / f"DeskMonitorMirror-{v}.zip")
+    with pytest.raises(SystemExit, match="third-party wheels.*app/x/foo"):
+        release_assets.collect(dist, f"v{version}")
+    (dist / f"DeskMonitorMirror-{v}.zip").unlink()
     full_zip(stage_dir(tmp_path / "bad", tu.bundle(v, foreign)), dist / f"DeskMonitorMirror-{v}.zip")
     with pytest.raises(SystemExit, match="third-party wheels.*numpy"):
         release_assets.collect(dist, f"v{version}")
