@@ -399,7 +399,7 @@ class FlashPnl:
         return {**({"flag": self.flag} if self.flag else {}),
                 **({"other_reason": self.other_reason} if self.other_reason else {}),
                 **({"start_quantity": self.start_quantity} if self.start_quantity is not None else {}),
-                **({"trades": [_json_safe(t) for t in self.trades]} if self.trades else {})}
+                **({"trades": _json_safe(self.trades)} if self.trades else {})}
 
     def breakdown(self) -> dict[str, Any]:
         """The keys of TDM#406 in ``extra`` (module docstring), JSON-safe: a pair whose value is not finite left out,
@@ -439,6 +439,8 @@ def _finite(x: Any) -> float | None:
 def _json_safe(v: Any) -> Any:
     if isinstance(v, dict):
         return {k: _json_safe(x) for k, x in v.items()}
+    if isinstance(v, list | tuple):
+        return [_json_safe(x) for x in v]
     return v if isinstance(v, str) or v is None else _finite(v)
 
 

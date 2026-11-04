@@ -293,15 +293,24 @@ def eod_run(settings: Settings, d: str, *, snapshots: str | Path | None = None, 
                 out(f"WARN static facts not updated: {type(e).__name__}: {e}")
         if book:
             _load(con, Path(book), d, out=out)
-        inputs = start_inputs = store.positions_for(con, run_date, books=books)
-        # the day's bond trades in the book of any run of the date whose positions are older than it (TDM#557)
+        inputs = store.positions_for(con, run_date, books=books)
+        start_inputs = None
+        # the day's bond trades in the book of any run of the date (TDM#557); the start of the day for their PnL
         inputs, intraday_trades = trades_mod.intraday_inputs(con, run_date, settings, inputs)
         if intraday_trades and not intraday_trades["set_ids"]:
             intraday_trades = None   # no trades of the date: nothing to say in the lineage
+        if intraday_trades:
+            start_inputs = intraday_trades.get("start_inputs")
         if intraday_trades and (intraday_trades["applied"] or intraday_trades["skipped"]):
             out(f"trades of {run_date}: {intraday_trades['applied']} in the book "
                 f"({intraday_trades['new_positions']} new positions), left out "
-                + (", ".join(f"{k} {v}" for k, v in intraday_trades["skipped"].items()) or "none"))
+                + (", ".join(f"{k} {v}" for k, v in intraday_trades["skipped"].items()) or "none")
+                + (f"; {intraday_trades['history']} trades of earlier days (no report since)"
+                   if intraday_trades.get("history") else ""))
+            if intraday_trades.get("gaps"):
+                out(f"WARN trades: {len(intraday_trades['gaps'])} position(s) where the report of {run_date} differs "
+                    "from the start of the day plus the trades (x.trades_report_gap, the report's quantity kept): "
+                    + ", ".join(f"{p} {g:+g}" for p, g in list(intraday_trades["gaps"].items())[:10]))
         if not inputs.rows:
             out(f"no positions in the store for {d}" + (f" (books {','.join(books)})" if books else ""))
             out(f"done in {time.perf_counter() - t0:.1f} s")
@@ -335,10 +344,14 @@ def eod_run(settings: Settings, d: str, *, snapshots: str | Path | None = None, 
             prev_inputs = store.positions_for(con, prev_ctx.business_date, books=books)
             direct_pnl.attach(prev_ctx, ctx, bp.direct, inputs, pv1.plan(prev_ctx, prev_inputs, second_order=False).direct,
                               prev_inputs.valid_dates)
-            if intraday_trades and intraday_trades["applied"]:   # the day's trades: start of day + new trades
+            if intraday_trades and intraday_trades["applied"] and start_inputs is not None:   # start of day + trades
                 split = new_trades_pnl.attach(prev_ctx, ctx, start_inputs, bp, outcomes, intraday_trades, carried)
                 out(f"PnL of the day's trades: {split['split']} positions split, {split['opened']} opened today, "
-                    f"{split['no_pnl']} without PnL, {split['flagged']} trades without a price or unit")
+                    f"{split['no_pnl']} without PnL")
+                if split["flagged"]:
+                    out(f"WARN trades: {split['flagged']} trade(s) without a PnL (no price, other currency, no "
+                        "valuation or rate): the PnL of the trades is incomplete")
+                    intraday_trades["unpriced"] = split["flagged"]
             flash = [o.pnl for o in outcomes if o.pnl]
             out(f"flash PnL {prev_date} -> {d}: {len(flash)}/{sum(o.valuation is not None for o in outcomes)} "
                 f"priced positions, total {sum(p.total for p in flash):,.0f} RUB, "
@@ -351,7 +364,7 @@ def eod_run(settings: Settings, d: str, *, snapshots: str | Path | None = None, 
         elif not prev_date:
             out(f"WARN no flash PnL: no eod_final or eod_preliminary market snapshot before {d} in {snapshots}")
         if intraday_trades:   # the transient figures for the PnL of the trades are not lineage
-            intraday_trades = {k: v for k, v in intraday_trades.items() if k not in ("trades", "rows")}
+            intraday_trades = {k: v for k, v in intraday_trades.items() if k not in ("trades", "rows", "start_inputs")}
         positions = pv1.merge(bp, outcomes)
         ok = sum(o.valuation is not None for _, _, o in positions)
         by_q = Counter(o.valuation.quality if o.valuation else "not_valued" for _, _, o in positions)

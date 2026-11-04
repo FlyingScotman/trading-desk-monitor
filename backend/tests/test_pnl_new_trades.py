@@ -17,6 +17,7 @@ from desk import store, trades
 from desk.autopilot import Autopilot
 from desk.inbox import scan
 from desk.pnl import new_trades as nt
+from desk.pnl.flash import NoPnl
 from desk.valuation import positions as pv1
 
 
@@ -93,14 +94,33 @@ def test_other_currency_is_zero_and_flagged():
     assert r["flag"] == "units_mismatch" and r["pnl_rub"] == 0.0
 
 
-def test_foreign_bond_accrued_is_taken_at_todays_rate(monkeypatch, stub_face):
-    monkeypatch.setattr(nt, "fx_rate", lambda ctx, ccy: (90.0, "test"))
+def test_foreign_bond_accrued_is_taken_at_the_valuations_implied_rate(monkeypatch, stub_face):
+    """A bond in USD whole: the cost is n x price % x face_rub, the accrued in USD at face_rub / face (90), not at the
+    market rate (95), so that no PnL of the rate move appears."""
+    monkeypatch.setattr(nt, "fx_rate", lambda ctx, ccy: (95.0, "test"))
     terms = SimpleNamespace(face_unit="USD", currency="USD")
-    r = nt.trade_pnl(_ctx(), "S", terms, _ref(face_rub=90_000.0, dirty_rub=60_000.0), _t(ccy="USD", accrued_ccy="10",
-                                                                                     price_pct="64"))
+    ref = _ref(face_rub=90_000.0, dirty_rub=60_000.0)
+    r = nt.trade_pnl(_ctx(), "S", terms, ref, _t(ccy="USD", accrued_ccy="10", price_pct="64"))
     assert r["cost_rub"] == pytest.approx(100 * 0.64 * 90_000 + 10 * 90)
+    assert r["pnl_rub"] == pytest.approx(100 * 60_000 - r["cost_rub"])
+    # no face to imply the rate from: the market rate; no market rate either: flagged
+    monkeypatch.setattr(pv1, "face_on", lambda t, d: 0.0)
+    assert nt.trade_pnl(_ctx(), "S", terms, ref, _t(ccy="USD", accrued_ccy="10"))["cost_rub"] == pytest.approx(
+        100 * 0.64 * 90_000 + 10 * 95)
     monkeypatch.setattr(nt, "fx_rate", lambda ctx, ccy: None)
-    assert nt.trade_pnl(_ctx(), "S", terms, _ref(), _t(ccy="USD"))["flag"] == "no_fx_rate"
+    assert nt.trade_pnl(_ctx(), "S", terms, ref, _t(ccy="USD", accrued_ccy="10"))["flag"] == "no_fx_rate"
+
+
+def test_a_replacement_bond_traded_in_rub_is_priced_by_its_face_percent(stub_face):
+    """A face in USD, the trade settled in RUB: price_pct is a percent of the face whatever the settlement currency,
+    the accrued is in RUB as it is. A third currency is still a mismatch."""
+    terms = SimpleNamespace(face_unit="USD", currency="USD")
+    ref = _ref(face_rub=90_000.0, dirty_rub=60_000.0)
+    r = nt.trade_pnl(_ctx(), "S", terms, ref, _t(ccy="RUB", accrued_ccy="900", price_pct="64"))
+    assert r["flag"] is None and r["cost_rub"] == pytest.approx(100 * 0.64 * 90_000 + 900)
+    assert r["pnl_rub"] == pytest.approx(100 * 60_000 - r["cost_rub"])
+    assert nt.trade_pnl(_ctx(), "S", terms, ref, _t(ccy="EUR"))["flag"] == "units_mismatch"
+    assert nt.trade_pnl(_ctx(), "S", TERMS, _ref(), _t(ccy="USD"))["flag"] == "units_mismatch"   # a RUB bond, USD trade
 
 
 def test_a_face_amount_is_the_number_of_bonds_by_the_initial_face(stub_face):
@@ -113,16 +133,89 @@ def test_no_valuation_is_zero_and_flagged(stub_face):
     assert nt.trade_pnl(_ctx(), "S", TERMS, _ref(dirty_rub=math.nan), _t())["flag"] == "no_valuation"
 
 
-def test_in_positions_when_the_book_report_is_as_of_the_day(monkeypatch):
+def _days(monkeypatch, by_date):
+    def rows(con, ds, on):
+        r = by_date.get(on.isoformat(), [])
+        return store.DatasetInputs(ds, on, r, [{"set_id": 9}] if r else [])
+    monkeypatch.setattr(store, "dataset_rows", rows)
+
+
+def _report(inputs, qty, valid="2026-11-03", **kw):
+    """The report of the day: T1|SEC1 at ``qty``, the books valid ``valid``."""
+    rows = [(p, b, s, qty if p == "T1|SEC1" else q) for p, b, s, q in inputs.rows]
+    return store.PositionInputs(**{**inputs.__dict__, "rows": rows, "private_inputs_hash": "report",
+                                   "valid_dates": {"T1": date.fromisoformat(valid), "T2": date.fromisoformat(valid)},
+                                   **kw})
+
+
+def test_a_report_of_the_day_keeps_its_quantity_and_the_trades_give_the_pnl(monkeypatch):
+    """TDM#557: the report valid the day has the positions; the start of the day is the earlier set; the trades are
+    used for the PnL; start + trades = the report: no gap."""
     import test_trades_intraday as tti
 
-    rows = [tti._trade()]
-    monkeypatch.setattr(store, "dataset_rows", lambda con, ds, on: store.DatasetInputs(ds, on, rows, [{"set_id": 9}]))
-    inputs = tti._inputs()
-    same = store.PositionInputs(**{**inputs.__dict__, "valid_dates": {"T1": date(2026, 11, 3), "T2": date(2026, 11, 3)}})
-    out, summary = trades.apply_intraday(None, date(2026, 11, 3), same)
-    assert summary["skipped"] == {"in_positions": 1} and summary["applied"] == 0 and out is same
-    assert trades.effect(rows[0], date(2026, 11, 3)) is None
+    day = date(2026, 11, 3)
+    _days(monkeypatch, {"2026-11-03": [tti._trade()]})
+    monkeypatch.setattr(store, "positions_for", lambda con, d, books=None: tti._inputs())
+    out, summary = trades.apply_intraday(None, day, _report(tti._inputs(), 1200.0))
+    assert {r[0]: r[3] for r in out.rows}["T1|SEC1"] == 1200.0 and summary["gaps"] == {}
+    assert summary["rows"]["T1|SEC1"] == {"mode": "qty", "start": 1000.0, "final": 1200.0, "new": False,
+                                          "final_fold": 1200.0, "report": True}
+    assert [t["trade_id"] for t in summary["trades"]] == ["TR1"] and summary["applied"] == 1
+    assert {r[0]: r[3] for r in summary["start_inputs"].rows}["T1|SEC1"] == 1000.0
+    assert out.private_inputs_hash not in ("report", "h0")   # the trades are in the hash
+
+
+def test_a_report_that_differs_is_kept_and_flagged(monkeypatch):
+    import test_trades_intraday as tti
+
+    day = date(2026, 11, 3)
+    _days(monkeypatch, {"2026-11-03": [tti._trade()]})
+    monkeypatch.setattr(store, "positions_for", lambda con, d, books=None: tti._inputs())
+    rep = _report(tti._inputs(), 1150.0)
+    rep.extra["T1|SEC1"]["x"] = {"keep": 1}
+    out, summary = trades.apply_intraday(None, day, rep)
+    assert {r[0]: r[3] for r in out.rows}["T1|SEC1"] == 1150.0
+    assert summary["gaps"] == {"T1|SEC1": pytest.approx(-50.0)}
+    assert out.extra["T1|SEC1"]["x"] == {"keep": 1, "trades_report_gap": pytest.approx(-50.0)}
+    assert summary["rows"]["T1|SEC1"]["final"] == 1150.0 and summary["rows"]["T1|SEC1"]["start"] == 1000.0
+
+
+def test_a_traded_row_the_report_no_longer_lists_is_kept_at_zero(monkeypatch):
+    import test_trades_intraday as tti
+
+    day = date(2026, 11, 3)
+    _days(monkeypatch, {"2026-11-03": [tti._trade(side="sell", quantity="1000")]})
+    monkeypatch.setattr(store, "positions_for", lambda con, d, books=None: tti._inputs())
+    rep = _report(tti._inputs(), 0.0)
+    rep = store.PositionInputs(**{**rep.__dict__, "rows": [r for r in rep.rows if r[0] != "T1|SEC1"]})
+    out, summary = trades.apply_intraday(None, day, rep)
+    row = next(r for r in out.rows if r[0] == "T1|SEC1")
+    assert row[3] == 0.0 and out.extra["T1|SEC1"]["mv_rub"] == 0 and summary["gaps"] == {}
+    assert summary["rows"]["T1|SEC1"]["start"] == 1000.0 and summary["rows"]["T1|SEC1"]["final"] == 0.0
+
+
+def test_the_trades_of_the_days_a_report_is_late_are_in_the_start_of_the_day(monkeypatch):
+    """TDM#557: no report for the 2nd: the 3rd's book is the set of the 1st + the 2nd's trades + the 3rd's; only the
+    3rd's trades are the day's PnL; when the report of the 2nd comes the 2nd's trades are not applied again."""
+    import test_trades_intraday as tti
+
+    day = date(2026, 11, 3)
+    _days(monkeypatch, {"2026-11-02": [tti._trade(trade_id="Y1", trade_date="2026-11-02", quantity="100")],
+                        "2026-11-03": [tti._trade(trade_id="T1", quantity="200")]})
+    old = store.PositionInputs(**{**tti._inputs().__dict__, "valid_dates": {"T1": date(2026, 11, 1),
+                                                                            "T2": date(2026, 11, 1)}})
+    out, summary = trades.apply_intraday(None, day, old)
+    assert {r[0]: r[3] for r in out.rows}["T1|SEC1"] == 1300.0 and summary["history"] == 1
+    assert [t["trade_id"] for t in summary["trades"]] == ["T1"] and summary["applied"] == 1
+    assert {r[0]: r[3] for r in summary["start_inputs"].rows}["T1|SEC1"] == 1100.0
+    assert summary["rows"]["T1|SEC1"]["start"] == 1100.0
+    base = trades.apply_intraday(None, day, tti._inputs())[0]   # report of the 1st... valid the 2nd: no history
+    assert {r[0]: r[3] for r in base.rows}["T1|SEC1"] == 1200.0
+    assert base.private_inputs_hash != out.private_inputs_hash
+    only = {**old.__dict__}
+    _days(monkeypatch, {"2026-11-02": [tti._trade(trade_id="Y1", trade_date="2026-11-02", quantity="100")]})
+    same, s2 = trades.apply_intraday(None, day, store.PositionInputs(**only))
+    assert s2["history"] == 1 and s2["applied"] == 0 and {r[0]: r[3] for r in same.rows}["T1|SEC1"] == 1100.0
 
 
 # ---------- the whole path ----------
@@ -144,10 +237,10 @@ class Day:
         self.ap.run_cycle()
         self.base = self.row()
 
-    def latest_id(self, rtype="INTRADAY"):
+    def latest_id(self, rtype="INTRADAY", on=FRI):
         with store.connect(self.url) as con:
             return con.execute("SELECT max(run_id) FROM run WHERE run_type = %s AND business_date = %s"
-                               " AND status = 'complete'", (rtype, FRI)).fetchone()[0]
+                               " AND status = 'complete'", (rtype, on)).fetchone()[0]
 
     def row(self, pid=PID, rid=None):
         with store.connect(self.url) as con:
@@ -338,7 +431,9 @@ def test_the_final_close_has_the_trades_until_the_report_of_the_day_comes(day):
     day.clock["t"] = at(MON, 8, 40)
     assert steps(day.ap.run_cycle())["eod"][1].startswith("up to date")   # no endless reruns
     assert day.latest_id("EOD") == final
-    # the report as of the end of 16.10 (the start of 19.10): the trades are in it, the close is made once more
+    # the report as of the end of 16.10 (the start of 19.10): the positions are the report's, the trades still give the
+    # PnL (they are the day's, and the day's PnL is not the report's); the difference is flagged, not hidden
+    nt_before = r["pnl"]["new_trades"]
     src = day.tmp / "in" / "positions_20261016.csv"
     (day.tmp / "in" / "positions_20261019.csv").write_text(src.read_text(encoding="utf-8-sig"), encoding="utf-8")
     day.clock["t"] = at(MON, 8, 50)
@@ -347,10 +442,80 @@ def test_the_final_close_has_the_trades_until_the_report_of_the_day_comes(day):
     again = day.latest_id("EOD")
     assert again > final
     r = day.row(rid=again)
-    assert r["q"] == 12000 and r["pnl"]["new_trades"] == 0.0   # the report's quantity, the trades not counted twice
-    assert lineage(day.url, again)["skipped"] == {"in_positions": 1}
+    assert r["q"] == 12000 and r["pnl"]["new_trades"] == pytest.approx(nt_before) and nt_before != 0
+    assert r["pnl"]["extra"]["start_quantity"] == 12000
+    lin = lineage(day.url, again)
+    assert lin["applied"] == 1 and lin["gaps"] == {PID: 1000.0}   # report 12000 against 12000 - 1000 sold
     day.clock["t"] = at(MON, 9, 0)
     assert steps(day.ap.run_cycle())["eod"][1].startswith("up to date") and day.latest_id("EOD") == again
     with store.connect(day.url) as con:
-        from desk import trades as tr
-        assert {x["trade_id"]: x["intraday"] for x in tr.view(con, FRI)["rows"]} == {"S1": "in_positions"}
+        assert {x["trade_id"]: x["intraday"] for x in trades.view(con, FRI)["rows"]} == {"S1": "applied"}
+
+
+def test_a_report_that_matches_the_start_plus_the_trades_has_no_gap(day):
+    day.drop(trade_line("S1", "sell", 1000, 62.0, 5_000.0))
+    publish(day.hub, FRI, "eod_final", "2026-10-19T05:00:00Z", 3)
+    day.clock["t"] = at(MON, 8, 30)
+    day.ap.run_cycle()
+    before = day.row(rid=day.latest_id("EOD"))
+    (day.tmp / "in" / "positions_20261019.csv").write_text(
+        (day.tmp / "in" / "positions_20261016.csv").read_text(encoding="utf-8-sig").replace(";12000;12000000;",
+                                                                                         ";11000;11000000;"),
+        encoding="utf-8")
+    day.clock["t"] = at(MON, 8, 50)
+    day.ap.run_cycle()
+    rid = day.latest_id("EOD")
+    r = day.row(rid=rid)
+    assert r["q"] == 11000 and r["pnl"]["new_trades"] == pytest.approx(before["pnl"]["new_trades"]) != 0
+    assert lineage(day.url, rid)["gaps"] == {}
+    for k in ("carry", "rolldown", "rates", "spread", "other"):
+        assert r["pnl"][k] == pytest.approx(before["pnl"][k])
+
+
+def test_a_report_a_day_late_the_next_days_book_holds_both_days_trades(day, monkeypatch):
+    """No report valid 16.10 yet on Monday: Monday's book is the set of 15.10 + Friday's trades + Monday's; once the
+    report of Friday comes Friday's trades are not applied again."""
+    day.drop(trade_line("S1", "sell", 1000, 62.0, 5_000.0))
+    publish(day.hub, FRI, "eod_final", "2026-10-19T05:00:00Z", 3)
+    publish(day.hub, MON, "intraday", "2026-10-19T07:00:00Z", 4)
+    (day.tmp / "in" / "trades_20261019_1100.csv").write_text(
+        HEAD + trade_line("M1", "sell", 500, 62.0, 2_000.0).replace("2026-10-16", "2026-10-19"), encoding="utf-8")
+    day.clock["t"] = at(MON, 10, 6)
+    by = steps(day.ap.run_cycle())
+    assert by["intraday"][0] == "ok", by["intraday"]
+    rid = day.latest_id(on=MON)
+    r = day.row(rid=rid)
+    assert r["q"] == 10500                       # 12000 - 1000 (Friday) - 500 (Monday)
+    assert r["pnl"]["extra"]["start_quantity"] == 11000   # Friday's trade is in the start of Monday
+    assert [t["trade_id"] for t in r["pnl"]["extra"]["trades"]] == ["M1"]
+    lin = lineage(day.url, rid)
+    assert lin["applied"] == 1 and lin["history"] == 1
+    day.clock["t"] = at(MON, 10, 8)
+    assert steps(day.ap.run_cycle())["intraday"][1].startswith("up to date")
+    # the report of Friday: the 11000 of the report; Friday's trade is not applied again
+    (day.tmp / "in" / "positions_20261019.csv").write_text(
+        (day.tmp / "in" / "positions_20261016.csv").read_text(encoding="utf-8-sig").replace(";12000;12000000;",
+                                                                                         ";11000;11000000;"),
+        encoding="utf-8")
+    day.clock["t"] = at(MON, 10, 9)
+    day.ap.run_cycle()
+    r = day.row(rid=day.latest_id(on=MON))
+    assert r["q"] == 10500
+    assert lineage(day.url, day.latest_id(on=MON))["history"] == 0
+
+
+def test_a_start_of_day_without_pnl_keeps_no_pnl_and_the_trades_beside_it(day, monkeypatch):
+    real = nt.portfolio_pnl
+
+    def unpriced(prev, ctx, start, pids, carried):
+        out = real(prev, ctx, start, pids, carried)
+        for o in out.values():
+            o.pnl, o.no_pnl = None, NoPnl("not_priced_prev", "test: no price on the previous close")
+        return out
+
+    monkeypatch.setattr(nt, "portfolio_pnl", unpriced)
+    day.drop(trade_line("S1", "sell", 1000, 62.0, 5_000.0))
+    r = day.row()
+    assert r["q"] == 11000 and r["pnl"] is None
+    assert r["no_pnl"]["reason"] == "not_priced_prev" and r["no_pnl"]["new_trades"] != 0
+    assert r["no_pnl"]["trades"][0]["trade_id"] == "S1" and r["no_pnl"]["start_quantity"] == 12000

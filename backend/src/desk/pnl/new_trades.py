@@ -11,7 +11,12 @@ A position that was bought or sold today is measured in two parts, so that the d
   ``n x price_pct / 100 x face`` (today's face of one bond, in RUB at today's rate) plus the trade's accrued interest
   (``accrued_ccy``, a sum for the whole trade in its currency; without it ``n x`` today's accrued, flagged
   ``accrued_assumed``). A trade without a price is 0, flagged ``no_trade_price`` (its quantity still changes the
-  position); a currency other than the bond's is 0, ``units_mismatch``.
+  position); a currency other than the bond's and RUB is 0, ``units_mismatch``. ``price_pct`` is a percent of the face
+  whatever the settlement currency, so a replacement bond (a face in USD, settled in RUB) is priced as any: the cost
+  is ``n x price_pct / 100 x face_rub``; its accrued in RUB is taken as it is, in the bond's currency at the rate
+  implied by the valuation (``face_rub`` / the face in currency), so that no PnL of ``n x accrued x rate move`` appears.
+  The trade's own settlement date is not used: its accrued is taken as given and the valuation's ``dirty_rub`` is the
+  one of the quote's settlement (T+1), so a T+0 trade carries a day of accrued in its PnL (a known simplification).
 
 ``attach`` puts the two together on the outcomes of the run: a changed row's ``pnl`` is its start-of-day PnL with
 ``new_trades`` added to ``total`` and ``quantity`` the number of bonds after the trades (``extra.start_quantity``,
@@ -59,7 +64,8 @@ def trade_pnl(ctx: EodContext, secid: str, terms: Any, ref: BondValuation | None
     for k in ("price_pct", "accrued_ccy"):
         out[k] = _num(out[k])
     unit = bond_currency(terms)
-    ccy_ok = not t.get("ccy") or ccy_code(t["ccy"]) == unit
+    tc = ccy_code(t["ccy"]) if t.get("ccy") else None
+    ccy_ok = tc is None or tc in (unit, "RUB")   # the price is a percent of the face; the accrued is in the trade's
     n = None
     if ccy_ok:
         n, _ = pv1._bonds(ctx, secid, qty, {} if qty is not None else {"ccy": t.get("ccy"), "face_amount_ccy": face})
@@ -73,13 +79,13 @@ def trade_pnl(ctx: EodContext, secid: str, terms: Any, ref: BondValuation | None
     elif ref is None or not _finite(ref.dirty_rub, ref.face_rub):
         out["flag"] = "no_valuation"
     else:
-        rate = fx_rate(ctx, unit)
         acc_ccy = out["accrued_ccy"]
+        rate = 1.0 if (tc == "RUB" or unit == "RUB") else _implied_rate(ctx, terms, unit, ref)
         if acc_ccy is not None and rate is None:
             out["flag"] = "no_fx_rate"
         else:
             if acc_ccy is not None:
-                acc, flag = acc_ccy * rate[0], None  # type: ignore[index]
+                acc, flag = acc_ccy * rate, None  # type: ignore[operator]
             else:
                 acc = n * (ref.accrued_rub if _finite(ref.accrued_rub) else 0.0)
                 flag = "accrued_assumed"
@@ -87,6 +93,19 @@ def trade_pnl(ctx: EodContext, secid: str, terms: Any, ref: BondValuation | None
             now = n * ref.dirty_rub
             out.update(pnl_rub=sign * (now - cost), cost_rub=cost, value_rub=now, flag=flag)
     return out
+
+
+def _implied_rate(ctx: EodContext, terms: Any, unit: str, ref: BondValuation) -> float | None:
+    """RUB per unit of the bond's currency as its valuation has it (``face_rub`` / the face in currency), else the market
+    rate: the accrued of a trade is converted as the face is, so the cost has no PnL of a rate move."""
+    try:
+        face = float(pv1.face_on(terms, ctx.business_date))
+    except Exception:   # noqa: BLE001 - no face: the market rate
+        face = 0.0
+    if face > 0 and math.isfinite(ref.face_rub):
+        return ref.face_rub / face
+    r = fx_rate(ctx, unit)
+    return None if r is None else r[0]
 
 
 def _by_row(trades: list[dict[str, Any]]) -> dict[str, list[dict[str, Any]]]:

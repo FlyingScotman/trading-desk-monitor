@@ -48,6 +48,7 @@ from .. import __version__ as BACKEND_VERSION
 from .. import logic_version, store
 from ..marketdata.adapter import MarketView
 from ..orchestrator import EodContext, Outcome
+from ..pnl.flash import _json_safe
 from ..store import PositionInputs
 from ..valuation.fallback import CarriedSpread, used_model_spreads
 from . import derivatives_parallel, funding_run, fx_liability, ocp_run
@@ -203,7 +204,8 @@ def _write(cur: psycopg.Cursor, run_id: int, positions: list[tuple[str, str, Out
         q = v.quantity if v and o.terms else qty[pid]  # a bond given by face: the number of bonds valued
         rows.append((run_id, pid, i, book, o.secid, q, v.quality if v else None, why, pv, dv01, cs01,
                      _jsonb(f) if f else None, _jsonb(pnl) if pnl else None,
-                     _jsonb({"reason": o.no_pnl.reason, "detail": o.no_pnl.detail, **(o.trades or {})}) if o.no_pnl else None))
+                     _jsonb({"reason": o.no_pnl.reason, "detail": o.no_pnl.detail,
+                             **(_json_safe(o.trades) if o.trades else {})}) if o.no_pnl else None))
         for b in (book, "_total"):
             coverage[b][v.quality if v else "not_valued"] += 1
             coverage[b]["not_valued"] += 0
