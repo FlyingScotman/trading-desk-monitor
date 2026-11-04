@@ -53,7 +53,8 @@ from ..valuation.fallback import CarriedSpread, used_model_spreads
 from . import derivatives_parallel, funding_run, fx_liability, ocp_run
 from .tdm_run import RunContent, git_sha, run_content
 
-PNL_KEYS = ("carry", "rolldown", "rates", "spread", "other", "fx_gross", "fx_funding", "funding", "total")
+PNL_KEYS = ("carry", "rolldown", "rates", "spread", "other", "fx_gross", "fx_funding", "funding", "new_trades",
+            "total")
 """Run totals per book: the components sum to ``total`` (a foreign-face bond's FX revaluation is in ``fx_gross``, the
 FX revaluation of its currency funding liability in ``fx_funding``, the position's funding in ``funding``: ``total`` is
 net of funding)."""
@@ -202,7 +203,7 @@ def _write(cur: psycopg.Cursor, run_id: int, positions: list[tuple[str, str, Out
         q = v.quantity if v and o.terms else qty[pid]  # a bond given by face: the number of bonds valued
         rows.append((run_id, pid, i, book, o.secid, q, v.quality if v else None, why, pv, dv01, cs01,
                      _jsonb(f) if f else None, _jsonb(pnl) if pnl else None,
-                     _jsonb({"reason": o.no_pnl.reason, "detail": o.no_pnl.detail}) if o.no_pnl else None))
+                     _jsonb({"reason": o.no_pnl.reason, "detail": o.no_pnl.detail, **(o.trades or {})}) if o.no_pnl else None))
         for b in (book, "_total"):
             coverage[b][v.quality if v else "not_valued"] += 1
             coverage[b]["not_valued"] += 0

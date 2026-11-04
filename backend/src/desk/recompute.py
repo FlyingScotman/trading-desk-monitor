@@ -62,7 +62,7 @@ def eod_dates(settings: Any, url: str, dates: Iterable[date], *, out: Callable[[
                 if not n:
                     continue
                 run = store.default_runs(con, d).get(d)
-                inputs_hash = store.positions_for(con, d).private_inputs_hash
+                inputs_hash = trades.intraday_inputs(con, d, settings)[0].private_inputs_hash  # TDM#557
             if run is not None and run["position_set_ids"] == ids and run["private_inputs_hash"] == inputs_hash:
                 continue
             rid = eod_run(settings, d.isoformat(), snapshots=settings.snapshot_cache, store_url=url,
@@ -96,9 +96,7 @@ def current_day(settings: Any, url: str, today: date, *, out: Callable[[str], No
         with store.connect(url) as con:
             if not store.current_sets(con, today)[1]:
                 return res
-            inputs = store.positions_for(con, today)
-            want = inputs.private_inputs_hash
-            want_intraday = trades.intraday_inputs(con, today, settings, inputs)[0].private_inputs_hash  # TDM#557
+            want = want_intraday = trades.intraday_inputs(con, today, settings)[0].private_inputs_hash  # TDM#557
             intraday = con.execute(_LATEST_INTRADAY, (today,)).fetchone()
             prelim = con.execute(_PRELIMINARY, (today, today)).fetchone()
     except Exception as e:  # noqa: BLE001 - the store not readable: nothing made again, said so

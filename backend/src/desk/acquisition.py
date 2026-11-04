@@ -19,7 +19,7 @@ from dataclasses import dataclass
 from datetime import date, datetime
 from pathlib import Path
 
-from . import helper_proc, recompute, store
+from . import helper_proc, recompute, store, trades
 from .autopilot import CycleLock
 from .helper_proc import MAX_REQUEST, MAX_RESPONSE  # noqa: F401 - the routes' and the tests' limits
 from .inbox import scan
@@ -306,7 +306,7 @@ class Acquisition:
                 if ({u["set_id"] for u in current} != {r[0] for r in wanted_sets}
                         or any(u["source"] != p.source or u["valid_date"] != day for u in current)):
                     raise FlowError("snapshot_not_current")
-                expected_hash = store.positions_for(con, day).private_inputs_hash
+                expected_hash = trades.intraday_inputs(con, day, st)[0].private_inputs_hash  # TDM#557
             self._update(phase="valuating", code="valuating")
             rid = eod_run(st, day.isoformat(), store_url=self._url, report_dir=None, out=lambda _: None)
             if rid is None:
@@ -316,7 +316,7 @@ class Acquisition:
                                   (rid,)).fetchone()
                 if not run or run[0] != "complete" or run[1] != expected_hash \
                         or run[2].get("positions", {}).get("private_inputs_hash") != expected_hash \
-                        or store.positions_for(con, day).private_inputs_hash != expected_hash:
+                        or trades.intraday_inputs(con, day, st)[0].private_inputs_hash != expected_hash:
                     raise FlowError("run_not_current", "error")
                 block = con.execute("SELECT data FROM run_reference WHERE run_id = %s"
                                     " AND kind = 'derivatives_parallel'", (rid,)).fetchone()

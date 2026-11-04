@@ -94,6 +94,8 @@ class DirectPnl:
     ``fx_core_rest`` (an FX deal by core); None for an FX row (all of it in ``fx_gross``)."""
     report_from: date | None = None
     """A report-valued row whose D-1 carried an older report: that report's valid date (``extra.report_from``)."""
+    new_trades: float = 0.0
+    """The PnL of the day's trades (``pnl.new_trades``); 0: a report-valued row has the trades inside its reports."""
     received_rub: float | None = None
     """A derivative valued by core: the cash its trades paid or settled in (D-1, D], in ``total`` (``extra.received_rub``,
     as a bond's); None for a row without core."""
@@ -104,7 +106,7 @@ class DirectPnl:
 
     def as_tdm(self) -> dict[str, float]:
         return {"carry": 0.0, "rolldown": 0.0, "rates": 0.0, "spread": 0.0, "convexity": 0.0, "other": self.other,
-                "fx_gross": self.fx_gross, "fx_funding": self.fx_funding, "new_trades": 0.0,
+                "fx_gross": self.fx_gross, "fx_funding": self.fx_funding, "new_trades": self.new_trades,
                 **({"fx_gross_cbr": self.fx_gross_cbr} if self.fx_gross_cbr is not None else {}),
                 **({"fx_funding_cbr": self.fx_funding_cbr} if self.fx_funding_cbr is not None else {})}
 

@@ -85,7 +85,7 @@ from typing import Any
 
 import psycopg
 
-from . import logic_version, store
+from . import logic_version, store, trades
 from .marketdata import cache
 from .marketdata.bundle import SnapshotDir, previous_close
 from .marketdata.hub import HubError, TransportError
@@ -248,7 +248,7 @@ def plan(con: psycopg.Connection, settings: Settings, date_from: date, date_to: 
         pc = previous_close(sd, d, hub_ids)  # the run's previous close once the run synced it (#203)
         pd, pcut, prev = pc if pc else (None, None, None)
         run = runs.get(date.fromisoformat(d))
-        inputs_hash = store.positions_for(con, date.fromisoformat(d)).private_inputs_hash
+        inputs_hash = trades.intraday_inputs(con, date.fromisoformat(d), settings)[0].private_inputs_hash  # TDM#557
         late = late_why(con, date.fromisoformat(d), run)
         why = ("no default run" if run is None else "positions changed" if run["position_set_ids"] != ids
                else "market snapshot changed" if run["market_snapshot_id"] != snap

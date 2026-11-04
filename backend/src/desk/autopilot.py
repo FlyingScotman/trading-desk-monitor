@@ -1046,7 +1046,7 @@ class Autopilot:
             pc = previous_close(sd, d)  # cli.eod_run's: the newest earlier close, its final preferred (#203)
             prev = pc[2] if pc else None
             run = runs.get(date.fromisoformat(d))
-            inputs_hash = store.positions_for(con, date.fromisoformat(d)).private_inputs_hash
+            inputs_hash = trades.intraday_inputs(con, date.fromisoformat(d), settings)[0].private_inputs_hash  # TDM#557
             why = ("no default run" if run is None else "positions changed" if run["position_set_ids"] != ids
                    else "market snapshot changed" if run["market_snapshot_id"] != snap
                    else "previous snapshot changed" if run["prev_market_snapshot_id"] != prev
@@ -1186,9 +1186,8 @@ class Autopilot:
         if target is None and last is not None and last[4] != prev_id:
             target = (last[1], "previous close changed")  # the previous close arrived (or was corrected) after it
         inputs_hash = None
-        if last is not None:  # an INTRADAY run values the day's trades too (TDM#557), as cli.eod_run does
-            inputs_hash = (trades.intraday_inputs(con, today, settings)[0] if rtype == "INTRADAY"
-                           else store.positions_for(con, today)).private_inputs_hash
+        if last is not None:  # every run values the day's trades too (TDM#557), as cli.eod_run does
+            inputs_hash = trades.intraday_inputs(con, today, settings)[0].private_inputs_hash
         if target is None and last is not None and last[5] != inputs_hash:
             target = (last[1], "private inputs changed")  # e.g. trade terms of an earlier date, in force today (#547)
         if target is None and last is not None and (late := late_why(con, today, {"positions_known_at": last[6]})):

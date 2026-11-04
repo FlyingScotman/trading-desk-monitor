@@ -165,12 +165,13 @@ def test_the_screen_says_what_the_run_took_in():
     assert state(_trade(trade_id="TR5"), day, run, True) == "pending"
     assert state(_trade(trade_id="TR5"), day, {**run, "truncated": True}, True) == "unknown"
     assert state(t, day, None, True) == "pending" and state(t, day, run, False) == "off"
-    assert state(t, day, {**run, "run_type": "EOD"}, True) == "eod"        # the preliminary close: no trades
+    assert state(t, day, {**run, "run_type": "EOD"}, True) == "applied"    # a close takes the day's trades in too
+    assert state(_trade(trade_id="TR8"), day, {**run, "skipped_ids": {"TR8": "in_positions"}}, True) == "in_positions"
     assert state(_trade(status="cancelled"), day, run, True) == "cancelled"
 
 
 def test_the_changed_row_says_where_its_day_started(monkeypatch):
-    """TDM#557, to be decided: the flash PnL of a changed row is measured on the quantity after the trades; the row says
+    """TDM#557: the start-of-day PnL of a changed row is measured on the quantity before the trades; the row says
     from what quantity the day started (``x.intraday_start_qty``)."""
     out, _ = _apply(monkeypatch, [_trade(side="sell", quantity="1000")])
     assert out.extra["T1|SEC1"]["x"]["intraday_start_qty"] == 1000.0

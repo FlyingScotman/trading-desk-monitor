@@ -350,6 +350,15 @@ class FlashPnl:
     price discovery, not a market move."""
     other_reason: dict[str, Any] | None = field(default=None, compare=False)
     """Why the PnL is (partly) in ``other`` (module docstring, ``pnl.reasons.other_reason``): ``extra["other_reason"]``."""
+    new_trades: float = 0.0
+    """The PnL of the day's trades in this position (``pnl.new_trades``, TDM#557): each trade from its price to the
+    day's valuation (a sale: from the valuation to its price). The components above are the position of the start of
+    the day (``start_quantity``); ``total`` holds this too. 0 for a position nobody traded today."""
+    start_quantity: float | None = None
+    """The position changed by the day's trades: the number of bonds the components above are measured on (the
+    start of the day; 0 for a position opened today); None for a position not traded (``quantity`` is then that)."""
+    trades: list[dict[str, Any]] | None = field(default=None, compare=False)
+    """Each trade of the day in the position with its PnL (``pnl.new_trades.trade_pnl``): ``extra["trades"]``."""
 
     @property
     def carry_pull(self) -> float | None:
@@ -367,7 +376,7 @@ class FlashPnl:
         """The ``pnl`` dict of a ``tdm`` position (writer PNL_COLS)."""
         return {"carry": self.carry, "rolldown": self.rolldown, "rates": self.rates, "spread": self.spread,
                 "convexity": 0.0, "other": self.other, "fx_gross": self.fx_gross, "fx_funding": self.fx_funding,
-                "new_trades": 0.0, **({"fx_gross_cbr": self.fx_gross_cbr} if self.fx_gross_cbr is not None else {}),
+                "new_trades": self.new_trades, **({"fx_gross_cbr": self.fx_gross_cbr} if self.fx_gross_cbr is not None else {}),
                 **({"fx_funding_cbr": self.fx_funding_cbr} if self.fx_funding_cbr is not None else {})}
 
     def extra(self) -> dict[str, Any]:
@@ -386,9 +395,11 @@ class FlashPnl:
         }
 
     def tags(self) -> dict[str, Any]:
-        """``flag`` and ``other_reason`` in ``extra``, when set."""
+        """``flag``, ``other_reason`` and the day's trades (``start_quantity``, ``trades``) in ``extra``, when set."""
         return {**({"flag": self.flag} if self.flag else {}),
-                **({"other_reason": self.other_reason} if self.other_reason else {})}
+                **({"other_reason": self.other_reason} if self.other_reason else {}),
+                **({"start_quantity": self.start_quantity} if self.start_quantity is not None else {}),
+                **({"trades": [_json_safe(t) for t in self.trades]} if self.trades else {})}
 
     def breakdown(self) -> dict[str, Any]:
         """The keys of TDM#406 in ``extra`` (module docstring), JSON-safe: a pair whose value is not finite left out,
@@ -417,7 +428,7 @@ BREAKDOWN_KEYS = ("carry_coupon", "carry_pull", "received_coupon_rub", "received
                   "curve_moves_bp", "prev")
 """The keys of ``FlashPnl.breakdown``: kept in the store's ``pnl.extra`` (``publish.desk_run``), which the PnL period
 API reads, not in the fact's copy of it (``publish.tdm_run.pnl_extra``), whose shape stays as it was."""
-STORE_ONLY_KEYS = (*BREAKDOWN_KEYS, "other_reason")
+STORE_ONLY_KEYS = (*BREAKDOWN_KEYS, "other_reason", "start_quantity", "trades")
 """``BREAKDOWN_KEYS`` and the reason of the unexplained (TDM#442): the store's ``pnl.extra`` only."""
 
 

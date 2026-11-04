@@ -875,10 +875,14 @@ delta source on the same book and date conflict (`scope_conflict`): a book is fe
 deltas, not both. The "newest full snapshot, then newer increments" walk above therefore runs within one source's
 sets. An `increment` unit is never `superseded`: a delta that arrives late is stored and still adds; one equal to a stored
 delta stores nothing. A flow: never carried forward. Served at `GET /api/v1/trades?date=&book_id=` and on the
-monitors' screen «Сделки дня» (C20). An INTRADAY run counts the day's bond trades into its book
-(`desk.trades.apply_intraday`, setting `intraday_trades`, TDM#557); the run's private inputs hash covers the trades it
-applied, so a new cut of the trades makes the run again. Everything else, the valuation of the trades and new-trade
-PnL, is the rest of S13 (TDM#29).
+monitors' screen «Сделки дня» (C20). Every run of date D (intraday, preliminary and final close) counts the day's bond
+trades into its book when the book's positions are older than D (`valid_date` of its set < D; otherwise they are in the
+report: reason `in_positions`; `desk.trades.apply_intraday`, setting `intraday_trades`, TDM#557); the run's private
+inputs hash covers the trades it applied, so a new cut of the trades, or the report of D, makes the run again. The PnL
+of a position the trades changed is the start-of-day position's PnL (the full factors) plus the component `new_trades`:
+each trade from its price (`price_pct`, clean, % of the current face; `accrued_ccy`, the trade's whole accrued, in its
+currency) to the run's valuation, a sale from the valuation to its price (`desk.pnl.new_trades`); a trade without a
+price is 0, flagged. Trades of other products (FX, derivatives) are the rest of S13 (TDM#29).
 
 ### `trade_list` — stock; `full_snapshot`, scope `["book_id"]`, `covers = listed`, `time_basis = end_of_day` (since 1.8)
 
