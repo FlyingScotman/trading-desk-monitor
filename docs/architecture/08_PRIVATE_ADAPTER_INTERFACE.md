@@ -185,7 +185,9 @@ it has. Two parts:
   others the adapter takes from its cache, because a `trade_terms` unit replaces the whole book (§6.6, §10). The monitor
   writes the file only when the store holds a `trade_list` of the owner's books **of the feed's date** (a unit of an
   earlier day, carried forward as a stock, does not count; `desk.terms_plan`), at most 50,000 trades; a book listed
-  with no trades gives an empty `trades`. Before such a feed the monitor runs the enabled and ready feed of the dataset
+  with no trades gives an empty `trades`; a book without a unit of that day is not listed and stays out of the request
+  (it does not make the other books' list stale). The `trade_list` feed gives a unit (possibly empty) for every book the
+  monitor asked for. Before such a feed the monitor runs the enabled and ready feed of the dataset
   `trade_list` in the same turn when the store has no list of that day. Without a file the field is absent, the feed
   runs as before and the outcome's first line says why («Список сделок за … не получен — полный проход», «Заявка не
   построена: …»). The bundle of a book replaces its terms whole, so an adapter takes into it every trade of the book it

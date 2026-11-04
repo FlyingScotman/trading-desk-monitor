@@ -159,6 +159,8 @@ def test_plan_new_changed_have_closed_and_cancelled(con, tmp_path: Path, inbox: 
          "buy;10;800;80\n")
     p = terms_plan.plan(con, D("2026-10-22"), ["D1"])
     assert p["trades"] == [] and p["books"] == ["D1"] and p["closed"] == ["GONE"] and p["counts"]["live"] == 0
-    # one stale unit among fresh ones: stale as a whole
+    # D1's unit is of an earlier day, T1's is of the day: T1 is planned, D1 is not listed (it does not make the plan stale)
     _put(con, s, inbox, "trade_list_20261023.csv", "trade_id;trade_version;book_id;status\r\nA;1;T1;live\r\n")
-    assert terms_plan.plan(con, D("2026-10-23"), ["D1", "T1"]) == {"stale": True, "date": "2026-10-23"}
+    p = terms_plan.plan(con, D("2026-10-23"), ["D1", "T1", "C1"])  # C1 has no unit at all
+    assert p["books"] == ["T1"] and [t["trade_id"] for t in p["trades"]] == ["A"]
+    assert p["closed"] == ["OTHER"]  # T1's earlier terms are closed by T1's list

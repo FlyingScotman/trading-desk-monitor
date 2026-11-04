@@ -30,18 +30,23 @@ def _version(v: Any) -> int | None:
 
 def plan(con: Any, day: date, books: list[str]) -> dict | None:
     """The comparison for ``books`` on ``day``. None: the store holds no ``trade_list`` unit of those books.
-    ``{"stale": True, "date"}``: it does, but a unit is of an earlier day (``trade_list`` is a stock, carried forward;
-    the list of another day is no list of this one: the caller asks for the terms of the whole report). A book listed
+    ``{"stale": True, "date"}``: it does, but none is of ``day`` (``trade_list`` is a stock, carried forward; the list of
+    another day is no list of this one: the caller asks for the terms of the whole report). Books with a unit of ``day``
+    are planned; one without is left out (not listed). A book listed
     with no trades (a marker) gives a plan with no trades."""
     wanted = set(books)
     listing = store.dataset_rows(con, "trade_list", day)
     units = [u for u in listing.units if u["scope"].get("book_id") in wanted]
     if not units:
         return None
-    if any(u["valid_date"] != day for u in units):
+    fresh = [u for u in units if u["valid_date"] == day]
+    if not fresh:  # only lists of earlier days (a stock carried forward): no list of this one
         return {"stale": True, "date": day.isoformat()}
+    # a book without a unit of the day is not listed (it left the adapter's selection, or the source did not name it):
+    # it stays out of the plan, the others are planned; it does not make the whole list stale
+    wanted = {u["scope"]["book_id"] for u in fresh}
     rows = [r for r in listing.rows if r.get("book_id") in wanted]
-    listed_books = {u["scope"]["book_id"] for u in units}
+    listed_books = set(wanted)
     live: dict[str, dict] = {}
     for r in sorted(rows, key=lambda r: (str(r["book_id"]), str(r["trade_id"]))):
         if r.get("status") != "live":
