@@ -351,6 +351,7 @@ def eod_run(settings: Settings, d: str, *, snapshots: str | Path | None = None, 
                 "(one deal_id on several rows), valued in none: " + "; ".join(bp.ambiguous_terms[:10]))
         outcomes = value(ctx, bp.requests, second_order=not no_gamma, position_ids=bp.position_ids,
                          carried_spreads=carried)
+        outside_total = None   # the day's trades whose PnL is not in the run's total (the lineage's ``outside_total``)
         if prev_cut and not no_pnl:
             prev_ctx = prep(sd, *prev_cut, fx_options=fx_options)
             attach_pnl(prev_ctx, value(prev_ctx, bp.requests, position_ids=bp.position_ids, carried_spreads=carried),
@@ -362,9 +363,10 @@ def eod_run(settings: Settings, d: str, *, snapshots: str | Path | None = None, 
                               prev_inputs.valid_dates, prev_inputs)
             if intraday_trades and intraday_trades["applied"] and start_inputs is not None:   # start of day + trades
                 split = new_trades_pnl.attach(prev_ctx, ctx, start_inputs, bp, outcomes, intraday_trades, carried)
-                texts = {"mixed_valuation": "lots valued in different ways (core and the report): the PnL of the trades "
-                                            "is whole on one lot",
-                         "lost": "no lot valued with terms: the PnL of the trades is not in the run"}
+                texts = {"mixed_valuation": "lots valued in different ways (core and the report): the PnL of the bond "
+                                            "(the start of the day and the trades) is whole on one lot",
+                         "lost": "valued at the report's figure, no lot with terms: the trades are inside the reports' "
+                                 "difference, the day's PnL of the bond is not shown"}
                 for kind, text in texts.items():
                     if split[kind]:
                         out(f"WARN trades: {len(split[kind])} bond(s), {text}: " + ", ".join(split[kind][:10]))
@@ -379,6 +381,7 @@ def eod_run(settings: Settings, d: str, *, snapshots: str | Path | None = None, 
                     out(f"WARN trades: {split['flagged']} trade(s) without a PnL (no price, other currency, no "
                         "valuation or rate): the PnL of the trades is incomplete")
                     intraday_trades["unpriced"] = split["flagged"]
+                outside_total = new_trades_pnl.outside_total(intraday_trades["applied"], split)
             flash = [o.pnl for o in outcomes if o.pnl]
             out(f"flash PnL {prev_date} -> {d}: {len(flash)}/{sum(o.valuation is not None for o in outcomes)} "
                 f"priced positions, total {sum(p.total for p in flash):,.0f} RUB, "
@@ -386,6 +389,10 @@ def eod_run(settings: Settings, d: str, *, snapshots: str | Path | None = None, 
             dp = [o.pnl for o in bp.direct.values() if o.pnl]
             out(f"PnL without core: {len(dp)}/{sum(o.valuation is not None for o in bp.direct.values())} positions "
                 f"(by the rate move or the reports), total {sum(p.total for p in dp):,.0f} RUB")
+        if intraday_trades and intraday_trades["applied"]:
+            # no previous close (or no PnL asked): none of the trades is in a total, said in the lineage
+            intraday_trades["outside_total"] = outside_total or new_trades_pnl.outside_total(
+                intraday_trades["applied"], no_prev_close=not prev_cut, no_pnl_run=bool(no_pnl))
         if on_close:
             out(f"no flash PnL: the book of {d} on the close of {ctx.business_date} (morning run)")
         elif not prev_date:
