@@ -160,7 +160,7 @@ def test_a_started_swap_without_the_fixings_is_not_valued(ctx):
 def test_a_swap_started_before_the_first_fixing_is_not_valued_with_the_date(ctx):
     o, _ = value(ctx, rus(start="2026-09-28", end="2027-09-28", **FIXED))
     assert o.core_not_valued[0] == "no_fixings"
-    assert o.core_not_valued[1].startswith("RUSFARCNY за 2026-09-28 нет в срезе")
+    assert o.core_not_valued[1].startswith("no RUSFARCNY fixing for 2026-09-28 in the snapshot")
 
 
 def _with_rows(ctx, drop):
@@ -202,7 +202,7 @@ def test_two_unpublished_last_business_days_are_missing_fixings_not_core_refusal
     late, info = _with_rows(ctx, {"2026-10-13", "2026-10-14"})
     assert info["unpublished_business_days"] == []
     o, _ = value(late, rus(**FIXED))
-    assert o.core_not_valued[0] == "no_fixings" and o.core_not_valued[1].startswith("RUSFARCNY за 2026-10-13 нет в срезе")
+    assert o.core_not_valued[0] == "no_fixings" and o.core_not_valued[1].startswith("no RUSFARCNY fixing for 2026-10-13 in the snapshot")
 
 
 def test_a_preliminary_fixing_is_said(ctx):

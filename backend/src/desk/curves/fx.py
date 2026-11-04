@@ -21,7 +21,8 @@
   (``ois-logdf-v1``, ACT/365F) that projects the floating CNY leg of a cross-currency swap on RUSFARCNY
   (``valuation.derivatives``); it never discounts and is never an FX forward's curve. Conventions, **provisional**
   (the exchange's OIS RUSFARCNY terms are not at hand): the swap starts TOM on ``FX:CNY`` (the curve date to the start
-  at the latest RUSFARCNY fixing, else the shortest tenor's rate), ends the tenor later (modified following), pays once up to 1Y and annually beyond
+  at the latest RUSFARCNY fixing, else the shortest tenor's rate), ends the tenor later (modified following), pays
+  once up to 1Y and annually beyond
   (rolled back from the end, adjusted, a short first stub), the fixed leg ACT/365F; the floating leg is single-curve
   (its PV is ``DF(start) - DF(end)``). The nodes are the start and the swap ends; past the last quote the curve is
   extrapolated flat-forward (said in the lineage).
@@ -104,13 +105,14 @@ RUSFAR_CNY_CURVE_ID, RUSFAR_CNY_SPEC = "CNY RUSFAR", "cny_discount_factors_v1"
 RUSFAR_CNY_DATASET = "cny_rusfar_ois"
 RUSFAR_CNY_FIXING = "RUSFARCNY"
 RUSFAR_CNY_INDEX = "CNY-RUSFARCNY-COMPOUND"
+"""The name of core's compounded index of a RUSFARCNY leg and of its fixings (``valuation.derivatives.CCS_FOREIGN_INDEX``)."""
 RUSFAR_CNY_MAX_UNPUBLISHED_DAYS = 1
 """As RUONIA's (``rates.RUONIA_MAX_UNPUBLISHED_DAYS``): at most one business day just before the business date may lack its
 RUSFARCNY fixing (the hub late, the first business day of the year after the exchange's last day without the index): the
 previous value is carried and said. More are missing fixings, never filled (``valuation.derivatives``: ``no_fixings``)."""
 RUSFAR_CNY_PRELIMINARY = "moex_marketdata_preliminary"
-"""The hub's label of a fixing that is a preliminary value (D-1 from the exchange's market data), said in the lineage."""
-"""The name of core's compounded index of a RUSFARCNY leg and of its fixings (``valuation.derivatives.CCS_FOREIGN_INDEX``)."""
+"""The hub's label of a fixing that is a preliminary value of the same day from the exchange's market data, replaced later by
+the history's (hub ``HISTORY_API.md``); said in the lineage."""
 CBR_SOURCE = "CBR"
 SPOT_SOURCES = ("market", "cets_tom")
 SWAP_LAG = {"TOD": 0, "TOM": 1, "SPT": 2}
@@ -324,7 +326,8 @@ def _add_months(d: date, months: int) -> date:
 RUSFAR_CNY_CONVENTION = (
     "provisional: the swap starts TOM on FX:CNY, ends the tenor later (modified following), pays once up to 1Y and "
     "annually beyond (rolled back from the end, adjusted, short first stub), fixed leg ACT/365F, floating leg "
-    "single-curve (DF(start) - DF(end)); DF(start) at the latest RUSFARCNY fixing (else the shortest tenor's rate) from the curve date; beyond the last "
+    "single-curve (DF(start) - DF(end)); DF(start) at the latest RUSFARCNY fixing (else the shortest tenor's rate) "
+    "from the curve date; beyond the last "
     "quote flat-forward")
 """The ``CNY RUSFAR`` bootstrap rule, in its lineage."""
 
@@ -398,7 +401,8 @@ def _rusfar_cny(market: Any, cal: BusinessCalendar, bd: date, front: tuple[date,
     curve = DiscountCurve(bd, tuple(nodes), "ois-logdf-v1", convention=conv)
     lineage.update(status="ok", spec_id=RUSFAR_CNY_SPEC, tenors_used=used, tenors_dropped=dropped,
                    last_node=nodes[-1][0].isoformat(), calendar=cal.version,
-                   front_rate=f"{RUSFAR_CNY_FIXING} {front[0].isoformat()}" if front else "shortest tenor", convention=RUSFAR_CNY_CONVENTION,
+                   front_rate=f"{RUSFAR_CNY_FIXING} {front[0].isoformat()}" if front else "shortest tenor",
+                   convention=RUSFAR_CNY_CONVENTION,
                    extrapolation=f"flat-forward beyond {nodes[-1][0].isoformat()} (provisional)")
     return curve, lineage
 

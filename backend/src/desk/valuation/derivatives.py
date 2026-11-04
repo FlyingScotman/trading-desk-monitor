@@ -1047,8 +1047,8 @@ def _ccs_build(ctx: Any, c: CcsTerms, iid: str, curve_of: dict[str, str]
                              "the settlement calendar): the previous fixing holds")
             prelim = [d for d in info.get("preliminary_days") or () if open_from.isoformat() <= d]
             if prelim:
-                notes.append(f"{c.label}: {foreign_fixing} of {', '.join(prelim)} is a preliminary value (exchange "
-                             "market data of the day before): provisional")
+                notes.append(f"{c.label}: {foreign_fixing} of {', '.join(prelim)} is a preliminary value (the "
+                             "exchange's market data of the same day, replaced later by its history): provisional")
         last = ((ctx.fx.lineage.get("curves") or {}).get(fidx.curve_id) or {}).get("last_node")
         notes.append(f"{c.label}: {fidx.curve_id} quotes to {last}, beyond them extrapolated flat-forward (provisional)")
     inst = XccyInstrument(iid, swap, RUONIA_OIS_CURVE_ID, foreign_curve, rub_fixing_id=fixing,
@@ -1074,11 +1074,11 @@ def _require_fixings(c: CcsTerms, fixings: Any, periods: Any, bd: date) -> None:
                 while not cal.is_business_day(obs):
                     obs -= timedelta(days=1)
             except CalendarRangeError:
-                raise NotValued("no_fixings", f"{fixings.index}: {obs} is before the fixing calendar for the started "
-                                              f"CCS {c.label}") from None
+                raise NotValued("no_fixings", f"{fixings.index}: {obs} is before the fixing calendar (the started CCS "
+                                              f"{c.label})") from None
             if obs not in have:
-                raise NotValued("no_fixings", f"{RUSFAR_CNY_FIXING} за {obs.isoformat()} нет в срезе (the started CCS "
-                                              f"{c.label} reads it)")
+                raise NotValued("no_fixings", f"no {RUSFAR_CNY_FIXING} fixing for {obs.isoformat()} in the snapshot (the "
+                                              f"started CCS {c.label} reads it)")
             day = day + timedelta(days=1)
 
 

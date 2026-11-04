@@ -2311,8 +2311,8 @@
   K.RC_IDX = { RUONIA: 'RUONIA', KEY_RATE: 'КС' };
   const RC_PROD = { irs: 'IRS', ois: 'OIS', repo: 'РЕПО', ccs: 'CCS' };
   K.RC_SIDE = { payer: 'плачу фикс', receiver: 'получаю фикс', repo: 'РЕПО (привлечение)', reverse_repo: 'обратное РЕПО (размещение)' };
-  // CCS с плавающей валютной ногой (foreignIndex): сторона — по валютной ноге, а не «фикс»
-  K.rcSide = (side, t) => t && t.product === 'ccs' && t.foreignIndex && (side === 'payer' || side === 'receiver')
+  // CCS, у которого плавают обе ноги (foreignIndex, нет фикса): сторона — по валютной ноге; при рублёвом фиксе side по фиксу
+  K.rcSide = (side, t) => t && t.product === 'ccs' && t.foreignIndex && t.fixedRate == null && (side === 'payer' || side === 'receiver')
     ? (side === 'payer' ? 'плачу валютную ногу' : 'получаю валютную ногу') : (K.RC_SIDE[side] || side);
   // причины, по которым ядро не оценило строку (backend valuation/derivatives.py NotValued; core_<код> — отказ ядра)
   const RC_REASON = { ccs_unsupported: 'CCS ядром пока не оценивается',
