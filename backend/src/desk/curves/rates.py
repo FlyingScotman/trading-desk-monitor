@@ -268,6 +268,14 @@ def key_rate_projection(market: Snapshot, static: Snapshot, discount: DiscountCu
                       CurveEntry(KEY_RATE_SWAP_CURVE_ID, KEY_RATE_SWAP_SPEC, fwd))
 
 
+def fixing_known(f: ar.Fixing, cut: datetime) -> bool:
+    """Whether the fixing ``f`` was published by ``cut`` (``fixing_entries``): ``published_at <= cut``, or, with only a
+    ``published_on`` date, ``published_on`` before the ``cut`` date; a row with neither counts as known."""
+    if f.published_at is not None:
+        return f.published_at <= cut
+    return f.published_on is None or f.published_on < cut.date()
+
+
 def fixing_entries(market: Snapshot, static: Snapshot, known_at: datetime | None = None,
                    kbd_history: Mapping[date, ZcycParameters] | None = None
                    ) -> tuple[tuple[FixingEntry, ...], dict[str, Any]]:
@@ -283,9 +291,7 @@ def fixing_entries(market: Snapshot, static: Snapshot, known_at: datetime | None
     cut = known_at or ar.known_at(market)
 
     def known(f: ar.Fixing) -> bool:
-        if f.published_at is not None:
-            return f.published_at <= cut
-        return f.published_on is None or f.published_on < cut.date()
+        return fixing_known(f, cut)
 
     entries, lineage = [], {"known_at": cut.isoformat()}
     for code, index, (cal, _) in (("RUONIA", "ruonia", ruonia_calendar(static, bd)),

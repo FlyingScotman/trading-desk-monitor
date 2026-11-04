@@ -2313,7 +2313,9 @@
   K.RC_SIDE = { payer: 'плачу фикс', receiver: 'получаю фикс', repo: 'РЕПО (привлечение)', reverse_repo: 'обратное РЕПО (размещение)' };
   // причины, по которым ядро не оценило строку (backend valuation/derivatives.py NotValued; core_<код> — отказ ядра)
   const RC_REASON = { ccs_unsupported: 'CCS ядром пока не оценивается',
-    ccs_foreign_floating_unsupported: 'CCS с плавающей валютной ногой ядром не оценивается (нет фиксингов валютного индекса)',
+    ccs_foreign_floating_unsupported: 'CCS с плавающей валютной ногой: индекс валютной ноги не поддерживается (оценивается только RUSFARCNY в юанях)',
+    ccs_index_averaging_unsupported: 'CCS: ставка валютной ноги — средняя арифметическая, ядро компаундирует: не оценивается',
+    no_foreign_projection_curve: 'CCS с плавающей юаневой ногой: нет кривой OIS на RUSFAR CNY в срезе хаба',
     ccs_ccy_unsupported: 'CCS не «рубли против валюты»: ядром не оценивается', basis_swap_unsupported: 'базисный своп (две плавающие ноги) ядром пока не оценивается',
     repo_open: 'открытое РЕПО: нет даты окончания (её задаёт владелец)', no_fixings: 'нет фиксингов индекса в прогоне', pv_not_finite: 'ядро дало нечисловую оценку',
     repo_index_unsupported: 'индекс РЕПО не поддерживается', no_key_rate_curve: 'нет кривой КС в прогоне', no_rub_curve: 'нет кривой RUONIA OIS в прогоне',
