@@ -28,7 +28,7 @@
   const RUN = {complete: 'получено', partial: 'получено частично', skipped: 'нечего загружать', blocked: 'остановлено',
     error: 'ошибка', cancelled: 'отменено'};
   const RUN_CODE = {login_required: 'нужен вход', not_configured: 'не настроено', feed_disabled: 'выключено в адаптере',
-    no_change: 'изменений нет', not_due: 'ещё рано', no_positions: 'нет позиций', config_invalid: 'проверьте настройки',
+    no_change: 'изменений нет', no_books: 'нет книг с позициями', not_due: 'ещё рано', no_positions: 'нет позиций', config_invalid: 'проверьте настройки',
     source_disabled: 'источник выключен', helper_timeout: 'время ожидания истекло', helper_response_invalid: 'некорректный ответ модуля',
     files_not_accepted: 'файлы не приняты', calculation_busy: 'занят расчёт, повтор позже', ingestion_busy: 'загрузка занята, повтор позже',
     runtime_unavailable: 'нет Python для получения данных', adapter_unavailable: 'адаптер не загружен',

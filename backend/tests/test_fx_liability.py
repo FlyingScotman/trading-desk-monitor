@@ -428,3 +428,22 @@ def test_cny_bond_liability_from_the_shared_policy(store_url):
     x = per["T1|CNY"]
     assert x["state"] == "computed" and x["ccy"] == "CNY" and x["reference"] == fx_liability.CURRENT
     assert x["amount_ccy"] == pytest.approx(-1_020_000.0) and x["clean_mv_ccy"] == pytest.approx(1_000_000.0)
+
+
+def test_a_foreign_bond_bought_for_the_first_time_today_keeps_its_currency(ctx):
+    """TDM#557: the intraday book's new row has no ``ccy`` (``desk.trades.apply_intraday`` does not know the
+    reference). The valuation takes the currency from the bond's reference, so the row, the funding and the FX
+    liability see USD, not RUB."""
+    from datetime import UTC, datetime
+
+    rows = [("T1|NEW", "T1", USD_BOND, 1000.0)]
+    extra = {"T1|NEW": {"asset_class": "bond", "x": {"intraday_trade": True}}}  # no ccy, a quantity
+    inp = store.PositionInputs(rows, [1], {"T1": ON}, datetime(2026, 10, 16, tzinfo=UTC), "h0", extra)
+    bp = plan(ctx, inp)
+    (pid, book, o), = merge(bp, value(ctx, bp.requests, position_ids=bp.position_ids))
+    row = tdm_run.position_row(ctx, book, pid, o, "")
+    assert row["ccy"] == "USD"
+    per = net([row])
+    assert per[pid]["state"] == "computed" and per[pid]["ccy"] == "USD" and per[pid]["amount_ccy"] < 0
+    pos, _why = fx_liability.funding_run._position(row, BOOKS)
+    assert pos is not None and pos.ccy == "USD"

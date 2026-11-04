@@ -1,6 +1,6 @@
 # 08 Private adapter interface (SPI v1)
 
-As of 3 November 2026, revision 8 (private contract 1.7: the `ocp` row's optional `derivatives_ccy`, the report's
+As of 3 November 2026, revision 10 (private contract 1.8: the dataset `trade_list`, the live trades of the owner's books without their terms, and the `feed` request's `trades_file`, a list of the trades whose terms to fetch, TDM#561; on top of revision 9); revision 9 (services: the `feed` request's repeated `book` and the FEED flag `books`, and the day's bond trades in the intraday run, §10 `trades`, TDM#557; no contract change); revision 8 (private contract 1.7: the `ocp` row's optional `derivatives_ccy`, the report's
 derivatives apart by kind, and `ocp_policy.published` `report_base_plus_day` with `report_max_age_bd`, for the published OCP of
 TDM#531; contract 1.6 of 2 November: the `trades` schema, TDM#525); revision 7 of 28 October (SPI 1 optional functions `status` and `run_action` with `describe()["actions"]`, the settings page's adapter tools of TDM#421, no contract change; revision 6, private contract 1.5: the `reference()` table `ocp_policy`, the organisation's OCP conventions, for the published OCP of TDM#416; revision 5 of 23 October, contract 1.4: `trade_terms` of interest rate and cross-currency swaps, REPO and HTM purchases, for the valuation of swaps by core and the funding of REPO and HTM lots; revision 4 of 22 October, contract 1.3: the `reference()` table `funding_policy` and
 `positions.purchase_accrued_ccy`, for the funding engine in the runs, wave B1; revision 3, contract 1.2: FUTURES books, the `ocp`, `cash_balances`, `pnl_official` and `trade_terms` schemas, `reference()` entities and funding rules, `describe()` settings tabs, multi-date cash history, adapter phases A7–A10; revision 2 of 19 October followed an independent review). Status: **accepted; both tracks build against it.** Decision: [ADR-008](adr/ADR-008-private-adapter-boundary.md). Owner of this document: the backend. A change here is a versioned change (§9).
@@ -165,6 +165,37 @@ Trusted fields the monitor always adds: `adapter_root`, `config_dir`, repeated `
 (`<home>/adapter-services/`, persistent, for the helper's caches and its protected secrets) and, for `feed`, a fresh
 empty `output_dir` (`<home>/adapter-services/out/<run id>/`; the folders of the last 20 runs are kept). A request
 never sets them: the routes accept only `f.<key>` of the cached panel, `action`, `arg` (and `date` for a feed run).
+For a `feed` of a FEED with `books: true` the monitor also adds a repeated `book`: the owner's books (the active books
+of the book list whose current position set on the day has rows, sorted, 1 to 200 values of 1 to 200 characters each). The
+helper may export the whole environment: the books name which of them the adapter's source keeps when it reads the file. With none, the monitor does not call the feed: its outcome is `blocked`, `no_books`.
+
+**The list of trades and the request file** (since 03.11.2026, TDM#561, private contract 1.8). The owner wants the terms
+of the *new and changed* trades only, so the monitor holds the list of the books' trades and compares it with the terms
+it has. Two parts:
+- The feed `trade_list` (FEED `books: true`, `after_positions: true`, dataset `trade_list`) returns, for the repeated
+  `book` and the `date` (without one, the latest positions date of the store), the file `trade_list_YYYYMMDD_<stamp>.json`
+  (the adapter's own format, read by its source `trade_list`) that the source turns into the dataset `trade_list` of §10:
+  the id, version, book and status of each trade, no terms. Where the adapter takes the list from is its business
+  (an adapter setting, on the panel); the monitor never learns.
+- A FEED with `trades_file: true` (the `trade_terms` feed) is called with one more field, `trades_file`: the absolute path
+  of a UTF-8 JSON file the monitor wrote atomically into `<state_dir>/requests/<run id>.json`:
+  `{"format": "terms-request", "version": 1, "date": "YYYY-MM-DD", "books": ["B1", …], "trades": [{"trade_id": "…",
+  "book_id": "B1", "trade_version": 2 | null, "need": true | false}, …]}`. `trades` are **all** the live trades of the
+  listed books, `need` marking those whose terms to fetch (new, or with a version different from the terms held); the
+  others the adapter takes from its cache, because a `trade_terms` unit replaces the whole book (§6.6, §10). The monitor
+  writes the file only when the store holds a `trade_list` of the owner's books **of the feed's date** (a unit of an
+  earlier day, carried forward as a stock, does not count; `desk.terms_plan`), at most 50,000 trades; a book listed
+  with no trades gives an empty `trades`; a book without a unit of that day is not listed and stays out of the request
+  (it does not make the other books' list stale). The `trade_list` feed gives a unit (possibly empty) for every book the
+  monitor asked for. Before such a feed the monitor runs the enabled and ready feed of the dataset
+  `trade_list` in the same turn when the store has no list of that day. Without a file the field is absent, the feed
+  runs as before and the outcome's first line says why («Список сделок за … не получен — полный проход», «Заявка не
+  построена: …»). The bundle of a book replaces its terms whole, so an adapter takes into it every trade of the book it
+  knows, not only the listed ones: the list says which terms the monitor lacks (`need`). The adapter checks the path (inside
+  `state_dir`), the size (16 MiB), `format` and `version`, the `date` (the feed's), and the count; the adapter may refuse a request for any
+  reason of its own, then `invalid_request`. The monitor keeps the last 5 request files for diagnosis and prepends
+  one line to the feed's outcome, «Список: сделок L, книг B; запрошено N (новых a, изменённых b), уже были M, закрыто K»,
+  and keeps the counts in the feed's state. The list is too long for the 256 request fields, hence a file.
 
 **Operations** (field `op`):
 
@@ -195,7 +226,8 @@ PANEL: `{"title", "status": [lines], "sections": [{"id", "title", "help", "field
 [{"id", "label", "confirm"?, "long"}]}]}`. A secret field never carries a value back: the monitor blanks `value`
 whatever the helper sends and keeps only `"set": true|false`.
 
-FEED: `{"id", "title", "dataset", "source", "enabled", "ready", "why_not_ready", "schedule", "after_positions"}`.
+FEED: `{"id", "title", "dataset", "source", "enabled", "ready", "why_not_ready", "schedule", "after_positions",
+"books"?, "trades_file"?}`. `books: true` (default false): the feed is for the owner's books and is called with the repeated `book`. `trades_file: true` (default false): the feed is called with `trades_file` when the monitor holds a list of trades (above).
 `source` names the adapter source that reads the feed's files. A feed may keep its data locally and return no files
 (`complete` with `files: []`); its `source` need not be among the adapter's `sources`. Files of a feed whose `source`
 is not declared for its `dataset` are refused (`feed_source_invalid`, an error), never read. `schedule`:
@@ -207,7 +239,7 @@ machine's local wall clock.
 when never run). `daily_at`: the first slot after the last start; a feed never run catches up today's slot already
 passed, once; slots missed while the monitor was off are one run, not many. `after_positions: true`: also once when a
 positions set for a newer business date than the feed last saw is in the store (the first sight only records it),
-with that date as `date`. A `trade_terms` feed run without a date (by its schedule or by hand) gets the latest
+with that date as `date`. A `trade_terms` or `trade_list` feed run without a date (by its schedule or by hand) gets the latest
 positions business date of the store (the adapter has no holiday calendar). Only enabled feeds (the monitor's switch, default the feed's own `enabled`) that are ready
 run by themselves; «Запустить сейчас» runs any. `blocked`/`login_required` pauses the feed («нужен вход», in the block
 and in «Статус дня») until a `describe` after a successful `save`, `action` or describe says it is ready, or a run by
@@ -248,7 +280,8 @@ the capability is declared: the panel rendered generically as text (fields by ty
 their confirmation, the progress of a long action, lines, a table, a pick list, status lines) and «Фоновая загрузка»
 (per feed: title, switch, schedule, last run with its files and recomputed runs, next run or «нужен вход»,
 «Запустить сейчас»). C14 «Статус дня» lists each feed's last run, state and «нужен вход» (`GET /api/v1/inbox`
-`feeds`: codes and times, no lines).
+`feeds`: codes and times, no lines). Under «Фоновая загрузка» the owner sees the line of the counts above in the feed's
+last run.
 
 ## 3 The module interface
 
@@ -559,13 +592,13 @@ The summary holds counts and codes only. It has no values and no sheet names, an
 - **Private input contract** (`describe()["contract"]`, `private/<major>.<minor>`): the dataset schemas of §10, versioned on their own, separate from the public results contract (1.3/1.4).
   - The backend accepts its own major with any minor. Fields from a newer minor are dropped with a `field_from_newer_contract` warning; the file is not rejected.
   - A new optional field is a minor version; a renamed, retyped or newly required field is a major one.
-  - Minors so far: 1.0 (S7a); 1.1 adds the optional `positions` fields `maturity_date`, `risk_dv01_rub`, `risk_cs01_rub`; 1.2 (22.10.2026) adds `book_type` `FUTURES`, the schemas of `ocp`, `cash_balances` (with the optional key field `ledger`), `pnl_official` and the new dataset `trade_terms`, the optional reference tables `entities` and `funding_rules`, the optional `describe()["settings_tabs"]`, and multi-date `cash_balances`; 1.3 (22.10.2026, wave B1) adds the optional reference table `funding_policy` and the optional `positions` field `purchase_accrued_ccy`; 1.4 (23.10.2026) adds to `trade_terms` the `product_kind` values `irs`, `ois`, `ccs`, `repo` and `bond_purchase`, the `side` values `pay`, `receive`, `repo` and `reverse_repo`, and their optional fields (§10); 1.5 (28.10.2026, TDM#180, TDM#416) adds the optional reference table `ocp_policy`; 1.6 (02.11.2026, TDM#525) the schema of the dataset `trades` (its sources were rejected with `dataset_not_supported` before); 1.7 (03.11.2026, TDM#531) adds the optional `ocp` field `derivatives_ccy` (an object, the report's derivatives apart), the `ocp_policy.published` value `report_base_plus_day` and the optional `ocp_policy.report_max_age_bd`. The backend supports 1.7 and accepts 1.0–1.6 adapters unchanged (an `ocp` unit without `derivatives_ccy` is a report whose `ocp_ccy` holds the derivatives at their nominal: the run publishes it so and says it in the gaps) (a 1.2 adapter without `funding_policy` gets the funding engine's provisional conventions, an adapter before 1.5 without `ocp_policy` the OCP engine's; each run says which). A 1.4 adapter that emits the new products needs a backend on 1.4: an older one rejects those `trade_terms` units (`bad_value` of `product_kind`), as with `FUTURES`.
+  - Minors so far: 1.0 (S7a); 1.1 adds the optional `positions` fields `maturity_date`, `risk_dv01_rub`, `risk_cs01_rub`; 1.2 (22.10.2026) adds `book_type` `FUTURES`, the schemas of `ocp`, `cash_balances` (with the optional key field `ledger`), `pnl_official` and the new dataset `trade_terms`, the optional reference tables `entities` and `funding_rules`, the optional `describe()["settings_tabs"]`, and multi-date `cash_balances`; 1.3 (22.10.2026, wave B1) adds the optional reference table `funding_policy` and the optional `positions` field `purchase_accrued_ccy`; 1.4 (23.10.2026) adds to `trade_terms` the `product_kind` values `irs`, `ois`, `ccs`, `repo` and `bond_purchase`, the `side` values `pay`, `receive`, `repo` and `reverse_repo`, and their optional fields (§10); 1.5 (28.10.2026, TDM#180, TDM#416) adds the optional reference table `ocp_policy`; 1.6 (02.11.2026, TDM#525) the schema of the dataset `trades` (its sources were rejected with `dataset_not_supported` before); 1.7 (03.11.2026, TDM#531) adds the optional `ocp` field `derivatives_ccy` (an object, the report's derivatives apart), the `ocp_policy.published` value `report_base_plus_day` and the optional `ocp_policy.report_max_age_bd`. 1.8 (03.11.2026, TDM#561) adds the dataset `trade_list` (the trades of the books with id, version and status, no terms, a stock). A backend before 1.8 does not load an adapter that declares a source of this dataset: its loader rejects the whole `describe()` (`bad_source`, unknown dataset), so no source of the adapter works, as with 1.2: update the monitor first, then the adapter. The in-app adapter update is safe against this: it loads the new package with the monitor's own loader before switching and keeps the working one (`Новый адаптер не установлен`). The backend supports 1.8 and accepts 1.0–1.7 adapters unchanged (an `ocp` unit without `derivatives_ccy` is a report whose `ocp_ccy` holds the derivatives at their nominal: the run publishes it so and says it in the gaps) (a 1.2 adapter without `funding_policy` gets the funding engine's provisional conventions, an adapter before 1.5 without `ocp_policy` the OCP engine's; each run says which). A 1.4 adapter that emits the new products needs a backend on 1.4: an older one rejects those `trade_terms` units (`bad_value` of `product_kind`), as with `FUTURES`.
   - A new enum value (`FUTURES`) is a minor too: old adapters stay valid. An adapter that emits it needs a backend on 1.2; an older one rejects that book (`bad_value`), never silently re-types it.
 - The adapter's README states the lowest backend version it needs. `desk adapter check` prints the backend version, the SPI, the contract and the adapter fingerprint.
 
-## 10 Private input contract v1 (`private/1.7`)
+## 10 Private input contract v1 (`private/1.8`)
 
-The schemas live in `contract/private/v1/` (one per dataset and reference table, with a header-only CSV template each). The tables below are the design; the schema files are authoritative once written (S7a; `ocp`, `cash_balances`, `pnl_official`, `trade_terms`, `entities`, `funding_rules` since 1.2, `trades` since 1.6, and a test keeps each table equal to its schema). They extend contract 1.3 ([DATA_REQUIREMENTS](../DATA_REQUIREMENTS.md) §4) and supersede its templates (below). A dataset without a schema (`internal_market`) is declared but its sources are rejected with `dataset_not_supported` until its slice.
+The schemas live in `contract/private/v1/` (one per dataset and reference table, with a header-only CSV template each). The tables below are the design; the schema files are authoritative once written (S7a; `ocp`, `cash_balances`, `pnl_official`, `trade_terms`, `entities`, `funding_rules` since 1.2, `trades` since 1.6, `trade_list` since 1.8, and a test keeps each table equal to its schema). They extend contract 1.3 ([DATA_REQUIREMENTS](../DATA_REQUIREMENTS.md) §4) and supersede its templates (below). A dataset without a schema (`internal_market`) is declared but its sources are rejected with `dataset_not_supported` until its slice.
 
 **Storage.** `positions` units are position sets (S7a). Every other dataset with a schema is stored generically, so a new dataset needs a schema and no code: one `dataset_set` per accepted unit (dataset, scope unit, business date) with the revision rules of §6.6, its rows in `dataset_row` (canonical fields as JSON, `_src` and `x_*` beside), typed views `ocp_row`, `cash_balance_row`, `pnl_official_row`, `trade_terms_row`, `trade_row` (1.6) over every revision, and `store.dataset_rows(dataset, D)` for the rows in force (§6.7: stocks carried forward, flows on D only; `trades` merged by version, below).
 
@@ -803,8 +836,23 @@ delta source on the same book and date conflict (`scope_conflict`): a book is fe
 deltas, not both. The "newest full snapshot, then newer increments" walk above therefore runs within one source's
 sets. An `increment` unit is never `superseded`: a delta that arrives late is stored and still adds; one equal to a stored
 delta stores nothing. A flow: never carried forward. Served at `GET /api/v1/trades?date=&book_id=` and on the
-monitors' screen «Сделки дня» (C20). Not valued yet: the book as opening positions plus trades, and new-trade PnL,
-are the rest of S13 (TDM#29).
+monitors' screen «Сделки дня» (C20). An INTRADAY run counts the day's bond trades into its book
+(`desk.trades.apply_intraday`, setting `intraday_trades`, TDM#557); the run's private inputs hash covers the trades it
+applied, so a new cut of the trades makes the run again. Everything else, the valuation of the trades and new-trade
+PnL, is the rest of S13 (TDM#29).
+
+### `trade_list` — stock; `full_snapshot`, scope `["book_id"]`, `covers = listed`, `time_basis = end_of_day` (since 1.8)
+
+The trades of the owner's books, without their terms (TDM#561): the list the monitor compares with the `trade_terms` it holds to ask the adapter for the terms of the new and changed trades only. Key: `trade_id`. A list of a book replaces the book's earlier list (a book listed with no rows, a marker, is a book with no trades); it stays in force until a newer list of the book (a stock). It is stored generically (no typed view).
+
+| Field | Type | Meaning |
+|---|---|---|
+| `trade_id` ● | str | The trade's id in the booking system, as in `trade_terms` |
+| `trade_version` | int | As reported; absent when the source does not give it (the monitor then cannot tell a changed trade and asks for the terms only of a new one) |
+| `book_id` ● | str | |
+| `status` ● | enum | `live`, `cancelled` |
+| `source_product` | str | The report's own product code |
+| `in_positions` | bool | The trade is in the positions report of the date |
 
 ### `internal_market` — observation; `full_snapshot`, scope `["kind"]`, `time_basis = end_of_day`
 

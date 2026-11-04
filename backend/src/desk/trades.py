@@ -1,10 +1,25 @@
 """The day's trades from the private adapter (S13a, TDM#525; 08 §10 ``trades``, private/1.6): what the monitors' screen
-«Сделки дня» shows. Acceptance only: no valuation of the trades and no new-trade PnL (the rest of S13, TDM#29).
+«Сделки дня» shows, and (TDM#557) the day's bond trades in the intraday book (``apply_intraday``). No new-trade PnL
+(the rest of S13, TDM#29).
 
 ``trades`` is a flow: a date's trades are those of its own files, never carried forward (08 §6.7). The current row of
 a ``trade_id`` is its highest ``trade_version`` over the date's cumulative exports and deltas (``store.dataset_rows``,
 ``store.versioned_rows``); a cancelled trade stays with its status, a late booking (``trade_date`` before the date)
 is a trade of the date and is marked ``late``.
+
+**The intraday book** (``apply_intraday``, TDM#557): an INTRADAY run of date D (``cli.eod_run``; the autopilot's
+intraday and morning steps, setting ``intraday_trades``, on by default) values the positions of D (the start-of-day
+report, carried forward) plus the day's trades: every current trade of D (``dataset_rows``) that is ``live``, a
+``bond``, of trade date D (a late booking or an amendment of an older trade is in the report already, or will be) and
+has a quantity (``quantity`` in bonds, else ``face_amount_ccy``) changes the row of its ``position_id`` in its book
+(else the row of its book with its ``instrument_id``): ``buy`` adds, ``sell`` subtracts; the row's own figures of the
+report (face amounts, market and book value, accrued, the report's risk) are scaled with the quantity. A trade of a
+bond the book does not hold opens a row of its own (``position_id`` of the trade; it needs an ``instrument_id``).
+Anything else is left out and counted by reason (``SKIP_REASONS``). The private inputs hash covers the trades
+applied, so the run is made again when they change: everything that compares the hash of an INTRADAY run (the
+autopilot's intraday and morning steps, ``recompute.current_day``) takes it from ``intraday_inputs``; the run's lineage
+``intraday_trades`` says what was applied. The flash PnL of such a row
+is still measured against the previous close (the new trade's own PnL from its price is TDM#29).
 
 ``view(con, on, book_id, days)`` is ``GET /api/v1/trades``: the date's current trades (optionally of one book), the
 counts per book, the files read, and the last ``days`` dates that have trades for the screen's strip.
@@ -12,7 +27,10 @@ counts per book, the files read, and the last ``days`` dates that have trades fo
 
 from __future__ import annotations
 
+import hashlib
+import json
 from collections import Counter
+from dataclasses import replace
 from datetime import UTC, date, datetime
 from decimal import Decimal
 from typing import Any
@@ -40,12 +58,222 @@ def _moscow_today() -> date:
     return datetime.now(UTC).astimezone(store.MSK).date()
 
 
-def _row(r: dict[str, Any], on: date) -> dict[str, Any]:
+SKIP_REASONS = ("cancelled", "not_bond", "other_trade_date", "no_quantity", "no_instrument", "units_mismatch",
+                "other_book", "position_id_taken", "no_currency")
+"""Why a trade of the day is not in the intraday book (``effect``; the screen shows them, the run counts them)."""
+SCALED = ("face_amount_ccy", "face_outstanding_ccy", "mv_rub", "accrued_ccy", "amount_ccy",
+          "risk_dv01_rub", "risk_cs01_rub")
+"""The report's own figures of a position row that follow its quantity when trades change it."""
+MAX_LISTED = 20000
+"""Trades of the day the run's lineage lists one by one (versions taken in, reasons left out)."""
+COST_BASIS = ("book_value_rub", "purchase_accrued_ccy")
+"""Follow the quantity only when it falls (the average cost of what stays); a purchase has its own price, which the
+row does not take in: the figures stay and the row says so (``x.intraday_cost_basis``)."""
+
+
+def effect(r: dict[str, Any], on: date) -> str | None:
+    """None when the trade ``r`` (a stored row) goes into the intraday book of ``on``, else the reason
+    (``SKIP_REASONS``; ``no_instrument`` is decided by ``apply_intraday``, which knows the book's rows)."""
+    if r.get("status") != "live":
+        return "cancelled"
+    if (r.get("asset_class") or "").lower() != "bond":
+        return "not_bond"
+    if str(r.get("trade_date")) != on.isoformat():
+        return "other_trade_date"
+    if r.get("quantity") is None and r.get("face_amount_ccy") is None:
+        return "no_quantity"
+    return None
+
+
+def _num(v: Any) -> float | None:
+    if v is None:
+        return None
+    try:
+        return float(Decimal(str(v)))
+    except (ArithmeticError, ValueError):
+        return None
+
+
+def _times(t: dict[str, Any]) -> str:
+    v = t.get("trade_ts")
+    return v.isoformat() if hasattr(v, "isoformat") else str(v or "")
+
+
+def apply_intraday(con: psycopg.Connection, on: date,
+                   inputs: store.PositionInputs) -> tuple[store.PositionInputs, dict[str, Any]]:
+    """The positions of ``on`` with the day's trades applied (module doc) and the summary for the run's lineage
+    ``intraday_trades``: ``{"set_ids", "applied", "new_positions", "skipped": {reason: n}, "versions": {trade_id:
+    version} of every trade taken in, "skipped_ids": {trade_id: reason} of every one left out}``; above ``MAX_LISTED``
+    trades the lists are cut and ``truncated`` is true (the screen then says "no information" for the rest).
+
+    The trades are first summed per position row, then the row's figures are scaled once by final / initial quantity
+    (so the order of the trades, a sale to zero and a later purchase, does not matter). Only books of the position
+    sets (``inputs.valid_dates``) take trades (else ``other_book``). A row that changes carries
+    ``x.intraday_start_qty`` (or ``_face``): its flash PnL of the day is still measured on the quantity after the
+    trades (previous close valued with today's quantity: bought bonds get the price move since that close, a bond
+    sold out has none), TDM#557 to be decided."""
+    day = store.dataset_rows(con, "trades", on)
+    summary: dict[str, Any] = {"set_ids": sorted({u["set_id"] for u in day.units}), "applied": 0,
+                               "new_positions": 0, "skipped": {}, "versions": {}, "skipped_ids": {}}
+    if not day.rows:
+        return inputs, summary
+    rows = [list(r) for r in inputs.rows]
+    extra = {pid: dict(x) for pid, x in inputs.extra.items()}
+    held = set(inputs.valid_dates)
+    taken = {r[0] for r in rows}
+    by_pid = {(r[1], r[0]): i for i, r in enumerate(rows)}
+    by_secid = {(r[1], r[2]): i for i, r in enumerate(rows) if r[2]}
+    ccy_of: dict[str, str] = {}
+    for r in rows:
+        c = (extra.get(r[0]) or {}).get("ccy")
+        if c and r[2]:
+            ccy_of.setdefault(r[2], c)
+    skipped: Counter = Counter()
+    skip_ids: dict[str, str] = {}
+    applied: list[dict] = []
+    groups: dict[int, dict[str, Any]] = {}   # row index -> {"mode": "qty"|"face", "d": float, "new": bool}
+
+    def skip(t: dict, why: str) -> None:
+        skipped[why] += 1
+        skip_ids[str(t.get("trade_id"))] = why
+
+    for t in sorted(day.rows, key=lambda t: (_times(t), str(t.get("trade_id")))):
+        why = effect(t, on)
+        if why:
+            skip(t, why)
+            continue
+        book, sign = str(t["book_id"]), 1.0 if t.get("side") == "buy" else -1.0
+        if book not in held:
+            skip(t, "other_book")
+            continue
+        qty, face = _num(t.get("quantity")), _num(t.get("face_amount_ccy"))
+        mode = "qty" if qty is not None else "face"
+        amount = qty if qty is not None else face
+        if amount is None:
+            skip(t, "no_quantity")
+            continue
+        i = by_pid.get((book, str(t.get("position_id"))))
+        if i is None and t.get("instrument_id"):
+            i = by_secid.get((book, t["instrument_id"]))
+        if i is None:
+            if not t.get("instrument_id"):
+                skip(t, "no_instrument")
+                continue
+            pid = str(t["position_id"])
+            if pid in taken:
+                skip(t, "position_id_taken")   # the id of a row of another book: its figures must not be replaced
+                continue
+            ccy = ccy_of.get(t["instrument_id"])   # the bond's own currency, as another row of the set has it
+            if mode == "face" and (not ccy or t.get("ccy") != ccy):   # a face amount needs it; a quantity does not:
+                skip(t, "no_currency" if not ccy else "units_mismatch")  # the core takes it from the reference
+                continue
+            rows.append([pid, book, t["instrument_id"], 0.0 if mode == "qty" else None])
+            x = {"asset_class": "bond", **({"ccy": ccy} if ccy else {}), "x": {"intraday_trade": True}}
+            for k in ("isin", "source_instrument_id", "source_instrument_name"):
+                if t.get(k) is not None:
+                    x[k] = t[k]
+            if mode == "face":
+                x["face_amount_ccy"] = 0.0
+            extra[pid] = x
+            taken.add(pid)
+            i = by_pid[(book, pid)] = by_secid[(book, t["instrument_id"])] = len(rows) - 1
+            groups[i] = {"mode": mode, "d": 0.0, "new": True}
+        else:
+            x = extra.get(rows[i][0])
+            row_mode = "qty" if rows[i][3] is not None else "face"
+            if mode != row_mode or (row_mode == "face" and (
+                    x is None or x.get("face_amount_ccy") is None or not t.get("ccy") or x.get("ccy") != t.get("ccy"))):
+                skip(t, "units_mismatch")
+                continue
+            groups.setdefault(i, {"mode": mode, "d": 0.0, "new": False})
+        groups[i]["d"] += sign * amount
+        applied.append({k: t.get(k) for k in ("trade_id", "trade_version", "book_id", "position_id", "side",
+                                              "quantity", "face_amount_ccy", "instrument_id")})
+    drop: set[int] = set()
+    for i, g in groups.items():
+        pid = rows[i][0]
+        x = extra.get(pid)
+        qty_mode = g["mode"] == "qty"
+        old = float(rows[i][3] or 0.0) if qty_mode else float(x.get("face_amount_ccy") or 0.0)
+        final = old + g["d"]
+        if g["new"]:
+            if abs(final) < 1e-9:
+                drop.add(i)
+                continue
+            summary["new_positions"] += 1
+        elif x is not None and old != 0:
+            k = final / old
+            x["x"] = {**(x.get("x") or {}), "intraday_trade": True,
+                      "intraday_start_" + ("qty" if qty_mode else "face"): old}
+            for f in SCALED:
+                if x.get(f) is not None:
+                    x[f] = float(x[f]) * k
+            for f in COST_BASIS:
+                if x.get(f) is not None and k <= 1:
+                    x[f] = float(x[f]) * k
+                elif x.get(f) is not None:
+                    x["x"]["intraday_cost_basis"] = "stale"
+        elif x is not None:
+            x["x"] = {**(x.get("x") or {}), "intraday_trade": True,
+                      "intraday_start_" + ("qty" if qty_mode else "face"): 0}
+        if qty_mode:
+            rows[i][3] = final
+        else:
+            x["face_amount_ccy"] = final  # type: ignore[index]
+    if drop:   # a new row whose trades add up to nothing
+        for i in drop:
+            extra.pop(rows[i][0], None)
+        rows = [r for j, r in enumerate(rows) if j not in drop]
+    summary.update(applied=len(applied), skipped=dict(sorted(skipped.items())),
+                   versions={str(a["trade_id"]): a["trade_version"] for a in applied[:MAX_LISTED]},
+                   skipped_ids=dict(list(skip_ids.items())[:MAX_LISTED]),
+                   truncated=len(applied) > MAX_LISTED or len(skip_ids) > MAX_LISTED)
+    if not applied:
+        return inputs, summary
+    canon = json.dumps([inputs.private_inputs_hash, applied], sort_keys=True, default=str, separators=(",", ":"))
+    return replace(inputs, rows=[tuple(r) for r in rows], extra=extra,  # type: ignore[misc]
+                   private_inputs_hash=hashlib.sha256(canon.encode()).hexdigest()), summary
+
+
+def intraday_inputs(con: psycopg.Connection, day: date, settings: Any,
+                    inputs: store.PositionInputs | None = None) -> tuple[store.PositionInputs, dict[str, Any] | None]:
+    """The positions of ``day`` as an INTRADAY run values them: ``inputs`` (default ``store.positions_for``) with the
+    day's trades applied, and the summary for the lineage. Unchanged, with None, when ``settings.intraday_trades`` is
+    off or there are no positions. The one place that decides it: the run (``cli.eod_run``) and every comparison of an
+    INTRADAY run's ``private_inputs_hash`` (autopilot, ``recompute``) go through it."""
+    if inputs is None:
+        inputs = store.positions_for(con, day)
+    if not inputs.rows or not getattr(settings, "intraday_trades", True):
+        return inputs, None
+    return apply_intraday(con, day, inputs)
+
+
+def _intraday_state(r: dict[str, Any], on: date, run: dict[str, Any] | None, enabled: bool) -> str:
+    """What the screen says of a trade: ``applied`` only when the latest run took exactly this version in (its
+    lineage), else the reason it is out, ``pending`` (no run since it arrived), ``eod`` (the latest run is a close:
+    the close is valued on the start-of-day positions) or ``off`` (the setting)."""
+    why = effect(r, on)
+    if why:
+        return why
+    if not enabled:
+        return "off"
+    if run is None:
+        return "pending"
+    if run["run_type"] != "INTRADAY":
+        return "eod"
+    tid = str(r.get("trade_id"))
+    if tid in run["versions"]:
+        return "applied" if str(run["versions"][tid]) == str(r.get("trade_version")) else "pending"
+    return run["skipped_ids"].get(tid) or ("unknown" if run.get("truncated") else "pending")
+
+
+def _row(r: dict[str, Any], on: date, run: dict[str, Any] | None = None, enabled: bool = True) -> dict[str, Any]:
     out: dict[str, Any] = {f: r.get(f) for f in FIELDS}
     for f in AMOUNTS:
         if out[f] is not None:
             out[f] = float(Decimal(str(out[f])))
     out["late"] = out["trade_date"] is not None and out["trade_date"] < on.isoformat()
+    out["intraday"] = _intraday_state(r, on, run, enabled)  # in the intraday book, or why not (TDM#557)
     out["src"] = r.get("_src")
     if r.get("x"):
         out["x"] = r["x"]
@@ -53,14 +281,15 @@ def _row(r: dict[str, Any], on: date) -> dict[str, Any]:
 
 
 def view(con: psycopg.Connection, on: date | None = None, book_id: str | None = None,
-         days: int = 20) -> dict[str, Any]:
+         days: int = 20, intraday_trades: bool = True) -> dict[str, Any]:
     """The trades screen of ``on`` (default: the latest date with trades, else today, Moscow), of ``book_id`` only when
     given: see the module docstring. Amounts as the contract has them (unsigned; ``side`` gives the direction)."""
     if on is None:
         latest = trade_dates(con, _moscow_today(), 1)
         on = latest[0] if latest else _moscow_today()
     t = store.dataset_rows(con, "trades", on, scope={"book_id": book_id} if book_id else None)
-    rows = [_row(r, on) for r in t.rows]
+    run = _intraday_run(con, on)
+    rows = [_row(r, on, run, intraday_trades) for r in t.rows]
     books = {b["book_id"]: b for b in store.current_books(con, on)}
     per_book: dict[str, Counter] = {}
     for r in rows:
@@ -86,4 +315,20 @@ def view(con: psycopg.Connection, on: date | None = None, book_id: str | None = 
                    "completeness": u["completeness"], "rows": u["row_count"], "file_name": u["file_name"]}
                   for u in t.units if not book_id or u["scope"].get("book_id") in (None, book_id)],
         "days": strip,
+        "intraday": ({k: v for k, v in run.items() if k not in ("versions", "skipped_ids")}
+                     | {"enabled": intraday_trades}) if run else None,
     }
+
+
+def _intraday_run(con: psycopg.Connection, on: date) -> dict[str, Any] | None:
+    """The latest complete run of ``on`` (an INTRADAY one, or the close after it: ``run_type`` ``EOD``) and what of the
+    day's trades it took in (its lineage ``intraday_trades``), or None. A close takes none in."""
+    row = con.execute("SELECT run_id, cut_type, run_type, lineage->'intraday_trades' FROM run WHERE business_date = %s"
+                      " AND status = 'complete' ORDER BY run_id DESC LIMIT 1", (on,)).fetchone()
+    if not row:
+        return None
+    t = row[3] or {}
+    return {"run_id": row[0], "cut_type": row[1], "run_type": row[2], "applied": t.get("applied", 0),
+            "new_positions": t.get("new_positions", 0), "skipped": t.get("skipped", {}),
+            "versions": t.get("versions", {}), "skipped_ids": t.get("skipped_ids", {}),
+            "truncated": bool(t.get("truncated"))}

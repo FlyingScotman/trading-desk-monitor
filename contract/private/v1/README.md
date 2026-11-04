@@ -1,4 +1,4 @@
-# Private input contract v1 (`private/1.7`)
+# Private input contract v1 (`private/1.8`)
 
 The rows a private adapter emits, one JSON Schema per dataset (`<dataset>.schema.json`) and per reference table of
 `reference()`, authoritative over the design tables of [08 §10](../../../docs/architecture/08_PRIVATE_ADAPTER_INTERFACE.md):
@@ -12,6 +12,7 @@ The rows a private adapter emits, one JSON Schema per dataset (`<dataset>.schema
 | `pnl_official` | the official daily PnL, one row per report line (flow) | 1.2 |
 | `trade_terms` | economic terms of OTC trades: FX forwards, NDFs, FX swap legs (stock) | 1.2 (1.4: IRS, OIS and CCS legs, REPO, HTM purchases) |
 | `trades` | the day's trades, one row per trade version: a cumulative export per book or deltas (flow; a file may hold several dates, 08 §6.1) | 1.6 |
+| `trade_list` | the live trades of the owner's books without their terms: id, version, book, status (stock) | 1.8 |
 | `entities` | `reference()["entities"]`: legal entities and their funding scheme (optional) | 1.2 |
 | `funding_rules` | `reference()["funding_rules"]`: funding basis and rate per selectors, with history (optional) | 1.2 |
 | `funding_policy` | `reference()["funding_policy"]`: the funding conventions that are not a rate (HTM base, timing, REPO policy, write-off), with history (optional) | 1.3 |
