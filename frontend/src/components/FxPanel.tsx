@@ -18,10 +18,11 @@ export function FxPanel({ fx, result, stale }: Props) {
   const nl = fx.nonlinear;
   return (
     <div className="panel">
-      <div className="ph"><h3>FX-шок</h3><span className="hint">линейная часть — ОВП × шок · {fx.asOf ?? ''}</span></div>
+      <div className="ph"><h3>FX-шок</h3><span className="hint">линейная часть — ОВП × шок{fx.asOf ? ` · ${fx.asOf}` : ''}</span></div>
       <p className="note">Линейная часть: открытая валютная позиция прогона (та же, что на экране «ОВП», весь деск — фильтр книг на этом
-        экране не применяется) × шок курса, без строк нелинейных деривативов. Откуда возникла позиция — от облигации или от кэша, —
-        неважно. Разбивки по позициям нет.{fx.methodNote ? ` ОВП ${fx.methodNote}.` : ''}
+        экране не применяется) × шок курса, за вычетом FX-дельты нелинейных деривативов. Откуда возникла позиция — от облигации или от кэша, —
+        неважно. Разбивки по позициям нет.{fx.methodNote ? ` ОВП ${fx.methodNote}; нелинейные деривативы внутри отчётной цифры отделены приближённо, по их FX-дельте.` : ''}
+        {fx.approxIds.length > 0 && ` Для ${fx.approxIds.length} поз. ОВП взяла сумму (номинал), а не FX-дельту, которую мы вычитаем: их доля приближённая.`}
         {fx.missingRate.length > 0 && ` Нет курса для ${fx.missingRate.join(', ')}: в линейную часть они не входят.`}</p>
       <div className="scroll">
         <table className="t">

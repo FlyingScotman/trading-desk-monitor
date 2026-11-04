@@ -73,3 +73,26 @@ def test_missing_rate_is_named():
     st = status([{"book": "B1", "ccy": "USD", "amount": 20.0}])
     st["byCcy"]["USD"]["rate"] = None
     assert fx_ocp(st, build(rows), rows)["missing_rate"] == ["USD"]
+
+
+def test_from_ocp_block_to_linear_part():
+    """The run's stored block -> ``ocp_status`` (what the OCP screen reads) -> ``fx_ocp``: linear part = the screen's
+    lines x rate, less the option's FX delta; an option taken at its nominal is marked approximate."""
+    from desk.api.concepts_run import ocp_status
+    block = {"as_of": "2026-11-03", "status": "ok", "published": {"basis": "report_base_plus_day", "by_ccy": {
+        "USD": {"total": 150.0, "rate": 90.0, "total_rub": 13500.0}}, "by_book": [
+        {"entity": "E", "book_id": "B1", "books": ["B1"], "ccy": "USD", "amount": 120.0, "source": "report"},
+        {"entity": "E", "book_id": "B2", "books": ["B2"], "ccy": "USD", "amount": 30.0, "source": "report"}]}}
+    rows = [row("b", "B1", {"USD": 120.0}), row("opt", "B2", {"USD": 25.0}, product="fx_option")]
+    rows[1]["fact"]["extra"]["ocp_amount"] = {"USD": 30.0}
+    out = fx_ocp(ocp_status(block), build(rows), rows)
+    screen = sum(x["amount"] for x in out["by_book"])
+    assert screen == 150.0
+    usd = out["by_ccy"]["USD"]
+    assert usd["linear"] == screen - 25.0 and usd["rate"] == 90.0
+    assert out["approx_ids"] == ["opt"]
+
+
+def test_rate_option_without_fx_is_not_nonlinear():
+    rows = [row("ropt", "B1", {}, product="rate_option")]
+    assert nonlinear_positions(build(rows), rows) == {}

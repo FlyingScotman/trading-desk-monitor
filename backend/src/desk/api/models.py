@@ -774,6 +774,8 @@ class RiskOcp(BaseModel):
     by_book: list[RiskOcpLine]
     nonlinear_ids: list[str] = Field(description="position_id of the non-linear derivatives (an option, a non-zero FX "
                                                  "gamma): shown apart from the linear part")
+    approx_ids: list[str] = Field(default_factory=list, description="of nonlinear_ids: positions the OCP took at "
+                                  "their amount (nominal), not at the FX delta subtracted: their share is approximate")
     missing_rate: list[str] = Field(description="currencies with an OCP and no rate in the run: no linear part for them")
 
 

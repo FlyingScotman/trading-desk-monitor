@@ -7353,6 +7353,14 @@
             "title": "Nonlinear Ids",
             "description": "position_id of the non-linear derivatives (an option, a non-zero FX gamma): shown apart from the linear part"
           },
+          "approx_ids": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Approx Ids",
+            "description": "of nonlinear_ids: positions the OCP took at their amount (nominal), not at the FX delta subtracted: their share is approximate"
+          },
           "missing_rate": {
             "items": {
               "type": "string"

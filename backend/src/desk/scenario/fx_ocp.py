@@ -36,9 +36,17 @@ def nonlinear_positions(payload: Mapping[str, Any], rows: Sequence[Mapping[str, 
         product = str((ex.get("core") or {}).get("product") or "").lower()
         option = "option" in product or "option" in O.product_group(ex.get("reported"))
         gamma = any(g and i in fx_idx and j in fx_idx for i, j, g in p["gamma"])
-        if option or gamma:
+        # an option with no FX exposure (a rate option in RUB) is no part of an FX shock
+        if (option and any((f.get("fx_delta") or {}).values())) or gamma:
             out[p["position_id"]] = (p["book_id"], {c: x for c, x in (f.get("fx_delta") or {}).items() if x})
     return out
+
+
+def _ocp_differs(fact: Mapping[str, Any]) -> bool:
+    """The row has an OCP amount (``extra.ocp_amount``) other than its FX delta: the OCP took it by that amount."""
+    amt = (fact.get("extra") or {}).get("ocp_amount") or {}
+    delta = fact.get("fx_delta") or {}
+    return any(abs((amt.get(c) or 0.0) - (delta.get(c) or 0.0)) > 1e-9 for c in {*amt, *delta})
 
 
 def fx_ocp(status: Mapping[str, Any] | None, payload: Mapping[str, Any],
@@ -46,9 +54,11 @@ def fx_ocp(status: Mapping[str, Any] | None, payload: Mapping[str, Any],
     """``status``: ``concepts_run.ocp_status`` of the run (None: no published OCP)."""
     nl = nonlinear_positions(payload, rows)
     ids = sorted(nl)
+    # the OCP takes these at their amount (nominal), not at the FX delta we subtract: the share is approximate
+    approx = sorted(r["position_id"] for r in rows if r["position_id"] in nl and _ocp_differs(r["fact"]))
     if not status:
         return {"available": False, "reason": NO_OCP, "as_of": None, "basis": None, "method_note": None,
-                "by_ccy": {}, "by_book": [], "nonlinear_ids": ids, "missing_rate": []}
+                "by_ccy": {}, "by_book": [], "nonlinear_ids": ids, "approx_ids": approx, "missing_rate": []}
     by_book_ccy: dict[tuple[str, str], float] = defaultdict(float)
     for book, ccys in nl.values():
         for ccy, x in ccys.items():
@@ -67,5 +77,5 @@ def fx_ocp(status: Mapping[str, Any] | None, payload: Mapping[str, Any],
     by_ccy = {c: {"amount": a, "nonlinear": n, "linear": a - n, "rate": (status.get("byCcy") or {}).get(c, {}).get("rate")}
               for c, (a, n) in sorted(tot.items())}
     return {"available": True, "reason": None, "as_of": status.get("asOf"), "basis": status.get("basis"),
-            "method_note": status.get("methodNote"), "by_ccy": by_ccy, "by_book": lines, "nonlinear_ids": ids,
+            "method_note": status.get("methodNote"), "by_ccy": by_ccy, "by_book": lines, "nonlinear_ids": ids, "approx_ids": approx,
             "missing_rate": sorted(c for c, v in by_ccy.items() if v["rate"] is None and v["amount"])}

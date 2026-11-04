@@ -20,7 +20,7 @@ const payload: RiskPayload = {
     by_ccy: { USD: { amount: 150, nonlinear: 30, linear: 120, rate: 90 } },
     by_book: [{ book: 'B1', books: ['B1'], entity: null, ccy: 'USD', amount: 120, nonlinear: 0, linear: 120 },
       { book: 'B2', books: ['B2'], entity: null, ccy: 'USD', amount: 30, nonlinear: 30, linear: 0 }],
-    nonlinear_ids: ['opt'], missing_rate: [],
+    nonlinear_ids: ['opt'], approx_ids: [], missing_rate: [],
   },
 };
 

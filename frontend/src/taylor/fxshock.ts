@@ -26,6 +26,8 @@ export interface FxShock {
   ccys: FxCcyRow[];
   linearTotal: number;
   missingRate: string[];
+  /** non-linear positions the OCP took at their amount, not at the FX delta: their share is approximate */
+  approxIds: string[];
   nonlinear: FxNonlinear;
 }
 
@@ -49,7 +51,7 @@ export function fxShock(payload: RiskPayload, norm: NormDef, taylor: TaylorRun, 
   const none: FxNonlinear = { n: 0, taylor: 0, exact: null, nExact: 0, taylorAll: 0 };
   if (!ocp || !ocp.available) {
     return { mode: 'positions', reason: ocp?.reason ?? 'в прогоне нет публикуемой ОВП', asOf: null, methodNote: null, taylor,
-      ccys: [], linearTotal: taylor.totals._total?.fx ?? 0, missingRate: [], nonlinear: none };
+      ccys: [], linearTotal: taylor.totals._total?.fx ?? 0, missingRate: [], approxIds: [], nonlinear: none };
   }
   const nl = new Set(ocp.nonlinear_ids);
   const fx = fxIndex(payload);
@@ -92,12 +94,12 @@ export function fxShock(payload: RiskPayload, norm: NormDef, taylor: TaylorRun, 
     const r = rate(l.ccy);
     if (r == null) continue;
     const rub = l.linear * r * (norm.fx?.[l.ccy] ?? 0) / 100;
-    const key = l.book ?? `${l.entity ?? 'юрлицо'}: ${l.books.join(', ')}`;
+    const key = l.book ?? `${l.entity ?? 'юрлицо'}: ${l.books.length ? l.books.join(', ') : 'остаток юрлица без книг'}`;
     add(key, { fx: rub, total: rub });
     add('_total', { fx: rub, total: rub });
     linearTotal += rub;
   }
   if (nlr.n) { add(NL_KEY, { fx: nlr.taylor, total: nlr.taylor }); add('_total', { fx: nlr.taylor, total: nlr.taylor }); }
   return { mode: 'ocp', reason: null, asOf: ocp.as_of ?? null, methodNote: ocp.method_note ?? null,
-    taylor: { positions: rows, totals }, ccys, linearTotal, missingRate: ocp.missing_rate, nonlinear: nlr };
+    taylor: { positions: rows, totals }, ccys, linearTotal, missingRate: ocp.missing_rate, approxIds: ocp.approx_ids ?? [], nonlinear: nlr };
 }

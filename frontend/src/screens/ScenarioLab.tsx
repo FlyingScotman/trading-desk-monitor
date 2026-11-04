@@ -72,6 +72,7 @@ export function ScenarioLab() {
   const fx = useMemo(() => (payload && posTaylor && typeof norm !== 'string' ? fxShock(payload, norm, posTaylor, result) : null),
     [payload, posTaylor, norm, result]);
   const taylor = fx?.taylor ?? posTaylor;
+  const ocpMode = fx?.mode === 'ocp';
 
   const stale = useMemo(() => {
     if (!job || typeof norm === 'string') return true;
@@ -121,11 +122,18 @@ export function ScenarioLab() {
                   <div className="big approx">{smln(taylor.totals._total?.total ?? 0, 1)}<small>млн ₽</small></div></div>
                 {tot && (
                   <div className={stale ? 'stale' : undefined}
-                    title="Точная переоценка покрытых позиций + Тейлор для остальных: сравнимо с итогом по Тейлору">
-                    <div className="lbl">Точно{tot.n_exact < tot.n_positions ? ` + ≈ для ${tot.n_positions - tot.n_exact} непокрытых` : ''}</div>
+                    title={ocpMode ? 'Точная переоценка покрытых позиций + Тейлор для остальных, FX от дельт позиций: сравнимо с «Тейлор по позициям ≈» справа, не с итогом «FX от ОВП»'
+                      : 'Точная переоценка покрытых позиций + Тейлор для остальных: сравнимо с итогом по Тейлору'}>
+                    <div className="lbl">Точно{ocpMode ? ' · FX от дельт позиций' : ''}{tot.n_exact < tot.n_positions ? ` + ≈ для ${tot.n_positions - tot.n_exact} непокрытых` : ''}</div>
                     <div className="big">{smln(tot.blended, 1)}<small>млн ₽</small></div>
                     <div className="sub">покрытые {tot.n_exact}/{tot.n_positions}: точно {smln(tot.exact, 1)} vs ≈ {smln(tot.taylor_covered, 1)},
                       остаток {smln(tot.residual, 1)}</div>
+                  </div>
+                )}
+                {tot && ocpMode && posTaylor && (
+                  <div title="Тейлор по позициям, FX от их дельт: пара к «Точно» слева">
+                    <div className="lbl">Тейлор по позициям ≈</div>
+                    <div className="big approx">{smln(posTaylor.totals._total?.total ?? 0, 1)}<small>млн ₽</small></div>
                   </div>
                 )}
                 <div className="side">
@@ -149,8 +157,8 @@ export function ScenarioLab() {
                 </button>
               </div>
               <div className="ph"><h3>По книгам</h3><span className="hint">млн ₽ · ≈ — разложение Тейлора{fx?.mode === 'ocp'
-                ? ' · столбец FX — ОВП × шок, без нелинейных деривативов' : ' · столбец FX — от валютных дельт позиций'}</span></div>
-              <ResultTable taylor={taylor} result={result} stale={stale} />
+                ? ' · столбец FX — ОВП × шок; нелинейные деривативы — отдельной строкой' : ' · столбец FX — от валютных дельт позиций'}</span></div>
+              <ResultTable taylor={taylor} result={result} stale={stale} ocpMode={fx?.mode === 'ocp'} />
               {fx?.mode === 'ocp' && result && <p className="note">Точный расчёт переоценивает позиции целиком: FX в нём идёт от их
                 валютных дельт, а не от ОВП. С итогом «≈» выше он напрямую не сравнивается.</p>}
             </div>

@@ -2571,6 +2571,11 @@ export interface components {
              */
             nonlinear_ids: string[];
             /**
+             * Approx Ids
+             * @description of nonlinear_ids: positions the OCP took at their amount (nominal), not at the FX delta subtracted: their share is approximate
+             */
+            approx_ids?: string[];
+            /**
              * Missing Rate
              * @description currencies with an OCP and no rate in the run: no linear part for them
              */
