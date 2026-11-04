@@ -268,7 +268,8 @@ def extras(con, run: dict[str, Any], writer: Writer = None) -> dict[str, Any]:
             "histSource": "runs", "pnlPeriods": periods,
             "positions": positions, "cashflows": flows, **market,
             "cbr": cb, "curveMap": CURVE_MAP, "notes": notes,
-            "unvalued": coverage.unvalued(con, run), "approx": coverage.approx(con, run)}
+            "unvalued": coverage.unvalued(con, run), "approx": coverage.approx(con, run),
+            "offReport": coverage.off_report(con, run)}
 
 
 def old_runs(con, runs: list[dict[str, Any]]) -> int:

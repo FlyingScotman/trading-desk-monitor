@@ -46,6 +46,7 @@ from typing import Any
 import psycopg
 
 from . import store
+from .valuation import offreport
 
 FIELDS = ("trade_id", "trade_version", "status", "trade_date", "trade_ts", "book_id", "position_id", "asset_class",
           "source_instrument_id", "source_instrument_name", "isin", "regnum", "moex_secid", "instrument_id", "side",
@@ -456,8 +457,19 @@ def intraday_inputs(con: psycopg.Connection, day: date, settings: Any,
     if inputs is None:
         inputs = store.positions_for(con, day)
     if not inputs.rows or not getattr(settings, "intraday_trades", True):
-        return inputs, None
-    return apply_intraday(con, day, inputs)
+        out, summary = inputs, None
+    else:
+        out, summary = apply_intraday(con, day, inputs)
+    # TDM#468: with the switch ``include`` the hash also says which trades off the report are in, today and on the day
+    # before (the PnL of today is measured against it); every path here
+    mode = getattr(settings, "off_report_derivatives", "exclude")
+    prev, prev_day = None, None
+    if mode == "include" and out.rows:
+        prev_day = day - timedelta(days=1)
+        while prev_day.weekday() > 4:  # the previous weekday: the run's previous market date, holidays apart
+            prev_day -= timedelta(days=1)
+        prev = store.positions_for(con, prev_day)
+    return offreport.stamp(out, day, mode, prev, prev_day), summary
 
 
 def _intraday_state(r: dict[str, Any], on: date, run: dict[str, Any] | None, enabled: bool) -> str:

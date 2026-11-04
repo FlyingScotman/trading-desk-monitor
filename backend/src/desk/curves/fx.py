@@ -16,6 +16,22 @@
 - **CNY XCCY** (``CNY XCCY``, ``cny_ruonia_xccy_v1``): the hub's ``cny_ruonia_xccy`` par quotes (percent, divided by
   100) bootstrapped by core ``bootstrap_xccy_curve`` on RUONIA OIS (MOEX XCS CNYRUB terms; the joint SPFI, MOSCOW,
   BEIJING and RUONIA calendar; the notional rate is the spot, provisional). It discounts CNY bonds.
+- **CNY RUSFAR** (``CNY RUSFAR``, ``cny_discount_factors_v1``; TDM#565): the hub's ``cny_rusfar_ois`` quotes (OIS on
+  RUSFAR CNY, the Moscow Exchange's overnight CNY repo rate; fractions) bootstrapped here into a ``DiscountCurve``
+  (``ois-logdf-v1``, ACT/365F) that projects the floating CNY leg of a cross-currency swap on RUSFARCNY
+  (``valuation.derivatives``); it never discounts and is never an FX forward's curve. Conventions, **provisional**
+  (the exchange's OIS RUSFARCNY terms are not at hand): the swap starts TOM on ``FX:CNY`` (the curve date to the start
+  at the latest RUSFARCNY fixing, else the shortest tenor's rate), ends the tenor later (modified following), pays
+  once up to 1Y and annually beyond
+  (rolled back from the end, adjusted, a short first stub), the fixed leg ACT/365F; the floating leg is single-curve
+  (its PV is ``DF(start) - DF(end)``). The nodes are the start and the swap ends; past the last quote the curve is
+  extrapolated flat-forward (said in the lineage).
+- **RUSFARCNY fixings** (``FxMarket.index_fixings``, core ``IndexFixingEntry``): the hub's ``RUSFARCNY`` fixings (percent),
+  those published by the snapshot's ``known_at`` and dated before the business date, as core ``IndexFixings`` (fractions,
+  dated the business date). Observation calendar: the dates published before the business date (the exchange does not
+  publish on weekends, China's holidays and the last trading day of the year: the previous value then holds, the
+  ``bridged_days`` of the lineage), ``FX:CNY`` from the business date on, before the first and after the last fixing too
+  (a business day with no fixing there is missing, which core refuses, never filled).
 - **Government par-yield proxies** (``USD UST``, ``EUR AAA``; ``usd_ust_par_proxy_v1``, ``eur_ecb_aaa_par_proxy_v1``):
   ``bootstrap_par_yield_curve`` of the hub's ``usd_ust_par`` / ``eur_aaa_par`` sets (percent / 100), dated the business
   date (the hub's set may be a day or two older: said in the lineage). Bonds use them only with the setting
@@ -35,15 +51,20 @@ fallback (a bond's ladder, an FX forward's report value), the rest of the book i
 
 from __future__ import annotations
 
+import calendar as _pycal
 from dataclasses import dataclass, field, replace
-from datetime import date
+from datetime import date, datetime, timedelta
 from typing import Any
 
 from rub_fixed_income import (
     BusinessCalendar,
+    BusinessDayConvention,
     CalendarEntry,
+    CalendarRangeError,
     CoreRejection,
+    CurveConvention,
     CurveEntry,
+    DayCount,
     DiscountCurve,
     FxBasis,
     FxFixing,
@@ -52,16 +73,20 @@ from rub_fixed_income import (
     FxRate,
     FxSpot,
     FxSwapPointsQuote,
+    IndexFixingEntry,
+    IndexFixings,
     MarketSnapshot,
     ParYieldCurveRequest,
     ParYieldQuote,
     XccyCurveBootstrapRequest,
     XccyParQuote,
+    adjust_date,
     bootstrap_par_yield_curve,
     bootstrap_xccy_curve,
     fx_implied_spec_id,
     fx_value_date,
     joint_calendar,
+    resolve_tenor,
     xcs_cnyrub_convention,
 )
 
@@ -76,6 +101,18 @@ PROXY_SPECS = {"usd_ust_par": ("USD", "USD UST", "usd_ust_par_proxy_v1"),
                "eur_aaa_par": ("EUR", "EUR AAA", "eur_ecb_aaa_par_proxy_v1")}
 """Hub proxy quote set -> (currency, curve ID, core spec). ``eur_bund_par`` has no core spec (core BACKLOG #130)."""
 XCCY_CURVE_ID, XCCY_SPEC = "CNY XCCY", "cny_ruonia_xccy_v1"
+RUSFAR_CNY_CURVE_ID, RUSFAR_CNY_SPEC = "CNY RUSFAR", "cny_discount_factors_v1"
+RUSFAR_CNY_DATASET = "cny_rusfar_ois"
+RUSFAR_CNY_FIXING = "RUSFARCNY"
+RUSFAR_CNY_INDEX = "CNY-RUSFARCNY-COMPOUND"
+"""The name of core's compounded index of a RUSFARCNY leg and of its fixings (``valuation.derivatives.CCS_FOREIGN_INDEX``)."""
+RUSFAR_CNY_MAX_UNPUBLISHED_DAYS = 1
+"""As RUONIA's (``rates.RUONIA_MAX_UNPUBLISHED_DAYS``): at most one business day just before the business date may lack its
+RUSFARCNY fixing (the hub late, the first business day of the year after the exchange's last day without the index): the
+previous value is carried and said. More are missing fixings, never filled (``valuation.derivatives``: ``no_fixings``)."""
+RUSFAR_CNY_PRELIMINARY = "moex_marketdata_preliminary"
+"""The hub's label of a fixing that is a preliminary value of the same day from the exchange's market data, replaced later by
+the history's (hub ``HISTORY_API.md``); said in the lineage."""
 CBR_SOURCE = "CBR"
 SPOT_SOURCES = ("market", "cets_tom")
 SWAP_LAG = {"TOD": 0, "TOM": 1, "SPT": 2}
@@ -102,8 +139,9 @@ class FxOptions:
     """``fx_implied_futures``: FORTS FX futures past the last swap point extend the implied curve."""
     spot_source: str = "market"
     """``fx_spot_source``: ``market`` (the FX_MARKET chain, as bonds and the OCP) or ``cets_tom`` (CETS TOM close)."""
-    unlinked_terms: bool = False
-    """``fx_unlinked_terms``: value a trade_terms trade that no positions row names as a position of its own."""
+    off_report: bool = False
+    """``off_report_derivatives == "include"`` (TDM#468): value the trade_terms derivatives no positions row names as
+    positions of their own."""
     fixing_sources: tuple[tuple[str, str], ...] = (("CBR", "CBR"), ("ЦБ", "CBR"), ("ЦБ РФ", "CBR"))
     """``ndf_fixing_sources``: the report's fixing source -> the hub source (``CBR``: the CBR official rate)."""
     futures_by_ticker: bool = False
@@ -133,7 +171,7 @@ class ForeignCurve:
     curve_id: str
     ccy: str
     kind: str
-    """``fx_implied`` | ``xccy`` | ``proxy``."""
+    """``fx_implied`` | ``xccy`` | ``proxy`` | ``ois`` (``CNY RUSFAR``: a projection curve only)."""
     spec_id: str
     name: str
     """The run's curve reference name (Russian)."""
@@ -153,6 +191,9 @@ class FxMarket:
     rates: dict[str, tuple[float, str]] = field(default_factory=dict)
     """ccy -> (RUB per unit, source) of the spot."""
     lineage: dict[str, Any] = field(default_factory=dict)
+    index_fixings: tuple[IndexFixingEntry, ...] = ()
+    """The foreign overnight indices' fixings (``RUSFARCNY``), kept out of ``core_market`` so the bonds' inputs stay as
+    they were: ``valuation.derivatives`` adds them to the call that reads them."""
     quote_entries: dict[str, CurveEntry] = field(default_factory=dict)
     """By curve ID: the quotes a curve of ``curves`` is built from (``XCCY_CURVE_ID``: ``XccyCurveBootstrapRequest``; a
     proxy: ``ParYieldCurveRequest``), for core's risk in quotes (module docstring, "Quote curves")."""
@@ -277,6 +318,170 @@ def _xccy(market: Any, static: Any, spot: FxSpot, rub: DiscountCurve, bd: date
     return curve, request, lineage
 
 
+def _add_months(d: date, months: int) -> date:
+    i = d.month - 1 + months
+    y, m = d.year + i // 12, i % 12 + 1
+    return date(y, m, min(d.day, _pycal.monthrange(y, m)[1]))
+
+
+RUSFAR_CNY_CONVENTION = (
+    "provisional: the swap starts TOM on FX:CNY, ends the tenor later (modified following), pays once up to 1Y and "
+    "annually beyond (rolled back from the end, adjusted, short first stub), fixed leg ACT/365F, floating leg "
+    "single-curve (DF(start) - DF(end)); DF(start) at the latest RUSFARCNY fixing (else the shortest tenor's rate) "
+    "from the curve date; beyond the last "
+    "quote flat-forward")
+"""The ``CNY RUSFAR`` bootstrap rule, in its lineage."""
+
+
+def _rusfar_cny(market: Any, cal: BusinessCalendar, bd: date, front: tuple[date, float] | None = None
+                ) -> tuple[DiscountCurve, dict[str, Any]]:
+    """``CNY RUSFAR``: the hub's ``cny_rusfar_ois`` quotes bootstrapped, tenor by tenor, into discount factors on the
+    swap's start and ends (``RUSFAR_CNY_CONVENTION``, provisional). ``front``: the latest RUSFARCNY fixing (date, rate),
+    the rate from the curve date to the start; absent, the shortest tenor's. A tenor whose dates fall outside the calendar, or
+    that does not start TOM, or ends before the previous one, is dropped with the reason."""
+    qs, lineage = rates.select_quote_set(market.snapshot, RUSFAR_CNY_DATASET)
+    tau = DayCount.ACT_365_FIXED.year_fraction
+    conv = CurveConvention(time_day_count=DayCount.ACT_365_FIXED)
+    start = cal.add_business_days(bd, 1)
+    swaps, dropped = [], {}
+    for q in qs.quotes:
+        if q.mid is None:
+            dropped[q.tenor] = "no mid"
+            continue
+        try:
+            td = resolve_tenor(bd, q.tenor, cal)
+        except (CoreRejection, ValueError, CalendarRangeError) as e:
+            dropped[q.tenor] = str(e)
+            continue
+        if td.effective_date != start:
+            dropped[q.tenor] = f"starts {td.effective_date}, not TOM {start}"
+            continue
+        swaps.append((td, q.mid, q.tenor))
+    if not swaps:
+        raise rates.RatesInputError(f"{bd}: no usable {RUSFAR_CNY_DATASET} quote in set {qs.quote_set_id}: {dropped}")
+    swaps.sort(key=lambda x: x[0].end_date)
+    front_rate = front[1] if front else swaps[0][1]
+    df_start = 1.0 / (1.0 + front_rate * tau(bd, start)) if start > bd else 1.0
+    nodes: list[tuple[date, float]] = [(start, df_start)] if start > bd else []
+    used = []
+    for td, rate, tenor in swaps:
+        end = td.end_date
+        if end <= (nodes[-1][0] if nodes else bd):
+            dropped[tenor] = f"ends {end}, not after the previous tenor"
+            continue
+        try:
+            pays = [end]
+            if td.unadjusted_end > _add_months(start, 12):
+                rolls, k = [], 1
+                while (roll := _add_months(td.unadjusted_end, -12 * k)) > start:
+                    rolls.append(adjust_date(roll, BusinessDayConvention.MODIFIED_FOLLOWING, cal))
+                    k += 1
+                pays = sorted({a for a in rolls if start < a < end}) + [end]
+        except CalendarRangeError as e:
+            dropped[tenor] = f"calendar range: {e}"
+            continue
+        taus = [tau(a, b) for a, b in zip([start, *pays[:-1]], pays, strict=True)]
+
+        def gap(x: float, pays=pays, taus=taus, rate=rate, end=end) -> float:
+            c = DiscountCurve(bd, (*nodes, (end, x)), "ois-logdf-v1", convention=conv)
+            return sum(rate * t * c.discount_factor(p) for t, p in zip(taus, pays, strict=True)) + x - df_start
+
+        if len(pays) == 1:
+            x = df_start / (1.0 + rate * taus[0])
+        else:
+            lo, hi = 1e-6, 2.0
+            if not gap(lo) < 0.0 < gap(hi):
+                dropped[tenor] = "no discount factor reprices the quote"
+                continue
+            for _ in range(100):
+                mid = (lo + hi) / 2.0
+                lo, hi = (mid, hi) if gap(mid) < 0.0 else (lo, mid)
+            x = (lo + hi) / 2.0
+        nodes.append((end, x))
+        used.append(tenor)
+    curve = DiscountCurve(bd, tuple(nodes), "ois-logdf-v1", convention=conv)
+    lineage.update(status="ok", spec_id=RUSFAR_CNY_SPEC, tenors_used=used, tenors_dropped=dropped,
+                   last_node=nodes[-1][0].isoformat(), calendar=cal.version,
+                   front_rate=f"{RUSFAR_CNY_FIXING} {front[0].isoformat()}" if front else "shortest tenor",
+                   convention=RUSFAR_CNY_CONVENTION,
+                   extrapolation=f"flat-forward beyond {nodes[-1][0].isoformat()} (provisional)")
+    return curve, lineage
+
+
+def _observation_calendar(cal: BusinessCalendar, published: set[date], bd: date | None = None
+                          ) -> tuple[BusinessCalendar, list[date], list[date]]:
+    """``cal`` (``FX:CNY``) with the days between the first and the last of ``published`` made business days exactly
+    where the index was published (a day with no fixing there is bridged by the previous value: the exchange does not
+    publish on weekends, China's holidays or the last trading day of the year). With ``bd``, up to
+    ``RUSFAR_CNY_MAX_UNPUBLISHED_DAYS`` business days of ``cal`` between the last fixing and ``bd`` are carried too
+    (unpublished); more are left as business days, so a fixing is required on them. Returns the calendar, the
+    bridged days (business days of ``cal`` with no fixing between the first and the last fixing) and the unpublished
+    ones."""
+    holidays, working = set(cal.holidays), set(cal.working_days)
+    bridged, unpublished, d, last = [], [], min(published), max(published)
+
+    def drop(day: date) -> None:
+        working.discard(day)
+        if day.weekday() < 5:
+            holidays.add(day)
+
+    while d <= last:
+        if d in published:
+            holidays.discard(d)
+            if d.weekday() >= 5:
+                working.add(d)
+        else:
+            if cal.is_business_day(d):
+                bridged.append(d)
+            drop(d)
+        d += timedelta(days=1)
+    if bd is not None:
+        tail = []
+        d = last + timedelta(days=1)
+        while d < bd:
+            if cal.covers(d) and cal.is_business_day(d):
+                tail.append(d)
+            d += timedelta(days=1)
+        if len(tail) <= RUSFAR_CNY_MAX_UNPUBLISHED_DAYS:
+            unpublished = tail
+            for day in tail:
+                drop(day)
+    return BusinessCalendar(frozenset(holidays), frozenset(working), f"{cal.version}+{RUSFAR_CNY_FIXING}",
+                            cal.valid_from, cal.valid_to), bridged, unpublished
+
+
+def rusfar_cny_fixings(snapshot: Any, cal: BusinessCalendar, bd: date, known_at: datetime | None = None
+                       ) -> tuple[IndexFixingEntry, dict[str, Any]]:
+    """The ``RUSFARCNY`` fixings of the market snapshot as core's ``IndexFixingEntry`` (module docstring): rows dated
+    before ``bd`` and in the calendar ``cal`` (``FX:CNY``) published by ``known_at`` (default the snapshot's;
+    ``rates.fixing_known``), in fractions, dated ``bd``. The lineage: the rows, the first and the latest fixing, the
+    rows not yet published at the cut, the ``bridged_days`` (the previous value holds), the ``unpublished_business_days``
+    (at most ``RUSFAR_CNY_MAX_UNPUBLISHED_DAYS`` just before ``bd``, carried) and the ``preliminary_days`` (rows the hub
+    labels ``RUSFAR_CNY_PRELIMINARY``). Raises ``RatesInputError`` without a usable row."""
+    cut = known_at or ar.known_at(snapshot)
+    rows = [f for f in ar.fixings(snapshot, RUSFAR_CNY_FIXING) if f.fixing_date < bd]
+    unknown = [f.fixing_date.isoformat() for f in rows if not rates.fixing_known(f, cut)]
+    rows = [f for f in rows if rates.fixing_known(f, cut)]
+    early = [f for f in rows if cal.valid_from is not None and f.fixing_date < cal.valid_from]
+    rows = rows[len(early):]
+    if not rows:
+        raise rates.RatesInputError(f"{bd}: no {RUSFAR_CNY_FIXING} fixing known at {cut.isoformat()}")
+    obs, bridged, unpublished = _observation_calendar(cal, {f.fixing_date for f in rows}, bd)
+    entry = IndexFixingEntry(RUSFAR_CNY_FIXING, IndexFixings(
+        RUSFAR_CNY_INDEX, bd, tuple((f.fixing_date, f.rate) for f in rows), obs, snapshot.id))
+    labels = {str(r.get("fixing_date")): r.get("labels") or () for r in snapshot.data.get("fixings") or ()
+              if r.get("index_code") == RUSFAR_CNY_FIXING}
+    kept = {f.fixing_date.isoformat() for f in rows}
+    return entry, {"status": "ok", "rows": len(rows), "first": rows[0].fixing_date.isoformat(),
+                   "latest": rows[-1].fixing_date.isoformat(), "known_at": cut.isoformat(),
+                   "unpublished_at_cut": unknown, "dropped_before_calendar": len(early),
+                   "bridged_days": [d.isoformat() for d in bridged],
+                   "unpublished_business_days": [d.isoformat() for d in unpublished],
+                   "max_unpublished_business_days": RUSFAR_CNY_MAX_UNPUBLISHED_DAYS,
+                   "preliminary_days": sorted(d for d in kept if RUSFAR_CNY_PRELIMINARY in labels.get(d, ())),
+                   "calendar": obs.version}
+
+
 def _tenor(q: dict[str, Any]) -> str | None:
     t = str(q.get("tenor") or "").strip().upper()
     if t[:-1].isdigit() and t[-1:] in ("D", "W", "M", "Y"):
@@ -326,6 +531,7 @@ def with_fx(market: Any, static: Any, core: MarketSnapshot, fx_rates: dict[str, 
     rub = next((c.curve for c in core.curves if c.curve_id == rates.RUONIA_OIS_CURVE_ID), None)
     rub_curve = rub if isinstance(rub, DiscountCurve) else None
     curves, calendars, spots, bases = list(core.curves), list(core.calendars), [], []
+    spot_cals: dict[str, BusinessCalendar] = {}
     fx = [FxRate(c, r[0]) for c, r in sorted(fx_rates.items()) if r and c != "RUB"]
     for ccy in sorted(c for c, r in fx_rates.items() if r and c != "RUB"):
         rate = _spot_rate(market, ccy, fx_rates, options)
@@ -340,6 +546,7 @@ def with_fx(market: Any, static: Any, core: MarketSnapshot, fx_rates: dict[str, 
             lin["spots"][ccy] = {"status": "error", "error": str(e)}
             continue
         calendars.append(CalendarEntry(fx_calendar_id(ccy), cal))
+        spot_cals[ccy] = cal
         spots.append(spot)
         out.spots[ccy], out.rates[ccy] = spot, rate
         lin["spots"][ccy] = (f"{rate[0]:g} {rate[1]}, value {vd.isoformat()} "
@@ -378,6 +585,26 @@ def with_fx(market: Any, static: Any, core: MarketSnapshot, fx_rates: dict[str, 
             lin["curves"][XCCY_CURVE_ID] = {"status": "missing", "error": str(e)}
         except (rates.RatesInputError, CoreRejection, ValueError, SnapshotError) as e:
             lin["curves"][XCCY_CURVE_ID] = {"status": "error", "error": str(e)}
+    if "CNY" in out.spots:  # RUSFAR CNY: the projection curve and the fixings of a floating CNY leg (TDM#565)
+        cal = spot_cals["CNY"]
+        front = None
+        try:
+            entry, info = rusfar_cny_fixings(market.snapshot, cal, bd)
+            out.index_fixings = (entry,)
+            lin["index_fixings"] = {RUSFAR_CNY_FIXING: info}
+            front = entry.fixings.fixings[-1]
+        except (rates.RatesInputError, CoreRejection, ValueError, SnapshotError) as e:
+            lin["index_fixings"] = {RUSFAR_CNY_FIXING: {"status": "missing", "error": str(e)}}
+        try:
+            built, info = _rusfar_cny(market, cal, bd, front)
+            curves.append(CurveEntry(RUSFAR_CNY_CURVE_ID, RUSFAR_CNY_SPEC, built))
+            out.curves[RUSFAR_CNY_CURVE_ID] = ForeignCurve(RUSFAR_CNY_CURVE_ID, "CNY", "ois", RUSFAR_CNY_SPEC,
+                                                           "CNY: OIS на RUSFAR CNY", built)
+            lin["curves"][RUSFAR_CNY_CURVE_ID] = info
+        except rates.QuoteSetMissing as e:
+            lin["curves"][RUSFAR_CNY_CURVE_ID] = {"status": "missing", "error": str(e)}
+        except (rates.RatesInputError, CoreRejection, ValueError, SnapshotError) as e:
+            lin["curves"][RUSFAR_CNY_CURVE_ID] = {"status": "error", "error": str(e)}
     for dataset, (ccy, cid, spec) in PROXY_SPECS.items():
         try:
             got = _proxy(market, dataset, spec, bd)
@@ -408,6 +635,6 @@ def options_from(settings: Any) -> FxOptions:
         foreign_curve=getattr(settings, "fx_foreign_curve", d.foreign_curve),
         implied_futures=bool(getattr(settings, "fx_implied_futures", d.implied_futures)),
         spot_source=getattr(settings, "fx_spot_source", d.spot_source),
-        unlinked_terms=bool(getattr(settings, "fx_unlinked_terms", d.unlinked_terms)),
+        off_report=getattr(settings, "off_report_derivatives", "exclude") == "include",
         fixing_sources=parse_fixing_sources(getattr(settings, "ndf_fixing_sources", None)) or d.fixing_sources,
         futures_by_ticker=bool(getattr(settings, "futures_by_ticker", d.futures_by_ticker)))

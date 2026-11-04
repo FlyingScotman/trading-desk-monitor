@@ -325,7 +325,7 @@
   function tradeOf(kind, s) {
     const pv = num(s.pv_rub), rep = num(s.reported_pv_rub), repo = kind === 'repo';
     return { kind, tradeId: s.trade_id == null ? null : String(s.trade_id), product: repo ? 'repo' : (s.product || null), index: s.index || null,
-      side: s.side || null, notional: repo ? num(s.start_amount_rub) : num(s.notional_rub), fixedRate: num(s.fixed_rate_pct), spreadBp: num(s.spread_bp),
+      side: s.side || null, notional: repo ? num(s.start_amount_rub) : num(s.notional_rub), fixedRate: num(s.fixed_rate_pct), spreadBp: num(s.spread_bp != null ? s.spread_bp : s.foreign_spread_bp), foreignIndex: s.foreign_index || null,
       parRate: repo ? null : num(s.par_rate_pct), start: s.start_date || null, end: (repo ? s.end_date : s.maturity_date) || null,
       pv, reportedPv: rep, diff: pv != null && rep != null ? pv - rep : null, convention: s.convention || null, security: s.security || null,
       discountCurve: s.discount_curve || null, projectionCurve: s.projection_curve || null, fixingId: s.fixing_id || null,
@@ -356,6 +356,7 @@
     p.instrType = d.instrType || null; p.assetClass = d.assetClass || null; p.segment = d.segment || null;
     p.productGroup = M.productGroup(ex.reported);
     p.ocp = !!(d.ocpTransfer || d.assetClass === 'Перенос ОВП');
+    p.offReport = !!d.offReport;  // деривативы вне отчёта позиций: оценена по условиям сделки (TDM#468)
     p.accrualOnly = !!d.accrualOnly;  // HTM по начислению: рыночного риска нет по правилу, это не пропуск
     // FX-дельта по валютам (fx_delta {ccy} прогона): у форварда, свопа и кросса валют может быть несколько — не сворачиваем
     p.fxDeltaBy = Object.fromEntries(Object.entries(d.fxDelta || {}).filter(([, v]) => num(v)).map(([c, v]) => [c, +v]));
@@ -533,6 +534,14 @@
   };
   // не оценённые позиции — по причинам и типам (R45, api/coverage.py): разбор в панели «Чего нет в данных» (kit.js)
   M.unvalued = X.unvalued || null; M.approx = X.approx || null;
+  // деривативы вне отчёта позиций (TDM#468, api/coverage.off_report): режим настройки, счётчики, не включённые сделки
+  M.offReport = X.offReport || null;
+  const OR = M.offReport;
+  if (OR && OR.legacy) M.notes.push('Условия свопов и РЕПО без строки позиций: сделок ' + OR.trades + ' — не оценены (прогон сделан до настройки «Деривативы вне отчёта позиций»)');
+  else if (OR && OR.mode === 'include') {
+    if (OR.trades) M.notes.push('Деривативы вне отчёта позиций включены настройкой: сделок ' + OR.trades + ', включено ' + (OR.included || 0) + ', оценено ' + (OR.valued || 0) + (OR.invalid ? '; условия не разобраны: ' + OR.invalid : '') + ' — отмечены «вне»');
+  } else if (OR && OR.excluded) M.notes.push('Деривативы вне отчёта позиций исключены настройкой: сделок ' + OR.excluded + ' — список ниже; включить: Настройки → Допущения расчёта');
+  if (OR && OR.suspect) M.notes.push('Возможно, уже в отчёте позиций, не включены: сделок ' + OR.suspect + ' — чтобы не посчитать дважды');
   const UV = M.unvalued;
   if (UV && UV.total) {
     if (UV.open) M.notes.push(UV.open + ' поз. не оценены: показаны без риска и MV — разбор по причинам ниже' + (UV.closed ? '; ещё ' + UV.closed + ' закрытых (нулевой объём) — не в счёте' : '') + (UV.fxMissing.length ? '; нет курса ' + UV.fxMissing.join(', ') + ' — суммы этих строк не в рублях' : ''));

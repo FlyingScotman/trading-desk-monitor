@@ -46,7 +46,7 @@ POSITION_KEYS = (
     "id", "book", "assetClass", "segment", "instrType", "name", "isin", "issuer", "issuerGroup", "sector", "rating",
     "ratingInfo", "ccy", "maturity", "tenorY", "couponType", "coupon", "index", "margin", "notional", "notionalRub",
     "price", "mv", "mvRub", "ytm", "spreadBp", "mdur", "sprDur", "cs01", "ofzSpr01", "risk", "fxDelta", "counterparty",
-    "newToday", "entity", "portfolio", "pnl", "accrualOnly", "ocpTransfer", "extra", "notValued")
+    "newToday", "entity", "portfolio", "pnl", "accrualOnly", "ocpTransfer", "offReport", "extra", "notValued")
 """A position's fields ``lib/real.js`` reads (``ratingInfo``, ``accrualOnly``, ``ocpTransfer``, ``extra`` and
 ``notValued`` only when there is one), plus a bond's ``BOND_KEYS``."""
 BOND_KEYS = ("instrumentId", "accrued", "couponFreq", "yieldDate", "spreadCurve")
@@ -318,6 +318,8 @@ def assemble(con, run: dict[str, Any]) -> dict[str, Any]:
             pos["accrualOnly"] = True
         if p.get("ocp_transfer") or (p.get("extra") or {}).get("ocp_transfer"):
             pos["ocpTransfer"] = True
+        if (p.get("extra") or {}).get("off_report"):
+            pos["offReport"] = True  # TDM#468: a derivative off the positions report, valued from its terms
         if p.get("instr_type") == "BOND":
             pos.update({"instrumentId": p.get("instrument_id") or p.get("isin"), "accrued": p.get("accrued"),
                         "couponFreq": p.get("coupon_freq"), "yieldDate": p.get("yield_date"),

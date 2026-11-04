@@ -288,4 +288,20 @@ t('C02: панель свопов и РЕПО — через K.ratesCorePanel и
   assert.ok(/K\.onFilter\(\(\) => \{[^}]*drawRates\(\)/.test(c02));
 });
 
+t('TDM#565: сторона CCS — по фиксу, а при двух плавающих ногах — по валютной ноге', () => {
+  const { K } = load();
+  // рублёвый фикс против юаней на RUSFARCNY: side считается по фиксу (плачу рублёвый фикс)
+  const fixRub = { product: 'ccs', foreignIndex: 'RUSFARCNY', fixedRate: 15 };
+  assert.strictEqual(K.rcSide('payer', fixRub), 'плачу фикс');
+  assert.strictEqual(K.rcSide('receiver', fixRub), 'получаю фикс');
+  // обе ноги плавают: сторона — по валютной ноге
+  const flt = { product: 'ccs', foreignIndex: 'RUSFARCNY', fixedRate: null };
+  assert.strictEqual(K.rcSide('payer', flt), 'плачу валютную ногу');
+  assert.strictEqual(K.rcSide('receiver', flt), 'получаю валютную ногу');
+  // обычный CCS с фиксом на валютной ноге и своп: как раньше
+  assert.strictEqual(K.rcSide('payer', { product: 'ccs', foreignIndex: null, fixedRate: null }), 'плачу фикс');
+  assert.strictEqual(K.rcSide('payer', { product: 'ois', fixedRate: 15 }), 'плачу фикс');
+  assert.strictEqual(K.rcSide('repo', { product: 'repo' }), 'РЕПО (привлечение)');
+});
+
 console.log(n + ' tests passed');
