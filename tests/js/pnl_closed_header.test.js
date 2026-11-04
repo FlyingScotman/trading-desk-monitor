@@ -16,10 +16,10 @@ function el() {
     querySelector(sel) { return q[sel] || (q[sel] = el()); }, querySelectorAll() { return []; }, addEventListener() {},
     setAttribute() {}, getAttribute() { return null; }, remove() {}, insertAdjacentHTML() {} };
 }
-function load() {
+function load(repr, closed) {
   const document = { addEventListener() {}, createElement: el, documentElement: el(), body: el(), querySelector() { return null; }, querySelectorAll() { return []; }, getElementById: () => el() };
   const ctx = { window: {}, document, URLSearchParams, console, location: { href: 'http://x/', search: '', hostname: 'x' }, setTimeout,
-    localStorage: { getItem() { return null; }, setItem() {} },
+    localStorage: { getItem(k) { return repr && k === 'concepts-repr' ? repr : null; }, setItem() {} },
     getComputedStyle: () => ({ getPropertyValue: () => '#888888' }), MutationObserver: class { observe() {} }, fetch: () => new Promise(() => {}) };
   ctx.window = ctx;
   vm.createContext(ctx);
@@ -28,6 +28,8 @@ function load() {
   // позиции и книги случая вместо демо-набора — до загрузки kit.js (список портфелей он строит при загрузке)
   M.book = Object.fromEntries(Object.entries(CASES.books).map(([id, b]) => [id, { id, name: id, entity: b.entity, desk: b.desk, type: b.type, portfolio: b.type === 'HTM' ? 'HTM' : null }]));  // portfolio — как BOOKS сервера
   M.positions = CASES.positions.map(p => ({ id: p.id, book: p.book, ccy: p.ccy, portfolio: p.portfolio, entity: CASES.books[p.book].entity, desk: CASES.books[p.book].desk, pnl: { total: p.pnl } }));
+  M.positions.forEach(p => { p.pnlMtd = p.pnl.total * 10; p.pnlYtd = p.pnl.total * 100; p.risk = {}; p.dv01ByCurve = {}; });
+  M.pnlClosed = JSON.parse(JSON.stringify(closed || []));
   vm.runInContext(P('concepts/lib/kit.js'), ctx);
   return { M, K: ctx.window.KIT };
 }
@@ -38,10 +40,8 @@ const CLOSED = [
   { positionId: 'C3', book: 'B3', ccy: 'USD', portfolio: null, entity: 'E2', desk: 'D2', issuer: 'I2', mtd: 7, ytd: 70 },
   { positionId: 'C4', book: 'B2', ccy: 'RUB', portfolio: null, entity: 'E1', desk: 'D1', issuer: 'I1', mtd: 3, ytd: 30 },
 ];
-function setup() {
-  const { M, K } = load();
-  M.positions.forEach(p => { p.pnlMtd = p.pnl.total * 10; p.pnlYtd = p.pnl.total * 100; });
-  M.pnlClosed = CLOSED;
+function setup(repr) {
+  const { M, K } = load(repr, CLOSED);
   const sum = (key) => K.pnlPeriodList(K.list()).reduce((s, p) => s + p[key], 0);
   return { M, K, sum };
 }
@@ -67,6 +67,14 @@ t('MTD и YTD = открытые под фильтром + закрытые по
     assert.strictEqual(sum('pnlYtd'), open(ids, 100) + cl.reduce((s, c) => s + c.ytd, 0), 'YTD ' + name);
   }
 });
+t('портфель, которого нет в прогоне (все позиции закрыты), снят целиком: закрытые под ним скрыты', () => {
+  const { K, M } = setup();
+  M.pnlClosed = CLOSED.concat([{ positionId: 'C5', book: 'B3', ccy: 'RUB', portfolio: 'Старый2', entity: 'E2', desk: 'D2', issuer: 'I2', mtd: 9, ytd: 90 }]);
+  K.setFilter({ ...RESET });
+  assert.ok(K.closedList().some(c => c.id === 'C5'));
+  K.setFilter({ ...RESET, portsOff: ['Старый2'] });
+  assert.ok(!K.closedList().some(c => c.id === 'C5') && K.closedList().length === 4);
+});
 t('эмитент: закрытые только своего эмитента (C13)', () => {
   const { K } = setup();
   K.setFilter({ ...RESET });
@@ -78,5 +86,16 @@ t('закрытая позиция годится для разбора по щ�
   const c = K.closedList()[0];
   assert.ok(c.searchText && c.bookName && c.issuerName && c.groupLabel && c.closed);
   assert.strictEqual(K.pnlPeriodList(null).length, K.list().length + 4);
+});
+t('валюта отчёта USD: закрытые позиции пересчитаны вместе с открытыми, итог не смешивает валюты', () => {
+  const rub = setup(), usd = setup('USD');
+  assert.ok(usd.M.fx.USD > 1);
+  for (const [name, flt] of CASE.map(c => [c[0], c[1]])) {
+    rub.K.setFilter({ ...RESET, ...flt }); usd.K.setFilter({ ...RESET, ...flt });
+    for (const key of ['pnlMtd', 'pnlYtd']) {
+      const a = rub.sum(key) / usd.M.fx.USD, b = usd.sum(key);
+      assert.ok(Math.abs(a - b) < 1e-6 * Math.max(1, Math.abs(a)), name + ' ' + key + ': ' + a + ' vs ' + b);
+    }
+  }
 });
 console.log(n + ' tests');

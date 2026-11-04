@@ -108,7 +108,7 @@
     carry: { label: 'Кэрри / день', unit: 'тыс ₽', fmt: f.k, sc: 1e3, kind: 'pnl', parts: one(p => p.carryDay) },  // без фондирования (#168)
     funding: { label: 'Фондирование / день', unit: 'тыс ₽', fmt: f.k, sc: 1e3, kind: 'pnl', parts: p => nulPart(p.fundingDay) },
     pnl: { label: 'PnL дня', unit: 'тыс ₽', fmt: f.k, sc: 1e3, kind: 'pnl', parts: p => FACT.map(([k]) => k === 'funding' ? nulPart(p.pnl[k], { factor: k })[0] : { factor: k, v: p.pnl[k] }).filter(x => x.keep || x.v) },
-    pnlMtd: { label: 'PnL MTD', unit: 'mm ₽', fmt: v => f.mn(v, 1), sc: 1e6, kind: 'pnl', parts: one(p => p.pnlMtd) },
+    pnlMtd: { label: 'PnL MTD', note: 'Только позиции текущего прогона. Позиции, закрытые раньше в периоде, есть в итоге MTD / YTD шапки и в «PnL за период» (C19), в таблицу не входят.', unit: 'mm ₽', fmt: v => f.mn(v, 1), sc: 1e6, kind: 'pnl', parts: one(p => p.pnlMtd) },
     count: { label: 'Кол-во позиций', unit: 'шт', fmt: v => f.n(v), sc: 1, int: true, kind: 'size', parts: one(() => 1) },
   };
   FACT.forEach(([k, t]) => MEAS['pnl_' + k] = { label: 'PnL: ' + t, unit: 'тыс ₽', fmt: f.k, sc: 1e3, kind: 'pnl', parts: p => k === 'funding' ? nulPart(p.pnl[k], { factor: k }) : [{ factor: k, v: p.pnl[k] }] });
@@ -303,7 +303,7 @@
       '<span class="grp"><span class="lb">Строки</span>' + pick('r0', esc(DIMS[st.r[0]].label)) + '<span class="arrow">→</span>' + (st.r[1] ? pick('r1', esc(DIMS[st.r[1]].label)) + '<span class="pick" data-a="r1x" title="убрать уровень">✕</span>' : '<span class="pick" data-a="r1">+ уровень</span>') + '</span>' +
       '<span class="pick" data-a="swap" title="строки ⇄ колонки">⇄</span>' +
       '<span class="grp"><span class="lb">Колонки</span>' + pick('c', esc(DIMS[st.c].label)) + '</span>' +
-      '<span class="grp"><span class="lb">Мера</span>' + pick('m', esc(MEAS[st.m].label), 'm') + '</span>' +
+      '<span class="grp"><span class="lb">Мера</span>' + pick('m', esc(MEAS[st.m].label) + (MEAS[st.m].note ? '<span title="' + esc(MEAS[st.m].note) + '" style="cursor:help"> *</span>' : ''), 'm') + '</span>' +
       '<span class="grp"><span class="lb">Фильтр</span>' + M.ccys.map(c => '<span class="k-chip' + (st.fc.includes(c) ? ' on' : '') + '" data-fc="' + c + '">' + c + '</span>').join('') +
       K.GROUPS.filter(g => g === 'GOV' || g === 'CORP' || g === 'DER' || M.positions.some(p => p.group === g)).map(g => '<span class="k-chip' + (st.fg.includes(g) ? ' on' : '') + '" data-fg="' + g + '">' + M.groupLabel[g] + '</span>').join('') + '</span>' +
       '<span class="sp"></span><span class="grp"><span class="lb">Строки по</span><span id="rsSeg"></span></span><span class="grp"><span class="lb">Вид</span><span id="vSeg"></span></span>';
@@ -312,7 +312,7 @@
     on('r1', e => K.menu(e, dimItems(true), st.r[1] || 'none', v => { if (v === 'none' || v === st.r[0]) st.r.length = 1; else st.r[1] = v; st.col = {}; render(); }));
     on('r1x', () => { st.r.length = 1; render(); });
     on('c', e => K.menu(e, dimItems(true), st.c, v => { st.c = v; render(); }));
-    on('m', e => K.menu(e, Object.keys(MEAS).map(k => ({ v: k, t: MEAS[k].label, sub: MEAS[k].unit })), st.m, v => { st.m = v; render(); }));
+    on('m', e => K.menu(e, Object.keys(MEAS).map(k => ({ v: k, t: MEAS[k].label, sub: MEAS[k].unit + (MEAS[k].note ? ' · без закрытых в периоде' : '') })), st.m, v => { st.m = v; render(); }));
     on('swap', () => { if (st.c === 'none') return; const c = st.c; st.c = st.r[0]; st.r = [c].concat(st.r[1] && st.r[1] !== c ? [st.r[1]] : []); st.col = {}; render(); });
     ctrl.querySelectorAll('[data-fc]').forEach(e => e.onclick = () => { const c = e.dataset.fc; st.fc = st.fc.includes(c) ? st.fc.filter(x => x !== c) : st.fc.concat([c]); render(); });
     ctrl.querySelectorAll('[data-fg]').forEach(e => e.onclick = () => { const g = e.dataset.fg; st.fg = st.fg.includes(g) ? st.fg.filter(x => x !== g) : st.fg.concat([g]); render(); });

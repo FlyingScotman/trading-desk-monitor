@@ -59,6 +59,8 @@
       arr(p.cs01b); arr(p.ofzSprb); Object.keys(p.risk).forEach(c => arr(p.risk[c])); Object.keys(p.dv01ByCurve).forEach(c => p.dv01ByCurve[c] *= k);
       Object.keys(p.pnl).forEach(x => { if (typeof p.pnl[x] === 'number') p.pnl[x] *= k; });  // null (нет PnL) остаётся null
     });
+    // позиции, закрытые раньше в периоде (M.pnlClosed, #568): их суммы MTD / YTD в той же валюте, что pnlMtd / pnlYtd открытых
+    (M.pnlClosed || []).forEach(c => { sc(c, ['mtd', 'ytd']); if (c.mtdParts) Object.keys(c.mtdParts).forEach(x => { if (c.mtdParts[x] != null) c.mtdParts[x] *= k; }); });
     const H = M.hist; [H.dv01, H.dv01Book, H.mvType, H.mvCcy, H.pnl].forEach(g => Object.keys(g).forEach(x => arr(g[x]))); arr(H.cs01); arr(H.ofzSpr01);
     M.cashflows.forEach(c => c.amountRub *= k);
     M.universeRub.forEach(b => b.size *= k);
@@ -700,9 +702,10 @@
   // Позиции, закрытые раньше в месяце или году (M.pnlClosed, сервер: api/pnl_mtd.closed), под тем же фильтром шапки, что
   // и открытые: книга, юрлицо, деск, валюта, портфель (книга HTM — HTM, SC.rowIn). Каждая — «позиция» только с суммами
   // MTD / YTD (pnlMtd, pnlYtd): итог MTD / YTD шапки и экранов равен «PnL за период» (C19) при том же фильтре, TDM#568.
-  // Карточки у такой позиции нет (M.pos её не знает). issuer — выбор эмитента экрана C13.
+  // Портфели снимаются целиком (filt.portsOff, как шлёт C19 на сервер), а не только те, что есть в прогоне: портфель, где все
+  // позиции закрыты, в прогоне не значится. Карточки у такой позиции нет (M.pos её не знает). issuer — выбор эмитента экрана C13.
   K.closedList = issuer => (M.pnlClosed || []).filter(c => (issuer == null || c.issuer === issuer) &&
-    SC.rowIn(filt, { book: c.book, ccy: c.ccy, entity: c.entity, desk: c.desk, portfolio: c.portfolio || '—' }, portsOff())).map(c => ({
+    SC.rowIn(filt, { book: c.book, ccy: c.ccy, entity: c.entity, desk: c.desk, portfolio: c.portfolio || '—' }, filt.portsOff || [])).map(c => ({
     id: c.positionId, name: c.name || c.positionId, exchName: c.name || c.positionId, searchText: [c.name, c.instrument, c.positionId, c.book, c.issuer].join(' ').toLowerCase(),
     issuer: c.issuer || null, issuerName: c.issuer || '—', book: c.book, bookName: c.bookName || c.book, ccy: c.ccy || '—', portfolio: c.portfolio || '—',
     group: 'closed', groupLabel: 'закрыта в периоде', kind: 'closed', kindLabel: 'закрытые позиции', tenor: 0, mv: 0, notional: 0, closed: true,
@@ -2553,7 +2556,7 @@
     carry: { key: 'carryDay', label: 'Кэрри/д', num: true, fmt: v => f.k(v), cls: v => f.cls(v), sum: true, unit: 'тыс ₽', title: 'тыс ₽ в день. ' + K.tips.carry, tip: true },
     funding: { key: 'fundingDay', label: 'Фондир./д', num: true, nullable: true, fmt: v => v == null ? '<span class="mut3">—</span>' : f.k(v), cls: v => f.cls(v), sum: true, unit: 'тыс ₽', title: 'Фондирование, тыс ₽ в день. ' + K.tips.funding, tip: true },
     pnl: { key: 'pnl', label: 'PnL дня', num: true, val: r => r.pnl.total, fmt: v => f.k(v), cls: v => f.cls(v), sum: r => r.pnl.total, unit: 'тыс ₽' },
-    pnlMtd: { key: 'pnlMtd', label: 'PnL MTD', num: true, fmt: v => f.mn(v, 1), cls: v => f.cls(v), sum: true, unit: 'mm ₽', sumFmt: v => f.mn(v, 1) },
+    pnlMtd: { key: 'pnlMtd', label: 'PnL MTD', title: 'Только позиции текущего прогона. Позиции, закрытые раньше в периоде, есть в итоге MTD / YTD шапки и в «PnL за период» (C19), в таблицу не входят.', num: true, fmt: v => f.mn(v, 1), cls: v => f.cls(v), sum: true, unit: 'mm ₽', sumFmt: v => f.mn(v, 1) },
     rating: { key: 'rating', label: 'Рейтинг', filter: true, fmt: v => '<span class="mut">' + esc(v) + '</span>' },
     sector: { key: 'sector', label: 'Сектор', filter: true, fmt: v => '<span class="mut">' + esc(v) + '</span>' },
   };

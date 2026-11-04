@@ -183,14 +183,18 @@ elif op == 'feed':
         else:  # ok, or no_records_file: a file with the header only
             late = (state / 'hist_late').read_text() if (state / 'hist_late').exists() else None
             name = 'trades_' + (late or day).replace('-', '') + '_' + ((state / 'hist_hhmm').read_text() if (state / 'hist_hhmm').exists() else '1845') + '.csv'
-            lines = ['TR-' + day + ';1;live;' + day + ';' + day + 'T10:30:00;OFZ;P1;bond;SU26238RMFS4;buy;1000;;RUB'] \
-                if hm == 'ok' else []
-            if (state / 'hist_extra').exists() and hm == 'ok':
-                lines += (state / 'hist_extra').read_text().replace('DAY', day).splitlines()
+            # hist_priced[_day]: the trades carry the price columns (the first one is priced, the extra ones are not)
+            priced = (state / ('hist_priced_' + day)).exists() or (state / 'hist_priced').exists()
+            lines = ['TR-' + day + ';1;live;' + day + ';' + day + 'T10:30:00;OFZ;P1;bond;SU26238RMFS4;buy;1000;;RUB'
+                     + (';99.5;1000' if priced else '')] if hm == 'ok' else []
+            extra = state / ('hist_extra_' + day) if (state / ('hist_extra_' + day)).exists() else state / 'hist_extra'
+            if extra.exists() and hm == 'ok':
+                lines += [x + (';;' if priced else '') for x in extra.read_text().replace('DAY', day).splitlines()]
             if late:   # the real adapter dates its file by the moment of the export: a later date, the rows say theirs
                 (out / name).write_text(TRADES_HEAD.rstrip('\n') + ';_report_date\n' + ''.join(x + ';' + day + '\n' for x in lines))
             else:
-                (out / name).write_text(TRADES_HEAD + ''.join(x + '\n' for x in lines))
+                (out / name).write_text(TRADES_HEAD.rstrip('\n') + (';price_pct;accrued_ccy' if priced else '') + '\n'
+                                        + ''.join(x + '\n' for x in lines))
             print(json.dumps({"state": "complete", "code": "no_records" if hm == 'no_records_file' else "exported",
                               "dates": [day], "files": [{"file": name, "sha256": hashlib.sha256((out / name).read_bytes()).hexdigest()}]}))
         sys.exit()

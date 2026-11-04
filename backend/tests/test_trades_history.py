@@ -163,6 +163,7 @@ def test_a_set_made_after_the_end_of_the_date_covers_it_without_a_request(env, t
 
 def test_trades_are_taken_in_without_a_run_and_the_backfill_makes_the_dates_again(env, monkeypatch):
     env.s.history_set(None, D13, None)
+    env.put("hist_priced_" + D13, "")   # the trade has its price: the whole PnL of it is in
     env.put("hist_mode_" + D14, "no_records")
     env.put("hist_mode_" + D15, "no_records")
     calls = []
@@ -184,8 +185,7 @@ def test_trades_are_taken_in_without_a_run_and_the_backfill_makes_the_dates_agai
         lin = con.execute("SELECT lineage->'intraday_trades' FROM run WHERE run_id = %s", (rid,)).fetchone()[0]
         assert lin["applied"] == 1 and lin["set_ids"]
         summary = trades_history.applied(con, env.st, env.doc)
-    # the synthetic trade has no price: the run says so (lineage ``unpriced``), so the PnL is only partly in
-    assert (summary["partial"], summary["reasons"], summary["waiting_recompute"]) == (1, {"unpriced": 1}, 0)
+    assert (summary["full"], summary["partial"], summary["reasons"], summary["waiting_recompute"]) == (1, 0, {}, 0)
     assert summary["in_pnl"] == 1
     assert env.plan(D13).count("todo") == 0
 
@@ -662,12 +662,50 @@ def test_pending_files_are_taken_in_after_a_cancel_and_the_helper_lock_is_taken(
 
 def test_in_pnl_counts_only_the_dates_whose_total_has_the_trades(env):
     env.s.history_set(None, D13, None)
+    env.put("hist_priced_" + D13, "")                       # the 13th: one trade, priced: full
+    env.put("hist_priced_" + D14, "")                       # the 14th: two trades, one without a price: partial
+    env.put("hist_extra_" + D14, "TR2-DAY;1;live;DAY;DAYT10:40:00;OFZ;P1;bond;SU26238RMFS4;buy;500;;RUB")
+    env.put("hist_mode_" + D15, "no_records")
+    env.step(3)
+    backfill.run(env.st, env.plan(D13), store_url=env.url, out=lambda line: None)
+    with store.connect(env.url) as con:
+        a = trades_history.applied(con, env.st, env.doc)
+    # a date that only carries the trades of the days before (no trade of its own in the book) is not counted anywhere
+    assert a["dates"][D13] == "full" and a["dates"][D14] == "partial", a
+    assert (a["full"], a["partial"], a["outside"], a["unknown"], a["in_pnl"]) == (1, 1, 0, 0, 2)
+    assert a["reasons"] == {"unpriced": 1}
+
+
+def test_a_date_whose_only_trade_has_no_price_is_outside_the_total(env):
+    env.s.history_set(None, D13, None)
     env.put("hist_mode_" + D14, "no_records")
     env.put("hist_mode_" + D15, "no_records")
     env.step(3)
     backfill.run(env.st, env.plan(D13), store_url=env.url, out=lambda line: None)
     with store.connect(env.url) as con:
         a = trades_history.applied(con, env.st, env.doc)
-    # the one date with a trade is partly in (the trade has no price); a date that only carries the trades of the days
-    # before (no trade of its own in the book) is not counted anywhere as in the PnL
-    assert (a["partial"], a["in_pnl"], a["outside"], a["unknown"]) == (1, 1, 0, 0)
+    assert a["dates"][D13] == "outside" and a["reasons"] == {"unpriced": 1}
+    assert (a["full"], a["partial"], a["outside"], a["in_pnl"]) == (0, 0, 1, 0)
+
+
+def test_the_hash_of_a_date_follows_the_off_report_switch_without_a_restart(env, monkeypatch):
+    """The memo of the plan is keyed by what ``trades.intraday_inputs`` reads, also the switch ``off_report_derivatives``
+    (it puts the off-report trades into the hash): switching it in the same process gives the date its new hash."""
+    from dataclasses import replace
+
+    from desk import trades as trades_mod
+    from desk.valuation import offreport
+    real = offreport.stamp
+
+    def stamp(inputs, on, mode, *a, **kw):
+        out = real(inputs, on, mode, *a, **kw)
+        return replace(out, private_inputs_hash=out.private_inputs_hash + "+" + mode) if mode == "include" else out
+
+    monkeypatch.setattr(offreport, "stamp", stamp)
+    monkeypatch.setattr(trades_mod.offreport, "stamp", stamp, raising=False)
+    inc = replace(env.st, off_report_derivatives="include")
+    with store.connect(env.url) as con:
+        a = backfill.inputs_hash(con, date.fromisoformat(D13), env.st)
+        b = backfill.inputs_hash(con, date.fromisoformat(D13), inc)
+        assert backfill.inputs_stamp(con, env.st) != backfill.inputs_stamp(con, inc)
+        assert b == a + "+include" and backfill.inputs_hash(con, date.fromisoformat(D13), env.st) == a
