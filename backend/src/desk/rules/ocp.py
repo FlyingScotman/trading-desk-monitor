@@ -322,6 +322,7 @@ def classify(row: Mapping[str, Any], terms: Sequence[Mapping[str, Any]], books: 
     rep = ex.get("reported") or {}
     delta = _amounts(row.get("fx_delta"), policy)
     core = ex.get("core") or {}
+    no_pv = False
     product, group = str(core.get("product") or "").lower(), product_group(rep)
     ndf = "fx_ndf" in product or group == "fx_ndf" or any(_truthy(t.get("ndf")) for t in terms)
     own = "options" if "option" in product or "option" in group else \
@@ -334,9 +335,10 @@ def classify(row: Mapping[str, Any], terms: Sequence[Mapping[str, Any]], books: 
         basis = policy.amount_basis.value
         if policy.amount_basis is AmountBasis.NOMINAL:
             delta = _amounts(ex.get("ocp_amount"), policy)
-    elif ex.get("ocp_amount") and policy.amount_basis is AmountBasis.NOMINAL:
-        # a CCS core did not value: the foreign leg's notional (its terms), not the report's PV
-        basis, delta = AmountBasis.NOMINAL.value, _amounts(ex["ocp_amount"], policy)
+    elif ex.get("ocp_amount"):
+        # a CCS core did not value: the foreign leg's exchanges still to come (its terms), not the report's PV, on
+        # either basis: a row without a PV, as an FX row without terms
+        basis, delta, no_pv = "notional", _amounts(ex["ocp_amount"], policy), True
     elif row.get("instr_type") == "BOND":
         basis = "mv_net" if _net_of_liability(row) else "mv"
     else:
@@ -350,13 +352,17 @@ def classify(row: Mapping[str, Any], terms: Sequence[Mapping[str, Any]], books: 
     if row.get("instr_type") == "BOND":
         return "bonds", delta, basis, ("грязная MV за вычетом валютного пассива фондирования" if basis == "mv_net"
                                        else "")
-    note = "" if core or basis != "notional" else "без условий сделки: номинал, не PV"
+    note = "" if core or basis != "notional" else \
+        "CCS не оценён ядром: обмены валютной ноги по условиям сделки, не PV" if no_pv else \
+        "без условий сделки: номинал, не PV"
     if ndf:
         return "ndf", delta, basis, note
     if own:
         return own, delta, basis, note
     if core:
         return "fx_legs", delta, basis, ""
+    if no_pv:
+        return "fx_legs", delta, basis, note
     if fx_like:
         if not later:
             return "cash", delta, "amount", ""
@@ -888,7 +894,10 @@ def derivative_lines(rows: Sequence[Mapping[str, Any]], books: Mapping[str, Mapp
         last, first = (max(dates) if dates else None), (min(tds) if tds else None)
         core = bool((r.get("extra") or {}).get("core"))
         entity = str((books.get(r["book_id"]) or {}).get("entity") or "—")
-        amounts = {c: a for c, a in sorted(_amounts(r.get("fx_delta"), policy).items()) if a}
+        ex = r.get("extra") or {}
+        no_pv = not core and ex.get("ocp_amount")  # a CCS core did not value: its exchanges, not a PV
+        amounts = {c: a for c, a in sorted(_amounts(ex["ocp_amount"] if no_pv else r.get("fx_delta"),
+                                                    policy).items()) if a}
         for ccy, a in amounts.items():
             out.append(DerivLine(pid, str(r["book_id"]), entity, ccy, a, kind, last,
                                  "spot_equivalent" if core else "notional", comp, first))

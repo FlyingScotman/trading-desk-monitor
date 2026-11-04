@@ -175,8 +175,50 @@ def test_a_ccs_core_did_not_value_has_its_notional_for_the_ocp(ctx):
     assert o.core_not_valued[0] == "ccs_foreign_floating_unsupported" and o.ocp_amount == {"CNY": 8e7}
     row = tdm_run.direct_row(ctx, "IRB", "C3", o, ex["C3"], None)
     assert row["extra"]["ocp_amount"] == {"CNY": 8e7}
-    comp, amounts, basis, _ = _ocp(row, t, O.AmountBasis.NOMINAL)
-    assert (comp, amounts, basis) == ("other", {"CNY": 8e7}, "nominal")
-    assert _ocp(row, t, O.AmountBasis.SPOT_EQUIVALENT)[2] != "nominal"  # the spot basis keeps its rule
+    for basis in (O.AmountBasis.NOMINAL, O.AmountBasis.SPOT_EQUIVALENT):  # a row without a PV on either basis
+        comp, amounts, b, _ = _ocp(row, t, basis)
+        assert (comp, amounts, b) == ("fx_legs", {"CNY": 8e7}, "notional"), basis
     assert dv.ccs_ocp_amount(t, BD) == {"CNY": 8e7}
     assert dv.ccs_ocp_amount(t, date(2030, 1, 1)) == {}  # matured
+
+
+def _valued_ocp(ctx, terms, pid="C1"):
+    bp, _ = ccs_plan(ctx, terms, pid)
+    return bp.direct[pid].valuation.extra.get("ocp_amount", {})
+
+
+def test_the_ccs_ocp_amount_is_the_exchanges_still_to_come(ctx):
+    """Receiving 100m CNY: no exchange (``none``) is nothing; a swap starting ahead with both exchanges nets to zero
+    (the initial one paid, the final one received, as an FX swap's legs); only the final exchange is +100m."""
+    base = {"index_code": "RUONIA"}
+    cases = {
+        "none": (ccs("C1", "pay", 1_250_000_000, 100_000_000, exchange="none", **base), {}),
+        "ahead": (ccs("C1", "pay", 1_250_000_000, 100_000_000, start="2026-10-20", end="2027-10-20", **base), {}),
+        "final": (ccs("C1", "pay", 1_250_000_000, 100_000_000, exchange="final", **base), {"CNY": 1e8}),
+        "seasoned": (ccs("C1", "pay", 1_250_000_000, 100_000_000, **base), {"CNY": 1e8}),
+    }
+    for name, (t, want) in cases.items():
+        assert _valued_ocp(ctx, t) == want, name
+        assert dv.ccs_ocp_amount(t, BD) == want, name  # the same from the terms, for a row core did not value
+    paying = ccs("C1", "receive", 1_250_000_000, 100_000_000, exchange="final", **base)
+    assert _valued_ocp(ctx, paying) == {"CNY": -1e8}
+    # ahead, the initial exchange alone (a swap whose final one is not stated away): -100m on the start day side
+    assert dv.ccs_exchange_amount("initial_and_final", "receive", 1e8, date(2026, 10, 20), date(2027, 10, 20),
+                                  date(2026, 10, 21)) == 1e8
+
+
+def test_a_book_with_a_valued_and_an_unvalued_ccs_keeps_both_exposures_at_the_default_basis(ctx):
+    good = ccs("C1", "pay", 1_250_000_000, 100_000_000, index_code="RUONIA")
+    bad = ccs("C3", "pay", 1e9, 8e7, fixed_rate_pct="15")
+    bad[1] = {k: v for k, v in {**bad[1], "fixed_rate_pct": None, "index_code": "SHIBOR"}.items() if v is not None}
+    ex = {p: {"asset_class": "otc", "ccy": "RUB", "deal_id": p, "source_instrument_id": p, "mv_rub": 1000.0}
+          for p in ("C1", "C3")}
+    bp, _ = plan_of(ctx, ex, [*good, *bad])
+    rows = [tdm_run.direct_row(ctx, "IRB", p, bp.direct[p], ex[p], None) for p in ex]
+    terms = {"C1": good, "C3": bad}
+    lines, _, _ = O.position_lines(rows, {}, terms, BD)  # the default basis
+    got = {ln.position_id: (ln.component, ln.ccy, ln.basis) for ln in lines}
+    assert got["C1"][:2] == ("fx_legs", "CNY") and got["C3"] == ("fx_legs", "CNY", "notional")
+    assert sum(ln.amount for ln in lines if ln.position_id == "C3") == 8e7
+    der = {d.position_id: d for d in O.derivative_lines(rows, {}, terms, BD)}
+    assert der["C3"].basis == "notional" and der["C3"].amount == 8e7 and der["C1"].basis == "spot_equivalent"

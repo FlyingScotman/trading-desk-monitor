@@ -61,7 +61,7 @@ delta), ``basis01`` (``FXBASIS|<ccy>``, RUB per bp), ``fixings`` (fixed / pendin
   ``fx_delta`` of the currency (the foreign leg's PV in it, today: the spot equivalent, what the OCP takes; an FX
   forward's is at the spot date, so the two differ by the foreign discount factor to it), ``basis01``
   (``XCCYBASIS`` apart from ``FXBASIS``, in ``extra.basis01_xccy``), ``extra.ocp_amount`` (the foreign leg's
-  notional to receive (+) or pay (-), as an FX forward's), ``extra.swaps``
+  exchanges still to come, received (+) or paid (-), as an FX forward's), ``extra.swaps``
   (``product`` ``ccs``, both legs' PV, ``side`` by the fixed leg). Not valued: a floating foreign leg
   (``ccs_foreign_floating_unsupported``: no foreign index fixings in the run), two foreign legs or two RUB legs
   (``ccs_ccy_unsupported``), a RUB leg on another index.
@@ -527,22 +527,38 @@ class CcsTerms:
 RatesTrade = SwapTerms | RepoTerms | CcsTerms
 
 
+def ccs_exchange_amount(exchange: str | None, side: str, notional: float, start: date, end: date, on: date) -> float:
+    """The foreign leg's notional exchanges still to come on ``on``, signed for the desk (received +): the initial one
+    (the leg's side pays it: receiving leg -N) if the swap starts on or after ``on``, the final one (+N) at the end,
+    as ``notional_exchange`` says (``none``: nothing; absent: initial and final, the standard swap's). What the OCP
+    holds of the leg, as an FX swap's far leg once its near leg has settled."""
+    ex = exchange or "initial_and_final"
+    sign = 1.0 if side == "receive" else -1.0
+    total = 0.0
+    if ex == "initial_and_final" and start >= on:
+        total -= sign * notional
+    if ex in ("initial_and_final", "final") and end >= on:
+        total += sign * notional
+    return total
+
+
 def ccs_ocp_amount(rows: list[dict[str, Any]], on: date) -> dict[str, float]:
-    """The foreign legs' notional of the ``ccs`` rows of ``rows`` (leg rows, valued or not) per currency, to receive (+)
-    or pay (-) as an FX forward's ``ocp_amount``: what the OCP takes at the nominal basis. A trade matured before
-    ``on`` is left out; a leg row without a side or a notional counts nothing."""
+    """The foreign legs' exchanges still to come (``ccs_exchange_amount``) of the ``ccs`` rows of ``rows`` (leg rows,
+    valued or not) per currency, as an FX forward's ``ocp_amount``: what the OCP takes of a CCS. A trade matured before
+    ``on`` is left out; a leg row without a side, a notional or dates counts nothing."""
     out: dict[str, float] = defaultdict(float)
     for r in rows:
         ccy, n, side = _ccy(r.get("ccy")), _num(r.get("notional_ccy")), str(r.get("side") or "").lower()
         try:
-            end = _day(r.get("maturity_date"))
+            start, end = _day(r.get("start_date")), _day(r.get("maturity_date"))
         except (TypeError, ValueError):
-            end = None
+            continue
         if r.get("product_kind") != "ccs" or not ccy or ccy == "RUB" or not n or side not in ("pay", "receive"):
             continue
-        if end is not None and end < on:
+        if start is None or end is None:
             continue
-        out[ccy] += n if side == "receive" else -n
+        ex = str(r["notional_exchange"]).strip().lower() if r.get("notional_exchange") is not None else None
+        out[ccy] += ccs_exchange_amount(ex, side, n, start, end, on)
     return {c: v for c, v in out.items() if v}
 
 
@@ -1517,10 +1533,11 @@ def _rates_valuation(ctx: Any, r: Request, a: _Acc, notes: list[str], result: An
     reported = None if r.partial else _reported_pv(x, [t.pv_rub for t in r.trades])
     horizon = max(t.end for t in r.trades)
     product = "+".join(sorted(a.products))
-    ocp: dict[str, float] = defaultdict(float)  # a CCS's foreign leg: its notional to receive (+) or pay (-)
+    ocp: dict[str, float] = defaultdict(float)  # a CCS's foreign leg: its exchanges still to come, received (+) or paid (-)
     for t in r.trades:
         if isinstance(t, CcsTerms):
-            ocp[t.foreign.ccy] += t.foreign.notional if t.foreign.side == "receive" else -t.foreign.notional
+            f = t.foreign
+            ocp[f.ccy] += ccs_exchange_amount(f.exchange, f.side, f.notional, t.start, t.maturity, bd)
     extra = {
         "core": {"product": product, "trades": sorted({t.trade_id for t in r.trades}),
                  "model_flags": sorted(a.flags), "rub_curve": RISK_CURVES[RUONIA_OIS_CURVE_ID],
