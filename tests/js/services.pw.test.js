@@ -28,7 +28,7 @@ const FEEDS = [
 const HIST = {available:true, code:'available', feed:'trades', enabled:false, when:'off_hours', from:'2026-01-05', history_from:null,
   from_min:'2026-01-05', from_default:'2026-01-05', backfill_enabled:true, paused:false, waiting:null, dates:10,
   counts:{fetched:4, no_trades:2, no_books:0, unmapped:1, unavailable:1, partial:0, todo:2, covered:0}, current:null,
-  applied:{full:1, partial:1, outside:1, unknown:0, waiting_recompute:1, no_effect:0, in_pnl:3, reasons:{no_prev_close:1, lost:1}},
+  applied:{full:1, partial:1, outside:1, unknown:0, waiting_recompute:1, no_effect:0, in_pnl:2, reasons:{no_prev_close:1, lost:1}},
   last:null, next_at:null, gate:'off', pending:false, calls_today:0, limit_per_day:300,
   problems:[{date:'2026-10-13', state:'unavailable', code:'date_unavailable', attempts:1, next_at:'2026-10-17T18:00:00+00:00'},
     {date:'2026-10-12', state:'unmapped', code:'books_unmapped', attempts:0, next_at:null}]};
@@ -36,11 +36,12 @@ const BF = {enabled:true, from:'2026-01-05', to:'2026-10-15', dates:10, done:8, 
   next:[], problem_dates:[], hub_problem_dates:[], stalled:null, oldest_run:'2026-01-05', first_positions:'2026-01-05', inbox_scanned_from:null};
 
 async function setup(browser, {width = 1440, available = true, code = 'available', hash = '#adapter/services', http = 200, noLogin = false,
-  history = HIST, bf = null} = {}) {
+  history = HIST, bf = null, waitsHistory = false} = {}) {
   const ctx = await browser.newContext({viewport:{width, height:1000}}), pg = await ctx.newPage(), errors = [], posts = [], dialogs = [];
   const hist = history ? JSON.parse(JSON.stringify(history)) : null;
   let job = {state:'idle', code:'idle'}, polls = 0;
   const feeds = JSON.parse(JSON.stringify(FEEDS));
+  if (waitsHistory) feeds[0].waits_history = true;
   if (noLogin) { feeds[1].last = {last_started:'2026-10-16T08:30:00+03:00', state:'complete', code:'fetched', needs_login:false, failures:0}; }
   pg.on('pageerror', e => errors.push(e.message));
   pg.on('dialog', d => { dialogs.push(d.message()); d.accept(); });
@@ -299,7 +300,9 @@ test('services block in Settings', {skip: pw ? false : 'нет Playwright'}, asy
         assert.match(await pg.locator('#svc-hist-when option:checked').textContent(), /Только вне торговых часов/);
         await pg.locator('#svc-hist-diag summary').click();
         const diag = await pg.locator('#svc-hist-diag').innerText();
-        assert.ok(diag.includes('13.10 — недоступно (date_unavailable)') && diag.includes('12.10 — книги не сопоставлены'));
+        assert.ok(diag.includes('13.10 — недоступно: сервис не отдаёт эту дату, попыток: 1') && diag.includes('12.10 — не сопоставлено: книги сервиса не сопоставлены с книгами монитора'));
+        assert.ok(!diag.includes('date_unavailable') && !diag.includes('books_unmapped'), 'no raw codes');
+        assert.match(await pg.locator('#svc-hist-box').innerText(), /будни 09:30–19:45 по Москве/);
         // the page itself does not overflow on a phone
         assert.strictEqual(await pg.locator('#svc-card').evaluate(n => n.scrollWidth > n.clientWidth + 1), false);
 
@@ -330,7 +333,7 @@ test('services block in Settings', {skip: pw ? false : 'нет Playwright'}, asy
 
         // the settings page, «История прогонов»: how many dates have the PnL of their trades
         await pg.waitForFunction(() => /Сделки прошлых дат/.test(document.getElementById('bf-rows').textContent));
-        assert.match(await pg.locator('#bf-rows').textContent(), /PnL сделок учтён в 3 датах, ждут пересчёта 1/);
+        assert.match(await pg.locator('#bf-rows').textContent(), /PnL сделок учтён в 2 датах \(полностью 1, частично 1\), вне PnL 1, ждут пересчёта 1/);
         assert.strictEqual(await pg.locator('#svc-hist-box button, #svc-hist-box a').evaluateAll(n => n.some(x => /desk\.bat|командн/i.test(x.textContent))), false);
         assert.deepStrictEqual(errors, []);
       } finally { await ctx.close(); }
@@ -351,9 +354,15 @@ test('services block in Settings', {skip: pw ? false : 'нет Playwright'}, asy
         await o.pg.waitForFunction(() => /ждёт конца торговых часов, дальше в/.test((document.getElementById('svc-hist-next') || {}).textContent || ''));
       } finally { await o.ctx.close(); }
       const now = {...HIST, enabled:true, gate:null, current:'2026-10-14'};
-      o = await setup(browser, {history: now});
+      o = await setup(browser, {history: now, waitsHistory: true});
       try {
-        await o.pg.waitForFunction(() => ((document.getElementById('svc-hist-next') || {}).textContent) === 'Сейчас: 14.10');
+        await o.pg.waitForFunction(() => /^Сейчас: 14\.10/.test((document.getElementById('svc-hist-next') || {}).textContent || ''));
+        assert.strictEqual(await o.pg.locator('#svc-hist-stop').isVisible(), true);
+        assert.match(await o.pg.locator('tr[data-feed=terms]').innerText(), /ждёт запроса прошлой даты/);
+        await o.pg.locator('#svc-hist-stop').click();
+        await o.pg.waitForFunction(() => true);
+        await o.pg.waitForTimeout(200);
+        assert.deepStrictEqual(o.posts.filter(x => x[0].endsWith('/cancel')).map(x => Object.fromEntries(x[1])), [{target:'feed'}]);
       } finally { await o.ctx.close(); }
       const none = {available:false, code:'history_unsupported', feed:null, enabled:false, when:'off_hours', from:'2026-01-05', counts:{}, applied:null, problems:[]};
       o = await setup(browser, {history: none});

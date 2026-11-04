@@ -75,6 +75,7 @@ import logging
 import re
 import socket
 import ssl
+import threading
 import time
 import urllib.error
 from collections import OrderedDict
@@ -180,6 +181,7 @@ def start_date(settings: Settings, date_from: date | None = None) -> date:
 
 _HASH_MEMO: OrderedDict[tuple, str] = OrderedDict()
 HASH_MEMO_SIZE = 4096
+_HASH_LOCK = threading.Lock()   # the autopilot's thread and the API's threads share the memo
 
 
 def inputs_stamp(con: psycopg.Connection, settings: Settings) -> tuple:
@@ -199,14 +201,16 @@ def inputs_hash(con: psycopg.Connection, d: date, settings: Settings, stamp: tup
     hundreds of dates the work of ``apply_intraday`` (the day's trades, the start of the day, the folds) would be done
     again and again (TDM#569). A changed stamp is a different key: the work is done once for the new inputs."""
     key = (stamp if stamp is not None else inputs_stamp(con, settings), d.isoformat())
-    hit = _HASH_MEMO.get(key)
-    if hit is not None:
-        _HASH_MEMO.move_to_end(key)
-        return hit
-    h = trades.intraday_inputs(con, d, settings)[0].private_inputs_hash
-    _HASH_MEMO[key] = h
-    while len(_HASH_MEMO) > HASH_MEMO_SIZE:
-        _HASH_MEMO.popitem(last=False)
+    with _HASH_LOCK:
+        hit = _HASH_MEMO.get(key)
+        if hit is not None:
+            _HASH_MEMO.move_to_end(key)
+            return hit
+    h = trades.intraday_inputs(con, d, settings)[0].private_inputs_hash   # (not under the lock: it reads the store)
+    with _HASH_LOCK:
+        _HASH_MEMO[key] = h
+        while len(_HASH_MEMO) > HASH_MEMO_SIZE:
+            _HASH_MEMO.popitem(last=False)
     return h
 
 

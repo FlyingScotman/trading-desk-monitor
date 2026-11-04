@@ -46,6 +46,8 @@
     gap: 'пауза между запросами', backoff: 'повтор после ошибки' };
   T.HIST_REASON = { no_prev_close: 'нет предыдущего закрытия', no_pnl: 'нет PnL позиции на начало дня', lost: 'бумага не оценена',
     unpriced: 'сделки без цены или курса', no_pnl_run: 'PnL в прогоне не считался', unvalued: 'бумага не оценена совсем' };
+  T.HIST_CODE = { date_unavailable: 'сервис не отдаёт эту дату', books_unmapped: 'книги сервиса не сопоставлены с книгами монитора',
+    export_incomplete: 'выгрузка неполная', files_not_accepted: 'файлы не приняты', empty: 'пусто, причина не указана' };
   T.history = function (h, now) {
     if (!h) return { unsupported: false, summary: '', applied: '', runs: '', next: '', problems: [] };
     var c = h.counts || {}, a = h.applied, dm = function (d) { return d.slice(8, 10) + '.' + d.slice(5, 7); };
@@ -71,18 +73,28 @@
       if (a.waiting_recompute) tail.push('Ждут пересчёта: ' + a.waiting_recompute + (h.backfill_enabled === false ? ' (история прогонов выключена)' : '') + '.');
       if (a.no_effect) tail.push('Не влияют на PnL: ' + a.no_effect + '.');
       out.applied = [line].concat(tail).filter(Boolean).join(' ');
-      if (h.enabled || c.fetched) out.runs = 'PnL сделок учтён в ' + (a.in_pnl || 0) + ' датах, ждут пересчёта ' + (a.waiting_recompute || 0)
-        + (h.backfill_enabled === false && a.waiting_recompute ? ' (история прогонов выключена)' : '');
+      if (h.enabled || c.fetched) {
+        var rest = [];
+        if (a.outside) rest.push('вне PnL ' + a.outside);
+        if (a.unknown) rest.push('нет данных о полноте ' + a.unknown);
+        out.runs = 'PnL сделок учтён в ' + (a.in_pnl || 0) + ' датах (полностью ' + (a.full || 0) + ', частично ' + (a.partial || 0) + ')'
+          + (rest.length ? ', ' + rest.join(', ') : '') + ', ждут пересчёта ' + (a.waiting_recompute || 0)
+          + (h.backfill_enabled === false && a.waiting_recompute ? ' (история прогонов выключена)' : '');
+      }
     }
     if (h.current) out.next = 'Сейчас: ' + dm(h.current);
     else if (h.paused && h.waiting) out.next = T.HIST_WAIT[h.waiting] || h.waiting;
     else if (!h.enabled) out.next = 'выключено';
     else if (h.gate && T.HIST_GATE[h.gate]) out.next = T.HIST_GATE[h.gate] + (h.next_at ? ', дальше в ' + T.when(h.next_at, now) : '');
-    else out.next = c.todo ? 'Дальше: сейчас' : 'Все даты получены';
+    else if (c.todo) out.next = 'Дальше: сейчас';
+    else if (h.pending) out.next = 'Файлы ждут окончания расчёта';
+    else if ((h.problems || []).length) out.next = 'Ждут повтора: ' + h.problems.length;
+    else out.next = 'Все даты получены';
     if (h.hint === 'all_unavailable') out.hint = 'Сервис не отдал ни одной прошлой даты. Скорее всего, дело в настройках подключения, а не в датах: проверьте адрес и вход в панели выше.';
     out.problems = (h.problems || []).map(function (p) {
-      return dm(p.date) + ' — ' + ({ unavailable: 'недоступно', unmapped: 'книги не сопоставлены', partial: 'получено частично' }[p.state] || p.state)
-        + (p.code ? ' (' + p.code + ')' : '') + (p.attempts ? ', попыток: ' + p.attempts : '') + (p.next_at ? ', следующая попытка ' + T.when(p.next_at, now) : '');
+      return dm(p.date) + ' — ' + ({ unavailable: 'недоступно', unmapped: 'не сопоставлено', partial: 'получено частично' }[p.state] || p.state)
+        + (p.code ? ': ' + (T.HIST_CODE[p.code] || p.code) : '') + (p.attempts ? ', попыток: ' + p.attempts : '')
+        + (p.next_at ? ', следующая попытка ' + T.when(p.next_at, now) : '');
     });
     return out;
   };

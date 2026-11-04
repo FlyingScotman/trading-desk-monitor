@@ -212,11 +212,11 @@ never today's date, and the answer's `dates` must be the asked date or empty. Th
 | `complete` / `no_records` | no records of the requested books on the date, and the book mapping is proven. Two cases: (a) the snapshot has no records at all: a file **without units**, it replaces nothing and the date is unchanged; (b) the snapshot has records, none of the requested books: a file with **empty units** of every requested book, it replaces them with an empty list (a trade deleted in the source leaves the date) | the date is marked «без сделок» by the code, whatever the file's status; it is asked again only in the window of the newest 3 dates |
 | `partial` / `books_unmapped` | records exist, but none proved its book mapping: no units, no book replaced. This is not «no trades» | marked «не сопоставлено»; asked again only after a new adapter fingerprint (the mapping was changed) |
 | `error` / `date_unavailable` | past dates only: the service refused the date's window (a 4xx other than 401, 403, 408, 429), no file. For today a 4xx stays `partial` / `export_incomplete` | marked «недоступно»; asked again after 1, 3, 7 days, then only after a new fingerprint or by the button. If every past date is refused, the screen suggests checking the connection settings |
-| `partial` / `export_incomplete` | the export is incomplete (5xx, the network) | asked again after 5, 15, 60 minutes; the third time as «недоступно» |
+| `partial` / `export_incomplete` | the export is incomplete (5xx, the network) | asked again after 5 and 15 minutes; the third failure is «недоступно» |
 | `blocked` (`login_required`, `config_invalid`, `source_disabled`), `skipped`, `error` otherwise | as for every feed | no mark; the whole fetch waits (a login) or backs off |
 
 Accepted risk of the adapter: the only trade of the whole environment deleted in the source stays in its date until
-another record appears. The sources `possvc_trades` and `trades_hourly` must not be enabled for the same books (the unit of
+another record appears. The adapter's service source of trades and its hourly source of trades must not be enabled for the same books (the unit of
 a date belongs to one source, §6.6). The files are taken in with one non-blocking try of the cycle lock; a busy lock
 leaves them pending and they are taken in at the next step, before another date is asked. No run is made after the
 ingestion: the monitor's eod and backfill steps recompute a date by the changed hash of its inputs (§10 `trades`).

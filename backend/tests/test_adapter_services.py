@@ -181,12 +181,16 @@ elif op == 'feed':
         elif hm == 'wrongdate':
             print(json.dumps({"state": "complete", "code": "exported", "dates": ['2020-01-01'], "files": []}))
         else:  # ok, or no_records_file: a file with the header only
-            name = 'trades_' + day.replace('-', '') + '_' + ((state / 'hist_hhmm').read_text() if (state / 'hist_hhmm').exists() else '1845') + '.csv'
+            late = (state / 'hist_late').read_text() if (state / 'hist_late').exists() else None
+            name = 'trades_' + (late or day).replace('-', '') + '_' + ((state / 'hist_hhmm').read_text() if (state / 'hist_hhmm').exists() else '1845') + '.csv'
             lines = ['TR-' + day + ';1;live;' + day + ';' + day + 'T10:30:00;OFZ;P1;bond;SU26238RMFS4;buy;1000;;RUB'] \
                 if hm == 'ok' else []
             if (state / 'hist_extra').exists() and hm == 'ok':
                 lines += (state / 'hist_extra').read_text().replace('DAY', day).splitlines()
-            (out / name).write_text(TRADES_HEAD + ''.join(x + '\n' for x in lines))
+            if late:   # the real adapter dates its file by the moment of the export: a later date, the rows say theirs
+                (out / name).write_text(TRADES_HEAD.rstrip('\n') + ';_report_date\n' + ''.join(x + ';' + day + '\n' for x in lines))
+            else:
+                (out / name).write_text(TRADES_HEAD + ''.join(x + '\n' for x in lines))
             print(json.dumps({"state": "complete", "code": "no_records" if hm == 'no_records_file' else "exported",
                               "dates": [day], "files": [{"file": name, "sha256": hashlib.sha256((out / name).read_bytes()).hexdigest()}]}))
         sys.exit()

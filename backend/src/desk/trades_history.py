@@ -28,8 +28,8 @@ has a report time after its own end on the Moscow clock is covered (``fetched``/
 ``no_books``   no book of the owner has positions on the date               when the position sets of the date change
 ``unmapped``   ``partial``/``books_unmapped``, or no unit taken in at all   a new adapter fingerprint
 ``unavailable````error``/``date_unavailable`` (or ``partial`` too often)    after 1, 3, 7 days, then a new fingerprint
-``partial``    ``partial``/``export_incomplete``, files not all taken in     after 5, 15, 60 minutes; ``MAX_ATTEMPTS``
-                                                                            times: ``unavailable``
+``partial``    ``partial``/``export_incomplete``, files not all taken in     after 5 and 15 minutes; the third failure:
+                                                                            ``unavailable``
 =============  ==========================================================  ==========================================
 
 No mark: a login or a setting is wanted (``wait``: the whole worker waits for the feed's login or a describe), an error
@@ -284,7 +284,8 @@ def queue(con: psycopg.Connection, settings: Settings, doc: dict, now: datetime,
           fingerprint: str | None) -> dict:
     """What to ask: ``{"candidates", "covered", "order"}``. The dates ``covered`` get their mark from the caller."""
     cands = candidates(con, settings, doc, now, history_from)
-    cov = covered(con, cands, doc)
+    asked = set(doc.get("priority") or [])   # asked again by the owner: a covering set is no answer to that
+    cov = covered(con, [d for d in cands if d not in asked], doc)
     todo: set[str] = set()
     for i, d in enumerate(cands):
         if d in cov:
@@ -351,17 +352,21 @@ def completeness(it: dict) -> tuple[str, str | None]:
 
 def applied(con: psycopg.Connection, settings: Settings, doc: dict) -> dict:
     """The dates with trades taken in (marks ``fetched``), by what their default run says: ``full``, ``partial``,
-    ``outside`` (with the reasons), ``unknown`` (the run has no completeness figures), ``waiting_recompute`` (the run
-    read other inputs: the eod or backfill step makes it again), ``no_effect`` (the trades do not change the inputs:
-    not bonds, all left out). ``in_pnl`` is the first four."""
+    ``outside`` (none of the trades is in the total, with the reasons), ``unknown`` (the run has no completeness figures),
+    ``waiting_recompute`` (the run read other inputs: the eod or backfill step makes it again), ``no_effect`` (the trades
+    do not change the inputs: not bonds, all left out). ``in_pnl`` is ``full`` + ``partial``: dates where the PnL of
+    the trades is in the total, whole or in part; ``outside`` and ``unknown`` are not counted in it."""
     days = sorted(d for d, m in doc["marks"].items() if m.get("state") == "fetched")
     out: dict[str, Any] = {"full": 0, "partial": 0, "outside": 0, "unknown": 0, "waiting_recompute": 0,
                            "no_effect": 0, "reasons": {}, "dates": {}}
     if days:
         dts = [date.fromisoformat(d) for d in days]
         runs = store.default_runs(con, min(dts))
-        newest = dict(con.execute("SELECT valid_date, max(set_id) FROM dataset_set WHERE dataset = 'trades'"
-                                  " AND valid_date = ANY(%s) GROUP BY 1", (dts,)).fetchall())
+        current: dict[date, list[int]] = {}   # the sets in force of each date's trades units (CURRENT_SET)
+        for d_, sid in con.execute("SELECT DISTINCT ON (valid_date, scope_key) valid_date, set_id FROM dataset_set"
+                                   " WHERE dataset = 'trades' AND valid_date = ANY(%s)"
+                                   f" ORDER BY valid_date, scope_key, {store.CURRENT_SET}", (dts,)):
+            current.setdefault(d_, []).append(sid)
         lin = {}
         for d_, it in con.execute(
                 "SELECT business_date, jsonb_build_object('set_ids', lineage #> '{intraday_trades,set_ids}',"
@@ -377,8 +382,11 @@ def applied(con: psycopg.Connection, settings: Settings, doc: dict) -> dict:
             key = d.isoformat()
             if run is None:
                 kind = "waiting_recompute"
-            elif it.get("has") and newest.get(d) in (it.get("set_ids") or []):
-                kind, why = completeness(it)
+            elif it.get("has") and current.get(d) and set(current[d]) <= set(it.get("set_ids") or []):
+                if count_of(it.get("applied")) == 0:
+                    kind, why = "no_effect", None   # nothing of the date's trades entered the book (not bonds, left out)
+                else:
+                    kind, why = completeness(it)
                 if why:
                     out["reasons"][why] = out["reasons"].get(why, 0) + 1
             elif backfill.inputs_hash(con, d, settings, stamp) == run["private_inputs_hash"]:
@@ -387,7 +395,7 @@ def applied(con: psycopg.Connection, settings: Settings, doc: dict) -> dict:
                 kind = "waiting_recompute"
             out[kind] += 1
             out["dates"][key] = kind
-    out["in_pnl"] = out["full"] + out["partial"] + out["outside"] + out["unknown"]
+    out["in_pnl"] = out["full"] + out["partial"]
     return out
 
 

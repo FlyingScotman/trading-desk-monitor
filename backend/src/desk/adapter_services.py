@@ -641,6 +641,7 @@ class AdapterServices:
                                         "failures", "retry_at", "needs_login")}
         return {**f, "enabled": on, "enabled_default": f["enabled"], "last": last,
                 "next_run": _iso(nd), "running": bool(running and running.get("feed") == f["id"]),
+                "waits_history": bool(running and running.get("kind") == "history" and f.get("history")),
                 "queued": f["id"] in queued}
 
     # ---- the owner's requests
@@ -1385,6 +1386,9 @@ class AdapterServices:
         except Exception:  # noqa: BLE001
             return False
         day, started = p["date"], self._now()
+        self._cancel.clear()   # a cancel that came after the request must not hold the files for ever
+        if not helper_proc.HELPER_LOCK.acquire(timeout=0.25):   # as every operation; busy: the next step
+            return False
         with self._lock:
             self._running = {"kind": "history", "history_feed": f["id"], "date": day, "since": _iso(started),
                              "phase": "ingesting"}
@@ -1402,6 +1406,7 @@ class AdapterServices:
         finally:
             with self._lock:
                 self._running = None
+            helper_proc.HELPER_LOCK.release()
         self._history_finish(st, day, r, ing, read_state(st).get("fingerprint"), started, drained=True)
         return True
 

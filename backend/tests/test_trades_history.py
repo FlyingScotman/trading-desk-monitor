@@ -623,3 +623,51 @@ def test_the_two_no_records_cases_are_both_no_trades(env):
     env.put("hist_mode_" + D15, "no_records_file")   # a file with the header only
     env.step(2)
     assert env.marks() == {D14: "no_trades", D15: "no_trades"} and env.doc["failures"] == 0
+
+
+def test_the_period_button_asks_the_service_again_for_a_date_it_already_has(env):
+    """A real export is dated by the moment it was made (after the end of the date): the date counts as covered only when
+    nobody asked for it. A date the owner asked again goes to the service all the same."""
+    env.s.history_set(None, D15, None)
+    env.put("hist_late", "2026-10-16")
+    assert env.step() == [True] and env.asked() == [D15] and env.marks() == {D15: "fetched"}
+    assert env.doc["marks"][D15]["code"] != "covered"
+    env.clock["t"] += timedelta(days=2)               # (the window of the newest dates would ask on the next day anyway)
+    with store.connect(env.url) as con:
+        assert trades_history.covered(con, [D15], {"marks": {}}) == [D15]   # the set is later than the date
+    env.s.history_refetch(D15, D15, True)
+    env.clock["t"] += timedelta(seconds=130)
+    env.put("hist_extra", "TR-DAY;2;cancelled;DAY;DAYT10:30:00;OFZ;P1;bond;SU26238RMFS4;buy;1000;;RUB")
+    assert env.step() == [True] and env.asked() == [D15, D15]
+    assert env.doc["priority"] == [] and env.marks() == {D15: "fetched"}
+
+
+def test_pending_files_are_taken_in_after_a_cancel_and_the_helper_lock_is_taken(env, monkeypatch):
+    env.s.history_set(None, D15, None)
+    real = svcs.AdapterServices._try_cycle_lock
+    busy = {"n": 1}
+    monkeypatch.setattr(svcs.AdapterServices, "_try_cycle_lock",
+                        staticmethod(lambda st: (busy.update(n=0) or None) if busy["n"] else real(st)))
+    env.s._history_step()
+    assert env.doc["pending"]
+    env.s._cancel.set()                                  # a cancel that came late must not hold the files for ever
+    assert helper_proc.HELPER_LOCK.acquire(timeout=1)    # an operation holds the helper: the files wait one step
+    try:
+        assert env.s._history_step() is False and env.doc["pending"]
+    finally:
+        helper_proc.HELPER_LOCK.release()
+    assert env.s._history_step() is True
+    assert env.doc["pending"] is None and env.marks() == {D15: "fetched"} and not env.s._cancel.is_set()
+
+
+def test_in_pnl_counts_only_the_dates_whose_total_has_the_trades(env):
+    env.s.history_set(None, D13, None)
+    env.put("hist_mode_" + D14, "no_records")
+    env.put("hist_mode_" + D15, "no_records")
+    env.step(3)
+    backfill.run(env.st, env.plan(D13), store_url=env.url, out=lambda line: None)
+    with store.connect(env.url) as con:
+        a = trades_history.applied(con, env.st, env.doc)
+    # the one date with a trade is partly in (the trade has no price); a date that only carries the trades of the days
+    # before (no trade of its own in the book) is not counted anywhere as in the PnL
+    assert (a["partial"], a["in_pnl"], a["outside"], a["unknown"]) == (1, 1, 0, 0)

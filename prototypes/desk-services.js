@@ -197,7 +197,7 @@
       const next = el('td'); next.dataset.l = 'Следующий';
       next.textContent = last.needs_login ? 'нужен вход: выполните вход в панели выше'
         : !f.ready ? 'не готово' + (f.why_not_ready ? ': ' + f.why_not_ready : '')
-        : !f.enabled ? 'выключено' : f.queued ? 'в очереди' : f.next_run ? when(f.next_run) + (last.failures ? ' (повтор ' + last.failures + ')' : '') : '—';
+        : f.waits_history ? 'ждёт запроса прошлой даты' : !f.enabled ? 'выключено' : f.queued ? 'в очереди' : f.next_run ? when(f.next_run) + (last.failures ? ' (повтор ' + last.failures + ')' : '') : '—';
       if (last.needs_login) next.style.color = 'var(--warn)';
       const act = el('td'), run = el('button', 'Запустить сейчас', 'ibtn'); run.type = 'button';
       run.disabled = f.running || f.queued; run.addEventListener('click', () => runNow(f.id, run));
@@ -328,6 +328,7 @@
     for (const [v, t] of [['off_hours', 'Только вне торговых часов (по умолчанию)'], ['any', 'В любое время']]) { const o = el('option', t); o.value = v; when.append(o); }
     const row2 = el('div', null, 'row'); row2.style.cssText = 'flex-wrap:wrap;align-items:center;gap:8px;margin-top:8px';
     const wl = el('label', 'Когда спрашивать сервис'); wl.htmlFor = 'svc-hist-when'; row2.append(wl, when);
+    const hrs = el('p', 'Торговые часы — будни 09:30–19:45 по Москве. При «в любое время» пересчёт прошлых дат идёт и днём (шаг «История прогонов») и удлиняет цикл автопилота до времени, отведённого истории прогонов за цикл.', 'hint');
     const rf = el('button', 'Перезапросить период…', 'ibtn'); rf.type = 'button'; rf.id = 'svc-hist-refetch';
     const row3 = el('div', null, 'row'); row3.style.cssText = 'flex-wrap:wrap;align-items:center;gap:8px;margin-top:8px';
     const rfrom = el('input', null, 'inp mono'), rto = el('input', null, 'inp mono'), go = el('button', 'Запросить заново', 'btn');
@@ -337,11 +338,14 @@
     row3.append(rf);
     const sum = el('p'); sum.id = 'svc-hist-sum'; sum.style.marginBottom = '2px';
     const app = el('p', null, 'hint'); app.id = 'svc-hist-applied';
-    const next = el('p', null, 'hint'); next.id = 'svc-hist-next';
+    const next = el('p', null, 'hint'); next.id = 'svc-hist-next'; next.append(document.createTextNode(''));
     const hintp = el('p', null, 'hint'); hintp.id = 'svc-hist-msg-hint'; hintp.style.color = 'var(--warn)';
     const msg = el('p', null, 'hint'); msg.id = 'svc-hist-msg'; msg.setAttribute('role', 'status');
     const diag = el('details'); diag.id = 'svc-hist-diag'; diag.hidden = true; diag.append(el('summary', 'Диагностика', 'mut3'));
-    host.append(row1, row2, row3, range, sum, app, next, hintp, msg, diag);
+    const stop = el('button', 'Остановить', 'lnk'); stop.type = 'button'; stop.id = 'svc-hist-stop'; stop.hidden = true;
+    stop.addEventListener('click', () => cancel('feed'));
+    next.append(' ', stop);
+    host.append(row1, row2, hrs, row3, range, sum, app, next, hintp, msg, diag);
     box.addEventListener('change', () => histSet(box.checked ? {enabled: 'true', ...(from.value ? {from: from.value} : {})} : {enabled: 'false'}, box));
     from.addEventListener('change', () => { if (from.value) histSet({from: from.value}, from); });
     when.addEventListener('change', () => histSet({when: when.value}, when));
@@ -370,7 +374,8 @@
     $('hist-when').value = h.when || 'off_hours';
     $('hist-sum').textContent = w.summary;
     $('hist-applied').textContent = ok ? w.applied : '';
-    $('hist-next').textContent = ok && w.next ? w.next : '';
+    $('hist-next').firstChild.textContent = ok && w.next ? w.next : '';
+    $('hist-stop').hidden = !(ok && h.current);
     $('hist-msg-hint').textContent = ok && w.hint ? w.hint : '';
     const d = $('hist-diag');
     d.hidden = !w.problems.length;
