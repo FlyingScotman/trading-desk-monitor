@@ -48,6 +48,17 @@ the store failed, a cancel) stay ``pending`` and are taken in at the feed's next
 again: the adapter may answer ``no_change`` then and never produce them again. Feed
 state (last start/end, outcome, failures, next retry, the pause, the positions date seen) is persisted, so a restart
 does not fetch again at once.
+
+**Trades of past dates** (TDM#569, ``desk.trades_history``; off until the owner turns it on). A feed with the dataset
+``trades``, ``books`` and the new ``history: true`` (and, when the source knows it, ``history_from``: the earliest date
+it keeps) also answers for a past ``date``. When nothing else is due (the owner's operations, «Запустить сейчас», the
+scheduled feeds), the worker asks it for one past date at a time (``_history_step``): newest block of dates first, the
+limits and the hours of ``trades_history``. It does not touch the feed's own state (``runs``): the schedule, the retries
+and the login pause of today's feed are not affected by it. Unlike a feed run, a history request (a) takes its files in
+with one non-blocking try of the cycle lock: busy, they stay ``pending`` in ``trades_history.json`` and are taken in at
+the next step, before another date is asked, with ``HELPER_LOCK`` free meanwhile; (b) makes no run after the ingestion:
+the eod and backfill steps do, by the changed hash of the date's inputs (the eod step leaves such dates to the backfill in
+the trading hours). A feed due within the time of the last request is waited for. The answer's date must be the asked one.
 """
 from __future__ import annotations
 
@@ -67,7 +78,7 @@ from datetime import time as dtime
 from pathlib import Path
 from typing import Any
 
-from . import helper_proc, recompute, store, terms_plan
+from . import backfill, helper_proc, recompute, store, terms_plan, trades_history
 from .autopilot import CycleLock
 from .inbox import scan
 from .inbox.loader import AdapterHandle, check_services, fingerprint, load_adapter
@@ -236,6 +247,14 @@ def clean_schedule(s: Any) -> dict | None:
     return None
 
 
+def _day(v: Any) -> str | None:
+    """A date ``YYYY-MM-DD`` or None (anything else is dropped: an optional key)."""
+    try:
+        return v if isinstance(v, str) and date.fromisoformat(v).isoformat() == v else None
+    except ValueError:
+        return None
+
+
 def clean_feeds(v: Any, h: AdapterHandle | None) -> list[dict]:
     """FEEDs. ``source_declared``: the adapter declares ``source`` for ``dataset`` (its ``sources``). A feed whose
     source it does not declare may still run (one that archives locally and returns no files); only its files are
@@ -252,7 +271,8 @@ def clean_feeds(v: Any, h: AdapterHandle | None) -> list[dict]:
                 "source": _str(f.get("source"), 100, empty=False), "enabled": f["enabled"], "ready": f["ready"],
                 "why_not_ready": _opt(f, "why_not_ready", 1000), "schedule": clean_schedule(f.get("schedule")),
                 "after_positions": f.get("after_positions") is True, "books": f.get("books") is True,
-                "trades_file": f.get("trades_file") is True}
+                "trades_file": f.get("trades_file") is True, "history": f.get("history") is True,
+                "history_from": _day(f.get("history_from"))}
         decl = h.source(feed["source"]) if h is not None else None
         feed["source_declared"] = h is None or (decl is not None and decl.get("dataset") == feed["dataset"])
         out.append(feed)
@@ -555,7 +575,7 @@ class AdapterServices:
             self._background_describe()
             return False
         if self._scheduling:
-            return self._scheduled()
+            return self._scheduled() or self._history_step()
         return False
 
     # ---- availability and GET
@@ -732,7 +752,7 @@ class AdapterServices:
                 self._job.update(state="cancelled", code="cancelled", finished_at=_iso(self._now()))
                 return dict(self._job)
             r = self._running or {}
-            if (target == "job" and r.get("kind") == "op") or (target == "feed" and r.get("kind") == "feed"):
+            if (target == "job" and r.get("kind") == "op") or (target == "feed" and r.get("kind") in ("feed", "history")):
                 if r.get("phase") == "ingesting":
                     raise ServiceError("cancel_after_commit_unavailable")
                 self._cancel.set()
@@ -794,6 +814,8 @@ class AdapterServices:
                     run = doc.setdefault("runs", {}).get(f["id"])
                     if f["ready"] and run and run.get("needs_login"):
                         run["needs_login"] = False
+                if any(f["ready"] and f.get("history") for f in feeds):
+                    self._history_unwait(st)
             write_state(st, doc)
             self._avail = None  # the fingerprint may have changed
         return panel
@@ -1010,22 +1032,7 @@ class AdapterServices:
             if plan is not None:
                 extra["trades_file"] = str(plan[0])
             if books:  # the whole request within the protocol's limits before the call, the books cut with a note
-                asked = len(books)
-                base = len(st.inbox_dirs) + 8
-                books = books[:max(0, helper_proc.MAX_FIELDS - base)]
-                while books:
-                    try:
-                        helper_proc.encode({"op": "feed", **extra, "book": books, "adapter_root": str(hp.root),
-                                            "config_dir": hp.handle.config_dir or "", "state_dir": str(state_dir(st)),
-                                            "output_dir": str(out), "inbox_dir": [str(d) for d in st.inbox_dirs]})
-                        break
-                    except helper_proc.HelperFailure:
-                        books = books[:-max(1, len(books) // 10)]
-                extra["book"] = books
-                if len(books) < asked:
-                    notes.append(f"В запрос вошло книг: {len(books)} из {asked} (предел размера запроса).")
-                if not books:
-                    raise ServiceError("invalid_request", "error")
+                self._fit_books(st, hp, out, extra, books, notes)
             r = clean_feed_result(self._call(st, hp, "feed", extra, out=out))
             outcome = {k: r[k] for k in ("state", "code", "lines", "dates")}
             if notes:
@@ -1062,6 +1069,26 @@ class AdapterServices:
             helper_proc.HELPER_LOCK.release()
             self._prune(st)
         self._finish(st, f, prev, outcome, started)
+
+    @staticmethod
+    def _fit_books(st: Settings, hp: Helper, out: Path, extra: dict, books: list[str], notes: list[str]) -> None:
+        """``extra["book"]``: the books within the protocol's limits of one request, cut with a note in ``notes``."""
+        asked = len(books)
+        base = len(st.inbox_dirs) + 8
+        books = books[:max(0, helper_proc.MAX_FIELDS - base)]
+        while books:
+            try:
+                helper_proc.encode({"op": "feed", **extra, "book": books, "adapter_root": str(hp.root),
+                                    "config_dir": hp.handle.config_dir or "", "state_dir": str(state_dir(st)),
+                                    "output_dir": str(out), "inbox_dir": [str(d) for d in st.inbox_dirs]})
+                break
+            except helper_proc.HelperFailure:
+                books = books[:-max(1, len(books) // 10)]
+        extra["book"] = books
+        if len(books) < asked:
+            notes.append(f"В запрос вошло книг: {len(books)} из {asked} (предел размера запроса).")
+        if not books:
+            raise ServiceError("invalid_request", "error")
 
     def _plan_of(self, day: str | None) -> tuple[date | None, dict | None]:
         on = date.fromisoformat(day) if day else self._newest_positions()
@@ -1119,6 +1146,9 @@ class AdapterServices:
             rec.update(needs_login=False, failures=0, retry_at=None)  # nothing to ask for yet: the next step tries again
         elif state in ("complete", "partial", "skipped"):
             rec.update(needs_login=False, failures=0, retry_at=None, last_ok=_iso(now))
+            if f.get("history"):
+                with self._lock:   # a feed run got in: the history of its trades need not wait for a login
+                    self._history_unwait(st)
         elif state == "cancelled":
             n = int(prev.get("failures") or 0)  # a cancelled retry waits for its next step, never again at once
             rec.update(failures=n, retry_at=_iso(now + backoff(n)) if n else None)
@@ -1137,8 +1167,16 @@ class AdapterServices:
             if time.monotonic() >= until or self._stop.wait(1.0):
                 return None
 
-    def _ingest(self, st: Settings, hp: Helper, f: dict, out: Path, r: dict) -> dict:
-        """The produced files through the scanner as the feed's source, then the affected runs (module doc)."""
+    @staticmethod
+    def _try_cycle_lock(st: Settings) -> CycleLock | None:
+        """One try of the cycle lock, no waiting (the history of trades: TDM#569)."""
+        lock = CycleLock(st.home)
+        return lock if lock.acquire() else None
+
+    def _ingest(self, st: Settings, hp: Helper, f: dict, out: Path, r: dict, *, recompute_runs: bool = True,
+                wait: bool = True) -> dict:
+        """The produced files through the scanner as the feed's source, then the affected runs (module doc).
+        ``recompute_runs`` False and ``wait`` False: the history of trades (one try of the cycle lock, no runs after it)."""
         root = out.resolve()
         paths = []
         for x in r["files"]:
@@ -1148,7 +1186,7 @@ class AdapterServices:
             paths.append(p)
         if self._cancel.is_set():
             raise ServiceError("cancelled", "cancelled")
-        lock = self._wait_cycle_lock(st)
+        lock = self._wait_cycle_lock(st) if wait else self._try_cycle_lock(st)
         if lock is None:
             raise ServiceError("calculation_busy", "error")
         try:
@@ -1173,7 +1211,8 @@ class AdapterServices:
                         dates |= {d for (d,) in units if d is not None}
                         accepted += len(units) if status != "duplicate" else 0
                     files.append({"file": p.name, "status": status})
-            rec = recompute.after_inputs(st, self._url, dates, self._today()) if dates else {"runs": [], "failed": []}
+            rec = recompute.after_inputs(st, self._url, dates, self._today()) if dates and recompute_runs \
+                else {"runs": [], "failed": []}
         finally:
             lock.release()
         bad = [x for x in files if x["status"] not in OK_FILE]
@@ -1202,11 +1241,306 @@ class AdapterServices:
                 self._running["phase"] = "fetching"
         return drained
 
+    # ---- the trades of past dates (TDM#569, ``desk.trades_history``)
+
+    @staticmethod
+    def _history_feed(doc: dict) -> dict | None:
+        """The feed that answers for past dates: the dataset ``trades``, the owner's books, ``history``."""
+        return next((f for f in doc.get("feeds") or [] if f.get("history") and f.get("books")
+                     and f.get("dataset") == "trades"), None)
+
+    def _hist_edit(self, st: Settings, fn: Callable[[dict], Any]) -> Any:
+        """The history file changed under the service's lock, atomically (the worker thread and the routes write)."""
+        with self._lock:
+            doc = trades_history.read(st)
+            r = fn(doc)
+            trades_history.write(st, doc)
+            return r
+
+    def _history_unwait(self, st: Settings) -> None:
+        """The caller holds ``self._lock``."""
+        doc = trades_history.read(st)
+        if doc.get("wait"):
+            doc["wait"] = None
+            trades_history.write(st, doc)
+
+    def _feed_due_soon(self, doc: dict, now: datetime, spent: float | None) -> bool:
+        """A feed is (or will be) due within the time the last request of the history took (at least 30 s): it would wait
+        for the whole request, so the history waits for it."""
+        need = timedelta(seconds=max(float(spent or 0.0), 30.0))
+        for f in doc.get("feeds") or []:
+            if _enabled(doc, f) and f.get("ready"):
+                nd = next_due(f, doc.get("runs", {}).get(f["id"], {}), now)
+                if nd is not None and nd - now < need:
+                    return True
+        return False
+
+    def _history_step(self) -> bool:
+        """One step of the worker of the trades of past dates (module doc): the files waiting for the cycle lock first,
+        else one date, if the limits and the hours allow. True: it did something that asks for the next step at once."""
+        st = self._load()
+        sdoc = read_state(st)
+        f = self._history_feed(sdoc)
+        h = trades_history.read(st)
+        if f is None or not h["enabled"] or not f.get("ready") or sdoc.get("runs", {}).get(f["id"], {}).get("needs_login"):
+            return False
+        now = self._now()
+        if h.get("pending"):
+            return self._history_drain(st, f, h)
+        if trades_history.gate(h, now) is not None or self._feed_due_soon(sdoc, now, h.get("last_duration_s")):
+            return False
+        fp = sdoc.get("fingerprint")
+        pick: tuple[str, list[str], list[str]] | None = None
+        no_books: dict[str, str] = {}
+        try:
+            with store.connect(self._url) as con:
+                q = trades_history.queue(con, st, h, now, f.get("history_from"), fp)
+                for d in q["order"][:20]:
+                    books, notes = owner_books(con, date.fromisoformat(d))
+                    if books:
+                        pick = (d, books, notes)
+                        break
+                    no_books[d] = trades_history.sets_signature(con, d)
+        except Exception:
+            log.exception("adapter services: the history of trades not planned")
+            return False
+
+        def marks(doc: dict) -> None:
+            for d in q["covered"]:
+                trades_history.apply_mark(doc, d, "fetched", "covered", now, fingerprint=fp)
+            for d, sig in no_books.items():
+                trades_history.apply_mark(doc, d, "no_books", "no_books", now, fingerprint=fp, sets=sig)
+            doc["priority"] = [d for d in doc.get("priority") or [] if d not in doc["marks"]]
+
+        if q["covered"] or no_books:
+            self._hist_edit(st, marks)
+        return self._history_fetch(st, f, *pick, fp) if pick else False
+
+    def _history_fetch(self, st: Settings, f: dict, day: str, books: list[str], notes: list[str],
+                       fp: str | None) -> bool:
+        """The feed asked for one past date: the answer checked (the date is the asked one), its files taken in with one
+        non-blocking try of the cycle lock, no run made after it, the date marked (``_history_finish``)."""
+        try:
+            hp = self._helper(st)
+        except Exception as e:  # noqa: BLE001 - no helper now: the next step tries again
+            log.info("adapter services: history waits (%s)", getattr(e, "code", type(e).__name__))
+            return False
+        self._cancel.clear()
+        if not helper_proc.HELPER_LOCK.acquire(timeout=0.25):   # an acquisition job or an operation: not waited for
+            return False
+        started = self._now()
+        rid = uuid.uuid4().hex
+        self._hist_edit(st, lambda h: trades_history.count_call(h, started))   # counted before the call: a restart too
+        with self._lock:
+            self._running = {"kind": "history", "history_feed": f["id"], "date": day, "since": _iso(started),
+                             "phase": "fetching"}
+        r: dict = {"state": "error", "code": "operation_failed", "files": [], "dates": []}
+        ing: dict | None = None
+        pending: dict | None = None
+        try:
+            out = state_dir(st) / "out" / rid
+            out.mkdir(parents=True)
+            extra: dict[str, str | list[str]] = {"feed": f["id"], "date": day}
+            self._fit_books(st, hp, out, extra, books, notes)
+            r = clean_feed_result(self._call(st, hp, "feed", extra, out=out))
+            if r["dates"] and r["dates"] != [day]:
+                raise Invalid   # the answer is for another date: not marked
+            if r["files"] and r["state"] in ("complete", "partial"):
+                if not f.get("source_declared", True):
+                    raise ServiceError("feed_source_invalid", "error")
+                try:
+                    ing = self._ingest(st, hp, f, out, r, recompute_runs=False, wait=False)
+                except Invalid:
+                    raise
+                except BaseException:
+                    pending = {"dir": rid, "files": r["files"], "state": r["state"], "code": r["code"], "date": day}
+                    raise
+        except ServiceError as e:
+            r = {**r, "code": e.code} if pending is not None else {"state": e.state, "code": e.code, "files": [],
+                                                                    "dates": []}
+        except Invalid:
+            r = {"state": "error", "code": "helper_response_invalid", "files": [], "dates": []}
+        except Exception:
+            log.exception("adapter services: history of %s failed", day)
+            r = {"state": "error", "code": "operation_failed", "files": [], "dates": []}
+        finally:
+            with self._lock:
+                self._running = None
+            helper_proc.HELPER_LOCK.release()
+            self._prune(st)
+        self._history_finish(st, day, r, ing, fp, started, pending=pending)
+        return True
+
+    def _history_drain(self, st: Settings, f: dict, h: dict) -> bool:
+        """The files an earlier step could not take in (the cycle lock was busy), tried again with one non-blocking try;
+        no other date is asked before. Gone or changed files: dropped, the date is asked again."""
+        p = h["pending"]
+        if not isinstance(p, dict) or not _RID.fullmatch(str(p.get("dir"))) or not isinstance(p.get("files"), list) \
+                or not isinstance(p.get("date"), str) or not (state_dir(st) / "out" / p["dir"]).is_dir():
+            self._hist_edit(st, lambda d: d.update(pending=None))
+            return False
+        folder = state_dir(st) / "out" / p["dir"]
+        try:
+            hp = self._helper(st)
+        except Exception:  # noqa: BLE001
+            return False
+        day, started = p["date"], self._now()
+        with self._lock:
+            self._running = {"kind": "history", "history_feed": f["id"], "date": day, "since": _iso(started),
+                             "phase": "ingesting"}
+        r = {"state": p.get("state"), "code": p.get("code"), "files": p["files"], "dates": [day]}
+        try:
+            ing = self._ingest(st, hp, f, folder, r, recompute_runs=False, wait=False)
+        except ServiceError:
+            return False   # still busy (or a cancel): kept
+        except Invalid:
+            self._hist_edit(st, lambda d: d.update(pending=None))
+            return False
+        except Exception:
+            log.exception("adapter services: pending history files of %s not taken in", day)
+            return False
+        finally:
+            with self._lock:
+                self._running = None
+        self._history_finish(st, day, r, ing, read_state(st).get("fingerprint"), started, drained=True)
+        return True
+
+    def _history_finish(self, st: Settings, day: str, r: dict, ing: dict | None, fp: str | None, started: datetime, *,
+                        pending: dict | None = None, drained: bool = False) -> None:
+        """The answer into the date's mark or, with no mark, into the worker's wait / retry (``trades_history`` doc)."""
+        now = self._now()
+        files = (ing or {}).get("files") or []
+        bad = [x for x in files if x["status"] not in OK_FILE]
+        state, code = str(r.get("state")), str(r.get("code"))
+        units = int((ing or {}).get("accepted_units") or 0)
+        mark, mcode = trades_history.mark_for(
+            state, code, files_ok=not bad, units=units, duplicate=any(x["status"] == "duplicate" for x in files),
+            had_files=bool(r.get("files")))
+        if pending is not None:
+            mark, mcode = None, code   # the files wait for the cycle lock: nothing is known of the date yet
+
+        def edit(h: dict) -> None:
+            h["last_duration_s"] = round((now - started).total_seconds(), 1)
+            if drained:
+                h["pending"] = None
+            if pending is not None:
+                h["pending"] = pending
+                h["last"] = {"date": day, "state": "pending", "code": mcode, "at": now.isoformat()}
+                return
+            if mark is not None:
+                trades_history.apply_mark(h, day, mark, mcode, now, fingerprint=fp, files=files, units=units)
+                h.update(failures=0, retry_at=None, wait=None,
+                         last={"date": day, "state": h["marks"][day]["state"], "code": mcode, "at": now.isoformat()})
+                h["priority"] = [d for d in h.get("priority") or [] if d != day]
+            elif state == "blocked" and code in trades_history.WAITS:
+                h["wait"] = {"code": code, "at": now.isoformat()}
+                h["last"] = {"date": day, "state": "blocked", "code": code, "at": now.isoformat()}
+            else:
+                n = int(h.get("failures") or 0) + (0 if state == "cancelled" else 1)
+                h.update(failures=n, retry_at=_iso(now + backoff(n)) if n else None,
+                         last={"date": day, "state": state, "code": code, "at": now.isoformat()})
+
+        self._hist_edit(st, edit)
+        log.info("adapter services: history %s %s/%s", day, mark or state, mcode)
+
+    # ---- the history of trades for the routes
+
+    def history(self) -> dict:
+        """``GET /api/v1/adapter-services/history`` (``trades_history.summary``)."""
+        a, _ = self.availability()
+        st = self._load()
+        with self._lock:
+            sdoc, h = read_state(st), trades_history.read(st)
+            running = dict(self._running) if self._running else None
+        f = self._history_feed(sdoc) if a["available"] else None
+        fs = sdoc.get("runs", {}).get(f["id"]) if f else None
+        now = self._now()
+        try:
+            with store.connect(self._url) as con:
+                out = trades_history.summary(con, st, h, now=now, feed=f, fingerprint=sdoc.get("fingerprint"),
+                                             running=running, feed_state=fs)
+        except Exception:
+            log.exception("adapter services: the history summary without the store")
+            out = trades_history.summary(None, st, h, now=now, feed=f, fingerprint=sdoc.get("fingerprint"),
+                                         running=running, feed_state=fs)
+            out["store"] = False
+        if not a["available"]:
+            out["code"] = a["code"]
+        return out
+
+    def history_set(self, enabled: bool | None, from_: str | None, when: str | None) -> dict:
+        """Turn the worker on or off, set the first date (never before ``backfill_from``) and the hours."""
+        st = self._load()
+        today = self._now().date()
+        d: date | None = None
+        if from_ is not None:
+            try:
+                d = date.fromisoformat(from_)
+                if d.isoformat() != from_ or d >= today:
+                    raise ValueError
+            except ValueError:
+                raise ServiceError("invalid_request") from None
+        if when is not None and when not in trades_history.WHEN:
+            raise ServiceError("invalid_request")
+
+        def edit(h: dict) -> None:
+            if when is not None:
+                h["when"] = when
+            if d is not None:
+                h["from"] = max(d, backfill.start_date(st)).isoformat()
+            if enabled is not None:
+                h["enabled"] = enabled
+                if enabled:
+                    h.update(failures=0, retry_at=None)
+                    h["from"] = h.get("from") or trades_history.default_from(st, today).isoformat()
+
+        self._hist_edit(st, edit)
+        self._wake.set()
+        return {"state": "complete", "code": "saved"}
+
+    def history_refetch(self, from_: str, to: str, confirm: bool) -> dict:
+        """«Перезапросить период»: the marks of the dates of the period (but «no books») dropped and the dates put first.
+        Without ``confirm`` only the number of dates is told."""
+        st = self._load()
+        today = self._now().date()
+        try:
+            lo, hi = date.fromisoformat(from_), date.fromisoformat(to)
+            if lo.isoformat() != from_ or hi.isoformat() != to or lo > hi or hi >= today:
+                raise ValueError
+        except ValueError:
+            raise ServiceError("invalid_request") from None
+        with self._lock:
+            sdoc, h = read_state(st), trades_history.read(st)
+        f = self._history_feed(sdoc)
+        if f is None:
+            raise ServiceError("history_unsupported")
+        try:
+            with store.connect(self._url) as con:
+                cands = trades_history.candidates(con, st, h, self._now(), f.get("history_from"))
+        except Exception:
+            log.exception("adapter services: dates to ask again not read")
+            raise ServiceError("operation_failed", "error") from None
+        dates = trades_history.refetch_dates(st, cands, h, lo, hi)
+        if not confirm:
+            return {"state": "confirm", "code": "confirm", "dates": len(dates)}
+
+        def edit(doc: dict) -> None:
+            for x in dates:
+                doc["marks"].pop(x, None)
+            doc["priority"] = sorted({*dates, *(doc.get("priority") or [])}, reverse=True)
+
+        self._hist_edit(st, edit)
+        self._wake.set()
+        return {"state": "complete", "code": "queued", "dates": len(dates)}
+
     @staticmethod
     def _prune(st: Settings) -> None:
         base = state_dir(st) / "out"
         keep = {r.get("pending", {}).get("dir") for r in read_state(st).get("runs", {}).values()
                 if isinstance(r, dict) and isinstance(r.get("pending"), dict)}
+        hp_ = trades_history.read(st).get("pending")
+        if isinstance(hp_, dict):   # the files of the history of trades waiting for the cycle lock (TDM#569)
+            keep.add(hp_.get("dir"))
         try:
             dirs = sorted((d for d in base.iterdir() if d.is_dir() and d.name not in keep),
                           key=lambda d: d.stat().st_mtime)

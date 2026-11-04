@@ -44,6 +44,8 @@ def describe():
                         "source": "trade_terms_csv"}
     return d
 '''
+TRADES_HEAD = ("trade_id;trade_version;status;trade_date;trade_ts;book_id;position_id;asset_class;source_instrument_id;"
+               "side;quantity;amount_ccy;ccy\n")
 TERMS_HEADER = ['trade_id', 'book_id', 'product_kind', 'trade_date', 'value_date', 'base_ccy', 'quote_ccy', 'side',
                 'notional_base', 'notional_quote', 'contract_rate']
 HELPER = r'''import csv, hashlib, json, os, sys, time
@@ -88,6 +90,14 @@ def feeds():
                   {"id": "planned", "title": "Условия по списку", "dataset": "trade_terms",
                    "source": "trade_terms_csv", "enabled": True, "ready": True, "trades_file": True,
                    "schedule": None}]
+    if mode == 'history_feed':   # the trades of the day, which also answers for a past date (TDM#569)
+        hf = (state / 'hist_from').read_text() if (state / 'hist_from').exists() else None
+        extra += [{"id": "tradeshist", "title": "Сделки дня", "dataset": "trades", "source": "trades_csv",
+                   "enabled": True, "ready": True, "books": True, "history": True, "schedule": None,
+                   **({"history_from": hf} if hf else {})}]
+    if mode == 'history_plain':  # the same feed without the flag: the worker does not work for it
+        extra += [{"id": "tradeshist", "title": "Сделки дня", "dataset": "trades", "source": "trades_csv",
+                   "enabled": True, "ready": True, "books": True, "schedule": None}]
     return extra + [{"id": "terms", "title": "Условия сделок", "dataset": "trade_terms", "source": "trade_terms_csv",
              "enabled": True, "ready": True, "after_positions": True,
              "schedule": {"every_min": 30, "from": "08:00", "to": "20:00", "weekdays_only": True}},
@@ -149,6 +159,37 @@ elif op == 'feed':
         print(json.dumps({"state": "complete", "code": "listed", "dates": [day], "files": [
             {"file": name, "sha256": hashlib.sha256((out / name).read_bytes()).hexdigest()}]}))
         sys.exit()
+    if one('feed') == 'tradeshist':
+        if not (state / 'logged_in').exists():
+            print(json.dumps({"state": "blocked", "code": "login_required", "lines": ["Нужен вход"]}))
+            sys.exit()
+        day = one('date') or '2026-10-15'
+        hm = (state / ('hist_mode_' + day)).read_text() if (state / ('hist_mode_' + day)).exists() else (
+            (state / 'hist_mode').read_text() if (state / 'hist_mode').exists() else 'ok')
+        if hm == 'unavailable':
+            print(json.dumps({"state": "error", "code": "date_unavailable", "lines": ["Нет данных за дату"]}))
+        elif hm == 'unmapped':
+            print(json.dumps({"state": "partial", "code": "books_unmapped", "dates": [day]}))
+        elif hm == 'partial':
+            print(json.dumps({"state": "partial", "code": "export_incomplete", "dates": [day]}))
+        elif hm == 'error':
+            print(json.dumps({"state": "error", "code": "fetch_failed", "lines": ["Сервис не ответил"]}))
+        elif hm == 'no_records':
+            print(json.dumps({"state": "complete", "code": "no_records", "dates": [day], "files": []}))
+        elif hm == 'empty':
+            print(json.dumps({"state": "complete", "code": "exported", "dates": [day], "files": []}))
+        elif hm == 'wrongdate':
+            print(json.dumps({"state": "complete", "code": "exported", "dates": ['2020-01-01'], "files": []}))
+        else:  # ok, or no_records_file: a file with the header only
+            name = 'trades_' + day.replace('-', '') + '_' + ((state / 'hist_hhmm').read_text() if (state / 'hist_hhmm').exists() else '1845') + '.csv'
+            lines = ['TR-' + day + ';1;live;' + day + ';' + day + 'T10:30:00;OFZ;P1;bond;SU26238RMFS4;buy;1000;;RUB'] \
+                if hm == 'ok' else []
+            if (state / 'hist_extra').exists() and hm == 'ok':
+                lines += (state / 'hist_extra').read_text().replace('DAY', day).splitlines()
+            (out / name).write_text(TRADES_HEAD + ''.join(x + '\n' for x in lines))
+            print(json.dumps({"state": "complete", "code": "no_records" if hm == 'no_records_file' else "exported",
+                              "dates": [day], "files": [{"file": name, "sha256": hashlib.sha256((out / name).read_bytes()).hexdigest()}]}))
+        sys.exit()
     if one('feed') == 'archive':  # kept locally by the adapter: no files
         print(json.dumps({"state": "complete", "code": "archived", "files": [], "counts": {"rows": 3}}))
         sys.exit(0)
@@ -169,7 +210,7 @@ elif op == 'feed':
     os.replace(tmp, out / name)
     print(json.dumps({"state": "complete", "code": "fetched", "dates": [day], "lines": ["Получена 1 сделка"],
                       "files": [{"file": name, "sha256": hashlib.sha256((out / name).read_bytes()).hexdigest()}]}))
-'''.replace("HEADER", repr(TERMS_HEADER))
+'''.replace("HEADER", repr(TERMS_HEADER)).replace("TRADES_HEAD", repr(TRADES_HEAD))
 
 
 def make(tmp_path: Path, services: object = None, **kw) -> Settings:
@@ -823,3 +864,29 @@ def test_a_feed_of_the_owners_books_gets_them_as_a_repeated_field(tmp_path, stor
         assert [r["book"] for r in requests(st) if r["op"] == "feed"][-1] == []
     finally:
         s.close()
+
+
+def test_feeds_declare_history_and_the_earliest_date_the_source_keeps(tmp_path):
+    """TDM#569: ``history`` and ``history_from`` are optional keys of a FEED; anything but a flag and an ISO date is
+    dropped; an old adapter's feed has neither."""
+    base = {"id": "t", "title": "Сделки", "dataset": "trades", "source": "trades_csv", "enabled": True, "ready": True}
+    got = svcs.clean_feeds([{**base, "history": True, "history_from": "2026-01-05"},
+                            {**base, "id": "u", "history": "yes", "history_from": "05.01.2026"},
+                            {**base, "id": "v", "history_from": "2026-13-45"}, {**base, "id": "w"}], None)
+    assert [(f["history"], f["history_from"]) for f in got] == [(True, "2026-01-05"), (False, None), (False, None),
+                                                                (False, None)]
+
+
+def test_prune_keeps_the_pending_files_of_the_history_of_trades(tmp_path):
+    from desk import trades_history
+
+    st = make(tmp_path)
+    keep = svcs.state_dir(st) / "out" / os.urandom(16).hex()
+    keep.mkdir(parents=True)
+    for _ in range(svcs.KEEP_OUT + 3):
+        (svcs.state_dir(st) / "out" / os.urandom(16).hex()).mkdir()
+    doc = trades_history.blank()
+    doc["pending"] = {"dir": keep.name, "files": [], "state": "complete", "code": "exported", "date": "2026-10-15"}
+    trades_history.write(st, doc)
+    svcs.AdapterServices._prune(st)
+    assert keep.is_dir()
