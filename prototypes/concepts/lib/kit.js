@@ -681,8 +681,10 @@
   // Книга: юрлицо, деск, (тип книги — только у C16) и выбор книг. Позиция — книга, валюта позиции и портфель. Портфель
   // позиции приходит с сервера готовым (p.portfolio, api/scope_rule.py: книга типа HTM — HTM, иначе колонка Portfolio
   // отчёта, иначе «—»); здесь он не пересчитывается. Валюта: у позиции — её валюта (ccy), у строки ОВП — валюта
-  // строки (ногой FX-сделки может быть другая валюта, чем у позиции: K.ocpNote). Строки без позиции (остатки ДС,
-  // строки отчёта) портфеля не имеют — они «без портфеля». Копий этого правила в других файлах нет.
+  // строки (ногой FX-сделки может быть другая валюта, чем у позиции: K.ocpNote). Строка без позиции (остаток ДС,
+  // строка отчёта) берёт портфель книги: у книги типа HTM он HTM (BOOKS[книга].portfolio с сервера), у остальных
+  // книг портфеля нет, и фильтр портфелей к такой строке не применяется (подпись на C17). Копий правила в других
+  // файлах нет.
   const SC = K.scope = {
     portOf: p => (p && p.portfolio) || '—',
     bookIn: (F, id, b) => { b = b || {}; return (!F.entity || b.entity === F.entity) && (!F.desk || b.desk === F.desk) && (!F.type || b.type === F.type) && (!F.books || !F.books.length || F.books.includes(id)); },
@@ -690,7 +692,7 @@
     portIn: (off, port) => !off || !off.length || !off.includes(port || '—'),
     posIn: (F, p, off) => SC.bookIn(F, p.book, p) && SC.ccyIn(F, p.ccy) && SC.portIn(off, SC.portOf(p)),
     // строка без позиции в модели: book, ccy и, если есть, entity / desk / portfolio; справочник книги — прогона
-    rowIn: (F, x, off) => { const b = M.book[x.book] || {}; return SC.bookIn(F, x.book, { entity: x.entity || b.entity, desk: x.desk && x.desk !== '—' ? x.desk : b.desk }) && SC.ccyIn(F, x.ccy) && SC.portIn(off, x.portfolio); },
+    rowIn: (F, x, off) => { const b = M.book[x.book] || {}; return SC.bookIn(F, x.book, { entity: x.entity || b.entity, desk: x.desk && x.desk !== '—' ? x.desk : b.desk }) && SC.ccyIn(F, x.ccy) && (x.portfolio || b.portfolio ? SC.portIn(off, x.portfolio || b.portfolio) : true); },
   };
   K.list = () => { const off = portsOff(); return M.positions.filter(p => SC.posIn(filt, p, off)); };
   K.rowIn = x => SC.rowIn(filt, x, portsOff());
@@ -3212,7 +3214,8 @@
   // строка части отчёта по юрлицу (book null, books — её книги) — только своего юрлица и если фильтр снят или покрывает
   // все её книги; без книг (books пуст) — только без фильтра книг и деска;
   // частично покрытая не входит и называется в notes. Фильтр портфелей к ОВП по книгам не применяется (notes).
-  // null — у прогона нет публикуемой ОВП (до v2 блока, демо): страницы берут сумму FX-дельт позиций, как раньше.
+  // null — у прогона нет публикуемой ОВП (до v2 блока, ошибка расчёта): страницы пишут «ОВП нет» (K.ocpNone), сумма FX-дельт ею не подменяется.
+  // ccyNote — смысл фильтра валюты для ОВП (валюта строки ОВП), он не входит в notes и счётчик «не вся».
   // byBook, meta (C16, TDM#446): строки другого дня той же формы (/api/v1/history/ocp) и справочник его книг ({ книга:
   // { entity, desk } }) — для книги, которой нет в M.book; flt (C16, TDM#533) — свой фильтр экрана той же формы, что
   // K.filter ({ entity, desk, books, ccy, portsOff }), вместо фильтра шапки; без него — фильтр шапки, как раньше.
@@ -3244,16 +3247,17 @@
     const notes = [...new Set(partial.map(x => 'часть отчёта ОВП по юрлицу ' + x.entity + ' учтена только целиком: без фильтра книг или с фильтром на все её книги (' + (x.books || []).join(', ') + ')')
       .concat(bookless.map(x => 'часть отчёта ОВП по юрлицу ' + x.entity + ' без книг — только без выбора книг' + (F.type ? ' и типа книги' : ''))))];
     if ((F.portsOff || []).length) notes.push('фильтр портфелей к ОВП по книгам не применяется');
-    if (F.ccy) notes.push('фильтр валюты: ОВП — по валюте строки ОВП, столбец «из позиций» — по валюте позиции');
-    return { lines, notes, partial: partial.length + bookless.length > 0 };
+    // не «часть ОВП потеряна», а смысл фильтра: валюта строки ОВП против валюты позиции (TDM#566); в счётчике notes её нет
+    const ccyNote = F.ccy ? 'фильтр валюты: в ОВП — по валюте строки ОВП, в разборе по позициям (бонды, деривативы, Σ FX-дельт) — по валюте позиции' : null;
+    return { lines, notes, ccyNote, partial: partial.length + bookless.length > 0 };
   };
   // источник суммы валюты: отчёт / из позиций / отчёт + поз.
   K.ocpSrcMark = src => { const k = Object.keys(src || {}).filter(s => src[s]); const rep = k.includes('report'), der = k.some(s => s !== 'report'); return rep && der ? 'отчёт + поз.' : rep ? 'отчёт' : der ? 'из позиций' : ''; };
   K.ocpSrcTitle = src => Object.entries(src || {}).filter(([, v]) => v).map(([s, v]) => (((M.ocp || {}).sourceNames || {})[s] || s) + ' ' + f.mns(v, 1)).join(' · ');
   // курс валюты к валюте отчёта: курса прогона нет (валюта только в отчёте ОВП) — курс из блока ОВП
   const reprRate = c => (M.toRepr && M.toRepr[c]) || (M.ocp && M.ocp.byCcy && M.ocp.byCcy[c] && M.ocp.byCcy[c].rate && M.fx[K.repr] ? M.ocp.byCcy[c].rate / M.fx[K.repr] : 1);
-  // строки ОВП по валютам: публикуемая ОВП, когда она есть (v, src — суммы по источникам, pub: true), иначе Σ FX-дельт
-  // позиций по ногам (INSTR.fxIn), как до TDM#416; der — Σ FX-дельт позиций под фильтром (разбор из позиций)
+  // строки ОВП по валютам: публикуемая ОВП (v, src — суммы по источникам, pub: true); der — Σ FX-дельт
+  // позиций — только отдельным разбором (der); публикуемой ОВП нет — строк нет (K.ocpNone), TDM#566
   K.fxRows = L => {
     const S = K.ocpScope(), der = c => M.sum(L, p => INSTR.fxIn(p, c));
     let R;
@@ -3266,7 +3270,11 @@
   };
   K.FX_MINOR = 0.05e6;  // меньше — 0.0 mm: в «прочих»
   // заметка под ОВП: часть отчёта по юрлицу не вошла из-за фильтра, фильтр портфелей (K.ocpScope)
-  K.ocpNote = () => { const S = K.ocpScope(); return S && S.notes.length ? '<span class="mut3 k-ocpnote" title="' + esc(S.notes.join('; ')) + '">ОВП под фильтром — не вся (' + S.notes.length + ')</span> ' : ''; };
+  K.ocpNote = () => {
+    const S = K.ocpScope();
+    return (S && S.notes.length ? '<span class="mut3 k-ocpnote" title="' + esc(S.notes.join('; ')) + '">ОВП под фильтром — не вся (' + S.notes.length + ')</span> ' : '') +
+      (S && S.ccyNote ? '<span class="mut3 k-ocpnote" title="' + esc(S.ccyNote) + '">валюта: ОВП и позиции по-разному</span> ' : '');
+  };
   // публикуемой ОВП в прогоне нет (до блока v2, ошибка расчёта ОВП, демо): шапка и C06 пишут это, а не показывают
   // сумму FX-дельт позиций под именем ОВП (она — другая величина; у C06 она остаётся отдельным столбцом)
   K.ocpNone = 'ОВП нет: в этом прогоне нет публикуемой ОВП (прогон до её блока, ошибка расчёта или демо). Причина по отчёту ОВП — на экране «ОВП» (C16)';

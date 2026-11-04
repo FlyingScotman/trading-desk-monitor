@@ -38,7 +38,7 @@ from ..pnl.reasons import (
 from ..publish.funding_run import NOT_COMPUTED, STATUS_TEXT
 from ..publish.summary import fx_net, fx_partial
 from .runs import PNL_KEYS, risk_notes, run_slice
-from .scope_rule import portfolio_map, portfolio_of
+from .scope_rule import book_portfolio, portfolio_map, portfolio_of
 
 RUB = {"ccy": "RUB", "rate": 1.0, "move_pct": 0.0, "rate_cbr": 1.0, "move_pct_cbr": 0.0}
 """The rouble's own rate row, first in ``FX`` (as compat)."""
@@ -153,8 +153,8 @@ def ocp_status(block: dict[str, Any] | None) -> dict[str, Any] | None:
     unit, ``books`` the books its figure holds) the amount, its source (``report``: the bank's report + the
     components outside it, ``components``; ``derived``: from positions; ``derived_stale_report``: from positions, the
     report too old; ``report_base_plus_day``, TDM#531: its ``baseDate`` and ``parts``), the notes and the ``gaps``. None
-    for a run without it (before v2, failed): the pages show the sum of
-    the positions' FX delta, as before."""
+    for a run without it (before v2, failed): the pages say «ОВП нет» (TDM#566), the positions' FX delta is not its
+    substitute."""
     pub = (block or {}).get("published") or {}
     if not pub.get("basis"):
         return None
@@ -267,6 +267,8 @@ def assemble(con, run: dict[str, Any]) -> dict[str, Any]:
              "entity": r.get("entity") or "—"}
         if r.get("ocp_to"):
             b["ocpTo"] = r["ocp_to"]
+        if book_portfolio(r.get("book_type")):  # a book of type HTM is all HTM (TDM#566): rows without a position too
+            b["portfolio"] = book_portfolio(r.get("book_type"))
         books[r["book_id"]] = b
     issuers, disp = {}, {}
     for r in ref.get("issuers", []):

@@ -17,7 +17,7 @@ from psycopg.rows import dict_row
 from ..pnl.reasons import REPORTED_METHOD
 from ..store import DEFAULT_RUNS
 from .runs import PNL_KEYS, run_slice
-from .scope_rule import EFFECTIVE_PORTFOLIO_SQL, INPUT_ROW_ORDER_SQL
+from .scope_rule import EFFECTIVE_PORTFOLIO_SQL, INPUT_ROW_ORDER_SQL, PORTFOLIO_ROW_SQL
 
 KEYS = (*PNL_KEYS, "reported")
 GROSS_KEYS = tuple(k for k in PNL_KEYS if k not in ("funding", "fx_funding"))
@@ -188,6 +188,7 @@ DIMENSIONS = f"""SELECT p.run_id AS "runId", r.business_date AS date, p.position
  LEFT JOIN LATERAL (SELECT x, ccy, source_instrument_name FROM position_input i
  JOIN position_set s USING (set_id) WHERE i.set_id = ANY(r.position_set_ids)
  AND i.position_id = p.position_id AND s.book_id = p.book_id ORDER BY {INPUT_ROW_ORDER_SQL} LIMIT 1) i ON true
+ LEFT JOIN LATERAL ({PORTFOLIO_ROW_SQL}) ip ON true
  WHERE p.run_id = ANY(%(ids)s)"""
 
 

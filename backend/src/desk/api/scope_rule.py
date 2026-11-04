@@ -11,12 +11,15 @@ The effective portfolio of a position:
 4. else none (the pages call it «без портфеля»).
 
 A book without a reference row or without a type goes to 2, no error. When the sets of a run hold several rows of the
-same position in the same book, the row with the Portfolio column wins, then the one of the latest set: the choice
-never depends on the order the database returns the rows in.
+same position in the same book, the LAST row (the greatest ``set_id``) stands for the position whole (currency, name
+and the rest); only the Portfolio column itself has a second step: if the last row has none, the column of the latest
+row that has it. The choice never depends on the order the database returns the rows in.
+A book of type HTM is also marked for the pages (``BOOKS[book].portfolio = "HTM"``, ``book_portfolio``): a row without
+a position (a cash balance, a report row) takes its book's portfolio from it.
 
 The rule is written once in two forms of the same text: ``effective_portfolio`` / ``portfolio_map`` for the assemblers
-of the run (``concepts_run``, ``compat``) and ``EFFECTIVE_PORTFOLIO_SQL`` / ``INPUT_ROW_SQL`` for the rows of the PnL
-report (``pnl_history.DIMENSIONS``). ``tests/test_scope_rule.py`` keeps them equal. The pages take the field as it
+of the run (``concepts_run``, ``compat``) and ``EFFECTIVE_PORTFOLIO_SQL`` / ``INPUT_ROW_ORDER_SQL`` for the rows of the PnL
+report (``pnl_history.DIMENSIONS``). ``tests/test_scope_566.py`` keeps them equal. The pages take the field as it
 comes (``p.portfolio``), they never compute it (``prototypes/concepts/lib/kit.js``, ``K.scope``)."""
 from __future__ import annotations
 
@@ -25,18 +28,29 @@ from typing import Any
 HTM = "HTM"
 
 EFFECTIVE_PORTFOLIO_SQL = (
-    "CASE WHEN upper(btrim(b.data->>'book_type')) = 'HTM' THEN 'HTM' ELSE COALESCE(i.x->>'x_portfolio',"
+    "CASE WHEN upper(btrim(b.data->>'book_type', E' \\t\\r\\n\\f\\013')) = 'HTM' THEN 'HTM' ELSE COALESCE(ip.portfolio,"
     " p.fact->'extra'->'x'->>'x_portfolio', p.fact->'extra'->'reported'->'x'->>'x_portfolio') END")
-"""SQL of the rule over the alias ``b`` (the run's book reference row, may be absent) and ``i`` (the chosen input row,
-may be absent) and ``p`` (the run's position), as ``pnl_history.DIMENSIONS`` has them."""
+"""SQL of the rule over the aliases ``b`` (the run's book reference row, may be absent), ``ip`` (the Portfolio column
+of the position: ``PORTFOLIO_ROW_SQL``, may be absent) and ``p`` (the run's position), as ``pnl_history.DIMENSIONS``
+has them."""
 
-INPUT_ROW_ORDER_SQL = "(x ? 'x_portfolio') DESC, set_id DESC"
-"""Which input row of a position stands for it (the module's docstring); a lateral subquery over ``position_input``
-orders by it and takes one."""
+INPUT_ROW_ORDER_SQL = "set_id DESC"
+"""Which input row stands for a position (the module's docstring: the last one); a lateral subquery over
+``position_input`` orders by it and takes one."""
+
+PORTFOLIO_ROW_SQL = ("SELECT x->>'x_portfolio' AS portfolio FROM position_input i2 JOIN position_set s2 USING (set_id)"
+                     " WHERE set_id = ANY(r.position_set_ids) AND i2.position_id = p.position_id"
+                     " AND s2.book_id = p.book_id AND x ? 'x_portfolio' ORDER BY set_id DESC LIMIT 1")
+"""The second step for the Portfolio column: the latest input row of the position that has it."""
 
 
 def is_htm(book_type: Any) -> bool:
-    return isinstance(book_type, str) and book_type.strip().upper() == HTM
+    return isinstance(book_type, str) and book_type.strip(" \t\r\n\f\v").upper() == HTM
+
+
+def book_portfolio(book_type: Any) -> str | None:
+    """A book's own portfolio for the pages: ``HTM`` for a book of that type, else none."""
+    return HTM if is_htm(book_type) else None
 
 
 def effective_portfolio(book_type: Any, reported: str | None) -> str | None:

@@ -51,7 +51,7 @@ from ..scenario.carry import HORIZONS as carry_horizons
 from ..scenario.carry import meeting_rows, meetings
 from ..store import CURRENT_RUNS, DEFAULT_RUNS, slice_label  # noqa: F401 - re-exported, as before
 from .runs import PNL_KEYS, RUONIA_DISCOUNT_VERSION, resolve_run, risk_notes, run_slice  # noqa: F401 - moved (TDM#289)
-from .scope_rule import portfolio_map, portfolio_of
+from .scope_rule import book_portfolio, portfolio_map, portfolio_of
 
 CARRY_HORIZONS = [list(h) for h in carry_horizons]  # the forward carry's (scenario.carry.HORIZONS)
 DEFAULT_CARRY = [{"id": "flat", "name": "КС без изменений", "ks": {"mode": "flat"}}]
@@ -283,6 +283,8 @@ def assemble(con, run: dict[str, Any]) -> dict[str, Any]:
              "entity": r.get("entity") or "—"}
         if r.get("ocp_to"):
             b["ocpTo"] = r["ocp_to"]
+        if book_portfolio(r.get("book_type")):  # a book of type HTM is all HTM (TDM#566): rows without a position too
+            b["portfolio"] = book_portfolio(r.get("book_type"))
         books[r["book_id"]] = b
     issuers, disp = {}, {}
     for r in ref.get("issuers", []):

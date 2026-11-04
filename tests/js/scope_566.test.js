@@ -27,7 +27,7 @@ function load() {
   vm.runInContext(P('concepts/lib/mock.js'), ctx);
   const M = ctx.window.MOCK;
   // позиции и книги случая вместо демо-набора — до загрузки kit.js (список портфелей он строит при загрузке)
-  M.book = Object.fromEntries(Object.entries(CASES.books).map(([id, b]) => [id, { id, name: id, entity: b.entity, desk: b.desk, type: b.type }]));
+  M.book = Object.fromEntries(Object.entries(CASES.books).map(([id, b]) => [id, { id, name: id, entity: b.entity, desk: b.desk, type: b.type, portfolio: b.type === 'HTM' ? 'HTM' : null }]));  // portfolio — как BOOKS сервера
   M.positions = CASES.positions.map(p => ({ id: p.id, book: p.book, ccy: p.ccy, portfolio: p.portfolio, entity: CASES.books[p.book].entity, desk: CASES.books[p.book].desk, pnl: { total: p.pnl } }));
   vm.runInContext(P('concepts/lib/kit.js'), ctx);
   return { M, K: ctx.window.KIT };
@@ -45,6 +45,14 @@ t('те же позиции под каждым фильтром, что и на
   }
 });
 
+t('строки без позиции — те же ожидания, что в общей фикстуре: книга HTM даёт HTM, у остальных книг фильтр портфелей не действует', () => {
+  const { K } = load();
+  for (const c of CASES.filters) {
+    K.setFilter({ ...RESET, ...c.filter });
+    eq(CASES.rows.filter(r => K.rowIn(r)).map(r => r.id).sort(), [...c.expectRows].sort(), c.name);
+  }
+});
+
 t('портфель позиции — поле сервера, клиент его не пересчитывает', () => {
   const { M, K } = load();
   for (const p of M.positions) assert.strictEqual(K.scope.portOf(p), CASES.positions.find(x => x.id === p.id).portfolio || '—');
@@ -57,8 +65,10 @@ t('строка без позиции (остатки, строки отчёта
   const { K } = load();
   K.setFilter({ ...RESET, portsOff: ['HTM'] });
   assert.ok(K.rowIn({ book: 'B2', ccy: 'RUB' }));
-  K.setFilter({ ...RESET, portsOff: ['—'] });
-  assert.ok(!K.rowIn({ book: 'B2', ccy: 'RUB' }) && K.rowIn({ book: 'B2', ccy: 'RUB', portfolio: 'Торговый' }));
+  K.setFilter({ ...RESET, portsOff: ['—'] });  // книга не HTM: портфеля у строки нет, фильтр к ней не применяется
+  assert.ok(K.rowIn({ book: 'B2', ccy: 'RUB' }));
+  K.setFilter({ ...RESET, portsOff: ['Торговый'] });
+  assert.ok(!K.rowIn({ book: 'B2', ccy: 'RUB', portfolio: 'Торговый' }) && K.rowIn({ book: 'B2', ccy: 'RUB', portfolio: 'Другой' }));
   K.setFilter({ ...RESET, entity: 'E2' });
   assert.ok(K.rowIn({ book: 'B3', ccy: 'RUB' }) && !K.rowIn({ book: 'B2', ccy: 'RUB' }));
   K.setFilter({ ...RESET, desk: 'D1', books: ['B1'] });
@@ -85,7 +95,8 @@ t('ОВП: строка книги и часть отчёта идут по то
   K.setFilter({ ...RESET, entity: 'E1', desk: 'D1' });
   eq([...new Set(K.list().map(p => p.book))].sort(), K.ocpScope().lines.map(x => x.book).sort());
   K.setFilter({ ...RESET, ccy: 'USD' });
-  assert.ok(K.ocpScope().notes.some(x => /валюты/.test(x)));
+  assert.ok(/валюты/.test(K.ocpScope().ccyNote) && !K.ocpScope().notes.some(x => /валюты/.test(x)), 'смысл валюты — не потеря ОВП');
+  assert.ok(!/не вся/.test(K.ocpNote()) && /валюта/.test(K.ocpNote()));
 });
 
 t('«Сбросить фильтр книг» сбрасывает и снятые портфели; K.top({ filter: false }) подписан', () => {

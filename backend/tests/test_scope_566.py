@@ -106,6 +106,8 @@ def test_effective_portfolio_in_every_server_form(store_url, reverse):
     rid = seed(store_url, reverse=reverse)
     c = TestClient(create_app(store_url))
     want = {p["id"]: p["portfolio"] for p in CASES["positions"]}
+    books = c.get("/api/v1/concepts/run", params={"run_id": rid}).json()["BOOKS"]
+    assert {b: m.get("portfolio") for b, m in books.items()} == {"B1": "HTM", "B2": None, "B3": None}
     cat = c.get("/api/v1/history/pnl", params=params({})).json()["catalogue"]
     assert {r["positionId"]: r["portfolio"] for r in cat} == want  # the PnL report
     for route in ("concepts/run", "compat/desk"):  # the monitors' run and its compat twin
@@ -118,19 +120,19 @@ def test_sql_and_python_forms_of_the_rule_agree(store_url):
     facts = (None, {"extra": {"x": {"x_portfolio": "F"}}}, {"extra": {"reported": {"x": {"x_portfolio": "R"}}}},
              {"extra": {"reported": "text"}})
     with store.connect(store_url) as con:
-        for book_type in (None, "", "HTM", "htm", " Htm ", "TRADING", "DERIVS"):
+        for book_type in (None, "", "HTM", "htm", " Htm ", "\tHTM\n", "\x0bHtm\x0c", "TRADING", "DERIVS"):
             for reported in (None, "HTM", "Торговый"):
                 for fact in facts:
                     got = con.execute(
                         f"SELECT {EFFECTIVE_PORTFOLIO_SQL} AS r FROM (SELECT %s::jsonb AS data) b,"
-                        " (SELECT %s::jsonb AS x) i, (SELECT %s::jsonb AS fact) p",
+                        " (SELECT %s::text AS portfolio) ip, (SELECT %s::jsonb AS fact) p",
                         (Jsonb({"book_type": book_type} if book_type is not None else {}),
-                         Jsonb({"x_portfolio": reported} if reported else {}), Jsonb(fact))).fetchone()[0]
+                         reported, Jsonb(fact))).fetchone()[0]
                     want = portfolio_of({("B", "P"): reported}, {"B": book_type}, "B", "P", fact)
                     assert got == want, (book_type, reported, fact)
         # a position of a book without a reference row: the report's column, no error
         assert con.execute(
-            f"SELECT {EFFECTIVE_PORTFOLIO_SQL} FROM (SELECT '{{\"x_portfolio\": \"A\"}}'::jsonb AS x) i"
+            f"SELECT {EFFECTIVE_PORTFOLIO_SQL} FROM (SELECT 'A'::text AS portfolio) ip"
             " LEFT JOIN (SELECT NULL::jsonb AS data WHERE false) b ON true"
             " CROSS JOIN (SELECT NULL::jsonb AS fact) p").fetchone()[0] == "A"
     assert date.fromisoformat(DAY)
