@@ -520,14 +520,14 @@ def _row(r: dict[str, Any], on: date, run: dict[str, Any] | None = None, enabled
 
 
 def view(con: psycopg.Connection, on: date | None = None, book_id: str | None = None,
-         days: int = 20, intraday_trades: bool = True) -> dict[str, Any]:
+         days: int = 20, intraday_trades: bool = True, run_id: int | None = None) -> dict[str, Any]:
     """The trades screen of ``on`` (default: the latest date with trades, else today, Moscow), of ``book_id`` only when
     given: see the module docstring. Amounts as the contract has them (unsigned; ``side`` gives the direction)."""
     if on is None:
         latest = trade_dates(con, _moscow_today(), 1)
         on = latest[0] if latest else _moscow_today()
     t = store.dataset_rows(con, "trades", on, scope={"book_id": book_id} if book_id else None)
-    run = _intraday_run(con, on)
+    run = _intraday_run(con, on, run_id)
     pnl = _trade_pnl(con, run)
     rows = [_row(r, on, run, intraday_trades, pnl) for r in t.rows]
     books = {b["book_id"]: b for b in store.current_books(con, on)}
@@ -560,11 +560,19 @@ def view(con: psycopg.Connection, on: date | None = None, book_id: str | None = 
     }
 
 
-def _intraday_run(con: psycopg.Connection, on: date) -> dict[str, Any] | None:
-    """The latest complete run of ``on`` (an INTRADAY one, or a close: ``run_type`` ``EOD``) and what of the day's
-    trades it took in (its lineage ``intraday_trades``), or None."""
-    row = con.execute("SELECT run_id, cut_type, run_type, lineage->'intraday_trades' FROM run WHERE business_date = %s"
-                      " AND status = 'complete' ORDER BY run_id DESC LIMIT 1", (on,)).fetchone()
+def _intraday_run(con: psycopg.Connection, on: date, run_id: int | None = None) -> dict[str, Any] | None:
+    """The run the trades screen reads of ``on`` and what of the day's trades it took in (its lineage
+    ``intraday_trades``), or None (TDM#568): the run asked for (``run_id``: the page's run of the navigation) when it is
+    a complete run of ``on``; else the date's default run (the close, ``store.DEFAULT_RUNS``), as the other screens
+    show it; a date with only INTRADAY runs: the latest of them. A test run is never taken by default."""
+    cols = "SELECT run_id, cut_type, run_type, lineage->'intraday_trades' FROM run WHERE business_date = %s" \
+           " AND status = 'complete'"
+    row = None
+    if run_id is not None:
+        row = con.execute(cols + " AND run_id = %s", (on, run_id)).fetchone()
+    if row is None:
+        row = con.execute(cols + f" AND run_id IN ({store.DEFAULT_RUNS})", (on,)).fetchone() \
+            or con.execute(cols + " AND run_type <> 'TEST' ORDER BY run_id DESC LIMIT 1", (on,)).fetchone()
     if not row:
         return None
     t = row[3] or {}

@@ -482,7 +482,7 @@
     p.funding = e.available === false || !d.pnl ? null : num(e.funding);  // null: не посчитано (не настроено, проблема)
     p.fundingInfo = ex.funding || null;
     p.ratesCore = ratesCoreOf(ex, d);  // свопы и РЕПО ядра (#201), null — нет
-    p.pnlMtd = num(xp.pnlMtd); p.pnlYtd = num(xp.pnlYtd);
+    p.pnlMtd = num(xp.pnlMtd); p.pnlYtd = num(xp.pnlYtd); p.pnlMtdParts = xp.pnlMtdParts || null;  // MTD по факторам (отчёт PnL за период, #568)
     p.spreadChgBp = num(xp.spreadChgBp);
     p.tradedToday = !!(xp.trade || d.newToday); p.tradeToday = xp.trade || null;
     p.searchBase = [p.exchName, p.isin, p.issuerName, p.issuerFull, p.issuerGroup, p.latName, p.book, p.bookName, p.ccy, p.kindLabel, p.groupLabel, p.sector, p.couponFmt, p.portfolio, p.rating, p.ratingAgency].join(' ').toLowerCase();
@@ -556,6 +556,7 @@
   M.histDates = (X.histDates && X.histDates.length) ? X.histDates.slice() : [M.asOf];
   M.histSource = X.histSource || 'positions';  // 'runs': суммы прогонов по датам
   M.pnlPeriods = X.pnlPeriods || null;
+  M.pnlClosed = X.pnlClosed || [];  // позиции, закрытые раньше в периоде: их PnL MTD/YTD не входит в строки позиций (#568)
   const n = M.histDates.length;
   const series = (src, keys, today) => { const o = {}; keys.forEach(k => { o[k] = (src && src[k]) ? src[k].map(v => v == null ? null : +v) : new Array(n).fill(0); if (!src && today) o[k][n - 1] = today(k); }); return o; };
   const sumBy = (f) => positions.reduce((s, p) => s + (f(p) || 0), 0);

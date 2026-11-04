@@ -10,10 +10,9 @@ from datetime import date
 from typing import Any
 
 from ..curves.rates import input_notes
-from ..store import CURRENT_RUNS, DEFAULT_RUNS, slice_label
+from ..store import CURRENT_RUNS, DEFAULT_RUNS, PNL_COMPONENTS, slice_label
 
-PNL_KEYS = ("carry", "rolldown", "rates", "spread", "fx_gross", "fx_funding", "funding", "convexity",
-            "new_trades", "other")
+PNL_KEYS = PNL_COMPONENTS
 """The PnL components of a run position (``run_position.pnl``), in the order the explained PnL sums them."""
 
 HEADER_SQL = (f"SELECT r.*, r.run_id IN ({DEFAULT_RUNS}) AS is_default,"

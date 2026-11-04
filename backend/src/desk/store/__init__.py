@@ -581,6 +581,11 @@ def current_reference(con: psycopg.Connection, kind: str, on: date, known_at: da
 
 # --- runs ----------------------------------------------------------------------------------------------
 
+PNL_COMPONENTS = ("carry", "rolldown", "rates", "spread", "fx_gross", "fx_funding", "funding", "convexity",
+                  "new_trades", "other")
+"""The PnL components of a run position (``run_position.pnl``), in the order the explained PnL sums them; the run
+totals per book (``publish.desk_run``) add ``total`` (TDM#568: one list, so that a book's components sum to its total)."""
+
 # The default run of a date (04 §3): the latest complete EOD run on eod_final, otherwise on eod_preliminary.
 DEFAULT_RUNS = ("SELECT DISTINCT ON (business_date) run_id FROM run"
                 " WHERE status = 'complete' AND run_type = 'EOD'"
