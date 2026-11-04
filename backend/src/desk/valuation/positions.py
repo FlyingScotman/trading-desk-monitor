@@ -18,6 +18,10 @@ core (``direct``). ``merge`` puts the two back in the inputs' order for ``desk_r
   (``RUB RUONIA``, the foreign curve, ``RUB KEY``), FX delta per currency (core's spot equivalent), basis, fixing
   status. When core cannot (no curve, no spot, a fixing missing, a basis swap), the row keeps the rule below with the reason
   first in its assumptions.
+- Trades off the report (TDM#468, ``valuation.offreport``): a forward, swap, CCS or REPO of ``trade_terms`` no row names
+  (also of a book without a positions set). Setting ``off_report_derivatives`` = ``include``: each is a row of its own
+  ``book|trade_id`` (``off_report`` in its row), valued by core as the linked ones; ``exclude`` (default): not valued,
+  listed in ``BookPlan.off_report``. A trade that looks like one the report has is never included.
 - A row without ``asset_class`` but with a ``deal_id`` is linked like an OTC row (TDM#501): with its trade's terms it
   is valued here (or, when core rejects them, by the OTC rule with the reason); without, it is a bond as before.
 - FX row without terms: its FX delta is the amount in currency (``tdm_run.direct_row``), no rates risk. Spot or cash

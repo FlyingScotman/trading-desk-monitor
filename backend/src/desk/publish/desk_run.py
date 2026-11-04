@@ -215,7 +215,7 @@ def _write(cur: psycopg.Cursor, run_id: int, positions: list[tuple[str, str, Out
         fund = pnl_funding.get(pid) if o.pnl else None
         pnl = {**o.pnl.as_tdm(), **({"funding": fund} if fund is not None else {}), "extra": o.pnl.extra()} \
             if o.pnl else None
-        q = v.quantity if v and o.terms else qty[pid]  # a bond given by face: the number of bonds valued
+        q = v.quantity if v and o.terms else qty.get(pid)  # a bond given by face: the number of bonds valued
         rows.append((run_id, pid, i, book, o.secid, q, v.quality if v else None, why, pv, dv01, cs01,
                      _jsonb(f) if f else None, _jsonb(pnl) if pnl else None,
                      _jsonb({"reason": o.no_pnl.reason, "detail": o.no_pnl.detail,

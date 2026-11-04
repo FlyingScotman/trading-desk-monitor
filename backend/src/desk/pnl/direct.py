@@ -30,6 +30,12 @@ positions valued at the report's figure. Each is flagged with its method (``reas
   the legs settled, x the rate move: the cash of a settled leg is taken at the D-1 rate and its later moves are the
   cash row's. A cash-settled NDF's amount is not recorded: ``received_unknown``.
 
+- A derivative off the positions report (TDM#468) is the same row with the position id ``book|trade_id``. D-1 is found by
+  that id, else by (book, the trades core valued in the row), so a trade that moved into the report or out of it keeps
+  its PnL. A derivative made after D-1 (every trade date later) has no PV of D-1: its PnL is its PV on D, in
+  ``new_trades`` (``desk-core-new-trade-v1``, ``NEW_TRADE_PNL_FROM_PV``, the owner's question 1 is open); an older
+  trade missing on D-1 has no PnL, the reason ``no_prev_terms`` (off the report) or ``valued_differently``.
+
 A report value says why its PnL is in ``other`` (``pnl.extra.other_reason``, TDM#442: ``no_terms`` for want of terms,
 else ``reported_value``), an FX deal by core ``fx_core_rest``. Anything else valued without core keeps
 ``NoPnl("valued_without_core")``. A missing PnL is a reason, never 0.
