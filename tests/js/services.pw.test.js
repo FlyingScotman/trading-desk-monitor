@@ -25,7 +25,7 @@ const FEEDS = [
    schedule:{daily_at:['08:30']}, after_positions:false, running:false, queued:false, next_run:null,
    last:{last_started:'2026-10-16T08:30:00+03:00', state:'blocked', code:'login_required', needs_login:true, failures:0}}];
 
-const HIST = {available:true, code:'available', feed:'trades', enabled:false, when:'off_hours', from:'2026-01-05', history_from:null,
+const HIST = {available:true, code:'available', feed:'trades', enabled:true, when:'any', from:'2026-01-05', history_from:null,
   from_min:'2026-01-05', from_default:'2026-01-05', backfill_enabled:true, paused:false, waiting:null, dates:10,
   counts:{fetched:4, no_trades:2, no_books:0, unmapped:1, unavailable:1, partial:0, todo:2, covered:0}, current:null,
   applied:{full:1, partial:1, outside:1, unknown:0, waiting_recompute:1, no_effect:0, in_pnl:2, reasons:{no_prev_close:1, lost:1}},
@@ -294,10 +294,10 @@ test('services block in Settings', {skip: pw ? false : 'нет Playwright'}, asy
         const applied = await pg.locator('#svc-hist-applied').textContent();
         assert.match(applied, /PnL сделок учтён полностью в 1 дате, частично в 1 дате, вне PnL в 1 дате \(/);
         assert.match(applied, /нет предыдущего закрытия: 1/); assert.match(applied, /Ждут пересчёта: 1/);
-        assert.strictEqual(await pg.locator('#svc-hist-on').isChecked(), false, 'по умолчанию выключено');
+        assert.strictEqual(await pg.locator('#svc-hist-on').isChecked(), true, 'по умолчанию включено');
         assert.strictEqual(await pg.locator('#svc-hist-from').inputValue(), '2026-01-05');
-        assert.strictEqual(await pg.locator('#svc-hist-when').inputValue(), 'off_hours');
-        assert.match(await pg.locator('#svc-hist-when option:checked').textContent(), /Только вне торговых часов/);
+        assert.strictEqual(await pg.locator('#svc-hist-when').inputValue(), 'any');
+        assert.match(await pg.locator('#svc-hist-when option:checked').textContent(), /В любое время/);
         await pg.locator('#svc-hist-diag summary').click();
         const diag = await pg.locator('#svc-hist-diag').innerText();
         assert.ok(diag.includes('13.10 — недоступно: сервис не отдаёт эту дату, попыток: 1') && diag.includes('12.10 — не сопоставлено: книги сервиса не сопоставлены с книгами монитора'));
@@ -309,13 +309,15 @@ test('services block in Settings', {skip: pw ? false : 'нет Playwright'}, asy
         await pg.locator('#svc-hist-from').fill('2026-03-02');
         await pg.waitForFunction(() => document.getElementById('svc-hist-from').value === '2026-03-02');
         await pg.locator('#svc-hist-box .tgl-s').click();
+        await pg.waitForFunction(() => !document.getElementById('svc-hist-on').checked);
+        await pg.locator('#svc-hist-box .tgl-s').click();
         await pg.waitForFunction(() => document.getElementById('svc-hist-on').checked);
         let p = posts.filter(x => x[0].endsWith('/adapter-services/history')).map(x => Object.fromEntries(x[1]));
-        assert.deepStrictEqual(p, [{from:'2026-03-02'}, {enabled:'true', from:'2026-03-02'}]);
-        await pg.locator('#svc-hist-when').selectOption('any');
-        await pg.waitForFunction(() => document.getElementById('svc-hist-when').value === 'any');
+        assert.deepStrictEqual(p, [{from:'2026-03-02'}, {enabled:'false'}, {enabled:'true', from:'2026-03-02'}]);
+        await pg.locator('#svc-hist-when').selectOption('off_hours');
+        await pg.waitForFunction(() => document.getElementById('svc-hist-when').value === 'off_hours');
         p = posts.filter(x => x[0].endsWith('/adapter-services/history')).map(x => Object.fromEntries(x[1]));
-        assert.deepStrictEqual(p.pop(), {when:'any'});
+        assert.deepStrictEqual(p.pop(), {when:'off_hours'});
 
         await pg.locator('#svc-hist-refetch').click();
         await pg.locator('#svc-hist-rf').fill('2026-10-01'); await pg.locator('#svc-hist-rt').fill('2026-10-15');

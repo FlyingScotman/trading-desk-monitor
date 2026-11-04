@@ -6,10 +6,12 @@ existing steps of the autopilot (eod for the latest dates, backfill for the olde
 changed ``private_inputs_hash``. This module has no thread and never calls the helper: the service does, and writes
 the file (``<home>/adapter-services/trades_history.json``, under its lock, atomically); no value of a trade is in it.
 
-**Switch.** Off until the owner turns it on: ``enabled``, ``from`` (the first date; by default the start of the year
-but not before the start of the history, ``default_from``; never before the setting ``backfill_from``, since a date
-the backfill does not reach is not made again by anyone), ``when``: ``off_hours`` (default: not in the trading hours,
-``autopilot.in_trading_hours``) or ``any``.
+**Switch.** On by default (owner, 04.11.2026): ``enabled``, ``from`` (the first date; by default the 1st of January of
+the current year but not before the start of the history, ``default_from``; never before the setting ``backfill_from``,
+since a date the backfill does not reach is not made again by anyone, nor the adapter's ``history_from``), ``when``:
+``any`` (default) or ``off_hours`` (not in the trading hours, ``autopilot.in_trading_hours``). A feed that does not
+declare ``history`` (an adapter without it, a source off) gives the worker nothing to ask: it stays silent, and no
+request, file or load comes of the default.
 
 **Dates.** The candidates are the dates of the default runs in [from, yesterday] (and not before the adapter's
 ``history_from``), yesterday from ``HISTORY_DAY_FROM`` on. Today is never asked: the feed of the day has it. The order
@@ -82,7 +84,7 @@ def path(st: Settings) -> Path:
 
 
 def blank() -> dict:
-    return {"version": VERSION, "enabled": False, "from": None, "when": "off_hours", "marks": {}, "priority": [],
+    return {"version": VERSION, "enabled": True, "from": None, "when": "any", "marks": {}, "priority": [],
             "pending": None, "calls": {"day": None, "n": 0}, "last_call": None, "last_duration_s": None,
             "wait": None, "failures": 0, "retry_at": None, "last": None}
 
@@ -263,7 +265,7 @@ def gate(doc: dict, now: datetime) -> dict | None:
     retry = _ts(doc.get("retry_at"))
     if retry is not None and retry > now:
         return {"code": "backoff", "until": retry.isoformat()}
-    if doc.get("when", "off_hours") == "off_hours" and in_trading_hours(now):
+    if doc.get("when", "any") == "off_hours" and in_trading_hours(now):
         return {"code": "trading_hours", "until": end_of_trading_hours(now).isoformat()}
     calls = doc.get("calls") or {}
     if calls.get("day") == now.date().isoformat() and int(calls.get("n") or 0) >= HISTORY_PER_DAY:
@@ -408,7 +410,7 @@ def summary(con: psycopg.Connection | None, settings: Settings, doc: dict, *, no
     today = now.date()
     out: dict[str, Any] = {
         "available": feed is not None, "code": "available" if feed else "history_unsupported",
-        "feed": feed["id"] if feed else None, "enabled": bool(doc.get("enabled")), "when": doc.get("when", "off_hours"),
+        "feed": feed["id"] if feed else None, "enabled": bool(doc.get("enabled")) and feed is not None, "when": doc.get("when", "any"),
         "from": lower_bound(settings, doc, hist_from, today).isoformat(), "history_from": hist_from,
         "from_min": max(backfill.start_date(settings), date.fromisoformat(hist_from) if hist_from else date.min).isoformat(),
         "from_default": default_from(settings, today).isoformat(),

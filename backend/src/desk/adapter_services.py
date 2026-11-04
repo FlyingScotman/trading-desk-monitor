@@ -49,7 +49,7 @@ again: the adapter may answer ``no_change`` then and never produce them again. F
 state (last start/end, outcome, failures, next retry, the pause, the positions date seen) is persisted, so a restart
 does not fetch again at once.
 
-**Trades of past dates** (TDM#569, ``desk.trades_history``; off until the owner turns it on). A feed with the dataset
+**Trades of past dates** (TDM#569, ``desk.trades_history``; on by default since 04.11.2026, silent while the feed is off in the monitor or the adapter does not declare ``history``). A feed with the dataset
 ``trades``, ``books`` and the new ``history: true`` (and, when the source knows it, ``history_from``: the earliest date
 it keeps) also answers for a past ``date``. When nothing else is due (the owner's operations, «Запустить сейчас», the
 scheduled feeds), the worker asks it for one past date at a time (``_history_step``): newest block of dates first, the
@@ -1283,7 +1283,7 @@ class AdapterServices:
         sdoc = read_state(st)
         f = self._history_feed(sdoc)
         h = trades_history.read(st)
-        if f is None or not h["enabled"] or not f.get("ready") or sdoc.get("runs", {}).get(f["id"], {}).get("needs_login"):
+        if f is None or not h["enabled"] or not _enabled(sdoc, f) or not f.get("ready") or sdoc.get("runs", {}).get(f["id"], {}).get("needs_login"):
             return False
         now = self._now()
         if h.get("pending"):

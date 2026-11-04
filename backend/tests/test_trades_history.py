@@ -357,7 +357,8 @@ def test_no_books_is_marked_and_asked_again_with_new_positions(env, tmp_path):
 # ---- the queue of the service: hours, limits, the scheduled feed ---------------------------------------------------
 
 def test_off_hours_waits_for_the_end_of_the_trading_hours_and_any_does_not(env):
-    env.s.history_set(None, D15, None)
+    assert env.doc["when"] == "any" and env.doc["enabled"] is True  # the defaults (owner, 04.11.2026)
+    env.s.history_set(None, D15, "off_hours")
     env.clock["t"] = at(FRI, 11, 0)
     assert in_trading_hours(env.clock["t"]) and env.step() == [False] and env.asked() == []
     g = trades_history.gate(env.doc, env.clock["t"])
@@ -538,7 +539,7 @@ def test_routes_summary_switch_and_the_period_button(env):
         r = c.get("/api/v1/adapter-services/history")
         j = r.json()
         assert r.status_code == 200 and r.headers["cache-control"] == "no-store"
-        assert j["available"] and j["enabled"] and j["counts"]["todo"] == 4 and j["from"] == D12 and j["when"] == "off_hours"
+        assert j["available"] and j["enabled"] and j["counts"]["todo"] == 4 and j["from"] == D12 and j["when"] == "any"
         assert c.get("/api/v1/adapter-services/history", headers={"X-Forwarded-For": "10.0.0.1"}).status_code == 403
         post = lambda path, body, **h: c.post("/api/v1/adapter-services" + path, content=body, headers={**FORM, **h})
         assert post("/history", "enabled=false").status_code == 200 and env.doc["enabled"] is False
@@ -568,6 +569,30 @@ def test_the_summary_without_the_adapter_or_the_history_file(tmp_path, store_url
         assert h["available"] is False and h["enabled"] is False and h["counts"]["todo"] == 0 and h["applied"]["in_pnl"] == 0
     finally:
         s.close()
+
+
+def test_defaults_are_on_any_time_and_silent_without_a_history_feed(tmp_path, store_url):
+    """Owner, 04.11.2026: on by default, any time, from the start of the year; with no adapter feed that declares
+    ``history`` the worker asks nothing and writes nothing."""
+    st = make(tmp_path, store_url=store_url)
+    d = trades_history.blank()
+    assert (d["enabled"], d["when"], d["from"]) == (True, "any", None)
+    assert trades_history.lower_bound(st, d, None, FRI) == trades_history.default_from(st, FRI)
+    assert trades_history.lower_bound(st, d, "2026-03-02", FRI) == date(2026, 3, 2)  # not before the adapter's start
+    s = service(st, store_url)
+    try:
+        assert s._history_step() is False and not trades_history.path(st).exists()
+    finally:
+        s.close()
+
+
+def test_the_feed_switched_off_in_the_monitor_is_not_asked_for_past_dates(env):
+    """The owner who switched the day's trades feed off («Фоновая загрузка») gets no requests for past dates either."""
+    f = env.s._history_feed(svcs.read_state(env.st))
+    env.s.set_enabled(f["id"], False)
+    assert env.step() == [False] and env.asked() == []
+    env.s.set_enabled(f["id"], True)
+    assert env.step() == [True] and env.asked() != []
 
 
 # ---- how far the trades are in the PnL: read from the lineage ----------------------------------------------------------

@@ -1072,7 +1072,8 @@ class Autopilot:
                 # them, and this step again at night
                 deferred.append(d)
                 continue
-            sig = (tuple(ids), snap, prev, logic, inputs_hash, store.dataset_set_ids(con, date.fromisoformat(d)))
+            sig = (tuple(ids), snap, prev, logic, inputs_hash, store.dataset_set_ids(con, date.fromisoformat(d)),
+                   store.reference_rev_ids(con))
             if self._failed_before(d, sig, store.slice_label(d, "eod_final")):
                 self._eod_tried.add(d)  # not the backfill's either this cycle (#23)
                 notes.append(f"{d} failed before on the same inputs, not retried")

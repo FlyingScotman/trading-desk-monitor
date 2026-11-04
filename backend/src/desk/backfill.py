@@ -19,8 +19,8 @@ upgrade recomputes only the latest date. Nothing ever computed an older date.
    before the first report of every book has no positions and no run. A date needs a run when it has none, or its
    default run read other position sets or canonical private inputs, another market snapshot (a hub correction),
    another previous close (``bundle.previous_close``: the newest close of the hub and the cache together, the one
-   the run picks once its bundle is synced, #203), read its inputs before an ``ocp`` report or ``cash_balances`` in
-   force on the date were recorded (``late_why``, TDM#181), or was
+   the run picks once its bundle is synced, #203), read its inputs before an ``ocp`` report, ``cash_balances`` or a revision of the OCP policy in
+   force on the date were recorded (``late_why``, TDM#181, TDM#567), or was
    made by another valuation or core version (``same_logic``: ``VALUATION_VERSION`` and the core version of
    ``logic_version()`` recompute the history; a new release or Windows bundle of the same computation does not). Otherwise it is skipped: nothing
    is computed twice.
@@ -246,14 +246,14 @@ def same_logic(a: str | None, b: str | None) -> bool:
     return logic_key(a) == logic_key(b)
 
 
-LATE_WHY = {"ocp": "ocp report", "cash_balances": "cash balances"}
-"""``store.LATE_DATASETS`` as a reason to run a date again (TDM#181)."""
+LATE_WHY = {"ocp": "ocp report", "cash_balances": "cash balances", "ocp_policy": "ocp policy"}
+"""``store.LATE_DATASETS`` and ``store.LATE_REFERENCE`` as a reason to run a date again (TDM#181, TDM#567)."""
 
 
-def late_why(con: psycopg.Connection, d: date, run: dict | None) -> str | None:
+def late_why(con: psycopg.Connection, d: date, run: dict | None, revs: store.ReferenceRevs | None = None) -> str | None:
     """"ocp report changed after the run" (and / or the cash balances) when an ``ocp`` or ``cash_balances`` set in
     force on ``d`` was recorded after the default run ``run`` read its inputs (``store.late_inputs``); else None."""
-    late = store.late_inputs(con, d, run.get("positions_known_at")) if run else []
+    late = store.late_inputs(con, d, run.get("positions_known_at"), revs) if run else []
     return " and ".join(LATE_WHY[x] for x in late) + " changed after the run" if late else None
 
 
@@ -271,6 +271,7 @@ def plan(con: psycopg.Connection, settings: Settings, date_from: date, date_to: 
     failed = state(settings).get("failed", {})
     first_pos = con.execute("SELECT min(valid_date) FROM position_set").fetchone()[0]
     stamp = inputs_stamp(con, settings)
+    revs = store.ReferenceRevs(con)  # once for every date (TDM#567)
     days = []
     for d in dates:
         if first_pos is None or d < first_pos.isoformat():
@@ -289,14 +290,15 @@ def plan(con: psycopg.Connection, settings: Settings, date_from: date, date_to: 
         pd, pcut, prev = pc if pc else (None, None, None)
         run = runs.get(date.fromisoformat(d))
         ih = inputs_hash(con, date.fromisoformat(d), settings, stamp)  # TDM#557, #569: remembered
-        late = late_why(con, date.fromisoformat(d), run)
+        late = late_why(con, date.fromisoformat(d), run, revs)
         why = ("no default run" if run is None else "positions changed" if run["position_set_ids"] != ids
                else "market snapshot changed" if run["market_snapshot_id"] != snap
                else "previous snapshot changed" if prev is not None and run["prev_market_snapshot_id"] != prev
                else "private inputs changed" if run["private_inputs_hash"] != ih
                else late
                or ("program updated" if not same_logic(run.get("logic_version"), logic) else None))
-        sig = [ids, snap, prev, logic, ih, store.dataset_set_ids(con, date.fromisoformat(d))]
+        sig = [ids, snap, prev, logic, ih, store.dataset_set_ids(con, date.fromisoformat(d)),
+               store.reference_rev_ids(con, revs=revs)]
         if why is None:
             days.append(Day(d, "done", market_id=snap, cached=is_cached, prev_date=pd, prev_cut=pcut))
         elif failed.get(d) == sig:
@@ -439,6 +441,8 @@ def _differs(con: psycopg.Connection, day: Day) -> str:
             "private_inputs_hash": (run["private_inputs_hash"], inputs_hash),
             "late_inputs": (store.dataset_set_ids(con, date.fromisoformat(day.date), known_at=run["positions_known_at"]),
                             late[0] if late else None)}
+    if len(late) > 1:  # a signature from before the policy revisions counted (TDM#567) lacks it: stale once
+        have["late_reference"] = (store.reference_rev_ids(con, run["positions_known_at"]), late[1])
     return "; ".join(f"{k}: run {a}, plan {b}" for k, (a, b) in have.items() if a != b) or "nothing"
 
 

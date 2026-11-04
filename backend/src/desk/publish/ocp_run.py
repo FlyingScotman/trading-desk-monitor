@@ -20,8 +20,8 @@ in the run's publication.
   out is negative), counted once, ≈ the residual when the transfer matched;
 - the reported OCP: ``store.dataset_rows("ocp", D)`` (08 §10, a stock; a unit older than ``D`` is carried forward
   and its ``valid_date`` said). No unit: status ``no_report``, the derived OCP is still published;
-- the policy: ``rules.ocp.PROVISIONAL_POLICY`` with the adapter's ``ocp_policy`` in force on ``D`` (private/1.5,
-  TDM#180; ``run_policy``): which components the report holds, what is published, NDFs, cash, the settlement
+- the policy: ``rules.ocp.PROVISIONAL_POLICY`` with the adapter's ``ocp_policy`` in force TODAY, the same for every ``D`` (private/1.5,
+  TDM#180, TDM#567; ``run_policy``): which components the report holds, what is published, NDFs, cash, the settlement
   window, the tolerance, the report's age. A conflict of two rows keeps the default and is said in the notes.
 
 **Report base + day** (TDM#531, ``published`` ``report_base_plus_day``, the default): per base date B before ``D``
@@ -54,7 +54,7 @@ from __future__ import annotations
 import math
 from collections import Counter, defaultdict
 from collections.abc import Callable, Mapping, Sequence
-from dataclasses import dataclass, field, fields, replace
+from dataclasses import dataclass, field, fields
 from datetime import date, timedelta
 from typing import Any
 
@@ -185,24 +185,20 @@ def _rates(reference_fx: list[dict[str, Any]]) -> dict[str, float]:
     return {r["ccy"]: float(r["rate"]) for r in reference_fx if r.get("rate")}
 
 
-def run_policy(con: psycopg.Connection, on: date, known_at: Any, base: O.OcpPolicy = O.PROVISIONAL_POLICY
+def run_policy(con: psycopg.Connection, known_at: Any, base: O.OcpPolicy = O.PROVISIONAL_POLICY
                ) -> tuple[O.OcpPolicy, dict[str, str], tuple[str, ...]]:
-    """The OCP policy of the run of ``on``: ``base`` with the adapter's ``ocp_policy`` in force (private/1.5,
+    """The OCP policy of a run: ``base`` with the adapter's ``ocp_policy`` in force today (``store.current_policy``: one
+    methodology for all dates, whatever the date computed; private/1.5,
     ``rules.reference.apply_ocp_policy``); (policy, source per field, conflicts). A field's source:
     ``ocp_policy:<id>``, an owner decision (``rules.ocp.DECIDED``), ``provisional`` (``OPEN_DECISIONS``) or
-    ``default``. ``published`` no row in force gives follows the date (``rules.ocp.default_published``): before
-    ``BASIS_SINCE`` the basis those dates were published on, ``report_plus_outside``, so a date recomputed later keeps
-    it."""
-    s = apply_ocp_policy(store.current_reference(con, "ocp_policy", on, known_at), base)
+    ``default``. ``published`` no row in force gives is the engine's ``report_base_plus_day`` on every date, past
+    ones too (owner, 04.11.2026, TDM#567: the whole year on the new methodology); a row of the adapter's
+    ``ocp_policy`` that gives ``published`` still wins."""
+    s = apply_ocp_policy(store.current_policy(con, "ocp_policy", known_at), base)
     policy = s.policy
     open_fields = {d.field for d in O.OPEN_DECISIONS}
     source = {f.name: s.source.get(f.name) or O.DECIDED.get(f.name)
               or ("provisional" if f.name in open_fields else "default") for f in fields(O.OcpPolicy)}
-    if "published" not in s.source and base.published is O.PROVISIONAL_POLICY.published \
-            and (by_date := O.default_published(on)) is not policy.published:
-        policy = replace(policy, published=by_date)
-        source["published"] = (f"OQ-18 (владелец, 28.10.2026, TDM#416): дата до "
-                               f"{O.BASIS_SINCE:%d.%m.%Y}, ocp_policy базис не задаёт")
     return policy, source, s.conflicts
 
 
@@ -264,7 +260,7 @@ def _compute(con: psycopg.Connection, on: date, market: MarketView | None, conte
              terms: Mapping[str, Any] | None = None, calendar: Any = None,
              off_report: Mapping[str, Any] | None = None) -> RunOcp:
     known_at = inputs.known_at
-    policy, source, conflicts = run_policy(con, on, known_at, policy)
+    policy, source, conflicts = run_policy(con, known_at, policy)
     books = {b["book_id"]: b for b in store.current_books(con, on, known_at)}
     books.update({b["book_id"]: b for b in reference.get("books") or []})
     notes: list[str] = list(conflicts)

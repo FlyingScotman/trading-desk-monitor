@@ -297,14 +297,15 @@ def dataset_set_ids(con: psycopg.Connection, valid_date: date, datasets: Iterabl
         (list(datasets), valid_date, known_at))}
 
 
-def late_inputs(con: psycopg.Connection, valid_date: date, known_at: datetime | None) -> list[str]:
+def late_inputs(con: psycopg.Connection, valid_date: date, known_at: datetime | None,
+                revs: ReferenceRevs | None = None) -> list[str]:
     """The ``LATE_DATASETS`` whose sets in force on ``valid_date`` now differ from those a run that read its inputs at
     ``known_at`` (its ``positions_known_at``) saw: an OCP report or balances recorded (or corrected) after the run.
     The autopilot and the backfill run the date again, the day status names them (TDM#181)."""
     if known_at is None:
         return []
     now, then = dataset_set_ids(con, valid_date), dataset_set_ids(con, valid_date, known_at=known_at)
-    return [ds for ds in LATE_DATASETS if now.get(ds, []) != then.get(ds, [])]
+    return [ds for ds in LATE_DATASETS if now.get(ds, []) != then.get(ds, [])] + late_reference(con, known_at, revs)
 
 
 def position_dates(con: psycopg.Connection, since: date) -> list[date]:
@@ -540,43 +541,153 @@ def versioned_rows(con: psycopg.Connection, dataset: str, on: date, *, known_at:
 
 # --- reference tables beyond books (08 §7, §10: entities, funding_rules) ---------------------------------
 
+LATE_REFERENCE = {"ocp_policy": "политика ОВП"}
+"""Policy tables a run reads for every date, whose change recomputes all dates -> their name (TDM#567). They are
+stored as a snapshot of the adapter's delivery (``store_reference``)."""
+
+
 def store_reference(con: psycopg.Connection, kind: str, rows: list[dict], adapter_fingerprint: str) -> list[str]:
     """Validated ``reference()[kind]`` rows (``validate.check_reference_tables``): a new ``reference_rev`` for each
     (key, valid_from) whose content changed. Returns the keys revised. shortcut: as for books, a row reference()
-    stops listing keeps its last revision; retire it with ``active = false``."""
+    stops listing keeps its last revision; retire it with ``active = false``.
+
+    A ``LATE_REFERENCE`` kind is a **snapshot**: the rows of one call are one delivery. When the set of (key,
+    valid_from, content) of the delivery equals that of the last recorded delivery, nothing is written; otherwise
+    every row is written, all with one ``clock_timestamp()`` taken before the inserts as ``recorded_at`` (the
+    delivery's identity), and the read takes the keys of the last delivery, so a row the adapter no longer lists
+    stops being in force and a return to an older content is a new delivery. A row of a validated delivery that the
+    validation left out (an error) is not in the snapshot: its key stops being in force. Two calls for one kind in
+    one transaction get different ``clock_timestamp()`` values, so they stay two deliveries. An empty list is no delivery (the adapter lists nothing: the stored policy is
+    kept; the owner switches a row off with ``active = false``)."""
     changed = []
     with con.transaction():
+        snapshot = kind in LATE_REFERENCE
+        if snapshot and not rows:
+            return []
+        items = []
         for r in rows:
             content = {k: v for k, v in r.items() if not k.startswith("_")}
             key = "|".join(str(r[k]) for k in REFERENCE_KEYS[kind])
             sha = hashlib.sha256(json.dumps(content, sort_keys=True, default=str).encode()).hexdigest()
-            last = con.execute(
-                "SELECT content_sha256 FROM reference_rev WHERE kind = %s AND ref_key = %s"
-                " AND valid_from IS NOT DISTINCT FROM %s ORDER BY rev_id DESC LIMIT 1",
-                (kind, key, r.get("valid_from"))).fetchone()
-            if last and last[0] == sha:
-                continue
+            items.append((r, content, key, sha))
+        if snapshot:
+            last = {(k, None if v is None else str(v), h) for k, v, h in con.execute(
+                "SELECT ref_key, valid_from, content_sha256 FROM reference_rev WHERE kind = %(k)s AND recorded_at ="
+                " (SELECT max(recorded_at) FROM reference_rev WHERE kind = %(k)s)", {"k": kind})}
+            if last == {(key, None if r.get("valid_from") is None else str(r["valid_from"]), sha)
+                        for r, _, key, sha in items}:
+                return []
+            delivered_at = con.execute("SELECT clock_timestamp()").fetchone()[0]
+        for r, content, key, sha in items:
+            if not snapshot:
+                last_sha = con.execute(
+                    "SELECT content_sha256 FROM reference_rev WHERE kind = %s AND ref_key = %s"
+                    " AND valid_from IS NOT DISTINCT FROM %s ORDER BY rev_id DESC LIMIT 1",
+                    (kind, key, r.get("valid_from"))).fetchone()
+                if last_sha and last_sha[0] == sha:
+                    continue
             con.execute("INSERT INTO reference_rev (kind, ref_key, valid_from, active, content, adapter_fingerprint,"
+                        " content_sha256, recorded_at) VALUES (%s, %s, %s, %s, %s, %s, %s, %s)"
+                        if snapshot else
+                        "INSERT INTO reference_rev (kind, ref_key, valid_from, active, content, adapter_fingerprint,"
                         " content_sha256) VALUES (%s, %s, %s, %s, %s, %s, %s)",
                         (kind, key, r.get("valid_from"), r.get("active", True), Jsonb(content), adapter_fingerprint,
-                         sha))
+                         sha, *((delivered_at,) if snapshot else ())))
             changed.append(key)
     return changed
+
+
+def _reference_revs(con: psycopg.Connection, kind: str, on: date, known_at: datetime | None) -> list[tuple[int, dict]]:
+    known_at = known_at or con.execute("SELECT now()").fetchone()[0]
+    if kind in LATE_REFERENCE:  # the keys of the last delivery by ``known_at``; per key the newest delivery with a row <= ``on``
+        return con.execute(
+            "SELECT DISTINCT ON (ref_key) rev_id, content FROM reference_rev WHERE kind = %(k)s AND recorded_at <= %(at)s"
+            " AND coalesce(valid_from, '-infinity'::date) <= %(on)s AND ref_key IN (SELECT ref_key FROM reference_rev"
+            " WHERE kind = %(k)s AND recorded_at = (SELECT max(recorded_at) FROM reference_rev WHERE kind = %(k)s"
+            " AND recorded_at <= %(at)s)) ORDER BY ref_key, recorded_at DESC,"
+            " coalesce(valid_from, '-infinity'::date) DESC, rev_id DESC",
+            {"k": kind, "at": known_at, "on": on}).fetchall()
+    return con.execute(
+        "SELECT DISTINCT ON (ref_key) rev_id, content FROM (SELECT *, coalesce(valid_from, CASE WHEN rev_id ="
+        " min(rev_id) OVER (PARTITION BY ref_key) THEN '-infinity'::date"
+        f" ELSE {MSK_DAY} END) AS eff FROM reference_rev"
+        " WHERE kind = %s AND recorded_at <= %s) r WHERE eff <= %s ORDER BY ref_key, eff DESC, rev_id DESC",
+        (kind, known_at, on)).fetchall()
 
 
 def current_reference(con: psycopg.Connection, kind: str, on: date, known_at: datetime | None = None) -> list[dict]:
     """The rows of a reference table in force on ``on`` as known at ``known_at`` (default now), by key: per key the
     revision recorded by then with the greatest effective date <= ``on`` (its ``valid_from``, else the Moscow day it
     was recorded; the first revision of a key: always), the latest on a tie. Retired rows (``active`` false) are
-    returned too, as ``current_books`` does."""
+    returned too, as ``current_books`` does. A ``LATE_REFERENCE`` kind is a snapshot: only the keys of the last
+    delivery recorded by ``known_at`` count; per key the row of the newest delivery that has one with a ``valid_from``
+    (none: always) <= ``on``, the greatest ``valid_from`` within it, so a row dated for later leaves the previous
+    delivery's row in force until its day."""
+    return [c for _, c in _reference_revs(con, kind, on, known_at)]
+
+
+def moscow_day(at: datetime) -> date:
+    """The Moscow calendar day (fixed +03:00) of a moment."""
+    return at.astimezone(timezone(timedelta(hours=3))).date()
+
+
+def current_policy(con: psycopg.Connection, kind: str, known_at: datetime | None = None) -> list[dict]:
+    """The rows of a policy table that holds for EVERY date: the ones in force on the Moscow day of ``known_at``
+    (default: today) as known at ``known_at``, whatever the date being computed (owner, 04.11.2026, TDM#567: one
+    methodology for the whole history; a changed setting recomputes all dates). A ``valid_from`` in the future only
+    postpones the change to its day."""
     known_at = known_at or con.execute("SELECT now()").fetchone()[0]
-    rows = con.execute(
-        "SELECT DISTINCT ON (ref_key) content FROM (SELECT *, coalesce(valid_from, CASE WHEN rev_id ="
-        " min(rev_id) OVER (PARTITION BY ref_key) THEN '-infinity'::date"
-        f" ELSE {MSK_DAY} END) AS eff FROM reference_rev"
-        " WHERE kind = %s AND recorded_at <= %s) r WHERE eff <= %s ORDER BY ref_key, eff DESC, rev_id DESC",
-        (kind, known_at, on)).fetchall()
-    return [c for (c,) in rows]
+    return current_reference(con, kind, moscow_day(known_at), known_at)
+
+
+class ReferenceRevs:
+    """The revisions of the ``LATE_REFERENCE`` tables loaded once (a few dozen rows), so that a plan over hundreds of
+    dates compares them in Python, not with queries a date (TDM#567). Same choice as ``current_policy``: the keys of
+    the last delivery recorded by the horizon; per key the row of the newest delivery that has one with a
+    ``valid_from`` (none: always) <= the horizon's Moscow day, the greatest ``valid_from`` within it."""
+
+    def __init__(self, con: psycopg.Connection) -> None:
+        self.now = con.execute("SELECT now()").fetchone()[0]
+        self.rows = list(con.execute(
+            "SELECT kind, ref_key, rev_id, recorded_at, valid_from, content_sha256 FROM reference_rev WHERE kind = ANY(%s)",
+            (list(LATE_REFERENCE),)))
+
+    def ids(self, known_at: datetime | None = None) -> dict[str, list[str]]:
+        """Per kind the rows ``current_policy`` picks as known at ``known_at`` (default now), each as ``key:content
+        hash``: a delivery that changes nothing in force (a row added for a later day) is no change."""
+        horizon = known_at or self.now
+        day = moscow_day(horizon)
+        out = {}
+        for kind in LATE_REFERENCE:
+            known = [r for r in self.rows if r[0] == kind and r[3] <= horizon]
+            last = max((r[3] for r in known), default=None)
+            keys = {r[1] for r in known if r[3] == last}
+            best: dict[str, tuple[Any, date, int, str]] = {}
+            for _, key, rev_id, rec, valid_from, sha in known:
+                eff = valid_from or date.min
+                rank = (rec, eff, rev_id, sha)
+                if key in keys and eff <= day and (key not in best or rank[:3] > best[key][:3]):
+                    best[key] = rank
+            out[kind] = sorted(f"{key}:{r[3]}" for key, r in best.items())
+        return out
+
+
+def reference_rev_ids(con: psycopg.Connection, known_at: datetime | None = None,
+                      revs: ReferenceRevs | None = None) -> dict[str, list[str]]:
+    """Per ``LATE_REFERENCE`` kind its rows (key and content hash) in force today as known at ``known_at`` (default now),
+    the same for every date; ``revs``: the revisions loaded once for many dates."""
+    return (revs or ReferenceRevs(con)).ids(known_at)
+
+
+def late_reference(con: psycopg.Connection, known_at: datetime | None,
+                   revs: ReferenceRevs | None = None) -> list[str]:
+    """The ``LATE_REFERENCE`` kinds whose revisions in force today now differ from those a run that read its inputs at
+    ``known_at`` saw (compared by key and content); the same answer for every date."""
+    if known_at is None:
+        return []
+    revs = revs or ReferenceRevs(con)
+    now, then = revs.ids(), revs.ids(known_at)
+    return [k for k in LATE_REFERENCE if now.get(k) != then.get(k)]
 
 
 # --- runs ----------------------------------------------------------------------------------------------

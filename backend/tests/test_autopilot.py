@@ -268,7 +268,8 @@ def test_upgrade_leaves_older_dates_alone(tmp_path, monkeypatch):
     monkeypatch.setattr(ap_mod.store, "positions_for", lambda con, d:
                         store.PositionInputs([], [], {}, datetime.now(UTC), "unchanged"))
     monkeypatch.setattr(ap_mod.store, "default_runs", lambda con, since: default)
-    monkeypatch.setattr(ap_mod.store, "dataset_set_ids", lambda con, d, *a, **kw: {})  # no OCP report, no balances
+    monkeypatch.setattr(ap_mod.store, "dataset_set_ids", lambda con, *a, **kw: {})  # no OCP report, no balances
+    monkeypatch.setattr(ap_mod.store, "reference_rev_ids", lambda con, *a, **kw: {})
     calls: list[str] = []
     monkeypatch.setattr(cli, "eod_run", lambda settings, d, **kw: calls.append(d) or len(calls) + 2)
     ap = Autopilot(settings_loader=lambda: Settings(home=tmp_path), today=lambda: TODAY)
@@ -317,7 +318,8 @@ def test_eod_leaves_past_dates_with_new_trades_to_the_backfill_in_the_trading_ho
     monkeypatch.setattr(ap_mod.store, "positions_for", lambda con, d:
                         store.PositionInputs([], [], {}, datetime.now(UTC), "with the trades"))
     monkeypatch.setattr(ap_mod.store, "default_runs", lambda con, since: default)
-    monkeypatch.setattr(ap_mod.store, "dataset_set_ids", lambda con, d, *a, **kw: {})
+    monkeypatch.setattr(ap_mod.store, "dataset_set_ids", lambda con, *a, **kw: {})
+    monkeypatch.setattr(ap_mod.store, "reference_rev_ids", lambda con, *a, **kw: {})
     calls: list[str] = []
     monkeypatch.setattr(cli, "eod_run", lambda settings, d, **kw: calls.append(d) or len(calls) + 2)
     ap = Autopilot(settings_loader=lambda: Settings(home=tmp_path), today=lambda: TODAY,
@@ -355,7 +357,8 @@ def test_eod_still_runs_a_date_the_cycle_was_asked_for_in_the_trading_hours(tmp_
     monkeypatch.setattr(ap_mod.store, "positions_for", lambda con, d:
                         store.PositionInputs([], [], {}, datetime.now(UTC), "new"))
     monkeypatch.setattr(ap_mod.store, "default_runs", lambda con, since: default)
-    monkeypatch.setattr(ap_mod.store, "dataset_set_ids", lambda con, d, *a, **kw: {})
+    monkeypatch.setattr(ap_mod.store, "dataset_set_ids", lambda con, *a, **kw: {})
+    monkeypatch.setattr(ap_mod.store, "reference_rev_ids", lambda con, *a, **kw: {})
     calls: list[str] = []
     monkeypatch.setattr(cli, "eod_run", lambda settings, d, **kw: calls.append(d) or len(calls) + 2)
     ap = Autopilot(settings_loader=lambda: Settings(home=tmp_path), today=lambda: TODAY,

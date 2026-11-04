@@ -202,8 +202,8 @@ dataset `trades` with `books: true` may add two optional keys: `history: true` (
 the day's cut at the end of that day, a newer export of the same date replaces the older one, §6.6) and
 `history_from: "YYYY-MM-DD"` (the earliest date the source keeps, when known). A monitor that does not know the keys drops
 them (`clean_feeds`); without `history` the monitor's background fetch of past dates does not use the feed and the screen
-says so. The fetch is off until the owner turns it on in the settings («Догружать сделки прошлых дат с …»), asks one
-date at a time (not more often than every 2 minutes, at most 300 requests a day, by default not in the trading hours),
+says so. The fetch is on by default (owner, 04.11.2026; the owner switches it in the settings, «Догружать сделки прошлых дат с …»), is silent while the feed is off in the monitor, asks one
+date at a time (not more often than every 2 minutes, at most 300 requests a day, by default at any time, also in the trading hours),
 never today's date, and the answer's `dates` must be the asked date or empty. The closed answers for a past date:
 
 | `state` / `code` | meaning | the monitor |
@@ -612,7 +612,7 @@ and OCP engines are generic and parameterised by them, never by firm constants i
 (`reference_rev`; `store.current_reference(kind, on)`), a new revision only when a row changed. Unlike books they
 may carry history: several rows of one key with different `valid_from`, the one in force on date D being the
 latest `valid_from` <= D (a row without `valid_from` applies from its first revision on, a later change from the
-day it was recorded, as books). An invalid row, or a repeated (key, `valid_from`), is left out with an error issue
+day it was recorded, as books). `ocp_policy` is read differently: it is a **snapshot** (the backend takes the keys of the last delivery, so a row the adapter stops listing stops being in force, and a row dated in the future keeps the key's previous row until its day; an empty list is no delivery), and one policy, the one in force today, applies to every date (§10). An invalid row, or a repeated (key, `valid_from`), is left out with an error issue
 and the rest is kept; a book or rule naming an entity that `entities` does not list gets `unknown_entity`, a rule
 naming an unknown book `unknown_book`, two rules with the same selectors and `valid_from` `ambiguous_rule`, a
 `funding_policy` or `ocp_policy` setting given twice with different values `ambiguous_policy`, an `ocp_policy.report_components`
@@ -706,12 +706,14 @@ What the run **publishes** follows `ocp_policy.published`. Since 1.7 (owner, 03.
 `report_max_age_bd` business days (a full snapshot of the entity: a book of it without a unit on B, also one whose
 older unit is still carried forward by `covers: listed`, has 0), **without the derivative kinds the report gives
 apart**, plus their PV from positions, plus the foreign bonds' revaluation and the trades since B, plus the
-components the report does not hold. A unit older than the limit is not published (its books derived). A date before
-03.11.2026 whose `ocp_policy` gives no `published` keeps `report_plus_outside` (TDM#416: `ocp_ccy` plus the components
-the report does not hold, with `report_max_age_days`), so a date recomputed later keeps its basis. An `ocp_policy` row
-giving `published` is in force as §7 says: a new revision of the same `policy_id` without `valid_from` applies from the
-Moscow day it is recorded, so the earlier dates, even recomputed, keep the basis they had; keep the `policy_id` (a
-new one, without `valid_from`, would apply to every past date and conflict with the old key).
+components the report does not hold. A unit older than the limit is not published (its books derived). Without a `published` in `ocp_policy` the engine takes this basis for every date, past ones too (owner, 04.11.2026, TDM#567;
+`report_plus_outside` of TDM#416: `ocp_ccy` plus the components the report does not hold, with `report_max_age_days`,
+stays selectable). An `ocp_policy` row
+giving `published` is in force as §7 says, **for every date alike**: the backend applies the policy in force **today**
+(the Moscow day; a row without `valid_from` is in force always; of the rows of one `policy_id` the one with the greatest `valid_from` <= today is taken) to
+all dates of the history, not the one that held on each date (owner, 04.11.2026, TDM#567). A changed policy recomputes the
+whole history; a `valid_from` in the future only postpones the change, and on that day the whole history is recomputed.
+Keys are those of the last delivery: a `policy_id` the adapter stops listing stops being in force, and when every row of a key in the last delivery is dated later than today, the row of the newest earlier delivery stays in force until that day (the real adapter gives one row, so a `valid_from` in the future postpones the change instead of switching to the engine's defaults). In a delivery of several rows a row that failed validation is left out of the snapshot, and its key stops being in force. An empty list is no delivery: the stored policy is kept (to cancel a row, `active` = false).
 
 Since 1.7 the adapter gives derivatives apart **by kind**. For each derivative kind it maps report row types to, it
 leaves the report's lines of that kind with a value date after the report's date out of `ocp_ccy` (and out of
@@ -1031,7 +1033,9 @@ with different values is `ambiguous_policy` (warning) and also keeps the default
 
 The organisation's OCP conventions: which components of the OCP the bank's OCP report holds, what the run publishes
 and the settings the generic engine leaves open (`desk.rules.ocp.OcpPolicy`, `OPEN_DECISIONS`). Key: `policy_id`,
-with `valid_from`; every row is firm-wide. The run publishes the bank's report where a report unit covers a book or
+with `valid_from`; every row is firm-wide. The backend reads the table as a snapshot: the keys of the last delivery, and for **all** dates the rows of those keys in force today (a row dated in the future keeps the key's previous row until its day)
+(a row without `valid_from` is in force always; of the rows of one `policy_id` the one with the greatest `valid_from` <= today is taken; the order of the rows does not matter)
+(see `published` below), so `valid_from` here dates the change of the setting, not a history of methodologies. The run publishes the bank's report where a report unit covers a book or
 an entity, as its base, with the derivatives' PV and the day's changes (`report_base_plus_day`, owner, 03.11.2026,
 TDM#531; `ocp` above) or plus the components the report does not hold (`report_plus_outside`, 28.10.2026, TDM#416); a
 book no unit covers is derived from positions. A field no row gives keeps the engine's value: the provisional default,

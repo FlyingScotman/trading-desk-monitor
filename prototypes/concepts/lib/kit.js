@@ -1278,7 +1278,8 @@
   // null — индикатора нет.
   const dmy = iso => iso ? iso.slice(8, 10) + '.' + iso.slice(5, 7) + '.' + iso.slice(0, 4) : '';
   const BF_WHY = { 'no default run': 'нет прогона', 'positions changed': 'изменились позиции', 'market snapshot changed': 'исправлен рынок',
-    'previous snapshot changed': 'изменилось прошлое закрытие', 'private inputs changed': 'изменились условия сделок', 'program updated': 'обновилась программа' };
+    'previous snapshot changed': 'изменилось прошлое закрытие', 'private inputs changed': 'изменились условия сделок', 'program updated': 'обновилась программа',
+    'ocp policy changed after the run': 'изменилась политика ОВП', 'ocp report changed after the run': 'пришёл отчёт ОВП', 'cash balances changed after the run': 'пришли остатки' };
   // причина застоя, момент по МСК, «не сходятся» / «не загружаются», текст застоя — одни с Настройками (../desk-backfill-text.js,
   // его подключает lib/boot.js раньше kit.js)
   const BT = () => window.DESK_BACKFILL_TEXT;

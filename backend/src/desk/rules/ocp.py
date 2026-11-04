@@ -180,7 +180,7 @@ OPEN_DECISIONS: tuple[OpenDecision, ...] = (
 )
 
 DECIDED: dict[str, str] = {
-    "published": "OQ-18 (владелец, 03.11.2026, TDM#531; 28.10.2026, TDM#416)",
+    "published": "OQ-18 (владелец, 04.11.2026, TDM#567; 03.11.2026, TDM#531; 28.10.2026, TDM#416)",
     "report_max_age_bd": "OQ-18 (владелец, 03.11.2026, TDM#531)",
     "bond_funding_liability": "OQ-04 (владелец, 23.10.2026, TDM#54)",
 }
@@ -795,17 +795,6 @@ CONTRIBUTIONS_MAX = 10
 BASE_SPLIT, BASE_WHOLE, BASE_ABSENT = "without_derivatives", "with_derivatives", "book_absent"
 """``base_kind`` of a line: the report without the derivatives' future flows (private/1.7 ``derivatives_ccy``), the
 report with them (an adapter before 1.7: their PV is not added), a book of a covered entity with no row (base 0)."""
-BASIS_SINCE = date(2026, 11, 3)
-"""The first date the engine's default basis is ``report_base_plus_day`` (owner, 03.11.2026, TDM#531): an earlier date
-whose ``ocp_policy`` in force does not give ``published`` keeps ``report_plus_outside`` (``default_published``), so a
-date recomputed later keeps the basis it was published on."""
-
-
-def default_published(on: date) -> PublishedBasis:
-    """The engine's basis of a date the adapter's ``ocp_policy`` gives none for (``BASIS_SINCE``)."""
-    return PublishedBasis.REPORT_BASE_PLUS_DAY if on >= BASIS_SINCE else PublishedBasis.REPORT_PLUS_OUTSIDE
-
-
 def _value_dates(row: Mapping[str, Any], terms: Sequence[Mapping[str, Any]]) -> list[date]:
     """Every flow date known of a derivative: its legs' value dates (``extra.legs``), the terms' ``value_date`` and
     ``maturity_date`` (a swap's start and end), the row's ``maturity`` and the report's ``value_date`` / ``maturity_date``;

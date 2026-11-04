@@ -373,7 +373,7 @@ def ocp_out(run_id: int, block: dict[str, Any] | None) -> RunOcp:
                                                       and (k in b or k not in keep)})
     # TDM#567: the published lines serialized as the page data and the history do (``ocp_line``), the day's methodology
     out.published_rows = [ocp_line(x) for x in (b.get("published") or {}).get("by_book") or []]
-    out.method_note = method_note((b.get("published") or {}).get("basis"), b.get("as_of"), out.published_rows)
+    out.method_note = method_note((b.get("published") or {}).get("basis"), out.published_rows)
     return out
 
 

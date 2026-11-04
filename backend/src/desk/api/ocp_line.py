@@ -8,7 +8,6 @@ named by :func:`method_note` (the pages show it as is, no rule of their own).
 
 from __future__ import annotations
 
-from datetime import date
 from typing import Any
 
 from ..rules import ocp as O
@@ -51,7 +50,7 @@ def book_meta(book_id: str, m: dict[str, Any], type_: str | None = None, *, ocp_
     return out
 
 
-def method_note(basis: str | None, on: date | str | None, lines: list[dict[str, Any]]) -> str | None:
+def method_note(basis: str | None, lines: list[dict[str, Any]]) -> str | None:
     """Why a day's OCP is not on the current methodology (the report without the derivatives + their PV), else None.
     ``lines`` as :func:`ocp_line` gives them. No basis (no OCP at all): None, the day's state says why."""
     if not basis:
@@ -63,10 +62,7 @@ def method_note(basis: str | None, on: date | str | None, lines: list[dict[str, 
         return ("не по текущей методике: отчёт ещё с деривативами, их PV не добавлен (" + ", ".join(old[:5])
                 + (f" и ещё {len(old) - 5}" if len(old) > 5 else "") + ")")
     if basis == O.PublishedBasis.REPORT_PLUS_OUTSIDE.value:
-        since = O.BASIS_SINCE
-        early = (str(on)[:10] < since.isoformat()) if on else False
-        return ("другая методика: отчёт целиком (с деривативами) и слагаемые вне отчёта"
-                + (f", день до {since.strftime('%d.%m.%Y')}" if early else ""))
+        return "другая методика: отчёт целиком (с деривативами) и слагаемые вне отчёта"
     if basis == O.PublishedBasis.DERIVED.value:
         return "другая методика: ОВП из позиций, отчёт ОВП только сверен"
     return f"методика «{basis}» не распознана"

@@ -108,8 +108,7 @@ def assert_parts_sum(r):
 def test_default_basis_is_report_base_plus_day_from_its_date():
     assert O.PROVISIONAL_POLICY.published is O.PublishedBasis.REPORT_BASE_PLUS_DAY
     assert O.PROVISIONAL_POLICY.report_max_age_bd == 1 and "report_max_age_bd" in O.DECIDED
-    assert O.default_published(O.BASIS_SINCE) is O.PublishedBasis.REPORT_BASE_PLUS_DAY
-    assert O.default_published(date(2026, 11, 2)) is O.PublishedBasis.REPORT_PLUS_OUTSIDE
+    assert not hasattr(O, "BASIS_SINCE") and not hasattr(O, "default_published")  # no date keeps the old default
 
 
 def test_run_on_the_base_date_is_the_report_without_derivatives_plus_their_pv():
@@ -646,16 +645,37 @@ def test_contract_1_7_ocp_row_and_policy():
     assert [i["code"] for i in issues] == ["bad_policy_value"]
 
 
-def test_basis_follows_the_date_unless_the_adapter_gives_it(store_url):
-    """A date before 03.11.2026 whose ocp_policy gives no basis keeps report_plus_outside (recomputed later, it keeps
-    the basis it was published on); from that date the engine's report_base_plus_day; a row giving it wins."""
+def test_every_date_is_on_the_new_basis_unless_the_adapter_gives_one(store_url):
+    """TDM#567 (owner, 04.11.2026): a date before 03.11.2026 whose ocp_policy gives no basis is
+    report_base_plus_day as any other (a recomputed history moves to the new methodology); a row giving a basis wins."""
     with store.connect(store_url) as con:
         now = datetime.now().astimezone()
-        old, src, _ = ocp_run.run_policy(con, date(2026, 10, 15), now)
-        assert old.published is O.PublishedBasis.REPORT_PLUS_OUTSIDE and "до 03.11.2026" in src["published"]
-        new, src, _ = ocp_run.run_policy(con, date(2026, 11, 3), now)
-        assert new.published is O.PublishedBasis.REPORT_BASE_PLUS_DAY and src["published"].startswith("OQ-18")
+        for on in (date(2026, 1, 12), date(2026, 10, 15), date(2026, 11, 2), date(2026, 11, 3)):
+            pol, _, _ = ocp_run.run_policy(con, now)
+            assert pol.published is O.PublishedBasis.REPORT_BASE_PLUS_DAY
+        # the adapter's explicit basis is not overridden by the date
+        base = replace(O.PROVISIONAL_POLICY, published=O.PublishedBasis.REPORT_PLUS_OUTSIDE)
+        pol, _, _ = ocp_run.run_policy(con, now, base)
+        assert pol.published is O.PublishedBasis.REPORT_PLUS_OUTSIDE
+    s = apply_ocp_policy([{"_src": "L2", "policy_id": "firm", "published": "report_plus_outside"}])
+    assert s.policy.published is O.PublishedBasis.REPORT_PLUS_OUTSIDE and s.source["published"] == "ocp_policy:firm"
     assert ocp_run.COMPUTED_TEXT[O.PublishedBasis.REPORT_BASE_PLUS_DAY] != ocp_run.STATUS_TEXT[ocp_run.COMPUTED]
+
+
+def test_adapter_revision_with_valid_from_moves_the_year_to_the_new_basis(store_url):
+    """TDM#567 (owner, 04.11.2026, one methodology for all dates): the adapter's first revision (report_plus_outside,
+    no valid_from) and a later one of the same policy_id with valid_from 2026-01-01 (report_base_plus_day): the policy
+    in force today is the second one, and every date is on its basis, 15.12.2025 as well as 15.10.2026."""
+    def rev(**kw):
+        norm, errs, _ = validate_row("ocp_policy", {"_src": "L2", "policy_id": "firm", **kw})
+        assert errs == []
+        return norm
+    with store.connect(store_url) as con:
+        store.store_reference(con, "ocp_policy", [rev(published="report_plus_outside")], "fp1")
+        store.store_reference(con, "ocp_policy",
+                              [rev(published="report_base_plus_day", valid_from="2026-01-01")], "fp2")
+        pol, src, _ = ocp_run.run_policy(con, datetime.now().astimezone())
+    assert pol.published is O.PublishedBasis.REPORT_BASE_PLUS_DAY and src["published"] == "ocp_policy:firm"
 
 
 # ---- a run end to end ------------------------------------------------------------------------------------------
@@ -787,3 +807,134 @@ def test_a_position_with_no_flow_after_the_base_is_not_a_coverage_gap():
     assert d1["fallback"] == ["fx_swap"] and d1["parts"]["derivatives"] == 310
     gaps = {g["code"]: g for g in r.gaps}
     assert "derivatives_partial_pv" not in gaps and "derivatives_nominal_fallback" in gaps
+
+
+def _rev(**kw):
+    norm, errs, _ = validate_row("ocp_policy", {"_src": "L2", "policy_id": "firm", **kw})
+    assert errs == []
+    return norm
+
+
+def test_the_policy_in_force_today_holds_for_every_date(store_url):
+    """TDM#567 (owner, 04.11.2026): the delivery R1 (valid_from 2026-10-21) is in force today for every date (15.01 and
+    yesterday alike); a later delivery of one row dated in the future leaves R1 in force until its day, it does not
+    switch the policy to the engine's defaults. The rows of one delivery in any order give the same answer."""
+    from datetime import timedelta
+
+    def got(con):
+        pol, _, _ = ocp_run.run_policy(con, datetime.now().astimezone())
+        return pol.published.value, pol.tolerance_ccy
+
+    with store.connect(store_url) as con:
+        today = store.moscow_day(con.execute("SELECT now()").fetchone()[0])
+        r0 = _rev(published="report_plus_outside", tolerance_ccy="10")
+        r1 = _rev(published="report_base_plus_day", tolerance_ccy="20", valid_from="2026-10-21")
+        store.store_reference(con, "ocp_policy", [r1, r0], "f0")  # the older row after the newer one
+        assert got(con) == ("report_base_plus_day", 20)
+        store.store_reference(con, "ocp_policy", [_rev(published="report_plus_outside", tolerance_ccy="30",
+                                                       valid_from=(today + timedelta(days=5)).isoformat())], "f1")
+        assert got(con) == ("report_base_plus_day", 20)
+
+
+def test_the_policy_is_a_snapshot_of_the_last_delivery(store_url):
+    """R2 (valid_from 01.01), then R3 (no date), then only R2 again: R2 is in force and the dates are late; a row the
+    adapter stopped listing is no longer in force; an empty delivery changes nothing."""
+    r2 = _rev(published="report_base_plus_day", valid_from="2026-01-01")
+    r3 = _rev(tolerance_ccy="40")
+    with store.connect(store_url) as con:
+        def now_policy():
+            pol, _, _ = ocp_run.run_policy(con, datetime.now().astimezone())
+            return pol.published.value, pol.tolerance_ccy
+
+        store.store_reference(con, "ocp_policy", [r2], "f2")
+        k2 = con.execute("SELECT now()").fetchone()[0]
+        assert now_policy()[1] != 40
+        store.store_reference(con, "ocp_policy", [r3], "f3")  # R3 alone replaces R2
+        k3 = con.execute("SELECT now()").fetchone()[0]
+        assert now_policy()[1] == 40
+        assert store.late_reference(con, k2) == ["ocp_policy"]
+        assert store.store_reference(con, "ocp_policy", [r2], "f4") == ["firm"]  # back to R2 alone: a new delivery
+        assert now_policy()[1] != 40
+        assert store.late_reference(con, k3) == ["ocp_policy"]  # R3 was in force then, not now
+        assert store.store_reference(con, "ocp_policy", [], "f5") == []  # no delivery
+        assert now_policy()[1] != 40 and store.late_reference(con, datetime.now().astimezone()) == []
+        # a row the adapter stopped listing: the other key stays, the removed one goes
+        a, b = _rev(policy_id="a", tolerance_ccy="1"), _rev(policy_id="b", report_max_age_bd="3")
+        store.store_reference(con, "ocp_policy", [a, b], "f6")
+        assert {r["policy_id"] for r in store.current_policy(con, "ocp_policy")} == {"a", "b"}
+        store.store_reference(con, "ocp_policy", [a], "f7")
+        assert {r["policy_id"] for r in store.current_policy(con, "ocp_policy")} == {"a"}
+
+
+def test_the_same_delivery_saved_again_is_no_revision_in_any_order(store_url):
+    """Two rows of one policy_id (no date, a date in the past) delivered twice, the second time in the other order:
+    no revision, no date late."""
+    rows = [_rev(published="report_plus_outside"),
+            _rev(published="report_base_plus_day", valid_from="2026-10-21")]
+    with store.connect(store_url) as con:
+        assert store.store_reference(con, "ocp_policy", rows, "f0") == ["firm", "firm"]
+        known = con.execute("SELECT now()").fetchone()[0]
+        assert store.store_reference(con, "ocp_policy", rows, "f1") == []
+        assert store.store_reference(con, "ocp_policy", rows[::-1], "f2") == []
+        assert store.late_reference(con, known) == []
+        n = con.execute("SELECT count(*) FROM reference_rev WHERE kind = 'ocp_policy'").fetchone()[0]
+        assert n == 2
+        assert len(con.execute("SELECT DISTINCT recorded_at FROM reference_rev").fetchall()) == 1
+
+
+def test_a_row_valid_from_the_future_puts_the_dates_late_on_its_day(store_url):
+    """The adapter gives one row: X (no date), then Y dated 3 days ahead. Today X is in force and nothing is late; on the
+    day Y takes effect (the clock of the plan moved) Y is in force and the dates are late."""
+    from datetime import timedelta
+
+    with store.connect(store_url) as con:
+        today = store.moscow_day(con.execute("SELECT now()").fetchone()[0])
+        store.store_reference(con, "ocp_policy", [_rev(published="report_plus_outside")], "f0")
+        known = con.execute("SELECT now()").fetchone()[0]
+        store.store_reference(con, "ocp_policy", [
+            _rev(published="report_base_plus_day", valid_from=(today + timedelta(days=3)).isoformat())], "f1")
+        pol, _, _ = ocp_run.run_policy(con, datetime.now().astimezone())
+        assert pol.published.value == "report_plus_outside"
+        revs = store.ReferenceRevs(con)
+        assert store.late_reference(con, known, revs) == []
+        revs.now = known + timedelta(days=4)  # the day it takes effect
+        assert store.late_reference(con, known, revs) == ["ocp_policy"]
+        assert revs.ids()["ocp_policy"] != revs.ids(known)["ocp_policy"]
+
+
+def test_the_revisions_are_loaded_once_for_many_dates_and_match_current_reference(store_url):
+    """The plan asks the revisions once, not three queries a date (about 210 dates); the ids ``ReferenceRevs`` picks
+    are those ``current_policy`` reads (no date, a date in the past and in the future, a horizon before some)."""
+    from datetime import timedelta
+
+    class Counting:
+        def __init__(self, con):
+            self.con, self.n = con, 0
+
+        def execute(self, sql, *a, **kw):
+            self.n += "reference_rev" in str(sql)
+            return self.con.execute(sql, *a, **kw)
+
+    with store.connect(store_url) as con:
+        today = store.moscow_day(con.execute("SELECT now()").fetchone()[0])
+        store.store_reference(con, "ocp_policy", [_rev(published="report_plus_outside")], "f0")
+        known = con.execute("SELECT now()").fetchone()[0]
+        store.store_reference(con, "ocp_policy", [
+            _rev(published="report_plus_outside"),
+            _rev(published="report_base_plus_day", valid_from="2026-01-01"),
+            _rev(tolerance_ccy="5", valid_from="2026-10-21")], "f1")
+        mid = con.execute("SELECT now()").fetchone()[0]
+        store.store_reference(con, "ocp_policy", [
+            _rev(tolerance_ccy="7", valid_from=(today + timedelta(days=3)).isoformat())], "f2")
+        c = Counting(con)
+        revs = store.ReferenceRevs(c)
+        for horizon in (None, known, mid):
+            ids = [i for i, _ in store._reference_revs(
+                con, "ocp_policy", store.moscow_day(horizon or datetime.now().astimezone()), horizon)]
+            expect = sorted(r[0] for r in con.execute(
+                "SELECT ref_key || ':' || content_sha256 FROM reference_rev WHERE rev_id = ANY(%s)", (ids,)))
+            assert revs.ids(horizon)["ocp_policy"] == expect and expect
+        for _ in range(200):
+            assert store.late_reference(c, known, revs) == ["ocp_policy"]
+            assert store.reference_rev_ids(c, revs=revs) == revs.ids()
+        assert c.n == 1

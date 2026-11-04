@@ -325,7 +325,7 @@
     const row1 = el('div', null, 'row'); row1.style.cssText = 'flex-wrap:wrap;align-items:center;gap:8px';
     row1.append(on, el('span', 'Догружать сделки прошлых дат с'), from);
     const when = el('select', null, 'inp'); when.id = 'svc-hist-when'; when.style.maxWidth = '100%';
-    for (const [v, t] of [['off_hours', 'Только вне торговых часов (по умолчанию)'], ['any', 'В любое время']]) { const o = el('option', t); o.value = v; when.append(o); }
+    for (const [v, t] of [['any', 'В любое время (по умолчанию)'], ['off_hours', 'Только вне торговых часов']]) { const o = el('option', t); o.value = v; when.append(o); }
     const row2 = el('div', null, 'row'); row2.style.cssText = 'flex-wrap:wrap;align-items:center;gap:8px;margin-top:8px';
     const wl = el('label', 'Когда спрашивать сервис'); wl.htmlFor = 'svc-hist-when'; row2.append(wl, when);
     const hrs = el('p', 'Торговые часы — будни 09:30–19:45 по Москве. При «в любое время» пересчёт прошлых дат идёт и днём (шаг «История прогонов») и удлиняет цикл автопилота до времени, отведённого истории прогонов за цикл.', 'hint');
@@ -372,7 +372,7 @@
     const f = $('hist-from');
     f.min = h.from_min || ''; f.max = ymd(new Date(Date.now() - 864e5));
     if (document.activeElement !== f) f.value = h.from || '';
-    $('hist-when').value = h.when || 'off_hours';
+    $('hist-when').value = h.when || 'any';
     $('hist-sum').textContent = w.summary;
     $('hist-applied').textContent = ok ? w.applied : '';
     $('hist-next').firstChild.textContent = ok && w.next ? w.next : '';

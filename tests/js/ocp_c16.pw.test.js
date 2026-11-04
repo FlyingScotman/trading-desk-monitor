@@ -43,9 +43,9 @@ function history(state, opt = {}) {
     if (opt.lines && days[0].lines.length) days[0].lines = opt.lines(days[0].lines);  // CHF: курса нет ни в прогоне, ни в отчёте
     if (opt.oldBook && days[0].lines.length) days[0].lines.push(L('Головной банк', 'OLDX', ['OLDX'], 'USD', 5e6));  // TDM#556
   }
-  // TDM#567 (D11, D24): подписи методики от сервера — день до 03.11.2026 и текущий день с отчётом ещё с деривативами
+  // TDM#567 (D11, D24): подписи методики от сервера — другая методика и текущий день с отчётом ещё с деривативами
   if (opt.method) {
-    days[days.length - 3].methodNote = 'другая методика: отчёт целиком (с деривативами) и слагаемые вне отчёта, день до 03.11.2026';
+    days[days.length - 3].methodNote = 'другая методика: отчёт целиком (с деривативами) и слагаемые вне отчёта';
     days[days.length - 1].methodNote = 'не по текущей методике: отчёт ещё с деривативами, их PV не добавлен (FXB)';
     days[days.length - 1].lines.forEach(x => { if (x.book === 'FXB') { x.baseKind = 'with_derivatives'; x.baseDate = AS_OF; x.parts = { base: x.amount }; } });
     days[days.length - 1].basis = 'report_base_plus_day';

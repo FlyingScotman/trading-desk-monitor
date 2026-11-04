@@ -59,8 +59,8 @@ def test_with_derivatives_line_is_named_and_the_current_one_is_not(three):
     c, _old, cur = three
     note = c.get("/api/v1/history/ocp", params={"run_id": cur, "from": "2026-11-04"}).json()["days"][0]["methodNote"]
     assert note.startswith("не по текущей методике: отчёт ещё с деривативами") and "B2" in note and "B1" not in note
-    assert method_note("report_base_plus_day", "2026-11-04", [ocp_line(v3("B1", "USD", 1.0))]) is None
-    assert method_note(None, "2026-11-04", []) is None
+    assert method_note("report_base_plus_day", [ocp_line(v3("B1", "USD", 1.0))]) is None
+    assert method_note(None, []) is None
 
 
 def test_a_day_of_the_old_methodology_is_marked(three):
@@ -69,13 +69,13 @@ def test_a_day_of_the_old_methodology_is_marked(three):
             c.get("/api/v1/history/ocp", params={"run_id": cur, "from": "2026-11-01"}).json()["days"]}
     assert days["2026-11-02"]["basis"] == "report_plus_outside"
     note = days["2026-11-02"]["methodNote"]
-    assert note.startswith("другая методика") and "03.11.2026" in note
+    assert note.startswith("другая методика") and "03.11.2026" not in note
     assert c.get(f"/api/v1/runs/{old}/ocp").json()["method_note"] == days["2026-11-02"]["methodNote"]
 
 
 def test_derived_basis_and_unknown_basis_are_named_honestly():
-    assert method_note("derived", "2026-11-04", []) == "другая методика: ОВП из позиций, отчёт ОВП только сверен"
-    assert "не распознана" in method_note("something_new", "2026-11-04", [])
+    assert method_note("derived", []) == "другая методика: ОВП из позиций, отчёт ОВП только сверен"
+    assert "не распознана" in method_note("something_new", [])
 
 
 def test_book_type_is_derived_once_per_period_and_a_day_carries_only_differences(three, store_url):

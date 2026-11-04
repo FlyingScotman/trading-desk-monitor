@@ -186,7 +186,7 @@ def history(con, anchor: dict[str, Any], start: date, end: date) -> dict[str, An
         lines = [ocp_line(y) for y in block.get("lines") or []]
         days.append({"date": r["business_date"], "runId": r["run_id"], "runType": r["run_type"],
                      "state": block.get("status") or ocp_run.NOT_COMPUTED, "basis": block.get("basis"),
-                     "methodNote": method_note(block.get("basis"), r["business_date"], lines), "books": diff,
+                     "methodNote": method_note(block.get("basis"), lines), "books": diff,
                      "fx": _fx(x.get("fx")), "reportFx": _report_fx(block, r["business_date"]), "lines": lines})
     return {"runId": anchor["run_id"], "asOf": anchor["business_date"], "from": start, "to": end,
             "days": days, "books": books}

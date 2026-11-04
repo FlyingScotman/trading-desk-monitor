@@ -166,7 +166,7 @@ def ocp_status(block: dict[str, Any] | None) -> dict[str, Any] | None:
                       "bySource": x.get("by_source") or {}} for c, x in (pub.get("by_ccy") or {}).items()},
         "byBook": lines,
         # TDM#567: why the run is not on the current methodology (null: it is), from the same rule as the history
-        "methodNote": method_note(pub["basis"], block.get("as_of"), lines),
+        "methodNote": method_note(pub["basis"], lines),
         "notes": block.get("notes") or [],
         "gaps": [{"code": g.get("code"), "text": g.get("text"), "items": g.get("items") or []}
                  for g in block.get("gaps") or []],

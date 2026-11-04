@@ -1241,3 +1241,50 @@ def test_the_plan_with_trades_of_200_dates_remembers_the_inputs_hashes(tmp_path,
             assert backfill.inputs_hash(con, date.fromisoformat(x), s) == real(con, date.fromisoformat(x), s)[0].private_inputs_hash
     assert {x.date: x.sig[4] for x in p_new.days}[days[100]] != {x.date: x.sig[4] for x in p_warm.days}[days[100]]
     assert timed()[1] == 0
+
+
+def _policy(**kw):
+    from desk.inbox.schema import validate_row
+
+    norm, errs, _ = validate_row("ocp_policy", {"_src": "L2", "policy_id": "firm", **kw})
+    assert errs == []
+    return norm
+
+
+def _basis(store_url: str, d: str) -> str | None:
+    with store.connect(store_url) as con:
+        rid = store.default_runs(con, date.fromisoformat(d))[date.fromisoformat(d)]["run_id"]
+        block = con.execute("SELECT lineage -> 'ocp' FROM run WHERE run_id = %s", (rid,)).fetchone()[0]
+    from fastapi.testclient import TestClient
+
+    from desk.api import create_app
+    return TestClient(create_app(store_url)).get(f"/api/v1/runs/{rid}/ocp").json()["published"]["basis"] if block else None
+
+
+def test_a_new_ocp_policy_revision_recomputes_the_dates_it_covers(tmp_path, cache, store_url):
+    """TDM#567 (owner, 04.11.2026): the adapter's later revision of the OCP policy (valid_from in the past) puts every
+    date in the plan with the reason, whatever its own date; after the recomputation they publish on the new basis. A
+    revision with valid_from in the future does not."""
+    load(store_url, tmp_path, "2026-10-14", 10)
+    s = settings(tmp_path, cache, store_url)
+    d1, d2 = date(2026, 10, 14), date(2026, 10, 15)
+    with store.connect(store_url) as con:
+        store.store_reference(con, "ocp_policy", [_policy(published="report_plus_outside")], "fp1")
+        backfill.run(s, backfill.plan(con, s, d1, d2), store_url=store_url, out=lambda line: None)
+        assert not backfill.plan(con, s, d1, d2).todo
+        assert store.late_reference(con, datetime.now(UTC)) == []
+    assert _basis(store_url, "2026-10-15") == "report_plus_outside"
+    with store.connect(store_url) as con:
+        store.store_reference(con, "ocp_policy", [_policy(published="report_base_plus_day", valid_from="2026-01-01")],
+                              "fp2")
+        p = backfill.plan(con, s, d1, d2)
+        assert [(d.date, d.why) for d in p.todo] == [("2026-10-14", "ocp policy changed after the run"),
+                                                     ("2026-10-15", "ocp policy changed after the run")]
+        backfill.run(s, p, store_url=store_url, out=lambda line: None)
+        assert not backfill.plan(con, s, d1, d2).todo
+        # a revision in force only from a future day: not in force today, nothing is late
+        # the adapter gives one row: a delivery with only the future row leaves the one in force until its day
+        store.store_reference(con, "ocp_policy", [_policy(published="report_plus_outside", valid_from="2099-01-01")],
+                              "fp3")
+        assert not backfill.plan(con, s, d1, d2).todo
+    assert _basis(store_url, "2026-10-15") == "report_base_plus_day"
