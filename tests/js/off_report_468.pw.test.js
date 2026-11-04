@@ -140,5 +140,24 @@ test('деривативы вне отчёта позиций в браузер�
         } finally { await ctx.close(); }
       });
     }
+    for (const width of [1024, 390]) {
+      await t.test('статус дня (c14): «включено» — серая строка, ' + width + ' px', async () => {
+        const ctx = await browser.newContext({ viewport: { width, height: 900 }, deviceScaleFactor: 2 });
+        const pg = await ctx.newPage(), errors = [];
+        pg.on('pageerror', e => errors.push(e.message));
+        await route(pg, u => u.pathname === '/api/v1/auth/state' ? json({ enabled: false, user: null }) : u.pathname.startsWith('/api/') ? { status: 404, contentType: 'application/json', body: '{}' } : null);
+        try {
+          await pg.goto(ORIGIN + '/concepts/c14-day-status.html?demo=1');
+          await pg.waitForSelector('.c14-list li.info');
+          assert.ok(/включены настройкой/.test(await pg.locator('.c14-list li.info').innerText()));
+          const colors = await pg.evaluate(() => ['info', 'warn'].map(c => getComputedStyle(document.querySelector('.c14-list li.' + c)).color));
+          assert.notStrictEqual(colors[0], colors[1], 'не цвет предупреждения');
+          assert.strictEqual(await pg.locator('.c14-list li.warn').count(), 2, 'предупреждения как были');
+          assert.ok(await noHScroll(pg), 'нет горизонтальной прокрутки');
+          await shot(pg, 'c14-' + width);
+          assert.deepStrictEqual(errors, []);
+        } finally { await ctx.close(); }
+      });
+    }
   } finally { await browser.close(); }
 });

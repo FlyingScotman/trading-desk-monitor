@@ -415,6 +415,14 @@ def test_gap_of_the_excluded_fx_trades_and_ccs():
     (only,) = ocp_run._off_report_gap(summary, {"B1": {"fx_forward"}, "B2": {"fx_forward"}})
     assert only["items"] == ["B1 (1)"]  # B2's CCS is a «swap» of the report, which B2 does not give apart
     assert ocp_run._off_report_gap(summary, {"B1": {"fx_forward"}}, {("B1", "T1")}) == []
+    rows = [{"entity": "E1", "ccy": "USD", "derivatives_ccy": {"fx_forward": "5", "fx_future": None}},
+            {"book_id": "B2", "entity": "E2", "ccy": "USD", "derivatives_ccy": {"swap": "1"}}]
+    assert ocp_run._apart(rows) == {"entity:E1": {"fx_forward"}, "B2": {"swap"}}
+    assert ocp_run._off_report_gap(summary, ocp_run._apart(rows), entity_of={"B1": "E1"})[0]["items"] == ["B1 (1)", "B2 (1)"]  # B2 gives swap apart
+    # a report of scope ["entity"] has no book_id: its kinds are the entity's, the trade's book is taken to its entity
+    assert ocp_run._off_report_gap(summary, {"entity:E1": {"fx_forward"}}, entity_of={"B1": "E1", "B2": "E2"})[0][
+        "items"] == ["B1 (1)"]
+    assert ocp_run._off_report_gap(summary, {"entity:E2": {"fx_forward"}}, entity_of={"B1": "E1"}) == []
     # counted from the whole list, not the one cut for the lineage
     many = offreport.summary([T("B", f"T{i}", ("fx_forward",), BD, BD, "excluded") for i in range(250)], 0, "exclude")
     assert len(many["list"]) == 200 and "(250)" in ocp_run._off_report_gap(many)[0]["items"][0]
@@ -548,3 +556,14 @@ def test_choosing_the_default_while_the_old_flag_is_on_keeps_an_explicit_exclude
     assert settings_routes.settings_payload()["off_report_derivatives"] == "include"
     update_settings_json({"off_report_derivatives": None}, home)  # the owner chooses «исключать»: it beats the variable
     assert load().off_report_derivatives == "exclude"
+
+
+def test_the_old_variable_of_the_env_file_counts_too(home):
+    (home / "desk.env").write_text("DESK_FX_UNLINKED_TERMS=1\n", encoding="utf-8")
+    import os
+
+    os.environ["DESK_ENV_FILE"] = str(home / "desk.env")  # restored by the fixture's monkeypatch of the same name
+    assert load().off_report_derivatives == "include"
+    update_settings_json({"off_report_derivatives": None}, home)  # «исключать» beats the file's variable
+    assert load().off_report_derivatives == "exclude"
+    assert "off_report_derivatives" not in settings_routes.settings_payload()

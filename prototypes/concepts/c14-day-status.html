@@ -19,7 +19,7 @@
 .c14-head .big { font-size: 20px; font-weight: 650; }
 .c14-badge { display: inline-block; padding: 1px 9px; border-radius: 999px; font-size: 12px; font-weight: 600; border: 1px solid var(--c); color: var(--c); background: color-mix(in srgb, var(--c) 12%, transparent); white-space: nowrap; }
 .c14-list { margin: 4px 0 0; padding-left: 18px; }
-.c14-list li.bad { color: var(--neg); } .c14-list li.warn { color: var(--warn); }
+.c14-list li.bad { color: var(--neg); } .c14-list li.warn { color: var(--warn); } .c14-list li.info { color: var(--fg-2); }
 .c14-inputs { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 200px), 1fr)); gap: 8px; }
 .c14-in { border: 1px solid var(--line); border-radius: 8px; padding: 8px 10px; background: var(--panel); position: relative; overflow: hidden; min-width: 0; }
 .c14-in::before { content: ""; position: absolute; left: 0; top: 0; bottom: 0; width: 3px; background: var(--c, var(--line-2)); }
@@ -125,7 +125,7 @@
     const hd = panel('Дата', '<span class="k-note">' + esc(d.adapter || '') + '</span>');
     hd.querySelector('.bd').innerHTML = '<div class="c14-head"><div><div class="big">' + f.dshort(d.date) + ' ' + d.date.slice(0, 4) + '</div>' +
       '<span class="c14-badge ' + stC + '">' + stT + '</span></div><div style="flex:1;min-width:260px">' +
-      (s.problems.length + s.warnings.length ? '<ul class="c14-list">' + s.problems.map(t => '<li class="bad">' + esc(t) + '</li>').join('') + s.warnings.map(t => '<li class="warn">' + esc(t) + '</li>').join('') + '</ul>' : '<span class="mut">Все входы на месте, основной прогон есть.</span>') +
+      (s.problems.length + s.warnings.length + (s.info || []).length ? '<ul class="c14-list">' + s.problems.map(t => '<li class="bad">' + esc(t) + '</li>').join('') + s.warnings.map(t => '<li class="warn">' + esc(t) + '</li>').join('') + (s.info || []).map(t => '<li class="info">' + esc(t) + '</li>').join('') + '</ul>' : '<span class="mut">Все входы на месте, основной прогон есть.</span>') +
       '</div><div class="mut" style="font-size:12px">основной прогон: <b>' + (s.default_run_id ? '#' + s.default_run_id : '—') + '</b>' +
       (s.current_run_id && s.current_run_id !== s.default_run_id ? '<br>показывается: #' + s.current_run_id : '') +
       (s.default_run_id && server ? '<br><a href="c01-cockpit.html?run_id=' + s.default_run_id + '">открыть в кокпите ▸</a>' : '') + '</div></div>';
@@ -256,7 +256,7 @@
     const ev = (id, h, m, type, level, text, extra) => Object.assign({ id, at: at(h, m), type, level, text, valid_date: D }, extra || {});
     return {
       day: {
-        date: D, adapter: 'ok demo_adapter 0.1.0', summary: { state: 'warn', problems: [], warnings: ['Позиции: принято частично', 'книг с замечаниями: 1'], default_run_id: 42, current_run_id: 42 },
+        date: D, adapter: 'ok demo_adapter 0.1.0', summary: { state: 'warn', problems: [], warnings: ['Позиции: принято частично', 'книг с замечаниями: 1'], info: ['деривативы вне отчёта позиций включены настройкой: сделок 3, включено 2, оценено 2'], default_run_id: 42, current_run_id: 42 },
         inputs: [
           { dataset: 'positions', name: 'Позиции', state: 'partial', units: { accepted: 3, rejected: 1, superseded: 0 }, rows: { accepted: 412, rejected: 18 }, sources: ['positions_daily'] },
           { dataset: 'ocp', name: 'ОВП', state: 'ok', units: { accepted: 2, rejected: 0, superseded: 0 }, rows: { accepted: 9, rejected: 0 }, sources: ['ocp_daily'] },

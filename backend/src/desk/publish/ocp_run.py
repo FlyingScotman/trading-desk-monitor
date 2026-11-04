@@ -225,17 +225,30 @@ def compute(con: psycopg.Connection, on: date, market: MarketView | None, conten
         return RunOcp(FAILED, empty_block(FAILED, text, on), log=[("WARN", text[:2000])])
 
 
+def _apart(rows: Sequence[Mapping[str, Any]]) -> dict[str, set[str]]:
+    """The kinds the report gives apart (``derivatives_ccy``) per book, or per ``entity:<entity>`` for a row without
+    ``book_id`` (a report of scope ``["entity"]``, 08)."""
+    out: dict[str, set[str]] = defaultdict(set)
+    for r in rows:
+        who = str(r["book_id"]) if r.get("book_id") else f"entity:{r.get('entity')}"
+        out[who] |= {k for k, v in (r.get("derivatives_ccy") or {}).items() if v is not None}
+    return dict(out)
+
+
 def _off_report_gap(off_report: Mapping[str, Any] | None, apart: Mapping[str, set[str]] | None = None,
-                    in_trades: set[tuple[str, str]] = frozenset()) -> list[dict[str, Any]]:
+                    in_trades: set[tuple[str, str]] = frozenset(), entity_of: Mapping[str, str] | None = None
+                    ) -> list[dict[str, Any]]:
     """Gap ``off_report_excluded`` (switch ``exclude``): FX trades and CCS off the positions report that no OCP term
     holds, though their nominal is out of the base: the books and the number of trades. Counted from the whole list
     (``summary.gap_trades``, not the cut one in the lineage); not counted: a closed trade, a trade the ``trades`` dataset
     already holds after the base (``in_trades``: (book, trade_id)), a kind the report does not give apart in its book
-    (``apart``: book -> the kinds of ``derivatives_ccy``; None: not checked)."""
+    (``apart``: book, or ``entity:<entity>`` for a report without ``book_id``, -> the kinds of ``derivatives_ccy``; the
+    trade's book is taken to its entity by ``entity_of``; None: not checked)."""
     if not off_report or off_report.get("mode") != "exclude":
         return []
     ex = [(b, t) for b, t, k in off_report.get("gap_trades") or []
-          if (b, t) not in in_trades and (apart is None or offreport.GAP_KINDS[k] in apart.get(b, set()))]
+          if (b, t) not in in_trades and (apart is None or offreport.GAP_KINDS[k] in (
+              apart.get(b, set()) | apart.get(f"entity:{(entity_of or {}).get(b)}", set())))]
     ex = list(dict.fromkeys(ex))
     if not ex:
         return []
@@ -265,12 +278,10 @@ def _compute(con: psycopg.Connection, on: date, market: MarketView | None, conte
                         liabilities=liabs, report_rows=report.rows, report_units=report.units, policy=policy,
                         days=days, is_business_day=is_bd, valid_dates=inputs.valid_dates)
     notes += res.notes
-    apart: dict[str, set[str]] = defaultdict(set)
-    for r in report.rows:
-        apart[str(r.get("book_id"))] |= {k for k, v in (r.get("derivatives_ccy") or {}).items() if v is not None}
+    apart = _apart(report.rows)
     in_trades = {(str(t.get("book_id")), str(t.get("trade_id"))) for d in days.values() for t in d.trade_rows or ()
                  if str(t.get("status") or "live") == "live"}
-    res.gaps.extend(_off_report_gap(off_report, apart, in_trades))
+    res.gaps.extend(_off_report_gap(off_report, apart, in_trades, {b: str(m.get("entity")) for b, m in books.items()}))
     rates = _rates(reference.get("fx") or [])
     status = COMPUTED if report.units else NO_REPORT
     by_ccy = {}

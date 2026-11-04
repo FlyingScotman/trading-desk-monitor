@@ -135,6 +135,9 @@ def _amounts(ts: list[dict[str, Any]], ccy: str) -> list[float]:
 def _suspect(book: str, trade: str, ts: list[dict[str, Any]], is_fx: bool, last: date | None,
              rows: list[tuple[str, str, dict[str, Any]]], linked: dict[str, Any], ids: dict[str, set[str]],
              ccys: set[str]) -> str:
+    """Why the trade looks like one the positions report has, else "". The amount is compared with a row of the same book,
+    kind, currency and date, so a row is taken to be one deal: a summary row per currency and date does not mark a
+    trade that is inside it."""
     if ids.get(trade):
         where = "another book" if ids[trade] - {book} else "this book"
         return f"the number {trade} is a deal or position of the positions report in {where}"

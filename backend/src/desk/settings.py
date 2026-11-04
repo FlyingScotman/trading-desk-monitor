@@ -896,6 +896,12 @@ def atomic_write_text(path: Path, text: str, *, private: bool = False) -> Path:
     return path
 
 
+def _legacy_variable() -> bool:
+    """``DESK_FX_UNLINKED_TERMS`` is on in the process environment or in the env file (``DESK_ENV_FILE``, ``.env``)."""
+    env = {**(read_env_file(f) if (f := _env_file(os.environ)).is_file() else {}), **os.environ}
+    return str(env.get("DESK_FX_UNLINKED_TERMS", "")).strip().lower() in _TRUE
+
+
 def update_settings_json(changes: dict[str, Any], home: Path | None = None) -> dict[str, Any]:
     """Merge ``changes`` into ``<home>/settings.json`` (null removes a key, unknown keys are kept), check the
     result and write it atomically; returns the new document. Nothing is written on a SettingsError. The token
@@ -912,7 +918,7 @@ def update_settings_json(changes: dict[str, Any], home: Path | None = None) -> d
         # TDM#468: the new switch replaces the old flag, whatever the value. «Exclude» chosen as the default while the
         # old flag is still on (in the file or the environment) is kept as an explicit ``exclude``: it beats the old flag
         legacy = doc.pop("fx_unlinked_terms", None) is True or (
-            os.environ.get("DESK_FX_UNLINKED_TERMS", "").strip().lower() in _TRUE)
+            _legacy_variable())
         if legacy and changes["off_report_derivatives"] in (None, ""):
             changes = {**changes, "off_report_derivatives": "exclude"}
     for k, v in changes.items():
