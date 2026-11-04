@@ -311,6 +311,16 @@ def product_group(rep: Any) -> str:
     return str(pg or "").lower()
 
 
+def takes_ocp_amount(ex: Mapping[str, Any], amount_basis: AmountBasis | str | None) -> bool:
+    """Whether the OCP takes a derivative row at its ``extra.ocp_amount`` (the nominal) and not at its FX delta: a row
+    core did not value (a CCS: its exchanges still to come), or a row core valued with ``amount_basis`` ``nominal``.
+    ``amount_basis`` None: the basis is not looked at (the published day's derivative lines are the PV whatever it
+    says). The one rule for ``classify``, ``derivative_lines`` and the scenario screen's FX shock (TDM#577)."""
+    if not ex.get("core"):
+        return bool(ex.get("ocp_amount"))
+    return amount_basis is not None and AmountBasis(amount_basis) is AmountBasis.NOMINAL
+
+
 def classify(row: Mapping[str, Any], terms: Sequence[Mapping[str, Any]], books: Mapping[str, Mapping[str, Any]],
              on: date, policy: OcpPolicy) -> tuple[str | None, dict[str, float], str, str]:
     """(component, amount per currency, basis, note) of a published row; component None: no OCP (a RUB row, an
@@ -333,7 +343,7 @@ def classify(row: Mapping[str, Any], terms: Sequence[Mapping[str, Any]], books: 
     later = vd is not None and vd > add_business_days(on, policy.settle_window_bd)
     if core:
         basis = policy.amount_basis.value
-        if policy.amount_basis is AmountBasis.NOMINAL:
+        if takes_ocp_amount(ex, policy.amount_basis):
             delta = _amounts(ex.get("ocp_amount"), policy)
     elif ex.get("ocp_amount"):
         # a CCS core did not value: the foreign leg's exchanges still to come (its terms), not the report's PV, on
@@ -895,7 +905,7 @@ def derivative_lines(rows: Sequence[Mapping[str, Any]], books: Mapping[str, Mapp
         core = bool((r.get("extra") or {}).get("core"))
         entity = str((books.get(r["book_id"]) or {}).get("entity") or "—")
         ex = r.get("extra") or {}
-        no_pv = not core and ex.get("ocp_amount")  # a CCS core did not value: its exchanges, not a PV
+        no_pv = not core and takes_ocp_amount(ex, None)  # a CCS core did not value: its exchanges, not a PV
         amounts = {c: a for c, a in sorted(_amounts(ex["ocp_amount"] if no_pv else r.get("fx_delta"),
                                                     policy).items()) if a}
         for ccy, a in amounts.items():

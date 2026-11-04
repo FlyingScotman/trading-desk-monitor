@@ -86,6 +86,12 @@ def test_from_ocp_block_to_linear_part():
     rows = [row("b", "B1", {"USD": 120.0}), row("opt", "B2", {"USD": 25.0}, product="fx_option")]
     rows[1]["fact"]["extra"]["ocp_amount"] = {"USD": 30.0}
     out = fx_ocp(ocp_status(block), build(rows), rows)
+    assert out["approx_ids"] == []  # core valued it: the OCP took the FX delta, as we subtract (spot equivalent)
+    out = fx_ocp(ocp_status(block), build(rows), rows, "nominal")
+    assert out["approx_ids"] == ["opt"]  # core valued, basis nominal: the OCP took the nominal
+    rows[1]["fact"]["extra"]["reported"] = {"x_product_group": "fx_option"}
+    rows[1]["fact"]["extra"].pop("core")  # not valued by core: its amount, whatever the basis
+    out = fx_ocp(ocp_status(block), build(rows), rows)
     screen = sum(x["amount"] for x in out["by_book"])
     assert screen == 150.0
     usd = out["by_ccy"]["USD"]

@@ -42,20 +42,17 @@ def nonlinear_positions(payload: Mapping[str, Any], rows: Sequence[Mapping[str, 
     return out
 
 
-def _ocp_differs(fact: Mapping[str, Any]) -> bool:
-    """The row has an OCP amount (``extra.ocp_amount``) other than its FX delta: the OCP took it by that amount."""
-    amt = (fact.get("extra") or {}).get("ocp_amount") or {}
-    delta = fact.get("fx_delta") or {}
-    return any(abs((amt.get(c) or 0.0) - (delta.get(c) or 0.0)) > 1e-9 for c in {*amt, *delta})
-
-
-def fx_ocp(status: Mapping[str, Any] | None, payload: Mapping[str, Any],
-           rows: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
-    """``status``: ``concepts_run.ocp_status`` of the run (None: no published OCP)."""
+def fx_ocp(status: Mapping[str, Any] | None, payload: Mapping[str, Any], rows: Sequence[Mapping[str, Any]],
+           amount_basis: str | None = None) -> dict[str, Any]:
+    """``status``: ``concepts_run.ocp_status`` of the run (None: no published OCP); ``amount_basis``: the run's OCP
+    policy (``block['policy']['amount_basis']``), None: the provisional default."""
     nl = nonlinear_positions(payload, rows)
     ids = sorted(nl)
     # the OCP takes these at their amount (nominal), not at the FX delta we subtract: the share is approximate
-    approx = sorted(r["position_id"] for r in rows if r["position_id"] in nl and _ocp_differs(r["fact"]))
+    basis = amount_basis or O.PROVISIONAL_POLICY.amount_basis
+    approx = sorted(r["position_id"] for r in rows if r["position_id"] in nl
+                    and (r["fact"].get("extra") or {}).get("ocp_amount")
+                    and O.takes_ocp_amount(r["fact"].get("extra") or {}, basis))
     if not status:
         return {"available": False, "reason": NO_OCP, "as_of": None, "basis": None, "method_note": None,
                 "by_ccy": {}, "by_book": [], "nonlinear_ids": ids, "approx_ids": approx, "missing_rate": []}
@@ -77,5 +74,5 @@ def fx_ocp(status: Mapping[str, Any] | None, payload: Mapping[str, Any],
     by_ccy = {c: {"amount": a, "nonlinear": n, "linear": a - n, "rate": (status.get("byCcy") or {}).get(c, {}).get("rate")}
               for c, (a, n) in sorted(tot.items())}
     return {"available": True, "reason": None, "as_of": status.get("asOf"), "basis": status.get("basis"),
-            "method_note": status.get("methodNote"), "by_ccy": by_ccy, "by_book": lines, "nonlinear_ids": ids, "approx_ids": approx,
-            "missing_rate": sorted(c for c, v in by_ccy.items() if v["rate"] is None and v["amount"])}
+            "method_note": status.get("methodNote"), "by_ccy": by_ccy, "by_book": lines, "nonlinear_ids": ids,
+            "approx_ids": approx, "missing_rate": sorted(c for c, v in by_ccy.items() if v["rate"] is None and v["amount"])}

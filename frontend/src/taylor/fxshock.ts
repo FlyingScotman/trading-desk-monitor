@@ -21,6 +21,8 @@ export interface FxShock {
   reason: string | null;
   asOf: string | null;
   methodNote: string | null;
+  /** how the published OCP was made (`derived`: from positions, no report figure) */
+  basis: string | null;
   /** the table to show: in mode ocp the FX column is the OCP's linear part, the non-linear derivatives' FX are out of it */
   taylor: TaylorRun;
   ccys: FxCcyRow[];
@@ -50,7 +52,7 @@ export function fxShock(payload: RiskPayload, norm: NormDef, taylor: TaylorRun, 
   const ocp = payload.ocp;
   const none: FxNonlinear = { n: 0, taylor: 0, exact: null, nExact: 0, taylorAll: 0 };
   if (!ocp || !ocp.available) {
-    return { mode: 'positions', reason: ocp?.reason ?? 'в прогоне нет публикуемой ОВП', asOf: null, methodNote: null, taylor,
+    return { mode: 'positions', reason: ocp?.reason ?? 'в прогоне нет публикуемой ОВП', asOf: null, methodNote: null, basis: null, taylor,
       ccys: [], linearTotal: taylor.totals._total?.fx ?? 0, missingRate: [], approxIds: [], nonlinear: none };
   }
   const nl = new Set(ocp.nonlinear_ids);
@@ -100,6 +102,6 @@ export function fxShock(payload: RiskPayload, norm: NormDef, taylor: TaylorRun, 
     linearTotal += rub;
   }
   if (nlr.n) { add(NL_KEY, { fx: nlr.taylor, total: nlr.taylor }); add('_total', { fx: nlr.taylor, total: nlr.taylor }); }
-  return { mode: 'ocp', reason: null, asOf: ocp.as_of ?? null, methodNote: ocp.method_note ?? null,
+  return { mode: 'ocp', reason: null, asOf: ocp.as_of ?? null, methodNote: ocp.method_note ?? null, basis: ocp.basis ?? null,
     taylor: { positions: rows, totals }, ccys, linearTotal, missingRate: ocp.missing_rate, approxIds: ocp.approx_ids ?? [], nonlinear: nlr };
 }

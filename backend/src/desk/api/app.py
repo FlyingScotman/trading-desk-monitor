@@ -699,7 +699,8 @@ def create_app(store_url: str, static_dir: Path | None = None, app_dir: Path | N
         ref = {r["kind"]: r["data"] for r in con.execute("SELECT kind, data FROM run_reference WHERE run_id = %s",
                                                          (run_id,))}
         payload = risk_payload(run, rows, ref)
-        payload["ocp"] = fx_ocp(concepts_run.ocp_status(ref.get("ocp")), payload, rows)  # TDM#577
+        payload["ocp"] = fx_ocp(concepts_run.ocp_status(ref.get("ocp")), payload, rows,
+                             ((ref.get("ocp") or {}).get("policy") or {}).get("amount_basis"))  # TDM#577
         return _cached(request, run, RiskPayload(**payload))
 
     # ---- bonds
