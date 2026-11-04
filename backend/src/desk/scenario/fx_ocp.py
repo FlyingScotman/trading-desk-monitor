@@ -48,11 +48,20 @@ def fx_ocp(status: Mapping[str, Any] | None, payload: Mapping[str, Any], rows: S
     policy (``block['policy']['amount_basis']``), None: the provisional default."""
     nl = nonlinear_positions(payload, rows)
     ids = sorted(nl)
-    # the OCP takes these at their amount (nominal), not at the FX delta we subtract: the share is approximate
-    basis = amount_basis or O.PROVISIONAL_POLICY.amount_basis
-    approx = sorted(r["position_id"] for r in rows if r["position_id"] in nl
-                    and (r["fact"].get("extra") or {}).get("ocp_amount")
-                    and O.takes_ocp_amount(r["fact"].get("extra") or {}, basis))
+    by_id = {r["position_id"]: r["fact"] for r in rows if r.get("fact")}
+    # the OCP takes these at their amount (nominal), not at the FX delta we subtract: the share is approximate. Under
+    # «report base + day» the derivatives are the PV whatever the policy's basis (basis None), except in the books whose
+    # line came from positions (``derived*``: ``classify`` and the policy's basis)
+    policy_basis = amount_basis or O.PROVISIONAL_POLICY.amount_basis
+    day = bool(status) and status.get("basis") == O.PublishedBasis.REPORT_BASE_PLUS_DAY.value
+    derived_books = {b for x in (status or {}).get("byBook") or [] if str(x.get("source") or "").startswith("derived")
+                     for b in ([x["book"]] if x.get("book") else x.get("books") or [])}
+
+    def basis_of(book: str) -> Any:
+        return None if day and book not in derived_books else policy_basis
+
+    approx = sorted(pid for pid, (book, _) in nl.items() if (ex := by_id[pid].get("extra") or {}).get("ocp_amount")
+                    and O.takes_ocp_amount(ex, basis_of(book)))
     if not status:
         return {"available": False, "reason": NO_OCP, "as_of": None, "basis": None, "method_note": None,
                 "by_ccy": {}, "by_book": [], "nonlinear_ids": ids, "approx_ids": approx, "missing_rate": []}

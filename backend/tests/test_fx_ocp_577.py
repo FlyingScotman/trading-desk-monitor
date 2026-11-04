@@ -79,7 +79,7 @@ def test_from_ocp_block_to_linear_part():
     """The run's stored block -> ``ocp_status`` (what the OCP screen reads) -> ``fx_ocp``: linear part = the screen's
     lines x rate, less the option's FX delta; an option taken at its nominal is marked approximate."""
     from desk.api.concepts_run import ocp_status
-    block = {"as_of": "2026-11-03", "status": "ok", "published": {"basis": "report_base_plus_day", "by_ccy": {
+    block = {"as_of": "2026-11-03", "status": "ok", "published": {"basis": "report_plus_outside", "by_ccy": {
         "USD": {"total": 150.0, "rate": 90.0, "total_rub": 13500.0}}, "by_book": [
         {"entity": "E", "book_id": "B1", "books": ["B1"], "ccy": "USD", "amount": 120.0, "source": "report"},
         {"entity": "E", "book_id": "B2", "books": ["B2"], "ccy": "USD", "amount": 30.0, "source": "report"}]}}
@@ -102,3 +102,17 @@ def test_from_ocp_block_to_linear_part():
 def test_rate_option_without_fx_is_not_nonlinear():
     rows = [row("ropt", "B1", {}, product="rate_option")]
     assert nonlinear_positions(build(rows), rows) == {}
+
+
+def test_report_base_plus_day_takes_pv_whatever_the_policy_except_derived_books():
+    from desk.api.concepts_run import ocp_status
+    def block(source):
+        return {"as_of": "2026-11-03", "status": "ok", "published": {"basis": "report_base_plus_day", "by_ccy": {
+            "USD": {"total": 30.0, "rate": 90.0}}, "by_book": [
+            {"entity": "E", "book_id": "B2", "books": ["B2"], "ccy": "USD", "amount": 30.0, "source": source}]}}
+    rows = [row("opt", "B2", {"USD": 25.0}, product="fx_option")]
+    rows[0]["fact"]["extra"]["ocp_amount"] = {"USD": 30.0}
+    st = ocp_status(block("report"))
+    assert fx_ocp(st, build(rows), rows, "nominal")["approx_ids"] == []  # the day's PV, nominal policy or not
+    st = ocp_status(block("derived"))
+    assert fx_ocp(st, build(rows), rows, "nominal")["approx_ids"] == ["opt"]  # from positions: the policy's basis
