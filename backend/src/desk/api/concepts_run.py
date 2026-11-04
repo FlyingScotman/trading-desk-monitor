@@ -311,7 +311,7 @@ def assemble(con, run: dict[str, Any]) -> dict[str, Any]:
             "cs01": p.get("cs01") or 0.0, "ofzSpr01": p.get("ofz_spr01") or 0.0, "risk": risk,
             "fxDelta": {c: d for c, d in (p.get("fx_delta") or {}).items() if d},
             "counterparty": p.get("counterparty"), "newToday": bool(p.get("new_today")),
-            "entity": books.get(p["book_id"], {}).get("entity", "—"), "portfolio": portfolio_of(port_rows, book_types, p["book_id"], pid),
+            "entity": books.get(p["book_id"], {}).get("entity", "—"), "portfolio": portfolio_of(port_rows, book_types, p["book_id"], pid, p),
             "pnl": _pnl(q) if q else no_pnl(*_no_pnl_code(row["no_pnl"], run["prev_date"])),
         }
         if p.get("accrual_only"):

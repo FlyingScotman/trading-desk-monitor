@@ -352,7 +352,7 @@ def assemble(con, run: dict[str, Any]) -> dict[str, Any]:
             "wal": p.get("wal"), "cpr": p.get("cpr"), "counterparty": p.get("counterparty"),
             "newToday": bool(p.get("new_today")),
             "gamma": gamma, **gamma_summary(gamma, p.get("mv_rub"), p.get("convexity"), cs01),
-            "entity": books.get(p["book_id"], {}).get("entity", "—"), "portfolio": portfolio_of(port_rows, book_types, p["book_id"], pid),
+            "entity": books.get(p["book_id"], {}).get("entity", "—"), "portfolio": portfolio_of(port_rows, book_types, p["book_id"], pid, p),
             "pnl": {
                 "carry": comp["carry"], "rolldown": comp["rolldown"], "rates": comp["rates"],
                 "spread": comp["spread"],

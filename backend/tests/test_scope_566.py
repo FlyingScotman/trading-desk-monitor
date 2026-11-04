@@ -17,16 +17,18 @@ from psycopg.types.json import Jsonb
 from desk import store
 from desk.api import create_app
 from desk.api.runs import PNL_KEYS
-from desk.api.scope_rule import EFFECTIVE_PORTFOLIO_SQL, effective_portfolio
+from desk.api.scope_rule import EFFECTIVE_PORTFOLIO_SQL, portfolio_of
 
 CASES = json.loads((Path(__file__).parent.parent.parent / "tests" / "js" / "fixtures" / "scope_cases.json")
                    .read_text(encoding="utf-8"))
 DAY = "2026-10-16"
 
 
-def seed(url, *, reverse=False):
+def seed(url, *, reverse=False, extras=None):
     """One run with the cases' books and positions; a position's ``reports`` are its rows in successive sets (a
-    ``null`` entry is a row without the Portfolio column); ``reverse``: the rows are inserted in the opposite order (the sets keep theirs)."""
+    ``null`` entry is a row without the Portfolio column); ``reverse``: the rows are inserted in the opposite order (the sets keep theirs); ``extras``: ``{id: (book, fact.extra)}``
+    of rows without an input row, or the extra of a case's row."""
+    extras = extras or {}
     with store.connect(url) as con:
         rid = con.execute(
             "INSERT INTO run(run_type,business_date,prev_date,cut_type,market_snapshot_id,static_snapshot_id,"
@@ -48,6 +50,8 @@ def seed(url, *, reverse=False):
             q = dict.fromkeys(PNL_KEYS, 0.0) | {"carry": float(p["pnl"]), "extra": {"method": "desk-flash-v1"}}
             fact = {"book_id": p["book"], "name": p["id"], "ccy": p["ccy"], "instr_type": "OTHER",
                     "asset_class": "other", "quantity": 1, "mv_rub": 1}
+            if p["id"] in extras:
+                fact["extra"] = extras[p["id"]][1]
             con.execute("INSERT INTO run_position(run_id,position_id,ord,book_id,secid,quantity,quality,fact,pnl)"
                         " VALUES (%s,%s,%s,%s,'S',1,'reported_value',%s,%s)",
                         (rid, p["id"], i, p["book"], Jsonb(fact), Jsonb(q)))
@@ -56,6 +60,14 @@ def seed(url, *, reverse=False):
                 con.execute("INSERT INTO position_input(set_id,position_id,secid,quantity,ccy,source_instrument_name,x)"
                             " VALUES (%s,%s,'S',1,%s,%s,%s)", (set_ids[p["book"], k], p["id"], p["ccy"], p["id"],
                                                                Jsonb(x)))
+        for i, (pid, (book, extra)) in enumerate(extras.items()):
+            if pid not in {p["id"] for p in CASES["positions"]}:  # no input row at all
+                q = dict.fromkeys(PNL_KEYS, 0.0) | {"carry": 1.0, "extra": {"method": "desk-flash-v1"}}
+                fact = {"book_id": book, "name": pid, "ccy": "RUB", "instr_type": "OTHER", "asset_class": "other",
+                        "quantity": 1, "mv_rub": 1, "extra": extra}
+                con.execute("INSERT INTO run_position(run_id,position_id,ord,book_id,secid,quantity,quality,fact,pnl)"
+                            " VALUES (%s,%s,%s,%s,'S',1,'reported_value',%s,%s)",
+                            (rid, pid, 100 + i, book, Jsonb(fact), Jsonb(q)))
         con.execute("UPDATE run SET position_set_ids=%s,status='complete',completed_at=now() WHERE run_id=%s",
                     (sorted(set_ids.values()), rid))
     return rid
@@ -103,16 +115,41 @@ def test_effective_portfolio_in_every_server_form(store_url, reverse):
 
 
 def test_sql_and_python_forms_of_the_rule_agree(store_url):
+    facts = (None, {"extra": {"x": {"x_portfolio": "F"}}}, {"extra": {"reported": {"x": {"x_portfolio": "R"}}}},
+             {"extra": {"reported": "text"}})
     with store.connect(store_url) as con:
         for book_type in (None, "", "HTM", "htm", " Htm ", "TRADING", "DERIVS"):
             for reported in (None, "HTM", "Торговый"):
-                got = con.execute(
-                    f"SELECT {EFFECTIVE_PORTFOLIO_SQL} AS p FROM (SELECT %s::jsonb AS data) b,"
-                    " (SELECT %s::jsonb AS x) i",
-                    (Jsonb({"book_type": book_type} if book_type is not None else {}),
-                     Jsonb({"x_portfolio": reported} if reported else {}))).fetchone()[0]
-                assert got == effective_portfolio(book_type, reported), (book_type, reported)
+                for fact in facts:
+                    got = con.execute(
+                        f"SELECT {EFFECTIVE_PORTFOLIO_SQL} AS r FROM (SELECT %s::jsonb AS data) b,"
+                        " (SELECT %s::jsonb AS x) i, (SELECT %s::jsonb AS fact) p",
+                        (Jsonb({"book_type": book_type} if book_type is not None else {}),
+                         Jsonb({"x_portfolio": reported} if reported else {}), Jsonb(fact))).fetchone()[0]
+                    want = portfolio_of({("B", "P"): reported}, {"B": book_type}, "B", "P", fact)
+                    assert got == want, (book_type, reported, fact)
         # a position of a book without a reference row: the report's column, no error
-        assert con.execute(f"SELECT {EFFECTIVE_PORTFOLIO_SQL} FROM (SELECT NULL::jsonb AS data WHERE false) b"
-                           " RIGHT JOIN (SELECT '{\"x_portfolio\": \"A\"}'::jsonb AS x) i ON true").fetchone()[0] == "A"
+        assert con.execute(
+            f"SELECT {EFFECTIVE_PORTFOLIO_SQL} FROM (SELECT '{{\"x_portfolio\": \"A\"}}'::jsonb AS x) i"
+            " LEFT JOIN (SELECT NULL::jsonb AS data WHERE false) b ON true"
+            " CROSS JOIN (SELECT NULL::jsonb AS fact) p").fetchone()[0] == "A"
     assert date.fromisoformat(DAY)
+
+
+def test_rows_the_trades_built_take_their_portfolio_from_the_row(store_url):
+    """``X|closed`` and a position the trades opened have no input row: the column kept in ``fact.extra`` (``x`` or
+    ``reported.x``) stands for them; the input row, when there is one, and the HTM type of the book come first."""
+    rid = seed(store_url, extras={
+        "X|closed": ("B2", {"x": {"x_portfolio": "A"}}), "NEW": ("B2", {"reported": {"x": {"x_portfolio": "A"}}}),
+        "HTMX": ("B1", {"x": {"x_portfolio": "A"}}), "P4": ("B2", {"x": {"x_portfolio": "A"}})})
+    c = TestClient(create_app(store_url))
+
+    def ids(**kw):
+        return {p["row"]["positionId"] for p in c.get("/api/v1/history/pnl", params=params({}) | kw).json()["positions"]}
+    assert {"X|closed", "NEW"} <= ids() and "X|closed" not in ids(ports_off="A") and "NEW" not in ids(ports_off="A")
+    assert {"X|closed", "NEW"} <= ids(ports_off="B")
+    assert "HTMX" in ids(ports_off="B") and "HTMX" not in ids(ports_off="HTM") and "HTMX" in ids(ports_off="A")
+    assert "P4" in ids(ports_off="A") and "P4" not in ids(ports_off="Торговый")
+    run = c.get("/api/v1/concepts/run", params={"run_id": rid}).json()
+    assert {p["id"]: p["portfolio"] for p in run["positions"]} | {} == {
+        **{p["id"]: p["portfolio"] for p in CASES["positions"]}, "X|closed": "A", "NEW": "A", "HTMX": "HTM"}
