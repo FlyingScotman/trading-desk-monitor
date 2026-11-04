@@ -220,12 +220,13 @@ def sets_signature(con: psycopg.Connection, day: str) -> str:
 def covered(con: psycopg.Connection, cands: list[str], doc: dict) -> list[str]:
     """Dates without a mark whose trades are in the store from a report made after the end of the date (its report time
     on the Moscow clock is a later date): a manual export; no request (the monitor does not know the adapter's end of
-    day)."""
+    day). The Moscow day is the fixed offset UTC+03:00 (as ``store.MSK_DAY``): the Windows bundle's database has no time
+    zone data."""
     todo = [d for d in cands if d not in doc["marks"]]
     if not todo:
         return []
     rows = con.execute("SELECT DISTINCT valid_date FROM dataset_set WHERE dataset = 'trades' AND valid_date = ANY(%s)"
-                       " AND (report_ts AT TIME ZONE 'Europe/Moscow')::date > valid_date",
+                       " AND (report_ts AT TIME ZONE INTERVAL '+03:00')::date > valid_date",
                        ([date.fromisoformat(d) for d in todo],)).fetchall()
     return sorted({r[0].isoformat() for r in rows})
 

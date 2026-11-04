@@ -523,6 +523,7 @@ def test_the_threaded_worker_asks_for_the_history_when_nothing_else_is_due(env):
     env.s.start()
     until = time.monotonic() + 40
     while D15 not in env.doc["marks"] and time.monotonic() < until:
+        env.s._wake.set()   # (the thread idles for the tick, an hour here, after a step that did nothing: wake it)
         time.sleep(0.1)
     assert env.marks() == {D15: "fetched"}
 
@@ -709,3 +710,22 @@ def test_the_hash_of_a_date_follows_the_off_report_switch_without_a_restart(env,
         b = backfill.inputs_hash(con, date.fromisoformat(D13), inc)
         assert backfill.inputs_stamp(con, env.st) != backfill.inputs_stamp(con, inc)
         assert b == a + "+include" and backfill.inputs_hash(con, date.fromisoformat(D13), env.st) == a
+
+
+def test_the_end_of_the_date_is_the_moscow_midnight_whatever_the_session_time_zone(env, tmp_path):
+    """The Moscow day is UTC+03:00 (no named zone: the Windows bundle has no time zone data). A report made at 23:59 of
+    the date does not cover it; one made at 00:00 of the next day does, also with another session time zone."""
+    head = ("trade_id;trade_version;status;trade_date;trade_ts;book_id;position_id;asset_class;source_instrument_id;"
+            "side;quantity;amount_ccy;ccy;_report_date\n")
+    row = "TR-{n};1;live;{d};{d}T10:30:00;OFZ;P1;bond;SU26238RMFS4;buy;5;;RUB;{d}\n"
+    drop = tmp_path / "drop"
+    drop.mkdir()
+    for name, d in (("trades_20261014_2359.csv", D14), ("trades_20261016_0000.csv", D15)):
+        f = drop / name
+        f.write_text(head + row.format(n=name[7:15], d=d), encoding="utf-8")
+        with store.connect(env.url) as con:
+            assert scan.ingest_feed(con, env.st, f, source="trades_csv", handle=scan.adapter(env.st)).files == {"accepted": 1}
+    with store.connect(env.url) as con:
+        for tz in ("UTC", "-05:00", "+09:00"):
+            con.execute(f"SET TIME ZONE '{tz}'")
+            assert trades_history.covered(con, [D15, D14], env.doc) == [D15], tz
