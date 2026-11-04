@@ -676,3 +676,187 @@ def test_morning_run_on_the_previous_close_without_the_hub(stub, tmp_path, store
     assert by["morning"][0] == "ok" and by["morning"][1].startswith("19.10 · закрытие 16.10: run"), by["morning"]
     assert [(r[1], r[6]) for r in morning_rows(store_url)] == [(MON, {"date": "2026-10-16", "cut_type": "eod_final"})]
     assert st["latest_run"]["label"] == "19.10 · закрытие 16.10"
+
+
+TRADES_HEAD = ("trade_id;trade_version;status;trade_date;trade_ts;book_id;position_id;asset_class;source_instrument_id;"
+               "side;quantity;amount_ccy;ccy\n")
+
+
+def test_trades_of_the_day_go_into_the_intraday_book(stub, tmp_path, store_url):
+    """TDM#557: a new cut of the day's trades makes the intraday run again; its book holds the day's bond trades
+    (desk.trades.apply_intraday), the lineage says what went in, the screen marks each trade."""
+    from desk import trades
+
+    s = cfg(tmp_path, store_url, stub)
+    put(tmp_path, "positions_20261016.csv")
+    clock = {"t": at(FRI, 10, 6)}
+    ap = Autopilot(settings_loader=lambda: s, now=lambda: clock["t"])
+    publish(stub, FRI, "intraday", "2026-10-16T07:00:00Z", 1)
+    ap.run_cycle()
+    q = ("SELECT p.quantity FROM run_position p JOIN run r USING (run_id) WHERE r.run_type = 'INTRADAY'"
+         " AND p.position_id = %s ORDER BY run_id DESC LIMIT 1")
+    with store.connect(store_url) as con:
+        assert con.execute(q, ("B1|SEC-26238",)).fetchone()[0] == 12000
+    (tmp_path / "in" / "trades_20261016_1100.csv").write_text(
+        TRADES_HEAD + "TR-1;1;live;2026-10-16;2026-10-16T10:30:00;B1;B1|SEC-26238;bond;SEC-26238;buy;1000;;RUB\n"
+        "TR-2;1;live;2026-10-16;2026-10-16T10:40:00;B1;B1|USD;fx;USD;sell;;5000;USD\n"
+        "TR-3;1;cancelled;2026-10-16;2026-10-16T10:45:00;B1;B1|SEC-26238;bond;SEC-26238;sell;400;;RUB\n"
+        "TR-4;1;live;2026-10-16;2026-10-16T10:50:00;B1;B1|NOPE;bond;NO-SUCH-BOND;buy;7;;RUB\n",
+        encoding="utf-8")
+    clock["t"] = at(FRI, 10, 12)  # the same hub slot: only the trades changed
+    by = steps(ap.run_cycle())
+    assert by["intraday"][0] == "ok" and "private inputs changed" in by["intraday"][1], by["intraday"]
+    with store.connect(store_url) as con:
+        assert con.execute(q, ("B1|SEC-26238",)).fetchone()[0] == 13000
+        lin = con.execute("SELECT lineage->'intraday_trades' FROM run WHERE run_type = 'INTRADAY'"
+                          " ORDER BY run_id DESC LIMIT 1").fetchone()[0]
+        assert (lin["applied"], lin["skipped"], list(lin["versions"])) == (
+            1, {"cancelled": 1, "no_instrument": 1, "not_bond": 1}, ["TR-1"])
+        v = trades.view(con, FRI)
+        assert {r["trade_id"]: r["intraday"] for r in v["rows"]} == {"TR-1": "applied", "TR-2": "not_bond",
+                                                                     "TR-3": "cancelled", "TR-4": "no_instrument"}
+        assert {r["trade_id"]: r["intraday"] for r in trades.view(con, FRI, intraday_trades=False)["rows"]} == {
+            "TR-1": "off", "TR-2": "not_bond", "TR-3": "cancelled", "TR-4": "off"}
+        assert v["intraday"]["applied"] == 1
+    clock["t"] = at(FRI, 10, 14)  # nothing new: no run
+    assert steps(ap.run_cycle())["intraday"][1].startswith("up to date")
+    s2 = cfg(tmp_path, store_url, stub, intraday_trades=False)  # the setting off: the trades stay out of the book
+    with store.connect(store_url) as con:
+        rid = cli.eod_run(s2, FRI.isoformat(), snapshots=s2.snapshot_cache, store_url=store_url, report_dir=None,
+                          out=lambda _: None, cut_type="intraday", run_type="INTRADAY",
+                          market_snapshot_id=SnapshotDir(tmp_path / "cache").market_id(FRI.isoformat(), "intraday"))
+        assert con.execute("SELECT quantity FROM run_position WHERE run_id = %s AND position_id = %s",
+                           (rid, "B1|SEC-26238")).fetchone()[0] == 12000
+
+
+def test_recompute_makes_the_intraday_run_again_once_for_the_days_trades(stub, tmp_path, store_url):
+    """TDM#557: trades of the day accepted by a managed producer (not the inbox cycle) change what the intraday run
+    reads; ``recompute.current_day`` makes it again once, the second call finds it current."""
+    from desk import recompute
+
+    s = cfg(tmp_path, store_url, stub)
+    put(tmp_path, "positions_20261016.csv")
+    ap = Autopilot(settings_loader=lambda: s, now=lambda: at(FRI, 10, 6))
+    publish(stub, FRI, "intraday", "2026-10-16T07:00:00Z", 1)
+    ap.run_cycle()
+    assert recompute.current_day(s, store_url, FRI)["runs"] == []  # nothing new: current
+    f = tmp_path / "drop" / "trades_20261016_1100.csv"
+    f.parent.mkdir()
+    f.write_text(TRADES_HEAD + "TR-1;1;live;2026-10-16;2026-10-16T10:30:00;B1;B1|SEC-26238;bond;SEC-26238;buy;1000;;RUB\n",
+                 encoding="utf-8")
+    with store.connect(store_url) as con:
+        assert scan.ingest_feed(con, s, f, source="trades_csv", handle=scan.adapter(s)).files == {"accepted": 1}
+    first = recompute.current_day(s, store_url, FRI)
+    assert [r["business_date"] for r in first["runs"]] == ["2026-10-16"] and first["failed"] == []
+    with store.connect(store_url) as con:
+        q = ("SELECT p.quantity FROM run_position p JOIN run r USING (run_id) WHERE r.run_type = 'INTRADAY'"
+             " AND p.position_id = 'B1|SEC-26238' ORDER BY run_id DESC LIMIT 1")
+        assert con.execute(q).fetchone()[0] == 13000
+    assert recompute.current_day(s, store_url, FRI)["runs"] == []  # once
+
+
+def test_an_ocp_report_recorded_after_the_intraday_run_runs_the_same_cut_again(stub, tmp_path, store_url):
+    """TDM#554: the owner maps the report's row types and the report is read again (a replay), or the report simply
+    comes after today's intraday run: the OCP base of today changed, so the same cut runs again at once (not only at
+    the next cut), and once only."""
+    s = cfg(tmp_path, store_url, stub)
+    put(tmp_path, "positions_20261016.csv")
+    publish(stub, FRI, "intraday", "2026-10-16T07:00:00Z", 1)
+    clock = {"t": at(FRI, 10, 6)}
+    ap = Autopilot(settings_loader=lambda: s, now=lambda: clock["t"])
+    by = steps(ap.run_cycle())
+    assert by["intraday"][0] == "ok" and "(new cut)" in by["intraday"][1], by["intraday"]
+    (tmp_path / "in" / "ocp_20261015.csv").write_text(
+        "entity;book_id;ccy;ocp_ccy;ocp_rub;rate_rub_per_unit\nENT1;B1;USD;1000;;\n", encoding="utf-8")
+    clock["t"] = at(FRI, 10, 8)  # the same 10-minute slot: no new cut
+    st = ap.run_cycle()
+    by = steps(st)
+    assert by["intraday"][0] == "ok" and "(ocp report changed after the run)" in by["intraday"][1], by["intraday"]
+    assert next(x for x in st["steps"] if x["name"] == "intraday")["reason"] == "ran"
+    clock["t"] = at(FRI, 10, 9)
+    by = steps(ap.run_cycle())
+    assert by["intraday"][0] == "ok" and by["intraday"][1].startswith("up to date"), by["intraday"]
+
+
+def test_a_failed_intraday_run_is_tried_again_when_an_ocp_report_arrives(stub, tmp_path, store_url, monkeypatch):
+    """TDM#554: the failed-run signature includes the ocp / cash_balances dataset sets, so a new revision of the OCP
+    base is a changed input (the run is tried again), while without it the failure stays not retried."""
+    s = cfg(tmp_path, store_url, stub)
+    put(tmp_path, "positions_20261016.csv")
+    real = cli.eod_run
+
+    def broken(*a, **kw):
+        if kw.get("cut_type") == "intraday":
+            raise ValueError("boom")
+        return real(*a, **kw)
+
+    monkeypatch.setattr(cli, "eod_run", broken)
+    clock = {"t": at(FRI, 9, 0)}
+    ap = Autopilot(settings_loader=lambda: s, now=lambda: clock["t"])
+    ap.run_cycle()
+    publish(stub, FRI, "intraday", "2026-10-16T07:00:00Z", 1)
+    clock["t"] = at(FRI, 10, 6)
+    assert steps(ap.run_cycle())["intraday"][0] == "error"
+    clock["t"] = at(FRI, 10, 16)
+    st = ap.run_cycle()
+    assert next(x for x in st["steps"] if x["name"] == "intraday")["reason"] == "failed_before"
+    (tmp_path / "in" / "ocp_20261015.csv").write_text(
+        "entity;book_id;ccy;ocp_ccy;ocp_rub;rate_rub_per_unit\nENT1;B1;USD;1000;;\n", encoding="utf-8")
+    clock["t"] = at(FRI, 10, 26)
+    st = ap.run_cycle()
+    intraday = next(x for x in st["steps"] if x["name"] == "intraday")
+    assert intraday["reason"] != "failed_before" and intraday["status"] == "error", intraday  # tried (and failed) again
+
+
+TERMS_FIELDS = ("trade_id", "book_id", "product_kind", "trade_date", "value_date", "base_ccy", "quote_ccy", "side",
+                "notional_base", "notional_quote", "contract_rate")
+
+
+def put_terms(tmp_path: Path, day: date, seq: int, rate: int) -> None:
+    """A trade_terms file of the reference CSV reader for ``day`` (book B1; synthetic amounts)."""
+    import csv
+
+    (tmp_path / "in").mkdir(exist_ok=True)
+    with (tmp_path / "in" / f"trade_terms_{day:%Y%m%d}_{seq}.csv").open("w", newline="", encoding="utf-8-sig") as f:
+        w = csv.writer(f, delimiter=";")
+        w.writerow(TERMS_FIELDS)
+        w.writerow(("TRADE-1", "B1", "fx_forward", "2026-10-01", "2026-12-17", "USD", "RUB", "buy", 10, 10 * rate,
+                    rate))
+
+
+def test_trade_terms_after_the_runs_recompute_todays_morning_and_intraday_runs(stub, tmp_path, store_url):
+    """TDM#547: trade terms of D-1 received after today's runs (a stock: they hold for D too) change the private
+    inputs of D. The morning run (the book of D on the close of D-1) and the intraday run are made again on the same
+    market, without waiting for a new cut; nothing changes: no new run."""
+    s = cfg(tmp_path, store_url, stub)
+    put(tmp_path, "positions_20261016.csv")  # start_of_day 16.10: valid 15.10
+    publish(stub, date(2026, 10, 15), "eod_final", "2026-10-16T05:00:00Z", 0)
+    clock = {"t": at(FRI, 8, 0)}  # before 10:00: no intraday cut, the morning run stays
+    ap = Autopilot(settings_loader=lambda: s, now=lambda: clock["t"])
+    by = steps(ap.run_cycle())
+    assert by["morning"] == ("ok", "16.10 · закрытие 15.10: run 2 (no run of 2026-10-16 yet)"), by
+    clock["t"] = at(FRI, 8, 10)
+    assert steps(ap.run_cycle())["morning"][1].startswith("up to date: run 2")
+
+    put_terms(tmp_path, date(2026, 10, 15), 1, 80)  # the terms of 15.10, fetched in the morning of 16.10
+    clock["t"] = at(FRI, 8, 20)
+    by = steps(ap.run_cycle())
+    assert by["eod"] == ("ok", "2026-10-15 run 3 (private inputs changed)"), by["eod"]
+    assert by["morning"] == ("ok", "16.10 · закрытие 15.10: run 4 (private inputs changed); removed run 2"), by
+    with store.connect(store_url) as con:
+        h = con.execute("SELECT private_inputs_hash FROM run WHERE run_id = 4").fetchone()[0]
+        assert h == store.positions_for(con, FRI).private_inputs_hash
+    clock["t"] = at(FRI, 8, 30)
+    assert steps(ap.run_cycle())["morning"][1].startswith("up to date: run 4")
+
+    publish(stub, FRI, "intraday", "2026-10-16T07:00:00Z", 1)
+    clock["t"] = at(FRI, 10, 6)
+    by = steps(ap.run_cycle())
+    assert by["intraday"][0] == "ok" and "run 5 (new cut)" in by["intraday"][1], by["intraday"]
+    put_terms(tmp_path, date(2026, 10, 15), 2, 81)  # a correction of the terms: the same cut again
+    clock["t"] = at(FRI, 10, 8)
+    by = steps(ap.run_cycle())
+    assert by["intraday"][0] == "ok" and "(private inputs changed)" in by["intraday"][1], by["intraday"]
+    clock["t"] = at(FRI, 10, 9)
+    by = steps(ap.run_cycle())
+    assert by["intraday"][1].startswith("up to date"), by["intraday"]

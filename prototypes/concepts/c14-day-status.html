@@ -46,11 +46,14 @@
 <div class="k-page">
   <div class="c14-days" id="days" aria-label="Даты"></div>
   <div id="view"><div class="c14-msg">загрузка…</div></div>
+  <!-- «Перечитать отчёты» (TDM#553, ../desk-replay.js): только этому компьютеру или администратору, иначе скрыт -->
+  <div class="k-panel" id="c14-replay" hidden><div class="hd"><h3>Перечитать отчёты</h3><span class="sp"></span><span class="mut3">после изменения настроек адаптера</span></div><div class="bd" data-desk-replay></div></div>
 </div>
 <div class="c14-toast" id="toast"></div>
 <script src="lib/boot.js"></script>
 <script src="lib/kit.js"></script>
 <script src="lib/instr.js"></script>
+<script src="../desk-replay.js"></script>
 <script>
 (function () {
   'use strict';
@@ -147,9 +150,9 @@
     if ((d.feeds || []).length) {
       const FEED_ST = { complete: ['получено', 'st-ok'], partial: ['получено частично', 'st-warn'], skipped: ['нечего загружать', ''], blocked: ['остановлено', 'st-warn'], error: ['ошибка', 'st-bad'], cancelled: ['отменено', ''] };
       const login = d.feeds.filter(x => x.needs_login);
-      const sp = panel('Фоновая загрузка', '<span class="k-note">сервисы адаптера · настройка — Настройки → Адаптер и источники</span>');
+      const sp = panel('Фоновая загрузка', '<span class="k-note">сервисы адаптера · настройка — <a href="../settings.html#adapter/services">Настройки → Адаптер и источники → Сервисы</a></span>');
       sp.querySelector('.bd').classList.add('flush', 'scroll');
-      sp.querySelector('.bd').innerHTML = (login.length ? '<div class="c14-msg" style="color:var(--warn)">Нужен вход: ' + login.map(x => esc(x.title)).join(', ') + '. Откройте настройки и выполните вход в блоке «Подключение к сервисам».</div>' : '') +
+      sp.querySelector('.bd').innerHTML = (login.length ? '<div class="c14-msg" style="color:var(--warn)">Нужен вход: ' + login.map(x => esc(x.title)).join(', ') + '. Откройте <a href="../settings.html#adapter/services">настройки</a> и выполните вход в блоке «Подключение к сервисам».</div>' : '') +
         '<table class="k-tbl" data-vk="c14-feeds" data-title="Фоновая загрузка"><thead><tr><th>Данные</th><th>Состояние</th><th>Последний запуск</th><th>Следующий</th></tr></thead><tbody>' +
         d.feeds.map(x => {
           const [t, c] = x.needs_login ? ['нужен вход', 'st-warn'] : !x.enabled ? ['выключено', ''] : (FEED_ST[x.state] || [x.state ? esc(x.state) : 'ещё не запускалось', '']);
@@ -296,6 +299,9 @@
   // раскрытые строки файлов остаются раскрытыми (#317)
   K.on('numfmt', () => { if (doc && (!on || doc.date === on) && view.querySelector('.k-grid')) K.keepOpen(view, 'data-f', render); });
   load();
+  // «Перечитать отчёты» (TDM#553): с сервером; панель показывается, когда перечитывание этому пользователю доступно
+  const rp = document.getElementById('c14-replay');
+  if (server && window.DeskReplay) window.DeskReplay.mount(rp.querySelector('[data-desk-replay]'), { base: '../', box: rp });
 })();
 </script>
 </body>

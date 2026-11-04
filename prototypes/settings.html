@@ -294,27 +294,100 @@ details.sf-grp[open] > summary::before{content:"▾"}
 .toast{position:fixed;right:16px;bottom:16px;z-index:120;max-width:min(460px,calc(100vw - 32px));background:var(--panel);border:1px solid var(--line-2);border-left:3px solid var(--accent);border-radius:8px;box-shadow:var(--shadow);padding:10px 14px;font-size:12.5px}
 .toast.ok{border-left-color:var(--pos)} .toast.err{border-left-color:var(--neg)}
 #users-card .du > h2,#users-card .du > p.du-note:first-of-type{display:none} /* заголовок и состояние входа — в шапке раздела выше */
+
+/* ---------- TDM#551: поиск, «Дополнительно» в навигации, подразделы ---------- */
+.st-find{position:relative;padding:0 2px 6px}
+.st-nav{overflow-x:hidden}
+.st-find .inp{width:100%;padding:5px 9px}
+.st-q-res{position:absolute;left:2px;right:2px;top:calc(100% - 2px);z-index:80;background:var(--panel);border:1px solid var(--line-2);border-radius:8px;box-shadow:var(--shadow);max-height:min(60vh,420px);overflow:auto;padding:4px}
+.st-q-it{display:flex;flex-direction:column;gap:1px;padding:6px 8px;border-radius:5px;cursor:pointer}
+.st-q-it[aria-selected="true"],.st-q-it:hover{background:var(--accent-bg)}
+.st-q-l{font-size:12.5px;color:var(--fg)} .st-q-p{font-size:11px;color:var(--fg-3)}
+.st-q-none{padding:8px;font-size:12px;color:var(--fg-3)}
+.st-more{display:flex;align-items:center;gap:9px;width:100%;margin-top:14px;padding:6px 10px;border:0;border-top:1px solid var(--line);border-radius:0;background:none;color:var(--fg-3);cursor:pointer;font-size:10.5px;text-transform:uppercase;letter-spacing:.08em;text-align:left}
+.st-more:hover{color:var(--fg)}
+.st-more .lbl{flex:1}
+.st-more .chev::before{content:"▸"} .st-more[aria-expanded="true"] .chev::before{content:"▾"}
+.st-more .dot{width:7px;height:7px;border-radius:50%;flex:none;background:transparent}
+.st-more .dot.bad{background:var(--neg)} .st-more .dot.warn{background:var(--warn)} .st-more .dot.dirty{background:var(--accent)}
+.st-more[aria-expanded="true"] .dot{display:none}
+.subnav{position:relative;display:flex;gap:2px;overflow-x:auto;border-bottom:1px solid var(--line);margin:0 0 14px;scrollbar-width:thin}
+@media (max-width:700px){  /* фоновая загрузка: на телефоне каждый фид — блок, а не строка таблицы */
+  #svc-feeds .svc-t thead{display:none} #svc-feeds .svc-t,#svc-feeds .svc-t tbody{display:block}
+  #svc-feeds .svc-t tr{display:block;border-bottom:1px solid var(--line);padding:10px 0}
+  #svc-feeds .svc-t td{display:block;border:0;padding:2px 0;white-space:normal}
+  #svc-feeds .svc-t td[data-l]::before{content:attr(data-l) ": ";color:var(--fg-3);font-size:12px}
+  #svc-feeds .svc-t td:first-child{font-weight:600}
+}
+@media (min-width:700px){.subnav{flex-wrap:wrap}}  /* на широком экране подразделы переносятся, на телефоне — полоса с прокруткой */
+.subnav a{display:inline-flex;align-items:center;gap:6px;padding:7px 12px;margin-bottom:-1px;border-bottom:2px solid transparent;color:var(--fg-2);text-decoration:none;white-space:nowrap;font-size:13px}
+.subnav a:hover{color:var(--fg)}
+.subnav a.on{color:var(--fg);border-bottom-color:var(--accent);font-weight:550}
+.subnav .dot{width:7px;height:7px;border-radius:50%;flex:none;background:transparent}
+.subnav .dot:not([class~="ok"]):not([class~="bad"]):not([class~="warn"]):not([class~="dirty"]){display:none}
+.subnav .dot.ok{background:var(--pos)} .subnav .dot.bad{background:var(--neg)} .subnav .dot.warn{background:var(--warn)} .subnav .dot.dirty{background:var(--accent)}
+.sub{display:none} .sub.on{display:block}
+.ad-line{font-size:13px}
+.card > .hd .mono{word-break:break-all}
+#ad-actions:not([hidden]) + #actions-none{display:none}
+@keyframes st-hit{0%{box-shadow:0 0 0 3px var(--accent)}100%{box-shadow:0 0 0 3px transparent}}
+.st-hit{animation:st-hit 2s ease-out;border-radius:6px}
+/* TDM#552: итог действия и подробности — строкой «Последний запуск»; длинные таблицы (settings-longtable.js) */
+details.at-last{margin-top:8px;border:1px solid var(--line);border-radius:6px;background:var(--panel)}
+details.at-last > summary{cursor:pointer;list-style:none;padding:7px 10px;font-size:12.5px;display:flex;gap:4px;flex-wrap:wrap;align-items:baseline}
+details.at-last > summary::-webkit-details-marker{display:none}
+details.at-last > summary::before{content:"▸";color:var(--fg-3);width:12px;flex:none}
+details.at-last[open] > summary::before{content:"▾"}
+details.at-last .at-open{margin-left:auto}
+details.at-last .at-open::before{content:"показать"} details.at-last[open] .at-open::before{content:"свернуть"}
+.at-last-bd{padding:0 10px 10px}
+.lt-bar{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin:8px 0 6px}
+.lt-bar .lt-n{flex:1;min-width:140px;font-size:12px}
+.lt-bar .lt-q{max-width:220px;min-width:140px;flex:0 1 220px}
+.lt-foot{margin-top:4px}
+.lt-long .k-tbl-wrap{max-height:none}
+@media (max-width:860px){
+  .st-nav{display:block;padding:8px 10px 0;overflow:visible;min-width:0}
+  .st-nav .st-find{padding:0 0 8px}
+  .st-links{display:flex;gap:4px;overflow-x:auto;padding-bottom:8px}
+  .st-links a{flex:none}
+  .st-more{width:auto;flex:none;margin:0;border:1px dashed var(--line-2);border-radius:6px;text-transform:none;letter-spacing:0;font-size:13px;color:var(--fg-2);padding:6px 10px}
+  .st-more .lbl{flex:none}
+  .st-more-l:not([hidden]){display:contents}
+}
 </style>
 
 <div class="st-shell">
   <nav class="st-nav" aria-label="Разделы настроек">
     <div class="ttl"><b>Настройки</b><button class="k-btn" id="theme-btn" type="button" title="Светлая / тёмная тема">◐</button></div>
-    <div class="grp">Программа</div>
+    <!-- поиск по настройкам (settings-nav.js): подписи, ключи settings.json, подсказки, карточки, поля форм адаптера -->
+    <div class="st-find" role="search">
+      <input class="inp" id="st-q" type="search" role="combobox" aria-autocomplete="list" aria-expanded="false" aria-controls="st-q-res" placeholder="Найти настройку…  /" aria-label="Поиск по настройкам" autocomplete="off" spellcheck="false">
+      <div class="st-q-res" id="st-q-res" role="listbox" aria-label="Найденные настройки" hidden></div>
+    </div>
+    <div class="st-links">
+    <div class="grp">Источники данных</div>
     <a href="#hub" data-sec="hub"><svg viewBox="0 0 16 16"><path d="M6 2v3M10 2v3M4.5 5h7v3a3.5 3.5 0 0 1-7 0zM8 11.5V14"/></svg><span class="lbl">Подключения</span><span class="dot" data-nav="hub"></span></a>
     <a href="#adapter" data-sec="adapter"><svg viewBox="0 0 16 16"><rect x="3.5" y="3.5" width="9" height="9" rx="1.5"/><path d="M6 1.5v2M10 1.5v2M6 12.5v2M10 12.5v2M1.5 6h2M1.5 10h2M12.5 6h2M12.5 10h2"/></svg><span class="lbl">Адаптер и источники</span><span class="dot" data-nav="adapter"></span></a>
+    <!-- место для экрана «ОВП: типы строк отчёта» (TDM#554): пункт и раздел видны, когда модуль вызвал DeskSettings.slot('ovp-types') -->
+    <a href="#ovp" data-sec="ovp" data-slot-nav="ovp-types" hidden><svg viewBox="0 0 16 16"><path d="M2.5 4h11M2.5 8h11M2.5 12h7"/><circle cx="12.5" cy="12" r="1.5"/></svg><span class="lbl">ОВП: типы строк</span><span class="dot" data-nav="ovp"></span></a>
     <div class="grp">Справочники деска</div>
     <a href="#entities" data-sec="entities"><svg viewBox="0 0 16 16"><path d="M2 14h12M3 14V6l5-3.5L13 6v8M6 14v-4h4v4"/></svg><span class="lbl">Юрлица</span><span class="nb" data-count="entities"></span><span class="dot" data-nav="entities"></span></a>
     <a href="#books" data-sec="books"><svg viewBox="0 0 16 16"><path d="M3 2.5h7.5a1.5 1.5 0 0 1 1.5 1.5v9.5H4.5A1.5 1.5 0 0 1 3 12zM3 12a1.5 1.5 0 0 1 1.5-1.5H12M6 5.5h3.5"/></svg><span class="lbl">Книги</span><span class="nb" data-count="books"></span><span class="dot" data-nav="books"></span></a>
     <a href="#funding" data-sec="funding"><svg viewBox="0 0 16 16"><path d="M12.5 3.5l-9 9M5 6.5a1.5 1.5 0 1 0 0-3 1.5 1.5 0 0 0 0 3zM11 12.5a1.5 1.5 0 1 0 0-3 1.5 1.5 0 0 0 0 3z"/></svg><span class="lbl">Фондирование</span><span class="nb" data-count="funding"></span><span class="dot" data-nav="funding"></span></a>
-    <div class="grp">Работа</div>
+    <div class="grp">Программа</div>
+    <a href="#up" data-sec="up"><svg viewBox="0 0 16 16"><path d="M8 2.5v8M4.5 7 8 10.5 11.5 7M3 13.5h10"/></svg><span class="lbl">Обновления</span><span class="nb" id="nav-ver"></span></a>
+    <!-- редкое (TDM#551): под кнопкой «Дополнительно»; открытость помнит браузер -->
+    <button class="st-more" id="st-more" type="button" aria-expanded="false" aria-controls="st-more-l"><span class="lbl">Дополнительно</span><span class="dot"></span><span class="chev" aria-hidden="true"></span></button>
+    <div class="st-more-l" id="st-more-l" hidden>
     <a href="#auto" data-sec="auto"><svg viewBox="0 0 16 16"><path d="M13.5 8a5.5 5.5 0 1 1-1.6-3.9M13.5 2.5v3h-3"/></svg><span class="lbl">Автообновление</span><span class="dot" data-nav="auto"></span></a>
     <a href="#calc" data-sec="calc"><svg viewBox="0 0 16 16"><path d="M3 13.5 6.5 8l2.5 3 4-7M2.5 2.5v11h11"/></svg><span class="lbl">Допущения расчёта</span><span class="dot" data-nav="calc"></span></a>
     <a href="#backup" data-sec="backup"><svg viewBox="0 0 16 16"><ellipse cx="8" cy="4" rx="5" ry="2"/><path d="M3 4v8c0 1.1 2.2 2 5 2s5-.9 5-2V4M3 8c0 1.1 2.2 2 5 2s5-.9 5-2"/></svg><span class="lbl">Резервные копии</span><span class="dot" data-nav="backup"></span></a>
-    <a href="#up" data-sec="up"><svg viewBox="0 0 16 16"><path d="M8 2.5v8M4.5 7 8 10.5 11.5 7M3 13.5h10"/></svg><span class="lbl">Обновление программы</span><span class="nb" id="nav-ver"></span></a>
     <a href="#diag" data-sec="diag"><svg viewBox="0 0 16 16"><path d="M1.5 8.5h3l2-5 3 9 2-4h3"/></svg><span class="lbl">Диагностика</span></a>
-    <div class="grp" data-users-nav>Доступ</div>
     <a href="#net" data-sec="net" data-users-nav><svg viewBox="0 0 16 16"><circle cx="8" cy="8" r="6"/><path d="M2 8h12M8 2c1.8 1.7 2.6 3.7 2.6 6S9.8 12.3 8 14M8 2C6.2 3.7 5.4 5.7 5.4 8s.8 4.3 2.6 6"/></svg><span class="lbl">Доступ из сети</span><span class="dot" data-nav="net"></span></a>
     <a href="#users" data-sec="users" data-users-nav><svg viewBox="0 0 16 16"><circle cx="6" cy="5.5" r="2.5"/><path d="M1.5 13.5c0-2.5 2-4 4.5-4s4.5 1.5 4.5 4M10.5 3.2a2.5 2.5 0 0 1 0 4.6M12 9.8c1.5.5 2.5 1.8 2.5 3.7"/></svg><span class="lbl">Пользователи</span><span class="nb" id="nav-auth"></span></a>
+    </div>
+    </div>
     <div class="foot" id="home-note">Загрузка настроек…</div>
   </nav>
 
@@ -405,12 +478,60 @@ details.sf-grp[open] > summary::before{content:"▾"}
       </details>
     </section>
 
-    <!-- ========== Адаптер и источники ========== -->
+    <!-- ========== Адаптер и источники: подразделы #adapter/<подраздел> (TDM#551; settings-nav.js) ==========
+         обзор — что за адаптер и в порядке ли он (обновление адаптера — в «Обновлениях», #up; здесь ссылка и строка состояния); ежедневное — папки, настройки источников, действия, условия сделок;
+         проверка и «для опытных» (папка адаптера, пределы времени, JSON) — отдельно. Места для блоков других модулей:
+         [data-slot="services"] (подключение к сервисам и фоновые фиды, TDM#548/#557), [data-slot="reread"]
+         (перечитать отчёты за период, TDM#553) — DeskSettings.slot(имя). -->
     <section class="sec" id="sec-adapter" data-sec="adapter">
-      <div class="sec-h"><div><h1>Адаптер и источники</h1><p>Какие папки с отчётами просматривает монитор и какой адаптер их читает; ниже — проверка, что отчёты читаются.</p></div>
-        <div class="badges"><span class="badge st" id="ad-st">проверка…</span><button class="ibtn" id="ad-refresh" type="button">Обновить статус</button>
-          <label class="chk" title="Показывает сырой JSON файлов настроек адаптера — для того, чего нет в формах"><input type="checkbox" id="advanced"> Показать JSON (для опытных)</label></div></div>
-      <div class="card">
+      <div class="sec-h"><div><h1>Адаптер и источники</h1><p>Какой адаптер читает отчёты, из каких папок, и что он умеет. Редкое и техническое — в «Проверке» и «Для опытных».</p></div>
+        <div class="badges"><span class="badge st" id="ad-st">проверка…</span><button class="ibtn" id="ad-refresh" type="button">Обновить статус</button></div></div>
+      <nav class="subnav" data-subnav="adapter" aria-label="Подразделы: адаптер и источники">
+        <a href="#adapter/overview" data-sub-link="overview">Обзор<span class="dot" data-subdot="overview"></span></a>
+        <a href="#adapter/services" data-sub-link="services" data-slot-nav="services" hidden>Сервисы<span class="dot" data-subdot="services"></span></a>
+        <a href="#adapter/folders" data-sub-link="folders">Папки<span class="dot" data-subdot="folders"></span></a>
+        <a href="#adapter/sources" data-sub-link="sources">Источники<span class="dot" data-subdot="sources"></span></a>
+        <a href="#adapter/actions" data-sub-link="actions" id="sub-actions-link">Действия<span class="dot" data-subdot="actions"></span></a>
+        <a href="#adapter/acq" data-sub-link="acq">Условия сделок<span class="dot" data-subdot="acq"></span></a>
+        <a href="#adapter/check" data-sub-link="check">Проверка<span class="dot" data-subdot="check"></span></a>
+        <a href="#adapter/expert" data-sub-link="expert">Для опытных<span class="dot" data-subdot="expert"></span></a>
+      </nav>
+
+      <!-- Обзор: какой адаптер, его состояние (status); обновление адаптера — в разделе «Обновления» (#up), здесь ссылка и строка состояния -->
+      <div class="sub" data-sub="overview">
+      <div class="card" id="ad-card">
+        <div class="hd"><h2>Адаптер</h2><span class="mut3">какой адаптер читает отчёты</span><span class="sp"></span><a class="lnk" href="#adapter/expert">заменить или настроить →</a> <a class="lnk" href="#ad-upd-card">обновление адаптера →</a></div>
+        <div class="bd"><div id="ad-res"></div><p class="hint" id="ad-upd-line"></p><p class="hint" id="svc-line"></p></div>
+      </div>
+      <div class="card" id="ad-status" hidden>
+        <div class="hd"><h2>Состояние адаптера</h2><span class="mut3" id="ad-status-at"></span><span class="sp"></span><button class="ibtn" id="ad-status-refresh" type="button">Обновить</button></div>
+        <div class="bd" id="ad-status-bd"><p class="mut">Загрузка…</p></div>
+      </div>
+      </div>
+
+      <!-- Сервисы: блок «Подключение к сервисам» и состояние фоновых фидов (TDM#548, TDM#557) — DeskSettings.slot('services') -->
+      <div class="sub" data-sub="services"><div data-slot="services" hidden>
+      <!-- Подключение к сервисам: панель и фоновая загрузка, которые описывает помощник адаптера (08 §2.2, #548;
+           desk-services.js, данные: /api/v1/adapter-services). Монитор сам о сервисах ничего не знает. -->
+      <div class="card" id="svc-card">
+        <div class="hd"><h2 id="svc-title">Подключение к сервисам</h2><span class="mut3" id="svc-sub"></span><span class="sp"></span><button class="ibtn" id="svc-refresh" type="button">Обновить</button></div>
+        <div class="bd">
+          <p class="hint" style="margin-top:0">Настройки подключения хранит адаптер на этом компьютере. Пароли сюда не возвращаются: пустое поле пароля при сохранении оставляет прежний.</p>
+          <p id="svc-status" role="status" aria-live="polite"></p>
+          <ul class="at-lines" id="svc-lines"></ul>
+          <div id="svc-panel"></div>
+          <div class="row" style="margin-top:12px;flex-wrap:wrap"><button class="btn" id="svc-save" type="button" disabled>Сохранить</button><button class="ibtn" id="svc-cancel" type="button" hidden>Отменить</button></div>
+          <div id="svc-result" class="at-res"></div>
+          <h3 class="at-h4">Фоновая загрузка</h3>
+          <p class="hint">Монитор сам получает эти данные по расписанию и сразу пересчитывает затронутые расчёты. Выключатель хранится в мониторе.</p>
+          <div id="svc-feeds" style="overflow-x:auto"></div>
+        </div>
+      </div>
+      </div></div>
+
+      <!-- Папки с отчётами и перечитывание за период (TDM#553 — DeskSettings.slot('reread')) -->
+      <div class="sub" data-sub="folders">
+      <div class="card" id="dirs-card">
         <div class="hd"><h2>Папки с отчётами</h2><span class="mut3">их просматривает монитор</span><span class="tag env" id="dirs-env" hidden>задано переменной окружения</span><span class="sp"></span><button class="ibtn" id="dir-add" type="button">+ Добавить папку</button></div>
         <div class="bd flush">
           <table class="t dirs-t">
@@ -429,11 +550,80 @@ details.sf-grp[open] > summary::before{content:"▾"}
               <p class="hint">Копии принятых файлов: отчёт перечитывается, даже если исходный удалён.</p></div>
           </div></details></div>
       </div>
-      <div class="card">
-        <div class="hd"><h2>Адаптер</h2><span class="mut3">какой адаптер читает отчёты</span></div>
+      <div data-slot="reread" hidden></div>
+      </div>
+
+      <!-- Настройки источников: формы, которые объявляет адаптер (кроме юрлиц, книг, фондирования — у них свои разделы) -->
+      <div class="sub" data-sub="sources">
+      <div class="note" id="tabs-none" hidden>Адаптер не объявляет других форм настроек: юрлица, книги и фондирование — в своих разделах слева.</div>
+      <div id="tabs-adapter"></div>
+      <div class="note" id="cf-hidden" hidden></div>
+      <p class="hint">Нужного поля нет в форме? <a href="#advanced">Правка JSON — в «Для опытных»</a>.</p>
+      </div>
+
+      <!-- Действия адаптера: итог последнего запуска — строкой, по щелчку (TDM#552) -->
+      <div class="sub" data-sub="actions">
+      <div class="card" id="ad-actions" hidden>
+        <div class="hd"><h2>Действия адаптера</h2><span class="mut3">файлы действий — в <span class="mono" id="ad-actions-root"></span>, их читают входящие</span></div>
+        <div class="bd" id="ad-actions-bd"></div>
+      </div>
+      <div class="note" id="actions-none">Действий нет: адаптер не загружен или их не объявляет.</div>
+      </div>
+
+      <!-- Условия сделок: запуск с логином и паролем внутренней системы (TDM#551 п. 4: поведение прежнее) -->
+      <div class="sub" data-sub="acq">
+      <div class="note"><b>Логин и пароль здесь не хранятся.</b> Они передаются только одному запуску «Получить и пересчитать» на этом компьютере
+        и после отправки стираются из полей: их нет ни в настройках, ни в файлах программы, ни в Git.</div>
+      <div class="card" id="acquisition-card">
+        <div class="hd"><h2>Получить условия сделок</h2><button class="ibtn" id="acq-refresh" type="button">Обновить доступность</button></div>
         <div class="bd">
-          <div id="ad-res"></div>
-          <div class="form" style="margin-top:14px">
+          <p class="hint">Запуск с этого компьютера. Сначала сохраните настройки подключения в форме адаптера и включите нужный источник. Остальные источники не меняются.</p>
+          <p class="hint">Будут получены условия выбранных книг, затем выполнен новый полный расчёт этой даты. Входные данные других книг не заменяются.</p>
+          <div class="form">
+            <label for="acq-date">Дата отчёта</label><div><input class="inp" type="date" id="acq-date"><p class="hint">Нужен существующий локальный отчёт именно этой даты, а также загруженные позиции и рынок. Другая дата автоматически не выбирается.</p></div>
+            <span>Состав сделок</span><div><button class="ibtn" id="acq-inspect" type="button">Найти отчёт и книги</button><div id="acq-scope" style="overflow-wrap:anywhere"></div></div>
+            <label for="acq-user">Логин внутренней системы</label><input class="inp" id="acq-user" autocomplete="off" spellcheck="false" maxlength="4096">
+            <label for="acq-password">Пароль</label><div><input class="inp" type="password" id="acq-password" autocomplete="new-password" maxlength="4096"><p class="hint">Логин и пароль передаются только этому запуску, в настройки не сохраняются. После отправки поля очищаются.</p></div>
+          </div>
+          <p class="hint" id="acq-nologin" hidden>Этому источнику вход не нужен: логин и пароль не запрашиваются.</p>
+          <div class="row" style="margin-top:14px;flex-wrap:wrap"><button class="ibtn" id="acq-check" type="button">Проверить вход</button><button class="ibtn" id="acq-fetch" type="button" disabled>Получить и пересчитать</button><button class="ibtn" id="acq-cancel" type="button" disabled>Отменить</button></div>
+          <p id="acq-status" role="status" aria-live="polite"></p><div id="acq-result"></div>
+          <details class="adv" id="adv-acq" data-fold><summary>Дополнительно <span class="mut3">— Python для получения данных</span></summary>
+          <div class="form">
+            <label for="acquisition_python">Python для получения данных</label>
+            <div><input class="inp mono" id="acquisition_python" data-key="acquisition_python" placeholder="C:\Python311\python.exe" autocomplete="off">
+              <p class="hint">python.exe с библиотекой внутренней системы. Пусто — получение условий недоступно.</p>
+              <div class="auto-list" id="py-found"></div></div>
+          </div></details>
+        </div>
+      </div>
+      </div>
+
+      <!-- Проверка адаптера целиком (desk adapter check) -->
+      <div class="sub" data-sub="check">
+      <div class="card" id="ad-check">
+        <div class="hd"><h2>Проверка адаптера</h2><span class="mut3">как desk adapter check: только коды и числа, без значений ячеек</span><span class="sp"></span>
+          <button class="ibtn" id="ad-check-copy" type="button" disabled>Скопировать сводку</button><button class="btn" id="ad-check-run" type="button">Запустить проверку</button></div>
+        <div class="bd">
+          <div class="form">
+            <label>Папки</label>
+            <div><div id="ad-check-opts"><p class="mut">Загрузка…</p></div>
+              <input class="inp mono" id="ad-check-dir" placeholder="другая папка; несколько — через «;»; в конце \** — с подпапками" autocomplete="off" style="margin-top:6px">
+              <label class="chk" style="margin-top:6px"><input type="checkbox" id="ad-check-stub"> без справочника инструментов (каждый поиск бумаги — «не найдено»)</label></div>
+          </div>
+          <p class="hint">Адаптер читает файлы папок так же, как входящие, но в базу ничего не попадает. Сводку можно отправить в чат: в ней нет значений из отчётов, числа меньше 10 — как «&lt;10».</p>
+          <div id="ad-check-st" class="mut" style="margin-top:6px"></div>
+          <div id="ad-check-res" style="margin-top:8px"></div>
+        </div>
+      </div>
+      </div>
+
+      <!-- Для опытных: свой адаптер вместо комплекта, папка настроек, пределы времени и размера, JSON файлов настроек -->
+      <div class="sub" data-sub="expert">
+      <div class="card" id="ad-paths">
+        <div class="hd"><h2>Папка адаптера и его настроек</h2><span class="mut3">обычно не меняются: адаптер из комплекта и «Обновление адаптера»</span></div>
+        <div class="bd">
+          <div class="form">
             <label for="private_adapter">Папка адаптера</label>
             <div><input class="inp mono" id="private_adapter" data-key="private_adapter" placeholder="C:\DeskMonitor\adapter" autocomplete="off">
               <p class="auto" data-auto="private_adapter"></p>
@@ -462,90 +652,32 @@ details.sf-grp[open] > summary::before{content:"▾"}
               <p class="hint">Крупнее — не читаются. Пусто — 500.</p></div>
             <label for="adapter_kit_timeout_s">Проверка адаптера целиком</label>
             <div><input class="inp mono num" id="adapter_kit_timeout_s" data-key="adapter_kit_timeout_s" inputmode="decimal" placeholder="1800"> <span class="unit">секунд</span>
-              <p class="hint">«Запустить проверку» ниже. Пусто — 1800.</p></div>
+              <p class="hint">«Запустить проверку» в «Проверке». Пусто — 1800.</p></div>
             <label for="adapter_status_timeout_s">Состояние адаптера</label>
             <div><input class="inp mono num" id="adapter_status_timeout_s" data-key="adapter_status_timeout_s" inputmode="decimal" placeholder="60"> <span class="unit">секунд</span>
-              <p class="hint">Карточка «Состояние адаптера». Пусто — 60.</p></div>
+              <p class="hint">Карточка «Состояние адаптера» в «Обзоре». Пусто — 60.</p></div>
             <label for="adapter_action_timeout_s">Одно действие адаптера</label>
             <div><input class="inp mono num" id="adapter_action_timeout_s" data-key="adapter_action_timeout_s" inputmode="decimal" placeholder="900"> <span class="unit">секунд</span>
-              <p class="hint">«Запустить» в «Действиях адаптера». Пусто — 900.</p></div>
+              <p class="hint">«Запустить» в «Действиях». Пусто — 900.</p></div>
           </div></details>
         </div>
       </div>
-      <!-- Обновление адаптера: выпуски закрытого репозитория адаптера по токену GitHub (desk-adapter-updater.js;
-           данные: /api/v1/update/adapter*) -->
-      <div class="card" id="ad-upd-card">
-        <div class="hd"><h2>Обновление адаптера</h2><span class="mut3">выпуски адаптера с GitHub — по токену или через браузер; ставится только по кнопке, без перезапуска</span></div>
-        <div class="bd" id="ad-upd"><span class="muted">Загрузка…</span></div>
-      </div>
-      <div class="card" id="ad-status" hidden>
-        <div class="hd"><h2>Состояние адаптера</h2><span class="mut3" id="ad-status-at"></span><span class="sp"></span><button class="ibtn" id="ad-status-refresh" type="button">Обновить</button></div>
-        <div class="bd" id="ad-status-bd"><p class="mut">Загрузка…</p></div>
-      </div>
-      <div class="card" id="ad-check">
-        <div class="hd"><h2>Проверка адаптера</h2><span class="mut3">как desk adapter check: только коды и числа, без значений ячеек</span><span class="sp"></span>
-          <button class="ibtn" id="ad-check-copy" type="button" disabled>Скопировать сводку</button><button class="btn" id="ad-check-run" type="button">Запустить проверку</button></div>
-        <div class="bd">
-          <div class="form">
-            <label>Папки</label>
-            <div><div id="ad-check-opts"><p class="mut">Загрузка…</p></div>
-              <input class="inp mono" id="ad-check-dir" placeholder="другая папка; несколько — через «;»; в конце \** — с подпапками" autocomplete="off" style="margin-top:6px">
-              <label class="chk" style="margin-top:6px"><input type="checkbox" id="ad-check-stub"> без справочника инструментов (каждый поиск бумаги — «не найдено»)</label></div>
-          </div>
-          <p class="hint">Адаптер читает файлы папок так же, как входящие, но в базу ничего не попадает. Сводку можно отправить в чат: в ней нет значений из отчётов, числа меньше 10 — как «&lt;10».</p>
-          <div id="ad-check-st" class="mut" style="margin-top:6px"></div>
-          <div id="ad-check-res" style="margin-top:8px"></div>
-        </div>
-      </div>
-      <div class="card" id="ad-actions" hidden>
-        <div class="hd"><h2>Действия адаптера</h2><span class="mut3">файлы действий — в <span class="mono" id="ad-actions-root"></span>, их читают входящие</span></div>
-        <div class="bd" id="ad-actions-bd"></div>
-      </div>
-      <div id="tabs-adapter"></div>
-      <div class="note" id="cf-hidden" hidden></div>
-      <!-- Подключение к сервисам: панель и фоновая загрузка, которые описывает помощник адаптера (08 §2.2, #548;
-           desk-services.js, данные: /api/v1/adapter-services). Монитор сам о сервисах ничего не знает. -->
-      <div class="card" id="svc-card" hidden>
-        <div class="hd"><h2 id="svc-title">Подключение к сервисам</h2><span class="mut3" id="svc-sub"></span><span class="sp"></span><button class="ibtn" id="svc-refresh" type="button">Обновить</button></div>
-        <div class="bd">
-          <p class="hint" style="margin-top:0">Настройки подключения хранит адаптер на этом компьютере. Пароли сюда не возвращаются: пустое поле пароля при сохранении оставляет прежний.</p>
-          <p id="svc-status" role="status" aria-live="polite"></p>
-          <ul class="at-lines" id="svc-lines"></ul>
-          <div id="svc-panel"></div>
-          <div class="row" style="margin-top:12px;flex-wrap:wrap"><button class="btn" id="svc-save" type="button" disabled>Сохранить</button><button class="ibtn" id="svc-cancel" type="button" hidden>Отменить</button></div>
-          <div id="svc-result" class="at-res"></div>
-          <h3 class="at-h4">Фоновая загрузка</h3>
-          <p class="hint">Монитор сам получает эти данные по расписанию и сразу пересчитывает затронутые расчёты. Выключатель хранится в мониторе.</p>
-          <div id="svc-feeds" style="overflow-x:auto"></div>
-        </div>
-      </div>
-      <div class="card" id="acquisition-card">
-        <div class="hd"><h2>Получить условия сделок</h2><button class="ibtn" id="acq-refresh" type="button">Обновить доступность</button></div>
-        <div class="bd">
-          <p class="hint">Запуск с этого компьютера. Сначала сохраните настройки подключения в форме адаптера и включите нужный источник. Остальные источники не меняются.</p>
-          <p class="hint">Будут получены условия выбранных книг, затем выполнен новый полный расчёт этой даты. Входные данные других книг не заменяются.</p>
-          <div class="form">
-            <label for="acq-date">Дата отчёта</label><div><input class="inp" type="date" id="acq-date"><p class="hint">Нужен существующий локальный отчёт именно этой даты, а также загруженные позиции и рынок. Другая дата автоматически не выбирается.</p></div>
-            <span>Состав сделок</span><div><button class="ibtn" id="acq-inspect" type="button">Найти отчёт и книги</button><div id="acq-scope" style="overflow-wrap:anywhere"></div></div>
-            <label for="acq-user">Логин внутренней системы</label><input class="inp" id="acq-user" autocomplete="off" spellcheck="false" maxlength="4096">
-            <label for="acq-password">Пароль</label><div><input class="inp" type="password" id="acq-password" autocomplete="new-password" maxlength="4096"><p class="hint">Логин и пароль передаются только этому запуску, в настройки не сохраняются. После отправки поля очищаются.</p></div>
-          </div>
-          <p class="hint" id="acq-nologin" hidden>Этому источнику вход не нужен: логин и пароль не запрашиваются.</p>
-          <div class="row" style="margin-top:14px;flex-wrap:wrap"><button class="ibtn" id="acq-check" type="button">Проверить вход</button><button class="ibtn" id="acq-fetch" type="button" disabled>Получить и пересчитать</button><button class="ibtn" id="acq-cancel" type="button" disabled>Отменить</button></div>
-          <p id="acq-status" role="status" aria-live="polite"></p><div id="acq-result"></div>
-          <details class="adv" id="adv-acq" data-fold><summary>Дополнительно <span class="mut3">— Python для получения данных</span></summary>
-          <div class="form">
-            <label for="acquisition_python">Python для получения данных</label>
-            <div><input class="inp mono" id="acquisition_python" data-key="acquisition_python" placeholder="C:\Python311\python.exe" autocomplete="off">
-              <p class="hint">python.exe с библиотекой внутренней системы. Пусто — получение условий недоступно.</p>
-              <div class="auto-list" id="py-found"></div></div>
-          </div></details>
-        </div>
+      <div class="card" id="ad-json">
+        <div class="hd"><h2>Файлы настроек как JSON</h2><span class="mut3">для того, чего нет в формах</span></div>
+        <div class="bd"><label class="chk" title="Показывает сырой JSON файлов настроек адаптера — для того, чего нет в формах"><input type="checkbox" id="advanced"> Показать JSON (для опытных)</label>
+          <p class="hint">Включает правку JSON в формах адаптера и показывает ниже файлы настроек без формы.</p></div>
       </div>
       <div class="card" id="cf-card">
         <div class="hd"><h2>Другие файлы настроек</h2><span class="mut3">без формы — правятся как JSON (для опытных)</span></div>
         <div class="bd" id="cf-list"><p class="mut">Загрузка…</p></div>
       </div>
+      </div>
+    </section>
+
+    <!-- ========== ОВП: типы строк отчёта (TDM#554) — раздел для модуля потока ОВП: DeskSettings.slot('ovp-types') ========== -->
+    <section class="sec" id="sec-ovp" data-sec="ovp">
+      <div class="sec-h"><div><h1>ОВП: типы строк отчёта</h1><p>Какие типы строк отчёта ОВП — деривативы и какого вида.</p></div></div>
+      <div data-slot="ovp-types" hidden></div>
     </section>
 
     <!-- ========== Юрлица / Книги / Фондирование: формы адаптера ========== -->
@@ -556,6 +688,8 @@ details.sf-grp[open] > summary::before{content:"▾"}
     <section class="sec" id="sec-books" data-sec="books">
       <div class="sec-h"><div><h1>Книги</h1><p>Тип книги, юрлицо, куда переносится ОВП и коды книги в отчётах. Книги из позиций, которых здесь нет, помечены «не настроено».</p></div></div>
       <div data-tab-slot="books"></div>
+      <!-- место для блока книг «только ОВП» (TDM#556): DeskSettings.slot('books-extra') -->
+      <div data-slot="books-extra" hidden></div>
     </section>
     <section class="sec" id="sec-funding" data-sec="funding">
       <div class="sec-h"><div><h1>Фондирование</h1><p>Ставки фондирования по типу книги и валюте: индекс + спред или фикс, база дней. Смена ставки — новая строка с датой «действует с», прежняя остаётся в истории.</p></div></div>
@@ -731,7 +865,7 @@ details.sf-grp[open] > summary::before{content:"▾"}
         #up #up-gh .row{margin-top:4px}
         @media (max-width:700px){ #up .up-t thead{display:none} #up .up-t td{display:block;border:0;padding:2px 8px} #up .up-t tr{display:block;border-bottom:1px solid var(--line);padding-block:6px} #up td.num{text-align:left} }
       </style>
-      <div class="sec-h"><div><h1 id="h-up">Обновление программы</h1><p>Новая версия — с GitHub или из папки с архивами. Настройки и данные при обновлении не меняются.</p></div>
+      <div class="sec-h"><div><h1 id="h-up">Обновление программы и адаптера</h1><p>Новая версия программы — с GitHub или из папки с архивами; адаптер — выпуском с GitHub. Настройки и данные при обновлении не меняются.</p></div>
         <div class="badges"><span class="badge">установлена <span class="mono" id="up-ver">…</span></span></div></div>
       <div class="note warn" id="up-off" hidden></div>
       <div class="card"><div class="hd"><h2>С GitHub</h2></div><div class="bd" id="up-gh"></div><!-- desk-updater.js -->
@@ -774,6 +908,12 @@ details.sf-grp[open] > summary::before{content:"▾"}
           </div>
           <div class="res" id="up-last" hidden></div>
         </div>
+      </div>
+      <!-- Обновление адаптера: выпуски закрытого репозитория адаптера по токену GitHub (desk-adapter-updater.js;
+           данные: /api/v1/update/adapter*) -->
+      <div class="card" id="ad-upd-card">
+        <div class="hd"><h2>Обновление адаптера</h2><span class="mut3">выпуски адаптера с GitHub — по токену или через браузер; ставится только по кнопке, без перезапуска</span></div>
+        <div class="bd" id="ad-upd"><span class="muted">Загрузка…</span></div>
       </div>
     </section>
 
@@ -1007,6 +1147,9 @@ details.sf-grp[open] > summary::before{content:"▾"}
 
 <script src="desk-nav.js"></script>
 <script src="settings-forms.js"></script>
+<script src="settings-longtable.js"></script>
+<script src="settings-nav.js"></script>
+<script src="settings-ocp-books.js"></script>
 <script src="settings-adapter.js"></script>
 <script src="settings-inbox-folders.js"></script>
 <script src="desk-backfill-text.js"></script>
@@ -1045,21 +1188,39 @@ async function api(method, url, body){
 }
 
 /* ---------- разделы: #hub, #adapter, #entities, #books, #funding, #auto, #up, #diag (и #dg, #rc, #bf, #eff внутри),
-   #net (и #srv, #lan, #fw внутри), #users ---------- */
-const SECTIONS = ['hub', 'adapter', 'entities', 'books', 'funding', 'auto', 'calc', 'backup', 'up', 'diag', 'net', 'users'];
+   #net (и #srv, #lan, #fw внутри), #users; подразделы — #adapter/<подраздел> (TDM#551, settings-nav.js); #ovp — место
+   для модуля ОВП (виден, когда модуль открыл DeskSettings.slot('ovp-types')) ---------- */
+const NAV = window.DeskSettingsNav;
+const SECTIONS = ['hub', 'adapter', 'ovp', 'entities', 'books', 'funding', 'auto', 'calc', 'backup', 'up', 'diag', 'net', 'users'];
 const INNER = {dg:'diag', rc:'diag', bf:'diag', eff:'diag', 'eff-card':'diag', lan:'net', srv:'net', fw:'net', 'net-urls':'net',
   'ad-status':'adapter', 'ad-actions':'adapter', 'ad-check':'adapter', 'sess-card':'users'};
+function available(id){  // раздел-место (#ovp) без модуля не открывается
+  const a = document.querySelector('.st-nav a[data-sec="' + id + '"]');
+  return SECTIONS.includes(id) && !(a && a.hidden && a.dataset.slotNav);
+}
 function show(hash){
-  let id = (hash || '').replace(/^#/, ''), inner = null;
+  const parts = NAV.split(hash);
+  let id = parts.id, inner = null, sub = parts.sub;
   if (INNER[id]) { inner = id; id = INNER[id]; }
   else if (id && !SECTIONS.includes(id) && $(id) && $(id).closest('section.sec')) { inner = id; id = $(id).closest('section.sec').dataset.sec; }
-  if (!SECTIONS.includes(id)) { const tab = id.startsWith('tab-') ? id : null; id = tab ? 'adapter' : (store.get('settings.sec') || 'hub'); if (tab) inner = tab; }
+  // место для модуля (#ovp) без модуля: открыт запасной раздел, но адрес и запомненный раздел не трогаем — slot() откроет нужный
+  const waitSec = SECTIONS.includes(id) && !available(id);
+  if (!available(id)) { const tab = id.startsWith('tab-') ? id : null, last = store.get('settings.sec'); id = tab ? 'adapter' : (available(last) ? last : 'hub'); if (tab) inner = tab; sub = null; }
   document.querySelectorAll('section.sec').forEach(s => s.classList.toggle('on', s.dataset.sec === id));
   document.querySelectorAll('.st-nav a[data-sec]').forEach(a => { a.classList.toggle('on', a.dataset.sec === id); if (a.dataset.sec === id) a.setAttribute('aria-current', 'page'); else a.removeAttribute('aria-current'); });
-  store.set('settings.sec', id);
+  if (!waitSec) store.set('settings.sec', id);
+  NAV.shown(id);  // раздел из «Дополнительно» — группа раскрыта
+  // подраздел: из адреса; для элемента внутри (#dirs, #ad-check, #tab-sources) — его подраздел; иначе последний открытый
+  const secEl = document.querySelector('section.sec[data-sec="' + id + '"]');
+  const box = inner && $(inner) && $(inner).closest('[data-sub]');
+  if (box && box.closest('section.sec') === secEl) sub = box.dataset.sub;
+  // подраздел-место (#adapter/services) без модуля: открыт запасной, адрес и запомненный подраздел не трогаем
+  const waitSub = !waitSec && !!sub && sub === parts.sub && NAV.pending(secEl, sub);
+  const opened = NAV.sub(secEl, sub, {remember: !waitSec && !waitSub});
+  if (opened && !inner && !waitSec && !waitSub && parts.sub !== opened) { try { history.replaceState(null, '', '#' + id + '/' + opened); } catch(e) {} }  // адрес — с подразделом
   if (id === 'users') usersSection();
   if (id === 'net') netSection();
-  if (id === 'adapter' && window.DeskAdapterTools) window.DeskAdapterTools.shown();  // «Состояние адаптера» — заново
+  if (id === 'adapter' && window.DeskAdapterTools && opened === 'overview') window.DeskAdapterTools.shown();  // «Состояние адаптера» — заново
   const cur = document.querySelector('.st-nav a.on');  // на телефоне разделы — полосой: выбранный виден
   if (cur && matchMedia('(max-width:860px)').matches) cur.parentNode.scrollLeft = cur.offsetLeft - 16;
   if (inner && $(inner)) {  // #bf, #sess-card, #dirs…: свёрнутый блок по дороге раскрывается
@@ -1067,6 +1228,8 @@ function show(hash){
     setTimeout(() => t.scrollIntoView({block:'start', behavior:'smooth'}), 30);
   }
   else window.scrollTo(0, 0);
+  // модули узнают, что раздел или подраздел открыт: DeskSettings.onShow(fn)
+  window.dispatchEvent(new CustomEvent('desk-settings:shown', {detail:{sec:id, sub:opened || null, hash:location.hash}}));
 }
 /* ---------- Пользователи: раздел desk-users.js (только администратор; вход выключен — объяснение, как включить) ---------- */
 let usersMounted = false;
@@ -1131,6 +1294,7 @@ document.querySelectorAll('[data-key]').forEach(el => {
   if (!k) l.append(k = h('small', {class:'key', title:'ключ в settings.json'}));
   k.textContent = k.textContent ? k.textContent + ', ' + el.dataset.key : el.dataset.key;
 });
+NAV.init({show, store, h, api:(...a) => api(...a), toast:(...a) => toast(...a), onStatus:() => renderSummary()});
 window.addEventListener('hashchange', () => show(location.hash));
 show(location.hash);
 
@@ -1152,13 +1316,17 @@ function setDirty(v){
   for (const sec of ['hub', 'adapter', 'auto', 'calc']) {  // точка «изменено» у раздела, где правили settings.json
     const dot = document.querySelector('.dot[data-nav="' + sec + '"]');
     if (dot) dot.className = 'dot ' + (v && S.dirtySecs && S.dirtySecs.has(sec) ? 'dirty' : (dot.dataset.base || ''));
+    NAV.rollup(sec);
   }
+  if (!v) document.querySelectorAll('[data-sub][data-dirty]').forEach(p => NAV.subDirty(p, 'dirty', false));  // подразделам — их базовая точка
+  NAV.moreDot();
 }
 function markDirty(e){
   const sec = e.target.closest('section.sec');
   if (!e.target.closest('[data-key], #dirs')) return;
   (S.dirtySecs = S.dirtySecs || new Set()).add(sec ? sec.dataset.sec : '');
   setDirty(true);
+  NAV.subDirty(e.target.closest('[data-sub]'), 'dirty', true);  // точка «изменено» у подраздела
   if (e.target.dataset.key && e.type === 'input') { renderAuto(e.target.dataset.key); foldCounts(); }  // не на change: он приходит при уходе из поля, щелчок по «вернуть авто» не должен потеряться
   renderSummary();
 }
@@ -1167,8 +1335,11 @@ document.addEventListener('change', markDirty);
 window.addEventListener('beforeunload', e => { if (S.dirty || Object.values(FORMS).some(f => f.dirty())) { e.preventDefault(); e.returnValue = ''; } });
 function navDot(sec, cls, title){
   const d = document.querySelector('.dot[data-nav="' + sec + '"]'); if (!d) return;
-  d.dataset.base = cls || ''; d.className = 'dot ' + (cls || ''); d.title = title || '';
+  d.dataset.base = cls || ''; d.dataset.baseTitle = title || ''; d.className = 'dot ' + (cls || ''); d.title = title || '';
+  NAV.rollup(sec);
+  NAV.moreDot();
 }
+function subDot(sec, sub, cls, title){ NAV.paintSub(sec, sub, cls || '', title); }  // точка у подраздела (#adapter/folders …); базовый класс — в data-base, «изменено» его не затирает
 
 function render(d){
   S.data = d;
@@ -1395,8 +1566,8 @@ function renderSummary(){
   else it('unk', '#hub', 'Хаб', 'не проверен', 'Подключения → «Проверить связь»');
   it(d.hub_token_set ? 'ok' : 'bad', '#token', 'Токен', d.hub_token_set ? 'задан' : 'не задан');
   const a = S.adapter;
-  if (S.adapterError) it('bad', '#adapter', 'Адаптер', 'ошибка', S.adapterError);
-  else if (a) it(a.loaded ? 'ok' : 'bad', '#adapter', 'Адаптер', a.loaded ? (a.reference ? 'эталонный (CSV)' : 'загружен') : 'не загружен', a.error || [a.name, a.version].filter(Boolean).join(' '));
+  if (S.adapterError) it('bad', '#adapter/overview', 'Адаптер', 'ошибка', S.adapterError);
+  else if (a) it(a.loaded ? 'ok' : 'bad', '#adapter/overview', 'Адаптер', a.loaded ? (a.reference ? 'эталонный (CSV)' : 'загружен') : 'не загружен', a.error || [a.name, a.version].filter(Boolean).join(' '));
   const nd = env.includes('inbox_dirs') ? (eff.inbox_dirs || []).length : S.dirs.filter(x => x.path.trim()).length, sg = dirSuggestions();
   const fs = window.DeskInboxFolders && DeskInboxFolders.summary(S.dirs.map(x => x.path));  // что найдено в папках (#445)
   const fwarn = fs && (fs.missing ? plural(fs.missing, 'папку', 'папки', 'папок') + ' сервер не видит' : fs.scanned && !fs.read ? 'ничего не прочитано' : '');
@@ -1415,6 +1586,9 @@ function renderSummary(){
     else if (b.todo) it('', '#bf', 'История прогонов', b.done + ' из ' + withPos, 'посчитано дат с позициями; остальные догружаются в фоне');
     else it('ok', '#bf', 'История прогонов', 'посчитана, ' + plural(b.done || 0, 'дата', 'даты', 'дат'));
   }
+  const fi = items.find(x => x.href === '#dirs');
+  if (fi) subDot('adapter', 'folders', fi.cls === 'bad' || fi.cls === 'warn' ? fi.cls : '', fi.text);
+  window.DeskSettings.statusItems().forEach(x => { if (x && x.k) it(x.cls || '', x.href || '', x.k, x.text || '', x.title); });  // блоки других модулей (сервисы, ОВП)
   const rank = {bad:0, warn:1, unk:2, '':3, ok:4}, need = items.filter(x => x.cls === 'bad' || x.cls === 'warn').length;
   const unk = items.filter(x => x.cls === 'unk').length;
   items.sort((x, y) => rank[x.cls] - rank[y.cls]);
@@ -1473,8 +1647,8 @@ function collect(){
 }
 function goToField(k){  // поле с ошибкой: его раздел, раскрытый блок, курсор в поле (поле может быть и в другом разделе)
   const el = document.querySelector('[data-key="' + k + '"]'); if (!el) return;
-  const sec = el.closest('section.sec');
-  if (sec && !sec.classList.contains('on')) { show('#' + el.id); try { history.replaceState(null, '', '#' + el.id); } catch(e) {} }
+  const sec = el.closest('section.sec'), sub = el.closest('[data-sub]');  // и подраздел (#adapter/…)
+  if ((sec && !sec.classList.contains('on')) || (sub && !sub.classList.contains('on'))) { show('#' + el.id); try { history.replaceState(null, '', '#' + el.id); } catch(e) {} }
   unfold(el); el.focus();
 }
 function keyOfError(msg){  // поле, которое называет ответ сервера: ключ settings.json или его переменная DESK_*
@@ -1599,26 +1773,33 @@ async function loadAdapter(reloadForms){
   let a;
   try { a = await api('GET', '/api/v1/adapter'); }
   catch(e) {
-    st.className = 'badge st bad'; st.textContent = 'ошибка'; navDot('adapter', 'bad', e.message); S.adapterError = e.message; renderSummary();
+    st.className = 'badge st bad'; st.textContent = 'ошибка'; navDot('adapter', 'bad', e.message); subDot('adapter', 'overview', 'bad', e.message); S.adapterError = e.message; renderSummary();
     box.textContent = ''; box.append(h('div', {class:'note err'}, e.message)); renderConfigFiles(null); mountTabs(null); return;
   }
   S.adapter = a; S.adapterError = null;
   st.className = 'badge st ' + (a.loaded ? 'ok' : 'bad');
   st.textContent = a.loaded ? 'загружен' : 'ошибка загрузки';
   navDot('adapter', a.loaded ? 'ok' : 'bad', a.loaded ? 'адаптер загружен' : a.error);
+  subDot('adapter', 'overview', a.loaded ? (a.error || (a.warnings || []).length ? 'warn' : '') : 'bad', a.loaded ? '' : a.error);
   box.textContent = '';
   const kind = a.reference ? 'Эталонный адаптер (CSV)' : a.default ? 'Из комплекта программы' : 'Приватный адаптер';
   const srcs = (a.describe && Array.isArray(a.describe.sources)) ? a.describe.sources : [];
-  box.append(h('div', {class:'kv'},
-    h('div', {}, h('div', {class:'l'}, kind), h('div', {class:'v'}, h('b', {}, a.name || '—'), ' ', h('span', {class:'mono mut'}, a.version || ''))),
-    h('div', {}, h('div', {class:'l'}, 'Контракт'), h('div', {class:'v mono'}, (a.describe && a.describe.contract) || '—')),
-    h('div', {}, h('div', {class:'l'}, 'Отпечаток'), h('div', {class:'v mono', title:a.fingerprint || ''}, a.fingerprint ? a.fingerprint.slice(0, 16) + '…' : '—')),
-    h('div', {}, h('div', {class:'l'}, 'Формы настроек'), h('div', {class:'v'}, (a.settings_tabs || []).length ? (a.settings_tabs || []).map(t => t.title).join(', ') : 'нет — файлы правятся как JSON')),
-    h('div', {style:'grid-column:1/-1'}, h('div', {class:'l'}, 'Путь'), h('div', {class:'v mono mut', style:'word-break:break-all'}, a.path))));
+  // на виду — какой адаптер и что читает; контракт, отпечаток, формы, путь — в «Подробностях» (TDM#552)
+  box.append(h('div', {class:'ad-line'}, h('span', {class:'mut'}, kind + ':'), ' ', h('b', {}, a.name || '—'), ' ', h('span', {class:'mono mut'}, a.version || ''),
+    srcs.length ? h('span', {class:'mut3'}, ' · ' + plural(srcs.length, 'источник', 'источника', 'источников')) : null));
   if (srcs.length) box.append(h('div', {class:'src-chips'}, srcs.map(s => h('span', {class:'k-chip', title:(s.time_basis || '') + ' · ' + (s.completeness || '')},
     h('b', {class:'mono'}, s.source), h('span', {class:'mut3'}, (s.datasets || [s.dataset]).join(', '))))));
   if (a.error) box.append(h('div', {class:'note err', style:'margin-top:10px'}, 'Ошибка: ' + a.error));
   (a.warnings || []).forEach(w => box.append(h('div', {class:'note warn', style:'margin-top:8px'}, 'Предупреждение: ' + w)));
+  box.append(h('details', {class:'more', id:'ad-details'}, h('summary', {}, 'Подробности: контракт, отпечаток, формы, путь'), h('div', {class:'kv', style:'margin-top:6px'},
+    h('div', {}, h('div', {class:'l'}, 'Контракт'), h('div', {class:'v mono'}, (a.describe && a.describe.contract) || '—')),
+    h('div', {}, h('div', {class:'l'}, 'Отпечаток'), h('div', {class:'v mono', title:a.fingerprint || ''}, a.fingerprint ? a.fingerprint.slice(0, 16) + '…' : '—')),
+    h('div', {}, h('div', {class:'l'}, 'Формы настроек'), h('div', {class:'v'}, (a.settings_tabs || []).length ? (a.settings_tabs || []).map(t => t.title).join(', ') : 'нет — файлы правятся как JSON')),
+    h('div', {style:'grid-column:1/-1'}, h('div', {class:'l'}, 'Путь'), h('div', {class:'v mono mut', style:'word-break:break-all'}, a.path)))));
+  // подразделы по возможностям адаптера: действий нет — нет и пункта (карточка и так скрыта)
+  const noActions = a.loaded && !(a.actions || []).length;
+  $('sub-actions-link').hidden = noActions;
+  if (noActions && NAV.split(location.hash).sub === 'actions') show('#adapter');
   const tabFiles = new Set((a.settings_tabs || []).map(t => t.file));
   renderConfigFiles(a, tabFiles);
   mountTabs(a, reloadForms);
@@ -1650,7 +1831,8 @@ async function renderConfigFiles(a, tabFiles){
   const files = (a.config_files || []).filter(f => !(tabFiles && tabFiles.has(f.name)));
   $('cf-card').hidden = (!files.length && a.loaded) || (files.length > 0 && !SF.advanced);
   $('cf-hidden').hidden = !files.length || SF.advanced;
-  $('cf-hidden').textContent = files.length ? 'Файлов настроек без формы: ' + files.length + ' (' + files.map(f => f.name).join(', ') + '). Их можно править как JSON, включив «Для опытных» вверху раздела.' : '';
+  $('cf-hidden').textContent = '';
+  if (files.length) $('cf-hidden').append('Файлов настроек без формы: ' + files.length + ' (' + files.map(f => f.name).join(', ') + '). Их можно править как JSON: ', h('a', {href:'#adapter/expert'}, '«Для опытных»'), '.');
   if (files.length && !SF.advanced) return;
   if (!files.length) { list.append(h('p', {class:'muted'}, a.loaded ? 'Адаптер не объявляет других файлов настроек.' : 'Адаптер не загружен.')); return; }
   if (a.config_dir) list.append(h('p', {class:'hint', style:'margin:0 0 10px'}, 'Папка: ', h('span', {class:'mono'}, a.config_dir)));
@@ -1822,6 +2004,7 @@ function lists(){
   };
 }
 function navForms(){
+  NAV.subDirty(document.querySelector('[data-sub="sources"]'), 'form-dirty', Object.keys(FORMS).some(id => !SLOT[id] && FORMS[id].dirty()));  // формы «Источников»
   for (const id of ['entities', 'books', 'funding']) {
     const f = FORMS[id], cnt = document.querySelector('[data-count="' + id + '"]');
     if (!f || !f.data) { if (cnt) cnt.textContent = ''; navDot(id, '', ''); continue; }
@@ -1829,8 +2012,9 @@ function navForms(){
     const miss = id === 'books' ? SF.unconfigured(f.data, CTX.recent_books).length : 0;
     if (cnt) cnt.textContent = miss ? n + ' · ' + miss + ' не настр.' : String(n);
     const err = f.errors().length || f.parseError;
-    navDot(id, f.dirty() ? 'dirty' : err ? 'bad' : miss ? 'warn' : '', f.dirty() ? 'есть несохранённые изменения' : err ? 'есть ошибки' : miss ? miss + ' книг из позиций не настроено' : '');
+    navDot(id, f.dirty() ? 'dirty' : err ? 'bad' : miss ? 'warn' : '', f.dirty() ? 'есть несохранённые изменения' : err ? 'есть ошибки' : miss ? miss + ' книг не настроено' : '');
   }
+  if (window.SETTINGS_OCP_BOOKS) window.SETTINGS_OCP_BOOKS.card(FORMS.books, CTX.recent_books, window.DeskSettings, SF);  // книги только из ОВП (TDM#556)
 }
 async function loadContext(){
   try { Object.assign(CTX, await api('GET', '/api/v1/adapter/settings-context')); } catch(e) { CTX.error = e.message; }
@@ -1847,9 +2031,16 @@ function mountTabs(a, reload){
   const extra = $('tabs-adapter'); extra.textContent = '';
   for (const id of Object.keys(SLOT)) {
     const slot = document.querySelector('[data-tab-slot="' + id + '"]'); slot.textContent = '';
-    if (!tabs.some(t => t.id === id)) slot.append(h('div', {class:'note'}, !a ? 'Статус адаптера недоступен.' : !a.loaded ? 'Адаптер не загружен — см. «Адаптер и источники».'
-      : 'Адаптер «' + (a.name || '') + '» не описывает эту форму (describe()["settings_tabs"]). Его файлы настроек — в разделе ', h('a', {href:'#adapter'}, 'Адаптер и источники'), '.'));
+    if (!tabs.some(t => t.id === id)) slot.append(h('div', {class:'note'}, !a ? ['Статус адаптера недоступен — см. ', h('a', {href:'#adapter/overview'}, 'Адаптер и источники → Обзор'), '.']
+      : !a.loaded ? ['Адаптер не загружен — см. ', h('a', {href:'#adapter/overview'}, 'Адаптер и источники → Обзор'), '.']
+      : ['Адаптер «' + (a.name || '') + '» не описывает эту форму (describe()["settings_tabs"]). Его файлы настроек — в разделе ', h('a', {href:'#adapter/expert'}, 'Адаптер и источники → Для опытных'), '.']));
   }
+  // «Источники»: адаптер не загружен или статус недоступен — заметка об этом; загружен, но других форм нет — прежний текст
+  const none = $('tabs-none'), loaded = !!(a && a.loaded);
+  none.hidden = loaded && tabs.some(t => !SLOT[t.id]);
+  none.textContent = '';
+  if (loaded) none.append('Адаптер не объявляет других форм настроек: юрлица, книги и фондирование — в своих разделах слева.');
+  else none.append('Адаптер не загружен — формы источников появятся, когда он загрузится (см. ', h('a', {href:'#adapter/overview'}, '«Обзор»'), ').');
   for (const t of tabs) {
     let el;
     if (SLOT[t.id]) el = document.querySelector('[data-tab-slot="' + t.id + '"]');
@@ -2243,3 +2434,36 @@ function mountTabs(a, reload){
 <script src="desk-backup.js"></script>
 <script src="desk-acquisition.js"></script>
 <script src="desk-services.js"></script>
+<script src="settings-ocp-types.js"></script>
+<script src="desk-replay.js"></script>
+<script>
+/* Блоки потока ОВП в места settings-nav.js: «ОВП: типы строк отчёта» (TDM#554, settings-ocp-types.js) — раздел #ovp,
+   место 'ovp-types'; «Перечитать отчёты за период» (TDM#553, desk-replay.js) — место 'reread' в «Адаптер и источники →
+   Папки» (скрывается, когда перечитывание этому пользователю недоступно). */
+(function () {
+  const DS = window.DeskSettings;
+  if (!DS || !/^https?:$/.test(location.protocol)) return;
+  const card = (title, sub) => {
+    const c = document.createElement('div'); c.className = 'card';
+    c.innerHTML = title ? '<div class="hd"><h2></h2><span class="mut3"></span></div><div class="bd"></div>' : '<div class="bd"></div>';
+    if (title) { c.querySelector('h2').textContent = title; c.querySelector('.mut3').textContent = sub || ''; }
+    return c;
+  };
+  if (window.DeskOcpTypes) {
+    const place = DS.slot('ovp-types');
+    if (place) {
+      const c = card(); place.replaceChildren(c);
+      window.DeskOcpTypes.mount(c.querySelector('.bd'), {api, toast});
+      DS.onShow(s => { if (s.sec === 'ovp') window.DeskOcpTypes.shown(); });  // the types again on each opening
+    }
+  }
+  if (window.DeskReplay) {
+    const place = DS.slot('reread');
+    if (place) {
+      const c = card('Перечитать отчёты за период', 'после изменения настроек адаптера, которое меняет уже принятые отчёты');
+      place.replaceChildren(c);
+      window.DeskReplay.mount(c.querySelector('.bd'), {api, toast, box: place});
+    }
+  }
+})();
+</script>

@@ -21,6 +21,7 @@ futures and the options, NDFs left out, published as the report plus the other c
 | `pnl_official_20261020.csv` | `trade_version` as an integer; K3's parts do not add up: `pnl_parts_mismatch` warning |
 | `trade_terms_20261020.csv` | a deliverable forward, an NDF with fixing, an FX swap as two legs (D1, accepted); F1's swap row without `leg_id` is an error, so F1 is rejected (`partially_accepted`) |
 | `trade_terms_20261021.csv` | private/1.4: an IRS (fixed against the key rate), an OIS on RUONIA with a spread, a CCS RUB/CNY with notional exchanges (D1, two legs each), a REPO and an HTM purchase lot (T1; the contract does not tie a product to a book type); all accepted |
+| `trade_list_20261020.csv` | private/1.8: the trades of D1 (an FX forward v2, a swap, a **cancelled** NDF not in positions) and T1 (a REPO without a version); F1 a **marker** (listed, no trades) |
 | `trades_20261020_1100.csv` | private/1.6: the day's cumulative export cut at 11:00 (T1: TR-10, TR-11, TR-15; D1: TR-12, an FX trade with an offset in `trade_ts`) |
 | `trades_20261020_1500.csv` | the 15:00 export, overlapping: TR-10 in two versions (v2 amends the quantity: current), TR-11 v2 `cancelled` (kept), TR-15 gone (the export replaces T1's trades), TR-13 a **late booking** (`trade_date` the day before), TR-14 new in D1 |
 | `trades_delta_20261021_1000.csv` | deltas (`increment`) of 2026-10-21 for C1: TR-20, TR-21 |

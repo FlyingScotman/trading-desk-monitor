@@ -43,7 +43,8 @@
   // отчёта — из позиций): GET ../api/v1/history/ocp (backend desk/api/ocp_history.py) — по дням, из сохранённых
   // прогонов, без пересчёта; последний день — прогон страницы. Часть отчёта по юрлицу (без книги) — своей строкой, по
   // книгам не делится; под выбором книг — только целиком (K.ocpScope). В демо — вымышленный ответ той же формы.
-  // Книги — свой выбор экрана (TDM#533): юрлицо и книги, по умолчанию все книги юрлица вместе с HTM; фильтр шапки
+  // Книги — свой выбор экрана (TDM#533): юрлицо, тип книги (TDM#556: по настройкам книг, и у книг ОВП без позиций) и
+  // книги, по умолчанию все книги юрлица вместе с HTM; фильтр шапки
   // (деск, книги, портфели) к C16 не применяется, об этом — строка над итогом. Выбор — в слое вида (K.viewStore,
   // 'c16:books'), отдельно от фильтра шапки; действует на итог, таблицу и график.
   // Отчёта ОВП нет (no_report) — почему, по журналу входящих (TDM#445): GET ../api/v1/inbox/datasets/ocp, lib/inbox-why.js.
@@ -69,7 +70,8 @@
   const SEL_KEY = 'c16:books';
   const SEL = (() => {
     const s = K.viewStore.get(SEL_KEY);
-    if (s && typeof s === 'object') return { entity: typeof s.entity === 'string' ? s.entity : null, off: Array.isArray(s.off) ? s.off.filter(x => typeof x === 'string') : [] };
+    // type (TDM#556) — тип книги справочника (TRADING, HTM, …), null — все; нет в запомненном — все
+    if (s && typeof s === 'object') return Object.assign({ entity: typeof s.entity === 'string' ? s.entity : null, off: Array.isArray(s.off) ? s.off.filter(x => typeof x === 'string') : [] }, typeof s.type === 'string' ? { type: s.type } : {});
     const x = { entity: K.filter.entity || null, off: [] }; K.viewStore.set(SEL_KEY, x); return x;
   })();
   // снятые книги хранятся как есть, без чистки по ответу: книга, которой в ответе нет (демо, другой прогон, ушла из
@@ -107,13 +109,15 @@
   // юрлица ответа; юрлицо выбора — запомненное, если оно есть в ответе, иначе все (подмена не сохраняется: другой
   // прогон или демо на том же адресе не стирают выбор). EN — на перерисовку
   const entsOf = () => [...new Set((H.days || []).flatMap(d => (d.lines || []).map(x => x.entity)).filter(Boolean))].sort((a, z) => entityName(a).localeCompare(entityName(z), 'ru'));
-  let EN = null;
-  // книги ОВП юрлица ent (null — всех) за все дни ответа: книги строк и книги частей отчёта по юрлицу
-  function bookList(ent) {
+  let EN = null, TY = null;
+  // типы книг ответа юрлица ent по справочнику (TDM#556: и книг ОВП без позиций, как их задал владелец)
+  const typesOf = ent => [...new Set(bookList(ent, null).map(b => bookMeta(b.id).type).filter(t => t && t !== '—'))].sort();
+  // книги ОВП юрлица ent (null — всех) типа ty (null — всех) за все дни ответа: книги строк и книги частей отчёта
+  function bookList(ent, ty) {
     const m = new Map();
     (H.days || []).forEach(d => (d.lines || []).forEach(x => (x.book ? [x.book] : x.books || []).forEach(b => {
       const e = bookMeta(b).entity;
-      if (!m.has(b) && (!ent || e === ent)) m.set(b, e);
+      if (!m.has(b) && (!ent || e === ent) && (!ty || bookMeta(b).type === ty)) m.set(b, e);
     })));
     return [...m].map(([id, entity]) => ({ id, entity })).sort((a, z) => bookName(a.id).localeCompare(bookName(z.id), 'ru') || a.id.localeCompare(z.id));
   }
@@ -122,10 +126,10 @@
   // снятыми книгами: остаток другого юрлица без книг остаётся (K.ocpScope). SF — на перерисовку
   let SF = null;
   function scopeFilter() {
-    const L = bookList(EN), on = L.filter(b => !SEL.off.includes(b.id)).map(b => b.id);
-    if (on.length === L.length) return { entity: EN, books: null };
+    const L = bookList(EN, TY), on = L.filter(b => !SEL.off.includes(b.id)).map(b => b.id);
+    if (on.length === L.length) return { entity: EN, type: TY, books: null };
     const offEntities = [...new Set(L.filter(b => SEL.off.includes(b.id)).map(b => b.entity))];
-    return on.length ? { entity: EN, books: on, offEntities } : null;
+    return on.length ? { entity: EN, type: TY, books: on, offEntities } : null;
   }
   // суммы дня под выбором книг экрана: по валютам и по строкам (книга или часть отчёта)
   function slice(d) {
@@ -156,12 +160,13 @@
   function scopeBar() {
     const sb = h('div', 'c16-scope'); sb.setAttribute('data-c16-scope', '');
     const ents = entsOf();
-    const L = bookList(EN), off = L.filter(b => SEL.off.includes(b.id)), n = L.length - off.length;
+    const L = bookList(EN, TY), off = L.filter(b => SEL.off.includes(b.id)), n = L.length - off.length, types = typesOf(EN);
     const blbl = !off.length ? 'все книги · ' + L.length : n ? 'книги: ' + n + ' из ' + L.length : 'книги не выбраны';
     const hf = K.filter, ports = (hf.portsOff || []).filter(Boolean);
     const head = [hf.entity && entityName(hf.entity), hf.desk, hf.ccy && 'валюта ' + hf.ccy, hf.books && hf.books.length && (hf.books.length === 1 ? bookName(hf.books[0]) : hf.books.length + ' книг'), ports.length && 'без ' + ports.map(portName).join(', ')].filter(Boolean);
     sb.innerHTML = '<span class="lb">Книги ОВП:</span>' +
       '<span class="k-chip' + (EN ? ' on' : '') + '" data-c16="entity">' + esc(EN ? entityName(EN) : 'все юрлица') + ' ▾</span>' +
+      (types.length ? '<span class="k-chip' + (TY ? ' on' : '') + '" data-c16="type" title="тип книги из настроек книг">' + esc(TY ? 'тип: ' + TY : 'все типы книг') + ' ▾</span>' : '') +
       '<span class="k-chip' + (off.length ? ' on' : '') + '" data-c16="books" title="' + esc(off.length ? 'сняты: ' + off.map(b => bookName(b.id)).join(', ') : 'все книги юрлица, HTM входит') + '">' + esc(blbl) + ' ▾</span>' +
       '<span class="k-note" data-c16-note><b>Фильтр шапки здесь не действует</b>' + (head.length ? ' (в шапке: ' + esc(head.join(' · ')) + ')' : '') +
       ': ОВП считается по книгам целиком, портфели' + (ports.length ? ' (' + esc(ports.map(portName).join(', ')) + ')' : '') + ' не исключаются — свой выбор книг экрана.</span>';
@@ -171,8 +176,12 @@
         K.menu(ch, [{ v: null, t: 'все юрлица' }].concat(ents.map(e => ({ v: e, t: entityName(e) }))), EN, v => setSel({ entity: v }));
         return;
       }
+      if (ch.dataset.c16 === 'type') {
+        K.menu(ch, [{ v: null, t: 'все типы книг' }].concat(types.map(t => ({ v: t, t }))), TY, v => setSel({ type: v }));
+        return;
+      }
       const reopen = () => { const c = document.querySelector('[data-c16=books]'); if (c) c.click(); };
-      const items = L.map(b => { const m = bookMeta(b.id), t = [b.id, m.desk && m.desk !== '—' ? m.desk : '', m.type && m.type !== '—' ? m.type : '', EN || !b.entity ? '' : entityName(b.entity)].filter(Boolean); return { v: b.id, t: bookName(b.id), sub: t.join(' · '), multi: true }; });
+      const items = L.map(b => { const m = bookMeta(b.id), t = [b.id, m.desk && m.desk !== '—' ? m.desk : '', m.type && m.type !== '—' ? m.type : '', EN || !b.entity ? '' : entityName(b.entity), m.ocpOnly ? 'только ОВП' : ''].filter(Boolean); return { v: b.id, t: bookName(b.id), sub: t.join(' · '), multi: true }; });
       const keep = ids => SEL.off.filter(b => !ids.includes(b));
       K.menu(ch, items, L.map(b => b.id).filter(b => !SEL.off.includes(b)), v => setSel({ off: SEL.off.includes(v) ? keep([v]) : SEL.off.concat(v) }), 'c16-books',
         Object.assign(menuOpt, { reopen, all: ids => setSel({ off: keep(ids) }), none: ids => setSel({ off: keep(ids).concat(ids) }) }));
@@ -221,6 +230,7 @@
     const days = H.days || [], last = days[days.length - 1];
     const d = last && last.date === H.asOf ? last : { date: H.asOf, state: 'not_computed', basis: null, fx: {}, lines: [] };
     const ents = entsOf(); EN = SEL.entity && ents.includes(SEL.entity) ? SEL.entity : null;
+    TY = SEL.type && typesOf(EN).includes(SEL.type) ? SEL.type : null;  // как юрлицо: нет в ответе — все (не сохраняется)
     SF = scopeFilter();
     const ok = usable(d), T = ok ? slice(d) : { by: {}, rows: [], notes: [], partial: false, ccys: [] };
     const C = T.ccys;

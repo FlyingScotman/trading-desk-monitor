@@ -13,7 +13,8 @@ Files, all ``;``-separated UTF-8 with BOM, header = canonical field names (``x_*
   ``ocp_YYYYMMDD.csv`` (source ``ocp_csv``, scope ``entity``, ``book_id``), ``cash_balances_YYYYMMDD.csv``
   (``cash_balances_csv``, ``entity``, ``book_id``), ``pnl_official_YYYYMMDD.csv`` (``pnl_official_csv``,
   ``entity``, ``book_id``) and ``trade_terms_YYYYMMDD.csv`` (``trade_terms_csv``, ``book_id``; FX trades since
-  private/1.2, swap legs, REPO and HTM purchases since 1.4). An ``ocp`` row's ``derivatives_ccy`` (private/1.7) is
+  private/1.2, swap legs, REPO and HTM purchases since 1.4) and ``trade_list_YYYYMMDD.csv`` (``trade_list_csv``,
+  ``book_id``; private/1.8: the trades of the books, a stock). An ``ocp`` row's ``derivatives_ccy`` (private/1.7) is
   written ``fx_forward=-1000000,ndf=0`` (``{}``: none). A
   ``cash_balances``, ``pnl_official`` or ``trades`` file may hold several dates (a history): a ``_report_date``
   column gives each row's date (08 §6.1); an empty cell is the date in the name.
@@ -34,7 +35,7 @@ Files, all ``;``-separated UTF-8 with BOM, header = canonical field names (``x_*
 fields are the scope keys (and ``_report_date``), meaning "this unit is covered and has no rows" (how a book that
 sold out is closed under ``covers=listed``). A file with no rows and no markers touches nothing and says
 ``empty_report``. Empty cells are absent fields; ``1``/``true``/``yes`` and ``0``/``false``/``no`` in a boolean
-column (``active``, ``ndf``, ``include_ndf``, ``cash_from_balances``) are booleans. ``_src`` is ``L<line>`` (the header is line 1).
+column (``active``, ``ndf``, ``include_ndf``, ``cash_from_balances``, ``in_positions``) are booleans. ``_src`` is ``L<line>`` (the header is line 1).
 ``instrument_id`` (``positions``, ``pnl_official``) is kept when the file has it, else looked up by ``isin``,
 ``regnum`` or ``moex_secid``.
 """
@@ -48,7 +49,7 @@ from datetime import datetime
 
 SPI_VERSION = 1
 SOURCE = "positions_csv"
-_FILE = re.compile(r"^(positions|ocp|cash_balances|pnl_official|trade_terms|trades|trades_delta)_([0-9]{8})"
+_FILE = re.compile(r"^(positions|ocp|cash_balances|pnl_official|trade_terms|trade_list|trades|trades_delta)_([0-9]{8})"
                    r"(?:_([0-9]+))?\.csv$")
 _DATASETS = {  # file prefix -> (source, time basis, scope); the prefix is the dataset, but for trades_delta
     "positions": (SOURCE, "start_of_day", ["book_id"]),
@@ -56,6 +57,7 @@ _DATASETS = {  # file prefix -> (source, time basis, scope); the prefix is the d
     "cash_balances": ("cash_balances_csv", "end_of_day", ["entity", "book_id"]),
     "pnl_official": ("pnl_official_csv", "end_of_day", ["entity", "book_id"]),
     "trade_terms": ("trade_terms_csv", "end_of_day", ["book_id"]),
+    "trade_list": ("trade_list_csv", "end_of_day", ["book_id"]),
     "trades": ("trades_csv", "intraday", ["book_id"]),
     "trades_delta": ("trades_delta_csv", "intraday", ["book_id"]),
 }
@@ -65,7 +67,7 @@ _BY_SOURCE = {src: prefix for prefix, (src, _, _) in _DATASETS.items()}
 _MULTI_DATE = {"cash_balances", "pnl_official", "trades"}
 _WITH_INSTRUMENT = {"positions", "pnl_official", "trades"}
 _CUT = re.compile(r"([01][0-9]|2[0-3])([0-5][0-9])")
-_BOOLEANS = {"active", "ndf", "include_ndf", "cash_from_balances"}
+_BOOLEANS = {"active", "ndf", "include_ndf", "cash_from_balances", "in_positions"}
 _OBJECTS = {"derivatives_ccy"}
 """Cells that hold an object (private/1.7 ``ocp.derivatives_ccy``): ``key=amount`` pairs separated by ``,``
 (``fx_forward=-1000000,ndf=0``), or ``{}`` for an empty one."""
@@ -76,7 +78,7 @@ _TRUE, _FALSE = {"1", "true", "yes"}, {"0", "false", "no"}
 
 def describe() -> dict:
     return {
-        "name": "desk_reference", "version": "1.5.0", "spi": 1, "contract": "private/1.7",
+        "name": "desk_reference", "version": "1.5.0", "spi": 1, "contract": "private/1.8",
         "sources": [{"source": src, "dataset": _DATASET_OF.get(prefix, prefix), "time_basis": tb, "scope": scope,
                      **({"completeness": "increment"} if prefix in _INCREMENT else
                         {"completeness": "full_snapshot", "covers": "listed"})}

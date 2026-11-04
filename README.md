@@ -43,7 +43,7 @@ Scenario Lab не работает: `desk-loader.js`, `desk-util.js`, `desk-scop
 ## Быстрый старт
 
 Разработка и локальный запуск — [backend/README.md](backend/README.md) (`uv sync`, `desk sync`, `desk eod`, `desk serve`).
-Установка на рабочую машину Windows — офлайн-сборка, [docs/INSTALL_BACKEND_WINDOWS.md](docs/INSTALL_BACKEND_WINDOWS.md).
+Установка на рабочую машину Windows — архив «без пакетов» `DeskMonitorMirror-<версия>.zip`: сторонние пакеты ставятся с зеркала pip рабочей машины, полный офлайн-комплект не выпускается (DEC15), [docs/INSTALL_BACKEND_WINDOWS.md](docs/INSTALL_BACKEND_WINDOWS.md).
 
 ```bash
 cd backend && uv sync --python 3.11 --extra dev && .venv/bin/python -m pytest -q   # тесты бэкенда

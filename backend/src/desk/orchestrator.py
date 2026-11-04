@@ -97,9 +97,15 @@ class Outcome:
     no_pnl: NoPnl | None = None
     core_result: PortfolioRiskResult | None = None
     """The core result this valuation comes from (shared by the positions of one core call)."""
+    trades: dict[str, Any] | None = None
+    """A bond traded today whose start-of-day position has no PnL (``no_pnl``): ``{"new_trades", "start_quantity",
+    "trades"}`` of the day's trades (``pnl.new_trades``), kept in the run position's ``no_pnl`` instead of a PnL."""
     core_not_valued: tuple[str, str] | None = None
     """(reason, detail) of a derivative row that is not valued by core from trade terms (none, or core could not):
     its value is the report's (``valuation.positions``); ``publish.derivatives_parallel`` lists it."""
+    ocp_amount: dict[str, float] | None = None
+    """Of such a CCS row: the foreign legs' notional per currency, to receive (+) or pay (-), for the OCP at the
+    nominal basis (``dv.ccs_ocp_amount``)."""
 
 
 @dataclass

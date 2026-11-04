@@ -322,6 +322,7 @@ def classify(row: Mapping[str, Any], terms: Sequence[Mapping[str, Any]], books: 
     rep = ex.get("reported") or {}
     delta = _amounts(row.get("fx_delta"), policy)
     core = ex.get("core") or {}
+    no_pv = False
     product, group = str(core.get("product") or "").lower(), product_group(rep)
     ndf = "fx_ndf" in product or group == "fx_ndf" or any(_truthy(t.get("ndf")) for t in terms)
     own = "options" if "option" in product or "option" in group else \
@@ -334,6 +335,10 @@ def classify(row: Mapping[str, Any], terms: Sequence[Mapping[str, Any]], books: 
         basis = policy.amount_basis.value
         if policy.amount_basis is AmountBasis.NOMINAL:
             delta = _amounts(ex.get("ocp_amount"), policy)
+    elif ex.get("ocp_amount"):
+        # a CCS core did not value: the foreign leg's exchanges still to come (its terms), not the report's PV, on
+        # either basis: a row without a PV, as an FX row without terms
+        basis, delta, no_pv = "notional", _amounts(ex["ocp_amount"], policy), True
     elif row.get("instr_type") == "BOND":
         basis = "mv_net" if _net_of_liability(row) else "mv"
     else:
@@ -347,13 +352,17 @@ def classify(row: Mapping[str, Any], terms: Sequence[Mapping[str, Any]], books: 
     if row.get("instr_type") == "BOND":
         return "bonds", delta, basis, ("грязная MV за вычетом валютного пассива фондирования" if basis == "mv_net"
                                        else "")
-    note = "" if core or basis != "notional" else "без условий сделки: номинал, не PV"
+    note = "" if core or basis != "notional" else \
+        "CCS не оценён ядром: обмены валютной ноги по условиям сделки, не PV" if no_pv else \
+        "без условий сделки: номинал, не PV"
     if ndf:
         return "ndf", delta, basis, note
     if own:
         return own, delta, basis, note
     if core:
         return "fx_legs", delta, basis, ""
+    if no_pv:
+        return "fx_legs", delta, basis, note
     if fx_like:
         if not later:
             return "cash", delta, "amount", ""
@@ -885,7 +894,10 @@ def derivative_lines(rows: Sequence[Mapping[str, Any]], books: Mapping[str, Mapp
         last, first = (max(dates) if dates else None), (min(tds) if tds else None)
         core = bool((r.get("extra") or {}).get("core"))
         entity = str((books.get(r["book_id"]) or {}).get("entity") or "—")
-        amounts = {c: a for c, a in sorted(_amounts(r.get("fx_delta"), policy).items()) if a}
+        ex = r.get("extra") or {}
+        no_pv = not core and ex.get("ocp_amount")  # a CCS core did not value: its exchanges, not a PV
+        amounts = {c: a for c, a in sorted(_amounts(ex["ocp_amount"] if no_pv else r.get("fx_delta"),
+                                                    policy).items()) if a}
         for ccy, a in amounts.items():
             out.append(DerivLine(pid, str(r["book_id"]), entity, ccy, a, kind, last,
                                  "spot_equivalent" if core else "notional", comp, first))
@@ -1089,6 +1101,13 @@ def _iso(x: Any) -> str | None:
     return d.isoformat() if d else None
 
 
+def _nominal_ok(kind: str, policy: OcpPolicy, outside_kinds: set[str]) -> bool:
+    """The report's nominal of a kind apart may stand in for its PV: its component is held by the report, no position
+    of the kind is counted outside the report, and it is not an NDF while ``include_ndf`` is off."""
+    return (KIND_COMPONENT[kind] in policy.report_components and kind not in outside_kinds
+            and not (kind == "ndf" and not policy.include_ndf))
+
+
 def published_day(comparisons: Sequence[Mapping[str, Any]], outside_report: Sequence[Mapping[str, Any]],
                   lines: Sequence[OcpLine], on: date, policy: OcpPolicy = PROVISIONAL_POLICY, *,
                   books: Mapping[str, Mapping[str, Any]] | None = None, units: Sequence[Mapping[str, Any]] = (),
@@ -1108,8 +1127,9 @@ def published_day(comparisons: Sequence[Mapping[str, Any]], outside_report: Sequ
       ``covers`` ``listed`` (``carried_units``; gap ``carried_forward_unit``);
     - ``derivatives``: for each kind apart whose component the report holds, the PV (``derivative_lines``: core's FX
       delta, whatever ``amount_basis``) of every position of that kind with a value date after B; a kind apart with a
-      nominal but no such position in the scope: that nominal, marked (``fallback``; an NDF never when ``include_ndf``
-      is off). A book absent from the report adds every kind. Rows that are not derivatives (``other`` equities, funds,
+      nominal but no such position in the scope, or none of them with a PV (no terms bound, not valued by core): that
+      nominal, marked (``fallback``; ``no_pv`` too in the second case; an NDF never when ``include_ndf`` is off). Some
+      of them with a PV: the PV of those and the notional of the others, marked (``partial_pv``). A book absent from the report adds every kind. Rows that are not derivatives (``other`` equities, funds,
       deposits, spots) never enter it;
     - ``bonds``: the revaluation of the foreign-currency bonds since B (``BaseDay.bonds``) when the report holds
       ``bonds``;
@@ -1272,24 +1292,34 @@ def published_day(comparisons: Sequence[Mapping[str, Any]], outside_report: Sequ
                     pv = [x for x in term if x.last_flow is None or b0 is None or x.last_flow > b0]
                     issues["derivatives_unknown_last_flow"] += [x.position_id for x in pv if x.last_flow is None]
                     # coverage: positions of the kind valued at their notional (no terms) or with no amount at all
-                    held = {x.position_id for x in mine if x.kind == k and x.in_term}
-                    bare = {x.position_id for x in pv if x.basis != "spot_equivalent"} | {
-                        x.position_id for x in mine if x.kind == k and x.in_term and x.basis == "none"}
+                    # (only those with flows still to come: ``pv``, and the ones with no amount at all; a position
+                    # whose last flow is not after B is not in ``pv`` and is no gap)
+                    unvalued = {x.position_id for x in mine if x.kind == k and x.in_term and x.basis == "none"}
+                    held = {x.position_id for x in pv} | unvalued
+                    bare = {x.position_id for x in pv if x.basis != "spot_equivalent"} | unvalued
                     if pv and bare:
                         (no_pv if bare >= held else partial).append(k)
-                        issues["derivatives_partial_pv"].append(
-                            f"{where} {ccy}: {KIND_TEXT[k]} ("
-                            + ("PV нет ни у одной позиции" if bare >= held else
-                               f"{len(bare)} из {len(held)} позиций без PV") + ")")
+                        # no position of the kind has a PV (no terms bound, core did not value it): the report's
+                        # nominal of the kind in this currency, marked, instead of the positions' notionals or zeros
+                        # (the owner, 03.11.2026); without such a nominal, the positions' own notionals, marked
+                        to_nominal = bare >= held and bool(nominal.get(k)) and _nominal_ok(k, policy, outside_kinds)
+                        if not to_nominal:  # with the nominal the gap is «номинал отчёта» (below), not this one too
+                            issues["derivatives_partial_pv"].append(
+                                f"{where} {ccy}: {KIND_TEXT[k]} ("
+                                + ("PV нет ни у одной позиции" if bare >= held else
+                                   f"{len(bare)} из {len(held)} позиций без PV") + ")")
+                        if to_nominal:
+                            pv = []
                 in_pv |= {x.position_id for x in pv}
                 if pv:
                     items["derivatives"] += [{"kind": "position", "position_id": x.position_id, "book_id": x.book_id,
                                               "derivative": k, "component": x.component, "basis": x.basis,
                                               "last_flow": _iso(x.last_flow), "amount": x.amount,
-                                              **({"note": "сделка после базы"} if k not in kinds else {})}
+                                              **({"note": "сделка после базы"} if k not in kinds else {}),
+                                              **({"marker": "номинал позиции, PV нет"}
+                                                 if x.basis != "spot_equivalent" else {})}
                                              for x in pv]
-                elif (k in kinds and nominal.get(k) and KIND_COMPONENT[k] in policy.report_components
-                      and k not in outside_kinds and not (k == "ndf" and not policy.include_ndf)):
+                elif k in kinds and nominal.get(k) and _nominal_ok(k, policy, outside_kinds):
                     items["derivatives"].append({"kind": "report_nominal", "derivative": k,
                                                  "component": KIND_COMPONENT[k], "set_id": sc["set_id"],
                                                  "book_id": sc["book_id"], "amount": nominal[k],
@@ -1345,9 +1375,9 @@ DAY_GAP_TEXT = {
                             "отчёт — полный срез юрлица, их база 0",
     "report_without_derivatives_split": "отчёт ОВП без разметки деривативов (адаптер до private/1.7): база держит "
                                         "будущие потоки деривативов по номиналу, их PV не добавлен",
-    "derivatives_partial_pv": "позиции вида без PV (нет условий сделки или ядро не оценило; у части или у всех): их "
-                              "номинал в отчёте по позициям не делится, взята оценка по номиналу сделки — проверьте "
-                              "сверку номинала",
+    "derivatives_partial_pv": "позиции вида без PV (нет условий сделки или ядро не оценило): если PV нет ни у одной, "
+                              "взят номинал вида из отчёта ОВП; если только у части — номинал отчёта по позициям не "
+                              "делится, у позиций без PV взят их номинал из отчёта позиций — проверьте сверку номинала",
     "derivatives_unknown_last_flow": "у дериватива нет даты последнего потока: считается, что поток после базы есть",
     "derivatives_nominal_fallback": "PV дериватива нет (нет условий сделки или ядро не оценило): взят номинал "
                                     "из отчёта ОВП",

@@ -9,7 +9,7 @@
   const TEXT = {
     capability_invalid: 'Адаптер описывает подключение к сервисам в несовместимом виде. Нужен совместимый комплект адаптера.',
     helper_unavailable: 'В комплекте адаптера нет модуля подключения к сервисам.',
-    runtime_unavailable: 'Укажите и сохраните «Python для получения данных» (ниже, «Получить условия сделок» → «Дополнительно»).',
+    runtime_unavailable: 'Укажите и сохраните «Python для получения данных» (подраздел «Условия сделок» → «Дополнительно»).',
     adapter_changed: 'Адаптер или его настройки только что изменились. Нажмите «Обновить».',
     settings_invalid: 'Проверьте настройки программы.', local_only: 'Подключение к сервисам настраивается только на компьютере с программой.',
     origin_invalid: 'Откройте настройки по локальному адресу программы.', status_unknown: 'Нет связи с программой. Обновите страницу.',
@@ -28,7 +28,7 @@
   const RUN = {complete: 'получено', partial: 'получено частично', skipped: 'нечего загружать', blocked: 'остановлено',
     error: 'ошибка', cancelled: 'отменено'};
   const RUN_CODE = {login_required: 'нужен вход', not_configured: 'не настроено', feed_disabled: 'выключено в адаптере',
-    no_change: 'изменений нет', not_due: 'ещё рано', no_positions: 'нет позиций', config_invalid: 'проверьте настройки',
+    no_change: 'изменений нет', no_books: 'нет книг с позициями', not_due: 'ещё рано', no_positions: 'нет позиций', config_invalid: 'проверьте настройки',
     source_disabled: 'источник выключен', helper_timeout: 'время ожидания истекло', helper_response_invalid: 'некорректный ответ модуля',
     files_not_accepted: 'файлы не приняты', calculation_busy: 'занят расчёт, повтор позже', ingestion_busy: 'загрузка занята, повтор позже',
     runtime_unavailable: 'нет Python для получения данных', adapter_unavailable: 'адаптер не загружен',
@@ -172,7 +172,7 @@
   function renderFeeds() {
     const host = $('feeds'), feeds = (data && data.feeds) || [];
     if (!feeds.length) { host.replaceChildren(el('p', data && data.panel ? 'Адаптер не описывает фоновых загрузок.' : '', 'hint')); return; }
-    const t = el('table', null, 't'), hr = el('tr');
+    const t = el('table', null, 't svc-t'), hr = el('tr');
     ['Данные', 'Включено', 'Расписание', 'Последний запуск', 'Следующий', ''].forEach(c => hr.append(el('th', c)));
     const head = el('thead'); head.append(hr); const tb = el('tbody');
     for (const f of feeds) {
@@ -182,7 +182,7 @@
       box.setAttribute('aria-label', 'Фоновая загрузка «' + f.title + '»');
       lab.append(box, el('span', null, 'tgl-s')); sw.append(lab);
       box.addEventListener('change', () => enable(f.id, box.checked, box));
-      const lastTd = el('td');
+      const lastTd = el('td'); lastTd.dataset.l = 'Последний запуск'; sw.dataset.l = 'Включено'; 
       if (last.last_started) {
         const code = !last.code ? '' : RUN_CODE[last.code] || (['complete', 'partial'].includes(last.state) ? '' : last.code);
         lastTd.append(el('div', when(last.last_finished || last.last_started) + ' · ' + (f.running ? 'идёт' : (RUN[last.state] || last.state || '')) + (code && !f.running ? ' (' + code + ')' : '')));
@@ -193,7 +193,7 @@
         more.push(...(last.lines || []));
         if (more.length) { const d = el('details'); d.append(el('summary', 'подробнее', 'mut3')); d.append(...more.map(x => el('div', x, 'hint'))); lastTd.append(d); }
       } else lastTd.append(el('span', f.running ? 'идёт' : 'ещё не запускалось', 'mut3'));
-      const next = el('td');
+      const next = el('td'); next.dataset.l = 'Следующий';
       next.textContent = last.needs_login ? 'нужен вход: выполните вход в панели выше'
         : !f.ready ? 'не готово' + (f.why_not_ready ? ': ' + f.why_not_ready : '')
         : !f.enabled ? 'выключено' : f.queued ? 'в очереди' : f.next_run ? when(f.next_run) + (last.failures ? ' (повтор ' + last.failures + ')' : '') : '—';
@@ -202,9 +202,37 @@
       run.disabled = f.running || f.queued; run.addEventListener('click', () => runNow(f.id, run));
       act.append(run);
       if (f.running) { const stop = el('button', 'Остановить', 'lnk'); stop.type = 'button'; stop.addEventListener('click', () => cancel('feed')); act.append(stop); }
-      tr.append(name, sw, el('td', scheduleText(f.schedule, f.after_positions)), lastTd, next, act); tb.append(tr);
+      const sched = el('td', scheduleText(f.schedule, f.after_positions)); sched.dataset.l = 'Расписание';
+      tr.append(name, sw, sched, lastTd, next, act); tb.append(tr);
     }
     t.append(head, tb); host.replaceChildren(t);
+  }
+
+  // место «Сервисы» на странице настроек (settings-nav.js): блок виден — открыто место и пункт подраздела, скрыт — нет
+  function place(hidden) {
+    const DS = window.DeskSettings;
+    if (!DS) return;
+    if (hidden) { DS.unslot('services'); DS.status('services', null); DS.dot('adapter/services', '', ''); } else DS.slot('services');
+    const line = document.getElementById('svc-line');
+    if (line && hidden) line.textContent = '';
+  }
+  // что важно на виду: сводка сверху, точка подраздела, строка в «Обзоре» адаптера
+  function summarize() {
+    const DS = window.DeskSettings, feeds = (data && data.feeds) || [];
+    const login = feeds.filter(f => f.last && f.last.needs_login).map(f => f.title);
+    const failed = feeds.filter(f => f.enabled && f.last && f.last.state === 'error' && !f.last.needs_login).map(f => f.title);
+    let cls = 'ok', text = 'работают', title = 'Подключение к сервисам работает';
+    if (!data.available) { cls = 'warn'; text = 'не готово'; title = TEXT[data.code] || data.code || ''; }
+    else if (login.length) { cls = 'warn'; text = 'нужен вход: ' + login.join(', '); }
+    else if (failed.length) { cls = 'warn'; text = 'ошибка загрузки: ' + failed.join(', '); }
+    const line = document.getElementById('svc-line');
+    if (line) {
+      line.textContent = 'Подключение к сервисам: ' + text + ' ';
+      const a = el('a', 'открыть →'); a.href = '#adapter/services'; line.append(a);
+    }
+    if (!DS) return;
+    DS.status('services', {cls, href: '#adapter/services', k: 'Сервисы', text, title});
+    DS.dot('adapter/services', cls === 'ok' ? '' : cls, text === 'работают' ? '' : text);
   }
 
   function render() {
@@ -212,7 +240,9 @@
     if (!data) return;
     // без возможности в адаптере (или без адаптера) блока нет: о сервисах монитор ничего не знает
     card.hidden = !data.available && ['services_unavailable', 'adapter_unavailable', undefined].includes(data.code);
+    place(card.hidden);
     if (card.hidden) return;
+    summarize();
     $('sub').textContent = data.available && data.name ? data.name + (data.version ? ' ' + data.version : '') : '';
     renderPanel(); renderFeeds();
     const job = data.job;
@@ -231,7 +261,7 @@
   async function refresh() {
     try {
       const res = await fetch('/api/v1/adapter-services', {cache: 'no-store'});
-      if (res.status === 403) { $('card').hidden = true; return; }
+      if (res.status === 403) { $('card').hidden = true; place(true); return; }
       if (!res.ok) { status(TEXT.status_unknown); return; }
       const before = data && data.job && data.job.id, was = before && ACTIVE.includes(data.job.state);
       data = await res.json();

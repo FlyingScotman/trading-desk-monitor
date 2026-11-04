@@ -22,6 +22,7 @@
 .c20-tag { display: inline-block; padding: 0 6px; border-radius: 999px; font-size: 11px; border: 1px solid var(--line-2); color: var(--fg-2); white-space: nowrap; }
 .c20-tag.late { border-color: var(--warn); color: var(--warn); }
 .c20-files { font-size: 12px; color: var(--fg-3); }
+.c20-tag.in { border-color: var(--pos); color: var(--pos); }
 @media (max-width: 720px) { .k-panel > .hd { flex-wrap: wrap; } .c20-bar .k-input { min-width: 0; width: 100%; } }
 </style>
 </head>
@@ -38,11 +39,29 @@
   'use strict';
   // «Сделки дня» (S13a, TDM#525): сделки даты из выгрузки частного адаптера (набор trades контракта, 08 §10) — текущая
   // версия каждой сделки (наибольший trade_version), отменённые остаются со статусом, поздние проводки помечены.
-  // Без оценки и PnL новых сделок (остальное S13). Данные: GET ../api/v1/trades?date=&book_id= (backend desk/trades.py).
+  // PnL сделки — от её цены до оценки прогона (pnl.extra.trades последнего прогона даты; TDM#557). Данные: GET ../api/v1/trades?date=&book_id= (backend desk/trades.py).
   const K = KIT, f = K.f, esc = K.esc;
   K.top({ title: 'C20 · Сделки дня', tag: 'сделки из выгрузки адаптера: версии, отмены, поздние проводки' });
   const server = K.source === 'real' || K.source === 'empty';
   const SIDE = { buy: 'покупка', sell: 'продажа' }, STATUS = { live: 'действует', cancelled: 'отменена' };
+  // в расчёте позиций дня (TDM#557: любой прогон даты добавляет к позициям начала дня сделки по облигациям, и сделки прошлых дней, пока по книге нет отчёта) — или почему нет
+  const INTRADAY = { applied: 'в позициях', cancelled: 'отменена', not_bond: 'не облигация — пока не учитывается',
+    other_trade_date: 'дата сделки другая — войдёт с отчётом позиций', no_quantity: 'нет количества',
+    no_instrument: 'бумага не найдена', units_mismatch: 'количество и номинал не сопоставить',
+    other_book: 'книги нет среди книг с позициями', position_id_taken: 'номер позиции занят другой книгой',
+    no_currency: 'валюта бумаги неизвестна', mixed_units: 'лоты бумаги в разных единицах (штуки и номинал) — сделка не в PnL', pending: 'ждёт прогона', unknown: 'нет сведений о прогоне', off: 'расчёт по сделкам дня выключен' };
+  // PnL сделки: от цены сделки до оценки прогона; пометка — почему 0 или принято допущение (pnl.new_trades.FLAGS)
+  const PNL_FLAG = { no_trade_price: 'без цены', units_mismatch: 'валюта не совпала', no_valuation: 'нет оценки', no_fx_rate: 'нет курса',
+    no_quantity: 'нет количества', accrued_assumed: 'НКД по оценке' };
+  function tradePnl(r) {
+    if (r.pnl_rub == null) return '<span class="mut3">—</span>';
+    return f.n(r.pnl_rub, 0) + (r.pnl_flag ? ' <span class="mut3">' + esc(PNL_FLAG[r.pnl_flag] || r.pnl_flag) + '</span>' : '');
+  }
+  function inBook(r) {
+    if (!r.intraday) return '<span class="mut3">—</span>';
+    return r.intraday === 'applied' ? '<span class="c20-tag in">' + INTRADAY.applied + '</span>'
+      : '<span class="mut3">' + esc(INTRADAY[r.intraday] || r.intraday) + '</span>';
+  }
   const view = document.getElementById('view'), daysEl = document.getElementById('days');
   const u = new URL(location.href);
   let on = u.searchParams.get('date') || null, book = u.searchParams.get('book_id') || '', doc = null, q = '';
@@ -99,13 +118,15 @@
     const ql = q.toLowerCase();
     const rows = d.rows.filter(r => (!book || r.book_id === book) &&
       (!ql || [r.trade_id, r.source_instrument_id, r.source_instrument_name, r.isin].some(x => x && String(x).toLowerCase().includes(ql))));
+    const it = d.intraday;
     const sum = '<div class="c20-sum" style="padding:6px 12px">сделок <b>' + s.trades + '</b><span>действуют <b>' + s.live + '</b></span><span>отменены <b>' + s.cancelled + '</b></span>' +
-      '<span>поздние проводки <b>' + s.late + '</b></span><span>с поправками <b>' + s.versions + '</b></span><span>книг <b>' + s.books + '</b></span></div>';
-    const body = rows.length ? '<table class="k-tbl" data-vk="c20-trades" data-title="Сделки дня"><thead><tr><th>Время</th><th>Книга</th><th>Сделка</th><th>Инструмент</th><th>Сторона</th><th class="n">Количество</th><th class="n">Цена</th><th>Статус</th><th class="n">Версия</th></tr></thead><tbody>' +
+      '<span>поздние проводки <b>' + s.late + '</b></span><span>с поправками <b>' + s.versions + '</b></span><span>книг <b>' + s.books + '</b></span>' +
+      (it ? '<span title="' + (it.run_type === 'EOD' ? 'Последний прогон этой даты — закрытие' : 'Последний внутридневной прогон этой даты') + '">в позициях дня <b>' + it.applied + '</b>' + (it.new_positions ? ', новых позиций <b>' + it.new_positions + '</b>' : '') + '</span>' : '') + '</div>';
+    const body = rows.length ? '<table class="k-tbl" data-vk="c20-trades" data-title="Сделки дня"><thead><tr><th>Время</th><th>Книга</th><th>Сделка</th><th>Инструмент</th><th>Сторона</th><th class="n">Количество</th><th class="n">Цена</th><th>Статус</th><th class="n">Версия</th><th>Позиции дня</th><th class="n" title="От цены сделки до оценки последнего прогона: покупка — выше цены, продажа — ниже оценки">PnL сделки</th></tr></thead><tbody>' +
       rows.map(r => '<tr class="' + (r.status === 'cancelled' ? 'cx' : '') + '"' + (r.src ? ' title="Строка отчёта ' + esc(r.src) + '"' : '') + '><td>' + time(r) + '</td><td>' + esc(r.book_id) + '</td><td class="mono">' + esc(r.trade_id) + '</td>' +
         '<td>' + esc(r.source_instrument_name || r.source_instrument_id) + (r.source_instrument_name ? ' <span class="mut3 mono">' + esc(r.source_instrument_id) + '</span>' : '') + '</td>' +
         '<td>' + esc(SIDE[r.side] || r.side) + '</td><td class="n">' + size(r) + '</td><td class="n">' + price(r) + '</td>' +
-        '<td class="st">' + esc(STATUS[r.status] || r.status) + '</td><td class="n">' + (r.trade_version == null ? '<span class="mut3">—</span>' : esc(String(r.trade_version))) + '</td></tr>').join('') + '</tbody></table>'
+        '<td class="st">' + esc(STATUS[r.status] || r.status) + '</td><td class="n">' + (r.trade_version == null ? '<span class="mut3">—</span>' : esc(String(r.trade_version))) + '</td><td>' + inBook(r) + '</td><td class="n">' + tradePnl(r) + '</td></tr>').join('') + '</tbody></table>'
       : '<div class="k-empty">' + (d.rows.length ? 'Под фильтр ничего не попало' : 'Сделок на эту дату нет: выгрузка сделок не загружена') + '</div>';
     const files = (d.files || []).length ? '<div class="c20-files" style="padding:6px 12px">файлы: ' + d.files.map(x => esc(x.file_name) + (x.completeness === 'increment' ? ' (дельта)' : '')).join(', ') + '</div>' : '';
     tp.querySelector('.bd').classList.add('flush', 'scroll');
@@ -124,11 +145,11 @@
     const t = (id, v, st, book, instr, side, qty, px, ts, extra) => Object.assign({ trade_id: id, trade_version: v, status: st, trade_date: D, trade_ts: D + 'T' + ts + ':00', book_id: book,
       asset_class: 'bond', source_instrument_id: instr, source_instrument_name: null, side, quantity: qty, price_pct: px, ccy: 'RUB', late: false }, extra || {});
     const rows = D === '2026-10-20' ? [
-      t('TR-10', 2, 'live', 'B1', 'SEC-1', 'buy', 1200, 98.5, '10:15', { source_instrument_name: 'Демо-облигация 1' }),
-      t('TR-11', 2, 'cancelled', 'B1', 'SEC-2', 'sell', 500, 101.2, '10:40'),
-      t('TR-13', 1, 'live', 'B1', 'SEC-1', 'sell', 300, 98.3, '18:30', { trade_date: '2026-10-19', trade_ts: '2026-10-19T18:30:00', late: true }),
-      t('TR-12', 1, 'live', 'B2', 'USDRUB', 'buy', null, null, '10:20', { asset_class: 'fx', amount_ccy: 1e6, fx_rate: 83.5, ccy: 'USD' }),
-    ] : [t('TR-01', 1, 'live', 'B1', 'SEC-1', 'buy', 400, 98.1, '11:05')];
+      t('TR-10', 2, 'live', 'B1', 'SEC-1', 'buy', 1200, 98.5, '10:15', { source_instrument_name: 'Демо-облигация 1', intraday: 'applied', pnl_rub: 4200, pnl_flag: null }),
+      t('TR-11', 2, 'cancelled', 'B1', 'SEC-2', 'sell', 500, 101.2, '10:40', { intraday: 'cancelled' }),
+      t('TR-13', 1, 'live', 'B1', 'SEC-1', 'sell', 300, 98.3, '18:30', { trade_date: '2026-10-19', trade_ts: '2026-10-19T18:30:00', late: true, intraday: 'other_trade_date' }),
+      t('TR-12', 1, 'live', 'B2', 'USDRUB', 'buy', null, null, '10:20', { asset_class: 'fx', amount_ccy: 1e6, fx_rate: 83.5, ccy: 'USD', intraday: 'not_bond' }),
+    ] : [t('TR-01', 1, 'live', 'B1', 'SEC-1', 'buy', 400, 98.1, '11:05', { intraday: 'applied', pnl_rub: 310, pnl_flag: 'accrued_assumed' })];
     const books = [...new Set(rows.map(r => r.book_id))].sort().map(b => { const L = rows.filter(r => r.book_id === b); return { book_id: b, trades: L.length, live: L.filter(r => r.status === 'live').length, cancelled: L.filter(r => r.status === 'cancelled').length }; });
     return {
       date: D, book_id: null, rows, books,
@@ -136,6 +157,7 @@
         late: rows.filter(r => r.late).length, books: books.length, versions: rows.filter(r => r.trade_version > 1).length },
       files: [{ file_name: 'trades_' + D.replace(/-/g, '') + '_1500.csv', completeness: 'full_snapshot' }],
       days: [{ date: '2026-10-20', trades: 4, cancelled: 1 }, { date: '2026-10-19', trades: 1, cancelled: 0 }],
+      intraday: { run_id: 1, run_type: 'INTRADAY', cut_type: 'intraday', applied: rows.filter(r => r.intraday === 'applied').length, new_positions: 0, skipped: {} },
     };
   }
 

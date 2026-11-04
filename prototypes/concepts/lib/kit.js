@@ -2312,11 +2312,13 @@
   const RC_PROD = { irs: 'IRS', ois: 'OIS', repo: 'РЕПО', ccs: 'CCS' };
   K.RC_SIDE = { payer: 'плачу фикс', receiver: 'получаю фикс', repo: 'РЕПО (привлечение)', reverse_repo: 'обратное РЕПО (размещение)' };
   // причины, по которым ядро не оценило строку (backend valuation/derivatives.py NotValued; core_<код> — отказ ядра)
-  const RC_REASON = { ccs_unsupported: 'CCS ядром пока не оценивается', basis_swap_unsupported: 'базисный своп (две плавающие ноги) ядром пока не оценивается',
+  const RC_REASON = { ccs_unsupported: 'CCS ядром пока не оценивается',
+    ccs_foreign_floating_unsupported: 'CCS с плавающей валютной ногой ядром не оценивается (нет фиксингов валютного индекса)',
+    ccs_ccy_unsupported: 'CCS не «рубли против валюты»: ядром не оценивается', basis_swap_unsupported: 'базисный своп (две плавающие ноги) ядром пока не оценивается',
     repo_open: 'открытое РЕПО: нет даты окончания (её задаёт владелец)', no_fixings: 'нет фиксингов индекса в прогоне', pv_not_finite: 'ядро дало нечисловую оценку',
     repo_index_unsupported: 'индекс РЕПО не поддерживается', no_key_rate_curve: 'нет кривой КС в прогоне', no_rub_curve: 'нет кривой RUONIA OIS в прогоне',
     swap_dates_mismatch: 'даты начала или окончания ног свопа не совпадают', swap_notional_mismatch: 'номиналы ног свопа не совпадают',
-    terms_mixed: 'у строки сделки разных видов', not_valued: 'ядро не вернуло оценку',
+    terms_mixed: 'у строки сделки разных видов', terms_ambiguous: 'условия одной сделки подходят нескольким строкам отчёта (один deal_id): ядро не оценивает ни одну', not_valued: 'ядро не вернуло оценку',
     swap_frequency_unsupported: 'частота выплат не поддерживается', day_count_unsupported: 'база начисления не поддерживается', swap_index_unsupported: 'индекс не поддерживается',
     swap_ccy_unsupported: 'валюта свопа не RUB', repo_ccy_unsupported: 'валюта РЕПО не RUB', terms_incomplete: 'условия сделки неполные', terms_invalid: 'условия сделки не приняты ядром', settled: 'сделка исполнена' };
   K.rcReason = c => !c ? '' : RC_REASON[c] || (/^core_/.test(c) ? 'ядро отклонило: ' + c.slice(5) : c);
@@ -3174,7 +3176,9 @@
   // ---------- публикуемая ОВП прогона (TDM#416, M.ocp из D.OCP) ----------
   // справочник книги ОВП: прогона (M.book), иначе периода (meta); юрлицо книги — только отсюда (K.ocpScope и выбор книг
   // C16 — по одному правилу: книга без справочника под фильтром юрлица не входит и в выборе не предлагается)
-  K.ocpBook = (id, meta) => M.book[id] || (meta && meta[id]) || {};
+  // книга ОВП без позиций в прогоне (TDM#556: её знает только отчёт ОВП, например старая книга) — из блока ОВП
+  // прогона (M.ocp.books: юрлицо, деск, тип книги, как их задал владелец), раньше справочника периода
+  K.ocpBook = (id, meta) => M.book[id] || (M.ocp && M.ocp.books && M.ocp.books[id]) || (meta && meta[id]) || {};
   // строки M.ocp.byBook под фильтром книг: строка книги — если книга проходит фильтр (юрлицо, деск, книги, валюта);
   // строка части отчёта по юрлицу (book null, books — её книги) — только своего юрлица и если фильтр снят или покрывает
   // все её книги; без книг (books пуст) — только без фильтра книг и деска;
@@ -3190,7 +3194,8 @@
     const B = byBook || (M.ocp && Array.isArray(M.ocp.byBook) ? M.ocp.byBook : null);
     if (!B) return null;
     const F = flt || K.filter, bk = id => K.ocpBook(id, meta);
-    const bookOk = id => (!F.entity || bk(id).entity === F.entity) && (!F.desk || bk(id).desk === F.desk) && (!F.books || !F.books.length || F.books.includes(id));
+    // flt.type (C16, TDM#556) — тип книги справочника (TRADING, HTM, …): как деск, по книге целиком
+    const bookOk = id => (!F.entity || bk(id).entity === F.entity) && (!F.desk || bk(id).desk === F.desk) && (!F.type || bk(id).type === F.type) && (!F.books || !F.books.length || F.books.includes(id));
     const lines = [], partial = [], bookless = [];
     B.forEach(x => {
       if (F.ccy && x.ccy !== F.ccy) return;
@@ -3199,8 +3204,8 @@
       const books = x.books || [], ok = books.filter(bookOk);
       // без книг (остаток юрлица за вычетом частей по книгам, юрлицо без известных книг): только без фильтра книг и деска
       if (!books.length) {
-        if (!F.desk && !(F.books && F.books.length)) lines.push(x);
-        else if (flt && !F.desk && Array.isArray(flt.offEntities) && !flt.offEntities.includes(x.entity)) lines.push(x);
+        if (!F.desk && !F.type && !(F.books && F.books.length)) lines.push(x);
+        else if (flt && !F.desk && !F.type && Array.isArray(flt.offEntities) && !flt.offEntities.includes(x.entity)) lines.push(x);
         else if (flt) bookless.push(x);
         return;
       }
@@ -3208,7 +3213,7 @@
       else if (ok.length) partial.push(x);
     });
     const notes = [...new Set(partial.map(x => 'часть отчёта ОВП по юрлицу ' + x.entity + ' учтена только целиком: без фильтра книг или с фильтром на все её книги (' + (x.books || []).join(', ') + ')')
-      .concat(bookless.map(x => 'часть отчёта ОВП по юрлицу ' + x.entity + ' без книг — только без выбора книг')))];
+      .concat(bookless.map(x => 'часть отчёта ОВП по юрлицу ' + x.entity + ' без книг — только без выбора книг' + (F.type ? ' и типа книги' : ''))))];
     if ((F.portsOff || []).length) notes.push('фильтр портфелей к ОВП по книгам не применяется');
     return { lines, notes, partial: partial.length + bookless.length > 0 };
   };

@@ -48,12 +48,14 @@ from .. import __version__ as BACKEND_VERSION
 from .. import logic_version, store
 from ..marketdata.adapter import MarketView
 from ..orchestrator import EodContext, Outcome
+from ..pnl.flash import _json_safe
 from ..store import PositionInputs
 from ..valuation.fallback import CarriedSpread, used_model_spreads
 from . import derivatives_parallel, funding_run, fx_liability, ocp_run
 from .tdm_run import RunContent, git_sha, run_content
 
-PNL_KEYS = ("carry", "rolldown", "rates", "spread", "other", "fx_gross", "fx_funding", "funding", "total")
+PNL_KEYS = ("carry", "rolldown", "rates", "spread", "other", "fx_gross", "fx_funding", "funding", "new_trades",
+            "total")
 """Run totals per book: the components sum to ``total`` (a foreign-face bond's FX revaluation is in ``fx_gross``, the
 FX revaluation of its currency funding liability in ``fx_funding``, the position's funding in ``funding``: ``total`` is
 net of funding)."""
@@ -78,7 +80,8 @@ def publish(con: psycopg.Connection, ctx: EodContext, positions: list[tuple[str,
             carried_from: dict[str, CarriedSpread] | None = None,
             pnl_basis: dict[str, Any] | None = None, core_results: list[Any] | None = None,
             business_date: date | None = None, cut_type: str | None = None,
-            unlinked_rates: list[str] | None = None) -> tuple[int, str, list[str]]:
+            unlinked_rates: list[str] | None = None,
+            intraday_trades: dict[str, Any] | None = None) -> tuple[int, str, list[str]]:
     """positions: (position_id, book_id, outcome) of ``inputs`` (``store.positions_for``); ``carried_from``:
     the carried spreads the valuation got; ``pnl_basis``: what the flash PnL is measured against
     (``desk.cli.pnl_basis``, lineage ``pnl_basis``); ``core_results``: core results of the run besides those its
@@ -86,7 +89,8 @@ def publish(con: psycopg.Connection, ctx: EodContext, positions: list[tuple[str,
     even when core valued none of its positions). Returns (run_id, status, warnings). An INTRADAY run supersedes
     nothing: the older intraday runs of its date are deleted once it is complete (``store.prune_intraday``).
     ``business_date`` / ``cut_type``: the morning run (#21), the book of ``business_date`` on the earlier close of
-    ``ctx`` as cut ``prev_close``; lineage ``market_close`` names that close."""
+    ``ctx`` as cut ``prev_close``; lineage ``market_close`` names that close. ``intraday_trades``: the day's trades an
+    INTRADAY run added to the book (``desk.trades.apply_intraday``, TDM#557), lineage ``intraday_trades``."""
     outcomes = [o for _, _, o in positions]
     results = {r.result_sha256: r for r in [*(o.core_result for o in outcomes), *(core_results or ())] if r}
     bodies = {sha: portfolio_result_to_json(r).decode() for sha, r in results.items()}  # raises unless verified
@@ -111,12 +115,14 @@ def publish(con: psycopg.Connection, ctx: EodContext, positions: list[tuple[str,
         "market_business_date": ctx.market.snapshot.business_date,  # the header shows it when older (#22)
         "pnl_basis": pnl_basis,
     }
+    if intraday_trades is not None:
+        lineage["intraday_trades"] = intraday_trades
     if bd != ctx.business_date:  # the morning run (#21): the close the book of ``bd`` is valued on
         lineage["market_close"] = {"date": ctx.business_date.isoformat(), "cut_type": ctx.market.snapshot.cut_type}
     content = run_content(ctx, positions, prev, lineage, inputs)
     if swaps:
         content.log.append(("WARN", (
-            f"условия свопов без строки позиций: сделок {swaps['trades']}, книги "
+            f"условия свопов и РЕПО без строки позиций: сделок {swaps['trades']}, книги "
             + ", ".join(f"{b} ({n})" for b, n in swaps["books"].items())
             + "; не оцениваются, не входят в риск и PnL (сделка после среза отчёта позиций?)")))
     funding = funding_run.compute(con, bd, prev, ctx.market, content.rows, content.reference["books"], inputs,
@@ -198,7 +204,8 @@ def _write(cur: psycopg.Cursor, run_id: int, positions: list[tuple[str, str, Out
         q = v.quantity if v and o.terms else qty[pid]  # a bond given by face: the number of bonds valued
         rows.append((run_id, pid, i, book, o.secid, q, v.quality if v else None, why, pv, dv01, cs01,
                      _jsonb(f) if f else None, _jsonb(pnl) if pnl else None,
-                     _jsonb({"reason": o.no_pnl.reason, "detail": o.no_pnl.detail}) if o.no_pnl else None))
+                     _jsonb({"reason": o.no_pnl.reason, "detail": o.no_pnl.detail,
+                             **(_json_safe(o.trades) if o.trades else {})}) if o.no_pnl else None))
         for b in (book, "_total"):
             coverage[b][v.quality if v else "not_valued"] += 1
             coverage[b]["not_valued"] += 0

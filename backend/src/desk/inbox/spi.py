@@ -8,11 +8,12 @@ from importlib.resources import files
 
 SPI_VERSION = 1
 SPI_MAJORS = frozenset({1})            # majors this backend can call (08 §9)
-CONTRACT_MAJOR, CONTRACT_MINOR = 1, 7  # private/1.7 (08 §9: 1.1 positions risk fields; 1.2 FUTURES books, ocp,
+CONTRACT_MAJOR, CONTRACT_MINOR = 1, 8  # private/1.8 (08 §9: 1.1 positions risk fields; 1.2 FUTURES books, ocp,
 #                                        cash_balances, pnl_official, trade_terms, reference entities and funding_rules;
 #                                        1.3 reference funding_policy, positions purchase_accrued_ccy; 1.4 trade_terms
 #                                        of swaps, REPO and HTM purchases; 1.5 reference ocp_policy; 1.6 trades;
-#                                        1.7 ocp derivatives_ccy, ocp_policy report_base_plus_day, report_max_age_bd)
+#                                        1.7 ocp derivatives_ccy, ocp_policy report_base_plus_day, report_max_age_bd;
+#                                        1.8 trade_list)
 CONTRACT = f"private/{CONTRACT_MAJOR}.{CONTRACT_MINOR}"
 _CONTRACT_RE = re.compile(r"^private/([0-9]+)\.([0-9]+)$")
 
@@ -22,10 +23,10 @@ AMOUNT_RE = re.compile(r"-?[0-9]+(\.[0-9]+)?")  # fullmatch: "123\n" is not an a
 # §10: every dataset of the contract; only those with a schema file can be validated by this backend yet
 # (internal_market has none: its sources are rejected with dataset_not_supported; trades since private/1.6).
 DATASETS = frozenset({"positions", "ocp", "cash_balances", "pnl_official", "trade_terms", "trades",
-                      "internal_market"})
+                      "trade_list", "internal_market"})
 DATASETS_WITH_BOOK = DATASETS - {"internal_market"}   # a source emitting these needs reference() (§7)
 MULTI_DATE_DATASETS = frozenset({"pnl_official", "trades", "cash_balances"})  # may carry _report_date (§6.1)
-STOCK_DATASETS = frozenset({"positions", "ocp", "cash_balances", "trade_terms"})  # carried forward (§6.7)
+STOCK_DATASETS = frozenset({"positions", "ocp", "cash_balances", "trade_terms", "trade_list"})  # carried forward (§6.7)
 DATASET_KEYS: dict[str, tuple[str, ...]] = {
     "positions": ("book_id", "position_id"),
     "ocp": ("entity", "book_id", "ccy"),
@@ -33,6 +34,7 @@ DATASET_KEYS: dict[str, tuple[str, ...]] = {
     "pnl_official": ("entity", "book_id", "line_id"),
     "trade_terms": ("trade_id", "leg_id"),
     "trades": ("trade_id", "trade_version"),
+    "trade_list": ("trade_id",),
 }
 VERSIONED_DATASETS: dict[str, tuple[str, str]] = {"trades": ("trade_id", "trade_version")}
 """Datasets whose rows are versions of one record (08 §10 ``trades``, private/1.6): (record key, integer version). The

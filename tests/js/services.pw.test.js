@@ -25,10 +25,11 @@ const FEEDS = [
    schedule:{daily_at:['08:30']}, after_positions:false, running:false, queued:false, next_run:null,
    last:{last_started:'2026-10-16T08:30:00+03:00', state:'blocked', code:'login_required', needs_login:true, failures:0}}];
 
-async function setup(browser, {width = 1440, available = true, code = 'available'} = {}) {
+async function setup(browser, {width = 1440, available = true, code = 'available', hash = '#adapter/services', http = 200, noLogin = false} = {}) {
   const ctx = await browser.newContext({viewport:{width, height:1000}}), pg = await ctx.newPage(), errors = [], posts = [];
   let job = {state:'idle', code:'idle'}, polls = 0;
   const feeds = JSON.parse(JSON.stringify(FEEDS));
+  if (noLogin) { feeds[1].last = {last_started:'2026-10-16T08:30:00+03:00', state:'complete', code:'fetched', needs_login:false, failures:0}; }
   pg.on('pageerror', e => errors.push(e.message));
   pg.on('dialog', d => d.accept());
   await pg.route('**/*', route => {
@@ -36,11 +37,12 @@ async function setup(browser, {width = 1440, available = true, code = 'available
     if (u.origin !== ORIGIN) return route.abort();
     const json = (data, status = 200) => route.fulfill({status, contentType:'application/json', body:JSON.stringify(data)});
     if (u.pathname === '/api/v1/auth/state') return json({enabled:false, user:null});
-    if (u.pathname === '/api/v1/settings') return json({home:'/synthetic', effective:{}, inbox_dirs:[], env_overrides:[]});
-    if (u.pathname === '/api/v1/adapter') return json({loaded:false, name:'synthetic', error:'not loaded', config_files:[], settings_tabs:[]});
+    if (u.pathname === '/api/v1/settings') return json({home:'/synthetic', effective:{}, inbox_dirs:[{path:'C:\\in', label:'', recursive:false}], env_overrides:[]});
+    if (u.pathname === '/api/v1/adapter') return json({loaded:true, name:'synthetic', version:'0.1', describe:{sources:[]}, optional:[], actions:[], config_files:[], settings_tabs:[]});
     if (u.pathname === '/api/v1/acquisition') return json({available:false, code:'acquisition_unavailable', job:{state:'idle', phase:'idle', code:'idle'}});
     if (u.pathname === '/api/v1/adapter-services') {
       polls++;
+      if (http !== 200) return json({message:'нет'}, http);
       if (job.state === 'running' && polls > 3) job = job.next;  // the long action ends after a few polls
       return json(available ? {available, code, name:'synthetic', version:'0.1', panel:PANEL, feeds, job, running:null, scheduler:true}
         : {available:false, code, panel:null, feeds:[], job});
@@ -75,7 +77,7 @@ async function setup(browser, {width = 1440, available = true, code = 'available
     if (!file.startsWith(ROOT) || !fs.existsSync(file) || fs.statSync(file).isDirectory()) return route.fulfill({status:404, body:''});
     return route.fulfill({status:200, contentType:TYPES[path.extname(file)] || 'application/octet-stream', body:fs.readFileSync(file)});
   });
-  await pg.goto(ORIGIN + '/settings.html#adapter');
+  await pg.goto(ORIGIN + '/settings.html' + hash);
   return {ctx, pg, errors, posts};
 }
 
@@ -181,13 +183,92 @@ test('services block in Settings', {skip: pw ? false : 'нет Playwright'}, asy
       } finally { await ctx.close(); }
     });
 
+    await t.test('прямой адрес #adapter/services: открыт подраздел «Сервисы», его пункт виден и выбран', async () => {
+      const {ctx, pg, errors} = await setup(browser);
+      try {
+        await pg.locator('#svc-card').waitFor({state:'visible'});
+        assert.strictEqual(await pg.evaluate(() => location.hash), '#adapter/services');
+        assert.strictEqual(await pg.locator('#sec-adapter .sub.on').getAttribute('data-sub'), 'services');
+        const link = pg.locator('.subnav a[data-sub-link="services"]');
+        assert.ok(await link.isVisible());
+        assert.strictEqual(await link.getAttribute('aria-current'), 'page');
+        assert.deepStrictEqual(errors, []);
+      } finally { await ctx.close(); }
+    });
+
+    await t.test('«нужен вход» на виду: сводка, точки, строка в «Обзоре»; без входа — «работают»', async () => {
+      const {ctx, pg, errors} = await setup(browser, {hash:'#adapter/overview'});
+      try {
+        await pg.waitForFunction(() => /нужен вход/.test(document.getElementById('svc-line').textContent));
+        const item = pg.locator('#st-sum a[href="#adapter/services"]');
+        assert.match(await item.innerText(), /Сервисы:\s*нужен вход: Позиции/);
+        assert.strictEqual(await pg.locator('.subnav .dot[data-subdot="services"]').getAttribute('class'), 'dot warn');
+        assert.match(await pg.locator('.st-nav .dot[data-nav="adapter"]').getAttribute('class'), /\bwarn\b/);
+        assert.match(await pg.locator('#svc-line').innerText(), /Подключение к сервисам: нужен вход: Позиции\s+открыть →/);
+        await item.click();
+        await pg.waitForFunction(() => document.querySelector('#sec-adapter .sub.on').dataset.sub === 'services');
+        assert.ok(await pg.locator('#svc-card').isVisible());
+        assert.deepStrictEqual(errors, []);
+      } finally { await ctx.close(); }
+      const ok = await setup(browser, {hash:'#adapter/overview', noLogin:true});
+      try {
+        await ok.pg.waitForFunction(() => /работают/.test(document.getElementById('svc-line').textContent));
+        assert.strictEqual(await ok.pg.locator('#st-sum a[href="#adapter/services"]').innerText(), 'Сервисы', 'зелёный пункт — только название');
+        assert.match(await ok.pg.locator('#st-sum a[href="#adapter/services"]').getAttribute('title'), /работает/);
+        assert.match(await ok.pg.locator('#st-sum a[href="#adapter/services"]').getAttribute('class'), /\bok\b/);
+        assert.doesNotMatch(await ok.pg.locator('.subnav .dot[data-subdot="services"]').getAttribute('class'), /warn|bad/);
+        assert.deepStrictEqual(ok.errors, []);
+      } finally { await ok.ctx.close(); }
+    });
+
+    await t.test('адаптер без сервисов (не объявлены или 404): нет пункта, строки в сводке и «Обзоре»; адрес открывает запасной подраздел', async () => {
+      for (const opt of [{available:false, code:'services_unavailable'}, {http:404}]) {
+        const {ctx, pg, errors} = await setup(browser, opt);
+        try {
+          await pg.waitForSelector('#st-sum:not([hidden]) a');
+          await pg.waitForTimeout(300);
+          assert.strictEqual(await pg.locator('.subnav a[data-sub-link="services"]').isVisible(), false);
+          assert.strictEqual(await pg.locator('#svc-card').isVisible(), false);
+          assert.doesNotMatch(await pg.locator('#st-sum').innerText(), /Сервисы/);
+          assert.strictEqual(await pg.evaluate(() => document.getElementById('svc-line').textContent), '');
+          assert.strictEqual(await pg.locator('#sec-adapter .sub.on').count(), 1);
+          assert.notStrictEqual(await pg.locator('#sec-adapter .sub.on').getAttribute('data-sub'), 'services');
+          assert.deepStrictEqual(errors, []);
+        } finally { await ctx.close(); }
+      }
+    });
+
+    await t.test('поиск: «подключение к сервисам» и поле панели находятся при открытом месте и ведут в «Сервисы»', async () => {
+      const {ctx, pg, errors} = await setup(browser, {hash:'#hub'});
+      try {
+        await pg.locator('#st-sum a[href="#adapter/services"]').waitFor();
+        const q = pg.locator('#st-q');
+        await q.fill('Тестовые сервисы');  // заголовок блока — название панели, которое дал адаптер
+        await pg.locator('#st-q-res .st-q-it').first().waitFor();
+        await q.press('Enter');
+        await pg.waitForFunction(() => document.querySelector('#sec-adapter .sub.on') && document.querySelector('#sec-adapter .sub.on').dataset.sub === 'services');
+        assert.ok(await pg.locator('#svc-card').isVisible());
+        await q.fill('Адрес');
+        assert.match(await pg.locator('#st-q-res').innerText(), /Адрес[\s\S]*Сервисы/);
+        assert.deepStrictEqual(errors, []);
+      } finally { await ctx.close(); }
+      const off = await setup(browser, {hash:'#hub', available:false, code:'services_unavailable'});
+      try {
+        await off.pg.waitForSelector('#st-sum:not([hidden]) a');
+        await off.pg.waitForTimeout(300);
+        await off.pg.locator('#st-q').fill('Тестовые сервисы');
+        assert.match(await off.pg.locator('#st-q-res').innerText(), /Ничего не нашлось/);
+      } finally { await off.ctx.close(); }
+    });
+
     await t.test('without the capability the block stays hidden; a broken one says why', async () => {
       for (const [code, hidden] of [['services_unavailable', true], ['capability_invalid', false]]) {
         const {ctx, pg, errors} = await setup(browser, {available:false, code});
         try {
-          await pg.locator('#acquisition-card').waitFor();
+          await pg.locator('#st-sum a').first().waitFor();
           await pg.waitForTimeout(300);
           assert.strictEqual(await pg.locator('#svc-card').isHidden(), hidden);
+          assert.strictEqual(await pg.locator('.subnav a[data-sub-link="services"]').isHidden(), hidden, 'пункт «Сервисы» — как карточка');
           if (!hidden) assert.match(await pg.locator('#svc-status').innerText(), /несовместимом виде/);
           assert.deepStrictEqual(errors, []);
         } finally { await ctx.close(); }

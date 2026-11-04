@@ -31,6 +31,13 @@ a job status, the state file, a log line or an error.
 "HH:MM", "weekdays_only": bool}``: inside the window, N minutes after the last start (at once when never run).
 ``{"daily_at": ["HH:MM", ...], "weekdays_only": bool}``: the first slot after the last start; a feed never run
 catches up today's slot already passed, once; missed slots of days the monitor was off are one run, not many.
+``books`` (TDM#557): the feed gets the owner's books as a repeated request field ``book`` (``owner_books``: active,
+with a current position set; at most ``MAX_BOOKS``); none: not called, ``blocked``/``no_books``.
+``trades_file`` (TDM#561): before such a feed (``trade_terms``) the monitor compares the stored ``trade_list`` of the
+owner's books with the terms it holds (``desk.terms_plan``) and, with a plan, writes the live trades of the list as
+``<state_dir>/requests/<run id>.json`` (``terms-request`` v1) and passes its path as the one field ``trades_file``;
+the adapter then asks for the terms of the new and changed trades only. The last ``KEEP_REQUESTS`` files are kept for
+diagnosis. The outcome gets a line of the counts. Without a plan the feed runs as before.
 ``after_positions``: also once when a positions set for a newer business date than the feed last saw is in the
 store (the first sight only records it), with that date as ``date``. Only enabled (the monitor's switch, default the
 feed's own ``enabled``) and ready feeds run by themselves. ``blocked``/``login_required`` pauses the feed («нужен
@@ -60,7 +67,7 @@ from datetime import time as dtime
 from pathlib import Path
 from typing import Any
 
-from . import helper_proc, recompute, store
+from . import helper_proc, recompute, store, terms_plan
 from .autopilot import CycleLock
 from .inbox import scan
 from .inbox.loader import AdapterHandle, check_services, fingerprint, load_adapter
@@ -76,6 +83,8 @@ TICK_S = 30.0
 RECHECK_S = 600.0          # the scheduler loads the adapter again this often: a new fingerprint is described again
 AVAILABILITY_S = 15.0      # GET's availability is reused this long (the settings page polls while a job runs)
 LOCK_WAIT_S = 1200.0       # a feed's files wait this long for the cycle lock (an autopilot cycle), then retry later
+KEEP_REQUESTS = 5          # the request files (``trades_file``) kept for diagnosis
+MAX_REQUEST_TRADES = 50000  # the adapter refuses a longer list (08 §2.2); the monitor then sends none
 KEEP_OUT = 20              # the output folders of the last feed runs kept (the archive keeps accepted files anyway)
 STATE_FILE = "state.json"
 
@@ -242,11 +251,32 @@ def clean_feeds(v: Any, h: AdapterHandle | None) -> list[dict]:
         feed = {"id": f["id"], "title": _str(f.get("title", f["id"]), 200), "dataset": _str(f.get("dataset"), 64),
                 "source": _str(f.get("source"), 100, empty=False), "enabled": f["enabled"], "ready": f["ready"],
                 "why_not_ready": _opt(f, "why_not_ready", 1000), "schedule": clean_schedule(f.get("schedule")),
-                "after_positions": f.get("after_positions") is True}
+                "after_positions": f.get("after_positions") is True, "books": f.get("books") is True,
+                "trades_file": f.get("trades_file") is True}
         decl = h.source(feed["source"]) if h is not None else None
         feed["source_declared"] = h is None or (decl is not None and decl.get("dataset") == feed["dataset"])
         out.append(feed)
     return out
+
+
+MAX_BOOKS = 200  # the request's ``book`` values (08 §2.2)
+
+
+def owner_books(con: Any, on: date) -> tuple[list[str], list[str]]:
+    """The owner's books for a feed with ``books`` (08 §2.2): the active books in force on ``on`` whose current
+    position set has rows, sorted; and the notes for the owner when some were left out (a book id over 200 characters,
+    more than ``MAX_BOOKS`` books: never silently). Empty books: the feed is not called."""
+    held = {r[1] for r in store.positions_for(con, on).rows}
+    active = {b["book_id"] for b in store.current_books(con, on) if b.get("active", True) is not False}
+    books, notes = sorted(held & active), []
+    long_ = [b for b in books if len(b) > 200]
+    if long_:
+        books = [b for b in books if len(b) <= 200]
+        notes.append(f"Книг с идентификатором длиннее 200 символов пропущено: {len(long_)}.")
+    if len(books) > MAX_BOOKS:
+        notes.append(f"Книг с позициями {len(books)}, в запрос вошли первые {MAX_BOOKS}.")
+        books = books[:MAX_BOOKS]
+    return books, notes
 
 
 def clean_action(r: dict) -> dict:
@@ -370,6 +400,25 @@ def next_due(feed: dict, run: dict, now: datetime) -> datetime | None:
 
 def backoff(failures: int) -> timedelta:
     return timedelta(minutes=BACKOFF_MIN[min(max(failures, 1), len(BACKOFF_MIN)) - 1])
+
+
+def plan_line(c: dict) -> str:
+    """The owner's line about a terms plan (``terms_plan.plan`` counts)."""
+    return (f"Список: сделок {c['live']}, книг {c['books']}; запрошено {c['requested']} (новых {c['new']}, "
+            f"изменённых {c['changed']}), уже были {c['have']}, закрыто {c['closed']}.")
+
+
+def write_request(st: Settings, rid: str, plan: dict) -> Path:
+    """The terms request file of a plan (08 §2.2 ``trades_file``), atomically, UTF-8, under ``state_dir/requests``."""
+    d = state_dir(st) / "requests"
+    d.mkdir(parents=True, exist_ok=True)
+    doc = {"format": "terms-request", "version": 1, "date": plan["date"], "books": plan["books"],
+           "trades": plan["trades"]}
+    tmp = d / f"{rid}.json.tmp"
+    tmp.write_text(json.dumps(doc, ensure_ascii=False, separators=(",", ":")), encoding="utf-8")
+    final = d / f"{rid}.json"
+    os.replace(tmp, final)
+    return final
 
 
 # ---- persisted state -------------------------------------------------------------------------------------------------
@@ -702,7 +751,8 @@ class AdapterServices:
                 return False
         return True
 
-    def _call(self, st: Settings, hp: Helper, op: str, extra: dict[str, str], *, out: Path | None = None) -> dict:
+    def _call(self, st: Settings, hp: Helper, op: str, extra: dict[str, str | list[str]], *,
+              out: Path | None = None) -> dict:
         fields: dict[str, str | list[str]] = {"op": op, **extra, "adapter_root": str(hp.root),
                                               "config_dir": hp.handle.config_dir or "",
                                               "inbox_dir": [str(d) for d in st.inbox_dirs],
@@ -903,12 +953,32 @@ class AdapterServices:
             return dict(run)
 
     def _feed(self, st: Settings, f: dict, trigger: str, day: str | None, newest: date | None) -> None:
+        if f.get("trades_file"):
+            self._ensure_list(st, f, day)
         rid = uuid.uuid4().hex
         started = self._now()
         seen = {"positions_seen": newest.isoformat()} if newest is not None else {}
         # recorded before the call: a restart in the middle does not fetch again at once
-        prev = self._record(st, f["id"], last_started=_iso(started), trigger=trigger, date=day, **seen)
+        prev = self._record(st, f["id"], last_started=_iso(started), trigger=trigger, date=day)
         outcome: dict[str, Any]
+        books: list[str] = []
+        notes: list[str] = []
+        if f.get("books"):  # a feed of the owner's books (TDM#557): none to ask for, nothing to call
+            try:
+                with store.connect(self._url) as con:
+                    books, notes = owner_books(con, date.fromisoformat(day) if day else self._today())
+            except Exception:
+                log.exception("adapter services: books of feed %s not read", f["id"])
+                self._finish(st, f, prev, {"state": "error", "code": "operation_failed", "lines": []}, started)
+                return
+            if not books:
+                if seen:  # seen all the same: a feed after the positions is not due again at every step
+                    self._record(st, f["id"], **seen)
+                self._finish(st, f, prev, {"state": "blocked", "code": "no_books", "lines": [
+                    "Нет книг владельца с позициями: загрузите позиции и отметьте книги активными."]}, started)
+                return
+        if seen:
+            self._record(st, f["id"], **seen)
         self._cancel.clear()
         with self._lock:
             self._running = {"kind": "feed", "feed": f["id"], "since": _iso(started), "phase": "waiting"}
@@ -927,16 +997,43 @@ class AdapterServices:
                 self._running = {"kind": "feed", "feed": f["id"], "since": _iso(started), "phase": "fetching"}
             out = state_dir(st) / "out" / rid
             out.mkdir(parents=True)
-            if day is None and f["dataset"] == "trade_terms":
+            if day is None and f["dataset"] in ("trade_terms", "trade_list"):
                 # the business date of the latest positions: the adapter has no holiday calendar of its own
                 newest_pos = self._newest_positions()
                 day = newest_pos.isoformat() if newest_pos else None
                 if day:
                     self._record(st, f["id"], date=day)
             drained = self._drain_pending(st, hp, f, prev.get("pending"))
-            extra = {"feed": f["id"], **({"date": day} if day else {})}
+            extra: dict[str, str | list[str]] = {"feed": f["id"], **({"date": day} if day else {}),
+                                                 **({"book": books} if books else {})}
+            plan, note = self._terms_plan(st, f, rid, day) if f.get("trades_file") else (None, None)
+            if plan is not None:
+                extra["trades_file"] = str(plan[0])
+            if books:  # the whole request within the protocol's limits before the call, the books cut with a note
+                asked = len(books)
+                base = len(st.inbox_dirs) + 8
+                books = books[:max(0, helper_proc.MAX_FIELDS - base)]
+                while books:
+                    try:
+                        helper_proc.encode({"op": "feed", **extra, "book": books, "adapter_root": str(hp.root),
+                                            "config_dir": hp.handle.config_dir or "", "state_dir": str(state_dir(st)),
+                                            "output_dir": str(out), "inbox_dir": [str(d) for d in st.inbox_dirs]})
+                        break
+                    except helper_proc.HelperFailure:
+                        books = books[:-max(1, len(books) // 10)]
+                extra["book"] = books
+                if len(books) < asked:
+                    notes.append(f"В запрос вошло книг: {len(books)} из {asked} (предел размера запроса).")
+                if not books:
+                    raise ServiceError("invalid_request", "error")
             r = clean_feed_result(self._call(st, hp, "feed", extra, out=out))
             outcome = {k: r[k] for k in ("state", "code", "lines", "dates")}
+            if notes:
+                outcome["lines"] = [*notes, *outcome["lines"]]
+            if plan is not None:
+                outcome["lines"] = [plan_line(plan[1]), *outcome["lines"]]
+            elif note:
+                outcome["lines"] = [note, *outcome["lines"]]
             if r["state"] in ("complete", "partial") and r["files"]:
                 if not f.get("source_declared", True):
                     raise ServiceError("feed_source_invalid", "error")  # files no declared source would read
@@ -966,6 +1063,49 @@ class AdapterServices:
             self._prune(st)
         self._finish(st, f, prev, outcome, started)
 
+    def _plan_of(self, day: str | None) -> tuple[date | None, dict | None]:
+        on = date.fromisoformat(day) if day else self._newest_positions()
+        if on is None:
+            return None, None
+        with store.connect(self._url) as con:
+            books, _ = owner_books(con, on)
+            return on, terms_plan.plan(con, on, books) if books else None
+
+    def _ensure_list(self, st: Settings, f: dict, day: str | None) -> None:
+        """A ``trades_file`` feed needs the list of its date: when the store has none of that day, the enabled and
+        ready feed of the dataset ``trade_list`` runs first, in the same turn (module doc)."""
+        try:
+            on, plan = self._plan_of(day)
+            if on is None or (plan is not None and not plan.get("stale")):
+                return
+            doc = read_state(st)
+            tl = next((x for x in doc.get("feeds") or [] if x.get("dataset") == "trade_list" and x["id"] != f["id"]
+                       and x.get("ready") and _enabled(doc, x)), None)
+            if tl is not None:
+                self._feed(st, tl, "dependency", on.isoformat(), None)
+        except Exception:
+            log.exception("adapter services: list for feed %s not ensured", f["id"])
+
+    def _terms_plan(self, st: Settings, f: dict, rid: str, day: str | None
+                    ) -> tuple[tuple[Path, dict] | None, str | None]:
+        """(the request file of a ``trades_file`` feed and the plan's counts or None, a line for the outcome or None).
+        No file (no list of the date, too long a list, any failure): the feed runs as before, the whole report, and the
+        line says why. The counts are kept in the feed's state."""
+        try:
+            on, plan = self._plan_of(day)
+            if on is None:
+                return None, None
+            if plan is None or plan.get("stale"):
+                return None, (f"Список сделок за {on:%d.%m.%Y} не получен — условия запрошены полным проходом.")
+            if len(plan["trades"]) > MAX_REQUEST_TRADES:
+                return None, f"Заявка не построена: в списке больше {MAX_REQUEST_TRADES} сделок, полный проход."
+            path = write_request(st, rid, plan)
+        except Exception:
+            log.exception("adapter services: terms plan of feed %s not made", f["id"])
+            return None, "Заявка не построена: ошибка при сравнении со списком, полный проход."
+        self._record(st, f["id"], plan=plan["counts"])
+        return (path, plan["counts"]), None
+
     def _finish(self, st: Settings, f: dict, prev: dict, outcome: dict, started: datetime) -> None:
         now = self._now()
         state, code = outcome["state"], outcome["code"]
@@ -975,6 +1115,8 @@ class AdapterServices:
                                "recompute_failed": outcome.get("recompute_failed", [])}
         if state == "blocked" and code == "login_required":
             rec.update(needs_login=True, failures=0, retry_at=None)
+        elif state == "blocked" and code == "no_books":
+            rec.update(needs_login=False, failures=0, retry_at=None)  # nothing to ask for yet: the next step tries again
         elif state in ("complete", "partial", "skipped"):
             rec.update(needs_login=False, failures=0, retry_at=None, last_ok=_iso(now))
         elif state == "cancelled":
@@ -1072,3 +1214,10 @@ class AdapterServices:
             return
         for d in dirs[:-KEEP_OUT] if len(dirs) > KEEP_OUT else []:
             shutil.rmtree(d, ignore_errors=True)
+        try:
+            reqs = sorted((p for p in (state_dir(st) / "requests").iterdir() if p.is_file()),
+                          key=lambda p: p.stat().st_mtime)
+        except OSError:
+            return
+        for p in reqs[:-KEEP_REQUESTS]:
+            p.unlink(missing_ok=True)

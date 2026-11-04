@@ -423,7 +423,9 @@ def direct_row(ctx: EodContext, book: str, pid: str, o: Outcome, x: dict[str, An
     v = o.valuation
     assert v is not None
     x = normalised(x)
-    kind = (x.get("asset_class") or "bond").lower()
+    # a row without asset_class valued by core from its trade's terms is a derivative, not an unmapped bond (TDM#501)
+    # or refused by core (``o.core_not_valued``: the plan gave it the OTC rule): an OTC row with the reason, not a bond
+    kind = (x.get("asset_class") or ("otc" if v.extra.get("core") or o.core_not_valued else "bond")).lower()
     fx = kind == "fx"
     itype, aclass, segment = DIRECT_KIND.get(kind, DIRECT_KIND["other"])
     why = list(v.assumptions)
@@ -473,6 +475,7 @@ def direct_row(ctx: EodContext, book: str, pid: str, o: Outcome, x: dict[str, An
             "assumptions": why, "quantity_bonds": qty, **({"not_exact_reason": o.reason} if o.reason else {}),
             **({"pnl": pnl_extra(o.pnl)} if o.pnl else {}),
             **({"fx_rate": rate} if ccy != "RUB" else {}), **v.extra, **reported(x),
+            **({"ocp_amount": o.ocp_amount} if o.ocp_amount and "ocp_amount" not in v.extra else {}),
             **({"fx_delta_basis": "notional (no trade terms: undiscounted)"} if fx and not core and delta else {}),
         },
     }

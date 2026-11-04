@@ -14,9 +14,10 @@ row per derivative position:
 - ``neither``: not valued by core and no PV in the report.
 
 ``used`` says which value the run publishes: today core's whenever it values the row, the report's otherwise
-(``valuation.positions``), for every product (TDM#45: interest rate swaps and REPO too; a CCS stays the report's,
-reason ``ccs_unsupported``). ``product`` (also the key of ``by_product``) is one scheme for all rows: core's product of
-a valued row (``fx_forward``, ``fx_swap``, ``fx_ndf``, ``fx_cross``, ``fx_future``, ``irs``, ``ois``, ``repo``, several
+(``valuation.positions``), for every product (TDM#45: interest rate swaps and REPO too; TDM#555: a CCS RUB against a
+foreign fixed leg, product ``ccs``; one with a floating foreign leg stays the report's,
+``ccs_foreign_floating_unsupported``). ``product`` (also the key of ``by_product``) is one scheme for all rows: core's product of
+a valued row (``fx_forward``, ``fx_swap``, ``fx_ndf``, ``fx_cross``, ``fx_future``, ``irs``, ``ois``, ``ccs``, ``repo``, several
 joined by ``+``); for a row core did not value, the same names from its linked trade terms (``ccs`` too), else
 ``<asset_class>_other`` in lower case (``fx_other``, ``otc_other``; ``other`` without a class). A
 difference is ``over`` the tolerance when it exceeds the larger of ``abs_rub`` and ``rel`` x |imported|; the
@@ -72,7 +73,7 @@ def compare(positions: list[tuple[str, str, Outcome]], extra: dict[str, dict[str
     """The block of the run: ``positions`` as ``desk_run.publish`` gets them, ``extra`` the positions rows
     (``PositionInputs.extra``) and ``terms`` the run's ``trade_terms`` rows, for the report's PV and the product of
     a row core did not value."""
-    linked, _ = dv.link([(pid, book, extra.get(pid) or {}) for pid, book, o in positions if o.core_not_valued],
+    linked, _, _ = dv.link([(pid, book, extra.get(pid) or {}) for pid, book, o in positions if o.core_not_valued],
                         terms or [])
     rows: list[dict[str, Any]] = []
     for pid, book, o in positions:

@@ -321,6 +321,76 @@ def test_context_offers_books_seen_in_recent_positions_and_the_hubs_indices(home
     assert j["recent_books"][0]["entity"] == "ООО Ромашка" and j["recent_books"][1]["entity"] is None
 
 
+def test_context_offers_ocp_only_books_without_recent_positions(home: Path, store_url: str) -> None:
+    """TDM#556: a book of the OCP report of the last weeks without recent positions (an old book that still holds an
+    OCP) is offered too, marked ``ocp_only``, with its entity from its book revision or else from the OCP unit; a book
+    with recent positions is listed once, as a positions book. Synthetic codes only."""
+    with psycopg.connect(store_url, autocommit=True) as con:
+        sid = con.execute("INSERT INTO position_set (book_id, valid_date, revision, source_name, source_file_sha256) "
+                          "VALUES ('T1', '2026-10-20', 1, 'f.csv', 'ab') RETURNING set_id").fetchone()[0]
+        con.execute("INSERT INTO position_input VALUES (%s, 'P0', 'SU26238RMFS4', 1)", (sid,))
+        con.execute("INSERT INTO position_set (book_id, valid_date, revision, source_name, source_file_sha256) "
+                    "VALUES ('OLD_POS', '2026-08-01', 1, 'f.csv', 'ab')")  # positions long ago: out of the window
+        con.execute("INSERT INTO inbox_file (sha256, path, name, size_bytes, mtime) VALUES ('ocp1', 'p', 'n', 1, now())")
+        con.execute("INSERT INTO book_rev (book_id, name, desk, book_type, entity, active, adapter_fingerprint, "
+                    "content_sha256) VALUES ('OLD_POS', 'Старая', 'AUTO', 'TRADING', 'E_BOOK', true, 'fp', 's')")
+
+        def unit(scope: dict, d: str, rows: list[dict], rev: int = 1) -> None:
+            set_id = con.execute(
+                "INSERT INTO dataset_set (dataset, scope, scope_key, valid_date, revision, source, report_date, "
+                "inbox_file_sha256, source_name, adapter_fingerprint, unit_hash, row_count) VALUES ('ocp', %s, %s, "
+                "%s, %s, 'ocp_demo', %s, 'ocp1', 'n', 'fp', 'h', %s) RETURNING set_id",
+                (json.dumps(scope), json.dumps(scope, sort_keys=True), d, rev, d, len(rows))).fetchone()[0]
+            for n, r in enumerate(rows, 1):
+                con.execute("INSERT INTO dataset_row (set_id, row_no, row_key, data) VALUES (%s, %s, %s, %s)",
+                            (set_id, n, f"{n}", json.dumps(r)))
+
+        row = {"entity": "E_OCP", "ccy": "USD", "ocp_ccy": "1"}
+        unit({"entity": "E_OCP", "book_id": "T1"}, "2026-10-20", [{**row, "book_id": "T1"}])
+        unit({"entity": "E_OCP", "book_id": "OLD_POS"}, "2026-10-19", [{**row, "book_id": "OLD_POS"}])
+        unit({"entity": "E_OCP", "book_id": "OLD_POS"}, "2026-10-20", [], 1)  # zero today: its scope still counts
+        unit({"entity": "E_OCP"}, "2026-10-18", [{**row, "book_id": "ONLY_OCP"}, {**row}])  # an entity-level unit
+        unit({"entity": "E_OCP", "book_id": "GONE"}, "2026-08-01", [{**row, "book_id": "GONE"}])  # too old
+    j = _client(store_url).get("/api/v1/adapter/settings-context").json()
+    assert j["error"] is None
+    got = [(b["book_id"], b["last_date"], b["positions"], b["ocp_only"], b["entity"]) for b in j["recent_books"]]
+    assert got == [("OLD_POS", "2026-10-20", None, True, "E_BOOK"), ("ONLY_OCP", "2026-10-18", None, True, "E_OCP"),
+                   ("T1", "2026-10-20", 1, False, None)]
+
+
+def test_ocp_only_books_a_closed_book_stays_ocp_only_and_a_superseded_revision_does_not_count(
+        home: Path, store_url: str) -> None:
+    """TDM#556: a book whose current position set is empty (closed by omission) has no positions, so it stays
+    ``ocp_only``; and only the current revision of an OCP unit counts: a book the first revision listed and the
+    later one dropped is not offered. Synthetic codes only."""
+    with psycopg.connect(store_url, autocommit=True) as con:
+        sid = con.execute("INSERT INTO position_set (book_id, valid_date, revision, source_name, source_file_sha256) "
+                          "VALUES ('T1', '2026-10-20', 1, 'f.csv', 'ab') RETURNING set_id").fetchone()[0]
+        con.execute("INSERT INTO position_input VALUES (%s, 'P0', 'SU26238RMFS4', 1)", (sid,))
+        con.execute("INSERT INTO position_set (book_id, valid_date, revision, source_name, source_file_sha256) "
+                    "VALUES ('CLOSED', '2026-10-20', 1, 'f.csv', 'ab')")  # an empty set: closed by omission
+        con.execute("INSERT INTO inbox_file (sha256, path, name, size_bytes, mtime) VALUES ('ocp1', 'p', 'n', 1, now())")
+
+        def unit(scope: dict, d: str, rows: list[dict], rev: int) -> None:
+            set_id = con.execute(
+                "INSERT INTO dataset_set (dataset, scope, scope_key, valid_date, revision, source, report_date, "
+                "inbox_file_sha256, source_name, adapter_fingerprint, unit_hash, row_count) VALUES ('ocp', %s, %s, "
+                "%s, %s, 'ocp_demo', %s, 'ocp1', 'n', 'fp', %s, %s) RETURNING set_id",
+                (json.dumps(scope), json.dumps(scope, sort_keys=True), d, rev, d, f"h{rev}", len(rows))).fetchone()[0]
+            for n, r in enumerate(rows, 1):
+                con.execute("INSERT INTO dataset_row (set_id, row_no, row_key, data) VALUES (%s, %s, %s, %s)",
+                            (set_id, n, f"{n}", json.dumps(r)))
+
+        row = {"entity": "E_OCP", "ccy": "USD", "ocp_ccy": "1"}
+        unit({"entity": "E_OCP", "book_id": "CLOSED"}, "2026-10-20", [{**row, "book_id": "CLOSED"}], 1)
+        unit({"entity": "E_OCP"}, "2026-10-20", [{**row, "book_id": "DROPPED"}, {**row, "book_id": "KEPT"}], 1)
+        unit({"entity": "E_OCP"}, "2026-10-20", [{**row, "book_id": "KEPT"}], 2)  # the current revision
+    j = _client(store_url).get("/api/v1/adapter/settings-context").json()
+    assert j["error"] is None
+    assert [(b["book_id"], b["positions"], b["ocp_only"]) for b in j["recent_books"]] == [
+        ("CLOSED", None, True), ("KEPT", None, True), ("T1", 1, False)]
+
+
 def test_with_sign_in_the_forms_are_the_admins_and_record_the_user(home: Path, store_url: str) -> None:
     """The form routes sit behind the settings' guard (``auth.require_admin``): with sign-in on, only an admin checks
     or saves, and the revision carries the user's name (sign-in off: ``local``, above); an alias edit likewise."""

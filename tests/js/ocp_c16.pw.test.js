@@ -41,15 +41,18 @@ function history(state, opt = {}) {
         L('Головной банк', 'SOV_FX', ['SOV_FX'], 'CNY', 260e6), L('Головной банк', 'CORP_FX', ['CORP_FX'], 'GBP', -6e6)]
         .concat(opt.chf ? [L('Головной банк', 'FXB', ['FXB'], 'CHF', 1e6)] : []) });
     if (opt.lines && days[0].lines.length) days[0].lines = opt.lines(days[0].lines);  // CHF: курса нет ни в прогоне, ни в отчёте
+    if (opt.oldBook && days[0].lines.length) days[0].lines.push(L('Головной банк', 'OLDX', ['OLDX'], 'USD', 5e6));  // TDM#556
   }
-  return { runId: null, asOf: AS_OF, from: days[0].date, to: AS_OF, books: {}, days };
+  // TDM#556: книга ОВП без позиций — справочник из блока ОВП прогона (ocp_history: books, ocpOnly)
+  const books = opt.oldBook ? { OLDX: { name: 'Старая книга ОВП', entity: 'Головной банк', desk: 'Legacy', type: 'HTM', ocpOnly: true } } : {};
+  return { runId: null, asOf: AS_OF, from: days[0].date, to: AS_OF, books, days };
 }
 const WHY = { dataset: 'ocp', name: 'ОВП', on: AS_OF, adapter: 'ok synthetic', sources: ['ocp_synthetic'], in_force: null,
   files: { total: 0, by_status: {}, status_text: {}, later: { total: 0, by_status: {}, first_date: null } }, latest: null,
   unread: { ignored: 0, too_old: 0 }, lookback_days: 35, folders: { count: 1, scanned: 1, missing: 0 }, settings_link: false, last_scan: null };
 
 async function open(browser, { width = 1366, theme = 'dark', state = null, hist = {}, store = {} } = {}) {
-  const ctx = await browser.newContext({ viewport: { width, height: 900 } }), pg = await ctx.newPage(), errors = [], calls = [];
+  const ctx = await browser.newContext({ viewport: { width, height: 900 }, deviceScaleFactor: SHOTS ? 2 : 1 }), pg = await ctx.newPage(), errors = [], calls = [];
   await ctx.addInitScript(([t, st]) => { try { localStorage.clear(); localStorage.setItem('concepts-theme', t); Object.entries(st).forEach(([k, v]) => localStorage.setItem(k, v)); } catch (e) { } }, [theme, store]);
   pg.on('pageerror', e => errors.push('pageerror: ' + e.message));
   pg.on('console', m => { if (m.type() === 'error' && !/Failed to load resource/.test(m.text())) errors.push('console: ' + m.text()); });
@@ -178,5 +181,30 @@ test('C16 under «report base + day»: the base date only in the tooltip, «от
     assert.ok(!BAD.test(await pg.locator('#view').textContent()));
     assert.deepEqual(errors, []);
     await ctx.close();
+  } finally { await browser.close(); }
+});
+
+test('C16: a book only the OCP report knows (TDM#556): entity and book type from its settings, the book type chip; 390 and 1024 px', { skip: pw ? false : 'нет Playwright', timeout: 120000 }, async () => {
+  const browser = await pw.chromium.launch();
+  try {
+    for (const width of [1024, 390]) {
+      const { pg, ctx, errors } = await open(browser, { width, hist: { oldBook: true } });
+      const rows = () => pg.locator('[data-ocp-row]').evaluateAll(a => a.map(e => e.dataset.ocpRow));
+      assert.ok((await rows()).includes('OLDX'), 'книга без позиций — в таблице');
+      const type = pg.locator('[data-c16="type"]');
+      assert.match(await type.innerText(), /все типы книг/);
+      await type.click();
+      await pg.locator('.mi', { hasText: 'HTM' }).first().click();
+      assert.deepEqual(await rows(), ['OLDX'], 'тип HTM — только книга этого типа; части отчёта без типа — нет');
+      assert.match(await pg.locator('[data-c16="type"]').innerText(), /тип: HTM/);
+      await pg.locator('[data-c16="books"]').click();
+      assert.ok((await pg.locator('.mi', { hasText: 'OLDX' }).first().innerText()).includes('только ОВП'));
+      await pg.mouse.click(5, 5);
+      assert.ok(await pg.evaluate(() => document.documentElement.scrollWidth <= innerWidth), 'нет прокрутки вбок');
+      assert.ok(!BAD.test(await pg.locator('#view').textContent()));
+      if (SHOTS) { fs.mkdirSync(SHOTS, { recursive: true }); await pg.screenshot({ path: path.join(SHOTS, 'c16-ocp-only-' + width + '.png'), fullPage: false }); }
+      assert.deepEqual(errors, []);
+      await ctx.close();
+    }
   } finally { await browser.close(); }
 });

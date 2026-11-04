@@ -7,7 +7,8 @@ a services feed) the owner should not wait for either: ``after_inputs`` makes th
 
 * ``eod_dates``: for each D the EOD run of D (``cli.eod_run``) when the cache holds its ``eod_final`` close, the store
   has positions for D and its default run is missing or read other inputs (position sets, private inputs hash).
-* ``current_day``: today's shown runs (``store.CURRENT_RUNS``) whose private inputs hash is no longer today's: the
+* ``current_day``: today's shown runs (``store.CURRENT_RUNS``) whose private inputs hash is no longer today's (for an
+  INTRADAY run with the day's trades applied, ``trades.intraday_inputs``, TDM#557): the
   latest INTRADAY run (an intraday cut, or the morning run on the previous close: ``cut_type`` ``prev_close``) while
   today has no EOD run, a preliminary close (``eod_preliminary`` EOD run) while today has no final one, each on the
   same market snapshot as before; the earlier INTRADAY runs of today go (``store.prune_intraday``, one per date as in
@@ -25,7 +26,7 @@ from datetime import date
 from pathlib import Path
 from typing import Any
 
-from . import store
+from . import store, trades
 from .marketdata.bundle import SnapshotDir, SnapshotError
 
 log = logging.getLogger("desk.recompute")
@@ -61,7 +62,7 @@ def eod_dates(settings: Any, url: str, dates: Iterable[date], *, out: Callable[[
                 if not n:
                     continue
                 run = store.default_runs(con, d).get(d)
-                inputs_hash = store.positions_for(con, d).private_inputs_hash
+                inputs_hash = trades.intraday_inputs(con, d, settings)[0].private_inputs_hash  # TDM#557
             if run is not None and run["position_set_ids"] == ids and run["private_inputs_hash"] == inputs_hash:
                 continue
             rid = eod_run(settings, d.isoformat(), snapshots=settings.snapshot_cache, store_url=url,
@@ -95,13 +96,13 @@ def current_day(settings: Any, url: str, today: date, *, out: Callable[[str], No
         with store.connect(url) as con:
             if not store.current_sets(con, today)[1]:
                 return res
-            want = store.positions_for(con, today).private_inputs_hash
+            want = want_intraday = trades.intraday_inputs(con, today, settings)[0].private_inputs_hash  # TDM#557
             intraday = con.execute(_LATEST_INTRADAY, (today,)).fetchone()
             prelim = con.execute(_PRELIMINARY, (today, today)).fetchone()
     except Exception as e:  # noqa: BLE001 - the store not readable: nothing made again, said so
         _failed(today, f"{today:%d.%m}", e, res)
         return res
-    if intraday is not None and intraday[5] != want:
+    if intraday is not None and intraday[5] != want_intraday:
         rid0, cut, snap, cut_ts, close, _ = intraday
         label = store.slice_label(today, cut, cut_ts, "INTRADAY", close)
         try:
