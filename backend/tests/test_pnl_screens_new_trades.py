@@ -40,12 +40,13 @@ def more(con, rid, day):
     con.execute("INSERT INTO run_position(run_id,position_id,ord,book_id,secid,quantity,quality,pv_rub,dv01_rub,"
                 "cs01_rub,fact,pnl) VALUES (%s,'T1',99,'DEMO-A','SYN-1',5,'exact',1e6,-400,-10,%s,%s)",
                 (rid, Jsonb(fact("A1", 11, day)), Jsonb(pnl)))
-    # N2: the start of the day has no PnL, its trade is kept in no_pnl
-    con.execute("INSERT INTO run_position(run_id,position_id,ord,book_id,secid,quantity,quality,pv_rub,dv01_rub,"
-                "cs01_rub,fact,no_pnl) VALUES (%s,'N2',98,'DEMO-A','SYN-1',5,'exact',1e6,-400,-10,%s,%s)",
-                (rid, Jsonb(fact("A1", 11, day)),
-                 Jsonb({"reason": "no_prev_report", "detail": "synthetic", "start_quantity": 2.0,
-                        "trades": [{"trade_id": "tr-4", "side": "buy", "quantity": 3.0, "pnl_rub": 5.0}]})))
+    # N2, N3: the start of the day has no PnL, the trade is kept in no_pnl (N3: the position was opened today)
+    for pid, start, i in (("N2", 2.0, 98), ("N3", 0.0, 96)):
+        con.execute("INSERT INTO run_position(run_id,position_id,ord,book_id,secid,quantity,quality,pv_rub,dv01_rub,"
+                    "cs01_rub,fact,no_pnl) VALUES (%s,%s,%s,'DEMO-A','SYN-1',5,'exact',1e6,-400,-10,%s,%s)",
+                    (rid, pid, i, Jsonb({**fact("A1", 11, day), "notional": 5000.0}),
+                     Jsonb({"reason": "no_prev_report", "detail": "synthetic", "start_quantity": start,
+                            "trades": [{"trade_id": "tr-" + pid, "side": "buy", "quantity": 3.0, "pnl_rub": 5.0}]})))
     # A1 moves to the other book on the last day: one position id, two books
     con.execute("UPDATE run_position SET book_id = 'DEMO-B' WHERE run_id = %s AND position_id = 'A1'", (rid,))
 
@@ -101,7 +102,9 @@ def test_a_day_trade_is_from_the_recorded_trades_not_the_change_of_the_quantity(
     p = extras(client, ids[-1])["positions"]
     assert p["A1"]["trade"]["n"] == 2  # bought and sold: the quantity is the same
     assert p["T1"]["trade"]["n"] == 1 and p["T1"]["trade"]["new"]
-    assert p["N2"]["trade"]["n"] == 1  # the start of the day has no PnL: the trade is in no_pnl.trades
+    # the start of the day has no PnL: the trade is in no_pnl.trades, its face from the quantity after the trades
+    assert p["N2"]["trade"]["n"] == 1 and p["N2"]["trade"]["qty"] == pytest.approx(3000.0)
+    assert "new" not in p["N2"]["trade"] and p["N3"]["trade"]["new"]  # start_quantity 0 from no_pnl: opened today
     assert "trade" not in p["B1"]
 
 
@@ -126,7 +129,7 @@ def test_the_trades_screen_reads_the_asked_run_else_the_main_run_of_the_date(scr
         assert trades._intraday_run(con, day)["run_id"] == main  # the main run, not the later intraday or test run
         assert trades._intraday_run(con, day, late)["run_id"] == late  # the run asked for
         assert trades._intraday_run(con, day, 10**9)["run_id"] == main  # no such run: the main run
-        assert set(trades._trade_pnl(con, trades._intraday_run(con, day))) == {"tr-1", "tr-2", "tr-3", "tr-4"}
+        assert set(trades._trade_pnl(con, trades._intraday_run(con, day))) == {"tr-1", "tr-2", "tr-3", "tr-N2", "tr-N3"}
         assert trades._trade_pnl(con, trades._intraday_run(con, day, late)) == {}
     r = client.get("/api/v1/trades", params={"run_id": late})  # no date: the run's date
     assert r.status_code == 200 and r.json()["date"] == LAST and r.json()["intraday"]["run_id"] == late
@@ -202,3 +205,21 @@ def test_book_totals_components_sum_to_total(desk, store_url):  # noqa: F811
             assert math.fsum(pnl[k] or 0.0 for k in PNL_COMPONENTS) == pytest.approx(pnl["total"])
             checked += 1
     assert checked
+
+
+def test_a_closed_position_takes_its_dimensions_from_its_latest_run_by_date(store_url):
+    ids = seed_period(store_url, more=more)
+    with store.connect(store_url) as con:  # a backfilled run of an older date has a bigger run id
+        old = con.execute(
+            "INSERT INTO run(run_type,business_date,prev_date,cut_type,market_snapshot_id,static_snapshot_id,"
+            "private_inputs_hash,position_set_ids,positions_known_at,core_version,backend_version,lineage)"
+            " SELECT run_type,business_date,prev_date,cut_type,market_snapshot_id,static_snapshot_id,"
+            "private_inputs_hash,position_set_ids,positions_known_at,core_version,backend_version,lineage"
+            " FROM run WHERE run_id = %s RETURNING run_id", (ids[2],)).fetchone()[0]
+        con.execute("INSERT INTO run_position(run_id,position_id,ord,book_id,secid,quantity,quality,pv_rub,dv01_rub,"
+                    "cs01_rub,fact,pnl) VALUES (%s,'C1',0,'DEMO-A','SYN-C',1,'exact',1,1,1,%s,NULL)",
+                    (old, Jsonb({**fact("C1", 0, "2026-10-02"), "name": "Renamed in a backfill"})))
+        con.execute("UPDATE run SET status='complete',completed_at=now() WHERE run_id = %s", (old,))
+    assert old > ids[-1]
+    x = extras(TestClient(create_app(store_url)), ids[-1])
+    assert [c["name"] for c in x["pnlClosed"] if c["positionId"] == "C1"] == ["Synthetic C1"]  # run of 2026-10-08

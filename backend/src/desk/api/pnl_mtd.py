@@ -65,16 +65,16 @@ def totals(con, run: dict[str, Any], as_of: date) -> dict[str, Any]:
     sy, sm = period_runs(con, run, year, as_of), period_runs(con, run, month, as_of)
     skip = {"y": run["run_id"] if sy["separate"] else None, "m": run["run_id"] if sm["separate"] else None}
     in_month = set(sm["ids"])
-    sql = (f'SELECT p.run_id AS "runId", p.book_id AS book, p.position_id AS "positionId", {NARROW_PNL} AS pnl'
-           " FROM run_position p WHERE p.run_id = ANY(%s)")
+    sql = (f'SELECT p.run_id AS "runId", p.book_id AS book, p.position_id AS "positionId", {NARROW_PNL} AS pnl,'
+           " r.business_date AS date FROM run_position p JOIN run r USING (run_id) WHERE p.run_id = ANY(%s)")
     acc: dict[tuple[str, str], Acc] = {}
-    last: dict[tuple[str, str], int] = {}
+    last: dict[tuple[str, str], tuple[Any, int]] = {}
     with con.transaction(), con.cursor(name="pnl_mtd_rows", row_factory=dict_row) as cursor:
         cursor.execute(sql + " ORDER BY p.run_id", (sy["ids"],))
         for r in cursor:
             key = (r["book"], r["positionId"])
             x = acc.setdefault(key, Acc())
-            last[key] = r["runId"]
+            last[key] = max(last.get(key, (r["date"], r["runId"])), (r["date"], r["runId"]))  # newest date, then run
             if r["runId"] == run["run_id"]:
                 x.open = True
             a = amounts(r["pnl"])
@@ -89,10 +89,10 @@ def totals(con, run: dict[str, Any], as_of: date) -> dict[str, Any]:
     gone = closed_keys(acc)
     if gone:
         dsql, dargs = rows_query({}, None, "1 AS one")
-        dargs["ids"] = sorted({last[k] for k in gone})
+        dargs["ids"] = sorted({last[k][1] for k in gone})
         for r in con.execute(dsql, dargs):
             key = (r["book"], r["positionId"])
-            if key in gone and last[key] == r["runId"]:
+            if key in gone and last[key][1] == r["runId"]:
                 acc[key].row = r
     return {"positions": acc, "separate": {"mtd": sm["separate"], "ytd": sy["separate"]}}
 
