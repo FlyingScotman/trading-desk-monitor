@@ -67,13 +67,14 @@ t('MTD и YTD = открытые под фильтром + закрытые по
     assert.strictEqual(sum('pnlYtd'), open(ids, 100) + cl.reduce((s, c) => s + c.ytd, 0), 'YTD ' + name);
   }
 });
-t('портфель, которого нет в прогоне (все позиции закрыты), снят целиком: закрытые под ним скрыты', () => {
-  const { K, M } = setup();
-  M.pnlClosed = CLOSED.concat([{ positionId: 'C5', book: 'B3', ccy: 'RUB', portfolio: 'Старый2', entity: 'E2', desk: 'D2', issuer: 'I2', mtd: 9, ytd: 90 }]);
-  K.setFilter({ ...RESET });
-  assert.ok(K.closedList().some(c => c.id === 'C5'));
+t('портфель только у закрытой позиции виден в списке портфелей, снимается и возвращается', () => {
+  const { K, M } = load(null, CLOSED.concat([{ positionId: 'C5', book: 'B3', ccy: 'RUB', portfolio: 'Старый2', entity: 'E2', desk: 'D2', issuer: 'I2', mtd: 9, ytd: 90 }]));
   K.setFilter({ ...RESET, portsOff: ['Старый2'] });
+  assert.deepStrictEqual(K.portsOff(), ['Старый2']);   // тот же список, что у K.list: невидимого фильтра нет
   assert.ok(!K.closedList().some(c => c.id === 'C5') && K.closedList().length === 4);
+  assert.strictEqual(K.list().length, M.positions.length);
+  K.setFilter({ portsOff: [] });
+  assert.ok(K.closedList().some(c => c.id === 'C5'));
 });
 t('эмитент: закрытые только своего эмитента (C13)', () => {
   const { K } = setup();

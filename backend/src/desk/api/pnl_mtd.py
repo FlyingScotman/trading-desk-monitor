@@ -15,7 +15,6 @@ The month's components by the pages' factors (``FACTORS``) are for the explain p
 The scan reads only the components and the method of ``pnl`` (not ``pnl.extra``'s inputs of D-1, a year of them is
 megabytes) and no dimensions; the dimensions are read for the closed positions only, from their last run.
 """
-
 from __future__ import annotations
 
 from datetime import date
@@ -26,36 +25,17 @@ from psycopg.rows import dict_row
 from .pnl_history import Sum, amounts, period_runs, rows_query
 from .runs import PNL_KEYS
 
-FACTORS = {
-    "carry": ("carry", "rolldown"),
-    "funding": ("funding",),
-    "rates": ("rates", "convexity"),
-    "spread": ("spread",),
-    "fx": ("fx_gross", "fx_funding"),
-    "trading": ("new_trades",),
-    "other": ("other", "reported"),
-}
+FACTORS = {"carry": ("carry", "rolldown"), "funding": ("funding",), "rates": ("rates", "convexity"),
+           "spread": ("spread",), "fx": ("fx_gross", "fx_funding"), "trading": ("new_trades",),
+           "other": ("other", "reported")}
 """The pages' PnL factors from the report's components (as ``publish.summary.PNL``, the reported PV with ``other``)."""
-DIMENSIONS = (
-    "book",
-    "bookName",
-    "positionId",
-    "name",
-    "instrument",
-    "ccy",
-    "assetClass",
-    "issuer",
-    "portfolio",
-    "entity",
-    "desk",
-)
+DIMENSIONS = ("book", "bookName", "positionId", "name", "instrument", "ccy", "assetClass", "issuer", "portfolio",
+              "entity", "desk")
 
 
-NARROW_PNL = (
-    "CASE WHEN p.pnl IS NULL THEN NULL ELSE jsonb_build_object("
-    + ", ".join(f"'{k}', p.pnl->'{k}'" for k in PNL_KEYS)
-    + ", 'extra', jsonb_build_object('method', p.pnl->'extra'->'method')) END"
-)
+NARROW_PNL = ("CASE WHEN p.pnl IS NULL THEN NULL ELSE jsonb_build_object("
+              + ", ".join(f"'{k}', p.pnl->'{k}'" for k in PNL_KEYS)
+              + ", 'extra', jsonb_build_object('method', p.pnl->'extra'->'method')) END")
 """The row's ``pnl`` as ``pnl_history.amounts`` reads it: the components and ``extra.method``."""
 
 
@@ -75,11 +55,8 @@ class Acc:
             self.parts[k].merge(other.parts[k])
 
     def result(self) -> dict[str, Any]:
-        return {
-            "mtd": self.mtd.value(),
-            "ytd": self.ytd.value(),
-            "mtdParts": {k: s.value() for k, s in self.parts.items()},
-        }
+        return {"mtd": self.mtd.value(), "ytd": self.ytd.value(),
+                "mtdParts": {k: s.value() for k, s in self.parts.items()}}
 
 
 def totals(con, run: dict[str, Any], as_of: date) -> dict[str, Any]:
@@ -89,10 +66,8 @@ def totals(con, run: dict[str, Any], as_of: date) -> dict[str, Any]:
     sy, sm = period_runs(con, run, year, as_of), period_runs(con, run, month, as_of)
     skip = {"y": run["run_id"] if sy["separate"] else None, "m": run["run_id"] if sm["separate"] else None}
     in_month = set(sm["ids"])
-    sql = (
-        f'SELECT p.run_id AS "runId", p.book_id AS book, p.position_id AS "positionId", {NARROW_PNL} AS pnl,'
-        " r.business_date AS date FROM run_position p JOIN run r USING (run_id) WHERE p.run_id = ANY(%s)"
-    )
+    sql = (f'SELECT p.run_id AS "runId", p.book_id AS book, p.position_id AS "positionId", {NARROW_PNL} AS pnl,'
+           " r.business_date AS date FROM run_position p JOIN run r USING (run_id) WHERE p.run_id = ANY(%s)")
     acc: dict[tuple[str, str], Acc] = {}
     last: dict[tuple[str, str], tuple[Any, int]] = {}
     with con.transaction(), con.cursor(name="pnl_mtd_rows", row_factory=dict_row) as cursor:
@@ -100,9 +75,7 @@ def totals(con, run: dict[str, Any], as_of: date) -> dict[str, Any]:
         for r in cursor:
             key = (r["book"], r["positionId"])
             x = acc.setdefault(key, Acc())
-            last[key] = max(
-                last.get(key, (r["date"], r["runId"])), (r["date"], r["runId"])
-            )  # newest date, then run
+            last[key] = max(last.get(key, (r["date"], r["runId"])), (r["date"], r["runId"]))  # newest date, then run
             if r["runId"] == run["run_id"]:
                 x.open = True
             a = amounts(r["pnl"])
@@ -148,7 +121,4 @@ def by_position(acc: dict[tuple[str, str], Acc]) -> dict[str, dict[str, Any]]:
 
 def closed(acc: dict[tuple[str, str], Acc]) -> list[dict[str, Any]]:
     """The positions of the period that the run does not have (sold or redeemed earlier), with their sums."""
-    return [
-        {**{k: acc[key].row.get(k) for k in DIMENSIONS}, **acc[key].result()}
-        for key in sorted(closed_keys(acc))
-    ]
+    return [{**{k: acc[key].row.get(k) for k in DIMENSIONS}, **acc[key].result()} for key in sorted(closed_keys(acc))]

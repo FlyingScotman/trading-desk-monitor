@@ -667,7 +667,8 @@
 
   // ---------- фильтр книг (верхний уровень) ----------
   // portsOff — скрытые портфели (колонка Portfolio отчёта, x_portfolio адаптера; '—' — позиции без неё): новые
-  // портфели прогона видны, пока их не сняли; сохранённые, которых в прогоне нет, ни на что не влияют
+  // портфели прогона и закрытых раньше в периоде позиций (M.pnlClosed) видны, пока их не сняли; сохранённые, которых нет
+  // ни там, ни там, ни на что не влияют
   const filt = { entity: null, desk: null, books: null, ccy: null, portsOff: null };
   try { Object.assign(filt, JSON.parse(localStorage.getItem('concepts-filter') || '{}')); } catch (e) { }
   K.filter = filt;
@@ -676,7 +677,9 @@
   let filterScope = M;
   // A period report supplies its historical catalogue; ordinary monitors keep the current run's catalogue.
   K.setFilterScope = scope => { filterScope = scope; renderFilterChips(); };
-  const portList = scope => [...new Set(scope.positions.map(portOf))].sort((a, b) => (a === '—') - (b === '—') || a.localeCompare(b, 'ru'));
+  // портфель закрытой позиции: у книги типа HTM — портфель книги, иначе колонка отчёта, иначе «—» (как SC.rowIn)
+  const closedPortOf = (c, scope) => (((scope.book || {})[c.book] || {}).portfolio) || c.portfolio || '—';
+  const portList = scope => [...new Set(scope.positions.map(portOf).concat((scope.pnlClosed || []).map(c => closedPortOf(c, scope))))].sort((a, b) => (a === '—') - (b === '—') || a.localeCompare(b, 'ru'));
   const PORTS = portList(M);
   const portsOff = () => (filt.portsOff || []).filter(v => PORTS.includes(v));
   // ---------- правило «книга / позиция под фильтром» (TDM#566): одно на все экраны ----------
@@ -698,14 +701,14 @@
   };
   K.list = () => { const off = portsOff(); return M.positions.filter(p => SC.posIn(filt, p, off)); };
   K.rowIn = x => SC.rowIn(filt, x, portsOff());
-  K.portsOff = portsOff;  // снятые портфели, которые есть в прогоне
+  K.portsOff = portsOff;  // снятые портфели, которые есть в прогоне или среди закрытых позиций периода
   // Позиции, закрытые раньше в месяце или году (M.pnlClosed, сервер: api/pnl_mtd.closed), под тем же фильтром шапки, что
   // и открытые: книга, юрлицо, деск, валюта, портфель (книга HTM — HTM, SC.rowIn). Каждая — «позиция» только с суммами
   // MTD / YTD (pnlMtd, pnlYtd): итог MTD / YTD шапки и экранов равен «PnL за период» (C19) при том же фильтре, TDM#568.
-  // Портфели снимаются целиком (filt.portsOff, как шлёт C19 на сервер), а не только те, что есть в прогоне: портфель, где все
-  // позиции закрыты, в прогоне не значится. Карточки у такой позиции нет (M.pos её не знает). issuer — выбор эмитента экрана C13.
+  // Портфели — те же, что у K.list (portsOff()): список портфелей включает портфели закрытых позиций, поэтому портфель,
+  // где все позиции закрыты, виден в чипах фильтра и снимается, как и на C19. Карточки у такой позиции нет (M.pos её не знает). issuer — выбор эмитента экрана C13.
   K.closedList = issuer => (M.pnlClosed || []).filter(c => (issuer == null || c.issuer === issuer) &&
-    SC.rowIn(filt, { book: c.book, ccy: c.ccy, entity: c.entity, desk: c.desk, portfolio: c.portfolio || '—' }, filt.portsOff || [])).map(c => ({
+    SC.rowIn(filt, { book: c.book, ccy: c.ccy, entity: c.entity, desk: c.desk, portfolio: c.portfolio || '—' }, portsOff())).map(c => ({
     id: c.positionId, name: c.name || c.positionId, exchName: c.name || c.positionId, searchText: [c.name, c.instrument, c.positionId, c.book, c.issuer].join(' ').toLowerCase(),
     issuer: c.issuer || null, issuerName: c.issuer || '—', book: c.book, bookName: c.bookName || c.book, ccy: c.ccy || '—', portfolio: c.portfolio || '—',
     group: 'closed', groupLabel: 'закрыта в периоде', kind: 'closed', kindLabel: 'закрытые позиции', tenor: 0, mv: 0, notional: 0, closed: true,
@@ -744,7 +747,7 @@
       const k = ch.dataset.f;
       if (k === 'reset') return K.setFilter({ entity: null, desk: null, books: null, ccy: null, portsOff: null });
       if (k === 'ports') {  // отмеченные — видны; щелчок снимает или возвращает портфель
-        const items = PORTS.map(v => ({ v, t: portName(v), sub: nPort[v] + ' поз', multi: true }));
+        const items = PORTS.map(v => ({ v, t: portName(v), sub: (nPort[v] || 0) + ' поз', multi: true }));
         menu(ch, items, PORTS.filter(v => !off.includes(v)), v => {
           const s = new Set(off); s.has(v) ? s.delete(v) : s.add(v);
           K.setFilter({ portsOff: s.size >= PORTS.length ? [] : [...s] });  // снять все — значит показать все

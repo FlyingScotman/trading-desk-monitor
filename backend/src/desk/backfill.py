@@ -188,8 +188,8 @@ def inputs_stamp(con: psycopg.Connection, settings: Settings) -> tuple:
     """What decides every date's ``trades.intraday_inputs`` hash, cheaply (two aggregate queries): the database, the
     position sets, every stored dataset set (the trades of the date and of the 60 days before it, the trade terms), the
     settings that ``trades.intraday_inputs`` reads (``intraday_trades``, ``off_report_derivatives``: the latter puts
-    the off-report trades into the hash). Sets are never changed, a new revision is a new row, so a changed count or newest id
-    says that some date's inputs changed (TDM#569)."""
+    the off-report trades into the hash). Sets are never changed, a new revision is a new row, so a changed count
+    or newest id says that some date's inputs changed (TDM#569)."""
     pos = con.execute("SELECT max(set_id), count(*) FROM position_set").fetchone()
     ds = con.execute("SELECT max(set_id), count(*), (SELECT oid FROM pg_database WHERE datname = current_database())"
                      " FROM dataset_set").fetchone()
