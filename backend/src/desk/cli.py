@@ -372,12 +372,7 @@ def eod_run(settings: Settings, d: str, *, snapshots: str | Path | None = None, 
                     out(f"WARN trades: {split['flagged']} trade(s) without a PnL (no price, other currency, no "
                         "valuation or rate): the PnL of the trades is incomplete")
                     intraday_trades["unpriced"] = split["flagged"]
-                outside_total = {   # what the trades did not put in the total: counts, and the PnL where it is known
-                    "no_prev_close": False,
-                    "no_pnl": {"positions": split["no_pnl"], "trades": split["no_pnl_trades"],
-                               "pnl_rub": split["no_pnl_rub"]},
-                    "lost": {"bonds": len(split["lost"]), "trades": split["lost_trades"]},
-                    "unpriced": {"trades": split["flagged"]}}
+                outside_total = new_trades_pnl.outside_total(intraday_trades["applied"], split)
             flash = [o.pnl for o in outcomes if o.pnl]
             out(f"flash PnL {prev_date} -> {d}: {len(flash)}/{sum(o.valuation is not None for o in outcomes)} "
                 f"priced positions, total {sum(p.total for p in flash):,.0f} RUB, "
@@ -387,8 +382,8 @@ def eod_run(settings: Settings, d: str, *, snapshots: str | Path | None = None, 
                 f"(by the rate move or the reports), total {sum(p.total for p in dp):,.0f} RUB")
         if intraday_trades and intraday_trades["applied"]:
             # no previous close (or no PnL asked): none of the trades is in a total, said in the lineage
-            intraday_trades["outside_total"] = outside_total or {
-                "no_prev_close": not prev_cut, "no_pnl_run": bool(no_pnl), "trades": intraday_trades["applied"]}
+            intraday_trades["outside_total"] = outside_total or new_trades_pnl.outside_total(
+                intraday_trades["applied"], no_prev_close=not prev_cut, no_pnl_run=bool(no_pnl))
         if on_close:
             out(f"no flash PnL: the book of {d} on the close of {ctx.business_date} (morning run)")
         elif not prev_date:

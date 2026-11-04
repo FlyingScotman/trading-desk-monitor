@@ -879,7 +879,7 @@ monitors' screen «Сделки дня» (C20). Every run of date D (intraday, p
 trades into its book (`desk.trades.apply_intraday`, setting `intraday_trades`, TDM#557). A book whose latest report is
 older than D (`valid_date` < D) is carried: its set plus the trades of the days after the report (a late report) plus
 the trades of D. A book with the report of D has the report's positions and risk strictly; the trades of D then give
-the PnL only (a book with a row per lot is compared and measured per bond, not per `position_id`: the PnL of the bond is on the largest lot of the report, its other lots have none, `extra.pnl_on_row`), and what the report differs from the start of the day plus the trades by is flagged on the row
+the PnL only (a book with a row per lot is compared and measured per bond and **portfolio** (`x_portfolio`), not per `position_id`: the PnL of the bond in a portfolio is on one lot of the report, the lot of the start of the day with the smallest id, its other lots of that portfolio have none, `extra.pnl_on_row`; a lot sold out in a portfolio is a row at zero in it, and a bond bought and sold within the day, neither at the start nor in the report, is a row at zero that carries the trades' PnL. When a trade does not name its portfolio (`x_portfolio` of the trade) and the book holds the bond in several, the bond is taken whole, as without portfolios. A bond valued at the report's figure, with no terms to value it, has the trades inside the difference of the reports' values at their whole value, so the lots the trades changed (another quantity, new) have no PnL of the day, `no_pnl` `trades_in_report_value`, flag `x.trades_not_in_pnl`, and the lots of a bond valued in different ways carry the bond's whole PnL on the lot valued with terms, the others a zero), and what the report differs from the start of the day plus the trades by is flagged on the row
 (`x.trades_report_gap`) and in the lineage (`gaps`). Trades older than seven days since a book's last report are not counted: the lineage says so (`history_cut`). The run's private inputs hash covers the trades it applied and the set the start of the day comes from, so a
 new cut of the trades, or the report of D, makes the run again. The PnL
 of a position the trades changed is the start-of-day position's PnL (the full factors) plus the component `new_trades`:
@@ -887,6 +887,8 @@ each trade from its price (`price_pct`, clean, % of the current face; `accrued_c
 currency) to the run's valuation, a sale from the valuation to its price (`desk.pnl.new_trades`); a trade without a
 price is 0, flagged; `price_pct` is a percent of the face whatever the settlement currency (a replacement bond traded in
 RUB is priced so); the trade's `settle_date` is not used. Trades of other products (FX, derivatives) are the rest of S13 (TDM#29).
+
+The run's lineage `intraday_trades.outside_total` (always these keys, zeros where empty) says what the trades did not put in the day's total: `trades` (in the book), `no_prev_close` (no previous close: no PnL of the day at all), `no_pnl_run` (the run was asked for no PnL), `no_pnl` (`positions`, `trades`, `pnl_rub`: positions whose start of the day has no PnL; the PnL of their trades is beside it), `lost` (`bonds`, `trades`: bonds at the report's figure, no PnL of the day), `unpriced` (`trades`: no price, rate or valuation, 0 in the total) and `unvalued` (`trades`: of bonds not valued at all).
 
 ### `trade_list` — stock; `full_snapshot`, scope `["book_id"]`, `covers = listed`, `time_basis = end_of_day` (since 1.8)
 

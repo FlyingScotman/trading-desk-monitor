@@ -223,6 +223,23 @@ shown (``pnl.reasons.NO_PNL_TEXT``). Core cannot value the bond from its terms, 
 it does not know) cannot be taken off the difference reliably."""
 
 
+def outside_total(applied: int, split: dict[str, Any] | None = None, *, no_prev_close: bool = False,
+                  no_pnl_run: bool = False) -> dict[str, Any]:
+    """The lineage's ``intraday_trades.outside_total``: what the day's trades did not put in the run's total, always the
+    same keys. ``applied``: the trades in the book; ``no_prev_close`` / ``no_pnl_run``: no previous close, or the run
+    asked for no PnL (then ``split`` is None and no trade is in a total); ``no_pnl``: positions whose start of the day has
+    no PnL (their trades' PnL is beside it: ``pnl_rub``) and their trades, counted with the positions the bond's other
+    lots without PnL; ``lost``: bonds at the report's figure and their trades (no PnL of the day); ``unpriced``: trades
+    without a price, a rate or a valuation (0 in the total); ``unvalued``: trades of bonds not valued at all."""
+    n = split or {}
+    return {"no_prev_close": no_prev_close, "no_pnl_run": no_pnl_run, "trades": applied,
+            "no_pnl": {"positions": n.get("no_pnl", 0), "trades": n.get("no_pnl_trades", 0),
+                       "pnl_rub": n.get("no_pnl_rub", 0.0)},
+            "lost": {"bonds": len(n.get("lost", ())), "trades": n.get("lost_trades", 0)},
+            "unpriced": {"trades": n.get("flagged", 0)},
+            "unvalued": {"trades": n.get("unvalued_trades", 0)}}
+
+
 def attach(prev: EodContext, ctx: EodContext, start: PositionInputs, bp: Any, outcomes: list[Outcome],
            summary: dict[str, Any], carried: Any) -> dict[str, Any]:
     """Split the PnL of the rows the day's trades changed (module doc), in place on ``outcomes`` (``bp``'s, after
@@ -239,29 +256,40 @@ def attach(prev: EodContext, ctx: EodContext, start: PositionInputs, bp: Any, ou
     begun = portfolio_pnl(prev, ctx, start, started, carried) if started else {}
     direct = getattr(bp, "direct", None) or {}
     n: dict[str, Any] = {"split": 0, "opened": 0, "no_pnl": 0, "flagged": 0, "mixed_valuation": [], "lost": [],
-                         "rows": {}, "no_pnl_trades": 0, "no_pnl_rub": 0.0, "lost_trades": 0}
+                         "rows": {}, "no_pnl_trades": 0, "no_pnl_rub": 0.0, "lost_trades": 0,
+                         "unvalued_trades": 0}
 
     def outcome(m: str) -> Outcome | None:
         return main.get(m) or direct.get(m)
 
-    def not_in_pnl(label: str, lots: list[str], count: int) -> None:
+    def not_in_pnl(label: str, lots: list[str], count: int, start: dict[str, float] | None) -> None:
         """The lots of a traded bond valued at the report's figure: no PnL (the trades are inside the reports' difference
-        at their whole value), said on the lots and in the run."""
+        at their whole value), said on the lots and in the run. Only the lots the trades changed (a different quantity
+        than at the start of the day, new, or ``start`` unknown): a lot that is as it was has its reports' difference
+        right. A lot that already has no PnL keeps its reason."""
         valued = [m for m in lots if (outcome(m) is not None and outcome(m).valuation is not None)]   # type: ignore[union-attr]
         if not valued:
+            n["unvalued_trades"] += count   # the bond is not valued at all: its trades are in no PnL either
+            return
+        hit = [m for m in valued if start is None or start.get(m) != mem_q[m]]
+        if not hit:
             return
         why = NoPnl(NOT_IN_PNL, "the bond was traded today and is valued at the report's figure: the trades are inside "
                                 "the difference of the reports' values")
-        for m in valued:
+        for m in hit:
             o_ = outcome(m)
             assert o_ is not None
-            o_.pnl, o_.no_pnl = None, why
+            if o_.no_pnl is None or o_.pnl is not None:
+                o_.pnl, o_.no_pnl = None, why
         n["lost"].append(label)
         n["lost_trades"] += count
-        n["rows"].update(dict.fromkeys(lots, "trades_not_in_pnl"))
+        n["rows"].update(dict.fromkeys(hit, "trades_not_in_pnl"))
     for pid, ts in by_row.items():
         mem = (info.get(pid) or {}).get("members") or {}
-        label = f"{(info.get(pid) or {}).get('book')}|{(info.get(pid) or {}).get('bond')}"
+        mem_q = mem
+        start_q = (info.get(pid) or {}).get("members_start")
+        label = (f"{(info.get(pid) or {}).get('book')}|{(info.get(pid) or {}).get('bond')}"
+                 + (f"|{(info.get(pid) or {})['portfolio']}" if (info.get(pid) or {}).get("portfolio") else ""))
         target = pid
         if mem:   # a book with its report: the lot that carries the bond's PnL is one valued with terms
             ok = [m for m in sorted(mem) if _core(main.get(m))]
@@ -269,12 +297,12 @@ def attach(prev: EodContext, ctx: EodContext, start: PositionInputs, bp: Any, ou
                 n["mixed_valuation"].append(label)
                 n["rows"].update(dict.fromkeys(mem, "trades_mixed_valuation"))
             if not ok:
-                not_in_pnl(label, sorted(mem), len(ts))
+                not_in_pnl(label, sorted(mem), len(ts), start_q)
                 continue
             target = pid if pid in ok else ok[0]
         o = main.get(target)
         if not _core(o):   # a row valued at the report's figure: the trades are inside its reports (D23)
-            not_in_pnl(label, [pid], len(ts))
+            not_in_pnl(label, [pid], len(ts), None)
             continue
         assert o is not None and o.valuation is not None
         s = begun.get(pid)
@@ -309,6 +337,8 @@ def attach(prev: EodContext, ctx: EodContext, start: PositionInputs, bp: Any, ou
             o_ = outcome(m)
             assert o_ is not None
             o_.pnl, o_.no_pnl = ((_cover(prev, ctx, o_, target), None) if o.pnl is not None else (None, o.no_pnl))
+        if o.pnl is None:   # these lots have no PnL either: counted with the bond's
+            n["no_pnl"] += len(plain)
         lots = [m for m in mem if m != target and _core(main.get(m))]
         if not lots:
             continue

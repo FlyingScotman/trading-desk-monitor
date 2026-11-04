@@ -166,6 +166,7 @@ def test_a_report_of_the_day_keeps_its_quantity_and_the_trades_give_the_pnl(monk
     assert {r[0]: r[3] for r in out.rows}["T1|SEC1"] == 1200.0 and summary["gaps"] == {}
     assert summary["rows"]["T1|SEC1"] == {"mode": "qty", "start": 1000.0, "final": 1200.0, "new": False,
                                           "final_fold": 1200.0, "report": True, "members": {"T1|SEC1": 1200.0},
+                                          "members_start": {"T1|SEC1": 1000.0},
                                           "bond": "SEC1", "book": "T1"}
     assert [t["trade_id"] for t in summary["trades"]] == ["TR1"] and summary["applied"] == 1
     assert {r[0]: r[3] for r in summary["start_inputs"].rows}["T1|SEC1"] == 1000.0
@@ -1072,4 +1073,154 @@ def test_the_lineage_says_when_there_is_no_previous_close(day, monkeypatch):
     monkeypatch.setattr(cli, "previous_close", lambda sd, d: None)
     day.drop(trade_line("S1", "sell", 1000, 62.0, 5_000.0))
     lin = lineage(day.url, day.latest_id())
-    assert lin["outside_total"] == {"no_prev_close": True, "no_pnl_run": False, "trades": 1}
+    assert lin["outside_total"] == nt.outside_total(1, no_prev_close=True)   # the same keys as always, zeros where empty
+    assert set(lin["outside_total"]) == {"no_prev_close", "no_pnl_run", "trades", "no_pnl", "lost", "unpriced",
+                                         "unvalued"}
+
+
+def test_a_purchase_into_one_portfolio_of_a_bond_held_in_two_is_measured_there(monkeypatch):
+    """A new lot of the report in the portfolio the trade names joins the lot of that portfolio, not the last lot of the
+    bond: no gap, no double count, the other portfolio is not part of the key."""
+    import test_trades_intraday as tti
+
+    _days(monkeypatch, {"2026-11-03": [tti._trade(position_id="T1|T9", instrument_id="SEC1", quantity="100",
+                                                  x_portfolio="A")]})
+    ext = {"T1|LA": _pf("A"), "T1|LB": _pf("B")}
+    _lots_prev(monkeypatch, [("T1|LA", "T1", "SEC1", 1000.0), ("T1|LB", "T1", "SEC1", 500.0)], ext)
+    rep = _with_extra(_lot_inputs([("T1|LA", "T1", "SEC1", 1000.0), ("T1|LB", "T1", "SEC1", 500.0),
+                                   ("T1|T9", "T1", "SEC1", 100.0)], DAY), {**ext, "T1|T9": _pf("A")})
+    _, summary = trades.apply_intraday(None, DAY, rep)
+    assert set(summary["rows"]) == {"T1|LA"} and summary["gaps"] == {}
+    c = summary["rows"]["T1|LA"]
+    assert (c["start"], c["final"], sorted(c["members"]), c["portfolio"]) == (1000.0, 1100.0, ["T1|LA", "T1|T9"], "A")
+    assert c["members_start"] == {"T1|LA": 1000.0}
+    assert [t["row"] for t in summary["trades"]] == ["T1|LA"]
+
+
+def test_a_purchase_that_does_not_name_its_portfolio_takes_the_bond_whole(monkeypatch):
+    """The portfolio of the trade is unknown and the bond is in two portfolios: the key falls back to (book, bond) as
+    before portfolios, so the new lot of the report is a member and nothing is counted twice."""
+    import test_trades_intraday as tti
+
+    _days(monkeypatch, {"2026-11-03": [tti._trade(position_id="T1|T9", instrument_id="SEC1", quantity="100")]})
+    ext = {"T1|LA": _pf("A"), "T1|LB": _pf("B")}
+    _lots_prev(monkeypatch, [("T1|LA", "T1", "SEC1", 1000.0), ("T1|LB", "T1", "SEC1", 500.0)], ext)
+    rep = _with_extra(_lot_inputs([("T1|LA", "T1", "SEC1", 1000.0), ("T1|LB", "T1", "SEC1", 500.0),
+                                   ("T1|T9", "T1", "SEC1", 100.0)], DAY), {**ext, "T1|T9": _pf("A")})
+    _, summary = trades.apply_intraday(None, DAY, rep)
+    assert len(summary["rows"]) == 1 and summary["gaps"] == {}
+    [(anchor, c)] = summary["rows"].items()
+    assert anchor == "T1|LA" and (c["start"], c["final"]) == (1500.0, 1600.0)
+    assert sorted(c["members"]) == ["T1|LA", "T1|LB", "T1|T9"] and "portfolio" not in c
+    assert [t["row"] for t in summary["trades"]] == ["T1|LA"]
+
+
+def test_a_purchase_without_portfolios_anywhere_is_as_it_was(monkeypatch):
+    import test_trades_intraday as tti
+
+    _days(monkeypatch, {"2026-11-03": [tti._trade(position_id="T1|T9", instrument_id="SEC1", quantity="100")]})
+    _lots_prev(monkeypatch, [("T1|LA", "T1", "SEC1", 1000.0), ("T1|LB", "T1", "SEC1", 500.0)])
+    _, summary = trades.apply_intraday(None, DAY, _lot_inputs(
+        [("T1|LA", "T1", "SEC1", 1000.0), ("T1|LB", "T1", "SEC1", 500.0), ("T1|T9", "T1", "SEC1", 100.0)], DAY))
+    [(anchor, c)] = summary["rows"].items()
+    assert anchor == "T1|LA" and sorted(c["members"]) == ["T1|LA", "T1|LB", "T1|T9"] and summary["gaps"] == {}
+
+
+def _report_lots(monkeypatch, quantities, pre=None):
+    """Lots of one bond valued at the report's figure (not core): L1 as at the start, T9 new; the trade hit L1."""
+    from desk.pnl.direct import DirectPnl
+
+    prev = SimpleNamespace(business_date=date(2026, 10, 15))
+    ctx = SimpleNamespace(business_date=date(2026, 10, 16))
+    lots = {m: _lot_outcome(q, core=False) for m, q in quantities.items()}
+    for o in lots.values():
+        o.pnl = DirectPnl("desk-reported-v1", prev.business_date, ctx.business_date, 100.0, other=100.0)
+    if pre is not None:
+        lots["L1"].pnl, lots["L1"].no_pnl = None, pre
+    bp = SimpleNamespace(position_ids=[], direct=lots)
+    summary = {"trades": [{"row": "L1", "trade_id": "S"}],
+               "rows": {"L1": {"start": 8000.0, "book": "B1", "bond": "S", "members": dict(quantities),
+                               "members_start": {"L1": 8000.0}}}}
+    monkeypatch.setattr(nt, "portfolio_pnl", lambda *a: {})
+    n = nt.attach(prev, ctx, SimpleNamespace(), bp, [], summary, None)
+    return lots, n
+
+
+def test_a_report_lot_the_trades_did_not_touch_keeps_its_pnl(monkeypatch):
+    """D23 is for the lots the trades changed: L1 is as at the start of the day (its reports' difference is right), T9
+    is new (its purchase is inside)."""
+    lots, n = _report_lots(monkeypatch, {"L1": 8000.0, "T9": 500.0})
+    assert lots["L1"].pnl.total == 100.0 and lots["L1"].no_pnl is None
+    assert lots["T9"].pnl is None and lots["T9"].no_pnl.reason == nt.NOT_IN_PNL
+    assert n["rows"] == {"T9": "trades_not_in_pnl"} and n["lost"] == ["B1|S"] and n["lost_trades"] == 1
+
+
+def test_a_report_lot_with_another_quantity_has_no_pnl_and_an_earlier_reason_stays(monkeypatch):
+    lots, _ = _report_lots(monkeypatch, {"L1": 7000.0, "T9": 500.0})
+    assert lots["L1"].pnl is None and lots["L1"].no_pnl.reason == nt.NOT_IN_PNL
+    assert lots["T9"].no_pnl.reason == nt.NOT_IN_PNL
+    # a lot that has no PnL for a more basic reason (a report carried from earlier) keeps that reason
+    lots, _ = _report_lots(monkeypatch, {"L1": 7000.0}, pre=NoPnl("report_carried", "test"))
+    assert lots["L1"].pnl is None and lots["L1"].no_pnl.reason == "report_carried"
+
+
+def test_the_trades_of_a_bond_not_valued_at_all_are_counted(monkeypatch):
+    monkeypatch.setattr(nt, "portfolio_pnl", lambda *a: {})
+    prev = SimpleNamespace(business_date=date(2026, 10, 15))
+    ctx = SimpleNamespace(business_date=date(2026, 10, 16))
+    o = _lot_outcome(8000.0, core=False)
+    o.valuation = None
+    bp = SimpleNamespace(position_ids=[], direct={"L1": o})
+    summary = {"trades": [{"row": "L1", "trade_id": "S"}],
+               "rows": {"L1": {"start": 8000.0, "book": "B1", "bond": "S", "members": {"L1": 7000.0},
+                               "members_start": {"L1": 8000.0}}}}
+    n = nt.attach(prev, ctx, SimpleNamespace(), bp, [], summary, None)
+    assert n["unvalued_trades"] == 1 and n["lost"] == [] and nt.outside_total(1, n)["unvalued"] == {"trades": 1}
+
+
+def test_lots_without_pnl_beside_a_core_lot_without_pnl_are_counted(monkeypatch):
+    """The bond's start of the day has no PnL: the lots at the report's figure are without PnL with it, and counted."""
+    monkeypatch.setattr(nt, "portfolio_pnl", lambda *a: {"L1": SimpleNamespace(
+        pnl=None, no_pnl=NoPnl("not_priced_prev", "t"), valuation=SimpleNamespace(quantity=11000.0))})
+    monkeypatch.setattr(nt, "trade_pnl", lambda *a: {"trade_id": "S", "pnl_rub": 50.0, "flag": None})
+    prev = SimpleNamespace(business_date=date(2026, 10, 15))
+    ctx = SimpleNamespace(business_date=date(2026, 10, 16))
+    lots = {"L1": _lot_outcome(8000.0, True), "L2": _lot_outcome(3000.0, False)}
+    bp = SimpleNamespace(position_ids=list(lots))
+    summary = {"trades": [{"row": "L1", "trade_id": "S"}],
+               "rows": {"L1": {"start": 11000.0, "book": "B1", "bond": "S", "members": {"L1": 8000.0, "L2": 3000.0},
+                               "members_start": {"L1": 11000.0}}}}
+    n = nt.attach(prev, ctx, SimpleNamespace(), bp, list(lots.values()), summary, None)
+    assert n["no_pnl"] == 2 and lots["L2"].no_pnl.reason == "not_priced_prev"
+    assert nt.outside_total(1, n)["no_pnl"]["positions"] == 2
+
+
+def test_the_books_total_is_the_sum_of_its_bonds_with_lots_valued_in_different_ways(stub, tmp_path, store_url,
+                                                                                    monkeypatch):
+    """Through the store: the same sale on the same market, the report of the day with two lots one of which is taken as
+    valued at the report's figure. The bond's PnL is on the first lot once, the second has a zero, the book's total
+    is the sum of its positions and equals the PnL of the all-core run (nothing counted twice)."""
+    d = Day(stub, tmp_path, store_url, lots=[("B1|L1", S, LOT_ISIN, 12000), ("B1|L2", S, LOT_ISIN, 3000)])
+    d.drop(trade_line("S1", "sell", 4000, 62.0, 10_000.0, pid="B1|L2", iid=""))
+    publish(d.hub, FRI, "eod_final", "2026-10-19T05:00:00Z", 3)
+    d.clock["t"] = at(MON, 8, 30)
+    d.ap.run_cycle()
+    carried = d.latest_id("EOD")
+    before = _book_sum(d, carried, ["B1|L1", "B1|L2"])
+    orig = nt._core
+    monkeypatch.setattr(nt, "_core", lambda o: orig(o) and o.valuation.quantity != 3000)
+    d.positions("positions_20261019.csv", [("B1|L1", S, LOT_ISIN, 8000), ("B1|L2", S, LOT_ISIN, 3000)])
+    d.clock["t"] = at(MON, 8, 50)
+    d.ap.run_cycle()
+    rid = d.latest_id("EOD")
+    assert rid > carried
+    with store.connect(d.url) as con:
+        totals = con.execute("SELECT totals FROM run WHERE run_id = %s", (rid,)).fetchone()[0]
+        rows = {r[0]: r[1] for r in con.execute(
+            "SELECT position_id, pnl FROM run_position WHERE run_id = %s AND book_id = 'B1'", (rid,))}
+    assert lineage(d.url, rid)["mixed_valuation"] == ["B1|SU26238RMFS4"]
+    assert rows["B1|L2"]["extra"]["total"] == 0.0 and rows["B1|L1"]["extra"]["total"] != 0
+    book = sum(p["extra"]["total"] for p in rows.values() if p)
+    t = totals["B1"]["pnl"]
+    assert t["total"] - t.get("funding", 0.0) == pytest.approx(book)   # the book's funding cost is its own, not a position's
+    assert book == pytest.approx(before[0])
