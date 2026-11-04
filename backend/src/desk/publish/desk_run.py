@@ -120,7 +120,7 @@ def publish(con: psycopg.Connection, ctx: EodContext, positions: list[tuple[str,
     content = run_content(ctx, positions, prev, lineage, inputs)
     if swaps:
         content.log.append(("WARN", (
-            f"условия свопов без строки позиций: сделок {swaps['trades']}, книги "
+            f"условия свопов и РЕПО без строки позиций: сделок {swaps['trades']}, книги "
             + ", ".join(f"{b} ({n})" for b, n in swaps["books"].items())
             + "; не оцениваются, не входят в риск и PnL (сделка после среза отчёта позиций?)")))
     funding = funding_run.compute(con, bd, prev, ctx.market, content.rows, content.reference["books"], inputs,

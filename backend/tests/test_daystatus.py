@@ -252,5 +252,5 @@ def test_swap_terms_without_a_positions_row_warn_on_the_date_and_in_the_strip(st
         con.execute("UPDATE run SET lineage = jsonb_set(lineage, '{positions,unlinked_swap_terms}',"
                     " '{\"trades\": 2, \"books\": {\"IRB\": 2}}') WHERE run_id = 1")
     head, row = both()
-    want = "условия свопов без строки позиций, не оцениваются: сделок 2"
+    want = "условия свопов и РЕПО без строки позиций, не оцениваются: сделок 2"
     assert want in head["warnings"] and head["warnings"] == row["warnings"] and head["state"] == row["state"] == "warn"

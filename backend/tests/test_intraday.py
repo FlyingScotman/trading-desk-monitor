@@ -806,3 +806,57 @@ def test_a_failed_intraday_run_is_tried_again_when_an_ocp_report_arrives(stub, t
     st = ap.run_cycle()
     intraday = next(x for x in st["steps"] if x["name"] == "intraday")
     assert intraday["reason"] != "failed_before" and intraday["status"] == "error", intraday  # tried (and failed) again
+
+
+TERMS_FIELDS = ("trade_id", "book_id", "product_kind", "trade_date", "value_date", "base_ccy", "quote_ccy", "side",
+                "notional_base", "notional_quote", "contract_rate")
+
+
+def put_terms(tmp_path: Path, day: date, seq: int, rate: int) -> None:
+    """A trade_terms file of the reference CSV reader for ``day`` (book B1; synthetic amounts)."""
+    import csv
+
+    (tmp_path / "in").mkdir(exist_ok=True)
+    with (tmp_path / "in" / f"trade_terms_{day:%Y%m%d}_{seq}.csv").open("w", newline="", encoding="utf-8-sig") as f:
+        w = csv.writer(f, delimiter=";")
+        w.writerow(TERMS_FIELDS)
+        w.writerow(("TRADE-1", "B1", "fx_forward", "2026-10-01", "2026-12-17", "USD", "RUB", "buy", 10, 10 * rate,
+                    rate))
+
+
+def test_trade_terms_after_the_runs_recompute_todays_morning_and_intraday_runs(stub, tmp_path, store_url):
+    """TDM#547: trade terms of D-1 received after today's runs (a stock: they hold for D too) change the private
+    inputs of D. The morning run (the book of D on the close of D-1) and the intraday run are made again on the same
+    market, without waiting for a new cut; nothing changes: no new run."""
+    s = cfg(tmp_path, store_url, stub)
+    put(tmp_path, "positions_20261016.csv")  # start_of_day 16.10: valid 15.10
+    publish(stub, date(2026, 10, 15), "eod_final", "2026-10-16T05:00:00Z", 0)
+    clock = {"t": at(FRI, 8, 0)}  # before 10:00: no intraday cut, the morning run stays
+    ap = Autopilot(settings_loader=lambda: s, now=lambda: clock["t"])
+    by = steps(ap.run_cycle())
+    assert by["morning"] == ("ok", "16.10 · закрытие 15.10: run 2 (no run of 2026-10-16 yet)"), by
+    clock["t"] = at(FRI, 8, 10)
+    assert steps(ap.run_cycle())["morning"][1].startswith("up to date: run 2")
+
+    put_terms(tmp_path, date(2026, 10, 15), 1, 80)  # the terms of 15.10, fetched in the morning of 16.10
+    clock["t"] = at(FRI, 8, 20)
+    by = steps(ap.run_cycle())
+    assert by["eod"] == ("ok", "2026-10-15 run 3 (private inputs changed)"), by["eod"]
+    assert by["morning"] == ("ok", "16.10 · закрытие 15.10: run 4 (private inputs changed); removed run 2"), by
+    with store.connect(store_url) as con:
+        h = con.execute("SELECT private_inputs_hash FROM run WHERE run_id = 4").fetchone()[0]
+        assert h == store.positions_for(con, FRI).private_inputs_hash
+    clock["t"] = at(FRI, 8, 30)
+    assert steps(ap.run_cycle())["morning"][1].startswith("up to date: run 4")
+
+    publish(stub, FRI, "intraday", "2026-10-16T07:00:00Z", 1)
+    clock["t"] = at(FRI, 10, 6)
+    by = steps(ap.run_cycle())
+    assert by["intraday"][0] == "ok" and "run 5 (new cut)" in by["intraday"][1], by["intraday"]
+    put_terms(tmp_path, date(2026, 10, 15), 2, 81)  # a correction of the terms: the same cut again
+    clock["t"] = at(FRI, 10, 8)
+    by = steps(ap.run_cycle())
+    assert by["intraday"][0] == "ok" and "(private inputs changed)" in by["intraday"][1], by["intraday"]
+    clock["t"] = at(FRI, 10, 9)
+    by = steps(ap.run_cycle())
+    assert by["intraday"][1].startswith("up to date"), by["intraday"]

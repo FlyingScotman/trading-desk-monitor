@@ -26,6 +26,7 @@ from desk.publish import tdm_run
 from desk.store import PositionInputs
 from desk.valuation import derivatives as dv
 from desk.valuation import positions as pv1
+from desk.valuation.fallback import fx_rate
 
 FIX = Path(__file__).parent / "fixtures" / "mdhub_v1_4"
 BD = date(2026, 10, 15)
@@ -395,3 +396,55 @@ def test_a_refusal_loses_only_the_payment_of_its_own_date(ctx, prev, monkeypatch
     assert other[("R", "2026-10-16")] == pytest.approx(base[("R", "2026-10-16")])
     assert other[("R", "2026-10-28")] == pytest.approx(base[("R", "2026-10-28")])
     assert other[("A", "2026-10-15")] == pytest.approx(base[("A", "2026-10-15")])
+
+
+def test_a_ccs_coupon_paid_on_d_is_cash_not_a_loss(ctx, prev):
+    """TDM#555: a CCS (pay RUB fixed, receive CNY fixed, annual) pays both coupons on D: PV D lacks them, PV D-1 has
+    them. The flows of D-1 carry them (RUB, the CNY one at its RUB value as core projects it), and the day's PnL is
+    the change of PV plus them: no jump of a year's coupons."""
+    common = {"trade_id": "X1", "book_id": "IRB", "product_kind": "ccs", "trade_date": "2025-10-10",
+              "start_date": "2025-10-14", "maturity_date": "2027-10-14", "notional_exchange": "initial_and_final",
+              "payment_frequency": "1Y", "day_count": "ACT/365"}
+    terms = [{**common, "leg_id": "rub", "side": "pay", "ccy": "RUB", "notional_ccy": "1250000000",
+              "fixed_rate_pct": "15"},
+             {**common, "leg_id": "cny", "side": "receive", "ccy": "CNY", "notional_ccy": "100000000",
+              "fixed_rate_pct": "3"}]
+    o, p = day(prev, ctx, terms, "X1")
+    assert o.valuation.extra["core"]["product"] == "ccs" and p.valuation.extra["core"]["product"] == "ccs"
+    paid = [f for f in p.valuation.extra["flows"] if f["date"] == BD.isoformat()]
+    assert paid and all(f["kind"] == "swap" and f["amount"] is not None for f in paid)
+    # a year (ACT/365, 14.10.2025-14.10.2026) of coupons: -15 % of 1.25bn RUB in RUB, +3 % of 100m CNY in CNY
+    by_ccy = {f["ccy"]: f["amount"] for f in paid}
+    assert by_ccy == pytest.approx({"RUB": -0.15 * 1.25e9, "CNY": 0.03 * 1e8}, rel=1e-9)
+    cash = by_ccy["RUB"] + by_ccy["CNY"] * 12.5141  # the CNY one at the spot of D-1, as the PnL takes it
+    assert not [f for f in o.valuation.extra["flows"] if f["date"] == BD.isoformat()]  # paid: not in PV D either
+    jump = o.valuation.pv_rub - p.valuation.pv_rub
+    assert o.pnl.received_rub == pytest.approx(cash)
+    assert o.pnl.total == pytest.approx(jump + cash)  # the fixture's D-1 has another CNY curve: the rest is no carry
+
+
+def test_a_ccs_coupon_paid_on_d_is_out_of_the_fx_delta_when_the_rate_moves(ctx, prev):
+    """TDM#555 review: the CNY coupon paid on D is cash in CNY, so the FX part of the PnL is the move of the rate on
+    the FX delta of D-1 without it (the coupon's own move is its cash's); the rest, with the same total, is ``other``.
+    Written as RUB (at the spot), the coupon's move was in ``fx_gross`` and, reversed, in ``other``."""
+    common = {"trade_id": "X1", "book_id": "IRB", "product_kind": "ccs", "trade_date": "2025-10-10",
+              "start_date": "2025-10-14", "maturity_date": "2027-10-14", "notional_exchange": "initial_and_final",
+              "payment_frequency": "1Y", "day_count": "ACT/365"}
+    terms = [{**common, "leg_id": "rub", "side": "pay", "ccy": "RUB", "notional_ccy": "1250000000",
+              "fixed_rate_pct": "15"},
+             {**common, "leg_id": "cny", "side": "receive", "ccy": "CNY", "notional_ccy": "100000000",
+              "fixed_rate_pct": "3"}]
+    m = copy.copy(ctx.market)
+    was = ctx.market.fx
+    m.fx = lambda ccy: {**was(ccy), "moex_19": was(ccy)["moex_19"] + 0.4} if ccy == "CNY" else was(ccy)
+    moved = dataclasses.replace(ctx, market=m)
+    still, p = day(prev, ctx, terms, "X1")
+    o, p = day(prev, moved, terms, "X1")
+    r0 = fx_rate(prev, "CNY")[0]
+    delta = p.valuation.fx_delta["CNY"] - 0.03 * 1e8  # D-1's CNY exposure less the coupon paid
+    move = moved.market.fx("CNY")["moex_19"] - r0
+    assert move == pytest.approx(0.4)
+    assert o.pnl.total == pytest.approx(still.pnl.total)  # the rate only splits it
+    assert o.pnl.fx_gross == pytest.approx(delta * move) and o.pnl.other == pytest.approx(o.pnl.total - o.pnl.fx_gross)
+    assert still.pnl.fx_gross == 0.0
+    assert o.pnl.fx_gross != pytest.approx(p.valuation.fx_delta["CNY"] * move)  # not the coupon's move too
