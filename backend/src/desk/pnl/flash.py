@@ -357,6 +357,9 @@ class FlashPnl:
     start_quantity: float | None = None
     """The position changed by the day's trades: the number of bonds the components above are measured on (the
     start of the day; 0 for a position opened today); None for a position not traded (``quantity`` is then that)."""
+    pnl_on_row: str | None = None
+    """A lot of a bond the day's trades changed, in a book with the report of the day: the bond's PnL (the start of the
+    day's and the trades') is on this other lot of it, this one has none (``extra["pnl_on_row"]``)."""
     trades: list[dict[str, Any]] | None = field(default=None, compare=False)
     """Each trade of the day in the position with its PnL (``pnl.new_trades.trade_pnl``): ``extra["trades"]``."""
 
@@ -399,6 +402,7 @@ class FlashPnl:
         return {**({"flag": self.flag} if self.flag else {}),
                 **({"other_reason": self.other_reason} if self.other_reason else {}),
                 **({"start_quantity": self.start_quantity} if self.start_quantity is not None else {}),
+                **({"pnl_on_row": self.pnl_on_row} if self.pnl_on_row else {}),
                 **({"trades": _json_safe(self.trades)} if self.trades else {})}
 
     def breakdown(self) -> dict[str, Any]:
@@ -428,7 +432,7 @@ BREAKDOWN_KEYS = ("carry_coupon", "carry_pull", "received_coupon_rub", "received
                   "curve_moves_bp", "prev")
 """The keys of ``FlashPnl.breakdown``: kept in the store's ``pnl.extra`` (``publish.desk_run``), which the PnL period
 API reads, not in the fact's copy of it (``publish.tdm_run.pnl_extra``), whose shape stays as it was."""
-STORE_ONLY_KEYS = (*BREAKDOWN_KEYS, "other_reason", "start_quantity", "trades")
+STORE_ONLY_KEYS = (*BREAKDOWN_KEYS, "other_reason", "start_quantity", "trades", "pnl_on_row")
 """``BREAKDOWN_KEYS`` and the reason of the unexplained (TDM#442): the store's ``pnl.extra`` only."""
 
 

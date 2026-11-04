@@ -37,9 +37,12 @@ HEAD = ("trade_id;trade_version;status;trade_date;trade_ts;book_id;position_id;a
 
 
 def trade_line(tid, side, qty, price="", acc="", pid="B1|SEC-26238", instr="SEC-26238", hhmm="10:30", ccy="RUB",
-               face="", status="live"):
+               face="", status="live", iid=None):
+    """``iid``: the ``instrument_id`` column (default the instrument; "" leaves it to the adapter, which looks the bond
+    up by ISIN as it does for a position)."""
+    iid = instr if iid is None else iid
     return (f"{tid};1;{status};2026-10-16;2026-10-16T{hhmm}:00;B1;{pid};bond;{instr};{side};{qty};{face};{price};{acc};"
-            f"{ccy};{instr};{ISIN.get(instr, '')}\n")
+            f"{ccy};{iid};{ISIN.get(instr, '')}\n")
 
 
 # ---------- one trade against a valuation (stubs, no database) ----------
@@ -159,7 +162,8 @@ def test_a_report_of_the_day_keeps_its_quantity_and_the_trades_give_the_pnl(monk
     out, summary = trades.apply_intraday(None, day, _report(tti._inputs(), 1200.0))
     assert {r[0]: r[3] for r in out.rows}["T1|SEC1"] == 1200.0 and summary["gaps"] == {}
     assert summary["rows"]["T1|SEC1"] == {"mode": "qty", "start": 1000.0, "final": 1200.0, "new": False,
-                                          "final_fold": 1200.0, "report": True}
+                                          "final_fold": 1200.0, "report": True, "members": ["T1|SEC1"],
+                                          "bond": "SEC1"}
     assert [t["trade_id"] for t in summary["trades"]] == ["TR1"] and summary["applied"] == 1
     assert {r[0]: r[3] for r in summary["start_inputs"].rows}["T1|SEC1"] == 1000.0
     assert out.private_inputs_hash not in ("report", "h0")   # the trades are in the hash
@@ -227,15 +231,26 @@ ROW = ("SELECT p.quantity, p.pv_rub, p.pnl, p.no_pnl FROM run_position p WHERE p
 class Day:
     """The intraday run of 16.10 on the stub hub, before and after files of trades are dropped."""
 
-    def __init__(self, hub, tmp_path, store_url):
+    def __init__(self, hub, tmp_path, store_url, lots=None):
         self.s = cfg(tmp_path, store_url, hub)
         self.url, self.tmp, self.hub = store_url, tmp_path, hub
-        put(tmp_path, "positions_20261016.csv")
+        if lots is None:
+            put(tmp_path, "positions_20261016.csv")
+        else:
+            self.positions("positions_20261016.csv", lots)
         self.clock = {"t": at(FRI, 10, 6)}
         self.ap = Autopilot(settings_loader=lambda: self.s, now=lambda: self.clock["t"])
         publish(hub, FRI, "intraday", "2026-10-16T07:00:00Z", 1)
         self.ap.run_cycle()
-        self.base = self.row()
+        self.base = self.row() if lots is None else None
+
+    def positions(self, name, lots):
+        """A positions file of book B1 with a row per lot: [(position_id, instrument, isin, quantity)]."""
+        (self.tmp / "in").mkdir(exist_ok=True)
+        head = ("book_id;position_id;asset_class;source_instrument_id;source_instrument_name;isin;ccy;quantity;"
+                "face_amount_ccy\n")
+        (self.tmp / "in" / name).write_text(head + "".join(
+            f"B1;{pid};bond;{ins};;{isin};RUB;{q:.0f};{q * 1000:.0f}\n" for pid, ins, isin, q in lots), encoding="utf-8")
 
     def latest_id(self, rtype="INTRADAY", on=FRI):
         with store.connect(self.url) as con:
@@ -445,7 +460,7 @@ def test_the_final_close_has_the_trades_until_the_report_of_the_day_comes(day):
     assert r["q"] == 12000 and r["pnl"]["new_trades"] == pytest.approx(nt_before) and nt_before != 0
     assert r["pnl"]["extra"]["start_quantity"] == 12000
     lin = lineage(day.url, again)
-    assert lin["applied"] == 1 and lin["gaps"] == {PID: 1000.0}   # report 12000 against 12000 - 1000 sold
+    assert lin["applied"] == 1 and lin["gaps"] == {"B1|SU26238RMFS4": 1000.0}   # report 12000 against 12000 - 1000 sold
     day.clock["t"] = at(MON, 9, 0)
     assert steps(day.ap.run_cycle())["eod"][1].startswith("up to date") and day.latest_id("EOD") == again
     with store.connect(day.url) as con:
@@ -519,3 +534,217 @@ def test_a_start_of_day_without_pnl_keeps_no_pnl_and_the_trades_beside_it(day, m
     assert r["q"] == 11000 and r["pnl"] is None
     assert r["no_pnl"]["reason"] == "not_priced_prev" and r["no_pnl"]["new_trades"] != 0
     assert r["no_pnl"]["trades"][0]["trade_id"] == "S1" and r["no_pnl"]["start_quantity"] == 12000
+
+
+# ---------- a report with a row per lot ----------
+
+def _lot_inputs(rows, valid):
+    import test_trades_intraday as tti
+
+    base = tti._inputs()
+    return store.PositionInputs(**{**base.__dict__, "rows": rows, "valid_dates": {"T1": valid, "T2": valid},
+                                   "private_inputs_hash": "report", "extra": {}})
+
+
+def _lots_prev(monkeypatch, rows, extra=None, h="prev"):
+    import test_trades_intraday as tti
+
+    prev = store.PositionInputs(**{**tti._inputs().__dict__, "rows": rows, "extra": extra or {},
+                                   "private_inputs_hash": h})
+    monkeypatch.setattr(store, "positions_for", lambda con, d, books=None: prev)
+
+
+DAY = date(2026, 11, 3)
+
+
+def test_a_purchase_of_a_bond_held_is_a_new_lot_of_the_report(monkeypatch):
+    import test_trades_intraday as tti
+
+    _days(monkeypatch, {"2026-11-03": [tti._trade(position_id="T1|T9", instrument_id="SEC1", quantity="500")]})
+    _lots_prev(monkeypatch, [("T1|L1", "T1", "SEC1", 1000.0)])
+    out, summary = trades.apply_intraday(None, DAY, _lot_inputs(
+        [("T1|L1", "T1", "SEC1", 1000.0), ("T1|T9", "T1", "SEC1", 500.0)], DAY))
+    assert summary["gaps"] == {}                               # by bond, not by position id
+    assert {r[0]: r[3] for r in out.rows} == {"T1|L1": 1000.0, "T1|T9": 500.0}   # the report's quantities
+    c = summary["rows"]["T1|L1"]                                 # the PnL of the bond is on its largest lot
+    assert (c["start"], c["final"], c["new"], sorted(c["members"])) == (1000.0, 1500.0, False, ["T1|L1", "T1|T9"])
+    assert [t["row"] for t in summary["trades"]] == ["T1|L1"]
+    assert {r[0]: r[3] for r in summary["start_inputs"].rows} == {"T1|L1": 1000.0}
+
+
+def test_a_part_sale_with_two_lots_the_report_takes_first_in_first_out(monkeypatch):
+    import test_trades_intraday as tti
+
+    _days(monkeypatch, {"2026-11-03": [tti._trade(position_id="T1|L2", side="sell", quantity="700")]})
+    _lots_prev(monkeypatch, [("T1|L1", "T1", "SEC1", 1000.0), ("T1|L2", "T1", "SEC1", 500.0)])
+    out, summary = trades.apply_intraday(None, DAY, _lot_inputs(
+        [("T1|L1", "T1", "SEC1", 300.0), ("T1|L2", "T1", "SEC1", 500.0)], DAY))
+    assert summary["gaps"] == {}
+    c = summary["rows"]["T1|L2"]                                 # the larger lot of the report
+    assert (c["start"], c["final"]) == (1500.0, 800.0) and sorted(c["members"]) == ["T1|L1", "T1|L2"]
+    assert {r[0]: r[3] for r in summary["start_inputs"].rows if r[1] == "T1"} == {"T1|L2": 1500.0}   # both lots, one row
+    assert {r[0]: r[3] for r in out.rows if r[1] == "T1"} == {"T1|L1": 300.0, "T1|L2": 500.0}
+
+
+def test_a_new_bond_with_another_position_id_in_the_report(monkeypatch):
+    import test_trades_intraday as tti
+
+    _days(monkeypatch, {"2026-11-03": [tti._trade(position_id="T1|X1", instrument_id="SEC2", quantity="10")]})
+    _lots_prev(monkeypatch, [("T1|L1", "T1", "SEC1", 1000.0), ("T2|SEC2", "T2", "SEC2", 5.0)])
+    out, summary = trades.apply_intraday(None, DAY, _lot_inputs(
+        [("T1|L1", "T1", "SEC1", 1000.0), ("T1|Y1", "T1", "SEC2", 10.0)], DAY))
+    assert summary["gaps"] == {}
+    c = summary["rows"]["T1|Y1"]
+    assert (c["start"], c["final"], c["new"]) == (0.0, 10.0, True)
+    assert [t["row"] for t in summary["trades"]] == ["T1|Y1"] and "T1|X1" not in {r[0] for r in out.rows}
+
+
+def test_a_book_with_a_report_and_no_earlier_set(monkeypatch):
+    import test_trades_intraday as tti
+
+    _days(monkeypatch, {"2026-11-03": [tti._trade(quantity="200", instrument_id="SEC1")]})
+    monkeypatch.setattr(store, "positions_for", lambda con, d, books=None: store.PositionInputs(
+        [], [], {}, datetime_now(), "none"))
+    out, summary = trades.apply_intraday(None, DAY, _lot_inputs([("T1|SEC1", "T1", "SEC1", 200.0)], DAY))
+    c = summary["rows"]["T1|SEC1"]
+    assert (c["start"], c["final"], c["new"]) == (0.0, 200.0, True) and summary["gaps"] == {}
+    assert {r[0]: r[3] for r in out.rows} == {"T1|SEC1": 200.0}
+
+
+def datetime_now():
+    from datetime import UTC, datetime
+
+    return datetime(2026, 11, 3, tzinfo=UTC)
+
+
+def test_the_set_the_start_of_the_day_comes_from_is_in_the_inputs_hash(monkeypatch):
+    import test_trades_intraday as tti
+
+    _days(monkeypatch, {"2026-11-03": [tti._trade(quantity="200")]})
+    hashes = []
+    for h in ("prev-v1", "prev-v1", "prev-v2"):   # the report of the day before corrected: another hash
+        _lots_prev(monkeypatch, [("T1|SEC1", "T1", "SEC1", 1000.0)], h=h)
+        hashes.append(trades.apply_intraday(None, DAY, _lot_inputs([("T1|SEC1", "T1", "SEC1", 1200.0)], DAY))[0]
+                      .private_inputs_hash)
+    assert hashes[0] == hashes[1] != hashes[2]
+
+
+def test_trades_older_than_the_window_are_said_to_be_dropped(monkeypatch):
+    import test_trades_intraday as tti
+
+    old = tti._inputs()
+    old = store.PositionInputs(**{**old.__dict__, "valid_dates": {"T1": date(2026, 10, 20), "T2": date(2026, 10, 20)}})
+    _days(monkeypatch, {"2026-10-22": [tti._trade(trade_id="O1", trade_date="2026-10-22")],
+                        "2026-10-29": [tti._trade(trade_id="N1", trade_date="2026-10-29", quantity="100")]})
+    out, summary = trades.apply_intraday(None, DAY, old)
+    assert summary["history_cut"] == {"T1": {"report": "2026-10-20", "dropped": 1}}
+    assert summary["history"] == 1 and {r[0]: r[3] for r in out.rows}["T1|SEC1"] == 1100.0
+
+
+def _book_sum(day, rid, pids):
+    with store.connect(day.url) as con:
+        rows = con.execute("SELECT position_id, quantity, pnl FROM run_position WHERE run_id = %s AND position_id"
+                           " = ANY(%s)", (rid, pids)).fetchall()
+    return sum((p["extra"]["total"] if p else 0.0) for _, _, p in rows), sum(q for _, q, _ in rows)
+
+
+def _lot_scenario(stub, tmp_path, store_url, start, trade, report, pids_carried, pids_report, buy=True):
+    """The same trades on the same final market, before the report of the day (carried book: the fold) and after it
+    (the report's rows per lot): the PnL of the bond and the book must be the same, whatever the lots."""
+    d = Day(stub, tmp_path, store_url, lots=start)
+    d.drop(trade_line(*trade[0], **trade[1]))
+    publish(d.hub, FRI, "eod_final", "2026-10-19T05:00:00Z", 3)
+    d.clock["t"] = at(MON, 8, 30)
+    d.ap.run_cycle()
+    carried = d.latest_id("EOD")
+    before = _book_sum(d, carried, pids_carried)
+    d.positions("positions_20261019.csv", report)
+    d.clock["t"] = at(MON, 8, 50)
+    d.ap.run_cycle()
+    rid = d.latest_id("EOD")
+    assert rid > carried
+    after = _book_sum(d, rid, pids_report)
+    assert after[0] == pytest.approx(before[0]) and after[0] != 0
+    assert after[1] == pytest.approx(before[1])      # the quantities are the report's
+    with store.connect(d.url) as con:
+        assert con.execute("SELECT count(*) FROM run_position WHERE run_id = %s AND pnl->'extra'->'trades' IS NOT NULL",
+                           (rid,)).fetchone()[0] == 1
+    assert lineage(d.url, rid)["gaps"] == {}
+    return d, rid
+
+
+S = "SEC-26238"
+LOT_ISIN = "RU000A1038V6"
+
+
+def test_lots_a_purchase_of_a_bond_held_as_a_new_lot_has_the_same_pnl(stub, tmp_path, store_url):
+    _lot_scenario(stub, tmp_path, store_url, [("B1|L1", S, LOT_ISIN, 12000)], (("B9", "buy", 500, 60.0, 20_000.0),
+                                                                          {"pid": "B1|T9", "iid": ""}),
+                  [("B1|L1", S, LOT_ISIN, 12000), ("B1|T9", S, LOT_ISIN, 500)], ["B1|L1"], ["B1|L1", "B1|T9"])
+
+
+def test_lots_a_part_sale_with_two_lots_the_report_takes_fifo_has_the_same_pnl(stub, tmp_path, store_url):
+    d, rid = _lot_scenario(stub, tmp_path, store_url, [("B1|L1", S, LOT_ISIN, 12000), ("B1|L2", S, LOT_ISIN, 3000)],
+                           (("S1", "sell", 4000, 62.0, 10_000.0), {"pid": "B1|L2", "iid": ""}),
+                           [("B1|L1", S, LOT_ISIN, 8000), ("B1|L2", S, LOT_ISIN, 3000)], ["B1|L1", "B1|L2"],
+                           ["B1|L1", "B1|L2"])
+    with store.connect(d.url) as con:   # the bond's PnL is on the larger lot of the report, the other has none
+        rows = dict(con.execute("SELECT position_id, pnl->'extra' FROM run_position WHERE run_id = %s AND position_id"
+                                " IN ('B1|L1', 'B1|L2')", (rid,)).fetchall())
+    assert rows["B1|L1"]["start_quantity"] == 15000 and "pnl_on_row" not in rows["B1|L1"]
+    assert rows["B1|L2"]["pnl_on_row"] == "B1|L1" and rows["B1|L2"]["total"] == 0.0
+
+
+def test_lots_a_new_bond_with_another_position_id_has_the_same_pnl(stub, tmp_path, store_url):
+    new = ("N1", "buy", 100, 59.0, 1_000.0)
+    d = Day(stub, tmp_path, store_url, lots=[("B1|L1", S, LOT_ISIN, 12000)])
+    d.drop(trade_line(*new, pid="B1|N1", instr="SEC-29008", iid=""))
+    publish(d.hub, FRI, "eod_final", "2026-10-19T05:00:00Z", 3)
+    d.clock["t"] = at(MON, 8, 30)
+    d.ap.run_cycle()
+    carried = d.latest_id("EOD")
+    before = _book_sum(d, carried, ["B1|N1", "B1|L1"])
+    d.positions("positions_20261019.csv", [("B1|L1", S, LOT_ISIN, 12000), ("B1|N2", "SEC-29008", "RU000A0JV4P3", 100)])
+    d.clock["t"] = at(MON, 8, 50)
+    d.ap.run_cycle()
+    rid = d.latest_id("EOD")
+    after = _book_sum(d, rid, ["B1|N2", "B1|L1"])
+    assert after[0] == pytest.approx(before[0]) and after[1] == pytest.approx(before[1])
+    assert lineage(d.url, rid)["gaps"] == {}
+    with store.connect(d.url) as con:
+        assert con.execute("SELECT count(*) FROM run_position WHERE run_id = %s AND position_id = 'B1|N1'",
+                           (rid,)).fetchone()[0] == 0
+
+
+def test_the_carried_book_with_two_lots_keeps_the_pnl_of_both(stub, tmp_path, store_url):
+    """No report of the day: the sale is folded on one lot (it may go negative), the bond's PnL is the same as the
+    sum of the lots' start-of-day PnL plus the trade's."""
+    d = Day(stub, tmp_path, store_url, lots=[("B1|L1", S, LOT_ISIN, 12000), ("B1|L2", S, LOT_ISIN, 3000)])
+    base = _book_sum(d, d.latest_id(), ["B1|L1", "B1|L2"])
+    d.drop(trade_line("S1", "sell", 4000, 62.0, 10_000.0, pid="B1|L2", iid=""))
+    after = _book_sum(d, d.latest_id(), ["B1|L1", "B1|L2"])
+    assert after[1] == 11000
+    with store.connect(d.url) as con:
+        nt_ = con.execute("SELECT sum((pnl->>'new_trades')::float8) FROM run_position WHERE run_id = %s",
+                          (d.latest_id(),)).fetchone()[0]
+    assert nt_ != 0 and after[0] == pytest.approx(base[0] + nt_)
+
+
+def test_a_corrected_report_of_the_day_before_makes_the_run_of_the_day_again_once(stub, tmp_path, store_url):
+    d = Day(stub, tmp_path, store_url, lots=[("B1|L1", S, LOT_ISIN, 12000)])
+    d.drop(trade_line("S1", "sell", 1000, 62.0, 5_000.0, pid="B1|L1"))
+    publish(d.hub, FRI, "eod_final", "2026-10-19T05:00:00Z", 3)
+    d.clock["t"] = at(MON, 8, 30)
+    d.ap.run_cycle()
+    d.positions("positions_20261019.csv", [("B1|L1", S, LOT_ISIN, 11000)])
+    d.clock["t"] = at(MON, 8, 50)
+    d.ap.run_cycle()
+    final = d.latest_id("EOD")
+    d.positions("positions_20261016_2.csv", [("B1|L1", S, LOT_ISIN, 12500)])   # the report of 15.10 corrected
+    d.clock["t"] = at(MON, 9, 10)
+    by = steps(d.ap.run_cycle())
+    assert by["eod"][0] == "ok" and "private inputs changed" in by["eod"][1], by["eod"]
+    again = d.latest_id("EOD")
+    assert again > final
+    d.clock["t"] = at(MON, 9, 20)
+    assert steps(d.ap.run_cycle())["eod"][1].startswith("up to date") and d.latest_id("EOD") == again

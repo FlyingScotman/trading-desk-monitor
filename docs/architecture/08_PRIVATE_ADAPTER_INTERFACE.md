@@ -879,8 +879,8 @@ monitors' screen «Сделки дня» (C20). Every run of date D (intraday, p
 trades into its book (`desk.trades.apply_intraday`, setting `intraday_trades`, TDM#557). A book whose latest report is
 older than D (`valid_date` < D) is carried: its set plus the trades of the days after the report (a late report) plus
 the trades of D. A book with the report of D has the report's positions and risk strictly; the trades of D then give
-the PnL only, and what the report differs from the start of the day plus the trades by is flagged on the row
-(`x.trades_report_gap`) and in the lineage (`gaps`). The run's private inputs hash covers the trades it applied, so a
+the PnL only (a book with a row per lot is compared and measured per bond, not per `position_id`: the PnL of the bond is on the largest lot of the report, its other lots have none, `extra.pnl_on_row`), and what the report differs from the start of the day plus the trades by is flagged on the row
+(`x.trades_report_gap`) and in the lineage (`gaps`). Trades older than seven days since a book's last report are not counted: the lineage says so (`history_cut`). The run's private inputs hash covers the trades it applied and the set the start of the day comes from, so a
 new cut of the trades, or the report of D, makes the run again. The PnL
 of a position the trades changed is the start-of-day position's PnL (the full factors) plus the component `new_trades`:
 each trade from its price (`price_pct`, clean, % of the current face; `accrued_ccy`, the trade's whole accrued, in its

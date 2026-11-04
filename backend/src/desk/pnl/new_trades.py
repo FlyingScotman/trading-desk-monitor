@@ -146,6 +146,15 @@ def _opened_today(prev: EodContext, ctx: EodContext, o: Outcome, nt: float, res:
         method=SIMPLE_METHOD)
 
 
+def _covered(prev: EodContext, ctx: EodContext, o: Outcome, anchor: str) -> SimplePnl:
+    """A lot of a bond whose PnL is on another lot (``pnl_on_row``): none of its own, so that the bond's PnL is counted
+    once and not again as a flash PnL of this lot from the previous close."""
+    v = o.valuation
+    assert v is not None
+    return replace(_opened_today(prev, ctx, o, 0.0, []), start_quantity=None, trades=None, pnl_on_row=anchor,
+                   note=f"the bond was traded today: its PnL (the start of the day's and the trades') is on the lot {anchor}")
+
+
 def attach(prev: EodContext, ctx: EodContext, start: PositionInputs, bp: Any, outcomes: list[Outcome],
            summary: dict[str, Any], carried: Any) -> dict[str, int]:
     """Split the PnL of the rows the day's trades changed (module doc), in place on ``outcomes`` (``bp``'s, after
@@ -180,4 +189,9 @@ def attach(prev: EodContext, ctx: EodContext, start: PositionInputs, bp: Any, ou
             o.trades = {"new_trades": nt, "start_quantity": s.valuation.quantity if s and s.valuation else None,
                         "trades": res}
             n["no_pnl"] += 1
+        for m in (info.get(pid) or {}).get("members", ()):   # the other lots of the bond in the report
+            lot = main.get(m)
+            if m == pid or lot is None or lot.valuation is None or lot.terms is None:
+                continue
+            lot.pnl, lot.no_pnl = (_covered(prev, ctx, lot, pid), None) if o.pnl is not None else (None, o.no_pnl)
     return n

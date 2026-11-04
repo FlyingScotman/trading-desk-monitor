@@ -36,6 +36,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 from collections import Counter
 from dataclasses import replace
 from datetime import UTC, date, datetime, timedelta
@@ -233,6 +234,11 @@ def _fold(rows: list, extra: dict[str, dict], books: set[str], d: date, trade_ro
                          "new_positions": new_positions}
 
 
+def _bond(r: Any, x: dict[str, Any] | None) -> tuple[str, str]:
+    """(book, bond) of a row: its instrument, else its ISIN, else its own id; the lots of a bond share it."""
+    return r[1], str(r[2] or (x or {}).get("isin") or r[0])
+
+
 def _row_qty(r: Any, x: dict[str, Any] | None) -> tuple[str, float | None]:
     """The row's quantity as its inputs give it: (``qty``, number of bonds), else (``face``, face amount)."""
     if r[3] is not None:
@@ -274,17 +280,33 @@ def apply_intraday(con: psycopg.Connection, on: date,
     day = store.dataset_rows(con, "trades", on)
     summary: dict[str, Any] = {"set_ids": sorted({u["set_id"] for u in day.units}), "applied": 0,
                                "new_positions": 0, "skipped": {}, "versions": {}, "skipped_ids": {}, "trades": [],
-                               "rows": {}, "history": 0, "gaps": {}, "start_inputs": None}
+                               "rows": {}, "history": 0, "history_cut": {}, "gaps": {}, "start_inputs": None}
+    start_hash = None
     base_rows: list[list] = [list(r) for r in inputs.rows if r[1] not in rep]
     base_extra = {r[0]: inputs.extra[r[0]] for r in base_rows if r[0] in inputs.extra}
     bvalid = {b: v for b, v in held.items() if b not in rep}
     if rep and any(str(t.get("book_id")) in rep for t in day.rows):   # the start of the day of a book with its report
+        # ``positions_for`` takes the latest set of each book valid on or before the date: the day before ``on`` gives
+        # the set in force at the start of ``on`` (the report of ``on`` itself is not valid before ``on``)
         prev = store.positions_for(con, on - timedelta(days=1), books=sorted(rep))
         base_rows += [list(r) for r in prev.rows]
         base_extra.update(prev.extra)
         bvalid.update(prev.valid_dates)
+        start_hash = prev.private_inputs_hash   # a corrected report of the day before changes the PnL of the trades
     hist: list[dict] = []
-    d = max(min(bvalid.values(), default=on) + timedelta(days=1), on - timedelta(days=MAX_HISTORY_DAYS))
+    first = max(min(bvalid.values(), default=on) + timedelta(days=1), on - timedelta(days=MAX_HISTORY_DAYS))
+    cut: dict[str, dict[str, Any]] = {}
+    for b, v in sorted(bvalid.items()):   # trades older than the window are lost: said, never silent
+        dropped = 0
+        d = v + timedelta(days=1)
+        while d < first and (d - v).days <= 60:
+            dropped += sum(1 for t in store.dataset_rows(con, "trades", d).rows
+                           if str(t.get("book_id")) == b and effect(t, d) is None)
+            d += timedelta(days=1)
+        if first > v + timedelta(days=1) and dropped:
+            cut[b] = {"report": v.isoformat(), "dropped": dropped}
+    summary["history_cut"] = cut
+    d = first
     while d < on:   # trades of the days between a book's report and ``on``: in its start of the day
         past = store.dataset_rows(con, "trades", d)
         if past.rows:
@@ -307,7 +329,6 @@ def apply_intraday(con: psycopg.Connection, on: date,
         return inputs, summary
     # the rows of the run: carried books from the fold, books with a report as it is
     by_pid = {r[0]: r for r in rows_f}
-    rep_rows = {r[0]: r for r in inputs.rows if r[1] in rep}
     out_rows: list[tuple] = []
     out_extra = dict(inputs.extra)
     listed = {r[0] for r in inputs.rows}
@@ -318,36 +339,73 @@ def apply_intraday(con: psycopg.Connection, on: date,
         out_rows.append(tuple(by_pid[r[0]]))
         if r[0] in extra_f:
             out_extra[r[0]] = extra_f[r[0]]
-    for r in rows_f:
-        pid, book = r[0], r[1]
-        if pid in listed:
-            continue
-        if book not in rep:   # a position the trades opened in a carried book
+    for r in rows_f:   # a position the trades opened in a carried book
+        if r[0] not in listed and r[1] not in rep:
             out_rows.append(tuple(r))
-            out_extra[pid] = extra_f[pid]
-        elif pid in changed:   # traded, and the report does not list it: kept at zero
-            mode, _ = _row_qty(r, extra_f.get(pid))
-            out_rows.append((pid, book, r[2], 0.0 if mode == "qty" else None))
-            if pid in extra_f:
-                out_extra[pid] = _zeroed(extra_f[pid])
+            out_extra[r[0]] = extra_f[r[0]]
+    # a book with its report is compared and measured by bond, not by position id: the source keeps a row per lot, a
+    # purchase of a bond held is a new lot of the report and a sale takes the first lot (FIFO), not the one the fold folds on
+    start_rows = [list(r) for r in base_rows]
+    start_extra = dict(base_extra)
     gaps: dict[str, float] = {}
-    for pid, c in changed.items():   # a book with its report: the report's quantity is the position's, strictly
-        fr = by_pid.get(pid)
-        if fr is None or fr[1] not in rep:
-            continue
-        rr = rep_rows.get(pid)
-        m_rep, q_rep = _row_qty(rr, inputs.extra.get(pid)) if rr is not None else (c["mode"], 0.0)
-        if m_rep != c["mode"] or q_rep is None:
-            continue
-        c.update(final_fold=c["final"], final=q_rep, report=True)
-        gap = q_rep - c["final_fold"]
+    rows_out: dict[str, dict[str, Any]] = {p: c for p, c in changed.items() if by_pid[p][1] not in rep}
+    traded = sorted({_bond(r, extra_f.get(r[0])) for r in rows_f if r[1] in rep and r[0] in changed}, key=str)
+    for key in traded:
+        lots_b = [r for r in base_rows if _bond(r, base_extra.get(r[0])) == key]
+        lots_f = [r for r in rows_f if _bond(r, extra_f.get(r[0])) == key]
+        lots_r = [r for r in inputs.rows if r[1] in rep and _bond(r, inputs.extra.get(r[0])) == key]
+        modes = {_row_qty(r, ex.get(r[0]))[0] for rs, ex in ((lots_b, base_extra), (lots_f, extra_f),
+                                                              (lots_r, inputs.extra)) for r in rs}
+        if len(modes) != 1:
+            continue   # lots in quantities and in face amounts: not comparable
+        mode = next(iter(modes))
+
+        def total(rs: list, ex: dict) -> float:
+            return math.fsum(_row_qty(r, ex.get(r[0]))[1] or 0.0 for r in rs)
+
+        q0, q_fold, q_rep = total(lots_b, base_extra), total(lots_f, extra_f), total(lots_r, inputs.extra)
+        book = key[0]
+        if lots_r:   # the row that carries the bond's PnL: the largest lot of the report
+            anchor = min(lots_r, key=lambda r: (-(_row_qty(r, inputs.extra.get(r[0]))[1] or 0.0), r[0]))[0]
+        else:        # the report lacks the bond: one row at zero keeps its PnL
+            anchor = (lots_b or lots_f)[0][0]
+            if anchor in listed:
+                anchor = f"{anchor}|closed"
+            src = (lots_f or lots_b)[0]
+            out_rows.append((anchor, book, src[2], 0.0 if mode == "qty" else None))
+            out_extra[anchor] = _zeroed(extra_f.get(src[0]) or base_extra.get(src[0]) or {"asset_class": "bond"})
+        gap = q_rep - q_fold
         if abs(gap) > 1e-6:
-            gaps[pid] = gap
-            if pid in out_extra:
-                out_extra[pid] = {**out_extra[pid], "x": {**(out_extra[pid].get("x") or {}), "trades_report_gap": gap}}
-    summary.update(rows=changed, gaps=dict(list(gaps.items())[:MAX_LISTED]))
-    summary["start_inputs"] = replace(inputs, rows=[tuple(r) for r in base_rows], extra=base_extra, valid_dates=bvalid)
-    canon = json.dumps([inputs.private_inputs_hash, applied, hist], sort_keys=True, default=str, separators=(",", ":"))
+            gaps[f"{book}|{key[1]}"] = gap
+            out_extra[anchor] = {**out_extra.get(anchor, {}), "x": {**(out_extra.get(anchor, {}).get("x") or {}),
+                                                                   "trades_report_gap": gap}}
+        pids_f = {r[0] for r in lots_f}
+        for a in applied:
+            if a["row"] in pids_f:
+                a["row"] = anchor
+        for p in pids_f:
+            rows_out.pop(p, None)
+        rows_out[anchor] = {"mode": mode, "start": q0, "final": q_rep, "final_fold": q_fold, "new": q0 == 0,
+                            "report": True, "members": [r[0] for r in lots_r], "bond": str(key[1])}
+        # the start of the day of the bond for its PnL: its lots in one row
+        start_rows = [r for r in start_rows if r not in lots_b]
+        for r in lots_b:
+            start_extra.pop(r[0], None)
+        if lots_b:
+            x0 = dict(base_extra.get(lots_b[0][0]) or {})
+            if len(lots_b) > 1:
+                x0.pop("face_outstanding_ccy", None)
+                faces = [(base_extra.get(r[0]) or {}).get("face_amount_ccy") for r in lots_b]
+                if None in faces:
+                    x0.pop("face_amount_ccy", None)
+                else:
+                    x0["face_amount_ccy"] = math.fsum(faces)
+            start_rows.append([anchor, book, lots_b[0][2], q0 if mode == "qty" else None])
+            start_extra[anchor] = x0
+    summary.update(trades=[a for a in applied if a["row"] in rows_out], rows=rows_out,
+                   gaps=dict(list(gaps.items())[:MAX_LISTED]))
+    summary["start_inputs"] = replace(inputs, rows=[tuple(r) for r in start_rows], extra=start_extra, valid_dates=bvalid)
+    canon = json.dumps([inputs.private_inputs_hash, applied, hist, start_hash, cut], sort_keys=True, default=str, separators=(",", ":"))
     return replace(inputs, rows=out_rows, extra=out_extra,  # type: ignore[misc]
                    private_inputs_hash=hashlib.sha256(canon.encode()).hexdigest()), summary
 
