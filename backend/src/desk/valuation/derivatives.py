@@ -62,9 +62,17 @@ delta), ``basis01`` (``FXBASIS|<ccy>``, RUB per bp), ``fixings`` (fixed / pendin
   forward's is at the spot date, so the two differ by the foreign discount factor to it), ``basis01``
   (``XCCYBASIS`` apart from ``FXBASIS``, in ``extra.basis01_xccy``), ``extra.ocp_amount`` (the foreign leg's
   exchanges still to come, received (+) or paid (-), as an FX forward's), ``extra.swaps``
-  (``product`` ``ccs``, both legs' PV, ``side`` by the fixed leg). Not valued: a floating foreign leg
-  (``ccs_foreign_floating_unsupported``: no foreign index fixings in the run), two foreign legs or two RUB legs
-  (``ccs_ccy_unsupported``), a RUB leg on another index.
+  (``product`` ``ccs``, both legs' PV, ``side`` by the fixed leg). TDM#565: the CNY leg may float on ``RUSFARCNY``
+  (``CCS_FOREIGN_INDEX``; + ``spread_bp``): compounded daily, provisionally on 365 / 366, projected on ``CNY RUSFAR``
+  (``curves.fx``, from the hub's OIS RUSFARCNY quotes, provisional conventions, flat-forward past the last quote) and
+  reading the run's ``RUSFARCNY`` fixings (``IndexFixingEntry``) for a started period; the fact then holds
+  ``foreign_index``, ``foreign_spread_bp``, ``foreign_projection_curve`` and ``par_spread_bp`` (in place of
+  ``par_rate_pct``), the risk is on ``CNY RUSFAR``, ``CNY XCCY`` and ``RUB RUONIA``. A floating coupon of the CNY leg is
+  in the RUB cash of the flows (core gives the horizon's cash in RUB only; ``_foreign_flows``): an approximation. Not
+  valued: another foreign index (``ccs_foreign_floating_unsupported``), an arithmetically averaged one
+  (``ccs_index_averaging_unsupported``), no ``CNY RUSFAR`` curve (``no_foreign_projection_curve``), no fixings of a
+  started period (``no_fixings``), two foreign legs or two RUB legs (``ccs_ccy_unsupported``), a RUB leg on another
+  index.
 - ``repo``: one core ``RepoTrade`` per row: ``repo`` borrows cash, ``reverse_repo`` lends it, ``notional_ccy`` the first
   leg's cash (RUB only), ``start_date`` / ``maturity_date`` its legs, fixed ``fixed_rate_pct`` or floating
   ``RUONIA`` / ``KEY_RATE`` + ``spread_bp`` (the MOEX observation rule; the key rate projected on
@@ -97,7 +105,7 @@ from collections import defaultdict
 from dataclasses import dataclass, field, replace
 from datetime import date, timedelta
 from decimal import Decimal
-from typing import Any
+from typing import Any, NamedTuple
 
 from rub_fixed_income import (
     RISK_BUCKETS,
@@ -105,6 +113,7 @@ from rub_fixed_income import (
     AccountingCategory,
     CalendarEntry,
     CalendarRangeError,
+    CompoundedIndex,
     CoreRejection,
     CurveBootstrapRequest,
     DayCount,
@@ -146,7 +155,7 @@ from rub_fixed_income import (
 from rub_fixed_income import __version__ as CORE_VERSION
 
 from ..curves import rates
-from ..curves.fx import FxOptions
+from ..curves.fx import RUSFAR_CNY_CURVE_ID, RUSFAR_CNY_FIXING, RUSFAR_CNY_INDEX, FxOptions
 from ..curves.rates import KEY_RATE_CURVE_ID, KEY_RATE_SWAP_CURVE_ID, RUONIA_OIS_CURVE_ID
 from .bonds import OIS_TAIL, RISK_CURVES, BondValuation
 
@@ -279,6 +288,11 @@ def _leg_schedule(base: SwapLegSchedule, freq: str | None, dc: str | None, start
             raise NotValued("day_count_unsupported", f"{label}: day_count {dc}")
         day_count = DAY_COUNTS[dc]
     return SwapLegSchedule(months, base.roll, day_count, single), freq is not None and dc is not None
+
+
+def _truthy(v: Any) -> bool:
+    return v is True or (isinstance(v, (int, float)) and not isinstance(v, bool) and v != 0) \
+        or (isinstance(v, str) and v.strip().lower() in ("1", "true", "yes", "y", "да"))
 
 
 def _leg_field(r: dict[str, Any], k: str) -> str | None:
@@ -450,12 +464,15 @@ class CcsLeg:
     frequency: str | None
     day_count: str | None
     exchange: str | None
+    arithmetic: bool = False
+    """The optional terms field ``x_overnight_arithmetic``: the report's overnight index is averaged arithmetically, not
+    compounded (core compounds; such a leg is not valued: ``ccs_index_averaging_unsupported``)."""
 
 
 @dataclass(frozen=True)
 class CcsTerms:
     """One ``ccs`` trade (TDM#555) from its two leg rows: a RUB leg (fixed, or RUONIA compounded) against a leg in a
-    foreign currency (fixed), one core ``XccySwap``."""
+    foreign currency (fixed, or compounded on a known index: ``CCS_FOREIGN_INDEX``, TDM#565), one core ``XccySwap``."""
 
     trade_id: str
     product: str
@@ -481,8 +498,11 @@ class CcsTerms:
 
     @property
     def side(self) -> str:
-        """``payer`` when the desk pays the fixed leg (the foreign one when both are fixed), else ``receiver``."""
-        fixed = self.foreign if self.foreign.fixed_rate_pct is not None else self.rub
+        """``payer`` when the desk pays the fixed leg, else ``receiver``. The foreign leg is the one that counts when it
+        is fixed, and when both legs float (then it stands for the pair: ``payer`` = the desk pays the foreign leg);
+        a fixed RUB leg against a floating foreign one is the fixed leg."""
+        fixed = self.rub if self.rub.fixed_rate_pct is not None and self.foreign.fixed_rate_pct is None \
+            else self.foreign
         return "payer" if fixed.side == "pay" else "receiver"
 
     @classmethod
@@ -506,7 +526,7 @@ class CcsTerms:
             legs.append(CcsLeg(_ccy(r.get("ccy")) or "", side, n, _num(r.get("fixed_rate_pct")),
                                str(r["index_code"]).strip().upper() if r.get("index_code") is not None else None,
                                _num(r.get("spread_bp")) or 0.0, _leg_field(r, "payment_frequency"),
-                               _leg_field(r, "day_count"), ex))
+                               _leg_field(r, "day_count"), ex, _truthy(r.get("x_overnight_arithmetic"))))
         rub = [g for g in legs if g.ccy == "RUB"]
         other = [g for g in legs if g.ccy != "RUB"]
         if len(rub) != 1 or len(other) != 1:
@@ -821,6 +841,28 @@ CCS_RUB_INDEX = {"RUONIA": RUONIA_OIS_COMPOUND}
 """``index_code`` of a CCS's RUB floating leg -> core's compounded index (core values RUONIA only)."""
 
 
+class CcsForeignIndex(NamedTuple):
+    """An index a CCS's foreign floating leg can float on (TDM#565)."""
+
+    ccy: str
+    index: CompoundedIndex
+    fixing_id: str
+    """The run's index fixings (``curves.fx.rusfar_cny_fixings``)."""
+    curve_id: str
+    """The curve the leg projects on (``curves.fx``)."""
+    note: str
+
+
+CCS_FOREIGN_INDEX = {
+    "RUSFARCNY": CcsForeignIndex(
+        "CNY", CompoundedIndex(RUSFAR_CNY_INDEX, "nfa_act", "nfa_act"), RUSFAR_CNY_FIXING, RUSFAR_CNY_CURVE_ID,
+        "RUSFARCNY compounded daily on 365 / 366 (the leap-year rule of the RUSFAR accumulated-return indices; "
+        "provisional: the exchange's RUSFARCNY compounding basis is not confirmed), projected on the OIS RUSFARCNY "
+        "quotes (provisional conventions, curves.fx)")}
+"""``index_code`` of a CCS's foreign floating leg -> the leg's index, fixings and projection curve. Other indices
+(SHIBOR, SOFR, ...) are ``ccs_foreign_floating_unsupported``: the run has neither their fixings nor a curve."""
+
+
 def _ccs_convention(leg: CcsLeg, base: OisSwapConvention, label: str) -> tuple[OisSwapConvention, DayCount, bool]:
     """The leg's period rule and day count: its ``payment_frequency`` and ``day_count`` where stated, else those of
     the MOEX standard swap (``xcs_cnyrub_convention``: a single period up to a year, annual beyond, ACT/ACT ISDA, a
@@ -895,15 +937,27 @@ def _ccs_build(ctx: Any, c: CcsTerms, iid: str, curve_of: dict[str, str]
     """Core's cross-currency swap of one ``CcsTerms`` (TDM#555): the schedule on the joint calendar of the RUONIA OIS
     and the foreign currency's settlement calendar, exchanges as the terms state them (absent: initial and final, the
     standard swap's), the RUB leg discounted on ``RUB RUONIA`` (RUONIA projected on it), the foreign leg on the
-    currency's XCCY curve where the run has it, else the curve of the FX derivatives (``FxOptions``; said). Returns the instrument, the notes and every payment
-    date (coupons and exchanges)."""
+    currency's XCCY curve where the run has it, else the curve of the FX derivatives (``FxOptions``; said). A foreign
+    leg floating on a known index (``CCS_FOREIGN_INDEX``, TDM#565) is compounded on it, projected on the index's curve
+    (no curve: ``no_foreign_projection_curve``), its started periods reading the index fixings (none:
+    ``no_fixings``); another index is ``ccs_foreign_floating_unsupported``, an arithmetically averaged one
+    ``ccs_index_averaging_unsupported``. Returns the instrument, the notes and every payment date (coupons and
+    exchanges)."""
     bd, notes = ctx.business_date, []
     ccy = c.foreign.ccy
     if c.maturity < bd - timedelta(days=FLOW_DAYS + 7):
         raise NotValued("settled", f"CCS {c.label} matured on {c.maturity}", c.maturity)
+    fidx = None
     if c.foreign.index_code is not None:
-        raise NotValued("ccs_foreign_floating_unsupported", f"CCS {c.label}: the {ccy} leg floats on "
-                                                            f"{c.foreign.index_code} (no {ccy} index fixings in the run)")
+        fidx = CCS_FOREIGN_INDEX.get(c.foreign.index_code)
+        if fidx is None or fidx.ccy != ccy:
+            raise NotValued("ccs_foreign_floating_unsupported",
+                            f"CCS {c.label}: the {ccy} leg floats on {c.foreign.index_code}: the index of the "
+                            f"currency leg is not supported (the run has {', '.join(CCS_FOREIGN_INDEX)} only)")
+        if c.foreign.arithmetic:
+            raise NotValued("ccs_index_averaging_unsupported",
+                            f"CCS {c.label}: the {c.foreign.index_code} leg is averaged arithmetically (core "
+                            "compounds the index)")
     if c.rub.index_code is not None and c.rub.index_code not in CCS_RUB_INDEX:
         raise NotValued("swap_index_unsupported", f"CCS {c.label}: RUB leg on {c.rub.index_code} (RUONIA only)")
     if ccy not in ctx.fx.spots:
@@ -914,6 +968,9 @@ def _ccs_build(ctx: Any, c: CcsTerms, iid: str, curve_of: dict[str, str]
     # the foreign leg is discounted on the currency's XCCY curve (calibrated on the XCS quotes) where the run has it,
     # else on the curve of the FX derivatives, whose quotes may end long before the swap does (said)
     present = {e.curve_id for e in ctx.core_market.curves}
+    if fidx is not None and fidx.curve_id not in present:
+        raise NotValued("no_foreign_projection_curve", f"CCS {c.label}: no {fidx.curve_id} curve in the run (the "
+                                                        f"{c.foreign.index_code} leg projects on it)")
     xccy = ctx.fx.curve(ccy, "xccy")
     if xccy is not None and xccy.curve_id in present:
         foreign_curve = xccy.curve_id
@@ -949,7 +1006,7 @@ def _ccs_build(ctx: Any, c: CcsTerms, iid: str, curve_of: dict[str, str]
             periods, initial_date=start if ex == "initial_and_final" else None, final_date=end)
         legs.append(XccyLeg(g.ccy, g.side, dc, periods, exchanges,  # type: ignore[arg-type]
                             fixed_rate=g.fixed_rate_pct / 100.0 if g.fixed_rate_pct is not None else None,
-                            index=CCS_RUB_INDEX[g.index_code] if rub and g.index_code else None,
+                            index=(CCS_RUB_INDEX[g.index_code] if rub else fidx.index) if g.index_code else None,  # type: ignore[union-attr]
                             spread=g.spread_bp / 1e4 if g.index_code else 0.0))
     if c.rub.exchange is None or c.foreign.exchange is None:
         notes.append(f"{c.label}: notional_exchange not stated: initial and final exchanges assumed (provisional)")
@@ -970,23 +1027,85 @@ def _ccs_build(ctx: Any, c: CcsTerms, iid: str, curve_of: dict[str, str]
         fixing = FIXING_ID["ruonia"]
         if fixing not in _fixing_ids(ctx):
             raise NotValued("no_fixings", f"no {fixing} fixings in the run on {bd} for the started CCS {c.label}")
-    inst = XccyInstrument(iid, swap, RUONIA_OIS_CURVE_ID, foreign_curve, rub_fixing_id=fixing)
+    foreign_fixing = None
+    if fidx is not None:
+        notes.append(f"{c.label}: {fidx.note}")
+        if start < bd:
+            foreign_fixing = fidx.fixing_id
+            if foreign_fixing not in {e.fixing_id for e in ctx.fx.index_fixings}:
+                raise NotValued("no_fixings", f"no {foreign_fixing} fixings in the run on {bd} for the started "
+                                              f"CCS {c.label}")
+            info = (ctx.fx.lineage.get("index_fixings") or {}).get(foreign_fixing) or {}
+            entry = next(e for e in ctx.fx.index_fixings if e.fixing_id == foreign_fixing)
+            # the periods still to pay that have started (one that ended and is paid is left out by core)
+            open_from = min((p.accrual_start for p in swap.foreign_leg.periods
+                             if p.payment_date > bd and p.accrual_start < bd), default=bd)
+            _require_fixings(c, entry.fixings, swap.foreign_leg.periods, bd)
+            bridged = [d for d in info.get("bridged_days") or () if open_from.isoformat() <= d]
+            if bridged:
+                notes.append(f"{c.label}: {foreign_fixing} not published on {', '.join(bridged)} (business days of "
+                             "the settlement calendar): the previous fixing holds")
+            prelim = [d for d in info.get("preliminary_days") or () if open_from.isoformat() <= d]
+            if prelim:
+                notes.append(f"{c.label}: {foreign_fixing} of {', '.join(prelim)} is a preliminary value (the "
+                             "exchange's market data of the same day, replaced later by its history): provisional")
+        last = ((ctx.fx.lineage.get("curves") or {}).get(fidx.curve_id) or {}).get("last_node")
+        notes.append(f"{c.label}: {fidx.curve_id} quotes to {last}, beyond them extrapolated flat-forward (provisional)")
+    inst = XccyInstrument(iid, swap, RUONIA_OIS_CURVE_ID, foreign_curve, rub_fixing_id=fixing,
+                          foreign_projection_curve_id=fidx.curve_id if fidx else None,
+                          foreign_fixing_id=foreign_fixing)
     return inst, notes, tuple(d for d in days if bd < d <= bd + timedelta(days=FLOW_DAYS))
 
 
+def _require_fixings(c: CcsTerms, fixings: Any, periods: Any, bd: date) -> None:
+    """The observation days a started foreign period reads before ``bd`` (each accrual day takes the fixing of the latest
+    business day of the index's calendar on or before it, as core) must have their fixing: the first one missing is
+    ``no_fixings`` with its date, not a refusal of core. The days the calendar carries (``curves.fx``) are not business
+    days there."""
+    have = {d for d, _ in fixings.fixings}
+    cal = fixings.calendar
+    for p in periods:
+        if p.payment_date <= bd or p.accrual_start >= bd:
+            continue
+        day = p.accrual_start
+        while day < min(p.accrual_end, bd):
+            obs = day
+            try:
+                while not cal.is_business_day(obs):
+                    obs -= timedelta(days=1)
+            except CalendarRangeError:
+                raise NotValued("no_fixings", f"{fixings.index}: {obs} is before the fixing calendar (the started CCS "
+                                              f"{c.label})") from None
+            if obs not in have:
+                raise NotValued("no_fixings", f"no {RUSFAR_CNY_FIXING} fixing for {obs.isoformat()} in the snapshot (the "
+                                              f"started CCS {c.label} reads it)")
+            day = day + timedelta(days=1)
+
+
 def _ccs_fact(t: CcsTerms, row: Any) -> dict[str, Any]:
-    """A CCS of ``extra.swaps``: its terms and core's figures (RUB; the foreign leg also in its currency)."""
+    """A CCS of ``extra.swaps``: its terms and core's figures (RUB; the foreign leg also in its currency). ``index`` and
+    ``spread_bp`` are the RUB leg's floating index (``projection_curve``, ``fixing_id``); a floating foreign leg adds
+    ``foreign_index``, ``foreign_spread_bp``, ``foreign_projection_curve``, ``foreign_fixing_id`` and its ``par_spread_bp``
+    in place of ``par_rate_pct`` (``index`` is then its index when the RUB leg is fixed)."""
     fixed = t.foreign if t.foreign.fixed_rate_pct is not None else t.rub
     flt = t.rub if t.rub.index_code is not None else None
+    ffl = t.foreign if t.foreign.index_code is not None else None  # a floating foreign leg (TDM#565)
     curves = dict(row.curve_ids)
-    return {"trade_id": t.trade_id, "product": "ccs", "index": flt.index_code if flt else None, "side": t.side,
+    par = row.foreign_leg_par_rate
+    return {"trade_id": t.trade_id, "product": "ccs", "index": (flt or ffl).index_code if flt or ffl else None,
+            "side": t.side,
             "notional_rub": t.rub.notional, "foreign_ccy": t.foreign.ccy, "foreign_notional": t.foreign.notional,
             "fixed_rate_pct": fixed.fixed_rate_pct, "spread_bp": flt.spread_bp if flt else None,
             "rub_side": t.rub.side, "foreign_side": t.foreign.side,
             "start_date": t.start.isoformat(), "maturity_date": t.maturity.isoformat(), "convention": "xccy",
             "pv_rub": row.pv_rub, "rub_leg_pv_rub": row.rub_leg_pv_rub, "foreign_leg_pv": row.foreign_leg_pv,
             "foreign_leg_pv_rub": row.foreign_leg_pv_rub, "spot_rate": row.spot_rate,
-            "par_rate_pct": row.foreign_leg_par_rate * 100.0 if row.foreign_leg_par_rate is not None else None,
+            # the par rate of the foreign leg: its fixed rate, and, when it floats, its spread
+            "par_rate_pct": par * 100.0 if par is not None and ffl is None else None,
+            **({"foreign_index": ffl.index_code, "foreign_spread_bp": ffl.spread_bp,
+                "foreign_projection_curve": _curve(curves.get("foreign_projection")),
+                "foreign_fixing_id": row.foreign_fixing_id,
+                "par_spread_bp": par * 1e4 if par is not None else None} if ffl else {}),
             "discount_curve": _curve(curves.get("rub_discount")),
             "foreign_curve": _curve(curves.get("foreign_discount")),
             "projection_curve": _curve(curves.get("rub_projection")) if flt else None,
@@ -1079,6 +1198,32 @@ def index_fixings(snapshot: Any, fixing_id: str) -> dict[str, Any]:
             "unpublished_business_days": [d.isoformat() for d in h.unpublished_business_days],
             "max_unpublished_business_days": h.max_unpublished_business_days,
             "missing_business_days": missing}
+
+
+def foreign_index_fixings(snapshot: Any, fixing_id: str, lineage: dict[str, Any]) -> dict[str, Any]:
+    """What a CCS's floating foreign leg read of the run's index fixings ``fixing_id`` (``curves.fx.rusfar_cny_fixings``;
+    the shape of ``index_fixings``): its latest fixing, the business days of its calendar missing inside the history
+    (core rejects a position that reads one) and the days the previous value bridges (``bridged_days``: not published,
+    but business days of the settlement calendar), the unpublished business days just before the business date (carried,
+    at most ``max_unpublished_business_days``; the row's assumptions say so, as RUONIA's) and the ``preliminary_days``
+    (fixings the hub labels as a preliminary value)."""
+    h = next(e.fixings for e in snapshot.index_fixings if e.fixing_id == fixing_id)
+    have = {d for d, _ in h.fixings}
+    first, latest = (h.fixings[0][0], h.fixings[-1][0]) if h.fixings else (None, None)
+    missing = []
+    if first is not None and latest is not None:
+        d = first
+        while d < latest:
+            if h.calendar.is_business_day(d) and d not in have:
+                missing.append(d.isoformat())
+            d = date.fromordinal(d.toordinal() + 1)
+    return {"snapshot_id": h.snapshot_id, "known_at": lineage.get("known_at"), "first": first and first.isoformat(),
+            "latest": latest and latest.isoformat(),
+            "latest_rate_pct": round(h.fixings[-1][1] * 100, 10) if h.fixings else None,
+            "unpublished_business_days": lineage.get("unpublished_business_days") or [],
+            "max_unpublished_business_days": lineage.get("max_unpublished_business_days") or 0,
+            "missing_business_days": missing, "bridged_days": lineage.get("bridged_days") or [],
+            "preliminary_days": lineage.get("preliminary_days") or []}
 
 
 def _ui_leg(t: TermsLeg | None, lv: Any, ccy: str, cross: bool = False) -> dict[str, Any]:
@@ -1225,6 +1370,8 @@ def value(ctx: Any, requests: list[Request], *, options: FxOptions, second_order
     used |= {c for i in instruments if isinstance(i, (SwapInstrument, RepoInstrument))
              and (c := i.projection_curve_id) is not None}
     used |= {i.foreign_discount_curve_id for i in instruments if isinstance(i, XccyInstrument)}
+    used |= {c for i in instruments if isinstance(i, XccyInstrument) and (c := i.foreign_projection_curve_id)}
+    index_ids = {f for i in instruments if isinstance(i, XccyInstrument) and (f := i.foreign_fixing_id) is not None}
     fixing_ids = {f for i in instruments if isinstance(i, (SwapInstrument, RepoInstrument))
                   and (f := i.fixing_id) is not None}
     fixing_ids |= {f for i in instruments if isinstance(i, XccyInstrument) and (f := i.rub_fixing_id) is not None}
@@ -1234,6 +1381,7 @@ def value(ctx: Any, requests: list[Request], *, options: FxOptions, second_order
     # as they were; the key-rate forward curve of a key-rate swap from EodContext.swap_curves
     snap = replace(market, quotes=(),
                    fixings=tuple(f for f in ctx.core_market.fixings if f.fixing_id in fixing_ids),
+                   index_fixings=tuple(e for e in ctx.fx.index_fixings if e.fixing_id in index_ids),
                    curves=(*(c for c in market.curves if c.curve_id in used),
                            *(c for c in ctx.swap_curves if c.curve_id in used)),
                    calendars=(*ctx.core_market.calendars, *calendars.values()),
@@ -1274,6 +1422,8 @@ def value(ctx: Any, requests: list[Request], *, options: FxOptions, second_order
             a.fallback_from.add(row.curve_fallback_from)
         if row.rub_fixing_id:
             a.fixing_ids.add(row.rub_fixing_id)
+        if row.foreign_fixing_id:
+            a.fixing_ids.add(row.foreign_fixing_id)
         a.fx_delta[row.currency] += row.foreign_leg_pv  # the foreign leg's PV in its currency: the spot equivalent
         a.products.add("ccs")
         a.swaps.append(_ccs_fact(t, row))
@@ -1409,9 +1559,14 @@ def _pay_dates(inst: Any, t: Any, calendars: dict[str, CalendarEntry], bd: date)
 def _foreign_flows(inst: XccyInstrument) -> dict[date, float]:
     """The foreign leg's known cash of a CCS per payment date, in its currency, signed for the desk (received +): the
     fixed coupons (``notional x rate x`` the day count's fraction, or the period's ``known_amount``) and the notional
-    exchanges (the foreign leg of a CCS is fixed: ``_ccs_instrument``)."""
+    exchanges. A floating foreign leg (``CCS_FOREIGN_INDEX``, TDM#565) has the exchanges only: its coupons are not known
+    from the schedule and stay in core's RUB cash (converted at the spot it holds), so the PnL's FX part takes a
+    floating coupon as RUB (an approximation, until core gives the foreign leg's cash in its currency,
+    ``received_foreign`` of ``XccyHorizonValuation``)."""
     leg, out = inst.swap.foreign_leg, defaultdict(float)
     for p in leg.periods:
+        if p.known_amount is None and leg.fixed_rate is None:
+            continue
         cpn = p.known_amount if p.known_amount is not None else \
             p.notional * (leg.fixed_rate or 0.0) * leg.day_count.year_fraction(p.accrual_start, p.accrual_end)
         out[p.payment_date] += leg.sign * cpn
@@ -1523,7 +1678,8 @@ def _rates_valuation(ctx: Any, r: Request, a: _Acc, notes: list[str], result: An
             why.append(f"{c}: {anchor}")
     fixings = {}
     for fid in sorted(a.fixing_ids):
-        info = fixings[fid] = index_fixings(snap, fid)
+        info = fixings[fid] = index_fixings(snap, fid) if any(e.fixing_id == fid for e in snap.fixings) \
+            else foreign_index_fixings(snap, fid, ((ctx.fx.lineage.get("index_fixings") or {}).get(fid) or {}))
         if info["unpublished_business_days"]:
             why.append(f"{fid} not yet published for {', '.join(info['unpublished_business_days'])}: the latest "
                        f"fixing of {info['latest']} carried (declared, at most "

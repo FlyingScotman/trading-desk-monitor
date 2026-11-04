@@ -557,8 +557,8 @@ def test_quote_curve_risk_behind_its_setting(ctx, tmp_path):
     assert ctx.lineage()["quote_curve_risk"] is False and ctx.curve_units()["CNY XCCY"] == "zero"
     on = replace(ctx, quote_curve_risk=True)
     assert on.lineage()["curve_units"] == {"RUB OFZ": "kbd_par", "RUB KEY": "zero", "RUB RUONIA": "ois_quote",
-                                           "BYN FX": "zero", "CNY FX": "zero", "CNY XCCY": "xccy_quote_fx",
-                                           "USD FX": "zero"}
+                                           "BYN FX": "zero", "CNY FX": "zero", "CNY RUSFAR": "zero",
+                                           "CNY XCCY": "xccy_quote_fx", "USD FX": "zero"}
     # bonds: the XCCY curve stays built (core 0.38 takes XCCY quotes for FX products only)
     assert on.risk_market.curve("CNY XCCY") == ctx.core_market.curve("CNY XCCY")
     assert isinstance(on.fx_risk_market.curve("CNY XCCY").curve, XccyCurveBootstrapRequest)

@@ -287,7 +287,9 @@ def curves_reference(ctx: EodContext, prev: MarketView | None, rows: list[dict[s
             out.append({"curve_id": RISK_CURVES[cid], "name": name, "ccy": "RUB", "kind": "swap",
                         "points": _zero_points(built[cid], old.get(cid))})
     risk_curves = dict.fromkeys(c for r in rows for c in r.get("risk") or {})
-    foreign = [c for cid, c in ctx.fx.curves.items() if cid in risk_curves or c.ccy in fxcurves.MAIN_CCYS]
+    # a projection curve (kind ``ois``: CNY RUSFAR, TDM#565) is published only where a row has risk on it
+    foreign = [c for cid, c in ctx.fx.curves.items()
+               if cid in risk_curves or (c.ccy in fxcurves.MAIN_CCYS and c.kind != "ois")]
     if foreign:  # core's foreign curves of the run (curves.fx): zero rates, the move on the previous date's
         old_fx = _prev_fx(ctx, prev, old.get(rates.RUONIA_OIS_CURVE_ID)) if prev else {}
         for c in foreign:

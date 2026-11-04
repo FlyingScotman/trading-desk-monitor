@@ -325,7 +325,7 @@
   function tradeOf(kind, s) {
     const pv = num(s.pv_rub), rep = num(s.reported_pv_rub), repo = kind === 'repo';
     return { kind, tradeId: s.trade_id == null ? null : String(s.trade_id), product: repo ? 'repo' : (s.product || null), index: s.index || null,
-      side: s.side || null, notional: repo ? num(s.start_amount_rub) : num(s.notional_rub), fixedRate: num(s.fixed_rate_pct), spreadBp: num(s.spread_bp),
+      side: s.side || null, notional: repo ? num(s.start_amount_rub) : num(s.notional_rub), fixedRate: num(s.fixed_rate_pct), spreadBp: num(s.spread_bp != null ? s.spread_bp : s.foreign_spread_bp), foreignIndex: s.foreign_index || null,
       parRate: repo ? null : num(s.par_rate_pct), start: s.start_date || null, end: (repo ? s.end_date : s.maturity_date) || null,
       pv, reportedPv: rep, diff: pv != null && rep != null ? pv - rep : null, convention: s.convention || null, security: s.security || null,
       discountCurve: s.discount_curve || null, projectionCurve: s.projection_curve || null, fixingId: s.fixing_id || null,
