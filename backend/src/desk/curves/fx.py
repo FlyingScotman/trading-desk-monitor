@@ -139,8 +139,9 @@ class FxOptions:
     """``fx_implied_futures``: FORTS FX futures past the last swap point extend the implied curve."""
     spot_source: str = "market"
     """``fx_spot_source``: ``market`` (the FX_MARKET chain, as bonds and the OCP) or ``cets_tom`` (CETS TOM close)."""
-    unlinked_terms: bool = False
-    """``fx_unlinked_terms``: value a trade_terms trade that no positions row names as a position of its own."""
+    off_report: bool = False
+    """``off_report_derivatives == "include"`` (TDM#468): value the trade_terms derivatives no positions row names as
+    positions of their own."""
     fixing_sources: tuple[tuple[str, str], ...] = (("CBR", "CBR"), ("ЦБ", "CBR"), ("ЦБ РФ", "CBR"))
     """``ndf_fixing_sources``: the report's fixing source -> the hub source (``CBR``: the CBR official rate)."""
     futures_by_ticker: bool = False
@@ -634,6 +635,6 @@ def options_from(settings: Any) -> FxOptions:
         foreign_curve=getattr(settings, "fx_foreign_curve", d.foreign_curve),
         implied_futures=bool(getattr(settings, "fx_implied_futures", d.implied_futures)),
         spot_source=getattr(settings, "fx_spot_source", d.spot_source),
-        unlinked_terms=bool(getattr(settings, "fx_unlinked_terms", d.unlinked_terms)),
+        off_report=getattr(settings, "off_report_derivatives", "exclude") == "include",
         fixing_sources=parse_fixing_sources(getattr(settings, "ndf_fixing_sources", None)) or d.fixing_sources,
         futures_by_ticker=bool(getattr(settings, "futures_by_ticker", d.futures_by_ticker)))

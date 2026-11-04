@@ -79,6 +79,7 @@ from .publish import desk_run
 from .publish import summary as run_summary
 from .report import validation
 from .settings import Settings, SettingsError, adapter_config_dir, load, mask_url
+from .valuation import offreport
 from .valuation import positions as pv1
 
 
@@ -330,13 +331,21 @@ def eod_run(settings: Settings, d: str, *, snapshots: str | Path | None = None, 
                 + f", valid {vd}" + (f", carried {age} days" if age else ""))
         carried = store.carried_spreads(con, before=run_date)
         bp = pv1.plan(ctx, inputs, second_order=not no_gamma)
-        if bp.unlinked_terms:
-            out(f"WARN trade_terms: {len(bp.unlinked_terms)} trade(s) no positions row names, "
-                + ("valued as rows of their own" if fx_options.unlinked_terms else "not valued (fx_unlinked_terms off)")
-                + ": " + ", ".join(bp.unlinked_terms[:10]))
-        if bp.unlinked_rates:
-            out(f"WARN trade_terms: {len(bp.unlinked_rates)} swap or REPO trade(s) no positions row names, not valued: "
-                + ", ".join(bp.unlinked_rates[:10]))
+        orp = offreport.summary(bp.off_report, bp.off_report_matured, "include" if fx_options.off_report else "exclude",
+                                sum(1 for pid in bp.added if bp.direct[pid].valuation is not None))
+        if fx_options.off_report:
+            if orp["trades"]:
+                out(f"trade_terms: derivatives outside the positions report included: {orp['included']}, valued "
+                    f"{orp['valued']}, unreadable terms {orp['invalid']}")
+        elif orp["trades"]:
+            out(f"WARN trade_terms: {orp['trades']} derivative(s) outside the positions report excluded by the setting "
+                f"(off_report_derivatives): " + ", ".join(t.key for t in bp.off_report[:10]))
+        if orp["suspect"]:
+            out(f"WARN trade_terms: possibly already in the positions report, not included: {orp['suspect']}: "
+                + ", ".join(t.key for t in bp.off_report if t.state == "suspect")[:300])
+        # the swaps and REPOs the switch values are no longer «not valued»
+        taken = {t.key for t in bp.off_report if t.state == "included"}
+        rates_left = [k for k in bp.unlinked_rates if k not in taken]
         if bp.ambiguous_terms:
             out(f"WARN trade_terms: {len(bp.ambiguous_terms)} position row(s) share a trade's legs with another row "
                 "(one deal_id on several rows), valued in none: " + "; ".join(bp.ambiguous_terms[:10]))
@@ -350,7 +359,7 @@ def eod_run(settings: Settings, d: str, *, snapshots: str | Path | None = None, 
             # dates (pnl.direct); the reason in run_position.no_pnl when there is none, never a bare null
             prev_inputs = store.positions_for(con, prev_ctx.business_date, books=books)
             direct_pnl.attach(prev_ctx, ctx, bp.direct, inputs, pv1.plan(prev_ctx, prev_inputs, second_order=False).direct,
-                              prev_inputs.valid_dates)
+                              prev_inputs.valid_dates, prev_inputs)
             if intraday_trades and intraday_trades["applied"] and start_inputs is not None:   # start of day + trades
                 split = new_trades_pnl.attach(prev_ctx, ctx, start_inputs, bp, outcomes, intraday_trades, carried)
                 texts = {"mixed_valuation": "lots valued in different ways (core and the report): the PnL of the trades "
@@ -391,7 +400,7 @@ def eod_run(settings: Settings, d: str, *, snapshots: str | Path | None = None, 
         run_id, status, warnings = desk_run.publish(con, ctx, positions, prev=prev, run_type=run_type,
                                                     inputs=inputs, carried_from=carried, pnl_basis=basis,
                                                     core_results=[bp.core_result] if bp.core_result else None,
-                                                    unlinked_rates=bp.unlinked_rates,
+                                                    unlinked_rates=rates_left, off_report=orp,
                                                     intraday_trades=intraday_trades,
                                                     **({"business_date": run_date, "cut_type": "prev_close"}
                                                        if on_close else {}))

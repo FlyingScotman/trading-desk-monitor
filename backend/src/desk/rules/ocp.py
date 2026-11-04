@@ -1003,12 +1003,16 @@ def current_trades(trades: Iterable[Mapping[str, Any]], after: date | None = Non
 
 def trade_flows(trades: Iterable[Mapping[str, Any]], books: Mapping[str, Mapping[str, Any]],
                 book_dates: Mapping[str, Any], derivatives: Mapping[str, str],
-                policy: OcpPolicy = PROVISIONAL_POLICY, *, after: date | None = None) -> TradeLegs:
+                policy: OcpPolicy = PROVISIONAL_POLICY, *, after: date | None = None,
+                held: Mapping[tuple[str, str], str] | None = None) -> TradeLegs:
     """The currency legs of the trades after the base (08 §10 ``trades``: amounts unsigned, ``side`` the direction,
     ``ccy`` the currency of the amounts; ``current_trades``: one version per trade, trade date after ``after``). Only
     legs of the components the report holds: the others come from positions (``outside``). ``book_dates``: book -> the
     valid date of its positions set in the run (a trade on or before it is in the positions); ``derivatives``:
-    position_id -> its derivative kind (``derivative_lines``) for the run's derivatives.
+    position_id -> its derivative kind (``derivative_lines``) for the run's derivatives; ``held``: (book, trade_id) ->
+    position_id of a trade the run holds as a position of its own though the book's set does not (a derivative off the
+    positions report that the switch ``off_report_derivatives`` included, TDM#468): such a trade is in the positions,
+    as that position, so it is not counted a second time.
 
     - ``fx``: the currency bought (+) or sold (−), ``amount_ccy``; a trade settling within ``settle_window_bd`` is
       ``cash``, a later one ``fx_legs`` (its nominal: the PV of a deal at inception). When the run's positions already
@@ -1036,6 +1040,8 @@ def trade_flows(trades: Iterable[Mapping[str, Any]], books: Mapping[str, Mapping
         td, bd = _day(t.get("trade_date")), _day(book_dates.get(book))
         in_positions = bd is not None and td is not None and bd >= td
         pid = str(t.get("position_id"))
+        if (book, tid) in (held or {}):
+            in_positions, pid = True, held[(book, tid)]  # type: ignore[index]
         mk = partial(TradeFlow, trade_id=tid, book_id=book, entity=entity, ccy=ccy,
                      trade_date=td.isoformat() if td else None, position_id=pid)
         if kind == "bond":
@@ -1554,8 +1560,10 @@ def compute_ocp(rows: Sequence[Mapping[str, Any]], books: Mapping[str, Mapping[s
         derivs = derivative_lines(rows, books, tb, on, policy)
         if days:  # the trades after each base, now that the run's positions and derivatives are known
             kind_of = {d.position_id: d.kind for d in derivs}
+            held = off_report_held(rows)
             days = {b: d if d.trades is not None or d.trade_rows is None else
-                    _with_trades(d, trade_flows(d.trade_rows, books, valid_dates or {}, kind_of, policy, after=b))
+                    _with_trades(d, trade_flows(d.trade_rows, books, valid_dates or {}, kind_of, policy, after=b,
+                                                held=held))
                     for b, d in days.items()}
         pub, pub_notes, day_gaps, covered = published_day(comps, outside, lines, on, policy, books=books,
                                                            units=report_units, days=days,
@@ -1575,6 +1583,19 @@ def compute_ocp(rows: Sequence[Mapping[str, Any]], books: Mapping[str, Mapping[s
                      notes + cash_notes + pub_notes, pub, gap, check,
                      [{"book_id": b, "ccy": c, "kind": k, "amount": v}
                       for (b, c, k), v in sorted(derivatives_pv(derivs, on).items())])
+
+
+def off_report_held(rows: Iterable[Mapping[str, Any]]) -> dict[tuple[str, str], str]:
+    """(book, trade_id) -> position_id of the run's rows that are derivatives off the positions report included by the
+    switch (``extra.off_report``, TDM#468): the trade of the ``trades`` dataset and the row are one deal."""
+    out = {}
+    for r in rows:
+        ex = r.get("extra") or {}
+        if ex.get("off_report"):
+            tid = (ex.get("reported") or {}).get("deal_id") or str(r["position_id"]).partition("|")[2]
+            if tid:
+                out[(str(r["book_id"]), str(tid))] = str(r["position_id"])
+    return out
 
 
 def _with_trades(d: BaseDay, legs: TradeLegs) -> BaseDay:

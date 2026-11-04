@@ -356,6 +356,7 @@
     p.instrType = d.instrType || null; p.assetClass = d.assetClass || null; p.segment = d.segment || null;
     p.productGroup = M.productGroup(ex.reported);
     p.ocp = !!(d.ocpTransfer || d.assetClass === 'Перенос ОВП');
+    p.offReport = !!d.offReport;  // деривативы вне отчёта позиций: оценена по условиям сделки (TDM#468)
     p.accrualOnly = !!d.accrualOnly;  // HTM по начислению: рыночного риска нет по правилу, это не пропуск
     // FX-дельта по валютам (fx_delta {ccy} прогона): у форварда, свопа и кросса валют может быть несколько — не сворачиваем
     p.fxDeltaBy = Object.fromEntries(Object.entries(d.fxDelta || {}).filter(([, v]) => num(v)).map(([c, v]) => [c, +v]));
@@ -533,6 +534,14 @@
   };
   // не оценённые позиции — по причинам и типам (R45, api/coverage.py): разбор в панели «Чего нет в данных» (kit.js)
   M.unvalued = X.unvalued || null; M.approx = X.approx || null;
+  // деривативы вне отчёта позиций (TDM#468, api/coverage.off_report): режим настройки, счётчики, не включённые сделки
+  M.offReport = X.offReport || null;
+  const OR = M.offReport;
+  if (OR && OR.legacy) M.notes.push('Условия свопов и РЕПО без строки позиций: сделок ' + OR.trades + ' — не оценены (прогон сделан до настройки «Деривативы вне отчёта позиций»)');
+  else if (OR && OR.mode === 'include') {
+    if (OR.trades) M.notes.push('Деривативы вне отчёта позиций включены настройкой: сделок ' + OR.trades + ', включено ' + (OR.included || 0) + ', оценено ' + (OR.valued || 0) + (OR.invalid ? '; условия не разобраны: ' + OR.invalid : '') + ' — отмечены «вне»');
+  } else if (OR && OR.trades) M.notes.push('Деривативы вне отчёта позиций исключены настройкой: сделок ' + OR.trades + ' — список ниже; включить: Настройки → Допущения расчёта');
+  if (OR && OR.suspect) M.notes.push('Возможно, уже в отчёте позиций, не включены: сделок ' + OR.suspect + ' — чтобы не посчитать дважды');
   const UV = M.unvalued;
   if (UV && UV.total) {
     if (UV.open) M.notes.push(UV.open + ' поз. не оценены: показаны без риска и MV — разбор по причинам ниже' + (UV.closed ? '; ещё ' + UV.closed + ' закрытых (нулевой объём) — не в счёте' : '') + (UV.fxMissing.length ? '; нет курса ' + UV.fxMissing.join(', ') + ' — суммы этих строк не в рублях' : ''));

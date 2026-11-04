@@ -671,7 +671,7 @@ def link(rows: list[tuple[str, str, dict[str, Any]]], terms: list[dict[str, Any]
          ) -> tuple[dict[str, list[dict[str, Any]]], list[dict[str, Any]], dict[str, list[str]]]:
     """position_id -> its trade_terms rows (``position_id`` of the terms, else ``trade_id`` = the row's ``deal_id`` or
     ``position_id``, same book), for ``rows`` = (position_id, book_id, positions row) of the FX and OTC rows; the
-    FX terms rows no row names (``fx_unlinked_terms``); and position_id -> ``trade_id`` of the trades another row
+    FX terms rows no row names (``off_report_derivatives``, see ``valuation.offreport``); and position_id -> ``trade_id`` of the trades another row
     took the same legs of: not in the first mapping, valued in none of those rows (``terms_ambiguous``).
     Linked: the products of ``LINKED_KINDS``."""
     out, left, amb = _link(rows, terms)

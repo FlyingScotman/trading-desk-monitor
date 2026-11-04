@@ -415,6 +415,13 @@ def rates_side(extra: dict[str, Any]) -> str:
     return sides.pop() if len(sides) == 1 else "MIXED"
 
 
+def _made_today(ctx: EodContext, x: dict[str, Any]) -> bool:
+    """A derivative off the positions report (``valuation.offreport``) whose trade date is the run's date."""
+    d = x.get("trade_date") if x.get("off_report") else None
+    d = date.fromisoformat(d) if isinstance(d, str) else d
+    return d is not None and d == ctx.business_date
+
+
 def direct_row(ctx: EodContext, book: str, pid: str, o: Outcome, x: dict[str, Any], qty: float | None
                ) -> dict[str, Any]:
     """An FX row, an unmapped bond or an OTC/other row (``valuation.positions``): PV, FX delta in currency (an FX
@@ -468,13 +475,15 @@ def direct_row(ctx: EodContext, book: str, pid: str, o: Outcome, x: dict[str, An
         "notional": amount, "notional_rub": amount * rate, "price": _num(v.clean_pct), "mv": v.pv_rub / rate,
         "mv_rub": v.pv_rub, "dv01": v.dv01_rub, "cs01": v.spread01_rub, "ofz_spr01": 0.0,
         "risk": risk_by_curve(v), "gamma": [[a, b, g] for a, b, g in v.hessian] if core else [],
-        "instrument_id": x.get("moex_secid") or x.get("source_instrument_id"), "new_today": False,
+        "instrument_id": x.get("moex_secid") or x.get("source_instrument_id"),
+        "new_today": _made_today(ctx, x),  # TDM#468: a derivative off the report made on the run's date
         **({"fx_delta": delta} if delta else {}),
         **({"pnl": o.pnl.as_tdm()} if o.pnl else {}),
         "extra": {
             "valuation": ("computed" if core else "reported" if v.quality == "reported_value" else "approximated"),
             "quality": v.quality,
             "assumptions": why, "quantity_bonds": qty, **({"not_exact_reason": o.reason} if o.reason else {}),
+            **({"off_report": True} if x.get("off_report") else {}),
             **({"pnl": pnl_extra(o.pnl)} if o.pnl else {}),
             **({"fx_rate": rate} if ccy != "RUB" else {}), **v.extra, **reported(x),
             **({"ocp_amount": o.ocp_amount} if o.ocp_amount and "ocp_amount" not in v.extra else {}),

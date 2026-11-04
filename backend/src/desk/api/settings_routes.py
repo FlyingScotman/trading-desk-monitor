@@ -135,6 +135,8 @@ def settings_payload() -> dict[str, Any]:
     except SettingsError as e:
         st, error = None, error or str(e)
     stored = {k: v for k, v in doc.items() if k not in READ_ONLY_KEYS}
+    if stored.get("off_report_derivatives") in (None, "") and stored.get("fx_unlinked_terms") is True:
+        stored["off_report_derivatives"] = "include"  # TDM#468: the old flag is what the list should show
     if isinstance(stored.get("https_proxy"), str):  # its password, like the token's, is never sent back
         stored["https_proxy"] = mask_proxy(stored["https_proxy"])
     return {**stored, "hub_token_set": bool(st and st.hub_token), "proxy_password_set": bool(st and st.proxy_password),

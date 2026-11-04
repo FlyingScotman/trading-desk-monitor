@@ -199,3 +199,20 @@ def approx(con, run: dict[str, Any]) -> list[dict[str, Any]]:
         g["mvRub"] += _f(r["pv_rub"]) or 0.0
         g["ids"].append(r["position_id"])
     return sorted(groups.values(), key=lambda g: (-g["n"], g["key"]))
+
+
+def off_report(con, run: dict[str, Any]) -> dict[str, Any] | None:
+    """The derivatives outside the positions report (TDM#468) for the panel «Чего нет в данных»: the run's
+    ``lineage.positions.off_report`` (switch, counts, the trades not included: excluded, suspect, invalid), or for a run
+    from before the switch only its ``unlinked_swap_terms`` count (``legacy``). None when the run has neither."""
+    pos = (run.get("lineage") or {}).get("positions") or {}
+    o = pos.get("off_report")
+    if isinstance(o, dict):
+        listed = [t for t in o.get("list") or [] if t.get("state") != "included"]
+        return {**{k: o.get(k) for k in ("mode", "trades", "included", "valued", "suspect", "invalid", "excluded",
+                                         "matured", "books")}, "list": listed,
+                "truncated": bool(o.get("list_truncated"))}
+    u = pos.get("unlinked_swap_terms")
+    if isinstance(u, dict) and u.get("trades"):
+        return {"mode": None, "legacy": True, "trades": u["trades"], "books": u.get("books") or {}, "list": []}
+    return None

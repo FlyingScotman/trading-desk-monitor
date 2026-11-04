@@ -1234,6 +1234,10 @@ def run_summary(con: psycopg.Connection, r: dict[str, Any], scrub: Scrubber) -> 
         # TDM#468: swap terms no positions row names (not valued): numbers only, no book codes
         "unlinked_swap_terms": ({"trades": u.get("trades"), "books": len(u.get("books") or {})}
                                 if (u := pos.get("unlinked_swap_terms")) else None),
+        # TDM#468: the derivatives off the positions report: numbers only
+        "off_report": ({"mode": o.get("mode"), "trades": o.get("trades"), "included": o.get("included"),
+                        "valued": o.get("valued"), "suspect": o.get("suspect"), "books": len(o.get("books") or {})}
+                       if (o := pos.get("off_report")) else None),
     })
     return out
 

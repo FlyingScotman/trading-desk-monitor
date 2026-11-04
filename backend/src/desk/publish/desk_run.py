@@ -80,7 +80,7 @@ def publish(con: psycopg.Connection, ctx: EodContext, positions: list[tuple[str,
             carried_from: dict[str, CarriedSpread] | None = None,
             pnl_basis: dict[str, Any] | None = None, core_results: list[Any] | None = None,
             business_date: date | None = None, cut_type: str | None = None,
-            unlinked_rates: list[str] | None = None,
+            unlinked_rates: list[str] | None = None, off_report: dict[str, Any] | None = None,
             intraday_trades: dict[str, Any] | None = None) -> tuple[int, str, list[str]]:
     """positions: (position_id, book_id, outcome) of ``inputs`` (``store.positions_for``); ``carried_from``:
     the carried spreads the valuation got; ``pnl_basis``: what the flash PnL is measured against
@@ -90,7 +90,9 @@ def publish(con: psycopg.Connection, ctx: EodContext, positions: list[tuple[str,
     nothing: the older intraday runs of its date are deleted once it is complete (``store.prune_intraday``).
     ``business_date`` / ``cut_type``: the morning run (#21), the book of ``business_date`` on the earlier close of
     ``ctx`` as cut ``prev_close``; lineage ``market_close`` names that close. ``intraday_trades``: the day's trades an
-    INTRADAY run added to the book (``desk.trades.apply_intraday``, TDM#557), lineage ``intraday_trades``."""
+    INTRADAY run added to the book (``desk.trades.apply_intraday``, TDM#557), lineage ``intraday_trades``.
+    ``off_report``: the derivatives outside the positions report (``valuation.offreport.summary``, TDM#468), lineage
+    ``positions.off_report``."""
     outcomes = [o for _, _, o in positions]
     results = {r.result_sha256: r for r in [*(o.core_result for o in outcomes), *(core_results or ())] if r}
     bodies = {sha: portfolio_result_to_json(r).decode() for sha, r in results.items()}  # raises unless verified
@@ -107,7 +109,9 @@ def publish(con: psycopg.Connection, ctx: EodContext, positions: list[tuple[str,
                       "known_at": inputs.known_at.isoformat(), "private_inputs_hash": inputs.private_inputs_hash,
                       "sources": inputs.sources,
                       **({"trade_terms": inputs.trade_terms_units} if inputs.trade_terms_units else {}),
-                      **({"unlinked_swap_terms": swaps} if swaps else {})},
+                      **({"unlinked_swap_terms": swaps} if swaps else {}),
+                      **({"off_report": off_report} if off_report and (
+                          off_report["trades"] or off_report["matured"] or off_report["mode"] == "include") else {})},
         "core_results": [{"result_sha256": sha, "schema": r.schema_version, "label": r.run_id.rsplit("-", 1)[-1]}
                          for sha, r in results.items()],
         "model_spreads": {"carried": carried, "new": len(spreads) - carried},
@@ -120,7 +124,17 @@ def publish(con: psycopg.Connection, ctx: EodContext, positions: list[tuple[str,
     if bd != ctx.business_date:  # the morning run (#21): the close the book of ``bd`` is valued on
         lineage["market_close"] = {"date": ctx.business_date.isoformat(), "cut_type": ctx.market.snapshot.cut_type}
     content = run_content(ctx, positions, prev, lineage, inputs)
-    if swaps:
+    if off_report and (off_report["trades"] or off_report["matured"]) and off_report["mode"] == "include":
+        content.log.append(("INFO", f"деривативы вне отчёта позиций включены настройкой: сделок {off_report['trades']}, "
+                                    f"включено {off_report['included']}, оценено {off_report['valued']}"))
+    elif off_report and off_report["trades"]:
+        content.log.append(("WARN", f"деривативы вне отчёта позиций исключены настройкой: сделок {off_report['trades']}, "
+                                    "книги " + ", ".join(f"{b} ({n})" for b, n in off_report["books"].items())
+                                    + "; не входят в риск, PnL и ОВП (Настройки, Допущения расчёта)"))
+    if off_report and off_report["suspect"]:
+        content.log.append(("WARN", f"возможно, уже в отчёте позиций: сделок {off_report['suspect']}; не включены, "
+                                    "чтобы не посчитать дважды"))
+    if swaps and not (off_report and off_report["mode"] == "include"):
         content.log.append(("WARN", (
             f"условия свопов и РЕПО без строки позиций: сделок {swaps['trades']}, книги "
             + ", ".join(f"{b} ({n})" for b, n in swaps["books"].items())
@@ -134,7 +148,7 @@ def publish(con: psycopg.Connection, ctx: EodContext, positions: list[tuple[str,
                                 bond_terms, by_pid)
     liab.apply(content.rows, content.reference, content.log, by_pid)
     ocp = ocp_run.compute(con, bd, ctx.market, content.rows, content.reference, inputs, terms=bond_terms,
-                          calendar=ctx.calendar)
+                          calendar=ctx.calendar, off_report=off_report)
     ocp.apply(content.rows, content.reference, content.log)
     try:  # a diagnostic: its failure is said in the run log, the run goes on without the block
         parallel = derivatives_parallel.compare(positions, inputs.extra, inputs.trade_terms)

@@ -70,10 +70,12 @@ checkout keeps its old names ``.devdata/inbox`` and ``.devdata/desk_pg``.
                            from the CETS swap points and FORTS futures, ``<CCY> FX``) or ``xccy`` (CNY: the XCCY curve);
                            the other is the fallback when absent. ``DESK_FX_IMPLIED_FUTURES`` (on): futures extend the
                            implied curves past the last swap. ``DESK_FX_SPOT_SOURCE`` (``market``: the MOEX 19:00 chain
-                           of the bonds and the OCP; ``cets_tom``: the CETS TOM close). ``DESK_FX_UNLINKED_TERMS`` (off): a
-                           trade_terms trade no positions row names is valued as a row of its own. If the same deal has a row in
-                           the positions in another book or under another deal id, it is counted twice: see the
-                           ``trade_terms`` warning in the run log (TDA#96).
+                           of the bonds and the OCP; ``cets_tom``: the CETS TOM close). ``DESK_OFF_REPORT_DERIVATIVES``
+                           (``exclude``, TDM#468): ``include`` values the forwards, swaps, CCS and REPO of trade_terms that no
+                           positions row names as positions of their own (marked «вне отчёта позиций»); a trade that looks
+                           like one already in the positions (its number is a deal of another book's row, or a row of the
+                           same kind, currency and date has no terms) is not included, to count nothing twice. It replaces
+                           ``DESK_FX_UNLINKED_TERMS`` (kept readable: true gives ``include`` when the new key is absent).
                            ``DESK_NDF_FIXING_SOURCES`` (``CBR=CBR,ЦБ=CBR,ЦБ РФ=CBR``): the report's NDF fixing source ->
                            the hub's. ``DESK_FUTURES_BY_TICKER`` (off): a non-bond row naming a FORTS FX future by
                            ticker is valued by core. All provisional (curves.fx.FxOptions; DECISIONS.md open questions)
@@ -154,6 +156,9 @@ ADAPTER_OUTPUT_DIR = "adapter-output"  # the files of the adapter's actions (08 
 _LOCAL_HOSTS = ("localhost", "127.0.0.1", "::1")
 
 # settings.json key -> (DESK_* variable, kind); kinds are checked by check_settings_doc
+OFF_REPORT_MODES = ("exclude", "include")
+"""``off_report_derivatives`` (TDM#468): the trade_terms derivatives no positions row names are left out or valued."""
+
 JSON_KEYS: dict[str, tuple[str, str]] = {
     "hub_url": ("DESK_HUB_URL", "str"),
     "hub_ca_bundle": ("DESK_HUB_CA_BUNDLE", "path"),
@@ -188,7 +193,8 @@ JSON_KEYS: dict[str, tuple[str, str]] = {
     "fx_foreign_curve": ("DESK_FX_FOREIGN_CURVE", "str"),
     "fx_implied_futures": ("DESK_FX_IMPLIED_FUTURES", "bool"),
     "fx_spot_source": ("DESK_FX_SPOT_SOURCE", "str"),
-    "fx_unlinked_terms": ("DESK_FX_UNLINKED_TERMS", "bool"),
+    "fx_unlinked_terms": ("DESK_FX_UNLINKED_TERMS", "bool"),  # replaced by off_report_derivatives (TDM#468), still readable
+    "off_report_derivatives": ("DESK_OFF_REPORT_DERIVATIVES", "str"),
     "ndf_fixing_sources": ("DESK_NDF_FIXING_SOURCES", "str"),
     "futures_by_ticker": ("DESK_FUTURES_BY_TICKER", "bool"),
     "inbox_lookback_days": ("DESK_INBOX_LOOKBACK_DAYS", "int0"),
@@ -297,7 +303,7 @@ class Settings:
     fx_foreign_curve: str = "fx_implied"  # an FX forward's foreign leg: fx_implied (swap points) or xccy (CNY)
     fx_implied_futures: bool = True  # FORTS FX futures past the last swap point extend the FX-implied curves
     fx_spot_source: str = "market"  # FX forwards' spot: market (MOEX 19:00 chain, as bonds) or cets_tom
-    fx_unlinked_terms: bool = False  # value a trade_terms trade no positions row names as a row of its own (double count if its row is in another book)
+    off_report_derivatives: str = "exclude"  # TDM#468: exclude | include the trade_terms derivatives no positions row names
     ndf_fixing_sources: str = "CBR=CBR,ЦБ=CBR,ЦБ РФ=CBR"  # the report's NDF fixing source -> the hub's
     futures_by_ticker: bool = False  # a non-bond row naming a FORTS FX future by ticker is valued by core (P3)
     inbox_lookback_days: int = 35  # report dates at most this many days old (R22); 0: no limit
@@ -416,7 +422,7 @@ class Settings:
             ("fx_foreign_curve", self.fx_foreign_curve + " (provisional)"),
             ("fx_implied_futures", "on" if self.fx_implied_futures else "off"),
             ("fx_spot_source", self.fx_spot_source),
-            ("fx_unlinked_terms", "on" if self.fx_unlinked_terms else "off"),
+            ("off_report_derivatives", self.off_report_derivatives),
             ("ndf_fixing_sources", self.ndf_fixing_sources),
             ("futures_by_ticker", "on" if self.futures_by_ticker else "off"),
             ("inbox_lookback_days", str(self.inbox_lookback_days) if self.inbox_lookback_days else "0 (no limit)"),
@@ -717,6 +723,11 @@ def _build(proc: dict[str, str], doc: dict[str, Any], file_env: dict[str, str], 
             raise SettingsError(f"{key}: expected one of {', '.join(allowed)}, not {v!r}")
         return v
 
+    # TDM#468: the old flag fx_unlinked_terms (true) means ``include`` while the new key is not set in any layer
+    off_report = choice("DESK_OFF_REPORT_DERIVATIVES",
+                        "include" if flag("DESK_FX_UNLINKED_TERMS", False) else defaults.off_report_derivatives,
+                        OFF_REPORT_MODES)
+
     def day(key: str, default: date) -> date:
         v = (get(key) or "").strip()
         if v and not _is_date(v):
@@ -814,7 +825,7 @@ def _build(proc: dict[str, str], doc: dict[str, Any], file_env: dict[str, str], 
         fx_foreign_curve=choice("DESK_FX_FOREIGN_CURVE", defaults.fx_foreign_curve, ("fx_implied", "xccy")),
         fx_implied_futures=flag("DESK_FX_IMPLIED_FUTURES", defaults.fx_implied_futures),
         fx_spot_source=choice("DESK_FX_SPOT_SOURCE", defaults.fx_spot_source, ("market", "cets_tom")),
-        fx_unlinked_terms=flag("DESK_FX_UNLINKED_TERMS", defaults.fx_unlinked_terms),
+        off_report_derivatives=off_report,
         ndf_fixing_sources=(get("DESK_NDF_FIXING_SOURCES") or defaults.ndf_fixing_sources).strip(),
         futures_by_ticker=flag("DESK_FUTURES_BY_TICKER", defaults.futures_by_ticker),
         inbox_lookback_days=count("DESK_INBOX_LOOKBACK_DAYS", defaults.inbox_lookback_days, 0),
@@ -897,6 +908,8 @@ def update_settings_json(changes: dict[str, Any], home: Path | None = None) -> d
         doc, broken = read_settings_json(home), False
     except SettingsError:
         doc, broken = {}, True
+    if "off_report_derivatives" in changes:
+        doc.pop("fx_unlinked_terms", None)  # TDM#468: the new switch replaces the old flag, whatever the value
     for k, v in changes.items():
         if k in READ_ONLY_KEYS:
             continue  # read-only or secret: never stored

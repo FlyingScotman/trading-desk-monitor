@@ -230,7 +230,7 @@ def test_plan_links_rows_to_their_trades_and_flags_the_rest(ctx):
                    "deal_id": "T1", "mv_rub": 1000.0},
         "FXB|T8": {"asset_class": "fx", "ccy": "EUR", "amount_ccy": 1e6, "value_date": date(2027, 1, 20),
                    "deal_id": "T8", "mv_rub": 5000.0},
-        "FXB|NOTERMS": {"asset_class": "fx", "ccy": "USD", "amount_ccy": 2e6, "value_date": date(2027, 1, 20)},
+        "FXB|NOTERMS": {"asset_class": "fx", "ccy": "USD", "amount_ccy": 2e6, "value_date": date(2027, 2, 19)},
     }
     inp = inputs(list(extra), extra, [BOOK[0], BOOK[-1], BOOK[1]])
     bp = pv1.plan(ctx, inp)
@@ -241,7 +241,7 @@ def test_plan_links_rows_to_their_trades_and_flags_the_rest(ctx):
     assert t8.valuation.assumptions[0].startswith("trade terms not valued by core (no_foreign_curve")
     assert nt.reason == pv1.NO_TERMS and nt.valuation.quality == "assumed"
     assert bp.unlinked_terms == ["FXB|T2"]
-    added = pv1.plan(replace(ctx, fx_options=fxcurves.FxOptions(unlinked_terms=True)), inp)
+    added = pv1.plan(replace(ctx, fx_options=fxcurves.FxOptions(off_report=True)), inp)
     assert added.added == ["FXB|T2"] and added.direct["FXB|T2"].valuation.extra["core"]["product"] == "fx_ndf"
 
     row = tdm_run.direct_row(ctx, "FXB", "FXB|T1", t1, extra["FXB|T1"], None)
