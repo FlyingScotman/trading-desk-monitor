@@ -176,7 +176,7 @@ t('R43: ОВП — мини-таблица: валюта на строку, по
   assert.ok(html.includes('+' + minor.length + ' прочих'));
   assert.strictEqual((html.match(/<tr class="small">/g) || []).length, minor.length);
   const big = R.filter(r => Math.abs(r.v) >= K.FX_MINOR);
-  assert.ok(big.length >= 3 && html.indexOf('>' + big[0].c + '<') < html.indexOf('>' + big[1].c + '<'));
+  assert.ok(big.length >= 3 && html.indexOf('>' + big[0].c + ' <') < html.indexOf('>' + big[1].c + ' <'));
   // один формат: знак, 1 знак после точки, разделитель тысяч
   const cny = R.find(r => r.c === 'CNY');
   assert.ok(html.includes(K.f.mns(cny.v, 1)) && /^(?:[+−]?[\d,]+\.\d|\([\d,]+\.\d\))$/.test(K.f.mns(cny.v, 1)));

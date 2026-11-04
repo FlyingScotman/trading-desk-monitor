@@ -52,15 +52,14 @@ const OCP = {
 };
 const withOcp = D => { D.OCP = JSON.parse(JSON.stringify(OCP)); };
 
-t('без публикуемой ОВП (прогон до v2, демо): шапка — сумма FX-дельт позиций, как раньше', () => {
-  for (const mutate of [null, D => { delete D.OCP; }, D => { D.OCP = null; }]) {
+t('без публикуемой ОВП (прогон до v2, ошибка расчёта): шапка пишет «ОВП нет», Σ FX-дельт позиций ОВП не подменяет (TDM#566)', () => {
+  for (const mutate of [D => { delete D.OCP; }, D => { D.OCP = null; }]) {
     const { M, K, I } = load(mutate);
     assert.ok(!M.ocp && K.ocpScope() === null);
-    const R = K.fxRows(M.positions);
-    assert.ok(R.length && R.every(r => !r.pub));
-    const usd = R.find(r => r.c === 'USD');
-    near(usd.v, M.positions.reduce((s, p) => s + I.fxIn(p, 'USD'), 0), 'USD по ногам');
-    assert.ok(!K.fxMini(M.positions).includes('k-ocpsrc') && K.ocpNote() === '');
+    assert.strictEqual(K.fxRows(M.positions).length, 0);
+    const html = K.fxMini(M.positions);
+    assert.ok(/ОВП нет/.test(html) && !html.includes('k-fxm') && !html.includes('k-ocpsrc') && K.ocpNote() === '');
+    assert.ok(M.positions.some(p => I.fxIn(p, 'USD')), 'FX-дельты позиций остаются у позиций');
   }
 });
 
@@ -458,3 +457,9 @@ ta('C16: книга ОВП без позиций (TDM#556) — юрлицо и �
   for (const [name, f] of asyncTests) { await f(); n++; console.log('ok', name); }
   console.log(n + ' tests passed');
 })().catch(e => { console.error(e); process.exit(1); });
+
+t('демо: публикуемая ОВП производная от FX-дельт позиций (шапка не пишет «ОВП нет»)', () => {
+  const { M, K } = load(null);
+  assert.ok(M.ocp && M.ocp.byBook.length && K.ocpScope() && K.fxRows(M.positions).length);
+  assert.ok(!/ОВП нет/.test(K.fxMini(M.positions)));
+});

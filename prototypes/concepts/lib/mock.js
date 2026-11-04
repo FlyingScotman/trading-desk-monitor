@@ -934,6 +934,14 @@
     return { v: n || !arr.length ? s : null, n, miss: arr.length - n };
   };
   M.sum = (arr, f) => M.sumX(arr, f).v;
+  // публикуемая ОВП демо — производная от FX-дельт позиций по книгам (источник «из позиций»), той же формы, что D.OCP
+  // сервера: в демо шапка и C06 показывают ОВП, а не «ОВП нет» (TDM#566)
+  (function () {
+    const by = {};
+    positions.forEach(p => Object.entries(p.fxDeltaBy || {}).forEach(([c, v]) => { if (c !== 'RUB' && v) { const k = p.book + '|' + c; by[k] = (by[k] || 0) + v; } }));
+    M.ocp = { asOf: null, state: 'demo', text: 'ОВП демо — из FX-дельт позиций', basis: 'derived', byCcy: {}, sourceNames: { derived: 'из позиций' }, componentNames: {}, notes: [], gaps: [], books: {},
+      byBook: Object.entries(by).map(([k, amount]) => { const [book, ccy] = k.split('|'); return { entity: (M.book[book] || {}).entity || '—', book, books: [book], ccy, amount, source: 'derived', components: [], reported: null }; }) };
+  })();
   M.kpis = function (list) {
     list = list || positions;
     const S = f => M.sum(list, f);

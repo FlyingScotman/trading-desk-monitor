@@ -142,14 +142,11 @@ test('валюта показа, carry/DV01, лидеры и аутсайдер�
   assert.ok([...L.top, ...L.bottom].every(x => !x.isCash && x.net != null));
 });
 
-test('причины «нет прогноза» и фильтры строк без позиции', () => {
+test('причины «нет прогноза»', () => {
   assert.strictEqual(C.reasonText('core_unsupported_product'), C.REASON.core_unsupported_product);
   assert.match(C.reasonText('core_xyz'), /ядро отклонило: xyz/);
   assert.match(C.reasonText('approx_dur'), /ниже точной/);
-  const keep = C.keep({ entity: 'ENT1' }, {});
-  assert.ok(keep({ book: 'D1', entity: 'ENT1', ccy: 'RUB' }) && !keep({ book: 'C1', entity: 'ENT2', ccy: 'RUB' }));
-  assert.ok(C.keep({ books: ['C1'] }, {})({ book: 'C1', ccy: 'RUB' }));
-  assert.ok(!C.keep({ desk: 'Rates' }, { X: { desk: 'Credit' } })({ book: 'X', ccy: 'RUB' }));
+  // фильтр строк без позиции — K.rowIn (kit.js), его проверяет tests/js/scope_566.test.js
 });
 
 test('флоатеры: знаменатель CS01, итог портфеля — по фиксам, флоатеры отдельно', () => {

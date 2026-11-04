@@ -252,17 +252,17 @@ body { display: flex; flex-direction: column; overflow: hidden; }
         const pubCell = c => { const r = PUB[c]; return r ? K.d({ title: 'ОВП ' + c + ' — позиции с FX-дельтой (разбор из позиций)', unit: 'mm ' + c, fmt: v => f.mn(v, 1), list: L, val: fx(c), v: r.v }, f.mn(r.v, 1)) + ' <small class="mut3 k-ocpsrc" title="' + esc(K.ocpSrcTitle(r.src)) + '">' + esc(K.ocpSrcMark(r.src)) + '</small>' : '<span class="mut3" title="в публикуемой ОВП валюты нет">—</span>'; };
         if (mode === 'table') {
           bd.innerHTML = '<table class="k-tbl" data-vk="c06-fx-position" data-title="ОВП по валютам"><thead><tr><th>Вал</th><th class="n">Курс</th><th class="n" title="Облигации: грязная MV в валюте минус валютный пассив фондирования (грязная MV на прошлый перенос ОВП) плюс купоны дня — валютный PnL с прошлого переноса; без пассива — вся грязная MV">Бонды</th><th class="n">Дерив.</th>' +
-            (S ? '<th class="n" title="Сумма FX-дельт позиций (бонды + деривативы)">Σ FX-дельт</th><th class="n" title="' + esc(K.tips.fxMiniPub) + '">ОВП</th>' : '<th class="n">ОВП</th>') + '<th class="n" title="тыс ₽">PnL FX</th></tr></thead><tbody>' +
+            (S ? '<th class="n" title="Сумма FX-дельт позиций (бонды + деривативы)">Σ FX-дельт</th><th class="n" title="' + esc(K.tips.fxMiniPub) + '">ОВП</th>' : '<th class="n" title="Сумма FX-дельт позиций (бонды + деривативы); публикуемой ОВП в прогоне нет">Σ FX-дельт</th>') + '<th class="n" title="тыс ₽">PnL FX</th></tr></thead><tbody>' +
             C.map(c => '<tr><td>' + K.ccyTag(c) + '</td><td class="n">' + f.n(M.fx[c], 2) + ' <span class="' + f.cls(M.fxChgPct[c]) + '" style="font-size:10.5px">' + f.pcts(M.fxChgPct[c], 2) + '</span></td>' +
               '<td class="n">' + K.d({ title: 'FX дельта бондов ' + c, unit: 'mm ' + c, fmt: v => f.mn(v, 1), list: part(c, false), val: fx(c) }) + '</td>' +
               '<td class="n">' + K.d({ title: 'FX дельта деривативов ' + c, unit: 'mm ' + c, fmt: v => f.mn(v, 1), list: part(c, true), val: fx(c) }) + '</td>' +
               (S ? '<td class="n">' + K.d({ title: 'FX дельта позиций ' + c, unit: 'mm ' + c, fmt: v => f.mn(v, 1), list: L, val: fx(c) }) + '</td><td class="n"><b>' + pubCell(c) + '</b></td>'
-                : '<td class="n"><b>' + K.d({ title: 'ОВП ' + c, unit: 'mm ' + c, fmt: v => f.mn(v, 1), list: L, val: fx(c) }) + '</b></td>') +
+                : '<td class="n"><b>' + K.d({ title: 'Σ FX-дельт позиций ' + c, unit: 'mm ' + c, fmt: v => f.mn(v, 1), list: L, val: fx(c) }) + '</b></td>') +
               '<td class="n">' + K.d({ title: 'PnL FX ' + c, unit: 'тыс ₽', fmt: f.k, list: L.filter(p => p.ccy === c), val: p => p.pnl.fx }) + '</td></tr>').join('') +
             '</tbody></table><div class="k-note" style="padding:4px 8px">mm в валюте; PnL FX — тыс ₽' +
             (M.fxPnl ? '. ' + K.fxLine(C) : '') +
             '. Бонды — грязная MV за вычетом валютного пассива (грязная MV на прошлый перенос ОВП): валютный PnL за день, его уводит перенос ОВП; деривативы — FX-дельта' +
-            (S ? '. ОВП — публикуемая: отчёт ОВП банка и слагаемые вне отчёта из позиций, по книгам без отчёта — из позиций (<a href="c16-ocp.html">C16</a>)' + (S.notes.length ? '; ' + esc(S.notes.join('; ')) : '') : '') + '</div>';
+            (!S ? '. ' + esc(K.ocpNone) : '') + (S ? '. ОВП — публикуемая: отчёт ОВП банка и слагаемые вне отчёта из позиций, по книгам без отчёта — из позиций (<a href="c16-ocp.html">C16</a>)' + (S.notes.length || S.ccyNote ? '; ' + esc(S.notes.concat(S.ccyNote || []).join('; ')) : '') : '') + '</div>';
           K.tableToolsAll(bd);
           return;
         }
