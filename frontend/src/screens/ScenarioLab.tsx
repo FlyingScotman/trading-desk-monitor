@@ -122,7 +122,7 @@ export function ScenarioLab() {
                   </div>
                 )}
                 <div className="side">
-                  <span>{payload.business_date} · прогон #{payload.run_id} · {payload.positions.length} позиций</span>
+                  <span>{payload.business_date} · прогон #{payload.run_id} · {payload.positions.length} позиций · все книги деска, фильтр книг мониторов не применяется</span>
                   <div className="chips">
                     {firstOnlyMv > 0 && <StatusChip tone="warn" title="У этих позиций нет гаммы (резервные ступени оценки)">
                       только 1-й порядок · {num(firstOnlyMv / (absMv || 1) * 100, 0)} % MV</StatusChip>}
@@ -141,7 +141,7 @@ export function ScenarioLab() {
                   Посчитать точно
                 </button>
               </div>
-              <div className="ph"><h3>По книгам</h3><span className="hint">млн ₽ · ≈ — разложение Тейлора · все книги деска, фильтр шапки не применяется</span></div>
+              <div className="ph"><h3>По книгам</h3><span className="hint">млн ₽ · ≈ — разложение Тейлора</span></div>
               <ResultTable taylor={taylor} result={result} stale={stale} />
             </div>
           )}
