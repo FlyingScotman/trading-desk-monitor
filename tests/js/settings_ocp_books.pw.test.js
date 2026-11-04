@@ -102,12 +102,16 @@ test('настройки книг: книги ОВП без позиций (TDM#
         const has = vals => selects.some(s => vals.every(v => s.opts.includes(v)));
         assert.ok(has(['ENT1', 'ENT2']), 'юрлицо списком: ' + JSON.stringify(selects));
         assert.ok(has(['TRADING', 'HTM', 'DERIVS', 'FUTURES']), 'тип книги списком');
-        // деск списком: дески книг файла и справочника; заглушка авто-книги AUTO — только как текущее значение
-        // («нет в списке»), последним перед «другое значение…»
+        // деск списком: дески книг файла и справочника; заглушка авто-книги (AUTO) не подставляется: пусто, «— выберите —»
         const desk = selects.find(s => s.opts.includes('LEGACY'));
         assert.ok(desk && desk.opts.includes('SYN_DESK') && desk.opts.includes('\u0000other'), JSON.stringify(selects));
-        assert.deepStrictEqual(desk.opts.filter(v => v === 'AUTO').length, 1);
-        assert.strictEqual(await card.locator('#' + desk.id.replace(/\./g, '\\.')).inputValue(), 'AUTO');
+        assert.strictEqual(desk.opts.filter(v => v === 'AUTO').length, 0);
+        const dsel = card.locator('#' + desk.id.replace(/\./g, '\\.'));
+        assert.strictEqual(await dsel.inputValue(), '');
+        assert.strictEqual(await dsel.locator('option:checked').innerText(), '— выберите —');
+        // книга без позиций добавляется неактивной, с подсказкой у поля
+        assert.ok(/неактивной/.test(await card.innerText()), 'подсказка у поля «активна»');
+        assert.ok(await card.locator('input[type=checkbox]').evaluateAll(els => els.some(e => !e.checked)), 'active: false');
         const cardNoScroll = await pg.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth + 1);
         assert.ok(cardNoScroll, 'карточка без горизонтальной прокрутки');
         if (process.env.SHOT_DIR) await pg.screenshot({ path: path.join(process.env.SHOT_DIR, 'book-card-' + w + '.png') });

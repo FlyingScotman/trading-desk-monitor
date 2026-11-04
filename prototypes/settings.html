@@ -2012,7 +2012,7 @@ function navForms(){
     const miss = id === 'books' ? SF.unconfigured(f.data, CTX.recent_books).length : 0;
     if (cnt) cnt.textContent = miss ? n + ' · ' + miss + ' не настр.' : String(n);
     const err = f.errors().length || f.parseError;
-    navDot(id, f.dirty() ? 'dirty' : err ? 'bad' : miss ? 'warn' : '', f.dirty() ? 'есть несохранённые изменения' : err ? 'есть ошибки' : miss ? miss + ' книг из позиций не настроено' : '');
+    navDot(id, f.dirty() ? 'dirty' : err ? 'bad' : miss ? 'warn' : '', f.dirty() ? 'есть несохранённые изменения' : err ? 'есть ошибки' : miss ? miss + ' книг не настроено' : '');
   }
   if (window.SETTINGS_OCP_BOOKS) window.SETTINGS_OCP_BOOKS.card(FORMS.books, CTX.recent_books, window.DeskSettings, SF);  // книги только из ОВП (TDM#556)
 }

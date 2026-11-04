@@ -181,13 +181,14 @@ def test_ocp_end_to_end_inbox_run_api(store_url, ctx, tmp_path):
     assert dp["D1|XFER"].get("ocpTransfer") is True and not dp["D1|USD"].get("ocpTransfer")
 
 
-def test_a_book_only_the_report_knows_carries_its_reference_in_the_block(store_url, ctx, tmp_path):
+@pytest.mark.parametrize("active", ["1", "0"])  # an OCP-only book is added as inactive: still counted (TDM#556)
+def test_a_book_only_the_report_knows_carries_its_reference_in_the_block(store_url, ctx, tmp_path, active):
     """TDM#556: a book of the OCP report without positions (an old book that still holds an OCP) is not among the run's
     reference books (those of its positions), so the block carries its row in force (``books``): the pages group and
     filter its OCP by the entity and book type the owner set. A book with positions is not repeated there."""
     from desk.api.concepts_run import ocp_status
 
-    books = BOOKS + "OLD;Old book;Legacy;HTM;ENT1;;;1;\n"
+    books = BOOKS + f"OLD;Old book;Legacy;HTM;ENT1;;;{active};\n"
     with store.connect(store_url) as con:
         _scan(con, tmp_path, books=books, ocp=OCP + "ENT1;OLD;EUR;2000000;;\n")
         rid, _ = _run(con, ctx)

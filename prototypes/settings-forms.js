@@ -399,7 +399,10 @@
   // строка books.json для книги из позиций: что известно из справочника сервера (авто-книга адаптера); остальное — человеку
   SF.bookPrefill = function (r) {
     var p = { book_id: r.book_id, name: r.name || r.book_id, book_type: r.book_type || 'TRADING' };
-    if (r.desk) p.desk = r.desk;
+    // книга только из отчёта ОВП (TDM#556): без позиций она неактивна — иначе источник позиций закроет её пустым срезом, а её ОВП
+    // всё равно учитывается; деск-заглушку (AUTO, «—») не подставляем: деск выбирает человек, поле обязательное
+    if (r.ocp_only === true) p.active = false;
+    if (r.desk && !(r.ocp_only === true && /^(auto|—)$/i.test(String(r.desk).trim()))) p.desk = r.desk;
     if (r.entity) p.entity = r.entity;
     if (r.trader) p.trader = r.trader;
     var at = r.book_id.indexOf('@');  // авто-книга «код@юрлицо»: код отчёта — до «@»
@@ -677,9 +680,15 @@
       var ed = self.editor(c, obj, path, onChange, depth || 0), scalar = SF.SCALAR[c.kind];
       grid.append(h('label', { class: 'sf-l', for: scalar ? self.ctlId(path) : null, title: c.key }, c.title, c.required ? h('span', { class: 'req' }, ' *') : null,
         c.readOnly ? h('span', { class: 'mut3' }, ' · только чтение') : null),
-        h('div', {}, ed, c.description ? h('div', { class: 'hint' }, c.description) : null));
+        h('div', {}, ed, c.description ? h('div', { class: 'hint' }, c.description) : null, self.extraHint(c, obj)));
     });
     return grid;
+  };
+  // пояснение у поля «активна» книги только из отчёта ОВП (TDM#556, settings-ocp-books.js)
+  E.extraHint = function (c, obj) {
+    var SOB = root.SETTINGS_OCP_BOOKS;
+    if (!SOB || c.key !== 'active' || !(this.tab && this.tab.id === 'books') || !obj || !obj.book_id || !this.o.recent) return null;
+    return SOB.ocpOnlyIds(this.o.recent())[obj.book_id] ? h('div', { class: 'hint' }, SOB.ACTIVE_HINT) : null;
   };
   // значение holder[col.key] по его виду
   E.editor = function (col, holder, path, onChange, depth) {

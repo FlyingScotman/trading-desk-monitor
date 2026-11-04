@@ -45,7 +45,16 @@ t('выпадающий список деска в форме книг; книг
   eq(SF.optionsFor(col, { desks: SOB.desks([], RECENT) }, 'books'), [{ value: 'Rates', label: 'из справочника' }]);
   assert.strictEqual(SF.optionsFor(col, {}, 'books'), null, 'деск без списка — поле ввода, как раньше');
   eq(SF.unconfigured({ books: [{ book_id: 'OLD1' }] }, RECENT).map(r => r.book_id), ['POS1', 'OLD2']);
-  eq(SF.bookPrefill(RECENT[2]), { book_id: 'OLD2', name: 'OLD2', book_type: 'TRADING', entity: 'E2' });
+  eq(SF.bookPrefill(RECENT[2]), { book_id: 'OLD2', name: 'OLD2', book_type: 'TRADING', entity: 'E2', active: false });
+});
+
+t('книга только из ОВП добавляется неактивной и без деска-заглушки; обычная книга — как раньше', () => {
+  eq(SF.bookPrefill(RECENT[1]), { book_id: 'OLD1', name: 'OLD1', book_type: 'TRADING', entity: 'E1', active: false }, 'AUTO — не деск');
+  eq(SF.bookPrefill({ book_id: 'OLD3', ocp_only: true, desk: '—' }).desk, undefined);
+  assert.strictEqual(SF.bookPrefill({ book_id: 'OLD3', ocp_only: true, desk: 'Credit' }).desk, 'Credit', 'настоящий деск остаётся');
+  const pos = SF.bookPrefill({ book_id: 'P', ocp_only: false, desk: 'auto' });
+  assert.strictEqual(pos.desk, 'auto'); assert.ok(!('active' in pos), 'книга с позициями активна по умолчанию');
+  assert.ok(/неактивной/.test(SOB.ACTIVE_HINT) && /ОВП/.test(SOB.ACTIVE_HINT));
 });
 
 t('сводка для карточки: настроена ли книга (по book_id или кодам), строка записи для «Изменить»', () => {

@@ -48,6 +48,7 @@ from ..settings import (
     write_hub_token,
     write_proxy_password,
 )
+from ..store import CURRENT_SET
 from .app import ApiError
 from .auth import LOCAL, actor, require_admin
 
@@ -534,23 +535,27 @@ def get_config_revision(name: str, rev_id: int, request: Request) -> dict[str, A
 
 _RECENT_BOOKS = f"""
 WITH newest AS (SELECT max(valid_date) AS d FROM position_set),
-sets AS (
+cur AS (
     SELECT DISTINCT ON (ps.book_id) ps.book_id, ps.valid_date, ps.set_id, ps.source
     FROM position_set ps, newest WHERE ps.valid_date >= newest.d - {RECENT_DAYS}
     ORDER BY ps.book_id, ps.valid_date DESC, ps.revision DESC, ps.set_id DESC),
+sets AS (  -- a book with positions: its current set is not empty (a book closed by omission is not)
+    SELECT * FROM cur WHERE EXISTS (SELECT 1 FROM position_input pi WHERE pi.set_id = cur.set_id)),
 books AS (SELECT DISTINCT ON (book_id) * FROM book_rev ORDER BY book_id, rev_id DESC),
 ocp_newest AS (SELECT max(valid_date) AS d FROM dataset_set WHERE dataset = 'ocp'),
+ocp_sets AS (  -- the current revision of each unit (scope) and day, not every revision
+    SELECT DISTINCT ON (ds.scope_key, ds.valid_date) ds.set_id, ds.scope, ds.valid_date, ds.revision, ds.source
+    FROM dataset_set ds, ocp_newest WHERE ds.dataset = 'ocp' AND ds.valid_date >= ocp_newest.d - {RECENT_DAYS}
+    ORDER BY ds.scope_key, ds.valid_date, {CURRENT_SET}),
 ocp AS (
     SELECT DISTINCT ON (x.book_id) x.book_id, x.valid_date, x.source, x.entity FROM (
-        SELECT ds.scope->>'book_id' AS book_id, ds.scope->>'entity' AS entity, ds.valid_date, ds.revision,
-               ds.set_id, ds.source
-        FROM dataset_set ds, ocp_newest WHERE ds.dataset = 'ocp' AND ds.valid_date >= ocp_newest.d - {RECENT_DAYS}
-          AND ds.scope->>'book_id' IS NOT NULL
+        SELECT os.scope->>'book_id' AS book_id, os.scope->>'entity' AS entity, os.valid_date, os.revision,
+               os.set_id, os.source
+        FROM ocp_sets os WHERE os.scope->>'book_id' IS NOT NULL
         UNION ALL
-        SELECT r.data->>'book_id', r.data->>'entity', ds.valid_date, ds.revision, ds.set_id, ds.source
-        FROM dataset_set ds JOIN dataset_row r USING (set_id), ocp_newest
-        WHERE ds.dataset = 'ocp' AND ds.valid_date >= ocp_newest.d - {RECENT_DAYS}
-          AND ds.scope->>'book_id' IS NULL AND r.data->>'book_id' IS NOT NULL) x
+        SELECT r.data->>'book_id', r.data->>'entity', os.valid_date, os.revision, os.set_id, os.source
+        FROM ocp_sets os JOIN dataset_row r USING (set_id)
+        WHERE os.scope->>'book_id' IS NULL AND r.data->>'book_id' IS NOT NULL) x
     ORDER BY x.book_id, x.valid_date DESC, x.revision DESC, x.set_id DESC)
 SELECT * FROM (
     SELECT s.book_id, s.valid_date AS last_date, s.source,
