@@ -5,9 +5,11 @@ and ``window.DESK``).
 
 ``extras``: the desk's series over the default runs up to the run (risk by curve, CS01, the OFZ basis, DV01 by book,
 market value by instrument type and currency, PnL by factor: each run's own sums, ``publish.summary``), per position
-of the run its PnL month and year to date over those runs (``pnlPeriods`` says from which date and whether a business
-day of the period has no run: then the sum is partial), the previous run's price and spread and what changed in its
-holding (a trade, a new position), its flows of the next 18 months up to the offer it is priced to
+of the run its PnL month and year to date and the month's factors (``pnlMtd``, ``pnlYtd``, ``pnlMtdParts``: the PnL
+report's sums over the period's runs, ``api.pnl_mtd``; ``pnlClosed``: the positions of the period that the run no
+longer has, which no position row carries; ``pnlPeriods`` says from which date and whether a business day of the period
+has no run: then the sum is partial), the previous run's price and spread and the day's trades (``pnl.extra.trades``,
+TDM#557; a run before it: the change of the holding), its flows of the next 18 months up to the offer it is priced to
 (``extra.cashflows`` cut by ``calendar_flows``: they go to maturity, TDM#166), the market of the latest
 cached close not after the run (every quoted bond, ``universeRub`` and ``universeFx``, with the static snapshot's
 issuer, group, sector, outstanding face, coupon and frequency: ``marketdata.static_facts``; the day's movers) and the
@@ -171,13 +173,15 @@ def unknown_days(start: date, first: date) -> list[date]:
 
 
 def _trades(con, run_id: int) -> tuple[dict[str, dict[str, Any]], bool]:
-    """The day's trades the run recorded per position (``pnl.extra.trades``, ``start_quantity``, the PnL of the trades
-    ``new_trades``, TDM#557) and whether the run records trades at all (any row has them: a run before TDM#557 does
-    not, then the pages fall back to the change of the quantity)."""
+    """The day's trades the run recorded per position (``pnl.extra.trades`` and ``start_quantity``, TDM#557; for a
+    position whose start of day has no PnL, ``no_pnl.trades``, as ``trades._trade_pnl`` reads them) and whether the run
+    records trades at all (any row has them: a run before TDM#557 does not, then the pages fall back to the change of
+    the quantity). A row valued at the report's figure has its trades inside the reports: no record, no mark."""
     out, known = {}, False
-    for r in con.execute("SELECT position_id, quantity, pnl->'extra'->'trades' AS trades,"
-                         " pnl->'extra'->'start_quantity' AS sq FROM run_position"
-                         " WHERE run_id = %s AND pnl IS NOT NULL", (run_id,)):
+    for r in con.execute("SELECT position_id, quantity,"
+                         " COALESCE(pnl->'extra'->'trades', no_pnl->'trades') AS trades,"
+                         " COALESCE(pnl->'extra'->'start_quantity', no_pnl->'start_quantity') AS sq FROM run_position"
+                         " WHERE run_id = %s AND (pnl IS NOT NULL OR no_pnl IS NOT NULL)", (run_id,)):
         known = known or r["sq"] is not None or bool(r["trades"])
         if isinstance(r["trades"], list) and r["trades"]:
             out[r["position_id"]] = {"trades": r["trades"], "quantity": r["quantity"], "start": r["sq"]}
@@ -185,7 +189,7 @@ def _trades(con, run_id: int) -> tuple[dict[str, dict[str, Any]], bool]:
 
 
 def trade_of(t: dict[str, Any], pos: list) -> dict[str, Any]:
-    """A position's ``trade`` for the pages from its recorded trades: ``n`` trades, ``pnl`` their PnL (RUB), ``qty`` the
+    """A position's ``trade`` for the pages from its recorded trades: ``n`` trades, ``qty`` the
     face traded (signed, in the position's face units; null when the position was sold to zero: the face of a bond is
     then not known), ``new`` opened today."""
     rows = [x for x in t["trades"] if isinstance(x, dict)]
@@ -194,8 +198,7 @@ def trade_of(t: dict[str, Any], pos: list) -> dict[str, Any]:
     n1 = t["quantity"]
     face = (pos[0] or 0.0) / n1 if n1 else None
     return {"qty": math.fsum(bonds) * face if face is not None and len(bonds) == len(rows) else None, "price": pos[6],
-            "n": len(rows), "pnl": math.fsum(x["pnl_rub"] for x in rows if isinstance(x.get("pnl_rub"), int | float)),
-            **({"new": True} if t["start"] == 0 else {})}
+            "n": len(rows), **({"new": True} if t["start"] == 0 else {})}
 
 
 def extras(con, run: dict[str, Any], writer: Writer = None) -> dict[str, Any]:
@@ -229,7 +232,7 @@ def extras(con, run: dict[str, Any], writer: Writer = None) -> dict[str, Any]:
     positions: dict[str, dict[str, Any]] = {}
     for pid, p in cur.items():
         out: dict[str, Any] = {}
-        if (t := sums_by_pos.get(pid)) is not None and t["ytd"] is not None:
+        if (t := sums_by_pos.get(pid)) is not None and (t["mtd"] is not None or t["ytd"] is not None):
             out["pnlMtd"], out["pnlYtd"], out["pnlMtdParts"] = t["mtd"], t["ytd"], t["mtdParts"]
         p0 = prev.get(pid) if prev is not None else None
         if p0 is not None:
@@ -252,14 +255,15 @@ def extras(con, run: dict[str, Any], writer: Writer = None) -> dict[str, Any]:
             out["trade"] = {"qty": p[0], "price": p[6], "new": True}
         positions[pid] = out
     periods, notes = _periods(con, as_of, dates)
-    for k, label in (("mtd", "месяца"), ("ytd", "года")):
+    for k in ("mtd", "ytd"):
         periods[k]["intradayApart"] = period["separate"][k]
-        if period["separate"][k]:
-            notes.append(f"внутридневной прогон пересекается с прогонами {label}: его PnL не входит в MTD/YTD, "
-                         "как в отчёте PnL за период (показан отдельно)")
     first = runs[0]["business_date"]
     if first.replace(day=1) > as_of.replace(day=1, month=1) and not notes:
         notes.append(f"история прогонов с {first.isoformat()}: PnL с начала года — с этой даты")
+    for k, label in (("mtd", "с начала месяца"), ("ytd", "с начала года")):
+        if period["separate"][k]:
+            notes.append(f"PnL {label}: внутридневной прогон пересекается с прогонами периода и в сумму не входит "
+                         "(в отчёте PnL за период он показан отдельно)")
     flows = []
     held = set()
     for x in con.execute("SELECT position_id, fact->>'ccy' AS ccy, fact->>'instrument_id' AS secid,"
@@ -271,8 +275,9 @@ def extras(con, run: dict[str, Any], writer: Writer = None) -> dict[str, Any]:
                           "amount": amount, "est": bool(est)})
     if not flows and cur:
         notes.append("потоков позиций в прогоне нет: прогон посчитан до версии с потоками (пересчитается последняя дата)")
-    if not prev_ok and run.get("prev_date") is not None and not trades_known:
-        notes.append(f"сделки дня и изменения к вчера не показаны: нет прогона за {run['prev_date'].isoformat()}"
+    if not prev_ok and run.get("prev_date") is not None:
+        notes.append(("изменения к вчера" if trades_known else "сделки дня и изменения к вчера")
+                     + f" не показаны: нет прогона за {run['prev_date'].isoformat()}"
                      f" (досчитать: {BACKFILL_LINK}, desk backfill)")
     if (old := old_runs(con, runs)):
         notes.append(f"история: {old} из {n} дат посчитаны прошлой версией программы — в графиках истории позиции "

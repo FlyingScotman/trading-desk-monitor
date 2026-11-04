@@ -87,7 +87,7 @@
 
     // ---------- панель управления + KPI ----------
     const ctl = h('div', 'bar2');
-    ctl.innerHTML = '<span class="mseg"></span><span class="k-note">' + (mode === 'day' ? 'день: ' + f.date(M.asOf) + ' к закрытию ' + f.date(M.prevDate) : (M.source === 'real' ? 'MTD по факторам: сумма прогонов месяца (как «PnL за период»), с PnL сделок дня' : 'MTD ≈ оценка: кэрри и фондирование × ' + DAYS_MTD + ' дн., остаток по факторам дня')) + '</span><span class="sp"></span><span class="k-note">щелчок по любой цифре — какие позиции дали вклад</span>';
+    ctl.innerHTML = '<span class="mseg"></span><span class="k-note">' + (mode === 'day' ? 'день: ' + f.date(M.asOf) + ' к закрытию ' + f.date(M.prevDate) : (M.source === 'real' ? 'MTD по факторам позиций: сумма прогонов месяца, с PnL сделок дня; позиции, закрытые раньше в месяце, в итог пока не входят' : 'MTD ≈ оценка: кэрри и фондирование × ' + DAYS_MTD + ' дн., остаток по факторам дня')) + '</span><span class="sp"></span><span class="k-note">щелчок по любой цифре — какие позиции дали вклад</span>';
     page.appendChild(ctl);
     K.seg(ctl.querySelector('.mseg'), [['day', 'день'], ['mtd', 'MTD']], mode, v => { mode = v; try { localStorage.setItem('c10-mode', v); } catch (e) { } render(); });
     const kp = h('div', 'k-kpis');
