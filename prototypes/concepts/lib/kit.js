@@ -697,6 +697,18 @@
   K.list = () => { const off = portsOff(); return M.positions.filter(p => SC.posIn(filt, p, off)); };
   K.rowIn = x => SC.rowIn(filt, x, portsOff());
   K.portsOff = portsOff;  // снятые портфели, которые есть в прогоне
+  // Позиции, закрытые раньше в месяце или году (M.pnlClosed, сервер: api/pnl_mtd.closed), под тем же фильтром шапки, что
+  // и открытые: книга, юрлицо, деск, валюта, портфель (книга HTM — HTM, SC.rowIn). Каждая — «позиция» только с суммами
+  // MTD / YTD (pnlMtd, pnlYtd): итог MTD / YTD шапки и экранов равен «PnL за период» (C19) при том же фильтре, TDM#568.
+  // Карточки у такой позиции нет (M.pos её не знает). issuer — выбор эмитента экрана C13.
+  K.closedList = issuer => (M.pnlClosed || []).filter(c => (issuer == null || c.issuer === issuer) &&
+    SC.rowIn(filt, { book: c.book, ccy: c.ccy, entity: c.entity, desk: c.desk, portfolio: c.portfolio || '—' }, portsOff())).map(c => ({
+    id: c.positionId, name: c.name || c.positionId, exchName: c.name || c.positionId, searchText: [c.name, c.instrument, c.positionId, c.book, c.issuer].join(' ').toLowerCase(),
+    issuer: c.issuer || null, issuerName: c.issuer || '—', book: c.book, bookName: c.bookName || c.book, ccy: c.ccy || '—', portfolio: c.portfolio || '—',
+    group: 'closed', groupLabel: 'закрыта в периоде', kind: 'closed', kindLabel: 'закрытые позиции', tenor: 0, mv: 0, notional: 0, closed: true,
+    pnlMtd: c.mtd, pnlYtd: c.ytd }));
+  // список для итога MTD / YTD: позиции прогона под фильтром и закрытые раньше в периоде (K.closedList)
+  K.pnlPeriodList = (L, issuer) => (L || K.list()).concat(K.closedList(issuer));
   let chipsBox = null;
   // каскад: юрлицо → деск → книги; в каждом списке только варианты, совместимые с уже выбранным
   const bookMemberships = (entity = filt.entity, desk = filt.desk) => filterScope.books.filter(b => (!entity || b.entity === entity) && (!desk || b.desk === desk));
@@ -3340,8 +3352,8 @@
       const pnlH = M.hist.pnl.total.slice(-30);
       el.innerHTML = '<div class="k-kpis">' +
         K.kpi('PnL дня', K.d({ title: 'PnL дня', unit: 'mm ₽', fmt: v => f.mns(v, 2), list: L, val: p => p.pnl.total }, f.mns(k.pnl, 1)) + K.kpiUnit('mm ₽'),
-          [['MTD', K.d({ title: 'PnL MTD', unit: 'mm ₽', fmt: v => f.mns(v, 1), list: L, val: 'pnlMtd' }) + K.partial('mtd')],
-           ['YTD', K.d({ title: 'PnL YTD', unit: 'mm ₽', fmt: v => f.mns(v, 0), list: L, val: 'pnlYtd' }) + K.partial('ytd')]], K.spark(pnlH, 64, 20)) +
+          [['MTD', K.d({ title: 'PnL MTD', unit: 'mm ₽', fmt: v => f.mns(v, 1), list: K.pnlPeriodList(L), val: 'pnlMtd' }) + K.partial('mtd')],
+           ['YTD', K.d({ title: 'PnL YTD', unit: 'mm ₽', fmt: v => f.mns(v, 0), list: K.pnlPeriodList(L), val: 'pnlYtd' }) + K.partial('ytd')]], K.spark(pnlH, 64, 20)) +
         K.kpi('DV01 ставки', K.d({ title: 'DV01 ставки (все кривые)', unit: 'тыс ₽/бп', list: L, val: 'dv01' }) + K.kpiUnit('тыс ₽/бп'),
           K.kpiCcyRows(M.ccys.reduce((o, c) => (o[c] = k.byCcy[c].dv01, o), {}), c => K.d({ title: 'DV01 ' + c + ' (кривые ' + c + ')', unit: 'тыс ₽/бп', list: L, val: p => INSTR.dv01In(p, c) }), 3, f.dv), null, K.tips.dv01) +
         K.kpi('DV01 RUONIA', K.d({ title: 'DV01 RUONIA', unit: 'тыс ₽/бп', list: L, val: p => p.dv01ByCurve['RUB RUONIA'] }) + K.kpiUnit('тыс ₽/бп'),

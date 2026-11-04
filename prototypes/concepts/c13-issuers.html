@@ -88,7 +88,7 @@ table.mini tr.put td:first-child { box-shadow: inset 3px 0 0 var(--warn); }
       const o = { id, name: i.short, full: i.name, sector: i.sector, rating: i.rating, ratingInfo: i.ratingInfo, list, n: list.length - nCds, nCds,
         mv: sumBy(list, p => p.mv), cs01: sumBy(list, p => p.cs01), dv01: sumBy(list, p => p.dv01), basis01: sumBy(list, p => p.basis01),
         // PnL, кэрри, фондирование: ни у одной бумаги не посчитано — null («—»), а не 0 (B1, #333)
-        pnl: M.sum(list, p => p.pnl.total), carry: M.sum(list, p => p.carryDay), funding: M.sum(list, p => p.fundingDay), mtd: M.sum(list, 'pnlMtd'), ytd: M.sum(list, 'pnlYtd'),
+        pnl: M.sum(list, p => p.pnl.total), carry: M.sum(list, p => p.carryDay), funding: M.sum(list, p => p.fundingDay), mtd: M.sum(K.pnlPeriodList(list, id), 'pnlMtd'), ytd: M.sum(K.pnlPeriodList(list, id), 'pnlYtd'),
         ccys: [...new Set(list.map(p => p.ccy))].sort((a, b) => M.ccyOrder[a] - M.ccyOrder[b]) };
       o.searchText = (o.name + ' ' + o.full + ' ' + o.sector + ' ' + o.rating + ' ' + o.ccys.join(' ')).toLowerCase();
       return o;
@@ -220,8 +220,8 @@ table.mini tr.put td:first-child { box-shadow: inset 3px 0 0 var(--warn); }
         ['PnL дня', D('PnL дня', p => p.pnl.total, f.k, 'тыс ₽') + ' <small>тыс ₽</small>'],
         [K.hint('Кэрри / день', K.tips.carry), D('Кэрри', 'carryDay', f.k, 'тыс ₽') + ' <small>тыс ₽</small>'],
         [K.hint('Фондирование / день', K.tips.funding), D('Фондирование', 'fundingDay', f.k, 'тыс ₽') + ' <small>тыс ₽</small>'],
-        ['PnL MTD', D('PnL MTD', 'pnlMtd', v => f.mn(v, 1), 'mm ₽') + ' <small>mm ₽</small>'],
-        ['PnL YTD', D('PnL YTD', 'pnlYtd', v => f.mn(v, 1), 'mm ₽') + ' <small>mm ₽</small>'],
+        ['PnL MTD', K.d({ title: x.name + ' · PnL MTD', unit: 'mm ₽', fmt: v => f.mn(v, 1), list: K.pnlPeriodList(L, x.id), val: 'pnlMtd' }) + ' <small>mm ₽</small>'],
+        ['PnL YTD', K.d({ title: x.name + ' · PnL YTD', unit: 'mm ₽', fmt: v => f.mn(v, 1), list: K.pnlPeriodList(L, x.id), val: 'pnlYtd' }) + ' <small>mm ₽</small>'],
         ['Ср. спред (по MV)', f.bp(wavg(p => p.zspread)) + ' <small>б.п.</small>'],
         ['Ср. дюрация', f.n(wavg(p => p.mdur), 2)],
         ['Ср. срок до события', f.yrs(wavg(p => p.tenor))],

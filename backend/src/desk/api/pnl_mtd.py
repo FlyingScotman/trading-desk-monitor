@@ -8,8 +8,8 @@ those runs and the net total by ``pnl_history.amounts``, summed with the same co
 (the run's and ``closed``) is the report's total and the sum of the days of the history.
 
 A position sold earlier in the period is not in the run: ``closed`` lists them (their dimensions and sums). The pages'
-headers sum the run's positions only, so until a page adds ``closed`` through the filter (``pnlClosed``) its total
-lacks them. The month's components by the pages' factors (``FACTORS``) are for the explain page.
+headers add ``closed`` (``pnlClosed``) to the run's positions through the same header filter (book, entity, desk,
+currency, portfolio), so a header's MTD / YTD equals the report's total under the same filter. The month's components by the pages' factors (``FACTORS``) are for the explain page.
 
 The scan reads only the components and the method of ``pnl`` (not ``pnl.extra``'s inputs of D-1, a year of them is
 megabytes) and no dimensions; the dimensions are read for the closed positions only, from their last run.

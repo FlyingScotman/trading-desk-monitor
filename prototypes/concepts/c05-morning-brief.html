@@ -165,7 +165,7 @@
     html += '<section id="s1"><div class="toc">' + SECS.map(([id, t]) => '<a href="#' + id + '">' + t + '</a>').join('') + '</div>' +
       '<h2><span class="no">01</span> Итог дня <span class="sp"></span><span class="k-note">' + f.date(M.asOf) + ', ' + esc(M.cut.label) + ' · к закрытию ' + f.date(M.prevDate) + '</span></h2>' +
       '<div class="hl"><span class="big ' + f.cls(tot) + '">' + K.d({ title: 'PnL дня', unit: 'mm ₽', fmt: v => f.mns(v, 2), list: L, val: p => p.pnl.total }, f.mns(tot, 1)) + ' <span style="font-size:18px;font-weight:500" class="mut">mm ₽</span></span>' +
-      '<span class="sub">MTD <b>' + mln('PnL MTD', L, 'pnlMtd') + '</b>' + K.partial('mtd') + ' · YTD <b>' + mln('PnL YTD', L, 'pnlYtd', 0) + '</b>' + K.partial('ytd') + '</span></div>' +
+      '<span class="sub">MTD <b>' + mln('PnL MTD', K.pnlPeriodList(L), 'pnlMtd') + '</b>' + K.partial('mtd') + ' · YTD <b>' + mln('PnL YTD', K.pnlPeriodList(L), 'pnlYtd', 0) + '</b>' + K.partial('ytd') + '</span></div>' +
       // PnL не посчитан ни у одной позиции (k.pnl null) — словами, а не «заработали 0.0» (#327, B1)
       (tot == null ? '<p>PnL за день не посчитан.' + (parts.length ? ' Главное: ' + parts.slice(0, 3).map(x => x.h).join(', ') + '.' : '')
         : '<p>За день ' + word(tot) + ' <b>' + f.mn(Math.abs(tot), 1) + ' mm ₽</b>. Главное: ' + parts.slice(0, 3).map(x => x.h).join(', ') + '.') +
