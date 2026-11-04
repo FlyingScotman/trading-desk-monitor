@@ -525,6 +525,11 @@ details.at-last .at-open::before{content:"показать"} details.at-last[ope
           <h3 class="at-h4">Фоновая загрузка</h3>
           <p class="hint">Монитор сам получает эти данные по расписанию и сразу пересчитывает затронутые расчёты. Выключатель хранится в мониторе.</p>
           <div id="svc-feeds" style="overflow-x:auto"></div>
+          <div id="svc-hist-box" hidden>
+            <h3 class="at-h4">Сделки прошлых дат</h3>
+            <p class="hint">Монитор может догрузить сделки за прошлые дни и пересчитать PnL этих дней так же, как PnL сегодняшнего дня: позиция на начало дня плюс PnL каждой сделки. Цифры PnL прошлых дней, а с ними MTD и YTD изменятся. Работа идёт в фоне, по одной дате; сегодняшний день не затрагивается.</p>
+            <div id="svc-hist"></div>
+          </div>
         </div>
       </div>
       </div></div>
@@ -2364,6 +2369,11 @@ function mountTabs(a, reload){
       ];
       if (st) rows.splice(4, 0, ['Догрузка стоит', 'с ' + at(st.since) + ': ' + T.cause(st) + T.stall(s).retry,
         st.error ? 'Ошибка' + (st.date ? ' на ' + dd(st.date) : '') + ': ' + st.error : '']);
+      try {   // сделки прошлых дат (TDM#569): сколько дат уже с PnL сделок; нет данных или нет доступа — строки нет
+        const hr = await fetch('/api/v1/adapter-services/history', {headers:{'Accept':'application/json'}, cache:'no-store'});
+        const hj = hr.ok ? T.history(await hr.json()) : null;
+        if (hj && hj.runs) rows.splice(2, 0, ['Сделки прошлых дат', hj.runs, hj.applied !== hj.runs ? hj.applied : '']);
+      } catch (_) { /* строка необязательная */ }
       if (s.step) rows.push(['Последний цикл', s.step.status + ': ' + s.step.detail]);
       const tb = $('bf-rows'); tb.textContent = '';
       rows.forEach(([k, v, sub]) => { const tr = document.createElement('tr'); tr.innerHTML = '<td class="k"></td><td class="v" style="white-space:pre-wrap"></td>'; tr.children[0].textContent = k; tr.children[1].textContent = v;

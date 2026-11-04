@@ -1174,3 +1174,70 @@ def test_a_full_disk_or_quota_is_a_stall_other_file_errors_are_not():
             assert backfill.transient(e) and backfill.stall_cause(e) == "disk", n
     for e in (FileNotFoundError("x"), PermissionError("x"), OSError(errno.EIO, "io")):
         assert not backfill.transient(e), e
+
+
+def test_the_plan_with_trades_of_200_dates_remembers_the_inputs_hashes(tmp_path, store_url, monkeypatch):
+    """TDM#569: with trades at hundreds of dates the plan (read at each poll of the status) must not fold the trades of
+    every date again. The hash of a date is remembered under the stamp of the stored sets: the second plan reads none; a
+    new revision of the trades of one date changes the stamp, every date is read again, and every hash equals the
+    uncached ``trades.intraday_inputs`` one. Measured: the plan of 200 dates with trades is not slower than without."""
+    import time
+
+    from desk import trades
+    from desk.inbox import scan
+
+    days, d = [], date(2025, 12, 31)
+    while len(days) < 200:
+        d += timedelta(days=1)
+        if d.weekday() < 5:
+            days.append(d.isoformat())
+    load(store_url, tmp_path, days[0], 10)
+    cache_dir = tmp_path / "cache"
+    cache_dir.mkdir()
+    root, cfg = tmp_path / "adapter", tmp_path / "config"
+    root.mkdir()
+    cfg.mkdir()
+    (root / "__init__.py").write_text("from desk.inbox.reference import SPI_VERSION, match, read, reference, describe\n")
+    (cfg / "books.csv").write_text("book_id;name;desk;book_type;entity;active\nOFZ;Synthetic;Test;TRADING;TEST;1\n"
+                                   "CORP;Other;Test;TRADING;TEST;1\n")
+    s = settings(tmp_path, cache_dir, store_url, private_adapter=str(root), private_adapter_config=cfg)
+    hub = [(x, "snap-" + x) for x in days]
+    calls = {"n": 0}
+    real = trades.intraday_inputs
+    monkeypatch.setattr(trades, "intraday_inputs", lambda *a, **kw: calls.update(n=calls["n"] + 1) or real(*a, **kw))
+
+    def timed():
+        calls["n"] = 0
+        t0 = time.perf_counter()
+        with store.connect(store_url) as con:
+            p = backfill.plan(con, s, date.fromisoformat(days[0]), date.fromisoformat(days[-1]), hub)
+        return time.perf_counter() - t0, calls["n"], p
+
+    backfill._HASH_MEMO.clear()
+    t_plain, n_plain, p_plain = timed()           # no trades yet
+    assert n_plain == 200 and len(p_plain.days) == 200
+    head = ("trade_id;trade_version;status;trade_date;trade_ts;book_id;position_id;asset_class;source_instrument_id;"
+            "side;quantity;amount_ccy;ccy;_report_date\n")
+
+    def export(name: str, rows: dict[str, str]) -> None:
+        f = tmp_path / name
+        f.write_text(head + "".join(f"TR-{x};{v};live;{x};{x}T10:30:00;OFZ;P1;bond;{OFZ};buy;5;;RUB;{x}\n"
+                                    for x, v in rows.items()), encoding="utf-8")
+        with store.connect(store_url) as con:
+            assert scan.ingest_feed(con, s, f, source="trades_csv", handle=scan.adapter(s)).files == {"accepted": 1}
+
+    export("trades_20261016_1845.csv", dict.fromkeys(days, "1"))
+    t_cold, n_cold, p_cold = timed()
+    t_warm, n_warm, p_warm = timed()
+    assert (n_cold, n_warm) == (200, 0)
+    assert [(x.date, x.status, x.why, x.sig) for x in p_cold.days] == [(x.date, x.status, x.why, x.sig) for x in p_warm.days]
+    assert t_warm < t_cold and t_warm < t_plain + 1.0, (t_plain, t_cold, t_warm)
+    # a new revision of the trades of one date, 30 days before others (history_cut): the key misses, nothing stale is kept
+    export("trades_20261016_1900.csv", {days[100]: "2"})
+    _, n_new, p_new = timed()
+    assert n_new == 200
+    with store.connect(store_url) as con:
+        for x in (days[0], days[99], days[100], days[101], days[130], days[199]):
+            assert backfill.inputs_hash(con, date.fromisoformat(x), s) == real(con, date.fromisoformat(x), s)[0].private_inputs_hash
+    assert {x.date: x.sig[4] for x in p_new.days}[days[100]] != {x.date: x.sig[4] for x in p_warm.days}[days[100]]
+    assert timed()[1] == 0

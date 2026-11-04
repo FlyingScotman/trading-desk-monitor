@@ -1,6 +1,6 @@
 # 08 Private adapter interface (SPI v1)
 
-As of 3 November 2026, revision 10 (private contract 1.8: the dataset `trade_list`, the live trades of the owner's books without their terms, and the `feed` request's `trades_file`, a list of the trades whose terms to fetch, TDM#561; on top of revision 9); revision 9 (services: the `feed` request's repeated `book` and the FEED flag `books`, and the day's bond trades in the intraday run, §10 `trades`, TDM#557; no contract change); revision 8 (private contract 1.7: the `ocp` row's optional `derivatives_ccy`, the report's
+As of 4 November 2026, revision 11 (services: the FEED flag `history` and `history_from`, the closed answer codes of a feed run for a past `date`, and the history of trades in the monitor, TDM#569; no contract change); revision 10 (private contract 1.8: the dataset `trade_list`, the live trades of the owner's books without their terms, and the `feed` request's `trades_file`, a list of the trades whose terms to fetch, TDM#561; on top of revision 9); revision 9 (services: the `feed` request's repeated `book` and the FEED flag `books`, and the day's bond trades in the intraday run, §10 `trades`, TDM#557; no contract change); revision 8 (private contract 1.7: the `ocp` row's optional `derivatives_ccy`, the report's
 derivatives apart by kind, and `ocp_policy.published` `report_base_plus_day` with `report_max_age_bd`, for the published OCP of
 TDM#531; contract 1.6 of 2 November: the `trades` schema, TDM#525); revision 7 of 28 October (SPI 1 optional functions `status` and `run_action` with `describe()["actions"]`, the settings page's adapter tools of TDM#421, no contract change; revision 6, private contract 1.5: the `reference()` table `ocp_policy`, the organisation's OCP conventions, for the published OCP of TDM#416; revision 5 of 23 October, contract 1.4: `trade_terms` of interest rate and cross-currency swaps, REPO and HTM purchases, for the valuation of swaps by core and the funding of REPO and HTM lots; revision 4 of 22 October, contract 1.3: the `reference()` table `funding_policy` and
 `positions.purchase_accrued_ccy`, for the funding engine in the runs, wave B1; revision 3, contract 1.2: FUTURES books, the `ocp`, `cash_balances`, `pnl_official` and `trade_terms` schemas, `reference()` entities and funding rules, `describe()` settings tabs, multi-date cash history, adapter phases A7–A10; revision 2 of 19 October followed an independent review). Status: **accepted; both tracks build against it.** Decision: [ADR-008](adr/ADR-008-private-adapter-boundary.md). Owner of this document: the backend. A change here is a versioned change (§9).
@@ -196,6 +196,30 @@ it has. Two parts:
   reason of its own, then `invalid_request`. The monitor keeps the last 5 request files for diagnosis and prepends
   one line to the feed's outcome, «Список: сделок L, книг B; запрошено N (новых a, изменённых b), уже были M, закрыто K»,
   and keeps the counts in the feed's state. The list is too long for the 256 request fields, hence a file.
+
+**Trades of past dates** (since 4 November 2026, TDM#569; no new minor version of the private contract). A FEED of the
+dataset `trades` with `books: true` may add two optional keys: `history: true` (the feed also answers for a past `date`:
+the day's cut at the end of that day, a newer export of the same date replaces the older one, §6.6) and
+`history_from: "YYYY-MM-DD"` (the earliest date the source keeps, when known). A monitor that does not know the keys drops
+them (`clean_feeds`); without `history` the monitor's background fetch of past dates does not use the feed and the screen
+says so. The fetch is off until the owner turns it on in the settings («Догружать сделки прошлых дат с …»), asks one
+date at a time (not more often than every 2 minutes, at most 300 requests a day, by default not in the trading hours),
+never today's date, and the answer's `dates` must be the asked date or empty. The closed answers for a past date:
+
+| `state` / `code` | meaning | the monitor |
+|---|---|---|
+| `complete` / `exported` | records of the requested books are in the files | files taken in; the date is marked received |
+| `complete` / `no_records` | no records of the requested books on the date, and the book mapping is proven. Two cases: (a) the snapshot has no records at all: a file **without units**, it replaces nothing and the date is unchanged; (b) the snapshot has records, none of the requested books: a file with **empty units** of every requested book, it replaces them with an empty list (a trade deleted in the source leaves the date) | the date is marked «без сделок» by the code, whatever the file's status; it is asked again only in the window of the newest 3 dates |
+| `partial` / `books_unmapped` | records exist, but none proved its book mapping: no units, no book replaced. This is not «no trades» | marked «не сопоставлено»; asked again only after a new adapter fingerprint (the mapping was changed) |
+| `error` / `date_unavailable` | past dates only: the service refused the date's window (a 4xx other than 401, 403, 408, 429), no file. For today a 4xx stays `partial` / `export_incomplete` | marked «недоступно»; asked again after 1, 3, 7 days, then only after a new fingerprint or by the button. If every past date is refused, the screen suggests checking the connection settings |
+| `partial` / `export_incomplete` | the export is incomplete (5xx, the network) | asked again after 5 and 15 minutes; the third failure is «недоступно» |
+| `blocked` (`login_required`, `config_invalid`, `source_disabled`), `skipped`, `error` otherwise | as for every feed | no mark; the whole fetch waits (a login) or backs off |
+
+Accepted risk of the adapter: the only trade of the whole environment deleted in the source stays in its date until
+another record appears. The adapter's service source of trades and its hourly source of trades must not be enabled for the same books (the unit of
+a date belongs to one source, §6.6). The files are taken in with one non-blocking try of the cycle lock; a busy lock
+leaves them pending and they are taken in at the next step, before another date is asked. No run is made after the
+ingestion: the monitor's eod and backfill steps recompute a date by the changed hash of its inputs (§10 `trades`).
 
 **Operations** (field `op`):
 
