@@ -114,6 +114,8 @@
   const OC = D.OCP;
   M.ocp = OC && Array.isArray(OC.byBook) ? {
     asOf: OC.asOf || null, state: OC.state, text: OC.text || '', basis: OC.basis,
+    // TDM#567: почему ОВП прогона не по текущей методике (сервер, api/ocp_line.method_note); null — по текущей
+    methodNote: OC.methodNote || null,
     byCcy: Object.fromEntries(Object.entries(OC.byCcy || {}).map(([c, x]) => [c, { total: num(x.total), rate: num(x.rate), totalRub: num(x.totalRub), bySource: x.bySource || {} }])),
     byBook: OC.byBook.map(x => Object.assign({}, x, { amount: num(x.amount) || 0, reported: num(x.reported), books: x.books || [], components: x.components || [] })),
     notes: OC.notes || [], gaps: OC.gaps || [], sourceNames: OC.sourceNames || {}, componentNames: OC.componentNames || {},

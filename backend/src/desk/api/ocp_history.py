@@ -34,6 +34,7 @@ from typing import Any
 
 from ..publish import ocp_run
 from ..rules import ocp as O
+from .ocp_line import book_type, method_note, ocp_line
 from .pnl_history import period_runs
 
 DEFAULT_DAYS = 92
@@ -43,8 +44,8 @@ MAX_PERIOD_DAYS = 400
 RATE_BAND = (0.5, 2.0)
 """``rate_rub_per_unit`` / (``ocp_rub`` / ``ocp_ccy``) of a report scope outside this: the scope gives no rate."""
 
-LINE_KEYS = ("entity", "book_id", "books", "ccy", "amount", "source", "reported", "valid_date", "base_date", "set_id",
-             "base_kind", "parts", "base_older")
+LINE_KEYS = ("entity", "book_id", "books", "ccy", "amount", "source", "components", "reported", "valid_date",
+             "base_date", "set_id", "base_kind", "parts", "base_older")
 """The keys of a published line the history reads: never its ``contributions`` (block v3), which stay in the run's
 ``/ocp``; the SQL picks them, so a long period does not carry them out of the store."""
 
@@ -73,19 +74,6 @@ def period(anchor: dict[str, Any], start: date | None, end: date | None) -> tupl
     if (end - start).days + 1 > MAX_PERIOD_DAYS:
         raise ValueError(f"Period must not exceed {MAX_PERIOD_DAYS} calendar days inclusive")
     return start, end
-
-
-def _line(x: dict[str, Any]) -> dict[str, Any]:
-    """A published line as the pages read it; under ``report_base_plus_day`` (block v3, TDM#531) also the base's date,
-    report set and kind and the terms (``parts``: base, derivatives, bonds, trades, outside; they sum to ``amount``).
-    Their contributions stay in the run's block (``/api/v1/runs/{id}/ocp``)."""
-    out = {"entity": x.get("entity"), "book": x.get("book_id"), "books": x.get("books") or [], "ccy": x.get("ccy"),
-           "amount": x.get("amount"), "source": x.get("source"), "reported": x.get("reported"),
-           "validDate": x.get("valid_date")}
-    if x.get("parts") is not None:
-        out.update(baseDate=x.get("base_date"), setId=x.get("set_id"), baseKind=x.get("base_kind"), parts=x["parts"],
-                   baseOlder=bool(x.get("base_older")))
-    return out
 
 
 def _fx(rows: list[dict[str, Any]] | None) -> dict[str, dict[str, Any]]:
@@ -149,26 +137,49 @@ def _report_fx(block: dict[str, Any], on: date) -> dict[str, float]:
     return out
 
 
+def _bond_books(con, run_ids: list[int], books: set[str]) -> dict[int, set[str]]:
+    """run -> the books among ``books`` that hold a bond in it (the run's rule of an unrecorded book type)."""
+    if not books:
+        return {}
+    out: dict[int, set[str]] = {}
+    for r in con.execute("SELECT DISTINCT run_id, fact->>'book_id' AS book FROM run_position WHERE run_id = ANY(%s)"
+                         " AND fact->>'instr_type' = 'BOND' AND fact->>'book_id' = ANY(%s)",
+                         (run_ids, sorted(books))).fetchall():
+        out.setdefault(r["run_id"], set()).add(r["book"])
+    return out
+
+
+def _day_books(x: dict[str, Any], block: dict[str, Any], bonds: set[str]) -> dict[str, dict[str, Any]]:
+    """The books of one day's run as the run itself gave them: name, entity, desk and book type (an unrecorded one
+    derived as the run does, ``book_type``); a book only the OCP knows (TDM#556) marked ``ocpOnly``, no type derived."""
+    out = {b["book_id"]: {"name": b.get("name"), "entity": b.get("entity"), "desk": b.get("desk"),
+                          "type": book_type(b.get("book_type"), b["book_id"] in bonds)}
+           for b in x.get("books") or []}
+    for b, m in (block.get("books") or {}).items():
+        if isinstance(m, dict) and b not in out:
+            out[b] = {"name": m.get("name"), "entity": m.get("entity"), "desk": m.get("desk"),
+                      "type": m.get("book_type") or "—", "ocpOnly": True}
+    return out
+
+
 def history(con, anchor: dict[str, Any], start: date, end: date) -> dict[str, Any]:
     """The published OCP of each day of ``start``..``end`` (see the module docstring)."""
     runs = period_runs(con, anchor, start, end)["runs"]
     ref: dict[int, dict[str, Any]] = {r["run_id"]: {} for r in runs}
     for r in con.execute(SQL, ([r["run_id"] for r in runs],)).fetchall():
         ref[r["run_id"]][r["kind"]] = r["data"]
+    untyped = {b["book_id"] for x in ref.values() for b in x.get("books") or [] if not b.get("book_type")}
+    bonds = _bond_books(con, [r["run_id"] for r in runs], untyped)
     days, books = [], {}
     for r in runs:
         x = ref[r["run_id"]]
         block = x.get("ocp") or {}
-        for b in x.get("books") or []:
-            books[b["book_id"]] = {"name": b.get("name"), "entity": b.get("entity"), "desk": b.get("desk"),
-                                   "type": b.get("book_type")}
-        for b, m in (block.get("books") or {}).items():  # TDM#556: the OCP's books without positions in the run
-            if isinstance(m, dict):
-                books[b] = {"name": m.get("name"), "entity": m.get("entity"), "desk": m.get("desk"),
-                            "type": m.get("book_type"), "ocpOnly": True}
+        mine = _day_books(x, block, bonds.get(r["run_id"], set()))
+        books.update(mine)  # the latest run of the period that has the book
+        lines = [ocp_line(y) for y in block.get("lines") or []]
         days.append({"date": r["business_date"], "runId": r["run_id"], "runType": r["run_type"],
                      "state": block.get("status") or ocp_run.NOT_COMPUTED, "basis": block.get("basis"),
-                     "fx": _fx(x.get("fx")), "reportFx": _report_fx(block, r["business_date"]),
-                     "lines": [_line(y) for y in block.get("lines") or []]})
+                     "methodNote": method_note(block.get("basis"), r["business_date"], lines), "books": mine,
+                     "fx": _fx(x.get("fx")), "reportFx": _report_fx(block, r["business_date"]), "lines": lines})
     return {"runId": anchor["run_id"], "asOf": anchor["business_date"], "from": start, "to": end,
             "days": days, "books": books}

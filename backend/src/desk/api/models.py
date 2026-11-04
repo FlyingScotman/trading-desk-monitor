@@ -511,6 +511,12 @@ class RunOcp(BaseModel):
     books: dict[str, dict[str, Any]] = Field(default_factory=dict, description=(
         "TDM#556: name, desk, book_type and entity of the published OCP's books without positions in the run (a book "
         "only the OCP report knows); the run's reference books have the others"))
+    published_rows: list[dict[str, Any]] = Field(default_factory=list, description=(
+        "TDM#567: ``published.by_book`` as the page data (``OCP.byBook``) and the history by day carry it: the same "
+        "serializer, camelCase fields, ``baseKind`` under report_base_plus_day"))
+    method_note: str | None = Field(None, description=(
+        "TDM#567: why the published OCP is not on the current methodology (the report without the derivatives + "
+        "their PV), null when it is"))
 
 
 class AggregateRow(BaseModel):

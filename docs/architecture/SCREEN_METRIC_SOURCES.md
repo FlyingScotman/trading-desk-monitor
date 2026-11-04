@@ -350,7 +350,7 @@ C11 строит риск, MV и номинал по датам из истор�
 ## Пакеты исправлений
 
 - Фильтр книг и портфелей: FlyingScotman/trading-desk-monitor#566 (D1, D2, D4–D8, D14, D20, D26, D27).
-- ОВП из одного источника: FlyingScotman/trading-desk-monitor#567 (D9–D13, D24, D25).
+- ОВП из одного источника: FlyingScotman/trading-desk-monitor#567 (D9–D13, D24, D25). Сделано в ветке пакета: D10 (`api/ocp_line.py`: один сериализатор строки для `ocp_status`, истории и `/runs/{id}/ocp`, `book_type`, справочник книг дня в `days[].books`), D11 (`methodNote` дня; история не пересчитывается), D24 (`baseKind` в `byBook`, подпись на шапке, C06, C16), D25 (C06 «бары»).
 - PnL сделок дня во всех PnL: FlyingScotman/trading-desk-monitor#568 (D15–D18, D28: единая константа `PNL_KEYS`;
   пометки «не в PnL» из D17).
 - Воркер прошлых дат (пересчёт истории): FlyingScotman/trading-desk-monitor#569 (D19).
