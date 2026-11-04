@@ -753,3 +753,56 @@ def test_recompute_makes_the_intraday_run_again_once_for_the_days_trades(stub, t
              " AND p.position_id = 'B1|SEC-26238' ORDER BY run_id DESC LIMIT 1")
         assert con.execute(q).fetchone()[0] == 13000
     assert recompute.current_day(s, store_url, FRI)["runs"] == []  # once
+
+
+def test_an_ocp_report_recorded_after_the_intraday_run_runs_the_same_cut_again(stub, tmp_path, store_url):
+    """TDM#554: the owner maps the report's row types and the report is read again (a replay), or the report simply
+    comes after today's intraday run: the OCP base of today changed, so the same cut runs again at once (not only at
+    the next cut), and once only."""
+    s = cfg(tmp_path, store_url, stub)
+    put(tmp_path, "positions_20261016.csv")
+    publish(stub, FRI, "intraday", "2026-10-16T07:00:00Z", 1)
+    clock = {"t": at(FRI, 10, 6)}
+    ap = Autopilot(settings_loader=lambda: s, now=lambda: clock["t"])
+    by = steps(ap.run_cycle())
+    assert by["intraday"][0] == "ok" and "(new cut)" in by["intraday"][1], by["intraday"]
+    (tmp_path / "in" / "ocp_20261015.csv").write_text(
+        "entity;book_id;ccy;ocp_ccy;ocp_rub;rate_rub_per_unit\nENT1;B1;USD;1000;;\n", encoding="utf-8")
+    clock["t"] = at(FRI, 10, 8)  # the same 10-minute slot: no new cut
+    st = ap.run_cycle()
+    by = steps(st)
+    assert by["intraday"][0] == "ok" and "(ocp report changed after the run)" in by["intraday"][1], by["intraday"]
+    assert next(x for x in st["steps"] if x["name"] == "intraday")["reason"] == "ran"
+    clock["t"] = at(FRI, 10, 9)
+    by = steps(ap.run_cycle())
+    assert by["intraday"][0] == "ok" and by["intraday"][1].startswith("up to date"), by["intraday"]
+
+
+def test_a_failed_intraday_run_is_tried_again_when_an_ocp_report_arrives(stub, tmp_path, store_url, monkeypatch):
+    """TDM#554: the failed-run signature includes the ocp / cash_balances dataset sets, so a new revision of the OCP
+    base is a changed input (the run is tried again), while without it the failure stays not retried."""
+    s = cfg(tmp_path, store_url, stub)
+    put(tmp_path, "positions_20261016.csv")
+    real = cli.eod_run
+
+    def broken(*a, **kw):
+        if kw.get("cut_type") == "intraday":
+            raise ValueError("boom")
+        return real(*a, **kw)
+
+    monkeypatch.setattr(cli, "eod_run", broken)
+    clock = {"t": at(FRI, 9, 0)}
+    ap = Autopilot(settings_loader=lambda: s, now=lambda: clock["t"])
+    ap.run_cycle()
+    publish(stub, FRI, "intraday", "2026-10-16T07:00:00Z", 1)
+    clock["t"] = at(FRI, 10, 6)
+    assert steps(ap.run_cycle())["intraday"][0] == "error"
+    clock["t"] = at(FRI, 10, 16)
+    st = ap.run_cycle()
+    assert next(x for x in st["steps"] if x["name"] == "intraday")["reason"] == "failed_before"
+    (tmp_path / "in" / "ocp_20261015.csv").write_text(
+        "entity;book_id;ccy;ocp_ccy;ocp_rub;rate_rub_per_unit\nENT1;B1;USD;1000;;\n", encoding="utf-8")
+    clock["t"] = at(FRI, 10, 26)
+    st = ap.run_cycle()
+    intraday = next(x for x in st["steps"] if x["name"] == "intraday")
+    assert intraday["reason"] != "failed_before" and intraday["status"] == "error", intraday  # tried (and failed) again

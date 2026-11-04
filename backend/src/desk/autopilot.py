@@ -53,9 +53,11 @@ every ``inbox_poll_seconds`` and on ``POST /api/v1/autopilot/run``):
    (``latest=true``) at most once per 10-minute slot (``POLL_SLOT_S``, starting ``POLL_LAG_S`` after the slot
    times), and for the preliminary cut only until today has a run on it; a run is made
    only for a cut newer than the last run's, when the position sets changed, when the previous close it is measured
-   against changed (the previous day's ``eod_final`` published late or corrected), or when its private inputs hash is
+   against changed (the previous day's ``eod_final`` published late or corrected), when its private inputs hash is
    no longer today's (trade terms of an earlier date, a stock in force today, arrived after it: #547; for an
-   INTRADAY run the hash includes the day's bond trades, ``trades.intraday_inputs``, TDM#557). The flash PnL is measured against
+   INTRADAY run the hash includes the day's bond trades, ``trades.intraday_inputs``, TDM#557), or when an
+   ``ocp`` report or ``cash_balances`` in force today were recorded after it read its inputs (``backfill.late_why``: a
+   replay after the owner changed the adapter's settings, TDM#554; the same cut again). The flash PnL is measured against
    the previous business day's ``eod_final``, else the newest earlier final or preliminary close, and the run says
    which (``pnl_basis``). The step's status carries a machine-readable ``reason`` (``INTRADAY_REASONS``) next to its
    detail. Only the latest INTRADAY run of a date is kept (``store.prune_intraday``); intraday and
@@ -67,7 +69,8 @@ every ``inbox_poll_seconds`` and on ``POST /api/v1/autopilot/run``):
    ``eod_final``, else its ``eod_preliminary``): ``cli.eod_run(on_close=...)``, an INTRADAY run of today with
    ``cut_type`` ``prev_close``, lineage ``market_close`` {date, cut_type}, no flash PnL (``pnl_basis`` says why), its
    label «16.10 · закрытие 15.10» (``store.slice_label``). Made again only when the position sets, the close, the
-   private inputs hash (#547, as the intraday run) or the logic (``backfill.same_logic``) change, the earlier morning run deleted (``store.prune_intraday``); the first
+   private inputs hash (#547, as the intraday run) or the logic (``backfill.same_logic``) change, or an ``ocp`` report
+   or balances in force came after it (``late_why``, TDM#554), the earlier morning run deleted (``store.prune_intraday``); the first
    intraday cut's run deletes it the same way. While the inbox is still draining (as step 3, R22) it waits. No run
    when the cache lacks the previous business day's close, even with an older one: the issue asks for D-1's close;
    the ``intraday`` setting does not turn it off. Its status carries a ``reason`` (``MORNING_REASONS``).
@@ -1147,7 +1150,8 @@ class Autopilot:
         cut = "eod_preliminary" if t >= PRELIM_FROM else "intraday"
         rtype = "INTRADAY" if cut == "intraday" else "EOD"
         last = con.execute(
-            "SELECT run_id, market_snapshot_id, cut_ts, position_set_ids, prev_market_snapshot_id, private_inputs_hash"
+            "SELECT run_id, market_snapshot_id, cut_ts, position_set_ids, prev_market_snapshot_id, private_inputs_hash,"
+            " positions_known_at"
             " FROM run WHERE business_date = %s"
             " AND run_type = %s AND cut_type = %s AND status = 'complete' ORDER BY run_id DESC LIMIT 1",
             (today, rtype, cut)).fetchone()
@@ -1187,6 +1191,10 @@ class Autopilot:
                            else store.positions_for(con, today)).private_inputs_hash
         if target is None and last is not None and last[5] != inputs_hash:
             target = (last[1], "private inputs changed")  # e.g. trade terms of an earlier date, in force today (#547)
+        if target is None and last is not None and (late := late_why(con, today, {"positions_known_at": last[6]})):
+            # an OCP report or balances in force today recorded after the run (a replay after the owner changed the
+            # adapter's settings, a report that came late): the same cut again, so the OCP follows (TDM#554)
+            target = (last[1], late)
         when = "asked the hub" if asked else "next hub check in the next 10-minute slot"
         if target is None:
             if last is not None:
@@ -1194,7 +1202,7 @@ class Autopilot:
                     "up_to_date"
             return "skipped", f"no {cut} cut of {today} on the hub yet ({when})", "no_cut_yet"
         sid, why = target
-        sig = (cut, sid, tuple(ids), prev_id, logic_version(), inputs_hash)
+        sig = (cut, sid, tuple(ids), prev_id, logic_version(), inputs_hash, store.dataset_set_ids(con, today))
         label = store.slice_label(today, cut, row.get("cut_ts") if row and sid == row["snapshot_id"] else last[2])
         if self._failed_before(f"{cut} {today}", sig, label):
             return "skipped", f"{cut} {sid[:12]} failed before on the same inputs, not retried", "failed_before"
@@ -1275,7 +1283,8 @@ class Autopilot:
             return "skipped", f"no close of {expected} in the cache", "no_close"
         snap = sd.market_id(*close)
         last = con.execute(
-            "SELECT run_id, market_snapshot_id, position_set_ids, lineage->>'logic_version', private_inputs_hash"
+            "SELECT run_id, market_snapshot_id, position_set_ids, lineage->>'logic_version', private_inputs_hash,"
+            " positions_known_at"
             " FROM run WHERE business_date = %s AND run_type = 'INTRADAY' AND cut_type = 'prev_close'"
             " AND status = 'complete' ORDER BY run_id DESC LIMIT 1", (today,)).fetchone()
         logic = logic_version()
@@ -1283,14 +1292,15 @@ class Autopilot:
         why = (f"no run of {today} yet" if last is None else "positions changed" if sorted(last[2]) != ids
                else "close changed" if last[1] != snap
                else "private inputs changed" if last[4] != inputs_hash  # trade terms in force today (#547)
-               else "program updated" if not same_logic(last[3], logic) else None)
+               else "program updated" if not same_logic(last[3], logic)
+               else late_why(con, today, {"positions_known_at": last[5]}))
         label = store.slice_label(today, "prev_close", None, None, {"date": close[0], "cut_type": close[1]})
         if why is None:
             return "ok", f"up to date: run {last[0]} on {label}", "up_to_date"
         if self._inbox_waiting and self._sync_later:  # as the eod step (R22): not once per revision of the backlog
             return "skipped", (f"{label}: after the inbox backlog ({self._inbox_waiting} files wait for a calendar, "
                                f"{self._sync_later} hub dates next cycle)"), "inbox_backlog"
-        sig = (snap, tuple(ids), logic, inputs_hash)
+        sig = (snap, tuple(ids), logic, inputs_hash, store.dataset_set_ids(con, today))
         if self._failed_before(f"prev_close {today}", sig, label):
             return "skipped", f"{label} failed before on the same inputs, not retried", "failed_before"
         self._progress("morning", 0, 1, label)

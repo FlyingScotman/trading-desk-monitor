@@ -324,6 +324,36 @@ issues (§6.3), nothing in them but the files of an action may hold a cell value
   recursive report folder (§13), so the files go through `match` / `read` like any report, and the page shows each
   file's outcome (accepted, rejected, …). `ctx.inbox_dirs` never includes that folder: the adapter does not read its
   own outputs as inputs. The adapter itself still writes no files (§2): the backend does.
+  - **`choices`** (optional, since 03.11.2026, TDM#554; only for an action that declares `choices`, §4; not the pick
+    list `choices` of a service action, §2.2): a table of
+    rows the owner gives a value from a dropdown on a screen of the monitor, saved into one object of a settings tab
+    (`settings_tabs`, §4) — so a mapping the adapter needs (for example a report's row type → derivative kind) is
+    chosen, never typed, and one button saves it and reads the affected reports again:
+
+    ```python
+    {"kind": "ocp_derivative_types",          # the declared kind (desk.inbox.tools.CHOICE_KINDS)
+     "title"?: str,
+     "save": {"tab": "<settings tab id>", "key": "<top-level key of its file: an object label -> value>"},
+     "options": [{"value": str | None, "title": str}],   # the dropdown; None: no entry for the row's key
+     "columns": [{"id": str, "title": str}],              # what a row shows besides its label (counts, shares)
+     "rows": [{"key": str, "label": str, "value": <option value>, "suggested"?: <option value>, "hint"?: str,
+               "new"?: bool, "future"?: int, "cells"?: {column id: str | number | None},
+               "replaces"?: [str],                        # other spellings of the key in the file, removed on a save
+               "children"?: [{"label": str, "cells"?: {...}}]}],   # shown by expanding the row
+     "risky_unset"?: [<option values>],   # a row left at None with future > 0 whose suggested value is one of these,
+                                          # or is chosen on another row: a warning on the screen (double counting)
+     "replay"?: {"source": str, "from": "YYYY-MM-DD", "to": "YYYY-MM-DD"},   # what to read again after a save
+     "notes"?: [str]}
+    ```
+
+    The backend checks the shape (`desk.inbox.tools.check_choices`; texts bounded as the rest, labels are the
+    adapter's own texts and reach the local page only) and keeps it with the job, with the SHA-256 of the tab's file
+    at the time. A broken `choices` is left out with a warning; the action itself stands. `POST
+    /api/v1/adapter/choices/{kind}` `{"values": {key: value | None}, "replay": true}` writes the values into the
+    tab's object (a value sets the key, None removes it and the row's `replaces` go; a None entry already in the
+    object is dropped), as a form save of that tab (its schema checked, a revision `via` form; 409 when the file
+    changed since the action ran), then reads `replay` again (`desk.inbox_replay`, as `desk inbox replay`, waiting
+    for a running scan). The adapter still writes no files: the backend does, through the tab.
 
 **Values.** All values crossing the boundary are JSON types: `dict`, `list`, `str`, `int`, `float`, `bool`, `None`.
 - Dates are `YYYY-MM-DD`. Timestamps are ISO 8601; one without an offset is Europe/Moscow.
@@ -419,7 +449,9 @@ issues (§6.3), nothing in them but the files of an action may hold a cell value
                "output_dir": True}]
   ```
 
-  `id` matches `^[a-z0-9_]{1,40}$` and is unique; `params` (optional, default no parameters) is a JSON Schema object
+  `id` matches `^[a-z0-9_]{1,40}$` and is unique; `choices` (optional, since 03.11.2026) names the monitor's screen
+  its result feeds (`ocp_derivative_types`: «ОВП: типы строк отчёта», §3 `choices`; another value is ignored with a
+  warning); `params` (optional, default no parameters) is a JSON Schema object
   rendered with the same form renderer as the settings tabs and checked by the backend before the run
   (`desk.settings_forms.check_schema`; unlike a settings form, a key outside `"additionalProperties": false` is an
   error, so the action does not run); `output_dir` (optional) says the action writes files for the inbox: the page
@@ -588,7 +620,7 @@ The summary holds counts and codes only. It has no values and no sheet names, an
 
 ## 9 Versions
 
-- **SPI** (`SPI_VERSION`, this document): an integer major. The backend lists the majors it supports (now `{1}`). Additions that old adapters can ignore (a new optional `ctx` member, a new optional function) do not bump it; anything else does, and the backend keeps the old major for one release. So far: `ctx.inbox_dirs` (20.10.2026); `status(ctx)`, `run_action(action_id, params, ctx)` and `describe()["actions"]` (28.10.2026, TDM#421; backends after 0.2.10); `ctx.adapter_output_dir` for those two (28.10.2026, TDM#421; an older backend has no such member, hence `getattr`). None of them changes a dataset, so the private contract keeps its minor (`private/1.5`); an adapter that uses them needs a backend from that date, an older one ignores them.
+- **SPI** (`SPI_VERSION`, this document): an integer major. The backend lists the majors it supports (now `{1}`). Additions that old adapters can ignore (a new optional `ctx` member, a new optional function) do not bump it; anything else does, and the backend keeps the old major for one release. So far: `ctx.inbox_dirs` (20.10.2026); `status(ctx)`, `run_action(action_id, params, ctx)` and `describe()["actions"]` (28.10.2026, TDM#421; backends after 0.2.10); `ctx.adapter_output_dir` for those two (28.10.2026, TDM#421; an older backend has no such member, hence `getattr`); an action's `choices` and its result's `choices` (03.11.2026, TDM#554: an older backend drops both keys, the action works as before without the screen). None of them changes a dataset, so the private contract keeps its minor (`private/1.5`); an adapter that uses them needs a backend from that date, an older one ignores them.
 - **Private input contract** (`describe()["contract"]`, `private/<major>.<minor>`): the dataset schemas of §10, versioned on their own, separate from the public results contract (1.3/1.4).
   - The backend accepts its own major with any minor. Fields from a newer minor are dropped with a `field_from_newer_contract` warning; the file is not rejected.
   - A new optional field is a minor version; a renamed, retyped or newly required field is a major one.
