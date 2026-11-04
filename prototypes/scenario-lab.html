@@ -298,7 +298,7 @@ input[type=date].dt{border:1px solid var(--line-strong);background:var(--surface
   <section id="view-scen" class="scen" role="tabpanel" aria-labelledby="mode-scen">
     <aside class="panel builder" aria-label="Конструктор сценария">
       <div class="sect">
-        <div class="ph"><h2>Сценарии</h2><span class="hint">PnL, млн ₽</span></div>
+        <div class="ph"><h2>Сценарии</h2><span class="hint" title="Экран устарел: фильтр книг шапки не применяется, считаются все книги деска">PnL, млн ₽ · все книги деска, фильтр шапки не применяется</span></div>
         <ul class="presets" id="preset-list"></ul>
         <div id="custom-wrap" hidden><div class="subcap">Свои</div><ul class="presets" id="custom-list"></ul></div>
       </div>
@@ -333,7 +333,7 @@ input[type=date].dt{border:1px solid var(--line-strong);background:var(--surface
       </div>
 
       <div class="sect">
-        <div class="ph"><h2>FX-шок</h2><span class="hint" title="Валютная облигация, фондированная в своей валюте, — за вычетом валютного пассива фондирования, как в ОВП (#249): шок двигает и облигацию, и пассив">+ = ослабление рубля; облигации — нетто фондирования</span></div>
+        <div class="ph"><h2>FX-шок</h2><span class="hint" title="Валютная облигация, фондированная в своей валюте, — за вычетом валютного пассива фондирования; считается от FX-дельт позиций, не от публикуемой ОВП (#249): шок двигает и облигацию, и пассив">+ = ослабление рубля; облигации — нетто фондирования</span></div>
         <div class="pb" id="fx-box" style="padding-top:2px"></div>
       </div>
 

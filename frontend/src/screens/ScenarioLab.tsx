@@ -141,7 +141,7 @@ export function ScenarioLab() {
                   Посчитать точно
                 </button>
               </div>
-              <div className="ph"><h3>По книгам</h3><span className="hint">млн ₽ · ≈ — разложение Тейлора</span></div>
+              <div className="ph"><h3>По книгам</h3><span className="hint">млн ₽ · ≈ — разложение Тейлора · все книги деска, фильтр шапки не применяется</span></div>
               <ResultTable taylor={taylor} result={result} stale={stale} />
             </div>
           )}

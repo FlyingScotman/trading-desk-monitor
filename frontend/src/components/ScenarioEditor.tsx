@@ -76,7 +76,7 @@ export function ScenarioEditor({ presets, presetId, onPreset, buckets, curves, c
           </select>
           {extras.length > 0 && <p className="note">Также в сценарии: {extras.join(' · ')}</p>}
           {Object.keys(base.fx ?? {}).length > 0 && <p className="note">FX-шок по валютной облигации — за вычетом валютного
-            пассива фондирования, как в ОВП: шок двигает и облигацию, и пассив.</p>}
+            пассива фондирования; считается от FX-дельт позиций, не от публикуемой ОВП: шок двигает и облигацию, и пассив.</p>}
         </div>
       </div>
 
