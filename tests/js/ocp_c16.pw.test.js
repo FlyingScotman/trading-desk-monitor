@@ -43,6 +43,13 @@ function history(state, opt = {}) {
     if (opt.lines && days[0].lines.length) days[0].lines = opt.lines(days[0].lines);  // CHF: курса нет ни в прогоне, ни в отчёте
     if (opt.oldBook && days[0].lines.length) days[0].lines.push(L('Головной банк', 'OLDX', ['OLDX'], 'USD', 5e6));  // TDM#556
   }
+  // TDM#567 (D11, D24): подписи методики от сервера — день до 03.11.2026 и текущий день с отчётом ещё с деривативами
+  if (opt.method) {
+    days[days.length - 3].methodNote = 'другая методика: отчёт целиком (с деривативами) и слагаемые вне отчёта, день до 03.11.2026';
+    days[days.length - 1].methodNote = 'не по текущей методике: отчёт ещё с деривативами, их PV не добавлен (FXB)';
+    days[days.length - 1].lines.forEach(x => { if (x.book === 'FXB') { x.baseKind = 'with_derivatives'; x.baseDate = AS_OF; x.parts = { base: x.amount }; } });
+    days[days.length - 1].basis = 'report_base_plus_day';
+  }
   // TDM#556: книга ОВП без позиций — справочник из блока ОВП прогона (ocp_history: books, ocpOnly)
   const books = opt.oldBook ? { OLDX: { name: 'Старая книга ОВП', entity: 'Головной банк', desk: 'Legacy', type: 'HTM', ocpOnly: true } } : {};
   return { runId: null, asOf: AS_OF, from: days[0].date, to: AS_OF, books, days };
@@ -75,6 +82,27 @@ async function open(browser, { width = 1366, theme = 'dark', state = null, hist 
   await pg.waitForTimeout(300);
   return { pg, ctx, errors, calls };
 }
+
+test('C16 on a run: days of another methodology and a line with the derivatives in the report are named (TDM#567)', { skip: pw ? false : 'нет Playwright', timeout: 120000 }, async () => {
+  const browser = await pw.chromium.launch();
+  try {
+    const plain = await open(browser);
+    assert.equal(await plain.pg.locator('[data-c16-method-day], [data-c16-method-legend], [data-c16-wd]').count(), 0, 'по текущей методике пометок нет');
+    await plain.ctx.close();
+    const { pg, ctx, errors } = await open(browser, { hist: { method: true } });
+    assert.equal(await pg.locator('[data-c16-method-day]').count(), 1, 'шапка дня');
+    assert.ok((await pg.locator('[data-c16-method-day]').innerText()).toLowerCase().startsWith('не по текущей методике'));
+    assert.ok((await pg.locator('[data-c16-wd]').first().innerText()).includes('отчёт с деривативами'), 'строка книги');
+    assert.equal(await pg.locator('[data-c16-method-legend]').count(), 1, 'пояснение к графику');
+    const marks = await pg.evaluate(() => { const o = echarts.getInstanceByDom(document.querySelector('.c16-chart')).getOption(), f = o.xAxis[0].axisLabel.formatter; return o.xAxis[0].data.map((v, i) => f(v, i)).filter(v => v.endsWith('*')).length; });
+    assert.equal(marks, 2, 'звёздочка на оси: день старой методики и текущий день');
+    const tip = await pg.evaluate(() => { const o = echarts.getInstanceByDom(document.querySelector('.c16-chart')).getOption(), n = o.xAxis[0].data.length;
+      return o.tooltip[0].formatter(o.series.map(z => ({ dataIndex: n - 3, seriesName: z.name, value: 1, marker: '' }))); });
+    assert.ok(tip.includes('data-c16-method') && tip.includes('другая методика'), tip);
+    assert.deepEqual(errors, []);
+    await ctx.close();
+  } finally { await browser.close(); }
+});
 
 test('C16 on a run: the published OCP of the books, switches, history, themes and widths', { skip: pw ? false : 'нет Playwright', timeout: 120000 }, async () => {
   const browser = await pw.chromium.launch();

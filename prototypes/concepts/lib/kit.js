@@ -3229,7 +3229,9 @@
   // C16 — по одному правилу: книга без справочника под фильтром юрлица не входит и в выборе не предлагается)
   // книга ОВП без позиций в прогоне (TDM#556: её знает только отчёт ОВП, например старая книга) — из блока ОВП
   // прогона (M.ocp.books: юрлицо, деск, тип книги, как их задал владелец), раньше справочника периода
-  K.ocpBook = (id, meta) => M.book[id] || (M.ocp && M.ocp.books && M.ocp.books[id]) || (meta && meta[id]) || {};
+  // TDM#567 (D10): meta — справочник книг того же дня (ответ истории, день или период): книга, сменившая юрлицо или
+  // тип, на прошлом дне фильтруется по тогдашним, не по нынешним; без meta — справочник прогона
+  K.ocpBook = (id, meta) => (meta && meta[id]) || M.book[id] || (M.ocp && M.ocp.books && M.ocp.books[id]) || {};
   // строки M.ocp.byBook под фильтром книг: строка книги — если книга проходит фильтр (юрлицо, деск, книги, валюта);
   // строка части отчёта по юрлицу (book null, books — её книги) — только своего юрлица и если фильтр снят или покрывает
   // все её книги; без книг (books пуст) — только без фильтра книг и деска;
@@ -3297,6 +3299,16 @@
   };
   // публикуемой ОВП в прогоне нет (до блока v2, ошибка расчёта ОВП, демо): шапка и C06 пишут это, а не показывают
   // сумму FX-дельт позиций под именем ОВП (она — другая величина; у C06 она остаётся отдельным столбцом)
+  // TDM#567 (D24, D11): ОВП прогона не по текущей методике (отчёт ещё с деривативами, другая методика) — подпись
+  // сервера (M.ocp.methodNote); пусто, когда по текущей
+  // По basis report_base_plus_day подпись сервера — про строки с отчётом ещё с деривативами: под фильтром книг она есть,
+  // только если такая строка в срезе; иная методика (basis) — на весь прогон
+  K.ocpMethodText = () => {
+    if (!M.ocp || !M.ocp.methodNote) return '';
+    if (M.ocp.basis === 'report_base_plus_day') { const S = K.ocpScope(); if (!S || !S.lines.some(x => x.baseKind === 'with_derivatives')) return ''; }
+    return M.ocp.methodNote;
+  };
+  K.ocpMethodNote = () => { const n = K.ocpMethodText(); return n ? '<span class="k-ocpmethod" style="color:var(--warn)" title="' + esc(n) + '">' + esc(n) + '</span> ' : ''; };
   K.ocpNone = 'ОВП нет: в этом прогоне нет публикуемой ОВП (прогон до её блока, ошибка расчёта или демо). Причина по отчёту ОВП — на экране «ОВП» (C16)';
   K.fxMini = function (L) {
     if (!K.ocpScope()) return '<span class="mut3" title="' + esc(K.ocpNone) + '">ОВП нет · <a href="c16-ocp.html">почему</a></span>';
@@ -3312,7 +3324,7 @@
     return '<table class="k-fxm"><thead><tr><th>вал.</th><th>mm в вал.</th><th>≈ mm ' + K.SYM[K.repr] + '</th></tr></thead><tbody>' +
       big.map(r => row(r)).join('') +
       (rest.length ? '<tr class="more" data-fxmore="' + rest.length + '"><td colspan="3" title="' + esc(rest.map(r => r.c + ' ' + f.mns(r.v, 3) + ' mm').join(' · ')) + '">+' + rest.length + ' прочих: ' + esc(rest.map(r => r.c).join(', ')) + '</td></tr>' + rest.map(r => row(r, 'small')).join('') : '') +
-      '</tbody></table>';
+      '</tbody></table>' + (K.ocpMethodText() ? '<div class="mut3" style="font-size:10.5px" data-ocp-method>' + K.ocpMethodNote() + '</div>' : '');
   };
   document.addEventListener('click', e => {
     const t = e.target.closest && e.target.closest('[data-fxmore]');

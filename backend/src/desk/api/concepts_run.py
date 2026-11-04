@@ -37,6 +37,7 @@ from ..pnl.reasons import (
 )
 from ..publish.funding_run import NOT_COMPUTED, STATUS_TEXT
 from ..publish.summary import fx_net, fx_partial
+from .ocp_line import book_meta, book_type, method_note, ocp_line
 from .runs import PNL_KEYS, risk_notes, run_slice
 from .scope_rule import book_portfolio, portfolio_map, portfolio_of
 
@@ -158,23 +159,21 @@ def ocp_status(block: dict[str, Any] | None) -> dict[str, Any] | None:
     pub = (block or {}).get("published") or {}
     if not pub.get("basis"):
         return None
+    lines = [ocp_line(x) for x in pub.get("by_book") or []]
     return {
         "asOf": block.get("as_of"), "state": block.get("status"), "text": block.get("text"), "basis": pub["basis"],
         "byCcy": {c: {"total": x.get("total"), "rate": x.get("rate"), "totalRub": x.get("total_rub"),
                       "bySource": x.get("by_source") or {}} for c, x in (pub.get("by_ccy") or {}).items()},
-        "byBook": [{"entity": x.get("entity"), "book": x.get("book_id"), "books": x.get("books") or [],
-                    "ccy": x.get("ccy"), "amount": x.get("amount"), "source": x.get("source"),
-                    "components": x.get("components") or [], "reported": x.get("reported"),
-                    **({"baseDate": x.get("base_date"), "parts": x["parts"]} if x.get("parts") is not None else {})}
-                   for x in pub.get("by_book") or []],
+        "byBook": lines,
+        # TDM#567: why the run is not on the current methodology (null: it is), from the same rule as the history
+        "methodNote": method_note(pub["basis"], block.get("as_of"), lines),
         "notes": block.get("notes") or [],
         "gaps": [{"code": g.get("code"), "text": g.get("text"), "items": g.get("items") or []}
                  for g in block.get("gaps") or []],
         # TDM#556: the books of the OCP without positions in the run (a book only the OCP report knows): the pages
         # take entity, desk and book type from here when the run's books have no such book (KIT.ocpBook)
-        "books": {b: {"name": m.get("name") or b, "entity": m.get("entity") or "—", "desk": m.get("desk") or "—",
-                      "type": m.get("book_type") or "—", "ocpOnly": True}
-                  for b, m in (block.get("books") or {}).items() if isinstance(m, dict)},
+        "books": {b: book_meta(b, m, ocp_only=True) for b, m in (block.get("books") or {}).items()
+                  if isinstance(m, dict)},
         "sourceNames": {x["key"]: x["name"] for x in block.get("sources") or []},
         "componentNames": {x["key"]: x["name"] for x in block.get("components") or []},
     }
@@ -263,7 +262,7 @@ def assemble(con, run: dict[str, Any]) -> dict[str, Any]:
     books = {}
     for r in ref.get("books", []):
         b = {"name": r["name"], "desk": r["desk"], "trader": r.get("trader"),
-             "bookType": r.get("book_type") or ("TRADING" if r["book_id"] in has_bonds else "DERIVS"),
+             "bookType": book_type(r.get("book_type"), r["book_id"] in has_bonds),
              "entity": r.get("entity") or "—"}
         if r.get("ocp_to"):
             b["ocpTo"] = r["ocp_to"]

@@ -8957,6 +8957,27 @@
             "type": "object",
             "title": "Books",
             "description": "TDM#556: name, desk, book_type and entity of the published OCP's books without positions in the run (a book only the OCP report knows); the run's reference books have the others"
+          },
+          "published_rows": {
+            "items": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "type": "array",
+            "title": "Published Rows",
+            "description": "TDM#567: ``published.by_book`` as the page data (``OCP.byBook``) and the history by day carry it: the same serializer, camelCase fields, ``baseKind`` under report_base_plus_day"
+          },
+          "method_note": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Method Note",
+            "description": "TDM#567: why the published OCP is not on the current methodology (the report without the derivatives + their PV), null when it is"
           }
         },
         "type": "object",

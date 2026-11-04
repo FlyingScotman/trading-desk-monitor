@@ -262,15 +262,21 @@ body { display: flex; flex-direction: column; overflow: hidden; }
             '</tbody></table><div class="k-note" style="padding:4px 8px">mm в валюте; PnL FX — тыс ₽' +
             (M.fxPnl ? '. ' + K.fxLine(C) : '') +
             '. Бонды — грязная MV за вычетом валютного пассива (грязная MV на прошлый перенос ОВП): валютный PnL за день, его уводит перенос ОВП; деривативы — FX-дельта' +
-            (!S ? '. ' + esc(K.ocpNone) : '') + (S ? '. ОВП — публикуемая: отчёт ОВП банка и слагаемые вне отчёта из позиций, по книгам без отчёта — из позиций (<a href="c16-ocp.html">C16</a>)' + (S.notes.length || S.ccyNote ? '; ' + esc(S.notes.concat(S.ccyNote || []).join('; ')) : '') : '') + '</div>';
+            (!S ? '. ' + esc(K.ocpNone) : '') + (S && K.ocpMethodText() ? '. ' + K.ocpMethodNote() : '') + (S ? '. ' + (M.ocp.text ? esc(M.ocp.text) : 'ОВП — публикуемая, по книгам без отчёта — из позиций') + ' (<a href="c16-ocp.html">C16</a>)' + (S.notes.length || S.ccyNote ? '; ' + esc(S.notes.concat(S.ccyNote || []).join('; ')) : '') : '') + '</div>';
           K.tableToolsAll(bd);
           return;
         }
+        // TDM#567 (D25): столбцы — FX-дельта позиций (бонды и деривативы), не публикуемая ОВП; публикуемая — ромбом
+        // на валюте (K.fxRows), разбор по клику называется FX-дельтой
+        const note = K.h('div', 'k-note'); note.style.padding = '2px 8px';
+        note.innerHTML = '<b>FX-дельта позиций</b> (бонды и деривативы), не публикуемая ОВП' + (PUB ? ': публикуемая — ромб (отчёт ОВП + слагаемые)' : '; публикуемой ОВП в прогоне нет') + (S && K.ocpMethodText() ? '. ' + K.ocpMethodNote() : '');
+        bd.appendChild(note);
         const el = K.h('div', 'fill'); bd.appendChild(el);
+        const mark = PUB ? [{ name: 'ОВП публикуемая', type: 'scatter', symbol: 'diamond', symbolSize: 11, itemStyle: { color: css('--fg') }, z: 5, data: C.map(c => PUB[c] ? PUB[c].eq : null) }] : [];
         const c = small(el, () => ({ grid, legend: { top: 0, left: 0 }, tooltip: { trigger: 'axis', axisPointer: { type: 'shadow' }, valueFormatter: v => f.mn(v, 1) + ' mm ₽' },
           xAxis: { type: 'category', data: C }, yAxis: { type: 'value', unit: 'mm ₽', axisLabel: { formatter: v => K.tick(v, 1e6) } },
-          series: [['бонды', false, css('--accent')], ['деривативы', true, css('--warn')]].map(([n, der, col]) => ({ name: n, type: 'bar', stack: 'o', itemStyle: { color: col }, data: C.map(c => M.sum(part(c, der), p => INSTR.fxIn(p, c) * M.toRepr[c])) })) }));
-        c.on('click', pp => { const cc = C[pp.dataIndex], der = pp.seriesIndex === 1; K.drill({ title: 'ОВП ' + cc + ' · ' + pp.seriesName, unit: 'mm ₽', fmt: v => f.mn(v, 1), list: part(cc, der), val: p => INSTR.fxIn(p, cc) * M.toRepr[cc] }); });
+          series: [['бонды', false, css('--accent')], ['деривативы', true, css('--warn')]].map(([n, der, col]) => ({ name: n, type: 'bar', stack: 'o', itemStyle: { color: col }, data: C.map(c => M.sum(part(c, der), p => INSTR.fxIn(p, c) * M.toRepr[c])) })).concat(mark) }));
+        c.on('click', pp => { if (pp.seriesType === 'scatter') return; const cc = C[pp.dataIndex], der = pp.seriesIndex === 1; K.drill({ title: 'FX-дельта ' + cc + ' · ' + pp.seriesName, unit: 'mm ₽', fmt: v => f.mn(v, 1), list: part(cc, der), val: p => INSTR.fxIn(p, cc) * M.toRepr[cc] }); });
       },
     },
     carry: {
