@@ -584,6 +584,26 @@ def test_completeness_from_the_lineage_keys(it, want):
     assert trades_history.completeness(it) == want
 
 
+def _ot(**kw):
+    base = {"no_prev_close": False, "no_pnl_run": False, "trades": 4, "no_pnl": {"positions": 0, "trades": 0, "pnl_rub": 0.0},
+            "lost": {"bonds": 0, "trades": 0}, "unpriced": {"trades": 0}, "unvalued": {"trades": 0}}
+    return {"applied": 4, "outside_total": {**base, **kw}}
+
+
+@pytest.mark.parametrize("it,want", [
+    (_ot(), ("full", None)),
+    (_ot(no_prev_close=True), ("outside", "no_prev_close")),
+    (_ot(no_pnl_run=True), ("outside", "no_pnl_run")),
+    (_ot(no_pnl={"positions": 1, "trades": 1, "pnl_rub": 5.0}), ("partial", "no_pnl")),
+    (_ot(lost={"bonds": 1, "trades": 2}, unpriced={"trades": 1}), ("partial", "lost")),
+    (_ot(unpriced={"trades": 4}), ("outside", "unpriced")),
+    (_ot(unvalued={"trades": 1}), ("partial", "unvalued")),
+    ({**_ot(), "no_pnl": 3}, ("full", None)),   # outside_total wins over the plain keys
+])
+def test_completeness_from_outside_total(it, want):
+    assert trades_history.completeness(it) == want
+
+
 def test_every_past_date_refused_says_to_check_the_settings(env):
     env.put("hist_mode", "unavailable")
     env.step(4)

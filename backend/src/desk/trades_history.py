@@ -321,8 +321,23 @@ def count_of(v: Any) -> int | None:
 
 def completeness(it: dict) -> tuple[str, str | None]:
     """How far the trades of a date are in its PnL, from the lineage ``intraday_trades``: ``("full", None)``,
-    ``("partial", reason)`` (some trades are outside the total), ``("outside", reason)`` (no previous close: none is in),
-    ``("unknown", None)`` (the run says nothing of it)."""
+    ``("partial", reason)`` (some trades are outside the total), ``("outside", reason)`` (none is in: no previous close,
+    no PnL asked, or every trade outside), ``("unknown", None)`` (the run says nothing of it). The run's
+    ``outside_total`` has all the keys always: ``no_prev_close`` / ``no_pnl_run`` (flags), ``trades`` (the day's trades),
+    ``no_pnl`` / ``lost`` / ``unpriced`` / ``unvalued`` (each with ``trades``). Without it (a run of an older program) the
+    plain keys of ``COMPLETENESS`` are read, counts or lists."""
+    ot = it.get("outside_total")
+    if isinstance(ot, dict):
+        if ot.get("no_prev_close"):
+            return "outside", "no_prev_close"
+        if ot.get("no_pnl_run"):
+            return "outside", "no_pnl_run"
+        out = {k: count_of((ot.get(k) or {}).get("trades") if isinstance(ot.get(k), dict) else ot.get(k)) or 0
+               for k in ("no_pnl", "lost", "unpriced", "unvalued")}
+        if not any(out.values()):
+            return "full", None
+        why = max(out, key=lambda k: out[k])
+        return ("outside" if sum(out.values()) >= (count_of(ot.get("trades")) or 0) > 0 else "partial"), why
     vals = {k: count_of(it.get(k)) for k in COMPLETENESS}
     if all(v is None for v in vals.values()):
         return "unknown", None
@@ -352,7 +367,8 @@ def applied(con: psycopg.Connection, settings: Settings, doc: dict) -> dict:
                 "SELECT business_date, jsonb_build_object('set_ids', lineage #> '{intraday_trades,set_ids}',"
                 " 'applied', lineage #> '{intraday_trades,applied}', 'no_pnl', lineage #> '{intraday_trades,no_pnl}',"
                 " 'lost', lineage #> '{intraday_trades,lost}', 'unpriced', lineage #> '{intraday_trades,unpriced}',"
-                " 'no_prev_close', lineage #> '{intraday_trades,no_prev_close}', 'has', lineage ? 'intraday_trades')"
+                " 'no_prev_close', lineage #> '{intraday_trades,no_prev_close}',"
+                " 'outside_total', lineage #> '{intraday_trades,outside_total}', 'has', lineage ? 'intraday_trades')"
                 f" FROM run WHERE run_id IN ({store.DEFAULT_RUNS}) AND business_date = ANY(%s)", (dts,)):
             lin[d_] = it
         stamp = backfill.inputs_stamp(con, settings)

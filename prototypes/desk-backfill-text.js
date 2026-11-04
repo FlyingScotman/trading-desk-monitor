@@ -45,7 +45,7 @@
   T.HIST_GATE = { trading_hours: 'ждёт конца торговых часов', daily_limit: 'на сегодня достигнут предел запросов',
     gap: 'пауза между запросами', backoff: 'повтор после ошибки' };
   T.HIST_REASON = { no_prev_close: 'нет предыдущего закрытия', no_pnl: 'нет PnL позиции на начало дня', lost: 'бумага не оценена',
-    unpriced: 'сделки без цены или курса' };
+    unpriced: 'сделки без цены или курса', no_pnl_run: 'PnL в прогоне не считался', unvalued: 'бумага не оценена совсем' };
   T.history = function (h, now) {
     if (!h) return { unsupported: false, summary: '', applied: '', runs: '', next: '', problems: [] };
     var c = h.counts || {}, a = h.applied, dm = function (d) { return d.slice(8, 10) + '.' + d.slice(5, 7); };
