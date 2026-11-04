@@ -8,13 +8,13 @@ from __future__ import annotations
 
 import copy
 from dataclasses import replace
-from datetime import UTC, date, datetime
+from datetime import date
 
 import pytest
-from test_ccs_review_555 import plan_of
 from test_swaps_repo_tdm45 import BD, FIX, ccs, ccs_plan
 
 from desk.curves import fx as fxcurves
+from desk.curves.rates import RUONIA_OIS_CURVE_ID
 from desk.marketdata.bundle import SnapshotDir
 from desk.orchestrator import prepare
 from desk.publish import tdm_run
@@ -157,10 +157,10 @@ def test_a_started_swap_without_the_fixings_is_not_valued(ctx):
     assert o.core_not_valued is None
 
 
-def test_a_swap_started_before_the_first_fixing_is_refused_by_core_not_filled(ctx):
+def test_a_swap_started_before_the_first_fixing_is_not_valued_with_the_date(ctx):
     o, _ = value(ctx, rus(start="2026-09-28", end="2027-09-28", **FIXED))
-    assert o.core_not_valued is not None and o.core_not_valued[0].startswith("core_")
-    assert "RUSFARCNY" in o.core_not_valued[1] and "2026-09-28" in o.core_not_valued[1]
+    assert o.core_not_valued[0] == "no_fixings"
+    assert o.core_not_valued[1].startswith("RUSFARCNY за 2026-09-28 нет в срезе")
 
 
 def _with_rows(ctx, drop):
@@ -186,12 +186,44 @@ def test_a_day_the_index_was_not_published_inside_the_history_is_bridged_and_sai
     assert v.pv_rub != full.pv_rub  # the previous value (0.68 %) in place of 0.54 % over a day
 
 
-def test_the_latest_business_day_without_a_fixing_is_missing_not_bridged(ctx):
+def test_one_unpublished_last_business_day_is_carried_and_said(ctx):
     late, info = _with_rows(ctx, {"2026-10-14"})
     assert info["bridged_days"] == [] and info["latest"] == "2026-10-13"
+    assert info["unpublished_business_days"] == ["2026-10-14"] and info["max_unpublished_business_days"] == 1
     o, _ = value(late, rus(**FIXED))
-    assert o.core_not_valued is not None and o.core_not_valued[0].startswith("core_")
-    assert "2026-10-14" in o.core_not_valued[1]
+    v = o.valuation
+    assert o.core_not_valued is None, o.core_not_valued
+    fx = v.extra["index_fixings"]["RUSFARCNY"]
+    assert fx["unpublished_business_days"] == ["2026-10-14"] and fx["missing_business_days"] == []
+    assert any("RUSFARCNY not yet published for 2026-10-14" in a and "2026-10-13" in a for a in v.assumptions)
+
+
+def test_two_unpublished_last_business_days_are_missing_fixings_not_core_refusals(ctx):
+    late, info = _with_rows(ctx, {"2026-10-13", "2026-10-14"})
+    assert info["unpublished_business_days"] == []
+    o, _ = value(late, rus(**FIXED))
+    assert o.core_not_valued[0] == "no_fixings" and o.core_not_valued[1].startswith("RUSFARCNY за 2026-10-13 нет в срезе")
+
+
+def test_a_preliminary_fixing_is_said(ctx):
+    snap = copy.deepcopy(ctx.market.snapshot)
+    for f in snap.data["fixings"]:
+        if f["index_code"] == "RUSFARCNY" and f["fixing_date"] == "2026-10-14":
+            f["labels"] = ["moex_marketdata_preliminary"]
+    cal = next(c.calendar for c in ctx.core_market.calendars if c.calendar_id == "FX:CNY")
+    entry, info = fxcurves.rusfar_cny_fixings(snap, cal, BD)
+    assert info["preliminary_days"] == ["2026-10-14"]
+    pre = replace(ctx, fx=replace(ctx.fx, index_fixings=(entry,),
+                                  lineage={**ctx.fx.lineage, "index_fixings": {"RUSFARCNY": info}}))
+    v = value(pre, rus(**FIXED))[0].valuation
+    assert v.extra["index_fixings"]["RUSFARCNY"]["preliminary_days"] == ["2026-10-14"]
+    assert any("preliminary value" in a and "2026-10-14" in a for a in v.assumptions)
+
+
+def test_the_curve_starts_from_the_latest_fixing(ctx):
+    assert ctx.fx.lineage["curves"]["CNY RUSFAR"]["front_rate"] == "RUSFARCNY 2026-10-14"
+    nodes = ctx.fx.curves["CNY RUSFAR"].curve.nodes
+    assert nodes[0] == (date(2026, 10, 16), pytest.approx(1.0 / (1.0 + 0.0043 / 365.0)))
 
 
 def test_the_observation_calendar_follows_the_publication():
@@ -200,11 +232,16 @@ def test_the_observation_calendar_follows_the_publication():
     base = BusinessCalendar(holidays=frozenset({date(2026, 10, 7)}), working_days=frozenset({date(2026, 10, 10)}),
                             version="T", valid_from=date(2026, 1, 1), valid_to=date(2030, 12, 31))
     published = {date(2026, 10, 5), date(2026, 10, 6), date(2026, 10, 9), date(2026, 10, 12)}
-    cal, bridged = fxcurves._observation_calendar(base, published)
+    cal, bridged, unpublished = fxcurves._observation_calendar(base, published)
     # 7.10 is a holiday and 8.10 a weekday with no fixing (bridged); 10.10 a working Saturday with none (bridged)
     assert bridged == [date(2026, 10, 8), date(2026, 10, 10)]
     assert [d for d in (date(2026, 10, n) for n in range(5, 13)) if cal.is_business_day(d)] == sorted(published)
     assert cal.is_business_day(date(2026, 10, 13))  # after the last fixing: the settlement calendar
+    assert unpublished == []  # no business date given
+    cal, _, unpublished = fxcurves._observation_calendar(base, published, date(2026, 10, 14))
+    assert unpublished == [date(2026, 10, 13)] and not cal.is_business_day(date(2026, 10, 13))
+    _, _, unpublished = fxcurves._observation_calendar(base, published, date(2026, 10, 15))
+    assert unpublished == []  # two business days in front of the business date: required
 
 
 # --- what is not valued ------------------------------------------------------------------------------------------
@@ -299,4 +336,28 @@ def test_inputs_survive_a_date_with_no_cny_spot_or_no_hub_data(ctx):
     spots = {k: v for k, v in ctx.fx.spots.items() if k != "CNY"}
     o, _ = value(replace(ctx, fx=replace(ctx.fx, spots=spots)), rus(**FIXED))
     assert o.core_not_valued[0] == "no_fx_spot"
-    assert datetime.now(UTC) and plan_of  # (imports used by the module's helpers)
+
+
+# --- the run's curve reference, risk in quotes ---------------------------------------------------------------------
+
+
+def test_the_projection_curve_is_in_the_reference_only_with_risk_on_it(ctx):
+    names = lambda rows: {c["curve_id"] for c in tdm_run.curves_reference(ctx, ctx.market, rows, [{"ccy": "CNY"}])}
+    assert "CNY RUSFAR" not in names([]) and "CNY XCCY" in names([])
+    got = tdm_run.curves_reference(ctx, ctx.market, [{"risk": {"CNY RUSFAR": {"2Y": 1.0}}}], [{"ccy": "CNY"}])
+    (c,) = [c for c in got if c["curve_id"] == "CNY RUSFAR"]
+    assert c["ccy"] == "CNY" and c["kind"] == "swap" and c["points"] and all(p["move_bp"] == 0 for p in c["points"])
+
+
+def test_the_previous_days_projection_curve_gives_the_move(ctx):
+    ois = next(e.curve for e in ctx.core_market.curves if e.curve_id == RUONIA_OIS_CURVE_ID)
+    old = tdm_run._prev_fx(ctx, ctx.market, ois)
+    assert "CNY RUSFAR" in old and old["CNY RUSFAR"].nodes == ctx.fx.curves["CNY RUSFAR"].curve.nodes
+
+
+def test_risk_in_quotes_keeps_the_pv_and_the_projection_curve_built(ctx):
+    base = value(ctx, rus(**FIXED))[0].valuation
+    on = value(replace(ctx, quote_curve_risk=True), rus(**FIXED))[0].valuation
+    assert on.pv_rub == pytest.approx(base.pv_rub, rel=1e-9)
+    assert set(on.curve_buckets) == set(base.curve_buckets) and on.curve_buckets["CNY RUSFAR"]["2Y"] != 0
+    assert replace(ctx, quote_curve_risk=True).curve_units()["CNY RUSFAR"] == "zero"

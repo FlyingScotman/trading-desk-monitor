@@ -299,7 +299,7 @@ def fixing_entries(market: Snapshot, static: Snapshot, known_at: datetime | None
         rows = [f for f in ar.fixings(market, code) if f.fixing_date < bd]
         unknown = [f.fixing_date.isoformat() for f in rows if not known(f)]
         rows = [f for f in rows if known(f)]
-        early = [f for f in rows if index == "ruonia" and f.fixing_date < cal.valid_from]
+        early = [f for f in rows if index == "ruonia" and cal.valid_from is not None and f.fixing_date < cal.valid_from]
         rows = rows[len(early):]
         history = FixingHistory(index, bd, tuple((f.fixing_date, f.rate) for f in rows), cal, market.id,
                                 RUONIA_MAX_UNPUBLISHED_DAYS if index == "ruonia" else 0, cut.isoformat())

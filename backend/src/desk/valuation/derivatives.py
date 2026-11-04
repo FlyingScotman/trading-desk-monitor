@@ -1036,16 +1036,50 @@ def _ccs_build(ctx: Any, c: CcsTerms, iid: str, curve_of: dict[str, str]
                 raise NotValued("no_fixings", f"no {foreign_fixing} fixings in the run on {bd} for the started "
                                               f"CCS {c.label}")
             info = (ctx.fx.lineage.get("index_fixings") or {}).get(foreign_fixing) or {}
-            bridged = [d for d in info.get("bridged_days") or () if d >= start.isoformat()]
+            entry = next(e for e in ctx.fx.index_fixings if e.fixing_id == foreign_fixing)
+            # the periods still to pay that have started (one that ended and is paid is left out by core)
+            open_from = min((p.accrual_start for p in swap.foreign_leg.periods
+                             if p.payment_date > bd and p.accrual_start < bd), default=bd)
+            _require_fixings(c, entry.fixings, swap.foreign_leg.periods, bd)
+            bridged = [d for d in info.get("bridged_days") or () if open_from.isoformat() <= d]
             if bridged:
                 notes.append(f"{c.label}: {foreign_fixing} not published on {', '.join(bridged)} (business days of "
                              "the settlement calendar): the previous fixing holds")
+            prelim = [d for d in info.get("preliminary_days") or () if open_from.isoformat() <= d]
+            if prelim:
+                notes.append(f"{c.label}: {foreign_fixing} of {', '.join(prelim)} is a preliminary value (exchange "
+                             "market data of the day before): provisional")
         last = ((ctx.fx.lineage.get("curves") or {}).get(fidx.curve_id) or {}).get("last_node")
         notes.append(f"{c.label}: {fidx.curve_id} quotes to {last}, beyond them extrapolated flat-forward (provisional)")
     inst = XccyInstrument(iid, swap, RUONIA_OIS_CURVE_ID, foreign_curve, rub_fixing_id=fixing,
                           foreign_projection_curve_id=fidx.curve_id if fidx else None,
                           foreign_fixing_id=foreign_fixing)
     return inst, notes, tuple(d for d in days if bd < d <= bd + timedelta(days=FLOW_DAYS))
+
+
+def _require_fixings(c: CcsTerms, fixings: Any, periods: Any, bd: date) -> None:
+    """The observation days a started foreign period reads before ``bd`` (each accrual day takes the fixing of the latest
+    business day of the index's calendar on or before it, as core) must have their fixing: the first one missing is
+    ``no_fixings`` with its date, not a refusal of core. The days the calendar carries (``curves.fx``) are not business
+    days there."""
+    have = {d for d, _ in fixings.fixings}
+    cal = fixings.calendar
+    for p in periods:
+        if p.payment_date <= bd or p.accrual_start >= bd:
+            continue
+        day = p.accrual_start
+        while day < min(p.accrual_end, bd):
+            obs = day
+            try:
+                while not cal.is_business_day(obs):
+                    obs -= timedelta(days=1)
+            except CalendarRangeError:
+                raise NotValued("no_fixings", f"{fixings.index}: {obs} is before the fixing calendar for the started "
+                                              f"CCS {c.label}") from None
+            if obs not in have:
+                raise NotValued("no_fixings", f"{RUSFAR_CNY_FIXING} за {obs.isoformat()} нет в срезе (the started CCS "
+                                              f"{c.label} reads it)")
+            day = day + timedelta(days=1)
 
 
 def _ccs_fact(t: CcsTerms, row: Any) -> dict[str, Any]:
@@ -1170,8 +1204,9 @@ def foreign_index_fixings(snapshot: Any, fixing_id: str, lineage: dict[str, Any]
     """What a CCS's floating foreign leg read of the run's index fixings ``fixing_id`` (``curves.fx.rusfar_cny_fixings``;
     the shape of ``index_fixings``): its latest fixing, the business days of its calendar missing inside the history
     (core rejects a position that reads one) and the days the previous value bridges (``bridged_days``: not published,
-    but business days of the settlement calendar). No day is declared unpublished: a gap in front of the business date
-    is a missing fixing."""
+    but business days of the settlement calendar), the unpublished business days just before the business date (carried,
+    at most ``max_unpublished_business_days``; the row's assumptions say so, as RUONIA's) and the ``preliminary_days``
+    (fixings the hub labels as a preliminary value)."""
     h = next(e.fixings for e in snapshot.index_fixings if e.fixing_id == fixing_id)
     have = {d for d, _ in h.fixings}
     first, latest = (h.fixings[0][0], h.fixings[-1][0]) if h.fixings else (None, None)
@@ -1185,8 +1220,10 @@ def foreign_index_fixings(snapshot: Any, fixing_id: str, lineage: dict[str, Any]
     return {"snapshot_id": h.snapshot_id, "known_at": lineage.get("known_at"), "first": first and first.isoformat(),
             "latest": latest and latest.isoformat(),
             "latest_rate_pct": round(h.fixings[-1][1] * 100, 10) if h.fixings else None,
-            "unpublished_business_days": [], "max_unpublished_business_days": 0, "missing_business_days": missing,
-            "bridged_days": lineage.get("bridged_days") or []}
+            "unpublished_business_days": lineage.get("unpublished_business_days") or [],
+            "max_unpublished_business_days": lineage.get("max_unpublished_business_days") or 0,
+            "missing_business_days": missing, "bridged_days": lineage.get("bridged_days") or [],
+            "preliminary_days": lineage.get("preliminary_days") or []}
 
 
 def _ui_leg(t: TermsLeg | None, lv: Any, ccy: str, cross: bool = False) -> dict[str, Any]:

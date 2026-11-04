@@ -2311,6 +2311,9 @@
   K.RC_IDX = { RUONIA: 'RUONIA', KEY_RATE: 'КС' };
   const RC_PROD = { irs: 'IRS', ois: 'OIS', repo: 'РЕПО', ccs: 'CCS' };
   K.RC_SIDE = { payer: 'плачу фикс', receiver: 'получаю фикс', repo: 'РЕПО (привлечение)', reverse_repo: 'обратное РЕПО (размещение)' };
+  // CCS с плавающей валютной ногой (foreignIndex): сторона — по валютной ноге, а не «фикс»
+  K.rcSide = (side, t) => t && t.product === 'ccs' && t.foreignIndex && (side === 'payer' || side === 'receiver')
+    ? (side === 'payer' ? 'плачу валютную ногу' : 'получаю валютную ногу') : (K.RC_SIDE[side] || side);
   // причины, по которым ядро не оценило строку (backend valuation/derivatives.py NotValued; core_<код> — отказ ядра)
   const RC_REASON = { ccs_unsupported: 'CCS ядром пока не оценивается',
     ccs_foreign_floating_unsupported: 'CCS с плавающей валютной ногой: индекс валютной ноги не поддерживается (оценивается только RUSFARCNY в юанях)',
@@ -2375,7 +2378,7 @@
     const rateProd = r => /(^|\+)(irs|ois|repo|ccs)(\+|$)/.test(r.product || '');
     const byReport = prow.filter(r => r.used === 'imported' && rateProd(r) && (M.pos[r.positionId] ? ids.has(r.positionId) : phantomOk(r)));
     const rows = core.map(p => {
-      const c = p.ratesCore, pr = parBy[p.id] || {}, sides = [...new Set(c.trades.map(t => K.RC_SIDE[t.side] || t.side).filter(Boolean))];
+      const c = p.ratesCore, pr = parBy[p.id] || {}, sides = [...new Set(c.trades.map(t => K.rcSide(t.side, t)).filter(Boolean))];
       const diff = c.pv != null && c.reportedPv != null ? (c.pvDiff != null ? c.pvDiff : c.pv - c.reportedPv) : null;
       return { id: p.id, name: p.name, book: p.book, product: c.product || c.trades.map(t => t.product).join('+'), side: sides.join(', ') || '—',
         maturity: p.maturity, pv: c.pv, rep: c.reportedPv, diff, over: pr.over == null ? null : pr.over, ruo: p.dv01ByCurve['RUB RUONIA'] || 0, key: p.dv01ByCurve['RUB KEY'] || 0,
@@ -2454,7 +2457,7 @@
         { key: 'pos', label: 'Позиция' },
         { key: 'product', label: 'Продукт', fmt: v => esc(rcProd(v)) },
         { key: 'index', label: 'Индекс', fmt: v => esc(v ? K.RC_IDX[v] || v : 'фикс') },
-        { key: 'side', label: 'Сторона', fmt: v => esc(K.RC_SIDE[v] || v || '—') },
+        { key: 'side', label: 'Сторона', fmt: (v, r) => esc(K.rcSide(v, r) || '—') },
         { key: 'notional', label: 'Номинал', num: true, unit: 'mm ₽', title: 'Номинал свопа; у РЕПО — денежная сумма первой части, mm ₽', fmt: v => rcMoney(v) },
         { key: 'fixedRate', label: 'Фикс', num: true, unit: '%', fmt: v => f.pct(v, 2) },
         { key: 'spreadBp', label: 'Спред', num: true, unit: 'б.п.', fmt: v => f.bp(v) },
