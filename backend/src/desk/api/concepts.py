@@ -54,6 +54,7 @@ from ..publish import summary
 from ..publish.summary import CURVE_MAP, GOV_CLASSES, PNL, is_minfin, kind_of, product_group  # noqa: F401 - the pages' names
 from ..scenario.carry import meetings
 from ..store import DEFAULT_RUNS
+from . import pnl_mtd
 
 HIST_RUNS = 260
 """At most this many default runs make the desk series (about a year of business days)."""
@@ -169,6 +170,34 @@ def unknown_days(start: date, first: date) -> list[date]:
     return out
 
 
+def _trades(con, run_id: int) -> tuple[dict[str, dict[str, Any]], bool]:
+    """The day's trades the run recorded per position (``pnl.extra.trades``, ``start_quantity``, the PnL of the trades
+    ``new_trades``, TDM#557) and whether the run records trades at all (any row has them: a run before TDM#557 does
+    not, then the pages fall back to the change of the quantity)."""
+    out, known = {}, False
+    for r in con.execute("SELECT position_id, quantity, pnl->'extra'->'trades' AS trades,"
+                         " pnl->'extra'->'start_quantity' AS sq FROM run_position"
+                         " WHERE run_id = %s AND pnl IS NOT NULL", (run_id,)):
+        known = known or r["sq"] is not None or bool(r["trades"])
+        if isinstance(r["trades"], list) and r["trades"]:
+            out[r["position_id"]] = {"trades": r["trades"], "quantity": r["quantity"], "start": r["sq"]}
+    return out, known
+
+
+def trade_of(t: dict[str, Any], pos: list) -> dict[str, Any]:
+    """A position's ``trade`` for the pages from its recorded trades: ``n`` trades, ``pnl`` their PnL (RUB), ``qty`` the
+    face traded (signed, in the position's face units; null when the position was sold to zero: the face of a bond is
+    then not known), ``new`` opened today."""
+    rows = [x for x in t["trades"] if isinstance(x, dict)]
+    bonds = [(1.0 if x.get("side") == "buy" else -1.0) * x["quantity"] for x in rows
+             if isinstance(x.get("quantity"), int | float)]
+    n1 = t["quantity"]
+    face = (pos[0] or 0.0) / n1 if n1 else None
+    return {"qty": math.fsum(bonds) * face if face is not None and len(bonds) == len(rows) else None, "price": pos[6],
+            "n": len(rows), "pnl": math.fsum(x["pnl_rub"] for x in rows if isinstance(x.get("pnl_rub"), int | float)),
+            **({"new": True} if t["start"] == 0 else {})}
+
+
 def extras(con, run: dict[str, Any], writer: Writer = None) -> dict[str, Any]:
     from . import coverage  # it imports this module
 
@@ -189,43 +218,45 @@ def extras(con, run: dict[str, Any], writer: Writer = None) -> dict[str, Any]:
     # change since then as a trade of the day
     prev_ok = n > 1 and run.get("prev_date") is not None and runs[-2]["business_date"] == run["prev_date"]
     cur, prev = sums[-1]["pos"], (sums[-2]["pos"] if prev_ok else None)
-    acc: dict[str, list[float]] = {pid: [0.0, 0.0] for pid in cur}
-    y, m = as_of.year, as_of.month
-    for r, s in zip(runs, sums):
-        d = r["business_date"]
-        if d.year != y:
-            continue
-        mtd = d.month == m
-        for pid, a in acc.items():
-            p = s["pos"].get(pid)
-            if p is not None and p[5] is not None:
-                a[1] += p[5]
-                if mtd:
-                    a[0] += p[5]
-    has_pnl = {pid for s in sums for pid, p in s["pos"].items() if p[5] is not None}
+    # month and year to date: the PnL report's sums over the period's runs (``pnl_mtd``, TDM#568), also of the
+    # positions the run no longer has
+    period = pnl_mtd.totals(con, run, as_of)
+    sums_by_pos = pnl_mtd.by_position(period["positions"])
+    trades, trades_known = _trades(con, run["run_id"])
     qty = {(r["run_id"], r["position_id"]): r["quantity"] for r in con.execute(
         "SELECT run_id, position_id, quantity FROM run_position WHERE run_id = ANY(%s) AND quantity IS NOT NULL",
         ([run["run_id"], runs[-2]["run_id"]],))} if prev is not None else {}
     positions: dict[str, dict[str, Any]] = {}
     for pid, p in cur.items():
         out: dict[str, Any] = {}
-        if pid in has_pnl:
-            out["pnlMtd"], out["pnlYtd"] = acc[pid]
+        if (t := sums_by_pos.get(pid)) is not None and t["ytd"] is not None:
+            out["pnlMtd"], out["pnlYtd"], out["pnlMtdParts"] = t["mtd"], t["ytd"], t["mtdParts"]
         p0 = prev.get(pid) if prev is not None else None
         if p0 is not None:
             out["prevPrice"] = p0[6]
             if p[7] is not None and p0[7] is not None:
                 out["spreadChgBp"] = p[7] - p0[7]
+        # the day's trades: the run's own record (``pnl.extra.trades``, TDM#557), not the change of the quantity (a
+        # position sold to zero, bought and sold in a day, a day without the previous close); a run before it has none,
+        # then the change of the quantity against the previous close as before
+        if pid in trades:
+            out["trade"] = trade_of(trades[pid], p)
+        elif not trades_known and p0 is not None:
             dq = (p[0] or 0.0) - (p0[0] or 0.0)
             n1, n0 = qty.get((run["run_id"], pid)), qty.get((runs[-2]["run_id"], pid))
             if n1 and n0 is not None:  # the number of bonds: a linker's indexed or an amortizer's face moves by itself
                 dq = (n1 - n0) * (p[0] or 0.0) / n1 if abs(n1 - n0) > 1e-6 * max(1.0, abs(n1)) else 0.0
             if abs(dq) > 1e-6 * max(1.0, abs(p[0] or 0.0)):
                 out["trade"] = {"qty": dq, "price": p[6]}
-        elif prev is not None:
+        elif not trades_known and prev is not None:
             out["trade"] = {"qty": p[0], "price": p[6], "new": True}
         positions[pid] = out
     periods, notes = _periods(con, as_of, dates)
+    for k, label in (("mtd", "месяца"), ("ytd", "года")):
+        periods[k]["intradayApart"] = period["separate"][k]
+        if period["separate"][k]:
+            notes.append(f"внутридневной прогон пересекается с прогонами {label}: его PnL не входит в MTD/YTD, "
+                         "как в отчёте PnL за период (показан отдельно)")
     first = runs[0]["business_date"]
     if first.replace(day=1) > as_of.replace(day=1, month=1) and not notes:
         notes.append(f"история прогонов с {first.isoformat()}: PnL с начала года — с этой даты")
@@ -240,7 +271,7 @@ def extras(con, run: dict[str, Any], writer: Writer = None) -> dict[str, Any]:
                           "amount": amount, "est": bool(est)})
     if not flows and cur:
         notes.append("потоков позиций в прогоне нет: прогон посчитан до версии с потоками (пересчитается последняя дата)")
-    if not prev_ok and run.get("prev_date") is not None:
+    if not prev_ok and run.get("prev_date") is not None and not trades_known:
         notes.append(f"сделки дня и изменения к вчера не показаны: нет прогона за {run['prev_date'].isoformat()}"
                      f" (досчитать: {BACKFILL_LINK}, desk backfill)")
     if (old := old_runs(con, runs)):
@@ -265,7 +296,7 @@ def extras(con, run: dict[str, Any], writer: Writer = None) -> dict[str, Any]:
                      "ofzRuo01": [s.get("ofzRuo") for s in sums],
                      "riskBad": [sorted(s.get("riskBad") or ()) for s in sums],
                      "dv01Book": series("dv01Book"), "mvType": series("mvType"), "mvCcy": series("mvCcy"), "pnl": pnl},
-            "histSource": "runs", "pnlPeriods": periods,
+            "histSource": "runs", "pnlPeriods": periods, "pnlClosed": pnl_mtd.closed(period["positions"]),
             "positions": positions, "cashflows": flows, **market,
             "cbr": cb, "curveMap": CURVE_MAP, "notes": notes,
             "unvalued": coverage.unvalued(con, run), "approx": coverage.approx(con, run)}

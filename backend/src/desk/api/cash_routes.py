@@ -23,11 +23,16 @@ public = APIRouter()
 
 @public.get("/api/v1/cash")
 def get_cash(request: Request, on: str | None = None,
-             days: Annotated[int, Query(ge=1, le=120)] = 20) -> JSONResponse:
-    """The cash screen of ``on`` (default: the latest date with cash, else today, Moscow)."""
+             days: Annotated[int, Query(ge=1, le=120)] = 20, run_id: int | None = None) -> JSONResponse:
+    """The cash screen of ``on`` (default: the date of ``run_id``, the run of the pages' navigation, TDM#568; else the
+    latest date with cash, else today, Moscow)."""
     try:
         day = date.fromisoformat(on) if on else None
     except ValueError:
         raise HTTPException(400, "on must be YYYY-MM-DD") from None
     with store.connect(request.app.state.store_url) as con:
+        if run_id is not None and day is None:
+            r = con.execute("SELECT business_date FROM run WHERE run_id = %s AND status = 'complete'",
+                            (run_id,)).fetchone()
+            day = r[0] if r else None
         return JSONResponse(cash.view(con, day, days), headers={"Cache-Control": "no-store"})

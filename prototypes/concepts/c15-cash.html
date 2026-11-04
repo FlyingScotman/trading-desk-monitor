@@ -56,7 +56,8 @@
   const STATUS = { match: 'сходится', break: 'расхождение', one_ledger: 'только в одной системе', single: 'одна система' };
   const view = document.getElementById('view'), daysEl = document.getElementById('days');
   const u = new URL(location.href);
-  let on = u.searchParams.get('on') || null, doc = null, filter = u.searchParams.get('status') || 'all', q = '';
+  const sel = window.CONCEPTS_SEL || {};  // дата и прогон из навигации (чип «Прогон» шапки), а не «последняя дата с данными» (#568)
+  let on = u.searchParams.get('on') || sel.as_of || null, doc = null, filter = u.searchParams.get('status') || 'all', q = '';
   const open = new Set();
 
   const amt = v => v == null ? '<span class="mut3">—</span>' : f.n(v, 2);
@@ -74,7 +75,7 @@
   }
   function load() {
     if (!server) { doc = DEMO(on); on = doc.date; render(); return Promise.resolve(); }
-    return getJSON('api/v1/cash?days=30' + (on ? '&on=' + on : '')).then(d => { doc = d; on = d.date; render(); }).catch(e => {
+    return getJSON('api/v1/cash?days=30' + (on ? '&on=' + on : (sel.run_id ? '&run_id=' + encodeURIComponent(sel.run_id) : ''))).then(d => { doc = d; on = d.date; render(); }).catch(e => {
       if (e.forbidden) return msg('Нужно войти в монитор: экран остатков открыт всем пользователям.');
       msg('Не удалось загрузить остатки' + (on ? ' за ' + esc(on) : '') + ': ' + esc(e.message) + '.');
     });
