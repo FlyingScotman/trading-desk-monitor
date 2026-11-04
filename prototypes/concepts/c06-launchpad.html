@@ -262,7 +262,7 @@ body { display: flex; flex-direction: column; overflow: hidden; }
             '</tbody></table><div class="k-note" style="padding:4px 8px">mm в валюте; PnL FX — тыс ₽' +
             (M.fxPnl ? '. ' + K.fxLine(C) : '') +
             '. Бонды — грязная MV за вычетом валютного пассива (грязная MV на прошлый перенос ОВП): валютный PnL за день, его уводит перенос ОВП; деривативы — FX-дельта' +
-            (!S ? '. ' + esc(K.ocpNone) : '') + (S && K.ocpMethodText() ? '. ' + K.ocpMethodNote() : '') + (S ? '. ' + (M.ocp.state === 'computed' && M.ocp.text ? esc(M.ocp.text) : 'ОВП — публикуемая, по книгам без отчёта — из позиций') + ' (<a href="c16-ocp.html">C16</a>)' + (S.notes.length ? '; ' + esc(S.notes.join('; ')) : '') : '') + '</div>';
+            (!S ? '. ' + esc(K.ocpNone) : '') + (S && K.ocpMethodText() ? '. ' + K.ocpMethodNote() : '') + (S ? '. ' + (M.ocp.text ? esc(M.ocp.text) : 'ОВП — публикуемая, по книгам без отчёта — из позиций') + ' (<a href="c16-ocp.html">C16</a>)' + (S.notes.length ? '; ' + esc(S.notes.join('; ')) : '') : '') + '</div>';
           K.tableToolsAll(bd);
           return;
         }
