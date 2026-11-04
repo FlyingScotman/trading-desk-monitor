@@ -141,8 +141,9 @@ def _days(monkeypatch, by_date):
         r = by_date.get(on.isoformat(), [])
         return store.DatasetInputs(ds, on, r, [{"set_id": 9}] if r else [])
     monkeypatch.setattr(store, "dataset_rows", rows)
-    monkeypatch.setattr(trades, "_dates_with_trades", lambda con, lo, hi: sorted(
-        d for k in by_date if by_date[k] and lo <= (d := date.fromisoformat(k)) < hi))
+    monkeypatch.setattr(trades, "_trade_sets", lambda con, lo, hi: sorted(
+        (date.fromisoformat(k), str(t["book_id"]), 1) for k, v in by_date.items() for t in v
+        if lo <= date.fromisoformat(k) < hi))
 
 
 def _report(inputs, qty, valid="2026-11-03", **kw):
@@ -165,7 +166,7 @@ def test_a_report_of_the_day_keeps_its_quantity_and_the_trades_give_the_pnl(monk
     assert {r[0]: r[3] for r in out.rows}["T1|SEC1"] == 1200.0 and summary["gaps"] == {}
     assert summary["rows"]["T1|SEC1"] == {"mode": "qty", "start": 1000.0, "final": 1200.0, "new": False,
                                           "final_fold": 1200.0, "report": True, "members": {"T1|SEC1": 1200.0},
-                                          "bond": "SEC1"}
+                                          "bond": "SEC1", "book": "T1"}
     assert [t["trade_id"] for t in summary["trades"]] == ["TR1"] and summary["applied"] == 1
     assert {r[0]: r[3] for r in summary["start_inputs"].rows}["T1|SEC1"] == 1000.0
     assert out.private_inputs_hash not in ("report", "h0")   # the trades are in the hash
@@ -810,8 +811,93 @@ def test_a_stale_book_with_no_trades_in_the_window_costs_one_read(monkeypatch):
 
     monkeypatch.setattr(store, "dataset_rows", rows)
     asked = []
-    monkeypatch.setattr(trades, "_dates_with_trades", lambda con, lo, hi: asked.append((lo, hi)) or [])
+    monkeypatch.setattr(trades, "_trade_sets", lambda con, lo, hi: asked.append((lo, hi)) or [])
     old = store.PositionInputs(**{**tti._inputs().__dict__, "valid_dates": {"T1": date(2026, 9, 1),
                                                                             "T2": date(2026, 9, 1)}})
     out, summary = trades.apply_intraday(None, DAY, old)
     assert out is old and calls == [DAY] and len(asked) == 1 and summary["history_cut"] == {}
+
+
+def test_a_closed_book_with_an_old_empty_set_sets_no_window_and_costs_no_reads(monkeypatch):
+    """A book that holds no positions (an old empty set) does not widen the window of the trades of the days before:
+    other books' trades of past days are neither read nor looked up."""
+    import test_trades_intraday as tti
+
+    base = tti._inputs()
+    rows = [r for r in base.rows if r[1] == "T1"]   # T2 is closed: no rows
+    inp = store.PositionInputs(**{**base.__dict__, "rows": rows, "valid_dates": {"T1": date(2026, 11, 2),
+                                                                                "T2": date(2026, 9, 1)}})
+    calls, asked = [], []
+    monkeypatch.setattr(store, "dataset_rows", lambda con, ds, on: calls.append(on) or store.DatasetInputs(
+        ds, on, [], []))
+    monkeypatch.setattr(trades, "_trade_sets", lambda con, lo, hi: asked.append((lo, hi)) or [])
+    out, summary = trades.apply_intraday(None, DAY, inp)
+    assert out is inp and calls == [DAY] and asked == [] and summary["history_cut"] == {}
+
+
+def test_trades_older_than_the_window_are_counted_by_one_aggregate_without_reading_rows(monkeypatch):
+    import test_trades_intraday as tti
+
+    read = []
+    monkeypatch.setattr(store, "dataset_rows", lambda con, ds, on: read.append(on) or store.DatasetInputs(
+        ds, on, [], []))
+    monkeypatch.setattr(trades, "_trade_sets", lambda con, lo, hi: [(date(2026, 10, 22), "T1", 3),
+                                                                    (date(2026, 10, 23), "T2", 1)])
+    old = store.PositionInputs(**{**tti._inputs().__dict__, "valid_dates": {"T1": date(2026, 10, 20),
+                                                                            "T2": date(2026, 10, 23)}})
+    _, summary = trades.apply_intraday(None, DAY, old)
+    assert summary["history_cut"] == {"T1": {"report": "2026-10-20", "dropped": 3}}   # T2's report is after its date
+    assert read == [DAY]                                                              # the past dates are not read
+
+
+def _lot_outcome(vq, core=True, pnl=None):
+    from desk.orchestrator import Outcome
+
+    v = SimpleNamespace(quantity=vq, valuation_date=date(2026, 10, 16), z_spread_bp=1.0, price_basis="p")
+    return Outcome("S", SimpleNamespace() if core else None, None, valuation=v, pnl=pnl)
+
+
+def _attach_case(monkeypatch, core):
+    """Two lots of one bond in a book with the report (8000 / 3000): which of them are valued with terms."""
+    prev = SimpleNamespace(business_date=date(2026, 10, 15))
+    ctx = SimpleNamespace(business_date=date(2026, 10, 16))
+    start_o = _lot_outcome(11000.0)
+    start_o.pnl = nt._opened_today(prev, ctx, start_o, 0.0, [])
+    start_o.pnl = nt.replace(start_o.pnl, total=-1000.0, carry=-1000.0)
+    monkeypatch.setattr(nt, "portfolio_pnl", lambda *a: {"L1": start_o})
+    monkeypatch.setattr(nt, "trade_pnl", lambda *a: {"trade_id": "S", "pnl_rub": 50.0, "flag": None})
+    lots = {"L1": _lot_outcome(8000.0, core["L1"]), "L2": _lot_outcome(3000.0, core["L2"])}
+    for o in lots.values():
+        o.pnl = "regular flash"
+    bp = SimpleNamespace(position_ids=list(lots))
+    summary = {"trades": [{"row": "L1", "trade_id": "S"}],
+               "rows": {"L1": {"start": 11000.0, "book": "B1", "bond": "S", "members": {"L1": 8000.0, "L2": 3000.0}}}}
+    n = nt.attach(prev, ctx, SimpleNamespace(), bp, list(lots.values()), summary, None)
+    return lots, n
+
+
+def test_lots_valued_in_different_ways_are_not_split_and_say_so(monkeypatch):
+    lots, n = _attach_case(monkeypatch, {"L1": True, "L2": False})
+    assert n["mixed_valuation"] == ["B1|S"] and n["rows"] == {"L1": "trades_mixed_valuation",
+                                                              "L2": "trades_mixed_valuation"}
+    assert lots["L1"].pnl.total == pytest.approx(-950.0) and lots["L1"].pnl.new_trades == 50.0   # the whole, no shares
+    assert lots["L2"].pnl == "regular flash"            # the lot at the report's figure keeps its own PnL
+
+
+def test_the_lot_that_carries_the_pnl_is_one_valued_with_terms(monkeypatch):
+    lots, n = _attach_case(monkeypatch, {"L1": False, "L2": True})
+    assert n["mixed_valuation"] == ["B1|S"]
+    assert lots["L2"].pnl.total == pytest.approx(-950.0) and lots["L1"].pnl == "regular flash"
+
+
+def test_no_lot_valued_with_terms_is_said_not_lost_silently(monkeypatch):
+    lots, n = _attach_case(monkeypatch, {"L1": False, "L2": False})
+    assert n["lost"] == ["B1|S"] and set(n["rows"].values()) == {"trades_not_in_pnl"}
+    assert all(o.pnl == "regular flash" for o in lots.values())
+
+
+def test_lots_all_valued_with_terms_are_split(monkeypatch):
+    lots, n = _attach_case(monkeypatch, {"L1": True, "L2": True})
+    assert n["mixed_valuation"] == [] and n["lost"] == []
+    assert lots["L1"].pnl.total + lots["L2"].pnl.total == pytest.approx(-950.0)
+    assert lots["L2"].pnl.pnl_on_row == "L1" and lots["L2"].pnl.total == pytest.approx(-950.0 * 3000 / 11000)

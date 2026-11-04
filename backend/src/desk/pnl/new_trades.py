@@ -188,20 +188,51 @@ def split_pnl(pnl: Any, ws: list[float]) -> list[Any]:
             for i in range(len(ws))]
 
 
+def _core(o: Outcome | None) -> bool:
+    """A row valued with terms (by core or its ladder): the rows whose PnL the trades split; not a row at the report's
+    figure."""
+    return o is not None and o.valuation is not None and o.terms is not None
+
+
+def _covered(prev: EodContext, ctx: EodContext, o: Outcome, main_pid: str) -> SimplePnl:
+    """A lot of a bond whose PnL is on another lot (``pnl_on_row``) without a split: none of its own."""
+    return replace(_opened_today(prev, ctx, o, 0.0, []), start_quantity=None, trades=None, pnl_on_row=main_pid,
+                   note=f"the bond was traded today: its PnL is on the lot {main_pid}")
+
+
 def attach(prev: EodContext, ctx: EodContext, start: PositionInputs, bp: Any, outcomes: list[Outcome],
-           summary: dict[str, Any], carried: Any) -> dict[str, int]:
+           summary: dict[str, Any], carried: Any) -> dict[str, Any]:
     """Split the PnL of the rows the day's trades changed (module doc), in place on ``outcomes`` (``bp``'s, after
-    ``attach_pnl``): ``summary`` is ``trades.apply_intraday``'s. Returns counts for the run's log."""
+    ``attach_pnl``): ``summary`` is ``trades.apply_intraday``'s. Returns the counts ``split`` / ``opened`` / ``no_pnl`` /
+    ``flagged`` for the run's log and the anomalies: ``mixed_valuation`` (``book|bond`` whose lots are valued some by
+    core and some at the report's figure: the PnL goes whole on one lot valued with terms, not split), ``lost`` (no lot
+    valued with terms: the trades' PnL is not in the run) and ``rows`` (their lots with the flag to put on each, ``x.trades_mixed_valuation`` / ``x.trades_not_in_pnl``)."""
     by_row = _by_row(summary.get("trades") or [])
     info = summary.get("rows") or {}
     main = dict(zip(bp.position_ids, outcomes))
     started = {p for p in by_row if (info.get(p) or {}).get("start")}
     begun = portfolio_pnl(prev, ctx, start, started, carried) if started else {}
-    n = {"split": 0, "opened": 0, "no_pnl": 0, "flagged": 0}
+    n: dict[str, Any] = {"split": 0, "opened": 0, "no_pnl": 0, "flagged": 0, "mixed_valuation": [], "lost": [],
+                         "rows": {}}
     for pid, ts in by_row.items():
-        o = main.get(pid)
-        if o is None or o.valuation is None or o.terms is None:
+        mem = (info.get(pid) or {}).get("members") or {}
+        label = f"{(info.get(pid) or {}).get('book')}|{(info.get(pid) or {}).get('bond')}"
+        target = pid
+        if mem:   # a book with its report: the lot that carries the bond's PnL is one valued with terms
+            ok = [m for m in sorted(mem) if _core(main.get(m))]
+            if len(ok) < len(mem) and ok:
+                n["mixed_valuation"].append(label)
+                n["rows"].update(dict.fromkeys(mem, "trades_mixed_valuation"))
+            if not ok:
+                if any(main.get(m) is not None and main[m].valuation is not None for m in mem):
+                    n["lost"].append(label)
+                    n["rows"].update(dict.fromkeys(mem, "trades_not_in_pnl"))
+                continue
+            target = pid if pid in ok else ok[0]
+        o = main.get(target)
+        if not _core(o):
             continue   # a row valued at the report's figure: the trades are inside its reports
+        assert o is not None and o.valuation is not None
         s = begun.get(pid)
         was_held = bool((info.get(pid) or {}).get("start"))
         ref = s.valuation if s is not None and s.valuation is not None else o.valuation
@@ -222,16 +253,18 @@ def attach(prev: EodContext, ctx: EodContext, start: PositionInputs, bp: Any, ou
             o.trades = {"new_trades": nt, "start_quantity": s.valuation.quantity if s and s.valuation else None,
                         "trades": res}
             n["no_pnl"] += 1
-        mem = (info.get(pid) or {}).get("members") or {}
-        lots = [m for m in mem if m != pid and main.get(m) is not None and main[m].valuation is not None
-                and main[m].terms is not None]
-        if pid not in mem or not lots:
+        lots = [m for m in mem if m != target and _core(main.get(m))]
+        if target not in mem or not lots:
             continue
         if o.pnl is None:   # no PnL of the bond: none on its other lots either
             for m in lots:
                 main[m].pnl, main[m].no_pnl = None, o.no_pnl
             continue
-        order = [pid, *sorted(lots)]   # the lot that keeps the trades first
+        if label in n["mixed_valuation"]:   # valued in different ways: not split, the whole on one lot
+            for m in lots:
+                main[m].pnl, main[m].no_pnl = _covered(prev, ctx, main[m], target), None
+            continue
+        order = [target, *sorted(lots)]   # the lot that keeps the trades first
         tot = math.fsum(mem[m] for m in order)
         if tot == 0:
             continue
@@ -239,6 +272,6 @@ def attach(prev: EodContext, ctx: EodContext, start: PositionInputs, bp: Any, ou
         for m, part in zip(order, parts):
             lot = main[m]
             lot.no_pnl = None
-            lot.pnl = replace(part, quantity=lot.valuation.quantity) if m == pid else replace(
-                part, quantity=lot.valuation.quantity, trades=None, start_quantity=None, pnl_on_row=pid)
+            lot.pnl = replace(part, quantity=lot.valuation.quantity) if m == target else replace(
+                part, quantity=lot.valuation.quantity, trades=None, start_quantity=None, pnl_on_row=target)
     return n

@@ -110,14 +110,16 @@ def _times(t: dict[str, Any]) -> str:
 MAX_HISTORY_DAYS = 7
 """How many days back the trades of a book's days without a report are looked for (``apply_intraday``)."""
 MAX_CUT_DAYS = 60
-"""How far back the trades older than that window are counted for the lineage's ``history_cut``."""
+"""How far back the trades older than that window are counted for the lineage's ``history_cut`` (rows of the stored
+sets, an upper bound)."""
 
 
-def _dates_with_trades(con: psycopg.Connection, lo: date, hi: date) -> list[date]:
-    """The dates in [lo, hi) with a stored ``trades`` set, oldest first: one query for the whole window."""
-    return [d for (d,) in con.execute(
-        "SELECT DISTINCT valid_date FROM dataset_set WHERE dataset = 'trades' AND valid_date >= %s AND valid_date < %s"
-        " ORDER BY valid_date", (lo, hi))]
+def _trade_sets(con: psycopg.Connection, lo: date, hi: date) -> list[tuple[date, str, int]]:
+    """(date, book, rows) of the stored ``trades`` sets in [lo, hi), oldest first: one aggregate query for the whole
+    window, no row read. The rows are those of every stored set and revision (an upper bound of the trades)."""
+    return [(d, str(b), int(n)) for d, b, n in con.execute(
+        "SELECT valid_date, scope->>'book_id', sum(row_count) FROM dataset_set WHERE dataset = 'trades'"
+        " AND valid_date >= %s AND valid_date < %s GROUP BY 1, 2 HAVING sum(row_count) > 0 ORDER BY 1, 2", (lo, hi))]
 
 
 def _fold(rows: list, extra: dict[str, dict], books: set[str], d: date, trade_rows: list[dict[str, Any]]
@@ -306,21 +308,23 @@ def apply_intraday(con: psycopg.Connection, on: date,
         bvalid.update(prev.valid_dates)
         start_hash = prev.private_inputs_hash   # a corrected report of the day before changes the PnL of the trades
     hist: list[dict] = []
-    lo = min(bvalid.values(), default=on) + timedelta(days=1)
+    live = {r[1] for r in base_rows}   # the books that hold positions: a closed or silent book sets no window
+    lo = min((v for b, v in bvalid.items() if b in live), default=on) + timedelta(days=1)
     first = max(lo, on - timedelta(days=MAX_HISTORY_DAYS))
-    # one query for the dates with trades between the oldest report and ``on`` (none: nothing more is read)
-    dated = _dates_with_trades(con, max(lo, on - timedelta(days=MAX_CUT_DAYS)), on) if lo < on else []
+    sets = _trade_sets(con, max(lo, on - timedelta(days=MAX_CUT_DAYS)), on) if lo < on else []   # one aggregate query
+    per_date: dict[date, dict[str, int]] = {}
+    for d, b, n_ in sets:
+        if b in bvalid and bvalid[b] < d:
+            per_date.setdefault(d, {})[b] = n_
     cut: dict[str, dict[str, Any]] = {}
-    for d in dated:
-        past = store.dataset_rows(con, "trades", d)
+    for d, by_book in sorted(per_date.items()):
         if d < first:   # older than the window: not counted, said (``history_cut``), never silent
-            for b, v in bvalid.items():
-                n = sum(1 for t in past.rows if str(t.get("book_id")) == b and v < d and effect(t, d) is None)
-                if n:
-                    c = cut.setdefault(b, {"report": v.isoformat(), "dropped": 0})
-                    c["dropped"] += n
+            for b, n_ in by_book.items():
+                c = cut.setdefault(b, {"report": bvalid[b].isoformat(), "dropped": 0})
+                c["dropped"] += n_
             continue
-        if past.rows:   # trades of the days between a book's report and ``on``: in its start of the day
+        past = store.dataset_rows(con, "trades", d)   # trades of the days between a report and ``on``: start of day
+        if past.rows:
             base_rows, base_extra, res = _fold(base_rows, base_extra, {b for b, v in bvalid.items() if v < d}, d,
                                                past.rows)
             hist += res["applied"]
@@ -408,7 +412,7 @@ def apply_intraday(con: psycopg.Connection, on: date,
         for p in pids_f:
             rows_out.pop(p, None)
         rows_out[anchor] = {"mode": mode, "start": q0, "final": q_rep, "final_fold": q_fold, "new": q0 == 0,
-                            "report": True, "bond": str(key[1]),
+                            "report": True, "bond": str(key[1]), "book": book,
                             "members": {r[0]: _row_qty(r, inputs.extra.get(r[0]))[1] or 0.0 for r in lots_r}}
         # the start of the day of the bond for its PnL: its lots in one row
         start_rows = [r for r in start_rows if r not in lots_b]

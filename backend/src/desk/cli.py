@@ -353,6 +353,17 @@ def eod_run(settings: Settings, d: str, *, snapshots: str | Path | None = None, 
                               prev_inputs.valid_dates)
             if intraday_trades and intraday_trades["applied"] and start_inputs is not None:   # start of day + trades
                 split = new_trades_pnl.attach(prev_ctx, ctx, start_inputs, bp, outcomes, intraday_trades, carried)
+                texts = {"mixed_valuation": "lots valued in different ways (core and the report): the PnL of the trades "
+                                            "is whole on one lot",
+                         "lost": "no lot valued with terms: the PnL of the trades is not in the run"}
+                for kind, text in texts.items():
+                    if split[kind]:
+                        out(f"WARN trades: {len(split[kind])} bond(s), {text}: " + ", ".join(split[kind][:10]))
+                        intraday_trades[kind] = split[kind]
+                for pid_, flag_ in split["rows"].items():   # the rows say so (the facts are built from the inputs)
+                    if pid_ in inputs.extra:
+                        x_ = inputs.extra[pid_]
+                        inputs.extra[pid_] = {**x_, "x": {**(x_.get("x") or {}), flag_: True}}
                 out(f"PnL of the day's trades: {split['split']} positions split, {split['opened']} opened today, "
                     f"{split['no_pnl']} without PnL")
                 if split["flagged"]:
