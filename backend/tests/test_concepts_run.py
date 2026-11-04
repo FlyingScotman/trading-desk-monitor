@@ -44,7 +44,7 @@ POSITION = {"id", "book", "assetClass", "segment", "instrType", "name", "isin", 
             "notValued",
             # a bond's
             "instrumentId", "accrued", "couponFreq", "yieldDate", "spreadCurve"}
-PNL = {"available", "reasonText", "carry", "rolldown", "rates", "convexity", "spread", "fx", "funding", "newTrades",
+PNL = {"available", "reasonText", "carry", "rolldown", "rates", "convexity", "spread", "fx", "fxPartial", "funding", "newTrades",
        "other", "reported", "explained", "method", "methodText"}
 
 

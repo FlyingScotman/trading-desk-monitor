@@ -51,7 +51,7 @@
   // учётными системами (поле ledger контракта, 08 §10). Данные: GET ../api/v1/cash?on=&days= (backend desk/cash.py).
   // Какая система основная — не задано: на расхождении остатка нет, и фондирование по нему не считается.
   const K = KIT, f = K.f, esc = K.esc;
-  K.top({ title: 'C15 · Остатки и расхождения', tag: 'остатки по книгам, сверка учётных систем' });
+  K.top({ title: 'C15 · Остатки и расхождения', tag: 'остатки по книгам, сверка учётных систем', filter: false, filterNote: 'остатки — по всем книгам' });
   const server = K.source === 'real' || K.source === 'empty';
   const STATUS = { match: 'сходится', break: 'расхождение', one_ledger: 'только в одной системе', single: 'одна система' };
   const view = document.getElementById('view'), daysEl = document.getElementById('days');

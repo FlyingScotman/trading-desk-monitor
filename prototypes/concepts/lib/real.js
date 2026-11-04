@@ -474,7 +474,7 @@
     } else {
       const z = v => v || 0;
       // кэрри — без фондирования (#168), фондирование — свой фактор: null (не посчитано) в сумме — 0, итог тот же
-      p.pnl = { carry: z(e.carry) + z(e.rolldown), funding: num(e.funding), rates: z(e.rates) + z(e.convexity), spread: z(e.spread), fx: z(e.fx), trading: z(e.newTrades),
+      p.pnl = { carry: z(e.carry) + z(e.rolldown), funding: num(e.funding), rates: z(e.rates) + z(e.convexity), spread: z(e.spread), fx: num(e.fx), fxPartial: !!e.fxPartial, trading: z(e.newTrades),
         other: z(e.other) + z(e.reported), total: z(e.explained), available: true, method: e.methodText || e.method || null };
       p.carryDay = (z(e.carry) + z(e.rolldown)) / accrualDays; p.fundingDay = e.funding == null ? null : e.funding / accrualDays; p.rollDay = z(e.rolldown) / accrualDays;
     }

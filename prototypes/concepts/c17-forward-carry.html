@@ -195,7 +195,7 @@
   function panel(title, extra, cls) { const p = h('div', 'k-panel ' + (cls || '')); p.innerHTML = '<div class="hd"><h3>' + title + '</h3><span class="sp"></span>' + (extra || '') + '</div><div class="bd"></div>'; return p; }
   function model() {
     const opts = { pos: M.pos, k: RK(), books: M.book, kindLabel: KIND, repr: K.repr };
-    const keepIds = new Set(K.list().map(p => p.id)), keep = C.keep(K.filter, M.book);
+    const keepIds = new Set(K.list().map(p => p.id)), keep = K.rowIn;
     const rows = C.rows(resp, opts).filter(r => r.p ? keepIds.has(r.id) : keep(r));
     return rows.concat(C.cashRows(resp, opts).filter(keep));
   }

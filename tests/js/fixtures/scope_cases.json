@@ -1,0 +1,27 @@
+{
+  "note": "Synthetic. One set of positions and filters for the server (backend/tests/test_scope_566.py) and the client (tests/js/scope_566.test.js): the effective portfolio and the positions under each filter are the same on both sides (TDM#566, #496).",
+  "books": {
+    "B1": {"entity": "E1", "desk": "D1", "type": "HTM"},
+    "B2": {"entity": "E1", "desk": "D1", "type": "TRADING"},
+    "B3": {"entity": "E2", "desk": "D2", "type": null}
+  },
+  "positions": [
+    {"id": "P1", "book": "B1", "ccy": "RUB", "reports": ["Торговый"], "portfolio": "HTM", "pnl": 100},
+    {"id": "P2", "book": "B1", "ccy": "RUB", "reports": [null], "portfolio": "HTM", "pnl": 10},
+    {"id": "P3", "book": "B2", "ccy": "RUB", "reports": ["HTM"], "portfolio": "HTM", "pnl": 30},
+    {"id": "P4", "book": "B2", "ccy": "USD", "reports": ["Старый", "Торговый"], "portfolio": "Торговый", "pnl": 7},
+    {"id": "P5", "book": "B2", "ccy": "RUB", "reports": [null], "portfolio": null, "pnl": 3},
+    {"id": "P6", "book": "B3", "ccy": "RUB", "reports": ["Торговый", null], "portfolio": "Торговый", "pnl": 1},
+    {"id": "P7", "book": "B3", "ccy": "USD", "reports": [], "portfolio": null, "pnl": 5}
+  ],
+  "filters": [
+    {"name": "none", "filter": {}, "expect": ["P1", "P2", "P3", "P4", "P5", "P6", "P7"]},
+    {"name": "without HTM", "filter": {"portsOff": ["HTM"]}, "expect": ["P4", "P5", "P6", "P7"]},
+    {"name": "book and without HTM", "filter": {"books": ["B2"], "portsOff": ["HTM"]}, "expect": ["P4", "P5"]},
+    {"name": "HTM book", "filter": {"books": ["B1"]}, "expect": ["P1", "P2"]},
+    {"name": "currency", "filter": {"ccy": "USD"}, "expect": ["P4", "P7"]},
+    {"name": "entity", "filter": {"entity": "E2"}, "expect": ["P6", "P7"]},
+    {"name": "desk and without portfolio", "filter": {"desk": "D1", "portsOff": ["—"]}, "expect": ["P1", "P2", "P3", "P4"]},
+    {"name": "no match", "filter": {"entity": "E1", "ccy": "EUR"}, "expect": []}
+  ]
+}

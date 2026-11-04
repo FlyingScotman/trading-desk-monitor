@@ -36,8 +36,9 @@ from ..pnl.reasons import (
     no_pnl_text,
 )
 from ..publish.funding_run import NOT_COMPUTED, STATUS_TEXT
-from ..publish.summary import fx_net
+from ..publish.summary import fx_net, fx_partial
 from .runs import PNL_KEYS, risk_notes, run_slice
+from .scope_rule import portfolio_map, portfolio_of
 
 RUB = {"ccy": "RUB", "rate": 1.0, "move_pct": 0.0, "rate_cbr": 1.0, "move_pct_cbr": 0.0}
 """The rouble's own rate row, first in ``FX`` (as compat)."""
@@ -52,9 +53,9 @@ POSITION_KEYS = (
 BOND_KEYS = ("instrumentId", "accrued", "couponFreq", "yieldDate", "spreadCurve")
 PNL_AMOUNTS = ("carry", "rolldown", "rates", "spread", "fx", "funding", "convexity", "newTrades", "other", "reported",
                "explained")
-PNL_KEYS_READ = (*PNL_AMOUNTS, "available", "reasonText", "method", "methodText")
+PNL_KEYS_READ = (*PNL_AMOUNTS, "fxPartial", "available", "reasonText", "method", "methodText")
 """A position's ``pnl`` as the pages read it: the amounts (all null without PnL, R10), whether it has one, why not and
-by which method."""
+by which method. ``fxPartial``: the FX is one of its two parts only (TDM#414, #566): the sum is incomplete."""
 EXTRA_KEYS_READ = ("assumptions", "core", "curve_proxy", "dm_bp", "funding", "g_spread_bp", "horizon_kind",
                    "index_fixings", "issue_size", "lat_name", "legs", "not_exact_reason", "offer_date", "offer_kind",
                    "ofz_basis01", "ofz_ruonia01", "pv_diff_rub", "quality", "quote", "reason", "reported",
@@ -122,7 +123,7 @@ def no_pnl(code: str, detail: str | None = None) -> dict[str, Any]:
     """A position's ``pnl`` without PnL (R10): every amount null, not 0, and why (``pnl.reasons``; the pages read
     only its text, not compat's ``reasonDetail``: ``no_pnl_reason_text`` says a change of discount curve with its
     curves, TDM#31)."""
-    return {**dict.fromkeys(PNL_AMOUNTS), "available": False, "reasonText": no_pnl_reason_text(code, detail),
+    return {**dict.fromkeys(PNL_AMOUNTS), "fxPartial": False, "available": False, "reasonText": no_pnl_reason_text(code, detail),
             "method": None, "methodText": None}
 
 
@@ -133,7 +134,7 @@ def _pnl(q: dict[str, Any]) -> dict[str, Any]:
     method = (q.get("extra") or {}).get("method")
     reported = comp["other"] if method == REPORTED_METHOD else 0.0
     return {"carry": comp["carry"], "rolldown": comp["rolldown"], "rates": comp["rates"], "spread": comp["spread"],
-            "fx": fx_net(q), "funding": q.get("funding"), "convexity": comp["convexity"],
+            "fx": fx_net(q), "fxPartial": fx_partial(q), "funding": q.get("funding"), "convexity": comp["convexity"],
             "newTrades": comp["new_trades"], "other": comp["other"] - reported, "reported": reported,
             "explained": sum(comp.values()), "available": True, "reasonText": None, "method": method,
             "methodText": METHOD_TEXT.get(method, method) if method else None}
@@ -279,11 +280,10 @@ def assemble(con, run: dict[str, Any]) -> dict[str, Any]:
             x["quasi"] = True
         issuers[disp[r["issuer"]]] = x
 
-    # the report's Portfolio column (x_portfolio) of every position, valued or not
-    portfolio = {r["position_id"]: r["portfolio"] for r in con.execute(
-        "SELECT position_id, x->>'x_portfolio' AS portfolio FROM position_input WHERE set_id = ANY(%s)"
-        " AND x ? 'x_portfolio'", (run["position_set_ids"] or [],))}
-
+    # the effective portfolio of every position, valued or not (TDM#566, scope_rule): the HTM type of its book, else
+    # the report's Portfolio column
+    book_types = {r["book_id"]: r.get("book_type") for r in ref.get("books", [])}
+    port_rows = portfolio_map(con, run["position_set_ids"])
     positions = []
     for row in prows:
         p, q = row["fact"], row["pnl"]
@@ -311,7 +311,7 @@ def assemble(con, run: dict[str, Any]) -> dict[str, Any]:
             "cs01": p.get("cs01") or 0.0, "ofzSpr01": p.get("ofz_spr01") or 0.0, "risk": risk,
             "fxDelta": {c: d for c, d in (p.get("fx_delta") or {}).items() if d},
             "counterparty": p.get("counterparty"), "newToday": bool(p.get("new_today")),
-            "entity": books.get(p["book_id"], {}).get("entity", "—"), "portfolio": portfolio.get(pid),
+            "entity": books.get(p["book_id"], {}).get("entity", "—"), "portfolio": portfolio_of(port_rows, book_types, p["book_id"], pid),
             "pnl": _pnl(q) if q else no_pnl(*_no_pnl_code(row["no_pnl"], run["prev_date"])),
         }
         if p.get("accrual_only"):
@@ -334,7 +334,7 @@ def assemble(con, run: dict[str, Any]) -> dict[str, Any]:
     for r in unvalued:
         i = inputs.get(r["position_id"])
         positions.append(_not_valued(r, books, {k: v for k, v in i.items() if k != "position_id"} if i else None,
-                                     portfolio.get(r["position_id"])))
+                                     portfolio_of(port_rows, book_types, r["book_id"], r["position_id"])))
     for c in dict.fromkeys(c for p in positions for c in p["risk"]):
         if c not in curves:  # a risk curve the run's reference lacks: shown without points, its risk never dropped
             curves[c] = {"name": c, "ccy": c.split()[0], "kind": "bond", "pts": [None] * len(B)}
