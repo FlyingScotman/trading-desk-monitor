@@ -342,7 +342,8 @@
     const hintp = el('p', null, 'hint'); hintp.id = 'svc-hist-msg-hint'; hintp.style.color = 'var(--warn)';
     const msg = el('p', null, 'hint'); msg.id = 'svc-hist-msg'; msg.setAttribute('role', 'status');
     const diag = el('details'); diag.id = 'svc-hist-diag'; diag.hidden = true; diag.append(el('summary', 'Диагностика', 'mut3'));
-    const stop = el('button', 'Остановить', 'lnk'); stop.type = 'button'; stop.id = 'svc-hist-stop'; stop.hidden = true;
+    const stop = el('button', 'Остановить запрос', 'lnk'); stop.type = 'button'; stop.id = 'svc-hist-stop'; stop.hidden = true;
+    stop.title = 'Догрузка продолжится со следующей даты через пару минут; чтобы выключить — снимите переключатель.';
     stop.addEventListener('click', () => cancel('feed'));
     next.append(' ', stop);
     host.append(row1, row2, hrs, row3, range, sum, app, next, hintp, msg, diag);

@@ -359,6 +359,8 @@ test('services block in Settings', {skip: pw ? false : 'нет Playwright'}, asy
         await o.pg.waitForFunction(() => /^Сейчас: 14\.10/.test((document.getElementById('svc-hist-next') || {}).textContent || ''));
         assert.strictEqual(await o.pg.locator('#svc-hist-stop').isVisible(), true);
         assert.match(await o.pg.locator('tr[data-feed=terms]').innerText(), /ждёт запроса прошлой даты/);
+        assert.strictEqual(await o.pg.locator('#svc-hist-stop').textContent(), 'Остановить запрос');
+        assert.match(await o.pg.locator('#svc-hist-stop').getAttribute('title'), /со следующей даты через пару минут; чтобы выключить — снимите переключатель/);
         await o.pg.locator('#svc-hist-stop').click();
         await o.pg.waitForFunction(() => true);
         await o.pg.waitForTimeout(200);
