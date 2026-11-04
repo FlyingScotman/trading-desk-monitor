@@ -37,6 +37,7 @@ from ..publish import ocp_run
 from ..publish.funding_run import NOT_COMPUTED, REPORTING_CCY, STATUS_TEXT
 from ..scenario import carry, jobs
 from ..scenario.definition import definition_hash, normalize
+from ..scenario.fx_ocp import fx_ocp
 from ..scenario.taylor import risk_payload
 from ..settings import REPO_ROOT
 from ..settings import load as load_settings
@@ -697,7 +698,9 @@ def create_app(store_url: str, static_dir: Path | None = None, app_dir: Path | N
                            (run_id,)).fetchall()
         ref = {r["kind"]: r["data"] for r in con.execute("SELECT kind, data FROM run_reference WHERE run_id = %s",
                                                          (run_id,))}
-        return _cached(request, run, RiskPayload(**risk_payload(run, rows, ref)))
+        payload = risk_payload(run, rows, ref)
+        payload["ocp"] = fx_ocp(concepts_run.ocp_status(ref.get("ocp")), payload, rows)  # TDM#577
+        return _cached(request, run, RiskPayload(**payload))
 
     # ---- bonds
     @app.get("/api/v1/bonds/history", response_model=BondHistory)

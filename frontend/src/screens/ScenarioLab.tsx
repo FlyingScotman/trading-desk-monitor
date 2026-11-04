@@ -5,6 +5,8 @@ import { ResidualTable, ResultTable } from '../components/ResultTable';
 import { type EditorState, ScenarioEditor, effective } from '../components/ScenarioEditor';
 import { StatusChip } from '../components/StatusChip';
 import { num, smln } from '../format';
+import { FxPanel } from '../components/FxPanel';
+import { fxShock } from '../taylor/fxshock';
 import { type NormDef, canon, normalize, runTaylor } from '../taylor/taylor';
 
 const ACCURACY_BP = 500;
@@ -63,7 +65,13 @@ export function ScenarioLab() {
   const norm = useMemo((): NormDef | string => {
     try { return normalize(effective(ed), payload?.curves); } catch (e) { return (e as Error).message; }
   }, [ed, payload]);
-  const taylor = useMemo(() => (payload && typeof norm !== 'string' ? runTaylor(payload, norm) : null), [payload, norm]);
+  const posTaylor = useMemo(() => (payload && typeof norm !== 'string' ? runTaylor(payload, norm) : null), [payload, norm]);
+
+  const result = job?.status === 'done' ? job.result : null;
+  // TDM#577: the FX column is the published OCP x the shock (non-linear derivatives apart); no OCP, the positions' FX deltas
+  const fx = useMemo(() => (payload && posTaylor && typeof norm !== 'string' ? fxShock(payload, norm, posTaylor, result) : null),
+    [payload, posTaylor, norm, result]);
+  const taylor = fx?.taylor ?? posTaylor;
 
   const stale = useMemo(() => {
     if (!job || typeof norm === 'string') return true;
@@ -83,10 +91,9 @@ export function ScenarioLab() {
 
   // Chips: share of MV with first-order Taylor only; largest move beyond the 2nd-order accuracy range.
   const absMv = payload?.positions.reduce((s, p) => s + Math.abs(p.pv_rub), 0) ?? 0;
-  const firstOnlyMv = payload && taylor
-    ? taylor.positions.reduce((s, r, i) => s + (r.second_order ? 0 : Math.abs(payload.positions[i].pv_rub)), 0) : 0;
-  const maxMove = taylor?.positions.reduce((m, r) => Math.max(m, r.max_move_bp), 0) ?? 0;
-  const result = job?.status === 'done' ? job.result : null;
+  const firstOnlyMv = payload && posTaylor
+    ? posTaylor.positions.reduce((s, r, i) => s + (r.second_order ? 0 : Math.abs(payload.positions[i].pv_rub)), 0) : 0;
+  const maxMove = posTaylor?.positions.reduce((m, r) => Math.max(m, r.max_move_bp), 0) ?? 0;
   const cov = result?.coverage;
   const tot = result?.totals._total;
   const missingTitle = cov?.missing.map(m => `${m.position_id}: ${m.reason}`).join('\n');
@@ -110,7 +117,7 @@ export function ScenarioLab() {
           {payload && taylor && (
             <div className="panel">
               <div className="hero">
-                <div><div className="lbl">PnL сценария, Тейлор</div>
+                <div><div className="lbl">PnL сценария, Тейлор{fx?.mode === 'ocp' ? ' · FX от ОВП' : ''}</div>
                   <div className="big approx">{smln(taylor.totals._total?.total ?? 0, 1)}<small>млн ₽</small></div></div>
                 {tot && (
                   <div className={stale ? 'stale' : undefined}
@@ -141,10 +148,15 @@ export function ScenarioLab() {
                   Посчитать точно
                 </button>
               </div>
-              <div className="ph"><h3>По книгам</h3><span className="hint">млн ₽ · ≈ — разложение Тейлора</span></div>
+              <div className="ph"><h3>По книгам</h3><span className="hint">млн ₽ · ≈ — разложение Тейлора{fx?.mode === 'ocp'
+                ? ' · столбец FX — ОВП × шок, без нелинейных деривативов' : ' · столбец FX — от валютных дельт позиций'}</span></div>
               <ResultTable taylor={taylor} result={result} stale={stale} />
+              {fx?.mode === 'ocp' && result && <p className="note">Точный расчёт переоценивает позиции целиком: FX в нём идёт от их
+                валютных дельт, а не от ОВП. С итогом «≈» выше он напрямую не сравнивается.</p>}
             </div>
           )}
+
+          {payload && fx && <FxPanel fx={fx} result={result} stale={stale} />}
 
           {payload && result && (
             <div className="panel">
