@@ -909,7 +909,12 @@ def update_settings_json(changes: dict[str, Any], home: Path | None = None) -> d
     except SettingsError:
         doc, broken = {}, True
     if "off_report_derivatives" in changes:
-        doc.pop("fx_unlinked_terms", None)  # TDM#468: the new switch replaces the old flag, whatever the value
+        # TDM#468: the new switch replaces the old flag, whatever the value. «Exclude» chosen as the default while the
+        # old flag is still on (in the file or the environment) is kept as an explicit ``exclude``: it beats the old flag
+        legacy = doc.pop("fx_unlinked_terms", None) is True or (
+            os.environ.get("DESK_FX_UNLINKED_TERMS", "").strip().lower() in _TRUE)
+        if legacy and changes["off_report_derivatives"] in (None, ""):
+            changes = {**changes, "off_report_derivatives": "exclude"}
     for k, v in changes.items():
         if k in READ_ONLY_KEYS:
             continue  # read-only or secret: never stored

@@ -337,9 +337,9 @@ def eod_run(settings: Settings, d: str, *, snapshots: str | Path | None = None, 
             if orp["trades"]:
                 out(f"trade_terms: derivatives outside the positions report included: {orp['included']}, valued "
                     f"{orp['valued']}, unreadable terms {orp['invalid']}")
-        elif orp["trades"]:
-            out(f"WARN trade_terms: {orp['trades']} derivative(s) outside the positions report excluded by the setting "
-                f"(off_report_derivatives): " + ", ".join(t.key for t in bp.off_report[:10]))
+        elif orp["excluded"]:
+            out(f"WARN trade_terms: {orp['excluded']} derivative(s) outside the positions report excluded by the setting "
+                "(off_report_derivatives): " + ", ".join(t.key for t in bp.off_report if t.state == "excluded")[:300])
         if orp["suspect"]:
             out(f"WARN trade_terms: possibly already in the positions report, not included: {orp['suspect']}: "
                 + ", ".join(t.key for t in bp.off_report if t.state == "suspect")[:300])

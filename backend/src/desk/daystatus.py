@@ -477,7 +477,7 @@ def _facts(con: psycopg.Connection, settings: Settings, lo: date, hi: date, *,
                 " lineage #> '{positions,off_report}' FROM run WHERE run_id = %s", (x["default_run_id"],)).fetchone()
             x["unlinked_swaps"] = int(swaps or 0)  # TDM#468: swap terms no positions row names, not valued
             # TDM#468: the derivatives off the positions report; a run before the switch has only the swaps above
-            x["off_report"] = ({k: orp.get(k) for k in ("mode", "trades", "included", "valued", "suspect", "invalid")}
+            x["off_report"] = ({k: orp.get(k) for k in ("mode", "trades", "excluded", "included", "valued", "suspect", "invalid")}
                                if isinstance(orp, dict) else None)
             x["default_set_ids"] = sorted(ids or [])
             x["run_behind"] = x["default_set_ids"] != store.current_sets(con, d)[0]
@@ -519,20 +519,22 @@ def _rate(x: dict[str, Any]) -> dict[str, Any]:
         warn.append(f"книг без позиций: {x['books_no_positions']}")
     if x["books_rows_differ"]:
         warn.append(f"в прогоне не все строки позиций: книг {x['books_rows_differ']}")
+    info: list[str] = []
     if (orp := x.get("off_report")) is not None:
         if orp.get("mode") == "include":
-            if orp.get("trades"):
-                warn.append(f"деривативы вне отчёта позиций включены настройкой: сделок {orp['trades']}, "
+            if orp.get("trades"):  # chosen by the owner and valued: not a problem, a line
+                info.append(f"деривативы вне отчёта позиций включены настройкой: сделок {orp['trades']}, "
                             f"включено {orp.get('included') or 0}, оценено {orp.get('valued') or 0}")
-        elif orp.get("trades"):
-            warn.append(f"деривативы вне отчёта позиций исключены настройкой: сделок {orp['trades']}")
+        elif orp.get("excluded"):
+            warn.append(f"деривативы вне отчёта позиций исключены настройкой: сделок {orp['excluded']}")
         if orp.get("suspect"):
             warn.append(f"возможно, уже в отчёте позиций, не включены: сделок {orp['suspect']}")
     elif x.get("unlinked_swaps"):
         warn.append(f"условия свопов и РЕПО без строки позиций, не оцениваются: сделок {x['unlinked_swaps']}")
     if not x["eod_final"]:
         warn.append("нет окончательного закрытия хаба")
-    return {"state": "bad" if bad else "warn" if warn else "ok", "problems": bad, "warnings": warn}
+    return {"state": "bad" if bad else "warn" if warn else "ok", "problems": bad, "warnings": warn,
+            "info": info}
 
 
 def day(con: psycopg.Connection, settings: Settings, on: date | None = None) -> dict[str, Any]:

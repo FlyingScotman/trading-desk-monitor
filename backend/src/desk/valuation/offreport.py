@@ -13,6 +13,8 @@ into risk, PnL and OCP as any other position).
   books with positions and, with ``BOOKS_WITHOUT_REPORT``, from the books of ``PositionInputs.other_book_terms``;
 - a trade whose last date is more than ``FLOW_DAYS`` before the date is dropped (counted as ``matured``): its last day
   is a row (PV 0) for ``FLOW_DAYS`` after it, as for a linked trade (``derivatives._settled_row``);
+- with ``exclude`` a trade whose last date is before the date (closed within ``FLOW_DAYS``) is ``closed``: not a gap, only
+  counted; with ``include`` it is ``included`` (its last day has a PnL);
 - state ``invalid`` when its terms cannot be read (the reason in ``why``); ``suspect`` when it looks like a deal the
   positions already have: its number is the ``deal_id`` or ``position_id`` of a row of another book, or a row of the
   same book of the same kind (FX / other), currency and date has no terms (it is not included, to count nothing
@@ -25,8 +27,9 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 from collections import defaultdict
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import date, timedelta
 from typing import TYPE_CHECKING, Any
 
@@ -43,7 +46,13 @@ SUSPECT_ARE_INCLUDED = False
 already in the positions report»."""
 LIST_MAX = 200
 """The longest list of trades in the run's lineage."""
-STATES = ("excluded", "included", "suspect", "invalid")
+STATES = ("excluded", "included", "suspect", "invalid", "closed")
+LISTED_FIRST = ("suspect", "invalid", "excluded")
+"""The states a screen lists, first when the list is cut."""
+GAP_KINDS = {"fx_forward": "fx_forward", "fx_swap": "fx_swap", "ccs": "swap"}
+"""Kinds of trades whose nominal the OCP takes out of the report's base when it gives the kind apart (``ocp.derivatives_ccy``
+of the report) -> that kind in the report."""
+SAME_AMOUNT = 1e-6
 MODES = ("exclude", "include")
 LABELS = {"irs": "IRS", "ois": "OIS", "ccs": "CCS", "repo": "REPO", "fx_forward": "FX forward", "fx_swap": "FX swap"}
 
@@ -113,19 +122,35 @@ def _rows(inputs: PositionInputs) -> list[tuple[str, str, dict[str, Any]]]:
     return out
 
 
+def _amounts(ts: list[dict[str, Any]], ccy: str) -> list[float]:
+    """The unsigned amounts of a trade's legs in ``ccy`` (and their sum): what a row's ``amount_ccy`` could be."""
+    out = []
+    for t in ts:
+        for k, a in (("base_ccy", "notional_base"), ("quote_ccy", "notional_quote"), ("ccy", "notional_ccy")):
+            if dv._ccy(t.get(k)) == ccy and (v := dv._num(t.get(a))) is not None:
+                out.append(abs(v))
+    return [*out, math.fsum(out)] if out else out
+
+
 def _suspect(book: str, trade: str, ts: list[dict[str, Any]], is_fx: bool, last: date | None,
              rows: list[tuple[str, str, dict[str, Any]]], linked: dict[str, Any], ids: dict[str, set[str]],
              ccys: set[str]) -> str:
-    if ids.get(trade, set()) - {book}:
-        return f"the number {trade} is a deal or position of the positions report in another book"
+    if ids.get(trade):
+        where = "another book" if ids[trade] - {book} else "this book"
+        return f"the number {trade} is a deal or position of the positions report in {where}"
     ends = {e for t in ts if (e := _leg_end(t)) is not None} or ({last} if last else set())
     for pid, rbook, x in rows:
         if rbook != book or pid in linked or (_row_class(x) == "fx") != is_fx:
             continue
         end = x.get("value_date") if is_fx else x.get("maturity_date")
         c = dv._ccy(x.get("ccy"))
-        if end is not None and end in ends and c in ccys:
-            return f"the positions report has a row {pid} of the same kind, currency {c} and date {end} without terms"
+        if end is None or end not in ends or c not in ccys:
+            continue
+        amount = x.get("amount_ccy")
+        if amount is not None and not any(abs(abs(float(amount)) - a) <= SAME_AMOUNT * max(a, 1.0)
+                                          for a in _amounts(ts, c or "")):
+            continue  # the same kind, currency and date, but another amount: another deal
+        return f"the positions report has a row {pid} of the same kind, currency {c} and date {end} without terms"
     return ""
 
 
@@ -160,14 +185,17 @@ def off_report_trades(inputs: PositionInputs, on: date, include: bool = True) ->
             except (TypeError, ValueError):
                 pass
         is_fx = set(kinds) <= set(dv.FX_KINDS)
-        state, why = ("included" if include else "excluded"), ""
+        state, why = ("included" if include else "closed" if last is not None and last < on else "excluded"), ""
         try:
             dv.request_of(f"{book}|{trade}", book, {}, ts)
         except dv.NotValued as e:
             state, why = "invalid", str(e)
         else:
             if why := _suspect(book, trade, ts, is_fx, last, rows, linked, ids, _leg_ccys(ts)):
-                state = "suspect" if not SUSPECT_ARE_INCLUDED else state
+                if state != "closed" and not SUSPECT_ARE_INCLUDED:
+                    state = "suspect"
+                else:
+                    why = ""
         out.append(OffReportTrade(book, trade, kinds, last, min(dates) if dates else None, state, why,
                                   book not in inputs.valid_dates, tuple(ts)))
     return out, matured
@@ -177,7 +205,7 @@ def row_of(t: OffReportTrade) -> dict[str, Any]:
     """The positions row the plan gives an included trade (``positions._derivatives``): a synthetic row, which core
     values from the trade's terms (``derivatives.request_of``). ``off_report`` and ``trade_date`` say where it comes from."""
     ccys = _leg_ccys(list(t.terms))
-    ccy = sorted(ccys)[0] if ccys else "RUB"
+    ccy = min(ccys) if ccys else "RUB"
     ts = t.terms
     if t.is_fx:
         name = f"{ts[0].get('base_ccy')}/{ts[0].get('quote_ccy')} {LABELS.get(t.kinds[0], t.kinds[0])} {t.trade_id}"
@@ -192,18 +220,28 @@ def row_of(t: OffReportTrade) -> dict[str, Any]:
 
 
 def summary(trades: list[OffReportTrade], matured: int, mode: str, valued: int = 0) -> dict[str, Any]:
-    """``lineage.positions.off_report``: the switch, the counts and the list (at most ``LIST_MAX``)."""
+    """``lineage.positions.off_report``: the switch, the counts and the list (at most ``LIST_MAX``, the suspect, unreadable
+    and excluded first). ``trades`` leaves out the closed ones (``closed``: a trade that ended within ``FLOW_DAYS`` and
+    is not valued: not a gap). ``gap_trades``: (book, trade_id, kind) of the excluded FX trades and CCS, whole, for the
+    OCP gap (``publish.ocp_run``); not for the lineage."""
+    live = [t for t in trades if t.state != "closed"]
     by_book: dict[str, int] = defaultdict(int)
     by_kind: dict[str, int] = defaultdict(int)
-    for t in trades:
+    for t in live:
         by_book[t.book] += 1
         by_kind[t.kind] += 1
-    count = lambda s: sum(t.state == s for t in trades)  # noqa: E731
-    return {"mode": mode, "trades": len(trades), "books": dict(sorted(by_book.items())),
+
+    def count(state: str) -> int:
+        return sum(t.state == state for t in trades)
+
+    first = sorted(live, key=lambda t: LISTED_FIRST.index(t.state) if t.state in LISTED_FIRST else len(LISTED_FIRST))
+    return {"mode": mode, "trades": len(live), "books": dict(sorted(by_book.items())),
             "by_kind": dict(sorted(by_kind.items())), "included": count("included"), "valued": valued,
             "suspect": count("suspect"), "invalid": count("invalid"), "excluded": count("excluded"),
-            "matured": matured, "list": [t.entry() for t in trades[:LIST_MAX]],
-            **({"list_truncated": len(trades)} if len(trades) > LIST_MAX else {})}
+            "closed": count("closed"), "matured": matured, "list": [t.entry() for t in first[:LIST_MAX]],
+            **({"list_truncated": len(live)} if len(live) > LIST_MAX else {}),
+            "gap_trades": [[t.book, t.trade_id, k] for t in live if t.state == "excluded"
+                           for k in t.kinds if k in GAP_KINDS]}
 
 
 def canon_terms(rows: list[dict[str, Any]]) -> list[str]:
@@ -211,20 +249,30 @@ def canon_terms(rows: list[dict[str, Any]]) -> list[str]:
                              sort_keys=True, default=str) for r in rows)
 
 
-def stamp(inputs: PositionInputs, on: date, mode: str) -> PositionInputs:
+def _live_keys(inputs: PositionInputs, on: date) -> list[str]:
+    trades, _ = off_report_trades(inputs, on, True)
+    return sorted(t.key for t in trades if t.state in ("included", "suspect"))
+
+
+def stamp(inputs: PositionInputs, on: date, mode: str, prev: PositionInputs | None = None,
+          prev_on: date | None = None) -> PositionInputs:
     """``inputs`` with the off-report switch in ``private_inputs_hash`` (``trades.intraday_inputs``, the one place every
-    run and every comparison of a run's hash goes through): with ``include`` and trades included or suspect on ``on``,
-    the hash also covers the mode, their keys and the terms of those of books without positions, so a switch recomputes
-    the dates it changes. ``exclude``, or no such trades: unchanged."""
+    run and every comparison of a run's hash goes through): with ``include`` and trades included or suspect on ``on``
+    (or on the day before, ``prev``: the PnL of ``on`` is measured against its valuation, so a trade that was off the
+    report then and is in it now changes the PnL), the hash also covers the mode, their keys and the terms of those of
+    books without positions, so a switch recomputes the dates it changes. ``exclude``, or no such trades: unchanged."""
     if mode != "include":
         return inputs
     trades, _ = off_report_trades(inputs, on, True)
     live = [t for t in trades if t.state in ("included", "suspect")]
-    if not live:
+    before = _live_keys(prev, prev_on) if prev is not None and prev_on is not None else []
+    if not live and not before:
         return inputs
     extra_terms = [r for r in inputs.other_book_terms if any(
         str(r.get("book_id")) == t.book and str(r.get("trade_id")) == t.trade_id for t in live if t.other_book)]
-    canon = json.dumps([inputs.private_inputs_hash, "off_report:include", sorted(t.key for t in live),
-                        canon_terms(extra_terms)], sort_keys=True, separators=(",", ":"), ensure_ascii=False)
-    from dataclasses import replace
+    parts: list[Any] = [inputs.private_inputs_hash, "off_report:include", sorted(t.key for t in live),
+                        canon_terms(extra_terms)]
+    if before:
+        parts.append({"previous": before})
+    canon = json.dumps(parts, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
     return replace(inputs, private_inputs_hash=hashlib.sha256(canon.encode()).hexdigest())

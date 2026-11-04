@@ -208,9 +208,9 @@ def off_report(con, run: dict[str, Any]) -> dict[str, Any] | None:
     pos = (run.get("lineage") or {}).get("positions") or {}
     o = pos.get("off_report")
     if isinstance(o, dict):
-        listed = [t for t in o.get("list") or [] if t.get("state") != "included"]
+        listed = [t for t in o.get("list") or [] if t.get("state") not in ("included", "closed")]
         return {**{k: o.get(k) for k in ("mode", "trades", "included", "valued", "suspect", "invalid", "excluded",
-                                         "matured", "books")}, "list": listed,
+                                         "closed", "matured", "books")}, "list": listed,
                 "truncated": bool(o.get("list_truncated"))}
     u = pos.get("unlinked_swap_terms")
     if isinstance(u, dict) and u.get("trades"):

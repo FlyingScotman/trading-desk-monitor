@@ -122,9 +122,9 @@ test('деривативы вне отчёта позиций в браузер�
           const label = await pg.evaluate(id => { const p = MOCK.pos[id]; return KIT.nameCell(p, p.name) + KIT.offReportTag(p); }, ID);
           assert.ok(/>вне</.test(label) && /вне отчёта позиций: оценена по условиям сделки/.test(label), label);
           const notes = await pg.evaluate(() => MOCK.notes.filter(n => /отчёте позиций|вне отчёта/i.test(n)));
-          assert.ok(notes.some(n => /исключены настройкой: сделок 3/.test(n)) && notes.some(n => /Возможно, уже в отчёте позиций/.test(n)), notes.join('|'));
+          assert.ok(notes.some(n => /исключены настройкой: сделок 2/.test(n)) && notes.some(n => /Возможно, уже в отчёте позиций/.test(n)), notes.join('|'));
           const html = await pg.evaluate(() => KIT.coverageHtml());
-          assert.ok(/Деривативы вне отчёта позиций: 3/.test(html) && /Настройки → Допущения расчёта/.test(html) && /возможно, уже в отчёте позиций/.test(html), html.slice(0, 300));
+          assert.ok(/Деривативы вне отчёта позиций: 3/.test(html) && /Настройки → Допущения расчёта/.test(html) && /возможно, уже в отчёте/.test(html) && /форвард/.test(html) && !/fx_forward/.test(html), html.slice(0, 300));
           assert.ok(/S7/.test(html) && /15\.03\.2027/.test(html));
           await pg.evaluate(id => KIT.card(id), ID);
           const drawer = pg.locator('.k-drawer').last();
@@ -133,7 +133,9 @@ test('деривативы вне отчёта позиций в браузер�
           await shot(pg, 'card-' + width);
           await pg.evaluate(() => document.querySelectorAll('.k-drawer').forEach(d => d.remove()));
           const nb = pg.locator('[data-a=notes]');
-          if (await nb.count()) { await nb.first().evaluate(e => e.click()); await shot(pg, 'notes-' + width); assert.ok(await noHScroll(pg)); }
+          if (await nb.count()) { await nb.first().evaluate(e => e.click()); await shot(pg, 'notes-' + width); assert.ok(await noHScroll(pg));
+            const fits = await pg.evaluate(() => { const p = document.querySelector('.k-panel'); const th = [...p.querySelectorAll('th')].find(x => x.textContent === 'Состояние'); const r = th.getBoundingClientRect(); return p.scrollWidth <= p.clientWidth + 1 && r.right <= innerWidth + 1 && r.left >= 0; });
+            assert.ok(fits, 'столбец «Состояние» виден без прокрутки'); }
           assert.deepStrictEqual(errors, []);
         } finally { await ctx.close(); }
       });

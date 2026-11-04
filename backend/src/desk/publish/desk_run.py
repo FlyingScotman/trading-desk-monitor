@@ -100,6 +100,9 @@ def publish(con: psycopg.Connection, ctx: EodContext, positions: list[tuple[str,
     carried = sum(1 for s in spreads if (c := (carried_from or {}).get(s.secid)) and c.z_spread_bp == s.z_spread_bp)
     bd = business_date or ctx.business_date
     swaps = _unlinked_swaps(unlinked_rates)
+    block = ({k: v for k, v in off_report.items() if k != "gap_trades"}
+             if off_report and (off_report["trades"] or off_report["matured"] or off_report["closed"]
+                                or off_report["mode"] == "include") else None)
     lineage = {
         **ctx.lineage(), "backend_version": BACKEND_VERSION, "backend_git_sha": git_sha(),
         "core_version": CORE_VERSION, "logic_version": logic_version(),
@@ -110,8 +113,7 @@ def publish(con: psycopg.Connection, ctx: EodContext, positions: list[tuple[str,
                       "sources": inputs.sources,
                       **({"trade_terms": inputs.trade_terms_units} if inputs.trade_terms_units else {}),
                       **({"unlinked_swap_terms": swaps} if swaps else {}),
-                      **({"off_report": off_report} if off_report and (
-                          off_report["trades"] or off_report["matured"] or off_report["mode"] == "include") else {})},
+                      **({"off_report": block} if block else {})},
         "core_results": [{"result_sha256": sha, "schema": r.schema_version, "label": r.run_id.rsplit("-", 1)[-1]}
                          for sha, r in results.items()],
         "model_spreads": {"carried": carried, "new": len(spreads) - carried},
@@ -124,17 +126,18 @@ def publish(con: psycopg.Connection, ctx: EodContext, positions: list[tuple[str,
     if bd != ctx.business_date:  # the morning run (#21): the close the book of ``bd`` is valued on
         lineage["market_close"] = {"date": ctx.business_date.isoformat(), "cut_type": ctx.market.snapshot.cut_type}
     content = run_content(ctx, positions, prev, lineage, inputs)
-    if off_report and (off_report["trades"] or off_report["matured"]) and off_report["mode"] == "include":
-        content.log.append(("INFO", f"деривативы вне отчёта позиций включены настройкой: сделок {off_report['trades']}, "
-                                    f"включено {off_report['included']}, оценено {off_report['valued']}"))
-    elif off_report and off_report["trades"]:
-        content.log.append(("WARN", f"деривативы вне отчёта позиций исключены настройкой: сделок {off_report['trades']}, "
-                                    "книги " + ", ".join(f"{b} ({n})" for b, n in off_report["books"].items())
-                                    + "; не входят в риск, PnL и ОВП (Настройки, Допущения расчёта)"))
-    if off_report and off_report["suspect"]:
-        content.log.append(("WARN", f"возможно, уже в отчёте позиций: сделок {off_report['suspect']}; не включены, "
-                                    "чтобы не посчитать дважды"))
-    if swaps and not (off_report and off_report["mode"] == "include"):
+    if block and block["mode"] == "include":
+        if block["trades"]:
+            content.log.append(("INFO", (f"деривативы вне отчёта позиций включены настройкой: сделок {block['trades']}, "
+                                         f"включено {block['included']}, оценено {block['valued']}")))
+    elif block and block["excluded"]:
+        books = ", ".join(f"{b} ({n})" for b, n in block["books"].items())
+        content.log.append(("WARN", (f"деривативы вне отчёта позиций исключены настройкой: сделок {block['excluded']}, "
+                                     f"книги {books}; не входят в риск, PnL и ОВП (Настройки, Допущения расчёта)")))
+    if block and block["suspect"]:
+        content.log.append(("WARN", (f"возможно, уже в отчёте позиций: сделок {block['suspect']}; не включены, "
+                                     "чтобы не посчитать дважды")))
+    if swaps and block is None:  # with the block the swaps are in it (no second line for the same trades)
         content.log.append(("WARN", (
             f"условия свопов и РЕПО без строки позиций: сделок {swaps['trades']}, книги "
             + ", ".join(f"{b} ({n})" for b, n in swaps["books"].items())

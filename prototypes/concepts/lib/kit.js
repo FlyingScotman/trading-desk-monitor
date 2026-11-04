@@ -1205,13 +1205,16 @@
     return out;
   };
   // деривативы вне отчёта позиций (TDM#468): исключённые настройкой, «возможно, уже в отчёте» и с неразобранными условиями
-  const OR_STATE = { excluded: 'исключена настройкой', suspect: 'возможно, уже в отчёте позиций', invalid: 'условия не разобраны' };
+  const OR_STATE = { excluded: 'исключена', suspect: 'возможно, уже в отчёте', invalid: 'условия не разобраны' };
+  const OR_KIND = { fx_forward: 'форвард', fx_swap: 'FX-своп', irs: 'IRS', ois: 'OIS', ccs: 'CCS', repo: 'РЕПО' };
+  K.offKind = k => String(k || '').split('+').map(x => OR_KIND[x] || x).join(' + ');
   K.offReportHtml = () => {
     const O = M.offReport, L = O && O.list || [];
     if (!L.length) return '';
+    const td = 'style="padding:3px 4px;white-space:normal;overflow-wrap:anywhere"';
     return '<div class="k-sec">Деривативы вне отчёта позиций: ' + L.length + (O.truncated ? '+' : '') + ' <span class="sp"></span><span class="mut3" style="text-transform:none;letter-spacing:0">' + (O.mode === 'include' ? 'не включены' : 'включить: Настройки → Допущения расчёта') + '</span></div>' +
-      '<table class="k-tbl k-compact" style="width:100%"><thead><tr><th>Книга</th><th>Сделка</th><th>Вид</th><th>Погашение</th><th>Состояние</th></tr></thead><tbody>' +
-      L.map(t => '<tr><td class="mut">' + esc(t.book) + '</td><td class="mono">' + esc(t.trade_id) + '</td><td class="mut">' + esc(t.kind) + '</td><td class="mut">' + esc(t.maturity ? dmy(t.maturity) : '—') + '</td><td class="mut3" title="' + esc(t.why || '') + '">' + esc(OR_STATE[t.state] || t.state) + '</td></tr>').join('') + '</tbody></table>';
+      '<table class="k-tbl k-compact" style="width:100%;table-layout:fixed;font-size:12px"><colgroup><col style="width:17%"><col style="width:27%"><col style="width:24%"><col style="width:32%"></colgroup><thead><tr><th style="white-space:normal;padding:3px 4px">Книга</th><th style="white-space:normal;padding:3px 4px">Сделка</th><th style="white-space:normal;padding:3px 4px">Погашение</th><th style="white-space:normal;padding:3px 4px">Состояние</th></tr></thead><tbody>' +
+      L.map(t => '<tr><td class="mut" ' + td + '>' + esc(t.book) + '</td><td ' + td + '><span class="mono">' + esc(t.trade_id) + '</span><div class="mut3">' + esc(K.offKind(t.kind)) + '</div></td><td class="mut" ' + td + '>' + esc(t.maturity ? dmy(t.maturity) : '—') + '</td><td class="mut3" ' + td + ' title="' + esc(t.why || '') + '">' + esc(OR_STATE[t.state] || t.state) + '</td></tr>').join('') + '</tbody></table>';
   };
   // список позиций группы: имя, книга, валюта, тип, причина (p.estReason — extra прогона, lib/real.js); строка — карточка позиции
   K.posList = function (title, ids, sub) {

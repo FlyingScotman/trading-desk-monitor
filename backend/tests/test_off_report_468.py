@@ -42,6 +42,8 @@ from desk.valuation import positions as pv1
 FIX = Path(__file__).parent / "fixtures" / "mdhub_v1_4"
 BD = date(2026, 10, 15)
 PREV = date(2026, 10, 14)
+B = date(2026, 10, 15)  # the OCP report's date (test_ocp_base_plus_day)
+D = date(2026, 10, 16)
 
 
 @pytest.fixture(scope="module")
@@ -175,13 +177,19 @@ def test_a_trade_that_looks_like_one_of_the_report_is_not_included(monkeypatch):
     rows = [LINKED_ROW,
             ("OTH|P9", "OTH", {"asset_class": "fx", "ccy": "CNY", "amount_ccy": 1.0, "deal_id": "D7"}),
             # a row without terms of the same kind, currency and value date in the trade's book
-            ("FXB|NOTERMS", "FXB", {"asset_class": "fx", "ccy": "CNY", "amount_ccy": 2e6,
-                                    "value_date": date(2027, 1, 20)})]
+            ("FXB|NOTERMS", "FXB", {"asset_class": "fx", "ccy": "CNY", "amount_ccy": 10e6,
+                                    "value_date": date(2027, 1, 20)}),
+            # same kind, currency and date, another amount: another deal
+            ("FXB|OTHER", "FXB", {"asset_class": "fx", "ccy": "CNY", "amount_ccy": 3e6,
+                                  "value_date": date(2027, 3, 17)})]
     terms = [fxt("L1"), fxt("D7"), fxt("N1", vd="2027-01-20"), fxt("N2", vd="2027-03-17")]
     got = by_key(offreport.off_report_trades(mk(rows, terms), BD, True)[0])
     assert got["FXB|D7"].state == "suspect" and "another book" in got["FXB|D7"].why
     assert got["FXB|N1"].state == "suspect" and "NOTERMS" in got["FXB|N1"].why
-    assert got["FXB|N2"].state == "included"
+    assert got["FXB|N2"].state == "included"  # the row of 27.03 is for 3m CNY, not N2's 10m
+    own = by_key(offreport.off_report_trades(mk([LINKED_ROW, ("FXB|X", "FXB", {"asset_class": "bond", "deal_id": "N3"})],
+                                               [fxt("L1"), fxt("N3", vd="2027-05-17")]), BD, True)[0])
+    assert own["FXB|N3"].state == "suspect" and "this book" in own["FXB|N3"].why  # a row of any class, any book
     monkeypatch.setattr(offreport, "SUSPECT_ARE_INCLUDED", True)  # question 2, answer (b)
     assert by_key(offreport.off_report_trades(mk(rows, terms), BD, True)[0])["FXB|D7"].state == "included"
 
@@ -277,13 +285,28 @@ def test_the_hash_changes_only_with_include_and_such_trades():
     assert offreport.stamp(sus, BD, "include") is not sus
 
 
+def test_the_hash_of_a_day_covers_the_trades_included_on_the_day_before():
+    """A trade off the report on D-1 and in the report on D: nothing is included on D, yet the PnL of D depends on the
+    mode (D-1 values the trade as a row of its own), so switching changes the hash of D."""
+    on_d = mk([LINKED_ROW, ("FXB|N1", "FXB", {"asset_class": "fx", "ccy": "CNY", "amount_ccy": 1e7,
+                                              "value_date": date(2027, 1, 20), "deal_id": "N1"})],
+              [fxt("L1"), fxt("N1", vd="2027-01-20")])
+    on_prev = mk([LINKED_ROW], [fxt("L1"), fxt("N1", vd="2027-01-20")], on_date=PREV)
+    assert offreport.stamp(on_d, BD, "include") is on_d  # without D-1: nothing to say
+    stamped = offreport.stamp(on_d, BD, "include", on_prev, PREV)
+    assert stamped.private_inputs_hash != on_d.private_inputs_hash
+    assert offreport.stamp(on_d, BD, "exclude", on_prev, PREV) is on_d  # exclude: as before
+    nothing = mk([LINKED_ROW], [fxt("L1")], on_date=PREV)
+    assert offreport.stamp(on_d, BD, "include", nothing, PREV) is on_d
+
+
 def test_intraday_inputs_goes_through_the_stamp(monkeypatch):
     from types import SimpleNamespace
 
     from desk import trades
 
     inp = mk([LINKED_ROW], [fxt("L1"), fxt("N1", vd="2027-01-20")])
-    monkeypatch.setattr(trades.store, "positions_for", lambda con, day: inp)
+    monkeypatch.setattr(trades.store, "positions_for", lambda con, day, **kw: inp)
     off = SimpleNamespace(intraday_trades=False, off_report_derivatives="exclude")
     on_ = SimpleNamespace(intraday_trades=False, off_report_derivatives="include")
     h0 = trades.intraday_inputs(None, BD, off)[0].private_inputs_hash
@@ -379,15 +402,66 @@ def test_a_trade_held_as_an_off_report_row_is_not_counted_twice_in_the_ocp():
 
 
 def test_gap_of_the_excluded_fx_trades_and_ccs():
+    T = offreport.OffReportTrade
     summary = offreport.summary(
-        [offreport.OffReportTrade("B1", "T1", ("fx_forward",), BD, BD, "excluded"),
-         offreport.OffReportTrade("B2", "T2", ("ccs",), BD, BD, "excluded"),
-         offreport.OffReportTrade("B2", "T3", ("ois",), BD, BD, "excluded"),
-         offreport.OffReportTrade("B3", "T4", ("fx_forward",), BD, BD, "suspect")], 0, "exclude")
+        [T("B1", "T1", ("fx_forward",), BD, BD, "excluded"), T("B2", "T2", ("ccs",), BD, BD, "excluded"),
+         T("B2", "T3", ("ois",), BD, BD, "excluded"), T("B3", "T4", ("fx_forward",), BD, BD, "suspect"),
+         T("B1", "T5", ("fx_forward",), PREV, BD, "closed")], 0, "exclude")
     (gap,) = ocp_run._off_report_gap(summary)
-    assert gap["code"] == "off_report_excluded" and gap["items"] == ["B1 (1)", "B2 (1)"]
+    assert gap["code"] == "off_report_excluded" and gap["items"] == ["B1 (1)", "B2 (1)"]  # not the OIS, suspect, closed
     assert "вынесен из базы ОВП" in gap["text"]
     assert ocp_run._off_report_gap({**summary, "mode": "include"}) == [] and ocp_run._off_report_gap(None) == []
+    # the kind must be apart in the report of the book; a trade the trades dataset holds after the base is not a gap
+    (only,) = ocp_run._off_report_gap(summary, {"B1": {"fx_forward"}, "B2": {"fx_forward"}})
+    assert only["items"] == ["B1 (1)"]  # B2's CCS is a «swap» of the report, which B2 does not give apart
+    assert ocp_run._off_report_gap(summary, {"B1": {"fx_forward"}}, {("B1", "T1")}) == []
+    # counted from the whole list, not the one cut for the lineage
+    many = offreport.summary([T("B", f"T{i}", ("fx_forward",), BD, BD, "excluded") for i in range(250)], 0, "exclude")
+    assert len(many["list"]) == 200 and "(250)" in ocp_run._off_report_gap(many)[0]["items"][0]
+
+
+def test_a_trade_that_ended_is_closed_not_a_gap_and_the_list_puts_the_gaps_first():
+    ended = fxt("E1", vd="2026-10-10")  # its last day was five days ago
+    got, matured = offreport.off_report_trades(mk([LINKED_ROW], [fxt("L1"), ended, fxt("N1", vd="2027-01-20")]), BD, False)
+    assert matured == 0 and by_key(got)["FXB|E1"].state == "closed" and by_key(got)["FXB|N1"].state == "excluded"
+    s = offreport.summary(got, matured, "exclude")
+    assert (s["trades"], s["excluded"], s["closed"]) == (1, 1, 1) and [t["trade_id"] for t in s["list"]] == ["N1"]
+    inc, _ = offreport.off_report_trades(mk([LINKED_ROW], [fxt("L1"), ended]), BD, True)
+    assert by_key(inc)["FXB|E1"].state == "included"  # its last day has a PnL
+    # cut at 200: the suspect, unreadable and excluded come before the included
+    T = offreport.OffReportTrade
+    big = [T("B", f"I{i}", ("fx_forward",), BD, BD, "included") for i in range(250)] + [
+        T("B", "S", ("fx_forward",), BD, BD, "suspect"), T("B", "X", ("fx_forward",), BD, BD, "invalid")]
+    assert [t["trade_id"] for t in offreport.summary(big, 0, "include")["list"][:2]] == ["S", "X"]
+
+
+def test_the_ocp_counts_a_trade_held_as_an_off_report_row_once_whether_or_not_the_kind_is_apart(monkeypatch):
+    """A forward after the base date, in the ``trades`` dataset and, with the switch ``include``, as a row of its own:
+    it enters the published OCP once. Without the match (``held``) the apart kind counts it twice."""
+    from test_ocp_base_plus_day import BOOKS, REPORT, ROWS, UNITS, core_row
+    from test_ocp_base_plus_day import run as ocp
+
+    trade = {"trade_id": "F9", "status": "live", "trade_date": "2026-10-16", "book_id": "D1", "position_id": "D1|X",
+             "asset_class": "fx", "side": "buy", "amount_ccy": "200000", "ccy": "USD", "settle_date": "2026-12-16"}
+    row = core_row("D1|F9", "D1", {"USD": 195_000.0}, nominal={"USD": 200_000.0})
+    row["extra"].update(off_report=True, reported={"deal_id": "F9"})
+    no_split = [{k: v for k, v in r.items() if k != "derivatives_ccy"} for r in REPORT]
+    assert BOOKS and UNITS
+
+    def usd(report, rows, trades):
+        days = {B: O.BaseDay(B, run_id=1, trade_rows=trades)}
+        r = ocp(on=D, report=report, rows=rows, days=days, valid_dates={"D1": D, "T1": D})
+        return {(x["book_id"], x["ccy"]): x for x in r.published}[("D1", "USD")]["amount"]
+
+    # kind apart: the row's PV replaces the trade's nominal; the amount equals the row alone
+    assert usd(REPORT, [*ROWS, row], [trade]) == usd(REPORT, [*ROWS, row], []) == 825_000
+    assert usd(REPORT, ROWS, [trade]) == 830_000  # the trade alone: its nominal
+    monkeypatch.setattr(O, "off_report_held", lambda rows: {})
+    assert usd(REPORT, [*ROWS, row], [trade]) == 1_025_000  # without the match: twice
+    monkeypatch.undo()
+    # kind not apart: the base holds the kinds' nominal; the trade is counted once, the row's PV is not added
+    assert usd(no_split, [*ROWS, row], [trade]) == usd(no_split, ROWS, [trade]) == 340_000
+    assert usd(no_split, [*ROWS, row], []) == 140_000
 
 
 # --- lineage and the screens -------------------------------------------------------------------------------------
@@ -415,12 +489,18 @@ def test_daystatus_warns_by_mode_and_reads_old_runs():
         x["inputs"] = {}
         return daystatus._rate(x)["warnings"]
 
+    def info(**kw):
+        x = daystatus._facts_empty()
+        x.update(default_run_id=1, current_run_id=1, positions_in_force=True, eod_final=True, inputs={}, **kw)
+        return daystatus._rate(x)["info"]
+
     assert rate() == []
-    ex = {"mode": "exclude", "trades": 3, "included": 0, "valued": 0, "suspect": 1, "invalid": 0}
+    ex = {"mode": "exclude", "trades": 3, "excluded": 3, "included": 0, "valued": 0, "suspect": 1, "invalid": 0}
     assert rate(off_report=ex) == ["деривативы вне отчёта позиций исключены настройкой: сделок 3",
                                    "возможно, уже в отчёте позиций, не включены: сделок 1"]
     inc = {"mode": "include", "trades": 3, "included": 2, "valued": 2, "suspect": 0, "invalid": 0}
-    assert rate(off_report=inc) == ["деривативы вне отчёта позиций включены настройкой: сделок 3, включено 2, оценено 2"]
+    assert rate(off_report=inc) == []  # chosen by the owner and valued: a line of the status, not a warning
+    assert info(off_report=inc) == ["деривативы вне отчёта позиций включены настройкой: сделок 3, включено 2, оценено 2"]
     assert rate(unlinked_swaps=2) == ["условия свопов и РЕПО без строки позиций, не оцениваются: сделок 2"]  # an old run
 
 
@@ -443,14 +523,28 @@ def test_the_run_carries_the_block_and_the_log_says_it(ctx0, store_url):
                                                 core_results=[bp.core_result], off_report=summ)
             lineage = con.execute("SELECT lineage FROM run WHERE run_id = %s", (rid,)).fetchone()[0]
             out[include] = (summ, warnings, coverage.off_report(con, {"lineage": lineage}), lineage["positions"])
-    ex_summ, ex_warn, ex_cov, ex_pos = out[False]
+    _, ex_warn, ex_cov, ex_pos = out[False]
     assert ex_pos["off_report"]["mode"] == "exclude" and ex_pos["off_report"]["excluded"] == 1
     assert ex_pos["off_report"]["suspect"] == 1 and ex_pos["off_report"]["list"][0]["trade_id"] == "D7"
-    assert any(w.startswith("деривативы вне отчёта позиций исключены настройкой: сделок 2") for w in ex_warn)
+    assert any(w.startswith("деривативы вне отчёта позиций исключены настройкой: сделок 1") for w in ex_warn)
     assert any(w.startswith("возможно, уже в отчёте позиций: сделок 1") for w in ex_warn)
     assert ex_cov["mode"] == "exclude" and {t["state"] for t in ex_cov["list"]} == {"excluded", "suspect"}
-    in_summ, in_warn, in_cov, in_pos = out[True]
+    _, in_warn, in_cov, in_pos = out[True]
     assert in_pos["off_report"]["mode"] == "include" and in_pos["off_report"]["included"] == 1
     assert in_pos["off_report"]["valued"] == 1
     assert any(w.startswith("возможно, уже в отчёте позиций") for w in in_warn)
     assert [t["trade_id"] for t in in_cov["list"]] == ["D7"]  # the included one is a position, not a gap
+
+
+def test_choosing_the_default_while_the_old_flag_is_on_keeps_an_explicit_exclude(home, monkeypatch):
+    update_settings_json({"fx_unlinked_terms": True}, home)
+    update_settings_json({"off_report_derivatives": None}, home)  # the page's «исключать (по умолчанию)»
+    assert load().off_report_derivatives == "exclude"
+    assert "off_report_derivatives" not in settings_routes.settings_payload()  # the list's default, as in force
+    # the old variable of the environment (nothing in the file): the list shows what is in force
+    update_settings_json({"off_report_derivatives": None}, home)
+    monkeypatch.setenv("DESK_FX_UNLINKED_TERMS", "1")
+    assert load().off_report_derivatives == "include"
+    assert settings_routes.settings_payload()["off_report_derivatives"] == "include"
+    update_settings_json({"off_report_derivatives": None}, home)  # the owner chooses «исключать»: it beats the variable
+    assert load().off_report_derivatives == "exclude"

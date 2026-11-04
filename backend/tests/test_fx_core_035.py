@@ -230,7 +230,7 @@ def test_plan_links_rows_to_their_trades_and_flags_the_rest(ctx):
                    "deal_id": "T1", "mv_rub": 1000.0},
         "FXB|T8": {"asset_class": "fx", "ccy": "EUR", "amount_ccy": 1e6, "value_date": date(2027, 1, 20),
                    "deal_id": "T8", "mv_rub": 5000.0},
-        "FXB|NOTERMS": {"asset_class": "fx", "ccy": "USD", "amount_ccy": 2e6, "value_date": date(2027, 2, 19)},
+        "FXB|NOTERMS": {"asset_class": "fx", "ccy": "USD", "amount_ccy": 2e6, "value_date": date(2027, 1, 20)},
     }
     inp = inputs(list(extra), extra, [BOOK[0], BOOK[-1], BOOK[1]])
     bp = pv1.plan(ctx, inp)
