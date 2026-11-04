@@ -122,7 +122,7 @@ export function ScenarioLab() {
                   </div>
                 )}
                 <div className="side">
-                  <span>{payload.business_date} · прогон #{payload.run_id} · {payload.positions.length} позиций</span>
+                  <span>{payload.business_date} · прогон #{payload.run_id} · {payload.positions.length} позиций · все книги деска, фильтр книг мониторов не применяется</span>
                   <div className="chips">
                     {firstOnlyMv > 0 && <StatusChip tone="warn" title="У этих позиций нет гаммы (резервные ступени оценки)">
                       только 1-й порядок · {num(firstOnlyMv / (absMv || 1) * 100, 0)} % MV</StatusChip>}
