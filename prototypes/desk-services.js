@@ -22,7 +22,8 @@
     invalid_request: 'Проверьте заполненные поля.', helper_timeout: 'Время ожидания истекло, процесс адаптера остановлен.',
     helper_response_invalid: 'Модуль подключения вернул некорректный ответ.', helper_failed: 'Модуль подключения завершился с ошибкой.',
     operation_failed: 'Операция не выполнена.', config_invalid: 'Проверьте настройки подключения.',
-    cancel_after_commit_unavailable: 'Данные уже загружаются в базу: отмена на этой фазе недоступна.'
+    cancel_after_commit_unavailable: 'Данные уже загружаются в базу: отмена на этой фазе недоступна.',
+    history_unsupported: 'Адаптер не умеет сделки прошлых дат.'
   };
   const STATE = {complete: 'Готово.', partial: 'Выполнено частично.', blocked: 'Остановлено.', error: 'Ошибка.'};
   const RUN = {complete: 'получено', partial: 'получено частично', skipped: 'нечего загружать', blocked: 'остановлено',
@@ -268,6 +269,7 @@
       // сохранено или перечитано: панель заново с сервера, набранное забыто
       if (was && data.job && data.job.id === before && ['saved', 'described'].includes(data.job.code)) { typed = {}; panelJson = null; }
       render();
+      loadHist();
     } catch (_) { status(TEXT.status_unknown); }
   }
   async function post(path, b) {
@@ -309,9 +311,110 @@
     } catch (_) { status(TEXT.status_unknown); }
     refresh();
   }
+  // ---- сделки прошлых дат (TDM#569): GET/POST /api/v1/adapter-services/history[/refetch]. Слова — desk-backfill-text.js ----
+  let hist = null;
+  const ymd = d => d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
+  const dmy = s => s ? s.slice(8, 10) + '.' + s.slice(5, 7) + '.' + s.slice(0, 4) : '';
+  const histWords = h => (window.DESK_BACKFILL_TEXT || {history: () => ({summary: '', applied: '', next: '', problems: []})}).history(h);
+  function buildHist() {
+    const host = $('hist');
+    if (!host || host.firstChild) return;
+    const on = el('label', null, 'tgl'), box = el('input'); box.type = 'checkbox'; box.id = 'svc-hist-on';
+    box.setAttribute('aria-label', 'Догружать сделки прошлых дат'); on.append(box, el('span', null, 'tgl-s'));
+    const from = el('input', null, 'inp mono'); from.type = 'date'; from.id = 'svc-hist-from'; from.style.width = '170px';
+    const row1 = el('div', null, 'row'); row1.style.cssText = 'flex-wrap:wrap;align-items:center;gap:8px';
+    row1.append(on, el('span', 'Догружать сделки прошлых дат с'), from);
+    const when = el('select', null, 'inp'); when.id = 'svc-hist-when'; when.style.maxWidth = '100%';
+    for (const [v, t] of [['off_hours', 'Только вне торговых часов (по умолчанию)'], ['any', 'В любое время']]) { const o = el('option', t); o.value = v; when.append(o); }
+    const row2 = el('div', null, 'row'); row2.style.cssText = 'flex-wrap:wrap;align-items:center;gap:8px;margin-top:8px';
+    const wl = el('label', 'Когда спрашивать сервис'); wl.htmlFor = 'svc-hist-when'; row2.append(wl, when);
+    const rf = el('button', 'Перезапросить период…', 'ibtn'); rf.type = 'button'; rf.id = 'svc-hist-refetch';
+    const row3 = el('div', null, 'row'); row3.style.cssText = 'flex-wrap:wrap;align-items:center;gap:8px;margin-top:8px';
+    const rfrom = el('input', null, 'inp mono'), rto = el('input', null, 'inp mono'), go = el('button', 'Запросить заново', 'btn');
+    rfrom.type = rto.type = 'date'; rfrom.id = 'svc-hist-rf'; rto.id = 'svc-hist-rt'; rfrom.style.width = rto.style.width = '170px'; go.type = 'button'; go.id = 'svc-hist-go';
+    const range = el('div', null, 'row'); range.id = 'svc-hist-range'; range.hidden = true; range.style.cssText = 'flex-wrap:wrap;align-items:center;gap:8px;margin-top:8px';
+    range.append(el('span', 'С'), rfrom, el('span', 'по'), rto, go);
+    row3.append(rf);
+    const sum = el('p'); sum.id = 'svc-hist-sum'; sum.style.marginBottom = '2px';
+    const app = el('p', null, 'hint'); app.id = 'svc-hist-applied';
+    const next = el('p', null, 'hint'); next.id = 'svc-hist-next';
+    const hintp = el('p', null, 'hint'); hintp.id = 'svc-hist-msg-hint'; hintp.style.color = 'var(--warn)';
+    const msg = el('p', null, 'hint'); msg.id = 'svc-hist-msg'; msg.setAttribute('role', 'status');
+    const diag = el('details'); diag.id = 'svc-hist-diag'; diag.hidden = true; diag.append(el('summary', 'Диагностика', 'mut3'));
+    host.append(row1, row2, row3, range, sum, app, next, hintp, msg, diag);
+    box.addEventListener('change', () => histSet(box.checked ? {enabled: 'true', ...(from.value ? {from: from.value} : {})} : {enabled: 'false'}, box));
+    from.addEventListener('change', () => { if (from.value) histSet({from: from.value}, from); });
+    when.addEventListener('change', () => histSet({when: when.value}, when));
+    rf.addEventListener('click', () => {
+      range.hidden = !range.hidden;
+      if (!range.hidden) { const y = new Date(Date.now() - 864e5); rto.value = rto.value || ymd(y); rfrom.value = rfrom.value || (hist && hist.from) || ''; }
+    });
+    go.addEventListener('click', () => histRefetch(rfrom.value, rto.value, go));
+  }
+  const plural = n => n % 100 > 10 && n % 100 < 15 ? 'дат' : n % 10 === 1 ? 'дату' : n % 10 > 1 && n % 10 < 5 ? 'даты' : 'дат';
+  function histMsg(t) { const n = $('hist-msg'); if (n) n.textContent = t || ''; }
+  function renderHist() {
+    const box = $('hist-box'), h = hist;
+    if (!box) return;
+    // без совместимого фида блок скрыт, если адаптер вообще не про сервисы; с фидом без истории — одна строка почему
+    const show = !!(data && data.available && (data.feeds || []).length);
+    box.hidden = !show || !h;
+    if (box.hidden) return;
+    buildHist();
+    const w = histWords(h), ok = h.available !== false;
+    for (const id of ['on', 'from', 'when', 'refetch']) { const n = $('hist-' + id); if (n) n.disabled = !ok; }
+    $('hist-on').checked = !!h.enabled;
+    const f = $('hist-from');
+    f.min = h.from_min || ''; f.max = ymd(new Date(Date.now() - 864e5));
+    if (document.activeElement !== f) f.value = h.from || '';
+    $('hist-when').value = h.when || 'off_hours';
+    $('hist-sum').textContent = w.summary;
+    $('hist-applied').textContent = ok ? w.applied : '';
+    $('hist-next').textContent = ok && w.next ? w.next : '';
+    $('hist-msg-hint').textContent = ok && w.hint ? w.hint : '';
+    const d = $('hist-diag');
+    d.hidden = !w.problems.length;
+    d.replaceChildren(el('summary', 'Диагностика', 'mut3'), ...w.problems.map(x => el('div', x, 'hint')));
+  }
+  async function loadHist() {
+    try {
+      const res = await fetch('/api/v1/adapter-services/history', {cache: 'no-store'});
+      if (!res.ok) { hist = null; renderHist(); return; }
+      hist = await res.json();
+    } catch (_) { return; }
+    renderHist();
+  }
+  async function histSet(fields, ctl) {
+    ctl.disabled = true; histMsg('');
+    try {
+      const [res, r] = await post('/history', new URLSearchParams(fields));
+      if (!res.ok) histMsg(TEXT[r.code] || TEXT.operation_failed);
+    } catch (_) { histMsg(TEXT.status_unknown); }
+    ctl.disabled = false;
+    loadHist();
+  }
+  async function histRefetch(from, to, btn) {
+    if (!from || !to) { histMsg('Укажите даты начала и конца периода.'); return; }
+    btn.disabled = true; histMsg('');
+    try {
+      const [res, r] = await post('/history/refetch', new URLSearchParams({from, to}));
+      if (!res.ok) histMsg(TEXT[r.code] || TEXT.operation_failed);
+      else if (!r.dates) histMsg('В этом периоде нет дат, которые можно запросить заново.');
+      else if (window.confirm('Запросить у сервиса заново сделки за ' + r.dates + ' ' + plural(r.dates) + ' (' + dmy(from) + ' — ' + dmy(to) + ')? PnL этих дат будет пересчитан.')) {
+        const [res2, r2] = await post('/history/refetch', new URLSearchParams({from, to, confirm: 'true'}));
+        histMsg(res2.ok ? 'Поставлено в очередь дат: ' + r2.dates + '.' : (TEXT[r2.code] || TEXT.operation_failed));
+        if (res2.ok) $('hist-range').hidden = true;
+      }
+    } catch (_) { histMsg(TEXT.status_unknown); }
+    btn.disabled = false;
+    loadHist();
+  }
+
   $('save').addEventListener('click', () => submit('save'));
   $('refresh').addEventListener('click', () => { if (data && data.available) submit('describe'); else refresh(); });
   $('cancel').addEventListener('click', () => cancel('job'));
   window.addEventListener('pagehide', () => { clearTimeout(timer); clearInterval(ticker); forgetSecrets(); });
   refresh();
+  const histTimer = setInterval(() => { if (!document.hidden) loadHist(); }, 15000);
+  window.addEventListener('pagehide', () => clearInterval(histTimer));
 })();

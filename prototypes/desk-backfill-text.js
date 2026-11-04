@@ -10,7 +10,10 @@
  *  T.n(n, one, many)      — «1 не сходится», «2 не сходятся»: число со своим словом;
  *  T.stall(j)             — {why, retry, text, title} застоя или null (догрузка выключена, дат к расчёту нет):
  *                           «стоит: <причина>, повтор в ЧЧ:ММ» (retry — «, повтор в ЧЧ:ММ», пусто, когда время
- *                           прошло или автопилот выключен), в подсказке — с какого времени, дата и ошибка целиком.
+ *                           прошло или автопилот выключен), в подсказке — с какого времени, дата и ошибка целиком;
+ *  T.history(h)           — сделки прошлых дат (TDM#569, GET /api/v1/adapter-services/history): {unsupported, summary,
+ *                           applied, runs, next, problems}: слова экрана «Подключение к сервисам» и строка «История
+ *                           прогонов» («PnL сделок учтён в X датах, ждут пересчёта Y»).
  * Подключается раньше kit.js (concepts/lib/boot.js) и в settings.html; window.DESK_BACKFILL_TEXT.
  */
 (function (root) {
@@ -36,6 +39,54 @@
     ((j && j.hub_problem_dates) || []).forEach(function (p) { if (!seen[p.date]) { seen[p.date] = 1; load.push(p); } });
     return { conv: conv, load: load };
   };
+  // ---- сделки прошлых дат (TDM#569): GET /api/v1/adapter-services/history ----
+  T.HIST_WAIT = { login_required: 'нужен вход: выполните вход в панели выше', config_invalid: 'проверьте настройки подключения',
+    source_disabled: 'источник выключен в адаптере', not_ready: 'загрузка сделок не готова' };
+  T.HIST_GATE = { trading_hours: 'ждёт конца торговых часов', daily_limit: 'на сегодня достигнут предел запросов',
+    gap: 'пауза между запросами', backoff: 'повтор после ошибки' };
+  T.HIST_REASON = { no_prev_close: 'нет предыдущего закрытия', no_pnl: 'нет PnL позиции на начало дня', lost: 'бумага не оценена',
+    unpriced: 'сделки без цены или курса' };
+  T.history = function (h, now) {
+    if (!h) return { unsupported: false, summary: '', applied: '', runs: '', next: '', problems: [] };
+    var c = h.counts || {}, a = h.applied, dm = function (d) { return d.slice(8, 10) + '.' + d.slice(5, 7); };
+    var out = { unsupported: h.available === false && h.code === 'history_unsupported', summary: '', applied: '', runs: '', next: '', problems: [] };
+    out.hint = '';
+    if (h.available === false) { out.summary = out.unsupported ? 'Адаптер не умеет сделки прошлых дат.' : ''; return out; }
+    var sum = 'Сделки прошлых дат: получено ' + (c.fetched || 0) + ' из ' + (h.dates || 0) + ' дат';
+    if (c.no_trades) sum += ' · без сделок ' + c.no_trades;
+    if (c.unmapped) sum += ' · не сопоставлено ' + c.unmapped;
+    if (c.unavailable) sum += ' · недоступно ' + c.unavailable;
+    if (c.partial) sum += ' · получено частично ' + c.partial;
+    if (c.todo) sum += ' · ждут запроса ' + c.todo;
+    out.summary = sum;
+    if (a) {
+      var parts = [];
+      if (a.full) parts.push('полностью в ' + T.n(a.full, ' дате', ' датах'));
+      if (a.partial) parts.push('частично в ' + T.n(a.partial, ' дате', ' датах'));
+      if (a.outside) parts.push('вне PnL в ' + T.n(a.outside, ' дате', ' датах'));
+      if (a.unknown) parts.push('нет данных о полноте в ' + T.n(a.unknown, ' дате', ' датах'));
+      var why = Object.keys(a.reasons || {}).map(function (k) { return (T.HIST_REASON[k] || k) + ': ' + a.reasons[k]; });
+      var line = parts.length ? 'PnL сделок учтён ' + parts.join(', ') + (why.length ? ' (' + why.join('; ') + ')' : '') + '.' : '';
+      var tail = [];
+      if (a.waiting_recompute) tail.push('Ждут пересчёта: ' + a.waiting_recompute + (h.backfill_enabled === false ? ' (история прогонов выключена)' : '') + '.');
+      if (a.no_effect) tail.push('Не влияют на PnL: ' + a.no_effect + '.');
+      out.applied = [line].concat(tail).filter(Boolean).join(' ');
+      if (h.enabled || c.fetched) out.runs = 'PnL сделок учтён в ' + (a.in_pnl || 0) + ' датах, ждут пересчёта ' + (a.waiting_recompute || 0)
+        + (h.backfill_enabled === false && a.waiting_recompute ? ' (история прогонов выключена)' : '');
+    }
+    if (h.current) out.next = 'Сейчас: ' + dm(h.current);
+    else if (h.paused && h.waiting) out.next = T.HIST_WAIT[h.waiting] || h.waiting;
+    else if (!h.enabled) out.next = 'выключено';
+    else if (h.gate && T.HIST_GATE[h.gate]) out.next = T.HIST_GATE[h.gate] + (h.next_at ? ', дальше в ' + T.when(h.next_at, now) : '');
+    else out.next = c.todo ? 'Дальше: сейчас' : 'Все даты получены';
+    if (h.hint === 'all_unavailable') out.hint = 'Сервис не отдал ни одной прошлой даты. Скорее всего, дело в настройках подключения, а не в датах: проверьте адрес и вход в панели выше.';
+    out.problems = (h.problems || []).map(function (p) {
+      return dm(p.date) + ' — ' + ({ unavailable: 'недоступно', unmapped: 'книги не сопоставлены', partial: 'получено частично' }[p.state] || p.state)
+        + (p.code ? ' (' + p.code + ')' : '') + (p.attempts ? ', попыток: ' + p.attempts : '') + (p.next_at ? ', следующая попытка ' + T.when(p.next_at, now) : '');
+    });
+    return out;
+  };
+
   T.stall = function (j, now) {
     var st = j && j.enabled !== false && j.todo ? j.stalled : null;
     if (!st) return null;
