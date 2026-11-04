@@ -1149,6 +1149,7 @@ details.at-last .at-open::before{content:"показать"} details.at-last[ope
 <script src="settings-forms.js"></script>
 <script src="settings-longtable.js"></script>
 <script src="settings-nav.js"></script>
+<script src="settings-ocp-books.js"></script>
 <script src="settings-adapter.js"></script>
 <script src="settings-inbox-folders.js"></script>
 <script src="desk-backfill-text.js"></script>
@@ -2011,8 +2012,9 @@ function navForms(){
     const miss = id === 'books' ? SF.unconfigured(f.data, CTX.recent_books).length : 0;
     if (cnt) cnt.textContent = miss ? n + ' · ' + miss + ' не настр.' : String(n);
     const err = f.errors().length || f.parseError;
-    navDot(id, f.dirty() ? 'dirty' : err ? 'bad' : miss ? 'warn' : '', f.dirty() ? 'есть несохранённые изменения' : err ? 'есть ошибки' : miss ? miss + ' книг из позиций не настроено' : '');
+    navDot(id, f.dirty() ? 'dirty' : err ? 'bad' : miss ? 'warn' : '', f.dirty() ? 'есть несохранённые изменения' : err ? 'есть ошибки' : miss ? miss + ' книг не настроено' : '');
   }
+  if (window.SETTINGS_OCP_BOOKS) window.SETTINGS_OCP_BOOKS.card(FORMS.books, CTX.recent_books, window.DeskSettings, SF);  // книги только из ОВП (TDM#556)
 }
 async function loadContext(){
   try { Object.assign(CTX, await api('GET', '/api/v1/adapter/settings-context')); } catch(e) { CTX.error = e.message; }

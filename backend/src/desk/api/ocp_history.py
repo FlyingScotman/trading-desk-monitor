@@ -20,8 +20,10 @@ unit older than the policy's ``report_max_age_days`` (``report_plus_outside``; p
 (their ``set_id``, as the run chose its base on its own calendar). Two scopes: the newer ``valid_date``, then a book's scope before an entity's,
 then the first book. A block without them (no report, before B2): ``{}``.
 
-The books of the period (``books``): name, entity and desk of each book from the latest run of the period that has
-it, for the pages' filter and labels when a book left the current run's reference.
+The books of the period (``books``): name, entity, desk and book type (``type``) of each book from the latest run of
+the period that has it, for the pages' filter and labels when a book left the current run's reference; a book of the
+OCP without positions in a run (TDM#556: only the OCP report knows it) from the run's OCP block (``books``, marked
+``ocpOnly``).
 """
 
 from __future__ import annotations
@@ -51,7 +53,7 @@ SQL = ("SELECT run_id, kind, CASE WHEN kind = 'ocp' THEN jsonb_build_object("
        " 'lines', (SELECT jsonb_agg(jsonb_build_object(" + ", ".join(f"'{k}', x->'{k}'" for k in LINE_KEYS) + "))"
        " FROM jsonb_array_elements(CASE WHEN jsonb_typeof(data->'published'->'by_book') = 'array'"
        " THEN data->'published'->'by_book' ELSE '[]' END) x),"
-       " 'max_age', data->'policy'->'report_max_age_days',"
+       " 'max_age', data->'policy'->'report_max_age_days', 'books', data->'books',"
        " 'rates', (SELECT jsonb_agg(jsonb_build_object('ccy', c->'ccy', 'rate', c->'reported_rate',"
        " 'rub', c->'reported_rub', 'amount', COALESCE(c->'reported_base', c->'reported'), 'valid', c->'valid_date',"
        " 'book', c->'book_id', 'set', c->'set_id'))"
@@ -158,7 +160,12 @@ def history(con, anchor: dict[str, Any], start: date, end: date) -> dict[str, An
         x = ref[r["run_id"]]
         block = x.get("ocp") or {}
         for b in x.get("books") or []:
-            books[b["book_id"]] = {"name": b.get("name"), "entity": b.get("entity"), "desk": b.get("desk")}
+            books[b["book_id"]] = {"name": b.get("name"), "entity": b.get("entity"), "desk": b.get("desk"),
+                                   "type": b.get("book_type")}
+        for b, m in (block.get("books") or {}).items():  # TDM#556: the OCP's books without positions in the run
+            if isinstance(m, dict):
+                books[b] = {"name": m.get("name"), "entity": m.get("entity"), "desk": m.get("desk"),
+                            "type": m.get("book_type"), "ocpOnly": True}
         days.append({"date": r["business_date"], "runId": r["run_id"], "runType": r["run_type"],
                      "state": block.get("status") or ocp_run.NOT_COMPUTED, "basis": block.get("basis"),
                      "fx": _fx(x.get("fx")), "reportFx": _report_fx(block, r["business_date"]),

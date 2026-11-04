@@ -169,6 +169,11 @@ def ocp_status(block: dict[str, Any] | None) -> dict[str, Any] | None:
         "notes": block.get("notes") or [],
         "gaps": [{"code": g.get("code"), "text": g.get("text"), "items": g.get("items") or []}
                  for g in block.get("gaps") or []],
+        # TDM#556: the books of the OCP without positions in the run (a book only the OCP report knows): the pages
+        # take entity, desk and book type from here when the run's books have no such book (KIT.ocpBook)
+        "books": {b: {"name": m.get("name") or b, "entity": m.get("entity") or "—", "desk": m.get("desk") or "—",
+                      "type": m.get("book_type") or "—", "ocpOnly": True}
+                  for b, m in (block.get("books") or {}).items() if isinstance(m, dict)},
         "sourceNames": {x["key"]: x["name"] for x in block.get("sources") or []},
         "componentNames": {x["key"]: x["name"] for x in block.get("components") or []},
     }

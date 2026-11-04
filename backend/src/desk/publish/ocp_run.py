@@ -39,7 +39,8 @@ derived OCP elsewhere; ``by_ccy`` {ccy: total, rate, total_rub, by_source}, ``by
 positions outside the report without trade terms, books outside every report unit), the derived OCP by currency and
 component and by book, the lines, the reconciliation per report scope and currency with the components outside the
 report, the derived OCP outside any report unit, the transfers per book and currency, the report's units, totals and
-notes;
+notes; ``books`` (TDM#556): name, desk, book type and entity of the published OCP's books that the run's reference books
+leave out (no positions in the run: a book only the OCP report knows, ``report_only_books``);
 per position ``fact.extra.ocp`` (component, amounts, basis) and, for a transfer deal, ``extra.ocp_transfer`` true
 (the pages mark it «Перенос ОВП»). The run log gets a summary line (the published OCP and its sources, the derived
 OCP, the reconciliation) and a WARN line per break. The per-position FX delta and FX PnL are not changed by any of it.
@@ -130,7 +131,24 @@ def empty_block(status: str, text: str, on: date | None = None, **kw: Any) -> di
             "by_ccy": {}, "by_book": [], "lines": [], "reconciliation": [], "derivatives_check": [],
             "derivatives_pv": [],
             "outside_report": [], "transfers": [], "report": {"units": [], "rows": 0}, "totals": None, "notes": [],
-            **kw}
+            "books": {}, **kw}
+
+
+def report_only_books(published: Sequence[Mapping[str, Any]], books: Mapping[str, Mapping[str, Any]],
+                      listed: Sequence[Mapping[str, Any]]) -> dict[str, dict[str, Any]]:
+    """The books of the published OCP (its lines' ``book_id`` and ``books``) that the run's reference books (``listed``:
+    the books with positions in the run) leave out, with their row in force (``books``; TDM#556: a book only the OCP
+    report knows, such as an old book without positions): ``{book_id: {name, desk, book_type, entity}}``, so the pages
+    group and filter its OCP by entity and book type as the owner set them. A book without a row in force is left out
+    (the pages know nothing more of it than the line)."""
+    have = {b.get("book_id") for b in listed}
+    ids = {x["book_id"] for x in published if x.get("book_id")} | {b for x in published for b in x.get("books") or ()}
+    out: dict[str, dict[str, Any]] = {}
+    for b in sorted(ids - have):
+        if (m := books.get(b)) is not None:
+            out[b] = {"name": m.get("name") or b, "desk": m.get("desk") or "—", "book_type": m.get("book_type"),
+                      "entity": m.get("entity") or "—"}
+    return out
 
 
 def _liabilities(con: psycopg.Connection, on: date, known_at: Any, rows: list[dict[str, Any]],
@@ -269,6 +287,7 @@ def _compute(con: psycopg.Connection, on: date, market: MarketView | None, conte
         by_ccy=by_ccy, by_book=by_book, lines=[x.as_json() for x in res.lines], reconciliation=res.comparisons,
         derivatives_check=res.derivatives_check, derivatives_pv=res.derivatives_pv,
         outside_report=res.outside_report, transfers=res.transfers,
+        books=report_only_books(res.published, books, reference.get("books") or []),
         report={"units": [{k: (v.isoformat() if isinstance(v, date) else v) for k, v in u.items()}
                           for u in report.units], "rows": len(report.rows)},
         totals=totals, notes=notes,

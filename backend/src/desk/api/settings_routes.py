@@ -48,6 +48,7 @@ from ..settings import (
     write_hub_token,
     write_proxy_password,
 )
+from ..store import CURRENT_SET
 from .app import ApiError
 from .auth import LOCAL, actor, require_admin
 
@@ -55,7 +56,8 @@ MAX_CONFIG_BYTES = 2 * 1024 * 1024
 LOCAL_USER = LOCAL
 """``changed_by`` of a change while sign-in is off (this computer; as ``alias_routes``); with it on, the user's name."""
 RECENT_DAYS = 35
-"""Books seen in positions of the last ``RECENT_DAYS`` days before the newest position date are offered."""
+"""Books seen in positions of the last ``RECENT_DAYS`` days before the newest position date are offered, and (TDM#556)
+the books of the OCP report of the last ``RECENT_DAYS`` days before its newest date that have no such positions."""
 CURRENCIES = ("RUB", "USD", "EUR", "CNY", "CHF", "GBP", "JPY", "HKD", "KZT", "AED", "TRY", "BYN", "INR")
 JsonBody = Annotated[dict[str, Any], Body()]
 
@@ -533,22 +535,47 @@ def get_config_revision(name: str, rev_id: int, request: Request) -> dict[str, A
 
 _RECENT_BOOKS = f"""
 WITH newest AS (SELECT max(valid_date) AS d FROM position_set),
-sets AS (
+cur AS (
     SELECT DISTINCT ON (ps.book_id) ps.book_id, ps.valid_date, ps.set_id, ps.source
     FROM position_set ps, newest WHERE ps.valid_date >= newest.d - {RECENT_DAYS}
     ORDER BY ps.book_id, ps.valid_date DESC, ps.revision DESC, ps.set_id DESC),
-books AS (SELECT DISTINCT ON (book_id) * FROM book_rev ORDER BY book_id, rev_id DESC)
-SELECT s.book_id, s.valid_date AS last_date, s.source,
-       (SELECT count(*) FROM position_input pi WHERE pi.set_id = s.set_id) AS positions,
-       b.name, b.desk, b.book_type, b.entity, b.trader
-FROM sets s LEFT JOIN books b USING (book_id) ORDER BY s.book_id"""
+sets AS (  -- a book with positions: its current set is not empty (a book closed by omission is not)
+    SELECT * FROM cur WHERE EXISTS (SELECT 1 FROM position_input pi WHERE pi.set_id = cur.set_id)),
+books AS (SELECT DISTINCT ON (book_id) * FROM book_rev ORDER BY book_id, rev_id DESC),
+ocp_newest AS (SELECT max(valid_date) AS d FROM dataset_set WHERE dataset = 'ocp'),
+ocp_sets AS (  -- the current revision of each unit (scope) and day, not every revision
+    SELECT DISTINCT ON (ds.scope_key, ds.valid_date) ds.set_id, ds.scope, ds.valid_date, ds.revision, ds.source
+    FROM dataset_set ds, ocp_newest WHERE ds.dataset = 'ocp' AND ds.valid_date >= ocp_newest.d - {RECENT_DAYS}
+    ORDER BY ds.scope_key, ds.valid_date, {CURRENT_SET}),
+ocp AS (
+    SELECT DISTINCT ON (x.book_id) x.book_id, x.valid_date, x.source, x.entity FROM (
+        SELECT os.scope->>'book_id' AS book_id, os.scope->>'entity' AS entity, os.valid_date, os.revision,
+               os.set_id, os.source
+        FROM ocp_sets os WHERE os.scope->>'book_id' IS NOT NULL
+        UNION ALL
+        SELECT r.data->>'book_id', r.data->>'entity', os.valid_date, os.revision, os.set_id, os.source
+        FROM ocp_sets os JOIN dataset_row r USING (set_id)
+        WHERE os.scope->>'book_id' IS NULL AND r.data->>'book_id' IS NOT NULL) x
+    ORDER BY x.book_id, x.valid_date DESC, x.revision DESC, x.set_id DESC)
+SELECT * FROM (
+    SELECT s.book_id, s.valid_date AS last_date, s.source,
+           (SELECT count(*) FROM position_input pi WHERE pi.set_id = s.set_id) AS positions,
+           b.name, b.desk, b.book_type, b.entity, b.trader, false AS ocp_only
+    FROM sets s LEFT JOIN books b USING (book_id)
+    UNION ALL
+    SELECT o.book_id, o.valid_date, o.source, NULL, b.name, b.desk, b.book_type, coalesce(b.entity, o.entity),
+           b.trader, true
+    FROM ocp o LEFT JOIN books b USING (book_id) WHERE o.book_id NOT IN (SELECT book_id FROM sets)) u
+ORDER BY book_id"""
 
 
 @router.get("/api/v1/adapter/settings-context")
 def get_settings_context(request: Request) -> dict[str, Any]:
-    """Lists for the forms, from the store: ``recent_books`` (books with positions in the last weeks; the page marks
-    those no books.json entry names «не настроено»), ``indices`` (the hub's fixings) and ``currencies``. Without the
-    store: empty lists (the currencies: the usual ones) and ``error``."""
+    """Lists for the forms, from the store: ``recent_books`` (books with positions in the last weeks and, TDM#556,
+    ``ocp_only``: books of the OCP report of the last weeks without such positions, e.g. an old book that still holds an
+    OCP; the page marks those no books.json entry names «не настроено» and the OCP-only ones «только ОВП»),
+    ``indices`` (the hub's fixings) and ``currencies``. Without the store: empty lists (the currencies: the usual ones)
+    and ``error``."""
     out: dict[str, Any] = {"recent_books": [], "indices": [], "currencies": list(CURRENCIES), "error": None,
                            "recent_days": RECENT_DAYS}
     try:

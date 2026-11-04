@@ -81,15 +81,16 @@ def ctx():
     return prepare(SnapshotDir(SNAPS), DATE.isoformat())
 
 
-def _scan(con, tmp_path: Path, report: bool = True, policy: str | None = None) -> None:
+def _scan(con, tmp_path: Path, report: bool = True, policy: str | None = None, books: str = BOOKS,
+          ocp: str = OCP) -> None:
     cfg, inbox = tmp_path / "cfg", tmp_path / "in"
     cfg.mkdir()
     inbox.mkdir()
-    for name, text in (("books.csv", BOOKS), ("entities.csv", ENTITIES), ("funding_rules.csv", RULES),
+    for name, text in (("books.csv", books), ("entities.csv", ENTITIES), ("funding_rules.csv", RULES),
                        *((("ocp_policy.csv", policy),) if policy else ())):
         _csv(cfg / name, text)
     files = [("positions_20261016.csv", POSITIONS), ("trade_terms_20261015.csv", TERMS),
-             ("cash_balances_20261015.csv", CASH)] + ([("ocp_20261015.csv", OCP)] if report else [])
+             ("cash_balances_20261015.csv", CASH)] + ([("ocp_20261015.csv", ocp)] if report else [])
     for name, text in files:
         _csv(inbox / name, text)
     s = Settings(snapshot_cache=SNAPS, inbox_dirs=(inbox,), inbox_archive=tmp_path / "archive", private_adapter=None,
@@ -178,6 +179,34 @@ def test_ocp_end_to_end_inbox_run_api(store_url, ctx, tmp_path):
     assert all(x["to"] in desk["BOOKS"] for x in desk["OCP_TRANSFERS"])  # the removed Desk Monitor named D.BOOKS[t.to]
     dp = {p["id"]: p for p in desk["positions"]}
     assert dp["D1|XFER"].get("ocpTransfer") is True and not dp["D1|USD"].get("ocpTransfer")
+
+
+@pytest.mark.parametrize("active", ["1", "0"])  # an OCP-only book is added as inactive: still counted (TDM#556)
+def test_a_book_only_the_report_knows_carries_its_reference_in_the_block(store_url, ctx, tmp_path, active):
+    """TDM#556: a book of the OCP report without positions (an old book that still holds an OCP) is not among the run's
+    reference books (those of its positions), so the block carries its row in force (``books``): the pages group and
+    filter its OCP by the entity and book type the owner set. A book with positions is not repeated there."""
+    from desk.api.concepts_run import ocp_status
+
+    books = BOOKS + f"OLD;Old book;Legacy;HTM;ENT1;;;{active};\n"
+    with store.connect(store_url) as con:
+        _scan(con, tmp_path, books=books, ocp=OCP + "ENT1;OLD;EUR;2000000;;\n")
+        rid, _ = _run(con, ctx)
+        block, = con.execute("SELECT data FROM run_reference WHERE run_id = %s AND kind = 'ocp'", (rid,)).fetchone()
+        ref, = con.execute("SELECT data FROM run_reference WHERE run_id = %s AND kind = 'books'", (rid,)).fetchone()
+    assert "OLD" not in {b["book_id"] for b in ref}
+    old = {(x["book_id"], x["ccy"]): x for x in block["published"]["by_book"]}[("OLD", "EUR")]
+    assert old["source"] == "report" and old["amount"] == 2_000_000
+    assert block["books"] == {"OLD": {"name": "Old book", "desk": "Legacy", "book_type": "HTM", "entity": "ENT1"}}
+    o = TestClient(create_app(store_url)).get(f"/api/v1/runs/{rid}/ocp").json()
+    assert o["books"] == block["books"]
+    assert ocp_status(block)["books"] == {"OLD": {"name": "Old book", "entity": "ENT1", "desk": "Legacy", "type": "HTM",
+                                                  "ocpOnly": True}}
+    # a block before TDM#556: no books, the API's default
+    assert ocp_out(rid, {k: v for k, v in block.items() if k != "books"}).books == {}
+    assert ocp_run.report_only_books([{"book_id": None, "books": ["OLD", "T1", "NONE"]}],
+                                     {"OLD": {"name": "Old book", "entity": "ENT1"}}, [{"book_id": "T1"}]) == {
+        "OLD": {"name": "Old book", "desk": "—", "book_type": None, "entity": "ENT1"}}
 
 
 def test_no_report_and_before_b2(store_url, ctx, tmp_path):

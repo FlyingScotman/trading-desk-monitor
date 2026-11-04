@@ -3317,6 +3317,15 @@ export interface components {
             } | null;
             /** Notes */
             notes: string[];
+            /**
+             * Books
+             * @description TDM#556: name, desk, book_type and entity of the published OCP's books without positions in the run (a book only the OCP report knows); the run's reference books have the others
+             */
+            books?: {
+                [key: string]: {
+                    [key: string]: unknown;
+                };
+            };
         };
         /** RunPnl */
         RunPnl: {

@@ -20,9 +20,11 @@ def line(book, ccy, amount, source="report", entity="ENT1", books=None, valid=No
             "reported": amount if source == "report" else None, "valid_date": valid}
 
 
-def block(status, lines, basis="report_plus_outside", reconciliation=None, max_age=None):
+def block(status, lines, basis="report_plus_outside", reconciliation=None, max_age=None, books=None):
     b = {"version": 2, "status": status, "text": "synthetic", "published": {"basis": basis, "by_ccy": {},
          "by_book": lines}, "lines": [{"position_id": "P" + str(i)} for i in range(50)]}
+    if books is not None:
+        b["books"] = books
     if reconciliation is not None:
         b["reconciliation"] = reconciliation
     if max_age is not None:
@@ -69,7 +71,8 @@ def seeded(store_url):
             rec("JPY", 55.0, amount=1e6, rub=0.55e6), rec("CHF", 100.0, amount=-1e6, rub=-101e6),
             rec("KZT", None, amount=-1e6, rub=0.18e6), rec("SGD", 60.0, amount=-1e6, rub=60.5e6),
             rec("HKD", 10.5, book=None), rec("HKD", 10.4, book="B3"), rec("HKD", 10.3, book="B2"),
-            rec("AED", -22.0, amount=1e6, rub=0.0), rec("RUB", 1.0), rec("TRY", 0.0)]),
+            rec("AED", -22.0, amount=1e6, rub=0.0), rec("RUB", 1.0), rec("TRY", 0.0)],
+            books={"B2": {"name": "Old OCP book", "desk": "D2", "book_type": "HTM", "entity": "ENT3"}}),
             books=[{"book_id": "B1", "name": "Old name", "entity": "ENT1", "desk": "FX"},
                    {"book_id": "B9", "name": "Gone", "entity": "ENT1", "desk": "Credit"}])
         insert(con, "2026-10-13", cut="eod_preliminary", ocp=block("computed", [line("B1", "USD", 9e9)]))
@@ -137,8 +140,10 @@ def test_days_are_the_saved_published_ocp(seeded):
     assert days["2026-10-20"]["runId"] == ids["anchor"] and days["2026-10-20"]["runType"] == "INTRADAY"
     assert days["2026-10-20"]["lines"][0]["validDate"] == "2026-10-19"
     # the books of the period: the latest run's reference wins, a book gone from it is kept
-    assert d["books"]["B1"] == {"name": "Book one", "entity": "ENT1", "desk": "FX"}
+    assert d["books"]["B1"] == {"name": "Book one", "entity": "ENT1", "desk": "FX", "type": None}
     assert d["books"]["B9"]["name"] == "Gone"
+    # TDM#556: a book of the OCP without positions in its run: from the run's OCP block, with its entity and type
+    assert d["books"]["B2"] == {"name": "Old OCP book", "entity": "ENT3", "desk": "D2", "type": "HTM", "ocpOnly": True}
 
 
 def test_period_defaults_and_limits(seeded):
