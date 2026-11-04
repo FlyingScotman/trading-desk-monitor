@@ -122,8 +122,15 @@ def _trade_sets(con: psycopg.Connection, lo: date, hi: date) -> list[tuple[date,
         " AND valid_date >= %s AND valid_date < %s GROUP BY 1, 2 HAVING sum(row_count) > 0 ORDER BY 1, 2", (lo, hi))]
 
 
-ANY = "*"
-"""The portfolio of a lot key that takes the bond whole, in every portfolio of the book (``apply_intraday``)."""
+class _AnyPortfolio:
+    """The portfolio of a lot key that takes the bond whole, in every portfolio of the book: a sentinel that no real
+    portfolio name equals."""
+
+    def __repr__(self) -> str:
+        return "<any portfolio>"
+
+
+ANY = _AnyPortfolio()
 
 
 def _portfolio(x: dict[str, Any] | None) -> str | None:
@@ -417,7 +424,7 @@ def apply_intraday(con: psycopg.Connection, on: date,
     for r in rows_f:
         if r[1] in rep and r[0] in changed:
             by_bond.setdefault(_bond(r, extra_f.get(r[0])), []).append(r)
-    keys: set[tuple[str, str, str | None]] = set()
+    keys: set[tuple[str, str, Any]] = set()
     for bk, rs in by_bond.items():
         pfs = ({_portfolio(base_extra.get(r[0])) for r in base_rows if _bond(r, base_extra.get(r[0])) == bk}
                | {_portfolio(inputs.extra.get(r[0])) for r in inputs.rows if r[1] in rep
@@ -428,10 +435,10 @@ def apply_intraday(con: psycopg.Connection, on: date,
             keys |= {_lot_key(r, extra_f.get(r[0])) for r in rs}
 
     def of(key: tuple, r: Any, ex: dict) -> bool:
-        return _bond(r, ex.get(r[0])) == key[:2] if key[2] == ANY else _lot_key(r, ex.get(r[0])) == key
+        return _bond(r, ex.get(r[0])) == key[:2] if key[2] is ANY else _lot_key(r, ex.get(r[0])) == key
 
     for key in sorted(keys, key=str):
-        pf = None if key[2] == ANY else key[2]
+        pf = None if key[2] is ANY else key[2]
         lots_b = [r for r in base_rows if of(key, r, base_extra)]
         lots_f = [r for r in rows_f if of(key, r, extra_f)]
         lots_r = [r for r in inputs.rows if r[1] in rep and of(key, r, inputs.extra)]

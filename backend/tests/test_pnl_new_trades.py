@@ -1224,3 +1224,18 @@ def test_the_books_total_is_the_sum_of_its_bonds_with_lots_valued_in_different_w
     t = totals["B1"]["pnl"]
     assert t["total"] - t.get("funding", 0.0) == pytest.approx(book)   # the book's funding cost is its own, not a position's
     assert book == pytest.approx(before[0])
+
+
+def test_trades_that_changed_no_lot_of_the_report_are_still_counted(monkeypatch):
+    """A sale to zero of a lot whose row is gone leaves L1 as it was, and a purchase and sale in one lot leave every
+    quantity as at the start: no lot is marked, but the trades are counted in the run (lost) and keep their PnL of none."""
+    lots, n = _report_lots(monkeypatch, {"L1": 8000.0})
+    assert lots["L1"].pnl.total == 100.0 and lots["L1"].no_pnl is None and n["rows"] == {}
+    assert n["lost"] == ["B1|S"] and n["lost_trades"] == 1
+    assert nt.outside_total(1, n)["lost"] == {"bonds": 1, "trades": 1}
+    lots, n = _report_lots(monkeypatch, {"L1": 8000.0 + 1e-9})   # a rounding below the gap's tolerance is no change
+    assert lots["L1"].pnl.total == 100.0 and n["rows"] == {} and n["lost_trades"] == 1
+
+
+def test_the_any_portfolio_of_a_key_is_no_portfolio_name():
+    assert trades.ANY != "*" and trades.ANY not in ("*", "ANY", "any", None)

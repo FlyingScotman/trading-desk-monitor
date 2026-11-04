@@ -271,8 +271,10 @@ def attach(prev: EodContext, ctx: EodContext, start: PositionInputs, bp: Any, ou
         if not valued:
             n["unvalued_trades"] += count   # the bond is not valued at all: its trades are in no PnL either
             return
-        hit = [m for m in valued if start is None or start.get(m) != mem_q[m]]
-        if not hit:
+        hit = [m for m in valued if start is None or m not in start or abs(start[m] - mem_q[m]) > 1e-6]
+        if not hit:   # the trades changed no lot of the report: no lot is marked, but they are not in a PnL either
+            n["lost"].append(label)
+            n["lost_trades"] += count
             return
         why = NoPnl(NOT_IN_PNL, "the bond was traded today and is valued at the report's figure: the trades are inside "
                                 "the difference of the reports' values")
