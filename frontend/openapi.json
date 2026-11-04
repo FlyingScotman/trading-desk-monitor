@@ -7279,6 +7279,205 @@
         ],
         "title": "RiskMissing"
       },
+      "RiskOcp": {
+        "properties": {
+          "available": {
+            "type": "boolean",
+            "title": "Available",
+            "description": "false: the run has no published OCP, the screen falls back to the positions' FX deltas; reason says why"
+          },
+          "reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reason"
+          },
+          "as_of": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "As Of"
+          },
+          "basis": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Basis"
+          },
+          "method_note": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Method Note",
+            "description": "Why the OCP is not on the current methodology, as the OCP screen"
+          },
+          "by_ccy": {
+            "additionalProperties": {
+              "$ref": "#/components/schemas/RiskOcpCcy"
+            },
+            "type": "object",
+            "title": "By Ccy"
+          },
+          "by_book": {
+            "items": {
+              "$ref": "#/components/schemas/RiskOcpLine"
+            },
+            "type": "array",
+            "title": "By Book"
+          },
+          "nonlinear_ids": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Nonlinear Ids",
+            "description": "position_id of the non-linear derivatives (an option, a non-zero FX gamma): shown apart from the linear part"
+          },
+          "approx_ids": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Approx Ids",
+            "description": "of nonlinear_ids: positions the OCP took at their amount (nominal), not at the FX delta subtracted: their share is approximate"
+          },
+          "missing_rate": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Missing Rate",
+            "description": "currencies with an OCP and no rate in the run: no linear part for them"
+          }
+        },
+        "type": "object",
+        "required": [
+          "available",
+          "by_ccy",
+          "by_book",
+          "nonlinear_ids",
+          "missing_rate"
+        ],
+        "title": "RiskOcp",
+        "description": "The published OCP of the run for the scenario screen's FX shock (TDM#577): linear part of the shock = the\nOCP's lines without the non-linear derivatives x the shock, the same lines the OCP screen reads (TDM#567)."
+      },
+      "RiskOcpCcy": {
+        "properties": {
+          "amount": {
+            "type": "number",
+            "title": "Amount",
+            "description": "The published OCP of the currency, in the currency (+ long)"
+          },
+          "nonlinear": {
+            "type": "number",
+            "title": "Nonlinear",
+            "description": "Of it, the FX delta of the non-linear derivatives (options and positions with an FX gamma), in the currency"
+          },
+          "linear": {
+            "type": "number",
+            "title": "Linear",
+            "description": "amount - nonlinear: what the FX shock takes linearly"
+          },
+          "rate": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Rate",
+            "description": "RUB per unit of the currency (the OCP's rate); null: none in the run"
+          }
+        },
+        "type": "object",
+        "required": [
+          "amount",
+          "nonlinear",
+          "linear"
+        ],
+        "title": "RiskOcpCcy"
+      },
+      "RiskOcpLine": {
+        "properties": {
+          "book": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Book",
+            "description": "null: an entity-level report unit, books are the books it holds"
+          },
+          "books": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Books"
+          },
+          "entity": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Entity"
+          },
+          "ccy": {
+            "type": "string",
+            "title": "Ccy"
+          },
+          "amount": {
+            "type": "number",
+            "title": "Amount"
+          },
+          "nonlinear": {
+            "type": "number",
+            "title": "Nonlinear"
+          },
+          "linear": {
+            "type": "number",
+            "title": "Linear"
+          }
+        },
+        "type": "object",
+        "required": [
+          "books",
+          "ccy",
+          "amount",
+          "nonlinear",
+          "linear"
+        ],
+        "title": "RiskOcpLine"
+      },
       "RiskPayload": {
         "properties": {
           "run_id": {
@@ -7319,6 +7518,17 @@
             },
             "type": "array",
             "title": "Positions"
+          },
+          "ocp": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/RiskOcp"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The published OCP for the FX shock (TDM#577); absent from a payload built outside the risk route"
           }
         },
         "type": "object",

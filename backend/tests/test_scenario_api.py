@@ -71,6 +71,9 @@ def test_risk_payload_and_compat_scenarios(store_url, book, client):
     assert all(0 <= i < n for x in p["positions"] for i, _ in x["delta"])
     assert all(0 <= i <= j < n for x in p["positions"] for i, j, _ in x["gamma"])
     assert any(x["gamma"] for x in p["positions"]) and {x["spread_kind"] for x in p["positions"]} >= {"ofz", "credit"}
+    # TDM#577: the published OCP for the FX shock; a fixture run may have none, then it says why
+    assert p["ocp"]["available"] or p["ocp"]["reason"]
+    assert p["ocp"]["nonlinear_ids"] == sorted(p["ocp"]["nonlinear_ids"])
     tag = r.headers["ETag"]
     assert client.get(f"/api/v1/runs/{rid}/risk", headers={"If-None-Match": tag}).status_code == 304
     assert_error(client.get("/api/v1/runs/999999/risk"), 404, "not_found")

@@ -8,11 +8,12 @@ interface Props {
   taylor: TaylorRun;
   result: ScenarioResult | null;  // exact columns only when a job is done
   stale: boolean;
+  ocpMode?: boolean;  // the FX column is the OCP's: the exact repricing is by the positions' FX deltas
 }
 
 /** Per-book Taylor ≈ table. Exact columns pair like with like: covered ≈ vs covered exact (residual),
  *  and blended (exact covered + ≈ uncovered) vs «Итого ≈»; coverage n/N. */
-export function ResultTable({ taylor, result, stale }: Props) {
+export function ResultTable({ taylor, result, stale, ocpMode }: Props) {
   if (!taylor.totals._total) return <div className="empty">В прогоне нет оценённых позиций</div>;
   const books = Object.keys(taylor.totals).filter(k => k !== '_total');
   const ex = stale ? 'n stale' : 'n';
@@ -47,7 +48,7 @@ export function ResultTable({ taylor, result, stale }: Props) {
               <th className={stale ? 'stale' : undefined} title="Тейлор только по позициям с точной переоценкой">Покрытые ≈</th>
               <th className={stale ? 'stale' : undefined} title="Точная переоценка покрытых позиций">Покрытые точно</th>
               <th className={stale ? 'stale' : undefined} title="Точно − Тейлор по покрытым">Остаток</th>
-              <th className={stale ? 'stale' : undefined} title="Точно для покрытых + Тейлор для остальных: сравнимо с «Итого ≈»">Точно + ≈ непокр.</th>
+              <th className={stale ? 'stale' : undefined} title={ocpMode ? 'Точно для покрытых + Тейлор для остальных, FX от дельт позиций: сравнимо с «Тейлор по позициям ≈», не с «Итого ≈» (там FX от ОВП)' : 'Точно для покрытых + Тейлор для остальных: сравнимо с «Итого ≈»'}>Точно + ≈ непокр.</th>
               <th className={stale ? 'stale' : undefined}>Покрытие</th></>}
           </tr>
         </thead>
