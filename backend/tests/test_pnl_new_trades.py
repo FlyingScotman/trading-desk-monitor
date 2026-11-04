@@ -141,6 +141,8 @@ def _days(monkeypatch, by_date):
         r = by_date.get(on.isoformat(), [])
         return store.DatasetInputs(ds, on, r, [{"set_id": 9}] if r else [])
     monkeypatch.setattr(store, "dataset_rows", rows)
+    monkeypatch.setattr(trades, "_dates_with_trades", lambda con, lo, hi: sorted(
+        d for k in by_date if by_date[k] and lo <= (d := date.fromisoformat(k)) < hi))
 
 
 def _report(inputs, qty, valid="2026-11-03", **kw):
@@ -162,7 +164,7 @@ def test_a_report_of_the_day_keeps_its_quantity_and_the_trades_give_the_pnl(monk
     out, summary = trades.apply_intraday(None, day, _report(tti._inputs(), 1200.0))
     assert {r[0]: r[3] for r in out.rows}["T1|SEC1"] == 1200.0 and summary["gaps"] == {}
     assert summary["rows"]["T1|SEC1"] == {"mode": "qty", "start": 1000.0, "final": 1200.0, "new": False,
-                                          "final_fold": 1200.0, "report": True, "members": ["T1|SEC1"],
+                                          "final_fold": 1200.0, "report": True, "members": {"T1|SEC1": 1200.0},
                                           "bond": "SEC1"}
     assert [t["trade_id"] for t in summary["trades"]] == ["TR1"] and summary["applied"] == 1
     assert {r[0]: r[3] for r in summary["start_inputs"].rows}["T1|SEC1"] == 1000.0
@@ -566,7 +568,7 @@ def test_a_purchase_of_a_bond_held_is_a_new_lot_of_the_report(monkeypatch):
         [("T1|L1", "T1", "SEC1", 1000.0), ("T1|T9", "T1", "SEC1", 500.0)], DAY))
     assert summary["gaps"] == {}                               # by bond, not by position id
     assert {r[0]: r[3] for r in out.rows} == {"T1|L1": 1000.0, "T1|T9": 500.0}   # the report's quantities
-    c = summary["rows"]["T1|L1"]                                 # the PnL of the bond is on its largest lot
+    c = summary["rows"]["T1|L1"]                                 # the lot of the start of the day keeps the trades
     assert (c["start"], c["final"], c["new"], sorted(c["members"])) == (1000.0, 1500.0, False, ["T1|L1", "T1|T9"])
     assert [t["row"] for t in summary["trades"]] == ["T1|L1"]
     assert {r[0]: r[3] for r in summary["start_inputs"].rows} == {"T1|L1": 1000.0}
@@ -580,9 +582,9 @@ def test_a_part_sale_with_two_lots_the_report_takes_first_in_first_out(monkeypat
     out, summary = trades.apply_intraday(None, DAY, _lot_inputs(
         [("T1|L1", "T1", "SEC1", 300.0), ("T1|L2", "T1", "SEC1", 500.0)], DAY))
     assert summary["gaps"] == {}
-    c = summary["rows"]["T1|L2"]                                 # the larger lot of the report
-    assert (c["start"], c["final"]) == (1500.0, 800.0) and sorted(c["members"]) == ["T1|L1", "T1|L2"]
-    assert {r[0]: r[3] for r in summary["start_inputs"].rows if r[1] == "T1"} == {"T1|L2": 1500.0}   # both lots, one row
+    c = summary["rows"]["T1|L1"]                  # the lot of the start of the day with the smallest id keeps the trades
+    assert (c["start"], c["final"]) == (1500.0, 800.0) and c["members"] == {"T1|L1": 300.0, "T1|L2": 500.0}
+    assert {r[0]: r[3] for r in summary["start_inputs"].rows if r[1] == "T1"} == {"T1|L1": 1500.0}   # both lots, one row
     assert {r[0]: r[3] for r in out.rows if r[1] == "T1"} == {"T1|L1": 300.0, "T1|L2": 500.0}
 
 
@@ -688,11 +690,17 @@ def test_lots_a_part_sale_with_two_lots_the_report_takes_fifo_has_the_same_pnl(s
                            (("S1", "sell", 4000, 62.0, 10_000.0), {"pid": "B1|L2", "iid": ""}),
                            [("B1|L1", S, LOT_ISIN, 8000), ("B1|L2", S, LOT_ISIN, 3000)], ["B1|L1", "B1|L2"],
                            ["B1|L1", "B1|L2"])
-    with store.connect(d.url) as con:   # the bond's PnL is on the larger lot of the report, the other has none
-        rows = dict(con.execute("SELECT position_id, pnl->'extra' FROM run_position WHERE run_id = %s AND position_id"
-                                " IN ('B1|L1', 'B1|L2')", (rid,)).fetchall())
-    assert rows["B1|L1"]["start_quantity"] == 15000 and "pnl_on_row" not in rows["B1|L1"]
-    assert rows["B1|L2"]["pnl_on_row"] == "B1|L1" and rows["B1|L2"]["total"] == 0.0
+    with store.connect(d.url) as con:   # the bond's PnL by the lots' shares of the report: 8000 / 3000
+        rows = {r[0]: r for r in con.execute(
+            "SELECT position_id, pv_rub, pnl->'extra', pnl->>'new_trades', pnl->>'carry', pnl->>'rates'"
+            " FROM run_position WHERE run_id = %s AND position_id IN ('B1|L1', 'B1|L2')", (rid,))}
+    l1, l2 = rows["B1|L1"], rows["B1|L2"]
+    assert l1[2]["start_quantity"] == 15000 and "pnl_on_row" not in l1[2] and l1[2]["trades"][0]["trade_id"] == "S1"
+    assert l2[2]["pnl_on_row"] == "B1|L1" and "trades" not in l2[2] and "start_quantity" not in l2[2]
+    for i in (3, 4, 5):   # the new trades, the carry and the rates are split 8000 : 3000
+        assert float(l1[i]) / float(l2[i]) == pytest.approx(8000 / 3000)
+    assert l2[2]["total"] / l1[2]["total"] == pytest.approx(3000 / 8000)
+    assert l2[2]["total"] / l2[1] == pytest.approx(l1[2]["total"] / l1[1])   # the PnL per unit of PV is the same
 
 
 def test_lots_a_new_bond_with_another_position_id_has_the_same_pnl(stub, tmp_path, store_url):
@@ -748,3 +756,62 @@ def test_a_corrected_report_of_the_day_before_makes_the_run_of_the_day_again_onc
     assert again > final
     d.clock["t"] = at(MON, 9, 20)
     assert steps(d.ap.run_cycle())["eod"][1].startswith("up to date") and d.latest_id("EOD") == again
+
+
+def test_split_pnl_adds_up_to_the_bonds_pnl_to_the_last_digit():
+    from datetime import date as d_
+
+    from desk.valuation.fallback import SimplePnl
+
+    p = SimplePnl(secid="S", quantity=1500.0, prev_date=d_(2026, 10, 15), as_of=d_(2026, 10, 16),
+                  prev_valuation_date=d_(2026, 10, 15), valuation_date=d_(2026, 10, 16), z0_bp=10.0, z1_bp=11.0,
+                  v0=1.5e6, v_carry=1.5e6, v_roll=1.5e6, v_rates=1.5e6, v_spread=1.5e6, v1=1.49e6, received_rub=7.0,
+                  carry=100.0, rolldown=3.3, rates=-41.7, spread=0.1, other=-0.3, total=-12345.678, identity_error=1e-6,
+                  rates_linear=-40.0, price_basis=("a", "b"), new_trades=-5000.5, start_quantity=1000.0,
+                  trades=[{"trade_id": "T"}], rates_linear_curves={"RUB OFZ": {"1Y": 3.0, "2Y": -7.0}},
+                  prev_inputs={"pv_rub": 1.5e6, "quantity": 1500.0, "clean_pct": 51.45, "risk": {"RUB OFZ": {"1Y": 2.0}}},
+                  curve_moves_bp={"RUB OFZ": {"1Y": 5.0}})
+    ws = [0.5, 0.3, 0.2]
+    a, b, c = nt.split_pnl(p, ws)
+    for f in ("carry", "total", "new_trades", "v0", "rates", "identity_error"):
+        assert math.fsum(getattr(x, f) for x in (a, b, c)) == pytest.approx(getattr(p, f), abs=1e-12)
+    assert b.total == pytest.approx(p.total * 0.3) and c.new_trades == pytest.approx(p.new_trades * 0.2)
+    assert math.fsum(x.rates_linear_curves["RUB OFZ"]["2Y"] for x in (a, b, c)) == pytest.approx(-7.0)
+    assert [x.prev_inputs["pv_rub"] for x in (b, c)] == [pytest.approx(0.45e6), pytest.approx(0.3e6)]
+    assert b.prev_inputs["clean_pct"] == 51.45 and b.curve_moves_bp == p.curve_moves_bp   # per bond: the same
+    assert b.z0_bp == 10.0                                                                # bp are not amounts
+
+
+def test_lots_in_different_units_are_said_and_their_trades_are_not_in_the_pnl(monkeypatch):
+    import test_trades_intraday as tti
+
+    _days(monkeypatch, {"2026-11-03": [tti._trade(position_id="T1|L2", instrument_id="SEC1", quantity="100")]})
+    _lots_prev(monkeypatch, [("T1|L1", "T1", "SEC1", 1000.0)])
+    # the report keeps the second lot as a face amount
+    rep = _lot_inputs([("T1|L1", "T1", "SEC1", 1000.0), ("T1|L2", "T1", "SEC1", None)], DAY)
+    rep.extra["T1|L2"] = {"asset_class": "bond", "ccy": "RUB", "face_amount_ccy": 100_000.0}
+    out, summary = trades.apply_intraday(None, DAY, rep)
+    assert summary["mixed_units"] == ["T1|SEC1"] and summary["trades"] == [] and summary["rows"] == {}
+    assert summary["skipped"] == {"mixed_units": 1} and summary["skipped_ids"] == {"TR1": "mixed_units"}
+    assert summary["applied"] == 0 and summary["versions"] == {}
+    assert out.extra["T1|L2"]["x"] == {"trades_mixed_units": True}
+    assert trades._intraday_state(tti._trade(), DAY, {"run_type": "EOD", "versions": {},
+                                                      "skipped_ids": summary["skipped_ids"]}, True) == "mixed_units"
+
+
+def test_a_stale_book_with_no_trades_in_the_window_costs_one_read(monkeypatch):
+    import test_trades_intraday as tti
+
+    calls = []
+
+    def rows(con, ds, on):
+        calls.append(on)
+        return store.DatasetInputs(ds, on, [], [])
+
+    monkeypatch.setattr(store, "dataset_rows", rows)
+    asked = []
+    monkeypatch.setattr(trades, "_dates_with_trades", lambda con, lo, hi: asked.append((lo, hi)) or [])
+    old = store.PositionInputs(**{**tti._inputs().__dict__, "valid_dates": {"T1": date(2026, 9, 1),
+                                                                            "T2": date(2026, 9, 1)}})
+    out, summary = trades.apply_intraday(None, DAY, old)
+    assert out is old and calls == [DAY] and len(asked) == 1 and summary["history_cut"] == {}

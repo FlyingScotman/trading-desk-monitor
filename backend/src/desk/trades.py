@@ -67,7 +67,7 @@ def _moscow_today() -> date:
 
 
 SKIP_REASONS = ("cancelled", "not_bond", "other_trade_date", "no_quantity", "no_instrument", "units_mismatch",
-                "other_book", "position_id_taken", "no_currency")
+                "other_book", "position_id_taken", "no_currency", "mixed_units")
 """Why a trade of the day is not in the day's book (``effect``; the screen shows them, the run counts them)."""
 SCALED = ("face_amount_ccy", "face_outstanding_ccy", "mv_rub", "accrued_ccy", "amount_ccy",
           "risk_dv01_rub", "risk_cs01_rub")
@@ -109,6 +109,15 @@ def _times(t: dict[str, Any]) -> str:
 
 MAX_HISTORY_DAYS = 7
 """How many days back the trades of a book's days without a report are looked for (``apply_intraday``)."""
+MAX_CUT_DAYS = 60
+"""How far back the trades older than that window are counted for the lineage's ``history_cut``."""
+
+
+def _dates_with_trades(con: psycopg.Connection, lo: date, hi: date) -> list[date]:
+    """The dates in [lo, hi) with a stored ``trades`` set, oldest first: one query for the whole window."""
+    return [d for (d,) in con.execute(
+        "SELECT DISTINCT valid_date FROM dataset_set WHERE dataset = 'trades' AND valid_date >= %s AND valid_date < %s"
+        " ORDER BY valid_date", (lo, hi))]
 
 
 def _fold(rows: list, extra: dict[str, dict], books: set[str], d: date, trade_rows: list[dict[str, Any]]
@@ -274,13 +283,16 @@ def apply_intraday(con: psycopg.Connection, on: date,
     trades of ``on``. **Books with the report of ``on``** (valid ``on``): the positions are the report's, strictly;
     the start of the day is the book's earlier set plus its days' trades, and the trades of ``on`` give the PnL only
     (``new_trades``). The difference of the report and start + trades is flagged on the row
-    (``x.trades_report_gap``) and in ``gaps``; a traded row the report no longer lists is kept at zero."""
+    (``x.trades_report_gap``) and in ``gaps``; a traded row the report no longer lists is kept at zero (a row of
+    its own, ``<position id>|closed`` when that id is taken: the history of a position by its id breaks there).
+    Bonds whose lots are in different units (quantity and face amount) cannot be compared or measured: their trades
+    are left out of the PnL, ``mixed_units`` and ``x.trades_mixed_units`` say so."""
     held = dict(inputs.valid_dates)
     rep = {b for b, v in held.items() if v >= on}
     day = store.dataset_rows(con, "trades", on)
     summary: dict[str, Any] = {"set_ids": sorted({u["set_id"] for u in day.units}), "applied": 0,
                                "new_positions": 0, "skipped": {}, "versions": {}, "skipped_ids": {}, "trades": [],
-                               "rows": {}, "history": 0, "history_cut": {}, "gaps": {}, "start_inputs": None}
+                               "rows": {}, "history": 0, "history_cut": {}, "mixed_units": [], "gaps": {}, "start_inputs": None}
     start_hash = None
     base_rows: list[list] = [list(r) for r in inputs.rows if r[1] not in rep]
     base_extra = {r[0]: inputs.extra[r[0]] for r in base_rows if r[0] in inputs.extra}
@@ -294,27 +306,26 @@ def apply_intraday(con: psycopg.Connection, on: date,
         bvalid.update(prev.valid_dates)
         start_hash = prev.private_inputs_hash   # a corrected report of the day before changes the PnL of the trades
     hist: list[dict] = []
-    first = max(min(bvalid.values(), default=on) + timedelta(days=1), on - timedelta(days=MAX_HISTORY_DAYS))
+    lo = min(bvalid.values(), default=on) + timedelta(days=1)
+    first = max(lo, on - timedelta(days=MAX_HISTORY_DAYS))
+    # one query for the dates with trades between the oldest report and ``on`` (none: nothing more is read)
+    dated = _dates_with_trades(con, max(lo, on - timedelta(days=MAX_CUT_DAYS)), on) if lo < on else []
     cut: dict[str, dict[str, Any]] = {}
-    for b, v in sorted(bvalid.items()):   # trades older than the window are lost: said, never silent
-        dropped = 0
-        d = v + timedelta(days=1)
-        while d < first and (d - v).days <= 60:
-            dropped += sum(1 for t in store.dataset_rows(con, "trades", d).rows
-                           if str(t.get("book_id")) == b and effect(t, d) is None)
-            d += timedelta(days=1)
-        if first > v + timedelta(days=1) and dropped:
-            cut[b] = {"report": v.isoformat(), "dropped": dropped}
-    summary["history_cut"] = cut
-    d = first
-    while d < on:   # trades of the days between a book's report and ``on``: in its start of the day
+    for d in dated:
         past = store.dataset_rows(con, "trades", d)
-        if past.rows:
+        if d < first:   # older than the window: not counted, said (``history_cut``), never silent
+            for b, v in bvalid.items():
+                n = sum(1 for t in past.rows if str(t.get("book_id")) == b and v < d and effect(t, d) is None)
+                if n:
+                    c = cut.setdefault(b, {"report": v.isoformat(), "dropped": 0})
+                    c["dropped"] += n
+            continue
+        if past.rows:   # trades of the days between a book's report and ``on``: in its start of the day
             base_rows, base_extra, res = _fold(base_rows, base_extra, {b for b, v in bvalid.items() if v < d}, d,
                                                past.rows)
             hist += res["applied"]
             summary["set_ids"] = sorted({*summary["set_ids"], *(u["set_id"] for u in past.units)})
-        d += timedelta(days=1)
+    summary["history_cut"] = cut
     summary["history"] = len(hist)
     if not day.rows and not hist:
         return inputs, summary
@@ -348,6 +359,8 @@ def apply_intraday(con: psycopg.Connection, on: date,
     start_rows = [list(r) for r in base_rows]
     start_extra = dict(base_extra)
     gaps: dict[str, float] = {}
+    mixed: list[str] = []
+    mixed_bonds: list[str] = []
     rows_out: dict[str, dict[str, Any]] = {p: c for p, c in changed.items() if by_pid[p][1] not in rep}
     traded = sorted({_bond(r, extra_f.get(r[0])) for r in rows_f if r[1] in rep and r[0] in changed}, key=str)
     for key in traded:
@@ -356,8 +369,16 @@ def apply_intraday(con: psycopg.Connection, on: date,
         lots_r = [r for r in inputs.rows if r[1] in rep and _bond(r, inputs.extra.get(r[0])) == key]
         modes = {_row_qty(r, ex.get(r[0]))[0] for rs, ex in ((lots_b, base_extra), (lots_f, extra_f),
                                                               (lots_r, inputs.extra)) for r in rs}
-        if len(modes) != 1:
-            continue   # lots in quantities and in face amounts: not comparable
+        if len(modes) != 1:   # lots in quantities and in face amounts: not comparable, so said, never silent
+            pids_m = {r[0] for r in lots_f}
+            mixed += [str(a["trade_id"]) for a in applied if a["row"] in pids_m]
+            mixed_bonds.append(f"{key[0]}|{key[1]}")
+            for r in lots_r:
+                out_extra[r[0]] = {**out_extra.get(r[0], {}), "x": {**(out_extra.get(r[0], {}).get("x") or {}),
+                                                                   "trades_mixed_units": True}}
+            for p_ in pids_m:
+                rows_out.pop(p_, None)
+            continue
         mode = next(iter(modes))
 
         def total(rs: list, ex: dict) -> float:
@@ -365,8 +386,9 @@ def apply_intraday(con: psycopg.Connection, on: date,
 
         q0, q_fold, q_rep = total(lots_b, base_extra), total(lots_f, extra_f), total(lots_r, inputs.extra)
         book = key[0]
-        if lots_r:   # the row that carries the bond's PnL: the largest lot of the report
-            anchor = min(lots_r, key=lambda r: (-(_row_qty(r, inputs.extra.get(r[0]))[1] or 0.0), r[0]))[0]
+        if lots_r:   # the lot that keeps the trades: a lot of the start of the day, the smallest id, else the smallest
+            starts = sorted(r[0] for r in lots_r if r[0] in {b_[0] for b_ in lots_b})
+            anchor = starts[0] if starts else min(r[0] for r in lots_r)
         else:        # the report lacks the bond: one row at zero keeps its PnL
             anchor = (lots_b or lots_f)[0][0]
             if anchor in listed:
@@ -386,23 +408,34 @@ def apply_intraday(con: psycopg.Connection, on: date,
         for p in pids_f:
             rows_out.pop(p, None)
         rows_out[anchor] = {"mode": mode, "start": q0, "final": q_rep, "final_fold": q_fold, "new": q0 == 0,
-                            "report": True, "members": [r[0] for r in lots_r], "bond": str(key[1])}
+                            "report": True, "bond": str(key[1]),
+                            "members": {r[0]: _row_qty(r, inputs.extra.get(r[0]))[1] or 0.0 for r in lots_r}}
         # the start of the day of the bond for its PnL: its lots in one row
         start_rows = [r for r in start_rows if r not in lots_b]
         for r in lots_b:
             start_extra.pop(r[0], None)
         if lots_b:
             x0 = dict(base_extra.get(lots_b[0][0]) or {})
-            if len(lots_b) > 1:
-                x0.pop("face_outstanding_ccy", None)
-                faces = [(base_extra.get(r[0]) or {}).get("face_amount_ccy") for r in lots_b]
-                if None in faces:
-                    x0.pop("face_amount_ccy", None)
-                else:
-                    x0["face_amount_ccy"] = math.fsum(faces)
+            if len(lots_b) > 1:   # the lots in one row: the figures that follow the quantity added up, else dropped
+                for f in (*SCALED, *COST_BASIS):
+                    vals = [(base_extra.get(r[0]) or {}).get(f) for r in lots_b]
+                    if None in vals:
+                        x0.pop(f, None)
+                    else:
+                        x0[f] = math.fsum(float(v) for v in vals)
             start_rows.append([anchor, book, lots_b[0][2], q0 if mode == "qty" else None])
             start_extra[anchor] = x0
-    summary.update(trades=[a for a in applied if a["row"] in rows_out], rows=rows_out,
+    if mixed:   # the trades of a bond in lots of different units: not in the PnL of the trades, said
+        drop_ids = set(mixed)
+        kept = [a for a in applied if str(a["trade_id"]) not in drop_ids]
+        skipped_m = dict(summary["skipped"])
+        skipped_m["mixed_units"] = len(drop_ids)
+        summary.update(applied=len(kept), skipped=dict(sorted(skipped_m.items())),
+                       versions={str(a["trade_id"]): a["trade_version"] for a in kept[:MAX_LISTED]},
+                       skipped_ids={**summary["skipped_ids"], **dict.fromkeys(sorted(drop_ids), "mixed_units")})
+    summary["mixed_units"] = mixed_bonds
+    summary.update(trades=[a for a in applied if a["row"] in rows_out and str(a["trade_id"]) not in set(mixed)],
+                   rows=rows_out,
                    gaps=dict(list(gaps.items())[:MAX_LISTED]))
     summary["start_inputs"] = replace(inputs, rows=[tuple(r) for r in start_rows], extra=start_extra, valid_dates=bvalid)
     canon = json.dumps([inputs.private_inputs_hash, applied, hist, start_hash, cut], sort_keys=True, default=str, separators=(",", ":"))

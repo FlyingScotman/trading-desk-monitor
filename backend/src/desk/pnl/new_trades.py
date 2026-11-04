@@ -146,13 +146,46 @@ def _opened_today(prev: EodContext, ctx: EodContext, o: Outcome, nt: float, res:
         method=SIMPLE_METHOD)
 
 
-def _covered(prev: EodContext, ctx: EodContext, o: Outcome, anchor: str) -> SimplePnl:
-    """A lot of a bond whose PnL is on another lot (``pnl_on_row``): none of its own, so that the bond's PnL is counted
-    once and not again as a flash PnL of this lot from the previous close."""
-    v = o.valuation
-    assert v is not None
-    return replace(_opened_today(prev, ctx, o, 0.0, []), start_quantity=None, trades=None, pnl_on_row=anchor,
-                   note=f"the bond was traded today: its PnL (the start of the day's and the trades') is on the lot {anchor}")
+SCALED_FIELDS = ("v0", "v_carry", "v_roll", "v_rates", "v_spread", "v1", "received_rub", "carry", "rolldown", "rates",
+                 "spread", "other", "total", "identity_error", "rates_linear", "fx_gross", "fx_gross_cbr", "fx_funding",
+                 "fx_funding_cbr", "fx_delta_ccy", "carry_coupon", "received_coupon_rub", "new_trades")
+"""The amounts of a ``FlashPnl`` that are linear in the quantity: split between the lots by their share."""
+PREV_LINEAR = ("pv_rub", "quantity", "dv01_rub", "cs01_rub", "ofz_spr01_rub", "risk", "ofz_ruonia_risk")
+"""The keys of ``prev_inputs`` (``extra.prev``) that are position sums and split with the PnL; the per-bond ones
+(prices, yield, accrued per bond) and ``curve_moves_bp`` (market moves) are the same for every lot."""
+
+
+def _parts(v: Any, ws: list[float]) -> list[Any]:
+    """``v`` (a number, or a nested dict / tuple of them) in parts by the shares ``ws``; the first part is the rest, so
+    that the parts add up to ``v`` exactly."""
+    if v is None or isinstance(v, bool | str):
+        return [v] * len(ws)
+    if isinstance(v, dict):
+        per = {k: _parts(x, ws) for k, x in v.items()}
+        return [{k: p[i] for k, p in per.items()} for i in range(len(ws))]
+    if isinstance(v, tuple | list):
+        per_t = [_parts(x, ws) for x in v]
+        return [type(v)(p[i] for p in per_t) for i in range(len(ws))]
+    if not isinstance(v, int | float):
+        return [v] * len(ws)
+    rest = [v * w for w in ws[1:]]
+    return [v - math.fsum(rest), *rest]
+
+
+def split_pnl(pnl: Any, ws: list[float]) -> list[Any]:
+    """The PnL of a bond in parts for its lots by their shares ``ws`` (the first takes the rounding rest and keeps the
+    trades and ``start_quantity``; the others point to it by ``pnl_on_row``): the amounts and the numeric breakdowns
+    (``rates_linear_curves``, the position sums of ``prev``) times the share; what is not an amount of the position
+    (rates, bp, prices per bond, the market's moves) is the same for each. The sum of the parts is the bond's PnL."""
+    cols = {f: _parts(getattr(pnl, f), ws) for f in SCALED_FIELDS if getattr(pnl, f, None) is not None}
+    cols["rates_linear_curves"] = _parts(pnl.rates_linear_curves, ws)
+    cols["rates_linear_ofz"] = _parts(pnl.rates_linear_ofz, ws)
+    prev = pnl.prev_inputs
+    prev_parts = ([prev] * len(ws) if not prev else
+                  [{**prev, **{k: p[i] for k, p in ((k, _parts(prev[k], ws)) for k in PREV_LINEAR if k in prev)}}
+                   for i in range(len(ws))])
+    return [replace(pnl, **{f: c[i] for f, c in cols.items()}, prev_inputs=prev_parts[i])
+            for i in range(len(ws))]
 
 
 def attach(prev: EodContext, ctx: EodContext, start: PositionInputs, bp: Any, outcomes: list[Outcome],
@@ -189,9 +222,23 @@ def attach(prev: EodContext, ctx: EodContext, start: PositionInputs, bp: Any, ou
             o.trades = {"new_trades": nt, "start_quantity": s.valuation.quantity if s and s.valuation else None,
                         "trades": res}
             n["no_pnl"] += 1
-        for m in (info.get(pid) or {}).get("members", ()):   # the other lots of the bond in the report
-            lot = main.get(m)
-            if m == pid or lot is None or lot.valuation is None or lot.terms is None:
-                continue
-            lot.pnl, lot.no_pnl = (_covered(prev, ctx, lot, pid), None) if o.pnl is not None else (None, o.no_pnl)
+        mem = (info.get(pid) or {}).get("members") or {}
+        lots = [m for m in mem if m != pid and main.get(m) is not None and main[m].valuation is not None
+                and main[m].terms is not None]
+        if pid not in mem or not lots:
+            continue
+        if o.pnl is None:   # no PnL of the bond: none on its other lots either
+            for m in lots:
+                main[m].pnl, main[m].no_pnl = None, o.no_pnl
+            continue
+        order = [pid, *sorted(lots)]   # the lot that keeps the trades first
+        tot = math.fsum(mem[m] for m in order)
+        if tot == 0:
+            continue
+        parts = split_pnl(o.pnl, [mem[m] / tot for m in order])
+        for m, part in zip(order, parts):
+            lot = main[m]
+            lot.no_pnl = None
+            lot.pnl = replace(part, quantity=lot.valuation.quantity) if m == pid else replace(
+                part, quantity=lot.valuation.quantity, trades=None, start_quantity=None, pnl_on_row=pid)
     return n

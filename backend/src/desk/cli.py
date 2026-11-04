@@ -310,6 +310,10 @@ def eod_run(settings: Settings, d: str, *, snapshots: str | Path | None = None, 
             for b, c in (intraday_trades.get("history_cut") or {}).items():
                 out(f"WARN trades: {c['dropped']} trade(s) of {b} older than {trades_mod.MAX_HISTORY_DAYS} days since its "
                     f"last report ({c['report']}) are not counted in the start of the day")
+            if intraday_trades.get("mixed_units"):
+                out(f"WARN trades: {len(intraday_trades['mixed_units'])} bond(s) with lots in different units "
+                    "(quantity / face amount): their trades are not in the PnL: "
+                    + ", ".join(intraday_trades["mixed_units"][:10]))
             if intraday_trades.get("gaps"):
                 out(f"WARN trades: {len(intraday_trades['gaps'])} position(s) where the report of {run_date} differs "
                     "from the start of the day plus the trades (x.trades_report_gap, the report's quantity kept): "
