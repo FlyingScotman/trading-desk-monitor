@@ -1280,20 +1280,22 @@ def published_day(comparisons: Sequence[Mapping[str, Any]], outside_report: Sequ
                     pv = [x for x in term if x.last_flow is None or b0 is None or x.last_flow > b0]
                     issues["derivatives_unknown_last_flow"] += [x.position_id for x in pv if x.last_flow is None]
                     # coverage: positions of the kind valued at their notional (no terms) or with no amount at all
-                    held = {x.position_id for x in mine if x.kind == k and x.in_term}
-                    bare = {x.position_id for x in pv if x.basis != "spot_equivalent"} | {
-                        x.position_id for x in mine if x.kind == k and x.in_term and x.basis == "none"}
+                    # (only those with flows still to come: ``pv``, and the ones with no amount at all; a position
+                    # whose last flow is not after B is not in ``pv`` and is no gap)
+                    unvalued = {x.position_id for x in mine if x.kind == k and x.in_term and x.basis == "none"}
+                    held = {x.position_id for x in pv} | unvalued
+                    bare = {x.position_id for x in pv if x.basis != "spot_equivalent"} | unvalued
                     if pv and bare:
                         (no_pv if bare >= held else partial).append(k)
                         # no position of the kind has a PV (no terms bound, core did not value it): the report's
                         # nominal of the kind in this currency, marked, instead of the positions' notionals or zeros
                         # (the owner, 03.11.2026); without such a nominal, the positions' own notionals, marked
                         to_nominal = bare >= held and bool(nominal.get(k)) and _nominal_ok(k, policy, outside_kinds)
-                        issues["derivatives_partial_pv"].append(
-                            f"{where} {ccy}: {KIND_TEXT[k]} ("
-                            + (("PV нет ни у одной позиции: номинал отчёта" if to_nominal
-                                else "PV нет ни у одной позиции") if bare >= held else
-                               f"{len(bare)} из {len(held)} позиций без PV") + ")")
+                        if not to_nominal:  # with the nominal the gap is «номинал отчёта» (below), not this one too
+                            issues["derivatives_partial_pv"].append(
+                                f"{where} {ccy}: {KIND_TEXT[k]} ("
+                                + ("PV нет ни у одной позиции" if bare >= held else
+                                   f"{len(bare)} из {len(held)} позиций без PV") + ")")
                         if to_nominal:
                             pv = []
                 in_pv |= {x.position_id for x in pv}

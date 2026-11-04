@@ -1202,7 +1202,7 @@ class Autopilot:
                     "up_to_date"
             return "skipped", f"no {cut} cut of {today} on the hub yet ({when})", "no_cut_yet"
         sid, why = target
-        sig = (cut, sid, tuple(ids), prev_id, logic_version(), inputs_hash)
+        sig = (cut, sid, tuple(ids), prev_id, logic_version(), inputs_hash, store.dataset_set_ids(con, today))
         label = store.slice_label(today, cut, row.get("cut_ts") if row and sid == row["snapshot_id"] else last[2])
         if self._failed_before(f"{cut} {today}", sig, label):
             return "skipped", f"{cut} {sid[:12]} failed before on the same inputs, not retried", "failed_before"
@@ -1300,7 +1300,7 @@ class Autopilot:
         if self._inbox_waiting and self._sync_later:  # as the eod step (R22): not once per revision of the backlog
             return "skipped", (f"{label}: after the inbox backlog ({self._inbox_waiting} files wait for a calendar, "
                                f"{self._sync_later} hub dates next cycle)"), "inbox_backlog"
-        sig = (snap, tuple(ids), logic, inputs_hash)
+        sig = (snap, tuple(ids), logic, inputs_hash, store.dataset_set_ids(con, today))
         if self._failed_before(f"prev_close {today}", sig, label):
             return "skipped", f"{label} failed before on the same inputs, not retried", "failed_before"
         self._progress("morning", 0, 1, label)

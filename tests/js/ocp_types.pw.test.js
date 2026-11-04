@@ -27,6 +27,8 @@ const ROWS = [
   { key: 'FAKE FUT', label: 'FAKE FUT', value: null, suggested: 'fx_future', hint: 'по названию типа', new: false, future: 12, cells: { lines: 30, future_share: 0.4, subtypes: 1 }, children: [] },
   { key: 'FAKE IRS FLOWS', label: 'FAKE IRS FLOWS', value: null, suggested: 'swap', hint: 'по названию типа', new: true, future: 8, cells: { lines: 8, future_share: 1, subtypes: 1 }, children: [] },
   { key: 'FAKE OTHER FLOW', label: 'FAKE OTHER FLOW', value: null, suggested: null, hint: null, new: false, future: 5, cells: { lines: 9, future_share: 0.5556, subtypes: 1 }, children: [] }];
+// nothing to look at: the suggested kinds are already saved, no new type, no unset one with future lines
+const CALM_ROWS = ROWS.map(r => ({ ...r, new: false, value: r.suggested !== null ? r.suggested : r.value }));
 const CHOICES = { kind: 'ocp_derivative_types', save: { tab: 'ocp_policy', key: 'derivative_types' }, options: OPTIONS, columns: [], rows: ROWS,
   risky_unset: ['fx_future', 'ndf', 'fx_option'], replay: { source: 'ocp_cash', from: '2026-11-02', to: '2026-11-02' }, file_sha256: 'f'.repeat(64),
   notes: ['Тип, оставленный «не дериватив», остаётся в ОВП отчёта по номиналу.'] };
@@ -35,13 +37,14 @@ const SOURCES = [{ source: 'ocp_cash', datasets: ['ocp', 'cash_balances'], names
 
 function server(opts) {
   const st = { saves: [], replayRuns: [], replayPolls: 0, autoPolls: 0, deny: !!(opts && opts.deny) };
+  const choices = opts && opts.calm ? { ...CHOICES, rows: CALM_ROWS } : CHOICES;
   st.handle = (u, method, body) => {
     const p = u.pathname;
     if (p === '/api/v1/auth/state') return { enabled: false, user: null };
     if (p === '/api/v1/settings' && method === 'GET') return { home: 'C:\\desk', inbox_dirs: [], effective: {}, env_overrides: [], error: null };
     if (p === '/api/v1/adapter/choices/ocp_derivative_types' && method === 'GET')
       return { action: { id: 'row_types', title: 'Типы строк отчёта ОВП' }, running: false, ok: true, summary: [], stale: false,
-        job: { state: 'done', started_at: new Date(Date.now() - 60000).toISOString(), finished_at: new Date(Date.now() - 50000).toISOString() }, choices: CHOICES };
+        job: { state: 'done', started_at: new Date(Date.now() - 60000).toISOString(), finished_at: new Date(Date.now() - 50000).toISOString() }, choices };
     if (p === '/api/v1/adapter/choices/ocp_derivative_types' && method === 'POST') {
       st.saves.push(body); st.replay = { state: 'running', waiting: true, request: { source: 'ocp_cash', from: '2026-11-02', to: '2026-11-02' } };
       return { saved: { revision: { rev_id: 7 } }, changed: Object.keys(body.values).length, replay: { started: true } };
@@ -167,6 +170,31 @@ test('ОВП: типы строк отчёта и перечитывание (TD
         await ctx.close();
       });
     }
+    await t.test('«требуют внимания» видно в меню и сводке, не заходя на экран; без таких типов — нет', async () => {
+      const seen = pg => pg.evaluate(() => ({ items: window.DeskSettings.statusItems().filter(x => x.k === 'ОВП: типы строк'),
+        dot: document.querySelector('a[data-sec="ovp"] .dot').className }));
+      // there are new / hinted types: warn on the section's dot and a line in the summary, on another section's page
+      let r = await page(browser, server(), '/settings.html#hub', 1024);
+      await r.pg.waitForFunction(() => /warn/.test(document.querySelector('a[data-sec="ovp"] .dot').className));
+      let s = await seen(r.pg);
+      assert.strictEqual(s.items.length, 1);
+      assert.ok(/требуют внимания: \d+/.test(s.items[0].text) && s.items[0].cls === 'warn' && s.items[0].href === '#ovp', JSON.stringify(s.items));
+      await r.ctx.close();
+      // nothing to check: no dot, no line; a kind taken off a type with future lines brings them, putting it back removes them
+      r = await page(browser, server({ calm: true }), '/settings.html#ovp', 1024);
+      const box = r.pg.locator('[data-slot="ovp-types"]');
+      await box.locator('.ot-row', { hasText: 'FAKE FUT' }).waitFor();
+      s = await seen(r.pg);
+      assert.ok(!/warn/.test(s.dot) && s.items.length === 0, JSON.stringify(s));
+      await box.locator('.ot-row', { hasText: 'FAKE FUT' }).locator('select').selectOption('');
+      await r.pg.waitForFunction(() => /warn/.test(document.querySelector('a[data-sec="ovp"] .dot').className));
+      assert.strictEqual((await seen(r.pg)).items.length, 1);
+      await box.locator('.ot-row', { hasText: 'FAKE FUT' }).locator('select').selectOption('fx_future');
+      await r.pg.waitForFunction(() => !/warn/.test(document.querySelector('a[data-sec="ovp"] .dot').className));
+      assert.strictEqual((await seen(r.pg)).items.length, 0);
+      assert.deepStrictEqual(r.errors, []);
+      await r.ctx.close();
+    });
     await t.test('перечитывание не показывается пользователю без прав', async () => {
       const st = server({ deny: true }), { pg, ctx } = await page(browser, st, '/replay-harness.html', 1024);
       await pg.waitForTimeout(500);

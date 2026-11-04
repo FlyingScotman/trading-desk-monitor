@@ -224,11 +224,22 @@ def test_choices_shape_is_checked() -> None:
     res = tools.check_action_result({"ok": True, "files": [], "choices": ok}, decl)
     assert res["choices"]["rows"][0]["suggested"] == "fx_forward" and res["warnings"] == []
     for bad in ({**ok, "kind": "other"}, {**ok, "save": {"tab": "Bad Tab", "key": "x"}},
-                {**ok, "rows": [{"key": "A", "value": "swap"}]}, {**ok, "rows": [{"key": "A"}, {"key": "A"}]},
-                {**ok, "rows": [{"key": "A", "future": -1}]}, {**ok, "replay": {"source": "s", "from": "x"}},
-                {**ok, "risky_unset": [None]}):
+                {**ok, "replay": {"source": "s", "from": "x"}}, {**ok, "rows": "A"}, {**ok, "risky_unset": [None]}):
         res = tools.check_action_result({"ok": True, "files": [], "choices": bad}, decl)
         assert "choices" not in res and res["warnings"] and res["ok"], bad  # the action stands, its choices go
+    # a bad row (a key on «_», a repeated key, a wrong value or future) goes alone, the other rows stay
+    rows = [{"key": "A", "value": None, "suggested": None}, {"key": "_x", "value": None, "suggested": None},
+            {"key": "A", "value": None, "suggested": None}, {"key": "B", "value": "swap", "suggested": None},
+            {"key": "C", "value": None, "suggested": None, "future": -1}, "junk",
+            {"key": "D", "value": None, "suggested": "fx_forward", "future": 1}]
+    res = tools.check_action_result({"ok": True, "files": [], "choices": {**ok, "rows": rows}}, decl)
+    assert [r["key"] for r in res["choices"]["rows"]] == ["A", "D"] and not res["choices"]["truncated"]
+    assert len(res["warnings"]) == 5 and all(w.endswith("row skipped") for w in res["warnings"]), res["warnings"]
+    big = [{"key": f"K{n}", "value": None, "suggested": None} for n in range(tools.MAX_CHOICE_ROWS + 5)]
+    res = tools.check_action_result({"ok": True, "files": [], "choices": {**ok, "rows": big}}, decl)
+    assert len(res["choices"]["rows"]) == tools.MAX_CHOICE_ROWS and res["choices"]["truncated"] is True
+    assert len(res["warnings"]) == 1 and "only the first" in res["warnings"][0]
+    assert "warnings" not in res["choices"]
     res = tools.check_action_result({"ok": True, "files": [], "choices": ok}, {})
     assert "choices" not in res and res["warnings"] == ["choices: the action does not declare choices, ignored"]
     acts, warn = tools.check_actions({"actions": [{"id": "a", "choices": "nope"}]}, True)
@@ -331,3 +342,25 @@ def test_a_derivative_without_bound_terms_keeps_the_reports_nominal_marked(home:
     assert d1["parts"]["base"] == 155_000 and d1["parts"]["derivatives"] == 260_000
     assert d1["fallback"] == ["fx_forward"] and d1["no_pv"] == ["fx_forward"]
     assert [i["marker"] for i in d1["contributions"]["derivatives"]["items"]] == ["номинал, PV нет"]
+
+
+def test_the_replay_the_adapter_asks_for_is_checked_like_the_owners(home: Path, store_url: str, monkeypatch) -> None:
+    """The adapter's choices carry the replay period and source: after the save they are checked as the replay page
+    checks the owner's (a bad period, an undeclared source), the saved file stays, nothing is started."""
+    from types import SimpleNamespace
+
+    from desk import inbox_replay
+    from desk.api import adapter_routes
+
+    st = load()
+    started = []
+    monkeypatch.setattr(inbox_replay, "start", lambda *a, **kw: started.append(a))
+    req = SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace()))
+    ok = {"source": "typed_ocp", "from": "2026-10-15", "to": "2026-10-15"}
+    assert adapter_routes._start_replay(st, req, ok, "why")["started"] is True and len(started) == 1
+    for bad in ({**ok, "from": "2026-10-16"},  # first after last
+                {**ok, "from": "2020-01-01"},  # longer than the page allows
+                {**ok, "source": "nope"}, {**ok, "from": "x"}, {**ok, "source": None}, None):
+        out = adapter_routes._start_replay(st, req, bad, "why")
+        assert out["started"] is False and out["error"], bad
+    assert len(started) == 1

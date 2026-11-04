@@ -154,6 +154,16 @@
     var s = document.createElement('style'); s.id = 'ot-style'; s.textContent = CSS; document.head.append(s);
   }
 
+  // «требуют внимания» — точка раздела «ОВП» в меню и строка сводки сверху (settings-nav.js): видны без захода на экран.
+  // n — число типов с риском двойного счёта, без вида после подсказки или новых; null/0 — снять
+  function signal(n) {
+    var DS = root.DeskSettings;
+    if (!DS) return;
+    var text = n ? 'ОВП: типов строк отчёта требуют внимания — ' + n : '';
+    if (DS.dot) DS.dot('ovp', n ? 'warn' : '', text);
+    if (DS.status) DS.status('ovp-types', n ? { cls: 'warn', href: '#ovp', k: 'ОВП: типы строк', text: 'требуют внимания: ' + n, title: text } : null);
+  }
+
   function render() {
     var el = S.el, r = S.data;
     el.textContent = '';
@@ -165,6 +175,7 @@
       return;
     }
     var ch = r.choices, running = r.running;
+    if (!ch) signal(0);
     var head = h('div', { class: 'ot-head' });
     var refresh = h('button', { class: 'ibtn', type: 'button', disabled: running || S.saving, onclick: function () { runAction(); } }, running ? 'Читаю отчёты…' : 'Обновить');
     head.append(refresh);
@@ -178,6 +189,7 @@
     var rows = T.order(ch.rows || []);
     var nFuture = rows.filter(function (x) { return x.future > 0; }).length;
     var nAttn = T.filter(ch, S.sel, rows, 'attention').length;
+    signal(nAttn);
     var chips = h('div', { class: 'ot-chips', role: 'tablist' });
     [['future', 'С будущими строками ' + nFuture], ['attention', 'Требуют внимания ' + nAttn], ['all', 'Все ' + rows.length]].forEach(function (m) {
       chips.append(h('button', { class: 'ot-chip' + (S.mode === m[0] ? ' on' : ''), type: 'button', role: 'tab', 'aria-selected': S.mode === m[0] ? 'true' : 'false',
@@ -300,6 +312,7 @@
     style();
     S.el = el; S.api = opts.api; S.toast = opts.toast || null;
     render();
+    load(false);  // the table once at the page's opening: the dot of the section «ОВП» needs it before the screen is opened
   };
   // экран открыт: данные заново (и действие, если результата нет или он устарел)
   T.shown = function () { if (S.el && !S.saving) load(true); };

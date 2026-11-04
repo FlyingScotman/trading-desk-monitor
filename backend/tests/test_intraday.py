@@ -776,3 +776,33 @@ def test_an_ocp_report_recorded_after_the_intraday_run_runs_the_same_cut_again(s
     clock["t"] = at(FRI, 10, 9)
     by = steps(ap.run_cycle())
     assert by["intraday"][0] == "ok" and by["intraday"][1].startswith("up to date"), by["intraday"]
+
+
+def test_a_failed_intraday_run_is_tried_again_when_an_ocp_report_arrives(stub, tmp_path, store_url, monkeypatch):
+    """TDM#554: the failed-run signature includes the ocp / cash_balances dataset sets, so a new revision of the OCP
+    base is a changed input (the run is tried again), while without it the failure stays not retried."""
+    s = cfg(tmp_path, store_url, stub)
+    put(tmp_path, "positions_20261016.csv")
+    real = cli.eod_run
+
+    def broken(*a, **kw):
+        if kw.get("cut_type") == "intraday":
+            raise ValueError("boom")
+        return real(*a, **kw)
+
+    monkeypatch.setattr(cli, "eod_run", broken)
+    clock = {"t": at(FRI, 9, 0)}
+    ap = Autopilot(settings_loader=lambda: s, now=lambda: clock["t"])
+    ap.run_cycle()
+    publish(stub, FRI, "intraday", "2026-10-16T07:00:00Z", 1)
+    clock["t"] = at(FRI, 10, 6)
+    assert steps(ap.run_cycle())["intraday"][0] == "error"
+    clock["t"] = at(FRI, 10, 16)
+    st = ap.run_cycle()
+    assert next(x for x in st["steps"] if x["name"] == "intraday")["reason"] == "failed_before"
+    (tmp_path / "in" / "ocp_20261015.csv").write_text(
+        "entity;book_id;ccy;ocp_ccy;ocp_rub;rate_rub_per_unit\nENT1;B1;USD;1000;;\n", encoding="utf-8")
+    clock["t"] = at(FRI, 10, 26)
+    st = ap.run_cycle()
+    intraday = next(x for x in st["steps"] if x["name"] == "intraday")
+    assert intraday["reason"] != "failed_before" and intraday["status"] == "error", intraday  # tried (and failed) again

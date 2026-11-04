@@ -472,8 +472,7 @@ def test_no_position_of_the_kind_with_a_pv_is_said_so():
     items = d1["contributions"]["derivatives"]["items"]
     assert [(i["kind"], i["amount"], i["marker"]) for i in items] == [("report_nominal", 310.0, "номинал, PV нет")]
     gaps = {g["code"]: g for g in r.gaps}
-    assert gaps["derivatives_partial_pv"]["items"] == [
-        "книга D1 USD: валютные свопы (PV нет ни у одной позиции: номинал отчёта)"]
+    assert "derivatives_partial_pv" not in gaps  # one gap about it, not two: the nominal is said below
     assert gaps["derivatives_nominal_fallback"]["items"] == ["книга D1 USD: валютные свопы"]
     chk = r.derivatives_check[0]
     assert (chk["no_pv"], chk["partial"]) == (True, False)
@@ -770,3 +769,21 @@ def test_pv_on_a_base_published_on_another_basis_is_unknown(store_url):
     r = run(on=D, days={B: O.BaseDay(B, run_id=old, pv_base=None, trade_rows=[])})
     chk = {(x["book_id"], x["ccy"], x["kind"]): x for x in r.derivatives_check}[("D1", "USD", "fx_forward")]
     assert (chk["pv"], chk["diff"], chk["over"], chk["note"]) == (None, None, False, "PV на базу неизвестен")
+
+
+def test_a_position_with_no_flow_after_the_base_is_not_a_coverage_gap():
+    """Review: the coverage compared the positions of the kind with ALL positions of it, also those whose last flow is
+    not after B (not in the PV term, in the report already): one expired swap leg made «none valued» a partial case.
+    Only positions with flows to come count; and with the report's nominal in place there is one gap, not two."""
+    def leg(pid, value_date):
+        return {"position_id": pid, "book_id": "D1", "instr_type": "FX", "fx_delta": {"USD": 300.0},
+                "extra": {"reported": {"asset_class": "fx", "value_date": value_date, "x_product_group": "fx_swap"},
+                          "fx_delta_basis": "notional (no trade terms: undiscounted)"}}
+    rep = [{"entity": "ENT1", "book_id": "D1", "ccy": "USD", "ocp_ccy": "0", "derivatives_ccy": {"fx_swap": "310"},
+            "_set_id": 11, "_src": "L2"}]
+    r = run(rows=[leg("D1|SWL", "2026-12-16"), leg("D1|OLD", "2026-10-15")], report=rep, units=UNITS[:1])
+    d1 = pub(r)[("D1", "USD")]
+    assert d1["no_pv"] == ["fx_swap"] and d1["partial_pv"] == [], d1  # the live leg has no PV, the expired one is no gap
+    assert d1["fallback"] == ["fx_swap"] and d1["parts"]["derivatives"] == 310
+    gaps = {g["code"]: g for g in r.gaps}
+    assert "derivatives_partial_pv" not in gaps and "derivatives_nominal_fallback" in gaps

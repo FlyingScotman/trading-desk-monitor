@@ -186,6 +186,29 @@ def get_choices(kind: str) -> dict[str, Any]:
             "replay": inbox_replay.job(st), "replay_running": inbox_replay.running()}
 
 
+def _start_replay(st: Any, request: Request, r: Any, reason: str) -> dict[str, Any]:
+    """The replay the action asks for after the save: its period and source come from the adapter, so they are checked
+    as ``POST /api/v1/inbox/replay`` checks the owner's (period, declared source). The file is already saved, so a bad
+    request is a result (``started: false`` and why), not an error."""
+    src = r.get("source") if isinstance(r, dict) else None
+    out: dict[str, Any] = {"started": False, "source": src, "from": r.get("from") if isinstance(r, dict) else None,
+                           "to": r.get("to") if isinstance(r, dict) else None}
+    try:
+        lo, hi = date.fromisoformat(str(out["from"])), date.fromisoformat(str(out["to"]))
+    except ValueError:
+        return {**out, "error": "the adapter's replay period is not two dates"}
+    if (why := inbox_replay.check_period(lo, hi)) is not None:
+        return {**out, "error": f"the adapter's replay period is refused: {why}"}
+    if not isinstance(src, str) or src not in {x["source"] for x in inbox_replay.sources(None, st)}:
+        return {**out, "error": "the adapter declares no such source to read again"}
+    try:
+        inbox_replay.start(st, src, lo, hi, getattr(request.app.state, "store_url", None),
+                           getattr(request.app.state, "autopilot", None), reason=reason)
+    except adapter_jobs.Busy:
+        return {**out, "error": "a replay is running: start it again when it ends"}
+    return {**out, "started": True}
+
+
 @router.post("/api/v1/adapter/choices/{kind}")
 def save_choices(kind: str, body: JsonBody, request: Request) -> dict[str, Any]:
     st = _settings()
@@ -226,13 +249,6 @@ def save_choices(kind: str, body: JsonBody, request: Request) -> dict[str, Any]:
     replay: dict[str, Any] | None = None
     if body.get("replay") is True and ch.get("replay"):
         r = ch["replay"]
-        lo, hi = date.fromisoformat(r["from"]), date.fromisoformat(r["to"])
-        try:
-            inbox_replay.start(st, r["source"], lo, hi, getattr(request.app.state, "store_url", None),
-                               getattr(request.app.state, "autopilot", None), reason=f"сохранено: {decl['title']}")
-            replay = {"started": True, "source": r["source"], "from": r["from"], "to": r["to"]}
-        except adapter_jobs.Busy:
-            replay = {"started": False, "error": "a replay is running: start it again when it ends",
-                      "source": r["source"], "from": r["from"], "to": r["to"]}
+        replay = _start_replay(st, request, r, f"сохранено: {decl['title']}")
     return {"saved": saved, "changed": changed, "schema": issues, "replay": replay,
             "replay_job": inbox_replay.job(st)}

@@ -21,8 +21,8 @@ Shapes (08 §3):
   of UTF-8.
 * an action may declare ``"choices": "<kind>"`` (since 03.11.2026, TDM#554): its result may then carry ``choices``, a
   table of rows the owner gives a value from a dropdown on a screen of the monitor (``CHOICE_KINDS``), saved into an
-  object of one of the adapter's settings tabs (``check_choices``). A broken ``choices`` is left out with a warning:
-  the action itself stands.
+  object of one of the adapter's settings tabs (``check_choices``). A broken ``choices`` is left out with a warning (a broken row only itself, over
+  ``MAX_CHOICE_ROWS`` rows: the first ones, ``truncated``): the action itself stands.
 """
 
 from __future__ import annotations
@@ -220,6 +220,7 @@ def check_action_result(result: Any, decl: dict) -> dict:
         else:
             try:
                 choices = check_choices(result["choices"], decl["choices"])
+                warnings.extend(choices.pop("warnings"))
             except BadResult as e:
                 warnings.append(f"{e}; choices ignored")
     return {"ok": result["ok"], "summary": _lines(result.get("summary"), "summary"),
@@ -245,6 +246,37 @@ def _cells(v: Any, cols: set[str], where: str) -> dict:
 
 def _opt_text(v: Any, where: str) -> str | None:
     return None if v is None else _text(v, where)
+
+
+def _choice_row(r: Any, w: str, keys: set, values: list, col_ids: set) -> dict:
+    """One row of ``choices.rows`` (``check_choices``); ``BadResult`` for a row that cannot be shown."""
+    if not isinstance(r, dict):
+        raise BadResult(f"{w}: must be an object")
+    key = _text(r.get("key"), f"{w}.key")
+    if not key.strip() or key.startswith("_") or key in keys:
+        raise BadResult(f"{w}.key: non-empty, not starting with _, unique")
+    if r.get("value") not in values or r.get("suggested") not in values:
+        raise BadResult(f"{w}: value and suggested are option values")
+    fut = r.get("future", 0)
+    if isinstance(fut, bool) or not isinstance(fut, int) or fut < 0:
+        raise BadResult(f"{w}.future: an integer, 0 or more")
+    rep = r.get("replaces") or []
+    if not isinstance(rep, list) or not all(isinstance(x, str) and x for x in rep):
+        raise BadResult(f"{w}.replaces: a list of keys")
+    kids = r.get("children") or []
+    if not isinstance(kids, list):
+        raise BadResult(f"{w}.children: a list")
+    row = {"key": key, "label": _text(r.get("label", key), f"{w}.label"), "value": r.get("value"),
+           "suggested": r.get("suggested"), "hint": _opt_text(r.get("hint"), f"{w}.hint"),
+           "new": r.get("new") is True, "future": fut, "cells": _cells(r.get("cells"), col_ids, f"{w}.cells"),
+           "replaces": [x[:MAX_TEXT] for x in rep[:20]],
+           "children": [{"label": _text(k.get("label") if isinstance(k, dict) else None,
+                                        f"{w}.children[{j}].label"),
+                         "cells": _cells(k.get("cells"), col_ids, f"{w}.children[{j}].cells")}
+                        for j, k in enumerate(kids[:MAX_CHILDREN])],
+           "children_more": max(0, len(kids) - MAX_CHILDREN)}
+    keys.add(key)
+    return row
 
 
 def check_choices(c: Any, kind: str) -> dict:
@@ -291,37 +323,18 @@ def check_choices(c: Any, kind: str) -> dict:
                for i, x in enumerate(cols_in)]
     col_ids = {x["id"] for x in columns}
     rows_in = c.get("rows")
-    if not isinstance(rows_in, list) or len(rows_in) > MAX_CHOICE_ROWS:
-        raise BadResult(f"choices.rows: a list of at most {MAX_CHOICE_ROWS}")
-    rows, keys = [], set()
-    for i, r in enumerate(rows_in):
+    if not isinstance(rows_in, list):
+        raise BadResult("choices.rows: must be a list")
+    truncated = len(rows_in) > MAX_CHOICE_ROWS  # the first MAX_CHOICE_ROWS are shown
+    rows, keys, warnings = [], set(), []
+    for i, r in enumerate(rows_in[:MAX_CHOICE_ROWS]):
         w = f"choices.rows[{i}]"
-        if not isinstance(r, dict):
-            raise BadResult(f"{w}: must be an object")
-        key = _text(r.get("key"), f"{w}.key")
-        if not key.strip() or key.startswith("_") or key in keys:
-            raise BadResult(f"{w}.key: non-empty, not starting with _, unique")
-        keys.add(key)
-        if r.get("value") not in values or r.get("suggested") not in values:
-            raise BadResult(f"{w}: value and suggested are option values")
-        fut = r.get("future", 0)
-        if isinstance(fut, bool) or not isinstance(fut, int) or fut < 0:
-            raise BadResult(f"{w}.future: an integer, 0 or more")
-        rep = r.get("replaces") or []
-        if not isinstance(rep, list) or not all(isinstance(x, str) and x for x in rep):
-            raise BadResult(f"{w}.replaces: a list of keys")
-        kids = r.get("children") or []
-        if not isinstance(kids, list):
-            raise BadResult(f"{w}.children: a list")
-        rows.append({"key": key, "label": _text(r.get("label", key), f"{w}.label"), "value": r.get("value"),
-                     "suggested": r.get("suggested"), "hint": _opt_text(r.get("hint"), f"{w}.hint"),
-                     "new": r.get("new") is True, "future": fut, "cells": _cells(r.get("cells"), col_ids, f"{w}.cells"),
-                     "replaces": [x[:MAX_TEXT] for x in rep[:20]],
-                     "children": [{"label": _text(k.get("label") if isinstance(k, dict) else None,
-                                                  f"{w}.children[{j}].label"),
-                                   "cells": _cells(k.get("cells"), col_ids, f"{w}.children[{j}].cells")}
-                                  for j, k in enumerate(kids[:MAX_CHILDREN])],
-                     "children_more": max(0, len(kids) - MAX_CHILDREN)})
+        try:
+            rows.append(_choice_row(r, w, keys, values, col_ids))
+        except BadResult as e:  # one bad row goes, the others stay
+            warnings.append(f"{e}; row skipped")
+    if truncated:
+        warnings.append(f"choices.rows: only the first {MAX_CHOICE_ROWS} of {len(rows_in)} are shown")
     risky = c.get("risky_unset") or []
     if not isinstance(risky, list) or any(x not in values or x is None for x in risky):
         raise BadResult("choices.risky_unset: option values")
@@ -339,7 +352,7 @@ def check_choices(c: Any, kind: str) -> dict:
     return {"kind": kind, "title": _opt_text(c.get("title"), "choices.title"), "save": {"tab": save["tab"],
             "key": save["key"]}, "options": options, "columns": columns, "rows": rows, "risky_unset": list(risky),
             "replay": replay, "notes": _lines(c.get("notes"), "choices.notes"),
-            "truncated": len(rows_in) > MAX_CHOICE_ROWS}
+            "truncated": truncated, "warnings": warnings}
 
 
 def merge_choices(data: dict, choices: dict, values: dict) -> tuple[dict, int]:
