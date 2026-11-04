@@ -100,6 +100,9 @@ class Outcome:
     core_not_valued: tuple[str, str] | None = None
     """(reason, detail) of a derivative row that is not valued by core from trade terms (none, or core could not):
     its value is the report's (``valuation.positions``); ``publish.derivatives_parallel`` lists it."""
+    ocp_amount: dict[str, float] | None = None
+    """Of such a CCS row: the foreign legs' notional per currency, to receive (+) or pay (-), for the OCP at the
+    nominal basis (``dv.ccs_ocp_amount``)."""
 
 
 @dataclass

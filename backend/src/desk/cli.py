@@ -319,6 +319,9 @@ def eod_run(settings: Settings, d: str, *, snapshots: str | Path | None = None, 
         if bp.unlinked_rates:
             out(f"WARN trade_terms: {len(bp.unlinked_rates)} swap or REPO trade(s) no positions row names, not valued: "
                 + ", ".join(bp.unlinked_rates[:10]))
+        if bp.ambiguous_terms:
+            out(f"WARN trade_terms: {len(bp.ambiguous_terms)} position row(s) share a trade's legs with another row "
+                "(one deal_id on several rows), valued in none: " + "; ".join(bp.ambiguous_terms[:10]))
         outcomes = value(ctx, bp.requests, second_order=not no_gamma, position_ids=bp.position_ids,
                          carried_spreads=carried)
         if prev_cut and not no_pnl:

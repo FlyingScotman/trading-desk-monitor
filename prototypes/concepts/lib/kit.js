@@ -2318,7 +2318,7 @@
     repo_open: 'открытое РЕПО: нет даты окончания (её задаёт владелец)', no_fixings: 'нет фиксингов индекса в прогоне', pv_not_finite: 'ядро дало нечисловую оценку',
     repo_index_unsupported: 'индекс РЕПО не поддерживается', no_key_rate_curve: 'нет кривой КС в прогоне', no_rub_curve: 'нет кривой RUONIA OIS в прогоне',
     swap_dates_mismatch: 'даты начала или окончания ног свопа не совпадают', swap_notional_mismatch: 'номиналы ног свопа не совпадают',
-    terms_mixed: 'у строки сделки разных видов', not_valued: 'ядро не вернуло оценку',
+    terms_mixed: 'у строки сделки разных видов', terms_ambiguous: 'условия одной сделки подходят нескольким строкам отчёта (один deal_id): ядро не оценивает ни одну', not_valued: 'ядро не вернуло оценку',
     swap_frequency_unsupported: 'частота выплат не поддерживается', day_count_unsupported: 'база начисления не поддерживается', swap_index_unsupported: 'индекс не поддерживается',
     swap_ccy_unsupported: 'валюта свопа не RUB', repo_ccy_unsupported: 'валюта РЕПО не RUB', terms_incomplete: 'условия сделки неполные', terms_invalid: 'условия сделки не приняты ядром', settled: 'сделка исполнена' };
   K.rcReason = c => !c ? '' : RC_REASON[c] || (/^core_/.test(c) ? 'ядро отклонило: ' + c.slice(5) : c);

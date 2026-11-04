@@ -339,6 +339,13 @@ def test_a_row_without_asset_class_is_linked_to_its_terms(ctx):
     assert row["side"] == "PAY" and not row["name"].endswith(tdm_run.FROM_REPORT)
     b1 = bp.direct["B1"]
     assert b1.core_not_valued[0] == "basis_swap_unsupported" and b1.valuation.pv_rub == 7.0
+    # published as a derivative with core's reason, not as an unmapped bond; the OCP does not take it as a bond
+    brow = tdm_run.direct_row(ctx, "IRB", "B1", b1, extra["B1"], None)
+    assert brow["instr_type"] == "OTC" and not brow["name"].endswith(tdm_run.FROM_REPORT)
+    assert brow["extra"]["not_exact_reason"] == "basis_swap_unsupported"
+    from desk.rules import ocp as O
+
+    assert O.classify(brow, terms, {}, BD, O.PROVISIONAL_POLICY)[0] != "bonds"
     assert "Z" not in bp.direct or bp.direct["Z"].core_not_valued is None  # no terms: the bond path, as before
 
 
@@ -354,6 +361,12 @@ def ccs(tid, rub_side, rub_n, cny_n, start="2026-10-06", end="2028-10-06", excha
     return [{**common, "leg_id": "rub", "side": rub_side, "ccy": "RUB", "notional_ccy": str(rub_n), **kw},
             {**common, "leg_id": "cny", "side": cny_side, "ccy": "CNY", "notional_ccy": str(cny_n),
              "fixed_rate_pct": rate}]
+
+
+def without_xccy(ctx):
+    """``ctx`` of a run whose snapshot has no CNY XCCY curve (a CCS then falls back on the FX derivatives' curve)."""
+    return replace(ctx, core_market=replace(ctx.core_market, curves=tuple(
+        c for c in ctx.core_market.curves if c.curve_id != "CNY XCCY")))
 
 
 def ccs_plan(ctx, terms, pid="C1"):
@@ -373,17 +386,19 @@ def test_ccs_valued_by_core_with_risk_on_both_curves_and_fx_delta(ctx):
     o = bp.direct["C1"]
     v = o.valuation
     assert o.core_not_valued is None and v.extra["core"]["product"] == "ccs", (o.reason, o.detail)
-    assert set(v.curve_buckets) == {"RUB RUONIA", "CNY FX"}
+    assert set(v.curve_buckets) == {"RUB RUONIA", "CNY XCCY"}  # the run's XCCY curve, not the FX-implied one
     (fact,) = v.extra["swaps"]
     assert (fact["product"], fact["side"], fact["rub_side"], fact["foreign_ccy"]) == ("ccs", "receiver", "pay", "CNY")
     assert v.fx_delta["CNY"] == pytest.approx(fact["foreign_leg_pv"]) and 0.9e8 < v.fx_delta["CNY"] < 1.1e8
     assert v.pv_rub == pytest.approx(fact["rub_leg_pv_rub"] + fact["foreign_leg_pv_rub"], rel=1e-9)
-    assert v.extra["fx_rates"] == {"CNY": 12.5141} and v.extra["basis01"]["CNY"] > 0  # receives CNY: long the basis
+    assert v.extra["fx_rates"] == {"CNY": 12.5141} and v.extra["basis01_xccy"]["CNY"] > 0  # receives CNY: long the basis
+    assert "basis01" not in v.extra and fact["foreign_curve"] == "CNY XCCY"
     assert "RUONIA" in v.extra["index_fixings"] and fact["fixing_id"] == "RUONIA"
-    assert v.curve_buckets["CNY FX"]["2Y"] < 0  # receives CNY fixed: long a CNY bond
+    assert v.curve_buckets["CNY XCCY"]["2Y"] < 0  # receives CNY fixed: long a CNY bond
+    assert v.extra["ocp_amount"] == {"CNY": 1e8}  # the foreign leg's notional to receive (TDM#555 review)
     row = tdm_run.direct_row(ctx, "IRB", "C1", o, inp.extra["C1"], None)
     assert row["instr_type"] != "FX" and row["fx_delta"] == {"CNY": v.fx_delta["CNY"]} and row["side"] == "REC"
-    assert set(row["risk"]) == {"RUB RUONIA", "CNY FX"}
+    assert set(row["risk"]) == {"RUB RUONIA", "CNY XCCY"}
     assert O.derivative_kind(row, inp.trade_terms) == "swap"
 
 
@@ -391,6 +406,7 @@ def test_ccs_with_only_a_final_exchange_and_no_coupons_is_an_fx_forward(ctx):
     """Core's identity (docs/xccy.md): a CCS with only the final exchange and zero coupons is the FX forward of its
     final amounts: the same PV and CNY delta as the deliverable forward valued from its own terms."""
     end = "2027-10-20"
+    ctx = without_xccy(ctx)  # on the FX-implied curve, as the forward is
     swap, _ = ccs_plan(ctx, ccs("C2", "pay", 1_300_000_000, 100_000_000, start="2026-10-20", end=end,
                                 exchange="final", fixed_rate_pct="0", cny_rate="0"), "C2")
     fwd_terms = [{"trade_id": "F2", "book_id": "IRB", "product_kind": "fx_forward", "trade_date": "2026-10-02",

@@ -73,7 +73,7 @@ def compare(positions: list[tuple[str, str, Outcome]], extra: dict[str, dict[str
     """The block of the run: ``positions`` as ``desk_run.publish`` gets them, ``extra`` the positions rows
     (``PositionInputs.extra``) and ``terms`` the run's ``trade_terms`` rows, for the report's PV and the product of
     a row core did not value."""
-    linked, _ = dv.link([(pid, book, extra.get(pid) or {}) for pid, book, o in positions if o.core_not_valued],
+    linked, _, _ = dv.link([(pid, book, extra.get(pid) or {}) for pid, book, o in positions if o.core_not_valued],
                         terms or [])
     rows: list[dict[str, Any]] = []
     for pid, book, o in positions:

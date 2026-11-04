@@ -75,6 +75,11 @@ class BookPlan:
     unlinked_rates: list[str] = field(default_factory=list)
     """``book|trade_id`` of the swap (irs, ois, ccs) trade_terms trades no positions row names: not valued, counted in
     the run's log and lineage (TDM#468)."""
+    ambiguous_terms: list[str] = field(default_factory=list)
+    """``position_id: trade_id`` of the rows whose trade's legs another row took as well: valued in none
+    (``terms_ambiguous``)."""
+    ocp_amounts: dict[str, dict[str, float]] = field(default_factory=dict)
+    """position_id -> the foreign legs' notional of its CCS trades, of the rows core did not value."""
     added: list[str] = field(default_factory=list)
     """Position IDs of the trades added with ``fx_unlinked_terms`` (rows of their own, in ``order`` and ``direct``)."""
 
@@ -281,13 +286,17 @@ def _derivatives(ctx: EodContext, inputs: PositionInputs, p: BookPlan, second_or
             # TDM#501: a row without asset_class but with a deal: its trade's terms link it, else it is a bond as before
             rows.append((pid, book, normalised(x)))
             classless.add(pid)
-    linked, unlinked = dv.link(rows, inputs.trade_terms)
+    linked, unlinked, ambiguous = dv.link(rows, inputs.trade_terms)
+    p.ambiguous_terms = sorted(f"{pid}: {', '.join(ts)}" for pid, ts in ambiguous.items())
     p.unlinked_terms = sorted({f"{t.get('book_id')}|{t.get('trade_id')}" for t in unlinked})
     p.unlinked_rates = dv.unlinked_rates(rows, inputs.trade_terms, ctx.business_date)
     reqs, out = [], {}
     qty = {pid: q for pid, _, _, q in inputs.rows}
     for pid, book, x in rows:
-        if pid in linked:
+        if pid in ambiguous:
+            out[pid] = dv.NotValued("terms_ambiguous", f"trade {', '.join(ambiguous[pid])} is the terms of several "
+                                                       "positions rows (one deal_id on several rows)")
+        elif pid in linked:
             try:
                 reqs.append(dv.request_of(pid, book, x, linked[pid]))
             except dv.NotValued as e:
@@ -319,7 +328,11 @@ def _derivatives(ctx: EodContext, inputs: PositionInputs, p: BookPlan, second_or
             p.added.append(pid)
     valued, result = dv.value(ctx, reqs, options=opts, second_order=second_order)
     p.core_result = result
-    return {**out, **valued}
+    got = {**out, **valued}
+    for pid, e in got.items():
+        if isinstance(e, dv.NotValued) and (amt := dv.ccs_ocp_amount(linked.get(pid, []), ctx.business_date)):
+            p.ocp_amounts[pid] = amt
+    return got
 
 
 def _future_row(ctx: EodContext, x: dict[str, Any]) -> dict[str, Any] | None:
@@ -395,6 +408,7 @@ def plan(ctx: EodContext, inputs: PositionInputs, *, second_order: bool = True) 
             if core is None and kind == "otc":  # the report's value only: listed by publish.derivatives_parallel
                 o.core_not_valued = (NO_TERMS, "no trade_terms row names this position")
             p.direct[pid] = _not_by_core(o, core) if core is not None else o
+            p.direct[pid].ocp_amount = p.ocp_amounts.get(pid)
             continue
         notes = []
         if secid is None or secid not in ctx.static.bonds:

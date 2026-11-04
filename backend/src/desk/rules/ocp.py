@@ -334,6 +334,9 @@ def classify(row: Mapping[str, Any], terms: Sequence[Mapping[str, Any]], books: 
         basis = policy.amount_basis.value
         if policy.amount_basis is AmountBasis.NOMINAL:
             delta = _amounts(ex.get("ocp_amount"), policy)
+    elif ex.get("ocp_amount") and policy.amount_basis is AmountBasis.NOMINAL:
+        # a CCS core did not value: the foreign leg's notional (its terms), not the report's PV
+        basis, delta = AmountBasis.NOMINAL.value, _amounts(ex["ocp_amount"], policy)
     elif row.get("instr_type") == "BOND":
         basis = "mv_net" if _net_of_liability(row) else "mv"
     else:

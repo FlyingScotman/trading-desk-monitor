@@ -53,6 +53,15 @@ def prev(ctx):
     return dataclasses.replace(p, market=m)
 
 
+@pytest.fixture(scope="module")
+def moved(ctx):
+    """D with the CNY market rate ``CNY_MOVE`` above D-1's: the FX part of the PnL has something to show."""
+    m = copy.copy(ctx.market)
+    was = ctx.market.fx
+    m.fx = lambda ccy: {**was(ccy), "moex_19": was(ccy)["moex_19"] + CNY_MOVE} if ccy == "CNY" else was(ccy)
+    return dataclasses.replace(ctx, market=m)
+
+
 def fx(tid, base, quote, side, nb, nq, vd, **kw):
     return {"trade_id": tid, "book_id": "DB", "product_kind": kw.pop("product_kind", "fx_forward"),
             "trade_date": "2026-10-01", "value_date": vd, "base_ccy": base, "quote_ccy": quote, "side": side,
@@ -76,6 +85,12 @@ TERMS = [
      "notional_exchange": "initial_and_final"},
     {**leg("C5", "cny", "receive", kind="ccs", fixed_rate_pct="3"), "ccy": "CNY", "notional_ccy": "100000000",
      "notional_exchange": "initial_and_final"},
+    # a CCS paying its annual coupons on D (14.10 + a business day): both fixed, in RUB and in CNY
+    *({"trade_id": "C6", "leg_id": lid, "book_id": "DB", "product_kind": "ccs", "trade_date": "2025-10-10",
+       "start_date": "2025-10-14", "maturity_date": "2027-10-14", "notional_exchange": "initial_and_final",
+       "payment_frequency": "1Y", "day_count": "ACT/365", "side": side, "ccy": ccy, "notional_ccy": n,
+       "fixed_rate_pct": rate}
+      for lid, side, ccy, n, rate in (("rub", "pay", "RUB", "1250000000", "15"), ("cny", "receive", "CNY", "100000000", "3"))),
 ]
 ROWS = {  # as the adapter reads the positions report: the report's PV of a row is not used once core values it
     "DB|F1": {"asset_class": "fx", "ccy": "CNY", "amount_ccy": 10e6, "value_date": date(2026, 12, 17), "deal_id": "F1"},
@@ -83,8 +98,12 @@ ROWS = {  # as the adapter reads the positions report: the report's PV of a row 
     "DB|N3": {"asset_class": "fx", "ccy": "USD", "amount_ccy": -1e6, "value_date": date(2027, 1, 20), "deal_id": "N3"},
     "DB|O4": {"asset_class": "otc", "ccy": "RUB", "deal_id": "O4", "mv_rub": 2.0},
     "DB|C5": {"asset_class": "otc", "ccy": "RUB", "deal_id": "C5", "mv_rub": 3.0},
+    "DB|C6": {"asset_class": "otc", "ccy": "RUB", "deal_id": "C6", "mv_rub": 4.0},
 }
-PRODUCTS = {"DB|F1": "fx_forward", "DB|S2": "fx_swap", "DB|N3": "fx_ndf", "DB|O4": "ois", "DB|C5": "ccs"}
+PRODUCTS = {"DB|F1": "fx_forward", "DB|S2": "fx_swap", "DB|N3": "fx_ndf", "DB|O4": "ois", "DB|C5": "ccs",
+            "DB|C6": "ccs"}
+CNY_MOVE = 0.4
+"""The CNY market rate of D less that of D-1 (the fixture gives D-1 the rates of D)."""
 
 
 def inputs(valid):
@@ -93,7 +112,7 @@ def inputs(valid):
 
 
 @pytest.fixture(scope="module")
-def published(ctx, prev, pg_server):
+def published(ctx, prev, moved, pg_server):
     """D-1 and D published to a store of their own (once for the module), and an API client on it."""
     from fastapi.testclient import TestClient
 
@@ -106,11 +125,11 @@ def published(ctx, prev, pg_server):
     url = pg_server.get_uri(name)
     store.migrate(url)
     pin, din = inputs(PREV), inputs(BD)
-    pbp, bp = pv1.plan(prev, pin), pv1.plan(ctx, din)
-    direct.attach(prev, ctx, bp.direct, din, pbp.direct, pin.valid_dates)
+    pbp, bp = pv1.plan(prev, pin), pv1.plan(moved, din)
+    direct.attach(prev, moved, bp.direct, din, pbp.direct, pin.valid_dates)
     with store.connect(url) as con:
         desk_run.publish(con, prev, pv1.merge(pbp, []), prev=None, inputs=pin, core_results=[pbp.core_result])
-        rid, status, _ = desk_run.publish(con, ctx, pv1.merge(bp, []), prev=prev.market, inputs=din,
+        rid, status, _ = desk_run.publish(con, moved, pv1.merge(bp, []), prev=prev.market, inputs=din,
                                           core_results=[bp.core_result])
     assert status == "complete"
     return TestClient(create_app(url)), rid, bp
@@ -152,7 +171,7 @@ def test_risk_screens_show_the_same_dv01_and_fx_delta(published, ctx):
         for ccy, a in (f.get("fx_delta") or {}).items():
             assert d[f"FX|{ccy}"] == pytest.approx(a * ctx.fx.rates[ccy][0] / 100, rel=1e-12), (pid, ccy)  # per 1 %
             delta[ccy] += a
-    assert set(pos["DB|C5"]["risk"]) == {"RUB RUONIA", "CNY FX"} and pos["DB|C5"]["fx_delta"]["CNY"] > 0
+    assert set(pos["DB|C5"]["risk"]) == {"RUB RUONIA", "CNY XCCY"} and pos["DB|C5"]["fx_delta"]["CNY"] > 0
     assert set(pos["DB|O4"]["risk"]) == {"RUB RUONIA"} and not pos["DB|O4"].get("fx_delta")
     table = c.get(f"/api/v1/runs/{rid}/risk-table").json()
     by_ccy = {r["ccy"]: r for r in table["rows"] if r["level"] == "ccy"}
@@ -222,3 +241,28 @@ def test_concept_pages_read_the_same_figures(published):
         o = bp.direct[pid]
         if o.pnl is not None:
             assert p["pnl"]["available"] and p["pnl"]["explained"] == pytest.approx(o.pnl.total)
+
+
+def test_pnl_fx_part_is_the_rate_move_on_the_delta_without_the_cash_paid(published, ctx, prev):
+    """The rate moved by ``CNY_MOVE`` between the two dates; C6 paid its coupons on D (a CNY one: a flow in CNY, out of
+    the exposure the move applies to), C5 and the FX rows paid nothing in (D-1, D]. Over a period of the two days the
+    total and the parts are the day's."""
+    c, rid, bp = published
+    pbp = pv1.plan(prev, inputs(PREV))
+    flows = {f["ccy"]: f["amount"] for f in pbp.direct["DB|C6"].valuation.extra["flows"] if f["date"] == BD.isoformat()}
+    assert flows == pytest.approx({"RUB": -0.15 * 1.25e9, "CNY": 0.03 * 1e8})  # each in its own currency
+    for pid in ("DB|C5", "DB|C6", "DB|F1"):
+        o, p = bp.direct[pid], pbp.direct[pid]
+        paid = sum(f["amount"] for f in p.valuation.extra["flows"] if f["date"] == BD.isoformat() and f["ccy"] == "CNY")
+        want = (p.valuation.fx_delta["CNY"] - paid) * CNY_MOVE
+        assert o.pnl.fx_gross == pytest.approx(want), pid
+        assert o.pnl.other == pytest.approx(o.pnl.total - want), pid
+    assert bp.direct["DB|C6"].pnl.received_rub == pytest.approx(-0.15 * 1.25e9 + 0.03 * 1e8 * ctx.fx.rates["CNY"][0])
+    rows = {p["position_id"]: p for p in c.get(f"/api/v1/runs/{rid}/pnl").json()["positions"]}
+    assert rows["DB|C6"]["total"] == pytest.approx(bp.direct["DB|C6"].pnl.total)
+    two = c.get("/api/v1/history/pnl/period", params={"from": PREV.isoformat(), "to": BD.isoformat(), "gran": "day",
+                                                      "run_id": rid}).json()
+    one = c.get("/api/v1/history/pnl/period", params={"from": BD.isoformat(), "to": BD.isoformat(), "gran": "day",
+                                                      "run_id": rid}).json()
+    assert two["summary"]["total"] == pytest.approx(one["summary"]["total"])
+    assert {p["positionId"] for p in two["positions"]} == set(ROWS)
