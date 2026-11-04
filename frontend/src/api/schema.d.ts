@@ -3326,6 +3326,18 @@ export interface components {
                     [key: string]: unknown;
                 };
             };
+            /**
+             * Published Rows
+             * @description TDM#567: ``published.by_book`` as the page data (``OCP.byBook``) and the history by day carry it: the same serializer, camelCase fields, ``baseKind`` under report_base_plus_day
+             */
+            published_rows?: {
+                [key: string]: unknown;
+            }[];
+            /**
+             * Method Note
+             * @description TDM#567: why the published OCP is not on the current methodology (the report without the derivatives + their PV), null when it is
+             */
+            method_note?: string | null;
         };
         /** RunPnl */
         RunPnl: {

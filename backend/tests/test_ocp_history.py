@@ -140,7 +140,8 @@ def test_days_are_the_saved_published_ocp(seeded):
     assert days["2026-10-20"]["runId"] == ids["anchor"] and days["2026-10-20"]["runType"] == "INTRADAY"
     assert days["2026-10-20"]["lines"][0]["validDate"] == "2026-10-19"
     # the books of the period: the latest run's reference wins, a book gone from it is kept
-    assert d["books"]["B1"] == {"name": "Book one", "entity": "ENT1", "desk": "FX", "type": "DERIVS"}  # TDM#567: no type recorded, no bond: as the run derives it
+    assert d["books"]["B1"] == {"name": "Book one", "entity": "ENT1", "desk": "FX", "type": "DERIVS",
+                                 "typeDerived": True}  # TDM#567: no type recorded, no bond: as the run derives it
     assert d["books"]["B9"]["name"] == "Gone"
     # TDM#556: a book of the OCP without positions in its run: from the run's OCP block, with its entity and type
     assert d["books"]["B2"] == {"name": "Old OCP book", "entity": "ENT3", "desk": "D2", "type": "HTM", "ocpOnly": True}

@@ -476,6 +476,11 @@ t('TDM#567 (D24): шапка называет ОВП не по текущей м
   assert.strictEqual(old.M.ocp.byBook[0].baseKind, 'with_derivatives');
   const html = old.K.fxMini(old.K.list());
   assert.ok(html.includes('data-ocp-method') && html.includes('не по текущей методике: отчёт ещё с деривативами'), html);
+  // report_base_plus_day: подпись только если строка с деривативами в срезе (TDM#567, ревью)
+  const bpd = f => load(D => { withOcp(D); D.OCP.basis = 'report_base_plus_day'; D.OCP.methodNote = note; D.OCP.byBook[0].baseKind = 'with_derivatives'; }, f);
+  assert.ok(bpd(null).K.fxMini(bpd(null).K.list()).includes('data-ocp-method'));
+  const cut = bpd({ books: ['SECUR'] });
+  assert.strictEqual(cut.K.ocpMethodText(), '', 'книга с отчётом с деривативами не в срезе — пометки нет');
 });
 
 ta('TDM#567 (D11, D24): C16 — день другой методики на графике и в подсказке, строка с отчётом с деривативами, справочник дня', async () => {

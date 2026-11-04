@@ -133,8 +133,9 @@
   }
   // суммы дня под выбором книг экрана: по валютам и по строкам (книга или часть отчёта)
   function slice(d) {
-    const sc = (SF && K.ocpScope(d.lines || [], d.books || H.books || {}, SF)) || { lines: [], notes: [], partial: false };
+    const sc = (SF && K.ocpScope(d.lines || [], Object.assign({}, H.books, d.books), SF)) || { lines: [], notes: [], partial: false };
     const by = {}, rows = new Map();
+    let withDer = false;
     sc.lines.forEach(x => {
       if (x.ccy === 'RUB' || x.amount == null) return;
       by[x.ccy] = (by[x.ccy] || 0) + x.amount;
@@ -147,12 +148,14 @@
       if (d.basis === 'report_base_plus_day') {
         if (x.baseDate) { if (x.baseOlder) r.valid = x.baseDate; else r.base = x.baseDate; }
         if (x.baseKind === 'book_absent') r.absent = true;
-        if (x.baseKind === 'with_derivatives') r.withDer = true;  // TDM#567 (D24): отчёт ещё с деривативами, PV не добавлен
+        if (x.baseKind === 'with_derivatives') { r.withDer = true; withDer = true; }  // TDM#567 (D24): отчёт ещё с деривативами, PV не добавлен
       } else if (x.validDate && x.validDate < d.date) r.valid = x.validDate;
       rows.set(k, r);
     });
-    return { by, rows: [...rows.values()], notes: sc.notes, partial: !!sc.partial, ccys: Object.keys(by).sort(ccyOrder) };
+    return { by, rows: [...rows.values()], withDer, notes: sc.notes, partial: !!sc.partial, ccys: Object.keys(by).sort(ccyOrder) };
   }
+  // подпись методики дня: по basis report_base_plus_day — только если в срезе есть строка с отчётом ещё с деривативами
+  const methodOf = (d, T) => d && d.methodNote && (d.basis !== 'report_base_plus_day' || (T && T.withDer)) ? d.methodNote : null;
   const usable = d => !!(d && d.basis && !NO_OCP[d.state]);
   const noOcp = d => 'ОВП нет: ' + (NO_OCP[d.state] || 'прогон до публикуемой ОВП');
   const portName = v => v === '—' ? 'без портфеля' : v;
@@ -167,7 +170,7 @@
     const head = [hf.entity && entityName(hf.entity), hf.desk, hf.ccy && 'валюта ' + hf.ccy, hf.books && hf.books.length && (hf.books.length === 1 ? bookName(hf.books[0]) : hf.books.length + ' книг'), ports.length && 'без ' + ports.map(portName).join(', ')].filter(Boolean);
     sb.innerHTML = '<span class="lb">Книги ОВП:</span>' +
       '<span class="k-chip' + (EN ? ' on' : '') + '" data-c16="entity">' + esc(EN ? entityName(EN) : 'все юрлица') + ' ▾</span>' +
-      (types.length ? '<span class="k-chip' + (TY ? ' on' : '') + '" data-c16="type" title="тип книги из настроек книг">' + esc(TY ? 'тип: ' + TY : 'все типы книг') + ' ▾</span>' : '') +
+      (types.length ? '<span class="k-chip' + (TY ? ' on' : '') + '" data-c16="type" title="тип книги из настроек книг; «выведен» — в настройках не задан, выводится по облигациям периода">' + esc(TY ? 'тип: ' + TY : 'все типы книг') + ' ▾</span>' : '') +
       '<span class="k-chip' + (off.length ? ' on' : '') + '" data-c16="books" title="' + esc(off.length ? 'сняты: ' + off.map(b => bookName(b.id)).join(', ') : 'все книги юрлица, HTM входит') + '">' + esc(blbl) + ' ▾</span>' +
       '<span class="k-note" data-c16-note><b>Фильтр шапки здесь не действует</b>' + (head.length ? ' (в шапке: ' + esc(head.join(' · ')) + ')' : '') +
       ': ОВП считается по книгам целиком, портфели' + (ports.length ? ' (' + esc(ports.map(portName).join(', ')) + ')' : '') + ' не исключаются — свой выбор книг экрана.</span>';
@@ -182,7 +185,7 @@
         return;
       }
       const reopen = () => { const c = document.querySelector('[data-c16=books]'); if (c) c.click(); };
-      const items = L.map(b => { const m = bookMeta(b.id), t = [b.id, m.desk && m.desk !== '—' ? m.desk : '', m.type && m.type !== '—' ? m.type : '', EN || !b.entity ? '' : entityName(b.entity), m.ocpOnly ? 'только ОВП' : ''].filter(Boolean); return { v: b.id, t: bookName(b.id), sub: t.join(' · '), multi: true }; });
+      const items = L.map(b => { const m = bookMeta(b.id), t = [b.id, m.desk && m.desk !== '—' ? m.desk : '', m.type && m.type !== '—' ? m.type + (m.typeDerived ? ' (выведен)' : '') : '', EN || !b.entity ? '' : entityName(b.entity), m.ocpOnly ? 'только ОВП' : ''].filter(Boolean); return { v: b.id, t: bookName(b.id), sub: t.join(' · '), multi: true }; });
       const keep = ids => SEL.off.filter(b => !ids.includes(b));
       K.menu(ch, items, L.map(b => b.id).filter(b => !SEL.off.includes(b)), v => setSel({ off: SEL.off.includes(v) ? keep([v]) : SEL.off.concat(v) }), 'c16-books',
         Object.assign(menuOpt, { reopen, all: ids => setSel({ off: keep(ids) }), none: ids => setSel({ off: keep(ids).concat(ids) }) }));
@@ -241,7 +244,7 @@
     const wrap = h('div', 'k-grid');
 
     // итог: дата, общая ОВП в USD, валюты
-    const sp = panel('ОВП на ' + f.dshort(d.date) + (d.state === 'no_report' ? '<span class="c16-badge" title="ОВП из позиций">отчёта ОВП нет</span>' : '') + (ok && d.methodNote ? '<span class="c16-badge" style="color:var(--warn)" data-c16-method-day title="' + esc(d.methodNote) + '">' + esc(d.methodNote.split(':')[0]) + '</span>' : ''));
+    const sp = panel('ОВП на ' + f.dshort(d.date) + (d.state === 'no_report' ? '<span class="c16-badge" title="ОВП из позиций">отчёта ОВП нет</span>' : '') + (ok && methodOf(d, T) ? '<span class="c16-badge" style="color:var(--warn)" data-c16-method-day title="' + esc(d.methodNote) + '">' + esc(d.methodNote.split(':')[0]) + '</span>' : ''));
     const m = sp.querySelector('.m'); m.style.cssText = 'display:inline-flex;gap:6px;flex-wrap:wrap;align-items:center';
     const nt = h('span'), u = h('span'), r = h('span'); m.append(nt, u, r);
     // часть отчёта по юрлицу не вошла из-за выбора книг — пометка
@@ -310,7 +313,7 @@
     });
     // TDM#567 (D11, D24): день не по текущей методике (подпись сервера, ocp_line.method_note) — звёздочка на оси,
     // бледные столбцы и строка в подсказке; пересчёта истории нет
-    const meth = D.map(x => usable(x) && x.methodNote ? x.methodNote : null);
+    const meth = D.map((x, i) => usable(x) ? methodOf(x, sl[i]) : null);
     if (meth.some(Boolean)) hp.querySelector('.m').insertAdjacentHTML('afterbegin', '<span class="mut3" data-c16-method-legend title="' + esc([...new Set(meth.filter(Boolean))].join('; ')) + '">* бледные столбцы — день не по текущей методике</span> ');
     const pale = (v, i, col) => meth[i] && v != null ? { value: v, itemStyle: { color: col, opacity: 0.45 } } : v;
     const css = K.css;

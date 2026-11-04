@@ -73,14 +73,24 @@ def test_a_day_of_the_old_methodology_is_marked(three):
     assert c.get(f"/api/v1/runs/{old}/ocp").json()["method_note"] == days["2026-11-02"]["methodNote"]
 
 
-def test_book_type_is_derived_alike_and_each_day_has_its_own_reference(three):
+def test_derived_basis_and_unknown_basis_are_named_honestly():
+    assert method_note("derived", "2026-11-04", []) == "другая методика: ОВП из позиций, отчёт ОВП только сверен"
+    assert "не распознана" in method_note("something_new", "2026-11-04", [])
+
+
+def test_book_type_is_derived_once_per_period_and_a_day_carries_only_differences(three, store_url):
     c, _old, cur = three
     d = c.get("/api/v1/history/ocp", params={"run_id": cur, "from": "2026-11-01"}).json()
     assert book_type(None, True) == "TRADING" and book_type("", False) == "DERIVS" and book_type("HTM", True) == "HTM"
-    day = {x["date"]: x for x in d["days"]}["2026-11-04"]
-    assert day["books"]["B2"]["type"] == "HTM" and day["books"]["B1"]["type"] == "DERIVS"  # no bond in the run
-    assert day["books"]["B7"] == {"name": "Only OCP", "entity": "ENT1", "desk": "FX", "type": "—", "ocpOnly": True}
-    assert d["books"]["B1"]["type"] == "DERIVS"
-    # the run's page data says the same of the same book
-    book = c.get("/api/v1/concepts/run", params={"run_id": cur}).json()["BOOKS"]
-    assert book["B1"]["bookType"] == day["books"]["B1"]["type"] and book["B2"]["bookType"] == "HTM"
+    # B1 has no recorded type and no bond in any day: DERIVS on the whole period; B2 recorded HTM
+    assert d["books"]["B1"]["type"] == "DERIVS" and d["books"]["B1"]["typeDerived"] is True
+    assert d["books"]["B2"]["type"] == "HTM" and "typeDerived" not in d["books"]["B2"]
+    assert d["books"]["B7"] == {"name": "Only OCP", "entity": "ENT1", "desk": "FX", "type": "—", "ocpOnly": True}
+    days = {x["date"]: x for x in d["days"]}
+    assert days["2026-11-04"]["books"] == {}  # the latest run is the period's reference
+    # the older day differs only in the name its run gave B1; the type is the period's (no jump)
+    assert days["2026-11-02"]["books"] == {"B1": {**d["books"]["B1"], "name": "Book one"}}
+    # the run's page data gives the OCP-only book the same entry
+    page = c.get("/api/v1/concepts/run", params={"run_id": cur}).json()
+    assert page["OCP"]["books"]["B7"] == d["books"]["B7"]
+    assert page["BOOKS"]["B1"]["bookType"] == "DERIVS" and page["BOOKS"]["B2"]["bookType"] == "HTM"

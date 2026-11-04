@@ -262,14 +262,14 @@ body { display: flex; flex-direction: column; overflow: hidden; }
             '</tbody></table><div class="k-note" style="padding:4px 8px">mm в валюте; PnL FX — тыс ₽' +
             (M.fxPnl ? '. ' + K.fxLine(C) : '') +
             '. Бонды — грязная MV за вычетом валютного пассива (грязная MV на прошлый перенос ОВП): валютный PnL за день, его уводит перенос ОВП; деривативы — FX-дельта' +
-            (!S ? '. ' + esc(K.ocpNone) : '') + (S && M.ocp.methodNote ? '. ' + K.ocpMethodNote() : '') + (S ? '. ОВП — публикуемая: отчёт ОВП банка и слагаемые вне отчёта из позиций, по книгам без отчёта — из позиций (<a href="c16-ocp.html">C16</a>)' + (S.notes.length ? '; ' + esc(S.notes.join('; ')) : '') : '') + '</div>';
+            (!S ? '. ' + esc(K.ocpNone) : '') + (S && K.ocpMethodText() ? '. ' + K.ocpMethodNote() : '') + (S ? '. ' + (M.ocp.state === 'computed' && M.ocp.text ? esc(M.ocp.text) : 'ОВП — публикуемая, по книгам без отчёта — из позиций') + ' (<a href="c16-ocp.html">C16</a>)' + (S.notes.length ? '; ' + esc(S.notes.join('; ')) : '') : '') + '</div>';
           K.tableToolsAll(bd);
           return;
         }
         // TDM#567 (D25): столбцы — FX-дельта позиций (бонды и деривативы), не публикуемая ОВП; публикуемая — ромбом
         // на валюте (K.fxRows), разбор по клику называется FX-дельтой
         const note = K.h('div', 'k-note'); note.style.padding = '2px 8px';
-        note.innerHTML = '<b>FX-дельта позиций</b> (бонды и деривативы), не публикуемая ОВП' + (PUB ? ': публикуемая — ромб (отчёт ОВП + слагаемые)' : '; публикуемой ОВП в прогоне нет') + (S && M.ocp.methodNote ? '. ' + K.ocpMethodNote() : '');
+        note.innerHTML = '<b>FX-дельта позиций</b> (бонды и деривативы), не публикуемая ОВП' + (PUB ? ': публикуемая — ромб (отчёт ОВП + слагаемые)' : '; публикуемой ОВП в прогоне нет') + (S && K.ocpMethodText() ? '. ' + K.ocpMethodNote() : '');
         bd.appendChild(note);
         const el = K.h('div', 'fill'); bd.appendChild(el);
         const mark = PUB ? [{ name: 'ОВП публикуемая', type: 'scatter', symbol: 'diamond', symbolSize: 11, itemStyle: { color: css('--fg') }, z: 5, data: C.map(c => PUB[c] ? PUB[c].eq : null) }] : [];

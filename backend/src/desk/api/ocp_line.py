@@ -37,6 +37,20 @@ def book_type(recorded: Any, has_bonds: bool) -> str:
     return recorded if isinstance(recorded, str) and recorded else TRADING if has_bonds else DERIVS
 
 
+def book_meta(book_id: str, m: dict[str, Any], type_: str | None = None, *, ocp_only: bool = False,
+              derived: bool = False) -> dict[str, Any]:
+    """A book's reference entry as the pages read it, the same for the run's page data and the history by day:
+    name, entity, desk, type (``m['book_type']`` unless ``type_`` is given; "—" without one), ``ocpOnly`` for a book only
+    the OCP report knows (TDM#556), ``typeDerived`` when the type was derived, not recorded (``book_type``)."""
+    out = {"name": m.get("name") or book_id, "entity": m.get("entity") or "—", "desk": m.get("desk") or "—",
+           "type": type_ or m.get("book_type") or "—"}
+    if ocp_only:
+        out["ocpOnly"] = True
+    if derived:
+        out["typeDerived"] = True
+    return out
+
+
 def method_note(basis: str | None, on: date | str | None, lines: list[dict[str, Any]]) -> str | None:
     """Why a day's OCP is not on the current methodology (the report without the derivatives + their PV), else None.
     ``lines`` as :func:`ocp_line` gives them. No basis (no OCP at all): None, the day's state says why."""
@@ -53,4 +67,6 @@ def method_note(basis: str | None, on: date | str | None, lines: list[dict[str, 
         early = (str(on)[:10] < since.isoformat()) if on else False
         return ("другая методика: отчёт целиком (с деривативами) и слагаемые вне отчёта"
                 + (f", день до {since.strftime('%d.%m.%Y')}" if early else ""))
-    return "другая методика: ОВП из позиций, отчёта ОВП в силе нет"
+    if basis == O.PublishedBasis.DERIVED.value:
+        return "другая методика: ОВП из позиций, отчёт ОВП только сверен"
+    return f"методика «{basis}» не распознана"

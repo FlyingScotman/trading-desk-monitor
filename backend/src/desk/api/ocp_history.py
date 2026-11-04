@@ -23,7 +23,9 @@ then the first book. A block without them (no report, before B2): ``{}``.
 The books of the period (``books``): name, entity, desk and book type (``type``) of each book from the latest run of
 the period that has it, for the pages' filter and labels when a book left the current run's reference; a book of the
 OCP without positions in a run (TDM#556: only the OCP report knows it) from the run's OCP block (``books``, marked
-``ocpOnly``).
+``ocpOnly``). A book without a recorded type has the type derived once for the whole period (a bond in any run of
+the period: ``TRADING``, else ``DERIVS``; marked ``typeDerived``), so it does not jump between days. A day's ``books``
+holds only what differs from the period's ``books``; the pages merge it over them (TDM#567).
 """
 
 from __future__ import annotations
@@ -34,7 +36,7 @@ from typing import Any
 
 from ..publish import ocp_run
 from ..rules import ocp as O
-from .ocp_line import book_type, method_note, ocp_line
+from .ocp_line import book_meta, book_type, method_note, ocp_line
 from .pnl_history import period_runs
 
 DEFAULT_DAYS = 92
@@ -137,28 +139,28 @@ def _report_fx(block: dict[str, Any], on: date) -> dict[str, float]:
     return out
 
 
-def _bond_books(con, run_ids: list[int], books: set[str]) -> dict[int, set[str]]:
-    """run -> the books among ``books`` that hold a bond in it (the run's rule of an unrecorded book type)."""
+def _bond_books(con, run_ids: list[int], books: set[str]) -> set[str]:
+    """The books among ``books`` that hold a bond in any run of the period: a book without a recorded type is
+    ``TRADING`` then, else ``DERIVS`` (the run's rule, applied once to the whole period so the type does not jump
+    between days of the chart)."""
     if not books:
-        return {}
-    out: dict[int, set[str]] = {}
-    for r in con.execute("SELECT DISTINCT run_id, fact->>'book_id' AS book FROM run_position WHERE run_id = ANY(%s)"
-                         " AND fact->>'instr_type' = 'BOND' AND fact->>'book_id' = ANY(%s)",
-                         (run_ids, sorted(books))).fetchall():
-        out.setdefault(r["run_id"], set()).add(r["book"])
-    return out
+        return set()
+    return {r["book_id"] for r in con.execute(
+        "SELECT DISTINCT book_id FROM run_position WHERE run_id = ANY(%s) AND book_id = ANY(%s)"
+        " AND fact->>'instr_type' = 'BOND'", (run_ids, sorted(books))).fetchall()}
 
 
 def _day_books(x: dict[str, Any], block: dict[str, Any], bonds: set[str]) -> dict[str, dict[str, Any]]:
-    """The books of one day's run as the run itself gave them: name, entity, desk and book type (an unrecorded one
-    derived as the run does, ``book_type``); a book only the OCP knows (TDM#556) marked ``ocpOnly``, no type derived."""
-    out = {b["book_id"]: {"name": b.get("name"), "entity": b.get("entity"), "desk": b.get("desk"),
-                          "type": book_type(b.get("book_type"), b["book_id"] in bonds)}
-           for b in x.get("books") or []}
+    """The books of one day's run as the run gave them (``book_meta``): an unrecorded type derived from the period's
+    bonds (``typeDerived``); a book only the OCP knows (TDM#556) marked ``ocpOnly``, no type derived."""
+    out = {}
+    for b in x.get("books") or []:
+        rec = b.get("book_type")
+        out[b["book_id"]] = book_meta(b["book_id"], b, None if rec else book_type(None, b["book_id"] in bonds),
+                                      derived=not rec)
     for b, m in (block.get("books") or {}).items():
         if isinstance(m, dict) and b not in out:
-            out[b] = {"name": m.get("name"), "entity": m.get("entity"), "desk": m.get("desk"),
-                      "type": m.get("book_type") or "—", "ocpOnly": True}
+            out[b] = book_meta(b, m, ocp_only=True)
     return out
 
 
@@ -170,16 +172,21 @@ def history(con, anchor: dict[str, Any], start: date, end: date) -> dict[str, An
         ref[r["run_id"]][r["kind"]] = r["data"]
     untyped = {b["book_id"] for x in ref.values() for b in x.get("books") or [] if not b.get("book_type")}
     bonds = _bond_books(con, [r["run_id"] for r in runs], untyped)
-    days, books = [], {}
+    days, books, mine = [], {}, []
     for r in runs:
         x = ref[r["run_id"]]
         block = x.get("ocp") or {}
-        mine = _day_books(x, block, bonds.get(r["run_id"], set()))
-        books.update(mine)  # the latest run of the period that has the book
+        mine.append(_day_books(x, block, bonds))
+        books.update(mine[-1])  # the latest run of the period that has the book
+    for r, m in zip(runs, mine, strict=True):
+        x = ref[r["run_id"]]
+        block = x.get("ocp") or {}
+        # a day carries only its differences from the period's reference (the pages merge them over it)
+        diff = {b: v for b, v in m.items() if books.get(b) != v}
         lines = [ocp_line(y) for y in block.get("lines") or []]
         days.append({"date": r["business_date"], "runId": r["run_id"], "runType": r["run_type"],
                      "state": block.get("status") or ocp_run.NOT_COMPUTED, "basis": block.get("basis"),
-                     "methodNote": method_note(block.get("basis"), r["business_date"], lines), "books": mine,
+                     "methodNote": method_note(block.get("basis"), r["business_date"], lines), "books": diff,
                      "fx": _fx(x.get("fx")), "reportFx": _report_fx(block, r["business_date"]), "lines": lines})
     return {"runId": anchor["run_id"], "asOf": anchor["business_date"], "from": start, "to": end,
             "days": days, "books": books}
