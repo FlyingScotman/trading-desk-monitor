@@ -75,6 +75,11 @@ t('строка без позиции (остатки, строки отчёта
   assert.ok(K.rowIn({ book: 'B1', ccy: 'RUB' }) && !K.rowIn({ book: 'B2', ccy: 'RUB' }));
   K.setFilter({ ...RESET, ccy: 'USD' });
   assert.ok(K.rowIn({ book: 'B1', ccy: 'USD' }) && !K.rowIn({ book: 'B1', ccy: 'RUB' }));
+  // книга HTM главнее собственного портфеля строки (#496)
+  K.setFilter({ ...RESET, portsOff: ['HTM'] });
+  assert.ok(!K.rowIn({ book: 'B1', ccy: 'RUB', portfolio: 'Торговый' }) && K.rowIn({ book: 'B2', ccy: 'RUB', portfolio: 'Торговый' }));
+  K.setFilter({ ...RESET, portsOff: ['Торговый'] });
+  assert.ok(K.rowIn({ book: 'B1', ccy: 'RUB', portfolio: 'Торговый' }));
   // явные юрлицо и деск строки главнее справочника
   K.setFilter({ ...RESET, entity: 'E2' });
   assert.ok(K.rowIn({ book: 'B1', entity: 'E2', ccy: 'RUB' }));
@@ -103,6 +108,7 @@ t('«Сбросить фильтр книг» сбрасывает и сняты
   const kit = P('concepts/lib/kit.js');
   assert.ok(/label: 'Сбросить фильтр книг', run: \(\) => K\.setFilter\(\{[^}]*portsOff: null/.test(kit));
   assert.ok(/opt\.filter === false/.test(kit));
+  assert.ok(/K\.portsOff\(\)\.length/.test(P('concepts/c17-forward-carry.html')) && !/K\.filter\.portsOff/.test(P('concepts/c17-forward-carry.html')));
   for (const f of ['c14-day-status', 'c15-cash', 'c20-trades']) assert.ok(/K\.top\(\{[^)]*filter: false/.test(P('concepts/' + f + '.html')), f);
   assert.ok(!/C\.keep/.test(P('concepts/lib/carry.js') + P('concepts/c17-forward-carry.html')));
 });

@@ -207,7 +207,7 @@
       const why = err.status === 404 ? 'сервер не нашёл прогон или снэпшоты его рынка (или эндпоинта ещё нет на сервере)' : err.status === 422 ? 'параметры не приняты' : err.status === 401 || err.status === 403 ? 'нужно войти в монитор' : 'ошибка запроса';
       ban.innerHTML = '<div class="c17-ban err"><b>Прогнозное кэрри не загружено</b>: ' + esc(why) + '. <span class="mut">' + esc(err.text || err.message || '') + '</span></div>';
       if (!resp) { body.innerHTML = ''; return; }
-    } else ban.innerHTML = (K.filter.portsOff || []).length ? '<div class="k-note" data-c17-ports>Остатки ДС и строки без позиции: у книги HTM портфель HTM, у остальных книг портфеля нет, и фильтр портфелей к ним не применяется.</div>' : '';
+    } else ban.innerHTML = K.portsOff().length ? '<div class="k-note" data-c17-ports>Остатки ДС и строки без позиции: у книги HTM портфель HTM, у остальных книг портфеля нет, и фильтр портфелей к ним не применяется.</div>' : '';
     if (!resp) return;
     const R = model(), fundOk = resp.fundingStatus === 'computed';
     // без общих фильтров — итоги сервера; с фильтрами — по строкам, по тому же правилу

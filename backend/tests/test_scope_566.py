@@ -24,7 +24,7 @@ CASES = json.loads((Path(__file__).parent.parent.parent / "tests" / "js" / "fixt
 DAY = "2026-10-16"
 
 
-def seed(url, *, reverse=False, extras=None):
+def seed(url, *, reverse=False, extras=None, probe=False):
     """One run with the cases' books and positions; a position's ``reports`` are its rows in successive sets (a
     ``null`` entry is a row without the Portfolio column); ``reverse``: the rows are inserted in the opposite order (the sets keep theirs); ``extras``: ``{id: (book, fact.extra)}``
     of rows without an input row, or the extra of a case's row."""
@@ -68,6 +68,15 @@ def seed(url, *, reverse=False, extras=None):
                 con.execute("INSERT INTO run_position(run_id,position_id,ord,book_id,secid,quantity,quality,fact,pnl)"
                             " VALUES (%s,%s,%s,%s,'S',1,'reported_value',%s,%s)",
                             (rid, pid, 100 + i, book, Jsonb(fact), Jsonb(q)))
+        if probe:  # a position whose fact has no currency and name: they come from its LAST input row
+            con.execute("INSERT INTO run_position(run_id,position_id,ord,book_id,secid,quantity,quality,fact,pnl)"
+                        " VALUES (%s,'PL',200,'B3','S',1,'reported_value',%s,%s)",
+                        (rid, Jsonb({"book_id": "B3", "instr_type": "OTHER", "asset_class": "other", "quantity": 1,
+                                     "mv_rub": 1}),
+                         Jsonb(dict.fromkeys(PNL_KEYS, 0.0) | {"carry": 1.0, "extra": {"method": "desk-flash-v1"}})))
+            for k, (ccy, name) in enumerate([("USD", "first row"), ("EUR", "last row")]):
+                con.execute("INSERT INTO position_input(set_id,position_id,secid,quantity,ccy,source_instrument_name,x)"
+                            " VALUES (%s,'PL','S',1,%s,%s,%s)", (set_ids["B3", k], ccy, name, Jsonb({})))
         con.execute("UPDATE run SET position_set_ids=%s,status='complete',completed_at=now() WHERE run_id=%s",
                     (sorted(set_ids.values()), rid))
     return rid
@@ -155,3 +164,14 @@ def test_rows_the_trades_built_take_their_portfolio_from_the_row(store_url):
     run = c.get("/api/v1/concepts/run", params={"run_id": rid}).json()
     assert {p["id"]: p["portfolio"] for p in run["positions"]} | {} == {
         **{p["id"]: p["portfolio"] for p in CASES["positions"]}, "X|closed": "A", "NEW": "A", "HTMX": "HTM"}
+
+
+def test_currency_and_name_come_from_the_last_input_row(store_url):
+    """The last row of the sets stands for the position whole (currency, name), not the one with a Portfolio column."""
+    seed(store_url, probe=True)
+    c = TestClient(create_app(store_url))
+
+    def ids(**kw):
+        return {p["row"]["positionId"] for p in c.get("/api/v1/history/pnl", params=params({}) | kw).json()["positions"]}
+    assert "PL" in ids(ccy="EUR") and "PL" not in ids(ccy="USD")
+    assert "PL" in ids(q="last row") and "PL" not in ids(q="first row")

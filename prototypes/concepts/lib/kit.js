@@ -692,10 +692,11 @@
     portIn: (off, port) => !off || !off.length || !off.includes(port || '—'),
     posIn: (F, p, off) => SC.bookIn(F, p.book, p) && SC.ccyIn(F, p.ccy) && SC.portIn(off, SC.portOf(p)),
     // строка без позиции в модели: book, ccy и, если есть, entity / desk / portfolio; справочник книги — прогона
-    rowIn: (F, x, off) => { const b = M.book[x.book] || {}; return SC.bookIn(F, x.book, { entity: x.entity || b.entity, desk: x.desk && x.desk !== '—' ? x.desk : b.desk }) && SC.ccyIn(F, x.ccy) && (x.portfolio || b.portfolio ? SC.portIn(off, x.portfolio || b.portfolio) : true); },
+    rowIn: (F, x, off) => { const b = M.book[x.book] || {}; return SC.bookIn(F, x.book, { entity: x.entity || b.entity, desk: x.desk && x.desk !== '—' ? x.desk : b.desk }) && SC.ccyIn(F, x.ccy) && (b.portfolio || x.portfolio ? SC.portIn(off, b.portfolio || x.portfolio) : true); },
   };
   K.list = () => { const off = portsOff(); return M.positions.filter(p => SC.posIn(filt, p, off)); };
   K.rowIn = x => SC.rowIn(filt, x, portsOff());
+  K.portsOff = portsOff;  // снятые портфели, которые есть в прогоне
   let chipsBox = null;
   // каскад: юрлицо → деск → книги; в каждом списке только варианты, совместимые с уже выбранным
   const bookMemberships = (entity = filt.entity, desk = filt.desk) => filterScope.books.filter(b => (!entity || b.entity === entity) && (!desk || b.desk === desk));
