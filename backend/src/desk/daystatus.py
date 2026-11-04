@@ -399,7 +399,7 @@ def _facts_empty() -> dict[str, Any]:
     return {"inputs": {}, "files_lost": 0, "stale_copies": 0, "runs": 0, "runs_failed": 0, "default_run_id": None,
             "current_run_id": None, "default_set_ids": None, "eod_final": False, "positions_in_force": False,
             "run_behind": False, "late_inputs": [], "books_no_positions": 0, "books_rows_differ": 0,
-            "unlinked_swaps": 0}
+            "unlinked_swaps": 0, "off_report": None}
 
 
 ROWS_DIFFER_SQL = (
@@ -472,10 +472,13 @@ def _facts(con: psycopg.Connection, settings: Settings, lo: date, hi: date, *,
         x["books_no_positions"] = sum(1 for b in store.current_books(con, d) if b.get("active", True)
                                       and (first_set.get(b["book_id"]) is None or first_set[b["book_id"]] > d))
         if x["default_run_id"]:
-            ids, known, swaps = con.execute(
-                "SELECT position_set_ids, positions_known_at, lineage #>> '{positions,unlinked_swap_terms,trades}'"
-                " FROM run WHERE run_id = %s", (x["default_run_id"],)).fetchone()
+            ids, known, swaps, orp = con.execute(
+                "SELECT position_set_ids, positions_known_at, lineage #>> '{positions,unlinked_swap_terms,trades}',"
+                " lineage #> '{positions,off_report}' FROM run WHERE run_id = %s", (x["default_run_id"],)).fetchone()
             x["unlinked_swaps"] = int(swaps or 0)  # TDM#468: swap terms no positions row names, not valued
+            # TDM#468: the derivatives off the positions report; a run before the switch has only the swaps above
+            x["off_report"] = ({k: orp.get(k) for k in ("mode", "trades", "excluded", "included", "valued", "suspect", "invalid")}
+                               if isinstance(orp, dict) else None)
             x["default_set_ids"] = sorted(ids or [])
             x["run_behind"] = x["default_set_ids"] != store.current_sets(con, d)[0]
             x["late_inputs"] = store.late_inputs(con, d, known)
@@ -516,11 +519,22 @@ def _rate(x: dict[str, Any]) -> dict[str, Any]:
         warn.append(f"книг без позиций: {x['books_no_positions']}")
     if x["books_rows_differ"]:
         warn.append(f"в прогоне не все строки позиций: книг {x['books_rows_differ']}")
-    if x.get("unlinked_swaps"):
+    info: list[str] = []
+    if (orp := x.get("off_report")) is not None:
+        if orp.get("mode") == "include":
+            if orp.get("trades"):  # chosen by the owner and valued: not a problem, a line
+                info.append(f"деривативы вне отчёта позиций включены настройкой: сделок {orp['trades']}, "
+                            f"включено {orp.get('included') or 0}, оценено {orp.get('valued') or 0}")
+        elif orp.get("excluded"):
+            warn.append(f"деривативы вне отчёта позиций исключены настройкой: сделок {orp['excluded']}")
+        if orp.get("suspect"):
+            warn.append(f"возможно, уже в отчёте позиций, не включены: сделок {orp['suspect']}")
+    elif x.get("unlinked_swaps"):
         warn.append(f"условия свопов и РЕПО без строки позиций, не оцениваются: сделок {x['unlinked_swaps']}")
     if not x["eod_final"]:
         warn.append("нет окончательного закрытия хаба")
-    return {"state": "bad" if bad else "warn" if warn else "ok", "problems": bad, "warnings": warn}
+    return {"state": "bad" if bad else "warn" if warn else "ok", "problems": bad, "warnings": warn,
+            "info": info}
 
 
 def day(con: psycopg.Connection, settings: Settings, on: date | None = None) -> dict[str, Any]:

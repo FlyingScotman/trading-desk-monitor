@@ -1163,7 +1163,7 @@
     const ch = bar.querySelector('[data-a=src]'), nb = bar.querySelector('[data-a=notes]');
     if (nb) nb.onclick = e => {
       e.stopPropagation(); if (openMenu) openMenu.remove();
-      const m = h('div', 'k-panel'), wide = !!(M.unvalued && M.unvalued.total || M.approx && M.approx.length), W = wide ? 640 : 460;
+      const m = h('div', 'k-panel'), wide = !!(M.unvalued && M.unvalued.total || M.approx && M.approx.length || M.offReport && M.offReport.list && M.offReport.list.length), W = wide ? 640 : 460;
       m.style.cssText = 'position:fixed;z-index:140;width:min(' + W + 'px,92vw);max-height:70vh;overflow:auto;box-shadow:var(--shadow);padding:10px 14px;font-size:12.5px';
       const r = nb.getBoundingClientRect(); m.style.left = Math.max(8, Math.min(r.left, innerWidth - W - 10)) + 'px'; m.style.top = (r.bottom + 4) + 'px';
       m.innerHTML = '<div class="k-sec" style="margin-top:0">Чего нет в данных</div><ul style="margin:0;padding-left:18px;display:flex;flex-direction:column;gap:4px">' + M.notes.map(t => '<li>' + K.noteHtml(t) + '</li>').join('') + '</ul>' + K.coverageHtml();
@@ -1201,7 +1201,20 @@
         '<table class="k-tbl k-compact" style="width:100%"><thead><tr><th>Как оценены</th><th>Тип</th><th class="n">Поз.</th><th class="n">MV, mm ₽</th></tr></thead><tbody>' +
         A.map((g, i) => '<tr class="row" data-cg="a:' + i + '" style="cursor:pointer"><td>' + esc(g.text) + '</td><td class="mut">' + esc(g.kindLabel) + '</td><td class="n">' + g.n + '</td><td class="n">' + mm(g.mvRub) + '</td></tr>').join('') + '</tbody></table>';
     }
+    out += K.offReportHtml();
     return out;
+  };
+  // деривативы вне отчёта позиций (TDM#468): исключённые настройкой, «возможно, уже в отчёте» и с неразобранными условиями
+  const OR_STATE = { excluded: 'исключена', suspect: 'возможно, уже в отчёте', invalid: 'условия не разобраны' };
+  const OR_KIND = { fx_forward: 'форвард', fx_swap: 'FX-своп', irs: 'IRS', ois: 'OIS', ccs: 'CCS', repo: 'РЕПО' };
+  K.offKind = k => String(k || '').split('+').map(x => OR_KIND[x] || x).join(' + ');
+  K.offReportHtml = () => {
+    const O = M.offReport, L = O && O.list || [];
+    if (!L.length) return '';
+    const td = 'style="padding:3px 4px;white-space:normal;overflow-wrap:anywhere"';
+    return '<div class="k-sec">Деривативы вне отчёта позиций: ' + L.length + (O.truncated ? '+' : '') + ' <span class="sp"></span><span class="mut3" style="text-transform:none;letter-spacing:0">' + (O.mode === 'include' ? 'не включены' : 'включить: Настройки → Допущения расчёта') + '</span></div>' +
+      '<table class="k-tbl k-compact" style="width:100%;table-layout:fixed;font-size:12px"><colgroup><col style="width:17%"><col style="width:27%"><col style="width:24%"><col style="width:32%"></colgroup><thead><tr><th style="white-space:normal;padding:3px 4px">Книга</th><th style="white-space:normal;padding:3px 4px">Сделка</th><th style="white-space:normal;padding:3px 4px">Погашение</th><th style="white-space:normal;padding:3px 4px">Состояние</th></tr></thead><tbody>' +
+      L.map(t => '<tr><td class="mut" ' + td + '>' + esc(t.book) + '</td><td ' + td + '><span class="mono">' + esc(t.trade_id) + '</span><div class="mut3">' + esc(K.offKind(t.kind)) + '</div></td><td class="mut" ' + td + '>' + esc(t.maturity ? dmy(t.maturity) : '—') + '</td><td class="mut3" ' + td + ' title="' + esc(t.why || '') + '">' + esc(OR_STATE[t.state] || t.state) + '</td></tr>').join('') + '</tbody></table>';
   };
   // список позиций группы: имя, книга, валюта, тип, причина (p.estReason — extra прогона, lib/real.js); строка — карточка позиции
   K.posList = function (title, ids, sub) {
@@ -2311,9 +2324,14 @@
   K.RC_IDX = { RUONIA: 'RUONIA', KEY_RATE: 'КС' };
   const RC_PROD = { irs: 'IRS', ois: 'OIS', repo: 'РЕПО', ccs: 'CCS' };
   K.RC_SIDE = { payer: 'плачу фикс', receiver: 'получаю фикс', repo: 'РЕПО (привлечение)', reverse_repo: 'обратное РЕПО (размещение)' };
+  // CCS, у которого плавают обе ноги (foreignIndex, нет фикса): сторона — по валютной ноге; при рублёвом фиксе side по фиксу
+  K.rcSide = (side, t) => t && t.product === 'ccs' && t.foreignIndex && t.fixedRate == null && (side === 'payer' || side === 'receiver')
+    ? (side === 'payer' ? 'плачу валютную ногу' : 'получаю валютную ногу') : (K.RC_SIDE[side] || side);
   // причины, по которым ядро не оценило строку (backend valuation/derivatives.py NotValued; core_<код> — отказ ядра)
   const RC_REASON = { ccs_unsupported: 'CCS ядром пока не оценивается',
-    ccs_foreign_floating_unsupported: 'CCS с плавающей валютной ногой ядром не оценивается (нет фиксингов валютного индекса)',
+    ccs_foreign_floating_unsupported: 'CCS с плавающей валютной ногой: индекс валютной ноги не поддерживается (оценивается только RUSFARCNY в юанях)',
+    ccs_index_averaging_unsupported: 'CCS: ставка валютной ноги — средняя арифметическая, ядро компаундирует: не оценивается',
+    no_foreign_projection_curve: 'CCS с плавающей юаневой ногой: нет кривой OIS на RUSFAR CNY в срезе хаба',
     ccs_ccy_unsupported: 'CCS не «рубли против валюты»: ядром не оценивается', basis_swap_unsupported: 'базисный своп (две плавающие ноги) ядром пока не оценивается',
     repo_open: 'открытое РЕПО: нет даты окончания (её задаёт владелец)', no_fixings: 'нет фиксингов индекса в прогоне', pv_not_finite: 'ядро дало нечисловую оценку',
     repo_index_unsupported: 'индекс РЕПО не поддерживается', no_key_rate_curve: 'нет кривой КС в прогоне', no_rub_curve: 'нет кривой RUONIA OIS в прогоне',
@@ -2373,7 +2391,7 @@
     const rateProd = r => /(^|\+)(irs|ois|repo|ccs)(\+|$)/.test(r.product || '');
     const byReport = prow.filter(r => r.used === 'imported' && rateProd(r) && (M.pos[r.positionId] ? ids.has(r.positionId) : phantomOk(r)));
     const rows = core.map(p => {
-      const c = p.ratesCore, pr = parBy[p.id] || {}, sides = [...new Set(c.trades.map(t => K.RC_SIDE[t.side] || t.side).filter(Boolean))];
+      const c = p.ratesCore, pr = parBy[p.id] || {}, sides = [...new Set(c.trades.map(t => K.rcSide(t.side, t)).filter(Boolean))];
       const diff = c.pv != null && c.reportedPv != null ? (c.pvDiff != null ? c.pvDiff : c.pv - c.reportedPv) : null;
       return { id: p.id, name: p.name, book: p.book, product: c.product || c.trades.map(t => t.product).join('+'), side: sides.join(', ') || '—',
         maturity: p.maturity, pv: c.pv, rep: c.reportedPv, diff, over: pr.over == null ? null : pr.over, ruo: p.dv01ByCurve['RUB RUONIA'] || 0, key: p.dv01ByCurve['RUB KEY'] || 0,
@@ -2452,7 +2470,7 @@
         { key: 'pos', label: 'Позиция' },
         { key: 'product', label: 'Продукт', fmt: v => esc(rcProd(v)) },
         { key: 'index', label: 'Индекс', fmt: v => esc(v ? K.RC_IDX[v] || v : 'фикс') },
-        { key: 'side', label: 'Сторона', fmt: v => esc(K.RC_SIDE[v] || v || '—') },
+        { key: 'side', label: 'Сторона', fmt: (v, r) => esc(K.rcSide(v, r) || '—') },
         { key: 'notional', label: 'Номинал', num: true, unit: 'mm ₽', title: 'Номинал свопа; у РЕПО — денежная сумма первой части, mm ₽', fmt: v => rcMoney(v) },
         { key: 'fixedRate', label: 'Фикс', num: true, unit: '%', fmt: v => f.pct(v, 2) },
         { key: 'spreadBp', label: 'Спред', num: true, unit: 'б.п.', fmt: v => f.bp(v) },
@@ -2472,7 +2490,7 @@
   K.posCols = {
     // валюта и эмитент — обычные столбцы (R37): сортировка и фильтр по значениям, как у остальных
     issuer: { key: 'issuerName', label: 'Эмитент', filter: true, title: 'эмитент (у деривативов — контрагент)', fmt: (v, r) => '<b style="color:' + K.issuerColor(r.issuer) + '">●</b> ' + esc(v) },
-    name: { key: 'name', label: 'Бумага', fmt: (v, r) => K.nameCell(r, v) + (r.tradedToday ? ' <span class="k-tag" style="border-color:var(--warn);color:var(--warn)" title="сделки сегодня">сд</span>' : '') + K.curveProxyTag(r) },
+    name: { key: 'name', label: 'Бумага', fmt: (v, r) => K.nameCell(r, v) + (r.tradedToday ? ' <span class="k-tag" style="border-color:var(--warn);color:var(--warn)" title="сделки сегодня">сд</span>' : '') + K.offReportTag(r) + K.curveProxyTag(r) },
     isin: { key: 'isin', label: 'ISIN', fmt: v => '<span class="mono mut">' + esc(v || '—') + '</span>' },
     ccy: { key: 'ccy', label: 'Вал', fmt: (v, r) => K.ccyTag(r.ccy), val: r => M.ccyOrder[r.ccy] ?? 99, filter: r => r.ccy, fltOrder: (a, b) => ((M.ccyOrder[a] ?? 99) - (M.ccyOrder[b] ?? 99)) || a.localeCompare(b) },
     kind: { key: 'kind', label: 'Тип', filter: r => M.kindLabel[r.kind] || r.kind, fmt: (v, r) => '<span class="tagc" style="border-color:' + K.kindColor[v] + '55">' + esc(M.kindShort[v]) + '</span>' },
@@ -2761,7 +2779,7 @@
       if (cpiNow != null) fields.push(['ИПЦ г/г', f.pct(cpiNow) + ' <small>' + (LH.bei && last(LH.bei) != null ? 'BEI − ИПЦ ' + f.bps((last(LH.bei) - cpiNow) * 100) + ' б.п.' : 'последний известный') + '</small>']);
     }
     const pn = p.pnl;
-    o.bd.innerHTML = '<div class="k-tags">' + [p.desk, (M.entities.find(e => e.id === p.entity) || {}).name, p.rating !== '—' ? 'рейтинг ' + K.ratingText(p.rating, p.ratingInfo) : null, p.tradedToday ? 'сделки сегодня' : null, p.quality && p.quality !== 'exact' ? 'оценка: ' + p.quality : null].filter(t => t && t !== '—').map(t => '<span class="k-tag">' + esc(t) + '</span>').join('') + '</div>' +
+    o.bd.innerHTML = '<div class="k-tags">' + [p.desk, (M.entities.find(e => e.id === p.entity) || {}).name, p.rating !== '—' ? 'рейтинг ' + K.ratingText(p.rating, p.ratingInfo) : null, p.tradedToday ? 'сделки сегодня' : null, p.offReport ? 'вне отчёта позиций' : null, p.quality && p.quality !== 'exact' ? 'оценка: ' + p.quality : null].filter(t => t && t !== '—').map(t => '<span class="k-tag">' + esc(t) + '</span>').join('') + '</div>' +
       (p.notValued && p.estReason ? '<div class="k-note" style="overflow-wrap:anywhere;margin:8px 0"><b>Причина отсутствия оценки:</b> ' + esc(p.estReason) + '</div>' : '') +
       (p.riskProblem ? '<div class="k-note risk-problem" style="overflow-wrap:anywhere;margin:8px 0;color:var(--warn)"><b>Риск не в суммах (невозможный риск):</b> ' + esc(p.riskProblem) + '</div>' : '') +
       K.curveProxyNote(p) +
@@ -2838,6 +2856,7 @@
   };
   // прокси-кривая (#31): в день без кривой RUONIA рублёвая бумага (RUONIA-флоатер, корпоратив) дисконтирована по КБД,
   // спред и риск — к RUB OFZ (extra.curve_proxy прогона, p.curveProxy — lib/real.js); пометка в таблице и в карточке
+  K.offReportTag = r => r && r.offReport ? ' <span class="k-tag" title="вне отчёта позиций: оценена по условиям сделки">вне</span>' : '';
   K.curveProxyTag = r => r && r.curveProxy ? ' <span class="k-tag k-proxy" title="' + esc(r.curveProxy) + '">прокси RUB OFZ</span>' : '';
   K.curveProxyNote = p => p && p.curveProxy ? '<div class="k-note curve-proxy" style="overflow-wrap:anywhere;margin:8px 0;color:var(--warn)"><b>Кривая:</b> ' + esc(p.curveProxy) + '</div>' : '';
   // нет PnL позиции (R10, #31): причина сервера (pnl.reasonText; смена кривой дисконтирования — с кривыми вчера и сегодня)

@@ -15,8 +15,8 @@ row per derivative position:
 
 ``used`` says which value the run publishes: today core's whenever it values the row, the report's otherwise
 (``valuation.positions``), for every product (TDM#45: interest rate swaps and REPO too; TDM#555: a CCS RUB against a
-foreign fixed leg, product ``ccs``; one with a floating foreign leg stays the report's,
-``ccs_foreign_floating_unsupported``). ``product`` (also the key of ``by_product``) is one scheme for all rows: core's product of
+foreign leg fixed or, in CNY, floating on RUSFARCNY (TDM#565), product ``ccs``; one with a foreign leg on another
+index stays the report's, ``ccs_foreign_floating_unsupported``). ``product`` (also the key of ``by_product``) is one scheme for all rows: core's product of
 a valued row (``fx_forward``, ``fx_swap``, ``fx_ndf``, ``fx_cross``, ``fx_future``, ``irs``, ``ois``, ``ccs``, ``repo``, several
 joined by ``+``); for a row core did not value, the same names from its linked trade terms (``ccs`` too), else
 ``<asset_class>_other`` in lower case (``fx_other``, ``otc_other``; ``other`` without a class). A

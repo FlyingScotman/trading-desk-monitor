@@ -30,6 +30,12 @@ positions valued at the report's figure. Each is flagged with its method (``reas
   the legs settled, x the rate move: the cash of a settled leg is taken at the D-1 rate and its later moves are the
   cash row's. A cash-settled NDF's amount is not recorded: ``received_unknown``.
 
+- A derivative off the positions report (TDM#468) is the same row with the position id ``book|trade_id``. D-1 is found by
+  that id, else by (book, the trades core valued in the row), so a trade that moved into the report or out of it keeps
+  its PnL. A derivative made after D-1 (every trade date later) has no PV of D-1: its PnL is its PV on D, in
+  ``new_trades`` (``desk-core-new-trade-v1``, ``NEW_TRADE_PNL_FROM_PV``, the owner's question 1 is open); an older
+  trade missing on D-1 has no PnL, the reason ``no_prev_terms`` (off the report) or ``valued_differently``.
+
 A report value says why its PnL is in ``other`` (``pnl.extra.other_reason``, TDM#442: ``no_terms`` for want of terms,
 else ``reported_value``), an FX deal by core ``fx_core_rest``. Anything else valued without core keeps
 ``NoPnl("valued_without_core")``. A missing PnL is a reason, never 0.
@@ -50,6 +56,7 @@ from .reasons import (
     CORE_FX_METHOD,
     FX_CORE_REST,
     FX_METHOD,
+    NEW_TRADE_METHOD,
     NO_TERMS,
     REPORTED_METHOD,
     REPORTED_VALUE,
@@ -64,6 +71,11 @@ if TYPE_CHECKING:
 NO_TERMS_ROW = "no_trade_terms"
 """``valuation.positions.NO_TERMS``: an OTC or FX row no ``trade_terms`` row names (not imported: positions imports the
 orchestrator, which imports this module)."""
+NEW_TRADE_PNL_FROM_PV = True
+"""TDM#468, the owner's question 1 (open): a derivative made after D-1 has no PV of D-1; its PnL of the day is its PV on D
+(``desk-core-new-trade-v1``, «PV at conclusion taken as 0», in ``new_trades``). False: no PnL, reason ``new_trade``.
+The same rule for a trade of the positions report and one off it."""
+NEW_TRADE_NOTE = "новая сделка: PnL от условий сделки (PV при заключении принят за 0)"
 REPORTED_FLAG = "по отчёту"
 FORWARD_FLAG = "форвард: по дельте спота, без форвардных пунктов"
 
@@ -260,12 +272,53 @@ def _settled_cash(prev: EodContext, ctx: EodContext, o: Outcome, p: Outcome | No
                    note=f"{t.note}; cash row: {c.note}")
 
 
+def _is_core(o: Outcome | None) -> bool:
+    return o is not None and o.valuation is not None and bool(o.valuation.extra.get("core"))
+
+
+def _trade_key(book: str, o: Outcome) -> tuple[str, frozenset[str]] | None:
+    """(book, the trades core valued in the row): where the same trades are found when a position id changed
+    (a trade off the report that the report took in, or the reverse; TDM#468)."""
+    trades = (o.valuation.extra.get("core") or {}).get("trades") if o.valuation is not None else None
+    return (book, frozenset(map(str, trades))) if trades else None
+
+
+def _new_trade(prev: EodContext, ctx: EodContext, o: Outcome, trade_dates: list[date | None]) -> DirectPnl | None:
+    """The PnL of a trade made after D-1 (every trade date after it): its PV on D, taken from a PV of 0 at conclusion."""
+    v = o.valuation
+    assert v is not None
+    if not trade_dates or None in trade_dates or not all(d > prev.business_date for d in trade_dates):  # type: ignore[operator]
+        return None
+    if not NEW_TRADE_PNL_FROM_PV:
+        raise NoPnl("new_trade", f"trade of {max(trade_dates)}: no PV of {prev.business_date}")  # type: ignore[type-var]
+    return DirectPnl(NEW_TRADE_METHOD, prev.business_date, ctx.business_date, v.pv_rub, new_trades=v.pv_rub,
+                     note=NEW_TRADE_NOTE, flag="новая сделка", received_rub=0.0)
+
+
+def _day(v: Any) -> date | None:
+    try:
+        return date.fromisoformat(v) if isinstance(v, str) else v
+    except ValueError:
+        return None
+
+
 def attach(prev: EodContext, ctx: EodContext, direct: dict[str, Outcome], inputs: PositionInputs,
-           prev_direct: dict[str, Outcome], prev_valid_dates: dict[str, date] | None = None) -> None:
+           prev_direct: dict[str, Outcome], prev_valid_dates: dict[str, date] | None = None,
+           prev_inputs: PositionInputs | None = None) -> None:
     """Set ``pnl`` or ``no_pnl`` on each valued outcome of ``direct`` (``positions.plan(ctx, inputs).direct``).
     ``prev_direct``: the same plan on the previous date's inputs and context (the reported values of D-1);
-    ``prev_valid_dates``: the valid dates of those inputs' books (``PositionInputs.valid_dates`` of D-1)."""
+    ``prev_valid_dates``: the valid dates of those inputs' books (``PositionInputs.valid_dates`` of D-1);
+    ``prev_inputs``: those inputs, to find a derivative of D-1 by its trades when its position id changed (TDM#468).
+    A derivative made after D-1 gets the PnL of a new trade (``_new_trade``)."""
     book = {pid: b for pid, b, _, _ in inputs.rows}
+    prev_book = {pid: b for pid, b, _, _ in prev_inputs.rows} if prev_inputs is not None else {}
+    by_trades: dict[tuple[str, frozenset[str]], list[Outcome]] = {}
+    for ppid, po in prev_direct.items():
+        if _is_core(po) and (k := _trade_key(prev_book.get(ppid) or ppid.partition("|")[0], po)):
+            by_trades.setdefault(k, []).append(po)
+    made: dict[tuple[str, str], list[date | None]] = {}
+    for t in (*inputs.trade_terms, *inputs.other_book_terms):
+        made.setdefault((str(t.get("book_id")), str(t.get("trade_id"))), []).append(_day(t.get("trade_date")))
     for pid, o in direct.items():
         v = o.valuation
         if v is None:
@@ -275,7 +328,23 @@ def attach(prev: EodContext, ctx: EodContext, direct: dict[str, Outcome], inputs
         vd = inputs.valid_dates.get(book.get(pid, ""))
         try:
             if v.extra.get("core"):  # a derivative valued by core from its terms (valuation.derivatives)
-                o.pnl = _core_fx(prev, ctx, o, prev_direct.get(pid))  # type: ignore[assignment]
+                pp = prev_direct.get(pid)
+                if not _is_core(pp):  # the same trades under another position id on D-1 (off the report <-> in it)
+                    k = _trade_key(book.get(pid) or pid.partition("|")[0], o)
+                    alt = by_trades.get(k, []) if k else []
+                    pp = alt[0] if len(alt) == 1 else pp
+                if not _is_core(pp):
+                    bk = book.get(pid) or pid.partition("|")[0]
+                    dates = [d for tid in ((v.extra.get("core") or {}).get("trades") or [])
+                             for d in made.get((bk, str(tid)), [None])]
+                    if x.get("off_report") and x.get("trade_date") and not dates:
+                        dates = [_day(x["trade_date"])]
+                    if (nt := _new_trade(prev, ctx, o, dates)) is not None:
+                        o.pnl = nt  # type: ignore[assignment]
+                        continue
+                    if x.get("off_report"):
+                        raise NoPnl("no_prev_terms", f"no terms of the trade on {prev.business_date}")
+                o.pnl = _core_fx(prev, ctx, o, pp)  # type: ignore[assignment]
             elif (kind == "fx" and (o.core_not_valued or ("",))[0] == "settled"
                   and (pp := prev_direct.get(pid)) is not None and pp.valuation is not None
                   and pp.valuation.extra.get("core")):  # the legs settled, the row is cash (TDM#466)

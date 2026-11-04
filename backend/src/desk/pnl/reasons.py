@@ -33,6 +33,7 @@ NO_PNL_TEXT = {
     "no_prev_report": "нет отчётной стоимости позиции за предыдущий день",
     "report_carried": "отчёт не обновлялся с предыдущего дня",
     "valued_differently": "за предыдущий день сделка оценена не ядром (нет условий или кривой)",
+    "no_prev_terms": "условий сделки на предыдущий день нет, а заключена она раньше",
 }
 
 METHOD_TEXT = {
@@ -45,8 +46,10 @@ METHOD_TEXT = {
     "desk-fx-spot-v1": "по курсу: сумма × изменение курса",
     "desk-reported-v1": "по отчёту: разница отчётных стоимостей",
     "desk-fx-core-v1": "FX-сделка: изменение PV ядра, курсовая часть по FX-дельте",
+    "desk-core-new-trade-v1": "новая сделка: PnL от условий сделки (PV при заключении принят за 0)",
 }
 CORE_FX_METHOD = "desk-fx-core-v1"
+NEW_TRADE_METHOD = "desk-core-new-trade-v1"
 REPORTED_METHOD = "desk-reported-v1"
 FX_METHOD = "desk-fx-spot-v1"
 EXACT_V1_METHOD = "desk-flash-exact-v1"

@@ -52,7 +52,7 @@ runs in a savepoint (TDM#215), so an SQL error inside does not abort the run's t
 from __future__ import annotations
 
 import math
-from collections import defaultdict
+from collections import Counter, defaultdict
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field, fields, replace
 from datetime import date, timedelta
@@ -70,6 +70,7 @@ from ..rules.reference import (
     entities_from_reference,
     policy_from_reference,
 )
+from ..valuation import offreport
 from . import funding_run, fx_liability
 
 KIND = "ocp"
@@ -208,23 +209,60 @@ def run_policy(con: psycopg.Connection, on: date, known_at: Any, base: O.OcpPoli
 def compute(con: psycopg.Connection, on: date, market: MarketView | None, content_rows: list[dict[str, Any]],
             reference: dict[str, Any], inputs: store.PositionInputs,
             policy: O.OcpPolicy = O.PROVISIONAL_POLICY, *, terms: Mapping[str, Any] | None = None,
-            calendar: Any = None) -> RunOcp:
-    """The OCP of the run of ``on`` (see the module docstring). ``reference``: ``RunContent.reference`` (books, fx);
+            calendar: Any = None, off_report: Mapping[str, Any] | None = None) -> RunOcp:
+    """The OCP of the run of ``on`` (see the module docstring). ``off_report``: the run's derivatives off the positions
+    report (``valuation.offreport.summary``, TDM#468): with the switch on ``exclude`` the FX trades and CCS among them
+    are a gap of the OCP. ``reference``: ``RunContent.reference`` (books, fx);
     ``policy``: the base the adapter's ``ocp_policy`` applies over; ``terms``: position_id -> ``BondTerms`` (the bonds'
     coupons and redemptions since the base); ``calendar``: the run's business calendar (core's ``BusinessCalendar``)
     for the age of a base, weekends outside its window or without it. In a savepoint (TDM#215): an SQL error inside
     rolls back only the block's reads, so the run still publishes, with the block ``failed``."""
     try:
         with funding_run.savepoint(con):
-            return _compute(con, on, market, content_rows, reference, inputs, policy, terms or {}, calendar)
+            return _compute(con, on, market, content_rows, reference, inputs, policy, terms or {}, calendar, off_report)
     except Exception as e:  # noqa: BLE001 - the OCP never fails the run; it says why it has none
         text = f"{STATUS_TEXT[FAILED]}: {type(e).__name__}: {e}"
         return RunOcp(FAILED, empty_block(FAILED, text, on), log=[("WARN", text[:2000])])
 
 
+def _apart(rows: Sequence[Mapping[str, Any]]) -> dict[str, set[str]]:
+    """The kinds the report gives apart (``derivatives_ccy``) per book, or per ``entity:<entity>`` for a row without
+    ``book_id`` (a report of scope ``["entity"]``, 08)."""
+    out: dict[str, set[str]] = defaultdict(set)
+    for r in rows:
+        who = str(r["book_id"]) if r.get("book_id") else f"entity:{r.get('entity')}"
+        out[who] |= {k for k, v in (r.get("derivatives_ccy") or {}).items() if v is not None}
+    return dict(out)
+
+
+def _off_report_gap(off_report: Mapping[str, Any] | None, apart: Mapping[str, set[str]] | None = None,
+                    in_trades: set[tuple[str, str]] = frozenset(), entity_of: Mapping[str, str] | None = None
+                    ) -> list[dict[str, Any]]:
+    """Gap ``off_report_excluded`` (switch ``exclude``): FX trades and CCS off the positions report that no OCP term
+    holds, though their nominal is out of the base: the books and the number of trades. Counted from the whole list
+    (``summary.gap_trades``, not the cut one in the lineage); not counted: a closed trade, a trade the ``trades`` dataset
+    already holds after the base (``in_trades``: (book, trade_id)), a kind the report does not give apart in its book
+    (``apart``: book, or ``entity:<entity>`` for a report without ``book_id``, -> the kinds of ``derivatives_ccy``; the
+    trade's book is taken to its entity by ``entity_of``; None: not checked)."""
+    if not off_report or off_report.get("mode") != "exclude":
+        return []
+    ex = [(b, t) for b, t, k in off_report.get("gap_trades") or []
+          if (b, t) not in in_trades and (apart is None or offreport.GAP_KINDS[k] in (
+              apart.get(b, set()) | apart.get(f"entity:{(entity_of or {}).get(b)}", set())))]
+    ex = list(dict.fromkeys(ex))
+    if not ex:
+        return []
+    by_book = Counter(b for b, _ in ex)
+    return [{"code": "off_report_excluded",
+             "items": [f"{b} ({n})" for b, n in sorted(by_book.items())][:20],
+             "text": f"сделки вне отчёта позиций исключены настройкой: {len(ex)} (книги "
+                     + ", ".join(sorted(by_book)[:10]) + "): их номинал вынесен из базы ОВП, а PV не добавлен"}]
+
+
 def _compute(con: psycopg.Connection, on: date, market: MarketView | None, content_rows: list[dict[str, Any]],
              reference: dict[str, Any], inputs: store.PositionInputs, policy: O.OcpPolicy,
-             terms: Mapping[str, Any] | None = None, calendar: Any = None) -> RunOcp:
+             terms: Mapping[str, Any] | None = None, calendar: Any = None,
+             off_report: Mapping[str, Any] | None = None) -> RunOcp:
     known_at = inputs.known_at
     policy, source, conflicts = run_policy(con, on, known_at, policy)
     books = {b["book_id"]: b for b in store.current_books(con, on, known_at)}
@@ -240,6 +278,10 @@ def _compute(con: psycopg.Connection, on: date, market: MarketView | None, conte
                         liabilities=liabs, report_rows=report.rows, report_units=report.units, policy=policy,
                         days=days, is_business_day=is_bd, valid_dates=inputs.valid_dates)
     notes += res.notes
+    apart = _apart(report.rows)
+    in_trades = {(str(t.get("book_id")), str(t.get("trade_id"))) for d in days.values() for t in d.trade_rows or ()
+                 if str(t.get("status") or "live") == "live"}
+    res.gaps.extend(_off_report_gap(off_report, apart, in_trades, {b: str(m.get("entity")) for b, m in books.items()}))
     rates = _rates(reference.get("fx") or [])
     status = COMPUTED if report.units else NO_REPORT
     by_ccy = {}
