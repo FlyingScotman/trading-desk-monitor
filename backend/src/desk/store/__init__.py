@@ -190,6 +190,15 @@ class PositionInputs:
     trades ``valuation.derivatives`` values from their terms."""
     trade_terms_units: list[dict] = field(default_factory=list)
     """Where those rows came from (``DatasetInputs.units``), for the run's lineage."""
+    other_book_terms: list[dict] = field(default_factory=list)
+    """TDM#468: the ``trade_terms`` rows of the books that have no positions set but are in the books reference and not
+    switched off (``active``). Always loaded, never in ``private_inputs_hash``: only the setting
+    ``off_report_derivatives`` = ``include`` values them (``valuation.offreport``), and then the hash says so
+    (``offreport.stamp``)."""
+    other_book_units: list[dict] = field(default_factory=list)
+    """Where those rows came from, as ``trade_terms_units``."""
+    other_books: dict[str, dict] = field(default_factory=dict)
+    """The books reference (``current_books``) of the books of ``other_book_terms``."""
 
 
 LEGACY_SOURCE = "load-positions"
@@ -235,6 +244,11 @@ def positions_for(con: psycopg.Connection, valid_date: date, *, known_at: dateti
     # the FX trades of the books (private/1.2 trade_terms, a stock), valued from their terms (valuation.derivatives)
     terms = dataset_rows(con, "trade_terms", valid_date, known_at=known_at)
     trade_terms = [r for r in terms.rows if str(r.get("book_id")) in used]
+    ref = {b["book_id"]: b for b in current_books(con, valid_date, known_at)}
+    # TDM#468: the books with trade terms but no positions set, that the books reference lists and has not switched off
+    other = {str(r.get("book_id")) for r in terms.rows} - used
+    other = {b for b in other if b in ref and ref[b].get("active") is not False and (books is None or b in books)}
+    other_terms = [r for r in terms.rows if str(r.get("book_id")) in other]
     canon_terms = sorted(json.dumps({k: v for k, v in r.items() if not k.startswith("_") and k != "x"},
                                      sort_keys=True, default=str) for r in trade_terms)
     # legacy inputs hash as before S7a; inbox rows add their canonical v1 fields (not src, not x: 08 §6.6); the
@@ -245,10 +259,14 @@ def positions_for(con: psycopg.Connection, valid_date: date, *, known_at: dateti
                           hashlib.sha256(canon.encode()).hexdigest(), extra,
                           {b: {"source": src, "report_date": rd, "inbox_file_sha256": sha, "file_name": name}
                            for _, b, _, src, rd, sha, name in sets},
-                          {b["book_id"]: b for b in current_books(con, valid_date, known_at) if b["book_id"] in used},
+                          {b: r for b, r in ref.items() if b in used},
                           trade_terms,
                           [{k: (v.isoformat() if isinstance(v, date) else v) for k, v in u.items()}
-                           for u in terms.units if str((u["scope"] or {}).get("book_id")) in used])
+                           for u in terms.units if str((u["scope"] or {}).get("book_id")) in used],
+                          other_terms,
+                          [{k: (v.isoformat() if isinstance(v, date) else v) for k, v in u.items()}
+                           for u in terms.units if str((u["scope"] or {}).get("book_id")) in other],
+                          {b: r for b, r in ref.items() if b in other})
 
 
 def current_sets(con: psycopg.Connection, valid_date: date) -> tuple[list[int], int]:

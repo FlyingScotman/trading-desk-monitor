@@ -56,7 +56,7 @@ from desk.valuation.derivatives import _ui_leg
 
 FIXTURE = Path(__file__).resolve().parents[2] / "tests" / "js" / "fixtures" / "concepts-run.json"
 SERVER_KEYS = FIXTURE.with_name("server-keys.json")
-FLAGS = {"accrualOnly", "ocpTransfer"}
+FLAGS = {"accrualOnly", "ocpTransfer", "offReport"}
 """A position's keys set only when true, on rows the golden book does not have."""
 CURVE_ID = r"^[A-Z]{3}( [A-Z][A-Z0-9]*)*$"
 """A key of ``CURVES``: its currency, then words of capitals and digits (``RUB OFZ``, ``CNY XCCY``, ``USD``)."""

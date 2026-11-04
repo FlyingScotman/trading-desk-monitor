@@ -18,6 +18,10 @@ core (``direct``). ``merge`` puts the two back in the inputs' order for ``desk_r
   (``RUB RUONIA``, the foreign curve, ``RUB KEY``), FX delta per currency (core's spot equivalent), basis, fixing
   status. When core cannot (no curve, no spot, a fixing missing, a basis swap), the row keeps the rule below with the reason
   first in its assumptions.
+- Trades off the report (TDM#468, ``valuation.offreport``): a forward, swap, CCS or REPO of ``trade_terms`` no row names
+  (also of a book without a positions set). Setting ``off_report_derivatives`` = ``include``: each is a row of its own
+  ``book|trade_id`` (``off_report`` in its row), valued by core as the linked ones; ``exclude`` (default): not valued,
+  listed in ``BookPlan.off_report``. A trade that looks like one the report has is never included.
 - A row without ``asset_class`` but with a ``deal_id`` is linked like an OTC row (TDM#501): with its trade's terms it
   is valued here (or, when core rejects them, by the OTC rule with the reason); without, it is a bond as before.
 - FX row without terms: its FX delta is the amount in currency (``tdm_run.direct_row``), no rates risk. Spot or cash
@@ -48,8 +52,10 @@ from ..marketdata.adapter import bond_currency, ccy_code
 from ..orchestrator import EodContext, Outcome
 from ..store import PositionInputs
 from . import derivatives as dv
+from . import offreport
 from .bonds import BondValuation, ccy_curve, face_on
 from .fallback import fx_rate
+from .offreport import OffReportTrade, off_report_trades
 
 MISMATCH_BONDS = 0.5
 RESOLVE_KEYS = (("moex_secid", "secid"), ("isin", "isin"), ("regnum", "regnumber"))
@@ -71,7 +77,7 @@ class BookPlan:
     core_result: Any = None
     """The core result (v3) of the derivatives valued from their terms (``valuation.derivatives``), None without."""
     unlinked_terms: list[str] = field(default_factory=list)
-    """``book|trade_id`` of the trade_terms trades no positions row names (not valued unless ``fx_unlinked_terms``)."""
+    """``book|trade_id`` of the trade_terms trades no positions row names (FX only; the switch ``off_report_derivatives`` decides whether they are valued: ``off_report``)."""
     unlinked_rates: list[str] = field(default_factory=list)
     """``book|trade_id`` of the swap (irs, ois, ccs) trade_terms trades no positions row names: not valued, counted in
     the run's log and lineage (TDM#468)."""
@@ -81,7 +87,12 @@ class BookPlan:
     ocp_amounts: dict[str, dict[str, float]] = field(default_factory=dict)
     """position_id -> the foreign legs' notional of its CCS trades, of the rows core did not value."""
     added: list[str] = field(default_factory=list)
-    """Position IDs of the trades added with ``fx_unlinked_terms`` (rows of their own, in ``order`` and ``direct``)."""
+    """Position IDs of the trades added with ``off_report_derivatives`` = ``include`` (rows of their own, in ``order``
+    and ``direct``)."""
+    off_report: list[OffReportTrade] = field(default_factory=list)
+    """TDM#468: every trade off the positions report with its state (``valuation.offreport``), in either mode."""
+    off_report_matured: int = 0
+    """Trades off the report left out because they matured more than ``FLOW_DAYS`` ago."""
 
 
 def _index(ctx: EodContext) -> dict[str, dict[str, str | None]]:
@@ -272,8 +283,8 @@ NO_TERMS = "no_trade_terms"
 def _derivatives(ctx: EodContext, inputs: PositionInputs, p: BookPlan, second_order: bool
                  ) -> dict[str, BondValuation | dv.NotValued]:
     """The FX and OTC rows valued by core (``valuation.derivatives``): those with trade_terms, a FORTS FX future by
-    ticker (setting ``futures_by_ticker``), and with ``fx_unlinked_terms`` the trades no row names (added to the
-    plan as rows of their own). Returns per position ID the valuation or why core did not value it."""
+    ticker (setting ``futures_by_ticker``), and with ``off_report_derivatives`` = ``include`` the trades no row names (added to the
+    plan as rows of their own, TDM#468). Returns per position ID the valuation or why core did not value it."""
     opts = ctx.fx_options
     rows, classless = [], set()
     for pid, book, _, _ in inputs.rows:
@@ -307,25 +318,29 @@ def _derivatives(ctx: EodContext, inputs: PositionInputs, p: BookPlan, second_or
                 out[pid] = dv.NotValued("no_quantity", f"future {f['secid']}: no number of contracts")
             else:
                 reqs.append(dv.Request(pid, book, x, future=f, contracts=float(n)))
-    if opts.unlinked_terms and unlinked:
-        trades: dict[tuple[str, str], list[dict[str, Any]]] = defaultdict(list)
-        for t in unlinked:
-            trades[(str(t.get("book_id")), str(t.get("trade_id")))].append(t)
-        for (book, trade), ts in sorted(trades.items()):
-            pid = f"{book}|{trade}"
-            try:
-                legs = [dv.TermsLeg.of(t) for t in ts]
-            except dv.NotValued as e:
-                p.unlinked_terms.append(f"{pid}: {e}")
-                continue
-            ccy = next((c for t in legs for c in (t.base, t.quote) if c != "RUB"), "RUB")
-            x = {"asset_class": "fx", "ccy": ccy, "deal_id": trade, "source_instrument_id": trade,
-                 "source_instrument_name": f"{legs[0].base}/{legs[0].quote} {legs[0].product} {trade}",
-                 "value_date": max(t.value_date for t in legs)}
-            inputs.extra[pid] = x
-            p.order.append((pid, book))
-            reqs.append(dv.Request(pid, book, x, legs))
-            p.added.append(pid)
+    # TDM#468: the trades off the positions report; with the switch ``include`` each is a row of its own
+    p.off_report, p.off_report_matured = off_report_trades(inputs, ctx.business_date, opts.off_report)
+    for t in p.off_report:
+        if t.state != "included":
+            continue
+        pid = t.key
+        if pid in inputs.extra and not inputs.extra[pid].get("off_report"):
+            pid += "|off"  # the position id is taken: keep both
+        x = offreport.row_of(t)
+        try:
+            req = dv.request_of(pid, t.book, x, list(t.terms))
+        except dv.NotValued:  # selected as readable: kept for safety
+            continue
+        inputs.extra[pid] = x
+        p.order.append((pid, t.book))
+        reqs.append(req)
+        p.added.append(pid)
+        if t.other_book:
+            if t.book in inputs.other_books:
+                inputs.books.setdefault(t.book, inputs.other_books[t.book])
+            for u in inputs.other_book_units:
+                if str((u.get("scope") or {}).get("book_id")) == t.book and u not in inputs.trade_terms_units:
+                    inputs.trade_terms_units.append(u)
     valued, result = dv.value(ctx, reqs, options=opts, second_order=second_order)
     p.core_result = result
     got = {**out, **valued}
@@ -367,7 +382,7 @@ def _not_by_core(o: Outcome, e: dv.NotValued) -> Outcome:
 
 def plan(ctx: EodContext, inputs: PositionInputs, *, second_order: bool = True) -> BookPlan:
     """Requests for core and the outcomes of the rows valued here, in ``inputs.rows`` order (then the trades added
-    with ``fx_unlinked_terms``). The FX and OTC rows with trade terms (or an FX future by ticker) are valued by core
+    with ``off_report_derivatives``). The FX and OTC rows with trade terms (or an FX future by ticker) are valued by core
     (``valuation.derivatives``); the others, and those core rejects, keep the rule of the module docstring."""
     p = BookPlan([], [], {}, [(pid, book) for pid, book, _, _ in inputs.rows])
     index = None
