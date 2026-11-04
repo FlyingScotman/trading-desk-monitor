@@ -227,17 +227,8 @@
   // общие фильтры шапки не заданы (K.filter): итоги — с сервера
   C.noFilter = f => !f || (!f.entity && !f.desk && !(f.books && f.books.length) && !f.ccy && !(f.portsOff && f.portsOff.length));
 
-  // фильтр строк без позиции в модели монитора и строк остатков: те же общие фильтры, что K.list (юрлицо, деск,
-  // книги, валюта); books — {id: {entity, desk}}
-  C.keep = function (filt, books) {
-    filt = filt || {}; books = books || {};
-    return x => {
-      const b = books[x.book] || {};
-      const ent = x.entity || b.entity, desk = x.desk && x.desk !== '—' ? x.desk : b.desk;
-      return (!filt.entity || ent === filt.entity) && (!filt.desk || desk === filt.desk) &&
-        (!filt.books || !filt.books.length || filt.books.includes(x.book)) && (!filt.ccy || x.ccy === filt.ccy);
-    };
-  };
+  // фильтр строк без позиции в модели монитора и строк остатков — K.rowIn (kit.js, K.scope): то же правило шапки, что у
+  // K.list, с портфелями (строка без позиции — «без портфеля»); своей копии правила здесь нет (TDM#566)
 
   // группы: dim — 'book' | 'entity' | 'ccy' | 'kind'
   C.DIMS = [['book', 'книга'], ['entity', 'юрлицо'], ['ccy', 'валюта'], ['kind', 'тип']];

@@ -62,7 +62,7 @@
   // события — lib/live.js (#28): SSE ../api/v1/events/stream, при недоступности — опрос раз в 30 с; курсор — last_event_id.
   const K = KIT, f = K.f, esc = K.esc, LIVE = window.DESK_LIVE;
   if (LIVE) LIVE.manual = true;  // своя обработка ленты: уведомления и перечитывание даты, без полосы «новый прогон»
-  K.top({ title: 'C14 · Статус дня', tag: 'что пришло, что отклонено, какие прогоны' });
+  K.top({ title: 'C14 · Статус дня', tag: 'что пришло, что отклонено, какие прогоны', filter: false, filterNote: 'статус дня — по всем книгам' });
   const server = K.source === 'real' || K.source === 'empty';
   const STATE = { ok: ['всё пришло', 'st-ok'], warn: ['есть замечания', 'st-warn'], bad: ['есть проблемы', 'st-bad'] };
   const IN_STATE = { ok: ['принято', 'st-ok'], partial: ['принято частично', 'st-warn'], rejected: ['отклонено', 'st-bad'], superseded: ['заменено', 'st-warn'], missing: ['не приходило', ''] };

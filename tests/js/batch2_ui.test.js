@@ -167,6 +167,10 @@ t('R39: демо — замещающие и евробонды Минфина �
 // ---------- R43: ОВП в шапке ----------
 t('R43: ОВП — мини-таблица: валюта на строку, по |эквиваленту|, мелкие — в «+N прочих»', () => {
   const { M, K, I } = load();
+  // демо без публикуемой ОВП (TDM#566: Σ FX-дельт ОВП не подменяет): публикуемая ОВП "из позиций" по книгам
+  const by = {};
+  M.positions.forEach(p => Object.keys(p.fxDeltaBy || {}).forEach(c => { const k = p.book + '|' + c; by[k] = (by[k] || 0) + I.fxIn(p, c); }));
+  M.ocp = { basis: 'derived', byBook: Object.entries(by).map(([k, v]) => { const [book, ccy] = k.split('|'); return { entity: M.book[book].entity, book, books: [book], ccy, amount: v, source: 'derived' }; }), notes: [], gaps: [], books: {}, sourceNames: {} };
   const R = K.fxRows(M.positions);
   assert.deepStrictEqual(R.map(r => Math.abs(r.eq)), R.map(r => Math.abs(r.eq)).sort((a, b) => b - a));
   const html = K.fxMini(M.positions);
@@ -176,7 +180,7 @@ t('R43: ОВП — мини-таблица: валюта на строку, по
   assert.ok(html.includes('+' + minor.length + ' прочих'));
   assert.strictEqual((html.match(/<tr class="small">/g) || []).length, minor.length);
   const big = R.filter(r => Math.abs(r.v) >= K.FX_MINOR);
-  assert.ok(big.length >= 3 && html.indexOf('>' + big[0].c + '<') < html.indexOf('>' + big[1].c + '<'));
+  assert.ok(big.length >= 3 && html.indexOf('>' + big[0].c + ' <') < html.indexOf('>' + big[1].c + ' <'));
   // один формат: знак, 1 знак после точки, разделитель тысяч
   const cny = R.find(r => r.c === 'CNY');
   assert.ok(html.includes(K.f.mns(cny.v, 1)) && /^(?:[+−]?[\d,]+\.\d|\([\d,]+\.\d\))$/.test(K.f.mns(cny.v, 1)));

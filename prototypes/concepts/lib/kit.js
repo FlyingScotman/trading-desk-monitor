@@ -167,6 +167,8 @@
   // столбец водопада без значения (#327): «—» на уровне нарастающего итога, вместо прямоугольника
   // признак неполноты суммы (M.sumX, #327): посчитано не у всех позиций — «не посчитано у N из M позиций»
   K.missNote = x => x && x.miss && x.n ? ' <span class="mut3">· не посчитано у ' + x.miss + ' из ' + (x.n + x.miss) + ' поз.</span>' : '';
+  // FX — нетто двух частей (FX бумаги и FX её валютного фондирования, TDM#414): у позиции только с одной из них сумма неполна
+  K.fxPartialNote = L => { const n = (L || []).filter(p => p.pnl && p.pnl.fxPartial).length; return n ? ' <span class="mut3" title="у этих позиций посчитана только одна из двух частей FX (бумага или её валютное фондирование)">· FX неполный у ' + n + ' поз.</span>' : ''; };
   K.wfNull = (api, i, y, fill) => { const a = api.coord([i, y]); return { type: 'text', style: { x: a[0], y: a[1] - 4, text: '—', fill, fontSize: 11, align: 'center', verticalAlign: 'bottom' } }; };
   // заседание ЦБ одной фразой: консенсус и ожидание кривой, если они есть в данных, иначе ставка и прошлое решение
   K.cbrLine = () => {
@@ -280,7 +282,7 @@
   K.tips.fx = 'FX (нетто ОВП): переоценка нетто открытой валютной позиции — FX бумаги вместе с FX её валютного ' +
     'фондирования, одной суммой. Две большие встречные суммы по отдельности не показываются.';
   // факторы PnL в порядке показа (#168: фондирование — свой фактор после кэрри); сумма факторов позиции — её итог
-  K.PNL_FACTORS = [['carry', 'Кэрри'], ['funding', 'Фондирование'], ['rates', 'Ставки'], ['spread', 'Спред'], ['fx', 'FX'], ['trading', 'Сделки'], ['other', 'Прочее']];
+  K.PNL_FACTORS = [['carry', 'Кэрри'], ['funding', 'Фондирование'], ['rates', 'Ставки'], ['spread', 'Спред'], ['fx', 'FX (нетто ОВП)'], ['trading', 'Сделки'], ['other', 'Прочее']];
   K.PNL_COLORS = { carry: '#3fb67a', funding: '#d9667a', rates: '#4c9dff', spread: '#e3b341', fx: '#b48cff', trading: '#22c3d6', other: '#a0b4c8' };
   K.tips.dv01 = 'DV01 ставок, тыс ₽/бп: сумма бакетов по кривым ставок (RUONIA, КС, валютные), без базиса ОФЗ и CS01.\n' + K.tips.ruonia;
   K.tips.zdisc = 'Z-спред к кривой дисконтирования (RUONIA OIS; в день без неё — к КБД), б.п., годовой, ACT/365F (R32): у фикс-бумаги — ' +
@@ -668,14 +670,30 @@
   try { Object.assign(filt, JSON.parse(localStorage.getItem('concepts-filter') || '{}')); } catch (e) { }
   K.filter = filt;
   K.setFilter = (patch) => { Object.assign(filt, patch); try { localStorage.setItem('concepts-filter', JSON.stringify(filt)); } catch (e) { } fire('filter'); renderFilterChips(); };
-  const portOf = p => p.portfolio || '—';
+  const portOf = p => (p && p.portfolio) || '—';  // то же, что K.scope.portOf (объявлена ниже)
   let filterScope = M;
   // A period report supplies its historical catalogue; ordinary monitors keep the current run's catalogue.
   K.setFilterScope = scope => { filterScope = scope; renderFilterChips(); };
   const portList = scope => [...new Set(scope.positions.map(portOf))].sort((a, b) => (a === '—') - (b === '—') || a.localeCompare(b, 'ru'));
   const PORTS = portList(M);
   const portsOff = () => (filt.portsOff || []).filter(v => PORTS.includes(v));
-  K.list = () => { const off = portsOff(); return M.positions.filter(p => (!filt.entity || p.entity === filt.entity) && (!filt.desk || p.desk === filt.desk) && (!filt.books || !filt.books.length || filt.books.includes(p.book)) && (!filt.ccy || p.ccy === filt.ccy) && (!off.length || !off.includes(portOf(p)))); };
+  // ---------- правило «книга / позиция под фильтром» (TDM#566): одно на все экраны ----------
+  // Книга: юрлицо, деск, (тип книги — только у C16) и выбор книг. Позиция — книга, валюта позиции и портфель. Портфель
+  // позиции приходит с сервера готовым (p.portfolio, api/scope_rule.py: книга типа HTM — HTM, иначе колонка Portfolio
+  // отчёта, иначе «—»); здесь он не пересчитывается. Валюта: у позиции — её валюта (ccy), у строки ОВП — валюта
+  // строки (ногой FX-сделки может быть другая валюта, чем у позиции: K.ocpNote). Строки без позиции (остатки ДС,
+  // строки отчёта) портфеля не имеют — они «без портфеля». Копий этого правила в других файлах нет.
+  const SC = K.scope = {
+    portOf: p => (p && p.portfolio) || '—',
+    bookIn: (F, id, b) => { b = b || {}; return (!F.entity || b.entity === F.entity) && (!F.desk || b.desk === F.desk) && (!F.type || b.type === F.type) && (!F.books || !F.books.length || F.books.includes(id)); },
+    ccyIn: (F, ccy) => !F.ccy || ccy === F.ccy,
+    portIn: (off, port) => !off || !off.length || !off.includes(port || '—'),
+    posIn: (F, p, off) => SC.bookIn(F, p.book, p) && SC.ccyIn(F, p.ccy) && SC.portIn(off, SC.portOf(p)),
+    // строка без позиции в модели: book, ccy и, если есть, entity / desk / portfolio; справочник книги — прогона
+    rowIn: (F, x, off) => { const b = M.book[x.book] || {}; return SC.bookIn(F, x.book, { entity: x.entity || b.entity, desk: x.desk && x.desk !== '—' ? x.desk : b.desk }) && SC.ccyIn(F, x.ccy) && SC.portIn(off, x.portfolio); },
+  };
+  K.list = () => { const off = portsOff(); return M.positions.filter(p => SC.posIn(filt, p, off)); };
+  K.rowIn = x => SC.rowIn(filt, x, portsOff());
   let chipsBox = null;
   // каскад: юрлицо → деск → книги; в каждом списке только варианты, совместимые с уже выбранным
   const bookMemberships = (entity = filt.entity, desk = filt.desk) => filterScope.books.filter(b => (!entity || b.entity === entity) && (!desk || b.desk === desk));
@@ -702,7 +720,7 @@
       '<span class="k-chip' + (filt.entity ? ' on' : '') + '" data-f="entity">' + (filt.entity ? esc(ent.find(e => e.id === filt.entity)?.name || filt.entity) : 'все юрлица') + ' ▾</span>' +
       '<span class="k-chip' + (filt.desk ? ' on' : '') + '" data-f="desk">' + (filt.desk ? esc(filt.desk) : 'все дески') + ' ▾</span>' +
       '<span class="k-chip' + (filt.books && filt.books.length ? ' on' : '') + '" data-f="books">' + esc(lbl) + ' ▾</span>' +
-      (showPorts ? '<span class="k-chip' + (off.length ? ' on' : '') + '" data-f="ports" title="Портфель — колонка Portfolio отчёта о позициях">' + esc(plbl) + ' ▾</span>' : '') +
+      (showPorts ? '<span class="k-chip' + (off.length ? ' on' : '') + '" data-f="ports" title="Портфель — колонка Portfolio отчёта о позициях; книга типа HTM целиком в портфеле HTM, что бы ни было в отчёте">' + esc(plbl) + ' ▾</span>' : '') +
       ((filt.entity || filt.desk || (filt.books && filt.books.length) || filt.ccy || off.length) ? '<span class="k-chip" data-f="reset"><span class="x">✕</span> сбросить</span>' : '');
     chipsBox.querySelectorAll('[data-f]').forEach(ch => ch.onclick = ev => {
       const k = ch.dataset.f;
@@ -1301,6 +1319,8 @@
     document.body.prepend(bar);
     if (/^https?:$/.test(location.protocol) && !window.DESK_AUTH) document.head.appendChild(Object.assign(document.createElement('script'), { src: '../desk-auth.js' }));  // вход: пользователь, «Выйти», CSRF
     chipsBox = bar.querySelector('.filters'); renderFilterChips();
+    // экран не читает фильтр шапки (TDM#566, K.top({ filter: false, filterNote })): чипов нет — только подпись, цифры экрана не зависят от выбора
+    if (opt.filter === false) { chipsBox.innerHTML = '<span class="k-note" data-nofilter title="Юрлица, дески, книги и портфели шапки на этом экране не применяются">Фильтр шапки здесь не действует' + (opt.filterNote ? ': ' + esc(opt.filterNote) : '') + '</span>'; chipsBox = null; }
     bar.querySelector('[data-a=search]').onclick = () => K.palette();
     bar.querySelector('[data-a=theme]').onclick = K.toggleTheme;
     const nb = bar.querySelector('[data-a=numfmt]');  // формат отрицательных чисел (#153): щелчок — другой формат
@@ -2376,13 +2396,9 @@
         (!un.length && !ms.length ? ' <span class="mut3">· пропусков нет</span>' : '') + '</div>';
     }).join('');
   };
-  // строка отчёта без позиции в прогоне: фильтр шапки — по её книге (юрлицо, деск, книга); валюты строки не знаем —
+  // строка отчёта без позиции в прогоне: фильтр шапки — по её книге (K.scope.rowIn: юрлицо, деск, книга, «без портфеля»); валюты строки не знаем —
   // при фильтре валюты показываем только рублёвые продукты (IRS, OIS, РЕПО)
-  const phantomOk = r => {
-    const b = M.book[r.book] || {};
-    return (!filt.entity || b.entity === filt.entity) && (!filt.desk || b.desk === filt.desk) && (!filt.books || !filt.books.length || filt.books.includes(r.book)) &&
-      (!filt.ccy || (filt.ccy === 'RUB' && !/ccs/.test(r.product || '')));
-  };
+  const phantomOk = r => K.rowIn({ book: r.book, ccy: /ccs/.test(r.product || '') ? null : 'RUB' });
   K.ratesCoreModel = list => {
     const L = list || K.list();
     const par = M.derivParallel ? M.derivParallel() : null, parBy = {}, prow = (par && par.rows) || [];
@@ -2640,7 +2656,20 @@
     return '<div class="k-note" style="margin-top:6px">Фондирование за период: ' + t + '</div>';
   };
   K.fundingPanel = function (el) {
-    const F = M.funding || { state: 'not_computed', text: 'нет данных о фондировании' };
+    if (!el._fundLive) { el._fundLive = true; K.live(el, 'filter', () => K.fundingPanel(el)); }  // один раз на панель
+    const F0 = M.funding || { state: 'not_computed', text: 'нет данных о фондировании' };
+    // фондирование по книгам — по правилу шапки (K.scope.bookIn: юрлицо, деск, книги); портфели и валюта к нему не
+    // применяются (фондирование делится по книгам, не по позициям) — это сказано подписью (TDM#566)
+    const byBook0 = Object.entries(F0.byBook || {}), bookSel = !!(filt.entity || filt.desk || (filt.books && filt.books.length));
+    const inScope = ([b]) => SC.bookIn(filt, b, M.book[b]);
+    const sel = bookSel ? byBook0.filter(inScope) : byBook0, sum = k => sel.reduce((a, [, v]) => a + (v[k] || 0), 0);
+    const F = !bookSel || F0.state !== 'computed' && F0.state !== 'demo' ? F0 : Object.assign({}, F0, {
+      total: sum('total'), inPositions: sum('inPositions'), bookLevel: sum('bookLevel'),
+      byBook: Object.fromEntries(sel),
+      byEntity: sel.reduce((o, [b, v]) => { const e = (M.book[b] || {}).entity || '—'; o[e] = (o[e] || 0) + (v.total || 0); return o; }, {}),
+      problems: (F0.problems || []).filter(x => !x.book || SC.bookIn(filt, x.book, M.book[x.book])) });
+    const scopeNote = (bookSel ? '<div class="k-note" style="padding:6px 10px" data-fund-scope>Под фильтром шапки: только выбранные книги, итог — по ним' : '<div class="k-note" style="padding:6px 10px" data-fund-scope>Все книги') +
+      ((filt.ccy || portsOff().length) ? '; фильтр ' + [filt.ccy && 'валюты', portsOff().length && 'портфелей'].filter(Boolean).join(' и ') + ' к фондированию по книгам не применяется' : '') + '</div>';
     const head = '<div class="k-note" style="padding:8px 10px">' + (F.state === 'computed' || F.state === 'demo'
       ? (F.period ? 'период ' + f.dshort(F.period.start) + ' → ' + f.dshort(F.period.end) + ' (' + F.period.days + ' дн.) · ' : '') + 'итог <b class="' + f.cls(F.total) + '">' + f.mns(F.total, 2) + '</b> mm ₽, в PnL позиций ' + f.mns(F.inPositions, 2) + ', строками книг ' + f.mns(F.bookLevel, 2) + (F.provisional && F.provisional.length ? ' · по умолчанию (не решено): ' + esc(F.provisional.join(', ')) : '')
       : '<span style="color:var(--warn)">Фондирование ' + esc(K.fundingStateText[F.state] || F.state) + (F.text ? ': ' + esc(F.text) : '') + '</span> — в PnL его нет, а не 0') + '</div>';
@@ -2654,7 +2683,7 @@
     const ent = ents.length > 1 ? '<div class="k-note" style="padding:6px 10px">по юрлицам: ' + ents.map(([e, v]) => esc(e) + ' ' + f.mns(v, 2)).join(' · ') + '</div>' : '';
     const pr = F.problems || [];
     const probs = pr.length ? '<div class="k-sec" style="margin:10px 10px 4px">Проблемы фондирования · ' + pr.length + '</div><ul class="k-note" style="margin:0 0 8px;padding-left:28px">' + pr.slice(0, 30).map(x => '<li>' + esc(x.kind + ' ' + x.ref + ': ' + x.reason) + '</li>').join('') + (pr.length > 30 ? '<li>ещё ' + (pr.length - 30) + '</li>' : '') + '</ul>' : '';
-    el.innerHTML = head + dflt + tbl + ent + probs;
+    el.innerHTML = scopeNote + head + dflt + tbl + ent + probs;
     K.tableTools(el, { viewKey: 'funding-books', title: 'Фондирование по книгам, mm ₽' });
   };
 
@@ -3140,7 +3169,7 @@
       const cols = vals.map(v => v >= 0 ? css('--pos') : css('--neg')).concat([css('--accent')]);
       const lo = Math.min(0, ...segs.map(x => Math.min(x[0], x[1]))), hi = Math.max(0, ...segs.map(x => Math.max(x[0], x[1])));
       return {
-        grid: { left: 6, right: 10, top: 18, bottom: 4, containLabel: true }, tooltip: { trigger: 'item', formatter: p => (keys[p.dataIndex] ? keys[p.dataIndex][1] : 'Итого') + ': <b>' + K.wfTip(p.dataIndex < vals.length ? vals[p.dataIndex] : run) + '</b> mm ₽' + K.missNote(sx[p.dataIndex]) },
+        grid: { left: 6, right: 10, top: 18, bottom: 4, containLabel: true }, tooltip: { trigger: 'item', formatter: p => (keys[p.dataIndex] ? keys[p.dataIndex][1] : 'Итого') + ': <b>' + K.wfTip(p.dataIndex < vals.length ? vals[p.dataIndex] : run) + '</b> mm ₽' + K.missNote(sx[p.dataIndex]) + (keys[p.dataIndex] && keys[p.dataIndex][0] === 'fx' ? K.fxPartialNote(L) : '') },
         xAxis: { type: 'category', data: cats, axisLabel: { interval: 0, fontSize: 10, formatter: (v, i) => stag && i % 2 ? '\n' + v : v } }, yAxis: { type: 'value', unit: 'mm ₽', nameGap: 20, min: lo, max: hi, scale: false, axisLabel: { formatter: v => K.tick(v, 1e6), hideOverlap: true, showMinLabel: !lo, showMaxLabel: !hi } },
         series: [{
           type: 'custom', data: segs.map((s, i) => [i, s[0], s[1]]),
@@ -3214,10 +3243,10 @@
     if (!B) return null;
     const F = flt || K.filter, bk = id => K.ocpBook(id, meta);
     // flt.type (C16, TDM#556) — тип книги справочника (TRADING, HTM, …): как деск, по книге целиком
-    const bookOk = id => (!F.entity || bk(id).entity === F.entity) && (!F.desk || bk(id).desk === F.desk) && (!F.type || bk(id).type === F.type) && (!F.books || !F.books.length || F.books.includes(id));
+    const bookOk = id => SC.bookIn(F, id, bk(id));
     const lines = [], partial = [], bookless = [];
     B.forEach(x => {
-      if (F.ccy && x.ccy !== F.ccy) return;
+      if (!SC.ccyIn(F, x.ccy)) return;  // валюта строки ОВП (K.scope)
       if (x.book) { if (bookOk(x.book)) lines.push(x); return; }
       if (F.entity && x.entity !== F.entity) return;  // часть отчёта другого юрлица
       const books = x.books || [], ok = books.filter(bookOk);
@@ -3234,6 +3263,7 @@
     const notes = [...new Set(partial.map(x => 'часть отчёта ОВП по юрлицу ' + x.entity + ' учтена только целиком: без фильтра книг или с фильтром на все её книги (' + (x.books || []).join(', ') + ')')
       .concat(bookless.map(x => 'часть отчёта ОВП по юрлицу ' + x.entity + ' без книг — только без выбора книг' + (F.type ? ' и типа книги' : ''))))];
     if ((F.portsOff || []).length) notes.push('фильтр портфелей к ОВП по книгам не применяется');
+    if (F.ccy) notes.push('фильтр валюты: ОВП — по валюте строки ОВП, столбец «из позиций» — по валюте позиции');
     return { lines, notes, partial: partial.length + bookless.length > 0 };
   };
   // источник суммы валюты: отчёт / из позиций / отчёт + поз.
@@ -3250,13 +3280,17 @@
       const by = {};
       S.lines.forEach(x => { if (x.ccy === 'RUB') return; const r = by[x.ccy] = by[x.ccy] || { c: x.ccy, v: 0, src: {} }; r.v += x.amount || 0; r.src[x.source] = (r.src[x.source] || 0) + (x.amount || 0); });
       R = Object.values(by).map(r => Object.assign(r, { pub: true, der: der(r.c), eq: r.v * reprRate(r.c) }));
-    } else R = K.fxCcys(L).map(c => { const v = der(c); return { c, v, der: v, eq: v * reprRate(c) }; });
+    } else R = [];  // публикуемой ОВП нет: Σ FX-дельт позиций ОВП не подменяет (TDM#566, K.ocpNone)
     return R.sort((a, b) => (Math.abs(b.eq) - Math.abs(a.eq)) || a.c.localeCompare(b.c));
   };
   K.FX_MINOR = 0.05e6;  // меньше — 0.0 mm: в «прочих»
   // заметка под ОВП: часть отчёта по юрлицу не вошла из-за фильтра, фильтр портфелей (K.ocpScope)
   K.ocpNote = () => { const S = K.ocpScope(); return S && S.notes.length ? '<span class="mut3 k-ocpnote" title="' + esc(S.notes.join('; ')) + '">ОВП под фильтром — не вся (' + S.notes.length + ')</span> ' : ''; };
+  // публикуемой ОВП в прогоне нет (до блока v2, ошибка расчёта ОВП, демо): шапка и C06 пишут это, а не показывают
+  // сумму FX-дельт позиций под именем ОВП (она — другая величина; у C06 она остаётся отдельным столбцом)
+  K.ocpNone = 'ОВП нет: в этом прогоне нет публикуемой ОВП (прогон до её блока, ошибка расчёта или демо). Причина по отчёту ОВП — на экране «ОВП» (C16)';
   K.fxMini = function (L) {
+    if (!K.ocpScope()) return '<span class="mut3" title="' + esc(K.ocpNone) + '">ОВП нет · <a href="c16-ocp.html">почему</a></span>';
     const R = K.fxRows(L);
     if (!R.length) return '<span class="mut3">открытых позиций нет</span>';
     const minor = r => Math.abs(r.v) < K.FX_MINOR;
@@ -3312,7 +3346,7 @@
 
   // стандартные команды поиска
   K.commands([
-    { label: 'Сбросить фильтр книг', run: () => K.setFilter({ entity: null, desk: null, books: null, ccy: null }) },
+    { label: 'Сбросить фильтр книг', run: () => K.setFilter({ entity: null, desk: null, books: null, ccy: null, portsOff: null }) },
     { label: 'Переключить тему', run: () => K.toggleTheme() },
     { label: 'Все мониторы', run: () => location.href = 'index.html' },
   ]);
