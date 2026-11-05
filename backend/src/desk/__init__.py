@@ -63,6 +63,8 @@ VALUATION_VERSION = 29  # 2: risk per curve (R8); 3: static display fields (R9 D
 # 28: a KBD floater's linear rates PnL takes its RUONIA discounting term too: rates_linear, its RUONIA/basis split and convexity (TDM#467)
 # 29: the OCP of every date on the methodology report without derivatives + their PV (report_base_plus_day, TDM#567: no
 # date keeps report_plus_outside unless the adapter's ocp_policy says so); the PnL of the day's trades fixed (TDM#570)
+#     also: a PnL that cannot be told exactly is shown on an assumption (pnl.extra.assumption): the price of the other day, the
+# start of the day taken as 0, the simple PnL for want of the exact one; not «нет PnL» (TDM#576)
 
 
 def logic_version() -> str:

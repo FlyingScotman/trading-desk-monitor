@@ -138,7 +138,8 @@ def test_positions_keep_nulls(store_url, book, client):
     assert all(gone[k] is None for k in ("pv_rub", "dv01_rub", "cs01_rub", "fact", "pnl", "no_pnl"))
     valued = [p for p in ps if p["quality"]]
     assert all(p["pv_rub"] is not None and p["fact"]["book_id"] == p["book_id"] for p in valued)
-    assert any(p["pnl"] is None and (p["no_pnl"] or {}).get("reason") == "not_priced_prev" for p in valued)
+    # TDM#576: no price on the previous close is not «нет PnL»: today's price stands for it, said in the row's extra
+    assert any((p["pnl"] or {}).get("extra", {}).get("assumption", {}).get("code") == "start_price_carried" for p in valued)
     ofz = client.get(f"/api/v1/runs/{rid}/positions?book=OFZ").json()["positions"]
     assert ofz and all(p["book_id"] == "OFZ" for p in ofz)
     ex = client.get(f"/api/v1/runs/{rid}/positions?quality=exact&book=CORP").json()["positions"]

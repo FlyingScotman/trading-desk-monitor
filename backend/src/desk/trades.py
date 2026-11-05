@@ -493,7 +493,7 @@ def apply_intraday(con: psycopg.Connection, on: date,
                             "report": True, "bond": str(key[1]), "book": book,
                             **({"portfolio": pf} if pf is not None else {}),
                             "members": {r[0]: _row_qty(r, inputs.extra.get(r[0]))[1] or 0.0 for r in lots_r},
-                            "members_start": {r[0]: _row_qty(r, base_extra.get(r[0]))[1] or 0.0 for r in lots_b}}
+                            "members_start": {r[0]: _row_qty(r, base_extra.get(r[0]))[1] for r in lots_b}}
         # the start of the day of the bond for its PnL: its lots in one row
         start_rows = [r for r in start_rows if r not in lots_b]
         for r in lots_b:

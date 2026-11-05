@@ -32,6 +32,7 @@ from ..pnl.reasons import (
     REPORTED_METHOD,
     RUN_NO_POSITION_PNL,
     RUN_NO_PREV_MARKET,
+    assumption_text,
     no_pnl_reason_text,
     no_pnl_text,
 )
@@ -54,7 +55,7 @@ POSITION_KEYS = (
 BOND_KEYS = ("instrumentId", "accrued", "couponFreq", "yieldDate", "spreadCurve")
 PNL_AMOUNTS = ("carry", "rolldown", "rates", "spread", "fx", "funding", "convexity", "newTrades", "other", "reported",
                "explained")
-PNL_KEYS_READ = (*PNL_AMOUNTS, "fxPartial", "available", "reasonText", "method", "methodText")
+PNL_KEYS_READ = (*PNL_AMOUNTS, "fxPartial", "available", "reasonText", "method", "methodText", "assumption")
 """A position's ``pnl`` as the pages read it: the amounts (all null without PnL, R10), whether it has one, why not and
 by which method. ``fxPartial``: the FX is one of its two parts only (TDM#414, #566): the sum is incomplete."""
 EXTRA_KEYS_READ = ("assumptions", "core", "curve_proxy", "dm_bp", "funding", "g_spread_bp", "horizon_kind",
@@ -125,7 +126,7 @@ def no_pnl(code: str, detail: str | None = None) -> dict[str, Any]:
     only its text, not compat's ``reasonDetail``: ``no_pnl_reason_text`` says a change of discount curve with its
     curves, TDM#31)."""
     return {**dict.fromkeys(PNL_AMOUNTS), "fxPartial": False, "available": False, "reasonText": no_pnl_reason_text(code, detail),
-            "method": None, "methodText": None}
+            "method": None, "methodText": None, "assumption": None}
 
 
 def _pnl(q: dict[str, Any]) -> dict[str, Any]:
@@ -138,7 +139,8 @@ def _pnl(q: dict[str, Any]) -> dict[str, Any]:
             "fx": fx_net(q), "fxPartial": fx_partial(q), "funding": q.get("funding"), "convexity": comp["convexity"],
             "newTrades": comp["new_trades"], "other": comp["other"] - reported, "reported": reported,
             "explained": sum(comp.values()), "available": True, "reasonText": None, "method": method,
-            "methodText": METHOD_TEXT.get(method, method) if method else None}
+            "methodText": METHOD_TEXT.get(method, method) if method else None,
+            "assumption": assumption_text((q.get("extra") or {}).get("assumption"))}
 
 
 def _no_pnl_code(stored: dict[str, Any] | None, prev_date: date | None) -> tuple[str, str | None]:

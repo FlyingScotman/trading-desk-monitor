@@ -359,6 +359,28 @@ def _accrued(t: BondTerms, d: date, face: float) -> tuple[float, str] | None:
     return None
 
 
+def carry_price(src: BondValuation, terms: BondTerms, ctx: EodContext, d: date, quantity: float | None = None
+                ) -> BondValuation | None:
+    """``src`` (a valuation of another date) carried to ``d``: its CLEAN price stands, the face and the accrued interest
+    are those of ``d`` (``face_on``, ``_accrued`` at the rates of ``ctx``), so that ``simple_pnl`` over the carried and
+    the real valuation is the accrual of the day plus the payments of (D-1, D], never a coupon twice (TDM#576). None
+    without a clean price, a face, a rate or an accrual on ``d``."""
+    if not math.isfinite(src.clean_pct):
+        return None
+    face = face_on(terms, d)
+    fx_f = fx_rate(ctx, bond_currency(terms))
+    if face is None or float(face) <= 0 or fx_f is None:
+        return None
+    acc = _accrued(terms, d, float(face))
+    if acc is None:
+        return None
+    face_rub, acc_rub = float(face) * fx_f[0], acc[0] * fx_f[0]
+    q = src.quantity if quantity is None else quantity
+    dirty = src.clean_pct / 100 * face_rub + acc_rub
+    return replace(src, quantity=q, valuation_date=d, settlement=d, face_rub=face_rub, accrued_rub=acc_rub,
+                   dirty_rub=dirty, pv_rub=dirty * q)
+
+
 def _schedule(t: BondTerms, d: date) -> tuple[Any, tuple[BondCashflow, ...], Any, PerpetualTail | None] | None:
     """Fixed-coupon schedule to the horizon (as ``valuation.bonds`` builds it), its flows, the core instrument and a
     never-called perpetual's tail (core ``perpetual_tail``, TDM#35; None for a dated bond), or None."""

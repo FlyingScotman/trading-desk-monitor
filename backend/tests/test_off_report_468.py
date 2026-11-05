@@ -366,11 +366,13 @@ def test_a_trade_made_today_has_its_pv_as_pnl_of_the_day(ctx0, prev0):
         direct.NEW_TRADE_PNL_FROM_PV = True
 
 
-def test_an_old_trade_missing_on_the_day_before_has_no_pnl_with_a_reason(ctx0, prev0):
+def test_an_old_trade_missing_on_the_day_before_has_pnl_0_on_an_assumption(ctx0, prev0):
+    """TDM#576: no terms of the trade on D-1: the PV of D stands for it, PnL 0, said on the row (not «нет PnL»)."""
     old = swap("S1", book_id="IRB")  # made 10.09, yet the previous day's inputs lack it
     bp, _ = two_days(ctx0, prev0, old, [])
     o = bp.direct["IRB|S1"]
-    assert o.pnl is None and o.no_pnl.reason == "no_prev_terms" and "no_prev_terms" in NO_PNL_TEXT
+    assert o.no_pnl is None and o.pnl.total == 0.0 and o.pnl.assumption == {"code": "start_pv_missing"}
+    assert "no_prev_terms" in NO_PNL_TEXT   # the code stays for the runs stored before
 
 
 def test_the_last_day_of_a_closed_trade_has_a_pnl_and_the_next_day_no_row(ctx0, prev0):

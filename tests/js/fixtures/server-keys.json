@@ -86,6 +86,7 @@
   "ytm"
  ],
  "pnl": [
+  "assumption",
   "available",
   "carry",
   "convexity",

@@ -45,7 +45,7 @@ POSITION = {"id", "book", "assetClass", "segment", "instrType", "name", "isin", 
             # a bond's
             "instrumentId", "accrued", "couponFreq", "yieldDate", "spreadCurve"}
 PNL = {"available", "reasonText", "carry", "rolldown", "rates", "convexity", "spread", "fx", "fxPartial", "funding", "newTrades",
-       "other", "reported", "explained", "method", "methodText"}
+       "other", "reported", "explained", "method", "methodText", "assumption"}
 
 
 MOVES = {"CURVE_MOVES", "FX_MOVE_PCT", "FX_CBR_MOVE_PCT"}

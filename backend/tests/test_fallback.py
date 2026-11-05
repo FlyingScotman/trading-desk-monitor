@@ -303,7 +303,7 @@ def test_pit_static_face_and_redemption_check(ctx, exact):
     assert pit.lineage()["point_in_time_warning"] == pit.point_in_time_warning
 
 
-def test_no_pnl_on_par_proxy_flag_on_model_price(ctx, exact):
+def test_par_proxy_carries_the_other_price_flag_on_model_price(ctx, exact):
     o, d0 = exact[RZD], ctx.business_date - timedelta(1)
     prev = shifted_prev(ctx, d0)
     mv = approximate(ctx, _outcome(o, "x"), Q, _fb(ctx))
@@ -314,9 +314,11 @@ def test_no_pnl_on_par_proxy_flag_on_model_price(ctx, exact):
         p.valuation, c.valuation = prev_v, cur_v
         attach_pnl(prev, [p], ctx, [c])
         return c
-    for a, b in ((replace(mv0, quality="par_proxy"), mv), (mv0, replace(mv, quality="par_proxy"))):
+    # TDM#576: a par placeholder on either date is not «нет PnL»: the other date's price stands for it, no price move
+    for a, b, on in ((replace(mv0, quality="par_proxy"), mv, mv.valuation_date), (mv0, replace(mv, quality="par_proxy"), d0)):
         c = run(a, b)
-        assert c.pnl is None and c.no_pnl.reason == "par_proxy"
+        assert c.no_pnl is None and c.pnl.assumption == {"code": "par_carried", "date": on.isoformat()}
+        assert c.pnl.total == pytest.approx(c.pnl.received_rub)
     c = run(replace(mv0, quality="model_price", dirty_rub=mv.dirty_rub - 1.0), mv)
     assert c.pnl.total == pytest.approx(Q * 1.0 + c.pnl.received_rub)
     assert c.pnl.extra()["flag"] == "price discovery: model -> market"

@@ -20,8 +20,9 @@ A position that was bought or sold today is measured in two parts, so that the d
 
 ``attach`` puts the two together on the outcomes of the run: a changed row's ``pnl`` is its start-of-day PnL with
 ``new_trades`` added to ``total`` and ``quantity`` the number of bonds after the trades (``extra.start_quantity``,
-``extra.trades``). A start-of-day position without PnL keeps its ``no_pnl`` (the trades' PnL in ``no_pnl.new_trades``,
-never zeros in place of a missing PnL). Only bonds valued by core or its fallback ladder (an ``Outcome`` with terms) carry
+``extra.trades``). A start-of-day position without PnL (no valuation of the start of the day) is taken as 0 and the
+trades' PnL is its day's PnL, on the assumption said in ``pnl.extra.assumption`` (``start_unvalued``, TDM#576): the trades
+are in the total, not beside it. Only bonds valued by core or its fallback ladder (an ``Outcome`` with terms) carry
 the PnL of the trades. A bond is measured and split inside its book and portfolio (``trades.apply_intraday``'s lot key), so a
 lot sold out in one portfolio keeps its PnL there. A row valued at the report's figure has the trades inside the difference
 of the reports' values, at their whole value (a purchase is not a gain): the bond's day is then not shown
@@ -44,6 +45,7 @@ from ..valuation.fallback import METHOD as SIMPLE_METHOD
 from ..valuation.fallback import SimplePnl, fx_rate
 from .direct import REPORTED_METHOD, DirectPnl
 from .flash import NoPnl
+from .reasons import NO_PNL_TEXT, assumption
 
 FLAGS = ("no_trade_price", "units_mismatch", "no_valuation", "no_fx_rate", "no_quantity", "accrued_assumed")
 """Why a trade's PnL is 0 (the first four and ``no_quantity``) or assumed (``accrued_assumed``): ``trades[].flag``."""
@@ -219,8 +221,140 @@ def _cover(prev: EodContext, ctx: EodContext, o: Outcome, main_pid: str) -> Dire
 NOT_IN_PNL = "trades_in_report_value"
 """``no_pnl.reason`` of a traded bond valued at the report's figure: its PnL is the difference of the reports' values, and
 a purchase (or a sale) of the day is inside it at its whole value, not as a gain: the day's PnL of the bond is not
-shown (``pnl.reasons.NO_PNL_TEXT``). Core cannot value the bond from its terms, so the trades' cost (a percent of a face
-it does not know) cannot be taken off the difference reliably."""
+shown (``pnl.reasons.NO_PNL_TEXT``) where the trades' cost cannot be taken off the difference: no price of a trade, no
+face of the bond (``_report_trades_pnl`` takes it off where there is one, TDM#576)."""
+
+
+REPORT_ASSUMPTIONS = ("start_report_missing", "report_unchanged")
+"""The assumptions of a lot's PnL by the reports (``pnl.direct._reported``) that ``_report_trades_pnl`` knows how to read."""
+
+
+def _report_trades_pnl(lots: list[Outcome], ts: list[dict[str, Any]], was: list[float | None] | None = None,
+                       names: list[str] | None = None, gap: float = 0.0, mode: str = "qty"
+                       ) -> list[tuple[Outcome, DirectPnl]] | None:
+    """The PnL of a traded bond valued at the report's figure (TDM#576): the bond's, once, on the first changed lot (the
+    others get a zero), whatever the order of its lots. ``lots``: the lots the trades changed; ``was``: the quantity of
+    each at the start of the day (0: new today, None: held, quantity not known). The base of a lot is what its PnL by the
+    reports (``pnl.direct._reported``) is:
+
+    - the difference of two reports' values (no assumption): that difference;
+    - ``start_report_missing`` (no report of D-1) of a lot new today (``was`` 0): its value of D; of a lot that was held
+      with a known start ``s`` and quantity ``q``: the value of D x (1 - s / q) (the start part at today's price, PnL 0);
+    - ``report_unchanged`` (the report of the book did not change since D-1, its figures hold the trades neither): 0, and
+      the trades are at the report's price, ``sum(side x n x (mark % - price %) / 100 x face)``, instead of their cost;
+    - any other assumption, ``start_report_missing`` of a lot that was held, or ``report_unchanged`` beside lots that are
+      not: None, the bond keeps no PnL.
+
+    ``gap``: the report's quantity less the start's and the trades' (``trades.apply_intraday``'s ``final - final_fold``; a
+    trade late, not yet fetched or corrected: the owner's rule, TDM#576): that part of the change of the position has no
+    trade in the file, it is taken as a trade at the report's price, dirty, PnL 0 (``mode``: ``qty`` bonds, ``face`` a face
+    amount); said in the assumption ``report_trades_gap``.
+
+    The bond's PnL is the sum of the bases less what the day's trades cost, ``sum(side x (n x price % / 100 x face +
+    accrued))``: a purchase is not a gain, a sale is not a loss. A trade costs ``face_amount x price %`` when it has its
+    face, else ``n x price % x`` the face of one bond, RUB: the report row's face outstanding over its quantity (not when
+    the report has no number of bonds: ``extra["qty_stub"]``), else the report's value over its quantity and price (the
+    accrued inside: approximate), said in the assumption. None without a face, a price or a RUB trade (a trade without a
+    currency is not taken for a RUB one)."""
+    if not lots or any(o is None or not isinstance(o.pnl, DirectPnl) or o.valuation is None for o in lots):
+        return None
+    codes = [(o.pnl.assumption or {}).get("code") for o in lots]   # type: ignore[union-attr]
+    if any(c not in (None, *REPORT_ASSUMPTIONS) for c in codes):
+        return None
+    starts = list(was) if was is not None else [None] * len(lots)
+    unchanged = [c == "report_unchanged" for c in codes]
+    if any(unchanged) and not all(unchanged):
+        return None
+    bases, held_start = [], False
+    for o, c, st in zip(lots, codes, starts):
+        assert o.valuation is not None and isinstance(o.pnl, DirectPnl)
+        if c == "start_report_missing":
+            pv = _num(getattr(o.valuation, "pv_rub", None))
+            q_ = _num(getattr(o.valuation, "quantity", None))
+            qstub = (getattr(o.valuation, "extra", None) or {}).get("qty_stub")
+            if st is None or not _finite(pv):   # held, quantity not known: the start of the day is not known
+                return None
+            if st == 0.0:
+                bases.append(pv)
+            elif _finite(q_) and q_ > 0 and not qstub and st > 0:   # held: its start at today's price (a sale: st > q, a negative base)
+                bases.append(pv * (1.0 - st / q_))
+                held_start = True
+            else:
+                return None
+        else:
+            bases.append(0.0 if c == "report_unchanged" else o.pnl.total)
+    first = lots[0]
+
+    def figures(o: Outcome) -> tuple[Any, ...]:
+        v_ = o.valuation
+        return tuple(_num(getattr(v_, k, None)) for k in ("face_rub", "quantity", "pv_rub", "clean_pct", "accrued_rub"))
+
+    def usable(o: Outcome) -> bool:   # a lot that tells the face of one bond and the price: not a stub, a face and a price
+        f_, q_, pv_, c_, _ = figures(o)
+        return (_finite(q_) and q_ > 0 and not (getattr(o.valuation, "extra", None) or {}).get("qty_stub")
+                and (_finite(f_) and f_ > 0 or _finite(pv_, c_) and c_ > 0))
+    ref = next((o for o in lots if usable(o)), first)   # the first such lot, whatever the order of the lots
+    face_rub, vq, pv_rub, clean, acc_rub = figures(ref)
+    known = usable(ref)
+    face, how = None, ""
+    if known and _finite(face_rub) and face_rub > 0:
+        face, how = face_rub / vq, "номинал выведен из отчётной строки"
+    elif known and _finite(pv_rub, clean) and clean > 0:
+        face, how = pv_rub / (vq * clean / 100), "номинал выведен из стоимости и цены отчёта"
+    net, hows, mark_gain = 0.0, set(), 0.0
+    for t in ts:
+        price, n, acc, f = (_num(t.get(k)) for k in ("price_pct", "quantity", "accrued_ccy", "face_amount_ccy"))
+        if price is None or not t.get("ccy") or ccy_code(t["ccy"]) != "RUB":
+            return None
+        sign = 1.0 if t.get("side") == "buy" else -1.0
+        if f and f > 0:
+            tface, hows_ = f, "номинал выведен из сделки"
+        elif n and face:
+            tface, hows_ = n * face, how
+        else:
+            return None
+        hows.add(hows_)
+        if acc is None:
+            acc = n * (acc_rub / vq) if n and known and _finite(acc_rub) else 0.0
+        net += sign * (tface * price / 100.0 + acc)
+        if all(unchanged):
+            if not _finite(clean):
+                return None
+            mark_gain += sign * tface * (clean - price) / 100.0
+    code_, gap_note = "report_trades_face", ""
+    if abs(gap) > 1e-6 and not all(unchanged):   # a change of the position the trades of the file do not explain
+        facef, accf = figures(first)[0], figures(ref)[4]
+        if mode == "face":   # a face amount: its accrued is the row's accrued in the share of the row's face
+            gface, gacc = gap, (gap / facef * accf if _finite(facef, accf) and facef > 0 else 0.0)
+            unit = "номинала"
+        elif face is not None:
+            gface, gacc = gap * face, (gap * accf / vq if _finite(accf) and known else 0.0)
+            unit = "бумаг"
+        else:
+            return None
+        if not _finite(clean):
+            return None
+        net += gface * clean / 100.0 + gacc
+        code_ = "report_trades_gap"
+        gap_note = f"расхождение отчёта и сделок {gap:+,.0f} {unit}, сделки из файла учтены; "
+    detail = gap_note + ("старт по сегодняшней цене отчёта; " if held_start else "") + "; ".join(sorted(hows))
+    if all(unchanged):
+        total, how_ = mark_gain, "отчёт не обновлялся: сделки по цене отчёта; " + detail
+    elif "start_report_missing" in codes:
+        total, how_ = math.fsum(bases) - net, "позиция открыта сегодня: стоимость отчёта за вычетом сделок; " + detail
+    else:
+        total, how_ = math.fsum(bases) - net, detail
+    out = []
+    for i, o in enumerate(lots):
+        assert isinstance(o.pnl, DirectPnl)
+        if i == 0:
+            out.append((o, replace(o.pnl, total=total, other=total, assumption=assumption(code_, how_),
+                                   note=f"{o.pnl.note}; the day's trades taken off the reports ({how_})")))
+        else:   # the bond's PnL is on the first lot: this one has none of its own, nothing is counted twice
+            out.append((o, replace(o.pnl, total=0.0, other=0.0, other_reason=None, report_from=None,
+                                   assumption=assumption("report_trades_face", "PnL облигации — на другой доле"),
+                                   note=f"{o.pnl.note}; the bond's PnL is on the lot {names[0] if names else 'first'}")))
+    return out
 
 
 def outside_total(applied: int, split: dict[str, Any] | None = None, *, no_prev_close: bool = False,
@@ -235,6 +369,7 @@ def outside_total(applied: int, split: dict[str, Any] | None = None, *, no_prev_
     return {"no_prev_close": no_prev_close, "no_pnl_run": no_pnl_run, "trades": applied,
             "no_pnl": {"positions": n.get("no_pnl", 0), "trades": n.get("no_pnl_trades", 0),
                        "pnl_rub": n.get("no_pnl_rub", 0.0)},
+            "assumed": {"positions": n.get("assumed", 0), "trades": n.get("assumed_trades", 0)},
             "lost": {"bonds": len(n.get("lost", ())), "trades": n.get("lost_trades", 0)},
             "unpriced": {"trades": n.get("flagged", 0)},
             "unvalued": {"trades": n.get("unvalued_trades", 0)}}
@@ -257,24 +392,37 @@ def attach(prev: EodContext, ctx: EodContext, start: PositionInputs, bp: Any, ou
     direct = getattr(bp, "direct", None) or {}
     n: dict[str, Any] = {"split": 0, "opened": 0, "no_pnl": 0, "flagged": 0, "mixed_valuation": [], "lost": [],
                          "rows": {}, "no_pnl_trades": 0, "no_pnl_rub": 0.0, "lost_trades": 0,
-                         "unvalued_trades": 0}
+                         "unvalued_trades": 0, "assumed": 0, "assumed_trades": 0}
 
     def outcome(m: str) -> Outcome | None:
         return main.get(m) or direct.get(m)
 
-    def not_in_pnl(label: str, lots: list[str], count: int, start: dict[str, float] | None) -> None:
-        """The lots of a traded bond valued at the report's figure: no PnL (the trades are inside the reports' difference
-        at their whole value), said on the lots and in the run. Only the lots the trades changed (a different quantity
+    def not_in_pnl(label: str, lots: list[str], count: int, start: dict[str, float] | None, ts: list[dict[str, Any]],
+                   was: dict[str, float | None], row: dict[str, Any]) -> None:
+        """The lots of a traded bond valued at the report's figure: the PnL with the trades taken off the reports' difference
+        (``_report_trades_pnl``), else no PnL (the trades are inside it at their whole value), said on the lots and in the
+        run. ``was``: the quantity of each lot at the start of the day (None: unknown). Only the lots the trades changed (a different quantity
         than at the start of the day, new, or ``start`` unknown): a lot that is as it was has its reports' difference
         right. A lot that already has no PnL keeps its reason."""
         valued = [m for m in lots if (outcome(m) is not None and outcome(m).valuation is not None)]   # type: ignore[union-attr]
         if not valued:
             n["unvalued_trades"] += count   # the bond is not valued at all: its trades are in no PnL either
             return
-        hit = [m for m in valued if start is None or m not in start or abs(start[m] - mem_q[m]) > 1e-6]
+        hit = [m for m in valued if start is None or start.get(m) is None or abs(start[m] - mem_q[m]) > 1e-6]
         if not hit:   # the trades changed no lot of the report: no lot is marked, but they are not in a PnL either
             n["lost"].append(label)
             n["lost_trades"] += count
+            return
+        # only a row of the report has both (``trades.apply_intraday``'s ``changed`` rows have no ``final_fold``: no gap)
+        fin, fold = _num(row.get("final")), _num(row.get("final_fold"))
+        gap = fin - fold if fin is not None and fold is not None else 0.0
+        adj = _report_trades_pnl([outcome(m) for m in hit], ts, [was.get(m) for m in hit], hit, gap,   # type: ignore[misc]
+                                 row.get("mode") or "qty")
+        if adj is not None:   # the trades taken off the reports' difference at their cost (TDM#576)
+            for o_, pnl_ in adj:
+                o_.pnl, o_.no_pnl = pnl_, None
+            n["assumed"] += 1
+            n["assumed_trades"] += count
             return
         why = NoPnl(NOT_IN_PNL, "the bond was traded today and is valued at the report's figure: the trades are inside "
                                 "the difference of the reports' values")
@@ -299,12 +447,13 @@ def attach(prev: EodContext, ctx: EodContext, start: PositionInputs, bp: Any, ou
                 n["mixed_valuation"].append(label)
                 n["rows"].update(dict.fromkeys(mem, "trades_mixed_valuation"))
             if not ok:
-                not_in_pnl(label, sorted(mem), len(ts), start_q)
+                not_in_pnl(label, sorted(mem), len(ts), start_q, ts, {m: start_q.get(m, 0.0) if start_q is not None else None for m in mem}, info.get(pid) or {})
                 continue
             target = pid if pid in ok else ok[0]
         o = main.get(target)
         if not _core(o):   # a row valued at the report's figure: the trades are inside its reports (D23)
-            not_in_pnl(label, [pid], len(ts), None)
+            not_in_pnl(label, [pid], len(ts), None, ts, {pid: 0.0 if (info.get(pid) or {}).get("new") else (info.get(pid) or {}).get("start")},
+                   info.get(pid) or {})
             continue
         assert o is not None and o.valuation is not None
         s = begun.get(pid)
@@ -320,15 +469,16 @@ def attach(prev: EodContext, ctx: EodContext, start: PositionInputs, bp: Any, ou
             o.pnl, o.no_pnl = replace(s.pnl, quantity=o.valuation.quantity, total=s.pnl.total + nt, new_trades=nt,
                                       start_quantity=s.valuation.quantity if s.valuation else None, trades=res), None
             n["split"] += 1
-        else:   # the start-of-day position has no PnL: kept so, with the trades' PnL beside it
-            o.pnl = None
-            o.no_pnl = (s.no_pnl if s is not None and s.no_pnl is not None else o.no_pnl
-                        or NoPnl("start_not_valued", "the position of the start of the day is not valued"))
-            o.trades = {"new_trades": nt, "start_quantity": s.valuation.quantity if s and s.valuation else None,
-                        "trades": res}
-            n["no_pnl"] += 1
-            n["no_pnl_trades"] += len(ts)
-            n["no_pnl_rub"] += nt
+        else:   # the start-of-day position has no PnL: it is taken as 0 and the trades' PnL stands (TDM#576)
+            why = (s.no_pnl if s is not None and s.no_pnl is not None else o.no_pnl
+                   or NoPnl("start_not_valued", "the position of the start of the day is not valued"))
+            sq = s.valuation.quantity if s is not None and s.valuation else (info.get(pid) or {}).get("start")
+            a = assumption("start_unvalued", NO_PNL_TEXT.get(why.reason, why.reason))
+            o.pnl, o.no_pnl = replace(_opened_today(prev, ctx, o, nt, res), start_quantity=_num(sq) or 0.0, assumption=a,
+                                      note=f"start of the day without PnL ({why.reason}): taken as 0, the PnL of the "
+                                           "day's trades only"), None
+            n["assumed"] += 1
+            n["assumed_trades"] += len(ts)
         if target not in mem:
             continue
         # the lots at the report's figure of a bond valued in different ways: the bond's whole PnL (the start of the

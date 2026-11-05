@@ -306,3 +306,4 @@ table.k-tbl.k-compact { width: auto; font-size: 12px; }
 .k-tag.k-proxy { border-color: var(--warn); color: var(--warn); cursor: help; margin-left: 4px; }
 .k-tag.k-carry { cursor: help; margin-left: 6px; }
 .k-rcsub { margin: 12px 0 4px; font-weight: 600; font-size: 12.5px; }
+.k-assume { color: var(--warn); cursor: help; font-weight: 600; }

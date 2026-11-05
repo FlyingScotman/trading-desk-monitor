@@ -376,7 +376,7 @@ def eod_run(settings: Settings, d: str, *, snapshots: str | Path | None = None, 
                         x_ = inputs.extra[pid_]
                         inputs.extra[pid_] = {**x_, "x": {**(x_.get("x") or {}), flag_: True}}
                 out(f"PnL of the day's trades: {split['split']} positions split, {split['opened']} opened today, "
-                    f"{split['no_pnl']} without PnL")
+                    f"{split['assumed']} on an assumption (start of the day not valued), {split['no_pnl']} without PnL")
                 if split["flagged"]:
                     out(f"WARN trades: {split['flagged']} trade(s) without a PnL (no price, other currency, no "
                         "valuation or rate): the PnL of the trades is incomplete")

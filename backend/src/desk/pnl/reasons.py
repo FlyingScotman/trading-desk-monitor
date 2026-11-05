@@ -112,6 +112,45 @@ def other_reason(code: str, detail: str = "", **fields: Any) -> dict[str, Any]:
     return {"code": code, "detail": detail, **{k: v for k, v in fields.items() if v is not None}}
 
 
+ASSUMPTION_TEXT = {
+    "start_price_carried": "оценки на начало дня нет: взята последняя известная котировка от {on}, PnL — движение цены от неё",
+    "start_price_model": "оценки и котировок на начало дня нет: взята модельная цена, PnL — движение цены от неё",
+    "start_price_today": "оценки на начало дня нет: принята чистая цена сегодняшнего дня, в PnL накопленный доход и выплаты дня",
+    "start_price_today_fx": "оценки на начало дня нет: принята чистая цена сегодняшнего дня, курса {why} нет — взят курс сегодняшнего дня",
+    "price_carried": "котировка не обновлялась{date}: чистая цена протянута, в PnL накопленный доход и выплаты дня",
+    "par_carried": "одна из оценок по номиналу (нет цены){date}: чистая цена другой даты протянута, в PnL накопленный доход и выплаты дня",
+    "report_trades_face": "бумага по отчёту, сделки дня сняты с разницы отчётов по их стоимости ({why})",
+    "quantity_changed": "количество изменилось ({why}): PnL по количеству на начало дня, изменение без цены сделки",
+    "simple_fallback": "точный расчёт недоступен ({why}): PnL — изменение грязной цены, без разложения",
+    "start_unvalued": "PnL позиции на начало дня не посчитан ({why}): принят нулевым, сделки дня учтены",
+    "fx_rate_carried": "нет курса {why}: курс принят неизменным, курсовой PnL нулевой",
+    "report_unchanged": "отчёт не обновлялся{date}: стоимость принята неизменной, PnL нулевой",
+    "report_trades_gap": "часть изменения позиции по отчёту без сделок в файле — принята по цене отчёта, PnL 0 ({why})",
+    "start_report_missing": "вчерашней отчётной стоимости нет: принята равной сегодняшней, PnL нулевой",
+    "start_pv_missing": "оценки по условиям на начало дня нет: PV принят равным сегодняшнему, PnL нулевой",
+}
+"""``pnl.extra.assumption`` (TDM#576): a PnL shown on an assumption instead of «нет PnL», the code -> the text the
+pages show (``{date}`` « с DD.MM.YYYY» and ``{on}`` «DD.MM.YYYY» of the carried price or report, ``{why}`` the detail). The assumption is said on the
+row, in the card and in the tips; a PnL that has no safe assumption keeps its ``no_pnl`` reason."""
+
+
+def assumption(code: str, detail: str = "", date: Any = None) -> dict[str, Any]:
+    """``pnl.extra.assumption``: ``{"code", "detail"?, "date"?}`` (``ASSUMPTION_TEXT``), the fields that are set."""
+    if code not in ASSUMPTION_TEXT:
+        raise ValueError(f"unknown assumption code {code}")
+    return {"code": code, **({"detail": detail} if detail else {}),
+            **({"date": date.isoformat() if hasattr(date, "isoformat") else str(date)} if date else {})}
+
+
+def assumption_text(a: dict[str, Any] | None) -> str | None:
+    """The Russian text of a stored ``assumption``, None without one (or with a code this program does not know)."""
+    if not a or a.get("code") not in ASSUMPTION_TEXT:
+        return None
+    d = str(a.get("date") or "")
+    when = f" с {d[8:10]}.{d[5:7]}.{d[:4]}" if len(d) == 10 and d[4] == "-" else ""
+    return ASSUMPTION_TEXT[a["code"]].format(date=when, on=when[3:], why=a.get("detail") or "")
+
+
 DISCOUNT_CURVE_CHANGED = "discount_curve_changed"
 """``pnl.flash.explain``'s refusal of a bond discounted on another curve on D-1 than on D (detail ``"<D-1> -> <D>"``,
 the published curves): ``orchestrator.attach_pnl`` gives such a bond the simple PnL (``discount_curve_switch``) before

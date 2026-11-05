@@ -42,6 +42,7 @@ from ..pnl.reasons import (
     REPORTED_METHOD,
     RUN_NO_POSITION_PNL,
     RUN_NO_PREV_MARKET,
+    assumption_text,
     no_pnl_reason_text,
     no_pnl_text,
 )
@@ -189,7 +190,7 @@ def no_pnl(code: str, detail: str | None = None) -> dict[str, Any]:
     """A position's ``pnl`` without PnL (R10): every amount null, not 0, and why (``pnl.reasons``)."""
     return {**dict.fromkeys(PNL_FIELDS), "fxPartial": False, "official": None, "breakNote": None, "available": False, "reason": code,
             "reasonText": no_pnl_reason_text(code, detail), "reasonDetail": detail or None, "method": None,
-            "methodText": None, "flag": None}
+            "methodText": None, "flag": None, "assumption": None}
 
 
 def _json(v: Any) -> Any:
@@ -368,6 +369,7 @@ def assemble(con, run: dict[str, Any]) -> dict[str, Any]:
                 "breakNote": q.get("break_note"), "available": True, "reason": None, "reasonText": None,
                 "reasonDetail": None, "method": method, "methodText": METHOD_TEXT.get(method, method) if method else None,
                 "flag": (q.get("extra") or {}).get("flag"),
+                "assumption": assumption_text((q.get("extra") or {}).get("assumption")),
             } if q else no_pnl(*_no_pnl_of(row["no_pnl"], run["prev_date"])),
         }
         if p.get("accrual_only"):

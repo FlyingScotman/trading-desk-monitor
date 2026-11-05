@@ -191,8 +191,10 @@ def test_pnl_daily_and_period_are_the_same(published):
     daily = 0.0
     for pid in ROWS:
         o = bp.direct[pid]
-        if o.pnl is None:  # the fixture's D-1 has no USD curve: the NDF is valued from its terms on D only
-            assert pid == "DB|N3" and rows[pid]["total"] is None and rows[pid]["no_pnl"]["reason"]
+        if pid == "DB|N3":   # the fixture's D-1 has no USD curve: the NDF is valued from its terms on D only (TDM#576:
+            # its PV of D stands for D-1, PnL 0 on an assumption said on the row, not «нет PnL»)
+            assert o.no_pnl is None and o.pnl.total == 0.0 and rows[pid]["extra"]["assumption"]["code"] == "start_pv_missing"
+            assert rows[pid]["total"] == 0 and rows[pid]["no_pnl"] is None
             continue
         assert rows[pid]["total"] == pytest.approx(o.pnl.total), pid
         daily += o.pnl.total
@@ -201,7 +203,7 @@ def test_pnl_daily_and_period_are_the_same(published):
     assert agg["pnl"]["total"] == pytest.approx(daily)
     period = c.get("/api/v1/history/pnl/period", params={"from": BD.isoformat(), "to": BD.isoformat(),
                                                          "gran": "day", "run_id": rid}).json()
-    assert period["summary"]["total"] == pytest.approx(daily) and period["summary"]["noTotal"] == 1
+    assert period["summary"]["total"] == pytest.approx(daily) and period["summary"]["noTotal"] == 0
     assert {p["positionId"] for p in period["positions"]} == set(ROWS)
 
 

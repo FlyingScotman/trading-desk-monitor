@@ -1022,6 +1022,9 @@
     rows.push({ k: 'Позиции', v: val + ' из ' + ps.length + ' оценены' + (nv ? ', ' + nv + ' без оценки' : ''), warn: !!nv });
     rows.push({ k: 'Книги', v: String(books) });
     rows.push({ k: 'PnL', v: pnl ? 'у ' + pnl + ' из ' + val + ' оценённых' : 'нет', warn: pnl < val });
+    // PnL на допущении (#576): сколько позиций и какая доля итога дня держится на допущении
+    const asm = ps.filter(p => !p.notValued && p.pnl && p.pnl.available !== false && p.pnl.assumption), asmSum = asm.reduce((t, p) => t + (p.pnl.total || 0), 0);
+    if (asm.length) rows.push({ k: 'PnL на допущении', v: asm.length + ' поз., ' + f.k(asmSum) + ' тыс ₽ (пометка «~» в таблицах)', warn: true });
     if (M.run && M.run.pnlBasis) rows.push({ k: 'База PnL', v: M.run.pnlBasis });
     if (M.funding) rows.push({ k: 'Фондирование', v: M.funding.state === 'computed' ? 'посчитано' + (M.funding.problems && M.funding.problems.length ? ', проблем ' + M.funding.problems.length : '') : (M.funding.text || M.funding.state), warn: M.funding.state !== 'computed' && M.funding.state !== 'demo' });
     rows.push({ k: 'Рынок', v: runLabel().text });
@@ -2837,7 +2840,7 @@
       '<div class="k-sec">Параметры</div>' + K.fieldsHtml(fields) +
       (p.legs && p.legs.length ? '<div class="k-sec">Ноги сделки <span class="sp"></span><span class="mut3" style="text-transform:none;letter-spacing:0">' + p.legs.length + '</span></div>' + K.legsHtml(p) : '') +
       '<div class="k-sec">PnL <span class="sp"></span><span class="mut3" style="text-transform:none;letter-spacing:0">тыс ₽</span></div>' +
-      K.pnlWhyNote(p) + '<div class="k-fields">' + [['Итого день', pn.total], ['Кэрри', pn.carry, K.tips.carry], ['Фондирование', pn.funding, K.tips.funding], ['Ставки', pn.rates], ['Спред', pn.spread], ['FX', pn.fx, K.tips.fx], ['Сделки', pn.trading], ['Прочее', pn.other], ['MTD', p.pnlMtd], ['YTD', p.pnlYtd]].map(([l, v, tip]) => '<div><div class="l">' + K.hint(l, tip) + '</div><div class="v ' + f.cls(v) + '">' + (v == null ? '<span class="mut3">—</span>' : Math.abs(v) >= 1e7 ? f.mns(v, 1) + ' <small>mm ₽</small>' : f.ks(v) + ' <small>тыс ₽</small>') + '</div></div>').join('') + '</div>' + K.fundingLine(p) +
+      K.pnlWhyNote(p) + K.pnlAssumeNote(p) + '<div class="k-fields">' + [['Итого день', pn.total], ['Кэрри', pn.carry, K.tips.carry], ['Фондирование', pn.funding, K.tips.funding], ['Ставки', pn.rates], ['Спред', pn.spread], ['FX', pn.fx, K.tips.fx], ['Сделки', pn.trading], ['Прочее', pn.other], ['MTD', p.pnlMtd], ['YTD', p.pnlYtd]].map(([l, v, tip]) => '<div><div class="l">' + K.hint(l, tip) + '</div><div class="v ' + f.cls(v) + '">' + (v == null ? '<span class="mut3">—</span>' : Math.abs(v) >= 1e7 ? f.mns(v, 1) + ' <small>mm ₽</small>' : f.ks(v) + ' <small>тыс ₽</small>') + '</div></div>').join('') + '</div>' + K.fundingLine(p) +
       '<div class="k-sec">История <span class="sp"></span><span class="hunit" style="margin-right:6px"></span><span class="hseg"></span></div><div class="hchart" style="height:230px"></div><div class="hnote mut3" style="font-size:11.5px;line-height:1.45;margin:4px 0 0"></div>' +
       '<div class="k-sec">Риск по бакетам <span class="sp"></span><span class="mut3" style="text-transform:none;letter-spacing:0">тыс ₽/бп</span></div><div class="rchart" style="height:200px"></div>' +
       '<div class="k-sec">Риск по кривым и срокам <span class="sp"></span><span class="mut3" style="text-transform:none;letter-spacing:0">тыс ₽/бп · подпись — как считается</span></div>' + K.curveRiskTable(p) +
@@ -2913,6 +2916,11 @@
   // нет PnL позиции (R10, #31): причина сервера (pnl.reasonText; смена кривой дисконтирования — с кривыми вчера и сегодня)
   K.pnlWhy = p => p && p.pnl && p.pnl.available === false ? p.pnl.reason || null : null;
   K.pnlWhyNote = p => K.pnlWhy(p) ? '<div class="k-note pnl-why" style="overflow-wrap:anywhere;margin:4px 0 8px"><b>Нет PnL:</b> ' + esc(K.pnlWhy(p)) + '</div>' : '';
+  // PnL на допущении (#576): вместо «нет PnL» — число и пометка, что принято (pnl.assumption, текст сервера)
+  K.pnlAssumed = p => p && p.pnl && p.pnl.available !== false ? p.pnl.assumption || null : null;
+  K.pnlAssumeMark = p => K.pnlAssumed(p) ? ' <sup class="k-assume" title="' + esc('допущение: ' + K.pnlAssumed(p)) + '">~</sup>' : '';
+  K.pnlAssumeNote = p => K.pnlAssumed(p) ? '<div class="k-note pnl-assume" style="overflow-wrap:anywhere;margin:4px 0 8px;color:var(--warn)"><b>PnL на допущении:</b> ' + esc(K.pnlAssumed(p)) + '</div>' : '';
+
   // ячейка «Бумага»: у бумаги с алиасом биржевое имя — в подсказке
   K.nameCell = (r, v) => r && r.alias && r.exchName && r.exchName !== r.alias ? '<span title="' + esc('биржевое имя: ' + r.exchName) + '">' + esc(v == null ? r.name : v) + '</span>' : esc(v == null ? (r && r.name) : v);
   const canAlias = p => !!(p && p.isin && M.aliasApi);

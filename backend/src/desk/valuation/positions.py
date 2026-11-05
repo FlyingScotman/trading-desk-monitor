@@ -186,7 +186,15 @@ def _source_id(x: dict[str, Any]) -> str:
 
 
 def _reported(ctx: EodContext, qty: float | None, x: dict[str, Any], reason: str, why: list[str]) -> Outcome:
-    """Rung ``reported_value``: the bank's figure for a bond we cannot value ourselves."""
+    """Rung ``reported_value``: the bank's figure for a bond we cannot value ourselves. A row without a number of bonds is
+    valued as one bond, said in ``valuation.extra["qty_stub"]`` (the trades' PnL does not take a face per bond from it)."""
+    o = _reported_row(ctx, qty, x, reason, why)
+    if o.valuation is not None and qty is None:
+        o.valuation.extra["qty_stub"] = True
+    return o
+
+
+def _reported_row(ctx: EodContext, qty: float | None, x: dict[str, Any], reason: str, why: list[str]) -> Outcome:
     o = Outcome(None, None, None, reason=reason)  # type: ignore[arg-type]
     q = qty if qty is not None else 1.0
     by_curve, cs01, risk = reported_risk(ctx, x)

@@ -34,11 +34,14 @@ positions valued at the report's figure. Each is flagged with its method (``reas
   that id, else by (book, the trades core valued in the row), so a trade that moved into the report or out of it keeps
   its PnL. A derivative made after D-1 (every trade date later) has no PV of D-1: its PnL is its PV on D, in
   ``new_trades`` (``desk-core-new-trade-v1``, ``NEW_TRADE_PNL_FROM_PV``, the owner's question 1 is open); an older
-  trade missing on D-1 has no PnL, the reason ``no_prev_terms`` (off the report) or ``valued_differently``.
+  trade missing on D-1 (``no_prev_terms`` off the report, ``valued_differently``) has the PV of D standing for the PV of
+  D-1, PnL 0 on the assumption ``start_pv_missing`` (TDM#576; re-valuing it on the market of D-1 with today's terms is
+  FlyingScotman/trading-desk-monitor#578).
 
 A report value says why its PnL is in ``other`` (``pnl.extra.other_reason``, TDM#442: ``no_terms`` for want of terms,
 else ``reported_value``), an FX deal by core ``fx_core_rest``. Anything else valued without core keeps
-``NoPnl("valued_without_core")``. A missing PnL is a reason, never 0.
+``NoPnl("valued_without_core")``. A PnL that cannot be told exactly is shown on an assumption said in ``pnl.extra.assumption``
+(``pnl.reasons.assumption``: a missing rate or report taken as unchanged, TDM#576); it is no PnL only where there is none.
 """
 
 from __future__ import annotations
@@ -60,6 +63,7 @@ from .reasons import (
     NO_TERMS,
     REPORTED_METHOD,
     REPORTED_VALUE,
+    assumption,
     other_reason,
 )
 
@@ -111,6 +115,8 @@ class DirectPnl:
     received_rub: float | None = None
     """A derivative valued by core: the cash its trades paid or settled in (D-1, D], in ``total`` (``extra.received_rub``,
     as a bond's); None for a row without core."""
+    assumption: dict[str, Any] | None = field(default=None, compare=False)
+    """A PnL on an assumption instead of a missing one (``pnl.reasons.assumption``, TDM#576): ``extra.assumption``."""
 
     @property
     def explained(self) -> float:
@@ -126,6 +132,7 @@ class DirectPnl:
         return {"method": self.method, "prev_date": self.prev_date.isoformat(), "total": self.total,
                 "note": self.note, **({"flag": self.flag} if self.flag else {}),
                 **({"other_reason": self.other_reason} if self.other_reason else {}),
+                **({"assumption": self.assumption} if self.assumption else {}),
                 **({"report_from": self.report_from.isoformat()} if self.report_from else {}),
                 **({"received_rub": self.received_rub} if self.received_rub is not None else {})}
 
@@ -160,8 +167,10 @@ def _fx_row(prev: EodContext, ctx: EodContext, o: Outcome, x: dict[str, Any]) ->
     if ccy == "RUB":
         return DirectPnl(FX_METHOD, prev.business_date, ctx.business_date, 0.0, note="RUB: no FX move")
     r0 = fx_rate(prev, ccy)
-    if r0 is None:
-        raise NoPnl("no_prev_fx_rate", f"{ccy} on {prev.business_date}")
+    if r0 is None:   # no rate of D-1: the rate is taken as not moved, no FX PnL (TDM#576)
+        return DirectPnl(FX_METHOD, prev.business_date, ctx.business_date, 0.0, flag=flag,
+                         note=f"{amount:,.2f} {ccy}: no rate on {prev.business_date}, taken as not moved",
+                         assumption=assumption("fx_rate_carried", f"{ccy} на {prev.business_date:%d.%m.%Y}"))
     r1 = v.face_rub  # the rate the row was valued at (``positions._fx``)
     fx = amount * (r1 - r0[0])
     c0, c1 = fx_rate_cbr(prev, ccy), fx_rate_cbr(ctx, ccy)
@@ -176,10 +185,14 @@ def _reported(prev: EodContext, ctx: EodContext, o: Outcome, p: Outcome | None, 
     the difference covers the gap between the reports, said in the note."""
     v = o.valuation
     assert v is not None
-    if carried is not None:
-        raise NoPnl("report_carried", f"report valid {carried}, not after {prev.business_date}")
-    if p is None or p.valuation is None or p.valuation.quality != "reported_value":
-        raise NoPnl("no_prev_report", f"no reported value on {prev.business_date}")
+    if carried is not None:   # the report did not change since D-1: its value stands, PnL 0 (TDM#576)
+        return DirectPnl(REPORTED_METHOD, prev.business_date, ctx.business_date, 0.0, flag=REPORTED_FLAG,
+                         note=f"report valid {carried}, not after {prev.business_date}: the value is taken as unchanged",
+                         other_reason=reported_reason(o), assumption=assumption("report_unchanged", date=carried))
+    if p is None or p.valuation is None or p.valuation.quality != "reported_value":   # no value of D-1: today's stands
+        return DirectPnl(REPORTED_METHOD, prev.business_date, ctx.business_date, 0.0, flag=REPORTED_FLAG,
+                         note=f"no reported value on {prev.business_date}: today's is taken for it",
+                         other_reason=reported_reason(o), assumption=assumption("start_report_missing"))
     total = v.pv_rub - p.valuation.pv_rub
     gap = prev_valid if prev_valid is not None and prev_valid < prev.business_date else None
     return DirectPnl(REPORTED_METHOD, prev.business_date, ctx.business_date, total, other=total, flag=REPORTED_FLAG,
@@ -200,7 +213,8 @@ def reported_reason(o: Outcome) -> dict[str, Any]:
     return other_reason(REPORTED_VALUE, nv or why or "", why=nv or why or None)
 
 
-def _received(prev: EodContext, ctx: EodContext, pv: Any) -> tuple[float, dict[str, float], list[str]]:
+def _received(prev: EodContext, ctx: EodContext, pv: Any, missing: list[str] | None = None
+              ) -> tuple[float, dict[str, float], list[str]]:
     """The cash the D-1 valuation's trades paid or settled in (D-1, D]: (RUB, the foreign amounts by currency, text).
     A flow counts when core stops counting it in that window (``out_on``); a foreign amount is in RUB at the D-1 rate.
     Raises ``NoPnl`` for flows that could not be read, a cash-settled NDF, or a window longer than the flows kept."""
@@ -220,8 +234,11 @@ def _received(prev: EodContext, ctx: EodContext, pv: Any) -> tuple[float, dict[s
             rub += amount
         else:
             r0 = fx_rate(prev, ccy)
-            if r0 is None:
-                raise NoPnl("no_prev_fx_rate", f"{ccy} on {prev.business_date}")
+            if r0 is None:   # no rate of D-1: the cash at the rate of D, said (TDM#576)
+                r0 = fx_rate(ctx, ccy)
+                if r0 is None or missing is None:
+                    raise NoPnl("no_prev_fx_rate", f"{ccy} on {prev.business_date}")
+                missing.append(f"{ccy} на {prev.business_date:%d.%m.%Y}")
             rub += amount * r0[0]
             foreign[ccy] = foreign.get(ccy, 0.0) + amount
         parts.append(f"{amount:,.2f} {ccy} {f['trade_id']} {f['date']}")
@@ -239,15 +256,17 @@ def _core_fx(prev: EodContext, ctx: EodContext, o: Outcome, p: Outcome | None, p
     now = v.pv_rub if pv_now is None else pv_now
     pv = p.valuation if p is not None else None
     if pv is None or not pv.extra.get("core"):
-        raise NoPnl("valued_differently", f"not valued by core from its terms on {prev.business_date}")
-    received, settled, flows = _received(prev, ctx, pv)
+        return _pv_carried(prev, ctx, "valued_differently", f"not valued by core from its terms on {prev.business_date}")
+    missing: list[str] = []
+    received, settled, flows = _received(prev, ctx, pv, missing)
     total = now - pv.pv_rub + received
     delta = {c: (pv.fx_delta or {}).get(c, 0.0) - settled.get(c, 0.0) for c in {*(pv.fx_delta or {}), *settled}}
     fx, cbr, parts = 0.0, 0.0, []
     for ccy, d in delta.items():
         r0, r1 = fx_rate(prev, ccy), fx_rate(ctx, ccy)
-        if r0 is None or r1 is None:
-            raise NoPnl("no_prev_fx_rate", f"{ccy} on {prev.business_date if r0 is None else ctx.business_date}")
+        if r0 is None or r1 is None:   # no rate on a date: the rate is taken as not moved (TDM#576)
+            missing.append(f"{ccy} на {(prev if r0 is None else ctx).business_date:%d.%m.%Y}")
+            continue
         fx += d * (r1[0] - r0[0])
         c0, c1 = fx_rate_cbr(prev, ccy), fx_rate_cbr(ctx, ccy)
         cbr = cbr + d * (c1[0] - c0[0]) if c0 and c1 and cbr is not None else None  # type: ignore[operator]
@@ -255,9 +274,19 @@ def _core_fx(prev: EodContext, ctx: EodContext, o: Outcome, p: Outcome | None, p
     return DirectPnl(CORE_FX_METHOD, prev.business_date, ctx.business_date, total, fx_gross=fx, other=total - fx,
                      fx_gross_cbr=cbr if delta else None, received_rub=received,
                      other_reason=other_reason(FX_CORE_REST, "rates, points and time: not the FX delta"),
+                     assumption=assumption("fx_rate_carried", ", ".join(missing)) if missing else None,
                      note=f"PV {now:,.2f} - {pv.pv_rub:,.2f} RUB"
                           + (f" + received {received:,.2f} RUB ({'; '.join(flows)})" if flows else "")
                           + "; fx_gross = FX delta D-1 " + ("; ".join(parts) or "0"))
+
+
+def _pv_carried(prev: EodContext, ctx: EodContext, code: str, detail: str) -> DirectPnl:
+    """A derivative with no PV of D-1 from its terms: the PV of D stands for it, PnL 0 (TDM#576); ``code`` and ``detail``
+    are what ``NoPnl`` said before."""
+    return DirectPnl(CORE_FX_METHOD, prev.business_date, ctx.business_date, 0.0, received_rub=0.0,
+                     other_reason=other_reason(NO_TERMS, f"{code}: {detail}"),
+                     note=f"{detail}: the PV of {ctx.business_date} is taken for it, PnL 0",
+                     assumption=assumption("start_pv_missing"))
 
 
 def _settled_cash(prev: EodContext, ctx: EodContext, o: Outcome, p: Outcome | None, x: dict[str, Any]) -> DirectPnl:
@@ -269,7 +298,7 @@ def _settled_cash(prev: EodContext, ctx: EodContext, o: Outcome, p: Outcome | No
     return replace(t, total=t.total + c.total, fx_gross=t.fx_gross + c.fx_gross,
                    fx_gross_cbr=None if (t.fx_gross_cbr is None and t.fx_gross) or (c.fx_gross_cbr is None and c.fx_gross)
                    else (t.fx_gross_cbr or 0.0) + (c.fx_gross_cbr or 0.0),
-                   note=f"{t.note}; cash row: {c.note}")
+                   assumption=t.assumption or c.assumption, note=f"{t.note}; cash row: {c.note}")
 
 
 def _is_core(o: Outcome | None) -> bool:
@@ -343,7 +372,9 @@ def attach(prev: EodContext, ctx: EodContext, direct: dict[str, Outcome], inputs
                         o.pnl = nt  # type: ignore[assignment]
                         continue
                     if x.get("off_report"):
-                        raise NoPnl("no_prev_terms", f"no terms of the trade on {prev.business_date}")
+                        o.pnl = _pv_carried(prev, ctx, "no_prev_terms",  # type: ignore[assignment]
+                                            f"no terms of the trade on {prev.business_date}")
+                        continue
                 o.pnl = _core_fx(prev, ctx, o, pp)  # type: ignore[assignment]
             elif (kind == "fx" and (o.core_not_valued or ("",))[0] == "settled"
                   and (pp := prev_direct.get(pid)) is not None and pp.valuation is not None
