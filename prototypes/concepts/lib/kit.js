@@ -2385,7 +2385,10 @@
     swap_dates_mismatch: 'даты начала или окончания ног свопа не совпадают', swap_notional_mismatch: 'номиналы ног свопа не совпадают',
     terms_mixed: 'у строки сделки разных видов', terms_ambiguous: 'условия одной сделки подходят нескольким строкам отчёта (один deal_id): ядро не оценивает ни одну', not_valued: 'ядро не вернуло оценку',
     swap_frequency_unsupported: 'частота выплат не поддерживается', day_count_unsupported: 'база начисления не поддерживается', swap_index_unsupported: 'индекс не поддерживается (IRS: RUONIA и ключевая ставка; рублёвая нога CCS: RUONIA, ключевая ставка, RUSFAR или фикс)',
-    swap_ccy_unsupported: 'валюта свопа не RUB', repo_ccy_unsupported: 'валюта РЕПО не RUB', terms_incomplete: 'условия сделки неполные', terms_invalid: 'условия сделки не приняты ядром', settled: 'сделка исполнена' };
+    swap_ccy_unsupported: 'валюта свопа не RUB', repo_ccy_unsupported: 'валюта РЕПО не RUB', terms_incomplete: 'условия сделки неполные', terms_invalid: 'условия сделки не приняты ядром', settled: 'сделка исполнена',
+    no_foreign_curve: 'нет кривой валюты сделки в прогоне', no_fx_spot: 'нет спот-курса валюты в прогоне', no_fx_calendar: 'нет календаря валюты в статике хаба',
+    ndf_unsupported: 'NDF с расчётами не в рублях или кросс-NDF ядром не оценивается', future_terms_incomplete: 'у фьючерса в срезе хаба нет базовой валюты, цены, лота или даты исполнения',
+    core_missing_market_data: 'ядру не хватило рыночных данных (кривой, курса или фиксинга за начало периода)', core_undeclared_fixing_gap: 'пропуск в истории фиксингов внутри периода сделки' };
   K.rcReason = c => !c ? '' : RC_REASON[c] || (/^core_/.test(c) ? 'ядро отклонило: ' + c.slice(5) : c);
   const rcProd = s => s ? String(s).split('+').map(x => RC_PROD[x] || x).join(' + ') : '—';
   const RK = () => (M.toRepr && M.toRepr.RUB) || 1;
@@ -2835,8 +2838,11 @@
       if (cpiNow != null) fields.push(['ИПЦ г/г', f.pct(cpiNow) + ' <small>' + (LH.bei && last(LH.bei) != null ? 'BEI − ИПЦ ' + f.bps((last(LH.bei) - cpiNow) * 100) + ' б.п.' : 'последний известный') + '</small>']);
     }
     const pn = p.pnl;
-    o.bd.innerHTML = '<div class="k-tags">' + [p.desk, (M.entities.find(e => e.id === p.entity) || {}).name, p.rating !== '—' ? 'рейтинг ' + K.ratingText(p.rating, p.ratingInfo) : null, p.tradedToday ? 'сделки сегодня' : null, p.offReport ? 'вне отчёта позиций' : null, p.quality && p.quality !== 'exact' ? 'оценка: ' + p.quality : null].filter(t => t && t !== '—').map(t => '<span class="k-tag">' + esc(t) + '</span>').join('') + '</div>' +
-      (p.notValued && p.estReason ? '<div class="k-note" style="overflow-wrap:anywhere;margin:8px 0"><b>Причина отсутствия оценки:</b> ' + esc(p.estReason) + '</div>' : '') +
+    o.bd.innerHTML = '<div class="k-tags">' + [p.desk, (M.entities.find(e => e.id === p.entity) || {}).name, p.rating !== '—' ? 'рейтинг ' + K.ratingText(p.rating, p.ratingInfo) : null, p.tradedToday ? 'сделки сегодня' : null, p.offReport ? 'вне отчёта позиций' : null, p.reportedCcy || null, p.quality && p.quality !== 'exact' ? 'оценка: ' + p.quality : null].filter(t => t && t !== '—').map(t => '<span class="k-tag">' + esc(t) + '</span>').join('') + '</div>' +
+      (p.notValued && p.estReason ? '<div class="k-note" style="overflow-wrap:anywhere;margin:8px 0"><b>Причина отсутствия оценки:</b> ' + esc(p.estReason) +
+        // TDM#589: что сделать и где это исправить — тот же текст, что в «Чего нет в данных»
+        (p.whyNot && p.whyNot.todo ? '<br><b>Что сделать:</b> ' + esc(p.whyNot.todo) : '') +
+        (p.whyNot && p.whyNot.fix && p.whyNot.fix.href ? ' · <a href="' + esc(p.whyNot.fix.href) + '">' + esc(p.whyNot.fix.label) + ' →</a>' : '') + '</div>' : '') +
       (p.riskProblem ? '<div class="k-note risk-problem" style="overflow-wrap:anywhere;margin:8px 0;color:var(--warn)"><b>Риск не в суммах (невозможный риск):</b> ' + esc(p.riskProblem) + '</div>' : '') +
       K.curveProxyNote(p) +
       '<div class="k-sec">Параметры</div>' + K.fieldsHtml(fields) +

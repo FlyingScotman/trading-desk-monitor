@@ -1114,6 +1114,10 @@ def _rates_lineage(rates: dict[str, Any], scrub: Scrubber) -> dict[str, Any]:
                                  "missing_business_days": len(i.get("missing_business_days") or []),
                                  "unpublished_at_cut": len(i.get("unpublished_at_cut") or [])}
                           for code, i in fx.items() if isinstance(i, dict)}
+    hist = rates.get("fixings_history")  # TDM#590: the rows filled in before the cut's window from the stored history
+    if isinstance(hist, dict):
+        out["fixings_history"] = {code: {k: i.get(k) for k in ("rows", "from", "to", "window_from")}
+                                  for code, i in (hist.get("codes") or {}).items() if isinstance(i, dict)}
     return out
 
 

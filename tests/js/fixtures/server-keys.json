@@ -141,6 +141,7 @@
   "quote",
   "reason",
   "reported",
+  "reported_ccy",
   "reported_pv_rub",
   "repos",
   "risk_problem",
@@ -149,7 +150,8 @@
   "spread_buckets",
   "swaps",
   "valuation",
-  "valuation_date"
+  "valuation_date",
+  "why"
  ],
  "curve": [
   "ccy",
@@ -179,11 +181,13 @@
   "quote",
   "reason",
   "reported",
+  "reported_ccy",
   "reported_pv_rub",
   "repos",
   "risk_problem",
   "spread_buckets",
-  "swaps"
+  "swaps",
+  "why"
  ],
  "extraNested": {
   "curve_proxy": [

@@ -148,10 +148,32 @@ class Plan:
         return sum(1 for d in self.todo if not d.cached)
 
     def summary(self) -> dict[str, Any]:
+        by: dict[str, int] = {}
+        for d in self.todo:
+            k = reason_key(d.why)
+            by[k] = by.get(k, 0) + 1
         return {"from": self.date_from, "to": self.date_to, "dates": len(self.days), "done": self.count("done"),
                 "todo": self.count("todo"), "no_positions": self.count("no_positions"),
                 "no_market": self.count("no_market"), "failed": self.count("failed"), "hub": self.hub,
-                "to_download": self.to_downloads(), "next": [d.date for d in self.todo[:5]]}
+                "to_download": self.to_downloads(), "next": [d.date for d in self.todo[:5]],
+                "todo_by_reason": [{"key": k, "text": REASON_TEXT[k], "n": n}
+                                   for k, n in sorted(by.items(), key=lambda kv: (-kv[1], kv[0]))]}
+
+
+REASON_TEXT = {"program": "новая версия расчёта", "no_run": "ещё не считалась", "positions": "изменились позиции",
+               "market": "хаб поправил срез", "previous": "хаб поправил прошлое закрытие",
+               "private_inputs": "изменились сделки или условия сделок", "late": "поздний отчёт ОВП или остатков",
+               "other": "другое"}
+"""TDM#587: why a date is to run (``plan``'s ``why``) -> the words of «Осталось» on «История прогонов»."""
+
+
+def reason_key(why: str | None) -> str:
+    """The ``REASON_TEXT`` key of a date's ``why`` (``plan``)."""
+    w = why or ""
+    return ("no_run" if w == "no default run" else "positions" if w == "positions changed"
+            else "market" if w == "market snapshot changed" else "previous" if w == "previous snapshot changed"
+            else "private_inputs" if w == "private inputs changed" else "program" if w == "program updated"
+            else "late" if w.endswith("changed after the run") else "other")
 
 
 def state(settings: Settings) -> dict[str, Any]:
@@ -188,12 +210,15 @@ def inputs_stamp(con: psycopg.Connection, settings: Settings) -> tuple:
     """What decides every date's ``trades.intraday_inputs`` hash, cheaply (two aggregate queries): the database, the
     position sets, every stored dataset set (the trades of the date and of the 60 days before it, the trade terms), the
     settings that ``trades.intraday_inputs`` reads (``intraday_trades``, ``off_report_derivatives``: the latter puts
-    the off-report trades into the hash). Sets are never changed, a new revision is a new row, so a changed count
+    the off-report trades into the hash), the revisions of the books reference and the reference tables (TDM#587). Sets are never changed, a new revision is a new row, so a changed count
     or newest id says that some date's inputs changed (TDM#569)."""
     pos = con.execute("SELECT max(set_id), count(*) FROM position_set").fetchone()
     ds = con.execute("SELECT max(set_id), count(*), (SELECT oid FROM pg_database WHERE datname = current_database())"
                      " FROM dataset_set").fetchone()
-    return (tuple(pos), tuple(ds), bool(getattr(settings, "intraday_trades", True)),
+    # TDM#587: the books reference and the other reference tables (a book's type or entity read by the day's trades)
+    refs = con.execute("SELECT (SELECT max(rev_id) FROM book_rev), (SELECT count(*) FROM book_rev),"
+                       " (SELECT max(rev_id) FROM reference_rev), (SELECT count(*) FROM reference_rev)").fetchone()
+    return (tuple(pos), tuple(ds), tuple(refs), bool(getattr(settings, "intraday_trades", True)),
             str(getattr(settings, "off_report_derivatives", "exclude")))
 
 
@@ -457,7 +482,9 @@ def run(settings: Settings, p: Plan, *, store_url: str | None = None, client: An
     stall's times (default: the wall clock). ``hub_answered``: the hub answered this cycle (the autopilot's sync step),
     so a date passed over on its download, no later date to tell, does not load on its own. Returns {done: [dates], failed: [(date, error)], unconverged: [dates
     still stale after their run, tried again next time], skipped: [dates without a bundle], left: n, stalled: the
-    stall the run stopped on or None, seconds}."""
+    stall the run stopped on or None, seconds}. ``progress(x, m, date)``, before each date (TDM#587): ``x`` the dates of
+    the plan already current (``done``) plus those this run computed, ``m`` the dates with positions and a close
+    (done, to run, failed), ``date`` the one computed now: «посчитано x из m, сейчас ДД.ММ», from the first date."""
     from .cli import ContextCache, eod_run
 
     t0 = time.monotonic()
@@ -510,8 +537,8 @@ def run(settings: Settings, p: Plan, *, store_url: str | None = None, client: An
                 waiting.append(day.date)  # stopped on it run after run as well: the next date tells (#447)
                 continue
             tried += 1
-            if progress is not None:
-                progress(i, len(todo), day.date)
+            if progress is not None:  # cumulative, not this run's index: «0 из N» for hours read as stopped (TDM#587)
+                progress(p.count("done") + len(done), p.count("done") + p.count("todo") + p.count("failed"), day.date)
             still, phase, downloaded = None, "bundle", False
             try:
                 sd = SnapshotDir(cache_dir)
@@ -657,7 +684,17 @@ def status(con: psycopg.Connection, settings: Settings, today: date | None = Non
         stall = None
     if stall:
         stall = {**stall, "next_attempt": next_attempt(stall, settings)}
+    from .marketdata import fixing_history
+
+    try:  # TDM#590: the stored fixings history the runs fill the cuts' windows from
+        fixings = {**fixing_history.status(con),
+                   "loading": bool(getattr(settings, "hub_url", None)) and int(getattr(settings, "history_days", 0) or 0) > 0,
+                   "since": str(getattr(settings, "history_rates_from", "") or "") or None}
+    except psycopg.Error as e:
+        con.rollback()
+        fixings = {"error": f"{type(e).__name__}: {e}"}
     return {**s, "total": s["done"] + s["todo"] + s["failed"], "enabled": bool(getattr(settings, "backfill", True)),
+            "fixings_history": fixings,
             "oldest_run": oldest.isoformat() if oldest else None,
             "first_positions": first.isoformat() if first else None,
             "inbox_scanned_from": (st.get("inbox") or {}).get("from"),

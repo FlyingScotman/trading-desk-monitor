@@ -54,7 +54,7 @@ from ..store import PositionInputs
 from . import derivatives as dv
 from . import offreport
 from .bonds import BondValuation, ccy_curve, face_on
-from .fallback import fx_rate
+from .fallback import fx_rate, fx_rate_cbr
 from .offreport import OffReportTrade, off_report_trades
 
 MISMATCH_BONDS = 0.5
@@ -234,12 +234,17 @@ def _fx(ctx: EodContext, x: dict[str, Any]) -> Outcome:
         o.reason, o.detail = "no_fx_rate", f"{ccy} on {ctx.business_date}"
         return o
     leg = f"{amount:g} {ccy}" + (f" x {fx[1]} {fx[0]:g}" if ccy != "RUB" else "")
+    got = None
     if vd is not None and vd > ctx.business_date:
         # A forward (NDF, FX future, an unsettled leg): the amount is an exposure, not a value. PV is the report's
         # mv_rub, else 0; the amount goes only into the FX delta (OCP) through ``tdm_run.direct_row``.
+        got = _npv_ccy(ctx, x, f"forward to {vd}") if x.get("mv_rub") is None else None
         if x.get("mv_rub") is not None:
             pv, quality = x["mv_rub"], "reported_value"
             why = [f"forward to {vd}: PV = the report's mv_rub; the amount {leg} is FX exposure only"]
+        elif isinstance(got, tuple):  # TDM#591: the report's value in its currency at the CBR rate
+            pv, quality = got[0], "reported_value"
+            why = [f"{got[2]}; the amount {leg} is FX exposure only"]
         else:
             pv, quality = 0.0, "assumed"
             why = [f"forward to {vd}: no mv_rub in the report, PV assumed 0;"
@@ -248,14 +253,59 @@ def _fx(ctx: EodContext, x: dict[str, Any]) -> Outcome:
         pv, quality = amount * fx[0], "market_value"
         why = [leg] if ccy != "RUB" else []
     o.valuation = _valuation(ctx, "fx", amount, pv, quality, why, face=fx[0], horizon=vd)
+    if isinstance(got, tuple):
+        o.valuation.extra["reported_ccy"] = got[1]
     return o
 
 
+def report_npv_ccy(x: dict[str, Any]) -> tuple[float, str] | None:
+    """The report's value of a row in its own currency when the adapter gives no ``mv_rub`` for it (TDM#591: report
+    risk «в валюте строки», a non-RUB row): ``x_npv_ccy_value`` and ``x_npv_ccy`` (under ``x`` or flat), else None."""
+    xx = x.get("x") if isinstance(x.get("x"), dict) else {}
+    v, c = xx.get("x_npv_ccy_value", x.get("x_npv_ccy_value")), xx.get("x_npv_ccy", x.get("x_npv_ccy"))
+    try:
+        f = float(v) if v is not None and not isinstance(v, bool) else None
+    except (TypeError, ValueError):
+        return None
+    if f is None or not math.isfinite(f) or not isinstance(c, str) or not c.strip():
+        return None
+    return f, norm_ccy(c.strip())
+
+
+NPV_CCY_NOTE = "стоимость из отчёта в {ccy}, по курсу ЦБ"
+"""TDM#591: the mark of a row valued at the report's value in its currency x the CBR rate of the run's date."""
+
+
+def _npv_ccy(ctx: EodContext, x: dict[str, Any], what: str) -> tuple[float, dict[str, Any], str] | Outcome | None:
+    """(PV in RUB, ``extra.reported_ccy``, the assumption) of a row at ``report_npv_ccy`` x the CBR rate of the
+    business date; an Outcome ``no_fx_rate`` without that rate; None when the report gives no such value."""
+    npv = report_npv_ccy(x)
+    if npv is None:
+        return None
+    v, ccy = npv
+    if (r := fx_rate_cbr(ctx, ccy)) is None:
+        return Outcome(None, None, None, reason="no_fx_rate",  # type: ignore[arg-type]
+                       detail=f"{ccy} on {ctx.business_date} (CBR): the report's value {v:g} {ccy} not converted")
+    info = {"ccy": ccy, "value": v, "rate": r[0], "rate_source": "CBR", "text": NPV_CCY_NOTE.format(ccy=ccy)}
+    return v * r[0], info, (f"{what}: PV = the report's value {v:g} {ccy} x CBR {r[0]:g} on {ctx.business_date} "
+                            f"({info['text']}), no risk reported")
+
+
 def _otc(ctx: EodContext, qty: float | None, x: dict[str, Any], kind: str) -> Outcome:
-    """An otc/other row: the report's mv_rub and risk (rung ``reported_value``), else not valued."""
+    """An otc/other row: the report's mv_rub and risk (rung ``reported_value``); without mv_rub the report's value in
+    the row's currency at the CBR rate (``_npv_ccy``, TDM#591), else not valued."""
     if x.get("mv_rub") is None:
-        return Outcome(None, None, None, reason="no_reported_value",  # type: ignore[arg-type]
-                       detail=f"{kind} {_source_id(x)}: no mv_rub")
+        got = _npv_ccy(ctx, x, kind)
+        if isinstance(got, Outcome):
+            return got
+        if got is None:
+            return Outcome(None, None, None, reason="no_reported_value",  # type: ignore[arg-type]
+                           detail=f"{kind} {_source_id(x)}: no mv_rub")
+        pv, info, note = got
+        o = Outcome(None, None, None)  # type: ignore[arg-type]
+        o.valuation = _valuation(ctx, "reported", qty if qty is not None else 1.0, pv, "reported_value", [note])
+        o.valuation.extra["reported_ccy"] = info
+        return o
     o = Outcome(None, None, None)  # type: ignore[arg-type]
     by_curve, cs01, risk = reported_risk(ctx, x)
     o.valuation = _valuation(ctx, "reported", qty if qty is not None else 1.0, x["mv_rub"], "reported_value",
@@ -336,7 +386,7 @@ def _derivatives(ctx: EodContext, inputs: PositionInputs, p: BookPlan, second_or
             pid += "|off"  # the position id is taken: keep both
         x = offreport.row_of(t)
         try:
-            req = dv.request_of(pid, t.book, x, list(t.terms))
+            req = dv.request_of(pid, t.book, x, list(t.terms), ctx.business_date)  # a matured trade: left out (TDM#589)
         except dv.NotValued:  # selected as readable: kept for safety
             continue
         inputs.extra[pid] = x

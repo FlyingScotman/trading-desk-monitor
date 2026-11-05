@@ -1,0 +1,126 @@
+"""TDM#590: a run fills the fixings of its market cut before the cut's window from the monitor's stored history
+(``marketdata.fixing_history``, ``md_hub_fixing``): an OIS on RUONIA whose one-year period started before the window
+is valued as on a cut with the whole history, and says where its fixings came from. On the hub's contract 1.4 golden
+cut of 15.10.2026 (its fixings start on 01.10: the window) with an invented history of September and invented
+trades."""
+
+from __future__ import annotations
+
+from datetime import UTC, date, datetime, timedelta
+
+import pytest
+from test_swaps_repo_tdm45 import BD, FIX, leg
+
+from desk import backfill, cli, store
+from desk.marketdata import fixing_history as fh
+from desk.marketdata.bundle import SnapshotDir
+from desk.orchestrator import prepare
+from desk.settings import Settings
+from desk.store import PositionInputs
+from desk.valuation import positions as pv1
+
+SEPT = [date(2026, 9, 1) + timedelta(days=n) for n in range(30)]
+WEEKDAYS = [d for d in SEPT if d.weekday() < 5]
+
+
+def row(code, d, value="16.25", source="cbr"):
+    return {"index_code": code, "source": source, "fixing_date": d.isoformat(), "value": value, "unit": "pct",
+            "effective_date": None, "published_on": None, "published_at": None, "hub_ingested_at": None, "labels": [],
+            "origin": fh.SOURCE_ID}
+
+
+def stored(extra=()):
+    rows = [row("RUONIA", d) for d in WEEKDAYS] + [row("KEY_RATE", d, "16.5") for d in SEPT] + list(extra)
+    by: dict[str, list] = {}
+    for r in sorted(rows, key=lambda r: (r["index_code"], r["fixing_date"])):
+        by.setdefault(r["index_code"], []).append(r)
+    return fh.FixingStore({k: tuple(v) for k, v in by.items()}, ("synthetic",))
+
+
+def swap(tid="Y1"):
+    """A payer OIS on RUONIA with one annual period that started on 14.09, before the cut's window."""
+    kw = {"start_date": "2026-09-14", "maturity_date": "2027-09-14", "trade_date": "2026-09-10",
+          "payment_frequency": "1Y", "day_count": "ACT/365"}
+    return [leg(tid, "fix", "pay", fixed_rate_pct="15.5", **kw), leg(tid, "flt", "receive", index_code="RUONIA", **kw)]
+
+
+def value(ctx, terms):
+    x = {"Y1": {"asset_class": "otc", "ccy": "RUB", "source_instrument_id": "Y1", "deal_id": "Y1"}}
+    inp = PositionInputs([("Y1", "IRB", None, None)], [], {"IRB": BD}, datetime.now(UTC), "0" * 64, x,
+                         trade_terms=terms)
+    return pv1.plan(ctx, inp).direct["Y1"]
+
+
+@pytest.fixture(scope="module")
+def plain():
+    return prepare(SnapshotDir(FIX), BD.isoformat())
+
+
+@pytest.fixture(scope="module")
+def filled():
+    return prepare(SnapshotDir(FIX), BD.isoformat(), fixings=stored())
+
+
+def test_the_cut_alone_refuses_the_swap(plain):
+    o = value(plain, swap())
+    assert o.valuation is None or o.core_not_valued is not None
+    reason = o.core_not_valued[0] if o.core_not_valued else o.reason
+    assert reason == "core_missing_market_data" and "RUONIA" in (o.core_not_valued or ("", o.detail))[1]
+
+
+def test_the_stored_history_fills_the_window_and_the_swap_is_valued(plain, filled):
+    o = value(filled, swap())
+    v = o.valuation
+    assert v is not None and o.core_not_valued is None and v.extra["core"]["product"] == "ois"
+    sw = v.extra["swaps"][0]
+    assert sw["fixing_id"] == "RUONIA" and sw["fixing_snapshot_id"] == f"{filled.market.snapshot.id}+md_hub_fixing"
+    lin = filled.rates["fixings_history"]["codes"]
+    assert lin["RUONIA"] == {"rows": len(WEEKDAYS), "from": "2026-09-01", "to": "2026-09-30",
+                             "window_from": "2026-10-01", "sources": ["cbr"]}
+    assert filled.rates["fixings"]["RUONIA"]["from_history"]["rows"] == len(WEEKDAYS)
+    assert filled.rates["fixings"]["RUONIA"]["first"] == "2026-09-01"
+    # the cut's own rows are as they were, and the market snapshot is the run's
+    own = [f for f in plain.market.fixings if f["index_code"] == "RUONIA"]
+    assert [f for f in filled.market.fixings if f["index_code"] == "RUONIA" and f["fixing_date"] >= "2026-10-01"] == own
+    assert filled.market.snapshot.id == plain.market.snapshot.id
+
+
+def test_only_dates_before_the_window_and_the_cuts_own_sources():
+    snap = SnapshotDir(FIX).market(BD.isoformat(), "eod_final")
+    extra = [row("RUONIA", date(2026, 10, 1), "99"),  # a date the cut has: never replaced
+             row("RUONIA", date(2026, 9, 2), "17", source="other_source"),  # a source the cut does not read
+             row("RUONIA", date(2014, 1, 9)),  # older than ten years before the date
+             row("NOT_IN_CUT", date(2026, 9, 1))]  # an index the cut does not carry
+    out, lin = fh.extend(snap, stored(extra))
+    ru = [f for f in out.data["fixings"] if f["index_code"] == "RUONIA"]
+    assert next(f for f in ru if f["fixing_date"] == "2026-10-01")["value"] != "99"
+    assert {f["source"] for f in ru} == {"cbr"} and min(f["fixing_date"] for f in ru) == "2026-09-01"
+    assert "NOT_IN_CUT" not in lin["codes"] and lin["depth_from"] == "2016-10-15"
+    assert snap.data["fixings"] is not out.data["fixings"]  # the snapshot itself is not changed
+    assert fh.extend(snap, fh.FixingStore())[0] is snap
+
+
+def insert(con, rows):
+    con.execute("INSERT INTO md_hub_job (dataset, key, params, period_from, period_to, status, fetched_at, checked_at)"
+                " VALUES ('fixings', '2026', '{}', '2026-01-01', '2026-12-31', 'done', now(), now())")
+    for r in rows:
+        con.execute("INSERT INTO md_hub_fixing (index_code, source, fixing_date, value, unit, labels, fetch_id)"
+                    " VALUES (%s, %s, %s, %s, 'pct', '[]', 1)", (r["index_code"], r["source"], r["fixing_date"],
+                                                                 r["value"]))
+
+
+def test_load_status_and_the_card(tmp_path, store_url):
+    with store.connect(store_url) as con:
+        insert(con, [row("RUONIA", d) for d in WEEKDAYS[:3]] + [row("SOFR", WEEKDAYS[0], source="nyfed")])
+        got = fh.load(con, date(2016, 1, 1))
+        assert [r["fixing_date"] for r in got.rows["RUONIA"]] == [d.isoformat() for d in WEEKDAYS[:3]]
+        assert got.rows["RUONIA"][0]["value"] == "16.25" and got.rows["SOFR"][0]["source"] == "nyfed"
+        assert fh.load(con, date(2016, 1, 1)) is got  # unchanged: the rows read before
+        st = fh.status(con)
+        assert st["indices"] == 2 and st["rows"] == 4 and [c["code"] for c in st["codes"]] == ["RUONIA", "SOFR"]
+        assert st["jobs"]["done"] == 1 and st["from"] == "2026-09-01"
+        s = Settings(home=tmp_path / "home", snapshot_cache=tmp_path / "cache", store_url=store_url)
+        doc = backfill.status(con, s, today=date(2026, 10, 15))
+    assert doc["fixings_history"]["rows"] == 4 and doc["fixings_history"]["loading"] is False
+    assert cli.stored_fixings(store_url, BD).rows["RUONIA"][0]["fixing_date"] == "2026-09-01"
+    assert cli.stored_fixings("postgresql://nobody@127.0.0.1:1/none", BD, out=lambda s: None) is None

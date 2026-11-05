@@ -37,6 +37,7 @@ from rub_fixed_income import (
 
 from .curves import fx as fxcurves
 from .curves import rates
+from .marketdata import fixing_history
 from .marketdata.adapter import (
     KBD_CURVE_ID,
     KBD_SPEC,
@@ -349,10 +350,13 @@ def market_rates(market: MarketView) -> dict[str, tuple[float, str] | None]:
 
 
 def prepare(snapshots: SnapshotDir, business_date: str, cut_type: str = "eod_final",
-            market_snapshot_id: str | None = None, *, fx_options: fxcurves.FxOptions | None = None) -> EodContext:
+            market_snapshot_id: str | None = None, *, fx_options: fxcurves.FxOptions | None = None,
+            fixings: fixing_history.FixingStore | None = None) -> EodContext:
     """``market_snapshot_id`` (a stored run's own snapshot) instead of the latest of (date, cut): a later
     correction or a relabelled cut must not change what a run is repriced on. ``fx_options``: the provisional FX
-    settings (``curves.fx.FxOptions``; default its defaults)."""
+    settings (``curves.fx.FxOptions``; default its defaults). ``fixings``: the stored fixings history
+    (``marketdata.fixing_history``, TDM#590): the cut's fixings filled in before its window, said in the lineage
+    (``rates.fixings_history``)."""
     if market_snapshot_id is None:
         snap = snapshots.market(business_date, cut_type)
     else:
@@ -362,11 +366,16 @@ def prepare(snapshots: SnapshotDir, business_date: str, cut_type: str = "eod_fin
         if (snap.kind, snap.business_date) != ("market", business_date):
             raise SnapshotError(f"snapshot {market_snapshot_id} is {snap.kind} of {snap.business_date}, "
                                 f"not the market of {business_date}")
+    filled = None
+    if fixings is not None:
+        snap, filled = fixing_history.extend(snap, fixings)
     market = MarketView(snap)
     assert snap.static_snapshot_id
     static = StaticView(snapshots.get(snap.static_snapshot_id))
     core_market, rates_lineage, quote_curves, swap_curves = with_rates(
         market, static, market.core_market(static), rates.kbd_history(snapshots, business_date, static.snapshot))
+    if filled is not None:
+        rates_lineage["fixings_history"] = filled
     fx_options = fx_options or fxcurves.FxOptions()
     core_market, fx_market = fxcurves.with_fx(market, static, core_market, market_rates(market), fx_options)
     params = market.zcyc_parameters()

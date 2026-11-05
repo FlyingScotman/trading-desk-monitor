@@ -64,6 +64,7 @@ from rub_fixed_income import (
 )
 
 from desk.marketdata import adapter_rates as ar
+from desk.marketdata import fixing_history
 from desk.marketdata.adapter import zcyc_parameters
 from desk.marketdata.bundle import Snapshot, SnapshotError
 
@@ -301,12 +302,16 @@ def fixing_entries(market: Snapshot, static: Snapshot, known_at: datetime | None
         rows = [f for f in rows if known(f)]
         early = [f for f in rows if index == "ruonia" and cal.valid_from is not None and f.fixing_date < cal.valid_from]
         rows = rows[len(early):]
-        history = FixingHistory(index, bd, tuple((f.fixing_date, f.rate) for f in rows), cal, market.id,
+        # TDM#590: the rows before the cut's window filled from the stored history (``fixing_history.extend``)
+        stored = fixing_history.filled(market, code)
+        sid = f"{market.id}+{fixing_history.SOURCE_ID}" if stored else market.id
+        history = FixingHistory(index, bd, tuple((f.fixing_date, f.rate) for f in rows), cal, sid,
                                 RUONIA_MAX_UNPUBLISHED_DAYS if index == "ruonia" else 0, cut.isoformat())
         entries.append(FixingEntry(code, history))
         info = {"rows": len(rows), "first": rows[0].fixing_date.isoformat() if rows else None,
                 "latest": rows[-1].fixing_date.isoformat() if rows else None, "unpublished_at_cut": unknown,
-                "dropped_before_calendar": len(early), "calendar": cal.version}
+                "dropped_before_calendar": len(early), "calendar": cal.version,
+                **({"from_history": stored} if stored else {})}
         if index == "ruonia" and rows:
             have = {f.fixing_date for f in rows}
             days = (rows[0].fixing_date + timedelta(days=i) for i in range((rows[-1].fixing_date - rows[0].fixing_date).days))

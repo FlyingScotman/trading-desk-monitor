@@ -65,6 +65,7 @@ from rub_fixed_income import (
 
 from ..curves import fx as fxcurves
 from ..curves import proxy, rates
+from ..inbox.schema import norm_ccy
 from ..marketdata import ratings
 from ..marketdata.adapter import MarketView, bond_currency
 from ..marketdata.bundle import SnapshotError
@@ -423,6 +424,27 @@ def _made_today(ctx: EodContext, x: dict[str, Any]) -> bool:
     return d is not None and d == ctx.business_date
 
 
+def fx_future_quote_leg(ctx: EodContext, x: dict[str, Any], base: str, nominal: float
+                        ) -> tuple[str | None, float, str] | None:
+    """DEC18 (owner, 05.11.2026, TDM#588): the quote leg of an FX future of the positions report (product group exactly
+    ``fx_future``; its amount is the nominal in the base currency, the row's ``ccy``) on a cross: (quote currency,
+    − nominal x price, the note), the price the cross of the run's market rates (base / quote, RUB per unit each).
+    A pair against RUB has no RUB leg: None, as a row that is no FX future. No rate of the quote: (None, 0, note)."""
+    rep = x.get("x") if isinstance(x.get("x"), dict) else {}
+    if str(rep.get("x_product_group") or x.get("x_product_group") or "").lower() != "fx_future":
+        return None
+    quote = norm_ccy(str(rep.get("x_sec_cur") or "")).upper() if rep.get("x_sec_cur") else ""
+    if not quote or quote in ("RUB", base):
+        return None
+    rb, rq = fx_rate(ctx, base), fx_rate(ctx, quote)
+    if rb is None or rq is None:
+        return None, 0.0, (f"FX future {base}/{quote}: no {quote if rq is None else base} rate on {ctx.business_date}, "
+                           "the quote leg is not in the FX delta")
+    price = rb[0] / rq[0]
+    return quote, -nominal * price, (f"FX future {base}/{quote}: nominal {nominal:g} {base}, quote leg "
+                                     f"{-nominal * price:g} {quote} at the cross {price:.6g} of the run's rates")
+
+
 def direct_row(ctx: EodContext, book: str, pid: str, o: Outcome, x: dict[str, Any], qty: float | None
                ) -> dict[str, Any]:
     """An FX row, an unmapped bond or an OTC/other row (``valuation.positions``): PV, FX delta in currency (an FX
@@ -463,6 +485,14 @@ def direct_row(ctx: EodContext, book: str, pid: str, o: Outcome, x: dict[str, An
         name = (name or x.get("isin") or pid) + FROM_REPORT
     if core:  # core's spot equivalent per currency, not the notional (the OCP amounts are in extra.ocp_amount)
         delta = {c: d for c, d in (v.fx_delta or {}).items() if c != "RUB"}
+    elif fx and ccy != "RUB" and (leg := fx_future_quote_leg(ctx, x, ccy, amount)) is not None:
+        # DEC18 (TDM#588): an FX future on a cross: its nominal in the base currency and the quote leg
+        delta = {ccy: amount}
+        if leg[0]:
+            delta[leg[0]] = leg[1]
+        why.append(leg[2])
+    elif (rc := v.extra.get("reported_ccy")) and not fx:  # TDM#591: the report's value in its currency, as given
+        delta = {rc["ccy"]: rc["value"]} if rc["ccy"] != "RUB" else {}
     else:
         delta = {ccy: amount if fx else v.pv_rub / rate} if ccy != "RUB" else {}
     return {

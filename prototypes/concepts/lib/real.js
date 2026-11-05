@@ -372,7 +372,12 @@
     p.issuerFull = d.issuer || (d.counterparty ? 'Контрагент: ' + d.counterparty : p.issuerName);
     p.sector = NO(d.sector) || (M.deal({ group }) ? M.dealName({ group }) : '—'); p.rating = NO(d.rating) || '—';
     // причина неточной оценки (extra прогона): список «не оценены / оценены не ядром» (kit.js, K.posList)
-    p.estReason = ex.reason || ex.not_exact_reason || (Array.isArray(ex.assumptions) ? ex.assumptions.join('; ') : '') || '';
+    // неоценённая строка: причина словами (backend coverage.explain, TDM#589): why, todo, short, detail, fix {label, href}
+    // TDM#591: стоимость из отчёта в валюте строки, пересчитанная по курсу ЦБ — пометка в карточке
+    p.reportedCcy = ex.reported_ccy && typeof ex.reported_ccy === 'object' ? ex.reported_ccy.text || null : null;
+    p.whyNot = d.notValued && ex.why && typeof ex.why === 'object' ? ex.why : null;
+    p.estReason = p.whyNot ? p.whyNot.why + (p.whyNot.detail ? ' (' + p.whyNot.detail + ')' : '')
+      : ex.reason || ex.not_exact_reason || (Array.isArray(ex.assumptions) ? ex.assumptions.join('; ') : '') || '';
     p.ratingInfo = d.ratingInfo || null; p.ratingAgency = (d.ratingInfo || {}).agency || null;  // рейтинг деска (R25)
     p.issuerGroup = d.issuerGroup && d.issuerGroup !== d.issuer ? d.issuerGroup : null;
     p.latName = ex.lat_name || null; p.issueSize = num(ex.issue_size);
@@ -387,7 +392,7 @@
           : type === 'linker' ? (d.coupon != null ? pct(d.coupon) + '%+CPI ' : 'CPI ') + F
             : type === 'zero' ? 'дисконт' : (d.coupon != null ? pct(d.coupon) + '% ' + F : '—');
       p.curCpn = num(d.coupon);
-    } else { p.cpn = null; p.couponFmt = d.notValued ? 'не оценено' : (p.kindLabel || ''); p.curCpn = null; p.rate = null; }
+    } else { p.cpn = null; p.couponFmt = d.notValued ? 'не оценено' + (p.whyNot && p.whyNot.short && p.whyNot.short !== 'не оценено' ? ': ' + p.whyNot.short : '') : (p.kindLabel || ''); p.curCpn = null; p.rate = null; }
     p.couponFmt = p.couponFmt.trim();
     // событие и срок
     const yd = d.yieldDate && (!d.maturity || d.yieldDate < d.maturity) ? d.yieldDate : null;

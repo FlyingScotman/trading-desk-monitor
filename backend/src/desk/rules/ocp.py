@@ -16,7 +16,10 @@ reporting currency has no OCP), in one component (``COMPONENTS``):
   ``extra.ocp_amount``; an FX row without terms and a later value date at its amount (basis ``notional``);
 - ``ndf`` — an NDF (core's ``fx_ndf``, the terms' ``ndf``, the report's product group ``fx_ndf``), amounted as the FX
   legs; only with ``include_ndf``;
-- ``futures`` — an FX future (core's ``fx_future`` or the report's product group ``fx_future``) at its FX delta;
+- ``futures`` — an FX future (core's ``fx_future`` or the report's product group exactly ``fx_future``) at its FX delta:
+  a future of the positions report at its nominal in the base currency, on a cross with its quote leg (DEC18). Any
+  other future (bonds, rates, an equity or an index, a commodity, an option on a future) has no OCP line at all
+  (``future_class``): its result in the currency is in the cash balances of its book;
 - ``options`` — an FX option (``option`` in core's product or the product group), at its FX delta or, without core,
   the report's amount;
 - ``bonds`` — a foreign-currency bond: its FX delta. A run since TDM#54 publishes it net of the bond's currency
@@ -132,6 +135,11 @@ class OcpPolicy:
     transfer_rule: TransferRule = TransferRule.INTERNAL_COUNTERPARTY
     transfer_target: TransferTarget = TransferTarget.FULL
     tolerance_ccy: float = 1000.0
+    derivative_share_max: float = 1.0
+    """TDM#588 (owner, 05.11.2026: «если один вклад деривативов больше заданной доли ОВП книги, книга получает
+    пометку»): a published line whose single derivative contribution is larger than this share of the line's OCP
+    (at least ``tolerance_ccy``) is marked (``derivative_share``). The owner decided the mark, not the share: 1.0 (one
+    derivative larger than the book's whole OCP in the currency) is the monitor's default, said in DEC18."""
     reporting_ccy: str = "RUB"
     published: PublishedBasis = PublishedBasis.REPORT_BASE_PLUS_DAY
     """What the run publishes as the OCP (``DECIDED``; owner, 03.11.2026, TDM#531, revising 28.10.2026, TDM#416): the
@@ -183,6 +191,7 @@ DECIDED: dict[str, str] = {
     "published": "OQ-18 (владелец, 04.11.2026, TDM#567; 03.11.2026, TDM#531; 28.10.2026, TDM#416)",
     "report_max_age_bd": "OQ-18 (владелец, 03.11.2026, TDM#531)",
     "bond_funding_liability": "OQ-04 (владелец, 23.10.2026, TDM#54)",
+    "derivative_share_max": "DEC18 (владелец, 05.11.2026, TDM#588: пометка книги; доля — 1,0 по умолчанию монитора)",
 }
 """Policy fields an owner decision sets (``docs/program/DECISIONS.md``): never provisional, the private adapter's
 ``ocp_policy`` may still give the organisation's own value."""
@@ -311,6 +320,32 @@ def product_group(rep: Any) -> str:
     return str(pg or "").lower()
 
 
+FX_FUTURE_GROUP = "fx_future"
+"""The report's product group of an FX future (DEC18, TDM#588): only this group (or core's product ``fx_future``) is
+an FX future in the OCP."""
+
+
+def future_class(row: Mapping[str, Any]) -> str | None:
+    """DEC18 (owner, 05.11.2026, TDM#588): ``fx`` for an FX future (core's product ``fx_future`` or the report's product
+    group exactly ``fx_future``), ``other`` for any other future (a product group or a core product with ``future`` in
+    it: on bonds, rates, an equity or an index, a commodity, an option on a future — ``bond_future``, ``ir_future``,
+    ``equity_future``, ``index_future``, ``commodity_future``, ``future_option`` and any new one), None when the row is
+    not a future. An ``other`` future gives no nominal and no PV in the OCP: its result in a currency is in the cash
+    balances of its book."""
+    ex = row.get("extra") or {}
+    product = str((ex.get("core") or {}).get("product") or "").lower()
+    group = product_group(ex.get("reported") or {})
+    if "fx_future" in product or group == FX_FUTURE_GROUP:
+        return "fx"
+    if "future" in group or "future" in product:
+        return "other"
+    return None
+
+
+NON_FX_FUTURE_NOTE = ("фьючерс не на валюту: номинала и стоимости в ОВП нет, его результат в валюте — в остатках по "
+                      "счетам книги (DEC18)")
+
+
 def takes_ocp_amount(ex: Mapping[str, Any], amount_basis: AmountBasis | str | None) -> bool:
     """Whether the OCP takes a derivative row at its ``extra.ocp_amount`` (the nominal) and not at its FX delta: a row
     core did not value (a CCS: its exchanges still to come), or a row core valued with ``amount_basis`` ``nominal``.
@@ -330,13 +365,15 @@ def classify(row: Mapping[str, Any], terms: Sequence[Mapping[str, Any]], books: 
     the report on its own (TDM#416)."""
     ex = row.get("extra") or {}
     rep = ex.get("reported") or {}
+    if future_class(row) == "other":  # DEC18: a future not on a currency has no OCP of its own
+        return None, {}, "none", NON_FX_FUTURE_NOTE
     delta = _amounts(row.get("fx_delta"), policy)
     core = ex.get("core") or {}
     no_pv = False
     product, group = str(core.get("product") or "").lower(), product_group(rep)
     ndf = "fx_ndf" in product or group == "fx_ndf" or any(_truthy(t.get("ndf")) for t in terms)
-    own = "options" if "option" in product or "option" in group else \
-        "futures" if "fx_future" in product or group == "fx_future" else None
+    own = "futures" if future_class(row) == "fx" else \
+        "options" if "option" in product or "option" in group else None
     kind = str(rep.get("asset_class") or "").lower()
     fx_like = row.get("instr_type") == "FX" or kind == "fx"
     vd = _day(rep.get("value_date"))
@@ -786,9 +823,10 @@ DERIVATIVE_COMPONENTS = tuple(dict.fromkeys(KIND_COMPONENT.values()))
 line is any FX-exposed row (an equity, a fund, a deposit), which stays in the report's base."""
 OTHER_DERIVATIVE_GROUPS = ("cds", "cap", "floor", "swaption")
 """Words of the report's product group (``x_product_group``) that make a row an ``other`` derivative."""
-PARTS = ("base", "derivatives", "bonds", "trades", "outside")
-PART_TEXT = {"base": "база: отчёт ОВП без деривативов", "derivatives": "PV деривативов",
-             "bonds": "переоценка облигаций", "trades": "сделки после базы", "outside": "вне отчёта"}
+PARTS = ("base", "balances", "derivatives", "bonds", "trades", "outside")
+PART_TEXT = {"base": "база: отчёт ОВП без деривативов", "balances": "остатки по счетам: книги нет в отчёте ОВП",
+             "derivatives": "PV деривативов", "bonds": "переоценка облигаций", "trades": "сделки после базы",
+             "outside": "вне отчёта"}
 """The terms of a ``report_base_plus_day`` figure (``published_day``) -> their names on the pages."""
 CONTRIBUTIONS_MAX = 10
 """Per published line and term at most this many contributions (the largest by size), the rest summed."""
@@ -810,8 +848,9 @@ def _value_dates(row: Mapping[str, Any], terms: Sequence[Mapping[str, Any]]) -> 
 def derivative_kind(row: Mapping[str, Any], terms: Sequence[Mapping[str, Any]],
                     policy: OcpPolicy = PROVISIONAL_POLICY, component: str | None = None) -> str | None:
     """The derivative kind (``DERIVATIVE_KINDS``) of a run's row, or None when it is not a derivative, from core's
-    product (``extra.core.product``), the report's product group (``fx_swap``, ``irs``, ``ois``, ``ccs``, ``ndf``, a
-    future, an option: read before a row without terms falls back to a forward) and the trade terms (``product_kind``,
+    product (``extra.core.product``), the report's product group (``fx_swap``, ``irs``, ``ois``, ``ccs``, ``ndf``, an FX
+    future, an option: read before a row without terms falls back to a forward; DEC18: ``fx_future`` only for core's
+    ``fx_future`` or the group exactly ``fx_future``, any other future is None, ``future_class``) and the trade terms (``product_kind``,
     ``ndf``): ``ndf``, ``fx_option``, ``fx_future``, ``fx_swap``, ``swap`` (``irs``, ``ois``, ``ccs``,
     ``cirs``), ``fx_forward`` (an outright forward, a cross, an FX row without terms whose ``classify`` ``component``
     is ``fx_legs``: a value date after the settlement window, at its notional) unless it
@@ -823,12 +862,15 @@ def derivative_kind(row: Mapping[str, Any], terms: Sequence[Mapping[str, Any]],
     product, group = str(core.get("product") or "").lower(), product_group(ex.get("reported") or {})
     words = set(re.split(r"[^a-z0-9]+", group)) - {""}
     kinds = {str(t.get("product_kind") or "").lower() for t in terms}
+    fut = future_class(row)
+    if fut == "other":  # DEC18 (TDM#588): a future on bonds, rates, an index, ... is not a currency derivative
+        return None
+    if fut == "fx":
+        return "fx_future"
     if "fx_ndf" in product or "ndf" in words or any(_truthy(t.get("ndf")) for t in terms):
         return "ndf"
     if "option" in product or "option" in group:
         return "fx_option"
-    if "fx_future" in product or "future" in group:
-        return "fx_future"
     if "fx_swap" in product or "fx_swap" in kinds or {"fx", "swap"} <= words:
         return "fx_swap"
     if any(p in product for p in ("irs", "ois", "ccs", "cirs")) or kinds & {"irs", "ois", "ccs"} \
@@ -1053,6 +1095,19 @@ def trade_flows(trades: Iterable[Mapping[str, Any]], books: Mapping[str, Mapping
             if "bonds" in policy.report_components and not in_positions:
                 res.flows.append(mk(amount=value, leg="security",
                                     note="бумага по цене сделки: позиций после сделки ещё нет"))
+        elif kind == "fx" and (fut := _trade_future(t)) is not None:
+            # DEC18 (TDM#588): a future on bonds, rates, an index, ... has no OCP; an FX future its nominal in the base
+            # currency, as the positions give it (component ``futures``: from positions when the report lacks it)
+            if fut == "other" or "futures" not in policy.report_components:
+                continue
+            base, nominal = _future_nominal(t, ccy, amt)
+            if base is None or nominal is None or base == policy.reporting_ccy:
+                res.not_valued.append(f"{tid} (fx_future)")
+                continue
+            res.flows.append(TradeFlow(tid, book, entity, base, sign * abs(nominal), "fx",
+                                       td.isoformat() if td else None,
+                                       "валютный фьючерс: номинал в базовой валюте",
+                                       derivatives.get(pid) if in_positions else None, pid))
         elif kind == "fx":
             if not ccy or ccy == policy.reporting_ccy or amt is None:
                 res.not_valued.append(f"{tid} ({kind})")
@@ -1067,6 +1122,34 @@ def trade_flows(trades: Iterable[Mapping[str, Any]], books: Mapping[str, Mapping
         else:
             res.not_valued.append(f"{tid} ({kind or '—'})")
     return res
+
+
+def _trade_x(t: Mapping[str, Any], key: str) -> Any:
+    """A ``trades`` row's raw ``x_*`` field, flat or under ``x``."""
+    if t.get(key) is not None:
+        return t[key]
+    return t["x"].get(key) if isinstance(t.get("x"), Mapping) else None
+
+
+def _trade_future(t: Mapping[str, Any]) -> str | None:
+    """``future_class`` of a ``trades`` row (its ``x_product_group``)."""
+    group = str(_trade_x(t, "x_product_group") or "").lower()
+    if group == FX_FUTURE_GROUP:
+        return "fx"
+    return "other" if "future" in group else None
+
+
+def _future_nominal(t: Mapping[str, Any], ccy: str, amt: float | None) -> tuple[str | None, float | None]:
+    """(base currency, nominal in it) of an FX future trade: the trade's own base currency (``x_prim_cur`` /
+    ``x_base_ccy``) when given, else its ``ccy``; an amount in another currency than the base is turned into the base
+    at the trade's ``fx_rate`` (quote per base), else unknown (None)."""
+    base = str(_trade_x(t, "x_prim_cur") or _trade_x(t, "x_base_ccy") or ccy or "").upper() or None
+    if amt is None or base is None:
+        return base, None
+    if base == ccy:
+        return base, amt
+    rate = _f(t.get("fx_rate"))
+    return (base, amt / rate) if rate else (base, None)
 
 
 def _unit_entity(u: Mapping[str, Any], entity_of: Mapping[str, str]) -> str:
@@ -1332,6 +1415,14 @@ def published_day(comparisons: Sequence[Mapping[str, Any]], outside_report: Sequ
                     fallback.append(k)
                     issues["derivatives_nominal_fallback"].append(f"{where} {ccy}: {KIND_TEXT[k]}")
             in_pv |= {x.position_id for x in mine if x.component not in policy.report_components}
+            if sc["absent"] and "cash" in policy.report_components:
+                # DEC18 (TDM#588): a book the report on B lacks has base 0; its cash balances (the futures' result in
+                # the currency, the cash of FX deals that move the OCP) come from the cash report, by currency
+                for b in sorted(won):
+                    items["balances"] += [{"kind": "balance", "book_id": b, "key": x.key, "amount": x.amount,
+                                           **({"note": x.note} if x.note else {})}
+                                          for x in by_bc.get((b, ccy), ()) if x.component == "cash"
+                                          and x.basis == "balance" and x.amount]
             if day is not None and "bonds" in policy.report_components:
                 items["bonds"] += [{"kind": "position", "position_id": m.position_id, "book_id": m.book_id,
                                     "mv_base": m.mv_base, "mv_now": m.mv_now, "paid": m.paid, "amount": m.amount,
@@ -1351,16 +1442,34 @@ def published_day(comparisons: Sequence[Mapping[str, Any]], outside_report: Sequ
                                                  "position_id": x.position_id or x.key, "book_id": b,
                                                  "component": x.component, "amount": x.amount})
                         added[x.component] += x.amount
-            parts = {p: math.fsum(i["amount"] for i in items[p]) for p in PARTS}
+            # ``balances`` only for a book absent from the report that has them (the other lines keep their five terms)
+            parts = {p: math.fsum(i["amount"] for i in items[p]) for p in PARTS if p != "balances" or items[p]}
+            if items["balances"] and any(i.get("leg") == "cash" for i in items["trades"]):
+                issues["balances_with_trades_cash"].append(f"{where} {ccy}")
+            total = math.fsum(parts.values())
+            # DEC18 (TDM#588): one derivative larger than the share of the line's OCP is marked
+            floor = max(abs(total), policy.tolerance_ccy)
+            deriv_ids = {d.position_id for d in mine}
+            big = [{"position_id": i.get("position_id"), "derivative": i.get("derivative") or i.get("component"),
+                    "amount": i["amount"], "ratio": round(abs(i["amount"]) / floor, 2)}
+                   for i in items["derivatives"] + [x for x in items["outside"]  # a derivative's whole PV outside
+                                                    if x.get("position_id") in deriv_ids]
+                   if i.get("kind") in ("position", "report_nominal")
+                   and abs(i["amount"]) > policy.derivative_share_max * floor]
+            for x in big:
+                issues["derivative_share"].append(f"{where} {ccy}: {x['position_id'] or KIND_TEXT.get(x['derivative'])}"
+                                                  f" — {x['ratio']:g} ОВП книги")
             has_report = bool(c) or bool(items["base"])
-            line(sc, won, ccy, math.fsum(parts.values()), REPORT,
+            line(sc, won, ccy, total, REPORT,
                  components=[k for k in COMPONENTS if added.get(k)], outside={k: v for k, v in added.items() if v},
                  reported=parts["base"] if has_report else 0.0 if sc["absent"] else None,
                  base_date=_iso(sc["valid_date"]),
                  set_id=sc["set_id"], base_kind=BASE_ABSENT if sc["absent"] else BASE_SPLIT if split else BASE_WHOLE,
                  parts=parts, contributions={p: _bounded(v) for p, v in items.items() if v}, fallback=fallback,
                  split_kinds=sorted(sc["kinds"]) if not sc["absent"] else [], partial_pv=partial, no_pv=no_pv,
-                 base_older=b0 is not None and business_days_between(b0, on, is_business_day) > 1)
+                 base_older=b0 is not None and business_days_between(b0, on, is_business_day) > 1,
+                 **({"derivative_share": sorted(big, key=lambda x: -abs(x["amount"]))[:CONTRIBUTIONS_MAX]}
+                    if big else {}))
     covered = {b for sc in scopes.values() for b in sc["books"]}
     for x in outside_report:
         if x["book_id"] not in covered and x["ccy"] != policy.reporting_ccy and x["derived"]:
@@ -1391,6 +1500,9 @@ DAY_GAP_TEXT = {
     "no_base_run": "прогона за дату базы нет: переоценка облигаций с даты базы не посчитана",
     "trades_not_valued": "сделки после базы, которые правило ОВП не оценивает (не облигация и не валюта)",
     "trades_unknown_book": "сделки после базы в книгах, которых нет в справочнике книг: в ОВП не вошли",
+    "derivative_share": "один дериватив больше заданной доли ОВП книги (DEC18): проверьте его номинал и вид",
+    "balances_with_trades_cash": "книги нет в отчёте ОВП: остатки по счетам из отчёта остатков и денежные ноги сделок "
+                                 "после базы вместе — оплаченная сделка может быть в остатке",
 }
 
 
