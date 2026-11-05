@@ -581,7 +581,7 @@ def _forward_carry(con: psycopg.Connection, snapshots: SnapshotDir, run: Mapping
     if spread not in SPREAD_MODES:
         raise CarryError(f"spread {spread!r}: one of {', '.join(SPREAD_MODES)}")
     hdate = horizon_date(run["business_date"], h)
-    ctx = _context(snapshots, run_for_context(run), ctx_cache, fixing_history.for_date(con, run["business_date"]))
+    ctx = _context(snapshots, run_for_context(run), ctx_cache, fixing_history.try_for_date(con, run["business_date"]))
     if ctx.business_date != run["business_date"]:  # not expected: prepare checks the snapshot's date
         raise CarryError(f"the run's market is of {ctx.business_date}, not {run['business_date']}")
     rows = con.execute("SELECT position_id, book_id, secid, quantity, quality, pv_rub, fact FROM run_position"

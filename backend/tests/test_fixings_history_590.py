@@ -239,8 +239,8 @@ def test_the_scenario_and_the_carry_reprice_on_the_stored_history_too(monkeypatc
     run = {"run_id": -590, "business_date": BD, "cut_type": "eod_final", "market_snapshot_id": None}
     ctx = exact._context(SnapshotDir(FIX), run, None, stored())
     assert ctx.rates["fixings_history"]["codes"]["RUONIA"]["rows"] == len(WEEKDAYS)
-    assert "fixing_history.for_date(con, run[\"business_date\"])" in inspect.getsource(jobs.run_once)
-    assert "fixing_history.for_date(con, run[\"business_date\"])" in inspect.getsource(carry._forward_carry)
+    assert "fixing_history.try_for_date(con, run[\"business_date\"])" in inspect.getsource(jobs.run_once)
+    assert "fixing_history.try_for_date(con, run[\"business_date\"])" in inspect.getsource(carry._forward_carry)
     seen = {}
     monkeypatch.setattr("desk.orchestrator.prepare", lambda *a, **kw: seen.update(kw) or (_ for _ in ()).throw(
         RuntimeError("stop")))
@@ -251,3 +251,36 @@ def test_the_scenario_and_the_carry_reprice_on_the_stored_history_too(monkeypatc
     assert seen["fixings"].stamp == ("synthetic",)
     with store.connect(store_url) as con:
         assert fh.for_date(con, BD).rows == {}
+
+
+def test_the_history_stays_when_the_cut_alone_fails_too(monkeypatch):
+    """Re-review of TDM#590: the key-rate curve failing for its own reason is no reason to drop the stored history."""
+    from desk.curves import rates as R
+
+    def broken(*a, **kw):
+        raise R.RatesInputError("synthetic: the key-rate quotes do not build")
+
+    monkeypatch.setattr(R, "key_rate_projection", broken)
+    ctx = prepare(SnapshotDir(FIX), BD.isoformat(), fixings=stored())
+    assert ctx.rates["status"]["key_rate_swap"] == "error"
+    fhl = ctx.rates["fixings_history"]
+    assert "dropped" not in fhl and fhl["codes"]["RUONIA"]["rows"] == len(WEEKDAYS)
+
+
+def test_an_unreadable_history_is_no_fill_and_the_memo_keeps_each_depth(store_url):
+    import psycopg
+
+    class Broken:
+        def transaction(self):
+            from contextlib import nullcontext
+            return nullcontext()
+
+        def execute(self, *a, **kw):
+            raise psycopg.OperationalError("synthetic: the store is gone")
+
+    assert fh.try_for_date(Broken(), BD) is None
+    with store.connect(store_url) as con:
+        insert(con, [row("RUONIA", WEEKDAYS[0])])
+        a = fh.for_date(con, BD)  # since 2016
+        b = fh.for_date(con, date(2019, 6, 3))  # since 2009: another depth, kept beside it
+        assert fh.for_date(con, BD) is a and fh.for_date(con, date(2019, 6, 3)) is b

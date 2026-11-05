@@ -319,32 +319,33 @@ FX_FUTURE_GROUP = "fx_future"
 an FX future in the OCP."""
 
 
-NON_FX_UNDERLYINGS = frozenset({"bond", "ir", "rate", "rates", "equity", "stock", "index", "commodity"})
-"""DEC18: the first word of a futures product group that names an underlying other than a currency (``bond_future``,
-``ir_future``, ``equity_future``, ``index_future``, ``commodity_future`` and their options ``bond_future_option``,
-``ir_future_option``, ...)."""
+FX_FUTURE_OPTION_GROUP = "fx_future_option"
+"""An option on a currency future (the adapter's FutureOptionFX): an option on a currency, as ``fx_option``."""
+KNOWN_FUTURE_GROUPS = frozenset({"bond_future", "ir_future", "equity_future", "index_future", "commodity_future",
+                                 "future", "future_option"})
+"""The other futures groups the adapter gives (DEC18); a group with ``future`` outside them is still a future not on a
+currency, said in the run's notes (a new name of the adapter)."""
 
 
 def group_future_class(group: str) -> str | None:
-    """``future_class`` of a product group: ``fx`` exactly ``fx_future``; ``other`` a future (or an option on one) whose
-    underlying is known not to be a currency (``NON_FX_UNDERLYINGS``); ``unknown`` any other group with ``future`` in it
-    (``future``, ``future_option``: the underlying is not said, an FX one possible); None no future."""
+    """``future_class`` of a product group: ``fx`` exactly ``fx_future``; ``fx_option`` exactly ``fx_future_option``
+    (an option on a currency future: an option on a currency); ``other`` any other group with ``future`` in it
+    (``bond_future``, ``ir_future``, ``future``, ``future_option``, any new name: the adapter gives the currency ones
+    their own groups, so these are not on a currency); None no future."""
     g = (group or "").lower()
     if g == FX_FUTURE_GROUP:
         return "fx"
+    if g == FX_FUTURE_OPTION_GROUP:
+        return "fx_option"
     words = [w for w in re.split(r"[^a-z0-9]+", g) if w]
-    if "future" not in words and "futures" not in words:
-        return None
-    return "other" if words[0] in NON_FX_UNDERLYINGS else "unknown"
+    return "other" if "future" in words or "futures" in words else None
 
 
 def future_class(row: Mapping[str, Any]) -> str | None:
     """DEC18 (owner, 05.11.2026, TDM#588): ``fx`` for an FX future (core's product ``fx_future`` or the report's product
-    group exactly ``fx_future``); ``other`` for a future, or an option on one, whose underlying is known not to be a
-    currency (``group_future_class``: bonds, rates, an equity or an index, a commodity); ``unknown`` for a future of an
-    underlying not said (``future``, ``future_option``: classified as before DEC18, an option among the options, with a
-    note); None when the row is not a future. An ``other`` future gives no nominal and no PV in the OCP: its result in
-    a currency is in the cash balances of its book."""
+    group exactly ``fx_future``); ``fx_option`` for an option on one (group ``fx_future_option``: classified as an FX
+    option, in ``options`` at its delta); ``other`` for every other future and option on a future (``group_future_class``):
+    no nominal and no PV in the OCP, its result in a currency is in the cash balances of its book; None not a future."""
     ex = row.get("extra") or {}
     product = str((ex.get("core") or {}).get("product") or "").lower()
     if "fx_future" in product:
@@ -354,8 +355,7 @@ def future_class(row: Mapping[str, Any]) -> str | None:
 
 NON_FX_FUTURE_NOTE = ("фьючерс не на валюту: номинала и стоимости в ОВП нет, его результат в валюте — в остатках по "
                       "счетам книги (DEC18)")
-UNKNOWN_FUTURE_NOTE = ("фьючерс или опцион на фьючерс без названного базового актива: в ОВП как до DEC18 (опцион — "
-                       "среди опционов), вид уточнит адаптер")
+NEW_FUTURE_GROUP_NOTE = "группа продукта «{group}» монитору незнакома: считается фьючерсом не на валюту (DEC18)"
 
 
 def takes_ocp_amount(ex: Mapping[str, Any], amount_basis: AmountBasis | str | None) -> bool:
@@ -378,7 +378,11 @@ def classify(row: Mapping[str, Any], terms: Sequence[Mapping[str, Any]], books: 
     ex = row.get("extra") or {}
     rep = ex.get("reported") or {}
     if future_class(row) == "other":  # DEC18: a future not on a currency has no OCP of its own
-        return None, {}, "none", NON_FX_FUTURE_NOTE if _amounts(row.get("fx_delta"), policy) else ""
+        if not _amounts(row.get("fx_delta"), policy):
+            return None, {}, "none", ""
+        g = product_group(rep)
+        return None, {}, "none", (NON_FX_FUTURE_NOTE if g in KNOWN_FUTURE_GROUPS or not g
+                                  else f"{NON_FX_FUTURE_NOTE}; " + NEW_FUTURE_GROUP_NOTE.format(group=g))
     delta = _amounts(row.get("fx_delta"), policy)
     core = ex.get("core") or {}
     no_pv = False
@@ -442,8 +446,6 @@ def position_lines(rows: Sequence[Mapping[str, Any]], books: Mapping[str, Mappin
     for r in rows:
         pid = r["position_id"]
         comp, amounts, basis, note = classify(r, terms.get(pid, ()), books, on, policy)
-        if comp is not None and future_class(r) == "unknown":
-            notes.append(f"{pid}: {UNKNOWN_FUTURE_NOTE}")
         if comp is None:
             if note:
                 notes.append(f"{pid}: {note}")
@@ -845,11 +847,11 @@ PART_TEXT = {"base": "база: отчёт ОВП без деривативов"
 DERIVATIVE_SHARE_MAX = 0.95
 """DEC18 (TDM#588, «если один вклад деривативов больше заданной доли ОВП книги, книга получает пометку»): a published
 line is marked (``derivative_share``) when one derivative is at least this share of the line's gross (the sum of the
-sizes of all its contributions) ... The owner named no share: the monitor's default, the owner may change it. The aim
+sizes of all its contributions) ... Set in the code at the owner's request (no setting). The aim
 is a wrong unit (a notional read as billions), not a hedged book, whose OCP is the small rest of large opposite legs."""
 DERIVATIVE_GROSS_MIN_USD = 10_000_000.0
 """... and the line's gross is at least this many US dollars (at the run's rates; a currency without a rate is not
-checked). The monitor's default; the owner may change it."""
+checked). Set in the code at the owner's request (no setting)."""
 CONTRIBUTIONS_MAX = 10
 """Per published line and term at most this many contributions (the largest by size), the rest summed."""
 BASE_SPLIT, BASE_WHOLE, BASE_ABSENT = "without_derivatives", "with_derivatives", "book_absent"
@@ -893,8 +895,6 @@ def derivative_kind(row: Mapping[str, Any], terms: Sequence[Mapping[str, Any]],
         return "ndf"
     if "option" in product or "option" in group:
         return "fx_option"
-    if fut == "unknown":  # as before DEC18: a future of an unsaid underlying is taken for an FX one
-        return "fx_future"
     if "fx_swap" in product or "fx_swap" in kinds or {"fx", "swap"} <= words:
         return "fx_swap"
     if any(p in product for p in ("irs", "ois", "ccs", "cirs")) or kinds & {"irs", "ois", "ccs"} \
@@ -1163,10 +1163,10 @@ def _trade_x(t: Mapping[str, Any], key: str) -> Any:
 
 
 def _trade_future(t: Mapping[str, Any]) -> str | None:
-    """``group_future_class`` of a ``trades`` row (its ``x_product_group``); a future of an unsaid underlying is a
-    trade as before DEC18 (None)."""
+    """``group_future_class`` of a ``trades`` row (its ``x_product_group``); an option on a currency future is a trade
+    as an FX option (None: the FX rule)."""
     c = group_future_class(str(_trade_x(t, "x_product_group") or ""))
-    return None if c == "unknown" else c
+    return None if c == "fx_option" else c
 
 
 def _future_nominal(t: Mapping[str, Any], ccy: str, amt: float | None) -> tuple[str | None, float | None]:

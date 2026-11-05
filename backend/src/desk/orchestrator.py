@@ -344,6 +344,12 @@ def with_rates(market: MarketView, static: StaticView, core: MarketSnapshot,
             swap_curves)
 
 
+def _rates_failed(lineage: dict[str, Any]) -> bool:
+    """``with_rates`` could not read the fixings or build the key-rate curve (status ``error``)."""
+    st = lineage.get("status") or {}
+    return st.get("fixings") == "error" or st.get("key_rate_swap") == "error"
+
+
 def market_rates(market: MarketView) -> dict[str, tuple[float, str] | None]:
     """ccy -> the market rate (``fallback.FX_MARKET``) and its source, for every currency of the snapshot's rates."""
     return {c: market_fx(market.fx(c)) for c in sorted({r["ccy"] for r in market.fx_rates if r.get("ccy")} - {"RUB"})}
@@ -375,15 +381,16 @@ def prepare(snapshots: SnapshotDir, business_date: str, cut_type: str = "eod_fin
     kbd_hist = rates.kbd_history(snapshots, business_date, static.snapshot)
     core_market, rates_lineage, quote_curves, swap_curves = with_rates(market, static, market.core_market(static),
                                                                        kbd_hist)
-    if filled is not None and snap is not cut and (rates_lineage["status"].get("fixings") == "error"
-                                                   or rates_lineage["status"].get("key_rate_swap") == "error"):
-        # the stored history broke what the cut alone reads (TDM#590 review): the run goes on without it, said
+    if filled is not None and snap is not cut and _rates_failed(rates_lineage):
+        # the stored history broke what the cut alone reads (TDM#590 review): the run goes on without it, said; when
+        # the cut alone fails too, the error is the cut's own and the history stays
         why = rates_lineage.get("fixings_error") or rates_lineage.get("key_rate_error")
-        snap = cut
-        market = MarketView(snap)
-        core_market, rates_lineage, quote_curves, swap_curves = with_rates(market, static,
-                                                                           market.core_market(static), kbd_hist)
-        filled = {**filled, "codes": {}, "dropped": f"the run's fixings failed with the stored history: {why}"}
+        alone = MarketView(cut)
+        plain = with_rates(alone, static, alone.core_market(static), kbd_hist)
+        if not _rates_failed(plain[1]):
+            snap, market = cut, alone
+            core_market, rates_lineage, quote_curves, swap_curves = plain
+            filled = {**filled, "codes": {}, "dropped": f"the run's fixings failed with the stored history: {why}"}
     if filled is not None:
         rates_lineage["fixings_history"] = filled
     fx_options = fx_options or fxcurves.FxOptions()

@@ -1118,6 +1118,14 @@ def _rates_lineage(rates: dict[str, Any], scrub: Scrubber) -> dict[str, Any]:
     if isinstance(hist, dict):
         out["fixings_history"] = {code: {k: i.get(k) for k in ("rows", "from", "to", "window_from")}
                                   for code, i in (hist.get("codes") or {}).items() if isinstance(i, dict)}
+        if hist.get("dropped"):
+            out["fixings_history_dropped"] = scrub.text(str(hist["dropped"]))
+        if isinstance(hist.get("errors"), dict) and hist["errors"]:
+            out["fixings_history_errors"] = {c: scrub.text(str(e), 160) for c, e in hist["errors"].items()}
+    ru = fx.get("RUONIA") if isinstance(fx, dict) else None
+    hole = ((ru or {}).get("calendar_from_fixings") or {}).get("hole") if isinstance(ru, dict) else None
+    if isinstance(hole, dict):
+        out["fixings_history_hole"] = {"RUONIA": {"from": hole.get("from"), "to": hole.get("to")}}
     return out
 
 

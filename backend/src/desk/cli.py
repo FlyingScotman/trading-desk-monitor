@@ -266,9 +266,18 @@ def eod_run(settings: Settings, d: str, *, snapshots: str | Path | None = None, 
     fixings = stored_fixings(store_url or store.resolve_url(settings), run_date, out)
     ctx = prep(sd, *(on_close or (d, cut_type)), market_snapshot_id=market_snapshot_id, fx_options=fx_options,
                fixings=fixings)
-    if (fh := (ctx.rates or {}).get("fixings_history")) and fh.get("codes"):
-        out("fixings from the stored history before the cut's window: " + ", ".join(
-            f"{c} {i['from']}..{i['to']} ({i['rows']})" for c, i in sorted(fh["codes"].items())))
+    if fh := (ctx.rates or {}).get("fixings_history"):
+        if fh.get("codes"):
+            out("fixings from the stored history before the cut's window: " + ", ".join(
+                f"{c} {i['from']}..{i['to']} ({i['rows']})" for c, i in sorted(fh["codes"].items())))
+        if hole := ((((ctx.rates or {}).get("fixings") or {}).get("RUONIA") or {}).get("calendar_from_fixings")
+                    or {}).get("hole"):
+            out(f"WARN stored RUONIA history has a hole {hole['from']}..{hole['to']}: only the fixings after it are "
+                "used, a period over it is not valued")
+        for c, e in sorted((fh.get("errors") or {}).items()):
+            out(f"WARN stored fixings of {c} not used: {e}")
+        if fh.get("dropped"):
+            out(f"WARN stored fixings history not used: {fh['dropped']}")
     # issuer names, groups, sectors and ratings: the newest static of the cache, not the market's own (R25)
     ctx = dataclasses.replace(ctx, reference=reference.facts(sd, ctx.static),
                               proxy_curves=bool(getattr(settings, "proxy_curves_for_risk", False)),

@@ -24,7 +24,9 @@ calendar there is the days with a fixing (``rates.published_before``), so those 
 
 from __future__ import annotations
 
-from collections import defaultdict
+import logging
+import threading
+from collections import OrderedDict, defaultdict
 from dataclasses import dataclass, field, replace
 from datetime import date
 from decimal import Decimal
@@ -34,6 +36,9 @@ import psycopg
 
 from .adapter_rates import FIXING_SOURCE_ORDER
 from .bundle import Snapshot
+
+log = logging.getLogger("desk.marketdata.fixing_history")
+_LOCK = threading.Lock()
 
 DEPTH_YEARS = 10
 """A run takes stored fixings back to this many years before its business date (the owner: «на 10 лет»)."""
@@ -54,8 +59,10 @@ class FixingStore:
     stamp: tuple = ()
 
 
-_MEMO: dict[tuple[str, date | None], FixingStore] = {}
-"""The last ``load`` per (database, since): a backfill runs hundreds of dates on one stored history."""
+_MEMO: OrderedDict[tuple[str, date | None], FixingStore] = OrderedDict()
+"""The ``load`` results last used per (database, since), at most ``MEMO_SIZE`` (an LRU): a backfill runs hundreds of
+dates on one stored history, and a date of another year (its own depth) does not evict the autopilot's today."""
+MEMO_SIZE = 4
 
 
 def _stamp(con: psycopg.Connection) -> tuple:
@@ -68,8 +75,10 @@ def load(con: psycopg.Connection, since: date | None = None) -> FixingStore:
     table's stamp (rows, newest fetch, newest date) is the same."""
     stamp = _stamp(con)
     key = (stamp[-1], since)
-    if (hit := _MEMO.get(key)) is not None and hit.stamp == stamp:
-        return hit
+    with _LOCK:
+        if (hit := _MEMO.get(key)) is not None and hit.stamp == stamp:
+            _MEMO.move_to_end(key)
+            return hit
     by: dict[str, list[dict[str, Any]]] = defaultdict(list)
     for code, source, d, value, unit, eff, pub, ing, labels in con.execute(
             "SELECT index_code, source, fixing_date, value, unit, effective_date, published_on, hub_ingested_at, labels"
@@ -81,8 +90,11 @@ def load(con: psycopg.Connection, since: date | None = None) -> FixingStore:
                          "published_at": None, "hub_ingested_at": ing and ing.isoformat(),
                          "labels": labels if isinstance(labels, list) else [], "origin": SOURCE_ID})
     out = FixingStore({k: tuple(v) for k, v in by.items()}, stamp)
-    _MEMO.clear()  # one history in memory at a time
-    _MEMO[key] = out
+    with _LOCK:
+        _MEMO[key] = out
+        _MEMO.move_to_end(key)
+        while len(_MEMO) > MEMO_SIZE:
+            _MEMO.popitem(last=False)
     return out
 
 
@@ -161,6 +173,17 @@ def filled(snap: Snapshot, code: str) -> dict[str, Any] | None:
 def for_date(con: psycopg.Connection, d: date) -> FixingStore:
     """``load`` for a run of ``d``: the stored rows from 1 January ``DEPTH_YEARS`` years before it."""
     return load(con, date(d.year - DEPTH_YEARS, 1, 1))
+
+
+def try_for_date(con: psycopg.Connection, d: date) -> FixingStore | None:
+    """``for_date`` in a transaction of its own; None, logged, when the store cannot read it (a scenario or a carry is
+    then computed on the cut alone, not failed)."""
+    try:
+        with con.transaction():
+            return for_date(con, d)
+    except psycopg.Error as e:
+        log.warning("stored fixings history not read: %s: %s", type(e).__name__, e)
+        return None
 
 
 def status(con: psycopg.Connection) -> dict[str, Any]:

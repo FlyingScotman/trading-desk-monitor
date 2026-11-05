@@ -17,6 +17,7 @@ from __future__ import annotations
 import math
 import os
 import re
+from datetime import date, timedelta
 from decimal import Decimal
 from typing import Any
 
@@ -244,9 +245,38 @@ def cause(code: str, kind: str, product: str | None, futures_by_ticker: bool | N
 FIXING_RE = re.compile(r"no (\w+) fixing on or before (\d{4})-(\d{2})-(\d{2})")
 
 
-def detail_text(detail: str | None) -> str | None:
-    """The words of a known detail of core's refusal (TDM#590): «нет фиксинга RUONIA на 10.04.2026 или раньше …»;
-    None for any other detail (the card shows it as it is)."""
+HOLE_RE = re.compile(r"outside calendar .*?(RUONIA).*?\+published_from_(\d{4})-(\d{2})-(\d{2})")
+
+
+def _dm(iso: str) -> str:
+    return f"{iso[8:10]}.{iso[5:7]}"
+
+
+def history_hole(lineage: dict[str, Any] | None) -> dict[str, str] | None:
+    """The hole of the stored RUONIA history of a run (``rates.fixings.RUONIA.calendar_from_fixings.hole``,
+    ``curves.rates.published_before``), None without one."""
+    r = ((((lineage or {}).get("rates") or {}).get("fixings") or {}).get("RUONIA") or {})
+    h = (r.get("calendar_from_fixings") or {}).get("hole") if isinstance(r, dict) else None
+    return h if isinstance(h, dict) and h.get("from") and h.get("to") else None
+
+
+def is_history_hole(detail: str | None) -> bool:
+    """Core's refusal of a period over a hole of the stored history (TDM#590: the calendar of the stored RUONIA starts
+    after its last hole)."""
+    return HOLE_RE.search(detail or "") is not None
+
+
+def detail_text(detail: str | None, hole: dict[str, str] | None = None) -> str | None:
+    """The words of a known detail of core's refusal (TDM#590): «нет фиксинга RUONIA на 10.04.2026 или раньше …»,
+    «в хранимой истории RUONIA пропуск с ДД.ММ по ДД.ММ: период сделки его пересекает» (``hole``: the run's,
+    ``history_hole``; without it the day before the history resumes); None for any other detail."""
+    if (h := HOLE_RE.search(detail or "")) is not None:
+        if hole:
+            span = f"с {_dm(hole['from'])} по {_dm(hole['to'])}"
+        else:
+            resumed = date(int(h.group(2)), int(h.group(3)), int(h.group(4))) - timedelta(days=1)
+            span = f"по {_dm(resumed.isoformat())}"
+        return f"в хранимой истории {h.group(1)} пропуск {span}: период сделки его пересекает"
     m = FIXING_RE.search(detail or "")
     if m is None:
         return None
@@ -267,15 +297,17 @@ def short(key: str) -> str:
     return "не оценено"
 
 
-def explain(reason: str | None, kind: str, product: str | None, futures_by_ticker: bool | None) -> dict[str, Any]:
+def explain(reason: str | None, kind: str, product: str | None, futures_by_ticker: bool | None,
+            hole: dict[str, str] | None = None) -> dict[str, Any]:
     """The words of an unvalued row's reason (``run_position.reason``: ``code: detail``) for the position card and the
     blotter (TDM#589): ``key``, ``why``, ``todo``, ``short``, ``detail`` (a known detail in words, else the raw one),
     ``fix`` ({label, href}: the settings screen that fixes it, or None)."""
     code, _, detail = (reason or "").partition(":")
     key, why, todo = cause(code.strip(), kind, product, futures_by_ticker)
-    fk = CAUSE_FIX.get(key) or ("report_risk" if REPORT_MV in todo else None)
     detail = detail.strip()
-    return {"key": key, "why": why, "todo": todo, "short": short(key), "detail": detail_text(detail) or detail or None,
+    fk = "history" if is_history_hole(detail) else CAUSE_FIX.get(key) or ("report_risk" if REPORT_MV in todo else None)
+    return {"key": key, "why": why, "todo": todo, "short": "пропуск фиксингов" if is_history_hole(detail) else short(key),
+            "detail": detail_text(detail, hole) or detail or None,
             "fix": {"label": FIX[fk][0], "href": FIX[fk][1]} if fk else None}
 
 
@@ -398,11 +430,12 @@ def off_report(con, run: dict[str, Any]) -> dict[str, Any] | None:
     return None
 
 
-def why_of(reason: str | None, x: dict[str, Any] | None, futures_by_ticker: bool | None) -> dict[str, Any]:
+def why_of(reason: str | None, x: dict[str, Any] | None, futures_by_ticker: bool | None,
+           hole: dict[str, str] | None = None) -> dict[str, Any]:
     """``explain`` of an unvalued position from its report row ``x`` (``position_input``: ``ccy``, ``asset_class``,
     its ``x_*`` under ``x``): the ``extra.why`` of the concept pages' and compat's not-valued position (TDM#589)."""
     x = x or {}
     rep = x.get("x") if isinstance(x.get("x"), dict) else {}
     kind = concepts.instr_kind({"ccy": x.get("ccy"), "asset_class": x.get("asset_class"), "extra": {"reported": rep}})
     product = rep.get("x_product") if isinstance(rep.get("x_product"), str) else None
-    return explain(reason, kind, product, futures_by_ticker)
+    return explain(reason, kind, product, futures_by_ticker, hole)

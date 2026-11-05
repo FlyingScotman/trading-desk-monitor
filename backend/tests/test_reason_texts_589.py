@@ -86,3 +86,30 @@ def test_the_unvalued_position_carries_the_words():
     w = p["extra"]["why"]
     assert p["notValued"] and w["key"] == "core_missing_market_data" and w["detail"].startswith("нет фиксинга RUONIA")
     assert "why" in concepts_run.EXTRA_KEYS_READ
+
+
+def test_a_period_over_a_hole_of_the_stored_history_in_words():
+    """TDM#590 re-review: core refuses a period over a hole of the stored RUONIA (its calendar starts after the hole):
+    the card says so, with the hole of the run when known, and the fix is «История прогонов»."""
+    reason = ("core_calendar_out_of_range: 2025-11-05 is outside calendar RUONIA_PUB(RU_PRODUCTION@ab, year-end from "
+              "2026-10-15)+published_from_2025-11-29 (2025-11-29..2079-12-31)")
+    w = coverage.explain(reason, "IRS", None, None, {"from": "2025-11-10", "to": "2025-11-28"})
+    assert w["detail"] == "в хранимой истории RUONIA пропуск с 10.11 по 28.11: период сделки его пересекает"
+    assert w["fix"]["label"] == "История прогонов" and w["short"] == "пропуск фиксингов"
+    w = coverage.explain(reason, "IRS", None, None)  # no hole in the run's lineage: up to the day before
+    assert w["detail"] == "в хранимой истории RUONIA пропуск по 28.11: период сделки его пересекает"
+    lin = {"rates": {"fixings": {"RUONIA": {"calendar_from_fixings": {"hole": {"from": "2025-11-10",
+                                                                             "to": "2025-11-28"}}}}}}
+    assert coverage.history_hole(lin) == {"from": "2025-11-10", "to": "2025-11-28"}
+    assert coverage.history_hole({}) is None
+
+
+def test_the_diagnostics_show_the_hole_and_what_was_not_used():
+    from desk.diagnostics import Scrubber, _rates_lineage
+
+    rates = {"fixings": {"RUONIA": {"rows": 3, "calendar_from_fixings": {"hole": {"from": "2025-11-10",
+                                                                               "to": "2025-11-28"}}}},
+             "fixings_history": {"codes": {}, "dropped": "the run's fixings failed", "errors": {"SOFR": "bad"}}}
+    out = _rates_lineage(rates, Scrubber())
+    assert out["fixings_history_hole"] == {"RUONIA": {"from": "2025-11-10", "to": "2025-11-28"}}
+    assert out["fixings_history_dropped"] and out["fixings_history_errors"] == {"SOFR": "bad"}

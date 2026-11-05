@@ -23,9 +23,7 @@ from desk.publish import tdm_run
 from desk.rules import ocp as O
 from desk.valuation.fallback import fx_rate
 
-NON_FX = ("bond_future", "ir_future", "equity_future", "index_future", "commodity_future", "bond_future_option",
-          "ir_future_option", "index_future_option")
-UNKNOWN = ("future", "future_option", "some_new_future")
+NON_FX = ("bond_future", "ir_future", "equity_future", "index_future", "commodity_future", "future", "future_option")
 
 
 def report_row(pid, book, group, delta, asset_class="otc"):
@@ -80,19 +78,20 @@ def test_an_fx_future_against_the_rouble_has_no_rouble_leg(ctx):  # noqa: F811
     assert row["fx_delta"] == {"USD": -250_000.0}
 
 
-def test_a_future_of_an_unsaid_underlying_is_as_before_with_a_note():
-    # the adapter puts an option on a future whose underlying it does not know into ``future_option``: an FX one is
-    # possible, so it stays an option (its delta in «опционы»), as before DEC18
-    opt = report_row("D1|FO", "D1", "future_option", {"USD": 3_000.0})
-    assert O.future_class(opt) == "unknown" and O.derivative_kind(opt, ()) == "fx_option"
+def test_an_option_on_a_currency_future_is_an_fx_option():
+    # the adapter's FutureOptionFX: an option on a currency, in «опционы» at its delta, as an FX option
+    opt = report_row("D1|FO", "D1", "fx_future_option", {"USD": 3_000.0})
+    assert O.future_class(opt) == "fx_option" and O.derivative_kind(opt, ()) == "fx_option"
     assert O.classify(opt, (), BOOKS, B, POLICY)[:2] == ("options", {"USD": 3_000.0})
     lines, _, notes = O.position_lines([opt], BOOKS, {}, B, POLICY)
-    assert lines and notes == [f"D1|FO: {O.UNKNOWN_FUTURE_NOTE}"]
-    for g in UNKNOWN:
-        assert O.group_future_class(g) == "unknown", g
-    fut = report_row("D1|F", "D1", "future", {"USD": 3_000.0})
-    assert O.derivative_kind(fut, ()) == "fx_future" and O.classify(fut, (), BOOKS, B, POLICY)[0] == "other"
-    # no currency amount: no note for a non-FX future either
+    assert [x.component for x in lines] == ["options"] and notes == []
+
+
+def test_a_new_futures_group_is_not_on_a_currency_and_is_said():
+    row = report_row("D1|N", "D1", "weather_future", {"USD": 3_000.0})
+    comp, amounts, _, note = O.classify(row, (), BOOKS, B, POLICY)
+    assert comp is None and amounts == {} and "«weather_future» монитору незнакома" in note
+    # no currency amount: no note
     assert O.classify(report_row("D1|B", "D1", "bond_future", {}), (), BOOKS, B, POLICY)[3] == ""
 
 
@@ -155,10 +154,13 @@ def test_trades_after_the_base_in_futures():
     pol = POLICY  # the report holds futures (every component but options and NDFs)
     legs = O.trade_flows([trade("T1", "fx_future"), trade("T2", "bond_future"), trade("T3", "index_future"),
                           trade("T4", "fx_future", ccy="RUB", amount="90000000", fx_rate="90", x_prim_cur="USD"),
-                          trade("T5", "fx_future", ccy="RUB", amount="90000000", x_prim_cur="USD")],
+                          trade("T5", "fx_future", ccy="RUB", amount="90000000", x_prim_cur="USD"),
+                          trade("T6", "future"), trade("T7", "future_option"), trade("T8", "fx_future_option")],
                          BOOKS, {}, {}, pol, after=B)
     got = {f.trade_id: (f.ccy, f.amount, f.leg) for f in legs.flows}
-    assert got == {"T1": ("USD", 1_000_000.0, "fx"), "T4": ("USD", pytest.approx(1_000_000.0), "fx")}
+    # T8, an option on a currency future, is a currency trade as before (the FX rule); T6, T7 have no OCP
+    assert got == {"T1": ("USD", 1_000_000.0, "fx"), "T4": ("USD", pytest.approx(1_000_000.0), "fx"),
+                   "T8": ("USD", 1_000_000.0, "fx")}
     assert legs.not_valued == ["T5 (fx_future)"]  # an amount in RUB without the rate: not guessed
     # the report without futures: they come from positions
     out = O.trade_flows([trade("T1", "fx_future")], BOOKS, {}, {},
