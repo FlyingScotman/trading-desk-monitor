@@ -102,6 +102,7 @@ from rub_fixed_income import (
 )
 
 from ..marketdata import adapter_rates as ar
+from ..marketdata import fixing_history
 from ..marketdata.bundle import SnapshotError
 from . import proxy as proxies
 from . import rates
@@ -540,8 +541,10 @@ def index_fixings(snapshot: Any, spec: ForeignOvernight, cal: BusinessCalendar, 
         raise rates.RatesInputError(f"{bd}: no {spec.code} fixing known at {cut.isoformat()}")
     obs, bridged, unpublished = _observation_calendar(cal, {f.fixing_date for f in rows}, bd, spec.max_unpublished,
                                                       spec.code)
+    stored = fixing_history.filled(snapshot, spec.code)  # TDM#590: rows before the cut's window from the stored history
     entry = IndexFixingEntry(spec.code, IndexFixings(
-        spec.index_name, bd, tuple((f.fixing_date, f.rate) for f in rows), obs, snapshot.id))
+        spec.index_name, bd, tuple((f.fixing_date, f.rate) for f in rows), obs,
+        f"{snapshot.id}+{fixing_history.SOURCE_ID}" if stored else snapshot.id))
     labels = {(str(r.get("fixing_date")), r.get("source")): r.get("labels") or ()
               for r in snapshot.data.get("fixings") or () if r.get("index_code") == spec.code}
     prelim = sorted(f.fixing_date.isoformat() for f in rows
@@ -553,7 +556,8 @@ def index_fixings(snapshot: Any, spec: ForeignOvernight, cal: BusinessCalendar, 
                    "bridged_days": [d.isoformat() for d in bridged],
                    "unpublished_business_days": [d.isoformat() for d in unpublished],
                    "max_unpublished_business_days": spec.max_unpublished,
-                   "preliminary_days": prelim, "calendar": obs.version}
+                   "preliminary_days": prelim, "calendar": obs.version,
+                   **({"from_history": stored} if stored else {})}
 
 
 def rusfar_cny_fixings(snapshot: Any, cal: BusinessCalendar, bd: date, known_at: datetime | None = None

@@ -65,7 +65,7 @@ def test_unvalued_by_cause_and_kind(published):
     swaps = g["swap_terms|IRS"]
     assert swaps["n"] == 2 and swaps["notionalRub"] == pytest.approx(150e6) and swaps["mvRub"] is None
     assert sorted(swaps["ids"]) == ["D|IRS1", "D|IRS2"] and "trade_terms" in swaps["why"]
-    assert swaps["reasons"] == {"no_reported_value": 2} and "report_risk" in swaps["todo"]
+    assert swaps["reasons"] == {"no_reported_value": 2} and "Оценка и риск из отчёта о позициях" in swaps["todo"]
     assert g["closed|IRS"]["closed"] and g["closed|IRS"]["ids"] == ["D|IRS0"] and u["groups"][-1]["closed"]
     assert g["bond_derivative|BOND_FUT"]["n"] == 1
     assert g["repo|REPO"]["why"].startswith("РЕПО") and g["repo|REPO"]["notionalRub"] == pytest.approx(25e6)

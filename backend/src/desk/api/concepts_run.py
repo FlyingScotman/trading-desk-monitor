@@ -61,7 +61,7 @@ by which method. ``fxPartial``: the FX is one of its two parts only (TDM#414, #5
 EXTRA_KEYS_READ = ("assumptions", "core", "curve_proxy", "dm_bp", "funding", "g_spread_bp", "horizon_kind",
                    "index_fixings", "issue_size", "lat_name", "legs", "not_exact_reason", "offer_date", "offer_kind",
                    "ofz_basis01", "ofz_ruonia01", "pv_diff_rub", "quality", "quote", "reason", "reported",
-                   "reported_pv_rub", "repos", "risk_problem", "spread_buckets", "swaps")
+                   "reported_ccy", "reported_pv_rub", "repos", "risk_problem", "spread_buckets", "swaps", "why")
 """The keys of a position's ``extra`` (the row's own, passed through) that ``lib/real.js`` reads, some only on rows
 a plain bond book does not have: an FX deal's ``legs``, a rates-core trade's ``swaps`` / ``repos`` / ``core``, a
 not-valued row's ``reported``, an impossible risk's ``risk_problem`` (TDM#170, TDM#460), a bond on the proxy curve's
@@ -203,9 +203,14 @@ def funding_status(block: dict[str, Any] | None) -> dict[str, Any]:
 
 
 def _not_valued(r: dict[str, Any], books: dict[str, dict], x: dict[str, Any] | None,
-                portfolio: str | None) -> dict[str, Any]:
-    """A run_position without fact: visible, PV empty, nothing in any total; ``x`` its report row."""
+                portfolio: str | None, futures_by_ticker: bool | None = None,
+                hole: dict[str, str] | None = None) -> dict[str, Any]:
+    """A run_position without fact: visible, PV empty, nothing in any total; ``x`` its report row. ``extra.why``: its
+    reason in words (``coverage.explain``, TDM#589: the card's «Причина отсутствия оценки», the blotter's short words)."""
+    from .coverage import why_of
+
     x = {k: _json(v) for k, v in (x or {}).items() if v is not None}
+    why = why_of(r["reason"], x, futures_by_ticker, hole)
     kind = (x.get("asset_class") or "").lower()
     aclass, segment = (None, None) if kind in ("", "bond") else NOT_VALUED_KIND.get(kind, NOT_VALUED_KIND["other"])
     return {
@@ -216,7 +221,7 @@ def _not_valued(r: dict[str, Any], books: dict[str, dict], x: dict[str, Any] | N
         "notional": None, "notionalRub": None, "price": None, "mv": None, "mvRub": None, "cs01": 0.0, "ofzSpr01": 0.0,
         "risk": {}, "fxDelta": {}, "entity": books.get(r["book_id"], {}).get("entity", "—"), "portfolio": portfolio,
         "newToday": False, "notValued": True, "pnl": no_pnl("not_valued"),
-        "extra": {"quality": "not_valued", "valuation": "not_valued", "reason": r["reason"],
+        "extra": {"quality": "not_valued", "valuation": "not_valued", "reason": r["reason"], "why": why,
                   "quantity": r["quantity"], **({"reported": x} if x else {})},
     }
 
@@ -336,10 +341,19 @@ def assemble(con, run: dict[str, Any]) -> dict[str, Any]:
         f"SELECT position_id, {', '.join(INPUT_FIELDS)} FROM position_input WHERE set_id = ANY(%s)"
         " AND position_id = ANY(%s)", (run["position_set_ids"], [r["position_id"] for r in unvalued]))} \
         if unvalued else {}
+    fbt = None
+    if unvalued:
+        from .coverage import _futures_by_ticker
+
+        fbt = _futures_by_ticker()
+    from .coverage import history_hole
+
+    hole = history_hole(run.get("lineage"))  # TDM#590: a hole of the stored RUONIA, for a refusal over it
     for r in unvalued:
         i = inputs.get(r["position_id"])
         positions.append(_not_valued(r, books, {k: v for k, v in i.items() if k != "position_id"} if i else None,
-                                     portfolio_of(port_rows, book_types, r["book_id"], r["position_id"])))
+                                     portfolio_of(port_rows, book_types, r["book_id"], r["position_id"]), fbt,
+                                     hole))
     for c in dict.fromkeys(c for p in positions for c in p["risk"]):
         if c not in curves:  # a risk curve the run's reference lacks: shown without points, its risk never dropped
             curves[c] = {"name": c, "ccy": c.split()[0], "kind": "bond", "pts": [None] * len(B)}

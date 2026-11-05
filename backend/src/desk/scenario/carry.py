@@ -67,6 +67,7 @@ from psycopg.rows import tuple_row
 from rub_fixed_income.dates import add_months
 
 from .. import funding_settings, store
+from ..marketdata import fixing_history
 from ..marketdata.adapter import OFZ_CLASSES, bond_currency
 from ..marketdata.bundle import SnapshotDir
 from ..marketdata.ratings import GRADES
@@ -580,7 +581,7 @@ def _forward_carry(con: psycopg.Connection, snapshots: SnapshotDir, run: Mapping
     if spread not in SPREAD_MODES:
         raise CarryError(f"spread {spread!r}: one of {', '.join(SPREAD_MODES)}")
     hdate = horizon_date(run["business_date"], h)
-    ctx = _context(snapshots, run_for_context(run), ctx_cache)
+    ctx = _context(snapshots, run_for_context(run), ctx_cache, fixing_history.try_for_date(con, run["business_date"]))
     if ctx.business_date != run["business_date"]:  # not expected: prepare checks the snapshot's date
         raise CarryError(f"the run's market is of {ctx.business_date}, not {run['business_date']}")
     rows = con.execute("SELECT position_id, book_id, secid, quantity, quality, pv_rub, fact FROM run_position"

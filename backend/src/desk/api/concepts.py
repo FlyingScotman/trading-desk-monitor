@@ -150,7 +150,7 @@ def _periods(con, as_of: date, dates: list[str]) -> tuple[dict[str, Any], list[s
                     "positionsFrom": first_pos.isoformat() if first_pos else None, "why": why}
         if why and runs_in:
             notes.append(f"PnL {label} — частичный: сумма {len(runs_in)} прогонов с {runs_in[0]}; {'; '.join(why)}"
-                         + (f"; досчитать: {BACKFILL_LINK} (desk backfill)" if missing else ""))
+                         + (f"; досчитать: {BACKFILL_LINK}" if missing else ""))
     return out, notes
 
 
@@ -278,7 +278,7 @@ def extras(con, run: dict[str, Any], writer: Writer = None) -> dict[str, Any]:
     if not prev_ok and run.get("prev_date") is not None:
         notes.append(("изменения к вчера" if trades_known else "сделки дня и изменения к вчера")
                      + f" не показаны: нет прогона за {run['prev_date'].isoformat()}"
-                     f" (досчитать: {BACKFILL_LINK}, desk backfill)")
+                     f" (досчитать: {BACKFILL_LINK})")
     if (old := old_runs(con, runs)):
         notes.append(f"история: {old} из {n} дат посчитаны прошлой версией программы — в графиках истории позиции "
                      f"они пунктиром; пересчитать: {BACKFILL_LINK} (идёт в фоне, от ранних дат)")

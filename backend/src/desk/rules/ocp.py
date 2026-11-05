@@ -16,7 +16,10 @@ reporting currency has no OCP), in one component (``COMPONENTS``):
   ``extra.ocp_amount``; an FX row without terms and a later value date at its amount (basis ``notional``);
 - ``ndf`` — an NDF (core's ``fx_ndf``, the terms' ``ndf``, the report's product group ``fx_ndf``), amounted as the FX
   legs; only with ``include_ndf``;
-- ``futures`` — an FX future (core's ``fx_future`` or the report's product group ``fx_future``) at its FX delta;
+- ``futures`` — an FX future (core's ``fx_future`` or the report's product group exactly ``fx_future``) at its FX delta:
+  a future of the positions report at its nominal in the base currency, on a cross with its quote leg (DEC18). Any
+  other future (bonds, rates, an equity or an index, a commodity, an option on a future) has no OCP line at all
+  (``future_class``): its result in the currency is in the cash balances of its book;
 - ``options`` — an FX option (``option`` in core's product or the product group), at its FX delta or, without core,
   the report's amount;
 - ``bonds`` — a foreign-currency bond: its FX delta. A run since TDM#54 publishes it net of the bond's currency
@@ -311,6 +314,50 @@ def product_group(rep: Any) -> str:
     return str(pg or "").lower()
 
 
+FX_FUTURE_GROUP = "fx_future"
+"""The report's product group of an FX future (DEC18, TDM#588): only this group (or core's product ``fx_future``) is
+an FX future in the OCP."""
+
+
+FX_FUTURE_OPTION_GROUP = "fx_future_option"
+"""An option on a currency future (the adapter's FutureOptionFX): an option on a currency, as ``fx_option``."""
+KNOWN_FUTURE_GROUPS = frozenset({"bond_future", "ir_future", "equity_future", "index_future", "commodity_future",
+                                 "bond_future_option", "ir_future_option", "future", "future_option"})
+"""The other futures groups the adapter gives (DEC18); a group with ``future`` outside them is still a future not on a
+currency, said in the run's notes (a new name of the adapter)."""
+
+
+def group_future_class(group: str) -> str | None:
+    """``future_class`` of a product group: ``fx`` exactly ``fx_future``; ``fx_option`` exactly ``fx_future_option``
+    (an option on a currency future: an option on a currency); ``other`` any other group with ``future`` in it
+    (``bond_future``, ``ir_future``, ``future``, ``future_option``, any new name: the adapter gives the currency ones
+    their own groups, so these are not on a currency); None no future."""
+    g = (group or "").lower()
+    if g == FX_FUTURE_GROUP:
+        return "fx"
+    if g == FX_FUTURE_OPTION_GROUP:
+        return "fx_option"
+    words = [w for w in re.split(r"[^a-z0-9]+", g) if w]
+    return "other" if "future" in words or "futures" in words else None
+
+
+def future_class(row: Mapping[str, Any]) -> str | None:
+    """DEC18 (owner, 05.11.2026, TDM#588): ``fx`` for an FX future (core's product ``fx_future`` or the report's product
+    group exactly ``fx_future``); ``fx_option`` for an option on one (group ``fx_future_option``: classified as an FX
+    option, in ``options`` at its delta); ``other`` for every other future and option on a future (``group_future_class``):
+    no nominal and no PV in the OCP, its result in a currency is in the cash balances of its book; None not a future."""
+    ex = row.get("extra") or {}
+    product = str((ex.get("core") or {}).get("product") or "").lower()
+    if "fx_future" in product:
+        return "fx"
+    return group_future_class(product_group(ex.get("reported") or {}))
+
+
+NON_FX_FUTURE_NOTE = ("фьючерс не на валюту: номинала и стоимости в ОВП нет, его результат в валюте — в остатках по "
+                      "счетам книги (DEC18)")
+NEW_FUTURE_GROUP_NOTE = "группа продукта «{group}» монитору незнакома: считается фьючерсом не на валюту (DEC18)"
+
+
 def takes_ocp_amount(ex: Mapping[str, Any], amount_basis: AmountBasis | str | None) -> bool:
     """Whether the OCP takes a derivative row at its ``extra.ocp_amount`` (the nominal) and not at its FX delta: a row
     core did not value (a CCS: its exchanges still to come), or a row core valued with ``amount_basis`` ``nominal``.
@@ -330,13 +377,19 @@ def classify(row: Mapping[str, Any], terms: Sequence[Mapping[str, Any]], books: 
     the report on its own (TDM#416)."""
     ex = row.get("extra") or {}
     rep = ex.get("reported") or {}
+    if future_class(row) == "other":  # DEC18: a future not on a currency has no OCP of its own
+        if not _amounts(row.get("fx_delta"), policy):
+            return None, {}, "none", ""
+        g = product_group(rep)
+        return None, {}, "none", (NON_FX_FUTURE_NOTE if g in KNOWN_FUTURE_GROUPS or not g
+                                  else f"{NON_FX_FUTURE_NOTE}; " + NEW_FUTURE_GROUP_NOTE.format(group=g))
     delta = _amounts(row.get("fx_delta"), policy)
     core = ex.get("core") or {}
     no_pv = False
     product, group = str(core.get("product") or "").lower(), product_group(rep)
     ndf = "fx_ndf" in product or group == "fx_ndf" or any(_truthy(t.get("ndf")) for t in terms)
-    own = "options" if "option" in product or "option" in group else \
-        "futures" if "fx_future" in product or group == "fx_future" else None
+    own = "futures" if future_class(row) == "fx" else \
+        "options" if "option" in product or "option" in group else None
     kind = str(rep.get("asset_class") or "").lower()
     fx_like = row.get("instr_type") == "FX" or kind == "fx"
     vd = _day(rep.get("value_date"))
@@ -786,10 +839,19 @@ DERIVATIVE_COMPONENTS = tuple(dict.fromkeys(KIND_COMPONENT.values()))
 line is any FX-exposed row (an equity, a fund, a deposit), which stays in the report's base."""
 OTHER_DERIVATIVE_GROUPS = ("cds", "cap", "floor", "swaption")
 """Words of the report's product group (``x_product_group``) that make a row an ``other`` derivative."""
-PARTS = ("base", "derivatives", "bonds", "trades", "outside")
-PART_TEXT = {"base": "база: отчёт ОВП без деривативов", "derivatives": "PV деривативов",
-             "bonds": "переоценка облигаций", "trades": "сделки после базы", "outside": "вне отчёта"}
+PARTS = ("base", "balances", "derivatives", "bonds", "trades", "outside")
+PART_TEXT = {"base": "база: отчёт ОВП без деривативов", "balances": "остатки по счетам: книги нет в отчёте ОВП",
+             "derivatives": "PV деривативов", "bonds": "переоценка облигаций", "trades": "сделки после базы",
+             "outside": "вне отчёта"}
 """The terms of a ``report_base_plus_day`` figure (``published_day``) -> their names on the pages."""
+DERIVATIVE_SHARE_MAX = 0.95
+"""DEC18 (TDM#588, «если один вклад деривативов больше заданной доли ОВП книги, книга получает пометку»): a published
+line is marked (``derivative_share``) when one derivative is at least this share of the line's gross (the sum of the
+sizes of all its contributions) ... Monitor defaults set in the code (no setting); changed at the owner's request. The aim
+is a wrong unit (a notional read as billions), not a hedged book, whose OCP is the small rest of large opposite legs."""
+DERIVATIVE_GROSS_MIN_USD = 10_000_000.0
+"""... and the line's gross is at least this many US dollars (at the run's rates; a currency without a rate is not
+checked). Monitor defaults set in the code (no setting); changed at the owner's request."""
 CONTRIBUTIONS_MAX = 10
 """Per published line and term at most this many contributions (the largest by size), the rest summed."""
 BASE_SPLIT, BASE_WHOLE, BASE_ABSENT = "without_derivatives", "with_derivatives", "book_absent"
@@ -810,8 +872,9 @@ def _value_dates(row: Mapping[str, Any], terms: Sequence[Mapping[str, Any]]) -> 
 def derivative_kind(row: Mapping[str, Any], terms: Sequence[Mapping[str, Any]],
                     policy: OcpPolicy = PROVISIONAL_POLICY, component: str | None = None) -> str | None:
     """The derivative kind (``DERIVATIVE_KINDS``) of a run's row, or None when it is not a derivative, from core's
-    product (``extra.core.product``), the report's product group (``fx_swap``, ``irs``, ``ois``, ``ccs``, ``ndf``, a
-    future, an option: read before a row without terms falls back to a forward) and the trade terms (``product_kind``,
+    product (``extra.core.product``), the report's product group (``fx_swap``, ``irs``, ``ois``, ``ccs``, ``ndf``, an FX
+    future, an option: read before a row without terms falls back to a forward; DEC18: ``fx_future`` only for core's
+    ``fx_future`` or the group exactly ``fx_future``, any other future is None, ``future_class``) and the trade terms (``product_kind``,
     ``ndf``): ``ndf``, ``fx_option``, ``fx_future``, ``fx_swap``, ``swap`` (``irs``, ``ois``, ``ccs``,
     ``cirs``), ``fx_forward`` (an outright forward, a cross, an FX row without terms whose ``classify`` ``component``
     is ``fx_legs``: a value date after the settlement window, at its notional) unless it
@@ -823,12 +886,15 @@ def derivative_kind(row: Mapping[str, Any], terms: Sequence[Mapping[str, Any]],
     product, group = str(core.get("product") or "").lower(), product_group(ex.get("reported") or {})
     words = set(re.split(r"[^a-z0-9]+", group)) - {""}
     kinds = {str(t.get("product_kind") or "").lower() for t in terms}
+    fut = future_class(row)
+    if fut == "other":  # DEC18 (TDM#588): a future on bonds, rates, an index, ... is not a currency derivative
+        return None
+    if fut == "fx":
+        return "fx_future"
     if "fx_ndf" in product or "ndf" in words or any(_truthy(t.get("ndf")) for t in terms):
         return "ndf"
     if "option" in product or "option" in group:
         return "fx_option"
-    if "fx_future" in product or "future" in group:
-        return "fx_future"
     if "fx_swap" in product or "fx_swap" in kinds or {"fx", "swap"} <= words:
         return "fx_swap"
     if any(p in product for p in ("irs", "ois", "ccs", "cirs")) or kinds & {"irs", "ois", "ccs"} \
@@ -970,6 +1036,13 @@ class BaseDay:
     base_positions: set[str] | None = None
     """Position ids of B's run (None: no run of B): a derivative in it is not new since B, even when a trade after B
     landed in it (an FX position keyed by book, currency and value date, a core row of several trades)."""
+    cash_rows: list[dict[str, Any]] | None = None
+    """The ``cash_balances`` in force on B (a stock: per unit its latest valid date <= B), for a book the report on B
+    lacks (DEC18: its cash on B + the trades after B); None: not read."""
+    cash: list[OcpLine] | None = None
+    """``cash_rows`` as OCP lines (``cash_lines``; ``compute_ocp`` makes them)."""
+    cash_dates: dict[str, date] = field(default_factory=dict)
+    """Book -> the newest valid date of its ``cash_rows``."""
 
 
 @dataclass
@@ -1053,6 +1126,19 @@ def trade_flows(trades: Iterable[Mapping[str, Any]], books: Mapping[str, Mapping
             if "bonds" in policy.report_components and not in_positions:
                 res.flows.append(mk(amount=value, leg="security",
                                     note="бумага по цене сделки: позиций после сделки ещё нет"))
+        elif kind == "fx" and (fut := _trade_future(t)) is not None:
+            # DEC18 (TDM#588): a future on bonds, rates, an index, ... has no OCP; an FX future its nominal in the base
+            # currency, as the positions give it (component ``futures``: from positions when the report lacks it)
+            if fut == "other" or "futures" not in policy.report_components:
+                continue
+            base, nominal = _future_nominal(t, ccy, amt)
+            if base is None or nominal is None or base == policy.reporting_ccy:
+                res.not_valued.append(f"{tid} (fx_future)")
+                continue
+            res.flows.append(TradeFlow(tid, book, entity, base, sign * abs(nominal), "fx",
+                                       td.isoformat() if td else None,
+                                       "валютный фьючерс: номинал в базовой валюте",
+                                       derivatives.get(pid) if in_positions else None, pid))
         elif kind == "fx":
             if not ccy or ccy == policy.reporting_ccy or amt is None:
                 res.not_valued.append(f"{tid} ({kind})")
@@ -1067,6 +1153,33 @@ def trade_flows(trades: Iterable[Mapping[str, Any]], books: Mapping[str, Mapping
         else:
             res.not_valued.append(f"{tid} ({kind or '—'})")
     return res
+
+
+def _trade_x(t: Mapping[str, Any], key: str) -> Any:
+    """A ``trades`` row's raw ``x_*`` field, flat or under ``x``."""
+    if t.get(key) is not None:
+        return t[key]
+    return t["x"].get(key) if isinstance(t.get("x"), Mapping) else None
+
+
+def _trade_future(t: Mapping[str, Any]) -> str | None:
+    """``group_future_class`` of a ``trades`` row (its ``x_product_group``); an option on a currency future is a trade
+    as an FX option (None: the FX rule)."""
+    c = group_future_class(str(_trade_x(t, "x_product_group") or ""))
+    return None if c == "fx_option" else c
+
+
+def _future_nominal(t: Mapping[str, Any], ccy: str, amt: float | None) -> tuple[str | None, float | None]:
+    """(base currency, nominal in it) of an FX future trade: the trade's own base currency (``x_prim_cur`` /
+    ``x_base_ccy``) when given, else its ``ccy``; an amount in another currency than the base is turned into the base
+    at the trade's ``fx_rate`` (quote per base), else unknown (None)."""
+    base = str(_trade_x(t, "x_prim_cur") or _trade_x(t, "x_base_ccy") or ccy or "").upper() or None
+    if amt is None or base is None:
+        return base, None
+    if base == ccy:
+        return base, amt
+    rate = _f(t.get("fx_rate"))
+    return (base, amt / rate) if rate else (base, None)
 
 
 def _unit_entity(u: Mapping[str, Any], entity_of: Mapping[str, str]) -> str:
@@ -1117,7 +1230,8 @@ def published_day(comparisons: Sequence[Mapping[str, Any]], outside_report: Sequ
                   lines: Sequence[OcpLine], on: date, policy: OcpPolicy = PROVISIONAL_POLICY, *,
                   books: Mapping[str, Mapping[str, Any]] | None = None, units: Sequence[Mapping[str, Any]] = (),
                   days: Mapping[date, BaseDay] | None = None,
-                  is_business_day: Callable[[date], bool] | None = None, derivs: Sequence[DerivLine] = ()
+                  is_business_day: Callable[[date], bool] | None = None, derivs: Sequence[DerivLine] = (),
+                  rates: Mapping[str, float] | None = None, cash_dates: Mapping[str, date] | None = None
                   ) -> tuple[list[dict[str, Any]], list[str], list[dict[str, Any]], set[str]]:
     """The published OCP under ``report_base_plus_day`` (owner, 03.11.2026, TDM#531): (lines, notes, gaps, the books a
     report covers). Per (entity, book or None for an entity-level unit, currency), B the unit's ``valid_date``:
@@ -1146,7 +1260,9 @@ def published_day(comparisons: Sequence[Mapping[str, Any]], outside_report: Sequ
     more than ``report_max_age_bd`` business days old is not a base: its books are derived (``derived_stale_report``).
     Overlapping units publish each book once, as ``published``. Each line has ``parts`` (term -> amount, their sum is
     ``amount``) and ``contributions`` (term -> the largest items, position, trade or report unit with its amount, and
-    the rest), ``base_date``, ``set_id`` and ``base_kind``."""
+    the rest), ``base_date``, ``set_id`` and ``base_kind``. ``rates``: RUB per unit of the run (the size check of
+    ``derivative_share``, DEC18); ``cash_dates``: book -> the valid date of its cash balances of the run (a book absent
+    from the report on the run of B itself)."""
     derived = derive(lines)
     by_bc: dict[tuple[str, str], list[OcpLine]] = defaultdict(list)
     for x in lines:
@@ -1235,6 +1351,8 @@ def published_day(comparisons: Sequence[Mapping[str, Any]], outside_report: Sequ
         if day is not None:
             ccys |= {m.ccy for m in day.bonds if m.book_id in won} | {t.ccy for t in day.trades or ()
                                                                       if t.book_id in won}
+            if sc["absent"]:
+                ccys |= {x.ccy for x in day.cash or () if x.book_id in won}
         if lost:
             notes.append(f"часть отчёта ОВП по юрлицу {sc['entity']} считается итогом юрлица: ОВП книг "
                          + ", ".join(sorted(lost)) + " взята из их части отчёта и из итога юрлица вычтена")
@@ -1332,6 +1450,24 @@ def published_day(comparisons: Sequence[Mapping[str, Any]], outside_report: Sequ
                     fallback.append(k)
                     issues["derivatives_nominal_fallback"].append(f"{where} {ccy}: {KIND_TEXT[k]}")
             in_pv |= {x.position_id for x in mine if x.component not in policy.report_components}
+            if sc["absent"] and "cash" in policy.report_components:
+                # DEC18 (TDM#588): a book the report on B lacks has base 0; its cash balances (the futures' result in
+                # the currency, the cash of FX deals that move the OCP) come from the cash report, by currency, as of
+                # B, so that the trades after B are added once: those of B's own cash (``BaseDay.cash``), else, on the
+                # run of B itself, the run's
+                at_b = day is not None and day.cash is not None
+                for b in sorted(won):
+                    src = [x for x in day.cash if x.book_id == b and x.ccy == ccy] if at_b else \
+                        [x for x in by_bc.get((b, ccy), ()) if x.component == "cash" and x.basis == "balance"]
+                    got = [{"kind": "balance", "book_id": b, "key": x.key, "amount": x.amount,
+                            **({"note": x.note} if x.note else {})} for x in src if x.amount]
+                    items["balances"] += got
+                    when = (day.cash_dates if at_b else cash_dates or {}).get(b)
+                    if got and b0 is not None and b0 < on and not at_b:
+                        issues["balances_not_at_base"].append(f"{where} {ccy}: остатки на дату прогона")
+                    elif got and b0 is not None and when is not None and when < b0:
+                        issues["balances_older_than_base"].append(
+                            f"{where} {ccy}: остатки от {when:%d.%m.%Y}, база {b0:%d.%m.%Y}")
             if day is not None and "bonds" in policy.report_components:
                 items["bonds"] += [{"kind": "position", "position_id": m.position_id, "book_id": m.book_id,
                                     "mv_base": m.mv_base, "mv_now": m.mv_now, "paid": m.paid, "amount": m.amount,
@@ -1351,16 +1487,34 @@ def published_day(comparisons: Sequence[Mapping[str, Any]], outside_report: Sequ
                                                  "position_id": x.position_id or x.key, "book_id": b,
                                                  "component": x.component, "amount": x.amount})
                         added[x.component] += x.amount
-            parts = {p: math.fsum(i["amount"] for i in items[p]) for p in PARTS}
+            # ``balances`` only for a book absent from the report that has them (the other lines keep their five terms)
+            parts = {p: math.fsum(i["amount"] for i in items[p]) for p in PARTS if p != "balances" or items[p]}
+            total = math.fsum(parts.values())
+            # DEC18 (TDM#588): one derivative that is nearly the whole gross of a large line is marked
+            gross = math.fsum(abs(i["amount"]) for p in PARTS for i in items[p])
+            usd = gross * rates[ccy] / rates["USD"] if rates and rates.get(ccy) and rates.get("USD") else None
+            deriv_ids = {d.position_id for d in mine}
+            big = [{"position_id": i.get("position_id"), "derivative": i.get("derivative") or i.get("component"),
+                    "amount": i["amount"], "share": round(abs(i["amount"]) / gross, 4)}
+                   for i in items["derivatives"] + [x for x in items["outside"]  # a derivative's whole PV outside
+                                                    if x.get("position_id") in deriv_ids]
+                   if i.get("kind") in ("position", "report_nominal") and usd is not None
+                   and usd >= DERIVATIVE_GROSS_MIN_USD and abs(i["amount"]) >= DERIVATIVE_SHARE_MAX * gross] \
+                if gross else []
+            for x in big:
+                issues["derivative_share"].append(f"{where} {ccy}: {x['position_id'] or KIND_TEXT.get(x['derivative'])}"
+                                                  f" — {x['share']:.0%} всех слагаемых строки")
             has_report = bool(c) or bool(items["base"])
-            line(sc, won, ccy, math.fsum(parts.values()), REPORT,
+            line(sc, won, ccy, total, REPORT,
                  components=[k for k in COMPONENTS if added.get(k)], outside={k: v for k, v in added.items() if v},
                  reported=parts["base"] if has_report else 0.0 if sc["absent"] else None,
                  base_date=_iso(sc["valid_date"]),
                  set_id=sc["set_id"], base_kind=BASE_ABSENT if sc["absent"] else BASE_SPLIT if split else BASE_WHOLE,
                  parts=parts, contributions={p: _bounded(v) for p, v in items.items() if v}, fallback=fallback,
                  split_kinds=sorted(sc["kinds"]) if not sc["absent"] else [], partial_pv=partial, no_pv=no_pv,
-                 base_older=b0 is not None and business_days_between(b0, on, is_business_day) > 1)
+                 base_older=b0 is not None and business_days_between(b0, on, is_business_day) > 1,
+                 **({"derivative_share": sorted(big, key=lambda x: -abs(x["amount"]))[:CONTRIBUTIONS_MAX]}
+                    if big else {}))
     covered = {b for sc in scopes.values() for b in sc["books"]}
     for x in outside_report:
         if x["book_id"] not in covered and x["ccy"] != policy.reporting_ccy and x["derived"]:
@@ -1391,6 +1545,11 @@ DAY_GAP_TEXT = {
     "no_base_run": "прогона за дату базы нет: переоценка облигаций с даты базы не посчитана",
     "trades_not_valued": "сделки после базы, которые правило ОВП не оценивает (не облигация и не валюта)",
     "trades_unknown_book": "сделки после базы в книгах, которых нет в справочнике книг: в ОВП не вошли",
+    "derivative_share": "один дериватив — почти вся сумма слагаемых строки ОВП (DEC18): проверьте его номинал и вид",
+    "balances_older_than_base": "книги нет в отчёте ОВП: последние её остатки по счетам старше даты базы — сделки "
+                                "между ними и базой в ОВП не вошли",
+    "balances_not_at_base": "книги нет в отчёте ОВП: остатков по счетам на дату базы прогон не прочитал, взяты остатки "
+                            "на дату прогона — оплаченные после базы сделки могут быть посчитаны дважды",
 }
 
 
@@ -1538,13 +1697,15 @@ def compute_ocp(rows: Sequence[Mapping[str, Any]], books: Mapping[str, Mapping[s
                 report_units: Sequence[Mapping[str, Any]] = (), policy: OcpPolicy = PROVISIONAL_POLICY,
                 days: Mapping[date, BaseDay] | None = None,
                 is_business_day: Callable[[date], bool] | None = None,
-                valid_dates: Mapping[str, Any] | None = None) -> OcpResult:
+                valid_dates: Mapping[str, Any] | None = None, rates: Mapping[str, float] | None = None
+                ) -> OcpResult:
     """The whole OCP of a run: lines, per position, the reconciliation with the report, the transfers, the published
     OCP and its gaps. ``days``: per base date before ``on`` what changed since it (``report_base_plus_day``,
     ``BaseDay``); ``is_business_day``: the run's calendar for the age of a base (weekdays without it); ``valid_dates``:
     book -> the valid date of its positions set in the run (a trade on or before it is in the positions)."""
     tb = terms_by_position(rows, terms)
     lines, per_pos, notes = position_lines(rows, books, tb, on, policy)
+    cash = list(cash)
     cl, cash_notes = cash_lines(cash, policy)
     net = {r["position_id"] for r in rows if _net_of_liability(r)}
     liabilities = list(liabilities)
@@ -1564,9 +1725,13 @@ def compute_ocp(rows: Sequence[Mapping[str, Any]], books: Mapping[str, Mapping[s
                     _with_trades(d, trade_flows(d.trade_rows, books, valid_dates or {}, kind_of, policy, after=b,
                                                 held=held))
                     for b, d in days.items()}
+            days = {b: d if d.cash_rows is None or d.cash is not None else
+                    replace(d, cash=cash_lines(d.cash_rows, policy)[0], cash_dates=cash_dates(d.cash_rows))
+                    for b, d in days.items()}
         pub, pub_notes, day_gaps, covered = published_day(comps, outside, lines, on, policy, books=books,
                                                            units=report_units, days=days,
-                                                           is_business_day=is_business_day, derivs=derivs)
+                                                           is_business_day=is_business_day, derivs=derivs,
+                                                           rates=rates, cash_dates=cash_dates(cash))
         old = {u.get("set_id") for u in carried_units(report_units, {str(b): str(m.get("entity") or "—")
                                                                      for b, m in books.items()}, on, policy,
                                                        is_business_day)[1]}
@@ -1582,6 +1747,18 @@ def compute_ocp(rows: Sequence[Mapping[str, Any]], books: Mapping[str, Mapping[s
                      notes + cash_notes + pub_notes, pub, gap, check,
                      [{"book_id": b, "ccy": c, "kind": k, "amount": v}
                       for (b, c, k), v in sorted(derivatives_pv(derivs, on).items())])
+
+
+def cash_dates(rows: Iterable[Mapping[str, Any]]) -> dict[str, date]:
+    """Book -> the newest ``_valid_date`` of its ``cash_balances`` rows (``store.dataset_rows``); a row without one
+    says nothing."""
+    out: dict[str, date] = {}
+    for r in rows:
+        d = _day(r.get("_valid_date"))
+        if d is not None and r.get("book_id") is not None:
+            b = str(r["book_id"])
+            out[b] = max(out.get(b, d), d)
+    return out
 
 
 def off_report_held(rows: Iterable[Mapping[str, Any]]) -> dict[tuple[str, str], str]:

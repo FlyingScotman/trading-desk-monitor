@@ -796,7 +796,7 @@ details.at-last .at-open::before{content:"показать"} details.at-last[ope
             <label for="backfill">Считать прошлые даты</label>
             <div><label class="tgl"><input type="checkbox" id="backfill" data-key="backfill"><span class="tgl-s"></span><span id="backfill-lbl">включено</span></label>
               <p class="hint">История риска и PnL за прошлые даты — для графиков и периодов.</p>
-              <details class="more"><summary>Как это работает</summary><p>Сервер в фоне считает прошлые даты: по каждой рабочей дате с позициями (отчёт дня, а без него — последний предыдущий отчёт книги) — расчёт на окончательном закрытии. Сначала один раз читает старые отчёты из папок, потом считает даты от самой ранней, в конце каждого цикла и не дольше заданного времени. Уже посчитанные даты с теми же входными данными не пересчитываются. То же сразу целиком: <span class="mono">desk.bat backfill</span>.</p></details></div>
+              <details class="more"><summary>Как это работает</summary><p>Сервер в фоне считает прошлые даты: по каждой рабочей дате с позициями (отчёт дня, а без него — последний предыдущий отчёт книги) — расчёт на окончательном закрытии. Сначала один раз читает старые отчёты из папок, потом считает даты от самой ранней, в конце каждого цикла и не дольше заданного времени. Уже посчитанные даты с теми же входными данными не пересчитываются. Запустить цикл сразу — кнопка «Обновить» в шапке монитора.</p></details></div>
           </div>
           <details class="adv" id="adv-bf" data-fold><summary>Дополнительно <span class="mut3">— с какой даты и сколько времени за цикл</span></summary>
           <div class="form">
@@ -1137,7 +1137,7 @@ details.at-last .at-open::before{content:"показать"} details.at-last[ope
       <div class="card" id="bf">
         <div class="hd"><h2>История прогонов</h2><span class="mut3" id="bf-when"></span><span class="sp"></span><button class="ibtn" id="bf-run" type="button">Обновить</button></div>
         <div class="bd">
-          <p class="hint" style="margin:0 0 8px">Расчёты прошлых дат для истории риска и PnL. Включается в «Автообновление» или командой <span class="mono">desk.bat backfill</span>. <span id="bf-msg" class="muted"></span></p>
+          <p class="hint" style="margin:0 0 8px">Расчёты прошлых дат для истории риска и PnL. Включается в «Автообновлении». <span id="bf-msg" class="muted"></span></p>
           <table class="t"><tbody id="bf-rows"></tbody></table>
         </div>
       </div>
@@ -2367,7 +2367,10 @@ function mountTabs(a, reload){
         ['Включено', s.enabled ? 'да' : 'нет (настройка в «Автообновлении»)'],
         ['Даты', dd(s.from) + ' — ' + dd(s.to) + ': ' + s.dates + ' рабочих дат' + (s.hub ? '' : ' (по загруженным срезам)')],
         ['Посчитано', s.done + ' из ' + withPos + ' дат с позициями'],
-        ['Осталось', s.todo ? s.todo + (s.next && s.next.length ? ' (ближайшие ' + s.next.map(dd).join(', ') + ')' : '') : '—'],
+        // TDM#587: «осталось по причинам» и дата, которая считается сейчас
+        ['Осталось', s.todo ? s.todo + (s.todo_by_reason && s.todo_by_reason.length ? ': ' + s.todo_by_reason.map(x => x.text + ' — ' + x.n).join(', ') : '')
+          + (s.current && s.current.date ? '\nсейчас считается ' + dd(s.current.date) + ' (посчитано ' + s.current.done + ' из ' + s.current.total + ')' : '')
+          + (s.next && s.next.length ? '\nближайшие ' + s.next.map(dd).join(', ') : '') : '—'],
         ['Без позиций', s.no_positions + (s.first_positions ? ' (позиции в базе с ' + dd(s.first_positions) + ')' : '')],
         ['Не сходятся', conv.length ? conv.length + ' — повтор после изменения данных или программы:\n' + conv.join('\n')
           : s.failed ? s.failed + ': ' + (s.failed_dates || []).map(dd).join(', ') + ' — повтор после изменения данных' : '—'],
@@ -2375,6 +2378,16 @@ function mountTabs(a, reload){
         ['Самый ранний расчёт', dd(s.oldest_run)],
         ['Старые отчёты прочитаны с', dd(s.inbox_scanned_from)],
       ];
+      // TDM#590: хранимая история фиксингов (RUONIA, ключевая ставка, RUSFAR, валютные индексы) — ею прогоны дополняют
+      // фиксинги среза хаба до начала его окна
+      const fh = s.fixings_history, FIX = { RUONIA: 'RUONIA', KEY_RATE: 'ключевая ставка', RUSFAR: 'RUSFAR', RUSFARCNY: 'RUSFAR CNY', SOFR: 'SOFR', ESTR: '€STR' };
+      if (fh && !fh.error) rows.push(['История фиксингов', fh.rows
+        ? fh.indices + ' индексов, с ' + dd(fh.from) + ' по ' + dd(fh.to) + (fh.codes && fh.codes.length ? ':\n' + fh.codes.map(c => (FIX[c.code] || c.code) + ' — с ' + dd(c.from) + ' по ' + dd(c.to)).join('\n') : '')
+        : (fh.loading ? 'загружается с маркет-дата сервера' : 'не загружается: нужны маркет-дата сервер и «История котировок» не 0 (Настройки → Автообновление)'),
+        (fh.api && fh.api.available === false ? 'История хаба недоступна: ' + (fh.api.reason || '') + '. ' : '')
+        + (fh.jobs && (fh.jobs.checked_at || fh.jobs.fetched_at) ? 'Проверено ' + at(fh.jobs.checked_at || fh.jobs.fetched_at) + '. ' : '')
+        + (fh.jobs && fh.jobs.pending ? 'Ещё загружается: ' + fh.jobs.pending + ' частей. ' : '') + (fh.jobs && fh.jobs.errors ? 'С ошибкой: ' + fh.jobs.errors + ' частей. ' : '')
+        + 'Прогоны берут фиксинги из среза хаба и дополняют их отсюда до начала окна среза.']);
       if (st) rows.splice(4, 0, ['Догрузка стоит', 'с ' + at(st.since) + ': ' + T.cause(st) + T.stall(s).retry,
         st.error ? 'Ошибка' + (st.date ? ' на ' + dd(st.date) : '') + ': ' + st.error : '']);
       try {   // сделки прошлых дат (TDM#569): сколько дат уже с PnL сделок; нет данных или нет доступа — строки нет
@@ -2382,7 +2395,8 @@ function mountTabs(a, reload){
         const hj = hr.ok ? T.history(await hr.json()) : null;
         if (hj && hj.runs) rows.splice(2, 0, ['Сделки прошлых дат', hj.runs, hj.applied !== hj.runs ? hj.applied : '']);
       } catch (_) { /* строка необязательная */ }
-      if (s.step) rows.push(['Последний цикл', s.step.status + ': ' + s.step.detail]);
+      // итог последнего шага догрузки — и между циклами (TDM#587: сервер хранит его до следующего)
+      if (s.step) rows.push(['Последний шаг догрузки', (s.step.at ? at(s.step.at) + ' · ' : '') + s.step.status + ': ' + s.step.detail]);
       const tb = $('bf-rows'); tb.textContent = '';
       rows.forEach(([k, v, sub]) => { const tr = document.createElement('tr'); tr.innerHTML = '<td class="k"></td><td class="v" style="white-space:pre-wrap"></td>'; tr.children[0].textContent = k; tr.children[1].textContent = v;
         if (sub) { const d = document.createElement('div'); d.className = 'hint'; d.textContent = sub; tr.children[1].append(d); }

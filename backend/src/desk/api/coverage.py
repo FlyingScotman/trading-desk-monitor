@@ -16,6 +16,8 @@ from __future__ import annotations
 
 import math
 import os
+import re
+from datetime import date, timedelta
 from decimal import Decimal
 from typing import Any
 
@@ -23,7 +25,15 @@ from . import concepts
 
 AMOUNTS = ("amount_ccy", "face_amount_ccy", "face_outstanding_ccy")
 SWAPS = ("IRS", "CCS", "CDS", "TRS")
-REPORT_MV = "MV и DV01 отчёта — опция report_risk адаптера отчётов (options.json)"
+REPORT_MV = ("стоимость и риск из отчёта о позициях: Настройки → Адаптер → Источники, «Оценка и риск из отчёта о "
+             "позициях»")
+FIX = {"terms": ("Условия сделок", "../settings.html#adapter/acq"),
+       "indexes": ("Индексы ставок", "../settings.html#indexes"),
+       "report_risk": ("Оценка и риск из отчёта о позициях", "../settings.html#adapter/sources"),
+       "hub": ("Маркет-дата сервер", "../settings.html#hub"),
+       "history": ("История прогонов", "../settings.html#bf"),
+       "diag": ("Диагностика", "../settings.html#diag")}
+"""The settings screen that fixes a cause (``CAUSE_FIX``): (its name, the link from a concept page)."""
 
 CAUSES: dict[str, tuple[str, str]] = {
     "unmapped_instrument": ("бумага не найдена в статике хаба (ISIN / рег. номер / тикер неизвестны)",
@@ -72,8 +82,123 @@ CAUSES: dict[str, tuple[str, str]] = {
                    "MV в отчёте нет"), "фиксинги приходят со срезом хаба: обновите данные за дату — или " + REPORT_MV),
     "no_key_rate_curve": ("нет кривой ключевой ставки в срезе хаба за дату (котировки IRS KEYRATE); MV в отчёте нет",
                           "кривая строится из среза хаба: обновите данные за дату — или " + REPORT_MV),
+    # TDM#589: every reason valuation.derivatives and valuation.positions give, in words (test_reason_texts_589)
+    "terms_incomplete": (("условия сделки неполные: не хватает поля, без которого сделку не оценить (дата, номинал, "
+                          "ставка, валюта ноги); MV в отчёте нет"),
+                         "проверьте условия сделки в источнике (Настройки → Адаптер → Условия сделок) — или " + REPORT_MV),
+    "terms_invalid": (("условия сделки противоречивы или не читаются (дата окончания раньше начала, номинал не число, "
+                       "сторона не задана); MV в отчёте нет"),
+                      "проверьте условия сделки в источнике (Настройки → Адаптер → Условия сделок) — или " + REPORT_MV),
+    "terms_mixed": (("под одной строкой отчёта позиций условия сделок разных видов (валютная и процентная): ядро не "
+                     "оценивает такую строку; MV в отчёте нет"),
+                    "нужна одна строка отчёта позиций на сделку — или " + REPORT_MV),
+    "no_rub_curve": ("нет рублёвой кривой RUONIA OIS в срезе хаба за дату: дисконтировать нечем; MV в отчёте нет",
+                     "кривая строится из среза хаба: обновите данные за дату — или " + REPORT_MV),
+    "no_foreign_curve": ("нет кривой валюты сделки в срезе хаба за дату; MV в отчёте нет",
+                         "кривые приходят со срезом хаба: обновите данные за дату — или " + REPORT_MV),
+    "no_fx_spot": ("нет спот-курса валюты сделки в срезе хаба за дату; MV в отчёте нет",
+                   "курсы приходят со срезом хаба: обновите данные за дату — или " + REPORT_MV),
+    "no_fx_calendar": (("нет календаря рабочих дней валюты сделки в статике хаба: даты расчётов не посчитать; MV в "
+                        "отчёте нет"), "календари приходят со статикой хаба — или " + REPORT_MV),
+    "day_count_unsupported": ("база начисления процентов в условиях сделки не поддерживается ядром; MV в отчёте нет",
+                              "проверьте базу (day_count) в условиях сделки — или " + REPORT_MV),
+    "swap_frequency_unsupported": ("частота выплат ноги свопа не поддерживается ядром; MV в отчёте нет",
+                                   "проверьте частоту выплат в условиях сделки — или " + REPORT_MV),
+    "swap_dates_mismatch": ("у ног свопа разные даты начала или окончания: ядро так не оценивает; MV в отчёте нет",
+                            "проверьте даты ног в условиях сделки — или " + REPORT_MV),
+    "swap_notional_mismatch": ("у ног свопа разные номиналы: ядро так не оценивает; MV в отчёте нет",
+                               "проверьте номиналы ног в условиях сделки — или " + REPORT_MV),
+    "swap_ccy_unsupported": ("процентный своп не в рублях: ядро в мониторе такие не оценивает; MV в отчёте нет",
+                             "до оценки ядром — " + REPORT_MV),
+    "repo_ccy_unsupported": ("РЕПО не в рублях: ядро в мониторе такие не оценивает; MV в отчёте нет",
+                             "до оценки ядром — " + REPORT_MV),
+    "repo_index_unsupported": (("индекс плавающей ставки РЕПО не поддерживается (оцениваются фикс, RUONIA и ключевая "
+                                "ставка); MV в отчёте нет"), "до оценки ядром — " + REPORT_MV),
+    "ndf_unsupported": ("NDF с расчётами не в рублях или кросс-NDF: ядро в мониторе такие не оценивает; MV в отчёте нет",
+                        "до оценки ядром — " + REPORT_MV),
+    "future_terms_incomplete": (("валютный фьючерс: у контракта в срезе хаба нет базовой валюты, расчётной цены, лота "
+                                 "или даты исполнения; MV в отчёте нет"),
+                                "данные фьючерсов приходят со срезом хаба: обновите данные за дату — или " + REPORT_MV),
+    "settled": ("сделка исполнена до даты прогона: оценивать нечего (погашенная сделка в отчёте позиций)",
+                "не пропуск: сделка закрыта; уйдёт из отчёта позиций"),
+    "not_valued": ("ядро не вернуло оценку строки и не назвало причину", "журнал прогона: Настройки → Диагностика"),
+    "pv_not_finite": ("ядро дало нечисловую оценку (бесконечность или «не число»): оценка не показана",
+                      "журнал прогона: Настройки → Диагностика; сообщите в задачу с датой прогона"),
+    "no_trade_terms": ("условий сделки нет: оценка взята из отчёта позиций", "до условий сделки — " + REPORT_MV),
+    # the bond rules of valuation.bonds (before the fallback ladder: a bond with its terms is valued somehow; one of
+    # these is the reason when even the ladder had nothing)
+    "no_quote": ("у бумаги нет котировки за дату и нет цены в отчёте", "котировки приходят со срезом хаба"),
+    "no_price": ("у бумаги нет цены за дату", "котировки приходят со срезом хаба"),
+    "stale_quote": ("котировка бумаги устарела", "котировки приходят со срезом хаба"),
+    "matured": ("бумага погашена до даты прогона", "не пропуск: закрытая позиция"),
+    "not_rub": ("бумага не в рублях: ядро в мониторе её не оценивает", "оценка по рыночной цене (без ядра)"),
+    "structured": ("структурная бумага: ядро её не оценивает", "оценка по рыночной цене (без ядра)"),
+    "face_indexed": ("номинал бумаги индексируется: ядро её не оценивает", "оценка по рыночной цене (без ядра)"),
+    "securitized": ("ипотечная или секьюритизированная бумага: погашения зависят от досрочных выплат",
+                    "оценка по рыночной цене (без ядра)"),
+    "floater_formula_missing": ("у флоатера нет формулы купона в статике хаба", "оценка по рыночной цене (без ядра)"),
+    "floater_formula_incomplete": ("формула купона флоатера неполная (нет спреда)", "оценка по рыночной цене (без ядра)"),
+    "floater_benchmark_unsupported": ("индекс купона флоатера не поддерживается", "оценка по рыночной цене (без ядра)"),
+    "perpetual_no_schedule": ("бессрочная бумага без графика купонов", "оценка по рыночной цене (без ядра)"),
+    "coupon_not_known": ("купон бумаги не известен", "оценка по рыночной цене (без ядра)"),
+    "redemption_incomplete": ("график погашения бумаги неполный", "оценка по рыночной цене (без ядра)"),
+    "redemption_amount_missing": ("в графике погашения нет сумм", "оценка по рыночной цене (без ядра)"),
+    "no_face_value": ("у бумаги нет номинала в статике хаба", "оценка по рыночной цене (без ядра)"),
+    "face_mismatch": ("номинал бумаги в статике и в котировке расходятся", "оценка по рыночной цене (без ядра)"),
+    "calendar_unknown": ("нет календаря торгов бумаги в статике хаба", "календари приходят со статикой хаба"),
 }
 """Reason code -> (why, what to do) of an unvalued row whatever its kind."""
+
+CORE_CAUSES: dict[str, tuple[str, str]] = {
+    "missing_market_data": (("ядру не хватило рыночных данных за дату (кривой, курса или фиксинга индекса за начало "
+                             "периода сделки); MV в отчёте нет"),
+                            ("фиксинги, кривые и курсы приходят со срезом хаба, старые фиксинги — из хранимой истории "
+                             "фиксингов (Настройки → История прогонов); обновите данные за дату — или " + REPORT_MV)),
+    "unsupported_product": ("ядро не поддерживает такой вид сделки; MV в отчёте нет", "до оценки ядром — " + REPORT_MV),
+    "invalid_terms": ("ядро не приняло условия сделки (противоречивы или неполны); MV в отчёте нет",
+                      "проверьте условия сделки в источнике (Настройки → Адаптер → Условия сделок) — или " + REPORT_MV),
+    "calendar_out_of_range": ("даты сделки выходят за календарь рабочих дней хаба; MV в отчёте нет",
+                              "календари приходят со статикой хаба — или " + REPORT_MV),
+    "unknown_curve_spec": ("ядро не знает кривую, на которой нужно оценить сделку; MV в отчёте нет",
+                           "журнал прогона: Настройки → Диагностика — или " + REPORT_MV),
+    "expired_contract": ("контракт истёк до даты прогона", "не пропуск: сделка закрыта"),
+    "settled_leg": ("нога сделки уже исполнена до даты прогона", "не пропуск: исполненная нога"),
+    "undeclared_fixing_gap": (("в истории фиксингов индекса пропуск внутри периода сделки (день без фиксинга); MV в "
+                               "отчёте нет"),
+                              ("фиксинги приходят со срезом хаба и из хранимой истории фиксингов (Настройки → История "
+                               "прогонов) — или " + REPORT_MV)),
+    "missing_basket_price": ("нет цены бумаги из корзины фьючерса", "котировки приходят со срезом хаба"),
+    "missing_assumption": ("ядру не хватило допущения для оценки (например даты исполнения)",
+                           "журнал прогона: Настройки → Диагностика — или " + REPORT_MV),
+    "calculation_failed": ("расчёт ядра упал на этой сделке", "журнал прогона: Настройки → Диагностика"),
+    "time_budget_exceeded": ("ядро не уложилось во время расчёта", "пересчитайте дату"),
+    "accrued_failed": ("ядро не посчитало НКД бумаги", "оценка по рыночной цене (без ядра)"),
+}
+"""A refusal of core (``core_<code>``, ``rub_fixed_income.errors``): (why, what to do)."""
+
+SHORT = {"swap_terms": "ждёт условий", "repo": "ждёт условий", "no_trade_terms": "ждёт условий",
+         "future_ticker": "ждёт настройки", "index_unmapped": "индекс не сопоставлен",
+         "terms_incomplete": "условия неполные", "terms_invalid": "условия с ошибкой", "terms_mixed": "условия смешаны",
+         "terms_ambiguous": "условия на нескольких строках", "settled": "исполнена", "closed": "закрыта",
+         "unmapped_instrument": "бумага не найдена", "not_in_static_snapshot": "бумага не найдена",
+         "no_quantity": "нет количества", "no_fx_rate": "нет курса", "no_fx_spot": "нет курса",
+         "no_fixings": "нет фиксингов", "core_missing_market_data": "нет рыночных данных",
+         "core_undeclared_fixing_gap": "пропуск фиксинга", "no_report_mv": "нет оценки в отчёте",
+         "no_fx_calendar": "нет календаря", "core_calendar_out_of_range": "нет календаря",
+         "repo_open": "нет даты окончания", "key_rate_curve_too_short": "кривая короче сделки"}
+"""Cause key -> the few words the blotter's «Купон» column and the card's «Ставка / курс» show (TDM#589); a key
+not listed: by its words below (``short``)."""
+
+CAUSE_FIX = {"swap_terms": "terms", "repo": "terms", "no_trade_terms": "terms", "terms_incomplete": "terms",
+             "terms_invalid": "terms", "terms_mixed": "terms", "terms_ambiguous": "terms", "repo_open": "terms",
+             "core_invalid_terms": "terms", "index_unmapped": "indexes", "swap_index_unsupported": "indexes",
+             "no_report_mv": "report_risk", "bond_derivative": "report_risk", "future_ticker": "report_risk",
+             "core_missing_market_data": "history", "core_undeclared_fixing_gap": "history", "no_fixings": "hub",
+             "no_fx_rate": "hub", "no_fx_spot": "hub", "no_rub_curve": "hub", "no_key_rate_curve": "hub",
+             "no_foreign_curve": "hub", "no_foreign_projection_curve": "hub", "future_terms_incomplete": "hub",
+             "not_valued": "diag", "pv_not_finite": "diag", "core_calculation_failed": "diag"}
+"""Cause key -> the settings screen that fixes it (``FIX``); a cause not listed whose text names the report's value
+gets ``report_risk``."""
 
 
 def _f(v: Any) -> float | None:
@@ -109,7 +234,86 @@ def cause(code: str, kind: str, product: str | None, futures_by_ticker: bool | N
             return ("repo", ("РЕПО ждёт условий сделки (trade_terms): ядро оценит его по ним (PV, риск ставок); "
                     "MV в отчёте нет"), "до условий сделки — " + REPORT_MV)
         return ("no_report_mv", "оценки нет: MV в отчёте нет", REPORT_MV)
-    return (code or "unknown", f"не оценено ({code or 'причина не записана'})", "журнал прогона: Диагностика")
+    if code.startswith("core_") and code[5:] in CORE_CAUSES:
+        return (code, *CORE_CAUSES[code[5:]])
+    if code.startswith("core_"):
+        return (code, f"ядро отказало оценивать сделку (код {code[5:]}); MV в отчёте нет",
+                "журнал прогона: Настройки → Диагностика — или " + REPORT_MV)
+    return (code or "unknown", f"не оценено ({code or 'причина не записана'})", "журнал прогона: Настройки → Диагностика")
+
+
+FIXING_RE = re.compile(r"no (\w+) fixing on or before (\d{4})-(\d{2})-(\d{2})")
+
+
+HOLE_RE = re.compile(r"outside calendar .*?(RUONIA).*?\+published_from_(\d{4})-(\d{2})-(\d{2})")
+
+
+def _dm(iso: str) -> str:
+    return f"{iso[8:10]}.{iso[5:7]}.{iso[0:4]}"   # with the year: the stored history goes years back
+
+
+def history_hole(lineage: dict[str, Any] | None) -> dict[str, str] | None:
+    """The hole of the stored RUONIA history of a run (``rates.fixings.RUONIA.calendar_from_fixings.hole``,
+    ``curves.rates.published_before``), None without one."""
+    r = ((((lineage or {}).get("rates") or {}).get("fixings") or {}).get("RUONIA") or {})
+    h = (r.get("calendar_from_fixings") or {}).get("hole") if isinstance(r, dict) else None
+    return h if isinstance(h, dict) and h.get("from") and h.get("to") else None
+
+
+def is_history_hole(detail: str | None) -> bool:
+    """Core's refusal of a period over a hole of the stored history (TDM#590: the calendar of the stored RUONIA starts
+    after its last hole)."""
+    return HOLE_RE.search(detail or "") is not None
+
+
+def detail_text(detail: str | None, hole: dict[str, str] | None = None) -> str | None:
+    """The words of a known detail of core's refusal (TDM#590): «нет фиксинга RUONIA на 10.04.2026 или раньше …»,
+    «в хранимой истории RUONIA пропуск с ДД.ММ.ГГГГ по ДД.ММ.ГГГГ: период сделки его пересекает» (``hole``: the run's,
+    ``history_hole``; without it the day before the history resumes); None for any other detail."""
+    if (h := HOLE_RE.search(detail or "")) is not None:
+        if hole:
+            span = f"с {_dm(hole['from'])} по {_dm(hole['to'])}"
+        else:
+            resumed = date(int(h.group(2)), int(h.group(3)), int(h.group(4))) - timedelta(days=1)
+            span = f"по {_dm(resumed.isoformat())}"
+        return f"в хранимой истории {h.group(1)} пропуск {span}: период сделки его пересекает"
+    m = FIXING_RE.search(detail or "")
+    if m is None:
+        return None
+    return (f"нет фиксинга {m.group(1)} на {m.group(4)}.{m.group(3)}.{m.group(2)} или раньше: начало периода сделки "
+            "раньше истории фиксингов прогона")
+
+
+def short(key: str) -> str:
+    """The few words of a cause (``SHORT``), else by its kind of trouble."""
+    if key in SHORT:
+        return SHORT[key]
+    if key.endswith("_unsupported") or key in ("bond_derivative", "core_unsupported_product"):
+        return "вид не поддержан"
+    if "curve" in key:
+        return "нет кривой"
+    if key.startswith("core_"):
+        return "отказ ядра"
+    return "не оценено"
+
+
+def explain(reason: str | None, kind: str, product: str | None, futures_by_ticker: bool | None,
+            hole: dict[str, str] | None = None) -> dict[str, Any]:
+    """The words of an unvalued row's reason (``run_position.reason``: ``code: detail``) for the position card and the
+    blotter (TDM#589): ``key``, ``why``, ``todo``, ``short``, ``detail`` (a known detail in words, else the raw one),
+    ``fix`` ({label, href}: the settings screen that fixes it, or None)."""
+    code, _, detail = (reason or "").partition(":")
+    key, why, todo = cause(code.strip(), kind, product, futures_by_ticker)
+    detail = detail.strip()
+    if is_history_hole(detail):  # not the hub's calendar: a hole of the monitor's stored fixings (TDM#590)
+        why = ("период начисления сделки пересекает пропуск в хранимой истории фиксингов: дни без фиксинга подряд "
+               "дольше праздников, это недостающие данные, а не выходные")
+        todo = ("история фиксингов догружается в фоне: проверьте строку «История фиксингов» в «Истории прогонов»; "
+                "после догрузки дата пересчитается")
+    fk = "history" if is_history_hole(detail) else CAUSE_FIX.get(key) or ("report_risk" if REPORT_MV in todo else None)
+    return {"key": key, "why": why, "todo": todo, "short": "пропуск фиксингов" if is_history_hole(detail) else short(key),
+            "detail": detail_text(detail, hole) or detail or None,
+            "fix": {"label": FIX[fk][0], "href": FIX[fk][1]} if fk else None}
 
 
 def _rates(con, run_id: int) -> dict[str, float]:
@@ -200,9 +404,11 @@ def approx(con, run: dict[str, Any]) -> list[dict[str, Any]]:
         kind = concepts.instr_kind(f)  # the report's x_* are under extra.reported.x (concepts.product_group)
         nr = (f.get("extra") or {}).get("not_exact_reason")
         no_terms = isinstance(nr, str) and nr.startswith("no_trade_terms")
-        key = f"{r['quality']}|{kind}|{int(no_terms)}"
-        text = APPROX_TEXT.get(r["quality"], r["quality"]) + ("; условий сделки (trade_terms) нет: FX-дельта = номинал"
-                                                              if no_terms else "")
+        rc = (f.get("extra") or {}).get("reported_ccy")
+        rc = rc.get("ccy") if isinstance(rc, dict) else None  # TDM#591: the report's value in its currency, CBR rate
+        key = f"{r['quality']}|{kind}|{int(no_terms)}" + (f"|{rc}" if rc else "")
+        text = (f"стоимость из отчёта в {rc}, по курсу ЦБ" if rc else APPROX_TEXT.get(r["quality"], r["quality"])) \
+            + ("; условий сделки (trade_terms) нет: FX-дельта = номинал" if no_terms else "")
         g = groups.setdefault(key, {"key": key, "quality": r["quality"], "kind": kind,
                                     "kindLabel": concepts.KIND_LABEL.get(kind, kind), "text": text, "n": 0,
                                     "mvRub": 0.0, "ids": []})
@@ -227,3 +433,14 @@ def off_report(con, run: dict[str, Any]) -> dict[str, Any] | None:
     if isinstance(u, dict) and u.get("trades"):
         return {"mode": None, "legacy": True, "trades": u["trades"], "books": u.get("books") or {}, "list": []}
     return None
+
+
+def why_of(reason: str | None, x: dict[str, Any] | None, futures_by_ticker: bool | None,
+           hole: dict[str, str] | None = None) -> dict[str, Any]:
+    """``explain`` of an unvalued position from its report row ``x`` (``position_input``: ``ccy``, ``asset_class``,
+    its ``x_*`` under ``x``): the ``extra.why`` of the concept pages' and compat's not-valued position (TDM#589)."""
+    x = x or {}
+    rep = x.get("x") if isinstance(x.get("x"), dict) else {}
+    kind = concepts.instr_kind({"ccy": x.get("ccy"), "asset_class": x.get("asset_class"), "extra": {"reported": rep}})
+    product = rep.get("x_product") if isinstance(rep.get("x_product"), str) else None
+    return explain(reason, kind, product, futures_by_ticker, hole)

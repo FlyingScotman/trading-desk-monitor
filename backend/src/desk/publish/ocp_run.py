@@ -272,7 +272,8 @@ def _compute(con: psycopg.Connection, on: date, market: MarketView | None, conte
     days = base_days(con, on, known_at, report.units, policy, is_bd, content_rows, books, terms or {})
     res = O.compute_ocp(content_rows, books, on, terms=inputs.trade_terms, cash=cash.rows if cash else (),
                         liabilities=liabs, report_rows=report.rows, report_units=report.units, policy=policy,
-                        days=days, is_business_day=is_bd, valid_dates=inputs.valid_dates)
+                        days=days, is_business_day=is_bd, valid_dates=inputs.valid_dates,
+                        rates={"RUB": 1.0, **_rates(reference.get("fx") or [])})
     notes += res.notes
     apart = _apart(report.rows)
     in_trades = {(str(t.get("book_id")), str(t.get("trade_id"))) for d in days.values() for t in d.trade_rows or ()
@@ -497,8 +498,12 @@ def base_days(con: psycopg.Connection, on: date, known_at: Any, units: list[dict
         rid, facts, _ = funding_run._previous_rows(con, b0)
         moves = bond_moves(rows, {f["position_id"]: f for f in facts}, books, terms, b0, on,
                            O.current_trades(trade_rows, b0)) if rid else []
+        # DEC18 (TDM#588): the cash balances in force on B, for a book the report on B lacks (its cash on B + the
+        # trades after B, never the balances of D with the trades they already hold)
+        cash_b = store.dataset_rows(con, "cash_balances", b0, known_at=known_at).rows \
+            if policy.cash_from_balances else None
         out[b0] = O.BaseDay(b0, rid, moves, None, [], _pv_base(con, rid), trade_rows if loaded else None,
-                            base_positions={f["position_id"] for f in facts} if rid else None)
+                            base_positions={f["position_id"] for f in facts} if rid else None, cash_rows=cash_b)
     return out
 
 

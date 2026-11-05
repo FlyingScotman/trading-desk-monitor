@@ -318,7 +318,9 @@ def progress_text(p: dict[str, Any]) -> str:
     if p["step"] == "history":
         return f"История котировок: {done} из {total}" if total is not None else "История котировок: список дат"
     if p["step"] == "backfill":
-        day = f" {detail[8:10]}.{detail[5:7]}.{detail[:4]}" if len(detail) == 10 else (f" {detail}" if detail else "")
+        if len(detail) == 10 and total is not None:  # a date being computed: the cumulative count (TDM#587)
+            return f"История прогонов: посчитано {done} из {total}, сейчас {detail[8:10]}.{detail[5:7]}.{detail[:4]}"
+        day = f" {detail}" if detail else ""
         return f"История прогонов{day}: {done} из {total}" if total is not None else f"История прогонов{day}"
     return f"{p['step']}: {done}" + (f" из {total}" if total is not None else "")
 
@@ -360,6 +362,7 @@ class Autopilot:
         self._static_polled = float("-inf")    # monotonic time the hub's newest static was last asked for (R25)
         self._backfill_rows: tuple[float, str, list[tuple[str, str]]] | None = None  # (listed at, from, hub rows)
         self._contexts: Any = None  # the backfill's prepared dates, kept between its runs (cli.ContextCache)
+        self._last_backfill: dict[str, Any] | None = None  # the last finished backfill step, of any cycle (TDM#587)
         self._stall_now = True  # the backfill runs at once, its stall's wait left out: a start or a manual cycle (#447)
         self._hub_answered = False  # this cycle's sync step read the hub: the backfill's downloads are told by it (#447)
         self._eod_tried: set[str] = set()  # the dates the eod step ran, failed or left as failed before, this cycle
@@ -418,6 +421,12 @@ class Autopilot:
                 st["progress"] = dict(st["progress"])
         st["enabled"] = self.running and (self.force or self._on)
         return st
+
+    def last_backfill(self) -> dict[str, Any] | None:
+        """The last finished backfill step of this process, whichever cycle ran it (TDM#587: the step is the cycle's
+        last, its list cleared at each cycle's start)."""
+        with self._lock:
+            return dict(self._last_backfill) if self._last_backfill else None
 
     # ---- one cycle
 
@@ -483,6 +492,7 @@ class Autopilot:
                     steps.append(self._guard("history", lambda: self._history(settings, con)))
                 if getattr(settings, "backfill", True):
                     steps.append(self._guard("backfill", lambda: self._backfill(settings, con, url, hub, ran)))
+                    self._last_backfill = dict(steps[-1])  # TDM#587: shown between the cycles too
                 try:
                     latest = latest_run(con)
                 except psycopg.Error:

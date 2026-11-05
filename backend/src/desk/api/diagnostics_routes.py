@@ -3,8 +3,9 @@ preview, or as a file to save (``download=1``: ``desk-diagnostics-<UTC>.json``).
 routes: the document has no private data, but it does describe this machine's setup.
 
 ``GET /api/v1/backfill/status`` (R23) is the settings page's «История прогонов» and the header's indicator:
-``desk.backfill.status`` (dates and counts, the store and the cache only, no hub call) and ``hub_problem_dates``, the
-autopilot sync step's ``problem_dates`` (#163).
+``desk.backfill.status`` (dates and counts, the store and the cache only, no hub call; ``todo_by_reason``) and
+``hub_problem_dates``, the autopilot sync step's ``problem_dates`` (#163); ``step`` the backfill step of this cycle, else
+the last finished one (``last_step``), ``current`` the date being computed now with the cumulative count (TDM#587).
 
 ``GET /api/v1/inbox/reconcile`` (R22) is the settings page's «Загрузка позиций»: ``desk inbox reconcile`` as JSON,
 book ids and file names included (the owner's own machine, local only). ``GET /api/v1/inbox/folders`` (TDM#445) is
@@ -114,9 +115,17 @@ def get_backfill_status(request: Request) -> Response:
     with store.connect(request.app.state.store_url or store.resolve_url(settings)) as con:
         doc = backfill.status(con, settings)
     ap = getattr(request.app.state, "autopilot", None)
-    steps = ap.status().get("steps", []) if ap is not None else []
+    st = ap.status() if ap is not None else {}
+    steps = st.get("steps", [])
     if ap is not None:
-        doc["step"] = next((x for x in steps if x["name"] == "backfill"), None)
+        # TDM#587: this cycle's step, else the last finished one (steps are cleared at each cycle's start)
+        last = ap.last_backfill() if hasattr(ap, "last_backfill") else None
+        doc["step"] = next((x for x in steps if x["name"] == "backfill"), None) or last
+        doc["last_step"] = last
+        pr = st.get("progress") or {}
+        # the date being computed now and the cumulative count (``backfill.run``'s progress)
+        doc["current"] = ({"date": pr.get("detail"), "done": pr.get("done"), "total": pr.get("total")}
+                          if pr.get("step") == "backfill" and len(str(pr.get("detail") or "")) == 10 else None)
     # the hub dates the sync step cannot load, waiting for a retry (#146): the header counts them among the dates
     # that do not load (#163, #447)
     doc["hub_problem_dates"] = next((x.get("problem_dates") or [] for x in steps if x["name"] == "sync"), [])

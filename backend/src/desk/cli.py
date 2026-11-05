@@ -68,7 +68,7 @@ import psycopg
 from . import store
 from . import trades as trades_mod
 from .curves import fx as fxcurves
-from .marketdata import cache, history, reference, static_facts
+from .marketdata import cache, fixing_history, history, reference, static_facts
 from .marketdata.adapter import MarketView
 from .marketdata.bundle import SnapshotDir, SnapshotError, previous_close
 from .marketdata.hub import HubClient, HubError, hub_check
@@ -92,12 +92,14 @@ class ContextCache:
         self.size, self._items = size, {}
 
     def prepare(self, sd: SnapshotDir, business_date: str, cut_type: str = "eod_final",
-                market_snapshot_id: str | None = None, *, fx_options: fxcurves.FxOptions | None = None) -> EodContext:
+                market_snapshot_id: str | None = None, *, fx_options: fxcurves.FxOptions | None = None,
+                fixings: fixing_history.FixingStore | None = None) -> EodContext:
         key = (str(sd.root), business_date, cut_type, market_snapshot_id or sd.market_id(business_date, cut_type),
-               fx_options)
+               fx_options, fixings.stamp if fixings is not None else None)  # another stored history: prepared again
         ctx = self._items.pop(key, None)
         if ctx is None:
-            ctx = prepare(sd, business_date, cut_type, market_snapshot_id=market_snapshot_id, fx_options=fx_options)
+            ctx = prepare(sd, business_date, cut_type, market_snapshot_id=market_snapshot_id, fx_options=fx_options,
+                          fixings=fixings)
         self._items[key] = ctx
         while len(self._items) > self.size:
             self._items.pop(next(iter(self._items)))
@@ -207,6 +209,28 @@ def pnl_basis(ctx: EodContext, prev: tuple[str, str] | None) -> dict[str, Any]:
     return out
 
 
+def stored_fixings(url: str, d: date, out: Callable[[str], None] = print) -> fixing_history.FixingStore | None:
+    """The stored fixings history for a run of ``d`` (``marketdata.fixing_history``, TDM#590): back to
+    ``fixing_history.DEPTH_YEARS`` before it; None when the store cannot be read (said, the run goes on without)."""
+    try:
+        with store.connect(url) as con:
+            return fixing_history.for_date(con, d)
+    except psycopg.Error as e:
+        out(f"WARN stored fixings history not read: {type(e).__name__}: {e}")
+        return None
+
+
+def _fixings_of(a: argparse.Namespace, d: date) -> fixing_history.FixingStore | None:
+    """``stored_fixings`` for a command without a run (``instruments export --value``, ``demo-book``): None, said,
+    when the store is not configured or cannot be reached."""
+    try:
+        url = store.resolve_url(a.settings)
+    except Exception as e:  # noqa: BLE001 - no store for a tool of the cache alone
+        print(f"WARN stored fixings history not read: {type(e).__name__}: {e}")
+        return None
+    return stored_fixings(url, d)
+
+
 def eod_run(settings: Settings, d: str, *, snapshots: str | Path | None = None, store_url: str | None = None,
             book: str | None = None, books: list[str] | None = None, run_type: str = "EOD",
             report_dir: str | Path | None = None, no_gamma: bool = False, no_pnl: bool = False,
@@ -239,7 +263,21 @@ def eod_run(settings: Settings, d: str, *, snapshots: str | Path | None = None, 
     prep = contexts.prepare if contexts is not None else prepare
     fx_options = fxcurves.options_from(settings)  # the provisional FX choices (curves.fx.FxOptions)
     run_date = date.fromisoformat(d)
-    ctx = prep(sd, *(on_close or (d, cut_type)), market_snapshot_id=market_snapshot_id, fx_options=fx_options)
+    fixings = stored_fixings(store_url or store.resolve_url(settings), run_date, out)
+    ctx = prep(sd, *(on_close or (d, cut_type)), market_snapshot_id=market_snapshot_id, fx_options=fx_options,
+               fixings=fixings)
+    if fh := (ctx.rates or {}).get("fixings_history"):
+        if fh.get("codes"):
+            out("fixings from the stored history before the cut's window: " + ", ".join(
+                f"{c} {i['from']}..{i['to']} ({i['rows']})" for c, i in sorted(fh["codes"].items())))
+        if hole := ((((ctx.rates or {}).get("fixings") or {}).get("RUONIA") or {}).get("calendar_from_fixings")
+                    or {}).get("hole"):
+            out(f"WARN stored RUONIA history has a hole {hole['from']}..{hole['to']}: only the fixings after it are "
+                "used, a period over it is not valued")
+        for c, e in sorted((fh.get("errors") or {}).items()):
+            out(f"WARN stored fixings of {c} not used: {e}")
+        if fh.get("dropped"):
+            out(f"WARN stored fixings history not used: {fh['dropped']}")
     # issuer names, groups, sectors and ratings: the newest static of the cache, not the market's own (R25)
     ctx = dataclasses.replace(ctx, reference=reference.facts(sd, ctx.static),
                               proxy_curves=bool(getattr(settings, "proxy_curves_for_risk", False)),
@@ -353,7 +391,7 @@ def eod_run(settings: Settings, d: str, *, snapshots: str | Path | None = None, 
                          carried_spreads=carried)
         outside_total = None   # the day's trades whose PnL is not in the run's total (the lineage's ``outside_total``)
         if prev_cut and not no_pnl:
-            prev_ctx = prep(sd, *prev_cut, fx_options=fx_options)
+            prev_ctx = prep(sd, *prev_cut, fx_options=fx_options, fixings=fixings)  # the same history (TDM#590)
             attach_pnl(prev_ctx, value(prev_ctx, bp.requests, position_ids=bp.position_ids, carried_spreads=carried),
                        ctx, outcomes)
             # fx rows, the report-valued rows (otc, unmapped bonds): by the rate move and by the reports of both
@@ -489,7 +527,7 @@ def cmd_demo_book(a: argparse.Namespace) -> int:
     """Synthetic book over real instruments: the most traded OFZ-PD and fixed corporates of the date,
     plus a few instruments S1 cannot price yet (to show coverage). Quantities are synthetic."""
     sd = SnapshotDir(Path(a.snapshots))
-    ctx = prepare(sd, a.date)
+    ctx = prepare(sd, a.date, fixings=_fixings_of(a, date.fromisoformat(a.date)))
     act = [t for t in ctx.static.bonds.values() if t.status == "active"]
 
     def traded(cls: str, coupon: tuple[str, ...]) -> list[str]:
@@ -619,7 +657,8 @@ def cmd_instruments_export(a: argparse.Namespace) -> int:
     from .report import instruments
 
     ex, summ = instruments.export(Path(a.out), Path(a.snapshots), on=a.date, static_file=a.static_file,
-                                  market_file=a.market_file, active_only=a.active, with_value=a.value)
+                                  market_file=a.market_file, active_only=a.active, with_value=a.value,
+                                  fixings=lambda d: _fixings_of(a, d))
     m = ex.market
     print(f"static {ex.static.id[:12]} of {ex.static.business_date} (known_at {ex.static.doc.get('known_at')}), "
           f"market {m.id[:12] if m else '-'}: {len(ex.rows)} instruments -> {a.out}")
