@@ -842,9 +842,16 @@ Status 25.10.2026: the backend validates and stores the 1.4 rows (`dataset_rows`
 `KEY_RATE` in RUB (core's swap, risk per curve) and `repo` with a `maturity_date` (fixed, or `RUONIA` / `KEY_RATE`);
 since 03.11.2026 (FlyingScotman/trading-desk-monitor#555) a `ccs` of a RUB leg (fixed or `RUONIA`) against a fixed
 leg in a foreign currency (core's cross-currency swap: risk on both curves, the FX delta of the foreign leg, the
-basis; `notional_exchange` absent is read as `initial_and_final`, provisional); a `ccs` with a floating foreign leg,
-a swap with two floating legs, an open REPO and a REPO on another index keep the report's value with the
-reason (`ccs_foreign_floating_unsupported`, `basis_swap_unsupported`, `repo_open`, `no_fixings`). Terms of `irs`,
+basis; `notional_exchange` absent is read as `initial_and_final`, provisional). Since FlyingScotman/trading-desk-monitor#565
+a `ccs` is valued with these legs. RUB leg: fixed, `RUONIA`, `KEY_RATE` (averaged arithmetically over calendar days, as
+the exchange's IRS KEYRATE) or `RUSFAR` (compounded, provisional, projected on RUONIA without a basis). Foreign leg:
+fixed, `RUSFARCNY` in CNY, `SOFR` in USD, `ESTR` in EUR (forecast by the UST / ECB AAA par proxy, not OIS, provisional).
+Anything else (a floating leg on another index, an index the adapter could not map: `index_unmapped`, an arithmetically
+averaged foreign or RUSFAR leg) is not valued: the report's value stays, with the reason
+(`ccs_foreign_floating_unsupported`, `index_unmapped`, `swap_index_unsupported`, `ccs_index_averaging_unsupported`,
+`no_foreign_projection_curve`, `no_key_rate_curve`, `no_fixings`). A swap with two floating legs (`irs`, `ois`), an open
+REPO and a REPO on another index likewise keep the report's value with the reason (`basis_swap_unsupported`, `repo_open`,
+`no_fixings`). Terms of `irs`,
 `ois`, `ccs` and `repo` no positions row names are counted in the run, not valued (FlyingScotman/trading-desk-monitor#468);
 the legs of a trade are linked together, a `position_id` on one leg links all of them
 (FlyingScotman/trading-desk-monitor#212); a positions row without `asset_class` but with `deal_id` is linked like an

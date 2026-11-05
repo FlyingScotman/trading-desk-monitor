@@ -136,7 +136,7 @@ def test_fixings_of_several_sources_are_chosen_by_the_order_not_an_error(ctx):
 
 def test_the_run_has_the_fixings_and_the_forecast_curves(ctx):
     lin = ctx.fx.lineage
-    assert {e.fixing_id for e in ctx.fx.index_fixings} == {"RUSFARCNY", "SOFR", "ESTR"}
+    assert {e.fixing_id for e in ctx.fx.index_fixings} == {"RUSFARCNY", "SOFR", "ESTR", "RUSFAR"}
     sofr = lin["index_fixings"]["SOFR"]
     assert (sofr["first"], sofr["latest"], sofr["sources"]) == ("2026-10-08", "2026-10-14", ["nyfed"])
     assert sofr["bridged_days"] == [] and sofr["unpublished_business_days"] == []

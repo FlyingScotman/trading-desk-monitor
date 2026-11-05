@@ -27,7 +27,8 @@
   (its PV is ``DF(start) - DF(end)``). The nodes are the start and the swap ends; past the last quote the curve is
   extrapolated flat-forward (said in the lineage).
 - **Overnight index fixings** (``FxMarket.index_fixings``, core ``IndexFixingEntry``; ``FOREIGN_OVERNIGHT``: ``RUSFARCNY``,
-  ``SOFR``, ``ESTR``): the hub's fixings of the index (percent),
+  ``SOFR``, ``ESTR``; ``RUB_OVERNIGHT``: the RUB ``RUSFAR`` of a RUB leg, TDM#565 stage 2, on ``MOEX_RUSFAR`` else
+  ``MOEX_STOCK``, no curve of its own): the hub's fixings of the index (percent),
   those published by the snapshot's ``known_at`` and dated before the business date, as core ``IndexFixings`` (fractions,
   dated the business date). Observation calendar: the dates published before the business date (the exchange does not
   publish on weekends, China's holidays and the last trading day of the year: the previous value then holds, the
@@ -115,6 +116,10 @@ RUSFAR_CNY_CURVE_ID, RUSFAR_CNY_SPEC = "CNY RUSFAR", "cny_discount_factors_v1"
 RUSFAR_CNY_DATASET = "cny_rusfar_ois"
 RUSFAR_CNY_FIXING = "RUSFARCNY"
 RUSFAR_CNY_INDEX = "CNY-RUSFARCNY-COMPOUND"
+RUSFAR_RUB_FIXING = "RUSFAR"
+RUSFAR_RUB_INDEX = "RUB-RUSFAR-OIS-COMPOUND"
+"""The RUB RUSFAR (TDM#565, stage 2): the hub's fixing code and core's compounded index of a RUB leg of a cross-currency
+swap on it (``valuation.derivatives.CCS_RUB_INDEX``)."""
 """The name of core's compounded index of a RUSFARCNY leg and of its fixings (``valuation.derivatives.CCS_FOREIGN_INDEX``)."""
 RUSFAR_CNY_MAX_UNPUBLISHED_DAYS = 1
 """As RUONIA's (``rates.RUONIA_MAX_UNPUBLISHED_DAYS``): at most one business day just before the business date may lack its
@@ -165,6 +170,12 @@ FOREIGN_OVERNIGHT = {
         proxy_of="eur_aaa_par", label="EUR: прогноз €STR по ECB AAA par (прокси, не OIS)")}
 """Index code -> the foreign overnight indices valued (``valuation.derivatives.CCS_FOREIGN_INDEX``). ``USD SOFR`` /
 ``EUR ESTR`` are forecast curves only (the proxies of the government par yields renamed, never discounting)."""
+RUB_OVERNIGHT = {
+    RUSFAR_RUB_FIXING: ForeignOvernight(
+        RUSFAR_RUB_FIXING, "RUB", RUSFAR_RUB_INDEX, "", "", "MOEX_RUSFAR", None, 1, label="RUB: RUSFAR")}
+"""Index code -> the RUB overnight indices read as core ``IndexFixings`` (``valuation.derivatives.CCS_RUB_INDEX``):
+fixings only, no curve (the leg projects on RUONIA). The fixing days' calendar is ``MOEX_RUSFAR`` where the static
+snapshot has it (hub contract 1.6), else ``MOEX_STOCK``, then as RUSFARCNY's: the days the exchange published."""
 CBR_SOURCE = "CBR"
 SPOT_SOURCES = ("market", "cets_tom")
 SWAP_LAG = {"TOD": 0, "TOM": 1, "SPT": 2}
@@ -245,7 +256,8 @@ class FxMarket:
     """ccy -> (RUB per unit, source) of the spot."""
     lineage: dict[str, Any] = field(default_factory=dict)
     index_fixings: tuple[IndexFixingEntry, ...] = ()
-    """The foreign overnight indices' fixings (``FOREIGN_OVERNIGHT``: ``RUSFARCNY``, ``SOFR``, ``ESTR``), kept out of
+    """The overnight indices' fixings read as ``IndexFixings`` (``FOREIGN_OVERNIGHT``: ``RUSFARCNY``, ``SOFR``, ``ESTR``;
+    ``RUB_OVERNIGHT``: the RUB ``RUSFAR``), kept out of
     ``core_market`` so the bonds' inputs stay as they were: ``valuation.derivatives`` adds them to the call that reads
     them."""
     quote_entries: dict[str, CurveEntry] = field(default_factory=dict)
@@ -590,9 +602,11 @@ def _index_calendar(static: Any, ov: ForeignOvernight, spot_cals: dict[str, Busi
                     ) -> BusinessCalendar | None:
     """The fixing days' calendar of ``ov``: its hub calendar from the static snapshot, else ``FX:<ccy>``; None without
     either (the currency has no spot)."""
-    if ov.base_calendar is not None:
+    for name in ((ov.base_calendar, "MOEX_STOCK") if ov.ccy == "RUB" else (ov.base_calendar,)):
+        if name is None:
+            continue
         try:
-            return ar.calendar(static.snapshot, ov.base_calendar)[0]
+            return ar.calendar(static.snapshot, name)[0]
         except SnapshotError:
             pass
     return spot_cals.get(ov.ccy)
@@ -684,7 +698,7 @@ def with_fx(market: Any, static: Any, core: MarketSnapshot, fx_rates: dict[str, 
             lin["curves"][XCCY_CURVE_ID] = {"status": "error", "error": str(e)}
     entries: list[IndexFixingEntry] = []
     lin["index_fixings"] = {}
-    for code, ov in FOREIGN_OVERNIGHT.items():  # the overnight indices of a floating foreign leg (TDM#565)
+    for code, ov in (*FOREIGN_OVERNIGHT.items(), *RUB_OVERNIGHT.items()):  # the overnight indices of a floating leg (TDM#565)
         cal = _index_calendar(static, ov, spot_cals)
         if cal is None:
             continue

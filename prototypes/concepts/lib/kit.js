@@ -2321,7 +2321,7 @@
   // «предварительно»; «предварительно» — прочие допущения (quality assumed). Разница — нейтральным цветом (это не PnL),
   // выше допуска — warn.
   // K.ratesCoreModel(list) — строки панели; K.ratesCorePanel(el) — фиксинги, итоги, таблица позиций и сделок (K.table).
-  K.RC_IDX = { RUONIA: 'RUONIA', KEY_RATE: 'КС', RUSFARCNY: 'RUSFAR CNY', SOFR: 'SOFR', ESTR: '€STR' };
+  K.RC_IDX = { RUONIA: 'RUONIA', KEY_RATE: 'КС', RUSFAR: 'RUSFAR', RUSFARCNY: 'RUSFAR CNY', SOFR: 'SOFR', ESTR: '€STR' };
   const RC_PROD = { irs: 'IRS', ois: 'OIS', repo: 'РЕПО', ccs: 'CCS' };
   K.RC_SIDE = { payer: 'плачу фикс', receiver: 'получаю фикс', repo: 'РЕПО (привлечение)', reverse_repo: 'обратное РЕПО (размещение)' };
   // CCS, у которого плавают обе ноги (foreignIndex, нет фикса): сторона — по валютной ноге; при рублёвом фиксе side по фиксу
@@ -2338,7 +2338,7 @@
     repo_index_unsupported: 'индекс РЕПО не поддерживается', no_key_rate_curve: 'нет кривой КС в прогоне', no_rub_curve: 'нет кривой RUONIA OIS в прогоне',
     swap_dates_mismatch: 'даты начала или окончания ног свопа не совпадают', swap_notional_mismatch: 'номиналы ног свопа не совпадают',
     terms_mixed: 'у строки сделки разных видов', terms_ambiguous: 'условия одной сделки подходят нескольким строкам отчёта (один deal_id): ядро не оценивает ни одну', not_valued: 'ядро не вернуло оценку',
-    swap_frequency_unsupported: 'частота выплат не поддерживается', day_count_unsupported: 'база начисления не поддерживается', swap_index_unsupported: 'индекс не поддерживается',
+    swap_frequency_unsupported: 'частота выплат не поддерживается', day_count_unsupported: 'база начисления не поддерживается', swap_index_unsupported: 'индекс не поддерживается (рублёвая нога CCS: RUONIA, ключевая ставка, RUSFAR или фикс)',
     swap_ccy_unsupported: 'валюта свопа не RUB', repo_ccy_unsupported: 'валюта РЕПО не RUB', terms_incomplete: 'условия сделки неполные', terms_invalid: 'условия сделки не приняты ядром', settled: 'сделка исполнена' };
   K.rcReason = c => !c ? '' : RC_REASON[c] || (/^core_/.test(c) ? 'ядро отклонило: ' + c.slice(5) : c);
   const rcProd = s => s ? String(s).split('+').map(x => RC_PROD[x] || x).join(' + ') : '—';
