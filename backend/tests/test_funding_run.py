@@ -207,10 +207,16 @@ def test_funding_end_to_end_inbox_run_api(store_url, ctx, tmp_path):
     assert st["T1|26238"] == st["H1|29008"] == "funded"
     pnl = {p["position_id"]: p for p in c.get(f"/api/v1/runs/{rid2}/pnl").json()["positions"]}
     with_pnl = [k for k in ("T1|26238", "H1|29008") if pnl[k]["components"]]
-    assert with_pnl == ["T1|26238"]  # the exact bond has a flash PnL; the HTM floater has none (book-level line)
+    # TDM#576: the exact bond has a flash PnL; the HTM floater had no valuation on the 14th, so its PnL is on an assumption
+    # (the last quote of the 14th's market stands for its start of the day), said in extra.assumption, no longer «нет PnL»
+    assert with_pnl == ["T1|26238", "H1|29008"]
+    assert pnl["H1|29008"]["no_pnl"] is None and pnl["H1|29008"]["extra"]["assumption"]["code"] == "start_price_carried"
+    assert pnl["H1|29008"]["extra"]["total"] == 0.0   # the price did not move: the PnL is the funding alone, once
+    assert "assumption" not in pnl["T1|26238"]["extra"]
     for k in with_pnl:
         assert pnl[k]["components"]["funding"] == pytest.approx(lines[k]["interest_rub"]) and lines[k]["in_position"]
         assert pnl[k]["total"] == pytest.approx(pnl[k]["extra"]["total"] + lines[k]["interest_rub"])  # net of funding
+    assert lines["H1|29008"]["in_position"] and "без флэш-PnL" not in lines["H1|29008"]["note"]
     for k in ("T1|26238", "H1|29008"):
         if k not in with_pnl:  # funded, but without a flash PnL: a book-level line, not in a PnL
             assert not lines[k]["in_position"] and "без флэш-PnL" in lines[k]["note"]
