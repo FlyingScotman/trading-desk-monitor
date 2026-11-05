@@ -133,8 +133,9 @@
   }
   // суммы дня под выбором книг экрана: по валютам и по строкам (книга или часть отчёта)
   function slice(d) {
-    const sc = (SF && K.ocpScope(d.lines || [], H.books || {}, SF)) || { lines: [], notes: [], partial: false };
+    const sc = (SF && K.ocpScope(d.lines || [], Object.assign({}, H.books, d.books), SF)) || { lines: [], notes: [], partial: false };
     const by = {}, rows = new Map();
+    let withDer = false;
     sc.lines.forEach(x => {
       if (x.ccy === 'RUB' || x.amount == null) return;
       by[x.ccy] = (by[x.ccy] || 0) + x.amount;
@@ -147,11 +148,14 @@
       if (d.basis === 'report_base_plus_day') {
         if (x.baseDate) { if (x.baseOlder) r.valid = x.baseDate; else r.base = x.baseDate; }
         if (x.baseKind === 'book_absent') r.absent = true;
+        if (x.baseKind === 'with_derivatives') { r.withDer = true; withDer = true; }  // TDM#567 (D24): отчёт ещё с деривативами, PV не добавлен
       } else if (x.validDate && x.validDate < d.date) r.valid = x.validDate;
       rows.set(k, r);
     });
-    return { by, rows: [...rows.values()], notes: sc.notes, partial: !!sc.partial, ccys: Object.keys(by).sort(ccyOrder) };
+    return { by, rows: [...rows.values()], withDer, notes: sc.notes, partial: !!sc.partial, ccys: Object.keys(by).sort(ccyOrder) };
   }
+  // подпись методики дня: по basis report_base_plus_day — только если в срезе есть строка с отчётом ещё с деривативами
+  const methodOf = (d, T) => d && d.methodNote && (d.basis !== 'report_base_plus_day' || (T && T.withDer)) ? d.methodNote : null;
   const usable = d => !!(d && d.basis && !NO_OCP[d.state]);
   const noOcp = d => 'ОВП нет: ' + (NO_OCP[d.state] || 'прогон до публикуемой ОВП');
   const portName = v => v === '—' ? 'без портфеля' : v;
@@ -166,7 +170,7 @@
     const head = [hf.entity && entityName(hf.entity), hf.desk, hf.ccy && 'валюта ' + hf.ccy, hf.books && hf.books.length && (hf.books.length === 1 ? bookName(hf.books[0]) : hf.books.length + ' книг'), ports.length && 'без ' + ports.map(portName).join(', ')].filter(Boolean);
     sb.innerHTML = '<span class="lb">Книги ОВП:</span>' +
       '<span class="k-chip' + (EN ? ' on' : '') + '" data-c16="entity">' + esc(EN ? entityName(EN) : 'все юрлица') + ' ▾</span>' +
-      (types.length ? '<span class="k-chip' + (TY ? ' on' : '') + '" data-c16="type" title="тип книги из настроек книг">' + esc(TY ? 'тип: ' + TY : 'все типы книг') + ' ▾</span>' : '') +
+      (types.length ? '<span class="k-chip' + (TY ? ' on' : '') + '" data-c16="type" title="тип книги из настроек книг; «выведен» — в настройках не задан, выводится по облигациям периода">' + esc(TY ? 'тип: ' + TY : 'все типы книг') + ' ▾</span>' : '') +
       '<span class="k-chip' + (off.length ? ' on' : '') + '" data-c16="books" title="' + esc(off.length ? 'сняты: ' + off.map(b => bookName(b.id)).join(', ') : 'все книги юрлица, HTM входит') + '">' + esc(blbl) + ' ▾</span>' +
       '<span class="k-note" data-c16-note><b>Фильтр шапки здесь не действует</b>' + (head.length ? ' (в шапке: ' + esc(head.join(' · ')) + ')' : '') +
       ': ОВП считается по книгам целиком, портфели' + (ports.length ? ' (' + esc(ports.map(portName).join(', ')) + ')' : '') + ' не исключаются — свой выбор книг экрана.</span>';
@@ -181,7 +185,7 @@
         return;
       }
       const reopen = () => { const c = document.querySelector('[data-c16=books]'); if (c) c.click(); };
-      const items = L.map(b => { const m = bookMeta(b.id), t = [b.id, m.desk && m.desk !== '—' ? m.desk : '', m.type && m.type !== '—' ? m.type : '', EN || !b.entity ? '' : entityName(b.entity), m.ocpOnly ? 'только ОВП' : ''].filter(Boolean); return { v: b.id, t: bookName(b.id), sub: t.join(' · '), multi: true }; });
+      const items = L.map(b => { const m = bookMeta(b.id), t = [b.id, m.desk && m.desk !== '—' ? m.desk : '', m.type && m.type !== '—' ? m.type + (m.typeDerived ? ' (выведен)' : '') : '', EN || !b.entity ? '' : entityName(b.entity), m.ocpOnly ? 'только ОВП' : ''].filter(Boolean); return { v: b.id, t: bookName(b.id), sub: t.join(' · '), multi: true }; });
       const keep = ids => SEL.off.filter(b => !ids.includes(b));
       K.menu(ch, items, L.map(b => b.id).filter(b => !SEL.off.includes(b)), v => setSel({ off: SEL.off.includes(v) ? keep([v]) : SEL.off.concat(v) }), 'c16-books',
         Object.assign(menuOpt, { reopen, all: ids => setSel({ off: keep(ids) }), none: ids => setSel({ off: keep(ids).concat(ids) }) }));
@@ -240,7 +244,7 @@
     const wrap = h('div', 'k-grid');
 
     // итог: дата, общая ОВП в USD, валюты
-    const sp = panel('ОВП на ' + f.dshort(d.date) + (d.state === 'no_report' ? '<span class="c16-badge" title="ОВП из позиций">отчёта ОВП нет</span>' : ''));
+    const sp = panel('ОВП на ' + f.dshort(d.date) + (d.state === 'no_report' ? '<span class="c16-badge" title="ОВП из позиций">отчёта ОВП нет</span>' : '') + (ok && methodOf(d, T) ? '<span class="c16-badge" style="color:var(--warn)" data-c16-method-day title="' + esc(d.methodNote) + '">' + esc(d.methodNote.split(':')[0]) + '</span>' : ''));
     const m = sp.querySelector('.m'); m.style.cssText = 'display:inline-flex;gap:6px;flex-wrap:wrap;align-items:center';
     const nt = h('span'), u = h('span'), r = h('span'); m.append(nt, u, r);
     // часть отчёта по юрлицу не вошла из-за выбора книг — пометка
@@ -272,7 +276,7 @@
       const mixed = rows.some(r => r.src.has('report')) && rows.some(r => [...r.src].some(s => s !== 'report'));
       const label = r => {
         const x = r.x, src = mixed ? [...r.src].filter(s => s !== 'report') : [];
-        const tag = (src.length ? ' <span class="c16-src" title="' + esc(src.map(s => (SRC[s] || s) + ': ' + r.by[s].join(', ')).join('; ')) + '">' + esc(src.map(s => SRC[s] || s).join(', ')) + '</span>' : '') + (r.valid ? ' <span class="c16-src">отчёт от ' + f.date(r.valid) + '</span>' : '') + (r.absent ? ' <span class="c16-src" title="книги нет в отчёте ОВП на дату базы: база 0, к ней PV деривативов и изменения дня">нет в отчёте</span>' : '');
+        const tag = (src.length ? ' <span class="c16-src" title="' + esc(src.map(s => (SRC[s] || s) + ': ' + r.by[s].join(', ')).join('; ')) + '">' + esc(src.map(s => SRC[s] || s).join(', ')) + '</span>' : '') + (r.valid ? ' <span class="c16-src">отчёт от ' + f.date(r.valid) + '</span>' : '') + (r.withDer ? ' <span class="c16-src" style="color:var(--warn)" data-c16-wd title="не по текущей методике: отчёт ещё с деривативами, их PV не добавлен">отчёт с деривативами</span>' : '') + (r.absent ? ' <span class="c16-src" title="книги нет в отчёте ОВП на дату базы: база 0, к ней PV деривативов и изменения дня">нет в отчёте</span>' : '');
         const base = r.base ? ' · база ' + r.base.slice(8, 10) + '.' + r.base.slice(5, 7) : '';
         return x.book ? '<span title="' + esc(x.book + base) + '">' + esc(bookName(x.book)) + '</span>' + tag
           : '<span title="книги: ' + esc(((x.books || []).map(bookName).join(', ') || '—') + base) + '">' + esc(entityName(x.entity)) + ' <span class="mut3">часть отчёта</span></span>' + tag;
@@ -307,6 +311,11 @@
       const no = sl[i].ccys.filter((c, k) => usdDay[i][k] == null);
       return no.length ? 'Общая — без ' + no.join(', ') + ': курса нет' : '';
     });
+    // TDM#567 (D11, D24): день не по текущей методике (подпись сервера, ocp_line.method_note) — звёздочка на оси,
+    // бледные столбцы и строка в подсказке; пересчёта истории нет
+    const meth = D.map((x, i) => usable(x) ? methodOf(x, sl[i]) : null);
+    if (meth.some(Boolean)) hp.querySelector('.m').insertAdjacentHTML('afterbegin', '<span class="mut3" data-c16-method-legend title="' + esc([...new Set(meth.filter(Boolean))].join('; ')) + '">* бледные столбцы — день не по текущей методике</span> ');
+    const pale = (v, i, col) => meth[i] && v != null ? { value: v, itemStyle: { color: col, opacity: 0.45 } } : v;
     const css = K.css;
     chart = K.chart(hp.querySelector('.c16-chart'), () => ({
       animation: false, grid: { left: 6, right: 10, top: 30, bottom: 4, containLabel: true }, legend: { top: 0, left: 0 },
@@ -315,11 +324,12 @@
         // валюта дня без курса — «—»; валюты, которой в этот день нет, — не строкой
         const rows = ps.filter(p => p.value != null || (sl[i] && sl[i].ccys.includes(p.seriesName)));
         return '<b>' + esc(f.date(D[i].date)) + '</b>' + rows.map(p => '<br>' + p.marker + esc(p.seriesName) + ': <b>' + (p.value == null ? '—' : f.s(p.value, 1) + ' mm USD') + '</b>').join('') +
-          (tip[i] ? '<br><span style="color:var(--warn)" data-c16-tip>' + esc(tip[i]) + '</span>' : '');
+          (tip[i] ? '<br><span style="color:var(--warn)" data-c16-tip>' + esc(tip[i]) + '</span>' : '') +
+          (meth[i] ? '<br><span style="color:var(--warn)" data-c16-method>' + esc(meth[i]) + '</span>' : '');
       } },
-      xAxis: { type: 'category', data: D.map(x => f.dshort(x.date)) },
+      xAxis: { type: 'category', data: D.map(x => f.dshort(x.date)), axisLabel: { formatter: (v, i) => meth[i] ? v + '*' : v } },
       yAxis: { type: 'value', unit: 'mm USD', axisLabel: { formatter: v => K.tick(v, 1) } },
-      series: HC.map(c => ({ name: c, type: 'bar', stack: 'o', barMaxWidth: 28, data: D.map((x, i) => usdOf(sl[i], c, x)), itemStyle: { color: K.ccyColor(c) } }))
+      series: HC.map(c => ({ name: c, type: 'bar', stack: 'o', barMaxWidth: 28, data: D.map((x, i) => pale(usdOf(sl[i], c, x), i, K.ccyColor(c))), itemStyle: { color: K.ccyColor(c) } }))
         // точка без соседей (дни вокруг без ОВП) — кружком, иначе одиночную дату линии не видно; showAllSymbol — чтобы
         // ECharts не прореживал точки (3 мес, узкий экран) и кружок не пропадал
         .concat([{ name: 'Общая', type: 'line', data: line, symbol: 'circle', showAllSymbol: true, symbolSize: (v, p) => line[p.dataIndex - 1] == null && line[p.dataIndex + 1] == null ? 5 : 0, lineStyle: { width: 2 }, color: css('--fg') }]),

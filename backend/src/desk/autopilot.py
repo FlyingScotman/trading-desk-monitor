@@ -137,7 +137,7 @@ from typing import Any
 
 import psycopg
 
-from . import logic_version, store, trades
+from . import backfill, logic_version, store, trades
 from .backfill import late_why, same_logic
 from .inbox.timesem import MSK
 from .marketdata import cache, history, hubhistory, static_facts
@@ -175,6 +175,8 @@ NO_ANSWER_CYCLES = 3
 # the intraday step's ``reason`` (status ``steps[].reason``; the header shows why there is no run of today, #22)
 INTRADAY_REASONS = ("off", "before_open", "not_business_day", "no_positions", "no_cut_yet", "up_to_date", "ran",
                     "failed_before", "run_failed", "hub_error", "error")
+TRADING_FROM = dtime(9, 30)  # MSK: the trading hours of the desk, weekdays, to ``PRELIM_FROM`` (TDM#569: what the
+# background work of past dates leaves alone: the eod step's runs of «private inputs changed», the history of trades)
 WARN_AFTER = dtime(10, 15)    # MSK: a business day with no run of today by then is not «актуальны» (#156; the header, #22)
 MORNING_FROM = dtime(7, 0)    # MSK: the morning run of a business day is made from then (#21; earlier on its own book)
 # the morning step's ``reason`` (status ``steps[].reason``, #21/#22)
@@ -233,6 +235,13 @@ def latest_run(con: psycopg.Connection) -> dict[str, Any] | None:
     return {"run_id": str(rid), "as_of": d.isoformat(), "created_at": _iso(done), "run_type": rtype,
             "cut_type": cut, "cut_ts": _iso(cut_ts), "label": store.slice_label(d, cut, cut_ts, rtype, close),
             "pnl_basis": basis, "market_close": close}
+
+
+def in_trading_hours(now: datetime) -> bool:
+    """A weekday between ``TRADING_FROM`` and ``PRELIM_FROM`` on the Moscow clock (no holiday calendar here: a holiday
+    counts as a weekday, the work waits a little longer)."""
+    t = now.astimezone(MSK)
+    return t.weekday() < 5 and TRADING_FROM <= t.time() < PRELIM_FROM
 
 
 class CycleLock:
@@ -935,7 +944,6 @@ class Autopilot:
     def _backfill(self, settings: Settings, con: psycopg.Connection, url: str | None, hub: bool,
                   ran: list[str]) -> tuple[str, str]:
         """The backfill step (module doc, ``desk.backfill``)."""
-        from . import backfill
         from .cli import ContextCache
 
         if self._inbox_waiting and self._sync_later:
@@ -1038,6 +1046,8 @@ class Autopilot:
         logic = logic_version()
         done, failed, notes = [], [], []
         todo: list[tuple[str, str, tuple]] = []
+        later = bool(getattr(settings, "backfill", True)) and in_trading_hours(self._now())  # TDM#569
+        deferred: list[str] = []
         for d in dates:
             ids, n = store.current_sets(con, date.fromisoformat(d))
             if not n:
@@ -1056,12 +1066,21 @@ class Autopilot:
                        else None))
             if why is None:
                 continue
-            sig = (tuple(ids), snap, prev, logic, inputs_hash, store.dataset_set_ids(con, date.fromisoformat(d)))
+            if why == "private inputs changed" and d != latest_valid and d not in extra and later:
+                # trades of a past date arrived (TDM#569): a full run of each such date in the trading hours would hold
+                # the intraday step of this cycle back; the backfill step (its own budget, after the intraday step) takes
+                # them, and this step again at night
+                deferred.append(d)
+                continue
+            sig = (tuple(ids), snap, prev, logic, inputs_hash, store.dataset_set_ids(con, date.fromisoformat(d)),
+                   store.reference_rev_ids(con))
             if self._failed_before(d, sig, store.slice_label(d, "eod_final")):
                 self._eod_tried.add(d)  # not the backfill's either this cycle (#23)
                 notes.append(f"{d} failed before on the same inputs, not retried")
                 continue
             todo.append((d, why, sig))
+        if deferred:
+            notes.append(f"{len(deferred)} dates with new trades are left to the backfill in the trading hours")
         todo.sort(key=lambda t: not (t[0] == latest_valid and t[1] == "no default run"))  # stable: then oldest first
         if self._inbox_waiting and self._sync_later:
             held = [t for t in todo if t[0] != latest_valid and t[0] not in extra]

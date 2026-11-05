@@ -92,7 +92,7 @@ UNIT_STATUS = {"accepted": "принято", "rejected": "отклонено", "
 
 RUN_CHANGES = {"positions": "позиции", "market": "снимок рынка", "prev_market": "снимок прошлого дня",
                "program": "версия программы", "cut": "срез (окончательное закрытие вместо предварительного)",
-               **store.LATE_DATASETS}
+               **store.LATE_DATASETS, **store.LATE_REFERENCE}
 """What changed against the run a run superseded; ``ocp`` / ``cash_balances``: the OCP report or the balances in force
 on the date were recorded between the two runs (``store.late_inputs``, TDM#181)."""
 
@@ -381,6 +381,9 @@ def _runs(con: psycopg.Connection, day: date) -> list[dict[str, Any]]:
                 a = store.dataset_set_ids(con, day, known_at=old["positions_known_at"])
                 b = store.dataset_set_ids(con, day, known_at=r["positions_known_at"])
                 changed += [ds for ds in store.LATE_DATASETS if a.get(ds, []) != b.get(ds, [])]
+                ra = store.reference_rev_ids(con, old["positions_known_at"])
+                rb = store.reference_rev_ids(con, r["positions_known_at"])
+                changed += [k for k in store.LATE_REFERENCE if ra[k] != rb[k]]
         err = (r["error"] or "").splitlines()[0][:300] if r["error"] else None
         out.append({"run_id": r["run_id"], "run_type": r["run_type"], "cut_type": r["cut_type"],
                     "label": store.slice_label(day, r["cut_type"], r["cut_ts"], r["run_type"]),
@@ -514,8 +517,12 @@ def _rate(x: dict[str, Any]) -> dict[str, Any]:
     elif x["run_behind"]:
         warn.append("позиции загружены после расчёта: прогон не пересчитан")
     if x["default_run_id"] and x.get("late_inputs"):
-        names = " и ".join(store.LATE_DATASETS[ds] for ds in x["late_inputs"])
-        warn.append(f"{names[0].upper()}{names[1:]} загружены после расчёта: прогон не пересчитан")
+        data = [store.LATE_DATASETS[ds] for ds in x["late_inputs"] if ds in store.LATE_DATASETS]
+        if data:
+            names = " и ".join(data)
+            warn.append(f"{names[0].upper()}{names[1:]} загружены после расчёта: прогон не пересчитан")
+        if "ocp_policy" in x["late_inputs"]:
+            warn.append("политика ОВП изменилась после расчёта: прогон не пересчитан")
     if x["positions_in_force"] and x["books_no_positions"]:
         warn.append(f"книг без позиций: {x['books_no_positions']}")
     if x["books_rows_differ"]:

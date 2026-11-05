@@ -511,6 +511,12 @@ class RunOcp(BaseModel):
     books: dict[str, dict[str, Any]] = Field(default_factory=dict, description=(
         "TDM#556: name, desk, book_type and entity of the published OCP's books without positions in the run (a book "
         "only the OCP report knows); the run's reference books have the others"))
+    published_rows: list[dict[str, Any]] = Field(default_factory=list, description=(
+        "TDM#567: ``published.by_book`` as the page data (``OCP.byBook``) and the history by day carry it: the same "
+        "serializer, camelCase fields, ``baseKind`` under report_base_plus_day"))
+    method_note: str | None = Field(None, description=(
+        "TDM#567: why the published OCP is not on the current methodology (the report without the derivatives + "
+        "their PV), null when it is"))
 
 
 class AggregateRow(BaseModel):
@@ -736,6 +742,43 @@ class RiskPosition(BaseModel):
     gamma: list[tuple[int, int, float]] = Field(description="[i, j, RUB per unit_i x unit_j], i <= j")
 
 
+class RiskOcpCcy(BaseModel):
+    amount: float = Field(description="The published OCP of the currency, in the currency (+ long)")
+    nonlinear: float = Field(description="Of it, the FX delta of the non-linear derivatives (options and positions with "
+                                         "an FX gamma), in the currency")
+    linear: float = Field(description="amount - nonlinear: what the FX shock takes linearly")
+    rate: float | None = Field(None, description="RUB per unit of the currency (the OCP's rate); null: none in the run")
+
+
+class RiskOcpLine(BaseModel):
+    book: str | None = Field(None, description="null: an entity-level report unit, books are the books it holds")
+    books: list[str]
+    entity: str | None = None
+    ccy: str
+    amount: float
+    nonlinear: float
+    linear: float
+
+
+class RiskOcp(BaseModel):
+    """The published OCP of the run for the scenario screen's FX shock (TDM#577): linear part of the shock = the
+    OCP's lines without the non-linear derivatives x the shock, the same lines the OCP screen reads (TDM#567)."""
+
+    available: bool = Field(description="false: the run has no published OCP, the screen falls back to the positions' "
+                                        "FX deltas; reason says why")
+    reason: str | None = None
+    as_of: str | None = None
+    basis: str | None = None
+    method_note: str | None = Field(None, description="Why the OCP is not on the current methodology, as the OCP screen")
+    by_ccy: dict[str, RiskOcpCcy]
+    by_book: list[RiskOcpLine]
+    nonlinear_ids: list[str] = Field(description="position_id of the non-linear derivatives (an option, a non-zero FX "
+                                                 "gamma): shown apart from the linear part")
+    approx_ids: list[str] = Field(default_factory=list, description="of nonlinear_ids: positions the OCP took at "
+                                  "their amount (nominal), not at the FX delta subtracted: their share is approximate")
+    missing_rate: list[str] = Field(description="currencies with an OCP and no rate in the run: no linear part for them")
+
+
 class RiskPayload(BaseModel):
     """First-order and Hessian sensitivities of a run's valued positions, for the Taylor (T1) scenario
     estimate: x_i shock per factor, total = sum delta x + sum_(i<=j) (i == j ? 1/2 : 1) gamma x_i x_j."""
@@ -747,6 +790,8 @@ class RiskPayload(BaseModel):
                                           "the RUB curves core reprices (sorted)")
     factors: list[str] = Field(description="IR|<curve>|<bucket>, then CS, then FX|<ccy>")
     positions: list[RiskPosition]
+    ocp: RiskOcp | None = Field(None, description="The published OCP for the FX shock (TDM#577); absent from a payload "
+                                                  "built outside the risk route")
 
 
 class JobIn(BaseModel):

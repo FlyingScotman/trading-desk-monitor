@@ -362,6 +362,8 @@ class FlashPnl:
     day's and the trades') is on this other lot of it, this one has none (``extra["pnl_on_row"]``)."""
     trades: list[dict[str, Any]] | None = field(default=None, compare=False)
     """Each trade of the day in the position with its PnL (``pnl.new_trades.trade_pnl``): ``extra["trades"]``."""
+    assumption: dict[str, Any] | None = field(default=None, compare=False)
+    """A PnL on an assumption instead of a missing one (``pnl.reasons.assumption``, TDM#576): ``extra["assumption"]``."""
 
     @property
     def carry_pull(self) -> float | None:
@@ -401,6 +403,7 @@ class FlashPnl:
         """``flag``, ``other_reason`` and the day's trades (``start_quantity``, ``trades``) in ``extra``, when set."""
         return {**({"flag": self.flag} if self.flag else {}),
                 **({"other_reason": self.other_reason} if self.other_reason else {}),
+                **({"assumption": self.assumption} if self.assumption else {}),
                 **({"start_quantity": self.start_quantity} if self.start_quantity is not None else {}),
                 **({"pnl_on_row": self.pnl_on_row} if self.pnl_on_row else {}),
                 **({"trades": _json_safe(self.trades)} if self.trades else {})}

@@ -2538,6 +2538,93 @@ export interface components {
             n: number;
         };
         /**
+         * RiskOcp
+         * @description The published OCP of the run for the scenario screen's FX shock (TDM#577): linear part of the shock = the
+         *     OCP's lines without the non-linear derivatives x the shock, the same lines the OCP screen reads (TDM#567).
+         */
+        RiskOcp: {
+            /**
+             * Available
+             * @description false: the run has no published OCP, the screen falls back to the positions' FX deltas; reason says why
+             */
+            available: boolean;
+            /** Reason */
+            reason?: string | null;
+            /** As Of */
+            as_of?: string | null;
+            /** Basis */
+            basis?: string | null;
+            /**
+             * Method Note
+             * @description Why the OCP is not on the current methodology, as the OCP screen
+             */
+            method_note?: string | null;
+            /** By Ccy */
+            by_ccy: {
+                [key: string]: components["schemas"]["RiskOcpCcy"];
+            };
+            /** By Book */
+            by_book: components["schemas"]["RiskOcpLine"][];
+            /**
+             * Nonlinear Ids
+             * @description position_id of the non-linear derivatives (an option, a non-zero FX gamma): shown apart from the linear part
+             */
+            nonlinear_ids: string[];
+            /**
+             * Approx Ids
+             * @description of nonlinear_ids: positions the OCP took at their amount (nominal), not at the FX delta subtracted: their share is approximate
+             */
+            approx_ids?: string[];
+            /**
+             * Missing Rate
+             * @description currencies with an OCP and no rate in the run: no linear part for them
+             */
+            missing_rate: string[];
+        };
+        /** RiskOcpCcy */
+        RiskOcpCcy: {
+            /**
+             * Amount
+             * @description The published OCP of the currency, in the currency (+ long)
+             */
+            amount: number;
+            /**
+             * Nonlinear
+             * @description Of it, the FX delta of the non-linear derivatives (options and positions with an FX gamma), in the currency
+             */
+            nonlinear: number;
+            /**
+             * Linear
+             * @description amount - nonlinear: what the FX shock takes linearly
+             */
+            linear: number;
+            /**
+             * Rate
+             * @description RUB per unit of the currency (the OCP's rate); null: none in the run
+             */
+            rate?: number | null;
+        };
+        /** RiskOcpLine */
+        RiskOcpLine: {
+            /**
+             * Book
+             * @description null: an entity-level report unit, books are the books it holds
+             */
+            book?: string | null;
+            /** Books */
+            books: string[];
+            /** Entity */
+            entity?: string | null;
+            /** Ccy */
+            ccy: string;
+            /** Amount */
+            amount: number;
+            /** Nonlinear */
+            nonlinear: number;
+            /** Linear */
+            linear: number;
+        };
+        /**
          * RiskPayload
          * @description First-order and Hessian sensitivities of a run's valued positions, for the Taylor (T1) scenario
          *     estimate: x_i shock per factor, total = sum delta x + sum_(i<=j) (i == j ? 1/2 : 1) gamma x_i x_j.
@@ -2564,6 +2651,8 @@ export interface components {
             factors: string[];
             /** Positions */
             positions: components["schemas"]["RiskPosition"][];
+            /** @description The published OCP for the FX shock (TDM#577); absent from a payload built outside the risk route */
+            ocp?: components["schemas"]["RiskOcp"] | null;
         };
         /** RiskPosition */
         RiskPosition: {
@@ -3326,6 +3415,18 @@ export interface components {
                     [key: string]: unknown;
                 };
             };
+            /**
+             * Published Rows
+             * @description TDM#567: ``published.by_book`` as the page data (``OCP.byBook``) and the history by day carry it: the same serializer, camelCase fields, ``baseKind`` under report_base_plus_day
+             */
+            published_rows?: {
+                [key: string]: unknown;
+            }[];
+            /**
+             * Method Note
+             * @description TDM#567: why the published OCP is not on the current methodology (the report without the derivatives + their PV), null when it is
+             */
+            method_note?: string | null;
         };
         /** RunPnl */
         RunPnl: {

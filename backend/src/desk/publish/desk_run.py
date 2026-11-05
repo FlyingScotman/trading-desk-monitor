@@ -49,13 +49,12 @@ from .. import logic_version, store
 from ..marketdata.adapter import MarketView
 from ..orchestrator import EodContext, Outcome
 from ..pnl.flash import _json_safe
-from ..store import PositionInputs
+from ..store import PNL_COMPONENTS, PositionInputs
 from ..valuation.fallback import CarriedSpread, used_model_spreads
 from . import derivatives_parallel, funding_run, fx_liability, ocp_run
 from .tdm_run import RunContent, git_sha, run_content
 
-PNL_KEYS = ("carry", "rolldown", "rates", "spread", "other", "fx_gross", "fx_funding", "funding", "new_trades",
-            "total")
+PNL_KEYS = (*PNL_COMPONENTS, "total")
 """Run totals per book: the components sum to ``total`` (a foreign-face bond's FX revaluation is in ``fx_gross``, the
 FX revaluation of its currency funding liability in ``fx_funding``, the position's funding in ``funding``: ``total`` is
 net of funding)."""

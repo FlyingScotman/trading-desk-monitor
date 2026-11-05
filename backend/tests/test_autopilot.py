@@ -16,7 +16,7 @@ import test_slice_s3
 from fastapi.testclient import TestClient
 from test_slice_s3 import TOKEN
 
-from desk import autopilot, cli, store
+from desk import autopilot, cli, logic_version, store
 from desk.api import create_app
 from desk.autopilot import LOCK_FILE, Autopilot, CycleLock, progress_text
 from desk.inbox import scan
@@ -268,13 +268,103 @@ def test_upgrade_leaves_older_dates_alone(tmp_path, monkeypatch):
     monkeypatch.setattr(ap_mod.store, "positions_for", lambda con, d:
                         store.PositionInputs([], [], {}, datetime.now(UTC), "unchanged"))
     monkeypatch.setattr(ap_mod.store, "default_runs", lambda con, since: default)
-    monkeypatch.setattr(ap_mod.store, "dataset_set_ids", lambda con, d, *a, **kw: {})  # no OCP report, no balances
+    monkeypatch.setattr(ap_mod.store, "dataset_set_ids", lambda con, *a, **kw: {})  # no OCP report, no balances
+    monkeypatch.setattr(ap_mod.store, "reference_rev_ids", lambda con, *a, **kw: {})
     calls: list[str] = []
     monkeypatch.setattr(cli, "eod_run", lambda settings, d, **kw: calls.append(d) or len(calls) + 2)
     ap = Autopilot(settings_loader=lambda: Settings(home=tmp_path), today=lambda: TODAY)
     ran: list[str] = []
     st = ap._eod(Settings(home=tmp_path, snapshot_cache=tmp_path), None, None, [], ran)
     assert st == ("ok", "2026-10-15 run 3 (program updated)") and calls == ["2026-10-15"] == ran
+
+
+@pytest.mark.parametrize("hh,backfill_on,expect", [
+    (11, True, ["2026-10-15"]),                    # the trading hours: only the latest date; the older one is the backfill's
+    (21, True, ["2026-10-14", "2026-10-15"]),      # at night the eod step takes both, as before
+    (11, False, ["2026-10-14", "2026-10-15"]),     # no backfill step to leave it to
+    (9, True, ["2026-10-14", "2026-10-15"]),       # before the trading hours (09:30)
+])
+def test_eod_leaves_past_dates_with_new_trades_to_the_backfill_in_the_trading_hours(tmp_path, monkeypatch, hh, backfill_on,
+                                                                                    expect):
+    """TDM#569: trades of past dates change the inputs of the dates (``private inputs changed``); a full run of each such
+    date at the head of the cycle would hold the intraday step back (the eod step comes first, with no budget). In the
+    trading hours the eod step runs only the latest positions date; the others are left to the backfill step (its own
+    budget, after the intraday step) and are not marked as tried, so the backfill does not skip them."""
+    import desk.autopilot as ap_mod
+
+    d14, d15 = date(2026, 10, 14), date(2026, 10, 15)
+
+    class Dir:
+        def __init__(self, *_: object) -> None:
+            pass
+
+        def market_dates(self) -> list[str]:
+            return ["2026-10-14", "2026-10-15"]
+
+        def market_id(self, d: str, cut: str = "eod_final") -> str:
+            return "m" + d
+
+        def previous_market_date(self, d: str, cut: str = "eod_final") -> str | None:
+            return "2026-10-14" if d == "2026-10-15" and cut == "eod_final" else None
+
+    now = logic_version()
+    default = {d14: {"run_id": 1, "market_snapshot_id": "m2026-10-14", "prev_market_snapshot_id": None,
+                     "position_set_ids": [1], "logic_version": now, "private_inputs_hash": "before the trades"},
+               d15: {"run_id": 2, "market_snapshot_id": "m2026-10-15", "prev_market_snapshot_id": "m2026-10-14",
+                     "position_set_ids": [2], "logic_version": now, "private_inputs_hash": "before the trades"}}
+    monkeypatch.setattr(ap_mod, "SnapshotDir", Dir)
+    monkeypatch.setattr(ap_mod.store, "position_dates", lambda con, since: [d14, d15])
+    monkeypatch.setattr(ap_mod.store, "current_sets", lambda con, d: ([1] if d == d14 else [2], 1))
+    monkeypatch.setattr(ap_mod.store, "positions_for", lambda con, d:
+                        store.PositionInputs([], [], {}, datetime.now(UTC), "with the trades"))
+    monkeypatch.setattr(ap_mod.store, "default_runs", lambda con, since: default)
+    monkeypatch.setattr(ap_mod.store, "dataset_set_ids", lambda con, *a, **kw: {})
+    monkeypatch.setattr(ap_mod.store, "reference_rev_ids", lambda con, *a, **kw: {})
+    calls: list[str] = []
+    monkeypatch.setattr(cli, "eod_run", lambda settings, d, **kw: calls.append(d) or len(calls) + 2)
+    ap = Autopilot(settings_loader=lambda: Settings(home=tmp_path), today=lambda: TODAY,
+                   now=lambda: datetime.combine(TODAY, dtime(hh, 0), MSK))
+    ap._eod(Settings(home=tmp_path, snapshot_cache=tmp_path, backfill=backfill_on), None, None, [], [])
+    assert calls == expect
+    assert (ap._eod_tried == set(expect))                    # the left-out date is not «tried»: the backfill takes it
+
+
+def test_eod_still_runs_a_date_the_cycle_was_asked_for_in_the_trading_hours(tmp_path, monkeypatch):
+    import desk.autopilot as ap_mod
+
+    d14, d15 = date(2026, 10, 14), date(2026, 10, 15)
+
+    class Dir:
+        def __init__(self, *_: object) -> None:
+            pass
+
+        def market_dates(self) -> list[str]:
+            return ["2026-10-14", "2026-10-15"]
+
+        def market_id(self, d: str, cut: str = "eod_final") -> str:
+            return "m" + d
+
+        def previous_market_date(self, d: str, cut: str = "eod_final") -> str | None:
+            return "2026-10-14" if d == "2026-10-15" and cut == "eod_final" else None
+
+    now = logic_version()
+    default = {d: {"run_id": i, "market_snapshot_id": "m" + d.isoformat(),
+                   "prev_market_snapshot_id": None if d == d14 else "m2026-10-14", "position_set_ids": [i],
+                   "logic_version": now, "private_inputs_hash": "old"} for i, d in ((1, d14), (2, d15))}
+    monkeypatch.setattr(ap_mod, "SnapshotDir", Dir)
+    monkeypatch.setattr(ap_mod.store, "position_dates", lambda con, since: [d14, d15])
+    monkeypatch.setattr(ap_mod.store, "current_sets", lambda con, d: ([1] if d == d14 else [2], 1))
+    monkeypatch.setattr(ap_mod.store, "positions_for", lambda con, d:
+                        store.PositionInputs([], [], {}, datetime.now(UTC), "new"))
+    monkeypatch.setattr(ap_mod.store, "default_runs", lambda con, since: default)
+    monkeypatch.setattr(ap_mod.store, "dataset_set_ids", lambda con, *a, **kw: {})
+    monkeypatch.setattr(ap_mod.store, "reference_rev_ids", lambda con, *a, **kw: {})
+    calls: list[str] = []
+    monkeypatch.setattr(cli, "eod_run", lambda settings, d, **kw: calls.append(d) or len(calls) + 2)
+    ap = Autopilot(settings_loader=lambda: Settings(home=tmp_path), today=lambda: TODAY,
+                   now=lambda: datetime.combine(TODAY, dtime(11, 0), MSK))
+    ap._eod(Settings(home=tmp_path, snapshot_cache=tmp_path), None, None, ["2026-10-14"], [])
+    assert calls == ["2026-10-14", "2026-10-15"]
 
 
 def test_settings_switch_and_errors_in_status(tmp_path, store_url):

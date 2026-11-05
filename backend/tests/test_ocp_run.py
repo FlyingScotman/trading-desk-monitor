@@ -108,9 +108,15 @@ def _run(con, ctx) -> tuple[int, list[str]]:
     return rid, warnings
 
 
+# the old methodology, given explicitly by the adapter (TDM#567: the engine's default is report_base_plus_day on every date)
+OLD_BASIS = """policy_id;valid_from;active;published
+old;;1;report_plus_outside
+"""
+
+
 def test_ocp_end_to_end_inbox_run_api(store_url, ctx, tmp_path):
     with store.connect(store_url) as con:
-        _scan(con, tmp_path)
+        _scan(con, tmp_path, policy=OLD_BASIS)
         rid, warnings = _run(con, ctx)
         lin, = con.execute("SELECT lineage FROM run WHERE run_id = %s", (rid,)).fetchone()
         log = [m for (m,) in con.execute("SELECT message FROM run_log WHERE run_id = %s ORDER BY seq", (rid,))]
@@ -164,7 +170,7 @@ def test_ocp_end_to_end_inbox_run_api(store_url, ctx, tmp_path):
     assert usd["total"] == 1_050_000 and usd["by_source"] == {"report": 150_000, "derived": 900_000}
     assert usd["rate"] and usd["total_rub"] == pytest.approx(usd["total"] * usd["rate"])
     assert [(g["code"], g["items"]) for g in o["gaps"]] == [("books_outside_report", ["X1"])]
-    assert o["policy"]["source"]["published"].startswith("OQ-18") and o["policy"]["source"]["report_components"] \
+    assert o["policy"]["source"]["published"] == "ocp_policy:old" and o["policy"]["source"]["report_components"] \
         == "provisional" and "published" not in o["policy"]["provisional"]
     assert lin["ocp"]["published"] == {"USD": 1_050_000}
     # the FX delta of the positions does not change: the derived OCP is still the sum of the positions' lines
@@ -254,7 +260,7 @@ def test_adapter_policy_explains_the_break_and_publishes_report_plus_outside(sto
 def test_stale_report_is_not_published(store_url, ctx, tmp_path):
     """The report of the 14th carried into the run of the 15th: reconciled, but the published OCP is derived."""
     with store.connect(store_url) as con:
-        _scan(con, tmp_path, report=False)
+        _scan(con, tmp_path, report=False, policy=OLD_BASIS)
         inbox = tmp_path / "in"
         _csv(inbox / "ocp_20261014.csv", OCP)
         s = Settings(snapshot_cache=SNAPS, inbox_dirs=(inbox,), inbox_archive=tmp_path / "archive",

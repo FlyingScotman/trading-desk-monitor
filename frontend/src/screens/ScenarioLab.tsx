@@ -5,6 +5,8 @@ import { ResidualTable, ResultTable } from '../components/ResultTable';
 import { type EditorState, ScenarioEditor, effective } from '../components/ScenarioEditor';
 import { StatusChip } from '../components/StatusChip';
 import { num, smln } from '../format';
+import { FxPanel } from '../components/FxPanel';
+import { fxShock } from '../taylor/fxshock';
 import { type NormDef, canon, normalize, runTaylor } from '../taylor/taylor';
 
 const ACCURACY_BP = 500;
@@ -63,7 +65,14 @@ export function ScenarioLab() {
   const norm = useMemo((): NormDef | string => {
     try { return normalize(effective(ed), payload?.curves); } catch (e) { return (e as Error).message; }
   }, [ed, payload]);
-  const taylor = useMemo(() => (payload && typeof norm !== 'string' ? runTaylor(payload, norm) : null), [payload, norm]);
+  const posTaylor = useMemo(() => (payload && typeof norm !== 'string' ? runTaylor(payload, norm) : null), [payload, norm]);
+
+  const result = job?.status === 'done' ? job.result : null;
+  // TDM#577: the FX column is the published OCP x the shock (non-linear derivatives apart); no OCP, the positions' FX deltas
+  const fx = useMemo(() => (payload && posTaylor && typeof norm !== 'string' ? fxShock(payload, norm, posTaylor, result) : null),
+    [payload, posTaylor, norm, result]);
+  const taylor = fx?.taylor ?? posTaylor;
+  const ocpMode = fx?.mode === 'ocp';
 
   const stale = useMemo(() => {
     if (!job || typeof norm === 'string') return true;
@@ -83,10 +92,9 @@ export function ScenarioLab() {
 
   // Chips: share of MV with first-order Taylor only; largest move beyond the 2nd-order accuracy range.
   const absMv = payload?.positions.reduce((s, p) => s + Math.abs(p.pv_rub), 0) ?? 0;
-  const firstOnlyMv = payload && taylor
-    ? taylor.positions.reduce((s, r, i) => s + (r.second_order ? 0 : Math.abs(payload.positions[i].pv_rub)), 0) : 0;
-  const maxMove = taylor?.positions.reduce((m, r) => Math.max(m, r.max_move_bp), 0) ?? 0;
-  const result = job?.status === 'done' ? job.result : null;
+  const firstOnlyMv = payload && posTaylor
+    ? posTaylor.positions.reduce((s, r, i) => s + (r.second_order ? 0 : Math.abs(payload.positions[i].pv_rub)), 0) : 0;
+  const maxMove = posTaylor?.positions.reduce((m, r) => Math.max(m, r.max_move_bp), 0) ?? 0;
   const cov = result?.coverage;
   const tot = result?.totals._total;
   const missingTitle = cov?.missing.map(m => `${m.position_id}: ${m.reason}`).join('\n');
@@ -110,19 +118,26 @@ export function ScenarioLab() {
           {payload && taylor && (
             <div className="panel">
               <div className="hero">
-                <div><div className="lbl">PnL сценария, Тейлор</div>
+                <div><div className="lbl">PnL сценария, Тейлор{fx?.mode === 'ocp' ? ' · FX от ОВП' : ''}</div>
                   <div className="big approx">{smln(taylor.totals._total?.total ?? 0, 1)}<small>млн ₽</small></div></div>
                 {tot && (
                   <div className={stale ? 'stale' : undefined}
-                    title="Точная переоценка покрытых позиций + Тейлор для остальных: сравнимо с итогом по Тейлору">
-                    <div className="lbl">Точно{tot.n_exact < tot.n_positions ? ` + ≈ для ${tot.n_positions - tot.n_exact} непокрытых` : ''}</div>
+                    title={ocpMode ? 'Точная переоценка покрытых позиций + Тейлор для остальных, FX от дельт позиций: сравнимо с «Тейлор по позициям ≈» справа, не с итогом «FX от ОВП»'
+                      : 'Точная переоценка покрытых позиций + Тейлор для остальных: сравнимо с итогом по Тейлору'}>
+                    <div className="lbl">Точно{ocpMode ? ' · FX от дельт позиций' : ''}{tot.n_exact < tot.n_positions ? ` + ≈ для ${tot.n_positions - tot.n_exact} непокрытых` : ''}</div>
                     <div className="big">{smln(tot.blended, 1)}<small>млн ₽</small></div>
                     <div className="sub">покрытые {tot.n_exact}/{tot.n_positions}: точно {smln(tot.exact, 1)} vs ≈ {smln(tot.taylor_covered, 1)},
                       остаток {smln(tot.residual, 1)}</div>
                   </div>
                 )}
+                {tot && ocpMode && posTaylor && (
+                  <div title="Тейлор по позициям, FX от их дельт: пара к «Точно» слева">
+                    <div className="lbl">Тейлор по позициям ≈</div>
+                    <div className="big approx">{smln(posTaylor.totals._total?.total ?? 0, 1)}<small>млн ₽</small></div>
+                  </div>
+                )}
                 <div className="side">
-                  <span>{payload.business_date} · прогон #{payload.run_id} · {payload.positions.length} позиций</span>
+                  <span>{payload.business_date} · прогон #{payload.run_id} · {payload.positions.length} позиций · все книги деска, фильтр книг мониторов не применяется</span>
                   <div className="chips">
                     {firstOnlyMv > 0 && <StatusChip tone="warn" title="У этих позиций нет гаммы (резервные ступени оценки)">
                       только 1-й порядок · {num(firstOnlyMv / (absMv || 1) * 100, 0)} % MV</StatusChip>}
@@ -141,10 +156,15 @@ export function ScenarioLab() {
                   Посчитать точно
                 </button>
               </div>
-              <div className="ph"><h3>По книгам</h3><span className="hint">млн ₽ · ≈ — разложение Тейлора</span></div>
-              <ResultTable taylor={taylor} result={result} stale={stale} />
+              <div className="ph"><h3>По книгам</h3><span className="hint">млн ₽ · ≈ — разложение Тейлора{fx?.mode === 'ocp'
+                ? ' · столбец FX — ОВП × шок; нелинейные деривативы — отдельной строкой' : ' · столбец FX — от валютных дельт позиций'}</span></div>
+              <ResultTable taylor={taylor} result={result} stale={stale} ocpMode={fx?.mode === 'ocp'} />
+              {fx?.mode === 'ocp' && result && <p className="note">Точный расчёт переоценивает позиции целиком: FX в нём идёт от их
+                валютных дельт, а не от ОВП. С итогом «≈» выше он напрямую не сравнивается.</p>}
             </div>
           )}
+
+          {payload && fx && <FxPanel fx={fx} result={result} stale={stale} />}
 
           {payload && result && (
             <div className="panel">

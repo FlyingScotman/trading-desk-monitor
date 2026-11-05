@@ -82,6 +82,7 @@ from ..pnl.reasons import (
     PROXY_CURVE_TEXT,
     REPORTED_METHOD,
     RUN_NO_PREV_MARKET,
+    assumption_text,
 )
 from ..settings import REPO_ROOT
 from ..store import PositionInputs
@@ -707,7 +708,7 @@ def run_content(ctx: EodContext, positions: list[tuple[str, str, Outcome]], prev
     extra = inputs.extra if inputs else {}
     quantities = {pid: q for pid, _, _, q in inputs.rows} if inputs else {}
     issuers: dict[str, dict[str, Any]] = {}
-    rows, skipped, no_pnl, approx = [], [], [], []
+    rows, skipped, no_pnl, approx, assumed = [], [], [], [], []
     quality: Counter[str] = Counter()
     for pid, book, o in positions:
         x = extra.get(pid)
@@ -719,6 +720,8 @@ def run_content(ctx: EodContext, positions: list[tuple[str, str, Outcome]], prev
         quality[o.valuation.quality] += 1
         if o.valuation.quality != "exact":
             approx.append(f"{pid} {label}: оценка {o.valuation.quality}: " + "; ".join(o.valuation.assumptions))
+        if (txt := assumption_text(getattr(o.pnl, "assumption", None))) is not None:   # TDM#576
+            assumed.append(f"{pid} {label}: PnL {o.pnl.total:,.0f} ₽ на допущении: {txt}")   # type: ignore[union-attr]
         if o.terms is None:  # valued without core (valuation.positions): PnL by the rate move or the reports
             if prev is not None and o.pnl is None:
                 no_pnl.append(f"{pid} {label}: нет PnL ({_why(o)})")
@@ -764,7 +767,7 @@ def run_content(ctx: EodContext, positions: list[tuple[str, str, Outcome]], prev
     if prev is None:
         log.append(("WARN", (f"PnL не посчитан: {NO_PNL_TEXT[RUN_NO_PREV_MARKET]} (нет среза eod_final раньше "
                              f"{ctx.business_date}); позиции без PnL, а не с нулём")))
-    log += [("WARN", s) for s in skipped + approx + no_pnl]
+    log += [("WARN", s) for s in skipped + approx + assumed + no_pnl]
     for r in rows:  # TDM#170: an impossible risk is the run's problem, said here and kept out of every sum (summary)
         if (why := risk_problem(r.get("risk"), r.get("dv01"), r.get("mv_rub"), r.get("notional_rub"),
                                  r.get("instr_type") == "BOND")) is not None:

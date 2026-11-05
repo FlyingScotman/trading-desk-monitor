@@ -86,12 +86,14 @@
   "ytm"
  ],
  "pnl": [
+  "assumption",
   "available",
   "carry",
   "convexity",
   "explained",
   "funding",
   "fx",
+  "fxPartial",
   "method",
   "methodText",
   "newTrades",

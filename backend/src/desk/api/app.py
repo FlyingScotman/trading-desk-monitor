@@ -37,6 +37,7 @@ from ..publish import ocp_run
 from ..publish.funding_run import NOT_COMPUTED, REPORTING_CCY, STATUS_TEXT
 from ..scenario import carry, jobs
 from ..scenario.definition import definition_hash, normalize
+from ..scenario.fx_ocp import fx_ocp
 from ..scenario.taylor import risk_payload
 from ..settings import REPO_ROOT
 from ..settings import load as load_settings
@@ -73,6 +74,7 @@ from .models import (
     ScenarioDefList,
     ScenarioJob,
 )
+from .ocp_line import method_note, ocp_line
 from .runs import HEADER_SQL, PNL_KEYS, resolve_run
 
 log = logging.getLogger("desk.api")
@@ -366,8 +368,13 @@ def ocp_out(run_id: int, block: dict[str, Any] | None) -> RunOcp:
     b = block or ocp_run.empty_block(ocp_run.NOT_COMPUTED, ocp_run.STATUS_TEXT[ocp_run.NOT_COMPUTED])
     # v2 of the block (TDM#416) and v3 (TDM#531): an older block has none of them, the model's defaults
     keep = ("sources", "published", "gaps", "derivatives_check", "parts", "derivatives_pv", "books")
-    return RunOcp(run_id=run_id, state=b["status"], **{k: b.get(k) for k in RunOcp.model_fields
-                                                       if k not in ("run_id", "state") and (k in b or k not in keep)})
+    out = RunOcp(run_id=run_id, state=b["status"], **{k: b.get(k) for k in RunOcp.model_fields
+                                                      if k not in ("run_id", "state", "published_rows", "method_note")
+                                                      and (k in b or k not in keep)})
+    # TDM#567: the published lines serialized as the page data and the history do (``ocp_line``), the day's methodology
+    out.published_rows = [ocp_line(x) for x in (b.get("published") or {}).get("by_book") or []]
+    out.method_note = method_note((b.get("published") or {}).get("basis"), out.published_rows)
+    return out
 
 
 def _total(components: dict[str, Any] | None) -> float | None:
@@ -691,7 +698,10 @@ def create_app(store_url: str, static_dir: Path | None = None, app_dir: Path | N
                            (run_id,)).fetchall()
         ref = {r["kind"]: r["data"] for r in con.execute("SELECT kind, data FROM run_reference WHERE run_id = %s",
                                                          (run_id,))}
-        return _cached(request, run, RiskPayload(**risk_payload(run, rows, ref)))
+        payload = risk_payload(run, rows, ref)
+        payload["ocp"] = fx_ocp(concepts_run.ocp_status(ref.get("ocp")), payload, rows,
+                             ((ref.get("ocp") or {}).get("policy") or {}).get("amount_basis"))  # TDM#577
+        return _cached(request, run, RiskPayload(**payload))
 
     # ---- bonds
     @app.get("/api/v1/bonds/history", response_model=BondHistory)

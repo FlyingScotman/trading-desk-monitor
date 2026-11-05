@@ -298,7 +298,7 @@ input[type=date].dt{border:1px solid var(--line-strong);background:var(--surface
   <section id="view-scen" class="scen" role="tabpanel" aria-labelledby="mode-scen">
     <aside class="panel builder" aria-label="Конструктор сценария">
       <div class="sect">
-        <div class="ph"><h2>Сценарии</h2><span class="hint">PnL, млн ₽</span></div>
+        <div class="ph"><h2>Сценарии</h2><span class="hint" title="Экран устарел: фильтр книг мониторов не применяется; действует только сохранённый старый выбор, если он остался в браузере">PnL, млн ₽ · фильтр книг мониторов не применяется</span></div>
         <ul class="presets" id="preset-list"></ul>
         <div id="custom-wrap" hidden><div class="subcap">Свои</div><ul class="presets" id="custom-list"></ul></div>
       </div>
@@ -333,7 +333,7 @@ input[type=date].dt{border:1px solid var(--line-strong);background:var(--surface
       </div>
 
       <div class="sect">
-        <div class="ph"><h2>FX-шок</h2><span class="hint" title="Валютная облигация, фондированная в своей валюте, — за вычетом валютного пассива фондирования, как в ОВП (#249): шок двигает и облигацию, и пассив">+ = ослабление рубля; облигации — нетто фондирования</span></div>
+        <div class="ph"><h2>FX-шок</h2><span class="hint" title="Валютная облигация, фондированная в своей валюте, — за вычетом валютного пассива фондирования (#249): шок двигает и облигацию, и пассив. Прототип: в экране сценариев (frontend) FX-шок считается от публикуемой ОВП прогона, нелинейные деривативы отдельно (#577)">+ = ослабление рубля; облигации — нетто фондирования</span></div>
         <div class="pb" id="fx-box" style="padding-top:2px"></div>
       </div>
 
@@ -753,7 +753,7 @@ function renderFx(){
   $('#fx-box').innerHTML = FXC.map(c => {
     const v = S.ed.fx[c], rate = D.FX[c] * (1 + v / 100);
     return `<div class="row"><label for="fx-${c}" title="${c}/RUB">${c}/RUB <span class="muted mono">${num(rate, 2)}</span></label><input type="range" id="fx-${c}" data-fx="${c}" min="-40" max="40" step="1" value="${v}"><output class="num" for="fx-${c}">${snum(v)}%</output></div>`;
-  }).join('') + '<p class="note">Облигация шокируется вместе с телом своего фондирования (в валюте бумаги); FX остатков ДС книг деривативов — в FX своей книги: FX показывается одной суммой, нетто ОВП.</p>';
+  }).join('') + '<p class="note">Облигация шокируется вместе с телом своего фондирования (в валюте бумаги); FX остатков ДС книг деривативов — в FX своей книги: FX показывается одной суммой, нетто фондирования (FX-дельты позиций, не публикуемая ОВП; в экране сценариев frontend — публикуемая ОВП, #577).</p>';
 }
 $('#fx-box').addEventListener('input', e => { const c = e.target.dataset.fx; if (!c) return; S.ed.fx[c] = +e.target.value; const row = e.target.closest('.row'); row.querySelector('output').textContent = snum(S.ed.fx[c]) + '%'; row.querySelector('label span').textContent = num(D.FX[c] * (1 + S.ed.fx[c] / 100), 2); markDirty(); });
 function renderCredit(){

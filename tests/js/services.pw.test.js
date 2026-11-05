@@ -25,13 +25,26 @@ const FEEDS = [
    schedule:{daily_at:['08:30']}, after_positions:false, running:false, queued:false, next_run:null,
    last:{last_started:'2026-10-16T08:30:00+03:00', state:'blocked', code:'login_required', needs_login:true, failures:0}}];
 
-async function setup(browser, {width = 1440, available = true, code = 'available', hash = '#adapter/services', http = 200, noLogin = false} = {}) {
-  const ctx = await browser.newContext({viewport:{width, height:1000}}), pg = await ctx.newPage(), errors = [], posts = [];
+const HIST = {available:true, code:'available', feed:'trades', enabled:true, when:'any', from:'2026-01-05', history_from:null,
+  from_min:'2026-01-05', from_default:'2026-01-05', backfill_enabled:true, paused:false, waiting:null, dates:10,
+  counts:{fetched:4, no_trades:2, no_books:0, unmapped:1, unavailable:1, partial:0, todo:2, covered:0}, current:null,
+  applied:{full:1, partial:1, outside:1, unknown:0, waiting_recompute:1, no_effect:0, in_pnl:2, reasons:{no_prev_close:1, lost:1}},
+  last:null, next_at:null, gate:'off', pending:false, calls_today:0, limit_per_day:300,
+  problems:[{date:'2026-10-13', state:'unavailable', code:'date_unavailable', attempts:1, next_at:'2026-10-17T18:00:00+00:00'},
+    {date:'2026-10-12', state:'unmapped', code:'books_unmapped', attempts:0, next_at:null}]};
+const BF = {enabled:true, from:'2026-01-05', to:'2026-10-15', dates:10, done:8, todo:2, no_positions:0, no_market:0, failed:0, hub:true,
+  next:[], problem_dates:[], hub_problem_dates:[], stalled:null, oldest_run:'2026-01-05', first_positions:'2026-01-05', inbox_scanned_from:null};
+
+async function setup(browser, {width = 1440, available = true, code = 'available', hash = '#adapter/services', http = 200, noLogin = false,
+  history = HIST, bf = null, waitsHistory = false} = {}) {
+  const ctx = await browser.newContext({viewport:{width, height:1000}}), pg = await ctx.newPage(), errors = [], posts = [], dialogs = [];
+  const hist = history ? JSON.parse(JSON.stringify(history)) : null;
   let job = {state:'idle', code:'idle'}, polls = 0;
   const feeds = JSON.parse(JSON.stringify(FEEDS));
+  if (waitsHistory) feeds[0].waits_history = true;
   if (noLogin) { feeds[1].last = {last_started:'2026-10-16T08:30:00+03:00', state:'complete', code:'fetched', needs_login:false, failures:0}; }
   pg.on('pageerror', e => errors.push(e.message));
-  pg.on('dialog', d => d.accept());
+  pg.on('dialog', d => { dialogs.push(d.message()); d.accept(); });
   await pg.route('**/*', route => {
     const req = route.request(), u = new URL(req.url());
     if (u.origin !== ORIGIN) return route.abort();
@@ -47,6 +60,8 @@ async function setup(browser, {width = 1440, available = true, code = 'available
       return json(available ? {available, code, name:'synthetic', version:'0.1', panel:PANEL, feeds, job, running:null, scheduler:true}
         : {available:false, code, panel:null, feeds:[], job});
     }
+    if (u.pathname === '/api/v1/backfill/status' && bf) return json(bf);
+    if (u.pathname === '/api/v1/adapter-services/history' && req.method() === 'GET') return hist ? json(hist) : json({message:'нет'}, 404);
     if (u.pathname.startsWith('/api/v1/adapter-services/')) {
       assert.strictEqual(req.method(), 'POST');
       assert.strictEqual(req.headers()['content-type'], 'application/x-www-form-urlencoded');
@@ -68,6 +83,14 @@ async function setup(browser, {width = 1440, available = true, code = 'available
           table:{columns:['Среда', 'Отчётов'], rows:[['test', 3], [EVIL, null]]}};
         return json({...job, state:'queued', code:'queued'}, 202);
       }
+      if (u.pathname.endsWith('/history')) {
+        for (const k of ['enabled', 'from', 'when']) if (p.has(k)) hist[k] = k === 'enabled' ? p.get(k) === 'true' : p.get(k);
+        return json({state:'complete', code:'saved'});
+      }
+      if (u.pathname.endsWith('/history/refetch')) {
+        if (p.get('from') === '2026-10-20') return json({state:'blocked', code:'invalid_request'}, 422);
+        return json(p.get('confirm') === 'true' ? {state:'complete', code:'queued', dates:3} : {state:'confirm', code:'confirm', dates:3});
+      }
       if (op === 'enabled') { const f = feeds.find(x => u.pathname.includes('/' + x.id + '/')); f.enabled = p.get('enabled') === 'true'; return json({state:'complete', code:'saved'}); }
       if (op === 'run') { feeds.find(x => u.pathname.includes('/' + x.id + '/')).queued = true; return json({state:'queued', code:'queued'}, 202); }
       return json({state:'idle', code:'idle'});
@@ -78,7 +101,7 @@ async function setup(browser, {width = 1440, available = true, code = 'available
     return route.fulfill({status:200, contentType:TYPES[path.extname(file)] || 'application/octet-stream', body:fs.readFileSync(file)});
   });
   await pg.goto(ORIGIN + '/settings.html' + hash);
-  return {ctx, pg, errors, posts};
+  return {ctx, pg, errors, posts, dialogs};
 }
 
 test('services block in Settings', {skip: pw ? false : 'нет Playwright'}, async t => {
@@ -259,6 +282,106 @@ test('services block in Settings', {skip: pw ? false : 'нет Playwright'}, asy
         await off.pg.locator('#st-q').fill('Тестовые сервисы');
         assert.match(await off.pg.locator('#st-q-res').innerText(), /Ничего не нашлось/);
       } finally { await off.ctx.close(); }
+    });
+
+    await t.test('the trades of past dates: summary, switch with the first date, hours, the period button with the number of dates', async () => {
+      const {ctx, pg, errors, posts, dialogs} = await setup(browser, {width: 390, bf: BF});
+      try {
+        await pg.locator('#svc-hist-box').waitFor();
+        await pg.waitForFunction(() => document.getElementById('svc-hist-sum').textContent.length > 0);
+        assert.strictEqual(await pg.locator('#svc-hist-sum').textContent(),
+          'Сделки прошлых дат: получено 4 из 10 дат · без сделок 2 · не сопоставлено 1 · недоступно 1 · ждут запроса 2');
+        const applied = await pg.locator('#svc-hist-applied').textContent();
+        assert.match(applied, /PnL сделок учтён полностью в 1 дате, частично в 1 дате, вне PnL в 1 дате \(/);
+        assert.match(applied, /нет предыдущего закрытия: 1/); assert.match(applied, /Ждут пересчёта: 1/);
+        assert.strictEqual(await pg.locator('#svc-hist-on').isChecked(), true, 'по умолчанию включено');
+        assert.strictEqual(await pg.locator('#svc-hist-from').inputValue(), '2026-01-05');
+        assert.strictEqual(await pg.locator('#svc-hist-when').inputValue(), 'any');
+        assert.match(await pg.locator('#svc-hist-when option:checked').textContent(), /В любое время/);
+        await pg.locator('#svc-hist-diag summary').click();
+        const diag = await pg.locator('#svc-hist-diag').innerText();
+        assert.ok(diag.includes('13.10 — недоступно: сервис не отдаёт эту дату, попыток: 1') && diag.includes('12.10 — не сопоставлено: книги сервиса не сопоставлены с книгами монитора'));
+        assert.ok(!diag.includes('date_unavailable') && !diag.includes('books_unmapped'), 'no raw codes');
+        assert.match(await pg.locator('#svc-hist-box').innerText(), /будни 09:30–19:45 по Москве/);
+        // the page itself does not overflow on a phone
+        assert.strictEqual(await pg.locator('#svc-card').evaluate(n => n.scrollWidth > n.clientWidth + 1), false);
+
+        await pg.locator('#svc-hist-from').fill('2026-03-02');
+        await pg.waitForFunction(() => document.getElementById('svc-hist-from').value === '2026-03-02');
+        await pg.locator('#svc-hist-box .tgl-s').click();
+        await pg.waitForFunction(() => !document.getElementById('svc-hist-on').checked);
+        await pg.locator('#svc-hist-box .tgl-s').click();
+        await pg.waitForFunction(() => document.getElementById('svc-hist-on').checked);
+        let p = posts.filter(x => x[0].endsWith('/adapter-services/history')).map(x => Object.fromEntries(x[1]));
+        assert.deepStrictEqual(p, [{from:'2026-03-02'}, {enabled:'false'}, {enabled:'true', from:'2026-03-02'}]);
+        await pg.locator('#svc-hist-when').selectOption('off_hours');
+        await pg.waitForFunction(() => document.getElementById('svc-hist-when').value === 'off_hours');
+        p = posts.filter(x => x[0].endsWith('/adapter-services/history')).map(x => Object.fromEntries(x[1]));
+        assert.deepStrictEqual(p.pop(), {when:'off_hours'});
+
+        await pg.locator('#svc-hist-refetch').click();
+        await pg.locator('#svc-hist-rf').fill('2026-10-01'); await pg.locator('#svc-hist-rt').fill('2026-10-15');
+        await pg.locator('#svc-hist-go').click();
+        await pg.getByText('Поставлено в очередь дат: 3.', {exact:true}).waitFor();
+        assert.strictEqual(dialogs.length, 1);
+        assert.match(dialogs[0], /за 3 даты \(01\.10\.2026 — 15\.10\.2026\)/);
+        const rf = posts.filter(x => x[0].endsWith('/history/refetch')).map(x => Object.fromEntries(x[1]));
+        assert.deepStrictEqual(rf, [{from:'2026-10-01', to:'2026-10-15'}, {from:'2026-10-01', to:'2026-10-15', confirm:'true'}]);
+        await pg.locator('#svc-hist-refetch').click();
+        await pg.locator('#svc-hist-rf').fill('2026-10-20');
+        await pg.locator('#svc-hist-go').click();
+        await pg.getByText('Проверьте заполненные поля.', {exact:true}).waitFor();
+        assert.strictEqual(dialogs.length, 1, 'no confirmation for a refused period');
+
+        // the settings page, «История прогонов»: how many dates have the PnL of their trades
+        await pg.waitForFunction(() => /Сделки прошлых дат/.test(document.getElementById('bf-rows').textContent));
+        assert.match(await pg.locator('#bf-rows').textContent(), /PnL сделок учтён в 2 датах \(полностью 1, частично 1\), вне PnL 1, ждут пересчёта 1/);
+        assert.strictEqual(await pg.locator('#svc-hist-box button, #svc-hist-box a').evaluateAll(n => n.some(x => /desk\.bat|командн/i.test(x.textContent))), false);
+        assert.deepStrictEqual(errors, []);
+      } finally { await ctx.close(); }
+    });
+
+    await t.test('the trades of past dates: a login pause, trading hours, backfill off, an adapter without the feature', async () => {
+      const waits = {...HIST, enabled:true, paused:true, waiting:'login_required', gate:null, current:null, backfill_enabled:false,
+        counts:{...HIST.counts, todo:0}, problems:[]};
+      let o = await setup(browser, {history: waits});
+      try {
+        await o.pg.waitForFunction(() => /нужен вход/.test((document.getElementById('svc-hist-next') || {}).textContent || ''));
+        assert.match(await o.pg.locator('#svc-hist-applied').textContent(), /Ждут пересчёта: 1 \(история прогонов выключена\)/);
+        assert.strictEqual(await o.pg.locator('#svc-hist-diag').isHidden(), true);
+      } finally { await o.ctx.close(); }
+      const hours = {...HIST, enabled:true, gate:'trading_hours', next_at:'2026-10-16T16:45:00+00:00', current:null};
+      o = await setup(browser, {history: hours});
+      try {
+        await o.pg.waitForFunction(() => /ждёт конца торговых часов, дальше в/.test((document.getElementById('svc-hist-next') || {}).textContent || ''));
+      } finally { await o.ctx.close(); }
+      const now = {...HIST, enabled:true, gate:null, current:'2026-10-14'};
+      o = await setup(browser, {history: now, waitsHistory: true});
+      try {
+        await o.pg.waitForFunction(() => /^Сейчас: 14\.10/.test((document.getElementById('svc-hist-next') || {}).textContent || ''));
+        assert.strictEqual(await o.pg.locator('#svc-hist-stop').isVisible(), true);
+        assert.match(await o.pg.locator('tr[data-feed=terms]').innerText(), /ждёт запроса прошлой даты/);
+        assert.strictEqual(await o.pg.locator('#svc-hist-stop').textContent(), 'Остановить запрос');
+        assert.match(await o.pg.locator('#svc-hist-stop').getAttribute('title'), /со следующей даты через пару минут; чтобы выключить — снимите переключатель/);
+        await o.pg.locator('#svc-hist-stop').click();
+        await o.pg.waitForFunction(() => true);
+        await o.pg.waitForTimeout(200);
+        assert.deepStrictEqual(o.posts.filter(x => x[0].endsWith('/cancel')).map(x => Object.fromEntries(x[1])), [{target:'feed'}]);
+      } finally { await o.ctx.close(); }
+      const none = {available:false, code:'history_unsupported', feed:null, enabled:false, when:'off_hours', from:'2026-01-05', counts:{}, applied:null, problems:[]};
+      o = await setup(browser, {history: none});
+      try {
+        await o.pg.waitForFunction(() => document.getElementById('svc-hist-sum') && document.getElementById('svc-hist-sum').textContent.length > 0);
+        assert.strictEqual(await o.pg.locator('#svc-hist-sum').textContent(), 'Адаптер не умеет сделки прошлых дат.');
+        assert.strictEqual(await o.pg.locator('#svc-hist-on').isDisabled(), true);
+        assert.strictEqual(await o.pg.locator('#svc-hist-refetch').isDisabled(), true);
+      } finally { await o.ctx.close(); }
+      o = await setup(browser, {history: null});   // the route is not there (an older program): the block stays hidden
+      try {
+        await o.pg.locator('#svc-card').waitFor();
+        await o.pg.waitForTimeout(400);
+        assert.strictEqual(await o.pg.locator('#svc-hist-box').isHidden(), true);
+      } finally { await o.ctx.close(); }
     });
 
     await t.test('without the capability the block stays hidden; a broken one says why', async () => {

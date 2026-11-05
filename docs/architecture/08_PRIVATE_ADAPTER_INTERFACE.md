@@ -1,6 +1,6 @@
 # 08 Private adapter interface (SPI v1)
 
-As of 3 November 2026, revision 10 (private contract 1.8: the dataset `trade_list`, the live trades of the owner's books without their terms, and the `feed` request's `trades_file`, a list of the trades whose terms to fetch, TDM#561; on top of revision 9); revision 9 (services: the `feed` request's repeated `book` and the FEED flag `books`, and the day's bond trades in the intraday run, §10 `trades`, TDM#557; no contract change); revision 8 (private contract 1.7: the `ocp` row's optional `derivatives_ccy`, the report's
+As of 4 November 2026, revision 11 (services: the FEED flag `history` and `history_from`, the closed answer codes of a feed run for a past `date`, and the history of trades in the monitor, TDM#569; no contract change); revision 10 (private contract 1.8: the dataset `trade_list`, the live trades of the owner's books without their terms, and the `feed` request's `trades_file`, a list of the trades whose terms to fetch, TDM#561; on top of revision 9); revision 9 (services: the `feed` request's repeated `book` and the FEED flag `books`, and the day's bond trades in the intraday run, §10 `trades`, TDM#557; no contract change); revision 8 (private contract 1.7: the `ocp` row's optional `derivatives_ccy`, the report's
 derivatives apart by kind, and `ocp_policy.published` `report_base_plus_day` with `report_max_age_bd`, for the published OCP of
 TDM#531; contract 1.6 of 2 November: the `trades` schema, TDM#525); revision 7 of 28 October (SPI 1 optional functions `status` and `run_action` with `describe()["actions"]`, the settings page's adapter tools of TDM#421, no contract change; revision 6, private contract 1.5: the `reference()` table `ocp_policy`, the organisation's OCP conventions, for the published OCP of TDM#416; revision 5 of 23 October, contract 1.4: `trade_terms` of interest rate and cross-currency swaps, REPO and HTM purchases, for the valuation of swaps by core and the funding of REPO and HTM lots; revision 4 of 22 October, contract 1.3: the `reference()` table `funding_policy` and
 `positions.purchase_accrued_ccy`, for the funding engine in the runs, wave B1; revision 3, contract 1.2: FUTURES books, the `ocp`, `cash_balances`, `pnl_official` and `trade_terms` schemas, `reference()` entities and funding rules, `describe()` settings tabs, multi-date cash history, adapter phases A7–A10; revision 2 of 19 October followed an independent review). Status: **accepted; both tracks build against it.** Decision: [ADR-008](adr/ADR-008-private-adapter-boundary.md). Owner of this document: the backend. A change here is a versioned change (§9).
@@ -196,6 +196,30 @@ it has. Two parts:
   reason of its own, then `invalid_request`. The monitor keeps the last 5 request files for diagnosis and prepends
   one line to the feed's outcome, «Список: сделок L, книг B; запрошено N (новых a, изменённых b), уже были M, закрыто K»,
   and keeps the counts in the feed's state. The list is too long for the 256 request fields, hence a file.
+
+**Trades of past dates** (since 4 November 2026, TDM#569; no new minor version of the private contract). A FEED of the
+dataset `trades` with `books: true` may add two optional keys: `history: true` (the feed also answers for a past `date`:
+the day's cut at the end of that day, a newer export of the same date replaces the older one, §6.6) and
+`history_from: "YYYY-MM-DD"` (the earliest date the source keeps, when known). A monitor that does not know the keys drops
+them (`clean_feeds`); without `history` the monitor's background fetch of past dates does not use the feed and the screen
+says so. The fetch is on by default (owner, 04.11.2026; the owner switches it in the settings, «Догружать сделки прошлых дат с …»), is silent while the feed is off in the monitor, asks one
+date at a time (not more often than every 2 minutes, at most 300 requests a day, by default at any time, also in the trading hours),
+never today's date, and the answer's `dates` must be the asked date or empty. The closed answers for a past date:
+
+| `state` / `code` | meaning | the monitor |
+|---|---|---|
+| `complete` / `exported` | records of the requested books are in the files | files taken in; the date is marked received |
+| `complete` / `no_records` | no records of the requested books on the date, and the book mapping is proven. Two cases: (a) the snapshot has no records at all: a file **without units**, it replaces nothing and the date is unchanged; (b) the snapshot has records, none of the requested books: a file with **empty units** of every requested book, it replaces them with an empty list (a trade deleted in the source leaves the date) | the date is marked «без сделок» by the code, whatever the file's status; it is asked again only in the window of the newest 3 dates |
+| `partial` / `books_unmapped` | records exist, but none proved its book mapping: no units, no book replaced. This is not «no trades» | marked «не сопоставлено»; asked again only after a new adapter fingerprint (the mapping was changed) |
+| `error` / `date_unavailable` | past dates only: the service refused the date's window (a 4xx other than 401, 403, 408, 429), no file. For today a 4xx stays `partial` / `export_incomplete` | marked «недоступно»; asked again after 1, 3, 7 days, then only after a new fingerprint or by the button. If every past date is refused, the screen suggests checking the connection settings |
+| `partial` / `export_incomplete` | the export is incomplete (5xx, the network) | asked again after 5 and 15 minutes; the third failure is «недоступно» |
+| `blocked` (`login_required`, `config_invalid`, `source_disabled`), `skipped`, `error` otherwise | as for every feed | no mark; the whole fetch waits (a login) or backs off |
+
+Accepted risk of the adapter: the only trade of the whole environment deleted in the source stays in its date until
+another record appears. The adapter's service source of trades and its hourly source of trades must not be enabled for the same books (the unit of
+a date belongs to one source, §6.6). The files are taken in with one non-blocking try of the cycle lock; a busy lock
+leaves them pending and they are taken in at the next step, before another date is asked. No run is made after the
+ingestion: the monitor's eod and backfill steps recompute a date by the changed hash of its inputs (§10 `trades`).
 
 **Operations** (field `op`):
 
@@ -600,7 +624,7 @@ and OCP engines are generic and parameterised by them, never by firm constants i
 (`reference_rev`; `store.current_reference(kind, on)`), a new revision only when a row changed. Unlike books they
 may carry history: several rows of one key with different `valid_from`, the one in force on date D being the
 latest `valid_from` <= D (a row without `valid_from` applies from its first revision on, a later change from the
-day it was recorded, as books). An invalid row, or a repeated (key, `valid_from`), is left out with an error issue
+day it was recorded, as books). `ocp_policy` is read differently: it is a **snapshot** (the backend takes the keys of the last delivery, so a row the adapter stops listing stops being in force, and a row dated in the future keeps the key's previous row until its day; an empty list is no delivery), and one policy, the one in force today, applies to every date (§10). An invalid row, or a repeated (key, `valid_from`), is left out with an error issue
 and the rest is kept; a book or rule naming an entity that `entities` does not list gets `unknown_entity`, a rule
 naming an unknown book `unknown_book`, two rules with the same selectors and `valid_from` `ambiguous_rule`, a
 `funding_policy` or `ocp_policy` setting given twice with different values `ambiguous_policy`, an `ocp_policy.report_components`
@@ -694,12 +718,14 @@ What the run **publishes** follows `ocp_policy.published`. Since 1.7 (owner, 03.
 `report_max_age_bd` business days (a full snapshot of the entity: a book of it without a unit on B, also one whose
 older unit is still carried forward by `covers: listed`, has 0), **without the derivative kinds the report gives
 apart**, plus their PV from positions, plus the foreign bonds' revaluation and the trades since B, plus the
-components the report does not hold. A unit older than the limit is not published (its books derived). A date before
-03.11.2026 whose `ocp_policy` gives no `published` keeps `report_plus_outside` (TDM#416: `ocp_ccy` plus the components
-the report does not hold, with `report_max_age_days`), so a date recomputed later keeps its basis. An `ocp_policy` row
-giving `published` is in force as §7 says: a new revision of the same `policy_id` without `valid_from` applies from the
-Moscow day it is recorded, so the earlier dates, even recomputed, keep the basis they had; keep the `policy_id` (a
-new one, without `valid_from`, would apply to every past date and conflict with the old key).
+components the report does not hold. A unit older than the limit is not published (its books derived). Without a `published` in `ocp_policy` the engine takes this basis for every date, past ones too (owner, 04.11.2026, TDM#567;
+`report_plus_outside` of TDM#416: `ocp_ccy` plus the components the report does not hold, with `report_max_age_days`,
+stays selectable). An `ocp_policy` row
+giving `published` is in force as §7 says, **for every date alike**: the backend applies the policy in force **today**
+(the Moscow day; a row without `valid_from` is in force always; of the rows of one `policy_id` the one with the greatest `valid_from` <= today is taken) to
+all dates of the history, not the one that held on each date (owner, 04.11.2026, TDM#567). A changed policy recomputes the
+whole history; a `valid_from` in the future only postpones the change, and on that day the whole history is recomputed.
+Keys are those of the last delivery: a `policy_id` the adapter stops listing stops being in force, and when every row of a key in the last delivery is dated later than today, the row of the newest earlier delivery stays in force until that day (the real adapter gives one row, so a `valid_from` in the future postpones the change instead of switching to the engine's defaults). In a delivery of several rows a row that failed validation is left out of the snapshot, and its key stops being in force. An empty list is no delivery: the stored policy is kept (to cancel a row, `active` = false).
 
 Since 1.7 the adapter gives derivatives apart **by kind**. For each derivative kind it maps report row types to, it
 leaves the report's lines of that kind with a value date after the report's date out of `ocp_ccy` (and out of
@@ -898,7 +924,7 @@ monitors' screen «Сделки дня» (C20). Every run of date D (intraday, p
 trades into its book (`desk.trades.apply_intraday`, setting `intraday_trades`, TDM#557). A book whose latest report is
 older than D (`valid_date` < D) is carried: its set plus the trades of the days after the report (a late report) plus
 the trades of D. A book with the report of D has the report's positions and risk strictly; the trades of D then give
-the PnL only (a book with a row per lot is compared and measured per bond, not per `position_id`: the PnL of the bond is on the largest lot of the report, its other lots have none, `extra.pnl_on_row`), and what the report differs from the start of the day plus the trades by is flagged on the row
+the PnL only (a book with a row per lot is compared and measured per bond and **portfolio** (`x_portfolio`), not per `position_id`: the PnL of the bond in a portfolio is on one lot of the report, the lot of the start of the day with the smallest id, its other lots of that portfolio have none, `extra.pnl_on_row`; a lot sold out in a portfolio is a row at zero in it, and a bond bought and sold within the day, neither at the start nor in the report, is a row at zero that carries the trades' PnL. When a trade does not name its portfolio (`x_portfolio` of the trade) and the book holds the bond in several, the bond is taken whole, as without portfolios. A bond valued at the report's figure, with no terms to value it, has the trades inside the difference of the reports' values at their whole value, so the lots the trades changed (another quantity, new) have no PnL of the day, `no_pnl` `trades_in_report_value`, flag `x.trades_not_in_pnl`, and the lots of a bond valued in different ways carry the bond's whole PnL on the lot valued with terms, the others a zero), and what the report differs from the start of the day plus the trades by is flagged on the row
 (`x.trades_report_gap`) and in the lineage (`gaps`). Trades older than seven days since a book's last report are not counted: the lineage says so (`history_cut`). The run's private inputs hash covers the trades it applied and the set the start of the day comes from, so a
 new cut of the trades, or the report of D, makes the run again. The PnL
 of a position the trades changed is the start-of-day position's PnL (the full factors) plus the component `new_trades`:
@@ -906,6 +932,8 @@ each trade from its price (`price_pct`, clean, % of the current face; `accrued_c
 currency) to the run's valuation, a sale from the valuation to its price (`desk.pnl.new_trades`); a trade without a
 price is 0, flagged; `price_pct` is a percent of the face whatever the settlement currency (a replacement bond traded in
 RUB is priced so); the trade's `settle_date` is not used. Trades of other products (FX, derivatives) are the rest of S13 (TDM#29).
+
+The run's lineage `intraday_trades.outside_total` (always these keys, zeros where empty) says what the trades did not put in the day's total: `trades` (in the book), `no_prev_close` (no previous close: no PnL of the day at all), `no_pnl_run` (the run was asked for no PnL), `no_pnl` (`positions`, `trades`, `pnl_rub`: positions whose start of the day has no PnL; the PnL of their trades is beside it), `lost` (`bonds`, `trades`: bonds at the report's figure, no PnL of the day), `unpriced` (`trades`: no price, rate or valuation, 0 in the total) and `unvalued` (`trades`: of bonds not valued at all).
 
 ### `trade_list` — stock; `full_snapshot`, scope `["book_id"]`, `covers = listed`, `time_basis = end_of_day` (since 1.8)
 
@@ -1024,7 +1052,9 @@ with different values is `ambiguous_policy` (warning) and also keeps the default
 
 The organisation's OCP conventions: which components of the OCP the bank's OCP report holds, what the run publishes
 and the settings the generic engine leaves open (`desk.rules.ocp.OcpPolicy`, `OPEN_DECISIONS`). Key: `policy_id`,
-with `valid_from`; every row is firm-wide. The run publishes the bank's report where a report unit covers a book or
+with `valid_from`; every row is firm-wide. The backend reads the table as a snapshot: the keys of the last delivery, and for **all** dates the rows of those keys in force today (a row dated in the future keeps the key's previous row until its day)
+(a row without `valid_from` is in force always; of the rows of one `policy_id` the one with the greatest `valid_from` <= today is taken; the order of the rows does not matter)
+(see `published` below), so `valid_from` here dates the change of the setting, not a history of methodologies. The run publishes the bank's report where a report unit covers a book or
 an entity, as its base, with the derivatives' PV and the day's changes (`report_base_plus_day`, owner, 03.11.2026,
 TDM#531; `ocp` above) or plus the components the report does not hold (`report_plus_outside`, 28.10.2026, TDM#416); a
 book no unit covers is derived from positions. A field no row gives keeps the engine's value: the provisional default,

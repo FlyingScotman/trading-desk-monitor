@@ -52,15 +52,14 @@ const OCP = {
 };
 const withOcp = D => { D.OCP = JSON.parse(JSON.stringify(OCP)); };
 
-t('без публикуемой ОВП (прогон до v2, демо): шапка — сумма FX-дельт позиций, как раньше', () => {
-  for (const mutate of [null, D => { delete D.OCP; }, D => { D.OCP = null; }]) {
+t('без публикуемой ОВП (прогон до v2, ошибка расчёта): шапка пишет «ОВП нет», Σ FX-дельт позиций ОВП не подменяет (TDM#566)', () => {
+  for (const mutate of [D => { delete D.OCP; }, D => { D.OCP = null; }]) {
     const { M, K, I } = load(mutate);
     assert.ok(!M.ocp && K.ocpScope() === null);
-    const R = K.fxRows(M.positions);
-    assert.ok(R.length && R.every(r => !r.pub));
-    const usd = R.find(r => r.c === 'USD');
-    near(usd.v, M.positions.reduce((s, p) => s + I.fxIn(p, 'USD'), 0), 'USD по ногам');
-    assert.ok(!K.fxMini(M.positions).includes('k-ocpsrc') && K.ocpNote() === '');
+    assert.strictEqual(K.fxRows(M.positions).length, 0);
+    const html = K.fxMini(M.positions);
+    assert.ok(/ОВП нет/.test(html) && !html.includes('k-fxm') && !html.includes('k-ocpsrc') && K.ocpNote() === '');
+    assert.ok(M.positions.some(p => I.fxIn(p, 'USD')), 'FX-дельты позиций остаются у позиций');
   }
 });
 
@@ -454,7 +453,73 @@ ta('C16: книга ОВП без позиций (TDM#556) — юрлицо и �
   assert.deepStrictEqual(Array.from(one.K.ocpScope(null, null, { type: 'HTM' }).lines, z => z.book), ['OLDX']);
 });
 
+t('TDM#567 (D10): K.ocpBook — справочник того же дня (meta) раньше справочника прогона; без meta — прогона', () => {
+  const { M, K } = load(withOcp);
+  const own = M.books[0].id;
+  assert.strictEqual(K.ocpBook(own).entity, M.book[own].entity);
+  assert.strictEqual(K.ocpBook(own, { [own]: { entity: 'Тогдашнее юрлицо', type: 'HTM' } }).entity, 'Тогдашнее юрлицо');
+  assert.strictEqual(K.ocpBook(own, { OTHER: {} }).entity, M.book[own].entity, 'книги нет в справочнике дня — прогона');
+  // прошлый день фильтруется по тогдашнему юрлицу книги: строка книги входит под юрлицом дня, не прогона
+  const day = [{ entity: HEAD, book: own, books: [own], ccy: 'USD', amount: 1e6, source: 'report' }];
+  assert.strictEqual(K.ocpScope(day, { [own]: { entity: 'Тогдашнее юрлицо' } }, { entity: 'Тогдашнее юрлицо' }).lines.length, 1);
+  assert.strictEqual(K.ocpScope(day, { [own]: { entity: 'Тогдашнее юрлицо' } }, { entity: M.book[own].entity }).lines.length, 0);
+});
+
+t('TDM#567 (D24): шапка называет ОВП не по текущей методике (M.ocp.methodNote); по текущей — без пометки', () => {
+  const now = load(withOcp);
+  assert.strictEqual(now.M.ocp.methodNote, null);
+  assert.strictEqual(now.K.ocpMethodNote(), '');
+  assert.ok(!now.K.fxMini(now.K.list()).includes('data-ocp-method'));
+  const note = 'не по текущей методике: отчёт ещё с деривативами, их PV не добавлен (FXB)';
+  const old = load(D => { withOcp(D); D.OCP.methodNote = note; D.OCP.byBook[0].baseKind = 'with_derivatives'; });
+  assert.strictEqual(old.M.ocp.methodNote, note);
+  assert.strictEqual(old.M.ocp.byBook[0].baseKind, 'with_derivatives');
+  const html = old.K.fxMini(old.K.list());
+  assert.ok(html.includes('data-ocp-method') && html.includes('не по текущей методике: отчёт ещё с деривативами'), html);
+  // report_base_plus_day: подпись только если строка с деривативами в срезе (TDM#567, ревью)
+  const bpd = f => load(D => { withOcp(D); D.OCP.basis = 'report_base_plus_day'; D.OCP.methodNote = note; D.OCP.byBook[0].baseKind = 'with_derivatives'; }, f);
+  assert.ok(bpd(null).K.fxMini(bpd(null).K.list()).includes('data-ocp-method'));
+  const cut = bpd({ books: ['SECUR'] });
+  assert.strictEqual(cut.K.ocpMethodText(), '', 'книга с отчётом с деривативами не в срезе — пометки нет');
+});
+
+ta('TDM#567 (D11, D24): C16 — день другой методики на графике и в подсказке, строка с отчётом с деривативами, справочник дня', async () => {
+  const s = JSON.parse(JSON.stringify(SRV));
+  s.days[1].methodNote = 'другая методика: отчёт целиком (с деривативами) и слагаемые вне отчёта';
+  const cur = s.days[3];
+  cur.basis = 'report_base_plus_day';
+  cur.methodNote = 'не по текущей методике: отчёт ещё с деривативами, их PV не добавлен (FXB)';
+  cur.lines = cur.lines.map(x => Object.assign({}, x, { baseDate: '2026-10-20', baseOlder: false, baseKind: x.book === 'FXB' ? 'with_derivatives' : 'without_derivatives', parts: { base: x.amount } }));
+  const x = page16({ srv: s });
+  await settle();
+  const html = x.html(), o = x.chart();
+  assert.ok(html.includes('data-c16-method-day') && html.includes('data-c16-wd') && x.code.includes('data-c16-method-legend'), 'шапка дня, строка книги, пояснение графика (вставка в заглушке DOM не видна)');
+  const k = o.xAxis.data.findIndex((_, j) => o.xAxis.axisLabel.formatter(o.xAxis.data[j], j).endsWith('*'));
+  assert.ok(k >= 0 && k !== o.xAxis.data.length - 1, 'звёздочка на оси у дня другой методики (и у текущего дня тоже, он не по текущей): ' + k);
+  const usd = o.series.find(z => z.name === 'USD').data;
+  assert.ok(usd.some(v => v && typeof v === 'object' && v.itemStyle.opacity < 1), 'бледный столбец');
+  const tip = o.tooltip.formatter(o.series.map(z => ({ dataIndex: k, seriesName: z.name, value: typeof z.data[k] === 'object' && z.data[k] ? z.data[k].value : z.data[k], marker: '' })));
+  assert.ok(tip.includes('data-c16-method') && tip.includes('другая методика'), tip);
+  const plain = page16({ srv: SRV });
+  await settle();
+  assert.ok(!plain.html().includes('data-c16-method') && !plain.html().includes('data-c16-wd') && !plain.chart().series.some(z => z.data.some(v => v && typeof v === 'object')), 'без пометок сервера пометок нет');
+  // справочник дня: книга сменила юрлицо — день фильтруется по своему справочнику
+  const h = JSON.parse(JSON.stringify(SRV));
+  h.days[1].books = { OLD: { name: 'Старая книга', entity: 'IC', desk: 'FX' } };
+  const KEY = 'tdm.view.v1:c16:books';
+  const ic = page16({ srv: h, store: { [KEY]: { entity: 'IC', off: [] } } });
+  await settle();
+  const usdIc = ic.chart().series.find(z => z.name === 'CNY').data;
+  assert.ok(usdIc.some(v => v != null), 'день 19.10 по справочнику дня: OLD под IC');
+});
+
 (async () => {
   for (const [name, f] of asyncTests) { await f(); n++; console.log('ok', name); }
   console.log(n + ' tests passed');
 })().catch(e => { console.error(e); process.exit(1); });
+
+t('демо: публикуемая ОВП производная от FX-дельт позиций (шапка не пишет «ОВП нет»)', () => {
+  const { M, K } = load(null);
+  assert.ok(M.ocp && M.ocp.byBook.length && K.ocpScope() && K.fxRows(M.positions).length);
+  assert.ok(!/ОВП нет/.test(K.fxMini(M.positions)));
+});

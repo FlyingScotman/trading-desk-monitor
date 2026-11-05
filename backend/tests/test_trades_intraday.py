@@ -131,10 +131,12 @@ def test_new_position_needs_a_free_id_and_a_face_amount_a_known_currency(monkeyp
                                       _trade(trade_id="D", position_id="T1|U3", instrument_id="SEC2", ccy="RUB", **face),
                                       _trade(trade_id="E", position_id="T1|U4", instrument_id="SEC2", ccy="USD", **face)])
     assert summary["skipped"] == {"no_currency": 1, "units_mismatch": 1} and summary["new_positions"] == 1
-    # a new row that nets to nothing is not left behind
+    # a new row that nets to nothing stays at zero: it carries the PnL of its two trades (TDM#570), it is no new position
     out, summary = _apply(monkeypatch, [_trade(trade_id="C", position_id="T1|N", instrument_id="SEC2"),
                                         _trade(trade_id="D", position_id="T1|N", instrument_id="SEC2", side="sell")])
-    assert "T1|N" not in {r[0] for r in out.rows} and summary["new_positions"] == 0 and summary["applied"] == 2
+    assert {r[0]: r[3] for r in out.rows}["T1|N"] == 0.0 and summary["new_positions"] == 0 and summary["applied"] == 2
+    assert [t["row"] for t in summary["trades"]] == ["T1|N", "T1|N"]
+    assert (summary["rows"]["T1|N"]["start"], summary["rows"]["T1|N"]["final"]) == (0.0, 0.0)
 
 
 def test_more_than_500_trades_are_all_listed_for_the_screen(monkeypatch):

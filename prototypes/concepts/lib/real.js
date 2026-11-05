@@ -31,8 +31,8 @@
  *    (extra.funding.lines rate_pct, по телу строк в рублях), p.fundingInfo — extra.funding (состояние, строки, причина);
  *    M.funding — фондирование прогона (D.fundingStatus: состояние, итоги по книгам и юрлицам, проблемы).
  *  - ОВП (TDM#416): M.ocp — публикуемая ОВП прогона (D.OCP: по валютам и по книгам, источник каждой цифры — отчёт ОВП
- *    банка + слагаемые вне отчёта или из позиций, чего не хватает — gaps); null — у прогона её нет (шапка и C06 — сумма
- *    FX-дельт позиций). FX-дельта позиций (p.fxDeltaBy) и PnL FX от неё не зависят.
+ *    банка + слагаемые вне отчёта или из позиций, чего не хватает — gaps); null — у прогона её нет (шапка и C06 пишут «ОВП нет»;
+ *    сумма FX-дельт позиций ею не подменяется). FX-дельта позиций (p.fxDeltaBy) и PnL FX от неё не зависят.
  *  - свопы и РЕПО, оценённые ядром (#201): p.ratesCore — сделки (extra.swaps / extra.repos), фиксинги (extra.index_fixings),
  *    сверка с отчётом (reported_pv_rub / pv_diff_rub), provisional — quality 'assumed'; null — нет. M.indexFixings — фиксинги
  *    прогона по индексу; M.derivParallel() — лениво, /api/v1/runs/{id}/derivatives (ядро и отчёт по позициям): state
@@ -110,10 +110,13 @@
   else if (M.funding.problems.length) M.notes.push('Фондирование: проблем ' + M.funding.problems.length + ' (кокпит, вкладка PnL)');
   // публикуемая ОВП прогона (TDM#416, D.OCP, api/concepts_run.ocp_status): отчёт ОВП банка + слагаемые вне отчёта, по
   // книгам без отчёта — из позиций. Шапка (K.fxMini), плитка C06 «ОВП и курсы» и C16 берут её; null — прогон без неё
-  // (до v2 блока ОВП, ошибка расчёта): сумма FX-дельт позиций, как раньше. Чего ей не хватает — заметка в шапке.
+  // (до v2 блока ОВП, ошибка расчёта): страницы пишут «ОВП нет», сумма FX-дельт позиций ею не подменяется (TDM#566).
+  // Чего ей не хватает — заметка в шапке.
   const OC = D.OCP;
   M.ocp = OC && Array.isArray(OC.byBook) ? {
     asOf: OC.asOf || null, state: OC.state, text: OC.text || '', basis: OC.basis,
+    // TDM#567: почему ОВП прогона не по текущей методике (сервер, api/ocp_line.method_note); null — по текущей
+    methodNote: OC.methodNote || null,
     byCcy: Object.fromEntries(Object.entries(OC.byCcy || {}).map(([c, x]) => [c, { total: num(x.total), rate: num(x.rate), totalRub: num(x.totalRub), bySource: x.bySource || {} }])),
     byBook: OC.byBook.map(x => Object.assign({}, x, { amount: num(x.amount) || 0, reported: num(x.reported), books: x.books || [], components: x.components || [] })),
     notes: OC.notes || [], gaps: OC.gaps || [], sourceNames: OC.sourceNames || {}, componentNames: OC.componentNames || {},
@@ -214,7 +217,7 @@
   }
 
   // ---------- книги, юрлица, эмитенты ----------
-  M.books = Object.entries(D.BOOKS || {}).map(([id, b]) => ({ id, name: b.name || id, entity: b.entity || '—', desk: b.desk || '—', type: b.bookType || '—', trader: b.trader || '—' }));
+  M.books = Object.entries(D.BOOKS || {}).map(([id, b]) => ({ id, name: b.name || id, entity: b.entity || '—', desk: b.desk || '—', type: b.bookType || '—', trader: b.trader || '—', portfolio: b.portfolio || null }));  // portfolio: HTM у книги типа HTM (api/scope_rule)
   D.positions.forEach(p => { if (p.book && !M.books.some(b => b.id === p.book)) M.books.push({ id: p.book, name: p.book, entity: p.entity || '—', desk: '—', type: '—', trader: '—' }); });
   M.book = Object.fromEntries(M.books.map(b => [b.id, b]));
   M.entities = [...new Set(M.books.map(b => b.entity))].map(e => ({ id: e, name: e }));
@@ -475,14 +478,14 @@
     } else {
       const z = v => v || 0;
       // кэрри — без фондирования (#168), фондирование — свой фактор: null (не посчитано) в сумме — 0, итог тот же
-      p.pnl = { carry: z(e.carry) + z(e.rolldown), funding: num(e.funding), rates: z(e.rates) + z(e.convexity), spread: z(e.spread), fx: z(e.fx), trading: z(e.newTrades),
-        other: z(e.other) + z(e.reported), total: z(e.explained), available: true, method: e.methodText || e.method || null };
+      p.pnl = { carry: z(e.carry) + z(e.rolldown), funding: num(e.funding), rates: z(e.rates) + z(e.convexity), spread: z(e.spread), fx: num(e.fx), fxPartial: !!e.fxPartial, trading: z(e.newTrades),
+        other: z(e.other) + z(e.reported), total: z(e.explained), available: true, method: e.methodText || e.method || null, assumption: e.assumption || null };
       p.carryDay = (z(e.carry) + z(e.rolldown)) / accrualDays; p.fundingDay = e.funding == null ? null : e.funding / accrualDays; p.rollDay = z(e.rolldown) / accrualDays;
     }
     p.funding = e.available === false || !d.pnl ? null : num(e.funding);  // null: не посчитано (не настроено, проблема)
     p.fundingInfo = ex.funding || null;
     p.ratesCore = ratesCoreOf(ex, d);  // свопы и РЕПО ядра (#201), null — нет
-    p.pnlMtd = num(xp.pnlMtd); p.pnlYtd = num(xp.pnlYtd);
+    p.pnlMtd = num(xp.pnlMtd); p.pnlYtd = num(xp.pnlYtd); p.pnlMtdParts = xp.pnlMtdParts || null;  // MTD по факторам (отчёт PnL за период, #568)
     p.spreadChgBp = num(xp.spreadChgBp);
     p.tradedToday = !!(xp.trade || d.newToday); p.tradeToday = xp.trade || null;
     p.searchBase = [p.exchName, p.isin, p.issuerName, p.issuerFull, p.issuerGroup, p.latName, p.book, p.bookName, p.ccy, p.kindLabel, p.groupLabel, p.sector, p.couponFmt, p.portfolio, p.rating, p.ratingAgency].join(' ').toLowerCase();
@@ -556,6 +559,7 @@
   M.histDates = (X.histDates && X.histDates.length) ? X.histDates.slice() : [M.asOf];
   M.histSource = X.histSource || 'positions';  // 'runs': суммы прогонов по датам
   M.pnlPeriods = X.pnlPeriods || null;
+  M.pnlClosed = X.pnlClosed || [];  // позиции, закрытые раньше в периоде: их PnL MTD/YTD не входит в строки позиций (#568)
   const n = M.histDates.length;
   const series = (src, keys, today) => { const o = {}; keys.forEach(k => { o[k] = (src && src[k]) ? src[k].map(v => v == null ? null : +v) : new Array(n).fill(0); if (!src && today) o[k][n - 1] = today(k); }); return o; };
   const sumBy = (f) => positions.reduce((s, p) => s + (f(p) || 0), 0);

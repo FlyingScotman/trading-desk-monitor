@@ -195,7 +195,7 @@
   function panel(title, extra, cls) { const p = h('div', 'k-panel ' + (cls || '')); p.innerHTML = '<div class="hd"><h3>' + title + '</h3><span class="sp"></span>' + (extra || '') + '</div><div class="bd"></div>'; return p; }
   function model() {
     const opts = { pos: M.pos, k: RK(), books: M.book, kindLabel: KIND, repr: K.repr };
-    const keepIds = new Set(K.list().map(p => p.id)), keep = C.keep(K.filter, M.book);
+    const keepIds = new Set(K.list().map(p => p.id)), keep = K.rowIn;
     const rows = C.rows(resp, opts).filter(r => r.p ? keepIds.has(r.id) : keep(r));
     return rows.concat(C.cashRows(resp, opts).filter(keep));
   }
@@ -207,7 +207,7 @@
       const why = err.status === 404 ? 'сервер не нашёл прогон или снэпшоты его рынка (или эндпоинта ещё нет на сервере)' : err.status === 422 ? 'параметры не приняты' : err.status === 401 || err.status === 403 ? 'нужно войти в монитор' : 'ошибка запроса';
       ban.innerHTML = '<div class="c17-ban err"><b>Прогнозное кэрри не загружено</b>: ' + esc(why) + '. <span class="mut">' + esc(err.text || err.message || '') + '</span></div>';
       if (!resp) { body.innerHTML = ''; return; }
-    } else ban.innerHTML = '';
+    } else ban.innerHTML = K.portsOff().length ? '<div class="k-note" data-c17-ports>Остатки ДС и строки без позиции: у книги HTM портфель HTM, у остальных книг портфеля нет, и фильтр портфелей к ним не применяется.</div>' : '';
     if (!resp) return;
     const R = model(), fundOk = resp.fundingStatus === 'computed';
     // без общих фильтров — итоги сервера; с фильтрами — по строкам, по тому же правилу

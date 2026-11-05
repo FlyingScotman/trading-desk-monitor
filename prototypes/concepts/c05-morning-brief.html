@@ -165,7 +165,7 @@
     html += '<section id="s1"><div class="toc">' + SECS.map(([id, t]) => '<a href="#' + id + '">' + t + '</a>').join('') + '</div>' +
       '<h2><span class="no">01</span> Итог дня <span class="sp"></span><span class="k-note">' + f.date(M.asOf) + ', ' + esc(M.cut.label) + ' · к закрытию ' + f.date(M.prevDate) + '</span></h2>' +
       '<div class="hl"><span class="big ' + f.cls(tot) + '">' + K.d({ title: 'PnL дня', unit: 'mm ₽', fmt: v => f.mns(v, 2), list: L, val: p => p.pnl.total }, f.mns(tot, 1)) + ' <span style="font-size:18px;font-weight:500" class="mut">mm ₽</span></span>' +
-      '<span class="sub">MTD <b>' + mln('PnL MTD', L, 'pnlMtd') + '</b>' + K.partial('mtd') + ' · YTD <b>' + mln('PnL YTD', L, 'pnlYtd', 0) + '</b>' + K.partial('ytd') + '</span></div>' +
+      '<span class="sub">MTD <b>' + mln('PnL MTD', K.pnlPeriodList(L), 'pnlMtd') + '</b>' + K.partial('mtd') + ' · YTD <b>' + mln('PnL YTD', K.pnlPeriodList(L), 'pnlYtd', 0) + '</b>' + K.partial('ytd') + '</span></div>' +
       // PnL не посчитан ни у одной позиции (k.pnl null) — словами, а не «заработали 0.0» (#327, B1)
       (tot == null ? '<p>PnL за день не посчитан.' + (parts.length ? ' Главное: ' + parts.slice(0, 3).map(x => x.h).join(', ') + '.' : '')
         : '<p>За день ' + word(tot) + ' <b>' + f.mn(Math.abs(tot), 1) + ' mm ₽</b>. Главное: ' + parts.slice(0, 3).map(x => x.h).join(', ') + '.') +
@@ -184,14 +184,16 @@
       .concat([{ label: 'CS01', ser: H.cs01, today: k.cs01, list: L, val: 'cs01', color: K.curveColors.CS01 }]);
     // приближение: история деска без фильтра; при фильтре берём долю
     const all = M.kpis();
-    const traded = L.filter(p => p.tradedToday && p.tradeToday && p.notional);
+    // сделки дня — по записи прогона (pnl.extra.trades, #557), а не по изменению количества; DV01 от сделок — там, где известен их объём
+    const traded = L.filter(p => p.tradedToday);
+    const tradedDv = traded.filter(p => p.tradeToday && p.tradeToday.qty != null && p.notional);
     const tradeDv = p => p.dv01 * p.tradeToday.qty / p.notional;
     const dDay = H.dv01['RUB RUONIA'][n - 1] - H.dv01['RUB RUONIA'][n - 2];
     const dvSumAll = s => M.curves.filter(c => c.kind === 'rate').reduce((a, c) => a + H.dv01[c.id][s], 0);
     const dvDay = dvSumAll(n - 1) - dvSumAll(n - 2), dvWeek = dvSumAll(n - 1) - dvSumAll(n - 6);
     html += '<section id="s2"><h2><span class="no">02</span> Что изменилось в риске <span class="sp"></span><span class="k-note">тыс ₽/бп · история — по всему деску</span></h2>' +
       '<p>DV01 по ставкам за день ' + (dvDay < 0 ? 'удлинился' : 'укоротился') + ' на <b>' + f.dv(Math.abs(dvDay)) + '</b> тыс ₽/бп, за неделю — на <b>' + f.dv(Math.abs(dvWeek)) + '</b> (' + (dvWeek < 0 ? 'длиннее' : 'короче') + '). ' +
-      (traded.length ? 'Сегодня сделки по ' + plural(traded.length, 'позиции', 'позициям', 'позициям') + ' добавили ' + K.d({ title: 'Изменение DV01 от сделок дня', unit: 'тыс ₽/бп', rows: traded.map(p => ({ p, v: tradeDv(p) })) }, null, '') + ' тыс ₽/бп; остальное — движение рынка и старение позиций.' : 'Сделок сегодня нет — изменение от рынка и старения позиций.') +
+      (traded.length ? 'Сегодня сделки по ' + plural(traded.length, 'позиции', 'позициям', 'позициям') + ' добавили ' + K.d({ title: 'Изменение DV01 от сделок дня', unit: 'тыс ₽/бп', rows: tradedDv.map(p => ({ p, v: tradeDv(p) })) }, null, '') + ' тыс ₽/бп' + (tradedDv.length < traded.length ? ' (по ' + tradedDv.length + ' из ' + traded.length + ': у остальных объём сделок не определён)' : '') + '; остальное — движение рынка и старение позиций.' : 'Сделок сегодня нет — изменение от рынка и старения позиций.') +
       ' RUONIA за день ' + f.dvs(dDay) + ' тыс ₽/бп.</p>' +
       '<table class="mini" data-vk="c05-risk-change" data-title="Что изменилось в риске, тыс ₽/бп"><thead><tr><th>Фактор</th><th class="n">Сейчас</th><th class="n">Δ день</th><th class="n">Δ неделя</th><th class="n">Δ месяц</th><th>30 дней</th><th class="n">min … max (130д)</th></tr></thead><tbody>' +
       rowsChg.map(r => {
@@ -258,7 +260,7 @@
     if (wide.length) alerts.push({ c: '', i: '↔', h: 'Широкие спреды (≥ 300 б.п.): <b>' + wide.length + '</b> бумаг, CS01 ' + K.d({ title: 'CS01 бумаг со спредом ≥ 300', unit: 'тыс ₽/бп', list: wide, val: 'cs01' }, null, '') + ' тыс ₽/бп.' + '<div class="lst">' + wide.map(p => '<span data-card="' + p.id + '">' + esc(p.name) + ' ' + Math.round(p.zspread) + '</span>').join(' · ') + '</div>' });
     const moved = bonds.filter(p => Math.abs(p.spreadChgBp || 0) >= 5).sort((a, b) => Math.abs(b.spreadChgBp) - Math.abs(a.spreadChgBp));
     if (moved.length) alerts.push({ c: '', i: '⇅', h: 'Спред сдвинулся на 5+ б.п.: <b>' + moved.length + '</b> бумаг, PnL от спреда ' + K.d({ title: 'PnL спреда · сдвиг ≥ 5 б.п.', unit: 'mm ₽', fmt: v => f.mns(v, 2), list: moved, val: p => p.pnl.spread }) + ' mm.' + '<div class="lst">' + moved.slice(0, 10).map(p => '<span data-card="' + p.id + '">' + esc(p.name) + ' <span class="' + (p.spreadChgBp > 0 ? 'chg-up' : 'chg-dn') + '">' + f.bps(p.spreadChgBp) + '</span></span>').join(' · ') + '</div>' });
-    if (traded.length) alerts.push({ c: 'info', i: '✎', h: 'Сделки сегодня: <b>' + traded.length + '</b>, PnL сделок ' + K.d({ title: 'PnL сделок дня', unit: 'mm ₽', fmt: v => f.mns(v, 2), list: traded, val: p => p.pnl.trading }) + ' mm.' + '<div class="lst">' + traded.map(p => '<span data-card="' + p.id + '">' + esc(p.name) + ' ' + (p.tradeToday.qty > 0 ? '+' : '') + f.mn(p.tradeToday.qty, 0) + '</span>').join(' · ') + '</div>' });
+    if (traded.length) alerts.push({ c: 'info', i: '✎', h: 'Сделки сегодня: <b>' + traded.length + '</b>, PnL сделок ' + K.d({ title: 'PnL сделок дня', unit: 'mm ₽', fmt: v => f.mns(v, 2), list: L, val: p => p.pnl.trading }) + ' mm.' + '<div class="lst">' + traded.map(p => '<span data-card="' + p.id + '">' + esc(p.name) + ' ' + (p.tradeToday && p.tradeToday.qty != null ? (p.tradeToday.qty > 0 ? '+' : '') + f.mn(p.tradeToday.qty, 0) : 'PnL ' + f.mns(p.pnl.trading || 0, 2)) + '</span>').join(' · ') + '</div>' });
     // кэрри без фондирования (#168): «отрицательное» — кэрри минус фондирование, т. е. кэрри + фондирование (оно со знаком минус)
     const netCarry = p => p.carryDay + (p.fundingDay || 0);
     const neg = bonds.filter(p => p.fundingDay != null && netCarry(p) < 0 && p.book !== 'HTM');

@@ -4,13 +4,13 @@ from __future__ import annotations
 
 import os
 
-__version__ = "0.2.17"
+__version__ = "0.2.18"
 
 # Bumped by hand when a change makes a run compute something else from the same inputs (valuation, PnL, risk
 # buckets, coverage). A run records ``logic_version()`` in its lineage; the autopilot recomputes the latest positions
 # date once when its default run was made by another logic version; the backfill (desk.backfill, R23) recomputes the
 # older dates in the background.
-VALUATION_VERSION = 28  # 2: risk per curve (R8); 3: static display fields (R9 D1-D6, D8: names, coupons, issuers);
+VALUATION_VERSION = 29  # 2: risk per curve (R8); 3: static display fields (R9 D1-D6, D8: names, coupons, issuers);
 # 4: RUB bonds discounted on RUONIA OIS + Z-spread, flash PnL on the bond's own curves;
 # 5: a key-rate floater on a fallback rung books its projection on RUB KEY, the run log names missing rates inputs
 # 6: a bond's offer, its next 18 months of flows and the day's quote (G-spread, volume) in extra (concept pages)
@@ -61,6 +61,10 @@ VALUATION_VERSION = 28  # 2: risk per curve (R8); 3: static display fields (R9 D
 # REPO's end, an FX leg's settlement (extra.flows of the D-1 valuation, pnl.extra.received_rub); a trade that ended is
 # valued on its last day as settled (PV 0, extra.settled), so that day has a PnL too, not a jump (TDM#466)
 # 28: a KBD floater's linear rates PnL takes its RUONIA discounting term too: rates_linear, its RUONIA/basis split and convexity (TDM#467)
+# 29: the OCP of every date on the methodology report without derivatives + their PV (report_base_plus_day, TDM#567: no
+# date keeps report_plus_outside unless the adapter's ocp_policy says so); the PnL of the day's trades fixed (TDM#570)
+#     also: a PnL that cannot be told exactly is shown on an assumption (pnl.extra.assumption): the price of the other day, the
+# start of the day taken as 0, the simple PnL for want of the exact one; not «нет PnL» (TDM#576)
 
 
 def logic_version() -> str:

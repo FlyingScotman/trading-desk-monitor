@@ -53,10 +53,12 @@
   let mode = 'day', dim = 'book', selDay = M.histDates.length - 1;
   try { mode = localStorage.getItem('c10-mode') || 'day'; dim = localStorage.getItem('c10-dim') || 'book'; } catch (e) { }
 
-  // MTD-разложение (оценка): кэрри и фондирование × дни месяца, сделки × 3, остаток — пропорционально факторам дня
+  // MTD-разложение: факторы месяца из отчёта PnL за период (сервер, p.pnlMtdParts, с PnL сделок дня); оценка — только для
+  // демо-набора и прогона без них: кэрри и фондирование × дни месяца, сделки × 3, остаток — пропорционально факторам дня
   const DAYS_MTD = 15, mtdCache = {};
   function mtd(p) {
     if (mtdCache[p.id]) return mtdCache[p.id];
+    if (p.pnlMtdParts) return (mtdCache[p.id] = Object.assign({}, p.pnlMtdParts));
     // не посчитано (null: фактор дня или PnL MTD) — и в MTD null, а не 0 (#327, B1)
     const x = (v, m) => v == null ? null : v * m;
     const o = { carry: x(p.pnl.carry, DAYS_MTD), funding: x(p.pnl.funding, DAYS_MTD), trading: x(p.pnl.trading, 3) };
@@ -85,7 +87,7 @@
 
     // ---------- панель управления + KPI ----------
     const ctl = h('div', 'bar2');
-    ctl.innerHTML = '<span class="mseg"></span><span class="k-note">' + (mode === 'day' ? 'день: ' + f.date(M.asOf) + ' к закрытию ' + f.date(M.prevDate) : 'MTD ≈ оценка: кэрри и фондирование × ' + DAYS_MTD + ' дн., остаток по факторам дня') + '</span><span class="sp"></span><span class="k-note">щелчок по любой цифре — какие позиции дали вклад</span>';
+    ctl.innerHTML = '<span class="mseg"></span><span class="k-note">' + (mode === 'day' ? 'день: ' + f.date(M.asOf) + ' к закрытию ' + f.date(M.prevDate) : (M.source === 'real' ? 'MTD по факторам позиций: сумма прогонов месяца, с PnL сделок дня; позиции, закрытые раньше в месяце, есть в итоге MTD шапки и в «PnL за период», но в разбор по факторам и позициям не входят' : 'MTD ≈ оценка: кэрри и фондирование × ' + DAYS_MTD + ' дн., остаток по факторам дня')) + '</span><span class="sp"></span><span class="k-note">щелчок по любой цифре — какие позиции дали вклад</span>';
     page.appendChild(ctl);
     K.seg(ctl.querySelector('.mseg'), [['day', 'день'], ['mtd', 'MTD']], mode, v => { mode = v; try { localStorage.setItem('c10-mode', v); } catch (e) { } render(); });
     const kp = h('div', 'k-kpis');

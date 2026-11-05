@@ -112,3 +112,59 @@ async def set_enabled(feed_id: str, request: Request):
         return fail(e.code, e.state)
     finally:
         fields.clear()
+
+
+@router.get("/api/v1/adapter-services/history")
+async def history(request: Request):
+    """The trades of past dates (TDM#569): the switch, the first date, the counts by mark, how far the trades are in the
+    PnL, the problems. No value of a trade."""
+    try:
+        guard(request)
+    except FlowError as e:
+        return fail(e.code, e.state)
+    return JSONResponse(await run_in_threadpool(_service(request).history), headers=NO_STORE)
+
+
+def _bool(v: str) -> bool:
+    if v not in ("true", "false"):
+        raise ServiceError("invalid_request")
+    return v == "true"
+
+
+@router.post("/api/v1/adapter-services/history")
+async def history_set(request: Request):
+    fields: dict[str, list[str]] = {}
+    try:
+        guard(request)
+        fields = await form(request)
+        if not fields or set(fields) - {"enabled", "from", "when"} or any(len(v) != 1 for v in fields.values()):
+            raise ServiceError("invalid_request")
+        one = {k: v[0] for k, v in fields.items()}
+        result = await run_in_threadpool(_service(request).history_set,
+                                         _bool(one["enabled"]) if "enabled" in one else None, one.get("from"),
+                                         one.get("when"))
+        return JSONResponse(result, headers=NO_STORE)
+    except (FlowError, ServiceError) as e:
+        return fail(e.code, e.state)
+    finally:
+        fields.clear()
+
+
+@router.post("/api/v1/adapter-services/history/refetch")
+async def history_refetch(request: Request):
+    """Ask the dates of a period again. Without ``confirm=true`` only the number of dates is returned."""
+    fields: dict[str, list[str]] = {}
+    try:
+        guard(request)
+        fields = await form(request)
+        if set(fields) - {"from", "to", "confirm"} or {"from", "to"} - set(fields) \
+                or any(len(v) != 1 for v in fields.values()):
+            raise ServiceError("invalid_request")
+        one = {k: v[0] for k, v in fields.items()}
+        result = await run_in_threadpool(_service(request).history_refetch, one["from"], one["to"],
+                                         _bool(one["confirm"]) if "confirm" in one else False)
+        return JSONResponse(result, headers=NO_STORE)
+    except (FlowError, ServiceError) as e:
+        return fail(e.code, e.state)
+    finally:
+        fields.clear()

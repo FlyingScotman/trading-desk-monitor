@@ -19,7 +19,7 @@ from desk.api import compat, create_app
 from desk.marketdata.bundle import SnapshotDir
 from desk.orchestrator import Outcome, attach_pnl, prepare, value
 from desk.pnl import direct
-from desk.pnl.reasons import FX_METHOD, NO_PNL_TEXT, REPORTED_METHOD
+from desk.pnl.reasons import FX_METHOD, NO_PNL_TEXT, REPORTED_METHOD, assumption_text
 from desk.publish import desk_run, tdm_run
 from desk.store import PositionInputs
 from desk.valuation.fallback import FallbackContext, approximate
@@ -120,7 +120,9 @@ def test_fx_rows_by_the_rate_move_and_otc_by_the_reports(ctx, prev):
     o1 = d["O1"].pnl
     assert (o1.method, o1.other, o1.fx_gross, o1.flag) == (REPORTED_METHOD, pytest.approx(8e4), 0.0, "по отчёту")
     assert o1.as_tdm()["other"] == pytest.approx(8e4) and o1.extra()["method"] == REPORTED_METHOD
-    assert d["B2"].pnl is None and d["B2"].no_pnl.reason == "no_prev_report"
+    # no reported value of D-1: today's stands for it, PnL 0 on a said assumption (TDM#576), not «нет PnL»
+    assert d["B2"].no_pnl is None and d["B2"].pnl.total == 0.0 and d["B2"].pnl.assumption == {"code": "start_report_missing"}
+    assert d["B2"].pnl.extra()["assumption"]["code"] == "start_report_missing" and "assumption" not in o1.extra()
     # D-1's own report (valid on D-1): the note says nothing of a gap, no report_from (TDM#440)
     assert "reports gap" not in o1.note and o1.report_from is None and "report_from" not in o1.extra()
     assert o1.note == "reported PV 500,000.00 - 420,000.00 RUB (trades of the day inside)"
@@ -141,14 +143,21 @@ def test_gap_between_reports_names_the_old_report(ctx, prev):
     assert "report_from" not in bp.direct["FX1"].pnl.extra() and "reports gap" not in bp.direct["FX1"].pnl.note
 
 
-def test_carried_report_and_missing_rate_give_reasons(ctx, prev):
-    _, bp = _direct(ctx, prev, valid=PREV)  # today's report is yesterday's: a difference would be a false 0
-    assert bp.direct["O1"].pnl is None and bp.direct["O1"].no_pnl.reason == "report_carried"
+def test_carried_report_and_missing_rate_give_assumptions(ctx, prev):
+    """TDM#576: a report valid since D-1 only (the value did not change) and a rate missing on D-1 are not «нет PnL»: the
+    value / the rate stands as it was, PnL 0, and the row says what was assumed (with the report's date)."""
+    _, bp = _direct(ctx, prev, valid=PREV)
+    o1 = bp.direct["O1"]
+    assert o1.no_pnl is None and o1.pnl.total == 0.0 and o1.pnl.other == 0.0 and o1.pnl.flag == "по отчёту"
+    assert o1.pnl.assumption == {"code": "report_unchanged", "date": PREV.isoformat()}
+    assert assumption_text(o1.pnl.assumption) == "отчёт не обновлялся с 14.10.2026: стоимость принята неизменной, PnL нулевой"
     noprev = dataclasses.replace(prev, market=copy.copy(prev.market))
     noprev.market.fx = lambda ccy: {"cbr": None, "cbr_next": None, "moex_tom": None}
     _, bp = _direct(ctx, noprev)
-    assert bp.direct["FX1"].pnl is None and bp.direct["FX1"].no_pnl.reason == "no_prev_fx_rate"
-    assert NO_PNL_TEXT["report_carried"] and NO_PNL_TEXT["no_prev_fx_rate"]
+    fx1 = bp.direct["FX1"]
+    assert fx1.no_pnl is None and fx1.pnl.total == 0.0 and fx1.pnl.fx_gross == 0.0
+    assert fx1.pnl.assumption["code"] == "fx_rate_carried" and "USD" in assumption_text(fx1.pnl.assumption)
+    assert NO_PNL_TEXT["report_carried"] and NO_PNL_TEXT["no_prev_fx_rate"]   # the codes stay for the runs stored before
 
 
 def test_published_pnl_methods_and_honest_absence(ctx, prev, store_url):
@@ -158,11 +167,11 @@ def test_published_pnl_methods_and_honest_absence(ctx, prev, store_url):
     view = prev.market
     with store.connect(store_url) as con:
         rid, status, warnings = desk_run.publish(con, ctx, positions, prev=view, inputs=inp)
-    assert status == "complete" and any("B2" in w and "no_prev_report" in w for w in warnings)
+    assert status == "complete" and any("B2" in w and "на допущении" in w and "вчерашней отчётной" in w for w in warnings)
     c = TestClient(create_app(store_url))
     pnl = {p["position_id"]: p for p in c.get(f"/api/v1/runs/{rid}/pnl").json()["positions"]}
     assert pnl["FX1"]["components"]["fx_gross"] == pytest.approx(pnl["FX1"]["total"])
-    assert pnl["O1"]["extra"]["flag"] == "по отчёту" and pnl["B2"]["no_pnl"]["reason"] == "no_prev_report"
+    assert pnl["O1"]["extra"]["flag"] == "по отчёту" and pnl["B2"]["no_pnl"] is None and pnl["B2"]["total"] == 0 and pnl["B2"]["extra"]["assumption"]["code"] == "start_report_missing"
     tot = c.get(f"/api/v1/runs/{rid}").json()["totals"]  # the run totals: the components add up to the total
     for b, t in tot.items():
         if t["pnl"]["total"] is not None:
@@ -176,9 +185,10 @@ def test_published_pnl_methods_and_honest_absence(ctx, prev, store_url):
     assert ps["O1"]["pnl"]["reported"] == pytest.approx(8e4) and ps["O1"]["pnl"]["other"] == 0.0
     assert ps["O1"]["pnl"]["explained"] == pytest.approx(8e4) and "по отчёту" in ps["O1"]["pnl"]["methodText"]
     assert ps["FX1"]["pnl"]["fx"] == pytest.approx(pnl["FX1"]["total"]) and ps["FX1"]["pnl"]["method"] == FX_METHOD
-    b2 = ps["B2"]["pnl"]  # valued, but no PnL: null with its reason, never 0
-    assert b2["available"] is False and b2["explained"] is None and b2["carry"] is None
-    assert b2["reasonText"] == NO_PNL_TEXT["no_prev_report"]
+    b2 = ps["B2"]["pnl"]  # no value of D-1: PnL 0 on an assumption the page shows (TDM#576), not «нет PnL»
+    assert b2["available"] is True and b2["explained"] == 0 and b2["assumption"] == assumption_text(
+        {"code": "start_report_missing"})
+    assert ps["O1"]["pnl"]["assumption"] is None
     l1 = ps["L1"]["pnl"]  # the bond had no D-1 valuation in this test: not_priced_prev is not set, the run's reason
     assert l1["available"] is False and l1["reason"] == "not_computed"
     cov = desk["pnlCoverage"]

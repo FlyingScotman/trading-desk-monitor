@@ -39,9 +39,9 @@
   'use strict';
   // «Сделки дня» (S13a, TDM#525): сделки даты из выгрузки частного адаптера (набор trades контракта, 08 §10) — текущая
   // версия каждой сделки (наибольший trade_version), отменённые остаются со статусом, поздние проводки помечены.
-  // PnL сделки — от её цены до оценки прогона (pnl.extra.trades последнего прогона даты; TDM#557). Данные: GET ../api/v1/trades?date=&book_id= (backend desk/trades.py).
+  // PnL сделки — от её цены до оценки прогона (pnl.extra.trades прогона из навигации, по умолчанию основного прогона даты; TDM#557, #568). Данные: GET ../api/v1/trades?date=&book_id= (backend desk/trades.py).
   const K = KIT, f = K.f, esc = K.esc;
-  K.top({ title: 'C20 · Сделки дня', tag: 'сделки из выгрузки адаптера: версии, отмены, поздние проводки' });
+  K.top({ title: 'C20 · Сделки дня', tag: 'сделки из выгрузки адаптера: версии, отмены, поздние проводки', filter: false, filterNote: 'книга выбирается на самом экране' });
   const server = K.source === 'real' || K.source === 'empty';
   const SIDE = { buy: 'покупка', sell: 'продажа' }, STATUS = { live: 'действует', cancelled: 'отменена' };
   // в расчёте позиций дня (TDM#557: любой прогон даты добавляет к позициям начала дня сделки по облигациям, и сделки прошлых дней, пока по книге нет отчёта) — или почему нет
@@ -64,7 +64,8 @@
   }
   const view = document.getElementById('view'), daysEl = document.getElementById('days');
   const u = new URL(location.href);
-  let on = u.searchParams.get('date') || null, book = u.searchParams.get('book_id') || '', doc = null, q = '';
+  const sel = window.CONCEPTS_SEL || {};  // прогон и дата из навигации (чип «Прогон» шапки): PnL сделок — из этого прогона (#568)
+  let on = u.searchParams.get('date') || sel.as_of || null, book = u.searchParams.get('book_id') || '', doc = null, q = '';
 
   function panel(title, extra) { const p = K.h('div', 'k-panel'); p.innerHTML = '<div class="hd"><h3>' + title + '</h3><span class="sp"></span>' + (extra || '') + '</div><div class="bd"></div>'; return p; }
   function msg(t) { view.innerHTML = '<div class="k-panel"><div class="c20-msg">' + t + '</div></div>'; }
@@ -80,7 +81,7 @@
   }
   function load() {
     if (!server) { doc = DEMO(on); on = doc.date; render(); return Promise.resolve(); }
-    return getJSON('api/v1/trades?days=30' + (on ? '&date=' + on : '')).then(d => { doc = d; on = d.date; render(); }).catch(e => {
+    return getJSON('api/v1/trades?days=30' + (on ? '&date=' + on : '') + (sel.run_id ? '&run_id=' + encodeURIComponent(sel.run_id) : '')).then(d => { doc = d; on = d.date; render(); }).catch(e => {
       if (e.forbidden) return msg('Нужно войти в монитор: экран сделок открыт всем пользователям.');
       msg('Не удалось загрузить сделки' + (on ? ' за ' + esc(on) : '') + ': ' + esc(e.message) + '.');
     });

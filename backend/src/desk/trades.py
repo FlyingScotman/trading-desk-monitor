@@ -123,24 +123,50 @@ def _trade_sets(con: psycopg.Connection, lo: date, hi: date) -> list[tuple[date,
         " AND valid_date >= %s AND valid_date < %s GROUP BY 1, 2 HAVING sum(row_count) > 0 ORDER BY 1, 2", (lo, hi))]
 
 
-def _fold(rows: list, extra: dict[str, dict], books: set[str], d: date, trade_rows: list[dict[str, Any]]
-          ) -> tuple[list[list], dict[str, dict], dict[str, Any]]:
+class _AnyPortfolio:
+    """The portfolio of a lot key that takes the bond whole, in every portfolio of the book: a sentinel that no real
+    portfolio name equals."""
+
+    def __repr__(self) -> str:
+        return "<any portfolio>"
+
+
+ANY = _AnyPortfolio()
+
+
+def _portfolio(x: dict[str, Any] | None) -> str | None:
+    """The report's Portfolio column (``x_portfolio``) of a row's extra, None for a row without it."""
+    v = ((x or {}).get("x") or {}).get("x_portfolio")
+    return None if v is None else str(v)
+
+
+def _fold(rows: list, extra: dict[str, dict], books: set[str], d: date, trade_rows: list[dict[str, Any]],
+          keep_flat: bool = False) -> tuple[list[list], dict[str, dict], dict[str, Any]]:
     """The trades ``trade_rows`` of date ``d`` folded into copies of ``rows`` and ``extra`` (module doc): the trades
     are first summed per position row, then the row's figures are scaled once by final / initial quantity (so the
     order of the trades, a sale to zero and a later purchase, does not matter). Only the books in ``books`` take
     trades (else ``other_book``). A row that changes carries ``x.intraday_start_qty`` (or ``_face``): the quantity
     before the trades. Returns the rows, the extras and ``{"applied": [...], "skipped": Counter, "skip_ids": {...},
-    "changed": {pid: {"mode", "start", "final", "new"}}, "new_positions": n}``."""
+    "changed": {pid: {"mode", "start", "final", "new"}}, "new_positions": n}``. A position the trades open
+    carries the portfolio of its book (the trade's own ``x_portfolio``, else the book's when all its rows share one).
+    ``keep_flat``: a position new today whose trades add up to nothing stays as a row at zero (the day's own trades,
+    which carry a PnL); else it is dropped (the trades of earlier days: only the start of the day)."""
     rows = [list(r) for r in rows]
     extra = {pid: dict(x) for pid, x in extra.items()}
     taken = {r[0] for r in rows}
     by_pid = {(r[1], r[0]): i for i, r in enumerate(rows)}
     by_secid = {(r[1], r[2]): i for i, r in enumerate(rows) if r[2]}
+    by_secid_pf = {(r[1], r[2], _portfolio(extra.get(r[0]))): i for i, r in enumerate(rows) if r[2]}
+    inexact: set[str] = set()   # rows a trade hit by the bond alone, not knowing the lot's portfolio (see apply_intraday)
     ccy_of: dict[str, str] = {}
     for r in rows:
         c = (extra.get(r[0]) or {}).get("ccy")
         if c and r[2]:
             ccy_of.setdefault(r[2], c)
+    book_pf: dict[str, set[str | None]] = {}
+    for r in rows:   # the bonds' portfolios: an FX or OTC row of the book says nothing of where a bond belongs
+        if ((extra.get(r[0]) or {}).get("asset_class") or "bond").lower() == "bond":
+            book_pf.setdefault(r[1], set()).add(_portfolio(extra.get(r[0])))
     skipped: Counter = Counter()
     skip_ids: dict[str, str] = {}
     applied: list[dict] = []
@@ -167,7 +193,13 @@ def _fold(rows: list, extra: dict[str, dict], books: set[str], d: date, trade_ro
             continue
         i = by_pid.get((book, str(t.get("position_id"))))
         if i is None and t.get("instrument_id"):
-            i = by_secid.get((book, t["instrument_id"]))
+            tpf = t.get("x_portfolio") or (t.get("x") or {}).get("x_portfolio")
+            if tpf is not None:   # the trade says where it belongs: the last lot of the bond in that portfolio
+                i = by_secid_pf.get((book, t["instrument_id"], str(tpf)))
+            if i is None:
+                i = by_secid.get((book, t["instrument_id"]))
+                if i is not None:
+                    inexact.add(rows[i][0])
         if i is None:
             if not t.get("instrument_id"):
                 skip(t, "no_instrument")
@@ -182,6 +214,11 @@ def _fold(rows: list, extra: dict[str, dict], books: set[str], d: date, trade_ro
                 continue
             rows.append([pid, book, t["instrument_id"], 0.0 if mode == "qty" else None])
             x = {"asset_class": "bond", **({"ccy": ccy} if ccy else {}), "x": {"intraday_trade": True}}
+            pf = t.get("x_portfolio") or (t.get("x") or {}).get("x_portfolio")
+            if pf is None and len(book_pf.get(book, ())) == 1:
+                pf = next(iter(book_pf[book]))
+            if pf is not None:   # the portfolio filter must not lose a position the trades opened
+                x["x"]["x_portfolio"] = str(pf)
             for k in ("isin", "source_instrument_id", "source_instrument_name"):
                 if t.get(k) is not None:
                     x[k] = t[k]
@@ -190,6 +227,7 @@ def _fold(rows: list, extra: dict[str, dict], books: set[str], d: date, trade_ro
             extra[pid] = x
             taken.add(pid)
             i = by_pid[(book, pid)] = by_secid[(book, t["instrument_id"])] = len(rows) - 1
+            by_secid_pf[(book, t["instrument_id"], _portfolio(x))] = i
             groups[i] = {"mode": mode, "d": 0.0, "new": True}
         else:
             x = extra.get(rows[i][0])
@@ -215,9 +253,11 @@ def _fold(rows: list, extra: dict[str, dict], books: set[str], d: date, trade_ro
         changed[pid] = {"mode": g["mode"], "start": old, "final": final, "new": g["new"]}
         if g["new"]:
             if abs(final) < 1e-9:
-                drop.add(i)
-                continue
-            new_positions += 1
+                if not keep_flat:
+                    drop.add(i)
+                    continue
+            else:
+                new_positions += 1
         elif x is not None and old != 0:
             k = final / old
             x["x"] = {**(x.get("x") or {}), "intraday_trade": True,
@@ -243,12 +283,18 @@ def _fold(rows: list, extra: dict[str, dict], books: set[str], d: date, trade_ro
             changed.pop(rows[i][0], None)
         rows = [r for j, r in enumerate(rows) if j not in drop]
     return rows, extra, {"applied": applied, "skipped": skipped, "skip_ids": skip_ids, "changed": changed,
-                         "new_positions": new_positions}
+                         "new_positions": new_positions, "inexact": inexact}
 
 
 def _bond(r: Any, x: dict[str, Any] | None) -> tuple[str, str]:
     """(book, bond) of a row: its instrument, else its ISIN, else its own id; the lots of a bond share it."""
     return r[1], str(r[2] or (x or {}).get("isin") or r[0])
+
+
+def _lot_key(r: Any, x: dict[str, Any] | None) -> tuple[str, str, str | None]:
+    """(book, bond, portfolio) of a row: the lots of a bond in one portfolio share it. The PnL of a traded bond is
+    measured and split inside this key, so that a lot sold out in one portfolio keeps its PnL there."""
+    return (*_bond(r, x), _portfolio(x))
 
 
 def _row_qty(r: Any, x: dict[str, Any] | None) -> tuple[str, float | None]:
@@ -288,6 +334,10 @@ def apply_intraday(con: psycopg.Connection, on: date,
     (``new_trades``). The difference of the report and start + trades is flagged on the row
     (``x.trades_report_gap``) and in ``gaps``; a traded row the report no longer lists is kept at zero (a row of
     its own, ``<position id>|closed`` when that id is taken: the history of a position by its id breaks there).
+    The lots of a traded bond are taken by book, bond **and portfolio** (``x_portfolio``): the PnL of the trades and of
+    the start of the day stays in the portfolio of the lot the trade hit, a lot sold out in one portfolio is a row at zero
+    there. A bond bought and sold within the day (no row at the start, none in the report) is kept as a row at zero too,
+    its PnL is the trades'.
     Bonds whose lots are in different units (quantity and face amount) cannot be compared or measured: their trades
     are left out of the PnL, ``mixed_units`` and ``x.trades_mixed_units`` say so."""
     held = dict(inputs.valid_dates)
@@ -334,7 +384,7 @@ def apply_intraday(con: psycopg.Connection, on: date,
     summary["history"] = len(hist)
     if not day.rows and not hist:
         return inputs, summary
-    rows_f, extra_f, res = _fold(base_rows, base_extra, set(held), on, day.rows)
+    rows_f, extra_f, res = _fold(base_rows, base_extra, set(held), on, day.rows, keep_flat=True)
     applied, changed = res["applied"], res["changed"]
     summary.update(trades=[a for a in applied if a["row"] in changed], new_positions=res["new_positions"],
                    applied=len(applied), skipped=dict(sorted(res["skipped"].items())),
@@ -367,11 +417,35 @@ def apply_intraday(con: psycopg.Connection, on: date,
     mixed: list[str] = []
     mixed_bonds: list[str] = []
     rows_out: dict[str, dict[str, Any]] = {p: c for p, c in changed.items() if by_pid[p][1] not in rep}
-    traded = sorted({_bond(r, extra_f.get(r[0])) for r in rows_f if r[1] in rep and r[0] in changed}, key=str)
-    for key in traded:
-        lots_b = [r for r in base_rows if _bond(r, base_extra.get(r[0])) == key]
-        lots_f = [r for r in rows_f if _bond(r, extra_f.get(r[0])) == key]
-        lots_r = [r for r in inputs.rows if r[1] in rep and _bond(r, inputs.extra.get(r[0])) == key]
+    # the lots of a traded bond are taken by portfolio. A trade that does not say its portfolio and hit a bond the book
+    # holds in several portfolios (or in a portfolio of the report that is not the start's) is not known to be in the
+    # row the fold chose: the bond is then taken whole, as ``ANY`` portfolio (book, bond), as it was before portfolios
+    inexact = res["inexact"]
+    by_bond: dict[tuple[str, str], list] = {}
+    for r in rows_f:
+        if r[1] in rep and r[0] in changed:
+            by_bond.setdefault(_bond(r, extra_f.get(r[0])), []).append(r)
+    keys: set[tuple[str, str, Any]] = set()
+    for bk, rs in by_bond.items():
+        pfs = ({_portfolio(base_extra.get(r[0])) for r in base_rows if _bond(r, base_extra.get(r[0])) == bk}
+               | {_portfolio(inputs.extra.get(r[0])) for r in inputs.rows if r[1] in rep
+                  and _bond(r, inputs.extra.get(r[0])) == bk})
+        if len(pfs) > 1 and any(r[0] in inexact for r in rs):
+            keys.add((*bk, ANY))
+        else:
+            keys |= {_lot_key(r, extra_f.get(r[0])) for r in rs}
+
+    def of(key: tuple, r: Any, ex: dict) -> bool:
+        return _bond(r, ex.get(r[0])) == key[:2] if key[2] is ANY else _lot_key(r, ex.get(r[0])) == key
+
+    for key in sorted(keys, key=str):
+        pf = None if key[2] is ANY else key[2]
+        lots_b = [r for r in base_rows if of(key, r, base_extra)]
+        lots_f = [r for r in rows_f if of(key, r, extra_f)]
+        lots_r = [r for r in inputs.rows if r[1] in rep and of(key, r, inputs.extra)]
+        if not lots_r and not any(_bond(r, base_extra.get(r[0])) == key[:2] for r in base_rows):
+            # a bond that is new today: the report may put it in another portfolio than the book's
+            lots_r = [r for r in inputs.rows if r[1] in rep and _bond(r, inputs.extra.get(r[0])) == key[:2]]
         modes = {_row_qty(r, ex.get(r[0]))[0] for rs, ex in ((lots_b, base_extra), (lots_f, extra_f),
                                                               (lots_r, inputs.extra)) for r in rs}
         if len(modes) != 1:   # lots in quantities and in face amounts: not comparable, so said, never silent
@@ -401,9 +475,12 @@ def apply_intraday(con: psycopg.Connection, on: date,
             src = (lots_f or lots_b)[0]
             out_rows.append((anchor, book, src[2], 0.0 if mode == "qty" else None))
             out_extra[anchor] = _zeroed(extra_f.get(src[0]) or base_extra.get(src[0]) or {"asset_class": "bond"})
+            if pf is not None:   # the row that keeps the PnL of a sold-out lot is in its portfolio
+                zx = out_extra[anchor]
+                out_extra[anchor] = {**zx, "x": {**(zx.get("x") or {}), "x_portfolio": pf}}
         gap = q_rep - q_fold
         if abs(gap) > 1e-6:
-            gaps[f"{book}|{key[1]}"] = gap
+            gaps[f"{book}|{key[1]}" + (f"|{pf}" if pf is not None else "")] = gap
             out_extra[anchor] = {**out_extra.get(anchor, {}), "x": {**(out_extra.get(anchor, {}).get("x") or {}),
                                                                    "trades_report_gap": gap}}
         pids_f = {r[0] for r in lots_f}
@@ -414,13 +491,17 @@ def apply_intraday(con: psycopg.Connection, on: date,
             rows_out.pop(p, None)
         rows_out[anchor] = {"mode": mode, "start": q0, "final": q_rep, "final_fold": q_fold, "new": q0 == 0,
                             "report": True, "bond": str(key[1]), "book": book,
-                            "members": {r[0]: _row_qty(r, inputs.extra.get(r[0]))[1] or 0.0 for r in lots_r}}
+                            **({"portfolio": pf} if pf is not None else {}),
+                            "members": {r[0]: _row_qty(r, inputs.extra.get(r[0]))[1] or 0.0 for r in lots_r},
+                            "members_start": {r[0]: _row_qty(r, base_extra.get(r[0]))[1] for r in lots_b}}
         # the start of the day of the bond for its PnL: its lots in one row
         start_rows = [r for r in start_rows if r not in lots_b]
         for r in lots_b:
             start_extra.pop(r[0], None)
         if lots_b:
-            x0 = dict(base_extra.get(lots_b[0][0]) or {})
+            # the figures of a lot with a quantity: the start row must be valued like the lots that have one
+            src_b = next((r for r in lots_b if _row_qty(r, base_extra.get(r[0]))[1] is not None), lots_b[0])
+            x0 = dict(base_extra.get(src_b[0]) or {})
             if len(lots_b) > 1:   # the lots in one row: the figures that follow the quantity added up, else dropped
                 for f in (*SCALED, *COST_BASIS):
                     vals = [(base_extra.get(r[0]) or {}).get(f) for r in lots_b]
@@ -428,7 +509,7 @@ def apply_intraday(con: psycopg.Connection, on: date,
                         x0.pop(f, None)
                     else:
                         x0[f] = math.fsum(float(v) for v in vals)
-            start_rows.append([anchor, book, lots_b[0][2], q0 if mode == "qty" else None])
+            start_rows.append([anchor, book, src_b[2], q0 if mode == "qty" else None])
             start_extra[anchor] = x0
     if mixed:   # the trades of a bond in lots of different units: not in the PnL of the trades, said
         drop_ids = set(mixed)
@@ -520,14 +601,14 @@ def _row(r: dict[str, Any], on: date, run: dict[str, Any] | None = None, enabled
 
 
 def view(con: psycopg.Connection, on: date | None = None, book_id: str | None = None,
-         days: int = 20, intraday_trades: bool = True) -> dict[str, Any]:
+         days: int = 20, intraday_trades: bool = True, run_id: int | None = None) -> dict[str, Any]:
     """The trades screen of ``on`` (default: the latest date with trades, else today, Moscow), of ``book_id`` only when
     given: see the module docstring. Amounts as the contract has them (unsigned; ``side`` gives the direction)."""
     if on is None:
         latest = trade_dates(con, _moscow_today(), 1)
         on = latest[0] if latest else _moscow_today()
     t = store.dataset_rows(con, "trades", on, scope={"book_id": book_id} if book_id else None)
-    run = _intraday_run(con, on)
+    run = _intraday_run(con, on, run_id)
     pnl = _trade_pnl(con, run)
     rows = [_row(r, on, run, intraday_trades, pnl) for r in t.rows]
     books = {b["book_id"]: b for b in store.current_books(con, on)}
@@ -560,11 +641,19 @@ def view(con: psycopg.Connection, on: date | None = None, book_id: str | None = 
     }
 
 
-def _intraday_run(con: psycopg.Connection, on: date) -> dict[str, Any] | None:
-    """The latest complete run of ``on`` (an INTRADAY one, or a close: ``run_type`` ``EOD``) and what of the day's
-    trades it took in (its lineage ``intraday_trades``), or None."""
-    row = con.execute("SELECT run_id, cut_type, run_type, lineage->'intraday_trades' FROM run WHERE business_date = %s"
-                      " AND status = 'complete' ORDER BY run_id DESC LIMIT 1", (on,)).fetchone()
+def _intraday_run(con: psycopg.Connection, on: date, run_id: int | None = None) -> dict[str, Any] | None:
+    """The run the trades screen reads of ``on`` and what of the day's trades it took in (its lineage
+    ``intraday_trades``), or None (TDM#568): the run asked for (``run_id``: the page's run of the navigation) when it is
+    a complete run of ``on``; else the date's default run (the close, ``store.DEFAULT_RUNS``), as the other screens
+    show it; a date with only INTRADAY runs: the latest of them. A test run is never taken by default."""
+    cols = "SELECT run_id, cut_type, run_type, lineage->'intraday_trades' FROM run WHERE business_date = %s" \
+           " AND status = 'complete'"
+    row = None
+    if run_id is not None:
+        row = con.execute(cols + " AND run_id = %s", (on, run_id)).fetchone()
+    if row is None:
+        row = con.execute(cols + f" AND run_id IN ({store.DEFAULT_RUNS})", (on,)).fetchone() \
+            or con.execute(cols + " AND run_type <> 'TEST' ORDER BY run_id DESC LIMIT 1", (on,)).fetchone()
     if not row:
         return None
     t = row[3] or {}

@@ -126,7 +126,7 @@ def test_a_rung_on_core_keeps_the_simple_pnl_when_the_exact_steps_refuse(dates, 
     assert f"exact flash refused: {refusal}" in x["note"]
 
 
-def test_other_refusals_of_the_exact_steps_stay_no_pnl(dates, monkeypatch):
+def test_other_refusals_of_the_exact_steps_give_the_simple_pnl_on_an_assumption(dates, monkeypatch):
     prev, cur = dates
     (e,) = value(prev, [(RZD, Q)])
     spreads = _carried(e.valuation.z_spread_bp + 40.0)
@@ -138,7 +138,8 @@ def test_other_refusals_of_the_exact_steps_stay_no_pnl(dates, monkeypatch):
 
     monkeypatch.setattr(orch, "explain", refuse)
     attach_pnl(prev, po, cur, co)
-    assert co[0].pnl is None and co[0].no_pnl.reason == "stale_quote"
+    # TDM#576: no longer «нет PnL»: the quote did not move, its price is carried from D-1 (the simple PnL, said on the row)
+    assert co[0].no_pnl is None and co[0].pnl.assumption["code"] == "price_carried"
 
 
 def test_model_to_market_is_flagged_and_its_spread_step_is_price_discovery(dates, monkeypatch):

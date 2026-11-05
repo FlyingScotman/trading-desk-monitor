@@ -31,6 +31,7 @@ from desk.marketdata.adapter import KBD_CURVE_ID, KBD_SPEC, MarketView
 from desk.marketdata.bundle import SnapshotDir
 from desk.orchestrator import EodContext, Outcome, attach_pnl, prepare, value
 from desk.pnl.flash import FlashCurves, explain
+from desk.pnl.reasons import assumption_text
 from desk.valuation.bonds import OFZ_KBD_CLASSES, BondValuation, bond_request, value_bonds
 
 FIX = Path(__file__).parent / "fixtures" / "mdhub_v1"
@@ -245,14 +246,20 @@ def test_kbd_fallback_without_ruonia(ctx, outcomes):
     assert abs(f.rates - f.rates_linear) < 0.02 * abs(f.rates_linear) and abs(f.other) < 1e-6
 
 
-def test_not_priced_previous_day_gets_no_pnl_and_a_warning(ctx, outcomes):
+def test_not_priced_previous_day_gets_a_pnl_on_an_assumption_and_a_warning(ctx, outcomes):
     prev = shifted_prev(ctx, ctx.business_date - timedelta(days=1))
     prevs = [prev_outcome(prev, o) for o in outcomes]
     gone = next(i for i, o in enumerate(outcomes) if o.valuation)
     prevs[gone] = Outcome(prevs[gone].secid, prevs[gone].terms, None, reason="no_quote")
     cur = [dataclasses.replace(o) for o in outcomes]
     attach_pnl(prev, prevs, ctx, cur)
-    assert cur[gone].pnl is None and cur[gone].no_pnl.reason == "not_priced_prev"
+    # TDM#576: no valuation on the day before is not «нет PnL»: the bond is valued on the market of that day with today's
+    # terms (the last quote, with its date) and the PnL is the move from there, said on the row
+    assert cur[gone].no_pnl is None and cur[gone].pnl is not None
+    a = cur[gone].pnl.assumption
+    assert a["code"] == "start_price_carried" and a["date"] <= prev.business_date.isoformat()
+    assert assumption_text(a).startswith("оценки на начало дня нет: взята последняя известная котировка от ")
+    assert cur[gone].pnl.extra()["other_reason"]["why"] == "not_priced_prev"   # what was missing stays in the row
 
     positions = [(f"P{i}", "OFZ" if o.secid.startswith("SU") else "CORP", o) for i, o in enumerate(cur)]
     prev_view = MarketView(ctx.market.snapshot)
@@ -263,6 +270,6 @@ def test_not_priced_previous_day_gets_no_pnl_and_a_warning(ctx, outcomes):
     assert len(pnl) == sum(o.pnl is not None for o in cur)
     assert sum(p["carry"] for p in pnl) == pytest.approx(sum(o.pnl.carry for o in cur if o.pnl))
     assert sum(p["rates"] for p in pnl) == pytest.approx(sum(o.pnl.rates for o in cur if o.pnl))
-    assert any(f"P{gone} " in w and "not_priced_prev" in w for w in warnings(c))
-    # one published row without PnL: the position not priced the day before (no PnL, never 0)
-    assert [r["position_id"] for r in c.rows if r.get("pnl") is None] == [f"P{gone}"]
+    assert any(f"P{gone} " in w and "на допущении" in w and assumption_text(a) in w for w in warnings(c))
+    # no published row is without PnL (the assumption is in the warning and in the stored row's extra)
+    assert [r["position_id"] for r in c.rows if r.get("pnl") is None] == []

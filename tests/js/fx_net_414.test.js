@@ -52,5 +52,5 @@ test('страницы концептов: один фактор fx, ни одн
     assert.ok(!/fxGross|fxFunding|FX актив|FX фондир|FX gross|FX funding/i.test(s), path.basename(f));
   });
   const kit = fs.readFileSync(path.join(dir, 'lib', 'kit.js'), 'utf8');
-  assert.ok(/\['fx', 'FX'\]/.test(kit) && /K\.tips\.fx = 'FX \(нетто ОВП\)/.test(kit));
+  assert.ok(/\['fx', 'FX \(нетто ОВП\)'\]/.test(kit) && /K\.tips\.fx = 'FX \(нетто ОВП\)/.test(kit));
 });

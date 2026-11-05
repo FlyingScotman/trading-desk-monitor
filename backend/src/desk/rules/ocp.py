@@ -180,7 +180,7 @@ OPEN_DECISIONS: tuple[OpenDecision, ...] = (
 )
 
 DECIDED: dict[str, str] = {
-    "published": "OQ-18 (владелец, 03.11.2026, TDM#531; 28.10.2026, TDM#416)",
+    "published": "OQ-18 (владелец, 04.11.2026, TDM#567; 03.11.2026, TDM#531; 28.10.2026, TDM#416)",
     "report_max_age_bd": "OQ-18 (владелец, 03.11.2026, TDM#531)",
     "bond_funding_liability": "OQ-04 (владелец, 23.10.2026, TDM#54)",
 }
@@ -311,6 +311,16 @@ def product_group(rep: Any) -> str:
     return str(pg or "").lower()
 
 
+def takes_ocp_amount(ex: Mapping[str, Any], amount_basis: AmountBasis | str | None) -> bool:
+    """Whether the OCP takes a derivative row at its ``extra.ocp_amount`` (the nominal) and not at its FX delta: a row
+    core did not value (a CCS: its exchanges still to come), or a row core valued with ``amount_basis`` ``nominal``.
+    ``amount_basis`` None: the basis is not looked at (the published day's derivative lines are the PV whatever it
+    says). The one rule for ``classify``, ``derivative_lines`` and the scenario screen's FX shock (TDM#577)."""
+    if not ex.get("core"):
+        return bool(ex.get("ocp_amount"))
+    return amount_basis is not None and AmountBasis(amount_basis) is AmountBasis.NOMINAL
+
+
 def classify(row: Mapping[str, Any], terms: Sequence[Mapping[str, Any]], books: Mapping[str, Mapping[str, Any]],
              on: date, policy: OcpPolicy) -> tuple[str | None, dict[str, float], str, str]:
     """(component, amount per currency, basis, note) of a published row; component None: no OCP (a RUB row, an
@@ -333,7 +343,7 @@ def classify(row: Mapping[str, Any], terms: Sequence[Mapping[str, Any]], books: 
     later = vd is not None and vd > add_business_days(on, policy.settle_window_bd)
     if core:
         basis = policy.amount_basis.value
-        if policy.amount_basis is AmountBasis.NOMINAL:
+        if takes_ocp_amount(ex, policy.amount_basis):
             delta = _amounts(ex.get("ocp_amount"), policy)
     elif ex.get("ocp_amount"):
         # a CCS core did not value: the foreign leg's exchanges still to come (its terms), not the report's PV, on
@@ -785,17 +795,6 @@ CONTRIBUTIONS_MAX = 10
 BASE_SPLIT, BASE_WHOLE, BASE_ABSENT = "without_derivatives", "with_derivatives", "book_absent"
 """``base_kind`` of a line: the report without the derivatives' future flows (private/1.7 ``derivatives_ccy``), the
 report with them (an adapter before 1.7: their PV is not added), a book of a covered entity with no row (base 0)."""
-BASIS_SINCE = date(2026, 11, 3)
-"""The first date the engine's default basis is ``report_base_plus_day`` (owner, 03.11.2026, TDM#531): an earlier date
-whose ``ocp_policy`` in force does not give ``published`` keeps ``report_plus_outside`` (``default_published``), so a
-date recomputed later keeps the basis it was published on."""
-
-
-def default_published(on: date) -> PublishedBasis:
-    """The engine's basis of a date the adapter's ``ocp_policy`` gives none for (``BASIS_SINCE``)."""
-    return PublishedBasis.REPORT_BASE_PLUS_DAY if on >= BASIS_SINCE else PublishedBasis.REPORT_PLUS_OUTSIDE
-
-
 def _value_dates(row: Mapping[str, Any], terms: Sequence[Mapping[str, Any]]) -> list[date]:
     """Every flow date known of a derivative: its legs' value dates (``extra.legs``), the terms' ``value_date`` and
     ``maturity_date`` (a swap's start and end), the row's ``maturity`` and the report's ``value_date`` / ``maturity_date``;
@@ -895,7 +894,7 @@ def derivative_lines(rows: Sequence[Mapping[str, Any]], books: Mapping[str, Mapp
         core = bool((r.get("extra") or {}).get("core"))
         entity = str((books.get(r["book_id"]) or {}).get("entity") or "—")
         ex = r.get("extra") or {}
-        no_pv = not core and ex.get("ocp_amount")  # a CCS core did not value: its exchanges, not a PV
+        no_pv = not core and takes_ocp_amount(ex, None)  # a CCS core did not value: its exchanges, not a PV
         amounts = {c: a for c, a in sorted(_amounts(ex["ocp_amount"] if no_pv else r.get("fx_delta"),
                                                     policy).items()) if a}
         for ccy, a in amounts.items():

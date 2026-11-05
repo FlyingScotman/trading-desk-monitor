@@ -37,7 +37,15 @@ from rub_fixed_income import (
 
 from .curves import fx as fxcurves
 from .curves import rates
-from .marketdata.adapter import KBD_CURVE_ID, KBD_SPEC, BondQuote, BondTerms, MarketView, StaticView
+from .marketdata.adapter import (
+    KBD_CURVE_ID,
+    KBD_SPEC,
+    BondQuote,
+    BondTerms,
+    MarketView,
+    StaticView,
+    bond_currency,
+)
 from .marketdata.bundle import SnapshotDir, SnapshotError
 from .marketdata.reference import Reference
 from .marketdata.reference import facts as reference_of
@@ -48,7 +56,9 @@ from .pnl.reasons import (
     DISCOUNT_CURVE_SWITCH,
     FALLBACK_PRICE,
     NO_CURVE_ON_DATE,
+    NO_PNL_TEXT,
     PRICE_SOURCE_SWITCH,
+    assumption,
     other_reason,
 )
 from .valuation.bonds import (
@@ -73,7 +83,9 @@ from .valuation.fallback import (
     at_last_price,
     at_model_price,
     by_core,
+    carry_price,
     fx_rate_cbr,
+    last_price,
     market_fx,
     model_notes,
     par_proxy,
@@ -553,19 +565,32 @@ def attach_pnl(prev: EodContext, prev_outcomes: list[Outcome], ctx: EodContext, 
     curves = FlashCurves.build(prev.kbd, ctx.kbd, prev.curve, ctx.curve, prev_market=prev.core_market,
                                cur_market=ctx.core_market)
     cache = new_cache()
+    ladder: list[FallbackContext] = []   # the ladder's context of D-1, built once and only if a bond needs it
     for p, o in zip(prev_outcomes, outcomes):
         if o.valuation is None:
             continue
         if p.secid != o.secid:
             raise ValueError(f"request order differs: {p.secid} vs {o.secid}")
-        if p.valuation is None:
-            o.no_pnl = NoPnl("not_priced_prev", f"{prev.business_date}: {p.reason}{': ' + p.detail if p.detail else ''}")
+        if p.valuation is None:   # no valuation on D-1: re-valued on the market of D-1 (TDM#576)
+            o.pnl, o.no_pnl = _from_nothing(prev, ctx, p, o, ladder)
             continue
         pv, ov = p.valuation, o.valuation
         try:
-            if "par_proxy" in (pv.quality, ov.quality):  # a placeholder value: no PnL is better
+            if "par_proxy" in (pv.quality, ov.quality):  # a placeholder value: the other date's clean price stands for it
                 d = prev.business_date if pv.quality == "par_proxy" else ctx.business_date
-                raise NoPnl("par_proxy", f"valued at par on {d}, no price")
+                why = NoPnl("par_proxy", f"valued at par on {d}, no price")
+                if pv.quality == ov.quality:
+                    pv_, ov_, a = pv, ov, assumption("par_carried", "обе даты", ov.valuation_date)
+                elif pv.quality == "par_proxy":
+                    pv_, ov_ = carry_price(ov, o.terms, prev, prev.business_date), ov   # type: ignore[arg-type]
+                    a = assumption("par_carried", date=ov.valuation_date)
+                else:
+                    pv_, ov_ = pv, carry_price(pv, o.terms, ctx, ctx.business_date, ov.quantity)   # type: ignore[arg-type]
+                    a = assumption("par_carried", date=pv.valuation_date)
+                if pv_ is None or ov_ is None:
+                    raise why
+                o.pnl, o.no_pnl = _assumed(prev, pv_, ctx, ov_, o, a, why)
+                continue
             # no cashflows to reprice: the dirty price move (a foreign bond's carry at its yield, ``yield_pnl``); a
             # rung core valued at its price on both dates has them (TDM#383, TDM#441)
             if (ov.quality in RUNGS or pv.quality in RUNGS) and not (by_core(pv) and by_core(ov)):
@@ -599,7 +624,85 @@ def attach_pnl(prev: EodContext, prev_outcomes: list[Outcome], ctx: EodContext, 
                     date=ov.valuation_date.isoformat()))
                 o.pnl = split_fx(replace(pnl, note=f"{pnl.note}; {why}", other_reason=reason), prev, ctx, o.terms)
         except NoPnl as e:
-            o.no_pnl = e
+            o.pnl, o.no_pnl = _refused(prev, pv, ctx, ov, o, e)
+
+
+def _from_nothing(prev: EodContext, ctx: EodContext, p: Outcome, o: Outcome, ladder: list[FallbackContext]
+                  ) -> tuple[FlashPnl | None, NoPnl | None]:
+    """A bond with no valuation on D-1 (no terms in its static, no face or rate): D-1 is valued on the market of D-1 with
+    today's terms by the ladder (the last quote of the 30 days before: ``stale_price`` with its date; else the model
+    price), and the PnL is the move from there. (The accrued interest of D-1 by the ladder is ACT/365 on the date, D's by
+    core on the settlement date: on a coupon date the two conventions can differ by a coupon, as in every ``simple_pnl``.) A par value or nothing on the ladder: the clean price of D carried to D-1,
+    the accrued interest of its own date (``fallback.carry_price``). None and the reason if neither can be told."""
+    assert o.valuation is not None
+    why = NoPnl("not_priced_prev", f"{prev.business_date}: {p.reason}{': ' + p.detail if p.detail else ''}")
+    if o.terms is None:
+        return None, why
+    q = o.valuation.quantity
+    try:
+        probe = Outcome(o.secid, o.terms, prev.market.quote(o.terms), reason=p.reason or "no_data")
+        if not ladder:
+            ladder.append(FallbackContext.build(prev))
+        fb = ladder[0]
+        pv = approximate(prev, probe, q, fb)
+        found = last_price(probe, fb) if pv is not None else None
+    except Exception:   # noqa: BLE001 - the ladder's own failure is the fallback's case
+        pv, found = None, None
+    if pv is not None and pv.quality in ("market_value", "stale_price") and found:
+        return _assumed(prev, pv, ctx, o.valuation, o, assumption("start_price_carried", date=found[0].trade_date), why)
+    if pv is not None and pv.quality == "model_price":
+        return _assumed(prev, pv, ctx, o.valuation, o, assumption("start_price_model"), why)
+    pv = carry_price(o.valuation, o.terms, prev, prev.business_date)
+    a = assumption("start_price_today")
+    if pv is None and (pv := carry_price(o.valuation, o.terms, ctx, prev.business_date)) is not None:
+        # no rate of D-1 for a foreign face: the rate of D stands for it (said)
+        a = assumption("start_price_today_fx", f"{bond_currency(o.terms)} на {prev.business_date:%d.%m.%Y}")
+    if pv is None:
+        return None, why
+    return _assumed(prev, pv, ctx, o.valuation, o, a, why)
+
+
+ASSUMED_REFUSALS = ("quantity_changed", "spread_kind_changed", "stale_quote", "discount_curve_changed", "curve_missing",
+                    "no_prev_fx_rate", "core_error", "identity_failed", "no_market")
+"""The refusals of the exact steps after which the PnL is the move of the dirty price on an assumption (``_refused``,
+TDM#576); ``received_unknown`` (a coupon or redemption without an amount) has none: the coupon would be missing."""
+
+
+def _assumed(prev: EodContext, pv: BondValuation, ctx: EodContext, ov: BondValuation, o: Outcome, a: dict[str, Any],
+             why: NoPnl) -> tuple[FlashPnl | None, NoPnl | None]:
+    """The simple PnL from ``pv`` to ``ov`` (``fallback.simple_pnl``, all in ``other``, no FX split) with the assumption
+    ``a`` (``pnl.reasons.assumption``) that stands for what is missing, as ``(pnl, None)``; ``(None, why)`` where even this
+    cannot be told (a coupon without an amount) or the bond has no terms."""
+    if o.terms is None:
+        return None, why
+    try:
+        pnl = simple_pnl(pv, ov, o.terms, ctx)
+    except NoPnl as e:
+        return None, e
+    code = why.reason
+    if code != "no_prev_fx_rate":   # the FX revaluation of a foreign face out of other, unless the rate is what is missing
+        pnl = split_fx(pnl, prev, ctx, o.terms)
+    return replace(pnl, assumption=a, other_reason=other_reason(
+        FALLBACK_PRICE, f"{NO_PNL_TEXT.get(code, code)}: {a['code']}", why=code, date=ov.valuation_date.isoformat())), None
+
+
+def _refused(prev: EodContext, pv: BondValuation, ctx: EodContext, ov: BondValuation, o: Outcome,
+             e: NoPnl) -> tuple[FlashPnl | None, NoPnl | None]:
+    """The exact steps refused the bond (``e``): the move of its dirty price on an assumption, said in
+    ``pnl.extra.assumption`` (TDM#576): the quantity of the start of the day, a quote not updated since D-1 (its price
+    carried), else the simple PnL for want of the exact one. None and ``e`` where there is none (``ASSUMED_REFUSALS``)."""
+    if e.reason not in ASSUMED_REFUSALS:
+        return None, e
+    if e.reason == "quantity_changed":
+        a = assumption("quantity_changed", f"{pv.quantity:g} → {ov.quantity:g}")
+        return _assumed(prev, pv, ctx, replace(ov, quantity=pv.quantity), o, a, e)
+    if e.reason == "stale_quote":   # the quote did not move: its clean price, the accrual of each date, the payments between
+        pv_ = carry_price(pv, o.terms, prev, prev.business_date)   # type: ignore[arg-type]
+        ov_ = carry_price(ov, o.terms, ctx, ctx.business_date)   # type: ignore[arg-type]
+        if pv_ is None or ov_ is None:
+            return None, e
+        return _assumed(prev, pv_, ctx, ov_, o, assumption("price_carried", date=pv.valuation_date), e)
+    return _assumed(prev, pv, ctx, ov, o, assumption("simple_fallback", NO_PNL_TEXT.get(e.reason, e.reason)), e)
 
 
 EXACT_REFUSALS = ("curve_missing", "core_error", "identity_failed")
