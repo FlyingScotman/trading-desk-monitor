@@ -60,14 +60,16 @@ t('порядок и фильтры: сначала без кода, затем 
 
 t('колонки адаптера: только непустые значения', () => {
   assert.deepStrictEqual(plain(T.cells(CH, CH.rows[1])), [{ title: 'Ног', value: '4' }, { title: 'Валюты', value: 'CNY' }]);
+  assert.deepStrictEqual(plain(T.cells(CH, { cells: { last: '2026-11-04' } })), [{ title: 'Последний файл', value: '04.11.2026' }]);  // дата — дд.мм.гггг
 });
 
-t('точка в меню: ноги живых сделок у строк без сохранённого кода и сигнал по файлам, что больше', () => {
-  assert.strictEqual(T.attention({ choices: CH, signal: null }), 6);  // 4 + 2 + 0
-  assert.strictEqual(T.attention({ choices: CH, signal: { count: 11 } }), 11);
-  assert.strictEqual(T.attention({ choices: null, signal: { count: 3 } }), 3);
-  assert.strictEqual(T.attention({ choices: { rows: [CH.rows[0], CH.rows[4]] }, signal: null }), 0);
-  assert.strictEqual(T.attention({ error: 'x' }), 0);
+t('точка в меню: ноги по строкам без сохранённого кода; нет таких строк — сделки из сигнала; единицы не смешиваются', () => {
+  assert.deepStrictEqual(plain(T.attention({ choices: CH, signal: null })), { n: 6, text: '6 ног' });  // 4 + 2 + 0
+  assert.deepStrictEqual(plain(T.attention({ choices: CH, signal: { count: 11 } })), { n: 6, text: '6 ног' });  // не максимум ног и сделок
+  assert.deepStrictEqual(plain(T.attention({ choices: null, signal: { count: 3 } })), { n: 3, text: '3 сделки' });
+  assert.deepStrictEqual(plain(T.attention({ choices: { rows: [CH.rows[0], CH.rows[4]] }, signal: { count: 1 } })), { n: 1, text: '1 сделка' });
+  assert.strictEqual(T.attention({ choices: { rows: [CH.rows[0], CH.rows[4]] }, signal: null }).n, 0);
+  assert.strictEqual(T.attention({ error: 'x' }).n, 0);
 });
 
 t('действие запускается само: нет результата, файл менялся, результат старый; не во время работы', () => {
@@ -94,6 +96,7 @@ t('ход «Сохранить и пересчитать»: ожидание с�
 
 t('тексты: числа и склонения, без команд терминала', () => {
   assert.deepStrictEqual([1, 2, 5, 11, 21].map(T.legs), ['1 нога', '2 ноги', '5 ног', '11 ног', '21 нога']);
+  assert.deepStrictEqual([1, 2, 5, 11, 21].map(T.trades), ['1 сделка', '2 сделки', '5 сделок', '11 сделок', '21 сделка']);
   assert.deepStrictEqual([1, 3, 12].map(T.names), ['1 название', '3 названия', '12 названий']);
   assert.strictEqual(T.dm('2026-11-04'), '04.11.2026');
   const src = fs.readFileSync(path.join(__dirname, '..', '..', 'prototypes', 'settings-index-codes.js'), 'utf8');

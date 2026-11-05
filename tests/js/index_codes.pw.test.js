@@ -39,7 +39,7 @@ function server(opts) {
   const o = opts || {};
   const st = { saves: [], replayPolls: 0, autoPolls: 0 };
   const choices = o.calm ? { ...CHOICES, rows: CALM_ROWS } : CHOICES;
-  const signalNow = () => (o.signal ? { code: 'unmapped_index', count: 6, files: 2, latest: '2026-11-04' } : null);
+  const signalNow = () => (o.signal ? { code: 'unmapped_index', count: 5, files: 2, latest: '2026-11-04' } : null);
   st.handle = (u, method, body) => {
     const p = u.pathname;
     if (p === '/api/v1/auth/state') return { enabled: false, user: null };
@@ -112,8 +112,9 @@ test('Индексы ставок (TDM#565)', { skip: pw ? false : 'нет Playw
         const none = box.locator('.ic-row', { hasText: 'A_VERY_LONG_NAME' });
         assert.strictEqual(await none.locator('select').inputValue(), '');
         assert.ok(/сделка будет «не оценено»/.test(await none.innerText()));
-        assert.ok(/6 ног пришли без сопоставления индекса/.test(await box.innerText()));
+        assert.ok(/пришло: 5 сделок/.test(await box.innerText()));
         await shot(pg, 'index-codes-' + width + '.png');
+        assert.ok(/Последний файл\s+04\.11\.2026/.test(await box.innerText()), 'дата дд.мм.гггг');
         assert.ok(await noHScroll(pg), 'без горизонтальной прокрутки');
         await box.locator('.ic-chip', { hasText: 'Все' }).click();
         await box.locator('.ic-row', { hasText: 'IDX_FAKE_KEY' }).waitFor();
@@ -148,6 +149,17 @@ test('Индексы ставок (TDM#565)', { skip: pw ? false : 'нет Playw
       s = await seen(r.pg);
       assert.ok(!/warn/.test(s.dot) && s.items.length === 0, JSON.stringify(s));
       assert.ok(/Нечего проверять/.test(await box.innerText()) === false);  // нет строк без кода: открыт «Все»
+      assert.deepStrictEqual(r.errors, []);
+      await r.ctx.close();
+    });
+    await t.test('сигнал есть, а все индексы уже выбраны: сделки из сигнала, подсказка про перечитывание', async () => {
+      const r = await page(browser, server({ calm: true, signal: true }), '/settings.html#indexes', 390);
+      const box = r.pg.locator('[data-slot="index-codes"]');
+      await box.locator('.note', { hasText: 'пришло: 5 сделок' }).waitFor();
+      assert.ok(/Перечитать отчёты за период/.test(await box.innerText()) && !/не выбран ниже/.test(await box.innerText()));
+      await r.pg.waitForFunction(() => /warn/.test(document.querySelector('a[data-sec="indexes"] .dot').className));
+      const item = await r.pg.evaluate(() => window.DeskSettings.statusItems().filter(x => x.k === 'Индексы ставок')[0].text);
+      assert.ok(/^5 сделок без сопоставления/.test(item), item);
       assert.deepStrictEqual(r.errors, []);
       await r.ctx.close();
     });

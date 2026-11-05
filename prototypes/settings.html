@@ -1196,8 +1196,8 @@ async function api(method, url, body){
 }
 
 /* ---------- разделы: #hub, #adapter, #entities, #books, #funding, #auto, #up, #diag (и #dg, #rc, #bf, #eff внутри),
-   #net (и #srv, #lan, #fw внутри), #users; подразделы — #adapter/<подраздел> (TDM#551, settings-nav.js); #ovp — место
-   для модуля ОВП (виден, когда модуль открыл DeskSettings.slot('ovp-types')) ---------- */
+   #net (и #srv, #lan, #fw внутри), #users; подразделы — #adapter/<подраздел> (TDM#551, settings-nav.js); #ovp и #indexes — места
+   для модулей ОВП и «Индексов ставок» (видны, когда модуль открыл DeskSettings.slot('ovp-types') / slot('index-codes')) ---------- */
 const NAV = window.DeskSettingsNav;
 const SECTIONS = ['hub', 'adapter', 'ovp', 'indexes', 'entities', 'books', 'funding', 'auto', 'calc', 'backup', 'up', 'diag', 'net', 'users'];
 const INNER = {dg:'diag', rc:'diag', bf:'diag', eff:'diag', 'eff-card':'diag', lan:'net', srv:'net', fw:'net', 'net-urls':'net',

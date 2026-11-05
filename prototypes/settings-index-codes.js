@@ -10,7 +10,9 @@
  *    действия (404) — «обновите адаптер».
  *  - Подсказка: у названия без кода выпадающий список сразу стоит на предложенном коде с пометкой «предложено —
  *    проверьте»; кнопка записывает его, только когда владелец её нажал.
- *  - Сигнал: ответ несёт signal — число ног, пришедших без сопоставления («unmapped_index» в последних файлах условий).
+ *  - Сигнал: ответ несёт signal — число сделок, пришедших без сопоставления индекса («unmapped_index» в последних
+ *    файлах условий, адаптер предупреждает один раз на сделку). Точка и сводка считают ноги по строкам экрана, а когда
+ *    строк без кода нет, — сделки из сигнала: единицы не смешиваются.
  *    Точка в меню и строка в сводке видны, не заходя на экран.
  *  - «Сохранить и пересчитать»: POST /api/v1/adapter/choices/trade_index_codes {values, replay: true} — запись в
  *    настройки адаптера (как форма вкладки, с историей правок) и перечитывание условий (/api/v1/inbox/replay), затем
@@ -32,6 +34,10 @@
   T.names = function (n) {
     var m10 = n % 10, m100 = n % 100;
     return n + ' ' + (m10 === 1 && m100 !== 11 ? 'название' : m10 >= 2 && m10 <= 4 && (m100 < 12 || m100 > 14) ? 'названия' : 'названий');
+  };
+  T.trades = function (n) {
+    var m10 = n % 10, m100 = n % 100;
+    return n + ' ' + (m10 === 1 && m100 !== 11 ? 'сделка' : m10 >= 2 && m10 <= 4 && (m100 < 12 || m100 > 14) ? 'сделки' : 'сделок');
   };
   T.legs = function (n) {
     var m10 = n % 10, m100 = n % 100;
@@ -80,11 +86,14 @@
   T.unmapped = function (choices) {
     return (choices.rows || []).filter(function (r) { return r.value == null; });
   };
-  // число ног без сопоставления для точки в меню и сводки: строки без сохранённого кода и сигнал по последним файлам
+  // что показать в точке меню и сводке: {n, text} — ноги живых сделок у строк без сохранённого кода, а если таких строк
+  // нет, сделки из сигнала по последним файлам (адаптер предупреждает на сделку); единицы не смешиваются. n = 0 — снять
   T.attention = function (data) {
     var ch = data && data.choices, sig = data && data.signal;
-    var byRows = ch ? T.unmapped(ch).reduce(function (a, r) { return a + (r.future > 0 ? r.future : 0); }, 0) : 0;
-    return Math.max(byRows, sig && sig.count > 0 ? sig.count : 0);
+    var legs = ch ? T.unmapped(ch).reduce(function (a, r) { return a + (r.future > 0 ? r.future : 0); }, 0) : 0;
+    if (legs > 0) return { n: legs, text: T.legs(legs) };
+    if (sig && sig.count > 0) return { n: sig.count, text: T.trades(sig.count) };
+    return { n: 0, text: '' };
   };
   // порядок: сначала без кода, затем новые, дальше как дал адаптер
   T.order = function (rows) {
@@ -101,7 +110,10 @@
   T.cells = function (choices, r) {
     var c = r.cells || {};
     return (choices.columns || []).filter(function (col) { return c[col.id] != null && c[col.id] !== ''; })
-      .map(function (col) { return { title: col.title, value: T.n(c[col.id]) }; });
+      .map(function (col) {
+        var v = c[col.id];
+        return { title: col.title, value: typeof v === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(v) ? T.dm(v) : T.n(v) };
+      });
   };
   // нужно ли запустить действие само: нет результата, файл настроек менялся после него, результат старый
   T.needsRun = function (r, now) {
@@ -164,12 +176,12 @@
   }
 
   // точка раздела «Индексы ставок» в меню и строка сводки сверху (settings-nav.js): видны без захода на экран
-  function signal(n) {
+  function signal(a) {
     var DS = root.DeskSettings;
     if (!DS) return;
-    var text = n ? 'Индексы ставок: ' + T.legs(n) + ' без сопоставления' : '';
+    var n = a.n, text = n ? 'Индексы ставок: ' + a.text + ' без сопоставления' : '';
     if (DS.dot) DS.dot('indexes', n ? 'warn' : '', text);
-    if (DS.status) DS.status('index-codes', n ? { cls: 'warn', href: '#indexes', k: 'Индексы ставок', text: T.legs(n) + ' без сопоставления — открыть', title: text } : null);
+    if (DS.status) DS.status('index-codes', n ? { cls: 'warn', href: '#indexes', k: 'Индексы ставок', text: a.text + ' без сопоставления — открыть', title: text } : null);
   }
 
   function render() {
@@ -189,9 +201,13 @@
     if (r.job && r.job.finished_at && !running) head.append(h('span', { class: 'mut3' }, 'по файлам на ' + (ch && ch.replay ? T.dm(ch.replay.to) : '—') + ' · обновлено ' + new Date(r.job.finished_at).toLocaleString('ru-RU', { dateStyle: 'short', timeStyle: 'short' })));
     el.append(head);
     el.append(h('p', { class: 'hint', style: 'margin:0 0 10px' }, 'Названия индексов видны только на этом компьютере.'));
-    if (r.signal && r.signal.count > 0)
-      el.append(h('div', { class: 'note warn' }, 'В последних файлах условий ' + T.legs(r.signal.count) + ' пришли без сопоставления индекса' +
-        (r.signal.latest ? ' (последний файл за ' + T.dm(r.signal.latest) + ')' : '') + ': сделки по ним «не оценено», пока индекс не выбран ниже.'));
+    if (r.signal && r.signal.count > 0) {
+      var open = ch && T.unmapped(ch).some(function (x) { return x.future > 0; });
+      el.append(h('div', { class: 'note warn' }, 'Без сопоставления индекса в последних файлах условий пришло: ' + T.trades(r.signal.count) +
+        (r.signal.latest ? ' (последний файл за ' + T.dm(r.signal.latest) + ')' : '') + '. ' + (open || !ch
+          ? 'Они «не оценено», пока индекс не выбран ниже.'
+          : 'Индексы ниже уже выбраны: нажмите «Перечитать отчёты за период» (Адаптер и источники), чтобы сделки пересчитались.')));
+    }
     if (running && !ch) { el.append(h('p', { class: 'mut' }, 'Адаптер читает последние файлы условий сделок…')); return; }
     if (!ch) {
       el.append(h('div', { class: 'note ' + (r.ok === false ? 'warn' : '') }, r.ok === false ? 'Индексы не получены: ' + (r.summary || []).join('; ') : 'Индексов ещё нет: нажмите «Обновить».'));

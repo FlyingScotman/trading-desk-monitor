@@ -35,6 +35,8 @@ def describe():
             "type": "object", "title": "Индексы",
             "additionalProperties": {"type": "string", "enum": CODES}}}}}]
     d["actions"] = [{"id": "index_names", "title": "Индексы ставок в условиях сделок", "choices": "trade_index_codes",
+                     "params": {"type": "object", "properties": {}}},
+                    {"id": "row_types", "title": "Типы", "choices": "ocp_derivative_types",
                      "params": {"type": "object", "properties": {}}}]
     return d
 
@@ -99,12 +101,12 @@ def _wait(c: TestClient, url: str, timeout: float = 60.0) -> dict:
 
 
 def _status(con, sha: str, *, status: str = "accepted", day: str, dataset: str | None = "trade_terms",
-            issues: tuple[tuple[str, int], ...] = (), source: str = "tt_fake") -> int:
+            issues: tuple[tuple[str, int], ...] = (), source: str = "tt_fake", seq: int | None = None) -> int:
     """One reading of a file: the file row (once), its status, a unit of ``dataset`` and its issues."""
     con.execute("INSERT INTO inbox_file (sha256, path, name, size_bytes, mtime) VALUES (%s, 'x', 'x.csv', 1, now())"
                 " ON CONFLICT DO NOTHING", (sha,))
-    sid = con.execute("INSERT INTO inbox_file_status (sha256, status, adapter_fingerprint, path, source, report_date)"
-                      " VALUES (%s, %s, 'fp', 'x', %s, %s) RETURNING status_id", (sha, status, source, day)).fetchone()[0]
+    sid = con.execute("INSERT INTO inbox_file_status (sha256, status, adapter_fingerprint, path, source, report_date, seq)"
+                      " VALUES (%s, %s, 'fp', 'x', %s, %s, %s) RETURNING status_id", (sha, status, source, day, seq)).fetchone()[0]
     uid = None
     if dataset:
         uid = con.execute("INSERT INTO inbox_unit (status_id, sha256, dataset, report_date, scope, status, row_count)"
@@ -190,16 +192,29 @@ def test_signal_counts_codes_of_the_latest_reading_of_terms_files_only(home: Pat
         _status(con, "a" * 64, day=_today(1), issues=(("unmapped_index", 2), ("other_code", 9)))
         sig = c.get("/api/v1/adapter/choices/trade_index_codes").json()["signal"]
         assert sig["count"] == 2 and sig["files"] == 1  # the old reading is not counted, other codes are not
-        # another file of the same day adds up; an older day, an old file, a file of another dataset do not
-        _status(con, "b" * 64, day=_today(1), issues=(("unmapped_index", 1),))
+        # a file of another source the same day adds up; an older day, an old file, a file of another dataset do not
+        _status(con, "b" * 64, day=_today(1), issues=(("unmapped_index", 1),), source="tt_b")
         _status(con, "c" * 64, day=_today(3), issues=(("unmapped_index", 40),))
         _status(con, "d" * 64, day=_today(30), issues=(("unmapped_index", 40),), source="old_src")
         _status(con, "e" * 64, day=_today(1), dataset="positions", issues=(("unmapped_index", 40),), source="pos")
         sig = c.get("/api/v1/adapter/choices/trade_index_codes").json()["signal"]
         assert (sig["count"], sig["files"], sig["latest"]) == (3, 2, _today(1))
         # read again without the issue: no sign
-        _status(con, "a" * 64, day=_today(1))
-        _status(con, "b" * 64, day=_today(1))
+        _status(con, "a" * 64, day=_today(1), source="tt_fake")
+        _status(con, "b" * 64, day=_today(1), source="tt_b")
+    assert c.get("/api/v1/adapter/choices/trade_index_codes").json()["signal"] is None
+
+
+def test_two_files_of_one_source_and_day_count_the_last_only(home: Path, store_url: str) -> None:
+    """The next file of the day replaces the earlier one (higher sequence): the earlier one's issues are not added."""
+    c = _client(store_url)
+    with store.connect(store_url) as con:
+        _status(con, "a" * 64, day=_today(1), seq=1, issues=(("unmapped_index", 5),))
+        _status(con, "b" * 64, day=_today(1), seq=2, issues=(("unmapped_index", 3),))
+    sig = c.get("/api/v1/adapter/choices/trade_index_codes").json()["signal"]
+    assert (sig["count"], sig["files"]) == (3, 1)
+    with store.connect(store_url) as con:  # the replacing file read without the issue: nothing left, not the old 5
+        _status(con, "b" * 64, day=_today(1), seq=2)
     assert c.get("/api/v1/adapter/choices/trade_index_codes").json()["signal"] is None
 
 
@@ -207,8 +222,10 @@ def test_without_a_store_the_signal_is_null_not_an_error(home: Path) -> None:
     c = _client(None)
     r = c.get("/api/v1/adapter/choices/trade_index_codes")
     assert r.status_code == 200 and r.json()["signal"] is None
-    # the other kinds carry no signal at all
-    assert c.get("/api/v1/adapter/choices/ocp_derivative_types").status_code == 404  # this adapter has no such action
+    # an adapter with an action of another kind: the screen answers, with no signal (CHOICE_SIGNALS has no such kind)
+    r = TestClient(create_app("postgresql://127.0.0.1:1/none"), base_url="http://127.0.0.1:8000",
+                   client=("127.0.0.1", 50000)).get("/api/v1/adapter/choices/ocp_derivative_types")
+    assert r.status_code == 200 and r.json()["action"]["id"] == "row_types" and r.json()["signal"] is None
 
 
 def test_responses_carry_no_text_but_the_adapters(home: Path, store_url: str) -> None:
