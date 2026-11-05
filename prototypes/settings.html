@@ -371,6 +371,8 @@ details.at-last .at-open::before{content:"показать"} details.at-last[ope
     <a href="#adapter" data-sec="adapter"><svg viewBox="0 0 16 16"><rect x="3.5" y="3.5" width="9" height="9" rx="1.5"/><path d="M6 1.5v2M10 1.5v2M6 12.5v2M10 12.5v2M1.5 6h2M1.5 10h2M12.5 6h2M12.5 10h2"/></svg><span class="lbl">Адаптер и источники</span><span class="dot" data-nav="adapter"></span></a>
     <!-- место для экрана «ОВП: типы строк отчёта» (TDM#554): пункт и раздел видны, когда модуль вызвал DeskSettings.slot('ovp-types') -->
     <a href="#ovp" data-sec="ovp" data-slot-nav="ovp-types" hidden><svg viewBox="0 0 16 16"><path d="M2.5 4h11M2.5 8h11M2.5 12h7"/><circle cx="12.5" cy="12" r="1.5"/></svg><span class="lbl">ОВП: типы строк</span><span class="dot" data-nav="ovp"></span></a>
+    <!-- место для экрана «Индексы ставок» (TDM#565): виден, когда модуль вызвал DeskSettings.slot('index-codes') -->
+    <a href="#indexes" data-sec="indexes" data-slot-nav="index-codes" hidden><svg viewBox="0 0 16 16"><path d="M2.5 13.5h11M4 11V8M8 11V4M12 11V6.5"/></svg><span class="lbl">Индексы ставок</span><span class="dot" data-nav="indexes"></span></a>
     <div class="grp">Справочники деска</div>
     <a href="#entities" data-sec="entities"><svg viewBox="0 0 16 16"><path d="M2 14h12M3 14V6l5-3.5L13 6v8M6 14v-4h4v4"/></svg><span class="lbl">Юрлица</span><span class="nb" data-count="entities"></span><span class="dot" data-nav="entities"></span></a>
     <a href="#books" data-sec="books"><svg viewBox="0 0 16 16"><path d="M3 2.5h7.5a1.5 1.5 0 0 1 1.5 1.5v9.5H4.5A1.5 1.5 0 0 1 3 12zM3 12a1.5 1.5 0 0 1 1.5-1.5H12M6 5.5h3.5"/></svg><span class="lbl">Книги</span><span class="nb" data-count="books"></span><span class="dot" data-nav="books"></span></a>
@@ -678,6 +680,12 @@ details.at-last .at-open::before{content:"показать"} details.at-last[ope
     <section class="sec" id="sec-ovp" data-sec="ovp">
       <div class="sec-h"><div><h1>ОВП: типы строк отчёта</h1><p>Какие типы строк отчёта ОВП — деривативы и какого вида.</p></div></div>
       <div data-slot="ovp-types" hidden></div>
+    </section>
+
+    <!-- ========== Индексы ставок (TDM#565) — раздел для модуля settings-index-codes.js: DeskSettings.slot('index-codes') ========== -->
+    <section class="sec" id="sec-indexes" data-sec="indexes">
+      <div class="sec-h"><div><h1>Индексы ставок</h1><p>Какой индекс хаба стоит за названием индекса плавающей ноги в условиях сделок.</p></div></div>
+      <div data-slot="index-codes" hidden></div>
     </section>
 
     <!-- ========== Юрлица / Книги / Фондирование: формы адаптера ========== -->
@@ -1191,7 +1199,7 @@ async function api(method, url, body){
    #net (и #srv, #lan, #fw внутри), #users; подразделы — #adapter/<подраздел> (TDM#551, settings-nav.js); #ovp — место
    для модуля ОВП (виден, когда модуль открыл DeskSettings.slot('ovp-types')) ---------- */
 const NAV = window.DeskSettingsNav;
-const SECTIONS = ['hub', 'adapter', 'ovp', 'entities', 'books', 'funding', 'auto', 'calc', 'backup', 'up', 'diag', 'net', 'users'];
+const SECTIONS = ['hub', 'adapter', 'ovp', 'indexes', 'entities', 'books', 'funding', 'auto', 'calc', 'backup', 'up', 'diag', 'net', 'users'];
 const INNER = {dg:'diag', rc:'diag', bf:'diag', eff:'diag', 'eff-card':'diag', lan:'net', srv:'net', fw:'net', 'net-urls':'net',
   'ad-status':'adapter', 'ad-actions':'adapter', 'ad-check':'adapter', 'sess-card':'users'};
 function available(id){  // раздел-место (#ovp) без модуля не открывается
@@ -2435,6 +2443,7 @@ function mountTabs(a, reload){
 <script src="desk-acquisition.js"></script>
 <script src="desk-services.js"></script>
 <script src="settings-ocp-types.js"></script>
+<script src="settings-index-codes.js"></script>
 <script src="desk-replay.js"></script>
 <script>
 /* Блоки потока ОВП в места settings-nav.js: «ОВП: типы строк отчёта» (TDM#554, settings-ocp-types.js) — раздел #ovp,
@@ -2455,6 +2464,14 @@ function mountTabs(a, reload){
       const c = card(); place.replaceChildren(c);
       window.DeskOcpTypes.mount(c.querySelector('.bd'), {api, toast});
       DS.onShow(s => { if (s.sec === 'ovp') window.DeskOcpTypes.shown(); });  // the types again on each opening
+    }
+  }
+  if (window.DeskIndexCodes) {  // «Индексы ставок» (TDM#565, settings-index-codes.js) — раздел #indexes, место 'index-codes'
+    const place = DS.slot('index-codes');
+    if (place) {
+      const c = card(); place.replaceChildren(c);
+      window.DeskIndexCodes.mount(c.querySelector('.bd'), {api, toast});
+      DS.onShow(s => { if (s.sec === 'indexes') window.DeskIndexCodes.shown(); });
     }
   }
   if (window.DeskReplay) {

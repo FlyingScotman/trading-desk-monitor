@@ -39,9 +39,11 @@ from desk.inbox.validate import _issue_ok
 
 ACTION_ID_RE = re.compile(r"^[a-z0-9_]{1,40}$")
 TAB_ID_RE = re.compile(r"^[a-z][a-z0-9_]{1,40}$")  # a settings tab's id (desk.inbox.loader.check_settings_tabs)
-CHOICE_KINDS = ("ocp_derivative_types",)
+CHOICE_KINDS = ("ocp_derivative_types", "trade_index_codes")
 """The screens a ``choices`` result feeds: ``ocp_derivative_types`` — «ОВП: типы строк отчёта» (TDM#554), the report's
-row types and the derivative kind of each (contract private/1.7 ``derivatives_ccy``)."""
+row types and the derivative kind of each (contract private/1.7 ``derivatives_ccy``); ``trade_index_codes`` —
+«Индексы ставок» (TDM#565), the index names in the trade terms and the hub's index code of each (the adapter's settings
+tab ``index_codes``)."""
 MAX_CHOICE_ROWS, MAX_CHILDREN, MAX_OPTIONS, MAX_CHOICE_COLUMNS = 2000, 200, 50, 20
 LEVELS = ("ok", "info", "warning", "error")
 MAX_PANELS, MAX_LINES, MAX_TEXT = 50, 200, 2000          # panels, lines per panel or summary, characters per line

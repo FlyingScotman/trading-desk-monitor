@@ -331,7 +331,7 @@ issues (§6.3), nothing in them but the files of an action may hold a cell value
     chosen, never typed, and one button saves it and reads the affected reports again:
 
     ```python
-    {"kind": "ocp_derivative_types",          # the declared kind (desk.inbox.tools.CHOICE_KINDS)
+    {"kind": "ocp_derivative_types",          # the declared kind (desk.inbox.tools.CHOICE_KINDS): ocp_derivative_types | trade_index_codes
      "title"?: str,
      "save": {"tab": "<settings tab id>", "key": "<top-level key of its file: an object label -> value>"},
      "options": [{"value": str | None, "title": str}],   # the dropdown; None: no entry for the row's key
@@ -354,6 +354,18 @@ issues (§6.3), nothing in them but the files of an action may hold a cell value
     object is dropped), as a form save of that tab (its schema checked, a revision `via` form; 409 when the file
     changed since the action ran), then reads `replay` again (`desk.inbox_replay`, as `desk inbox replay`, waiting
     for a running scan). The adapter still writes no files: the backend does, through the tab.
+
+    Kinds so far (`desk.inbox.tools.CHOICE_KINDS`):
+    - `ocp_derivative_types` (03.11.2026, TDM#554): a report's row type → derivative kind (screen «ОВП: типы строк
+      отчёта»).
+    - `trade_index_codes` (05.11.2026, TDM#565): the name of a floating leg's index as the trade terms give it → the
+      hub's index code (`options` are the `index_code` values of §10, `OTHER` included; screen «Индексы ставок»).
+      `save` is a top-level object of one settings tab of the adapter (`{"tab": "index_codes", "key": "index_codes"}`)
+      that both terms sources read, so a name chosen once serves every source. Index names are values of the terms
+      field, like a report's row types: they appear only in `choices.rows` (and in files the action writes for the
+      owner), never in `issues`, `summary`, status panels or logs. `GET /api/v1/adapter/choices/trade_index_codes`
+      also gives `signal` (`{code, count, files, latest}` or `null`): the `unmapped_index` issue codes (a count of
+      legs, no name) of the newest trade terms files, so the settings page marks the screen before it is opened.
 
 **Values.** All values crossing the boundary are JSON types: `dict`, `list`, `str`, `int`, `float`, `bool`, `None`.
 - Dates are `YYYY-MM-DD`. Timestamps are ISO 8601; one without an offset is Europe/Moscow.
@@ -450,8 +462,8 @@ issues (§6.3), nothing in them but the files of an action may hold a cell value
   ```
 
   `id` matches `^[a-z0-9_]{1,40}$` and is unique; `choices` (optional, since 03.11.2026) names the monitor's screen
-  its result feeds (`ocp_derivative_types`: «ОВП: типы строк отчёта», §3 `choices`; another value is ignored with a
-  warning); `params` (optional, default no parameters) is a JSON Schema object
+  its result feeds (`ocp_derivative_types`: «ОВП: типы строк отчёта»; `trade_index_codes`: «Индексы ставок», since
+  05.11.2026; §3 `choices`; another value is ignored with a warning); `params` (optional, default no parameters) is a JSON Schema object
   rendered with the same form renderer as the settings tabs and checked by the backend before the run
   (`desk.settings_forms.check_schema`; unlike a settings form, a key outside `"additionalProperties": false` is an
   error, so the action does not run); `output_dir` (optional) says the action writes files for the inbox: the page
@@ -620,7 +632,7 @@ The summary holds counts and codes only. It has no values and no sheet names, an
 
 ## 9 Versions
 
-- **SPI** (`SPI_VERSION`, this document): an integer major. The backend lists the majors it supports (now `{1}`). Additions that old adapters can ignore (a new optional `ctx` member, a new optional function) do not bump it; anything else does, and the backend keeps the old major for one release. So far: `ctx.inbox_dirs` (20.10.2026); `status(ctx)`, `run_action(action_id, params, ctx)` and `describe()["actions"]` (28.10.2026, TDM#421; backends after 0.2.10); `ctx.adapter_output_dir` for those two (28.10.2026, TDM#421; an older backend has no such member, hence `getattr`); an action's `choices` and its result's `choices` (03.11.2026, TDM#554: an older backend drops both keys, the action works as before without the screen). None of them changes a dataset, so the private contract keeps its minor (`private/1.5`); an adapter that uses them needs a backend from that date, an older one ignores them.
+- **SPI** (`SPI_VERSION`, this document): an integer major. The backend lists the majors it supports (now `{1}`). Additions that old adapters can ignore (a new optional `ctx` member, a new optional function) do not bump it; anything else does, and the backend keeps the old major for one release. So far: `ctx.inbox_dirs` (20.10.2026); `status(ctx)`, `run_action(action_id, params, ctx)` and `describe()["actions"]` (28.10.2026, TDM#421; backends after 0.2.10); `ctx.adapter_output_dir` for those two (28.10.2026, TDM#421; an older backend has no such member, hence `getattr`); an action's `choices` and its result's `choices` (03.11.2026, TDM#554: an older backend drops both keys, the action works as before without the screen); the `choices` kind `trade_index_codes` (05.11.2026, TDM#565: an older backend ignores the action's `choices` like any unknown kind, so the action runs without the screen). A new `choices` kind and the `index_code` value `OTHER` (§10) change no dataset schema and no field, only the content a field may hold, so neither bumps the SPI or the private contract's minor: an older backend reads `OTHER` as an index it cannot value and shows the trade as not valued (`swap_index_unsupported` / `ccs_foreign_floating_unsupported`). None of them changes a dataset, so the private contract keeps its minor (`private/1.5`); an adapter that uses them needs a backend from that date, an older one ignores them.
 - **Private input contract** (`describe()["contract"]`, `private/<major>.<minor>`): the dataset schemas of §10, versioned on their own, separate from the public results contract (1.3/1.4).
   - The backend accepts its own major with any minor. Fields from a newer minor are dropped with a `field_from_newer_contract` warning; the file is not rejected.
   - A new optional field is a minor version; a renamed, retyped or newly required field is a major one.
@@ -793,7 +805,7 @@ out.
 | `start_date` | date | Since 1.4: a swap leg's effective date (start of the first accrual period); a REPO's first-leg settlement |
 | `maturity_date` | date | Since 1.4: a swap leg's end date as the trade states it; a REPO's second-leg date (absent: an open REPO) |
 | `fixed_rate_pct` | num | Since 1.4: a fixed leg's rate; a fixed-rate REPO's rate |
-| `index_code` | str | Since 1.4: a floating leg's or floating REPO's index, as the hub's fixing index code (`KEY_RATE`, `RUONIA`, ...) the adapter maps the report's name to (as in `funding_rules`) |
+| `index_code` | str | Since 1.4: a floating leg's or floating REPO's index, as the hub's fixing index code (`KEY_RATE`, `RUONIA`, ...) the adapter maps the report's name to (as in `funding_rules`). `OTHER` (since 05.11.2026): an index the adapter could not map, or one the hub has no data for; the backend does not value the leg (`index_unmapped` with `x_index_unmapped: true`, else the product's `*_unsupported`), the leg still has exactly one of `fixed_rate_pct` / `index_code` and the trade is not dropped. Older backends do not know the value and show the trade as not valued. `x_index_unmapped` (bool, an `x_` field): the adapter set `OTHER` because the name was not in its mapping; `x_index` keeps the report's name |
 | `spread_bp` | num | Since 1.4: added to `index_code`; absent: 0 |
 | `payment_frequency` | str | Since 1.4: a swap leg's period between payments, a tenor `<n>D`, `<n>W`, `<n>M` or `<n>Y`, or `term` (one payment at maturity) |
 | `day_count` | enum | Since 1.4: `ACT/365` (fixed), `ACT/360`, `ACT/ACT` (ISDA), `30/360`, of a leg's or REPO's interest; absent: the backend's convention of the index or currency |
