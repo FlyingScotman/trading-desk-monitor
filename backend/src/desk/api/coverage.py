@@ -249,7 +249,7 @@ HOLE_RE = re.compile(r"outside calendar .*?(RUONIA).*?\+published_from_(\d{4})-(
 
 
 def _dm(iso: str) -> str:
-    return f"{iso[8:10]}.{iso[5:7]}"
+    return f"{iso[8:10]}.{iso[5:7]}.{iso[0:4]}"   # with the year: the stored history goes years back
 
 
 def history_hole(lineage: dict[str, Any] | None) -> dict[str, str] | None:
@@ -268,7 +268,7 @@ def is_history_hole(detail: str | None) -> bool:
 
 def detail_text(detail: str | None, hole: dict[str, str] | None = None) -> str | None:
     """The words of a known detail of core's refusal (TDM#590): «нет фиксинга RUONIA на 10.04.2026 или раньше …»,
-    «в хранимой истории RUONIA пропуск с ДД.ММ по ДД.ММ: период сделки его пересекает» (``hole``: the run's,
+    «в хранимой истории RUONIA пропуск с ДД.ММ.ГГГГ по ДД.ММ.ГГГГ: период сделки его пересекает» (``hole``: the run's,
     ``history_hole``; without it the day before the history resumes); None for any other detail."""
     if (h := HOLE_RE.search(detail or "")) is not None:
         if hole:
@@ -305,6 +305,11 @@ def explain(reason: str | None, kind: str, product: str | None, futures_by_ticke
     code, _, detail = (reason or "").partition(":")
     key, why, todo = cause(code.strip(), kind, product, futures_by_ticker)
     detail = detail.strip()
+    if is_history_hole(detail):  # not the hub's calendar: a hole of the monitor's stored fixings (TDM#590)
+        why = ("период начисления сделки пересекает пропуск в хранимой истории фиксингов: дни без фиксинга подряд "
+               "дольше праздников, это недостающие данные, а не выходные")
+        todo = ("история фиксингов догружается в фоне: проверьте строку «История фиксингов» в «Истории прогонов»; "
+                "после догрузки дата пересчитается")
     fk = "history" if is_history_hole(detail) else CAUSE_FIX.get(key) or ("report_risk" if REPORT_MV in todo else None)
     return {"key": key, "why": why, "todo": todo, "short": "пропуск фиксингов" if is_history_hole(detail) else short(key),
             "detail": detail_text(detail, hole) or detail or None,

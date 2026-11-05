@@ -322,7 +322,7 @@ an FX future in the OCP."""
 FX_FUTURE_OPTION_GROUP = "fx_future_option"
 """An option on a currency future (the adapter's FutureOptionFX): an option on a currency, as ``fx_option``."""
 KNOWN_FUTURE_GROUPS = frozenset({"bond_future", "ir_future", "equity_future", "index_future", "commodity_future",
-                                 "future", "future_option"})
+                                 "bond_future_option", "ir_future_option", "future", "future_option"})
 """The other futures groups the adapter gives (DEC18); a group with ``future`` outside them is still a future not on a
 currency, said in the run's notes (a new name of the adapter)."""
 
@@ -847,11 +847,11 @@ PART_TEXT = {"base": "база: отчёт ОВП без деривативов"
 DERIVATIVE_SHARE_MAX = 0.95
 """DEC18 (TDM#588, «если один вклад деривативов больше заданной доли ОВП книги, книга получает пометку»): a published
 line is marked (``derivative_share``) when one derivative is at least this share of the line's gross (the sum of the
-sizes of all its contributions) ... Set in the code at the owner's request (no setting). The aim
+sizes of all its contributions) ... Monitor defaults set in the code (no setting); changed at the owner's request. The aim
 is a wrong unit (a notional read as billions), not a hedged book, whose OCP is the small rest of large opposite legs."""
 DERIVATIVE_GROSS_MIN_USD = 10_000_000.0
 """... and the line's gross is at least this many US dollars (at the run's rates; a currency without a rate is not
-checked). Set in the code at the owner's request (no setting)."""
+checked). Monitor defaults set in the code (no setting); changed at the owner's request."""
 CONTRIBUTIONS_MAX = 10
 """Per published line and term at most this many contributions (the largest by size), the rest summed."""
 BASE_SPLIT, BASE_WHOLE, BASE_ABSENT = "without_derivatives", "with_derivatives", "book_absent"
