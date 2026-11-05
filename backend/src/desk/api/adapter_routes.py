@@ -18,7 +18,10 @@ by hand.
   the store.
 * ``GET /api/v1/adapter/choices/{kind}`` (TDM#554): the screen of a ``choices`` kind (``desk.inbox.tools.CHOICE_KINDS``):
   the action that declares it, its last job's ``choices`` (rows, options, what to read again), whether the settings
-  file changed since the action built them (``stale``: the page runs the action again) and the replay job.
+  file changed since the action built them (``stale``: the page runs the action again), the replay job and, for a kind
+  in ``CHOICE_SIGNALS`` (TDM#565), ``signal``: ``{code, count, files, latest}`` — the issue codes the last reading of
+  the trade terms files of the last ``SIGNAL_DAYS`` days carries (codes and counts only, no value), ``null`` when none
+  or no store.
 * ``POST /api/v1/adapter/choices/{kind}`` ``{"values": {row key: option value | null}, "replay": true,
   "base_sha256"?}``: writes the values into the settings tab's object the choices name (``save``: a value sets the
   row's key, null removes it, and the row's ``replaces`` spellings go), as a form save of that tab (its schema checked,
@@ -36,6 +39,7 @@ import json
 from datetime import date
 from typing import Annotated, Any
 
+import psycopg
 from fastapi import APIRouter, Body, Depends, Request
 
 from .. import adapter_jobs, inbox_replay, settings_forms
@@ -47,6 +51,9 @@ from .settings_routes import _blocking, _config_payload, _read, _sha, _write, lo
 router = APIRouter(dependencies=[Depends(local_only)])
 # settings_forms' codes of a key outside ``additionalProperties: false``: warnings in a form, errors for an action
 UNKNOWN_PARAM_CODES = ("unknown_config_key", "unknown_field")
+CHOICE_SIGNALS = {"trade_index_codes": ("unmapped_index",)}
+"""The inbox issue codes a choices screen is warned by before it is opened (the settings page's dot and summary line)."""
+SIGNAL_DAYS = 10
 JsonBody = Annotated[dict[str, Any], Body()]
 
 
@@ -172,8 +179,42 @@ def _choices(st: Settings, decl: dict) -> tuple[dict | None, dict | None]:
     return j, res.get("choices")
 
 
+def _signal(store_url: str | None, kind: str) -> dict[str, Any] | None:
+    """Codes and counts only: the ``CHOICE_SIGNALS`` codes in the issues of the newest reading of each trade terms file
+    (``inbox_file_status`` latest per file) of the newest report date per source within ``SIGNAL_DAYS`` days, one file
+    per source and day (the last by report time, sequence, reading: a file the next one replaced is not counted twice).
+    "One file per source and day" assumes the day's file is a full snapshot of the books.
+    The adapter warns once per trade, so ``count`` is trades. A file read again after the owner's choice no longer
+    carries them, and an older day does not keep the sign on."""
+    codes = CHOICE_SIGNALS.get(kind)
+    if not codes or not store_url:
+        return None
+    sql = (
+        "WITH l AS (SELECT DISTINCT ON (sha256) status_id, source, report_ts, seq, generated_at,"
+        "  COALESCE(report_date, at::date) AS day FROM inbox_file_status ORDER BY sha256, status_id DESC),"
+        " d AS (SELECT DISTINCT ON (source, day) * FROM l"
+        "  WHERE day >= current_date - %(days)s AND EXISTS (SELECT 1 FROM inbox_unit u"
+        "   WHERE u.status_id = l.status_id AND u.dataset = 'trade_terms')"
+        "  ORDER BY source, day, report_ts DESC NULLS LAST, seq DESC NULLS LAST, generated_at DESC NULLS LAST,"
+        "  status_id DESC),"
+        " w AS (SELECT d.*, max(day) OVER (PARTITION BY source) AS newest FROM d)"
+        " SELECT i.code, sum(i.count), count(DISTINCT w.status_id), max(w.day) FROM w"
+        " JOIN inbox_issue i ON i.status_id = w.status_id WHERE w.day = w.newest AND i.code = ANY(%(codes)s)"
+        " GROUP BY i.code")
+    try:
+        with psycopg.connect(store_url, autocommit=True, connect_timeout=3) as con:
+            rows = con.execute(sql, {"days": SIGNAL_DAYS, "codes": list(codes)}).fetchall()
+    except Exception:  # noqa: BLE001 - no store or an older schema: no sign, never an error of the screen
+        return None
+    if not rows:
+        return None
+    return {"code": rows[0][0] if len(rows) == 1 else ",".join(sorted(r[0] for r in rows)),
+            "count": int(sum(r[1] for r in rows)), "files": max(int(r[2]) for r in rows),
+            "latest": max(r[3] for r in rows).isoformat()}
+
+
 @router.get("/api/v1/adapter/choices/{kind}")
-def get_choices(kind: str) -> dict[str, Any]:
+def get_choices(kind: str, request: Request) -> dict[str, Any]:
     st = _settings()
     h, decl = _choice_action(st, kind)
     j, ch = _choices(st, decl)
@@ -183,7 +224,8 @@ def get_choices(kind: str) -> dict[str, Any]:
             "ok": ((j or {}).get("result") or {}).get("ok"),
             "summary": ((j or {}).get("result") or {}).get("summary") or [],
             "choices": ch, "file_sha256": now, "stale": bool(ch) and now != ch.get("file_sha256"),
-            "replay": inbox_replay.job(st), "replay_running": inbox_replay.running()}
+            "replay": inbox_replay.job(st), "replay_running": inbox_replay.running(),
+            "signal": _signal(getattr(request.app.state, "store_url", None), kind)}
 
 
 def _start_replay(st: Any, request: Request, r: Any, reason: str) -> dict[str, Any]:
