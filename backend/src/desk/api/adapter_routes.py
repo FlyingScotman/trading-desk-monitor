@@ -183,18 +183,20 @@ def _signal(store_url: str | None, kind: str) -> dict[str, Any] | None:
     """Codes and counts only: the ``CHOICE_SIGNALS`` codes in the issues of the newest reading of each trade terms file
     (``inbox_file_status`` latest per file) of the newest report date per source within ``SIGNAL_DAYS`` days, one file
     per source and day (the last by report time, sequence, reading: a file the next one replaced is not counted twice).
+    "One file per source and day" assumes the day's file is a full snapshot of the books.
     The adapter warns once per trade, so ``count`` is trades. A file read again after the owner's choice no longer
     carries them, and an older day does not keep the sign on."""
     codes = CHOICE_SIGNALS.get(kind)
     if not codes or not store_url:
         return None
     sql = (
-        "WITH l AS (SELECT DISTINCT ON (sha256) status_id, source, report_ts, seq,"
+        "WITH l AS (SELECT DISTINCT ON (sha256) status_id, source, report_ts, seq, generated_at,"
         "  COALESCE(report_date, at::date) AS day FROM inbox_file_status ORDER BY sha256, status_id DESC),"
         " d AS (SELECT DISTINCT ON (source, day) * FROM l"
         "  WHERE day >= current_date - %(days)s AND EXISTS (SELECT 1 FROM inbox_unit u"
         "   WHERE u.status_id = l.status_id AND u.dataset = 'trade_terms')"
-        "  ORDER BY source, day, report_ts DESC NULLS LAST, seq DESC NULLS LAST, status_id DESC),"
+        "  ORDER BY source, day, report_ts DESC NULLS LAST, seq DESC NULLS LAST, generated_at DESC NULLS LAST,"
+        "  status_id DESC),"
         " w AS (SELECT d.*, max(day) OVER (PARTITION BY source) AS newest FROM d)"
         " SELECT i.code, sum(i.count), count(DISTINCT w.status_id), max(w.day) FROM w"
         " JOIN inbox_issue i ON i.status_id = w.status_id WHERE w.day = w.newest AND i.code = ANY(%(codes)s)"
