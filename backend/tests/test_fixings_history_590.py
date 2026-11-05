@@ -124,3 +124,26 @@ def test_load_status_and_the_card(tmp_path, store_url):
     assert doc["fixings_history"]["rows"] == 4 and doc["fixings_history"]["loading"] is False
     assert cli.stored_fixings(store_url, BD).rows["RUONIA"][0]["fixing_date"] == "2026-09-01"
     assert cli.stored_fixings("postgresql://nobody@127.0.0.1:1/none", BD, out=lambda s: None) is None
+
+
+def test_a_history_before_the_hubs_calendar_is_its_own_publication_calendar(plain):
+    """The hub's calendars start on 01.01.2026 here: a period that began in December 2025 needs RUONIA before them.
+    There the days with a fixing are the publication calendar (a weekday without one a holiday), not a guess."""
+    from desk.curves.rates import ruonia_calendar
+
+    cal, _ = ruonia_calendar(plain.static.snapshot, BD)
+    assert cal.valid_from == date(2026, 1, 1)
+    days = [date(2025, 12, 1) + timedelta(days=n) for n in range(304)]  # 01.12.2025 .. 30.09.2026
+    have = [d for d in days if (d.weekday() < 5 and d != date(2025, 12, 31)) if d < cal.valid_from] + \
+        [d for d in days if d >= cal.valid_from and cal.is_business_day(d)]
+    ctx = prepare(SnapshotDir(FIX), BD.isoformat(), fixings=fh.FixingStore(
+        {"RUONIA": tuple(row("RUONIA", d) for d in have)}, ("before-calendar",)))
+    kw = {"start_date": "2025-12-15", "maturity_date": "2026-12-15", "trade_date": "2025-12-11",
+          "payment_frequency": "1Y", "day_count": "ACT/365"}
+    o = value(ctx, [leg("Y1", "fix", "pay", fixed_rate_pct="15.5", **kw),
+                    leg("Y1", "flt", "receive", index_code="RUONIA", **kw)])
+    assert o.valuation is not None and o.core_not_valued is None, o.core_not_valued
+    info = ctx.rates["fixings"]["RUONIA"]
+    assert info["calendar_from_fixings"] == {"from": "2025-12-01", "to": "2025-12-31"}
+    assert info["dropped_before_calendar"] == 0 and info["first"] == "2025-12-01"
+    assert info["missing_business_days"] == []  # 31.12.2025 had no fixing: a holiday of the publication calendar

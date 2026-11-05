@@ -277,6 +277,24 @@ def fixing_known(f: ar.Fixing, cut: datetime) -> bool:
     return f.published_on is None or f.published_on < cut.date()
 
 
+def published_before(cal: BusinessCalendar, days: list[date]) -> tuple[BusinessCalendar, dict[str, str]]:
+    """``cal`` reaching back to the first of ``days`` (the dates with a fixing): before its ``valid_from`` a weekday
+    without a fixing is a holiday and a weekend day with one a working day (TDM#590: the stored RUONIA history before
+    the hub's calendar); and the range so built."""
+    have, lo, hi = set(days), min(days), cal.valid_from
+    hol, work = set(), set()
+    d = lo
+    while d < hi:
+        if d.weekday() < 5 and d not in have:
+            hol.add(d)
+        elif d.weekday() >= 5 and d in have:
+            work.add(d)
+        d += timedelta(days=1)
+    return (BusinessCalendar(cal.holidays | hol, cal.working_days | work, f"{cal.version}+published_from_{lo}", lo,
+                             cal.valid_to),
+            {"from": lo.isoformat(), "to": (hi - timedelta(days=1)).isoformat()})
+
+
 def fixing_entries(market: Snapshot, static: Snapshot, known_at: datetime | None = None,
                    kbd_history: Mapping[date, ZcycParameters] | None = None
                    ) -> tuple[tuple[FixingEntry, ...], dict[str, Any]]:
@@ -300,10 +318,15 @@ def fixing_entries(market: Snapshot, static: Snapshot, known_at: datetime | None
         rows = [f for f in ar.fixings(market, code) if f.fixing_date < bd]
         unknown = [f.fixing_date.isoformat() for f in rows if not known(f)]
         rows = [f for f in rows if known(f)]
-        early = [f for f in rows if index == "ruonia" and cal.valid_from is not None and f.fixing_date < cal.valid_from]
-        rows = rows[len(early):]
         # TDM#590: the rows before the cut's window filled from the stored history (``fixing_history.extend``)
         stored = fixing_history.filled(market, code)
+        published = None
+        if index == "ruonia" and stored and cal.valid_from is not None and rows and rows[0].fixing_date < cal.valid_from:
+            # the stored history reaches before the hub's calendar: there the publication calendar is the days with a
+            # fixing (core: «its business days are exactly the days with a fixing»), not a guess of the holidays
+            cal, published = published_before(cal, [f.fixing_date for f in rows])
+        early = [f for f in rows if index == "ruonia" and cal.valid_from is not None and f.fixing_date < cal.valid_from]
+        rows = rows[len(early):]
         sid = f"{market.id}+{fixing_history.SOURCE_ID}" if stored else market.id
         history = FixingHistory(index, bd, tuple((f.fixing_date, f.rate) for f in rows), cal, sid,
                                 RUONIA_MAX_UNPUBLISHED_DAYS if index == "ruonia" else 0, cut.isoformat())
@@ -311,7 +334,8 @@ def fixing_entries(market: Snapshot, static: Snapshot, known_at: datetime | None
         info = {"rows": len(rows), "first": rows[0].fixing_date.isoformat() if rows else None,
                 "latest": rows[-1].fixing_date.isoformat() if rows else None, "unpublished_at_cut": unknown,
                 "dropped_before_calendar": len(early), "calendar": cal.version,
-                **({"from_history": stored} if stored else {})}
+                **({"from_history": stored} if stored else {}),
+                **({"calendar_from_fixings": published} if published else {})}
         if index == "ruonia" and rows:
             have = {f.fixing_date for f in rows}
             days = (rows[0].fixing_date + timedelta(days=i) for i in range((rows[-1].fixing_date - rows[0].fixing_date).days))

@@ -16,6 +16,8 @@ by a preference keeps its choice; one read from one source never gets a second r
 copy: the snapshot file is not changed, its id stays the run's market snapshot id. The lineage of the run says, per
 index, how many rows came from the store and from which dates (``rates.fixings_history``), and core's fixing history
 of an index filled so is named ``<market snapshot id>+md_hub_fixing`` (``fixing_snapshot_id`` of a swap's valuation).
+Where the stored RUONIA reaches before the hub's calendar (``valid_from`` of the static's calendars), its publication
+calendar there is the days with a fixing (``rates.published_before``), so those rows are not dropped.
 
 ``status`` is the card «История прогонов»: per index code the stored range and rows, and the state of the loading.
 """
