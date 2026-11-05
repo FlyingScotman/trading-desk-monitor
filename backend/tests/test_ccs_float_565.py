@@ -62,7 +62,7 @@ def test_the_run_has_the_cny_rusfar_curve_and_the_fixings(ctx):
     assert "provisional" in lin["convention"]
     assert "CNY RUSFAR" not in ctx.fx.fx_curve_ids("CNY", ctx.fx_options)[1]  # never an FX forward's curve
     # the fixings are the run's own, not the bonds' market
-    (entry,) = ctx.fx.index_fixings
+    (entry,) = [e for e in ctx.fx.index_fixings if e.fixing_id == "RUSFARCNY"]
     assert entry.fixing_id == "RUSFARCNY" and entry.fixings.index == "CNY-RUSFARCNY-COMPOUND"
     assert entry.fixings.valuation_date == BD and entry.fixings.fixings[0] == (date(2026, 10, 8), 0.0063)
     assert [d for d, _ in entry.fixings.fixings][-1] == date(2026, 10, 14)  # dated before the business date
@@ -110,7 +110,8 @@ def test_a_floating_cny_leg_on_rusfarcny_is_valued_with_risk_on_the_three_curves
         "2026-10-08", "2026-10-14", [], [])
     assert fact["side"] == ("receiver" if rub is RUONIA else "payer")  # paying the fixed RUB leg: payer
     assert any("RUSFARCNY compounded" in a and "provisional" in a for a in v.assumptions)
-    assert any("CNY RUSFAR quotes to 2031-10-16" in a and "flat-forward" in a for a in v.assumptions)
+    # a 2Y swap ends inside the quotes (to 5Y): not marked as extrapolated
+    assert any("CNY RUSFAR quotes to 2031-10-16" in a and "flat-forward" not in a for a in v.assumptions)
     assert "RUSFARCNY" in v.extra["core"]["curves"] or "CNY RUSFAR" in v.extra["core"]["curves"]
     row = tdm_run.direct_row(ctx, "IRB", "R1", o, inp.extra["R1"], None)
     assert row["instr_type"] != "FX" and row["fx_delta"] == {"CNY": v.fx_delta["CNY"]}
@@ -281,8 +282,8 @@ def test_an_arithmetically_averaged_index_is_not_valued(ctx):
 
 
 def test_a_floating_rub_leg_on_another_index_still_is_not_valued(ctx):
-    o, _ = value(ctx, rus(index_code="RUSFAR"))
-    assert o.core_not_valued[0] == "swap_index_unsupported"
+    o, _ = value(ctx, rus(index_code="SHIBOR"))
+    assert o.core_not_valued[0] == "swap_index_unsupported" and "RUONIA, KEY_RATE or RUSFAR" in o.core_not_valued[1]
 
 
 # --- OCP, flows --------------------------------------------------------------------------------------------------

@@ -26,12 +26,23 @@
   (rolled back from the end, adjusted, a short first stub), the fixed leg ACT/365F; the floating leg is single-curve
   (its PV is ``DF(start) - DF(end)``). The nodes are the start and the swap ends; past the last quote the curve is
   extrapolated flat-forward (said in the lineage).
-- **RUSFARCNY fixings** (``FxMarket.index_fixings``, core ``IndexFixingEntry``): the hub's ``RUSFARCNY`` fixings (percent),
+- **Overnight index fixings** (``FxMarket.index_fixings``, core ``IndexFixingEntry``; ``FOREIGN_OVERNIGHT``: ``RUSFARCNY``,
+  ``SOFR``, ``ESTR``; ``RUB_OVERNIGHT``: the RUB ``RUSFAR`` of a RUB leg, TDM#565 stage 2, on ``MOEX_RUSFAR`` else
+  ``MOEX_STOCK``, no curve of its own): the hub's fixings of the index (percent),
   those published by the snapshot's ``known_at`` and dated before the business date, as core ``IndexFixings`` (fractions,
   dated the business date). Observation calendar: the dates published before the business date (the exchange does not
   publish on weekends, China's holidays and the last trading day of the year: the previous value then holds, the
-  ``bridged_days`` of the lineage), ``FX:CNY`` from the business date on, before the first and after the last fixing too
+  ``bridged_days`` of the lineage), the index's calendar (``ForeignOvernight.base_calendar``: ``US_FED`` / ``TARGET`` from the static snapshot, else ``FX:<ccy>``;
+  ``FX:CNY`` for RUSFARCNY) from the business date on, before the first and after the last fixing too
   (a business day with no fixing there is missing, which core refuses, never filled).
+- **Forecast curves USD SOFR / EUR ESTR** (``USD SOFR``, ``EUR ESTR``; ``usd_discount_factors_v1``,
+  ``eur_discount_factors_v1``; TDM#565): the nodes of the proxies below as a ``DiscountCurve`` (``ois-logdf-v1``, ACT/365F),
+  so their discount factors equal the proxies'. Only the forecast of a floating USD / EUR leg of a cross-currency swap
+  (``valuation.derivatives``): never discounting, never an FX forward's curve, a separate ID from the proxy (a proxy is a
+  ``ParYieldCurveRequest`` in the quote-risk slice, which core's ``discount_curve`` does not give a swap). **Provisional:**
+  government yields stand for the OIS curve (the spread is some tens of bp); the lineage says so (``proxy``,
+  ``provisional``, ``stale``). Without the proxy set: no curve (``missing``). SOFR and ESTR fixings: one date from several
+  sources takes the first of ``ForeignOvernight.sources`` known at the cut (``adapter_rates.fixings``).
 - **Government par-yield proxies** (``USD UST``, ``EUR AAA``; ``usd_ust_par_proxy_v1``, ``eur_ecb_aaa_par_proxy_v1``):
   ``bootstrap_par_yield_curve`` of the hub's ``usd_ust_par`` / ``eur_aaa_par`` sets (percent / 100), dated the business
   date (the hub's set may be a day or two older: said in the lineage). Bonds use them only with the setting
@@ -106,13 +117,66 @@ RUSFAR_CNY_DATASET = "cny_rusfar_ois"
 RUSFAR_CNY_FIXING = "RUSFARCNY"
 RUSFAR_CNY_INDEX = "CNY-RUSFARCNY-COMPOUND"
 """The name of core's compounded index of a RUSFARCNY leg and of its fixings (``valuation.derivatives.CCS_FOREIGN_INDEX``)."""
+RUSFAR_RUB_FIXING = "RUSFAR"
+RUSFAR_RUB_INDEX = "RUB-RUSFAR-OIS-COMPOUND"
+"""The RUB RUSFAR (TDM#565, stage 2): the hub's fixing code and core's compounded index of a RUB leg of a cross-currency
+swap on it (``valuation.derivatives.CCS_RUB_INDEX``)."""
 RUSFAR_CNY_MAX_UNPUBLISHED_DAYS = 1
 """As RUONIA's (``rates.RUONIA_MAX_UNPUBLISHED_DAYS``): at most one business day just before the business date may lack its
 RUSFARCNY fixing (the hub late, the first business day of the year after the exchange's last day without the index): the
 previous value is carried and said. More are missing fixings, never filled (``valuation.derivatives``: ``no_fixings``)."""
-RUSFAR_CNY_PRELIMINARY = "moex_marketdata_preliminary"
+MOEX_PRELIMINARY = RUSFAR_CNY_PRELIMINARY = "moex_marketdata_preliminary"
 """The hub's label of a fixing that is a preliminary value of the same day from the exchange's market data, replaced later by
 the history's (hub ``HISTORY_API.md``); said in the lineage."""
+
+
+@dataclass(frozen=True)
+class ForeignOvernight:
+    """A foreign overnight index a cross-currency swap's floating leg can float on (TDM#565): its fixings and, apart
+    from the exchange's own, the projection curve ``curve_id`` (``proxy_of``: the government par-yield proxy it is
+    renamed from)."""
+
+    code: str
+    """The hub's fixing code and the terms' ``index_code``."""
+    ccy: str
+    index_name: str
+    """Core's compounded index name of the fixings."""
+    curve_id: str
+    spec_id: str
+    base_calendar: str | None
+    """The hub calendar of the index's fixing days (``US_FED``, ``TARGET``); None, or absent in the static snapshot:
+    ``FX:<ccy>``."""
+    sources: tuple[str, ...] | None
+    """The hub sources in order of preference when one date comes from several (``adapter_rates.fixings``); None: one
+    source only (a duplicate is an error)."""
+    max_unpublished: int
+    preliminary_label: str | None = None
+    proxy_of: str | None = None
+    """The proxy quote set (``PROXY_SPECS``) the projection curve is built from; None: its own quotes."""
+    label: str = ""
+    """The curve's run reference name."""
+
+
+FOREIGN_OVERNIGHT = {
+    RUSFAR_CNY_FIXING: ForeignOvernight(
+        RUSFAR_CNY_FIXING, "CNY", RUSFAR_CNY_INDEX, RUSFAR_CNY_CURVE_ID, RUSFAR_CNY_SPEC, None, None,
+        RUSFAR_CNY_MAX_UNPUBLISHED_DAYS, RUSFAR_CNY_PRELIMINARY, label="CNY: OIS на RUSFAR CNY"),
+    "SOFR": ForeignOvernight(
+        "SOFR", "USD", "USD-SOFR-COMPOUND", "USD SOFR", "usd_discount_factors_v1", "US_FED", ("nyfed", "fred"), 1,
+        proxy_of="usd_ust_par", label="USD: прогноз SOFR по UST par (прокси, не OIS)"),
+    "ESTR": ForeignOvernight(
+        "ESTR", "EUR", "EUR-ESTR-COMPOUND", "EUR ESTR", "eur_discount_factors_v1", "TARGET",
+        ("ecb_data_portal", "bundesbank", "dbnomics", "fred"), 1,
+        proxy_of="eur_aaa_par", label="EUR: прогноз €STR по ECB AAA par (прокси, не OIS)")}
+"""Index code -> the foreign overnight indices valued (``valuation.derivatives.CCS_FOREIGN_INDEX``). ``USD SOFR`` /
+``EUR ESTR`` are forecast curves only (the proxies of the government par yields renamed, never discounting)."""
+RUB_OVERNIGHT = {
+    RUSFAR_RUB_FIXING: ForeignOvernight(
+        RUSFAR_RUB_FIXING, "RUB", RUSFAR_RUB_INDEX, "", "", "MOEX_RUSFAR", None, 1, MOEX_PRELIMINARY,
+        label="RUB: RUSFAR")}
+"""Index code -> the RUB overnight indices read as core ``IndexFixings`` (``valuation.derivatives.CCS_RUB_INDEX``):
+fixings only, no curve (the leg projects on RUONIA). The fixing days' calendar is ``MOEX_RUSFAR`` where the static
+snapshot has it (hub contract 1.6), else ``MOEX_STOCK``, then as RUSFARCNY's: the days the exchange published."""
 CBR_SOURCE = "CBR"
 SPOT_SOURCES = ("market", "cets_tom")
 SWAP_LAG = {"TOD": 0, "TOM": 1, "SPT": 2}
@@ -171,7 +235,8 @@ class ForeignCurve:
     curve_id: str
     ccy: str
     kind: str
-    """``fx_implied`` | ``xccy`` | ``proxy`` | ``ois`` (``CNY RUSFAR``: a projection curve only)."""
+    """``fx_implied`` | ``xccy`` | ``proxy`` | ``ois`` (``CNY RUSFAR``, ``USD SOFR``, ``EUR ESTR``: a
+    projection curve only)."""
     spec_id: str
     name: str
     """The run's curve reference name (Russian)."""
@@ -192,8 +257,10 @@ class FxMarket:
     """ccy -> (RUB per unit, source) of the spot."""
     lineage: dict[str, Any] = field(default_factory=dict)
     index_fixings: tuple[IndexFixingEntry, ...] = ()
-    """The foreign overnight indices' fixings (``RUSFARCNY``), kept out of ``core_market`` so the bonds' inputs stay as
-    they were: ``valuation.derivatives`` adds them to the call that reads them."""
+    """The overnight indices' fixings read as ``IndexFixings`` (``FOREIGN_OVERNIGHT``: ``RUSFARCNY``, ``SOFR``, ``ESTR``;
+    ``RUB_OVERNIGHT``: the RUB ``RUSFAR``), kept out of
+    ``core_market`` so the bonds' inputs stay as they were: ``valuation.derivatives`` adds them to the call that reads
+    them."""
     quote_entries: dict[str, CurveEntry] = field(default_factory=dict)
     """By curve ID: the quotes a curve of ``curves`` is built from (``XCCY_CURVE_ID``: ``XccyCurveBootstrapRequest``; a
     proxy: ``ParYieldCurveRequest``), for core's risk in quotes (module docstring, "Quote curves")."""
@@ -408,12 +475,13 @@ def _rusfar_cny(market: Any, cal: BusinessCalendar, bd: date, front: tuple[date,
     return curve, lineage
 
 
-def _observation_calendar(cal: BusinessCalendar, published: set[date], bd: date | None = None
+def _observation_calendar(cal: BusinessCalendar, published: set[date], bd: date | None = None,
+                          max_unpublished: int = RUSFAR_CNY_MAX_UNPUBLISHED_DAYS, code: str = RUSFAR_CNY_FIXING
                           ) -> tuple[BusinessCalendar, list[date], list[date]]:
-    """``cal`` (``FX:CNY``) with the days between the first and the last of ``published`` made business days exactly
-    where the index was published (a day with no fixing there is bridged by the previous value: the exchange does not
-    publish on weekends, China's holidays or the last trading day of the year). With ``bd``, up to
-    ``RUSFAR_CNY_MAX_UNPUBLISHED_DAYS`` business days of ``cal`` between the last fixing and ``bd`` are carried too
+    """``cal`` (the index's settlement calendar) with the days between the first and the last of ``published`` made
+    business days exactly where the index was published (a day with no fixing there is bridged by the previous value:
+    the exchange does not publish on weekends, China's holidays or the last trading day of the year). With ``bd``, up to
+    ``max_unpublished`` business days of ``cal`` between the last fixing and ``bd`` are carried too
     (unpublished); more are left as business days, so a fixing is required on them. Returns the calendar, the
     bridged days (business days of ``cal`` with no fixing between the first and the last fixing) and the unpublished
     ones."""
@@ -442,44 +510,56 @@ def _observation_calendar(cal: BusinessCalendar, published: set[date], bd: date 
             if cal.covers(d) and cal.is_business_day(d):
                 tail.append(d)
             d += timedelta(days=1)
-        if len(tail) <= RUSFAR_CNY_MAX_UNPUBLISHED_DAYS:
+        if len(tail) <= max_unpublished:
             unpublished = tail
             for day in tail:
                 drop(day)
-    return BusinessCalendar(frozenset(holidays), frozenset(working), f"{cal.version}+{RUSFAR_CNY_FIXING}",
+    return BusinessCalendar(frozenset(holidays), frozenset(working), f"{cal.version}+{code}",
                             cal.valid_from, cal.valid_to), bridged, unpublished
+
+
+def index_fixings(snapshot: Any, spec: ForeignOvernight, cal: BusinessCalendar, bd: date,
+                  known_at: datetime | None = None) -> tuple[IndexFixingEntry, dict[str, Any]]:
+    """The ``spec`` index's fixings of the market snapshot as core's ``IndexFixingEntry`` (module docstring): rows dated
+    before ``bd`` and in the calendar ``cal`` published by ``known_at`` (default the snapshot's;
+    ``rates.fixing_known``), in fractions, dated ``bd``. One date from several sources: the first of ``spec.sources``
+    that is known by the cut (deterministic; ``adapter_rates.fixings``). The lineage: the rows, the first and the latest
+    fixing, the rows not yet published at the cut, the ``bridged_days`` (the previous value holds), the
+    ``unpublished_business_days`` (at most ``spec.max_unpublished`` just before ``bd``, carried), the ``preliminary_days``
+    (rows the hub labels ``spec.preliminary_label``) and the sources read. Raises ``RatesInputError`` without a usable
+    row."""
+    cut = known_at or ar.known_at(snapshot)
+    every = [f for f in ar.fixings(snapshot, spec.code, spec.sources) if f.fixing_date < bd]
+    rows = [f for f in ar.fixings(snapshot, spec.code, spec.sources, lambda f: rates.fixing_known(f, cut))
+            if f.fixing_date < bd]
+    kept_days = {f.fixing_date for f in rows}
+    unknown = [f.fixing_date.isoformat() for f in every if f.fixing_date not in kept_days]
+    early = [f for f in rows if cal.valid_from is not None and f.fixing_date < cal.valid_from]
+    rows = rows[len(early):]
+    if not rows:
+        raise rates.RatesInputError(f"{bd}: no {spec.code} fixing known at {cut.isoformat()}")
+    obs, bridged, unpublished = _observation_calendar(cal, {f.fixing_date for f in rows}, bd, spec.max_unpublished,
+                                                      spec.code)
+    entry = IndexFixingEntry(spec.code, IndexFixings(
+        spec.index_name, bd, tuple((f.fixing_date, f.rate) for f in rows), obs, snapshot.id))
+    labels = {(str(r.get("fixing_date")), r.get("source")): r.get("labels") or ()
+              for r in snapshot.data.get("fixings") or () if r.get("index_code") == spec.code}
+    prelim = sorted(f.fixing_date.isoformat() for f in rows
+                    if spec.preliminary_label and spec.preliminary_label in labels.get((f.fixing_date.isoformat(), f.source), ()))
+    return entry, {"status": "ok", "rows": len(rows), "first": rows[0].fixing_date.isoformat(),
+                   "latest": rows[-1].fixing_date.isoformat(), "known_at": cut.isoformat(),
+                   "sources": sorted({f.source for f in rows}),
+                   "unpublished_at_cut": unknown, "dropped_before_calendar": len(early),
+                   "bridged_days": [d.isoformat() for d in bridged],
+                   "unpublished_business_days": [d.isoformat() for d in unpublished],
+                   "max_unpublished_business_days": spec.max_unpublished,
+                   "preliminary_days": prelim, "calendar": obs.version}
 
 
 def rusfar_cny_fixings(snapshot: Any, cal: BusinessCalendar, bd: date, known_at: datetime | None = None
                        ) -> tuple[IndexFixingEntry, dict[str, Any]]:
-    """The ``RUSFARCNY`` fixings of the market snapshot as core's ``IndexFixingEntry`` (module docstring): rows dated
-    before ``bd`` and in the calendar ``cal`` (``FX:CNY``) published by ``known_at`` (default the snapshot's;
-    ``rates.fixing_known``), in fractions, dated ``bd``. The lineage: the rows, the first and the latest fixing, the
-    rows not yet published at the cut, the ``bridged_days`` (the previous value holds), the ``unpublished_business_days``
-    (at most ``RUSFAR_CNY_MAX_UNPUBLISHED_DAYS`` just before ``bd``, carried) and the ``preliminary_days`` (rows the hub
-    labels ``RUSFAR_CNY_PRELIMINARY``). Raises ``RatesInputError`` without a usable row."""
-    cut = known_at or ar.known_at(snapshot)
-    rows = [f for f in ar.fixings(snapshot, RUSFAR_CNY_FIXING) if f.fixing_date < bd]
-    unknown = [f.fixing_date.isoformat() for f in rows if not rates.fixing_known(f, cut)]
-    rows = [f for f in rows if rates.fixing_known(f, cut)]
-    early = [f for f in rows if cal.valid_from is not None and f.fixing_date < cal.valid_from]
-    rows = rows[len(early):]
-    if not rows:
-        raise rates.RatesInputError(f"{bd}: no {RUSFAR_CNY_FIXING} fixing known at {cut.isoformat()}")
-    obs, bridged, unpublished = _observation_calendar(cal, {f.fixing_date for f in rows}, bd)
-    entry = IndexFixingEntry(RUSFAR_CNY_FIXING, IndexFixings(
-        RUSFAR_CNY_INDEX, bd, tuple((f.fixing_date, f.rate) for f in rows), obs, snapshot.id))
-    labels = {str(r.get("fixing_date")): r.get("labels") or () for r in snapshot.data.get("fixings") or ()
-              if r.get("index_code") == RUSFAR_CNY_FIXING}
-    kept = {f.fixing_date.isoformat() for f in rows}
-    return entry, {"status": "ok", "rows": len(rows), "first": rows[0].fixing_date.isoformat(),
-                   "latest": rows[-1].fixing_date.isoformat(), "known_at": cut.isoformat(),
-                   "unpublished_at_cut": unknown, "dropped_before_calendar": len(early),
-                   "bridged_days": [d.isoformat() for d in bridged],
-                   "unpublished_business_days": [d.isoformat() for d in unpublished],
-                   "max_unpublished_business_days": RUSFAR_CNY_MAX_UNPUBLISHED_DAYS,
-                   "preliminary_days": sorted(d for d in kept if RUSFAR_CNY_PRELIMINARY in labels.get(d, ())),
-                   "calendar": obs.version}
+    """The ``RUSFARCNY`` fixings (``index_fixings``) on the calendar ``cal`` (``FX:CNY``)."""
+    return index_fixings(snapshot, FOREIGN_OVERNIGHT[RUSFAR_CNY_FIXING], cal, bd, known_at)
 
 
 def _tenor(q: dict[str, Any]) -> str | None:
@@ -517,6 +597,39 @@ def _proxy(market: Any, dataset: str, spec: str, bd: date
                    "tenors_dropped": dropped, "proxy": True,
                    **({"stale": f"quotes of {s.get('snapshot_date')} dated {bd}"}
                       if s.get("snapshot_date") and s["snapshot_date"] != bd.isoformat() else {})}
+
+
+def _index_calendar(static: Any, ov: ForeignOvernight, spot_cals: dict[str, BusinessCalendar]
+                    ) -> BusinessCalendar | None:
+    """The fixing days' calendar of ``ov``: its hub calendar from the static snapshot, else ``FX:<ccy>``; None without
+    either (the currency has no spot). A RUB index (``RUB_OVERNIGHT``: RUSFAR) falls back on ``MOEX_STOCK`` where the
+    static snapshot has no ``MOEX_RUSFAR``."""
+    for name in ((ov.base_calendar, "MOEX_STOCK") if ov.ccy == "RUB" else (ov.base_calendar,)):
+        if name is None:
+            continue
+        try:
+            return ar.calendar(static.snapshot, name)[0]
+        except SnapshotError:
+            pass
+    return spot_cals.get(ov.ccy)
+
+
+def _proxy_projection(proxy: DiscountCurve, proxy_lineage: dict[str, Any], ov: ForeignOvernight, bd: date
+                      ) -> tuple[DiscountCurve, dict[str, Any]]:
+    """``USD SOFR`` / ``EUR ESTR``: the nodes of the government par-yield proxy (``USD UST`` / ``EUR AAA``) as a
+    ``DiscountCurve`` (``ois-logdf-v1``, ACT/365F) under the spec core reads a currency's discount factors by. The
+    interpolation is the proxy's own, so the two curves have the same discount factors; the lineage keeps the proxy's
+    quote date and ``stale`` and says what stands for what (provisional)."""
+    built = DiscountCurve(bd, proxy.nodes, "ois-logdf-v1", convention=CurveConvention(time_day_count=DayCount.ACT_365_FIXED))
+    last = proxy.nodes[-1][0].isoformat()
+    info = {"status": "ok", "spec_id": ov.spec_id, "source_curve": PROXY_SPECS[ov.proxy_of or ""][1],
+            "dataset": proxy_lineage.get("dataset"), "source": proxy_lineage.get("source"),
+            "quote_date": proxy_lineage.get("quote_date"), "dated": bd.isoformat(),
+            "tenors_used": proxy_lineage.get("tenors_used"), "last_node": last,
+            "extrapolation": f"flat-forward beyond {last} (provisional)", "proxy": True,
+            "provisional": "UST/AAA par yields stand for the OIS curve", **({"stale": proxy_lineage["stale"]}
+                                                                          if proxy_lineage.get("stale") else {})}
+    return built, info
 
 
 def with_fx(market: Any, static: Any, core: MarketSnapshot, fx_rates: dict[str, tuple[float, str] | None],
@@ -585,21 +698,27 @@ def with_fx(market: Any, static: Any, core: MarketSnapshot, fx_rates: dict[str, 
             lin["curves"][XCCY_CURVE_ID] = {"status": "missing", "error": str(e)}
         except (rates.RatesInputError, CoreRejection, ValueError, SnapshotError) as e:
             lin["curves"][XCCY_CURVE_ID] = {"status": "error", "error": str(e)}
-    if "CNY" in out.spots:  # RUSFAR CNY: the projection curve and the fixings of a floating CNY leg (TDM#565)
-        cal = spot_cals["CNY"]
-        front = None
+    entries: list[IndexFixingEntry] = []
+    lin["index_fixings"] = {}
+    for code, ov in (*FOREIGN_OVERNIGHT.items(), *RUB_OVERNIGHT.items()):  # the overnight indices of a floating leg (TDM#565)
+        cal = _index_calendar(static, ov, spot_cals)
+        if cal is None:
+            continue
         try:
-            entry, info = rusfar_cny_fixings(market.snapshot, cal, bd)
-            out.index_fixings = (entry,)
-            lin["index_fixings"] = {RUSFAR_CNY_FIXING: info}
-            front = entry.fixings.fixings[-1]
+            entry, info = index_fixings(market.snapshot, ov, cal, bd)
+            entries.append(entry)
+            lin["index_fixings"][code] = info
         except (rates.RatesInputError, CoreRejection, ValueError, SnapshotError) as e:
-            lin["index_fixings"] = {RUSFAR_CNY_FIXING: {"status": "missing", "error": str(e)}}
+            lin["index_fixings"][code] = {"status": "missing", "error": str(e)}
+    out.index_fixings = tuple(entries)
+    if "CNY" in out.spots:  # RUSFAR CNY: the projection curve of a floating CNY leg
+        cal = spot_cals["CNY"]
+        front = next((e.fixings.fixings[-1] for e in entries if e.fixing_id == RUSFAR_CNY_FIXING), None)
         try:
             built, info = _rusfar_cny(market, cal, bd, front)
             curves.append(CurveEntry(RUSFAR_CNY_CURVE_ID, RUSFAR_CNY_SPEC, built))
             out.curves[RUSFAR_CNY_CURVE_ID] = ForeignCurve(RUSFAR_CNY_CURVE_ID, "CNY", "ois", RUSFAR_CNY_SPEC,
-                                                           "CNY: OIS на RUSFAR CNY", built)
+                                                           FOREIGN_OVERNIGHT[RUSFAR_CNY_FIXING].label, built)
             lin["curves"][RUSFAR_CNY_CURVE_ID] = info
         except rates.QuoteSetMissing as e:
             lin["curves"][RUSFAR_CNY_CURVE_ID] = {"status": "missing", "error": str(e)}
@@ -617,6 +736,21 @@ def with_fx(market: Any, static: Any, core: MarketSnapshot, fx_rates: dict[str, 
         out.quote_entries[cid] = CurveEntry(cid, spec, got[1])
         out.curves[cid] = ForeignCurve(cid, ccy, "proxy", spec, f"{ccy}: {proxies.label(dataset)}", got[0])
         lin["curves"][cid] = got[2]
+    for ov in FOREIGN_OVERNIGHT.values():  # USD SOFR / EUR ESTR: the proxies renamed, a forecast curve only
+        if ov.proxy_of is None:
+            continue
+        proxy_id = PROXY_SPECS[ov.proxy_of][1]
+        if proxy_id not in out.curves:
+            src = lin["curves"].get(proxy_id) or {}
+            lin["curves"][ov.curve_id] = {
+                "status": src.get("status", "missing"),
+                "error": (f"{proxy_id} not built for {ov.curve_id}: {src['error']}" if src.get("error")
+                          else f"no {ov.proxy_of} quotes in the snapshot for {ov.curve_id}")}
+            continue
+        built, info = _proxy_projection(out.curves[proxy_id].curve, lin["curves"][proxy_id], ov, bd)
+        curves.append(CurveEntry(ov.curve_id, ov.spec_id, built))
+        out.curves[ov.curve_id] = ForeignCurve(ov.curve_id, ov.ccy, "ois", ov.spec_id, ov.label, built)
+        lin["curves"][ov.curve_id] = info
     fixings = {}
     for f in market.cbr_fixings():
         fixings[(f["ccy"], f["fixing_date"])] = FxFixing(f["ccy"], CBR_SOURCE, f["fixing_date"], f["rate"])

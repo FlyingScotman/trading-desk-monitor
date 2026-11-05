@@ -68,6 +68,7 @@ ISSUE_TEXT = {
     "report_date_suspicious": "время формирования не сходится с датой отчёта",
     "same_valid_date": "другая дата отчёта даёт тот же рабочий день",
     "pnl_parts_mismatch": "части PnL не сходятся с итогом",
+    "unmapped_index": "индекс ноги не сопоставлен: сделка «не оценено» — экран «Индексы ставок» в настройках",
 }
 
 LEVELS = {"input.rejected": "error", "input.failed": "error", "input.match_failed": "error", "run.failed": "error",
