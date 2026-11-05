@@ -2331,14 +2331,15 @@
   const RC_REASON = { ccs_unsupported: 'CCS ядром пока не оценивается',
     ccs_foreign_floating_unsupported: 'CCS с плавающей валютной ногой: индекс валютной ноги не поддерживается (оцениваются юани на RUSFAR CNY, доллары на SOFR, евро на €STR)',
     index_unmapped: 'индекс плавающей ноги не сопоставлен с кодом хаба в настройках адаптера (Настройки, экран «Индексы ставок»)',
-    ccs_index_averaging_unsupported: 'CCS: ставка валютной ноги — средняя арифметическая, ядро компаундирует: не оценивается',
+    ccs_index_averaging_unsupported: 'CCS: ставка плавающей ноги (валютной или RUSFAR) — средняя арифметическая, ядро компаундирует: не оценивается',
+    key_rate_curve_too_short: 'CCS на ключевой ставке длиннее кривой ключевой ставки (около 10 лет): не оценивается',
     no_foreign_projection_curve: 'CCS с плавающей валютной ногой: нет кривой прогноза индекса за дату (юани: OIS RUSFAR CNY; доллары и евро: кривая UST / ECB AAA в срезе хаба)',
     ccs_ccy_unsupported: 'CCS не «рубли против валюты»: ядром не оценивается', basis_swap_unsupported: 'базисный своп (две плавающие ноги) ядром пока не оценивается',
     repo_open: 'открытое РЕПО: нет даты окончания (её задаёт владелец)', no_fixings: 'нет фиксингов индекса в прогоне', pv_not_finite: 'ядро дало нечисловую оценку',
     repo_index_unsupported: 'индекс РЕПО не поддерживается', no_key_rate_curve: 'нет кривой КС в прогоне', no_rub_curve: 'нет кривой RUONIA OIS в прогоне',
     swap_dates_mismatch: 'даты начала или окончания ног свопа не совпадают', swap_notional_mismatch: 'номиналы ног свопа не совпадают',
     terms_mixed: 'у строки сделки разных видов', terms_ambiguous: 'условия одной сделки подходят нескольким строкам отчёта (один deal_id): ядро не оценивает ни одну', not_valued: 'ядро не вернуло оценку',
-    swap_frequency_unsupported: 'частота выплат не поддерживается', day_count_unsupported: 'база начисления не поддерживается', swap_index_unsupported: 'индекс не поддерживается (рублёвая нога CCS: RUONIA, ключевая ставка, RUSFAR или фикс)',
+    swap_frequency_unsupported: 'частота выплат не поддерживается', day_count_unsupported: 'база начисления не поддерживается', swap_index_unsupported: 'индекс не поддерживается (IRS: RUONIA и ключевая ставка; рублёвая нога CCS: RUONIA, ключевая ставка, RUSFAR или фикс)',
     swap_ccy_unsupported: 'валюта свопа не RUB', repo_ccy_unsupported: 'валюта РЕПО не RUB', terms_incomplete: 'условия сделки неполные', terms_invalid: 'условия сделки не приняты ядром', settled: 'сделка исполнена' };
   K.rcReason = c => !c ? '' : RC_REASON[c] || (/^core_/.test(c) ? 'ядро отклонило: ' + c.slice(5) : c);
   const rcProd = s => s ? String(s).split('+').map(x => RC_PROD[x] || x).join(' + ') : '—';

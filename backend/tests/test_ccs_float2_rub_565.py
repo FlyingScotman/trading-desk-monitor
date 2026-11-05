@@ -107,11 +107,6 @@ def test_without_the_key_rate_curve_the_swap_is_not_valued(ctx):
     assert value(without_curve(ctx, KEY_RATE_CURVE_ID), rub("RUONIA"))[0].core_not_valued is None
 
 
-def test_a_swap_longer_than_the_key_rate_curve_is_not_valued_with_the_reason(ctx):
-    o, _ = value(ctx, rub("KEY_RATE", end="2040-10-08"))
-    assert o.core_not_valued[0] == "core_missing_market_data" and "key-rate" in o.core_not_valued[1]
-
-
 def test_the_key_rate_averaging_flag_is_not_read(ctx):
     t = rub("KEY_RATE")
     t[0]["x_overnight_arithmetic"] = True
@@ -203,9 +198,38 @@ def test_an_arithmetically_averaged_rusfar_leg_is_not_valued(ctx):
     assert value(ctx, t)[0].core_not_valued is None
 
 
-def test_the_rusfar_calendar_is_moex_rusfar_else_moex_stock(ctx):
+def _with_rusfar_calendar(tmp):
+    """The golden snapshot with a ``MOEX_RUSFAR`` calendar (a copy of ``MOEX_STOCK`` under another version) in its static."""
+    import copy
+    import gzip
+    import hashlib
+    import json
+
+    sd = SnapshotDir(FIX)
+    market = sd.market(DATE, "eod_final")
+    static = copy.deepcopy(sd.get(market.static_snapshot_id).doc)
+    m = copy.deepcopy(market.doc)
+    stock = next(c for c in static["data"]["calendars"] if c["calendar"] == "MOEX_STOCK")
+    static["data"]["calendars"].append({**stock, "calendar": "MOEX_RUSFAR", "version": "rusfar-test-version"})
+
+    def put(doc):
+        raw = json.dumps(doc, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode()
+        sid = hashlib.sha256(raw).hexdigest()
+        (tmp / f"{sid}.json.gz").write_bytes(gzip.compress(raw))
+        return sid
+
+    m["static_snapshot_id"] = put(static)
+    put(m)
+    return SnapshotDir(tmp)
+
+
+def test_the_rusfar_calendar_is_moex_rusfar_else_moex_stock(ctx, tmp_path):
     cal = next(e.fixings.calendar for e in ctx.fx.index_fixings if e.fixing_id == "RUSFAR")
     assert cal.version.endswith("+RUSFAR") and cal.is_business_day(date(2026, 10, 14))
+    assert cal.version.startswith("MOEX_STOCK@")  # no MOEX_RUSFAR in the golden static
+    own = prepare(_with_rusfar_calendar(tmp_path), DATE)
+    cal = next(e.fixings.calendar for e in own.fx.index_fixings if e.fixing_id == "RUSFAR")
+    assert cal.version.startswith("MOEX_RUSFAR@") and cal.version.endswith("+RUSFAR")
     from desk.curves import fx as fxcurves
 
     assert fxcurves.RUB_OVERNIGHT["RUSFAR"].base_calendar == "MOEX_RUSFAR"
@@ -295,3 +319,48 @@ def test_more_spellings_of_no_offset_are_not_stated(val):
 @pytest.mark.parametrize("val", ["1", "+1", "-1", "2 calendar days", "5 business days", "T-2", "1D"])
 def test_a_real_offset_is_still_stated(val):
     assert dv._nonzero(val) is True
+
+
+# --- review of the key-rate and RUSFAR legs ------------------------------------------------------------------------------
+
+
+def test_a_preliminary_rusfar_fixing_is_said(tmp_path):
+    def mut(m):
+        for f in m["data"]["fixings"]:
+            if f["index_code"] == "RUSFAR" and f["fixing_date"] == "2026-10-14":
+                f["labels"] = ["moex_marketdata_preliminary"]
+
+    c = prepare(build(tmp_path, mut), DATE)
+    assert c.fx.lineage["index_fixings"]["RUSFAR"]["preliminary_days"] == ["2026-10-14"]
+    o, _ = value(c, rub("RUSFAR"))
+    assert any("RUSFAR of 2026-10-14 is a preliminary value" in a and "provisional" in a
+               for a in o.valuation.assumptions)
+
+
+def test_a_key_rate_swap_longer_than_the_curve_has_its_own_reason(ctx):
+    node = next(e.curve.nodes[-1][0] for e in ctx.core_market.curves if e.curve_id == KEY_RATE_CURVE_ID)
+    o, _ = value(ctx, rub("KEY_RATE", end="2040-10-08"))
+    assert o.core_not_valued[0] == "key_rate_curve_too_short" and node.isoformat() in o.core_not_valued[1]
+    from desk.api import coverage
+
+    assert "key_rate_curve_too_short" in coverage.CAUSES
+    ok = date(node.year - 1, 10, 8).isoformat()
+    assert value(ctx, rub("KEY_RATE", end=ok))[0].core_not_valued is None
+
+
+def test_the_reason_texts_have_no_commands_for_the_owner():
+    from desk.api import coverage
+
+    for code, (why, todo) in coverage.CAUSES.items():
+        assert "desk sync" not in why + todo, code
+
+
+def test_a_row_of_matured_trades_only_names_the_unmapped_one_too(ctx):
+    dead = ccs("D1", "pay", 1_250_000_000, 100_000_000, start="2024-10-08", end="2026-10-13", fixed_rate_pct="15")
+    dead[1]["index_code"], dead[1]["fixed_rate_pct"], dead[1]["x_index_unmapped"] = "OTHER", None, True
+    old = ccs("D2", "pay", 1_250_000_000, 100_000_000, start="2024-10-08", end="2026-10-12", fixed_rate_pct="15")
+    o, _ = value(ctx, [{**r, "position_id": "K1"} for r in (*dead, *old)])
+    v = o.valuation
+    assert v is not None and o.core_not_valued is None
+    assert sorted(v.extra["core"]["trades"]) == ["D1", "D2"]
+    assert any(a == "settled trades left out: D1" for a in v.assumptions), v.assumptions

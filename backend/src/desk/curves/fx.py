@@ -116,16 +116,16 @@ RUSFAR_CNY_CURVE_ID, RUSFAR_CNY_SPEC = "CNY RUSFAR", "cny_discount_factors_v1"
 RUSFAR_CNY_DATASET = "cny_rusfar_ois"
 RUSFAR_CNY_FIXING = "RUSFARCNY"
 RUSFAR_CNY_INDEX = "CNY-RUSFARCNY-COMPOUND"
+"""The name of core's compounded index of a RUSFARCNY leg and of its fixings (``valuation.derivatives.CCS_FOREIGN_INDEX``)."""
 RUSFAR_RUB_FIXING = "RUSFAR"
 RUSFAR_RUB_INDEX = "RUB-RUSFAR-OIS-COMPOUND"
 """The RUB RUSFAR (TDM#565, stage 2): the hub's fixing code and core's compounded index of a RUB leg of a cross-currency
 swap on it (``valuation.derivatives.CCS_RUB_INDEX``)."""
-"""The name of core's compounded index of a RUSFARCNY leg and of its fixings (``valuation.derivatives.CCS_FOREIGN_INDEX``)."""
 RUSFAR_CNY_MAX_UNPUBLISHED_DAYS = 1
 """As RUONIA's (``rates.RUONIA_MAX_UNPUBLISHED_DAYS``): at most one business day just before the business date may lack its
 RUSFARCNY fixing (the hub late, the first business day of the year after the exchange's last day without the index): the
 previous value is carried and said. More are missing fixings, never filled (``valuation.derivatives``: ``no_fixings``)."""
-RUSFAR_CNY_PRELIMINARY = "moex_marketdata_preliminary"
+MOEX_PRELIMINARY = RUSFAR_CNY_PRELIMINARY = "moex_marketdata_preliminary"
 """The hub's label of a fixing that is a preliminary value of the same day from the exchange's market data, replaced later by
 the history's (hub ``HISTORY_API.md``); said in the lineage."""
 
@@ -172,7 +172,8 @@ FOREIGN_OVERNIGHT = {
 ``EUR ESTR`` are forecast curves only (the proxies of the government par yields renamed, never discounting)."""
 RUB_OVERNIGHT = {
     RUSFAR_RUB_FIXING: ForeignOvernight(
-        RUSFAR_RUB_FIXING, "RUB", RUSFAR_RUB_INDEX, "", "", "MOEX_RUSFAR", None, 1, label="RUB: RUSFAR")}
+        RUSFAR_RUB_FIXING, "RUB", RUSFAR_RUB_INDEX, "", "", "MOEX_RUSFAR", None, 1, MOEX_PRELIMINARY,
+        label="RUB: RUSFAR")}
 """Index code -> the RUB overnight indices read as core ``IndexFixings`` (``valuation.derivatives.CCS_RUB_INDEX``):
 fixings only, no curve (the leg projects on RUONIA). The fixing days' calendar is ``MOEX_RUSFAR`` where the static
 snapshot has it (hub contract 1.6), else ``MOEX_STOCK``, then as RUSFARCNY's: the days the exchange published."""
@@ -601,7 +602,8 @@ def _proxy(market: Any, dataset: str, spec: str, bd: date
 def _index_calendar(static: Any, ov: ForeignOvernight, spot_cals: dict[str, BusinessCalendar]
                     ) -> BusinessCalendar | None:
     """The fixing days' calendar of ``ov``: its hub calendar from the static snapshot, else ``FX:<ccy>``; None without
-    either (the currency has no spot)."""
+    either (the currency has no spot). A RUB index (``RUB_OVERNIGHT``: RUSFAR) falls back on ``MOEX_STOCK`` where the
+    static snapshot has no ``MOEX_RUSFAR``."""
     for name in ((ov.base_calendar, "MOEX_STOCK") if ov.ccy == "RUB" else (ov.base_calendar,)):
         if name is None:
             continue

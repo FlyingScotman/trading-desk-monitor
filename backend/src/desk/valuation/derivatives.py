@@ -73,8 +73,9 @@ delta), ``basis01`` (``FXBASIS|<ccy>``, RUB per bp), ``fixings`` (fixed / pendin
   as MOEX IRS KEYRATE (core's ``RUB_KEY_RATE_AVERAGE``; the terms' averaging flag is not read, as for IRS), projected on
   the key-rate curve ``RUB_KEY_RATE_PROJ`` (calendar-day nodes, ACT/365F; published as ``RUB KEY``), its started period
   reading the ``KEY_RATE`` history, and the forward curve ``RUB_KEY_RATE_SWAP`` of ``EodContext.swap_curves`` handed to
-  core for the horizon (``rub_key_rate_curve_id``: carry, flows; a swap longer than the curve is not valued by core,
-  said as ``MissingMarketData``); no curve: ``no_key_rate_curve``. ``RUSFAR`` compounded on 365 / 366 (provisional),
+  core for the horizon (``rub_key_rate_curve_id``: the flows of ``_rates_flows``; the carry of the PnL is zero, as for
+  every derivative); a swap with a period ending past the curve's last node is ``key_rate_curve_too_short`` (core would
+  refuse it as ``MissingMarketData``); no curve: ``no_key_rate_curve``. ``RUSFAR`` compounded on 365 / 366 (provisional),
   projected on ``RUB RUONIA`` without a basis (provisional), reading the run's ``RUSFAR`` fixings
   (``FxMarket.index_fixings``, ``curves.fx.RUB_OVERNIGHT``) for a started period; an arithmetically averaged one
   (``x_overnight_arithmetic``) is ``ccs_index_averaging_unsupported``. Not valued: another foreign index (``ccs_foreign_floating_unsupported``; TDM#565 stage 2: SOFR on a USD leg and ESTR on a
@@ -912,7 +913,8 @@ class CcsRubIndex(NamedTuple):
     note: str
     key_rate_curve_id: str | None = None
     """The key-rate forward curve (``rub_key_rate_swap_v1``) core's horizon rolls the key-rate leg by
-    (``XccyInstrument.rub_key_rate_curve_id``); it lies in ``EodContext.swap_curves``, not in ``core_market``."""
+    (``XccyInstrument.rub_key_rate_curve_id``); the monitor's horizon is the flows (``_rates_flows``), the PnL's carry
+    is zero. It lies in ``EodContext.swap_curves``, not in ``core_market``."""
     reads_averaging_flag: bool = False
     """Whether ``x_overnight_arithmetic`` is read: an arithmetically averaged leg is then
     ``ccs_index_averaging_unsupported`` (RUSFAR, which core compounds). RUONIA's flag was never read; the key rate's leg
@@ -1152,6 +1154,11 @@ def _ccs_build(ctx: Any, c: CcsTerms, iid: str, curve_of: dict[str, str]
         notes.append(f"{c.label}: the MOEX XCS convention ({', '.join(takes)}) where the terms state no "
                      f"{' or '.join(lacks)} (provisional)")
     swap = XccySwap(c.label, legs[0], legs[1])
+    if rub_idx is not None and rub_idx.projection_curve_id is not None:  # the key-rate curve ends (about 10Y)
+        node = next(e.curve.nodes[-1][0] for e in ctx.core_market.curves if e.curve_id == rub_idx.projection_curve_id)
+        if any(p.accrual_end > node and p.payment_date > bd for p in swap.rub_leg.periods):
+            raise NotValued("key_rate_curve_too_short", f"CCS {c.label}: a period of the {c.rub.index_code} leg ends "
+                                                        f"past the key-rate curve (quotes to {node})")
     days = sorted({d for g in legs for d in (*(p.payment_date for p in g.periods),
                                              *(e.payment_date for e in g.exchanges))})
     if days[-1] <= bd:
@@ -1481,6 +1488,8 @@ def value(ctx: Any, requests: list[Request], *, options: FxOptions, second_order
                     built.append((inst, t.foreign.ccy if isinstance(t, CcsTerms) else "RUB", t, 1.0))
                     pay_dates[iid] = days if days is not None else _pay_dates(inst, t, calendars, bd)
                 if gone and not built:
+                    if r.left_out:
+                        notes[r.position_id].append("settled trades left out: " + ", ".join(r.left_out))
                     out[r.position_id] = _settled_row(ctx, r, [(t, e.last or _last_event(t)) for t, e in gone], gone[0][1],
                                                       notes[r.position_id])
                     continue
@@ -1683,7 +1692,8 @@ def _settled_row(ctx: Any, r: Request, gone_at: list[tuple[Any, date]], why: Not
     spot = ctx.fx.rates.get(ccy, (1.0, ""))[0] if ccy != "RUB" else 1.0
     why_text = f"settled on {last}: PV 0, the flows of the last day are in the day's PnL"
     extra = {
-        "core": {"product": product, "trades": sorted({t.trade_id for t in gone}), "model_flags": ["settled"],
+        "core": {"product": product, "trades": sorted({t.trade_id for t in gone} | set(r.left_out)),
+                 "model_flags": ["settled"],
                  "rub_curve": RISK_CURVES[RUONIA_OIS_CURVE_ID], "core_version": CORE_VERSION},
         "settled": [{"trade_id": t.label, "date": ends[id(t)].isoformat()} for t in gone],
         "flows": [],
