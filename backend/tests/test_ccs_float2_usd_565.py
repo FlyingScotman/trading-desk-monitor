@@ -196,7 +196,7 @@ def test_a_floating_usd_or_eur_leg_is_valued_with_risk_on_the_forecast_curve(ctx
     assert forecast in v.extra["core"]["curves"] or f"{forecast}" in str(v.extra["core"])
 
 
-def test_the_started_period_reads_the_first_source_not_the_other(ctx):
+def test_the_started_period_reads_the_first_source_not_the_other(ctx, tmp_path):
     """SOFR from nyfed is 4.30 %, from fred 4.10 %: the PV equals that on a snapshot with only the nyfed rows, and
     differs from one with only the fred rows."""
     t = fl(**FIXED)
@@ -208,16 +208,13 @@ def test_the_started_period_reads_the_first_source_not_the_other(ctx):
                                     if not (f["index_code"] == "SOFR" and f["source"] != source)]
         return mut
 
-    import tempfile
-    from pathlib import Path
-
-    with tempfile.TemporaryDirectory() as a, tempfile.TemporaryDirectory() as b:
-        nyfed = prepare(build(Path(a), only("nyfed")), DATE)
-        fred = prepare(build(Path(b), only("fred")), DATE)
-        assert value(nyfed, t)[0].valuation.pv_rub == pytest.approx(pv, rel=1e-12)
-        assert value(fred, t)[0].valuation.pv_rub != pytest.approx(pv, rel=1e-9)
-    ((_, info),) = [(1, ctx.fx.lineage["index_fixings"]["SOFR"])]
-    assert info["sources"] == ["nyfed"]
+    (tmp_path / "a").mkdir()
+    (tmp_path / "b").mkdir()
+    nyfed = prepare(build(tmp_path / "a", only("nyfed")), DATE)
+    fred = prepare(build(tmp_path / "b", only("fred")), DATE)
+    assert value(nyfed, t)[0].valuation.pv_rub == pytest.approx(pv, rel=1e-12)
+    assert value(fred, t)[0].valuation.pv_rub != pytest.approx(pv, rel=1e-9)
+    assert ctx.fx.lineage["index_fixings"]["SOFR"]["sources"] == ["nyfed"]
 
 
 def test_the_fixings_not_yet_known_fall_back_to_the_next_source(ctx):
@@ -280,7 +277,7 @@ def test_a_fixing_offset_is_ignored_and_said(ctx):
 def test_an_unmapped_index_is_its_own_reason_before_the_index_checks(ctx):
     t = fl(**FIXED)
     t[1]["index_code"], t[1]["x_index_unmapped"] = "OTHER", True
-    t[1]["x_index_raw"] = "SECRET-NAME"
+    t[1]["x_index"] = "SECRET-NAME"  # the report's own name, as the contract keeps it
     o, _ = value(ctx, t)
     assert o.core_not_valued[0] == "index_unmapped"
     assert "OTHER" in o.core_not_valued[1] and "SECRET-NAME" not in o.core_not_valued[1]
@@ -337,8 +334,8 @@ def test_the_forecast_curve_extrapolation_follows_the_same_rule(ctx):
     a = [x for x in value(ctx, fl(**FIXED))[0].valuation.assumptions if "USD SOFR quotes to" in x]
     assert len(a) == 1 and "extrapolated" not in a[0]
     far = value(ctx, fl(end="2040-10-08", **FIXED))[0]
-    if far.core_not_valued is None:
-        assert any("USD SOFR quotes to" in x and "extrapolated flat-forward" in x for x in far.valuation.assumptions)
+    assert far.core_not_valued is None, far.core_not_valued
+    assert any("USD SOFR quotes to" in x and "extrapolated flat-forward" in x for x in far.valuation.assumptions)
 
 
 # --- the run's reference, scenarios, OCP -----------------------------------------------------------------------------
@@ -376,3 +373,91 @@ def test_the_calendars_of_the_fixings_are_the_hubs(ctx):
     assert not cal.is_business_day(date(2026, 10, 12)) and cal.is_business_day(date(2026, 10, 13))  # Columbus Day
     cal = next(e.fixings.calendar for e in ctx.fx.index_fixings if e.fixing_id == "ESTR")
     assert cal.is_business_day(date(2026, 10, 12))
+
+
+# --- review round: day count, offsets, matured unmapped trades, proxy errors, units --------------------------------
+
+
+def test_a_sofr_or_estr_leg_without_a_day_count_accrues_on_act_360(ctx):
+    for ccy, index in (("USD", "SOFR"), ("EUR", "ESTR")):
+        pvs = {}
+        for dc in (None, "ACT/360", "ACT/ACT"):
+            t = fl(ccy=ccy, index=index, **FIXED)
+            if dc:
+                t[1]["day_count"] = dc
+            o, _ = value(ctx, t)
+            assert o.core_not_valued is None, o.core_not_valued
+            pvs[dc] = o.valuation
+        assert pvs[None].pv_rub == pytest.approx(pvs["ACT/360"].pv_rub, rel=1e-12)
+        assert pvs[None].pv_rub != pytest.approx(pvs["ACT/ACT"].pv_rub, rel=1e-9)
+        assert any("day_count of the" in a and "ACT/360" in a and "provisional" in a for a in pvs[None].assumptions)
+        assert not any("day_count of the" in a for a in pvs["ACT/360"].assumptions)
+
+
+def test_the_anchor_of_the_fx_curve_is_said_once(ctx):
+    v = value(ctx, fl(**FIXED))[0].valuation
+    anchors = [a for a in v.assumptions if "no TOD/TOM swap" in a]
+    assert len(anchors) == 1, anchors
+
+
+@pytest.mark.parametrize("val,stated", [(2, True), ("2D", True), ("5 business days", True), (" 1 ", True),
+                                        (0, False), ("0", False), ("0D", False), ("0 days", False), ("", False),
+                                        ("нет", False), ("no", False), ("false", False), (False, False), (None, False)])
+def test_any_stated_offset_or_lookback_is_ignored_and_said(val, stated):
+    assert dv._nonzero(val) is stated
+
+
+def test_a_lookback_string_gets_the_ignored_note(ctx):
+    t = fl(**FIXED)
+    t[1]["x_lookback"] = "5 business days"
+    assert any("ignored" in a for a in value(ctx, t)[0].valuation.assumptions)
+    t[1]["x_lookback"] = "0D"
+    assert not any("ignored" in a for a in value(ctx, t)[0].valuation.assumptions)
+
+
+def test_a_matured_unmapped_trade_does_not_spoil_the_position(ctx):
+    live = fl("L1", **FIXED)
+    dead = fl("D1", start="2024-10-08", end="2026-04-08", **FIXED)
+    dead[1]["index_code"], dead[1]["x_index_unmapped"] = "OTHER", True
+    terms = [{**r, "position_id": "F1"} for r in (*live, *dead)]
+    o, _ = value(ctx, terms)
+    assert o.core_not_valued is None, o.core_not_valued
+    assert [f["trade_id"] for f in o.valuation.extra["swaps"]] == ["L1"]
+    # alive and unmapped: the whole position is index_unmapped; matured alone: settled
+    dead[1]["maturity_date"] = dead[0]["maturity_date"] = "2028-04-08"
+    both = [{**r, "position_id": "F1"} for r in (*live, *dead)]
+    assert value(ctx, both)[0].core_not_valued[0] == "index_unmapped"
+    old = [{**r, "position_id": "F1"} for r in fl("D2", start="2024-10-08", end="2026-04-08", **FIXED)]
+    old[1]["index_code"], old[1]["x_index_unmapped"] = "OTHER", True
+    with pytest.raises(dv.NotValued) as e:
+        dv.request_of("F1", "IRB", {}, old, BD)
+    assert e.value.reason == "settled"
+    with pytest.raises(dv.NotValued) as e:
+        dv.request_of("F1", "IRB", {}, old)  # no date given: as before
+    assert e.value.reason == "index_unmapped"
+
+
+def test_a_failed_proxy_is_named_in_the_forecast_curve_lineage(tmp_path):
+    def mut(m):
+        for qs in m["data"]["curve_quote_sets"]:
+            if qs["dataset"] == "usd_ust_par":
+                for q in qs["quotes"]:
+                    q["mid_pct"] = None
+
+    c = prepare(build(tmp_path, mut), DATE)
+    proxy, forecast = c.fx.lineage["curves"]["USD UST"], c.fx.lineage["curves"]["USD SOFR"]
+    assert proxy["status"] == "error" and forecast["status"] == "error"
+    assert "USD UST not built" in forecast["error"] and proxy["error"] in forecast["error"]
+    assert "USD SOFR" not in c.fx.curves
+
+
+def test_the_unit_is_checked_on_the_rows_kept_only(ctx):
+    snap = copy.deepcopy(ctx.market.snapshot)
+    for f in snap.data["fixings"]:
+        if f["index_code"] == "SOFR" and f["source"] == "fred":
+            f["unit"] = "bp"
+    assert {r.source for r in ar.fixings(snap, "SOFR", ("nyfed", "fred"))} == {"nyfed"}
+    with pytest.raises(Exception, match="need pct"):
+        ar.fixings(snap, "SOFR", ("fred", "nyfed"))
+    nothing = ar.fixings(snap, "SOFR", ("nyfed", "fred"), lambda r: r.source == "nyfed")
+    assert len(nothing) == len(SOFR_DAYS)

@@ -309,7 +309,7 @@ def _derivatives(ctx: EodContext, inputs: PositionInputs, p: BookPlan, second_or
                                                        "positions rows (one deal_id on several rows)")
         elif pid in linked:
             try:
-                reqs.append(dv.request_of(pid, book, x, linked[pid]))
+                reqs.append(dv.request_of(pid, book, x, linked[pid], ctx.business_date))
             except dv.NotValued as e:
                 out[pid] = e
         elif pid not in classless and opts.futures_by_ticker and (f := _future_row(ctx, x)) is not None:

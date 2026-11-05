@@ -105,21 +105,24 @@ def fixings(snap: Snapshot, index_code: str, sources: tuple[str, ...] | None = N
 
     One date may come from several sources: with ``sources`` (a preference order) the row of the first source of the
     order is kept, sources outside it follow by name; without it duplicates are an error. ``only``: rows to consider
-    (applied before the choice of a source)."""
+    (applied before the choice of a source); the unit is checked on the rows kept."""
     rows = []
     for f in _market(snap)["fixings"]:
         if f["index_code"] != index_code or f["value"] is None:
             continue
+        row = Fixing(index_code, date.fromisoformat(f["fixing_date"]), _rate(f["value"]), f["source"],
+                     _date(f.get("published_on")), _ts(f.get("published_at")))
+        if only is not None and not only(row):
+            continue
+        rows.append((row, f))
+    if sources is not None:  # the choice of a source before the unit check: a row not chosen may be in another unit
+        rank = {s: i for i, s in enumerate(sources)}
+        rows.sort(key=lambda p: (p[0].fixing_date, rank.get(p[0].source, len(rank)), p[0].source))
+        rows = [p for i, p in enumerate(rows) if i == 0 or p[0].fixing_date != rows[i - 1][0].fixing_date]
+    for _, f in rows:
         if f["unit"] != "pct":
             raise SnapshotError(f"{snap.id}: {index_code} fixing {f['fixing_date']} in {f['unit']!r}, need pct")
-        rows.append(Fixing(index_code, date.fromisoformat(f["fixing_date"]), _rate(f["value"]), f["source"],
-                           _date(f.get("published_on")), _ts(f.get("published_at"))))
-    if only is not None:
-        rows = [r for r in rows if only(r)]
-    if sources is not None:
-        rank = {s: i for i, s in enumerate(sources)}
-        rows.sort(key=lambda r: (r.fixing_date, rank.get(r.source, len(rank)), r.source))
-        return [r for i, r in enumerate(rows) if i == 0 or r.fixing_date != rows[i - 1].fixing_date]
+    rows = [r for r, _ in rows]
     rows.sort(key=lambda r: r.fixing_date)
     if len({r.fixing_date for r in rows}) != len(rows):
         raise SnapshotError(f"{snap.id}: duplicate {index_code} fixing dates")

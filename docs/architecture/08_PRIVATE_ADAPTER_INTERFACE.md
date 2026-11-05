@@ -810,6 +810,7 @@ out.
 | `payment_frequency` | str | Since 1.4: a swap leg's period between payments, a tenor `<n>D`, `<n>W`, `<n>M` or `<n>Y`, or `term` (one payment at maturity) |
 | `day_count` | enum | Since 1.4: `ACT/365` (fixed), `ACT/360`, `ACT/ACT` (ISDA), `30/360`, of a leg's or REPO's interest; absent: the backend's convention of the index or currency |
 | `notional_exchange` | enum | Since 1.4, `ccs`: `none`, `final`, `initial_and_final`: which notional exchanges the leg has; absent: not stated |
+| `x_fixing_offset`, `x_lookback` | str / num | Optional `x_` fields of a floating leg (05.11.2026, TDM#565): the leg's fixing offset or lookback as the report states it; the monitor does not apply them yet (core has neither) and says in the assumptions that they are ignored, any value but empty, 0 or a no counts as stated |
 | `source_instrument_id`, `source_instrument_name`, `isin`, `regnum`, `moex_secid`, `instrument_id` | str | Since 1.4: a REPO's security, a purchase's bond, as in `positions` (§6.1: `instrument_id` only from `ctx.instruments.lookup`) |
 | `quantity` | num | Since 1.4: number of bonds of a REPO's security or a purchase |
 | `face_amount_ccy` | num | Since 1.4: number of bonds × initial face, of a REPO's security or a purchase |

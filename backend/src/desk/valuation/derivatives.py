@@ -104,6 +104,7 @@ Published for them: PV, ``risk`` per curve (``RUB RUONIA``, ``RUB KEY``), the He
 from __future__ import annotations
 
 import math
+import re
 from calendar import monthrange
 from collections import defaultdict
 from dataclasses import dataclass, field, replace
@@ -308,9 +309,16 @@ def _check_mapped(rows: list[dict[str, Any]], label: str) -> None:
                                           "(index_code OTHER)")
 
 
+_NO_OFFSET = re.compile(r"(0+([.,]0+)?\s*(d|bd|days?|business days?|дн\w*)?|нет|no|n|false|none|null|-)?")
+
+
 def _nonzero(v: Any) -> bool:
-    n = _num(v)
-    return bool(n) if n is not None else _truthy(v)
+    """An optional ``x_`` field of a leg that states something: any value but empty, zero (``0``, ``0D``) or a no."""
+    if v is None or isinstance(v, bool):
+        return bool(v)
+    if isinstance(v, (int, float)):
+        return v != 0
+    return _NO_OFFSET.fullmatch(str(v).strip().lower()) is None
 
 
 def _leg_field(r: dict[str, Any], k: str) -> str | None:
@@ -625,7 +633,8 @@ class Request:
     """Some trades of the row have settled and are left out: the report's PV covers more than the valued ones."""
 
 
-def request_of(position_id: str, book_id: str, row: dict[str, Any], terms: list[dict[str, Any]]) -> Request:
+def request_of(position_id: str, book_id: str, row: dict[str, Any], terms: list[dict[str, Any]],
+               bd: date | None = None) -> Request:
     """The request of a positions row from its linked trade_terms rows (``link``); raises ``NotValued`` for terms
     core is not given (FX and rates trades under one row, incomplete terms)."""
     kinds = {str(t.get("product_kind")) for t in terms}
@@ -637,14 +646,21 @@ def request_of(position_id: str, book_id: str, row: dict[str, Any], terms: list[
     for t in terms:
         by_trade[str(t.get("trade_id"))].append(t)
     trades: list[RatesTrade] = []
-    for _, ts in sorted(by_trade.items()):
+    left_out: list[str] = []
+    for tid, ts in sorted(by_trade.items()):
+        if bd is not None and any(_truthy(t.get("x_index_unmapped")) for t in ts) \
+                and (ends := [_day(t.get("maturity_date")) for t in ts]) and None not in ends and max(ends) < bd:
+            left_out.append(tid)  # a matured trade whose index is not mapped has nothing to value and nothing to say
+            continue
         if ts[0].get("product_kind") == "repo":
             trades += [RepoTerms.of(t) for t in ts]
         elif {t.get("product_kind") for t in ts} == {"ccs"}:
             trades.append(CcsTerms.of(ts))
         else:
             trades.append(SwapTerms.of(ts))
-    return Request(position_id, book_id, row, trades=trades)
+    if left_out and not trades:
+        raise NotValued("settled", f"trade {', '.join(left_out)} matured before {bd}")
+    return Request(position_id, book_id, row, trades=trades, partial=bool(left_out))
 
 
 def _link(rows: list[tuple[str, str, dict[str, Any]]], terms: list[dict[str, Any]]
@@ -876,11 +892,15 @@ class CcsForeignIndex(NamedTuple):
     curve_id: str
     """The curve the leg projects on (``curves.fx``)."""
     note: str
+    day_count: DayCount | None = None
+    """The leg's interest day count where the terms state none (SOFR, ESTR: ACT/360, as their rates; absent: the MOEX
+    XCS standard's ACT/ACT ISDA)."""
 
 
-def _foreign_index(code: str, basis: str, note: str) -> CcsForeignIndex:
+def _foreign_index(code: str, basis: str, note: str, day_count: DayCount | None = None) -> CcsForeignIndex:
     ov = FOREIGN_OVERNIGHT[code]
-    return CcsForeignIndex(ov.ccy, CompoundedIndex(ov.index_name, basis, basis), ov.code, ov.curve_id, note)  # type: ignore[arg-type]
+    return CcsForeignIndex(ov.ccy, CompoundedIndex(ov.index_name, basis, basis), ov.code, ov.curve_id, note,  # type: ignore[arg-type]
+                           day_count)
 
 
 _SHIFT_NOTE = "no lookback or observation shift (provisional: the trade's convention is not in its terms)"
@@ -893,21 +913,22 @@ CCS_FOREIGN_INDEX = {
     "SOFR": _foreign_index(
         "SOFR", "act_360",
         f"SOFR compounded daily on ACT/360, {_SHIFT_NOTE}, projected on the UST par proxy (USD SOFR), not OIS "
-        "(provisional)"),
+        "(provisional)", DayCount.ACT_360),
     "ESTR": _foreign_index(
         "ESTR", "act_360",
         f"ESTR compounded daily on ACT/360, {_SHIFT_NOTE}, projected on the ECB AAA par proxy (EUR ESTR), not OIS "
-        "(provisional)")}
+        "(provisional)", DayCount.ACT_360)}
 """``index_code`` of a CCS's foreign floating leg -> the leg's index, fixings and projection curve (``curves.fx``,
 ``FOREIGN_OVERNIGHT``). Other indices (SHIBOR, LPR, EURIBOR, SONIA, ...) or an index in another currency are
 ``ccs_foreign_floating_unsupported``: the run has neither their fixings nor a curve."""
 
 
-def _ccs_convention(leg: CcsLeg, base: OisSwapConvention, label: str) -> tuple[OisSwapConvention, DayCount, bool]:
+def _ccs_convention(leg: CcsLeg, base: OisSwapConvention, label: str, default_dc: DayCount | None = None
+                    ) -> tuple[OisSwapConvention, DayCount, bool]:
     """The leg's period rule and day count: its ``payment_frequency`` and ``day_count`` where stated, else those of
     the MOEX standard swap (``xcs_cnyrub_convention``: a single period up to a year, annual beyond, ACT/ACT ISDA, a
     business day's payment lag); and whether the terms stated both."""
-    conv, dc = base, base.fixed_day_count
+    conv, dc = base, default_dc or base.fixed_day_count
     if leg.frequency is not None:
         f = leg.frequency.upper()
         if f == "TERM":
@@ -921,7 +942,7 @@ def _ccs_convention(leg: CcsLeg, base: OisSwapConvention, label: str) -> tuple[O
         if leg.day_count not in DAY_COUNTS:
             raise NotValued("day_count_unsupported", f"{label}: day_count {leg.day_count}")
         dc = DAY_COUNTS[leg.day_count]
-    return conv, dc, leg.frequency is not None and leg.day_count is not None
+    return conv, dc, leg.frequency is not None and (leg.day_count is not None or default_dc is not None)
 
 
 def _add_months(d: date, months: int) -> date:
@@ -1017,10 +1038,9 @@ def _ccs_build(ctx: Any, c: CcsTerms, iid: str, curve_of: dict[str, str]
     elif ccy in curve_of:
         foreign_curve = curve_of[ccy]
         last = ((ctx.fx.lineage.get("curves") or {}).get(foreign_curve) or {}).get("last_node")
-        anchor = ((ctx.fx.lineage.get("curves") or {}).get(foreign_curve) or {}).get("anchor")
         notes.append(f"{c.label}: no {ccy} XCCY curve in the run: the {foreign_curve} curve of the FX derivatives"
                      + (f" (quotes to {last}, beyond them extrapolated)" if last else "")
-                     + (f" ({anchor})" if anchor else "") + " (provisional)")
+                     + " (provisional)")
     else:
         raise NotValued("no_foreign_curve", f"no {ccy} curve in the run")
     cals = {e.calendar_id: e.calendar for e in ctx.core_market.calendars}
@@ -1039,7 +1059,11 @@ def _ccs_build(ctx: Any, c: CcsTerms, iid: str, curve_of: dict[str, str]
     stated, unadjusted = True, not cal.covers(c.start)
     legs = []
     for g, rub in ((c.rub, True), (c.foreign, False)):
-        conv, dc, both = _ccs_convention(g, base, f"{c.label} {g.ccy}")
+        dflt = fidx.day_count if fidx is not None and not rub else None
+        conv, dc, both = _ccs_convention(g, base, f"{c.label} {g.ccy}", dflt)
+        if dflt is not None and g.day_count is None:
+            notes.append(f"{c.label}: day_count of the {g.ccy} leg not stated: ACT/360, the day count of "
+                         f"{g.index_code} (provisional)")
         stated &= both
         periods, raw = _ccs_periods(conv, start, c.maturity, end, g.notional)
         unadjusted |= raw

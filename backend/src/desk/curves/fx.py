@@ -31,7 +31,8 @@
   those published by the snapshot's ``known_at`` and dated before the business date, as core ``IndexFixings`` (fractions,
   dated the business date). Observation calendar: the dates published before the business date (the exchange does not
   publish on weekends, China's holidays and the last trading day of the year: the previous value then holds, the
-  ``bridged_days`` of the lineage), ``FX:CNY`` from the business date on, before the first and after the last fixing too
+  ``bridged_days`` of the lineage), the index's calendar (``ForeignOvernight.base_calendar``: ``US_FED`` / ``TARGET`` from the static snapshot, else ``FX:<ccy>``;
+  ``FX:CNY`` for RUSFARCNY) from the business date on, before the first and after the last fixing too
   (a business day with no fixing there is missing, which core refuses, never filled).
 - **Forecast curves USD SOFR / EUR ESTR** (``USD SOFR``, ``EUR ESTR``; ``usd_discount_factors_v1``,
   ``eur_discount_factors_v1``; TDM#565): the nodes of the proxies below as a ``DiscountCurve`` (``ois-logdf-v1``, ACT/365F),
@@ -724,8 +725,11 @@ def with_fx(market: Any, static: Any, core: MarketSnapshot, fx_rates: dict[str, 
             continue
         proxy_id = PROXY_SPECS[ov.proxy_of][1]
         if proxy_id not in out.curves:
-            lin["curves"][ov.curve_id] = {"status": "missing",
-                                          "error": f"no {ov.proxy_of} quotes in the snapshot for {ov.curve_id}"}
+            src = lin["curves"].get(proxy_id) or {}
+            lin["curves"][ov.curve_id] = {
+                "status": src.get("status", "missing"),
+                "error": (f"{proxy_id} not built for {ov.curve_id}: {src['error']}" if src.get("error")
+                          else f"no {ov.proxy_of} quotes in the snapshot for {ov.curve_id}")}
             continue
         built, info = _proxy_projection(out.curves[proxy_id].curve, lin["curves"][proxy_id], ov, bd)
         curves.append(CurveEntry(ov.curve_id, ov.spec_id, built))
