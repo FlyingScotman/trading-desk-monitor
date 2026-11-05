@@ -366,14 +366,24 @@ def prepare(snapshots: SnapshotDir, business_date: str, cut_type: str = "eod_fin
         if (snap.kind, snap.business_date) != ("market", business_date):
             raise SnapshotError(f"snapshot {market_snapshot_id} is {snap.kind} of {snap.business_date}, "
                                 f"not the market of {business_date}")
-    filled = None
+    filled, cut = None, snap
     if fixings is not None:
         snap, filled = fixing_history.extend(snap, fixings)
     market = MarketView(snap)
     assert snap.static_snapshot_id
     static = StaticView(snapshots.get(snap.static_snapshot_id))
-    core_market, rates_lineage, quote_curves, swap_curves = with_rates(
-        market, static, market.core_market(static), rates.kbd_history(snapshots, business_date, static.snapshot))
+    kbd_hist = rates.kbd_history(snapshots, business_date, static.snapshot)
+    core_market, rates_lineage, quote_curves, swap_curves = with_rates(market, static, market.core_market(static),
+                                                                       kbd_hist)
+    if filled is not None and snap is not cut and (rates_lineage["status"].get("fixings") == "error"
+                                                   or rates_lineage["status"].get("key_rate_swap") == "error"):
+        # the stored history broke what the cut alone reads (TDM#590 review): the run goes on without it, said
+        why = rates_lineage.get("fixings_error") or rates_lineage.get("key_rate_error")
+        snap = cut
+        market = MarketView(snap)
+        core_market, rates_lineage, quote_curves, swap_curves = with_rates(market, static,
+                                                                           market.core_market(static), kbd_hist)
+        filled = {**filled, "codes": {}, "dropped": f"the run's fixings failed with the stored history: {why}"}
     if filled is not None:
         rates_lineage["fixings_history"] = filled
     fx_options = fx_options or fxcurves.FxOptions()

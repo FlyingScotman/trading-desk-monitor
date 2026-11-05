@@ -277,22 +277,49 @@ def fixing_known(f: ar.Fixing, cut: datetime) -> bool:
     return f.published_on is None or f.published_on < cut.date()
 
 
-def published_before(cal: BusinessCalendar, days: list[date]) -> tuple[BusinessCalendar, dict[str, str]]:
+PUBLISHED_HOLIDAY_MAX_DAYS = 8
+"""``published_before``: at most this many weekdays in a row without a fixing are holidays (the Russian New Year
+holidays are the longest, 8 days at most); a longer run is a hole in the stored history (a load that failed), never
+holidays."""
+
+
+def published_before(cal: BusinessCalendar, days: list[date]) -> tuple[BusinessCalendar, dict[str, Any]]:
     """``cal`` reaching back to the first of ``days`` (the dates with a fixing): before its ``valid_from`` a weekday
-    without a fixing is a holiday and a weekend day with one a working day (TDM#590: the stored RUONIA history before
-    the hub's calendar); and the range so built."""
+    without a fixing is a holiday (``PUBLISHED_HOLIDAY_MAX_DAYS`` in a row at most) and a weekend day with one a working
+    day (TDM#590: the stored RUONIA history before the hub's calendar); and the range so built. A longer run without a
+    fixing is a hole, not holidays: the calendar starts after the last hole (the rows before it are dropped, said in
+    ``hole``), so a period over the hole finds no fixing and core refuses it, rather than carrying one rate across."""
     have, lo, hi = set(days), min(days), cal.valid_from
-    hol, work = set(), set()
+    hol, work, gap, holes = set(), set(), [], []
+
+    def close_gap() -> None:
+        if len(gap) <= PUBLISHED_HOLIDAY_MAX_DAYS:
+            hol.update(gap)
+        else:
+            holes.append((gap[0], gap[-1]))
+        gap.clear()
+
     d = lo
     while d < hi:
         if d.weekday() < 5 and d not in have:
-            hol.add(d)
-        elif d.weekday() >= 5 and d in have:
+            gap.append(d)
+        elif d.weekday() < 5:
+            close_gap()
+        elif d in have:
             work.add(d)
         d += timedelta(days=1)
-    return (BusinessCalendar(cal.holidays | hol, cal.working_days | work, f"{cal.version}+published_from_{lo}", lo,
-                             cal.valid_to),
-            {"from": lo.isoformat(), "to": (hi - timedelta(days=1)).isoformat()})
+    close_gap()  # a run up to the hub's calendar
+    start = holes[-1][1] + timedelta(days=1) if holes else lo
+    if start >= hi:  # nothing usable before the hub's calendar
+        return cal, {"from": None, "to": None, "hole": {"from": holes[-1][0].isoformat(),
+                                                         "to": holes[-1][1].isoformat()}}
+    hol = {x for x in hol if x >= start}
+    work = {x for x in work if x >= start}
+    info: dict[str, Any] = {"from": start.isoformat(), "to": (hi - timedelta(days=1)).isoformat()}
+    if holes:
+        info["hole"] = {"from": holes[-1][0].isoformat(), "to": holes[-1][1].isoformat()}
+    return (BusinessCalendar(cal.holidays | hol, cal.working_days | work, f"{cal.version}+published_from_{start}",
+                             start, cal.valid_to), info)
 
 
 def fixing_entries(market: Snapshot, static: Snapshot, known_at: datetime | None = None,

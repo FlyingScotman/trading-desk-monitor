@@ -27,10 +27,12 @@ from __future__ import annotations
 from collections import defaultdict
 from dataclasses import dataclass, field, replace
 from datetime import date
+from decimal import Decimal
 from typing import Any
 
 import psycopg
 
+from .adapter_rates import FIXING_SOURCE_ORDER
 from .bundle import Snapshot
 
 DEPTH_YEARS = 10
@@ -100,28 +102,65 @@ def extend(snap: Snapshot, store: FixingStore, depth_years: int = DEPTH_YEARS) -
         own[f["index_code"]].append(f)
     added: list[dict[str, Any]] = []
     codes: dict[str, dict[str, Any]] = {}
+    errors: dict[str, str] = {}
     for code, rows in sorted(own.items()):
         stored = store.rows.get(code)
         if not stored:
             continue
-        start = min(f["fixing_date"] for f in rows)
-        sources = {f["source"] for f in rows}
-        fill = [f for f in stored if depth <= f["fixing_date"] < start and f["source"] in sources]
+        try:
+            fill = _fill(code, rows, stored, depth)
+        except (ArithmeticError, KeyError, TypeError, ValueError) as e:  # one index's bad rows: that index unfilled
+            errors[code] = f"{type(e).__name__}: {e}"
+            continue
         if not fill:
             continue
         added += fill
         codes[code] = {"rows": len(fill), "from": fill[0]["fixing_date"], "to": fill[-1]["fixing_date"],
-                       "window_from": start, "sources": sorted({f["source"] for f in fill})}
-    lineage = {"source": SOURCE_ID, "depth_from": depth, "codes": codes}
+                       "window_from": min(f["fixing_date"] for f in rows),
+                       "sources": sorted({f["source"] for f in fill})}
+    lineage = {"source": SOURCE_ID, "depth_from": depth, "codes": codes, **({"errors": errors} if errors else {})}
     if not added:
         return snap, lineage
     data = {**snap.data, "fixings": [*added, *snap.data["fixings"]]}
     return replace(snap, doc={**snap.doc, "data": data, "fixings_history": codes}), lineage
 
 
+def _fill(code: str, rows: list[dict[str, Any]], stored: tuple[dict[str, Any], ...], depth: str
+          ) -> list[dict[str, Any]]:
+    """The stored rows of one index that go under the cut's ``rows``: dated in [``depth``, the cut's first date), of a
+    source the cut has and of the cut's unit (a row without a unit or in another one is never taken: the run reads
+    percents, ``adapter_rates.fixings`` refuses the others), one per date (the source order of
+    ``adapter_rates.FIXING_SOURCE_ORDER``, else the cut's first row's source first), every value a number."""
+    start = min(f["fixing_date"] for f in rows)
+    sources = {f["source"] for f in rows}
+    units = {f.get("unit") for f in rows}
+    if len(units) != 1 or None in units:
+        raise ValueError(f"{code}: the cut's rows are in {sorted(map(str, units))}, not one unit")
+    unit = next(iter(units))
+    first = min(rows, key=lambda f: f["fixing_date"])["source"]
+    order = FIXING_SOURCE_ORDER.get(code) or (first,)
+    rank = {s: i for i, s in enumerate(order)}
+    best: dict[str, dict[str, Any]] = {}
+    for f in stored:
+        if not (depth <= f["fixing_date"] < start) or f["source"] not in sources or f.get("unit") != unit:
+            continue
+        Decimal(str(f["value"]))  # raises on a value that is no number
+        date.fromisoformat(f["fixing_date"])
+        old = best.get(f["fixing_date"])
+        key = (rank.get(f["source"], len(rank)), f["source"])
+        if old is None or key < (rank.get(old["source"], len(rank)), old["source"]):
+            best[f["fixing_date"]] = f
+    return [best[d] for d in sorted(best)]
+
+
 def filled(snap: Snapshot, code: str) -> dict[str, Any] | None:
     """The lineage of ``extend`` for one index of a filled cut, None when it was not filled."""
-    return (snap.doc.get("fixings_history") or {}).get(code)
+    return ((getattr(snap, "doc", None) or {}).get("fixings_history") or {}).get(code)
+
+
+def for_date(con: psycopg.Connection, d: date) -> FixingStore:
+    """``load`` for a run of ``d``: the stored rows from 1 January ``DEPTH_YEARS`` years before it."""
+    return load(con, date(d.year - DEPTH_YEARS, 1, 1))
 
 
 def status(con: psycopg.Connection) -> dict[str, Any]:

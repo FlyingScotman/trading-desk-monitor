@@ -27,7 +27,7 @@ import re
 import statistics
 import zipfile
 from collections import Counter, defaultdict
-from collections.abc import Iterable
+from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 from datetime import date
 from decimal import Decimal
@@ -430,11 +430,12 @@ def _quotes(rows: list[dict[str, Any]], view: StaticView, market: Snapshot | Non
             r["num_trades"] = q.num_trades
 
 
-def _core_market(rows: list[dict[str, Any]], snapshots: Path, market: Snapshot) -> None:
-    """Full valuation of the active instruments (core, no fallback): its reason per bond."""
+def _core_market(rows: list[dict[str, Any]], snapshots: Path, market: Snapshot, fixings: Any = None) -> None:
+    """Full valuation of the active instruments (core, no fallback): its reason per bond. ``fixings``: the stored
+    fixings history (``marketdata.fixing_history``) the cut is filled from, as a run's (TDM#590)."""
     from ..orchestrator import prepare, value
 
-    ctx = prepare(SnapshotDir(Path(snapshots)), market.business_date, market_snapshot_id=market.id)
+    ctx = prepare(SnapshotDir(Path(snapshots)), market.business_date, market_snapshot_id=market.id, fixings=fixings)
     act = [r for r in rows if r["status"] == "active"]
     for r, o in zip(act, value(ctx, [(r["secid"], 1.0) for r in act], fallback=False), strict=True):
         r["core_market"] = (o.valuation.quality if o.valuation else o.reason) or "not_valued"
@@ -625,14 +626,15 @@ def write_xlsx(path: Path, rows: list[dict[str, Any]], summ: dict[str, Any] | No
 
 
 def export(out: Path, snapshots: Path, *, on: str | None = None, static_file: Path | None = None,
-           market_file: Path | None = None, active_only: bool = False, with_value: bool = False
-           ) -> tuple[Export, dict[str, Any]]:
+           market_file: Path | None = None, active_only: bool = False, with_value: bool = False,
+           fixings: Callable[[date], Any] | None = None) -> tuple[Export, dict[str, Any]]:
     static, market = find_snapshots(snapshots, on, static_file, market_file)
     ex = build(static, market, active_only=active_only)
     if with_value:
         if market is None:
             raise SnapshotError(f"--value needs an eod_final market snapshot of {static.business_date}")
-        _core_market(ex.rows, snapshots, market)
+        _core_market(ex.rows, snapshots, market,
+                     fixings(date.fromisoformat(market.business_date)) if fixings is not None else None)
     summ = summary(ex.rows)
     out = Path(out)
     if out.suffix.lower() == ".xlsx":

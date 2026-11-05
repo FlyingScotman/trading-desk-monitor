@@ -18,6 +18,7 @@ from rub_fixed_income import __version__ as CORE_VERSION
 
 from .. import __version__ as BACKEND_VERSION
 from .. import store
+from ..marketdata import fixing_history
 from ..marketdata.bundle import SnapshotDir
 from .definition import DefinitionError, definition_hash, normalize
 from .exact import METHOD, reprice_run
@@ -157,7 +158,8 @@ def run_once(con: psycopg.Connection, snapshots: SnapshotDir, ctx_cache: dict | 
                            (rid,)).fetchall()
         ref = {r["kind"]: r["data"] for r in cur.execute(
             "SELECT kind, data FROM run_reference WHERE run_id = %s", (rid,))}
-        result = reprice_run(snapshots, run, rows, ref, job["definition"], ctx_cache)
+        result = reprice_run(snapshots, run, rows, ref, job["definition"], ctx_cache,
+                             fixing_history.for_date(con, run["business_date"]))
         with con.transaction():
             cur.execute("INSERT INTO scenario_result (job_id, base_run_id, definition_hash, result)"
                         " VALUES (%s, %s, %s, %s)", (jid, rid, job["definition_hash"], Jsonb(result)))

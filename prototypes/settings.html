@@ -2387,7 +2387,7 @@ function mountTabs(a, reload){
         (fh.api && fh.api.available === false ? 'История хаба недоступна: ' + (fh.api.reason || '') + '. ' : '')
         + (fh.jobs && (fh.jobs.checked_at || fh.jobs.fetched_at) ? 'Проверено ' + at(fh.jobs.checked_at || fh.jobs.fetched_at) + '. ' : '')
         + (fh.jobs && fh.jobs.pending ? 'Ещё загружается: ' + fh.jobs.pending + ' частей. ' : '') + (fh.jobs && fh.jobs.errors ? 'С ошибкой: ' + fh.jobs.errors + ' частей. ' : '')
-        + 'Прогоны берут фиксинги из среза хаба и дополняют их отсюда до начала окна среза (внутри дня — 200 дней).']);
+        + 'Прогоны берут фиксинги из среза хаба и дополняют их отсюда до начала окна среза.']);
       if (st) rows.splice(4, 0, ['Догрузка стоит', 'с ' + at(st.since) + ': ' + T.cause(st) + T.stall(s).retry,
         st.error ? 'Ошибка' + (st.date ? ' на ' + dd(st.date) : '') + ': ' + st.error : '']);
       try {   // сделки прошлых дат (TDM#569): сколько дат уже с PnL сделок; нет данных или нет доступа — строки нет

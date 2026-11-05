@@ -117,13 +117,17 @@ def run_curves(ctx: EodContext) -> tuple[str, ...]:
                         | {c.curve_id for c in ctx.swap_curves}))
 
 
-def _context(snapshots: SnapshotDir, run: Mapping[str, Any], ctx_cache: dict | None) -> EodContext:
+def _context(snapshots: SnapshotDir, run: Mapping[str, Any], ctx_cache: dict | None,
+             fixings: Any = None) -> EodContext:
     """The run's context on its own snapshot, with its risk in the unit the run's was (``quote_curve_risk`` of its
     lineage, issue #171: a curve the run took in its quotes is shifted in its quotes, as its Taylor factors) and its OFZ
     in the run's scheme (``ofz_scheme`` of its lineage: ``kbd_par``, a run of 0.2.6, on the KBD alone)."""
     if ctx_cache is not None and run["run_id"] in ctx_cache:
         return ctx_cache[run["run_id"]]
-    ctx = prepare(snapshots, str(run["business_date"]), run["cut_type"], market_snapshot_id=run["market_snapshot_id"])
+    # the run's cut with the stored fixings history, as the run had it (TDM#590): a floater or a swap whose period
+    # began before the cut's window reprices on the same fixings
+    ctx = prepare(snapshots, str(run["business_date"]), run["cut_type"], market_snapshot_id=run["market_snapshot_id"],
+                  fixings=fixings)
     if run.get("quote_curve_risk"):
         ctx = replace(ctx, quote_curve_risk=True)
     if run.get("ofz_scheme") == OFZ_SCHEME_P:  # a run of 0.2.6: its OFZ on the KBD alone, as its Taylor (TDM#213)
@@ -139,11 +143,12 @@ def _context(snapshots: SnapshotDir, run: Mapping[str, Any], ctx_cache: dict | N
 
 def reprice_run(snapshots: SnapshotDir, run: Mapping[str, Any], rows: list[Mapping[str, Any]],
                 reference: Mapping[str, list], definition: Mapping[str, Any],
-                ctx_cache: dict | None = None) -> dict[str, Any]:
+                ctx_cache: dict | None = None, fixings: Any = None) -> dict[str, Any]:
     """``run``: ``run_id``, ``business_date`` (a date), ``cut_type``, ``market_snapshot_id`` (and ``quote_curve_risk``,
     the run's lineage flag: absent is off; ``ofz_scheme``, its lineage's: absent is today's); ``rows``:
     ``run_position`` dicts (``position_id``, ``book_id``, ``secid``, ``quantity``, ``quality``, ``pv_rub``,
-    ``fact``); ``reference``: ``run_reference`` data by kind. Raises ``DefinitionError`` on a bad definition,
+    ``fact``); ``reference``: ``run_reference`` data by kind; ``fixings``: the stored fixings history
+    (``marketdata.fixing_history``) the run's cut is filled from, as the run's. Raises ``DefinitionError`` on a bad definition,
     ``SnapshotError`` when the run's snapshots are not in ``snapshots``. Returns the result JSON."""
     payload = risk_payload(run, rows, reference)
     norm = normalize(definition, payload["curves"])
@@ -165,7 +170,7 @@ def reprice_run(snapshots: SnapshotDir, run: Mapping[str, Any], rows: list[Mappi
         else:
             code[p["position_id"]] = p["quality"]
     if fx_reqs:
-        ctx = _context(snapshots, run, ctx_cache)
+        ctx = _context(snapshots, run, ctx_cache, fixings)
         scenario = core_scenario(h[:12], norm, 0.0, run_curves(ctx))
         valued, result = dv.value(ctx, fx_reqs, options=ctx.fx_options, second_order=False, scenarios=(scenario,))
         pnl: dict[str, float | None] = {}
@@ -184,7 +189,7 @@ def reprice_run(snapshots: SnapshotDir, run: Mapping[str, Any], rows: list[Mappi
             else:
                 exact[pid] = pnl[pid]  # type: ignore[assignment]
     if groups:
-        ctx = _context(snapshots, run, ctx_cache)
+        ctx = _context(snapshots, run, ctx_cache, fixings)
         for ds, ps in groups.items():  # shortcut: one core call per distinct ds; upgrade: a per-position spread shift in core
             pids = [p["position_id"] for p in ps]
             scenario = core_scenario(h[:12], norm, ds, run_curves(ctx))

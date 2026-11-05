@@ -72,3 +72,39 @@ def test_an_fx_forward_without_mv_rub_takes_the_value_in_its_currency(ctx):  # n
     v = one(ctx, x).valuation
     assert v.quality == "reported_value" and v.pv_rub == pytest.approx(3_000.0 * fx_rate_cbr(ctx, "USD")[0])
     assert v.extra["reported_ccy"]["ccy"] == "USD"
+
+
+def test_an_fx_future_keeps_its_pnl_by_the_rate_move():
+    """Review of TDM#591: an FX future's NPV in its currency (the margin, swept daily) is not its value: the row stays
+    at PV 0 on an assumption and its daily PnL the notional x the rate move; an FX swap without terms takes the value."""
+    import copy
+    import dataclasses
+
+    import test_pnl_r10 as R
+
+    from desk.orchestrator import prepare as prep
+    from desk.pnl import direct
+    from desk.pnl.reasons import FX_METHOD
+    from desk.valuation.positions import plan
+
+    c = prep(R.SnapshotDir(R.FIX), R.DATE)
+    # the day before as test_pnl_r10's ``prev``: USD at 80.4 (MOEX 19:00)
+    p = R.shifted_prev(c, R.PREV)
+    m = copy.copy(c.market)
+    m.business_date = R.PREV
+    m.fx = lambda ccy: ({"cbr": R.USD_PREV, "cbr_next": None, "moex_tom": None, "moex_19": R.USD_PREV_MKT}
+                        if ccy == "USD" else {"cbr": None, "cbr_next": None, "moex_tom": None})
+    p = dataclasses.replace(p, market=m)
+    fut = {"asset_class": "fx", "ccy": "USD", "amount_ccy": -400.0, "value_date": "2027-01-15",
+           "x": {"x_product_group": "fx_future", "x_npv_ccy_value": 12.0, "x_npv_ccy": "USD"}}
+    swp = {**fut, "x": {**fut["x"], "x_product_group": "fx_swap"}}
+    rows = [("F1", "TSY", None, None), ("S1", "TSY", None, None)]
+    extra = {"F1": fut, "S1": swp}
+    inp, prev_inp = R.inputs(rows, extra), R.inputs(rows, extra, R.PREV)
+    bp = plan(c, inp)
+    assert bp.direct["F1"].valuation.quality == "assumed" and "reported_ccy" not in bp.direct["F1"].valuation.extra
+    assert bp.direct["S1"].valuation.quality == "reported_value"
+    direct.attach(p, c, bp.direct, inp, plan(p, prev_inp).direct, prev_inp.valid_dates)
+    mkt = c.market.fx("USD")["moex_19"]
+    f1 = bp.direct["F1"].pnl
+    assert f1.method == FX_METHOD and f1.total == pytest.approx(-400 * (mkt - R.USD_PREV_MKT))

@@ -214,10 +214,21 @@ def stored_fixings(url: str, d: date, out: Callable[[str], None] = print) -> fix
     ``fixing_history.DEPTH_YEARS`` before it; None when the store cannot be read (said, the run goes on without)."""
     try:
         with store.connect(url) as con:
-            return fixing_history.load(con, date(d.year - fixing_history.DEPTH_YEARS, 1, 1))
+            return fixing_history.for_date(con, d)
     except psycopg.Error as e:
         out(f"WARN stored fixings history not read: {type(e).__name__}: {e}")
         return None
+
+
+def _fixings_of(a: argparse.Namespace, d: date) -> fixing_history.FixingStore | None:
+    """``stored_fixings`` for a command without a run (``instruments export --value``, ``demo-book``): None, said,
+    when the store is not configured or cannot be reached."""
+    try:
+        url = store.resolve_url(a.settings)
+    except Exception as e:  # noqa: BLE001 - no store for a tool of the cache alone
+        print(f"WARN stored fixings history not read: {type(e).__name__}: {e}")
+        return None
+    return stored_fixings(url, d)
 
 
 def eod_run(settings: Settings, d: str, *, snapshots: str | Path | None = None, store_url: str | None = None,
@@ -507,7 +518,7 @@ def cmd_demo_book(a: argparse.Namespace) -> int:
     """Synthetic book over real instruments: the most traded OFZ-PD and fixed corporates of the date,
     plus a few instruments S1 cannot price yet (to show coverage). Quantities are synthetic."""
     sd = SnapshotDir(Path(a.snapshots))
-    ctx = prepare(sd, a.date)
+    ctx = prepare(sd, a.date, fixings=_fixings_of(a, date.fromisoformat(a.date)))
     act = [t for t in ctx.static.bonds.values() if t.status == "active"]
 
     def traded(cls: str, coupon: tuple[str, ...]) -> list[str]:
@@ -637,7 +648,8 @@ def cmd_instruments_export(a: argparse.Namespace) -> int:
     from .report import instruments
 
     ex, summ = instruments.export(Path(a.out), Path(a.snapshots), on=a.date, static_file=a.static_file,
-                                  market_file=a.market_file, active_only=a.active, with_value=a.value)
+                                  market_file=a.market_file, active_only=a.active, with_value=a.value,
+                                  fixings=lambda d: _fixings_of(a, d))
     m = ex.market
     print(f"static {ex.static.id[:12]} of {ex.static.business_date} (known_at {ex.static.doc.get('known_at')}), "
           f"market {m.id[:12] if m else '-'}: {len(ex.rows)} instruments -> {a.out}")

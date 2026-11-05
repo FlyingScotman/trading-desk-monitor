@@ -238,7 +238,11 @@ def _fx(ctx: EodContext, x: dict[str, Any]) -> Outcome:
     if vd is not None and vd > ctx.business_date:
         # A forward (NDF, FX future, an unsettled leg): the amount is an exposure, not a value. PV is the report's
         # mv_rub, else 0; the amount goes only into the FX delta (OCP) through ``tdm_run.direct_row``.
-        got = _npv_ccy(ctx, x, f"forward to {vd}") if x.get("mv_rub") is None else None
+        # TDM#591 for a forward or an FX swap without terms; a future is not (its NPV is the margin swept daily: its PnL
+        # stays the notional x the rate move, ``pnl.direct._fx_row``)
+        group = str((x.get("x") if isinstance(x.get("x"), dict) else {}).get("x_product_group")
+                    or x.get("x_product_group") or "").lower()
+        got = _npv_ccy(ctx, x, f"forward to {vd}") if x.get("mv_rub") is None and "future" not in group else None
         if x.get("mv_rub") is not None:
             pv, quality = x["mv_rub"], "reported_value"
             why = [f"forward to {vd}: PV = the report's mv_rub; the amount {leg} is FX exposure only"]
