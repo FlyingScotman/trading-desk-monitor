@@ -59,7 +59,7 @@ TERMS = [
     repo("R2", "repo", "2026-10-09", "2026-10-20", index_code="KEY_RATE", spread_bp="-50"),
     repo("R3", "repo", "2026-10-14", None, fixed_rate_pct="15"),
     {**leg("C1", "rub", "pay", kind="ccs", fixed_rate_pct="15"), "pv_rub": "250000"},
-    {**leg("C1", "usd", "receive", kind="ccs", index_code="SOFR"), "ccy": "USD", "notional_ccy": "12000000"},
+    {**leg("C1", "usd", "receive", kind="ccs", index_code="SONIA"), "ccy": "USD", "notional_ccy": "12000000"},
     leg("B1", "a", "pay", index_code="RUONIA"), leg("B1", "b", "receive", kind="ois", index_code="KEY_RATE"),
 ]
 REPORT_PV = {"S1": -14_000_000.0, "K1": -3_000_000.0, "R1": 500_100_000.0, "R2": None, "R3": -300_000_000.0,

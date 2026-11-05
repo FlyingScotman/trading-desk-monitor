@@ -2321,7 +2321,7 @@
   // «предварительно»; «предварительно» — прочие допущения (quality assumed). Разница — нейтральным цветом (это не PnL),
   // выше допуска — warn.
   // K.ratesCoreModel(list) — строки панели; K.ratesCorePanel(el) — фиксинги, итоги, таблица позиций и сделок (K.table).
-  K.RC_IDX = { RUONIA: 'RUONIA', KEY_RATE: 'КС' };
+  K.RC_IDX = { RUONIA: 'RUONIA', KEY_RATE: 'КС', RUSFARCNY: 'RUSFAR CNY', SOFR: 'SOFR', ESTR: '€STR' };
   const RC_PROD = { irs: 'IRS', ois: 'OIS', repo: 'РЕПО', ccs: 'CCS' };
   K.RC_SIDE = { payer: 'плачу фикс', receiver: 'получаю фикс', repo: 'РЕПО (привлечение)', reverse_repo: 'обратное РЕПО (размещение)' };
   // CCS, у которого плавают обе ноги (foreignIndex, нет фикса): сторона — по валютной ноге; при рублёвом фиксе side по фиксу
@@ -2329,9 +2329,10 @@
     ? (side === 'payer' ? 'плачу валютную ногу' : 'получаю валютную ногу') : (K.RC_SIDE[side] || side);
   // причины, по которым ядро не оценило строку (backend valuation/derivatives.py NotValued; core_<код> — отказ ядра)
   const RC_REASON = { ccs_unsupported: 'CCS ядром пока не оценивается',
-    ccs_foreign_floating_unsupported: 'CCS с плавающей валютной ногой: индекс валютной ноги не поддерживается (оценивается только RUSFARCNY в юанях)',
+    ccs_foreign_floating_unsupported: 'CCS с плавающей валютной ногой: индекс валютной ноги не поддерживается (оцениваются юани на RUSFAR CNY, доллары на SOFR, евро на €STR)',
+    index_unmapped: 'индекс плавающей ноги не сопоставлен с кодом хаба в настройках адаптера (Настройки, экран «Индексы ставок»)',
     ccs_index_averaging_unsupported: 'CCS: ставка валютной ноги — средняя арифметическая, ядро компаундирует: не оценивается',
-    no_foreign_projection_curve: 'CCS с плавающей юаневой ногой: нет кривой OIS на RUSFAR CNY в срезе хаба',
+    no_foreign_projection_curve: 'CCS с плавающей валютной ногой: нет кривой прогноза индекса за дату (юани: OIS RUSFAR CNY; доллары и евро: кривая UST / ECB AAA в срезе хаба)',
     ccs_ccy_unsupported: 'CCS не «рубли против валюты»: ядром не оценивается', basis_swap_unsupported: 'базисный своп (две плавающие ноги) ядром пока не оценивается',
     repo_open: 'открытое РЕПО: нет даты окончания (её задаёт владелец)', no_fixings: 'нет фиксингов индекса в прогоне', pv_not_finite: 'ядро дало нечисловую оценку',
     repo_index_unsupported: 'индекс РЕПО не поддерживается', no_key_rate_curve: 'нет кривой КС в прогоне', no_rub_curve: 'нет кривой RUONIA OIS в прогоне',

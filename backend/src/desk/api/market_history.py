@@ -41,6 +41,7 @@ from rub_fixed_income import RISK_PILLARS, kbd_effective_yield
 
 from ..curves import proxy
 from ..marketdata import hubhistory
+from ..marketdata.adapter_rates import FIXING_SOURCE_ORDER
 from ..marketdata.history import kbd
 from ..marketdata.history import latest_market_day as latest_day
 from . import runs
@@ -51,10 +52,9 @@ INDICES = (("КС", "KEY_RATE"), ("RUONIA", "RUONIA"), ("RUSFAR", "RUSFAR"), ("R
            ("SOFR", "SOFR"), ("€STR", "ESTR"))
 CPI = "CPI_RU_MOM"
 CPI_YOY = "CPI_RU_YOY"
-SOURCE_ORDER = {"ESTR": ("ecb_data_portal", "bundesbank", "dbnomics", "fred"), "SOFR": ("nyfed", "fred"),
-                "SOFR30DAVG": ("nyfed", "fred"), "SOFR90DAVG": ("nyfed", "fred"), "SOFR180DAVG": ("nyfed", "fred"),
-                "SOFRINDEX": ("nyfed", "fred")}
-"""Codes whose sources republish one figure (the hub's HISTORY_API): per day the first source present in this order.
+SOURCE_ORDER = FIXING_SOURCE_ORDER
+"""Codes whose sources republish one figure (the hub's HISTORY_API): per day the first source present in this order
+(``marketdata.adapter_rates.FIXING_SOURCE_ORDER``).
 Any other code: the source with the most rows (one series per code, sources are not merged)."""
 CROSSES = (("EUR/USD", "EUR", "USD"), ("USD/CNY", "USD", "CNY"))
 CROSS_PREF = {"EUR/USD": ("ecb", "fred_h10", "cbr_cross", "moex_indicative_cross", "moex_cets"),

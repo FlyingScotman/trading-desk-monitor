@@ -110,7 +110,8 @@ def test_a_floating_cny_leg_on_rusfarcny_is_valued_with_risk_on_the_three_curves
         "2026-10-08", "2026-10-14", [], [])
     assert fact["side"] == ("receiver" if rub is RUONIA else "payer")  # paying the fixed RUB leg: payer
     assert any("RUSFARCNY compounded" in a and "provisional" in a for a in v.assumptions)
-    assert any("CNY RUSFAR quotes to 2031-10-16" in a and "flat-forward" in a for a in v.assumptions)
+    # a 2Y swap ends inside the quotes (to 5Y): not marked as extrapolated
+    assert any("CNY RUSFAR quotes to 2031-10-16" in a and "flat-forward" not in a for a in v.assumptions)
     assert "RUSFARCNY" in v.extra["core"]["curves"] or "CNY RUSFAR" in v.extra["core"]["curves"]
     row = tdm_run.direct_row(ctx, "IRB", "R1", o, inp.extra["R1"], None)
     assert row["instr_type"] != "FX" and row["fx_delta"] == {"CNY": v.fx_delta["CNY"]}

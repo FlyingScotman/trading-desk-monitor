@@ -7,6 +7,7 @@ Nothing is filled: a missing value stays ``None``.
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import date, datetime
 from decimal import Decimal
@@ -92,8 +93,19 @@ def quote_sets(snap: Snapshot, dataset: str) -> list[QuoteSet]:
     return out
 
 
-def fixings(snap: Snapshot, index_code: str) -> list[Fixing]:
-    """Rows of one index with a value, by fixing date. Only percent rows are rates."""
+FIXING_SOURCE_ORDER = {"ESTR": ("ecb_data_portal", "bundesbank", "dbnomics", "fred"), "SOFR": ("nyfed", "fred"),
+                       "SOFR30DAVG": ("nyfed", "fred"), "SOFR90DAVG": ("nyfed", "fred"),
+                       "SOFR180DAVG": ("nyfed", "fred"), "SOFRINDEX": ("nyfed", "fred")}
+"""Codes whose sources republish one figure (the hub's HISTORY_API): per day the first source present in this order."""
+
+
+def fixings(snap: Snapshot, index_code: str, sources: tuple[str, ...] | None = None,
+            only: Callable[[Fixing], bool] | None = None) -> list[Fixing]:
+    """Rows of one index with a value, by fixing date. Only percent rows are rates.
+
+    One date may come from several sources: with ``sources`` (a preference order) the row of the first source of the
+    order is kept, sources outside it follow by name; without it duplicates are an error. ``only``: rows to consider
+    (applied before the choice of a source)."""
     rows = []
     for f in _market(snap)["fixings"]:
         if f["index_code"] != index_code or f["value"] is None:
@@ -102,6 +114,12 @@ def fixings(snap: Snapshot, index_code: str) -> list[Fixing]:
             raise SnapshotError(f"{snap.id}: {index_code} fixing {f['fixing_date']} in {f['unit']!r}, need pct")
         rows.append(Fixing(index_code, date.fromisoformat(f["fixing_date"]), _rate(f["value"]), f["source"],
                            _date(f.get("published_on")), _ts(f.get("published_at"))))
+    if only is not None:
+        rows = [r for r in rows if only(r)]
+    if sources is not None:
+        rank = {s: i for i, s in enumerate(sources)}
+        rows.sort(key=lambda r: (r.fixing_date, rank.get(r.source, len(rank)), r.source))
+        return [r for i, r in enumerate(rows) if i == 0 or r.fixing_date != rows[i - 1].fixing_date]
     rows.sort(key=lambda r: r.fixing_date)
     if len({r.fixing_date for r in rows}) != len(rows):
         raise SnapshotError(f"{snap.id}: duplicate {index_code} fixing dates")
