@@ -59,7 +59,7 @@ TERMS = [
     repo("R2", "repo", "2026-10-09", "2026-10-20", index_code="KEY_RATE", spread_bp="-50"),
     repo("R3", "repo", "2026-10-14", None, fixed_rate_pct="15"),
     {**leg("C1", "rub", "pay", kind="ccs", fixed_rate_pct="15"), "pv_rub": "250000"},
-    {**leg("C1", "usd", "receive", kind="ccs", index_code="SOFR"), "ccy": "USD", "notional_ccy": "12000000"},
+    {**leg("C1", "usd", "receive", kind="ccs", index_code="SONIA"), "ccy": "USD", "notional_ccy": "12000000"},
     leg("B1", "a", "pay", index_code="RUONIA"), leg("B1", "b", "receive", kind="ois", index_code="KEY_RATE"),
 ]
 REPORT_PV = {"S1": -14_000_000.0, "K1": -3_000_000.0, "R1": 500_100_000.0, "R2": None, "R3": -300_000_000.0,
@@ -424,13 +424,13 @@ def test_ccs_with_only_a_final_exchange_and_no_coupons_is_an_fx_forward(ctx):
 
 
 def test_ccs_core_does_not_value_keeps_the_report(ctx):
-    """A floating foreign leg (no foreign index fixings), two foreign legs, a key-rate RUB leg: the report's rule with
+    """A floating foreign leg (no foreign index fixings), two foreign legs, a RUB leg on another index: the report's rule with
     the reason; the defaults the terms leave out are said (provisional)."""
     float_cny = ccs("C3", "pay", 1e9, 8e7, fixed_rate_pct="15")
     float_cny[1] = {**float_cny[1], "fixed_rate_pct": None, "index_code": "SHIBOR"}
     both_fx = ccs("C4", "pay", 1e9, 8e7, fixed_rate_pct="15")
     both_fx[0] = {**both_fx[0], "ccy": "USD"}
-    key = ccs("C5", "pay", 1e9, 8e7, index_code="KEY_RATE")
+    key = ccs("C5", "pay", 1e9, 8e7, index_code="SHIBOR")
     for terms, pid, reason in ((float_cny, "C3", "ccs_foreign_floating_unsupported"),
                                (both_fx, "C4", "ccs_ccy_unsupported"), (key, "C5", "swap_index_unsupported")):
         bp, _ = ccs_plan(ctx, [{k: v for k, v in t.items() if v is not None} for t in terms], pid)
