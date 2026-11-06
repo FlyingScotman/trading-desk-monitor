@@ -985,3 +985,16 @@ def test_the_revisions_are_loaded_once_for_many_dates_and_match_current_referenc
             assert store.late_reference(c, known, revs) == ["ocp_policy"]
             assert store.reference_rev_ids(c, revs=revs) == revs.ids()
         assert c.n == 1
+
+
+def test_a_subtracted_book_type_leaves_no_negative_row():
+    """Review of #608: a book part's type outside the entity's capped list is subtracted from it; the residue without
+    lines is not listed (no negative rows in the drill-down)."""
+    from desk.rules import ocp as O
+
+    into: dict = {}
+    O._merge_types(into, [{"type": "Тип строки A", "kind": "fx_forward", "kept": False, "lines": 3, "amount": 30.0}])
+    O._merge_types(into, [{"type": "Тип строки A", "kind": "fx_forward", "kept": False, "lines": 1, "amount": 10.0},
+                          {"type": "Тип строки B", "kind": "fx_swap", "kept": False, "lines": 2, "amount": 5.0}], -1.0)
+    out = O._types_out(into)
+    assert [(t["type"], t["lines"], t["amount"]) for t in out] == [("Тип строки A", 2, 20.0)]

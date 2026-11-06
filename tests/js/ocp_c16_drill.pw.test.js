@@ -75,6 +75,30 @@ test('C16 demo: one book selection for every day — «месяц» and «3 ме
   } finally { await browser.close(); }
 });
 
+// ревью #608: сужение выбора на одном юрлице не снимает книги других юрлиц, когда выбор снова «все юрлица»
+test('C16 demo: unchecking a book of one entity keeps the other entities\' books under «все юрлица» (TDM#604)', { skip: pw ? false : 'нет Playwright', timeout: 120000 }, async () => {
+  const browser = await pw.chromium.launch();
+  try {
+    const { pg, ctx, errors } = await open(browser);
+    const rows = () => pg.evaluate(() => [...document.querySelectorAll('[data-ocp-row]')].map(r => r.getAttribute('data-ocp-row')));
+    const before = await rows();
+    assert.ok(before.includes('IC-BND') && before.includes('AM') && before.includes('HTM'), before.join());
+    await pg.locator('[data-c16="entity"]').click();
+    await pg.locator('.mi').filter({ hasNotText: 'все юрлица' }).filter({ hasText: /Банк|BANK/ }).first().click();
+    await pg.locator('[data-c16="books"]').click();
+    await pg.locator('.mi', { hasText: 'HTM' }).first().click();
+    await pg.mouse.click(5, 5);
+    assert.ok(!(await rows()).includes('HTM'));
+    await pg.locator('[data-c16="entity"]').click();
+    await pg.locator('.mi', { hasText: 'все юрлица' }).first().click();
+    const after = await rows();
+    assert.ok(!after.includes('HTM'), 'снятая книга остаётся снятой: ' + after.join());
+    assert.ok(after.includes('IC-BND') && after.includes('AM'), 'книги других юрлиц не снимались: ' + after.join());
+    assert.deepEqual(errors, []);
+    await ctx.close();
+  } finally { await browser.close(); }
+});
+
 // TDM#603: щелчок по строке книги — из чего складывается её ОВП за день; по сумме валюты — только эта валюта
 test('C16 demo: a book row opens what its OCP consists of; the total equals the cell; report lines taken out as derivatives (TDM#603)', { skip: pw ? false : 'нет Playwright', timeout: 120000 }, async () => {
   const browser = await pw.chromium.launch();

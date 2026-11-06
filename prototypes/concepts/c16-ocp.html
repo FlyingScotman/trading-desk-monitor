@@ -98,16 +98,22 @@
   // (то, что пользователь видел, когда снимал), — запоминается один раз; книга только старых дней — снята
   function migrateSel(d) {
     if (Array.isArray(SEL.on) || !narrowed(bookList(null, null))) return;
-    const today = new Set((d.lines || []).flatMap(x => x.book ? [x.book] : x.books || []));
+    // день таблицы без строк (не посчитан, ошибка) — последний день ответа со строками; таких нет — не переносим
+    const src = (d && (d.lines || []).length) ? d : [...(H.days || [])].reverse().find(x => (x.lines || []).length);
+    if (!src) return;
+    const today = new Set((src.lines || []).flatMap(x => x.book ? [x.book] : x.books || []));
     SEL.on = bookList(null, null).map(b => b.id).filter(b => today.has(b) && !SEL.off.includes(b)); K.viewStore.set(SEL_KEY, SEL);
   }
   // книги списка L, что входят: ничего в L не снято — все; иначе — выбранные явно
   const narrowed = L => L.some(b => SEL.off.includes(b.id));
   const onOf = L => narrowed(L) ? L.filter(b => !SEL.off.includes(b.id) && (!Array.isArray(SEL.on) || SEL.on.includes(b.id))) : L;
   // выбор по списку L: каждая книга списка — явно выбрана или снята, книги вне списка — как были
+  // Первое сужение (по всему ответу ничего не было снято) берёт за основу все книги ответа без снятых, а не только
+  // список на экране: книги другого юрлица или типа, которых пользователь не снимал, остаются выбранными (ревью #608)
   function choose(L, inc) {
-    const ids = L.map(b => b.id);
-    setSel({ on: (SEL.on || []).filter(b => !ids.includes(b)).concat(ids.filter(b => inc.has(b))), off: SEL.off.filter(b => !ids.includes(b)).concat(ids.filter(b => !inc.has(b))) });
+    const ids = L.map(b => b.id), all = bookList(null, null).map(b => b.id);
+    const base = narrowed(bookList(null, null)) && Array.isArray(SEL.on) ? SEL.on : all.filter(b => !SEL.off.includes(b));
+    setSel({ on: base.filter(b => !ids.includes(b)).concat(ids.filter(b => inc.has(b))), off: SEL.off.filter(b => !ids.includes(b)).concat(ids.filter(b => !inc.has(b))) });
   }
   const menuOpt = {};  // строка поиска меню книг между переоткрытиями
 

@@ -574,8 +574,9 @@ def _merge_types(into: dict[tuple[str, str, bool], dict[str, Any]], items: Itera
 
 
 def _types_out(into: Mapping[tuple[str, str, bool], dict[str, Any]]) -> list[dict[str, Any]]:
-    """Excluded (``kept`` false) first, then the largest; entries that cancelled out are left out."""
-    out = [t for t in into.values() if t["lines"] > 0 or abs(t["amount"]) > 1e-9]
+    """Excluded (``kept`` false) first, then the largest; entries that cancelled out are left out, and so is a residue
+    without lines (a book part's type outside the entity's capped list, subtracted from it: no negative rows)."""
+    out = [t for t in into.values() if t["lines"] > 0]
     return sorted(out, key=lambda t: (t["kept"], -abs(t["amount"]), t["type"]))[:DERIVATIVE_TYPES_MAX]
 
 
