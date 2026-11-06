@@ -146,6 +146,20 @@
       '<div class="c14-in' + (m.intraday && m.intraday.count ? ' st-ok' : '') + '"><div class="l">Срезы внутри дня</div><div class="v">' + ((m.intraday && m.intraday.count) || 0) + '</div><div class="s">' + (m.intraday && m.intraday.latest_cut_ts ? 'последний ' + hm(m.intraday.latest_cut_ts) + ' МСК' : '') + (m.error ? 'кэш снимков не прочитан: ' + esc(m.error) : '') + '</div></div></div>';
     wrap.appendChild(inp);
 
+    // сделки дня (TDM#585): сколько, сколько в позициях, из какого источника и когда получены — по всем книгам, как весь
+    // статус дня; если на других экранах выбраны книги в шапке — и по ним; подробности по каждой сделке — C20
+    const tp = panel('Сделки дня', '<span class="k-note">источник, время получения, учёт в позициях · по каждой сделке — <a href="c20-trades.html?date=' + esc(d.date) + '">C20</a></span>');
+    wrap.appendChild(tp);
+    const dtEl = K.h('div'); tp.querySelector('.bd').appendChild(dtEl);
+    K.dayTradesForget();  // дата перечитана (новые события): сводка — заново
+    let tile = null;
+    const byHeader = x => {
+      if (!x || x.error || K.source !== 'real' || !K.headerFilter()) return '';
+      const hb = K.dayTrades(() => { if (tile && dtEl.isConnected) tile.redraw(); }, { date: d.date });
+      return '<div class="s mut3">под фильтром шапки других экранов (как на C20): ' + (hb && !hb.error ? 'сделок <b>' + f.n(hb.trades, 0) + '</b>, в позициях <b>' + f.n(hb.applied, 0) + '</b>' : '…') + '</div>';
+    };
+    tile = K.dayTradesTile(dtEl, { all: true, date: d.date, extra: byHeader });
+
     // фоновая загрузка из сервисов адаптера (08 §2.2, #548): последний запуск, состояние, «нужен вход»
     if ((d.feeds || []).length) {
       const FEED_ST = { complete: ['получено', 'st-ok'], partial: ['получено частично', 'st-warn'], skipped: ['нечего загружать', ''], blocked: ['остановлено', 'st-warn'], error: ['ошибка', 'st-bad'], cancelled: ['отменено', ''] };

@@ -109,7 +109,8 @@ t('«Сбросить фильтр книг» сбрасывает и сняты
   assert.ok(/label: 'Сбросить фильтр книг', run: \(\) => K\.setFilter\(\{[^}]*portsOff: null/.test(kit));
   assert.ok(/opt\.filter === false/.test(kit));
   assert.ok(/K\.portsOff\(\)\.length/.test(P('concepts/c17-forward-carry.html')) && !/K\.filter\.portsOff/.test(P('concepts/c17-forward-carry.html')));
-  for (const f of ['c14-day-status', 'c15-cash', 'c20-trades']) assert.ok(/K\.top\(\{[^)]*filter: false/.test(P('concepts/' + f + '.html')), f);
+  for (const f of ['c14-day-status', 'c15-cash', 'c21-data-flow']) assert.ok(/K\.top\(\{[^)]*filter: false/.test(P('concepts/' + f + '.html')), f);
+  assert.ok(!/filter: false/.test(P('concepts/c20-trades.html')), 'C20 следует фильтру шапки (TDM#585)');
   assert.ok(!/C\.keep/.test(P('concepts/lib/carry.js') + P('concepts/c17-forward-carry.html')));
 });
 

@@ -41,6 +41,8 @@ td.n.k-accp::after { content: ')'; visibility: hidden; } .mut { color: var(--fg-
 .k-top .brand { font-weight: 650; letter-spacing: .02em; display: flex; align-items: center; gap: 8px; white-space: nowrap; }
 .k-top .brand a { color: var(--fg-2); font-weight: 400; }
 .k-top .brand .tag { font-size: 11px; color: var(--fg-3); font-weight: 400; }
+.k-top .brand a.k-navq { font-size: 12px; color: var(--fg-2); border-left: 1px solid var(--line-2); padding-left: 8px; }
+.k-top .brand a.k-navq:hover { color: var(--accent); }
 .k-top .sp { flex: 1; }
 .k-top .asof { color: var(--fg-2); font-size: 12px; white-space: nowrap; }
 .k-top .asof b { color: var(--fg); font-weight: 600; }
@@ -307,3 +309,9 @@ table.k-tbl.k-compact { width: auto; font-size: 12px; }
 .k-tag.k-carry { cursor: help; margin-left: 6px; }
 .k-rcsub { margin: 12px 0 4px; font-weight: 600; font-size: 12.5px; }
 .k-assume { color: var(--warn); cursor: help; font-weight: 600; }
+/* сделки дня на общих экранах (TDM#585, K.dayTradesTile / K.dayTradesLine) */
+.k-dt { background: var(--panel); border: 1px solid var(--line); border-left: 3px solid var(--accent); border-radius: 8px; padding: 6px 12px; font-size: 12.5px; color: var(--fg-2); min-width: 0; }
+.k-dt.warn { border-left-color: var(--warn); }
+.k-dt b, .k-dtl b { color: var(--fg); font-variant-numeric: tabular-nums; }
+.k-dt .s { font-size: 11.5px; margin-top: 2px; overflow-wrap: anywhere; }
+.k-tag.sd-n { border-color: var(--warn); color: var(--warn); padding: 0 4px; margin-left: 4px; text-decoration: none; }

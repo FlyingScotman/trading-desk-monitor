@@ -1414,7 +1414,10 @@ class AdapterServices:
                         pending: dict | None = None, drained: bool = False) -> None:
         """The answer into the date's mark or, with no mark, into the worker's wait / retry (``trades_history`` doc)."""
         now = self._now()
-        files = (ing or {}).get("files") or []
+        sha = {x.get("file"): x.get("sha256") for x in r.get("files") or [] if isinstance(x, dict)}
+        # the mark keeps the sha256 of each file taken in (the helper's own, checked by _ingest): the screens tell the
+        # files of this fetch from the feed of the day by it (trades.origin_of, TDM#585)
+        files = [{**x, "sha256": x.get("sha256") or sha.get(x.get("file"))} for x in (ing or {}).get("files") or []]
         bad = [x for x in files if x["status"] not in OK_FILE]
         state, code = str(r.get("state")), str(r.get("code"))
         units = int((ing or {}).get("accepted_units") or 0)

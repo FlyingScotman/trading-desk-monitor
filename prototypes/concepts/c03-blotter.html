@@ -110,7 +110,8 @@ body { display: flex; flex-direction: column; height: 100vh; overflow: hidden; }
   const pnlNa = r => '<span class="mut3"' + (K.pnlWhy(r) ? ' title="' + esc('нет PnL: ' + K.pnlWhy(r)) + '"' : '') + '>—</span>';
   const pnlCol = (key, label, k, tip) => ({ label, num: true, nullable: k === 'funding', val: r => r.pnl[k], fmt: (v, r) => v == null ? pnlNa(r) : '<span class="' + f.cls(v) + '">' + f.k(v) + '</span>', sum: r => r.pnl[k], unit: 'тыс ₽', sfmt: f.k, title: tip ? 'тыс ₽. ' + tip : 'тыс ₽', tip: !!tip });
   const C = {
-    name: { label: 'Бумага', val: r => r.name, fmt: (v, r) => K.nameCell(r, v) + (r.tradedToday ? '<span class="k-tag sd" title="сделки сегодня">сд</span>' : '') + K.offReportTag(r) + K.curveProxyTag(r) },
+    // сделки дня позиции (TDM#585): число сделок прогона, щелчок — эти сделки на C20
+    name: { label: 'Бумага', val: r => r.name, fmt: (v, r) => K.nameCell(r, v) + (r.tradedToday ? K.tradesTag(r) : '') + K.offReportTag(r) + K.curveProxyTag(r) },
     issuer: { label: 'Эмитент', filter: true, title: 'эмитент (у деривативов — контрагент)', val: r => r.issuerName, fmt: (v, r) => '<b style="color:' + K.issuerColor(r.issuer) + '">●</b> ' + esc(v) },
     issuerFull: { label: 'Эмитент (полн.)', filter: true, val: r => r.issuerFull, fmt: v => esc(v) },
     isin: { label: 'ISIN', val: r => r.isin, fmt: v => '<span class="mono mut3">' + esc(v || '—') + '</span>' },
@@ -290,7 +291,9 @@ body { display: flex; flex-direction: column; height: 100vh; overflow: hidden; }
     else lg = '<span>полоса и подложка — цвет эмитента</span>';
     const fk = Object.keys(st.filters).filter(k => st.filters[k] && C[k]);
     const flt = fk.length ? '<span>фильтр: ' + fk.map(k => esc(C[k].label) + ' — ' + esc(st.filters[k].length <= 3 ? st.filters[k].join(', ') : st.filters[k].length + ' знач.')).join('; ') + '</span><a data-a="unfilter">✕ фильтры</a>' : '';
-    sub.innerHTML = '<span><b style="color:var(--fg)">' + L.length + '</b> позиций</span>' + lg + flt + '<span class="sp" style="flex:1"></span>' +
+    // сделки дня по книгам шапки (TDM#585) — со ссылкой на C20
+    const dt = K.dayTrades(d => { const x = document.getElementById('c3-dt'); if (x) x.innerHTML = K.dayTradesLine(d); });
+    sub.innerHTML = '<span><b style="color:var(--fg)">' + L.length + '</b> позиций</span><span id="c3-dt">' + K.dayTradesLine(dt) + '</span>' + lg + flt + '<span class="sp" style="flex:1"></span>' +
       (st.sort.length ? '<span>сортировка: ' + st.sort.map(([k, d]) => esc(C[k].label) + (d > 0 ? ' ▲' : ' ▼')).join(', ') + ((GROUPS[st.grouping] || []).length ? ' — и группы' + (C[st.sort[0][0]].sum ? ' (по сумме)' : '') : '') + '</span><a data-a="unsort">✕ сортировка по умолчанию</a>'
         : '<span>сортировка по умолчанию: валюта → эмитент → срок до оферты; щелчок по столбцу — сортировка' + ((GROUPS[st.grouping] || []).length ? ' (и групп)' : '') + ', ⏷ — фильтр</span>') +
       ((GROUPS[st.grouping] || []).length ? '<a data-a="collapse">свернуть</a><a data-a="expand">развернуть</a>' : '') +
