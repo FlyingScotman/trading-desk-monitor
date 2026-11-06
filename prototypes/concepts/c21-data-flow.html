@@ -89,7 +89,7 @@
   // чего ждёт, прогресс фоновой работы, ссылка на экран с подробностями и на настройку. Красная стрелка — дальше пошли
   // неполные данные. Внизу — «Что впереди»: очередь фоновых работ. Данные — один маршрут GET ../api/v1/dataflow?on=
   // (backend desk/dataflow.py): то, что монитор уже знает; хаб и сервисы при открытии не опрашиваются. Полоса дат —
-  // ../api/v1/inbox/days (как C14). Обновляется раз в 30 с, пока вкладка открыта.
+  // ../api/v1/inbox/days (как C14). Обновляется раз в минуту, пока вкладка открыта.
   const K = KIT, f = K.f, esc = K.esc;
   K.top({ title: 'C21 · Схема данных', tag: 'откуда пришли данные, что посчитано, где остановилось, что дальше', filter: false, filterNote: 'схема — по всем книгам' });
   const server = K.source === 'real' || K.source === 'empty';
@@ -144,7 +144,7 @@
     const ins = doc.edges.filter(e => e.to === b.id), outs = doc.edges.filter(e => e.from === b.id);
     const name = id => esc((by[id] || {}).title || id);
     const io = (ins.length ? '← ' + ins.map(e => e.incomplete ? '<span class="bad" title="' + esc(e.why) + '">' + name(e.from) + ': ' + esc(e.why) + '</span>' : '<span title="' + esc(e.what) + '">' + name(e.from) + '</span>').join(', ') : '') +
-      (ins.length && outs.length ? '<br>' : '') + (outs.length ? '→ ' + outs.map(e => '<span' + (e.incomplete ? ' class="bad"' : '') + ' title="' + esc(e.what + (e.why ? ': ' + e.why : '')) + '">' + name(e.to) + '</span>').join(', ') : '');
+      (ins.length && outs.length ? '<br>' : '') + (outs.length ? '→ ' + outs.map(e => '<span' + (e.incomplete ? ' class="bad"' : '') + ' title="' + esc(e.what + (e.why ? ': ' + e.why : '')) + '">' + name(e.to) + (e.incomplete ? ': ' + esc(e.why) : '') + '</span>').join(', ') : '');
     return '<div class="c21-b st-' + esc(b.status) + '" id="b-' + esc(b.id) + '" data-b="' + esc(b.id) + '" tabindex="0">' +
       '<div class="hd"><span class="dot" aria-hidden="true"></span><b>' + esc(b.title) + '</b><span class="sp"></span><span class="c21-badge">' + esc(b.status_text || b.status) + '</span></div>' +
       '<div class="what">' + esc(b.what) + (b.at ? ' · ' + esc(K.mskTime(b.at, true)) : '') + '</div>' + prog(b.progress) +
@@ -192,7 +192,7 @@
     const wrap = K.h('div', 'k-grid');
     const cnt = Object.keys(S).filter(k => (d.counts || {})[k]).map(k => '<span class="c21-cnt st-' + k + '"><i></i>' + esc(S[k]) + ' <b>' + d.counts[k] + '</b></span>').join('');
     const ap = d.autopilot || {};
-    const hd = panel('Дата', '<span class="k-note">' + (d.generated_at ? 'собрано ' + esc(K.mskTime(d.generated_at, true)) + ' · ' : '') + (server ? 'обновляется раз в 30 с' : 'демо') + '</span>');
+    const hd = panel('Дата', '<span class="k-note">' + (d.generated_at ? 'собрано ' + esc(K.mskTime(d.generated_at, true)) + ' · ' : '') + (server ? 'обновляется раз в минуту' : 'демо') + '</span>');
     hd.querySelector('.bd').innerHTML = '<div class="c21-head"><span class="big">' + f.dshort(d.date) + ' ' + esc(d.date.slice(0, 4)) + '</span>' +
       '<span>' + (d.run ? 'прогон <b>#' + d.run.run_id + '</b> · ' + esc(d.run.label) + (d.run.is_default ? '' : ' (основного ещё нет)') : 'прогона за дату нет') + '</span>' + cnt +
       (d.incomplete ? '<span style="color:var(--neg)">неполные данные пошли дальше: <b style="color:var(--neg)">' + d.incomplete + '</b></span>' : '<span class="mut3">неполных данных дальше не ушло</span>') +
@@ -235,7 +235,7 @@
   if (document.fonts && document.fonts.ready) document.fonts.ready.then(() => requestAnimationFrame(drawEdges));
   K.on('theme', () => requestAnimationFrame(drawEdges));
   K.on('numfmt', () => { if (doc && view.querySelector('.c21-flow')) render(); });
-  if (server) setInterval(() => { if (!document.hidden && doc) load(); }, 30000);
+  if (server) setInterval(() => { if (!document.hidden && doc) load(); }, 60000);
 
   // ---------- демо-набор (файл или ?demo=1): вымышленный, форма ответа /api/v1/dataflow ----------
   const DEMO_DAYS = [['2026-10-20', 'warn', 42], ['2026-10-19', 'ok', 37], ['2026-10-16', 'bad', null], ['2026-10-15', 'ok', 31]].map(([date, state, r]) => ({ date, state, default_run_id: r, runs: r ? 2 : 1 }));
