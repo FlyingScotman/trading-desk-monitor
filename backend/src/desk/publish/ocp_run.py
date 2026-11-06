@@ -53,7 +53,7 @@ from __future__ import annotations
 
 import math
 from collections import Counter, defaultdict
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass, field, fields
 from datetime import date, timedelta
 from typing import Any
@@ -62,6 +62,7 @@ import psycopg
 
 from .. import store
 from ..marketdata.adapter import MarketView
+from ..orchestrator import market_rates
 from ..rules import funding as F
 from ..rules import ocp as O
 from ..rules.reference import (
@@ -72,6 +73,7 @@ from ..rules.reference import (
 )
 from ..valuation import offreport
 from . import funding_run, fx_liability
+from .tdm_run import fx_row
 
 KIND = "ocp"
 BLOCK_VERSION = 3
@@ -185,6 +187,31 @@ def _rates(reference_fx: list[dict[str, Any]]) -> dict[str, float]:
     return {r["ccy"]: float(r["rate"]) for r in reference_fx if r.get("rate")}
 
 
+def _snapshot_rates(market: MarketView | None) -> dict[str, float]:
+    """ccy -> RUB per unit at the market rate (``fallback.FX_MARKET``, the CBR rate per unit when MOEX does not trade
+    the currency) of every currency of the snapshot's rates (TDM#602): the engine's size check of a line in a currency
+    the run's rows do not hold (JPY, KZT of the OCP report only)."""
+    if market is None:
+        return {}
+    return {c: x[0] for c, x in market_rates(market).items() if x}
+
+
+def add_ocp_rates(reference: dict[str, Any], market: MarketView | None, prev: MarketView | None,
+                  ccys: Iterable[str]) -> list[str]:
+    """Append to the run's rates (``reference["fx"]``) a row (``tdm_run.fx_row``) of every currency of ``ccys`` the run
+    has no rate of and the snapshot has (TDM#602: a currency only the OCP report, a position off the report or a day's
+    trade holds; without a market rate the CBR rate per unit, ``rate_source`` ``CBR``). The currencies added."""
+    if market is None:
+        return []
+    have = {r.get("ccy") for r in reference.get("fx") or []} | {"RUB"}
+    added = []
+    for ccy in dict.fromkeys(c for c in ccys if isinstance(c, str) and c not in have):
+        if (row := fx_row(market, prev, ccy)) is not None:
+            reference.setdefault("fx", []).append(row)
+            added.append(ccy)
+    return added
+
+
 def run_policy(con: psycopg.Connection, known_at: Any, base: O.OcpPolicy = O.PROVISIONAL_POLICY
                ) -> tuple[O.OcpPolicy, dict[str, str], tuple[str, ...]]:
     """The OCP policy of a run: ``base`` with the adapter's ``ocp_policy`` in force today (``store.current_policy``: one
@@ -205,17 +232,20 @@ def run_policy(con: psycopg.Connection, known_at: Any, base: O.OcpPolicy = O.PRO
 def compute(con: psycopg.Connection, on: date, market: MarketView | None, content_rows: list[dict[str, Any]],
             reference: dict[str, Any], inputs: store.PositionInputs,
             policy: O.OcpPolicy = O.PROVISIONAL_POLICY, *, terms: Mapping[str, Any] | None = None,
-            calendar: Any = None, off_report: Mapping[str, Any] | None = None) -> RunOcp:
+            calendar: Any = None, off_report: Mapping[str, Any] | None = None,
+            prev: MarketView | None = None) -> RunOcp:
     """The OCP of the run of ``on`` (see the module docstring). ``off_report``: the run's derivatives off the positions
     report (``valuation.offreport.summary``, TDM#468): with the switch on ``exclude`` the FX trades and CCS among them
     are a gap of the OCP. ``reference``: ``RunContent.reference`` (books, fx);
     ``policy``: the base the adapter's ``ocp_policy`` applies over; ``terms``: position_id -> ``BondTerms`` (the bonds'
     coupons and redemptions since the base); ``calendar``: the run's business calendar (core's ``BusinessCalendar``)
     for the age of a base, weekends outside its window or without it. In a savepoint (TDM#215): an SQL error inside
-    rolls back only the block's reads, so the run still publishes, with the block ``failed``."""
+    rolls back only the block's reads, so the run still publishes, with the block ``failed``. ``prev``: the previous
+    date's market, for the move of a rate the OCP adds to the run's (``add_ocp_rates``)."""
     try:
         with funding_run.savepoint(con):
-            return _compute(con, on, market, content_rows, reference, inputs, policy, terms or {}, calendar, off_report)
+            return _compute(con, on, market, content_rows, reference, inputs, policy, terms or {}, calendar, off_report,
+                            prev)
     except Exception as e:  # noqa: BLE001 - the OCP never fails the run; it says why it has none
         text = f"{STATUS_TEXT[FAILED]}: {type(e).__name__}: {e}"
         return RunOcp(FAILED, empty_block(FAILED, text, on), log=[("WARN", text[:2000])])
@@ -258,7 +288,7 @@ def _off_report_gap(off_report: Mapping[str, Any] | None, apart: Mapping[str, se
 def _compute(con: psycopg.Connection, on: date, market: MarketView | None, content_rows: list[dict[str, Any]],
              reference: dict[str, Any], inputs: store.PositionInputs, policy: O.OcpPolicy,
              terms: Mapping[str, Any] | None = None, calendar: Any = None,
-             off_report: Mapping[str, Any] | None = None) -> RunOcp:
+             off_report: Mapping[str, Any] | None = None, prev: MarketView | None = None) -> RunOcp:
     known_at = inputs.known_at
     policy, source, conflicts = run_policy(con, known_at, policy)
     books = {b["book_id"]: b for b in store.current_books(con, on, known_at)}
@@ -273,8 +303,12 @@ def _compute(con: psycopg.Connection, on: date, market: MarketView | None, conte
     res = O.compute_ocp(content_rows, books, on, terms=inputs.trade_terms, cash=cash.rows if cash else (),
                         liabilities=liabs, report_rows=report.rows, report_units=report.units, policy=policy,
                         days=days, is_business_day=is_bd, valid_dates=inputs.valid_dates,
-                        rates={"RUB": 1.0, **_rates(reference.get("fx") or [])})
+                        rates={"RUB": 1.0, **_snapshot_rates(market), **_rates(reference.get("fx") or [])})
     notes += res.notes
+    # the currencies of the OCP the run's rows do not hold (the report's JPY, KZT, a day's trade): their rates join the
+    # run's, so that the published OCP has a rate and a rouble equivalent for each (TDM#602)
+    add_ocp_rates(reference, market, prev, [*(x.ccy for x in res.lines), *(x.get("ccy") for x in res.published),
+                                            *(c.get("ccy") for c in res.comparisons)])
     apart = _apart(report.rows)
     in_trades = {(str(t.get("book_id")), str(t.get("trade_id"))) for d in days.values() for t in d.trade_rows or ()
                  if str(t.get("status") or "live") == "live"}

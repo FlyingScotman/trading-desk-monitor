@@ -297,3 +297,31 @@ def test_sql_error_in_a_block_fails_only_the_block(store_url, ctx, tmp_path, mon
     assert any("ОВП не посчитано" in m and "UndefinedTable" in m for m in log)
     o = TestClient(create_app(store_url)).get(f"/api/v1/runs/{rid}/ocp").json()
     assert o["state"] == "failed" and o["published"]["by_book"] == [] and o["gaps"] == []
+
+
+def test_rates_of_every_currency_of_the_ocp(store_url, ctx, tmp_path):
+    """TDM#602: a currency only the OCP report holds (JPY and KZT, which the CBR quotes per 100 units; GEL, which MOEX
+    does not trade) gets its rate in the run: per unit from the snapshot (MOEX, else the CBR's with ``rate_source``
+    ``CBR``), so the published OCP has its rouble equivalent; a currency the snapshot has no rate of stays without."""
+    report = OCP + "ENT1;D1;JPY;10000000;;\nENT1;D1;KZT;5000000;;\nENT1;D1;GEL;100000;;\nENT1;D1;XAU;10;;\n"
+    with store.connect(store_url) as con:
+        _scan(con, tmp_path, ocp=report)
+        rid, _ = _run(con, ctx)
+        block, = con.execute("SELECT data FROM run_reference WHERE run_id = %s AND kind = 'ocp'", (rid,)).fetchone()
+        fx, = con.execute("SELECT data FROM run_reference WHERE run_id = %s AND kind = 'fx'", (rid,)).fetchone()
+    rates = {r["ccy"]: r for r in fx}
+    jpy, kzt, gel = (ctx.market.fx(c) for c in ("JPY", "KZT", "GEL"))
+    assert rates["JPY"]["rate"] == pytest.approx(jpy["moex_19"]) and rates["JPY"]["rate_cbr"] == pytest.approx(0.529852)
+    assert rates["KZT"]["rate"] == pytest.approx(kzt["moex_19"]) and rates["KZT"]["rate_cbr"] == pytest.approx(0.1872)
+    assert (rates["GEL"]["rate"], rates["GEL"]["rate_source"]) == (pytest.approx(gel["cbr"]), "CBR")
+    assert "XAU" not in rates  # no rate in the snapshot: none invented
+    pub = block["published"]["by_ccy"]
+    for c in ("JPY", "KZT", "GEL"):
+        assert pub[c]["rate"] == rates[c]["rate"] and pub[c]["total_rub"] == pytest.approx(pub[c]["total"] * pub[c]["rate"])
+    assert pub["JPY"]["total_rub"] == pytest.approx(10_000_000 * 0.53033)  # per unit, not per 100
+    assert pub["XAU"]["rate"] is None and pub["XAU"]["total_rub"] is None
+    # the OCP history carries them as the day's rates
+    h = TestClient(create_app(store_url)).get(f"/api/v1/history/ocp?run_id={rid}&from=2026-10-15&to=2026-10-15").json()
+    day, = h["days"]
+    assert {"JPY", "KZT", "GEL"} <= set(day["fx"]) and day["fx"]["GEL"]["cbr"] == pytest.approx(gel["cbr"])
+
