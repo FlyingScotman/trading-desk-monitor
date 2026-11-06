@@ -202,3 +202,27 @@ def test_base_plus_day_lines_without_contributions_and_a_bounded_blob(store_url)
     assert len(day["lines"]) == 1000 and "contributions" not in day["lines"][0]
     assert day["lines"][0]["parts"] == parts and day["lines"][0]["baseDate"] == "2026-10-19"
     assert day["reportFx"] == {"USD": 80.0}  # GBP's set is not a base of the day
+
+
+def test_a_rate_the_run_has_not_is_the_hubs_stored_cbr_rate(store_url):
+    """TDM#602, TDM#534: a run that published no rate of a currency of its OCP (JPY, KZT before TDM#602; USD of a run
+    without rates) gets the CBR rate per unit in force on its date from the stored hub history; the run's own rate
+    wins; a currency the history has not stays without."""
+    with store.connect(store_url) as con:
+        rid = insert(con, "2026-10-12", ocp=block("computed", [
+            line("B1", "USD", 1e6), line("B1", "JPY", 1e8), line("B1", "KZT", -5e6), line("B1", "XAU", 10)]),
+            fx=[{"ccy": "CNY", "rate": 11.0, "rate_source": "MOEX 19:00", "rate_cbr": 10.9}])
+        for pair, day, v in (("JPY/RUB", "2026-10-12", 0.5299), ("JPY/RUB", "2026-10-11", 0.52),
+                             ("KZT/RUB", "2026-10-10", 0.1872), ("USD/RUB", "2026-10-12", 81.5),
+                             ("CNY/RUB", "2026-10-12", 10.0), ("GEL/RUB", "2026-09-01", 30.0)):
+            con.execute("INSERT INTO md_hub_fx (kind, pair, date, rate, per_unit, nominal, fetch_id)"
+                        " VALUES ('cbr_official', %s, %s, %s, %s, 1, 1)", (pair, day, v, v))
+    d = TestClient(create_app(store_url)).get("/api/v1/history/ocp", params={
+        "run_id": rid, "from": "2026-10-12"}).json()
+    fx = d["days"][0]["fx"]
+    hub = "CBR (история хаба)"
+    assert fx["JPY"] == {"market": 0.5299, "cbr": 0.5299, "source": hub}  # the date's own, per unit
+    assert fx["KZT"] == {"market": 0.1872, "cbr": 0.1872, "source": hub}  # the latest before it
+    assert fx["USD"] == {"market": 81.5, "cbr": 81.5, "source": hub}
+    assert fx["CNY"]["source"] == "MOEX 19:00"  # the run's own rate wins
+    assert "XAU" not in fx and "GEL" not in fx

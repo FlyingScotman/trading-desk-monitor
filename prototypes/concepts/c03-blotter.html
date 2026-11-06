@@ -115,7 +115,7 @@ body { display: flex; flex-direction: column; height: 100vh; overflow: hidden; }
     issuer: { label: 'Эмитент', filter: true, title: 'эмитент (у деривативов — контрагент)', val: r => r.issuerName, fmt: (v, r) => '<b style="color:' + K.issuerColor(r.issuer) + '">●</b> ' + esc(v) },
     issuerFull: { label: 'Эмитент (полн.)', filter: true, val: r => r.issuerFull, fmt: v => esc(v) },
     isin: { label: 'ISIN', val: r => r.isin, fmt: v => '<span class="mono mut3">' + esc(v || '—') + '</span>' },
-    ccy: { label: 'Вал', val: r => M.ccyOrder[r.ccy] ?? 99, fmt: (v, r) => K.ccyTag(r.ccy), filter: r => r.ccy, fltOrder: K.posCols.ccy.fltOrder },
+    ccy: { label: 'Вал', val: r => M.ccyOrder[r.ccy] ?? 99, fmt: (v, r) => K.ccyTag(r.ccy, r.ccyReported), filter: r => r.ccy, fltOrder: K.posCols.ccy.fltOrder },
     kind: { label: 'Тип', val: r => r.group + r.kind, filter: r => M.kindLabel[r.kind] || r.kind, fmt: (v, r) => '<span class="tagc" style="border-color:' + K.kindColor[r.kind] + '66">' + esc(M.kindShort[r.kind]) + '</span>' },
     book: { label: 'Книга', filter: true, val: r => r.book, fmt: v => '<span class="mut">' + esc(v) + '</span>' },
     coupon: { label: 'Купон', val: r => r.couponFmt, fmt: v => '<span class="mono">' + esc(v || '—') + '</span>', title: 'Q — квартальный, M — месячный, S — полугодовой, A — годовой' },
@@ -341,7 +341,7 @@ body { display: flex; flex-direction: column; height: 100vh; overflow: hidden; }
     if (!p) { cur = null; $('.cd-hd').innerHTML = '<div class="cd-empty">выберите позицию в таблице</div>'; return; }
     cur = p;
     const isBond = !!p.cpn, isFloat = K.cpnType(p) === 'float';
-    $('.cd-hd').innerHTML = '<div class="t"><span style="color:' + K.issuerColor(p.issuer) + '">●</span>' + K.aliasName(p) + ' ' + K.ccyTag(p.ccy) + ' <span class="tagc" style="font-size:11px;font-weight:400;padding:0 6px;border:1px solid var(--line);border-radius:4px;color:var(--fg-2)">' + esc(p.kindLabel) + '</span></div>' +
+    $('.cd-hd').innerHTML = '<div class="t"><span style="color:' + K.issuerColor(p.issuer) + '">●</span>' + K.aliasName(p) + ' ' + K.ccyTag(p.ccy, p.ccyReported) + ' <span class="tagc" style="font-size:11px;font-weight:400;padding:0 6px;border:1px solid var(--line);border-radius:4px;color:var(--fg-2)">' + esc(p.kindLabel) + '</span></div>' +
       '<div class="st">' + esc(p.issuerFull) + (p.isin ? ' · <span class="mono">' + esc(p.isin) + '</span>' : '') + ' · ' + esc(p.book) + ' — ' + esc(p.bookName) + (p.rating !== '—' ? ' · ' + esc(p.rating) : '') + '</div>' +
       '<div class="acts"><button class="k-btn pri" data-a="full">Открыть полностью ↗</button>' + (p.issuer ? '<button class="k-btn" data-a="iss">Все бумаги эмитента</button>' : '') + '<button class="k-btn" data-a="book">Книга ' + esc(p.book) + '</button></div>';
     $('.cd-hd [data-a=full]').onclick = () => K.card(p.id);

@@ -283,6 +283,34 @@ holidays are the longest, 8 days at most); a longer run is a hole in the stored 
 holidays."""
 
 
+UNPUBLISHED_BRIDGE_DAYS = 10
+"""``bridge_unpublished``: a business day without a RUONIA fixing takes the previous one when it is at most this many
+calendar days older (owner, TDM#606); a longer gap is missing data, core refuses the period over it."""
+
+
+def bridge_unpublished(cal: BusinessCalendar, days: list[date]) -> tuple[BusinessCalendar, list[tuple[date, date]]]:
+    """``cal`` with every business day inside the history (between the first and the latest of ``days``, the dates with a
+    fixing) that has no fixing a holiday of the publication calendar, when the previous fixing is at most
+    ``UNPUBLISHED_BRIDGE_DAYS`` calendar days older; [(that day, the date of the rate it takes)]. The CBR's own rule:
+    a rate is in force until the next day it is computed (30.12.2025: not computed, the RUONIA index accrues the rate
+    of 29.12 until 12.01.2026); core then carries the previous fixing over it, as over a holiday."""
+    have = sorted(set(days))
+    if len(have) < 2:
+        return cal, []
+    published, out, prev, d = set(have), [], have[0], have[0]
+    while d < have[-1]:
+        if d in published:
+            prev = d
+        elif cal.is_business_day(d) and (d - prev).days <= UNPUBLISHED_BRIDGE_DAYS:
+            out.append((d, prev))
+        d += timedelta(days=1)
+    if not out:
+        return cal, []
+    hol = {d for d, _ in out}
+    return BusinessCalendar(cal.holidays | hol, cal.working_days - hol, f"{cal.version}+unpublished_{len(hol)}",
+                            cal.valid_from, cal.valid_to), out
+
+
 def published_before(cal: BusinessCalendar, days: list[date]) -> tuple[BusinessCalendar, dict[str, Any]]:
     """``cal`` reaching back to the first of ``days`` (the dates with a fixing): before its ``valid_from`` a weekday
     without a fixing is a holiday (``PUBLISHED_HOLIDAY_MAX_DAYS`` in a row at most) and a weekend day with one a working
@@ -354,6 +382,9 @@ def fixing_entries(market: Snapshot, static: Snapshot, known_at: datetime | None
             cal, published = published_before(cal, [f.fixing_date for f in rows])
         early = [f for f in rows if index == "ruonia" and cal.valid_from is not None and f.fixing_date < cal.valid_from]
         rows = rows[len(early):]
+        bridged: list[tuple[date, date]] = []
+        if index == "ruonia":  # TDM#606: a business day the CBR published no RUONIA for takes the previous rate
+            cal, bridged = bridge_unpublished(cal, [f.fixing_date for f in rows])
         sid = f"{market.id}+{fixing_history.SOURCE_ID}" if stored else market.id
         history = FixingHistory(index, bd, tuple((f.fixing_date, f.rate) for f in rows), cal, sid,
                                 RUONIA_MAX_UNPUBLISHED_DAYS if index == "ruonia" else 0, cut.isoformat())
@@ -362,7 +393,9 @@ def fixing_entries(market: Snapshot, static: Snapshot, known_at: datetime | None
                 "latest": rows[-1].fixing_date.isoformat() if rows else None, "unpublished_at_cut": unknown,
                 "dropped_before_calendar": len(early), "calendar": cal.version,
                 **({"from_history": stored} if stored else {}),
-                **({"calendar_from_fixings": published} if published else {})}
+                **({"calendar_from_fixings": published} if published else {}),
+                **({"bridged_days": [{"date": d.isoformat(), "from": p.isoformat()} for d, p in bridged]}
+                   if bridged else {})}
         if index == "ruonia" and rows:
             have = {f.fixing_date for f in rows}
             days = (rows[0].fixing_date + timedelta(days=i) for i in range((rows[-1].fixing_date - rows[0].fixing_date).days))

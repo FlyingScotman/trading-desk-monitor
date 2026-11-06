@@ -360,24 +360,32 @@ def _fx_rows(ctx: EodContext, prev: MarketView | None, also: Iterable[str] = ())
     (``fallback.FX_MARKET``: MOEX 19:00, else 14:00, else CETS close, else CBR) with its ``rate_source``, and its move
     on the previous date's by the same chain; ``rate_cbr`` the CBR rate in force, its move, and ``rate_cbr_next``.
     ``FX_CCYS`` and ``also``: every other currency of the run's rows (a CHF bond, R27), so that its amounts convert
-    and its curve is its own, not RUB's."""
+    and its curve is its own, not RUB's. The OCP adds the currencies of its lines (``fx_row``, TDM#602)."""
     rows = []
     for ccy in dict.fromkeys([*FX_CCYS, *(c for c in also if c != "RUB")]):
-        now = ctx.market.fx(ccy)
-        mkt = market_fx(now)
-        if mkt is None:
-            continue
-        old = prev.fx(ccy) if prev else {}
-        was = market_fx(old) if old else None
-        rows.append({
-            "ccy": ccy, "rate": mkt[0], "rate_source": mkt[1],
-            "move_pct": (mkt[0] / was[0] - 1) * 100 if was else 0.0,
-            **({"prev_rate": was[0], "prev_rate_source": was[1]} if was else {}),
-            "rate_cbr": now["cbr"],
-            "move_pct_cbr": (now["cbr"] / old["cbr"] - 1) * 100 if now["cbr"] and old.get("cbr") else None,
-            "rate_cbr_next": now["cbr_next"],
-        })
+        if (row := fx_row(ctx.market, prev, ccy)) is not None:
+            rows.append(row)
     return rows
+
+
+def fx_row(market: MarketView, prev: MarketView | None, ccy: str) -> dict[str, Any] | None:
+    """One rate of the run (``_fx_rows``) of ``ccy`` on ``market``; None without any rate of ``FX_MARKET``. A currency
+    MOEX does not trade (JPY, KZT, GEL: TDM#602) has the CBR rate per unit as its market rate, ``rate_source``
+    ``CBR``."""
+    now = market.fx(ccy)
+    mkt = market_fx(now)
+    if mkt is None:
+        return None
+    old = prev.fx(ccy) if prev else {}
+    was = market_fx(old) if old else None
+    return {
+        "ccy": ccy, "rate": mkt[0], "rate_source": mkt[1],
+        "move_pct": (mkt[0] / was[0] - 1) * 100 if was else 0.0,
+        **({"prev_rate": was[0], "prev_rate_source": was[1]} if was else {}),
+        "rate_cbr": now["cbr"],
+        "move_pct_cbr": (now["cbr"] / old["cbr"] - 1) * 100 if now["cbr"] and old.get("cbr") else None,
+        "rate_cbr_next": now["cbr_next"],
+    }
 
 
 def _why(o: Outcome) -> str:

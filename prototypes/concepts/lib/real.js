@@ -358,6 +358,8 @@
     // для типа инструмента таблицы «валюта × тип» (lib/instr.js, api/concepts.instr_kind): поля факта и группа продукта отчёта
     p.instrType = d.instrType || null; p.assetClass = d.assetClass || null; p.segment = d.segment || null;
     p.productGroup = M.productGroup(ex.reported);
+    // код валюты в отчёте, если монитор свёл его в другой (Настройки → «Одна валюта под двумя кодами», CNH = CNY, TDM#601)
+    p.ccyReported = (ex.reported && ex.reported.ccy_reported) || null;
     p.ocp = !!(d.ocpTransfer || d.assetClass === 'Перенос ОВП');
     p.offReport = !!d.offReport;  // деривативы вне отчёта позиций: оценена по условиям сделки (TDM#468)
     p.accrualOnly = !!d.accrualOnly;  // HTM по начислению: рыночного риска нет по правилу, это не пропуск

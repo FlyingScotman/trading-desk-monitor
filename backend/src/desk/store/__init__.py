@@ -26,6 +26,7 @@ from typing import Any
 import psycopg
 from psycopg.types.json import Jsonb
 
+from ..inbox.schema import alias_position, alias_row, ccy_fields
 from ..inbox.spi import (  # stdlib only, no cycle
     DATASET_KEYS,
     REFERENCE_KEYS,
@@ -237,6 +238,7 @@ def positions_for(con: psycopg.Connection, valid_date: date, *, known_at: dateti
         rows.append((pid, book, secid, qty))
         if inbox:
             fields = {k: v for k, v in zip(V1_COLUMNS, v1) if v is not None}
+            alias_position(fields)  # TDM#601: CNH is CNY; the report's code stays as ccy_reported
             canon_extra[pid] = {k: str(v) for k, v in fields.items()}
             extra[pid] = {k: float(v) if isinstance(v, Decimal) else v for k, v in fields.items()}
             extra[pid].update({k: v for k, v in (("src", src), ("x", x)) if v is not None})
@@ -487,6 +489,7 @@ def dataset_rows(con: psycopg.Connection, dataset: str, on: date, *, known_at: d
     for sid, data, src, x in con.execute(
             "SELECT set_id, data, src, x FROM dataset_row WHERE set_id = ANY(%s) ORDER BY set_id, row_no",
             (list(by_set),)):
+        alias_row(data, ccy_fields(dataset))  # TDM#601: CNH is CNY; the report's codes in _ccy_reported
         rows.append({**data, "_src": src, **({"x": x} if x else {}), "_valid_date": by_set[sid]["valid_date"],
                      "_set_id": sid})
     return DatasetInputs(dataset, on, rows, units)
@@ -532,6 +535,7 @@ def versioned_rows(con: psycopg.Connection, dataset: str, on: date, *, known_at:
         rank = (-1 if v is None else int(v), -age_of[sid])
         k = str(data.get(key_field))
         if k not in current or rank > current[k][0]:
+            alias_row(data, ccy_fields(dataset))  # TDM#601, as dataset_rows
             current[k] = (rank, {**data, "_src": src, **({"x": x} if x else {}), "_valid_date": by_set[sid]["valid_date"],
                                  "_set_id": sid})
     rows = [r for _, r in current.values() if not where or all(r.get(f) == v for f, v in where.items())]

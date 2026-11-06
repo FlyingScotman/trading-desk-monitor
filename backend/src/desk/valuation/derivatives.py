@@ -410,8 +410,9 @@ class SwapTerms:
             raise NotValued("terms_incomplete", f"trade {tid}: notional_ccy, start_date and maturity_date of both legs")
         if abs(n[0] - n[1]) > 1e-9 * max(abs(n[0]), 1.0):  # type: ignore[operator]
             raise NotValued("swap_notional_mismatch", f"trade {tid}: the legs' notionals differ")
-        if starts[0] != starts[1] or ends[0] != ends[1]:
-            raise NotValued("swap_dates_mismatch", f"trade {tid}: the legs' start or maturity dates differ")
+        if starts[0] != starts[1] or ends[0] != ends[1]:  # core's InterestRateSwap: one pair of dates (core#106)
+            raise NotValued("swap_dates_mismatch", f"сделка {tid}: фиксированная нога {_ru_span(starts[0], ends[0])}, "
+                                                   f"плавающая {_ru_span(starts[1], ends[1])}")
         if n[0] <= 0:  # type: ignore[operator]
             raise NotValued("terms_invalid", f"trade {tid}: notional must be positive")
         notes = []
@@ -516,6 +517,10 @@ class CcsLeg:
     shifted: bool = False
     """The row states a fixing offset (``x_fixing_offset``) or a lookback (``x_lookback``): core has neither, it is
     ignored and said."""
+    start: date | None = None
+    maturity: date | None = None
+    """The leg's own start and maturity (TDM#605: a leg may start later or end a day apart from the other; each leg's
+    periods and exchanges run on its own dates). None: the trade's (``CcsTerms.start`` / ``maturity``)."""
 
 
 @dataclass(frozen=True)
@@ -577,7 +582,8 @@ class CcsTerms:
                                str(r["index_code"]).strip().upper() if r.get("index_code") is not None else None,
                                _num(r.get("spread_bp")) or 0.0, _leg_field(r, "payment_frequency"),
                                _leg_field(r, "day_count"), ex, _truthy(r.get("x_overnight_arithmetic")),
-                               _nonzero(r.get("x_fixing_offset")) or _nonzero(r.get("x_lookback"))))
+                               _nonzero(r.get("x_fixing_offset")) or _nonzero(r.get("x_lookback")),
+                               _day(r.get("start_date")), _day(r.get("maturity_date"))))
         rub = [g for g in legs if g.ccy == "RUB"]
         other = [g for g in legs if g.ccy != "RUB"]
         if len(rub) != 1 or len(other) != 1:
@@ -585,13 +591,15 @@ class CcsTerms:
                                                    "against a foreign one only")
         if {g.side for g in legs} != {"pay", "receive"}:
             raise NotValued("terms_incomplete", f"trade {tid}: one pay and one receive leg")
-        starts, ends = {_day(r.get("start_date")) for r in rows}, {_day(r.get("maturity_date")) for r in rows}
+        starts, ends = {g.start for g in legs}, {g.maturity for g in legs}
         if None in starts or None in ends:
             raise NotValued("terms_incomplete", f"trade {tid}: start_date and maturity_date of both legs")
-        if len(starts) != 1 or len(ends) != 1:
-            raise NotValued("swap_dates_mismatch", f"trade {tid}: the legs' start or maturity dates differ")
+        if any(g.maturity <= g.start for g in legs):  # type: ignore[operator]
+            raise NotValued("terms_invalid", f"trade {tid}: a leg's maturity must be after its start")
+        # TDM#605: legs with dates of their own (a later start of one leg, a day apart at the end) are valued each on
+        # its own dates; the trade spans from the earliest start to the latest maturity
         pvs = [p for r in rows if (p := _num(r.get("pv_rub"))) is not None]
-        return cls(tid, "ccs", str(rows[0].get("book_id")), rub[0], other[0], starts.pop(), ends.pop(),  # type: ignore[arg-type]
+        return cls(tid, "ccs", str(rows[0].get("book_id")), rub[0], other[0], min(starts), max(ends),  # type: ignore[type-var]
                    math.fsum(pvs) if pvs else None)
 
 
@@ -1120,12 +1128,17 @@ def _ccs_build(ctx: Any, c: CcsTerms, iid: str, curve_of: dict[str, str]
         if c.maturity < bd:
             raise NotValued("settled", f"CCS {c.label} matured on {c.maturity}", c.maturity)
         raise NotValued("no_fx_calendar", f"CCS {c.label}: maturity {c.maturity} outside the run's calendars")
-    start = adjust_date(c.start, base.business_day_convention, cal) if cal.covers(c.start) else c.start
-    end = adjust_date(c.maturity, base.business_day_convention, cal)
-    unadjusted = not cal.covers(c.start)
+    unadjusted = False
     need_freq = need_dc = False
     legs = []
+    starts: dict[bool, date] = {}  # the leg's adjusted start: True the RUB leg's, False the foreign one's
     for g, rub in ((c.rub, True), (c.foreign, False)):
+        # each leg on its own dates (TDM#605); a leg without them on the trade's
+        g_start, g_mat = g.start or c.start, g.maturity or c.maturity
+        start = adjust_date(g_start, base.business_day_convention, cal) if cal.covers(g_start) else g_start
+        end = adjust_date(g_mat, base.business_day_convention, cal)
+        unadjusted |= not cal.covers(g_start)
+        starts[rub] = start
         dflt = fidx.day_count if fidx is not None and not rub else None
         conv, dc, _ = _ccs_convention(g, base, f"{c.label} {g.ccy}", dflt)
         if dflt is not None and g.day_count is None:
@@ -1133,7 +1146,7 @@ def _ccs_build(ctx: Any, c: CcsTerms, iid: str, curve_of: dict[str, str]
                          f"{g.index_code} (provisional)")
         need_freq |= g.frequency is None
         need_dc |= g.day_count is None and dflt is None
-        periods, raw = _ccs_periods(conv, start, c.maturity, end, g.notional)
+        periods, raw = _ccs_periods(conv, start, g_mat, end, g.notional)
         unadjusted |= raw
         ex = g.exchange or "initial_and_final"
         exchanges = () if ex == "none" else notional_exchanges(
@@ -1167,7 +1180,7 @@ def _ccs_build(ctx: Any, c: CcsTerms, iid: str, curve_of: dict[str, str]
     if rub_idx is not None:
         if rub_idx.note:
             notes.append(f"{c.label}: {rub_idx.note}")
-        if start < bd:
+        if starts[True] < bd:
             fixing = rub_idx.fixing_id
             if rub_idx.fixing_kind == "history":
                 if fixing not in _fixing_ids(ctx):
@@ -1181,7 +1194,7 @@ def _ccs_build(ctx: Any, c: CcsTerms, iid: str, curve_of: dict[str, str]
         if c.foreign.shifted:
             notes.append(f"{c.label}: the fixing offset / lookback of the {ccy} leg is ignored (core has neither; "
                          "provisional)")
-        if start < bd:
+        if starts[False] < bd:
             foreign_fixing = fidx.fixing_id
             _index_fixings_read(ctx, c, foreign_fixing, swap.foreign_leg.periods, notes)
         last = ((ctx.fx.lineage.get("curves") or {}).get(fidx.curve_id) or {}).get("last_node")
@@ -1264,6 +1277,10 @@ def _ccs_fact(t: CcsTerms, row: Any) -> dict[str, Any]:
             "fixed_rate_pct": fixed.fixed_rate_pct, "spread_bp": flt.spread_bp if flt else None,
             "rub_side": t.rub.side, "foreign_side": t.foreign.side,
             "start_date": t.start.isoformat(), "maturity_date": t.maturity.isoformat(), "convention": "xccy",
+            **({"leg_dates": {g.ccy: {"start_date": (g.start or t.start).isoformat(),
+                                      "maturity_date": (g.maturity or t.maturity).isoformat()}
+                              for g in (t.rub, t.foreign)}}
+               if (t.rub.start, t.rub.maturity) != (t.foreign.start, t.foreign.maturity) else {}),
             "pv_rub": row.pv_rub, "rub_leg_pv_rub": row.rub_leg_pv_rub, "foreign_leg_pv": row.foreign_leg_pv,
             "foreign_leg_pv_rub": row.foreign_leg_pv_rub, "spot_rate": row.spot_rate,
             # the par rate of the foreign leg: its fixed rate, and, when it floats, its spread
@@ -1345,6 +1362,20 @@ def _repo_fact(t: RepoTerms, row: Any) -> dict[str, Any]:
             "discount_curve": _curve(row.discount_curve_id), "projection_curve": _curve(row.projection_curve_id),
             "fixing_id": row.fixing_id, "fixing_snapshot_id": row.fixing_snapshot_id, "security": t.security,
             **({"reported_pv_rub": t.pv_rub} if t.pv_rub is not None else {})}
+
+
+UNPUBLISHED_NOTE = "RUONIA за {day} не публиковалась: взята ставка {prev}"
+"""TDM#606: the assumption of a swap whose period holds a day without a published RUONIA (``rates.bridge_unpublished``)."""
+
+
+def _ru_span(a: date, b: date) -> str:
+    """``15.01.2026–15.01.2027``: a leg's start and maturity, as C03 shows them (TDM#605)."""
+    return f"{a:%d.%m.%Y}–{b:%d.%m.%Y}"
+
+
+def _ru(iso: str) -> str:
+    """``2025-12-30`` -> ``30.12.2025``."""
+    return date.fromisoformat(iso).strftime("%d.%m.%Y")
 
 
 def index_fixings(snapshot: Any, fixing_id: str) -> dict[str, Any]:
@@ -1863,6 +1894,12 @@ def _rates_valuation(ctx: Any, r: Request, a: _Acc, notes: list[str], result: An
             why.append(f"{fid} not yet published for {', '.join(info['unpublished_business_days'])}: the latest "
                        f"fixing of {info['latest']} carried (declared, at most "
                        f"{info['max_unpublished_business_days']} business day)")
+    # TDM#606: a day the CBR published no RUONIA for, inside the trades' periods, took the previous rate
+    if "RUONIA" in a.fixing_ids:
+        lo = min(t.start for t in r.trades)
+        for b in ((ctx.rates or {}).get("fixings") or {}).get("RUONIA", {}).get("bridged_days") or ():
+            if lo <= date.fromisoformat(b["date"]) < bd:
+                why.append(UNPUBLISHED_NOTE.format(day=_ru(b["date"]), prev=_ru(b["from"])))
     amount = math.fsum(t.amount for t in r.trades)
     # the report's PV of a row with settled trades covers more than the valued ones: no difference then
     reported = None if r.partial else _reported_pv(x, [t.pv_rub for t in r.trades])
@@ -1872,7 +1909,8 @@ def _rates_valuation(ctx: Any, r: Request, a: _Acc, notes: list[str], result: An
     for t in r.trades:
         if isinstance(t, CcsTerms):
             f = t.foreign
-            ocp[f.ccy] += ccs_exchange_amount(f.exchange, f.side, f.notional, t.start, t.maturity, bd)
+            ocp[f.ccy] += ccs_exchange_amount(f.exchange, f.side, f.notional, f.start or t.start,
+                                              f.maturity or t.maturity, bd)
     extra = {
         "core": {"product": product, "trades": sorted({t.trade_id for t in r.trades}),
                  "model_flags": sorted(a.flags), "rub_curve": RISK_CURVES[RUONIA_OIS_CURVE_ID],

@@ -21,10 +21,27 @@ from datetime import date, timedelta
 from decimal import Decimal
 from typing import Any
 
+from ..inbox.schema import alias_position
 from . import concepts
 
 AMOUNTS = ("amount_ccy", "face_amount_ccy", "face_outstanding_ccy")
 SWAPS = ("IRS", "CCS", "CDS", "TRS")
+TERMS_SWAPS = ("IRS", "CCS")
+"""The swaps core values from their trade terms: only they «wait for the terms»; a CDS or a TRS has terms in no source
+(TDM#607) and is valued at the report's value or not at all (``NO_TERMS_CAUSES``)."""
+NO_TERMS_CAUSES: dict[str, tuple[str, str]] = {
+    "report_no_value": (("в отчёте позиций нет стоимости (NPV) этой строки; условий таких сделок нет ни в одном "
+                         "источнике, поэтому другой оценки нет"),
+                        "проверьте в отчёте позиций, заполнена ли стоимость этой сделки"),
+    "report_value_no_rate": (("стоимость в отчёте позиций есть, но в валюте строки, а курса ЦБ этой валюты на дату "
+                              "нет"), "курсы ЦБ приходят со срезом хаба: обновите данные за дату"),
+    "report_value_off": (("стоимость из отчёта позиций выключена в настройках адаптера: ни у одной строки деривативов "
+                          "отчёта её нет"), ("включите «Оценка и риск из отчёта о позициях» (Настройки → Адаптер → "
+                                             "Источники) и пересчитайте дату")),
+    "run_before_report_value": (("прогон сделан программой до версии 0.2.19: стоимость в отчёте позиций есть, но та "
+                                 "версия её не брала"), "пересчитайте дату: Настройки → История прогонов"),
+}
+"""TDM#607: why a swap without trade terms (CDS, TRS) is not valued, by what its report row and the run say."""
 REPORT_MV = ("стоимость и риск из отчёта о позициях: Настройки → Адаптер → Источники, «Оценка и риск из отчёта о "
              "позициях»")
 FIX = {"terms": ("Условия сделок", "../settings.html#adapter/acq"),
@@ -104,8 +121,9 @@ CAUSES: dict[str, tuple[str, str]] = {
                               "проверьте базу (day_count) в условиях сделки — или " + REPORT_MV),
     "swap_frequency_unsupported": ("частота выплат ноги свопа не поддерживается ядром; MV в отчёте нет",
                                    "проверьте частоту выплат в условиях сделки — или " + REPORT_MV),
-    "swap_dates_mismatch": ("у ног свопа разные даты начала или окончания: ядро так не оценивает; MV в отчёте нет",
-                            "проверьте даты ног в условиях сделки — или " + REPORT_MV),
+    "swap_dates_mismatch": (("у ног процентного свопа (IRS) разные даты начала или окончания: ядро пока оценивает IRS "
+                             "только с общими датами ног, доработка — в ядре; MV в отчёте нет"),
+                            "даты обеих ног — в подробностях причины; до доработки ядра — " + REPORT_MV),
     "swap_notional_mismatch": ("у ног свопа разные номиналы: ядро так не оценивает; MV в отчёте нет",
                                "проверьте номиналы ног в условиях сделки — или " + REPORT_MV),
     "swap_ccy_unsupported": ("процентный своп не в рублях: ядро в мониторе такие не оценивает; MV в отчёте нет",
@@ -176,7 +194,9 @@ CORE_CAUSES: dict[str, tuple[str, str]] = {
 }
 """A refusal of core (``core_<code>``, ``rub_fixed_income.errors``): (why, what to do)."""
 
-SHORT = {"swap_terms": "ждёт условий", "repo": "ждёт условий", "no_trade_terms": "ждёт условий",
+SHORT = {"report_no_value": "нет стоимости в отчёте", "report_value_no_rate": "нет курса",
+         "report_value_off": "выключено в настройках", "run_before_report_value": "старый прогон",
+         "swap_terms": "ждёт условий", "repo": "ждёт условий", "no_trade_terms": "ждёт условий",
          "future_ticker": "ждёт настройки", "index_unmapped": "индекс не сопоставлен",
          "terms_incomplete": "условия неполные", "terms_invalid": "условия с ошибкой", "terms_mixed": "условия смешаны",
          "terms_ambiguous": "условия на нескольких строках", "settled": "исполнена", "closed": "закрыта",
@@ -189,7 +209,8 @@ SHORT = {"swap_terms": "ждёт условий", "repo": "ждёт услови
 """Cause key -> the few words the blotter's «Купон» column and the card's «Ставка / курс» show (TDM#589); a key
 not listed: by its words below (``short``)."""
 
-CAUSE_FIX = {"swap_terms": "terms", "repo": "terms", "no_trade_terms": "terms", "terms_incomplete": "terms",
+CAUSE_FIX = {"report_value_off": "report_risk", "report_value_no_rate": "hub", "run_before_report_value": "history",
+             "swap_terms": "terms", "repo": "terms", "no_trade_terms": "terms", "terms_incomplete": "terms",
              "terms_invalid": "terms", "terms_mixed": "terms", "terms_ambiguous": "terms", "repo_open": "terms",
              "core_invalid_terms": "terms", "index_unmapped": "indexes", "swap_index_unsupported": "indexes",
              "no_report_mv": "report_risk", "bond_derivative": "report_risk", "future_ticker": "report_risk",
@@ -215,8 +236,14 @@ def closed(quantity: Any, row: dict[str, Any]) -> bool:
     return bool(known) and all(abs(v) < 1e-9 for v in known)
 
 
-def cause(code: str, kind: str, product: str | None, futures_by_ticker: bool | None) -> tuple[str, str, str]:
-    """(group key, why, what to do) of an unvalued row: the reason code (before ``:``) read with its kind."""
+def cause(code: str, kind: str, product: str | None, futures_by_ticker: bool | None, *,
+          report_value: bool = False, report_value_on: bool | None = None) -> tuple[str, str, str]:
+    """(group key, why, what to do) of an unvalued row: the reason code (before ``:``) read with its kind.
+    ``report_value``: the row has the report's value in its currency (``x_npv_ccy_value``); ``report_value_on``: some
+    derivative row of the book's report has a value (``report_value_by_book``; False: none has, the adapter's report
+    value looks off; None: unknown)."""
+    if kind in SWAPS and kind not in TERMS_SWAPS and code in ("no_reported_value", "no_fx_rate"):
+        return (key := no_terms_cause(code, report_value, report_value_on), *NO_TERMS_CAUSES[key])
     if code in CAUSES:
         return (code, *CAUSES[code])
     if code == "no_reported_value":
@@ -240,6 +267,41 @@ def cause(code: str, kind: str, product: str | None, futures_by_ticker: bool | N
         return (code, f"ядро отказало оценивать сделку (код {code[5:]}); MV в отчёте нет",
                 "журнал прогона: Настройки → Диагностика — или " + REPORT_MV)
     return (code or "unknown", f"не оценено ({code or 'причина не записана'})", "журнал прогона: Настройки → Диагностика")
+
+
+def no_terms_cause(code: str, report_value: bool, report_value_on: bool | None) -> str:
+    """The key of ``NO_TERMS_CAUSES`` of a CDS or TRS without a value (TDM#607): no CBR rate of the value's currency,
+    the value there but not taken (a run before 0.2.19), the report's value off in the adapter, none in the report."""
+    if code == "no_fx_rate":
+        return "report_value_no_rate"
+    if report_value:
+        return "run_before_report_value"
+    return "report_value_off" if report_value_on is False else "report_no_value"
+
+
+def has_report_value(x: dict[str, Any] | None) -> bool:
+    """The report row (``x_*`` fields, flat or under ``x``) has the report's value in its currency (TDM#591)."""
+    x = x or {}
+    xx = x.get("x") if isinstance(x.get("x"), dict) else x
+    return xx.get("x_npv_ccy_value") is not None or x.get("x_npv_ccy_value") is not None
+
+
+REPORT_VALUE_SQL = ("SELECT s.book_id, bool_or(i.mv_rub IS NOT NULL OR i.x ? 'x_npv_ccy_value'"
+                    " OR i.x ? 'x_report_risk_assumption') FROM position_input i JOIN position_set s USING (set_id)"
+                    " WHERE i.set_id = ANY(%s) AND lower(i.asset_class) IN ('otc', 'other') GROUP BY 1")
+
+
+def report_value_by_book(con, set_ids: list[int] | None) -> dict[str, bool]:
+    """Per book of the run's position sets with derivative rows (otc, other): whether any has a report value
+    (``mv_rub``, the value in its currency, the adapter's note of its report value). False: none has, the adapter's
+    «Оценка и риск из отчёта о позициях» looks off for that book's report; a book without such rows is not listed."""
+    if not set_ids:
+        return {}
+    out = {}
+    for row in con.execute(REPORT_VALUE_SQL, (list(set_ids),)).fetchall():
+        book, v = (row[0], row[1]) if isinstance(row, tuple | list) else tuple(row.values())[:2]
+        out[str(book)] = bool(v)
+    return out
 
 
 FIXING_RE = re.compile(r"no (\w+) fixing on or before (\d{4})-(\d{2})-(\d{2})")
@@ -298,12 +360,14 @@ def short(key: str) -> str:
 
 
 def explain(reason: str | None, kind: str, product: str | None, futures_by_ticker: bool | None,
-            hole: dict[str, str] | None = None) -> dict[str, Any]:
+            hole: dict[str, str] | None = None, *, report_value: bool = False,
+            report_value_on: bool | None = None) -> dict[str, Any]:
     """The words of an unvalued row's reason (``run_position.reason``: ``code: detail``) for the position card and the
     blotter (TDM#589): ``key``, ``why``, ``todo``, ``short``, ``detail`` (a known detail in words, else the raw one),
     ``fix`` ({label, href}: the settings screen that fixes it, or None)."""
     code, _, detail = (reason or "").partition(":")
-    key, why, todo = cause(code.strip(), kind, product, futures_by_ticker)
+    key, why, todo = cause(code.strip(), kind, product, futures_by_ticker, report_value=report_value,
+                           report_value_on=report_value_on)
     detail = detail.strip()
     if is_history_hole(detail):  # not the hub's calendar: a hole of the monitor's stored fixings (TDM#590)
         why = ("период начисления сделки пересекает пропуск в хранимой истории фиксингов: дни без фиксинга подряд "
@@ -345,7 +409,10 @@ def unvalued(con, run: dict[str, Any], futures_by_ticker: bool | None = None) ->
         "SELECT position_id, asset_class, ccy, amount_ccy, face_amount_ccy, face_outstanding_ccy, mv_rub, x"
         " FROM position_input WHERE set_id = ANY(%s) AND position_id = ANY(%s)",
         (run["position_set_ids"], [r["position_id"] for r in rows]))}
+    for i in inputs.values():  # TDM#601: CNH is CNY, as the run read the row (store.positions_for)
+        alias_position(i)
     fx = _rates(con, run["run_id"])
+    on = report_value_by_book(con, run.get("position_set_ids"))
     groups: dict[str, dict[str, Any]] = {}
     missing: set[str] = set()
     n_closed = 0
@@ -360,7 +427,8 @@ def unvalued(con, run: dict[str, Any], futures_by_ticker: bool | None = None) ->
             key, why, todo = "closed", "закрытая сделка или нулевой объём в отчёте", "не пропуск: в счёт не входит"
             n_closed += 1
         else:
-            key, why, todo = cause(code, kind, product, fbt)
+            key, why, todo = cause(code, kind, product, fbt, report_value=has_report_value(x),
+                                   report_value_on=on.get(str(r["book_id"])))
         gk = f"{key}|{kind}"
         g = groups.setdefault(gk, {"key": gk, "cause": key, "kind": kind, "kindLabel": concepts.KIND_LABEL.get(kind, kind),
                                    "why": why, "todo": todo, "closed": key == "closed", "n": 0, "mvRub": None,
@@ -436,11 +504,12 @@ def off_report(con, run: dict[str, Any]) -> dict[str, Any] | None:
 
 
 def why_of(reason: str | None, x: dict[str, Any] | None, futures_by_ticker: bool | None,
-           hole: dict[str, str] | None = None) -> dict[str, Any]:
+           hole: dict[str, str] | None = None, report_value_on: bool | None = None) -> dict[str, Any]:
     """``explain`` of an unvalued position from its report row ``x`` (``position_input``: ``ccy``, ``asset_class``,
     its ``x_*`` under ``x``): the ``extra.why`` of the concept pages' and compat's not-valued position (TDM#589)."""
     x = x or {}
     rep = x.get("x") if isinstance(x.get("x"), dict) else {}
     kind = concepts.instr_kind({"ccy": x.get("ccy"), "asset_class": x.get("asset_class"), "extra": {"reported": rep}})
     product = rep.get("x_product") if isinstance(rep.get("x_product"), str) else None
-    return explain(reason, kind, product, futures_by_ticker, hole)
+    return explain(reason, kind, product, futures_by_ticker, hole, report_value=has_report_value(rep),
+                   report_value_on=report_value_on)

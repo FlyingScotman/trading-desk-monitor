@@ -9,6 +9,11 @@ is normalised so that equal data hashes equally: amounts become plain decimal st
 repr, so nothing is lost), integers (``type`` integer, since private/1.2) become ints, absent and null are the same
 (null keys are dropped), ``ccy`` and every field of the ``#/$defs/ccy`` type is upper case (``RUR`` is ``RUB``) and
 ``""`` is invalid.
+
+Currency aliases (TDM#601): the codes the desk takes for one currency, ``CNH`` -> ``CNY`` by default (setting
+``ccy_aliases``, the settings page). A stored row keeps the report's code (``validate_row``: only upper case and
+``RUR``); the store's readers (``store.positions_for``, ``dataset_rows``) and ``norm_ccy`` give the alias's target, so
+the rows of both codes are one currency on every screen, and the reported code stays with the row (``alias_row``).
 """
 
 from __future__ import annotations
@@ -48,9 +53,89 @@ def _load(dataset: str) -> dict | None:
     return json.loads(p.read_text(encoding="utf-8")) if p.is_file() else None
 
 
-def norm_ccy(code: str) -> str:
-    """A currency code as the backend keys it: upper case, ``RUR`` (the pre-1998 code) as ``RUB``."""
+DEFAULT_CCY_ALIASES = {"CNH": "CNY"}
+"""The setting ``ccy_aliases`` by default (owner, 06.11.2026, TDM#601): offshore yuan is the desk's CNY."""
+_ccy_aliases: dict[str, str] = dict(DEFAULT_CCY_ALIASES)
+
+
+def parse_ccy_aliases(text: str | None) -> dict[str, str]:
+    """``"CNH=CNY, XYZ=USD"`` -> {code: the code it is taken as}; entries that are not two currency codes, a code
+    mapped to itself and RUB are left out. ``None`` or blank: no aliases."""
+    out = {}
+    for part in (text or "").replace(";", ",").split(","):
+        k, _, v = part.partition("=")
+        k, v = k.strip().upper(), v.strip().upper()
+        if re.fullmatch(r"[A-Z]{3}", k) and re.fullmatch(r"[A-Z]{3}", v) and k != v and "RUB" not in (k, v):
+            out[k] = v
+    return out
+
+
+def set_ccy_aliases(aliases: dict[str, str]) -> None:
+    """The process's currency aliases (``desk.settings.load`` sets them from the setting ``ccy_aliases``)."""
+    global _ccy_aliases
+    _ccy_aliases = {k.upper(): v.upper() for k, v in aliases.items()}
+
+
+def ccy_aliases() -> dict[str, str]:
+    """The currency aliases in force: code -> the code the desk takes it as."""
+    return dict(_ccy_aliases)
+
+
+def ccy_partners(code: str) -> list[str]:
+    """The other codes of the same currency under the aliases (``CNY`` -> ``["CNH"]``, ``CNH`` -> ``["CNY"]``): where a
+    rate, curve or fixing of one is missing, the other's stands in (TDM#601)."""
+    c = code.upper()
+    target = _ccy_aliases.get(c, c)
+    return [x for x in dict.fromkeys([target, *(k for k, v in _ccy_aliases.items() if v == target)]) if x != c]
+
+
+def code_ccy(code: str) -> str:
+    """A currency code as the report gives it: upper case, ``RUR`` (the pre-1998 code) as ``RUB``; no aliases."""
     return _CCY_ALIAS.get(code.upper(), code.upper())
+
+
+def norm_ccy(code: str) -> str:
+    """A currency code as the backend keys it: upper case, ``RUR`` (the pre-1998 code) as ``RUB``, an alias
+    (``ccy_aliases``, ``CNH`` -> ``CNY``) as its target."""
+    c = code_ccy(code)
+    return _ccy_aliases.get(c, c)
+
+
+@cache
+def ccy_fields(dataset: str) -> tuple[str, ...]:
+    """The currency fields of a dataset: ``ccy`` and every field of the ``#/$defs/ccy`` type."""
+    s = load_schema(dataset)
+    if s is None:
+        return ("ccy",)
+    return tuple(k for k, node in s["properties"].items() if k == "ccy" or node.get("$ref") == _CCY_REF)
+
+
+CCY_REPORTED = "_ccy_reported"
+"""The key ``alias_row`` keeps the report's codes under: {field: code} of the fields it changed."""
+
+
+def alias_row(row: dict, fields: tuple[str, ...] | list[str]) -> dict[str, str]:
+    """Replace in ``row`` (in place) every code of ``fields`` that is an alias by its target; {field: the report's
+    code} of those changed (also kept in the row as ``CCY_REPORTED``)."""
+    changed = {}
+    for f in fields:
+        v = row.get(f)
+        if isinstance(v, str) and (t := _ccy_aliases.get(v.upper())) is not None:
+            changed[f] = v
+            row[f] = t
+    if changed:
+        row[CCY_REPORTED] = {**(row.get(CCY_REPORTED) or {}), **changed}
+    return changed
+
+
+def alias_position(row: dict) -> str | None:
+    """A positions row's ``ccy`` under the aliases (in place), the report's code kept as ``ccy_reported`` (published
+    with the row's report fields, ``extra.reported``: the pages say «в отчёте — CNH»); that code, or None."""
+    c = row.get("ccy")
+    if isinstance(c, str) and (t := _ccy_aliases.get(c.upper())) is not None:
+        row["ccy"], row["ccy_reported"] = t, c
+        return c
+    return None
 
 
 def schema_fields(dataset: str) -> tuple[list[str], list[str]]:
@@ -184,7 +269,7 @@ def validate_row(dataset: str, row: dict, *, allow_newer: bool = False) -> tuple
                 errors.append(RowError(code, key))
             else:
                 is_ccy = key == "ccy" or props[key].get("$ref") == _CCY_REF
-                out[key] = norm_ccy(norm) if is_ccy and isinstance(norm, str) else norm
+                out[key] = code_ccy(norm) if is_ccy and isinstance(norm, str) else norm
         elif any(re.search(p, key) for p in patterns):
             if value == "":
                 errors.append(RowError("bad_value", None))

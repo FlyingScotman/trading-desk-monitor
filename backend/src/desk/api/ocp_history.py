@@ -20,6 +20,11 @@ unit older than the policy's ``report_max_age_days`` (``report_plus_outside``; p
 (their ``set_id``, as the run chose its base on its own calendar). Two scopes: the newer ``valid_date``, then a book's scope before an entity's,
 then the first book. A block without them (no report, before B2): ``{}``.
 
+A currency of a day's lines the run has no rate of (a run before TDM#602 published rates of its rows' currencies only:
+JPY, KZT of the OCP report had none), and USD for the USD equivalent: the CBR rate per unit in force on the date from
+the stored hub history (``md_hub_fx``, ``cbr_official``; the latest of the ``HUB_FX_DAYS`` calendar days up to the
+date), as both its market and CBR rate, ``source`` ``HUB_CBR_SOURCE`` (TDM#534). No stored history: no rate, as before.
+
 The books of the period (``books``): name, entity, desk and book type (``type``) of each book from the latest run of
 the period that has it, for the pages' filter and labels when a book left the current run's reference; a book of the
 OCP without positions in a run (TDM#556: only the OCP report knows it) from the run's OCP block (``books``, marked
@@ -45,6 +50,11 @@ MAX_PERIOD_DAYS = 400
 
 RATE_BAND = (0.5, 2.0)
 """``rate_rub_per_unit`` / (``ocp_rub`` / ``ocp_ccy``) of a report scope outside this: the scope gives no rate."""
+
+HUB_FX_DAYS = 10
+"""How many calendar days back the stored CBR rate of a day may be (the CBR sets one every business day)."""
+HUB_CBR_SOURCE = "CBR (история хаба)"
+"""``source`` of a day's rate taken from the stored hub history, not from the run."""
 
 LINE_KEYS = ("entity", "book_id", "books", "ccy", "amount", "source", "components", "reported", "valid_date",
              "base_date", "set_id", "base_kind", "parts", "base_older")
@@ -86,6 +96,27 @@ def _fx(rows: list[dict[str, Any]] | None) -> dict[str, dict[str, Any]]:
     before_cbr = not any(r.get("rate_cbr") is not None for r in rows)
     return {r["ccy"]: {"market": r["rate"], "cbr": r["rate"] if before_cbr else r.get("rate_cbr"),
                        "source": r.get("rate_source")} for r in rows}
+
+
+def _hub_cbr(con, wanted: dict[date, set[str]]) -> dict[date, dict[str, float]]:
+    """day -> currency -> the CBR rate per unit in force on it from the stored hub history (the module docstring), for
+    the (day, currency) of ``wanted``; nothing found: the day or currency is left out."""
+    ccys = sorted({c for cs in wanted.values() for c in cs})
+    if not ccys:
+        return {}
+    lo, hi = min(wanted) - timedelta(days=HUB_FX_DAYS), max(wanted)
+    series: dict[str, list[tuple[date, float]]] = {}
+    for r in con.execute("SELECT pair, date, per_unit FROM md_hub_fx WHERE kind = 'cbr_official' AND pair = ANY(%s)"
+                         " AND date BETWEEN %s AND %s AND per_unit IS NOT NULL AND per_unit > 0 ORDER BY date",
+                         ([f"{c}/RUB" for c in ccys], lo, hi)).fetchall():
+        series.setdefault(r["pair"][:3], []).append((r["date"], float(r["per_unit"])))
+    out: dict[date, dict[str, float]] = {}
+    for d, cs in wanted.items():
+        for c in cs:
+            v = next((v for x, v in reversed(series.get(c, [])) if x <= d and (d - x).days <= HUB_FX_DAYS), None)
+            if v is not None:
+                out.setdefault(d, {})[c] = v
+    return out
 
 
 def _num(x: Any) -> float | None:
@@ -173,6 +204,15 @@ def history(con, anchor: dict[str, Any], start: date, end: date) -> dict[str, An
     untyped = {b["book_id"] for x in ref.values() for b in x.get("books") or [] if not b.get("book_type")}
     bonds = _bond_books(con, [r["run_id"] for r in runs], untyped)
     days, books, mine = [], {}, []
+    # the currencies of a day's lines without the run's rate (and USD, the equivalent's): the hub's stored CBR rate
+    wanted: dict[date, set[str]] = {}
+    for r in runs:
+        x = ref[r["run_id"]]
+        have = set(_fx(x.get("fx")))
+        need = {y.get("ccy") for y in (x.get("ocp") or {}).get("lines") or []} - {None, "RUB"}
+        if need - have:
+            wanted[r["business_date"]] = (need | {"USD"}) - have
+    hub = _hub_cbr(con, wanted)
     for r in runs:
         x = ref[r["run_id"]]
         block = x.get("ocp") or {}
@@ -184,9 +224,12 @@ def history(con, anchor: dict[str, Any], start: date, end: date) -> dict[str, An
         # a day carries only its differences from the period's reference (the pages merge them over it)
         diff = {b: v for b, v in m.items() if books.get(b) != v}
         lines = [ocp_line(y) for y in block.get("lines") or []]
+        fx = _fx(x.get("fx"))
+        for c, v in hub.get(r["business_date"], {}).items():
+            fx.setdefault(c, {"market": v, "cbr": v, "source": HUB_CBR_SOURCE})
         days.append({"date": r["business_date"], "runId": r["run_id"], "runType": r["run_type"],
                      "state": block.get("status") or ocp_run.NOT_COMPUTED, "basis": block.get("basis"),
                      "methodNote": method_note(block.get("basis"), lines), "books": diff,
-                     "fx": _fx(x.get("fx")), "reportFx": _report_fx(block, r["business_date"]), "lines": lines})
+                     "fx": fx, "reportFx": _report_fx(block, r["business_date"]), "lines": lines})
     return {"runId": anchor["run_id"], "asOf": anchor["business_date"], "from": start, "to": end,
             "days": days, "books": books}

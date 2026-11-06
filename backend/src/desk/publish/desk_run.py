@@ -150,7 +150,7 @@ def publish(con: psycopg.Connection, ctx: EodContext, positions: list[tuple[str,
                                 bond_terms, by_pid)
     liab.apply(content.rows, content.reference, content.log, by_pid)
     ocp = ocp_run.compute(con, bd, ctx.market, content.rows, content.reference, inputs, terms=bond_terms,
-                          calendar=ctx.calendar, off_report=off_report)
+                          calendar=ctx.calendar, off_report=off_report, prev=prev)
     ocp.apply(content.rows, content.reference, content.log)
     try:  # a diagnostic: its failure is said in the run log, the run goes on without the block
         parallel = derivatives_parallel.compare(positions, inputs.extra, inputs.trade_terms)
