@@ -3421,13 +3421,25 @@
     if (!filt.entity && !filt.desk && !(filt.books && filt.books.length)) return null;
     return [...new Set((M.books || []).filter(b => SC.bookIn(filt, b.id, b)).map(b => b.id))].sort();
   };
+  // фильтр шапки целиком для сервера (сводка сделок дня, TDM#585): юрлицо, деск, выбор книг, валюта, снятые портфели —
+  // сервер применяет к каждой сделке то же правило, что C20 (K.scope.rowIn: юрлицо и деск книги сделки, а не книги
+  // прогона — сделка книги без позиций считается так же); фильтра нет — null
+  K.headerFilter = () => {
+    const off = portsOff(), x = {};
+    if (filt.entity) x.entity = filt.entity;
+    if (filt.desk) x.desk = filt.desk;
+    if (filt.books && filt.books.length) x.books = [...filt.books].sort();
+    if (filt.ccy) x.ccy = filt.ccy;
+    if (off.length) x.ports_off = [...off].sort();
+    return Object.keys(x).length ? x : null;
+  };
   // время сделки — ЧЧ:ММ из trade_ts как есть (без пересчёта поясов, как на C20); время получения — по Москве
   K.hhmm = ts => ts ? String(ts).slice(11, 16) : '';
   K.mskTime = (iso, withDay) => {
     if (!iso) return ''; const d = new Date(iso); if (isNaN(d)) return '';
     return d.toLocaleString('ru-RU', Object.assign({ timeZone: 'Europe/Moscow', hour: '2-digit', minute: '2-digit' }, withDay ? { day: '2-digit', month: '2-digit' } : {}));
   };
-  // сводка сделок дня (GET ../api/v1/trades/summary: дата и прогон экрана, книги шапки) — одна на страницу и фильтр;
+  // сводка сделок дня (GET ../api/v1/trades/summary: дата и прогон экрана, фильтр шапки) — одна на страницу и фильтр;
   // opt.all — по всем книгам (C14: статус дня — по всем). Готова — возвращает её, иначе null и cb(сводка) по готовности.
   // Демо (файл, ?demo=1) — из позиций демо-набора с пометкой «сделки сегодня»: вымышленные.
   const DT = new Map();
@@ -3444,22 +3456,21 @@
   // opt.date — своя дата экрана (C14), иначе дата прогона страницы; прогон — только на его дату
   K.dayTrades = (cb, opt) => {
     opt = opt || {};
-    const real = K.source === 'real' || K.source === 'empty', books = opt.all ? null : K.headerBooks();
+    // прогона нет (источник 'empty') — чипов шапки нет, и C20 фильтр не применяет: сводка тоже по всем книгам
+    const real = K.source === 'real' || K.source === 'empty', hf = opt.all || K.source !== 'real' ? null : K.headerFilter();
     const date = opt.date || (K.source === 'real' ? M.asOf : null) || null;
     const run = K.source === 'real' && M.run && M.run.id != null && (!opt.date || opt.date === M.asOf) ? M.run.id : null;
-    const key = JSON.stringify([K.source, date, run, books, real ? null : filt]);
+    const key = JSON.stringify([K.source, date, run, hf, real ? null : filt]);
     let e = DT.get(key);
     if (!e) {
       e = { doc: null, wait: null };
       DT.set(key, e);
-      const empty = { trades: 0, live: 0, cancelled: 0, applied: 0, problems: 0, states: [], sources: [], by_book: {}, top: [], last_trade_ts: null, books: [] };
       if (!real) e.wait = Promise.resolve(e.doc = demoTrades());
-      else if (books && !books.length) e.wait = Promise.resolve(e.doc = Object.assign({ date }, empty));  // фильтр не оставил книг
       else {
         const q = new URLSearchParams();
         if (date) q.set('date', date);
         if (run != null) q.set('run_id', String(run));
-        (books || []).forEach(b => q.append('books', b));
+        Object.entries(hf || {}).forEach(([k, v]) => (Array.isArray(v) ? v : [v]).forEach(x => q.append(k, x)));
         e.wait = fetch('../api/v1/trades/summary' + (String(q) ? '?' + q : ''), { cache: 'no-store' })
           .then(r => r.ok ? r.json() : { error: r.status === 401 || r.status === 403 ? 'нужно войти' : 'ответ ' + r.status })
           .catch(x => ({ error: x.message || 'нет связи' })).then(d => (e.doc = d));
@@ -3468,8 +3479,13 @@
     if (!e.doc && cb) e.wait.then(d => cb(d));
     return e.doc;
   };
-  // пометка «сд N» у позиции со сделками дня: щелчок — сделки этой позиции на C20 (TDM#585)
-  K.tradesTag = r => { const n = r.tradeToday && r.tradeToday.n; return '<a class="k-tag sd-n" href="' + K.c20Href({ date: M.asOf }, '&pos=' + encodeURIComponent(r.id)) + '" title="сделки сегодня' + (n ? ': ' + n : '') + ' — открыть на C20" onclick="event.stopPropagation()">сд' + (n ? ' ' + n : '') + '</a>'; };
+  // пометка «сд N» у позиции со сделками дня: щелчок — сделки этой позиции на C20 (TDM#585). Прогон может положить
+  // сделку в другую строку той же бумаги книги, чем её номер позиции: C20 отбирает по позиции, куда сделку положил
+  // прогон (run_position_id сервера), поэтому ссылка несёт и прогон этой страницы
+  K.tradesTag = r => {
+    const n = r.tradeToday && r.tradeToday.n, run = K.source === 'real' && M.run && M.run.id != null ? '&run_id=' + encodeURIComponent(M.run.id) : '';
+    return '<a class="k-tag sd-n" href="' + K.c20Href({ date: M.asOf }, '&pos=' + encodeURIComponent(r.id) + run) + '" title="сделки сегодня' + (n ? ': ' + n : '') + ' — открыть на C20" onclick="event.stopPropagation()">сд' + (n ? ' ' + n : '') + '</a>';
+  };
   // забыть сводки (C14 перечитывает дату по новым событиям ленты: сделки могли прийти)
   K.dayTradesForget = () => DT.clear();
   K.c20Href = (d, extra) => 'c20-trades.html' + (d && d.date ? '?date=' + encodeURIComponent(d.date) + (extra || '') : '');
@@ -3478,9 +3494,9 @@
     opt = opt || {};
     if (!d) return '<span class="mut3">сделки дня: загрузка…</span>';
     if (d.error) return '<span class="mut3" title="' + esc(String(d.error)) + '">сделки дня не загрузились</span>';
-    const scope = opt.all ? 'по всем книгам' : d.books ? 'по книгам шапки: ' + d.books.length : 'по всем книгам';
+    const scope = opt.all ? 'по всем книгам' : d.filter ? 'под фильтром шапки (как на C20)' : 'по всем книгам';
     const out = d.trades - d.applied - (d.cancelled || 0);
-    return '<span class="k-dtl" title="Сделки за ' + esc(f.date(d.date)) + ' ' + scope + (d.demo ? ' (демо)' : '') + '. «В позициях» — сделки по облигациям, вошедшие в позиции дня прогона; валюта и портфель шапки к сводке не применяются — на C20 применяются">' +
+    return '<span class="k-dtl" title="Сделки за ' + esc(f.date(d.date)) + ' ' + scope + (d.demo ? ' (демо)' : '') + '. «В позициях» — сделки по облигациям, вошедшие в позиции дня прогона">' +
       'Сделки дня: <b>' + f.n(d.trades, 0) + '</b>, в позициях <b>' + f.n(d.applied, 0) + '</b>' +
       (d.last_trade_ts ? ', последняя в <b>' + esc(K.hhmm(d.last_trade_ts)) + '</b>' : '') +
       (d.problems ? ', <span style="color:var(--warn)">не учтено с ошибкой: ' + d.problems + '</span>' : out > 0 ? ', <span class="mut3">вне позиций: ' + out + '</span>' : '') +
@@ -3505,7 +3521,7 @@
   K.dayTradesTop = d => {
     if (!d || d.error || !(d.top || []).length) return '';
     const side = { buy: 'покупка', sell: 'продажа' };
-    return '<div class="lst">' + d.top.map(t => '<a href="' + K.c20Href(d, t.position_id ? '&pos=' + encodeURIComponent(t.position_id) : '') + '" title="' + esc((t.book_id || '') + ' · ' + (side[t.side] || t.side || '') + (t.trade_ts ? ' · ' + K.hhmm(t.trade_ts) : '')) + '">' +
+    return '<div class="lst">' + d.top.map(t => '<a href="' + K.c20Href(d, (t.run_position_id || t.position_id) ? '&pos=' + encodeURIComponent(t.run_position_id || t.position_id) + (d.run_id != null ? '&run_id=' + encodeURIComponent(d.run_id) : '') : '') + '" title="' + esc((t.book_id || '') + ' · ' + (side[t.side] || t.side || '') + (t.trade_ts ? ' · ' + K.hhmm(t.trade_ts) : '')) + '">' +
       esc(t.source_instrument_name || t.source_instrument_id || t.trade_id) + ' ' + (t.pnl_rub != null ? '<span class="' + f.cls(t.pnl_rub) + '">' + f.s(t.pnl_rub, 0) + ' ₽</span>' : '<span class="mut3">' + esc((d.state_text || K.TRADE_STATE)[t.intraday] || 'PnL нет') + '</span>') + '</a>').join(' · ') + '</div>';
   };
 

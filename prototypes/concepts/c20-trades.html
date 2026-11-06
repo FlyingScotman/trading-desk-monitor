@@ -52,7 +52,8 @@
   // её получил; сверху — сводка: сколько сделок, сколько в позициях дня, что не учтено и почему, последнее получение
   // по каждому источнику. Фильтр шапки (юрлицо, деск, книги, валюта, портфель) действует, как на остальных экранах
   // (K.rowIn: юрлицо и деск книги — с сервера). PnL сделки — от её цены до оценки прогона (pnl.extra.trades прогона из
-  // навигации, по умолчанию основного прогона даты; TDM#557, #568). ?pos= — сделки одной позиции (ссылка с C03).
+  // навигации, по умолчанию основного прогона даты; TDM#557, #568). ?pos= — сделки одной позиции (ссылка с C03): позиции,
+  // в которую сделку положил прогон (run_position_id: он мог взять другую строку той же бумаги книги), иначе её position_id.
   // Данные: GET ../api/v1/trades?date=&run_id= (backend desk/trades.py).
   const K = KIT, f = K.f, esc = K.esc;
   K.top({ title: 'C20 · Сделки дня', tag: 'сделки из выгрузки адаптера: источник, учёт в позициях, версии, отмены' });
@@ -156,7 +157,7 @@
     wrap.appendChild(hp);
     const tp = panel('Сделки ' + f.date(d.date), '<span class="c20-bar">' + (pos ? '<span class="k-chip on" id="pos" title="Сделки одной позиции (ссылка с экрана позиций)">позиция ' + esc(pos) + ' <span class="x">✕</span></span>' : '') + '<select class="k-input" id="book" title="Книга">' + opts + '</select><input class="k-input" id="q" placeholder="сделка, инструмент" value="' + esc(q) + '" style="min-width:160px"></span>');
     const ql = q.toLowerCase();
-    const rows = scoped.filter(r => (!book || String(r.book_id) === book) && (!pos || r.position_id === pos) &&
+    const rows = scoped.filter(r => (!book || String(r.book_id) === book) && (!pos || (r.run_position_id || r.position_id) === pos) &&
       (!ql || [r.trade_id, r.source_instrument_id, r.source_instrument_name, r.isin].some(x => x && String(x).toLowerCase().includes(ql))));
     const s = d.summary;
     const sum = '<div class="c20-sum" style="padding:6px 12px">показано <b>' + rows.length + '</b><span>поздние проводки <b>' + rows.filter(r => r.late).length + '</b></span><span>с поправками <b>' + rows.filter(r => (r.trade_version || 0) > 1).length + '</b></span><span>книг <b>' + new Set(rows.map(r => r.book_id)).size + '</b></span>' +

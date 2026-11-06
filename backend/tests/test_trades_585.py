@@ -122,3 +122,125 @@ def test_the_summary_counts_the_books_of_the_header(store_url, tmp_path: Path) -
     assert c.get("/api/v1/trades/summary").json()["date"] == "2026-10-20"  # the latest date with trades
     # no run of the date: the trades wait for it, and the states say so in words
     assert {x["state"]: x["text"] for x in every["states"]}.get("pending") == "ждёт прогона"
+
+
+def test_the_fetch_of_past_dates_is_told_by_its_marks_the_clock_only_without_them(tmp_path: Path) -> None:
+    """The marks of the fetch of past dates hold the sha256 of the files it took in, per date: they decide; the clock
+    (a file recorded after its own date) only for a date without a mark."""
+    from desk import trades_history
+
+    rid = uuid.uuid4().hex
+    feed = f"/home/desk/adapter-services/out/{rid}/trades_20261020_1500.csv"
+    day, late = D("2026-10-20"), datetime(2026, 10, 21, 7, 0, tzinfo=UTC)
+    marks = {"2026-10-20": {"a" * 64}}
+    assert trades.origin_of(feed, late, day, "a" * 64, marks) == "history"
+    assert trades.origin_of(feed, late, day, "b" * 64, marks) == "feed"   # recorded late, but not of the fetch
+    assert trades.origin_of(feed, datetime(2026, 10, 20, 9, tzinfo=UTC), day, "a" * 64, marks) == "history"
+    assert trades.origin_of(feed, late, D("2026-10-19"), "a" * 64, marks) == "history"   # no mark: the clock
+    assert trades.origin_of("/reports/in/trades.csv", late, day, "a" * 64, marks) == "file"
+    s = _settings(tmp_path, tmp_path)
+    assert trades.history_files(s) == {}   # no marks file yet: no date known
+    doc = trades_history.blank()
+    trades_history.apply_mark(doc, "2026-10-20", "fetched", "covered", late, fingerprint=None,
+                              files=[{"file": "x.csv", "sha256": "c" * 64, "status": "accepted"}], units=1)
+    trades_history.write(s, doc)
+    assert trades.history_files(s) == {"2026-10-20": {"c" * 64}}
+    assert trades.history_files(None) is None
+
+
+def test_the_feed_of_the_day_read_late_is_not_the_fetch_of_past_dates(store_url, tmp_path: Path) -> None:
+    from desk import trades_history
+
+    s = _settings(tmp_path, tmp_path / "in")
+    (tmp_path / "in").mkdir()
+    out = tmp_path / "h" / "adapter-services" / "out" / uuid.uuid4().hex
+    out.mkdir(parents=True)
+    with store.connect(store_url) as con:
+        for n in ("trades_delta_20261021_1000.csv", "trades_delta_20261021_1200.csv"):
+            shutil.copy(DS / n, out / n)
+            assert scan.ingest_feed(con, s, out / n, source="trades_delta_csv", handle=scan.adapter(s)).files == \
+                {"accepted": 1}
+        # recorded today, after 21.10: by the clock both are the fetch of a past date; the marks say only the second
+        doc = trades_history.blank()
+        trades_history.apply_mark(doc, "2026-10-21", "fetched", "covered", datetime.now(UTC), fingerprint=None,
+                                  files=[{"file": "b.csv", "sha256": scan._sha256(str(out / "trades_delta_20261021_1200.csv")),
+                                          "status": "accepted"}], units=1)
+        trades_history.write(s, doc)
+        by_clock = trades.view(con, D("2026-10-21"))
+        exact = trades.view(con, D("2026-10-21"), history=trades.history_files(s))
+    assert {f["origin"] for f in by_clock["files"]} == {"history"}
+    assert {f["file_name"]: f["origin"] for f in exact["files"]} == {
+        "trades_delta_20261021_1000.csv": "feed", "trades_delta_20261021_1200.csv": "history"}
+
+
+def _c20_row_in(f: dict, r: dict) -> bool:
+    """C20's rule for a trade under the header's filter (``K.scope.rowIn`` of kit.js over the row's book, currency,
+    entity, desk and portfolio), written out: the summary must count the same trades."""
+    return ((not f.get("entity") or r["entity"] == f["entity"]) and (not f.get("desk") or r["desk"] == f["desk"])
+            and (not f.get("books") or r["book_id"] in f["books"]) and (not f.get("ccy") or r["ccy"] == f["ccy"])
+            and (not r["portfolio"] or r["portfolio"] not in (f.get("ports_off") or [])))
+
+
+def test_the_summary_follows_the_whole_header_filter_as_c20_does(store_url, tmp_path: Path) -> None:
+    inbox = tmp_path / "in"
+    inbox.mkdir()
+    for n in ("trades_20261020_1100.csv", "trades_20261020_1500.csv"):
+        shutil.copy(DS / n, inbox / n)
+    s = _settings(tmp_path, inbox)
+    with store.connect(store_url) as con:
+        assert scan.scan(con, s).ok
+        out = tmp_path / "h" / "adapter-services" / "out" / uuid.uuid4().hex
+        out.mkdir(parents=True)
+        for n in ("trades_delta_20261021_1000.csv", "trades_delta_20261021_1200.csv"):
+            shutil.copy(DS / n, out / n)
+            scan.ingest_feed(con, s, out / n, source="trades_delta_csv", handle=scan.adapter(s))
+    c = TestClient(create_app(store_url))
+    filters = [{}, {"entity": "ENT1"}, {"entity": "ENT2"}, {"desk": "Rates"}, {"ccy": "USD"}, {"ccy": "RUB"},
+               {"books": ["T1"]}, {"entity": "ENT1", "ccy": "RUB"}, {"ports_off": ["HTM"]}]
+    for day in ("2026-10-20", "2026-10-21"):
+        rows = c.get("/api/v1/trades", params={"date": day}).json()["rows"]
+        for f in filters:
+            params = [("date", day)] + [(k, x) for k, v in f.items() for x in (v if isinstance(v, list) else [v])]
+            got = c.get("/api/v1/trades/summary", params=params).json()
+            want = [r for r in rows if _c20_row_in(f, r)]
+            assert got["trades"] == len(want), (day, f, got["trades"], len(want))
+            assert got["applied"] == sum(r["intraday"] == "applied" for r in want)
+            assert got["cancelled"] == sum(r["status"] == "cancelled" for r in want)
+            assert got["filter"] == ({k: sorted(v) if isinstance(v, list) else v for k, v in f.items()} or None)
+    # a book the run has no positions of (C1, the other legal entity) is counted by its own entity, as on C20
+    ent2 = c.get("/api/v1/trades/summary", params={"date": "2026-10-21", "entity": "ENT2"}).json()
+    assert ent2["trades"] == 3 and set(ent2["by_book"]) == {"C1"}
+    assert c.get("/api/v1/trades/summary", params={"date": "2026-10-20", "ccy": "USD"}).json()["trades"] == 1
+    assert c.get("/api/v1/trades/summary", params={"date": "2026-10-20", "entity": "x" * 201}).status_code == 400
+
+
+def test_a_trade_says_the_position_the_run_put_it_in(store_url, tmp_path: Path) -> None:
+    """The run may put a trade into another row of its bond in the book than its own position id (``_fold``: by the
+    bond): C03's «сд N» of that row must open C20 on it, so each trade carries the run's position."""
+    from psycopg.types.json import Jsonb
+
+    inbox = tmp_path / "in"
+    inbox.mkdir()
+    for n in ("trades_20261020_1100.csv", "trades_20261020_1500.csv"):
+        shutil.copy(DS / n, inbox / n)
+    with store.connect(store_url) as con:
+        assert scan.scan(con, _settings(tmp_path, inbox)).ok
+        lineage = {"intraday_trades": {"applied": 1, "versions": {"TR-10": 2}, "skipped_ids": {}}}
+        rid = con.execute(
+            "INSERT INTO run(run_type,business_date,cut_type,status,market_snapshot_id,static_snapshot_id,"
+            "private_inputs_hash,position_set_ids,positions_known_at,core_version,backend_version,lineage)"
+            " VALUES ('EOD','2026-10-20','eod_final','loading','m','s','h','{}',now(),'c','b',%s) RETURNING run_id",
+            (Jsonb(lineage),)).fetchone()[0]
+        con.execute("INSERT INTO run_position(run_id,position_id,ord,book_id,secid,quantity,pnl) VALUES"
+                    " (%s,'T1|LOT-7',1,'T1','SEC-26238',3200,%s)",
+                    (rid, Jsonb({"extra": {"trades": [{"trade_id": "TR-10", "side": "buy", "quantity": 1200,
+                                                       "pnl_rub": 12.0}], "start_quantity": 2000}})))
+        con.execute("UPDATE run SET status = 'complete', completed_at = now() WHERE run_id = %s", (rid,))
+        con.commit()
+        v = trades.view(con, D("2026-10-20"), run_id=rid)
+        b = trades.brief(con, D("2026-10-20"), None, True, rid)
+    tr10 = next(r for r in v["rows"] if r["trade_id"] == "TR-10")
+    assert tr10["intraday"] == "applied" and tr10["position_id"] == "T1|SEC-26238"
+    assert tr10["run_position_id"] == "T1|LOT-7" and tr10["pnl_rub"] == 12.0
+    assert all(r["run_position_id"] is None for r in v["rows"] if r["trade_id"] != "TR-10")
+    assert next(t for t in b["top"] if t["trade_id"] == "TR-10")["run_position_id"] == "T1|LOT-7"

@@ -4,8 +4,10 @@
   ``trades``, a flow: never carried forward), of one book when ``book_id`` is given; cancelled trades with their
   status, late bookings marked; the counts per book, the files read, and the last ``N`` dates that have trades. Per
   trade where it came from and when it was received, the book's legal entity, desk and portfolio (TDM#585).
-* ``GET /api/v1/trades/summary?date=&run_id=&books=B1&books=B2``: the same trades counted for the general screens
-  (C01, C03, C05, C14; TDM#585) under the books of the header's filter, without the rows (``trades.brief``).
+* ``GET /api/v1/trades/summary?date=&run_id=&entity=&desk=&books=B1&books=B2&ccy=&ports_off=P``: the same trades
+  counted for the general screens (C01, C03, C05, C14; TDM#585) under the header's filter (legal entity, desk, books,
+  currency, portfolios taken off: ``trades.header_filter``, the rule C20 applies to each trade), without the rows
+  (``trades.brief``).
 
 Read routes like the cash and the day status: every signed-in user, the ``viewer`` role included; with sign-in off,
 this computer, as every other page.
@@ -35,35 +37,46 @@ def get_trades(request: Request, date: str | None = None, book_id: str | None = 
         day = Date.fromisoformat(date) if date else None
     except ValueError:
         raise HTTPException(400, "date must be YYYY-MM-DD") from None
-    try:  # the one setting of the screen, read as the day status's routes read the settings
-        intraday = load().intraday_trades
-    except SettingsError:
-        intraday = True
+    intraday, history = _settings()
     with store.connect(request.app.state.store_url) as con:
         if run_id is not None and day is None:
             r = con.execute("SELECT business_date FROM run WHERE run_id = %s AND status = 'complete'",
                             (run_id,)).fetchone()
             day = r[0] if r else None
-        return JSONResponse(trades.view(con, day, book_id or None, days, intraday, run_id),
+        return JSONResponse(trades.view(con, day, book_id or None, days, intraday, run_id, history),
                             headers={"Cache-Control": "no-store"})
+
+
+def _settings() -> tuple[bool, dict[str, set[str]] | None]:
+    """The one setting of the screens (``intraday_trades``, read as the day status's routes read the settings) and the
+    files of the fetch of past dates (``trades.history_files``: where each trade came from)."""
+    try:
+        s = load()
+    except SettingsError:
+        return True, None
+    return s.intraday_trades, trades.history_files(s)
 
 
 @public.get("/api/v1/trades/summary")
 def get_trades_summary(request: Request, date: str | None = None, run_id: int | None = None,
-                       books: Annotated[list[str] | None, Query()] = None) -> JSONResponse:
-    """The day's trades counted for the general screens (TDM#585, ``trades.brief``): of the books of the header's
-    filter (``books``, repeated; none: every book), without the rows. ``date``: default the date of ``run_id``, else
-    the latest date with trades."""
+                       books: Annotated[list[str] | None, Query()] = None, entity: str | None = None,
+                       desk: str | None = None, ccy: str | None = None,
+                       ports_off: Annotated[list[str] | None, Query()] = None) -> JSONResponse:
+    """The day's trades counted for the general screens (TDM#585, ``trades.brief``) under the header's filter
+    (``entity``, ``desk``, ``books`` repeated, ``ccy``, ``ports_off`` repeated; none: every trade), without the rows.
+    ``date``: default the date of ``run_id``, else the latest date with trades."""
     try:
         day = Date.fromisoformat(date) if date else None
     except ValueError:
         raise HTTPException(400, "date must be YYYY-MM-DD") from None
     if books is not None and (len(books) > 2000 or any(len(b) > 200 for b in books)):
         raise HTTPException(400, "books: at most 2000 book ids of at most 200 characters")
-    try:
-        intraday = load().intraday_trades
-    except SettingsError:
-        intraday = True
+    if ports_off is not None and (len(ports_off) > 500 or any(len(p) > 200 for p in ports_off)):
+        raise HTTPException(400, "ports_off: at most 500 portfolios of at most 200 characters")
+    if any(v is not None and len(v) > 200 for v in (entity, desk, ccy)):
+        raise HTTPException(400, "entity, desk, ccy: at most 200 characters")
+    intraday, history = _settings()
+    scope = trades.header_filter(entity or None, desk or None, books or None, ccy or None, ports_off or None)
     with store.connect(request.app.state.store_url) as con:
-        return JSONResponse(trades.brief(con, day, books or None, intraday, run_id),
+        return JSONResponse(trades.brief(con, day, None, intraday, run_id, scope=scope, history=history),
                             headers={"Cache-Control": "no-store"})

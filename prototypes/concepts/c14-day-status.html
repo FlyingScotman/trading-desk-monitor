@@ -154,10 +154,9 @@
     K.dayTradesForget();  // дата перечитана (новые события): сводка — заново
     let tile = null;
     const byHeader = x => {
-      const hbks = K.headerBooks();
-      if (!x || x.error || !hbks) return '';
+      if (!x || x.error || K.source !== 'real' || !K.headerFilter()) return '';
       const hb = K.dayTrades(() => { if (tile && dtEl.isConnected) tile.redraw(); }, { date: d.date });
-      return '<div class="s mut3">по книгам, выбранным в шапке других экранов (' + hbks.length + '): ' + (hb && !hb.error ? 'сделок <b>' + f.n(hb.trades, 0) + '</b>, в позициях <b>' + f.n(hb.applied, 0) + '</b>' : '…') + '</div>';
+      return '<div class="s mut3">под фильтром шапки других экранов (как на C20): ' + (hb && !hb.error ? 'сделок <b>' + f.n(hb.trades, 0) + '</b>, в позициях <b>' + f.n(hb.applied, 0) + '</b>' : '…') + '</div>';
     };
     tile = K.dayTradesTile(dtEl, { all: true, date: d.date, extra: byHeader });
 
