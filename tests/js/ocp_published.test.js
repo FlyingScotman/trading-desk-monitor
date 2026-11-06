@@ -354,18 +354,20 @@ ta('C16: часть отчёта по юрлицу без книг (books: []) �
   html = other.html();
   assert.ok(html.includes('data-ocp-row="BANK"') && html.includes('все книги · 2') && !html.includes('не вся'), html);
   // выбор книг юрлица действительно сужен — часть без книг не входит и названа («под выбором книг — не вся»)
-  const part = page16({ srv: s, store: { [KEY]: { entity: 'BANK', off: ['FXB'] } } });
+  // (OLD — книга только старого дня: выбрана явно, TDM#604; без этого при суженном выборе она снята)
+  const part = page16({ srv: s, store: { [KEY]: { entity: 'BANK', off: ['FXB'], on: ['OLD'] } } });
   await settle();
   html = part.html();
   assert.ok(!html.includes('data-ocp-row="BANK"') && html.includes('под выбором книг — не вся') && html.includes('часть отчёта ОВП по юрлицу BANK без книг — только без выбора книг'), html);
-  // «все юрлица», снята книга BANK: остаток AM без книг (у AM ничего не снято) остаётся, «не вся» нет (ревью #538, 2)
+  // «все юрлица», снята книга BANK: остаток AM без книг под суженным выбором тоже не входит и назван — его книги не
+  // известны (TDM#604; до него — входил, ревью #538, 2: на графике за 3 месяца это давало ОВП снятых книг)
   const s2 = JSON.parse(JSON.stringify(SRV));
   s2.days[3].lines.push(L('AM', null, [], 'USD', 2e6));
   const am = page16({ srv: s2, store: { [KEY]: { entity: null, off: ['FXB'] } } });
   await settle();
   html = am.html();
-  assert.ok(!html.includes('data-ocp-row="FXB"') && usd(am) === '+2.0' && !html.includes('не вся') && html.includes('книги: 4 из 5'), usd(am) + html);
-  near(Object.fromEntries(am.chart().series.map(z => [z.name, z.data])).USD[2], 2, 'линия: остаток AM без книг');
+  assert.ok(!html.includes('data-ocp-row="FXB"') && !html.includes('data-ocp-ccy="USD"') && html.includes('под выбором книг — не вся') && html.includes('книги: 3 из 5'), html);  // и OLD: книга только старого дня
+  assert.ok(!('USD' in Object.fromEntries(am.chart().series.map(z => [z.name, z.data]))), 'линия: без остатка AM без книг');
   // а остаток BANK без книг при снятой книге BANK — не входит и назван
   const both = page16({ srv: s, store: { [KEY]: { entity: null, off: ['FXB'] } } });
   await settle();
@@ -511,6 +513,60 @@ ta('TDM#567 (D11, D24): C16 — день другой методики на гр
   await settle();
   const usdIc = ic.chart().series.find(z => z.name === 'CNY').data;
   assert.ok(usdIc.some(v => v != null), 'день 19.10 по справочнику дня: OLD под IC');
+});
+
+ta('C16: выбор книг один для всех дней (TDM#604): «месяц» и «3 мес» совпадают, снятые и невыбранные книги и часть юрлица без книг не входят ни в один день', async () => {
+  // дни двух видов: старые (до 09.09) — часть отчёта по юрлицу BANK без книг и книга OLDBK, которой в новых днях нет;
+  // новые — по книгам FXB и NEWB
+  const days = [];
+  for (let x = new Date('2026-07-22T00:00:00Z'); x.toISOString().slice(0, 10) <= '2026-10-21'; x.setUTCDate(x.getUTCDate() + 1)) {
+    if (!(x.getUTCDay() % 6)) continue;
+    const date = x.toISOString().slice(0, 10), old = date < '2026-09-09';
+    days.push({ date, runId: days.length + 1, state: 'computed', basis: old ? 'report_plus_outside' : 'report_base_plus_day', fx: FX,
+      lines: old ? [L('BANK', null, [], 'USD', 50e6), L('BANK', 'FXB', ['FXB'], 'USD', 1e6), L('BANK', 'OLDBK', ['OLDBK'], 'USD', 30e6)]
+        : [L('BANK', 'FXB', ['FXB'], 'USD', 1e6), L('BANK', 'NEWB', ['NEWB'], 'USD', 2e6)] });
+  }
+  const srv = { runId: 42, asOf: '2026-10-21', from: days[0].date, to: '2026-10-21', books: { OLDBK: { name: 'Старая', entity: 'BANK' }, NEWB: { name: 'Новая', entity: 'BANK' } }, days };
+  const KEY = 'tdm.view.v1:c16:books';
+  const line = x => { const c = x.chart(); return Object.fromEntries(c.xAxis.data.map((d, i) => [d, c.series.find(z => z.name === 'Общая').data[i]])); };
+  for (const store of [{ [KEY]: { entity: null, off: ['NEWB'], on: ['FXB'] } }, { [KEY]: { entity: null, off: ['NEWB'] } }]) {
+    const x = page16({ srv, store });
+    await settle();
+    const m1 = line(x);
+    x.segs.w2('m3');
+    await settle();
+    const m3 = line(x);
+    assert.ok(Object.keys(m3).length > Object.keys(m1).length + 30, '3 мес — длиннее');
+    Object.entries(m1).forEach(([d, v]) => near(m3[d], v, 'общая дата ' + d + ': месяц и 3 мес'));
+    Object.values(m3).forEach(v => near(v, 1, 'каждый день — только FXB'));
+    assert.match(x.html(), /книги: 1 из 3/);
+    // до TDM#604 запомнены только снятые: выбранными стали книги дня таблицы, книга старых дней снята
+    assert.deepStrictEqual(Array.from(store[KEY].on), ['FXB']);
+    // подсказка точки старого дня: книг вошло и исключено, часть юрлица без книг названа
+    const o = x.chart(), tip = o.tooltip.formatter(o.series.map(z => ({ dataIndex: 0, seriesName: z.name, value: 1, marker: '' })));
+    assert.ok(tip.includes('книг дня: 1 из 2, исключено выбором: 1') && tip.includes('часть отчёта по юрлицу Банк без книг не учтена'), tip);
+    const n = o.xAxis.data.length - 1, last = o.tooltip.formatter(o.series.map(z => ({ dataIndex: n, seriesName: z.name, value: 1, marker: '' })));
+    assert.ok(last.includes('книг дня: 1 из 2, исключено выбором: 1') && !last.includes('без книг'), last);
+  }
+  // выбор не сужен — входят все, и книга старых дней, и часть юрлица без книг; подсказка — без «исключено»
+  const all = page16({ srv, store: { [KEY]: { entity: null, off: [] } } });
+  await settle();
+  all.segs.w2('m3');
+  await settle();
+  const o = all.chart();
+  near(o.series.find(z => z.name === 'Общая').data[0], 81, 'старый день: всё');
+  const tip = o.tooltip.formatter(o.series.map(z => ({ dataIndex: 0, seriesName: z.name, value: 1, marker: '' })));
+  assert.ok(tip.includes('книг дня: 2 из 2') && !tip.includes('исключено') && !tip.includes('без книг'), tip);
+  // сужен в новом дне, затем в ответе появилась книга, которой при выборе не было: снята
+  const later = page16({ srv, store: { [KEY]: { entity: null, off: ['OLDBK'], on: ['FXB', 'NEWB'] } } });
+  await settle();
+  assert.match(later.html(), /книги: 2 из 3/);
+  const st = { [KEY]: { entity: null, off: ['NEWB'], on: ['FXB'] } };
+  const brandNew = JSON.parse(JSON.stringify(srv));
+  brandNew.days[brandNew.days.length - 1].lines.push(L('BANK', 'BRAND', ['BRAND'], 'USD', 7e6));
+  const bn = page16({ srv: brandNew, store: st });
+  await settle();
+  assert.ok(!bn.html().includes('data-ocp-row="BRAND"') && /книги: 1 из 4/.test(bn.html()), 'новая книга при суженном выборе — снята');
 });
 
 (async () => {

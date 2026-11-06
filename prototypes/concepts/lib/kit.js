@@ -3281,8 +3281,9 @@
   // { entity, desk } }) — для книги, которой нет в M.book; flt (C16, TDM#533) — свой фильтр экрана той же формы, что
   // K.filter ({ entity, desk, books, ccy, portsOff }), вместо фильтра шапки; без него — фильтр шапки, как раньше.
   // Со своим фильтром часть отчёта по юрлицу без книг под выбором книг тоже названа в notes и partial (без него — нет,
-  // как раньше); flt.offEntities — юрлица, у которых в выборе снята хоть одна книга: остаток юрлица без книг, у которого
-  // ничего не снято, входит (снятая книга одного юрлица не убирает остаток другого)
+  // как раньше). TDM#604: под суженным выбором книг (flt.books) она не входит ни в один день — какие книги в ней, не
+  // известно (раньше остаток юрлица, у которого ничего не снято, входил: старые дни по юрлицу целиком давали на графике
+  // ОВП снятых книг)
   K.ocpScope = function (byBook, meta, flt) {
     const B = byBook || (M.ocp && Array.isArray(M.ocp.byBook) ? M.ocp.byBook : null);
     if (!B) return null;
@@ -3298,7 +3299,6 @@
       // без книг (остаток юрлица за вычетом частей по книгам, юрлицо без известных книг): только без фильтра книг и деска
       if (!books.length) {
         if (!F.desk && !F.type && !(F.books && F.books.length)) lines.push(x);
-        else if (flt && !F.desk && !F.type && Array.isArray(flt.offEntities) && !flt.offEntities.includes(x.entity)) lines.push(x);
         else if (flt) bookless.push(x);
         return;
       }
