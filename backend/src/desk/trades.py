@@ -29,7 +29,12 @@ final quantity) and ``start_inputs`` (the positions at the start of D), which ``
 lineage.
 
 ``view(con, on, book_id, days)`` is ``GET /api/v1/trades``: the date's current trades (optionally of one book), the
-counts per book, the files read, and the last ``days`` dates that have trades for the screen's strip.
+counts per book, the files read, and the last ``days`` dates that have trades for the screen's strip. Each trade says
+where it came from (``origin``, TDM#585: ``file`` a report folder, ``feed`` the adapter services' feed of the day,
+``history`` the fetch of past dates, ``request`` a managed acquisition; ``origin_of``) and when the monitor received it
+(``received_at``: the stored set's ``recorded_at``), with the book's legal entity, desk and portfolio for the header's
+filter (``api.scope_rule``). ``brief(con, on, books, ...)`` is ``GET /api/v1/trades/summary``: the same trades counted
+for the general screens (C01, C03, C05, C14) under the books of the header, without the rows.
 """
 
 from __future__ import annotations
@@ -37,6 +42,7 @@ from __future__ import annotations
 import hashlib
 import json
 import math
+import re
 from collections import Counter
 from dataclasses import replace
 from datetime import UTC, date, datetime, timedelta
@@ -70,6 +76,52 @@ def _moscow_today() -> date:
 SKIP_REASONS = ("cancelled", "not_bond", "other_trade_date", "no_quantity", "no_instrument", "units_mismatch",
                 "other_book", "position_id_taken", "no_currency", "mixed_units")
 """Why a trade of the day is not in the day's book (``effect``; the screen shows them, the run counts them)."""
+
+STATE_TEXT = {"applied": "в позициях", "cancelled": "отменена", "not_bond": "не облигация — в позиции дня пока не входит",
+              "other_trade_date": "дата сделки другая — войдёт с отчётом позиций", "no_quantity": "нет количества",
+              "no_instrument": "бумага не найдена", "units_mismatch": "количество и номинал не сопоставить",
+              "other_book": "книги нет среди книг с позициями", "position_id_taken": "номер позиции занят другой книгой",
+              "no_currency": "валюта бумаги неизвестна",
+              "mixed_units": "лоты бумаги в разных единицах (штуки и номинал) — сделка не в PnL",
+              "pending": "ждёт прогона", "unknown": "нет сведений о прогоне", "off": "расчёт по сделкам дня выключен"}
+"""What the screens say of a trade's ``intraday`` state (``_intraday_state``): in the day's book, or why not. The
+monitors keep the same words in ``prototypes/concepts/lib/kit.js`` (``K.TRADE_STATE``, for the demo); a test keeps them
+equal."""
+PROBLEMS = ("no_quantity", "no_instrument", "units_mismatch", "other_book", "position_id_taken", "no_currency",
+            "mixed_units")
+"""States of a live bond trade of the date that should have gone into the day's book and did not: the data flow marks
+the arrow «сделки → позиции дня» incomplete (TDM#586)."""
+ORIGINS = ("file", "feed", "history", "request")
+ORIGIN_TEXT = {"file": "из папки с отчётами", "feed": "фид сервисов адаптера", "history": "догрузка прошлых дат",
+               "request": "загрузка по запросу"}
+"""Where a trade's file came from (``origin_of``, TDM#585)."""
+_FEED_DIR = re.compile(r"[\\/]adapter-services[\\/]out[\\/][0-9a-f]{32}[\\/][^\\/]+$")
+_REQUEST_DIR = re.compile(r"[\\/]acquisition[\\/][0-9A-Za-z_-]{8,64}[\\/][^\\/]+$")
+
+
+def origin_of(path: str | None, recorded_at: datetime | None, valid_date: date | None) -> str:
+    """``file``, ``feed``, ``history`` or ``request`` (``ORIGINS``) of a stored set by the path its file was first seen
+    at (``inbox_file.path``): a services feed writes into ``<home>/adapter-services/out/<run id>/`` (the feed of the day
+    and the fetch of past dates alike: a file of the feed recorded after its own business date on the Moscow clock is
+    the fetch of a past date), a managed acquisition into ``<home>/acquisition/<id>/``; anything else is a file of a
+    report folder."""
+    p = str(path or "")
+    if _FEED_DIR.search(p):
+        late = recorded_at is not None and valid_date is not None and recorded_at.astimezone(store.MSK).date() > valid_date
+        return "history" if late else "feed"
+    return "request" if _REQUEST_DIR.search(p) else "file"
+
+
+def set_origins(con: psycopg.Connection, set_ids: list[int]) -> dict[int, dict[str, Any]]:
+    """Per stored set: its ``origin`` (``origin_of``) and ``received_at`` (when the monitor stored it)."""
+    out: dict[int, dict[str, Any]] = {}
+    if not set_ids:
+        return out
+    for sid, at, vd, path in con.execute(
+            "SELECT s.set_id, s.recorded_at, s.valid_date, f.path FROM dataset_set s"
+            " JOIN inbox_file f ON f.sha256 = s.inbox_file_sha256 WHERE s.set_id = ANY(%s)", (sorted(set(set_ids)),)):
+        out[sid] = {"origin": origin_of(path, at, vd), "received_at": at.isoformat() if at else None}
+    return out
 SCALED = ("face_amount_ccy", "face_outstanding_ccy", "mv_rub", "accrued_ccy", "amount_ccy",
           "risk_dv01_rub", "risk_cs01_rub")
 """The report's own figures of a position row that follow its quantity when trades change it."""
@@ -584,7 +636,10 @@ def _trade_pnl(con: psycopg.Connection, run: dict[str, Any] | None) -> dict[str,
 
 
 def _row(r: dict[str, Any], on: date, run: dict[str, Any] | None = None, enabled: bool = True,
-         pnl: dict[str, dict[str, Any]] | None = None) -> dict[str, Any]:
+         pnl: dict[str, dict[str, Any]] | None = None, origins: dict[int, dict[str, Any]] | None = None,
+         books: dict[str, dict[str, Any]] | None = None) -> dict[str, Any]:
+    from .api.scope_rule import effective_portfolio  # at call time: desk.api imports the app
+
     out: dict[str, Any] = {f: r.get(f) for f in FIELDS}
     for f in AMOUNTS:
         if out[f] is not None:
@@ -595,9 +650,56 @@ def _row(r: dict[str, Any], on: date, run: dict[str, Any] | None = None, enabled
     out["pnl_rub"] = p["pnl_rub"] if p else None   # the trade's PnL from its price to the run's valuation (TDM#557)
     out["pnl_flag"] = p.get("flag") if p else None   # why it is 0 or assumed (pnl.new_trades.FLAGS)
     out["src"] = r.get("_src")
+    o = (origins or {}).get(r.get("_set_id")) or {}
+    out["origin"] = o.get("origin")             # where the file came from (TDM#585, ``origin_of``)
+    out["received_at"] = o.get("received_at")   # when the monitor stored it
+    b = (books or {}).get(str(r.get("book_id"))) or {}
+    out["entity"], out["desk"] = b.get("entity"), b.get("desk")   # for the header's filter (TDM#585)
+    out["portfolio"] = effective_portfolio(b.get("book_type"), (r.get("x") or {}).get("x_portfolio"))
     if r.get("x"):
         out["x"] = r["x"]
     return out
+
+
+def _day(con: psycopg.Connection, on: date, intraday_trades: bool, run_id: int | None,
+         book_id: str | None = None) -> tuple[store.DatasetInputs, dict[str, Any] | None, list[dict[str, Any]],
+                                               dict[int, dict[str, Any]], dict[str, dict[str, Any]]]:
+    """The trades of ``on`` as the screens show them: the stored rows, the run read, the rows of the screen, the origin
+    of each set read and the books in force."""
+    t = store.dataset_rows(con, "trades", on, scope={"book_id": book_id} if book_id else None)
+    run = _intraday_run(con, on, run_id)
+    pnl = _trade_pnl(con, run)
+    origins = set_origins(con, [u["set_id"] for u in t.units])
+    books = {b["book_id"]: b for b in store.current_books(con, on)}
+    rows = [_row(r, on, run, intraday_trades, pnl, origins, books) for r in t.rows]
+    return t, run, rows, origins, books
+
+
+def _sources(rows: list[dict[str, Any]], units: list[dict[str, Any]], origins: dict[int, dict[str, Any]]
+             ) -> list[dict[str, Any]]:
+    """Per origin (``ORIGINS`` order): the trades whose current row came from it and when it last delivered a set of
+    the date (any set read, also one whose trades all moved on to a newer version)."""
+    out = []
+    for k in ORIGINS:
+        ats = [o["received_at"] for u in units if (o := origins.get(u["set_id"])) and o["origin"] == k
+               and o["received_at"]]
+        n = sum(1 for r in rows if r["origin"] == k)
+        if n or ats:
+            out.append({"origin": k, "text": ORIGIN_TEXT[k], "trades": n, "last_at": max(ats) if ats else None})
+    return out
+
+
+def _counts(rows: list[dict[str, Any]]) -> dict[str, Any]:
+    """The day's trades counted: live, cancelled, in the day's positions, by state (``STATE_TEXT``), the problems
+    (``PROBLEMS``) and the time of the last live trade."""
+    states = Counter(r["intraday"] for r in rows if r["intraday"])
+    ts = [str(r["trade_ts"]) for r in rows if r.get("trade_ts") and r["status"] == "live"]
+    return {"trades": len(rows), "live": sum(1 for r in rows if r["status"] == "live"),
+            "cancelled": sum(1 for r in rows if r["status"] == "cancelled"),
+            "applied": states.get("applied", 0),
+            "states": [{"state": k, "text": STATE_TEXT.get(k, k), "n": n} for k, n in states.most_common()],
+            "problems": sum(n for k, n in states.items() if k in PROBLEMS),
+            "last_trade_ts": max(ts) if ts else None}
 
 
 def view(con: psycopg.Connection, on: date | None = None, book_id: str | None = None,
@@ -607,38 +709,85 @@ def view(con: psycopg.Connection, on: date | None = None, book_id: str | None = 
     if on is None:
         latest = trade_dates(con, _moscow_today(), 1)
         on = latest[0] if latest else _moscow_today()
-    t = store.dataset_rows(con, "trades", on, scope={"book_id": book_id} if book_id else None)
-    run = _intraday_run(con, on, run_id)
-    pnl = _trade_pnl(con, run)
-    rows = [_row(r, on, run, intraday_trades, pnl) for r in t.rows]
-    books = {b["book_id"]: b for b in store.current_books(con, on)}
+    t, run, rows, origins, books = _day(con, on, intraday_trades, run_id, book_id)
     per_book: dict[str, Counter] = {}
     for r in rows:
         c = per_book.setdefault(str(r["book_id"]), Counter())
         c["trades"] += 1
         c[r["status"]] += 1
+        c["applied"] += r["intraday"] == "applied"
     strip = []
     for d in trade_dates(con, on, days):  # a small screen's strip: the current trades per date
         day = store.dataset_rows(con, "trades", d)
         strip.append({"date": d.isoformat(), "trades": len(day.rows),
                       "cancelled": sum(1 for r in day.rows if r.get("status") == "cancelled")})
+    counts = _counts(rows)
     return {
         "date": on.isoformat(), "book_id": book_id,
-        "summary": {"trades": len(rows), "live": sum(1 for r in rows if r["status"] == "live"),
-                    "cancelled": sum(1 for r in rows if r["status"] == "cancelled"),
+        "summary": {"trades": len(rows), "live": counts["live"], "cancelled": counts["cancelled"],
                     "late": sum(1 for r in rows if r["late"]), "books": len(per_book),
                     "versions": sum(1 for r in rows if (r["trade_version"] or 0) > 1)},
-        "books": [{"book_id": b, "name": (books.get(b) or {}).get("name"), "trades": c["trades"], "live": c["live"],
-                   "cancelled": c["cancelled"]} for b, c in sorted(per_book.items())],
+        "counts": counts,   # TDM#585: in the day's positions, left out by reason, the last trade
+        "sources": _sources(rows, t.units, origins),   # TDM#585: per origin the trades and the last delivery
+        "state_text": STATE_TEXT, "origin_text": ORIGIN_TEXT,
+        "books": [{"book_id": b, "name": (books.get(b) or {}).get("name"), "entity": (books.get(b) or {}).get("entity"),
+                   "desk": (books.get(b) or {}).get("desk"), "trades": c["trades"], "live": c["live"],
+                   "cancelled": c["cancelled"], "applied": c["applied"]} for b, c in sorted(per_book.items())],
         "rows": rows,
         "files": [{"scope": u["scope"], "source": u["source"], "report_date": u["report_date"].isoformat(),
                    "report_ts": u["report_ts"].isoformat() if u["report_ts"] else None,
-                   "completeness": u["completeness"], "rows": u["row_count"], "file_name": u["file_name"]}
+                   "completeness": u["completeness"], "rows": u["row_count"], "file_name": u["file_name"],
+                   **{k: (origins.get(u["set_id"]) or {}).get(k) for k in ("origin", "received_at")}}
                   for u in t.units if not book_id or u["scope"].get("book_id") in (None, book_id)],
         "days": strip,
         "intraday": ({k: v for k, v in run.items() if k not in ("versions", "skipped_ids")}
                      | {"enabled": intraday_trades}) if run else None,
     }
+
+
+TOP = 5
+"""The largest trades of the day the general screens list (``brief``)."""
+BRIEF_FIELDS = ("trade_id", "book_id", "position_id", "trade_ts", "side", "asset_class", "source_instrument_id",
+                "source_instrument_name", "quantity", "face_amount_ccy", "amount_ccy", "ccy", "price_pct", "intraday",
+                "pnl_rub", "pnl_flag", "origin", "received_at")
+
+
+def brief(con: psycopg.Connection, on: date | None = None, books: list[str] | None = None,
+          intraday_trades: bool = True, run_id: int | None = None) -> dict[str, Any]:
+    """``GET /api/v1/trades/summary`` (TDM#585): the day's trades for the general screens, of ``books`` only when given
+    (the books of the header's filter; none: every book), without the rows: the counts (``_counts``), per origin the
+    trades and the last delivery, per book its counts and last trade, and the ``TOP`` live trades of the largest PnL
+    (by its size; then the latest without a PnL). ``on``: default the date of ``run_id``, else the latest date with
+    trades, else today (Moscow)."""
+    if on is None and run_id is not None:
+        r = con.execute("SELECT business_date FROM run WHERE run_id = %s AND status = 'complete'", (run_id,)).fetchone()
+        on = r[0] if r else None
+    if on is None:
+        latest = trade_dates(con, _moscow_today(), 1)
+        on = latest[0] if latest else _moscow_today()
+    t, run, rows, origins, _ = _day(con, on, intraday_trades, run_id)
+    want = set(books) if books else None
+    units = t.units
+    if want is not None:
+        rows = [r for r in rows if str(r["book_id"]) in want]
+        units = [u for u in t.units if (u["scope"] or {}).get("book_id", "") in want or "book_id" not in (u["scope"] or {})]
+    per_book: dict[str, dict[str, Any]] = {}
+    for r in rows:
+        b = per_book.setdefault(str(r["book_id"]), {"trades": 0, "applied": 0, "last_trade_ts": None})
+        b["trades"] += 1
+        b["applied"] += r["intraday"] == "applied"
+        if r["status"] == "live" and r.get("trade_ts") and str(r["trade_ts"]) > str(b["last_trade_ts"] or ""):
+            b["last_trade_ts"] = str(r["trade_ts"])
+    live = [r for r in rows if r["status"] == "live"]
+    top = sorted((r for r in live if r["pnl_rub"] is not None), key=lambda r: -abs(r["pnl_rub"]))[:TOP]
+    top += sorted((r for r in live if r["pnl_rub"] is None), key=lambda r: str(r.get("trade_ts") or ""),
+                  reverse=True)[:TOP - len(top)]
+    return {"date": on.isoformat(), "books": sorted(want) if want is not None else None,
+            "run_id": run["run_id"] if run else None, **_counts(rows),
+            "sources": _sources(rows, units, origins), "state_text": STATE_TEXT,
+            "by_book": dict(sorted(per_book.items())),
+            "top": [{k: r.get(k) for k in BRIEF_FIELDS} for r in top],
+            "enabled": intraday_trades}
 
 
 def _intraday_run(con: psycopg.Connection, on: date, run_id: int | None = None) -> dict[str, Any] | None:
