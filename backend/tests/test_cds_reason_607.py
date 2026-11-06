@@ -104,7 +104,7 @@ def test_the_run_names_the_reason_and_values_the_usd_cds(published):
 def test_a_run_before_0_2_19_says_so(published, ctx):  # noqa: F811
     """A run of an older program left a CDS with its value in the row unvalued (``no_reported_value``): the row's value
     is there, so the reason is the old run, not the report."""
-    con, r = published
+    _con, _r = published
     x = {"ccy": "USD", "asset_class": "otc", "x": {"x_product_group": "cds", "x_npv_ccy_value": -1.0, "x_npv_ccy": "USD"}}
     assert coverage.why_of("no_reported_value: otc CDS: no mv_rub", x, None, None, True)["key"] == \
         "run_before_report_value"
