@@ -151,6 +151,7 @@
     const tp = panel('Сделки дня', '<span class="k-note">источник, время получения, учёт в позициях · по каждой сделке — <a href="c20-trades.html?date=' + esc(d.date) + '">C20</a></span>');
     wrap.appendChild(tp);
     const dtEl = K.h('div'); tp.querySelector('.bd').appendChild(dtEl);
+    K.dayTradesForget();  // дата перечитана (новые события): сводка — заново
     let tile = null;
     const byHeader = x => {
       const hbks = K.headerBooks();

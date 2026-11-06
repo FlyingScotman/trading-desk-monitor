@@ -3470,6 +3470,8 @@
   };
   // пометка «сд N» у позиции со сделками дня: щелчок — сделки этой позиции на C20 (TDM#585)
   K.tradesTag = r => { const n = r.tradeToday && r.tradeToday.n; return '<a class="k-tag sd-n" href="' + K.c20Href({ date: M.asOf }, '&pos=' + encodeURIComponent(r.id)) + '" title="сделки сегодня' + (n ? ': ' + n : '') + ' — открыть на C20" onclick="event.stopPropagation()">сд' + (n ? ' ' + n : '') + '</a>'; };
+  // забыть сводки (C14 перечитывает дату по новым событиям ленты: сделки могли прийти)
+  K.dayTradesForget = () => DT.clear();
   K.c20Href = (d, extra) => 'c20-trades.html' + (d && d.date ? '?date=' + encodeURIComponent(d.date) + (extra || '') : '');
   // строка «Сделки дня: N, в позициях M, последняя в ЧЧ:ММ» со ссылкой на C20 (C01, C03, C05)
   K.dayTradesLine = (d, opt) => {
