@@ -383,3 +383,18 @@ def test_a_rate_of_one_code_stands_in_for_the_other(ctx):
     """TDM#601: the snapshot has no CNH rate: CNH takes CNY's (and a code with neither stays without)."""
     assert ctx.market.fx("CNH") == ctx.market.fx("CNY") and ctx.market.fx("CNY")["cbr"]
     assert not any(ctx.market.fx("XAU").values())
+
+
+def test_cnh_and_cny_report_lines_with_their_own_rates_give_no_false_rate(store_url, ctx, tmp_path):
+    """Review of #608 (TDM#601): the report's CNH and CNY lines of a book merge into one CNY line; their rates differ
+    and one has no ₽ figure, so the merged line carries neither a rate nor a partial ₽ sum (the history checks no
+    false ratio and takes the run's or the CBR rate)."""
+    with store.connect(store_url) as con:
+        _scan(con, tmp_path, policy=OLD_BASIS,
+              ocp=OCP + "ENT1;D1;CNH;6000000;66000000;11.0\nENT1;D1;CNY;1000000;;11.2\n")
+        rid, _ = _run(con, ctx)
+        block, = con.execute("SELECT data FROM run_reference WHERE run_id = %s AND kind = 'ocp'", (rid,)).fetchone()
+    rec = {(x["book_id"], x["ccy"]): x for x in block["reconciliation"]}
+    cny = rec[("D1", "CNY")]
+    assert cny["reported"] == 7_000_000
+    assert cny["reported_rate"] is None and cny["reported_rub"] is None

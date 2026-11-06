@@ -638,10 +638,21 @@ def reconcile(lines: Sequence[OcpLine], report_rows: Sequence[Mapping[str, Any]]
                 x["derivatives"][k] += v
             if (rub := _f(r.get("ocp_rub"))) is not None:
                 x["ocp_rub"] = (x["ocp_rub"] or 0.0) + rub
-            x["rate"] = _f(r.get("rate_rub_per_unit")) or x["rate"]
+            elif a:
+                x["_rub_missing"] = True
+            if (rr := _f(r.get("rate_rub_per_unit"))):
+                x.setdefault("_rates", set()).add(rr)
+            x["rate"] = rr or x["rate"]
             x["rows"] = x.get("rows", 0) + 1
             if r.get("_src"):
                 x["src"].append(r["_src"])
+        # rows merged under one key (two codes of one currency, TDM#601): a ₽ figure missing on one of them makes the
+        # sum partial, two different rates make "the" rate none — the history then checks no false ratio (review #608)
+        for x in reported.values():
+            if x.pop("_rub_missing", False) and x.get("rows", 0) > 1:
+                x["ocp_rub"] = None
+            if len(x.pop("_rates", ())) > 1:
+                x["rate"] = None
         at_of = {b: b if (book or b in named or (named and not entity_rows)) else None for b in books_in}
         books_at: dict[str | None, set[str]] = defaultdict(set)
         for b in books_in:
