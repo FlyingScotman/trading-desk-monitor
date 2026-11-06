@@ -312,11 +312,15 @@ test('services block in Settings', {skip: pw ? false : 'нет Playwright'}, asy
         await pg.waitForFunction(() => !document.getElementById('svc-hist-on').checked);
         await pg.locator('#svc-hist-box .tgl-s').click();
         await pg.waitForFunction(() => document.getElementById('svc-hist-on').checked);
-        let p = posts.filter(x => x[0].endsWith('/adapter-services/history')).map(x => Object.fromEntries(x[1]));
+        // the field changes before its POST reaches the route: wait for the requests, not the field
+        const histPosts = () => posts.filter(x => x[0].endsWith('/adapter-services/history')).map(x => Object.fromEntries(x[1]));
+        for (const t0 = Date.now(); histPosts().length < 3 && Date.now() - t0 < 5000;) await pg.waitForTimeout(50);
+        let p = histPosts();
         assert.deepStrictEqual(p, [{from:'2026-03-02'}, {enabled:'false'}, {enabled:'true', from:'2026-03-02'}]);
         await pg.locator('#svc-hist-when').selectOption('off_hours');
         await pg.waitForFunction(() => document.getElementById('svc-hist-when').value === 'off_hours');
-        p = posts.filter(x => x[0].endsWith('/adapter-services/history')).map(x => Object.fromEntries(x[1]));
+        for (const t0 = Date.now(); histPosts().length < 4 && Date.now() - t0 < 5000;) await pg.waitForTimeout(50);
+        p = histPosts();
         assert.deepStrictEqual(p.pop(), {when:'off_hours'});
 
         await pg.locator('#svc-hist-refetch').click();

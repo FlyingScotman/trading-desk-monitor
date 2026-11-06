@@ -26,6 +26,7 @@ from typing import Any
 
 from rub_fixed_income import RISK_BUCKETS, RISK_PILLARS
 
+from ..inbox.schema import alias_position
 from ..marketdata import ratings
 from ..pnl.reasons import (
     METHOD_TEXT,
@@ -204,13 +205,13 @@ def funding_status(block: dict[str, Any] | None) -> dict[str, Any]:
 
 def _not_valued(r: dict[str, Any], books: dict[str, dict], x: dict[str, Any] | None,
                 portfolio: str | None, futures_by_ticker: bool | None = None,
-                hole: dict[str, str] | None = None) -> dict[str, Any]:
+                hole: dict[str, str] | None = None, report_value_on: bool | None = None) -> dict[str, Any]:
     """A run_position without fact: visible, PV empty, nothing in any total; ``x`` its report row. ``extra.why``: its
     reason in words (``coverage.explain``, TDM#589: the card's «Причина отсутствия оценки», the blotter's short words)."""
     from .coverage import why_of
 
     x = {k: _json(v) for k, v in (x or {}).items() if v is not None}
-    why = why_of(r["reason"], x, futures_by_ticker, hole)
+    why = why_of(r["reason"], x, futures_by_ticker, hole, report_value_on)
     kind = (x.get("asset_class") or "").lower()
     aclass, segment = (None, None) if kind in ("", "bond") else NOT_VALUED_KIND.get(kind, NOT_VALUED_KIND["other"])
     return {
@@ -341,11 +342,14 @@ def assemble(con, run: dict[str, Any]) -> dict[str, Any]:
         f"SELECT position_id, {', '.join(INPUT_FIELDS)} FROM position_input WHERE set_id = ANY(%s)"
         " AND position_id = ANY(%s)", (run["position_set_ids"], [r["position_id"] for r in unvalued]))} \
         if unvalued else {}
-    fbt = None
+    for i in inputs.values():  # TDM#601: CNH is CNY, as the run read the row (store.positions_for)
+        alias_position(i)
+    fbt, on = None, {}
     if unvalued:
-        from .coverage import _futures_by_ticker
+        from .coverage import _futures_by_ticker, report_value_by_book
 
         fbt = _futures_by_ticker()
+        on = report_value_by_book(con, run["position_set_ids"])  # TDM#607: the adapter's report value on or off
     from .coverage import history_hole
 
     hole = history_hole(run.get("lineage"))  # TDM#590: a hole of the stored RUONIA, for a refusal over it
@@ -353,7 +357,7 @@ def assemble(con, run: dict[str, Any]) -> dict[str, Any]:
         i = inputs.get(r["position_id"])
         positions.append(_not_valued(r, books, {k: v for k, v in i.items() if k != "position_id"} if i else None,
                                      portfolio_of(port_rows, book_types, r["book_id"], r["position_id"]), fbt,
-                                     hole))
+                                     hole, on.get(str(r["book_id"]))))
     for c in dict.fromkeys(c for p in positions for c in p["risk"]):
         if c not in curves:  # a risk curve the run's reference lacks: shown without points, its risk never dropped
             curves[c] = {"name": c, "ccy": c.split()[0], "kind": "bond", "pts": [None] * len(B)}

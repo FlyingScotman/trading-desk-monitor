@@ -322,7 +322,8 @@
   K.ccyColor = c => css('--' + String(c).toLowerCase()) || css('--accent');
   const CCY_NAMES = { RUB: 'Рубли', USD: 'Доллары', EUR: 'Евро', CNY: 'Юани', CHF: 'Франки', GBP: 'Фунты', HKD: 'Гонконгские доллары', JPY: 'Иены', AED: 'Дирхамы', KZT: 'Тенге', BYN: 'Белорусские рубли', TRY: 'Лиры', INR: 'Рупии' };
   K.ccyName = c => CCY_NAMES[c] || c;
-  K.ccyTag = c => '<span class="k-ccy" style="background:' + K.ccyColor(c) + '">' + c + '</span>';
+  // rep — код валюты в отчёте, сведённый монитором в c (CNH = CNY, TDM#601): в подсказке, чтобы сверка с отчётом оставалась возможной
+  K.ccyTag = (c, rep) => '<span class="k-ccy" style="background:' + K.ccyColor(c) + '"' + (rep && rep !== c ? ' title="в отчёте — ' + rep + '"' : '') + '>' + c + '</span>';
   K.curveColors = { 'RUB RUONIA': '#4c9dff', 'RUB KEY': '#22c3d6', 'RUB OFZ': '#9b7bff', 'USD SOFR': '#3fb67a', 'EUR ESTR': '#d58cff', 'CNY XCCY': '#f0645a', 'CS01': '#e3b341', 'OFZSPR': '#c98a3a' };
   K.PAL = ['#4c9dff', '#3fb67a', '#e3b341', '#f0645a', '#b48cff', '#22c3d6', '#ff8f3f', '#8bc34a', '#ef6fb0', '#7f8cff', '#c9a26b', '#5fd4a8', '#ff6b8b', '#a0b4c8'];
   // кривые прогона, которых нет в списке цветов (CNY implied, прокси, CHF…), — цвет из палитры, детерминированно по имени
@@ -1394,6 +1395,7 @@
 
   // ---------- выезжающие панели ----------
   const stack = [];
+  K.drawer = wide => drawer(wide);  // выезжающая панель страницы (C16, TDM#603): { el, bd, close }
   function drawer(wide) {
     const scrim = h('div', 'k-scrim'), d = h('div', 'k-drawer' + (wide ? ' wide' : ''));
     d.innerHTML = '<div class="hd"><div style="min-width:0;flex:1"><div class="k-crumbs"></div><div class="t"></div><div class="st"></div></div><button class="close" title="Закрыть (Esc)">×</button></div><div class="bd"></div>';
@@ -2542,7 +2544,7 @@
     issuer: { key: 'issuerName', label: 'Эмитент', filter: true, title: 'эмитент (у деривативов — контрагент)', fmt: (v, r) => '<b style="color:' + K.issuerColor(r.issuer) + '">●</b> ' + esc(v) },
     name: { key: 'name', label: 'Бумага', fmt: (v, r) => K.nameCell(r, v) + (r.tradedToday ? ' ' + K.tradesTag(r) : '') + K.offReportTag(r) + K.curveProxyTag(r) },
     isin: { key: 'isin', label: 'ISIN', fmt: v => '<span class="mono mut">' + esc(v || '—') + '</span>' },
-    ccy: { key: 'ccy', label: 'Вал', fmt: (v, r) => K.ccyTag(r.ccy), val: r => M.ccyOrder[r.ccy] ?? 99, filter: r => r.ccy, fltOrder: (a, b) => ((M.ccyOrder[a] ?? 99) - (M.ccyOrder[b] ?? 99)) || a.localeCompare(b) },
+    ccy: { key: 'ccy', label: 'Вал', fmt: (v, r) => K.ccyTag(r.ccy, r.ccyReported), val: r => M.ccyOrder[r.ccy] ?? 99, filter: r => r.ccy, fltOrder: (a, b) => ((M.ccyOrder[a] ?? 99) - (M.ccyOrder[b] ?? 99)) || a.localeCompare(b) },
     kind: { key: 'kind', label: 'Тип', filter: r => M.kindLabel[r.kind] || r.kind, fmt: (v, r) => '<span class="tagc" style="border-color:' + K.kindColor[v] + '55">' + esc(M.kindShort[v]) + '</span>' },
     book: { key: 'book', label: 'Книга', filter: true, fmt: v => '<span class="mut">' + esc(v) + '</span>' },
     coupon: { key: 'couponFmt', label: 'Купон', fmt: v => '<span class="mono">' + esc(v || '—') + '</span>' },
@@ -3281,8 +3283,9 @@
   // { entity, desk } }) — для книги, которой нет в M.book; flt (C16, TDM#533) — свой фильтр экрана той же формы, что
   // K.filter ({ entity, desk, books, ccy, portsOff }), вместо фильтра шапки; без него — фильтр шапки, как раньше.
   // Со своим фильтром часть отчёта по юрлицу без книг под выбором книг тоже названа в notes и partial (без него — нет,
-  // как раньше); flt.offEntities — юрлица, у которых в выборе снята хоть одна книга: остаток юрлица без книг, у которого
-  // ничего не снято, входит (снятая книга одного юрлица не убирает остаток другого)
+  // как раньше). TDM#604: под суженным выбором книг (flt.books) она не входит ни в один день — какие книги в ней, не
+  // известно (раньше остаток юрлица, у которого ничего не снято, входил: старые дни по юрлицу целиком давали на графике
+  // ОВП снятых книг)
   K.ocpScope = function (byBook, meta, flt) {
     const B = byBook || (M.ocp && Array.isArray(M.ocp.byBook) ? M.ocp.byBook : null);
     if (!B) return null;
@@ -3298,7 +3301,6 @@
       // без книг (остаток юрлица за вычетом частей по книгам, юрлицо без известных книг): только без фильтра книг и деска
       if (!books.length) {
         if (!F.desk && !F.type && !(F.books && F.books.length)) lines.push(x);
-        else if (flt && !F.desk && !F.type && Array.isArray(flt.offEntities) && !flt.offEntities.includes(x.entity)) lines.push(x);
         else if (flt) bookless.push(x);
         return;
       }

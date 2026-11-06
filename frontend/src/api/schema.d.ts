@@ -2172,6 +2172,20 @@ export interface components {
              * @default false
              */
             base_older?: boolean;
+            /**
+             * Excluded
+             * @description report_base_plus_day, TDM#603: per derivative kind the report gives apart, {kind, component, nominal: taken out of the base, added: the PV the positions add for it, outside: a derivative of the kind outside the report, positions, fallback, diff = nominal − added − outside}
+             */
+            excluded?: {
+                [key: string]: unknown;
+            }[];
+            /**
+             * Derivative Types
+             * @description report_base_plus_day, TDM#603: the report's row types behind ``excluded``, from the adapter's ``x_derivative_types``: {type, kind, kept: false — its future lines taken out as the kind, true — a spot type left in the base at its nominal, lines, amount}
+             */
+            derivative_types?: {
+                [key: string]: unknown;
+            }[];
         };
         /** OcpTransfer */
         OcpTransfer: {

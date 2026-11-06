@@ -44,6 +44,7 @@ from rub_fixed_income import (
 from rub_fixed_income import Offer as CoreOffer
 from rub_fixed_income import Redemption as CoreRedemption
 
+from ..inbox.schema import ccy_partners
 from .bundle import Snapshot, SnapshotError
 
 
@@ -424,7 +425,17 @@ class MarketView:
     def fx(self, ccy: str) -> dict[str, float | None]:
         """RUB per 1 unit: CBR official in force on the business date (``cbr``) and set on it for the next day
         (``cbr_next``); the MOEX indicative rates of the business date at 19:00 and 14:00 MSK (``moex_19``,
-        ``moex_14``); the CETS TOM close (``cets_close``, else its weighted price) and weighted price (``moex_tom``)."""
+        ``moex_14``); the CETS TOM close (``cets_close``, else its weighted price) and weighted price (``moex_tom``).
+        A currency without any rate takes those of another code of the same currency under the aliases
+        (``inbox.schema.ccy_aliases``, TDM#601: CNH and CNY, both ways)."""
+        out = self._fx(ccy)
+        if not any(out.values()):
+            for other in ccy_partners(ccy):
+                if any((alt := self._fx(other)).values()):
+                    return alt
+        return out
+
+    def _fx(self, ccy: str) -> dict[str, float | None]:
         bd = self.business_date.isoformat()
         cbr = [r for r in self.fx_rates if r["kind"] == "cbr_official" and r["ccy"] == ccy and r["effective_date"] == bd]
         nxt = [r for r in self.fx_rates if r["kind"] == "cbr_official" and r["ccy"] == ccy and r["set_date"] == bd]

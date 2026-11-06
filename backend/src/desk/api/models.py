@@ -439,6 +439,14 @@ class OcpPublishedLine(BaseModel):
                                                                "(«PV нет ни у одной позиции»)")
     base_older: bool = Field(False, description="The base is older than the previous business day (the run's "
                                                 "calendar)")
+    excluded: list[dict[str, Any]] = Field(default_factory=list, description=(
+        "report_base_plus_day, TDM#603: per derivative kind the report gives apart, {kind, component, nominal: taken "
+        "out of the base, added: the PV the positions add for it, outside: a derivative of the kind outside the report, "
+        "positions, fallback, diff = nominal − added − outside}"))
+    derivative_types: list[dict[str, Any]] = Field(default_factory=list, description=(
+        "report_base_plus_day, TDM#603: the report's row types behind ``excluded``, from the adapter's "
+        "``x_derivative_types``: {type, kind, kept: false — its future lines taken out as the kind, true — a spot type "
+        "left in the base at its nominal, lines, amount}"))
 
 
 class OcpPublishedCcy(BaseModel):

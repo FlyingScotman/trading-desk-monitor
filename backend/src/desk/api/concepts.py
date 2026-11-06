@@ -49,6 +49,7 @@ from typing import Any
 
 from psycopg.rows import tuple_row
 
+from ..inbox.schema import alias_position
 from ..marketdata import static_facts
 from ..marketdata.bundle import read_bundle
 from ..marketdata.history import RUB_SETTLEMENT, curve_rate, curve_rates_by_day, kbd, latest_market_day
@@ -1035,6 +1036,8 @@ def risk_items(con, run: dict[str, Any], books: list[str] | None = None
     inputs = {i["position_id"]: i for i in con.execute(
         "SELECT position_id, ccy, asset_class, x FROM position_input WHERE set_id = ANY(%s) AND position_id = ANY(%s)",
         (run["position_set_ids"], unvalued))} if unvalued else {}
+    for i in inputs.values():  # TDM#601: CNH is CNY, as the run read the row (store.positions_for)
+        alias_position(i)
     items = []
     for r in rows:
         if r["fact"] is not None:

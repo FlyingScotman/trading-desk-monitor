@@ -284,3 +284,43 @@ def test_an_unreadable_history_is_no_fill_and_the_memo_keeps_each_depth(store_ur
         a = fh.for_date(con, BD)  # since 2016
         b = fh.for_date(con, date(2019, 6, 3))  # since 2009: another depth, kept beside it
         assert fh.for_date(con, BD) is a and fh.for_date(con, date(2019, 6, 3)) is b
+
+
+def test_a_day_without_a_published_ruonia_takes_the_previous_rate():
+    """TDM#606: the CBR published no RUONIA for a business day (30.12.2025; here an invented 16.09.2026): the day takes
+    the rate of the day before (a holiday of the publication calendar, as the CBR's RUONIA index accrues it), the swap
+    over it is valued and says so. A gap longer than ``UNPUBLISHED_BRIDGE_DAYS`` calendar days stays missing data."""
+    from desk.curves.rates import UNPUBLISHED_BRIDGE_DAYS, bridge_unpublished
+
+    gone = date(2026, 9, 16)
+    by_day = {d: f"{16 + (d.day % 5) / 10:.2f}" for d in WEEKDAYS}  # a rate that moves, so the day matters
+
+    def history(days, value=lambda d: by_day[d]):
+        rows = [row("RUONIA", d, value(d)) for d in days] + [row("KEY_RATE", d, "16.5") for d in SEPT]
+        by: dict[str, list] = {}
+        for r in rows:
+            by.setdefault(r["index_code"], []).append(r)
+        return fh.FixingStore({k: tuple(v) for k, v in by.items()}, ("synthetic",))
+
+    ctx = prepare(SnapshotDir(FIX), BD.isoformat(), fixings=history([d for d in WEEKDAYS if d != gone]))
+    info = ctx.rates["fixings"]["RUONIA"]
+    assert info["bridged_days"] == [{"date": "2026-09-16", "from": "2026-09-15"}] and info["missing_business_days"] == []
+    o = value(ctx, swap())
+    assert o.valuation is not None and o.core_not_valued is None, o.core_not_valued
+    assert "RUONIA за 16.09.2026 не публиковалась: взята ставка 15.09.2026" in o.valuation.assumptions
+    # as a history that repeats 15.09 on 16.09, but the two days accrue in one step (a non-computed day, as the CBR's
+    # index): the difference is the daily compounding of one day only
+    same = prepare(SnapshotDir(FIX), BD.isoformat(), fixings=history(
+        WEEKDAYS, lambda d: by_day[d - timedelta(days=1)] if d == gone else by_day[d]))
+    pv = value(same, swap()).valuation.pv_rub
+    assert pv != o.valuation.pv_rub and pv == pytest.approx(o.valuation.pv_rub, rel=1e-4)
+    # a gap of more than 10 calendar days: the days past it are still missing (core refuses), not bridged
+    from desk.curves.rates import ruonia_calendar
+
+    base, _ = ruonia_calendar(ctx.static.snapshot, BD)
+    days = [date(2026, 9, 1), date(2026, 9, 2), date(2026, 9, 21), date(2026, 9, 22)]
+    _, bridged = bridge_unpublished(base, days)
+    assert UNPUBLISHED_BRIDGE_DAYS == 10
+    assert [d for d, _ in bridged] == [date(2026, 9, 3), date(2026, 9, 4), date(2026, 9, 7), date(2026, 9, 8),
+                                       date(2026, 9, 9), date(2026, 9, 10), date(2026, 9, 11)]
+    assert all(p == date(2026, 9, 2) for _, p in bridged)

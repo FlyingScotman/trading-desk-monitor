@@ -144,6 +144,49 @@ def test_run_on_the_base_date_is_the_report_without_derivatives_plus_their_pv():
     assert_parts_sum(r)
 
 
+def test_excluded_kinds_against_what_the_positions_add():
+    """TDM#603: per kind the report gives apart, its nominal taken out of the base against the PV the positions add."""
+    p = pub(run())
+    usd = {x["kind"]: x for x in p[("D1", "USD")]["excluded"]}
+    assert set(usd) == {"fx_forward"}  # fx_future: nominal 0 and no position — nothing to show
+    assert usd["fx_forward"] == {"kind": "fx_forward", "component": "fx_legs", "nominal": 500_000, "added": 490_000,
+                                 "outside": 0, "positions": 1, "fallback": False, "diff": 10_000}
+    cny = {x["kind"]: x for x in p[("D1", "CNY")]["excluded"]}
+    assert cny["fx_future"]["fallback"] and cny["fx_future"]["added"] == 800_000 and cny["fx_future"]["diff"] == 0
+    assert cny["fx_future"]["positions"] == 0
+    assert p[("T1", "USD")]["excluded"] == []  # nothing apart in T1
+    # a report row type mapped to a derivative kind the positions lack: the spot leg of a swap is in the report's
+    # fx_forward nominal (+500k now, −500k later: 0), the positions hold only the far leg — the spot leg is lost
+    rep = [{**REPORT[0], "ocp_ccy": "0", "derivatives_ccy": {"fx_forward": "0"}}]
+    far = core_row("D1|FAR", "D1", {"USD": -490_000.0})
+    x = pub(run(report=rep, units=UNITS[:1], rows=[far]))[("D1", "USD")]
+    assert x["amount"] == -490_000
+    assert [(e["kind"], e["nominal"], e["added"], e["diff"]) for e in x["excluded"]] == [
+        ("fx_forward", 0, -490_000, 490_000)]
+    # the adapter's row types behind it (``x_derivative_types``, synthetic labels): taken out as the kind, or a spot
+    # type kept at its nominal; under ``x`` as stored, or flat
+    types = [{"type": "Type A", "kind": "fx_forward", "kept": False, "lines": 2, "amount_ccy": "-500000"},
+             {"type": "Type B", "kind": "fx_forward", "kept": False, "lines": 1, "amount_ccy": "500000"},
+             {"type": "Type B", "kind": "fx_forward", "kept": True, "lines": 1, "amount_ccy": "120000"},
+             {"type": 7, "kept": False}, "junk"]
+    rep_x = [{**rep[0], "x": {"x_derivative_types": types}}]
+    y = pub(run(report=rep_x, units=UNITS[:1], rows=[far]))[("D1", "USD")]
+    assert y["derivative_types"] == [
+        {"type": "Type A", "kind": "fx_forward", "kept": False, "lines": 2, "amount": -500_000},
+        {"type": "Type B", "kind": "fx_forward", "kept": False, "lines": 1, "amount": 500_000},
+        {"type": "Type B", "kind": "fx_forward", "kept": True, "lines": 1, "amount": 120_000}]
+    flat = [{**rep[0], "x_derivative_types": types[:1]}]
+    assert pub(run(report=flat, units=UNITS[:1], rows=[far]))[("D1", "USD")]["derivative_types"][0]["lines"] == 2
+    assert x["derivative_types"] == []  # absent: none
+    # a derivative of a kind apart whose component is outside the report: whole in ``outside``, counted there
+    opt_rep = [{**REPORT[0], "derivatives_ccy": {"fx_option": "45000"}}]
+    o = pub(run(report=opt_rep, units=UNITS[:1], rows=ROWS[1:2]))[("D1", "USD")]
+    assert [(e["kind"], e["added"], e["outside"], e["positions"], e["diff"]) for e in o["excluded"]] == [
+        ("fx_option", 0, 40_000, 1, 5_000)]
+    # a book absent from the report has no report figure to exclude from
+    assert pub(run(rows=ROWS))[("X1", "USD")]["excluded"] == []
+
+
 def test_what_never_enters_the_pv_term():
     """Reproduced in review: an ``other`` equity, a core-valued spot and a derivative whose last flow is on or before B
     are in the report's ocp_ccy; adding them again doubled the figure."""
@@ -225,7 +268,7 @@ def test_intraday_bond_move_coupon_on_d_trade_and_derivatives_pv():
     assert d1["parts"] == {"base": 100_000, "derivatives": 490_000, "bonds": 0, "trades": 200_000, "outside": 40_000}
     assert d1["contributions"]["trades"]["items"][0] == {
         "kind": "trade", "trade_id": "TR-1", "book_id": "D1", "leg": "fx", "trade_date": "2026-10-16",
-        "amount": 200_000.0}
+        "amount": 200_000.0, "asset": "fx", "value_date": "2026-10-20"}  # TDM#603: type and value date for C16
     assert d1["base_date"] == "2026-10-15" and d1["valid_date"] == B
     chk = {(x["book_id"], x["ccy"], x["kind"]): x for x in r.derivatives_check}
     assert chk[("D1", "USD", "fx_forward")]["pv"] == 495_000
@@ -533,6 +576,8 @@ def test_trade_legs():
     legs = O.trade_flows(trades, BOOKS, {"T1": B, "D1": D}, {"D1|FWD2": "fx_forward"}, POLICY, after=B)
     assert [(f.trade_id, f.leg, f.amount, f.pv_kind) for f in legs.flows] == [
         ("B1", "cash", -1_000_000, None), ("B1", "security", 1_000_000, None), ("F1", "fx", -100_000, "fx_forward")]
+    assert [(f.trade_id, f.asset, f.value_date) for f in legs.flows] == [
+        ("B1", "bond", None), ("B1", "bond", None), ("F1", "fx", "2026-12-16")]
     assert legs.not_valued == ["O1 (otc)"] and legs.unknown_book == ["U1 (NEW)"]
     # the bond's book dated on the trade: its MV is in the bonds' revaluation, only the cash here
     assert [f.leg for f in O.trade_flows(trades[:1], BOOKS, book_dates, {}, POLICY).flows] == ["cash"]
@@ -750,6 +795,8 @@ def test_run_on_the_base_date_then_inside_the_next_day(store_url, ctx, tmp_path)
     assert lb["parts"]["base"] == 150_000 and lb["parts"]["derivatives"] == pytest.approx(260_000)
     assert lb["fallback"] == ["fx_forward"] and lb["no_pv"] == ["fx_forward"]
     assert lb["contributions"]["derivatives"]["items"][0]["marker"] == "номинал, PV нет"
+    # TDM#603: the kind taken out of the base and what is added for it, through the route
+    assert [(x["kind"], x["nominal"], x["fallback"]) for x in lb["excluded"]] == [("fx_forward", 260_000, True)]
     assert lb["parts"]["trades"] == 0 and lb["amount"] == pytest.approx(410_000)
     rec = {(x["book_id"], x["ccy"]): x for x in ob["reconciliation"]}[("D1", "USD")]
     assert rec["reported"] == 410_000 and rec["reported_base"] == 150_000 and rec["split"]
@@ -938,3 +985,16 @@ def test_the_revisions_are_loaded_once_for_many_dates_and_match_current_referenc
             assert store.late_reference(c, known, revs) == ["ocp_policy"]
             assert store.reference_rev_ids(c, revs=revs) == revs.ids()
         assert c.n == 1
+
+
+def test_a_subtracted_book_type_leaves_no_negative_row():
+    """Review of #608: a book part's type outside the entity's capped list is subtracted from it; the residue without
+    lines is not listed (no negative rows in the drill-down)."""
+    from desk.rules import ocp as O
+
+    into: dict = {}
+    O._merge_types(into, [{"type": "Тип строки A", "kind": "fx_forward", "kept": False, "lines": 3, "amount": 30.0}])
+    O._merge_types(into, [{"type": "Тип строки A", "kind": "fx_forward", "kept": False, "lines": 1, "amount": 10.0},
+                          {"type": "Тип строки B", "kind": "fx_swap", "kept": False, "lines": 2, "amount": 5.0}], -1.0)
+    out = O._types_out(into)
+    assert [(t["type"], t["lines"], t["amount"]) for t in out] == [("Тип строки A", 2, 20.0)]

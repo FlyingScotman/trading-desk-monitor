@@ -20,6 +20,18 @@
 .k-tbl tr.tot td { font-weight: 650; border-top: 1px solid var(--line-2); background: var(--panel-2); }
 .k-tbl .c16-src { font-size: 11px; color: var(--fg-3); margin-left: 2px; }
 @media (max-width: 720px) { .k-panel > .hd { flex-wrap: wrap; } }
+/* разбор строки книги (TDM#603) */
+.k-tbl tr[data-ocp-i] { cursor: pointer; }
+.c16-dr .tools { display: flex; flex-wrap: wrap; gap: 6px 10px; align-items: center; margin-bottom: 8px; font-size: 12px; }
+.c16-dr table.k-tbl { width: 100%; table-layout: fixed; font-size: 12px; }
+.c16-dr td { white-space: normal; overflow-wrap: anywhere; vertical-align: top; }
+.c16-dr td.n, .c16-dr th.n { width: 108px; white-space: nowrap; }
+.c16-dr tr.pt td { font-weight: 600; background: var(--panel-2); }
+.c16-dr tr.it td:first-child { padding-left: 22px; color: var(--fg-2); }
+.c16-dr tr.sum td { font-weight: 650; border-top: 1px solid var(--line-2); }
+.c16-dr .warn { color: var(--warn); }
+.c16-dr .k-note { font-size: 12px; color: var(--fg-2); margin: 6px 0; }
+@media (max-width: 520px) { .c16-dr td.n, .c16-dr th.n { width: 66px; } .c16-dr th.n { white-space: normal; } }
 </style>
 </head>
 <body>
@@ -47,6 +59,8 @@
   // книги, по умолчанию все книги юрлица вместе с HTM; фильтр шапки
   // (деск, книги, портфели) к C16 не применяется, об этом — строка над итогом. Выбор — в слое вида (K.viewStore,
   // 'c16:books'), отдельно от фильтра шапки; действует на итог, таблицу и график.
+  // Щелчок по строке книги (по сумме валюты — только она) — разбор ОВП строки за день (TDM#603, drill): GET
+  // ../api/v1/runs/{run_id дня}/ocp, слагаемые и вклады, строки отчёта, исключённые как деривативы.
   // Отчёта ОВП нет (no_report) — почему, по журналу входящих (TDM#445): GET ../api/v1/inbox/datasets/ocp, lib/inbox-why.js.
   const M = MOCK, K = KIT, f = K.f, esc = K.esc, h = K.h;
   const bar = K.top({ title: 'C16 · ОВП' });
@@ -65,18 +79,42 @@
   const S = { unit: 'ccy', rate: 'market', period: 'm1' };
   let H = null;  // ответ /api/v1/history/ocp; смена выбора книг, курса, формата перерисовывает его без нового запроса
   let chart = null;
-  // свой выбор книг (TDM#533): юрлицо (null — все) и снятые книги (off; новая книга — сразу в выборе). Первый раз —
-  // юрлицо шапки и все книги, дальше — своё, отдельно от шапки
+  // свой выбор книг (TDM#533): юрлицо (null — все), снятые книги (off) и выбранные (on). Первый раз — юрлицо шапки и
+  // все книги, дальше — своё, отдельно от шапки
+  // TDM#604: выбор один для всех дней ответа (график за 3 месяца — те же книги, что таблица). Пока в списке книг ничего
+  // не снято — входят все, новая книга тоже. Сужен (снята хоть одна книга списка) — входят только выбранные явно (on):
+  // книга, которой при выборе не было (только в старых днях, новый код), — снята
   const SEL_KEY = 'c16:books';
   const SEL = (() => {
-    const s = K.viewStore.get(SEL_KEY);
+    const s = K.viewStore.get(SEL_KEY), str = a => a.filter(x => typeof x === 'string');
     // type (TDM#556) — тип книги справочника (TRADING, HTM, …), null — все; нет в запомненном — все
-    if (s && typeof s === 'object') return Object.assign({ entity: typeof s.entity === 'string' ? s.entity : null, off: Array.isArray(s.off) ? s.off.filter(x => typeof x === 'string') : [] }, typeof s.type === 'string' ? { type: s.type } : {});
+    if (s && typeof s === 'object') return Object.assign({ entity: typeof s.entity === 'string' ? s.entity : null, off: Array.isArray(s.off) ? str(s.off) : [] }, typeof s.type === 'string' ? { type: s.type } : {}, Array.isArray(s.on) ? { on: str(s.on) } : {});
     const x = { entity: K.filter.entity || null, off: [] }; K.viewStore.set(SEL_KEY, x); return x;
   })();
-  // снятые книги хранятся как есть, без чистки по ответу: книга, которой в ответе нет (демо, другой прогон, ушла из
-  // истории), выбор не сужает (scopeFilter), а снятое в рабочем прогоне не теряется
+  // снятые и выбранные книги хранятся как есть, без чистки по ответу: книга, которой в ответе нет (демо, другой прогон,
+  // ушла из истории), выбор не сужает (scopeFilter), а выбранное в рабочем прогоне не теряется
   const setSel = patch => { Object.assign(SEL, patch); K.viewStore.set(SEL_KEY, SEL); render(); };
+  // выбор, запомненный до TDM#604 (только снятые), если он сужен: выбранными считаются книги дня таблицы, кроме снятых
+  // (то, что пользователь видел, когда снимал), — запоминается один раз; книга только старых дней — снята
+  function migrateSel(d) {
+    if (Array.isArray(SEL.on) || !narrowed(bookList(null, null))) return;
+    // день таблицы без строк (не посчитан, ошибка) — последний день ответа со строками; таких нет — не переносим
+    const src = (d && (d.lines || []).length) ? d : [...(H.days || [])].reverse().find(x => (x.lines || []).length);
+    if (!src) return;
+    const today = new Set((src.lines || []).flatMap(x => x.book ? [x.book] : x.books || []));
+    SEL.on = bookList(null, null).map(b => b.id).filter(b => today.has(b) && !SEL.off.includes(b)); K.viewStore.set(SEL_KEY, SEL);
+  }
+  // книги списка L, что входят: ничего в L не снято — все; иначе — выбранные явно
+  const narrowed = L => L.some(b => SEL.off.includes(b.id));
+  const onOf = L => narrowed(L) ? L.filter(b => !SEL.off.includes(b.id) && (!Array.isArray(SEL.on) || SEL.on.includes(b.id))) : L;
+  // выбор по списку L: каждая книга списка — явно выбрана или снята, книги вне списка — как были
+  // Первое сужение (по всему ответу ничего не было снято) берёт за основу все книги ответа без снятых, а не только
+  // список на экране: книги другого юрлица или типа, которых пользователь не снимал, остаются выбранными (ревью #608)
+  function choose(L, inc) {
+    const ids = L.map(b => b.id), all = bookList(null, null).map(b => b.id);
+    const base = narrowed(bookList(null, null)) && Array.isArray(SEL.on) ? SEL.on : all.filter(b => !SEL.off.includes(b));
+    setSel({ on: base.filter(b => !ids.includes(b)).concat(ids.filter(b => inc.has(b))), off: SEL.off.filter(b => !ids.includes(b)).concat(ids.filter(b => !inc.has(b))) });
+  }
   const menuOpt = {};  // строка поиска меню книг между переоткрытиями
 
   // Общая ОВП — нетто: сумма USD-эквивалентов валют со знаком (владелец, 30.10.2026; правило — здесь)
@@ -121,19 +159,23 @@
     })));
     return [...m].map(([id, entity]) => ({ id, entity })).sort((a, z) => bookName(a.id).localeCompare(bookName(z.id), 'ru') || a.id.localeCompare(z.id));
   }
-  // фильтр для K.ocpScope из выбора экрана; null — не выбрано ни одной книги. Снятыми считаются только книги юрлица
-  // в ответе: снятая книга, которой нет (ушла из истории, другое юрлицо), выбор не сужает. offEntities — юрлица со
-  // снятыми книгами: остаток другого юрлица без книг остаётся (K.ocpScope). SF — на перерисовку
+  // фильтр для K.ocpScope из выбора экрана; null — не выбрано ни одной книги. Список — книги юрлица и типа за все дни
+  // ответа: снятая книга, которой нет (ушла из истории, другое юрлицо), выбор не сужает. Под суженным выбором часть
+  // отчёта по юрлицу без книг не входит ни в один день (K.ocpScope, TDM#604). SF — на перерисовку
   let SF = null;
   function scopeFilter() {
-    const L = bookList(EN, TY), on = L.filter(b => !SEL.off.includes(b.id)).map(b => b.id);
+    const L = bookList(EN, TY), on = onOf(L).map(b => b.id);
     if (on.length === L.length) return { entity: EN, type: TY, books: null };
-    const offEntities = [...new Set(L.filter(b => SEL.off.includes(b.id)).map(b => b.entity))];
-    return on.length ? { entity: EN, type: TY, books: on, offEntities } : null;
+    return on.length ? { entity: EN, type: TY, books: on } : null;
   }
   // суммы дня под выбором книг экрана: по валютам и по строкам (книга или часть отчёта)
   function slice(d) {
-    const sc = (SF && K.ocpScope(d.lines || [], Object.assign({}, H.books, d.books), SF)) || { lines: [], notes: [], partial: false };
+    const meta = Object.assign({}, H.books, d.books);
+    const sc = (SF && K.ocpScope(d.lines || [], meta, SF)) || { lines: [], notes: [], partial: false };
+    // TDM#604: книги дня юрлица и типа выбора — сколько вошло, сколько нет; часть отчёта по юрлицу без книг, что не вошла
+    const own = x => x.book ? [x.book] : x.books || [], day = new Set(), got = new Set(sc.lines.flatMap(own));
+    (d.lines || []).forEach(x => own(x).forEach(b => { const m = K.ocpBook(b, meta); if ((!EN || m.entity === EN) && (!TY || m.type === TY)) day.add(b); }));
+    const lost = [...new Set((d.lines || []).filter(x => !x.book && !(x.books || []).length && (!EN || x.entity === EN) && !sc.lines.includes(x)).map(x => x.entity))];
     const by = {}, rows = new Map();
     let withDer = false;
     sc.lines.forEach(x => {
@@ -152,7 +194,8 @@
       } else if (x.validDate && x.validDate < d.date) r.valid = x.validDate;
       rows.set(k, r);
     });
-    return { by, rows: [...rows.values()], withDer, notes: sc.notes, partial: !!sc.partial, ccys: Object.keys(by).sort(ccyOrder) };
+    return { by, rows: [...rows.values()], withDer, notes: sc.notes, partial: !!sc.partial, ccys: Object.keys(by).sort(ccyOrder),
+      books: { day: day.size, in: [...day].filter(b => got.has(b)).length }, lost };
   }
   // подпись методики дня: по basis report_base_plus_day — только если в срезе есть строка с отчётом ещё с деривативами
   const methodOf = (d, T) => d && d.methodNote && (d.basis !== 'report_base_plus_day' || (T && T.withDer)) ? d.methodNote : null;
@@ -164,7 +207,7 @@
   function scopeBar() {
     const sb = h('div', 'c16-scope'); sb.setAttribute('data-c16-scope', '');
     const ents = entsOf();
-    const L = bookList(EN, TY), off = L.filter(b => SEL.off.includes(b.id)), n = L.length - off.length, types = typesOf(EN);
+    const L = bookList(EN, TY), inc = onOf(L), off = L.filter(b => !inc.includes(b)), n = inc.length, types = typesOf(EN);
     const blbl = !off.length ? 'все книги · ' + L.length : n ? 'книги: ' + n + ' из ' + L.length : 'книги не выбраны';
     const hf = K.filter, ports = (hf.portsOff || []).filter(Boolean);
     const head = [hf.entity && entityName(hf.entity), hf.desk, hf.ccy && 'валюта ' + hf.ccy, hf.books && hf.books.length && (hf.books.length === 1 ? bookName(hf.books[0]) : hf.books.length + ' книг'), ports.length && 'без ' + ports.map(portName).join(', ')].filter(Boolean);
@@ -186,9 +229,9 @@
       }
       const reopen = () => { const c = document.querySelector('[data-c16=books]'); if (c) c.click(); };
       const items = L.map(b => { const m = bookMeta(b.id), t = [b.id, m.desk && m.desk !== '—' ? m.desk : '', m.type && m.type !== '—' ? m.type + (m.typeDerived ? ' (выведен)' : '') : '', EN || !b.entity ? '' : entityName(b.entity), m.ocpOnly ? 'только ОВП' : ''].filter(Boolean); return { v: b.id, t: bookName(b.id), sub: t.join(' · '), multi: true }; });
-      const keep = ids => SEL.off.filter(b => !ids.includes(b));
-      K.menu(ch, items, L.map(b => b.id).filter(b => !SEL.off.includes(b)), v => setSel({ off: SEL.off.includes(v) ? keep([v]) : SEL.off.concat(v) }), 'c16-books',
-        Object.assign(menuOpt, { reopen, all: ids => setSel({ off: keep(ids) }), none: ids => setSel({ off: keep(ids).concat(ids) }) }));
+      const cur = () => new Set(inc.map(b => b.id));
+      K.menu(ch, items, inc.map(b => b.id), v => { const c = cur(); if (c.has(v)) c.delete(v); else c.add(v); choose(L, c); }, 'c16-books',
+        Object.assign(menuOpt, { reopen, all: ids => choose(L, new Set([...cur(), ...ids])), none: ids => { const c = cur(); ids.forEach(b => c.delete(b)); choose(L, c); } }));
     });
     return sb;
   }
@@ -235,6 +278,7 @@
     const d = last && last.date === H.asOf ? last : { date: H.asOf, state: 'not_computed', basis: null, fx: {}, lines: [] };
     const ents = entsOf(); EN = SEL.entity && ents.includes(SEL.entity) ? SEL.entity : null;
     TY = SEL.type && typesOf(EN).includes(SEL.type) ? SEL.type : null;  // как юрлицо: нет в ответе — все (не сохраняется)
+    migrateSel(d);
     SF = scopeFilter();
     const ok = usable(d), T = ok ? slice(d) : { by: {}, rows: [], notes: [], partial: false, ccys: [] };
     const C = T.ccys;
@@ -283,8 +327,14 @@
       };
       bp.querySelector('.bd').innerHTML = '<table class="k-tbl" data-vk="c16-books" data-title="ОВП по книгам"><thead><tr><th>Книга</th>' +
         C.map(c => '<th class="n"' + (byReport(c, d) ? ' title="Курса нет. ' + REP + '"' : '') + '>' + esc(c) + '<span class="k-thu">' + unitOf(c) + '</span></th>').join('') + '<th class="n" title="сумма USD-эквивалентов валют строки со знаком">ОВП книги<span class="k-thu">mm USD</span></th></tr></thead><tbody>' +
-        rows.map(r => '<tr data-ocp-row="' + esc(r.x.book || r.x.entity) + '"><td>' + label(r) + '</td>' + C.map(c => cell(r.v[c], c)).join('') + '<td class="n"' + (r.g == null ? ' title="нет курса одной из валют строки"' : '') + '>' + fmt(mm(r.g)) + '</td></tr>').join('') +
+        rows.map((r, i) => '<tr data-ocp-row="' + esc(r.x.book || r.x.entity) + '" data-ocp-i="' + i + '" title="щелчок — из чего складывается ОВП строки"><td>' + label(r) + '</td>' + C.map(c => cell(r.v[c], c).replace('<td class="n">', '<td class="n" data-ocp-c="' + esc(c) + '">')).join('') + '<td class="n"' + (r.g == null ? ' title="нет курса одной из валют строки"' : '') + '>' + fmt(mm(r.g)) + '</td></tr>').join('') +
         '<tr class="tot"><td>Итого</td>' + C.map(c => cell(T.by[c], c)).join('') + '<td></td></tr></tbody></table>';
+      // TDM#603: щелчок по строке — разбор ОВП строки за день таблицы, по сумме валюты — только этой валюты
+      bp.querySelector('.bd').onclick = ev => {
+        const tr = ev.target.closest('tr[data-ocp-i]'); if (!tr || ev.target.closest('a')) return;
+        const td = ev.target.closest('td[data-ocp-c]');
+        drill(rows[+tr.dataset.ocpI], td ? td.dataset.ocpC : null, d.date);
+      };
     } else bp.querySelector('.bd').innerHTML = EMPTY;
     wrap.appendChild(bp);
 
@@ -325,6 +375,8 @@
         const rows = ps.filter(p => p.value != null || (sl[i] && sl[i].ccys.includes(p.seriesName)));
         return '<b>' + esc(f.date(D[i].date)) + '</b>' + rows.map(p => '<br>' + p.marker + esc(p.seriesName) + ': <b>' + (p.value == null ? '—' : f.s(p.value, 1) + ' mm USD') + '</b>').join('') +
           (tip[i] ? '<br><span style="color:var(--warn)" data-c16-tip>' + esc(tip[i]) + '</span>' : '') +
+          (sl[i] && sl[i].books.day ? '<br><span class="mut3" data-c16-books>' + esc(booksTip(sl[i])) + '</span>' : '') +
+          (sl[i] && sl[i].lost.length ? '<br><span style="color:var(--warn)" data-c16-lost>' + esc('часть отчёта по юрлицу ' + sl[i].lost.map(entityName).join(', ') + ' без книг не учтена: под выбором книг её не разделить по книгам') + '</span>' : '') +
           (meth[i] ? '<br><span style="color:var(--warn)" data-c16-method>' + esc(meth[i]) + '</span>' : '');
       } },
       xAxis: { type: 'category', data: D.map(x => f.dshort(x.date)), axisLabel: { formatter: (v, i) => meth[i] ? v + '*' : v } },
@@ -335,6 +387,124 @@
         .concat([{ name: 'Общая', type: 'line', data: line, symbol: 'circle', showAllSymbol: true, symbolSize: (v, p) => line[p.dataIndex - 1] == null && line[p.dataIndex + 1] == null ? 5 : 0, lineStyle: { width: 2 }, color: css('--fg') }]),
     }));
   }
+  // ---------- разбор строки (TDM#603): из чего складывается ОВП книги за день ----------
+  // Источник — блок ОВП прогона дня: GET ../api/v1/runs/{run_id дня}/ocp (published.by_book: parts и ограниченные
+  // contributions, excluded, derivative_types; история их не несёт). В демо — вымышленный ответ той же формы (DEMO_OCP).
+  const KIND = { fx_forward: 'валютные форварды', fx_swap: 'валютные свопы', fx_future: 'валютные фьючерсы', ndf: 'NDF', fx_option: 'валютные опционы', swap: 'процентные и валютно-процентные свопы', other: 'прочие деривативы' };
+  const PART = { base: 'база: отчёт ОВП без деривативов', balances: 'остатки по счетам: книги нет в отчёте ОВП', derivatives: 'PV деривативов из позиций', bonds: 'переоценка облигаций', trades: 'сделки после базы', outside: 'вне отчёта (из позиций)' };
+  const ASSET = { fx: 'валюта', bond: 'облигация' }, LEG = { fx: 'валюта', cash: 'деньги', security: 'бумага' };
+  const RUNS = {};  // ответ /ocp по прогону (демо — по дате): повторный щелчок не спрашивает сервер снова
+  function runOcp(day) {
+    const id = day.runId != null ? day.runId : day.date === H.asOf ? (M.run || {}).id : null;
+    const key = server ? 'r' + id : 'd' + day.date;
+    if (RUNS[key]) return RUNS[key];
+    if (!server) return (RUNS[key] = Promise.resolve(DEMO_OCP(day)));
+    if (id == null) return Promise.reject(new Error('у дня нет прогона'));
+    return (RUNS[key] = fetch('../api/v1/runs/' + encodeURIComponent(id) + '/ocp', { cache: 'no-store' }).then(r => {
+      if (!r.ok) throw new Error(r.status + ' ' + r.statusText);
+      return r.json();
+    }).catch(e => { delete RUNS[key]; throw e; }));
+  }
+  // строка таблицы ↔ строка блока (snake_case) и строка истории (camelCase): книга или часть отчёта по юрлицу с теми же книгами
+  const rowKey = (book, entity, books) => book ? 'b|' + book : 'e|' + entity + '|' + (books || []).slice().sort().join(',');
+  const keyOf = r => rowKey(r.x.book, r.x.entity, r.x.books);
+  const mm2 = v => '<span class="' + f.cls(Math.round((v || 0) / 1e4)) + '">' + f.mns(v, 2) + '</span>';
+  const dl = (h, t) => '<a href="' + esc(h) + '">' + esc(t) + '</a>';
+  const posLink = id => id ? dl('c03-blotter.html?pos=' + encodeURIComponent(id), id) : '—';
+  function item(p, i, line) {
+    const bits = [];
+    if (i.kind === 'report') bits.push('отчёт ОВП от ' + esc(f.date(i.valid_date)) + (i.file ? ', файл ' + esc(i.file) : '') + (i.rows ? ', строк: ' + esc(i.rows) : ''));
+    else if (i.kind === 'report_part') bits.push(esc(i.note || 'часть отчёта') + (i.book_id ? ' (' + esc(bookName(i.book_id)) + ')' : ''));
+    else if (i.kind === 'report_nominal') bits.push('номинал отчёта: ' + esc(KIND[i.derivative] || i.derivative) + ' — PV нет');
+    else if (i.kind === 'trade') bits.push(dl('c20-trades.html?date=' + encodeURIComponent(i.trade_date || '') + '&book_id=' + encodeURIComponent(i.book_id || line.book_id || ''), 'сделка ' + i.trade_id),
+      esc([ASSET[i.asset] || i.asset, LEG[i.leg] && i.asset !== 'fx' ? LEG[i.leg] : '', i.trade_date ? 'заключена ' + f.date(i.trade_date) : '', i.value_date ? 'валютирование ' + f.date(i.value_date) : ''].filter(Boolean).join(' · ')));
+    else if (i.kind === 'balance') bits.push('остаток по счёту' + (i.key ? ' ' + esc(i.key) : ''));
+    else if (p === 'bonds') bits.push(posLink(i.position_id), esc('MV на базу ' + (i.mv_base == null ? '—' : f.mns(i.mv_base, 2)) + ' → сейчас ' + (i.mv_now == null ? '—' : f.mns(i.mv_now, 2)) + (i.paid ? ', выплаты ' + f.mns(i.paid, 2) : '') + ' mm'));
+    else if (p === 'outside') bits.push(i.kind === 'position' ? posLink(i.position_id) : esc(i.position_id || '—'), esc(compName(i.component)));
+    else bits.push(posLink(i.position_id), esc([KIND[i.derivative] || compName(i.component), i.last_flow ? 'последний поток ' + f.date(i.last_flow) : ''].filter(Boolean).join(' · ')));
+    if (i.book_id && line.books && line.books.length > 1 && i.kind !== 'report_part') bits.push(esc(bookName(i.book_id)));
+    if (i.marker) bits.push('<span class="warn">' + esc(i.marker) + '</span>');
+    if (i.note && i.kind !== 'report_part') bits.push('<span class="mut3">' + esc(i.note) + '</span>');
+    return '<tr class="it"><td>' + bits.join(' · ') + '</td><td class="n">' + mm2(i.amount) + '</td></tr>';
+  }
+  let COMP = {};
+  const compName = c => COMP[c] || c || '—';
+  // исключено из отчёта как деривативы (TDM#603): вид, номинал, что добавлено из позиций; строки отчёта по типам (адаптер)
+  function excludedHtml(line) {
+    const ex = line.excluded || [], ty = line.derivative_types || [];
+    if (!ex.length && !ty.length) return '';
+    const bad = x => { const add = (x.added || 0) + (x.outside || 0), big = Math.max(Math.abs(x.nominal || 0), Math.abs(add)); return !x.fallback && big > 0 && Math.abs(x.diff != null ? x.diff : x.nominal - add) > 0.1 * big; };
+    const warn = ex.filter(bad);
+    return '<div class="k-sec" data-c16-excluded>Строки отчёта, исключённые как деривативы</div>' +
+      '<div class="k-note">Эти строки вынесены из базы отчёта: считается, что их ОВП монитор добавит сам — PV деривативов из позиций. Если из позиций добавлено меньше, чем вынесено, часть ОВП пропала.</div>' +
+      (ex.length ? '<table class="k-tbl" data-vk="c16-drill-excluded" data-title="ОВП: вынесено из отчёта как деривативы"><thead><tr><th>Вид</th><th class="n">вынесено из отчёта</th><th class="n">добавлено из позиций</th><th class="n">разница</th></tr></thead><tbody>' +
+        ex.map(x => '<tr' + (bad(x) ? ' class="warn" data-c16-exbad' : '') + '><td>' + esc(KIND[x.kind] || x.kind) + ' <span class="mut3">' + esc((x.positions || 0) + ' поз.' + (x.fallback ? ' · номинал отчёта, PV нет' : '')) + '</span></td><td class="n">' + mm2(x.nominal) + '</td><td class="n">' + mm2((x.added || 0) + (x.outside || 0)) + '</td><td class="n">' + mm2(x.diff != null ? x.diff : x.nominal - (x.added || 0) - (x.outside || 0)) + '</td></tr>').join('') + '</tbody></table>' : '') +
+      (ty.length ? '<table class="k-tbl" data-vk="c16-drill-types" data-title="ОВП: строки отчёта по типам" data-c16-types><thead><tr><th>Тип строки отчёта</th><th class="n">сумма<span class="k-thu">mm ' + esc(line.ccy) + '</span></th></tr></thead><tbody>' + ty.map(t => '<tr class="it"><td>' + (t.kept ? esc(t.type) + ': спот оставлен по номиналу в базе' : esc(t.type) + ' → ' + esc(KIND[t.kind] || t.kind)) + ' <span class="mut3">' + esc(t.lines + ' стр.') + '</span></td><td class="n">' + mm2(t.amount) + '</td></tr>').join('') + '</tbody></table>' : '') +
+      (warn.length ? '<div class="k-note warn" data-c16-exwarn>Из отчёта вынесено не то, что добавлено из позиций (' + esc(warn.map(x => KIND[x.kind] || x.kind).join(', ')) + '). Возможно, тип строки отчёта отнесён к деривативам, а в позициях его нет (спот, ближняя нога свопа). Проверьте <a href="../settings.html#ovp">Настройки → ОВП: типы строк</a>.</div>' : '');
+  }
+  function lineHtml(line, cellV) {
+    const ccy = line.ccy, unit = 'mm ' + ccy;
+    const same = cellV == null || Math.abs(cellV - line.amount) < 0.5;
+    const check = cellV == null ? '' : same ? ' <span class="mut3" data-c16-same>= ячейке таблицы</span>' : ' <span class="warn">в таблице ' + f.mns(cellV, 2) + '</span>';
+    let body = '';
+    if (line.parts) {
+      const C = line.contributions || {};
+      body = Object.keys(PART).filter(p => p in line.parts).map(p => {
+        const c = C[p], items = (c && c.items) || [], rest = c && c.rest;
+        const shown = rest ? ' <span class="mut3" data-c16-trunc>показаны ' + items.length + ' из ' + (items.length + rest.count) + '</span>' : '';
+        return '<tr class="pt" data-c16-part="' + p + '"><td>' + esc(PARTN[p] || PART[p]) + shown + '</td><td class="n">' + mm2(line.parts[p]) + '</td></tr>' +
+          items.map(i => item(p, i, line)).join('') + (rest ? '<tr class="it"><td class="mut3">ещё ' + rest.count + '</td><td class="n">' + mm2(rest.amount) + '</td></tr>' : '');
+      }).join('');
+    } else if (line.source === 'report') {
+      // прежняя методика (отчёт целиком + слагаемые вне отчёта): разбора по слагаемым у прогона нет
+      body = '<tr class="pt"><td>отчёт ОВП' + (line.valid_date ? ' от ' + esc(f.date(line.valid_date)) : '') + ' <span class="mut3">целиком, с деривативами</span></td><td class="n">' + mm2(line.reported || 0) + '</td></tr>' +
+        Object.entries(line.outside || {}).map(([c, v]) => '<tr class="it"><td>вне отчёта: ' + esc(compName(c)) + '</td><td class="n">' + mm2(v) + '</td></tr>').join('');
+    } else body = '<tr class="pt"><td>из позиций: ' + esc(line.source === 'derived' ? 'книги нет в отчёте ОВП' : 'отчёт устарел') + ' — ' + dl('c03-blotter.html?q=' + encodeURIComponent(line.book_id || ''), 'позиции книги на C03') + '</td><td class="n">' + mm2(line.amount) + '</td></tr>';
+    const marks = [(line.fallback || []).length && 'номинал отчёта вместо PV: ' + line.fallback.map(k => KIND[k] || k).join(', '), (line.no_pv || []).length && 'PV нет ни у одной позиции: ' + line.no_pv.map(k => KIND[k] || k).join(', '),
+      (line.partial_pv || []).length && 'часть позиций без PV: ' + line.partial_pv.map(k => KIND[k] || k).join(', '), (line.derivative_share || []).length && 'один дериватив — почти вся сумма слагаемых строки'].filter(Boolean);
+    return '<div class="k-sec" data-c16-drill-ccy="' + esc(ccy) + '">' + esc(ccy) + '<span class="sp"></span><span style="text-transform:none;letter-spacing:0">' + unit + '</span></div>' +
+      (line.parts ? '<div class="k-note">База — отчёт ОВП от ' + esc(f.date(line.base_date)) + (line.base_kind === 'book_absent' ? ': книги в нём нет, база 0' : line.base_kind === 'with_derivatives' ? ': ещё с деривативами, их PV не добавлен' : '') + '</div>' : '') +
+      '<table class="k-tbl" data-vk="c16-drill" data-title="ОВП: из чего складывается"><thead><tr><th>Слагаемое</th><th class="n">сумма<span class="k-thu">' + unit + '</span></th></tr></thead><tbody>' + body + '<tr class="sum" data-c16-sum><td>Итого ОВП ' + esc(ccy) + check + '</td><td class="n">' + mm2(line.amount) + '</td></tr></tbody></table>' +
+      (marks.length ? '<div class="k-note warn">' + esc(marks.join('; ')) + '</div>' : '') + excludedHtml(line);
+  }
+  let PARTN = {};
+  function drill(r, ccy, date) {
+    const o = K.drawer(true), key = keyOf(r), who = r.x.book ? bookName(r.x.book) : entityName(r.x.entity) + ' · часть отчёта';
+    o.title = 'ОВП: ' + who;
+    o.el.querySelector('.t').textContent = 'Из чего складывается ОВП: ' + who;
+    o.el.classList.add('c16-dr'); o.el.setAttribute('data-c16-drill', key);
+    const days = (H.days || []).filter(usable).slice().reverse();
+    let on = date, cur = ccy;
+    const draw = () => {
+      const day = days.find(x => x.date === on) || days[0];
+      if (!day) { o.bd.innerHTML = '<div class="k-empty">ОВП за этот день нет</div>'; return; }
+      o.el.querySelector('.st').textContent = 'на ' + f.date(day.date) + (day.runId != null ? ' · прогон #' + day.runId : '');
+      // значения ячеек — из ответа истории за этот день (сравнение с итогом разбора)
+      const cellOf = c => { const L = (day.lines || []).filter(x => x.ccy === c && rowKey(x.book, x.entity, x.books) === key); return L.length ? L.reduce((a, x) => a + (x.amount || 0), 0) : null; };
+      const ccys = [...new Set((day.lines || []).filter(x => x.ccy !== 'RUB' && rowKey(x.book, x.entity, x.books) === key).map(x => x.ccy))].sort(ccyOrder);
+      const tools = '<div class="tools"><span class="mut">день</span><select class="k-input" data-c16-day>' + days.map(x => '<option value="' + x.date + '"' + (x.date === day.date ? ' selected' : '') + '>' + f.date(x.date) + '</option>').join('') + '</select>' +
+        '<span class="mut">валюта</span><span data-c16-ccys></span></div>';
+      o.bd.innerHTML = tools + '<div data-c16-dbody><div class="mut">загрузка…</div></div>';
+      o.bd.querySelector('[data-c16-day]').onchange = e => { on = e.target.value; draw(); };
+      if (cur && !ccys.includes(cur)) cur = null;
+      if (ccys.length > 1) K.seg(o.bd.querySelector('[data-c16-ccys]'), [['', 'все']].concat(ccys.map(c => [c, c])), cur || '', v => { cur = v || null; draw(); });
+      else o.bd.querySelector('[data-c16-ccys]').textContent = ccys.join('') || '—';
+      const out = o.bd.querySelector('[data-c16-dbody]');
+      runOcp(day).then(J => {
+        if (on !== day.date && days.find(x => x.date === on)) return;  // уже другой день
+        COMP = Object.fromEntries((J.components || []).map(c => [c.key, c.name]));
+        PARTN = Object.fromEntries((J.parts || []).map(c => [c.key, c.name]));
+        const lines = (((J.published || {}).by_book) || []).filter(x => rowKey(x.book_id, x.entity, x.books) === key && x.ccy !== 'RUB' && (!cur || x.ccy === cur)).sort((a, z) => ccyOrder(a.ccy, z.ccy));
+        out.innerHTML = lines.length ? lines.map(x => lineHtml(x, cellOf(x.ccy))).join('') : '<div class="k-empty">В этот день у строки нет ОВП' + (cur ? ' в ' + esc(cur) : '') + '</div>';
+        K.tableToolsAll(out);
+      }, e => { out.innerHTML = '<div class="k-empty">Разбор не загрузился: ' + esc(e.message) + '</div>'; });
+    };
+    draw();
+    return o;
+  }
+
+  // книги дня в подсказке точки (TDM#604): сколько вошло и сколько исключено выбором
+  const booksTip = s => 'книг дня: ' + s.books.in + ' из ' + s.books.day + (s.books.day > s.books.in ? ', исключено выбором: ' + (s.books.day - s.books.in) : '');
   // начало периода: дни позже этой даты
   function since(iso, p) {
     const x = new Date(iso + 'T00:00:00Z');
@@ -362,12 +532,50 @@
     const w = (i, c) => 1 + 0.004 * Math.sin(i / 5 + c.length + (c === 'CNY' ? 2 : 0));
     const fx = i => Object.fromEntries(['USD', 'EUR', 'CNY'].map(c => [c, { market: Math.round(M.fx[c] * w(i, c) * 1e4) / 1e4, cbr: Math.round(cbr[c] * w(i, c) * 1e4) / 1e4, source: 'demo' }]));
     const reportFx = i => Object.fromEntries(Object.keys(cbr).map(c => [c, Math.round(cbr[c] * w(i, c) * 1e4) / 1e4]));
-    return { runId: null, asOf, from: dates[0], to: asOf, books: {},
+    // TDM#604: дни двух видов — старые (первые полтора месяца) ещё с частью отчёта по юрлицу BANK без книг и книгой
+    // FXB-OLD, которой в новых днях нет; под суженным выбором книг они не входят ни в один день
+    const oldUntil = dates[Math.floor(dates.length / 2)];
+    return { runId: null, asOf, from: dates[0], to: asOf, books: { 'FXB-OLD': { name: 'FX: прежняя книга', entity: 'BANK', desk: 'FX', type: 'TRADING', ocpOnly: true } },
       days: dates.map((date, i) => {
-        const today = i === dates.length - 1, nr = today && noReport;
-        return { date, runId: null, runType: 'EOD', state: nr ? 'no_report' : 'computed', basis: 'report_plus_outside', fx: fx(i), reportFx: nr ? {} : reportFx(i),
-          lines: TODAY.map(([entity, book, books, ccy, , src], k) => ({ entity, book, books: books || [book], ccy, amount: walk[k][i] * 1e6 * (nr ? 1.03 : 1), source: nr ? 'derived' : src || 'report', reported: null, validDate: null })) };
+        const today = i === dates.length - 1, nr = today && noReport, old = date < oldUntil;
+        return { date, runId: null, runType: 'EOD', state: nr ? 'no_report' : 'computed', basis: old ? 'report_plus_outside' : 'report_base_plus_day', fx: fx(i), reportFx: nr ? {} : reportFx(i),
+          lines: TODAY.map(([entity, book, books, ccy, , src], k) => ({ entity, book, books: books || [book], ccy, amount: walk[k][i] * 1e6 * (nr ? 1.03 : 1), source: nr ? 'derived' : src || 'report', reported: null, validDate: null }))
+            .concat(old ? [{ entity: 'BANK', book: null, books: [], ccy: 'USD', amount: 6e6, source: 'report', reported: null, validDate: null },
+              { entity: 'BANK', book: 'FXB-OLD', books: ['FXB-OLD'], ccy: 'USD', amount: 4e6, source: 'report', reported: null, validDate: null }] : []) };
       }) };
+  }
+  // демо разбора (TDM#603): вымышленный ответ /api/v1/runs/{id}/ocp той же формы по строкам дня истории — база отчёта,
+  // PV деривативов, сделки, вне отчёта; у FXB-FWD в USD из отчёта вынесено как деривативы больше, чем добавлено из позиций
+  // (тип строки отчёта без пары в позициях), у FXB-SWAP в CNY разбор обрезан (показаны 10 из 14). Метки типов строк — вымышленные
+  function DEMO_OCP(day) {
+    const prev = s => { const t = new Date(s + 'T00:00:00Z'); do t.setUTCDate(t.getUTCDate() - 1); while (!(t.getUTCDay() % 6)); return t.toISOString().slice(0, 10); };
+    const next2 = s => { const t = new Date(s + 'T00:00:00Z'); for (let n = 0; n < 2;) { t.setUTCDate(t.getUTCDate() + 1); if (t.getUTCDay() % 6) n++; } return t.toISOString().slice(0, 10); };
+    const B = prev(day.date), r2 = v => Math.round(v);
+    const bounded = items => { items.sort((a, z) => Math.abs(z.amount) - Math.abs(a.amount)); const head = items.slice(0, 10), rest = items.slice(10); return { items: head, rest: rest.length ? { count: rest.length, amount: rest.reduce((a, x) => a + x.amount, 0) } : null }; };
+    const by = (day.lines || []).map((x, k) => {
+      const a = x.amount, book = x.book;
+      const L = { entity: x.entity, book_id: x.book, books: x.books || [], ccy: x.ccy, amount: a, source: x.source, components: [], outside: {}, reported: null, valid_date: B };
+      if (x.source !== 'report') return L;
+      if (!book) return Object.assign(L, { reported: a, base_date: B, set_id: 900 + k, base_kind: 'without_derivatives', parts: { base: a, derivatives: 0, bonds: 0, trades: 0, outside: 0 },
+        contributions: { base: { items: [{ kind: 'report', set_id: 900 + k, valid_date: B, file: 'ocp_demo.csv', book_id: null, rows: 2, amount: a }], rest: null } }, excluded: [], derivative_types: [] });
+      const many = book === 'FXB-SWAP' && x.ccy === 'CNY', spot = book === 'FXB-FWD' && x.ccy === 'USD';
+      const der = r2(a * 0.35), trd = r2(a * 0.08), out = k % 3 ? 0 : r2(a * 0.04), base = a - der - trd - out;
+      const dItems = many ? Array.from({ length: 14 }, (_, j) => ({ kind: 'position', position_id: book + '|SWP-' + (j + 1), book_id: book, derivative: 'fx_swap', component: 'fx_legs', basis: 'spot_equivalent', last_flow: next2(next2(day.date)), amount: 0 }))
+        : [{ kind: 'position', position_id: book + '|FWD-1', book_id: book, derivative: 'fx_forward', component: 'fx_legs', basis: 'spot_equivalent', last_flow: '2026-12-16', amount: spot ? der : r2(der * 0.7) },
+          ...(spot ? [] : [{ kind: 'position', position_id: book + '|SWP-2', book_id: book, derivative: 'fx_swap', component: 'fx_legs', basis: 'spot_equivalent', last_flow: '2027-01-20', amount: der - r2(der * 0.7) }])];
+      if (many) { let left = der; dItems.forEach((it, j) => { it.amount = j === dItems.length - 1 ? left : r2(der * (1 + (j % 3 - 1) * 0.3) / 14); left -= it.amount; }); }
+      const kinds = [...new Set(dItems.map(i => i.derivative))];
+      const excluded = kinds.map(kd => { const add = dItems.filter(i => i.derivative === kd).reduce((s0, i) => s0 + i.amount, 0), nom = spot ? add + 9e6 : r2(add * 1.01);
+        return { kind: kd, component: 'fx_legs', nominal: nom, added: add, outside: 0, positions: dItems.filter(i => i.derivative === kd).length, fallback: false, diff: nom - add }; });
+      const types = spot ? [{ type: 'Тип строки A', kind: 'fx_forward', kept: false, lines: 2, amount: der }, { type: 'Тип строки B', kind: 'fx_forward', kept: false, lines: 1, amount: 9e6 }, { type: 'Тип строки C', kind: 'fx_forward', kept: true, lines: 1, amount: 1.5e6 }] : [];
+      const C = { base: bounded([{ kind: 'report', set_id: 900 + k, valid_date: B, file: 'ocp_demo.csv', book_id: book, rows: 3, amount: base }]), derivatives: bounded(dItems),
+        trades: bounded([{ kind: 'trade', trade_id: 'D' + (100 + k), book_id: book, leg: 'fx', trade_date: day.date, amount: trd, asset: 'fx', value_date: next2(day.date) }]) };
+      if (out) C.outside = bounded([{ kind: 'position', position_id: book + '|OPT-1', book_id: book, component: 'options', amount: out }]);
+      return Object.assign(L, { reported: base, base_date: B, set_id: 900 + k, base_kind: 'without_derivatives', components: out ? ['options'] : [], outside: out ? { options: out } : {},
+        parts: { base, derivatives: der, bonds: 0, trades: trd, outside: out }, contributions: C, split_kinds: kinds, fallback: [], partial_pv: [], no_pv: [], excluded, derivative_types: types });
+    });
+    return { run_id: null, state: 'computed', as_of: day.date, components: Object.entries({ cash: 'кэш и к расчёту', fx_legs: 'PV валютных ног', options: 'опционы', bonds: 'облигации', other: 'прочее' }).map(([key, name]) => ({ key, name })),
+      parts: [], published: { basis: 'report_base_plus_day', base_date: B, by_book: by } };
   }
   // демо «почему отчёта нет» (форма ответа /api/v1/inbox/datasets/ocp): вымышленные файл и коды
   const DEMO_WHY = on => ({ dataset: 'ocp', name: 'ОВП', on, adapter: 'ok demo 1.0 000000000000', sources: ['ocp_demo'], in_force: null,
