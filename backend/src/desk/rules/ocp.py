@@ -543,6 +543,42 @@ def derivative_nominals(x: Any) -> dict[str, float]:
     return out
 
 
+DERIVATIVE_TYPES_MAX = 20
+"""Per comparison at most this many report row types (``derivative_types``), the largest by size."""
+
+
+def derivative_types(x: Any) -> list[dict[str, Any]]:
+    """An ``ocp`` row's ``x_derivative_types`` (the adapter's, stored as is; TDM#603): per report row type and whether
+    its future lines were taken out as a derivative kind (``kept`` false: in ``derivatives_ccy[kind]``) or left in
+    ``ocp_ccy`` at their nominal (``kept`` true, a spot type): {type, kind, kept, lines, amount}. An entry that is not of
+    that shape is left out; none: ``[]``."""
+    out = []
+    for e in x if isinstance(x, list) else []:
+        if not isinstance(e, Mapping) or not isinstance(e.get("type"), str) or not isinstance(e.get("kept"), bool):
+            continue
+        a, n = _f(e.get("amount_ccy")), e.get("lines")
+        if a is None or not math.isfinite(a):
+            continue
+        out.append({"type": e["type"][:80], "kind": str(e.get("kind") or "")[:40], "kept": e["kept"],
+                    "lines": n if isinstance(n, int) and not isinstance(n, bool) else 0, "amount": a})
+    return out
+
+
+def _merge_types(into: dict[tuple[str, str, bool], dict[str, Any]], items: Iterable[Mapping[str, Any]],
+                 sign: float = 1.0) -> None:
+    for e in items:
+        k = (e["type"], e["kind"], e["kept"])
+        t = into.setdefault(k, {"type": e["type"], "kind": e["kind"], "kept": e["kept"], "lines": 0, "amount": 0.0})
+        t["lines"] += int(sign) * e["lines"]
+        t["amount"] += sign * e["amount"]
+
+
+def _types_out(into: Mapping[tuple[str, str, bool], dict[str, Any]]) -> list[dict[str, Any]]:
+    """Excluded (``kept`` false) first, then the largest; entries that cancelled out are left out."""
+    out = [t for t in into.values() if t["lines"] > 0 or abs(t["amount"]) > 1e-9]
+    return sorted(out, key=lambda t: (t["kept"], -abs(t["amount"]), t["type"]))[:DERIVATIVE_TYPES_MAX]
+
+
 def split_kinds(report_rows: Sequence[Mapping[str, Any]], report_units: Sequence[Mapping[str, Any]]
                 ) -> dict[Any, frozenset[str]]:
     """set_id -> the derivative kinds its report file gives apart (private/1.7): a kind is apart for every unit of a
@@ -592,7 +628,8 @@ def reconcile(lines: Sequence[OcpLine], report_rows: Sequence[Mapping[str, Any]]
             rb = r.get("book_id") or book
             key = (str(rb) if rb else None, ccy)
             x = reported.setdefault(key, {"ocp_ccy": 0.0, "ocp_rub": None, "rate": None, "src": [], "base": 0.0,
-                                          "derivatives": defaultdict(float)})
+                                          "derivatives": defaultdict(float), "types": {}})
+            _merge_types(x["types"], derivative_types(_trade_x(r, "x_derivative_types")))
             der = derivative_nominals(r.get("derivatives_ccy"))
             x["ocp_ccy"] += a + math.fsum(der.values())
             x["base"] += a
@@ -617,7 +654,7 @@ def reconcile(lines: Sequence[OcpLine], report_rows: Sequence[Mapping[str, Any]]
             b, ccy = key
             parts = {c: parts_by[key][c] for c in COMPONENTS if abs(parts_by[key].get(c, 0.0)) > 0}
             rep = reported.get(key, {"ocp_ccy": 0.0, "ocp_rub": None, "rate": None, "src": [], "base": 0.0,
-                                     "derivatives": {}})
+                                     "derivatives": {}, "types": {}})
             in_report = _sum(parts, policy.report_components)
             brk = rep["ocp_ccy"] - in_report
             over = abs(brk) > policy.tolerance_ccy
@@ -625,6 +662,7 @@ def reconcile(lines: Sequence[OcpLine], report_rows: Sequence[Mapping[str, Any]]
                 "level": "book" if b is not None else "entity", "entity": str(entity or entity_of.get(b or "", "—")),
                 "book_id": b, "ccy": ccy, "reported": rep["ocp_ccy"], "reported_base": rep["base"],
                 "reported_derivatives": dict(rep["derivatives"]), "split": bool(kinds),
+                "derivative_types": _types_out(rep["types"]),
                 "split_kinds": sorted(kinds),
                 "reported_rub": rep["ocp_rub"],
                 "reported_rate": rep["rate"], "in_report_file": key in reported, "src": rep["src"][:20],
@@ -1009,6 +1047,10 @@ class TradeFlow:
     """The derivative kind of the position when the run's positions already hold it (dated on or after the trade): the
     trade is left out, the position's PV is in the derivatives' term (or ``outside``) whatever the report gives apart."""
     position_id: str | None = None
+    asset: str = ""
+    """The trade's ``asset_class`` (``fx``, ``bond``): its type on the pages (C16's drill-down, TDM#603)."""
+    value_date: str | None = None
+    """The trade's ``settle_date``, ISO; None: not given."""
 
 
 @dataclass
@@ -1114,8 +1156,10 @@ def trade_flows(trades: Iterable[Mapping[str, Any]], books: Mapping[str, Mapping
         pid = str(t.get("position_id"))
         if (book, tid) in (held or {}):
             in_positions, pid = True, held[(book, tid)]  # type: ignore[index]
+        sd = _day(t.get("settle_date"))
         mk = partial(TradeFlow, trade_id=tid, book_id=book, entity=entity, ccy=ccy,
-                     trade_date=td.isoformat() if td else None, position_id=pid)
+                     trade_date=td.isoformat() if td else None, position_id=pid, asset=kind,
+                     value_date=sd.isoformat() if sd else None)
         if kind == "bond":
             if not ccy or ccy == policy.reporting_ccy or amt is None:
                 continue
@@ -1138,12 +1182,12 @@ def trade_flows(trades: Iterable[Mapping[str, Any]], books: Mapping[str, Mapping
             res.flows.append(TradeFlow(tid, book, entity, base, sign * abs(nominal), "fx",
                                        td.isoformat() if td else None,
                                        "валютный фьючерс: номинал в базовой валюте",
-                                       derivatives.get(pid) if in_positions else None, pid))
+                                       derivatives.get(pid) if in_positions else None, pid, kind,
+                                       sd.isoformat() if sd else None))
         elif kind == "fx":
             if not ccy or ccy == policy.reporting_ccy or amt is None:
                 res.not_valued.append(f"{tid} ({kind})")
                 continue
-            sd = _day(t.get("settle_date"))
             fwd = sd is not None and td is not None and sd > add_business_days(td, policy.settle_window_bd)
             if ("fx_legs" if fwd else "cash") not in policy.report_components:
                 continue  # outside the report: from positions
@@ -1156,7 +1200,7 @@ def trade_flows(trades: Iterable[Mapping[str, Any]], books: Mapping[str, Mapping
 
 
 def _trade_x(t: Mapping[str, Any], key: str) -> Any:
-    """A ``trades`` row's raw ``x_*`` field, flat or under ``x``."""
+    """A row's raw ``x_*`` field (``trades``, ``ocp``), flat or under ``x``."""
     if t.get(key) is not None:
         return t[key]
     return t["x"].get(key) if isinstance(t.get("x"), Mapping) else None
@@ -1260,7 +1304,10 @@ def published_day(comparisons: Sequence[Mapping[str, Any]], outside_report: Sequ
     more than ``report_max_age_bd`` business days old is not a base: its books are derived (``derived_stale_report``).
     Overlapping units publish each book once, as ``published``. Each line has ``parts`` (term -> amount, their sum is
     ``amount``) and ``contributions`` (term -> the largest items, position, trade or report unit with its amount, and
-    the rest), ``base_date``, ``set_id`` and ``base_kind``. ``rates``: RUB per unit of the run (the size check of
+    the rest), ``base_date``, ``set_id``, ``base_kind`` and ``excluded`` (TDM#603: per kind the report gives apart, its
+    nominal out of the base against the PV the positions add for it, ``diff`` the rest) and ``derivative_types`` (the
+    report's row types behind it, the adapter's ``x_derivative_types``: taken out as a kind, or a spot kept at its
+    nominal). ``rates``: RUB per unit of the run (the size check of
     ``derivative_share``, DEC18); ``cash_dates``: book -> the valid date of its cash balances of the run (a book absent
     from the report on the run of B itself)."""
     derived = derive(lines)
@@ -1385,9 +1432,12 @@ def published_day(comparisons: Sequence[Mapping[str, Any]], outside_report: Sequ
                                       "file": unit.get("file_name"), "book_id": sc["book_id"],
                                       "rows": c.get("report_rows"), "amount": c.get(figure, c["reported"])})
             nominal: dict[str, float] = defaultdict(float, (c or {}).get("reported_derivatives") or {})
+            types: dict[tuple[str, str, bool], dict[str, Any]] = {}
+            _merge_types(types, (c or {}).get("derivative_types") or ())
             for k in lost_keys:
                 lc = scopes[k]["by_ccy"].get(ccy)
                 if lc:
+                    _merge_types(types, lc.get("derivative_types") or (), -1.0)
                     items["base"].append({"kind": "report_part", "set_id": scopes[k]["set_id"],
                                           "book_id": scopes[k]["book_id"], "amount": -lc.get(figure, lc["reported"]),
                                           "note": "книга со своей частью отчёта: вычтена из итога юрлица"})
@@ -1476,6 +1526,8 @@ def published_day(comparisons: Sequence[Mapping[str, Any]], outside_report: Sequ
             if day is not None:
                 items["trades"] += [{"kind": "trade", "trade_id": t.trade_id, "book_id": t.book_id, "leg": t.leg,
                                      "trade_date": t.trade_date, "amount": t.amount,
+                                     **({"asset": t.asset} if t.asset else {}),
+                                     **({"value_date": t.value_date} if t.value_date else {}),
                                      **({"note": t.note} if t.note else {})}
                                     for t in day.trades or () if t.book_id in won and t.ccy == ccy and t.amount
                                     and not (t.pv_kind and t.position_id in in_pv)]  # its position's whole PV is counted
@@ -1504,6 +1556,21 @@ def published_day(comparisons: Sequence[Mapping[str, Any]], outside_report: Sequ
             for x in big:
                 issues["derivative_share"].append(f"{where} {ccy}: {x['position_id'] or KIND_TEXT.get(x['derivative'])}"
                                                   f" — {x['share']:.0%} всех слагаемых строки")
+            # TDM#603: per kind the report gives apart, its nominal taken out of the base against what the positions
+            # add for it (the PV term, a derivative outside the report whole): a report row type mapped to a
+            # derivative kind the positions lack (a spot leg) shows here as a nominal with nothing, or less, added
+            kind_of = {x.position_id: x.kind for x in mine}
+            excluded = [] if sc["absent"] else [
+                {"kind": k, "component": KIND_COMPONENT[k], "nominal": nominal.get(k, 0.0),
+                 "added": math.fsum(i["amount"] for i in items["derivatives"] if i.get("derivative") == k),
+                 "outside": math.fsum(i["amount"] for i in items["outside"] if kind_of.get(i.get("position_id")) == k),
+                 "positions": len({i["position_id"] for i in items["derivatives"] + items["outside"]
+                                   if i.get("kind") == "position" and kind_of.get(i.get("position_id")) == k}),
+                 "fallback": k in fallback}
+                for k in DERIVATIVE_KINDS if k in kinds]
+            excluded = [x for x in excluded if x["nominal"] or x["added"] or x["outside"]]
+            for x in excluded:
+                x["diff"] = x["nominal"] - x["added"] - x["outside"]
             has_report = bool(c) or bool(items["base"])
             line(sc, won, ccy, total, REPORT,
                  components=[k for k in COMPONENTS if added.get(k)], outside={k: v for k, v in added.items() if v},
@@ -1513,6 +1580,7 @@ def published_day(comparisons: Sequence[Mapping[str, Any]], outside_report: Sequ
                  parts=parts, contributions={p: _bounded(v) for p, v in items.items() if v}, fallback=fallback,
                  split_kinds=sorted(sc["kinds"]) if not sc["absent"] else [], partial_pv=partial, no_pv=no_pv,
                  base_older=b0 is not None and business_days_between(b0, on, is_business_day) > 1,
+                 excluded=excluded, derivative_types=[] if sc["absent"] else _types_out(types),
                  **({"derivative_share": sorted(big, key=lambda x: -abs(x["amount"]))[:CONTRIBUTIONS_MAX]}
                     if big else {}))
     covered = {b for sc in scopes.values() for b in sc["books"]}

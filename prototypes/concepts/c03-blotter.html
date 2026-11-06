@@ -400,6 +400,10 @@ body { display: flex; flex-direction: column; height: 100vh; overflow: hidden; }
   K.seg(document.getElementById('sColor'), [['issuer', 'эмитент'], ['ccy', 'валюта'], ['type', 'тип'], ['pnl', 'PnL дня']], st.color, v => { st.color = v; save(); render(); });
   const q = document.getElementById('q');
   q.oninput = () => { st.q = q.value; render(); };
+  // ссылка с другого экрана (C16, TDM#603): ?q= — текст поиска, ?pos= — позиция (выбрана, карточка справа)
+  { const u = new URL(location.href), pq = u.searchParams.get('q'), pp = u.searchParams.get('pos');
+    if (pp && M.pos[pp]) { st.sel = pp; if (!pq) { st.q = (M.pos[pp].isin || M.pos[pp].name || '').toLowerCase(); q.value = st.q; } }
+    if (pq) { st.q = pq; q.value = pq; } }
   K.commands([{ label: 'Колонки: ' + 'Базовый', run: () => document.querySelector('#sCols button').click() }, { label: 'Поиск в таблице позиций', run: () => q.focus() }]);
 
   document.addEventListener('keydown', e => {
@@ -416,6 +420,7 @@ body { display: flex; flex-direction: column; height: 100vh; overflow: hidden; }
   K.on('alias', () => { if (st.sel) showCard(st.sel); });  // новое имя бумаги — в карточке справа
   K.on('theme', render);
   render();
+  if (new URL(location.href).searchParams.get('pos') === st.sel && st.sel) select(st.sel, true);  // позиция по ссылке — в виду
 })();
 </script>
 </body>
