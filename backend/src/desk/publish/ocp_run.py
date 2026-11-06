@@ -61,6 +61,7 @@ from typing import Any
 import psycopg
 
 from .. import store
+from ..inbox.schema import CCY_REPORTED
 from ..marketdata.adapter import MarketView
 from ..orchestrator import market_rates
 from ..rules import funding as F
@@ -187,6 +188,18 @@ def _rates(reference_fx: list[dict[str, Any]]) -> dict[str, float]:
     return {r["ccy"]: float(r["rate"]) for r in reference_fx if r.get("rate")}
 
 
+def aliased_notes(sources: Mapping[str, Sequence[Mapping[str, Any]]]) -> list[str]:
+    """A note per dataset whose rows had a currency code taken as another (``inbox.schema.alias_row``, TDM#601: CNH as
+    CNY), so that the OCP of the merged currency can be reconciled with the report's own code."""
+    out = []
+    for what, rows in sources.items():
+        pairs = Counter((code, r.get(f)) for r in rows for f, code in (r.get(CCY_REPORTED) or {}).items())
+        if pairs:
+            out.append(f"{what}: " + ", ".join(f"{a} взята как {b} (строк: {n})" for (a, b), n in sorted(pairs.items()))
+                       + " — Настройки, «Одна валюта под двумя кодами»")
+    return out
+
+
 def _snapshot_rates(market: MarketView | None) -> dict[str, float]:
     """ccy -> RUB per unit at the market rate (``fallback.FX_MARKET``, the CBR rate per unit when MOEX does not trade
     the currency) of every currency of the snapshot's rates (TDM#602): the engine's size check of a line in a currency
@@ -300,6 +313,9 @@ def _compute(con: psycopg.Connection, on: date, market: MarketView | None, conte
     report = store.dataset_rows(con, KIND, on, known_at=known_at)
     is_bd = business_day(calendar)
     days = base_days(con, on, known_at, report.units, policy, is_bd, content_rows, books, terms or {})
+    notes += aliased_notes({"отчёт ОВП": report.rows, "условия сделок": inputs.trade_terms,
+                            "остатки на счетах": cash.rows if cash else [],
+                            "сделки": [t for d in days.values() for t in d.trade_rows or ()]})
     res = O.compute_ocp(content_rows, books, on, terms=inputs.trade_terms, cash=cash.rows if cash else (),
                         liabilities=liabs, report_rows=report.rows, report_units=report.units, policy=policy,
                         days=days, is_business_day=is_bd, valid_dates=inputs.valid_dates,

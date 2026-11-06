@@ -21,6 +21,7 @@ from datetime import date, timedelta
 from decimal import Decimal
 from typing import Any
 
+from ..inbox.schema import alias_position
 from . import concepts
 
 AMOUNTS = ("amount_ccy", "face_amount_ccy", "face_outstanding_ccy")
@@ -345,6 +346,8 @@ def unvalued(con, run: dict[str, Any], futures_by_ticker: bool | None = None) ->
         "SELECT position_id, asset_class, ccy, amount_ccy, face_amount_ccy, face_outstanding_ccy, mv_rub, x"
         " FROM position_input WHERE set_id = ANY(%s) AND position_id = ANY(%s)",
         (run["position_set_ids"], [r["position_id"] for r in rows]))}
+    for i in inputs.values():  # TDM#601: CNH is CNY, as the run read the row (store.positions_for)
+        alias_position(i)
     fx = _rates(con, run["run_id"])
     groups: dict[str, dict[str, Any]] = {}
     missing: set[str] = set()

@@ -36,6 +36,7 @@ from typing import Any
 
 from rub_fixed_income import RISK_BUCKETS, RISK_PILLARS
 
+from ..inbox.schema import alias_position
 from ..marketdata import ratings
 from ..pnl.reasons import (
     METHOD_TEXT,
@@ -398,6 +399,8 @@ def assemble(con, run: dict[str, Any]) -> dict[str, Any]:
         f"SELECT position_id, {', '.join(INPUT_FIELDS)} FROM position_input WHERE set_id = ANY(%s)"
         " AND position_id = ANY(%s)", (run["position_set_ids"], [r["position_id"] for r in unvalued]))} \
         if unvalued else {}
+    for i in inputs.values():  # TDM#601: CNH is CNY, as the run read the row (store.positions_for)
+        alias_position(i)
     fbt = None
     if unvalued:
         from .coverage import _futures_by_ticker

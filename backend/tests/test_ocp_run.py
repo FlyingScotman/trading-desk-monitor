@@ -82,15 +82,15 @@ def ctx():
 
 
 def _scan(con, tmp_path: Path, report: bool = True, policy: str | None = None, books: str = BOOKS,
-          ocp: str = OCP) -> None:
+          ocp: str = OCP, positions: str = POSITIONS, cash: str = CASH, more: tuple = ()) -> None:
     cfg, inbox = tmp_path / "cfg", tmp_path / "in"
     cfg.mkdir()
     inbox.mkdir()
     for name, text in (("books.csv", books), ("entities.csv", ENTITIES), ("funding_rules.csv", RULES),
                        *((("ocp_policy.csv", policy),) if policy else ())):
         _csv(cfg / name, text)
-    files = [("positions_20261016.csv", POSITIONS), ("trade_terms_20261015.csv", TERMS),
-             ("cash_balances_20261015.csv", CASH)] + ([("ocp_20261015.csv", ocp)] if report else [])
+    files = [("positions_20261016.csv", positions), ("trade_terms_20261015.csv", TERMS),
+             ("cash_balances_20261015.csv", cash)] + ([("ocp_20261015.csv", ocp)] if report else []) + list(more)
     for name, text in files:
         _csv(inbox / name, text)
     s = Settings(snapshot_cache=SNAPS, inbox_dirs=(inbox,), inbox_archive=tmp_path / "archive", private_adapter=None,
@@ -325,3 +325,61 @@ def test_rates_of_every_currency_of_the_ocp(store_url, ctx, tmp_path):
     day, = h["days"]
     assert {"JPY", "KZT", "GEL"} <= set(day["fx"]) and day["fx"]["GEL"]["cbr"] == pytest.approx(gel["cbr"])
 
+
+def test_cnh_is_cny_in_every_dataset(store_url, ctx, tmp_path):
+    """TDM#601: positions, the OCP report, cash balances and the day's trades given in CNH are CNY in the run (the
+    setting ``ccy_aliases``, default CNH=CNY): one currency CNY with its rate, no CNH line or rate; the report's code
+    kept with the row (``extra.reported.ccy_reported``, ``_ccy_reported``) and said in the OCP notes."""
+    from desk.inbox.schema import CCY_REPORTED
+
+    positions = POSITIONS + "D1;D1|CNH;fx;CNH;;CNH;;5000000;;\nD1;D1|CNY;fx;CNY;;CNY;;1000000;;\n"
+    trades = ("trade_id;trade_version;status;trade_date;book_id;position_id;asset_class;source_instrument_id;side;"
+              "amount_ccy;ccy;settle_date\nTR-1;1;live;2026-10-15;D1;D1|CNH;fx;CNHRUB_TOM;buy;100000;CNH;2026-10-16\n")
+    with store.connect(store_url) as con:
+        _scan(con, tmp_path, policy=OLD_BASIS, positions=positions, cash=CASH + "ENT1;D1;CNH;MAIN;20000\n",
+              ocp=OCP + "ENT1;D1;CNH;6000000;;\n", more=(("trades_20261015_1100.csv", trades),))
+        day = store.dataset_rows(con, "trades", DATE).rows
+        rid, _ = _run(con, ctx)
+        block, = con.execute("SELECT data FROM run_reference WHERE run_id = %s AND kind = 'ocp'", (rid,)).fetchone()
+        fx, = con.execute("SELECT data FROM run_reference WHERE run_id = %s AND kind = 'fx'", (rid,)).fetchone()
+    assert [(t["ccy"], t[CCY_REPORTED]) for t in day] == [("CNY", {"ccy": "CNH"})]
+    rates = {r["ccy"]: r for r in fx}
+    assert "CNH" not in rates and rates["CNY"]["rate"]
+    pub = block["published"]["by_ccy"]
+    assert "CNH" not in pub and pub["CNY"]["rate"] == rates["CNY"]["rate"] and pub["CNY"]["total_rub"] is not None
+    assert "CNH" not in {x["ccy"] for x in block["lines"]} and "CNH" not in block["by_ccy"]
+    rec = {(x["book_id"], x["ccy"]): x for x in block["reconciliation"]}
+    assert rec[("D1", "CNY")]["reported"] == 6_000_000  # the report's CNH line is the book's CNY
+    assert any(n.startswith("отчёт ОВП: CNH взята как CNY") for n in block["notes"])
+    pos = {p["position_id"]: p["fact"] for p in
+           TestClient(create_app(store_url)).get(f"/api/v1/runs/{rid}/positions").json()["positions"]}
+    assert pos["D1|CNH"]["ccy"] == pos["D1|CNY"]["ccy"] == "CNY"
+    assert pos["D1|CNH"]["extra"]["reported"]["ccy_reported"] == "CNH"
+    assert "ccy_reported" not in pos["D1|CNY"]["extra"]["reported"]
+
+
+def test_currency_aliases_setting(tmp_path, monkeypatch):
+    """TDM#601: the setting's text, both directions of a rate's fallback, «нет» for none."""
+    from desk.inbox import schema
+    from desk.settings import load
+
+    assert schema.parse_ccy_aliases("cnh=CNY; XYZ = usd, RUB=USD, bad, CNY=CNY") == {"CNH": "CNY", "XYZ": "USD"}
+    assert schema.parse_ccy_aliases("нет") == {} and schema.parse_ccy_aliases(None) == {}
+    env = {"DESK_HOME": str(tmp_path)}
+    try:
+        assert load(env).ccy_aliases == "CNH=CNY" and schema.ccy_aliases() == {"CNH": "CNY"}
+        assert schema.norm_ccy("cnh") == "CNY" and schema.code_ccy("cnh") == "CNH" and schema.norm_ccy("RUR") == "RUB"
+        assert schema.ccy_partners("CNY") == ["CNH"] and schema.ccy_partners("CNH") == ["CNY"]
+        row = {"base_ccy": "CNH", "quote_ccy": "RUB"}
+        assert schema.alias_row(row, ("base_ccy", "quote_ccy")) == {"base_ccy": "CNH"}
+        assert row == {"base_ccy": "CNY", "quote_ccy": "RUB", schema.CCY_REPORTED: {"base_ccy": "CNH"}}
+        (tmp_path / "settings.json").write_text('{"ccy_aliases": "нет"}', encoding="utf-8")
+        assert load(env).ccy_aliases == "нет" and schema.ccy_aliases() == {} and schema.norm_ccy("CNH") == "CNH"
+    finally:
+        schema.set_ccy_aliases(schema.DEFAULT_CCY_ALIASES)
+
+
+def test_a_rate_of_one_code_stands_in_for_the_other(ctx):
+    """TDM#601: the snapshot has no CNH rate: CNH takes CNY's (and a code with neither stays without)."""
+    assert ctx.market.fx("CNH") == ctx.market.fx("CNY") and ctx.market.fx("CNY")["cbr"]
+    assert not any(ctx.market.fx("XAU").values())

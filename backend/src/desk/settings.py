@@ -134,6 +134,7 @@ from urllib.parse import urlsplit
 
 from . import funding_settings
 from .inbox.runner import is_path_spec
+from .inbox.schema import parse_ccy_aliases, set_ccy_aliases
 from .updater import adapter_store
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
@@ -196,6 +197,7 @@ JSON_KEYS: dict[str, tuple[str, str]] = {
     "fx_unlinked_terms": ("DESK_FX_UNLINKED_TERMS", "bool"),  # replaced by off_report_derivatives (TDM#468), still readable
     "off_report_derivatives": ("DESK_OFF_REPORT_DERIVATIVES", "str"),
     "ndf_fixing_sources": ("DESK_NDF_FIXING_SOURCES", "str"),
+    "ccy_aliases": ("DESK_CCY_ALIASES", "str"),
     "futures_by_ticker": ("DESK_FUTURES_BY_TICKER", "bool"),
     "inbox_lookback_days": ("DESK_INBOX_LOOKBACK_DAYS", "int0"),
     "update_dir": ("DESK_UPDATE_DIR", "path"),
@@ -305,6 +307,7 @@ class Settings:
     fx_spot_source: str = "market"  # FX forwards' spot: market (MOEX 19:00 chain, as bonds) or cets_tom
     off_report_derivatives: str = "exclude"  # TDM#468: exclude | include the trade_terms derivatives no positions row names
     ndf_fixing_sources: str = "CBR=CBR,ЦБ=CBR,ЦБ РФ=CBR"  # the report's NDF fixing source -> the hub's
+    ccy_aliases: str = "CNH=CNY"  # TDM#601: codes taken as one currency (inbox.schema.parse_ccy_aliases); «нет»: none
     futures_by_ticker: bool = False  # a non-bond row naming a FORTS FX future by ticker is valued by core (P3)
     inbox_lookback_days: int = 35  # report dates at most this many days old (R22); 0: no limit
     history_days: int = 260  # hub business dates of market history for the bond charts (~1 year); 0: the cache only
@@ -424,6 +427,7 @@ class Settings:
             ("fx_spot_source", self.fx_spot_source),
             ("off_report_derivatives", self.off_report_derivatives),
             ("ndf_fixing_sources", self.ndf_fixing_sources),
+            ("ccy_aliases", ", ".join(f"{k} as {v}" for k, v in parse_ccy_aliases(self.ccy_aliases).items()) or "none"),
             ("futures_by_ticker", "on" if self.futures_by_ticker else "off"),
             ("inbox_lookback_days", str(self.inbox_lookback_days) if self.inbox_lookback_days else "0 (no limit)"),
             ("update_dir", str(self.update_dir or "none")),
@@ -627,7 +631,9 @@ def load(environ: dict[str, str] | None = None) -> Settings:
         raise SettingsError(f"{home / SETTINGS_FILE}: " + "; ".join(errors))
     if environ is None:
         _export_proxy(doc)
-    return _build(proc, doc, file_env, home)
+    st = _build(proc, doc, file_env, home)
+    set_ccy_aliases(parse_ccy_aliases(st.ccy_aliases))  # TDM#601: the store's readers and norm_ccy follow the setting
+    return st
 
 
 def _token(proc: dict[str, str], file_env: dict[str, str], home: Path) -> tuple[str | None, str]:
@@ -827,6 +833,7 @@ def _build(proc: dict[str, str], doc: dict[str, Any], file_env: dict[str, str], 
         fx_spot_source=choice("DESK_FX_SPOT_SOURCE", defaults.fx_spot_source, ("market", "cets_tom")),
         off_report_derivatives=off_report,
         ndf_fixing_sources=(get("DESK_NDF_FIXING_SOURCES") or defaults.ndf_fixing_sources).strip(),
+        ccy_aliases=(get("DESK_CCY_ALIASES") or defaults.ccy_aliases).strip(),
         futures_by_ticker=flag("DESK_FUTURES_BY_TICKER", defaults.futures_by_ticker),
         inbox_lookback_days=count("DESK_INBOX_LOOKBACK_DAYS", defaults.inbox_lookback_days, 0),
         history_days=count("DESK_HISTORY_DAYS", defaults.history_days, 0),

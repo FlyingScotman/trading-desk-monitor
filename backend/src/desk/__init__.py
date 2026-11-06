@@ -71,7 +71,7 @@ VALUATION_VERSION = 31  # 2: risk per curve (R8); 3: static display fields (R9 D
 # futures, a book absent from the OCP report with its cash balances, the trades in FX futures in the base currency
 # (TDM#588)
 # 31: the run's rates hold every currency of its OCP (the report's JPY, KZT, GEL: the CBR rate per unit where MOEX has
-# none, TDM#602)
+# none, TDM#602); CNH is CNY in every dataset (setting ccy_aliases, TDM#601)
 
 
 def logic_version() -> str:
