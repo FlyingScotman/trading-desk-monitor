@@ -18,6 +18,7 @@
 <div class="k-tabs" id="tabs"></div>
 <div class="k-page">
   <div id="hud"></div>
+  <div id="trades" style="margin:10px 0 12px"></div>
   <div id="view"></div>
 </div>
 <script src="../echarts.min.js"></script>
@@ -31,6 +32,8 @@
   // вкладки под шапкой
   document.body.insertBefore(document.getElementById('tabs'), document.querySelector('.k-page'));
   K.hud(document.getElementById('hud'));
+  // сделки дня по книгам шапки (TDM#585): сколько, сколько в позициях, последняя — со ссылкой на C20
+  K.dayTradesTile(document.getElementById('trades'));
   const TABS = [['risk', 'Риски'], ['ccy', 'Валюта × тип'], ['pos', 'Позиции'], ['pnl', 'PnL'], ['hist', 'История']];
   let tab = 'risk';
   try { tab = localStorage.getItem('c01-tab') || 'risk'; } catch (e) { }

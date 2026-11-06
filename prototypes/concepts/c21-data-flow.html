@@ -1,0 +1,297 @@
+<!doctype html>
+<html lang="ru" data-run="optional">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="icon" href="data:,">
+<title>C21 · Схема данных</title>
+<link rel="stylesheet" href="lib/kit.css">
+<style>
+.c21-days { display: flex; gap: 6px; overflow-x: auto; padding-bottom: 2px; align-items: stretch; }
+.c21-day { flex: none; min-width: 74px; border: 1px solid var(--line-2); border-radius: 6px; background: var(--panel); padding: 4px 8px 5px; cursor: pointer; text-align: left; position: relative; color: var(--fg); }
+.c21-day:hover { border-color: var(--accent); }
+.c21-day.on { border-color: var(--accent); background: var(--accent-bg); }
+.c21-day .d { font-weight: 600; font-variant-numeric: tabular-nums; }
+.c21-day .s { font-size: 11px; color: var(--fg-3); white-space: nowrap; }
+.c21-day::before { content: ""; position: absolute; left: 0; top: 6px; bottom: 6px; width: 3px; border-radius: 2px; background: var(--c, var(--line-2)); }
+.dst-ok { --c: var(--pos); } .dst-warn { --c: var(--warn); } .dst-bad { --c: var(--neg); }
+/* статус блока: готово / идёт / ждёт / ошибка / выключено */
+.st-ok { --c: var(--pos); } .st-running { --c: var(--accent); } .st-waiting { --c: var(--warn); } .st-error { --c: var(--neg); } .st-off { --c: var(--fg-3); }
+.c21-head { display: flex; gap: 8px 16px; align-items: center; flex-wrap: wrap; font-size: 12.5px; color: var(--fg-2); }
+.c21-head .big { font-size: 18px; font-weight: 650; color: var(--fg); }
+.c21-head b { color: var(--fg); }
+.c21-cnt { display: inline-flex; align-items: center; gap: 5px; white-space: nowrap; }
+.c21-cnt i, .c21-b .dot { width: 9px; height: 9px; border-radius: 50%; background: var(--c); display: inline-block; flex: none; }
+.c21-legend { display: flex; gap: 6px 14px; flex-wrap: wrap; font-size: 11.5px; color: var(--fg-3); }
+.c21-legend .ln { display: inline-block; width: 22px; height: 0; border-top: 2px solid var(--line-2); vertical-align: middle; margin-right: 4px; }
+.c21-legend .ln.bad { border-top-color: var(--neg); }
+/* схема: три столбца, между ними — стрелки (SVG поверх); на узком окне — один столбец, стрелки словами в блоках */
+.c21-flow { position: relative; display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 14px 64px; align-items: start; }
+.c21-col { display: flex; flex-direction: column; gap: 10px; min-width: 0; position: relative; z-index: 1; }
+.c21-col > h4 { margin: 0 0 2px; font-size: 11.5px; text-transform: uppercase; letter-spacing: .06em; color: var(--fg-2); font-weight: 600; }
+.c21-svg { position: absolute; left: 0; top: 0; pointer-events: none; z-index: 0; overflow: visible; }
+.c21-svg path { fill: none; stroke: var(--line-2); stroke-width: 1.5; opacity: .9; }
+.c21-svg path.bad { stroke: var(--neg); stroke-width: 2.2; opacity: 1; }
+.c21-svg path.hl { stroke: var(--accent); stroke-width: 2.4; opacity: 1; }
+.c21-svg path.bad.hl { stroke: var(--neg); stroke-width: 3; }
+.c21-flow.hlon .c21-svg path:not(.hl) { opacity: .25; }
+.c21-b { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 8px 10px 8px 12px; position: relative; overflow: hidden; min-width: 0; font-size: 12px; }
+.c21-b::before { content: ""; position: absolute; left: 0; top: 0; bottom: 0; width: 3px; background: var(--c); }
+.c21-b:focus-visible, .c21-b.hl { outline: 2px solid var(--accent); outline-offset: 1px; }
+.c21-b .hd { display: flex; align-items: center; gap: 6px; }
+.c21-b .hd b { font-size: 13px; color: var(--fg); min-width: 0; overflow-wrap: anywhere; }
+.c21-b .hd .sp { flex: 1; }
+.c21-badge { display: inline-block; padding: 0 8px; border-radius: 999px; font-size: 11px; font-weight: 600; border: 1px solid var(--c); color: var(--c); white-space: nowrap; background: color-mix(in srgb, var(--c) 12%, transparent); }
+.c21-b .what { color: var(--fg-3); font-size: 11.5px; margin: 1px 0 4px; }
+.c21-b ul { margin: 2px 0 0; padding-left: 15px; color: var(--fg-2); }
+.c21-b li { margin: 1px 0; overflow-wrap: anywhere; }
+.c21-b li .at { color: var(--fg-3); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.c21-b li.bad { color: var(--neg); } .c21-b li.warn { color: var(--warn); }
+.c21-b .sub { font-size: 11px; color: var(--fg-3); margin-top: 4px; text-transform: uppercase; letter-spacing: .04em; }
+.c21-b .wait { margin-top: 4px; color: var(--warn); }
+.c21-b .io { margin-top: 5px; font-size: 11.5px; color: var(--fg-3); }
+.c21-b .io .bad { color: var(--neg); }
+.c21-b .lnk { margin-top: 5px; display: flex; gap: 4px 12px; flex-wrap: wrap; font-size: 11.5px; }
+.c21-b .more { color: var(--accent); cursor: pointer; font-size: 11.5px; background: none; border: 0; padding: 0; }
+.c21-prog { margin-top: 4px; }
+.c21-prog .bar { height: 5px; border-radius: 3px; background: var(--line); overflow: hidden; }
+.c21-prog .bar i { display: block; height: 100%; background: var(--c); }
+.c21-prog .t { font-size: 11px; color: var(--fg-2); font-variant-numeric: tabular-nums; margin-top: 1px; }
+.c21-ahead { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 260px), 1fr)); gap: 8px; }
+.c21-a { border: 1px solid var(--line); border-radius: 8px; padding: 8px 10px; background: var(--panel); min-width: 0; font-size: 12px; color: var(--fg-2); }
+.c21-a b { color: var(--fg); }
+.c21-a.bad { border-color: var(--neg); }
+.c21-gaps li { margin: 2px 0; }
+.c21-gaps li b { color: var(--neg); font-weight: 600; }
+.c21-msg { padding: 24px; text-align: center; color: var(--fg-2); }
+@media (max-width: 900px) {
+  .c21-flow { grid-template-columns: minmax(0, 1fr); gap: 14px; }
+  .c21-svg { display: none; }
+}
+@media (max-width: 720px) { .k-panel > .hd { flex-wrap: wrap; } }
+</style>
+</head>
+<body>
+<div class="k-page">
+  <div class="c21-days" id="days" aria-label="Даты"></div>
+  <div id="view"><div class="c21-msg">загрузка…</div></div>
+</div>
+<script src="lib/boot.js"></script>
+<script src="lib/kit.js"></script>
+<script src="lib/instr.js"></script>
+<script>
+(function () {
+  'use strict';
+  // «Схема данных» (TDM#586): поток данных выбранной даты блок-схемой. Слева — откуда приходят данные (отчёты из папок,
+  // фиды сервисов адаптера, закрытия и история хаба, справочники), в середине — что с ними делается (чтение, приём,
+  // сделки → позиции дня, оценка ядром, ОВП, PnL, пересчёт прошлых дат, догрузка истории), справа — где это видно (экраны).
+  // В каждом блоке — статус (готово / идёт / ждёт / ошибка / выключено), что получено и когда, что отброшено и почему,
+  // чего ждёт, прогресс фоновой работы, ссылка на экран с подробностями и на настройку. Красная стрелка — дальше пошли
+  // неполные данные. Внизу — «Что впереди»: очередь фоновых работ. Данные — один маршрут GET ../api/v1/dataflow?on=
+  // (backend desk/dataflow.py): то, что монитор уже знает; хаб и сервисы при открытии не опрашиваются. Полоса дат —
+  // ../api/v1/inbox/days (как C14). Обновляется раз в 30 с, пока вкладка открыта.
+  const K = KIT, f = K.f, esc = K.esc;
+  K.top({ title: 'C21 · Схема данных', tag: 'откуда пришли данные, что посчитано, где остановилось, что дальше', filter: false, filterNote: 'схема — по всем книгам' });
+  const server = K.source === 'real' || K.source === 'empty';
+  const view = document.getElementById('view'), daysEl = document.getElementById('days');
+  const u = new URL(location.href);
+  let on = u.searchParams.get('on') || null, doc = null, open = new Set();
+  const COLS = ['source', 'process', 'result'];
+  const DAY = { ok: 'всё пришло', warn: 'есть замечания', bad: 'есть проблемы' };
+
+  function panel(title, extra) { const p = K.h('div', 'k-panel'); p.innerHTML = '<div class="hd"><h3>' + title + '</h3><span class="sp"></span>' + (extra || '') + '</div><div class="bd"></div>'; return p; }
+  function msg(t) { view.innerHTML = '<div class="k-panel"><div class="c21-msg">' + t + '</div></div>'; }
+  function getJSON(path) {
+    return fetch('../' + path, { cache: 'no-store' }).then(r => {
+      if (r.status === 401 || r.status === 403) throw Object.assign(new Error('forbidden'), { forbidden: true });
+      if (!r.ok) throw new Error(r.status + ' ' + r.statusText);
+      return r.json();
+    });
+  }
+  function load() {
+    if (!server) { doc = DEMO(); on = doc.date; render(); renderDays(DEMO_DAYS); return Promise.resolve(); }
+    const strip = getJSON('api/v1/inbox/days?n=45').then(ds => ds.days).catch(() => []);
+    return Promise.all([getJSON('api/v1/dataflow' + (on ? '?on=' + on : '')), strip]).then(([d, ds]) => { doc = d; on = d.date; render(); renderDays(ds); }).catch(e => {
+      if (e.forbidden) return msg('Нужно войти в монитор: схема данных открыта всем пользователям.');
+      msg('Не удалось загрузить схему данных' + (on ? ' за ' + esc(on) : '') + ': ' + esc(e.message) + '. Выберите другую дату.');
+      strip.then(renderDays);
+    });
+  }
+  function pick(d) { on = d; const x = new URL(location.href); x.searchParams.set('on', d); history.replaceState(null, '', x.toString()); load(); }
+  function renderDays(list) {
+    daysEl.innerHTML = list.slice(0, 45).map(x => '<button class="c21-day dst-' + esc(x.state) + (x.date === on ? ' on' : '') + '" data-d="' + esc(x.date) + '" title="' + esc(DAY[x.state] || '') + '"><div class="d">' + f.dshort(x.date) + '</div><div class="s">' + (x.default_run_id ? '#' + x.default_run_id : x.runs ? x.runs + ' прог.' : 'нет прогона') + '</div></button>').join('') +
+      '<input class="k-input" type="date" id="pick" style="min-width:140px" title="Другая дата" value="' + esc(on || '') + '">';
+    daysEl.querySelectorAll('[data-d]').forEach(b => b.onclick = () => pick(b.dataset.d));
+    const ip = document.getElementById('pick'); ip.onchange = () => ip.value && pick(ip.value);
+    const sel = daysEl.querySelector('.on'); if (sel) sel.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+  }
+
+  // ---------- блок ----------
+  const when = at => at ? ' <span class="at">' + esc(/^\d{4}-\d\d-\d\dT/.test(at) ? K.mskTime(at, true) : at) + '</span>' : '';
+  const li = x => '<li' + (x.tone ? ' class="' + esc(x.tone) + '"' : '') + '>' + esc(x.t) + when(x.at) + '</li>';
+  const SHOW = 4;
+  function list(id, kind, L) {
+    if (!L.length) return '';
+    const all = open.has(id + ':' + kind), shown = all ? L : L.slice(0, SHOW);
+    return '<ul>' + shown.map(li).join('') + '</ul>' + (L.length > SHOW ? '<button class="more" data-more="' + esc(id + ':' + kind) + '">' + (all ? 'свернуть' : 'ещё ' + (L.length - SHOW)) + '</button>' : '');
+  }
+  function prog(p) {
+    if (!p || p.total == null && !p.done) return '';
+    const pct = p.total ? Math.max(0, Math.min(100, 100 * p.done / p.total)) : 0;
+    return '<div class="c21-prog"><div class="bar"><i style="width:' + pct.toFixed(1) + '%"></i></div><div class="t">' + f.n(p.done || 0, 0) + (p.total != null ? ' из ' + f.n(p.total, 0) : '') + (p.text ? ' · ' + esc(p.text) : '') + '</div></div>';
+  }
+  function card(b, by) {
+    const ins = doc.edges.filter(e => e.to === b.id), outs = doc.edges.filter(e => e.from === b.id);
+    const name = id => esc((by[id] || {}).title || id);
+    const io = (ins.length ? '← ' + ins.map(e => e.incomplete ? '<span class="bad" title="' + esc(e.why) + '">' + name(e.from) + ': ' + esc(e.why) + '</span>' : '<span title="' + esc(e.what) + '">' + name(e.from) + '</span>').join(', ') : '') +
+      (ins.length && outs.length ? '<br>' : '') + (outs.length ? '→ ' + outs.map(e => '<span' + (e.incomplete ? ' class="bad"' : '') + ' title="' + esc(e.what + (e.why ? ': ' + e.why : '')) + '">' + name(e.to) + '</span>').join(', ') : '');
+    return '<div class="c21-b st-' + esc(b.status) + '" id="b-' + esc(b.id) + '" data-b="' + esc(b.id) + '" tabindex="0">' +
+      '<div class="hd"><span class="dot" aria-hidden="true"></span><b>' + esc(b.title) + '</b><span class="sp"></span><span class="c21-badge">' + esc(b.status_text || b.status) + '</span></div>' +
+      '<div class="what">' + esc(b.what) + (b.at ? ' · ' + esc(K.mskTime(b.at, true)) : '') + '</div>' + prog(b.progress) +
+      list(b.id, 'got', b.got) +
+      (b.dropped.length ? '<div class="sub">отброшено и замечания</div>' + list(b.id, 'dropped', b.dropped) : '') +
+      (b.waits ? '<div class="wait">ждёт: ' + esc(b.waits) + '</div>' : '') +
+      (io ? '<div class="io">' + io + '</div>' : '') +
+      '<div class="lnk">' + (b.link ? '<a href="' + esc(b.link.href) + '">' + esc(b.link.text) + ' →</a>' : '') + (b.fix ? '<a href="' + esc(b.fix.href) + '" title="Настройка, которая включает или исправляет этот шаг">настройка: ' + esc(b.fix.text) + '</a>' : b.fix_note && b.status !== 'ok' ? '<span class="mut3">' + esc(b.fix_note) + '</span>' : '') + '</div>' +
+      '</div>';
+  }
+
+  // ---------- стрелки: из блока одного столбца в блок другого; красная — неполные данные ----------
+  let flowEl = null;
+  function drawEdges() {
+    if (!flowEl || !flowEl.isConnected) return;
+    const svg = flowEl.querySelector('.c21-svg');
+    if (getComputedStyle(svg).display === 'none') { svg.innerHTML = ''; return; }
+    const R = flowEl.getBoundingClientRect(), col = id => ((doc.blocks.find(b => b.id === id) || {}).column);
+    const rect = id => { const el = flowEl.querySelector('#b-' + CSS.escape(id)); if (!el) return null; const r = el.getBoundingClientRect(); return { l: r.left - R.left, r: r.right - R.left, t: r.top - R.top, h: r.height, cy: r.top - R.top + r.height / 2 }; };
+    const E = doc.edges.filter(e => col(e.from) && col(e.to) && col(e.from) !== col(e.to)).map(e => Object.assign({ a: rect(e.from), b: rect(e.to) }, e)).filter(e => e.a && e.b);
+    // точки на краях блока — по порядку другого конца (меньше пересечений)
+    const outs = {}, ins = {};
+    E.forEach(e => { (outs[e.from] = outs[e.from] || []).push(e); (ins[e.to] = ins[e.to] || []).push(e); });
+    Object.values(outs).forEach(L => { L.sort((x, y) => x.b.cy - y.b.cy); L.forEach((e, i) => { e.y1 = e.a.t + e.a.h * (i + 1) / (L.length + 1); }); });
+    Object.values(ins).forEach(L => { L.sort((x, y) => x.a.cy - y.a.cy); L.forEach((e, i) => { e.y2 = e.b.t + e.b.h * (i + 1) / (L.length + 1); }); });
+    svg.setAttribute('width', flowEl.clientWidth); svg.setAttribute('height', flowEl.scrollHeight);
+    svg.setAttribute('viewBox', '0 0 ' + flowEl.clientWidth + ' ' + flowEl.scrollHeight);
+    const mk = (id, v) => '<marker id="' + id + '" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" style="fill:var(' + v + ');stroke:none"/></marker>';
+    svg.innerHTML = '<defs>' + mk('c21-ar', '--line-2') + mk('c21-arb', '--neg') + '</defs>' + E.map(e => {
+      const x1 = e.a.r + 1, x2 = e.b.l - 3, dx = Math.max(20, (x2 - x1) / 2);
+      return '<path class="' + (e.incomplete ? 'bad' : '') + '" data-from="' + esc(e.from) + '" data-to="' + esc(e.to) + '" marker-end="url(#' + (e.incomplete ? 'c21-arb' : 'c21-ar') + ')" d="M' + x1.toFixed(1) + ' ' + e.y1.toFixed(1) + ' C' + (x1 + dx).toFixed(1) + ' ' + e.y1.toFixed(1) + ' ' + (x2 - dx).toFixed(1) + ' ' + e.y2.toFixed(1) + ' ' + x2.toFixed(1) + ' ' + e.y2.toFixed(1) + '"><title>' + esc(e.what + (e.why ? ' — неполные данные: ' + e.why : '')) + '</title></path>';
+    }).join('');
+  }
+  function highlight(id) {
+    if (!flowEl) return;
+    flowEl.classList.toggle('hlon', !!id);
+    flowEl.querySelectorAll('.c21-svg path').forEach(p => p.classList.toggle('hl', !!id && (p.dataset.from === id || p.dataset.to === id)));
+    flowEl.querySelectorAll('.c21-b').forEach(c => c.classList.toggle('hl', !!id && c.dataset.b !== id && doc.edges.some(e => (e.from === id && e.to === c.dataset.b) || (e.to === id && e.from === c.dataset.b))));
+  }
+
+  // ---------- экран ----------
+  function render() {
+    const d = doc, by = Object.fromEntries(d.blocks.map(b => [b.id, b])), S = d.statuses || {};
+    view.innerHTML = '';
+    const wrap = K.h('div', 'k-grid');
+    const cnt = Object.keys(S).filter(k => (d.counts || {})[k]).map(k => '<span class="c21-cnt st-' + k + '"><i></i>' + esc(S[k]) + ' <b>' + d.counts[k] + '</b></span>').join('');
+    const ap = d.autopilot || {};
+    const hd = panel('Дата', '<span class="k-note">' + (d.generated_at ? 'собрано ' + esc(K.mskTime(d.generated_at, true)) + ' · ' : '') + (server ? 'обновляется раз в 30 с' : 'демо') + '</span>');
+    hd.querySelector('.bd').innerHTML = '<div class="c21-head"><span class="big">' + f.dshort(d.date) + ' ' + esc(d.date.slice(0, 4)) + '</span>' +
+      '<span>' + (d.run ? 'прогон <b>#' + d.run.run_id + '</b> · ' + esc(d.run.label) + (d.run.is_default ? '' : ' (основного ещё нет)') : 'прогона за дату нет') + '</span>' + cnt +
+      (d.incomplete ? '<span style="color:var(--neg)">неполные данные пошли дальше: <b style="color:var(--neg)">' + d.incomplete + '</b></span>' : '<span class="mut3">неполных данных дальше не ушло</span>') +
+      '<span class="mut3">автопилот: ' + esc(ap.state === 'running' ? 'идёт цикл' : ap.state === 'error' ? 'ошибка' : ap.enabled ? 'ожидание' : 'не запущен') + '</span>' +
+      '<a href="c14-day-status.html?on=' + esc(d.date) + '">статус дня (C14) →</a></div>' +
+      '<div class="c21-legend" style="margin-top:6px"><span><span class="ln"></span>данные идут дальше</span><span><span class="ln bad"></span>дальше пошли неполные данные (наведите — почему)</span><span>щелчок по блоку — его связи</span></div>';
+    wrap.appendChild(hd);
+
+    const fp = panel('Схема', '<span class="k-note">слева направо: откуда → что делается → где видно</span>');
+    flowEl = K.h('div', 'c21-flow');
+    flowEl.innerHTML = '<svg class="c21-svg" aria-hidden="true"></svg>' + COLS.map(c => '<div class="c21-col"><h4>' + esc(((d.columns || []).find(x => x.id === c) || {}).title || c) + '</h4>' + d.blocks.filter(b => b.column === c).map(b => card(b, by)).join('') + '</div>').join('');
+    fp.querySelector('.bd').appendChild(flowEl);
+    wrap.appendChild(fp);
+
+    const bad = d.edges.filter(e => e.incomplete);
+    if (bad.length) {
+      const gp = panel('Где данные неполные', '<span class="k-note">красные стрелки схемы</span>');
+      gp.querySelector('.bd').innerHTML = '<ul class="c21-gaps">' + bad.map(e => '<li><b>' + esc((by[e.from] || {}).title || e.from) + ' → ' + esc((by[e.to] || {}).title || e.to) + '</b>: ' + esc(e.why) + '</li>').join('') + '</ul>';
+      wrap.appendChild(gp);
+    }
+
+    const ah = panel('Что впереди', '<span class="k-note">фоновые работы и чего ждём</span>');
+    const eta = s => s == null ? '' : ' · осталось ≈ ' + (s >= 5400 ? f.n(s / 3600, 1) + ' ч' : Math.max(1, Math.round(s / 60)) + ' мин');
+    ah.querySelector('.bd').innerHTML = (d.ahead || []).length ? '<div class="c21-ahead">' + d.ahead.map(a => '<div class="c21-a' + (a.tone === 'bad' ? ' bad' : '') + '"><b>' + esc(a.title) + '</b><div>' + esc(a.text || '') + (a.at ? ' · ' + esc(K.mskTime(a.at, true)) : '') + eta(a.eta_s) + '</div>' + (a.progress ? '<div class="st-running">' + prog(a.progress) + '</div>' : '') + '</div>').join('') + '</div>'
+      : '<div class="k-empty">Фоновых работ нет, ничего не ждём</div>';
+    wrap.appendChild(ah);
+    view.appendChild(wrap);
+
+    flowEl.querySelectorAll('[data-more]').forEach(b => b.onclick = e => { e.stopPropagation(); const k = b.dataset.more; open.has(k) ? open.delete(k) : open.add(k); render(); });
+    let hl = null;
+    flowEl.querySelectorAll('.c21-b').forEach(c => {
+      c.onmouseenter = () => highlight(c.dataset.b); c.onmouseleave = () => highlight(hl);
+      c.onfocus = () => highlight(c.dataset.b);
+      c.onclick = e => { if (e.target.closest('a, button')) return; hl = hl === c.dataset.b ? null : c.dataset.b; highlight(hl); };
+    });
+    requestAnimationFrame(drawEdges);
+  }
+  window.addEventListener('resize', () => requestAnimationFrame(drawEdges));
+  if (window.ResizeObserver) new ResizeObserver(() => requestAnimationFrame(drawEdges)).observe(view);
+  if (document.fonts && document.fonts.ready) document.fonts.ready.then(() => requestAnimationFrame(drawEdges));
+  K.on('theme', () => requestAnimationFrame(drawEdges));
+  K.on('numfmt', () => { if (doc && view.querySelector('.c21-flow')) render(); });
+  if (server) setInterval(() => { if (!document.hidden && doc) load(); }, 30000);
+
+  // ---------- демо-набор (файл или ?demo=1): вымышленный, форма ответа /api/v1/dataflow ----------
+  const DEMO_DAYS = [['2026-10-20', 'warn', 42], ['2026-10-19', 'ok', 37], ['2026-10-16', 'bad', null], ['2026-10-15', 'ok', 31]].map(([date, state, r]) => ({ date, state, default_run_id: r, runs: r ? 2 : 1 }));
+  function DEMO() {
+    const D = '2026-10-20', at = (h, m) => D + 'T' + String(h - 3).padStart(2, '0') + ':' + String(m).padStart(2, '0') + ':00Z';
+    const L = (t, a, tone) => ({ t, at: a || null, tone: tone || null });
+    const B = (id, column, title, what, status, got, extra) => Object.assign({ id, column, title, what, status, got, dropped: [], waits: null, progress: null, at: null, link: { href: 'c14-day-status.html', text: 'Статус дня' }, fix: null, fix_note: null }, extra || {});
+    const blocks = [
+      B('positions', 'source', 'Отчёт о позициях', 'позиции книг из отчётов в папках', 'ok', [L('за 20.10: книг 3 из 3, строк принято 430'), L('positions_20261020.csv — принят', at(8, 5))]),
+      B('ocp_report', 'source', 'Отчёт ОВП', 'ОВП юрлиц из отчёта', 'ok', [L('в силе: частей 2, последняя за 19.10.2026'), L('ocp_20261019.csv — принят', at(19, 10))], { link: { href: 'c16-ocp.html', text: 'ОВП' } }),
+      B('cash', 'source', 'Остатки на счетах', 'остатки по счетам книг: для ОВП и сверки', 'waiting', [], { waits: 'остатки на счетах за 20.10', link: { href: 'c15-cash.html', text: 'Остатки' } }),
+      B('pnl_official', 'source', 'Официальный PnL', 'PnL из отчёта: для сверки', 'off', [L('адаптер этот отчёт не даёт')]),
+      B('trades', 'source', 'Сделки дня', 'сделки даты: из фида сервисов, файлом или догрузкой', 'ok', [L('за 20.10: сделок 5, действуют 4, отменены 1'), L('фид сервисов адаптера: сделок 4', at(16, 41)), L('из папки с отчётами: сделок 1', at(19, 2))], { link: { href: 'c20-trades.html', text: 'Сделки дня' } }),
+      B('terms', 'source', 'Условия сделок', 'условия деривативов: для оценки ядром', 'ok', [L('в силе: частей 1, последняя за 20.10.2026'), L('фид «Условия сделок»: получено', at(8, 40))]),
+      B('past_trades', 'source', 'Сделки прошлых дат', 'догрузка сделок за прошлые даты из сервисов', 'running', [L('дат с 01.01.2026: получено 120, без сделок 14, осталось 61'), L('сейчас запрашивается 03.06.2026')], { progress: { done: 134, total: 195, text: 'дат обработано' } }),
+      B('market', 'source', 'Закрытия рынка (хаб)', 'срезы цен и кривых за дату из кэша хаба', 'ok', [L('окончательное закрытие', at(21, 40)), L('срезов внутри дня: 18', at(18, 30))]),
+      B('hub_history', 'source', 'История фиксингов (хаб)', 'фиксинги индексов и история рынка', 'ok', [L('индексов 9, значений 12 400, с 03.01.2024 по 20.10.2026', at(7, 0))], { link: { href: 'c09-market.html', text: 'Рынок' } }),
+      B('reference', 'source', 'Справочники и политика ОВП', 'книги, юрлица, правила фондирования и ОВП', 'ok', [L('книг в силе: 3'), L('юрлица: записей 2', at(8, 0)), L('политика ОВП: записей 4', at(8, 0))]),
+      B('read', 'process', 'Чтение отчётов адаптером', 'адаптер распознаёт и читает файлы', 'ok', [L('файлов за 20.10: 4 — принят 3, отклонён 1'), L('последний просмотр папок', at(19, 15))], { dropped: [L('pnl_20261020.xlsx: отклонён: нет обязательных полей', at(19, 5), 'bad')] }),
+      B('store', 'process', 'Приём в хранилище', 'проверка строк и запись позиций по книгам', 'ok', [L('строк: в отчётах 448, принято 430, в расчёте 430')], { dropped: [L('часть отчёта отклонена: 1', null, 'warn')] }),
+      B('intraday', 'process', 'Сделки → позиции дня', 'сделки по облигациям меняют позиции начала дня', 'ok', [L('в позиции вошло сделок: 2, новых позиций 0')], { dropped: [L('не облигация — в позиции дня пока не входит: 1'), L('бумага не найдена: 1', null, 'warn')], link: { href: 'c20-trades.html', text: 'Сделки дня' } }),
+      B('value', 'process', 'Оценка ядром', 'цены, риск и кривые позиций по срезу хаба', 'ok', [L('прогон #42 · 20.10 · закрытие', at(22, 55)), L('позиций 432, оценено 428')], { dropped: [L('бумага не найдена в статике хаба (ISIN / рег. номер / тикер неизвестны): 4', null, 'warn')], link: { href: 'c03-blotter.html', text: 'Позиции' } }),
+      B('ocp', 'process', 'Расчёт ОВП', 'ОВП из отчёта и из позиций, сверка', 'ok', [L('ОВП — отчёт ОВП юрлица за последний рабочий день плюс сделки после даты отчёта')], { dropped: [L('на входе неполные данные: ОВП посчитана без остатков на счетах', null, 'warn')], link: { href: 'c16-ocp.html', text: 'ОВП' } }),
+      B('pnl', 'process', 'Расчёт PnL', 'PnL позиций к прошлому закрытию, PnL новых сделок и допущения', 'ok', [L('PnL посчитан у позиций: 425 из 432'), L('с допущениями: 6', null, 'warn'), L('PnL новых сделок: сделок 2')], { dropped: [L('котировка не обновилась с предыдущего дня: 3', null, 'warn')], link: { href: 'c10-pnl-explain.html', text: 'PnL explain' } }),
+      B('backfill', 'process', 'Пересчёт прошлых дат', 'история прогонов: пересчёт дат после изменений', 'waiting', [L('дат с 05.01.2026: посчитано 196 из 203'), L('в очереди — изменились сделки или условия сделок: 7')], { waits: 'очередь: 7 дат', progress: { done: 196, total: 203, text: 'дат посчитано' }, link: { href: 'c11-history.html', text: 'Динамика' } }),
+      B('history_load', 'process', 'Догрузка истории', 'история фиксингов и рынка из хаба по частям', 'ok', [L('запросов: выполнено 36, в очереди 0', at(7, 0))], { link: { href: 'c09-market.html', text: 'Рынок' } }),
+      B('r_positions', 'result', 'Позиции и риск', 'C03 «Позиции», C02 «Лестница рисков», C01 «Кокпит»', 'ok', [L('позиций 432, книг 3')], { link: { href: 'c03-blotter.html', text: 'Позиции' } }),
+      B('r_trades', 'result', 'Сделки дня', 'C20 «Сделки дня», плитка на кокпите', 'ok', [L('сделок 5, в позициях 2', '2026-10-20T16:40:00')], { link: { href: 'c20-trades.html', text: 'Сделки дня' } }),
+      B('r_ocp', 'result', 'ОВП', 'C16 «ОВП», ОВП в шапке', 'ok', [L('ОВП — отчёт ОВП юрлица за последний рабочий день плюс сделки после даты отчёта')], { dropped: [L('на входе неполные данные: ОВП посчитана без остатков на счетах', null, 'warn')], link: { href: 'c16-ocp.html', text: 'ОВП' } }),
+      B('r_pnl', 'result', 'PnL дня', 'C05 «Утренний брифинг», C10 «PnL explain»', 'ok', [L('PnL у позиций: 425 из 432')], { link: { href: 'c05-morning-brief.html', text: 'Брифинг' } }),
+      B('r_history', 'result', 'История и PnL за период', 'C11 «Динамика», C19 «PnL за период»', 'ok', [L('основных прогонов с 05.01.2026'), L('ещё не пересчитано дат: 7', null, 'warn')], { link: { href: 'c19-pnl-history.html', text: 'PnL за период' } }),
+    ];
+    const S = { ok: 'готово', running: 'идёт', waiting: 'ждёт', error: 'ошибка', off: 'выключено' };
+    blocks.forEach(b => { b.status_text = S[b.status]; });
+    const E = (from, to, what, why) => ({ from, to, what, incomplete: !!why, why: why || null });
+    const edges = [E('positions', 'read', 'отчёты о позициях'), E('ocp_report', 'ocp', 'отчёт ОВП'), E('cash', 'ocp', 'остатки на счетах', 'ОВП посчитана без остатков на счетах'),
+      E('pnl_official', 'pnl', 'официальный PnL для сверки'), E('trades', 'intraday', 'сделки дня', 'не вошли в позиции дня сделок: 1'), E('terms', 'value', 'условия сделок'),
+      E('past_trades', 'backfill', 'сделки прошлых дат'), E('market', 'value', 'срез рынка'), E('hub_history', 'history_load', 'фиксинги и история рынка'),
+      E('reference', 'store', 'справочник книг'), E('reference', 'ocp', 'политика ОВП'), E('read', 'store', 'строки отчётов', 'файлов с ошибкой: 1'), E('store', 'intraday', 'позиции начала дня'),
+      E('store', 'value', 'позиции'), E('intraday', 'value', 'позиции с учётом сделок', 'не вошли в позиции дня сделок: 1'), E('history_load', 'value', 'фиксинги для окна среза'),
+      E('history_load', 'backfill', 'история для прошлых дат'), E('value', 'ocp', 'валютная дельта, PV деривативов', 'не оценено позиций: 4'), E('value', 'pnl', 'оценка сегодня и вчера', 'не оценено позиций: 4'),
+      E('value', 'r_positions', 'позиции, риск', 'не оценено позиций: 4'), E('intraday', 'r_trades', 'сделки и их учёт', 'не вошли в позиции дня сделок: 1'), E('ocp', 'r_ocp', 'ОВП', 'ОВП посчитана без остатков на счетах'),
+      E('pnl', 'r_pnl', 'PnL', 'PnL без 7 позиций'), E('backfill', 'r_history', 'прогоны прошлых дат', 'история не полная: 7 дат в очереди')];
+    const counts = {}; blocks.forEach(b => { counts[b.status] = (counts[b.status] || 0) + 1; });
+    return { date: D, generated_at: at(23, 10), statuses: S, run: { run_id: 42, label: '20.10 · закрытие', is_default: true }, day_state: 'warn',
+      columns: [{ id: 'source', title: 'Откуда приходят данные' }, { id: 'process', title: 'Что с ними делается' }, { id: 'result', title: 'Где это видно' }],
+      blocks, edges, counts, incomplete: edges.filter(e => e.incomplete).length, autopilot: { state: 'idle', enabled: true, message: null },
+      ahead: [{ id: 'past_trades', title: 'Догрузка сделок прошлых дат', text: 'осталось дат: 61 (по 40 в день)', at: null, eta_s: null, progress: { done: 134, total: 195, text: 'дат обработано' } },
+        { id: 'backfill', title: 'Пересчёт прошлых дат', text: 'осталось дат: 7, следующие: 13.10.2026, 14.10.2026, 15.10.2026', at: null, eta_s: 840, progress: { done: 196, total: 203, text: 'дат посчитано' } },
+        { id: 'feed:trades', title: 'Фид «Сделки дня»', text: 'следующий запрос', at: '2026-10-21T07:10:00+00:00', eta_s: null },
+        { id: 'wait:cash', title: 'Ждём: Остатки на счетах', text: 'остатки на счетах за 20.10', at: null, eta_s: null }] };
+  }
+
+  K.commands && K.commands([{ label: 'Схема данных: обновить', run: load }]);
+  load();
+})();
+</script>
+</body>
+</html>
