@@ -1347,6 +1347,15 @@ def _repo_fact(t: RepoTerms, row: Any) -> dict[str, Any]:
             **({"reported_pv_rub": t.pv_rub} if t.pv_rub is not None else {})}
 
 
+UNPUBLISHED_NOTE = "RUONIA за {day} не публиковалась: взята ставка {prev}"
+"""TDM#606: the assumption of a swap whose period holds a day without a published RUONIA (``rates.bridge_unpublished``)."""
+
+
+def _ru(iso: str) -> str:
+    """``2025-12-30`` -> ``30.12.2025``."""
+    return date.fromisoformat(iso).strftime("%d.%m.%Y")
+
+
 def index_fixings(snapshot: Any, fixing_id: str) -> dict[str, Any]:
     """What a swap or REPO read of the run's fixing history ``fixing_id``: its latest fixing, the declared unpublished
     business days before the business date (carried at the latest fixing, at most ``max_unpublished``) and the
@@ -1863,6 +1872,12 @@ def _rates_valuation(ctx: Any, r: Request, a: _Acc, notes: list[str], result: An
             why.append(f"{fid} not yet published for {', '.join(info['unpublished_business_days'])}: the latest "
                        f"fixing of {info['latest']} carried (declared, at most "
                        f"{info['max_unpublished_business_days']} business day)")
+    # TDM#606: a day the CBR published no RUONIA for, inside the trades' periods, took the previous rate
+    if "RUONIA" in a.fixing_ids:
+        lo = min(t.start for t in r.trades)
+        for b in ((ctx.rates or {}).get("fixings") or {}).get("RUONIA", {}).get("bridged_days") or ():
+            if lo <= date.fromisoformat(b["date"]) < bd:
+                why.append(UNPUBLISHED_NOTE.format(day=_ru(b["date"]), prev=_ru(b["from"])))
     amount = math.fsum(t.amount for t in r.trades)
     # the report's PV of a row with settled trades covers more than the valued ones: no difference then
     reported = None if r.partial else _reported_pv(x, [t.pv_rub for t in r.trades])
