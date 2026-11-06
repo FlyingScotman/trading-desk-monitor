@@ -72,7 +72,7 @@ VALUATION_VERSION = 31  # 2: risk per curve (R8); 3: static display fields (R9 D
 # (TDM#588)
 # 31: the run's rates hold every currency of its OCP (the report's JPY, KZT, GEL: the CBR rate per unit where MOEX has
 # none, TDM#602); CNH is CNY in every dataset (setting ccy_aliases, TDM#601); a business day without a published RUONIA
-# takes the previous rate (TDM#606)
+# takes the previous rate (TDM#606); a CCS's legs each on their own dates (TDM#605)
 
 
 def logic_version() -> str:
