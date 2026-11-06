@@ -7,7 +7,7 @@ from __future__ import annotations
 
 import json
 import shutil
-from datetime import date
+from datetime import UTC, date, datetime
 from pathlib import Path
 
 import pytest
@@ -17,6 +17,7 @@ from desk import cli, dataflow, store
 from desk.api import auth, create_app
 from desk.inbox import scan
 from desk.settings import Settings
+from desk.settings import load as load_settings
 
 FIX = Path(__file__).parent / "fixtures"
 PRIV, CONFIG, SNAPS = FIX / "private" / "v1", FIX / "private" / "v1" / "config", FIX / "mdhub_v1"
@@ -31,9 +32,11 @@ RESULTS = {"r_positions", "r_trades", "r_ocp", "r_pnl", "r_history"}
 def _fresh_process():
     for memo in (scan._handles, scan._last_seen, scan._static_seen):
         memo.clear()
+    dataflow.forget()
     yield
     for memo in (scan._handles, scan._last_seen, scan._static_seen):
         memo.clear()
+    dataflow.forget()
 
 
 def _env(monkeypatch, tmp_path: Path, store_url: str, inbox: Path) -> None:
@@ -106,10 +109,18 @@ def test_a_date_with_a_run_shows_what_went_where_and_what_was_incomplete(store_u
     assert by["ocp_report"]["status"] in ("waiting", "off")
     assert edges[("ocp", "r_ocp")]["incomplete"]
     assert edges[("positions", "read")]["incomplete"] is False
-    # the OCP block receives incomplete data and says so among what it left out
+    # the OCP block receives incomplete data and says so among what it left out, each thing once
     assert any("на входе неполные данные" in ln["t"] for ln in by["ocp"]["dropped"])
-    # trades: none for this date in the fixtures
-    assert by["trades"]["status"] in ("waiting", "off") and by["r_trades"]["status"] == "waiting"
+    ocp_lines = [ln["t"] for ln in by["ocp"]["got"] + by["ocp"]["dropped"]]
+    assert sum("отчёта ОВП" in t for t in ocp_lines) == 1, ocp_lines
+    # trades: none for this past date in the fixtures, never awaited later: «не пришло», not among the reports awaited
+    assert by["trades"]["status"] == "missing" and by["trades"]["status_text"] == "не пришло"
+    assert by["trades"]["waits"] is None and by["r_trades"]["status"] == "missing"
+    assert by["pnl_official"]["status"] in ("missing", "off") and by["terms"]["status"] in ("missing", "off")
+    assert not {a["id"] for a in doc["ahead"]} & {"wait:trades", "wait:pnl_official", "wait:terms"}
+    # the PnL waits for the previous close: its screen does not say «готово» with no PnL
+    assert by["pnl"]["status"] == "waiting"
+    assert by["r_pnl"]["status"] == "waiting" and by["r_pnl"]["waits"].startswith("«Расчёт PnL»"), by["r_pnl"]
     # no private values: no PnL figures, no folder paths
     text = json.dumps(doc, ensure_ascii=False)
     assert str(inbox) not in text and str(tmp_path) not in text
@@ -161,3 +172,103 @@ def test_the_running_step_and_the_queue_ahead(store_url, tmp_path, monkeypatch):
     edges = {(e["from"], e["to"]): e for e in doc["edges"]}
     assert edges[("past_trades", "backfill")]["why"] == "сделки 1 прошлых дат не получены"
     assert doc["autopilot"] == {"state": "running", "message": "Пересчёт истории: 3 из 10", "enabled": True}
+
+
+def _two_dates(monkeypatch, tmp_path, store_url):
+    inbox = tmp_path / "in"
+    inbox.mkdir()
+    for n in ("positions_20261015.csv", "positions_20261016.csv"):
+        shutil.copy(PRIV / n, inbox / n)
+    _env(monkeypatch, tmp_path, store_url, inbox)
+    assert cli.main(["inbox", "scan"]) == 0
+    assert cli.main(["eod", "--date", "2026-10-15", "--snapshots", str(SNAPS)]) == 0
+    return load_settings()
+
+
+def test_no_run_no_red_arrow_and_a_result_takes_its_inputs_wait(store_url, tmp_path, monkeypatch):
+    """16.10: no run (the books' positions are of 15.10): nothing incomplete went on, so no arrow is red; the results
+    wait with the step they wait for."""
+    s = _two_dates(monkeypatch, tmp_path, store_url)
+    with store.connect(store_url) as con:
+        doc = dataflow.build(con, s, D("2026-10-16"))
+    by = _check_shape(doc)
+    assert doc["run"] is None and by["positions"]["status"] == "waiting"
+    assert "с прошлых дат" in by["positions"]["waits"]
+    assert doc["incomplete"] == 0 and not [e for e in doc["edges"] if e["incomplete"]]
+    for k in ("r_positions", "r_ocp", "r_pnl", "r_trades"):
+        assert by[k]["status"] == "waiting", (k, by[k])
+    # the same date on its own day (not past yet): the trades and the official PnL are awaited, not «не пришло»
+    with store.connect(store_url) as con:
+        today = dataflow.build(con, s, D("2026-10-16"), now=datetime(2026, 10, 16, 9, 0, tzinfo=UTC))
+    tb = {b["id"]: b for b in today["blocks"]}
+    assert tb["trades"]["status"] == "waiting" and tb["trades"]["waits"] == "сделки за 16.10"
+    assert any(a["id"] == "wait:trades" for a in today["ahead"])
+
+
+def test_a_stock_with_only_older_parts_waits_for_the_dates_report(store_url, tmp_path, monkeypatch):
+    s = _two_dates(monkeypatch, tmp_path, store_url)
+    old = {"cash_balances": [{"valid_date": D("2026-10-14")}], "ocp": [{"valid_date": D("2026-10-15")}]}
+    monkeypatch.setattr(dataflow, "_stock_units", lambda con, ds, d: old.get(ds, []))
+    monkeypatch.setattr(dataflow, "_declared", lambda st: {"cash_balances": ["cash_csv"], "ocp": ["ocp_csv"]})
+    with store.connect(store_url) as con:
+        by = _check_shape(dataflow.build(con, s, D("2026-10-15")))
+    cash = by["cash"]
+    assert cash["status"] == "waiting", cash
+    assert cash["waits"] == "остатки на счетах за 15.10; пока в силе части с прошлых дат (последняя за 14.10.2026)"
+    assert by["ocp_report"]["status"] == "ok" and by["ocp_report"]["waits"] is None  # the part of the date itself
+
+
+def test_errors_in_words_without_codes_or_settings_variables(store_url, tmp_path, monkeypatch):
+    import dataclasses
+
+    import psycopg
+
+    s = _two_dates(monkeypatch, tmp_path, store_url)
+    good = scan.adapter(s)
+    bad = dataclasses.replace(good, error="config_dir_missing: DESK_PRIVATE_ADAPTER_CONFIG is not a folder")
+    monkeypatch.setattr(scan, "adapter", lambda st: bad)
+
+    def broken(con, d):
+        raise psycopg.OperationalError("server closed the connection unexpectedly")
+
+    monkeypatch.setattr(dataflow, "_reference", broken)
+    with store.connect(store_url) as con:
+        by = _check_shape(dataflow.build(con, s, D("2026-10-15")))
+    rd = [ln["t"] for ln in by["read"]["dropped"]]
+    assert by["read"]["status"] == "error"
+    assert rd[0].startswith("Отчёты не читаются: не найдена папка настроек адаптера.") and rd[1] == \
+        "код причины: config_dir_missing", rd
+    ref = [ln["t"] for ln in by["reference"]["dropped"]]
+    assert by["reference"]["status"] == "error" and "нет связи с хранилищем" in ref[0] and "Error" not in ref[0], ref
+    text = json.dumps([b["dropped"] for b in by.values()], ensure_ascii=False)
+    assert "DESK_" not in text and "server closed" not in text
+
+
+def test_the_ocp_settings_link_only_when_the_section_has_its_module(monkeypatch):
+    from types import SimpleNamespace
+
+    monkeypatch.setattr(scan, "adapter", lambda st: SimpleNamespace(ok=True, actions=[]))
+    assert dataflow._ovp_fix(None) is None
+    monkeypatch.setattr(scan, "adapter", lambda st: SimpleNamespace(
+        ok=True, actions=[{"id": "ocp_types", "choices": "ocp_derivative_types"}]))
+    assert dataflow._ovp_fix(None) == ("../settings.html#ovp", "ОВП: типы строк")
+
+
+def test_the_history_of_runs_is_read_once_a_minute_not_on_every_call(store_url, tmp_path, monkeypatch):
+    """C21 asks every minute per tab; ``backfill.status`` reads every date of the history: kept BACKFILL_TTL_S."""
+    from desk import backfill
+
+    s = _two_dates(monkeypatch, tmp_path, store_url)
+    calls, real = [], backfill.status
+    monkeypatch.setattr(backfill, "status", lambda *a, **k: calls.append(1) or real(*a, **k))
+    t = [1000.0]
+    monkeypatch.setattr(dataflow, "_clock", lambda: t[0])
+    with store.connect(store_url) as con:
+        a = dataflow.build(con, s, D("2026-10-15"))
+        t[0] += 30
+        b = dataflow.build(con, s, D("2026-10-16"))
+        assert len(calls) == 1
+        assert {x["id"]: x for x in a["blocks"]}["backfill"]["got"] == {x["id"]: x for x in b["blocks"]}["backfill"]["got"]
+        t[0] += dataflow.BACKFILL_TTL_S
+        dataflow.build(con, s, D("2026-10-15"))
+        assert len(calls) == 2

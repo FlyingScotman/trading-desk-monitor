@@ -1,6 +1,6 @@
 // Сделки дня на общих экранах (TDM#585) и экран «Схема данных» (TDM#586), без браузера: слова состояний и источников
 // сделки в kit.js — те же, что у сервера (backend desk/trades.py); сводка сделок дня (K.dayTrades) спрашивает сервер о
-// дате и прогоне страницы и о книгах фильтра шапки; строка «Сделки дня: N, в позициях M, последняя в ЧЧ:ММ» ведёт на
+// дате и прогоне страницы и о фильтре шапки целиком (юрлицо, деск, книги, валюта, снятые портфели — как C20); строка «Сделки дня: N, в позициях M, последняя в ЧЧ:ММ» ведёт на
 // C20; C20 следует фильтру шапки; C01, C03, C05, C14 показывают сделки дня; C20 и C21 — в навигации и галерее.
 //   node tests/js/day_trades_585.test.js
 'use strict';
@@ -65,14 +65,19 @@ t('книги шапки: без фильтра — все (null), юрлицо,
   assert.deepStrictEqual([...K.headerBooks()], ['B2']);
   K.setFilter({ ...RESET, books: ['B3'] });
   assert.deepStrictEqual([...K.headerBooks()], ['B3']);
-  K.setFilter({ ...RESET, ccy: 'USD' });  // валюта и портфель книг не выбирают: сводка — по книгам
+  K.setFilter({ ...RESET, ccy: 'USD' });  // валюта и портфель книг не выбирают
   assert.strictEqual(K.headerBooks(), null);
+  // фильтр шапки целиком (для сводки сделок дня): всё, что выбрано, и только снятые портфели, которые есть в прогоне
+  K.setFilter(RESET);
+  assert.strictEqual(K.headerFilter(), null);
+  K.setFilter({ ...RESET, entity: 'E1', desk: 'D2', books: ['B2', 'B1'], ccy: 'USD', portsOff: ['нет такого'] });
+  assert.deepStrictEqual(plain(K.headerFilter()), { entity: 'E1', desk: 'D2', books: ['B1', 'B2'], ccy: 'USD' });
 });
 
 (async () => {
-  await at('сводка: дата и прогон страницы, книги шапки; одна на фильтр; пустой выбор книг — без запроса', async () => {
+  await at('сводка: дата и прогон страницы, фильтр шапки целиком; одна на фильтр', async () => {
     const urls = [];
-    const body = { date: '2026-10-20', books: ['B1', 'B2'], trades: 7, live: 6, cancelled: 1, applied: 4, problems: 1, last_trade_ts: '2026-10-20T16:41:00',
+    const body = { date: '2026-10-20', books: null, filter: { entity: 'E1' }, trades: 7, live: 6, cancelled: 1, applied: 4, problems: 1, last_trade_ts: '2026-10-20T16:41:00',
       states: [{ state: 'applied', text: 'в позициях', n: 4 }, { state: 'no_instrument', text: 'бумага не найдена', n: 1 }],
       sources: [{ origin: 'feed', text: 'фид сервисов адаптера', trades: 6, last_at: '2026-10-20T13:42:00+00:00' }], top: [], by_book: {} };
     const { K } = load('real', u => { urls.push(u); return Promise.resolve({ ok: true, status: 200, json: () => Promise.resolve(body) }); });
@@ -86,7 +91,8 @@ t('книги шапки: без фильтра — все (null), юрлицо,
     assert.strictEqual(u.pathname, '/api/v1/trades/summary');
     assert.strictEqual(u.searchParams.get('date'), '2026-10-20');
     assert.strictEqual(u.searchParams.get('run_id'), '42');
-    assert.deepStrictEqual(u.searchParams.getAll('books'), ['B1', 'B2']);
+    assert.strictEqual(u.searchParams.get('entity'), 'E1', 'юрлицо — серверу: сделка книги без позиций — по своей книге, как на C20');
+    assert.deepStrictEqual(u.searchParams.getAll('books'), []);
     assert.strictEqual(K.dayTrades(), body, 'та же страница и фильтр — без второго запроса');
     assert.strictEqual(urls.length, 1);
     // своя дата экрана (C14) — без прогона страницы; по всем книгам
@@ -95,23 +101,25 @@ t('книги шапки: без фильтра — все (null), юрлицо,
     assert.strictEqual(v.searchParams.get('date'), '2026-10-19');
     assert.strictEqual(v.searchParams.get('run_id'), null);
     assert.deepStrictEqual(v.searchParams.getAll('books'), []);
-    // фильтр не оставил книг — ноль без запроса
-    K.setFilter({ ...RESET, entity: 'E9' });
-    const z = K.dayTrades();
-    assert.strictEqual(z.trades, 0);
-    assert.strictEqual(urls.length, 2);
+    // валюта, книги и портфели шапки — тоже серверу (на C20 они действуют): новый фильтр — новый запрос
+    K.setFilter({ ...RESET, books: ['B3', 'B1'], ccy: 'USD' });
+    K.dayTrades();
+    const w = new URL(urls[2], 'http://x/concepts/');
+    assert.deepStrictEqual(w.searchParams.getAll('books'), ['B1', 'B3']);
+    assert.strictEqual(w.searchParams.get('ccy'), 'USD');
+    assert.strictEqual(w.searchParams.get('entity'), null);
     // строка экранов: число, в позициях, последняя, ошибки учёта, ссылка на C20 с датой
     const line = K.dayTradesLine(body);
     assert.ok(/Сделки дня: <b>7<\/b>, в позициях <b>4<\/b>, последняя в <b>16:41<\/b>/.test(line), line);
     assert.ok(/не учтено с ошибкой: 1/.test(line) && /href="c20-trades\.html\?date=2026-10-20"/.test(line), line);
-    assert.ok(/по книгам шапки: 2/.test(line));
+    assert.ok(/под фильтром шапки \(как на C20\)/.test(line) && !/не применяются/.test(line), line);
     assert.ok(/загрузка/.test(K.dayTradesLine(null)) && /не загрузились/.test(K.dayTradesLine({ error: 'ответ 500' })));
-    // пометка позиции «сд N» ведёт на её сделки
+    // пометка позиции «сд N» ведёт на её сделки в прогоне страницы (C20 отбирает по позиции, куда их положил прогон)
     const tag = K.tradesTag({ id: 'B1|SEC 1', tradeToday: { n: 3 } });
-    assert.ok(/href="c20-trades\.html\?date=2026-10-20&pos=B1%7CSEC%201"/.test(tag) && />сд 3</.test(tag), tag);
+    assert.ok(/href="c20-trades\.html\?date=2026-10-20&pos=B1%7CSEC%201&run_id=42"/.test(tag) && />сд 3</.test(tag), tag);
     assert.strictEqual(K.dayTradesTop({ top: [] }), '');
-    const top = K.dayTradesTop({ date: '2026-10-20', top: [{ trade_id: 'T1', position_id: 'B1|S', source_instrument_name: 'Бумага', pnl_rub: -1500, side: 'sell' }] });
-    assert.ok(/Бумага/.test(top) && /&pos=B1%7CS/.test(top) && /class="neg"/.test(top), top);
+    const top = K.dayTradesTop({ date: '2026-10-20', run_id: 42, top: [{ trade_id: 'T1', position_id: 'B1|S', run_position_id: 'B1|LOT', source_instrument_name: 'Бумага', pnl_rub: -1500, side: 'sell' }] });
+    assert.ok(/Бумага/.test(top) && /&pos=B1%7CLOT&run_id=42/.test(top) && /class="neg"/.test(top), top);
   });
 
   t('демо: сводка из позиций демо-набора, под фильтром шапки', () => {
@@ -126,6 +134,7 @@ t('книги шапки: без фильтра — все (null), юрлицо,
     assert.ok(!/filter: false/.test(c20), 'C20 больше не «фильтр шапки здесь не действует»');
     assert.ok(/K\.rowIn\(\{ book: r\.book_id, ccy: r\.ccy, entity: r\.entity, desk: r\.desk/.test(c20));
     assert.ok(/K\.onFilter\(/.test(c20) && /searchParams\.get\('pos'\)/.test(c20));
+    assert.ok(c20.includes("(r.run_position_id || r.position_id) === pos"), 'позиция — та, куда сделку положил прогон');
     assert.ok(/Источник · получена/.test(c20) && /Откуда пришли/.test(c20) && /Не в позициях — почему/.test(c20));
   });
 
@@ -155,7 +164,9 @@ t('книги шапки: без фильтра — все (null), юрлицо,
     assert.ok(/getJSON\('api\/v1\/dataflow'/.test(c21));
     const apis = [...c21.matchAll(/getJSON\('api\/v1\/([a-z/-]+)/g)].map(m => m[1]).sort();
     assert.deepStrictEqual(apis, ['dataflow', 'inbox/days'], 'хаб и сервисы экран не спрашивает');
-    for (const w of ['готово', 'идёт', 'ждёт', 'ошибка', 'выключено']) assert.ok(c21.includes(w), w);
+    for (const w of ['готово', 'идёт', 'ждёт', 'не пришло', 'ошибка', 'выключено']) assert.ok(c21.includes(w), w);
+    assert.ok(/\.st-missing \{/.test(c21), 'у «не пришло» свой цвет');
+    assert.ok(/open = new Set\(\), hl = null;/.test(c21) && !/\n\s+let hl = null;/.test(c21), 'выбор щелчком — вне перерисовки');
     assert.ok(/\.c21-svg path\.bad \{ stroke: var\(--neg\)/.test(c21));
     assert.ok(/@media \(max-width: 900px\) \{\s*\.c21-flow \{ grid-template-columns: minmax\(0, 1fr\)/.test(c21));
     assert.ok(/Что впереди/.test(c21) && /Где данные неполные/.test(c21));

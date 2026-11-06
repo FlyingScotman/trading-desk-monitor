@@ -8,18 +8,26 @@ the services' feeds), the day's trades (``trades.brief``), the date's default ru
 the day's positions, the OCP and its gaps; its positions: valued, with a PnL, why not), the history of runs
 (``backfill.status``), the hub's history in the store (``hubhistory.status``), the trades of past dates
 (``AdapterServices.history``) and the autopilot's step now (``Autopilot.status``). A part that cannot be read is said
-in its block (status ``error``), the rest is still built.
+in its block (status ``error``, in words: ``FAILED``), the rest is still built. The screen asks every minute per tab:
+the history of runs (``backfill.status``, a query per date of the history) is kept ``BACKFILL_TTL_S`` seconds.
 
 **Blocks** in three columns: ``source`` (reports, the services' feeds, the hub, reference data), ``process`` (reading,
 storing, the day's trades into the positions, the core's valuation, the OCP, the PnL, the history of runs, the history
-loads) and ``result`` (the screens). Each: ``status`` (``STATUS``: готово / идёт / ждёт / ошибка / выключено) and its
+loads) and ``result`` (the screens). Each: ``status`` (``STATUS``: готово / идёт / ждёт / не пришло / ошибка /
+выключено; a result takes the worst of its input's waiting and error, ``RESULT_TAKES``) and its
 words, ``got`` (what was received and when), ``dropped`` (what was left out and why), ``waits`` (what it waits for),
 ``progress`` (``done`` of ``total`` of a background work), ``link`` (the screen with the details) and ``fix`` (the
 setting that turns it on or fixes it: only for a user who may open the settings, ``admin``). A line is ``{t, at, tone}``:
 the text, an optional time (ISO, the page shows it on the Moscow clock) and ``bad`` / ``warn`` / none.
 
 **Edges** ``{from, to, what, incomplete, why}``: which data goes where; ``incomplete`` when data went on although a part
-of it was missing (``why``: «ОВП посчитана без остатков на счетах»): the page draws it red.
+of it was missing (``why``: «ОВП посчитана без остатков на счетах»): the page draws it red. Into the valuation and what
+follows it only when the date has a run: without one nothing went on.
+
+A source of a past date that is never awaited later (the day's trades, the official PnL, the trade terms) is «не пришло»
+(``missing``), not «ждёт», and is not among the reports awaited ahead; a stock source (the OCP report, the balances,
+the trade terms) whose latest part in force is older than the date waits for the date's report while the parts of
+past dates stay in force.
 
 **Ahead** (``ahead``): the queue of background work (dates of the history to compute, trades of past dates to fetch,
 hub history to load, reports still awaited, the next feed) with what is known of the time left (``eta_s``).
@@ -31,6 +39,8 @@ positions, no PnL figures, no folder paths.
 from __future__ import annotations
 
 import logging
+import threading
+import time
 from collections import Counter
 from collections.abc import Callable
 from datetime import UTC, date, datetime
@@ -43,8 +53,30 @@ from .settings import Settings
 
 log = logging.getLogger(__name__)
 
-STATUS = {"ok": "готово", "running": "идёт", "waiting": "ждёт", "error": "ошибка", "off": "выключено"}
+STATUS = {"ok": "готово", "running": "идёт", "waiting": "ждёт", "missing": "не пришло", "error": "ошибка",
+          "off": "выключено"}
 """A block's status and its word on the screen."""
+ORDER = ("ok", "off", "missing", "waiting", "running", "error")
+"""Worse to the right: a block keeps the worst status said of it (``_status``)."""
+RESULT_TAKES = ("waiting", "error")
+"""The statuses of its input a result block takes (its one edge in): a screen shows what its step got."""
+PAST_MISSING = ("trades", "pnl_official", "trade_terms")
+"""Sources not awaited after their date: on a past date without them, «не пришло»."""
+BACKFILL_TTL_S = 60.0
+"""How long the history of runs (``backfill.status``) of a store is kept for the screen (``_backfill``)."""
+FAILED = {"OperationalError": "нет связи с хранилищем", "InterfaceError": "нет связи с хранилищем",
+          "QueryCanceled": "хранилище не ответило вовремя", "TimeoutError": "не ответило вовремя",
+          "OSError": "файл не прочитан", "FileNotFoundError": "файл не найден", "PermissionError": "нет доступа к файлу"}
+"""A part not read, in words (``Flow.failed``); the exception's name only in a secondary line."""
+ADAPTER_ERROR = {"config_dir_missing": "не найдена папка настроек адаптера",
+                 "not_found": "пакет адаптера не найден",
+                 "fingerprint_mismatch": "файлы адаптера отличаются от проверенных (задан отпечаток адаптера)",
+                 "import_error": "код адаптера не загружается",
+                 "unsupported_contract": "адаптер написан для более новой версии программы",
+                 "unsupported_spi": "адаптер написан для более новой версии программы",
+                 "bad_source": "адаптер объявляет данные, которых эта версия программы не знает",
+                 "bad_describe": "адаптер описывает себя не по договору"}
+"""Why the adapter did not load (``AdapterHandle.error`` code), in words."""
 COLUMNS = [{"id": "source", "title": "Откуда приходят данные"}, {"id": "process", "title": "Что с ними делается"},
            {"id": "result", "title": "Где это видно"}]
 STEP_BLOCK = {"sync": "market", "scan": "read", "eod": "value", "intraday": "value", "morning": "value",
@@ -101,15 +133,28 @@ class Flow:
         self.edges.append({"from": a, "to": b, "what": what, "incomplete": bool(why), "why": why})
 
     def failed(self, b: dict[str, Any], e: BaseException) -> None:
-        """A part that could not be read: the block says so, the rest is built."""
+        """A part that could not be read: the block says so in words, the rest is built; the exception's name in a
+        secondary line, for the administrator."""
         b["status"] = "error"
-        b["dropped"].append(_line(f"сведения не прочитаны: {type(e).__name__}", tone="bad"))
+        name = type(e).__name__
+        why = next((FAILED[c.__name__] for c in type(e).__mro__ if c.__name__ in FAILED), "внутренняя ошибка монитора")
+        b["dropped"].append(_line(f"Сведения этого шага не прочитаны: {why}. Схема покажет их при следующем обновлении.",
+                                  tone="bad"))
+        b["dropped"].append(_line(f"для администратора: {name}, подробности — в журнале монитора"))
 
 
 def _status(b: dict[str, Any], st: str) -> None:
-    order = ["ok", "off", "waiting", "running", "error"]
-    if order.index(st) > order.index(b["status"]) or b["status"] == "ok":
+    if ORDER.index(st) > ORDER.index(b["status"]) or b["status"] == "ok":
         b["status"] = st
+
+
+def _adapter_error(err: str | None) -> list[dict[str, Any]]:
+    """The adapter that did not load, in a sentence, and its code (never the detail: it names settings variables)."""
+    code = str(err or "").split(":", 1)[0].strip()
+    why = ADAPTER_ERROR.get(code) or ("адаптер не запустился" if code.startswith(("locate_", "describe_"))
+                                      else "адаптер не загрузился")
+    return [_line(f"Отчёты не читаются: {why}. Проверьте адаптер в настройках («Проверка адаптера»).", tone="bad"),
+            _line(f"код причины: {code or '—'}")]
 
 
 def _latest(*ts: Any) -> str | None:
@@ -208,6 +253,7 @@ def build(con: psycopg.Connection, settings: Settings, on: date | None = None, *
         declared = _declared(settings)
     except Exception:  # noqa: BLE001 - no adapter: every source reads «не настроено»
         declared = {}
+    past = d < today
     ap = autopilot or {}
     prog = ap.get("progress") if ap.get("state") == "running" else None
     running_block = STEP_BLOCK.get((prog or {}).get("step"))
@@ -217,7 +263,7 @@ def build(con: psycopg.Connection, settings: Settings, on: date | None = None, *
              "services": ("../settings.html#adapter/services", "Сервисы адаптера"),
              "hub": ("../settings.html#hub", "Маркет-дата сервер"),
              "check": ("../settings.html#adapter/check", "Проверка адаптера"),
-             "ovp": ("../settings.html#ovp", "Политика ОВП"),
+             "ovp": _ovp_fix(settings),
              "books": ("../settings.html#books", "Книги"),
              "bf": ("../settings.html#bf", "История прогонов"),
              "auto": ("../settings.html#auto", "Автопилот"),
@@ -270,6 +316,16 @@ def build(con: psycopg.Connection, settings: Settings, on: date | None = None, *
         _status(b, "waiting")
         b["waits"] = f"отчёт о позициях за {dd}; пока считаются позиции с прошлых дат"
 
+    def not_come(b: dict[str, Any], ds: str, waits: str) -> None:
+        """A source without its data of the date: waits for it, or on a past date «не пришло» (``PAST_MISSING``)."""
+        if past and ds in PAST_MISSING:
+            _status(b, "missing")
+            b["waits"] = None
+            b["dropped"].insert(0, _line(f"не пришло: {waits}", tone="warn"))
+        else:
+            _status(b, "waiting")
+            b["waits"] = waits
+
     # stocks and flows of the adapter
     def dataset_block(bid: str, ds: str, title: str, what: str, link: tuple[str, str], fix: tuple[str, str],
                       stock: bool) -> tuple[dict[str, Any], list[dict[str, Any]]]:
@@ -278,27 +334,29 @@ def build(con: psycopg.Connection, settings: Settings, on: date | None = None, *
         units = _safe(flow, b, lambda: _stock_units(con, ds, d), con) if stock else None
         units = units or []
         report_files(b, ds)
+        given = bool(declared.get(ds)) or any(x.get("dataset") == ds for x in feeds)
+        noun = WAIT_NOUN.get(ds, ds)
         if stock:
+            vd = max(u["valid_date"] for u in units) if units else None
             if units:
-                vd = max(u["valid_date"] for u in units)
                 b["got"].insert(0, _line(f"в силе: частей {len(units)}, последняя за {_dm(vd)}"))
-            if not units and not declared.get(ds) and not files_of.get(ds):
+            if not units and not given and not files_of.get(ds):
                 _status(b, "off")
                 b["waits"] = None
                 b["got"].insert(0, _line("адаптер этот отчёт не даёт"))
             elif not units:
-                _status(b, "waiting")
-                b["waits"] = f"{WAIT_NOUN.get(ds, ds)} за {dd}"
+                not_come(b, ds, f"{noun} за {dd}")
+            elif given and _as_date(vd) < d:   # the parts of past dates stay in force; the date's report is awaited
+                not_come(b, ds, f"{noun} за {dd}; пока в силе части с прошлых дат (последняя за {_dm(vd)})")
         else:
             rows = (inp.get("rows") or {}).get("accepted", 0)
             if inp.get("state") not in (None, "missing"):
                 b["got"].insert(0, _line(f"за {dd}: строк принято {_n(rows)}"))
-            elif not declared.get(ds):
+            elif not given:
                 _status(b, "off")
                 b["got"].insert(0, _line("адаптер этот отчёт не даёт"))
             else:
-                _status(b, "waiting")
-                b["waits"] = f"{WAIT_NOUN.get(ds, ds)} за {dd}"
+                not_come(b, ds, f"{noun} за {dd}")
         if inp.get("state") == "rejected":
             _status(b, "error")
         return b, units
@@ -332,7 +390,8 @@ def build(con: psycopg.Connection, settings: Settings, on: date | None = None, *
     # the day's trades
     tb = flow.block("trades", "source", "Сделки дня", "сделки даты: из фида сервисов, файлом или догрузкой",
                     (f"c20-trades.html?date={d.isoformat()}", "Сделки дня"), fixes["services"])
-    tr = _safe(flow, tb, lambda: trades.brief(con, d, None, getattr(settings, "intraday_trades", True), run_id), con)
+    tr = _safe(flow, tb, lambda: trades.brief(con, d, None, getattr(settings, "intraday_trades", True), run_id,
+                                              history=trades.history_files(settings)), con)
     if tr is not None:
         tb["got"].append(_line(f"за {dd}: сделок {_n(tr['trades'])}, действуют {_n(tr['live'])}, "
                                f"отменены {_n(tr['cancelled'])}"))
@@ -345,8 +404,7 @@ def build(con: psycopg.Connection, settings: Settings, on: date | None = None, *
             _status(tb, "off")
             tb["got"].insert(0, _line("адаптер сделок дня не даёт"))
         else:
-            _status(tb, "waiting")
-            tb["waits"] = tb["waits"] or f"сделки за {dd}"
+            not_come(tb, "trades", f"сделки за {dd}")
 
     # trade terms
     terms, _ = dataset_block("terms", "trade_terms", "Условия сделок", "условия деривативов: для оценки ядром",
@@ -471,7 +529,7 @@ def build(con: psycopg.Connection, settings: Settings, on: date | None = None, *
         h = scan.adapter(settings)
         if not h.ok:
             _status(pr, "error")
-            pr["dropped"].append(_line(f"адаптер не загрузился: {h.error}", tone="bad"))
+            pr["dropped"].extend(_adapter_error(h.error))
     except Exception as e:  # noqa: BLE001
         flow.failed(pr, e)
     st = Counter(f["status"] for f in day["files"])
@@ -563,6 +621,7 @@ def build(con: psycopg.Connection, settings: Settings, on: date | None = None, *
                     fixes["ovp"])
     oc = lineage.get("ocp") or {}
     gaps: list[dict[str, Any]] = []
+    ocp_said: set[str] = set()   # what the block says itself: not again as «на входе неполные данные»
     if run is None:
         _status(ob, "waiting")
         ob["waits"] = "прогон даты"
@@ -577,8 +636,11 @@ def build(con: psycopg.Connection, settings: Settings, on: date | None = None, *
             _status(ob, "error")
         elif status in (None, "not_computed"):
             _status(ob, "off")
-        for g in gaps[:6]:
-            ob["dropped"].append(_line(g.get("text") or g.get("code"), tone="warn"))
+        for g in gaps[:6]:   # the missing report is said once: by the line of the block's result above
+            if not (status == "no_report" and g.get("code") == "no_report"):
+                ob["dropped"].append(_line(g.get("text") or g.get("code"), tone="warn"))
+        ocp_said = {x["t"] for x in ob["got"] + ob["dropped"]} | {
+            g.get("text") for g in gaps if status == "no_report" and g.get("code") == "no_report"}
         if oc.get("breaks"):
             ob["dropped"].append(_line(f"расхождений с отчётом ОВП: {oc['breaks']}", tone="warn"))
     codes = {g.get("code") for g in gaps}
@@ -702,10 +764,12 @@ def build(con: psycopg.Connection, settings: Settings, on: date | None = None, *
         rp["got"].append(_line(f"позиций {_n(facts['positions'])}, книг {len(books)}"))
         rn["got"].append(_line(f"PnL у позиций: {_n(facts['with_pnl'])} из {_n(facts['positions'])}"))
     if tr is not None:
-        rt["got"].append(_line(f"сделок {_n(tr['trades'])}, в позициях {_n(tr['applied'])}", tr["last_trade_ts"]))
+        # the time of the last trade as C20 shows it: HH:MM of trade_ts as is, no time zone (not ``at``: the page
+        # puts an ``at`` on the Moscow clock)
+        last = f", последняя в {str(tr['last_trade_ts'])[11:16]}" if tr["last_trade_ts"] else ""
+        rt["got"].append(_line(f"сделок {_n(tr['trades'])}, в позициях {_n(tr['applied'])}{last}"))
         if not tr["trades"]:
-            _status(rt, "waiting")
-            rt["waits"] = f"сделки за {dd}"
+            not_come(rt, "trades", f"сделки за {dd}")
     if run is not None:
         ro["got"].append(_line(ob["got"][0]["t"] if ob["got"] else "ОВП"))
         if ob["status"] in ("error", "off"):
@@ -716,33 +780,49 @@ def build(con: psycopg.Connection, settings: Settings, on: date | None = None, *
             rh["got"].append(_line(f"ещё не пересчитано дат: {bf['todo']}", tone="warn"))
 
     # ---------------------------------------------------------------- edges
-    flow.edge("positions", "read", "отчёты о позициях", pos_why)
+    def ran(why: str | None) -> str | None:   # into the valuation and on: only a run took the incomplete data on
+        return why if run is not None else None
+
+    flow.edge("positions", "read", "отчёты о позициях", ran(pos_why))
     flow.edge("ocp_report", "ocp", "отчёт ОВП", ocp_report_why)
     flow.edge("cash", "ocp", "остатки на счетах", cash_why)
     flow.edge("pnl_official", "pnl", "официальный PnL для сверки")
     flow.edge("trades", "intraday", "сделки дня", trades_why)
-    flow.edge("terms", "value", "условия сделок", terms_why)
+    flow.edge("terms", "value", "условия сделок", ran(terms_why))
     flow.edge("past_trades", "backfill", "сделки прошлых дат", hist_why)
-    flow.edge("market", "value", "срез рынка", market_why)
+    flow.edge("market", "value", "срез рынка", ran(market_why))
     flow.edge("hub_history", "history_load", "фиксинги и история рынка", None)
     flow.edge("reference", "store", "справочник книг")
     flow.edge("reference", "ocp", "политика ОВП", ref_why)
     flow.edge("read", "store", "строки отчётов", read_why)
     flow.edge("store", "intraday", "позиции начала дня")
-    flow.edge("store", "value", "позиции", store_why or pos_why)
-    flow.edge("intraday", "value", "позиции с учётом сделок", trades_why)
-    flow.edge("history_load", "value", "фиксинги для окна среза", hub_why)
+    flow.edge("store", "value", "позиции", ran(store_why or pos_why))
+    flow.edge("intraday", "value", "позиции с учётом сделок", ran(trades_why))
+    flow.edge("history_load", "value", "фиксинги для окна среза", ran(hub_why))
     flow.edge("history_load", "backfill", "история для прошлых дат", hub_why)
     flow.edge("value", "ocp", "валютная дельта, PV деривативов", value_why)
     flow.edge("value", "pnl", "оценка сегодня и вчера", value_why)
     flow.edge("value", "r_positions", "позиции, риск", value_why)
-    flow.edge("intraday", "r_trades", "сделки и их учёт", trades_why)
-    flow.edge("ocp", "r_ocp", "ОВП", cash_why or ocp_report_why or (f"ОВП с оговорками: {len(gaps)}" if gaps else None))
-    flow.edge("pnl", "r_pnl", "PnL", pnl_why)
+    flow.edge("intraday", "r_trades", "сделки и их учёт", ran(trades_why))
+    flow.edge("ocp", "r_ocp", "ОВП", ran(cash_why or ocp_report_why or (f"ОВП с оговорками: {len(gaps)}" if gaps else None)))
+    flow.edge("pnl", "r_pnl", "PnL", ran(pnl_why))
     flow.edge("backfill", "r_history", "прогоны прошлых дат", hist_runs_why)
-    for x in flow.blocks.values():   # a block that was given incomplete data says so
+    for x in flow.blocks.values():   # a result takes its input's waiting or error (RESULT_TAKES)
+        if x["column"] != "result":
+            continue
         for e in flow.edges:
-            if e["to"] == x["id"] and e["incomplete"] and x["status"] == "ok":
+            src = flow.blocks.get(e["from"])
+            if e["to"] == x["id"] and src and src["status"] in RESULT_TAKES:
+                worse = ORDER.index(src["status"]) > ORDER.index(x["status"]) or x["status"] == "ok"
+                _status(x, src["status"])
+                if worse and x["status"] == "waiting":
+                    x["waits"] = f"«{src['title']}»" + (f": {src['waits']}" if src.get("waits") else "")
+                elif worse:
+                    x["dropped"].insert(0, _line(f"ошибка на шаге «{src['title']}»", tone="bad"))
+    for x in flow.blocks.values():   # a block that was given incomplete data says so (once: not what it said itself)
+        for e in flow.edges:
+            if e["to"] == x["id"] and e["incomplete"] and x["status"] == "ok" \
+                    and e["why"] not in (ocp_said if x["id"] == "ocp" else ()):
                 x["dropped"].append(_line(f"на входе неполные данные: {e['why']}", tone="warn"))
 
     # reports still awaited
@@ -775,7 +855,49 @@ def _reference(con: psycopg.Connection, d: date) -> dict[str, Any]:
     return {"books": books, "kinds": kinds}
 
 
+_BF_LOCK = threading.Lock()
+_BF_CACHE: dict[tuple[str, str, date], tuple[float, dict[str, Any]]] = {}
+_clock = time.monotonic
+
+
 def _backfill(con: psycopg.Connection, settings: Settings) -> dict[str, Any]:
+    """``backfill.status`` of this store and settings, kept ``BACKFILL_TTL_S`` seconds: the screen asks every minute
+    per tab, and the status reads every date of the history (a year: thousands of queries)."""
     from . import backfill
 
-    return backfill.status(con, settings, datetime.now(UTC).astimezone(store.MSK).date())
+    today = datetime.now(UTC).astimezone(store.MSK).date()
+    key = (str(con.info.dbname) + "@" + str(con.info.host) + ":" + str(con.info.port), str(settings.home), today)
+    with _BF_LOCK:
+        hit = _BF_CACHE.get(key)
+        if hit is not None and _clock() - hit[0] < BACKFILL_TTL_S:
+            return hit[1]
+    v = backfill.status(con, settings, today)
+    with _BF_LOCK:
+        for k in [k for k, (t, _) in _BF_CACHE.items() if _clock() - t >= BACKFILL_TTL_S]:
+            del _BF_CACHE[k]
+        _BF_CACHE[key] = (_clock(), v)
+    return v
+
+
+def forget() -> None:
+    """Drop the kept history of runs (tests; a change the screen must show at once)."""
+    with _BF_LOCK:
+        _BF_CACHE.clear()
+
+
+def _as_date(v: Any) -> date:
+    return v if isinstance(v, date) else date.fromisoformat(str(v)[:10])
+
+
+def _ovp_fix(settings: Settings) -> tuple[str, str] | None:
+    """The settings' section of the OCP («ОВП: типы строк») only when it has something: it opens with the module of
+    the adapter's choice ``ocp_derivative_types`` (TDM#554); else no link (the section stays hidden)."""
+    from .inbox import scan
+
+    try:
+        h = scan.adapter(settings)
+        if h.ok and any(a.get("choices") == "ocp_derivative_types" for a in h.actions or ()):
+            return ("../settings.html#ovp", "ОВП: типы строк")
+    except Exception:  # noqa: BLE001 - no adapter: no link
+        return None
+    return None

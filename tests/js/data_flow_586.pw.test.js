@@ -54,8 +54,19 @@ const SUMMARY = { date: AS_OF, books: null, run_id: 7, trades: 3, live: 3, cance
   states: [{ state: 'applied', text: 'в позициях', n: 1 }, { state: 'not_bond', text: 'не облигация — в позиции дня пока не входит', n: 1 }, { state: 'no_instrument', text: 'бумага не найдена', n: 1 }],
   sources: [{ origin: 'feed', text: 'фид сервисов адаптера', trades: 2, last_at: AS_OF + 'T08:21:00+00:00' }], by_book: {}, top: [], state_text: {} };
 
-async function open(browser, page, { width = 1366, theme = 'dark', store = {}, ready = '#view .k-grid' } = {}) {
+// сводка сделок дня, как сервер её считает (trades.brief): правило C20 (K.scope.rowIn) к каждой сделке по параметрам
+// фильтра шапки — юрлицо и деск книги сделки, книги, валюта, снятые портфели
+function summaryOf(rows, q) {
+  const books = q.getAll('books'), off = q.getAll('ports_off'), e = q.get('entity'), dk = q.get('desk'), c = q.get('ccy');
+  const R = rows.filter(r => (!e || r.entity === e) && (!dk || r.desk === dk) && (!books.length || books.includes(r.book_id)) && (!c || r.ccy === c) && (!r.portfolio || !off.includes(r.portfolio)));
+  const filter = Object.fromEntries([['entity', e], ['desk', dk], ['books', books.length ? books : null], ['ccy', c], ['ports_off', off.length ? off : null]].filter(x => x[1]));
+  return Object.assign({}, SUMMARY, { trades: R.length, live: R.filter(r => r.status === 'live').length, cancelled: R.filter(r => r.status === 'cancelled').length,
+    applied: R.filter(r => r.intraday === 'applied').length, problems: R.filter(r => r.intraday === 'no_instrument').length, filter: Object.keys(filter).length ? filter : null });
+}
+
+async function open(browser, page, { width = 1366, theme = 'dark', store = {}, ready = '#view .k-grid', trades = TRADES, clock = false } = {}) {
   const ctx = await browser.newContext({ viewport: { width, height: 900 } }), pg = await ctx.newPage(), errors = [], calls = [];
+  if (clock) await pg.clock.install();
   await ctx.addInitScript(([t, st]) => { try { localStorage.clear(); localStorage.setItem('concepts-theme', t); Object.entries(st).forEach(([k, v]) => localStorage.setItem(k, v)); } catch (e) { } }, [theme, store]);
   pg.on('pageerror', e => errors.push('pageerror: ' + e.message));
   pg.on('console', m => { if (m.type() === 'error' && !/Failed to load resource/.test(m.text())) errors.push('console: ' + m.text()); });
@@ -68,8 +79,8 @@ async function open(browser, page, { width = 1366, theme = 'dark', store = {}, r
     if (u.pathname === '/api/v1/auth/state') return json({ enabled: false, user: null });
     if (u.pathname === '/api/v1/dataflow') return json(FLOW);
     if (u.pathname === '/api/v1/inbox/days') return json(DAYS);
-    if (u.pathname === '/api/v1/trades') return json(TRADES);
-    if (u.pathname === '/api/v1/trades/summary') return json(SUMMARY);
+    if (u.pathname === '/api/v1/trades') return json(trades);
+    if (u.pathname === '/api/v1/trades/summary') return json(trades === TRADES ? SUMMARY : summaryOf(trades.rows, u.searchParams));
     if (u.pathname.startsWith('/api/')) return route.fulfill({ status: 404, contentType: 'application/json', body: '{"detail":"нет в тесте"}' });
     const f = path.join(ROOT, decodeURIComponent(u.pathname));
     if (!f.startsWith(ROOT) || !fs.existsSync(f) || fs.statSync(f).isDirectory()) return route.fulfill({ status: 404, body: '' });
@@ -146,5 +157,44 @@ test('C20 follows the header filter, shows the source and receipt time; C01 show
     assert.equal(await r.pg.locator('#trades a[href^="c20-trades.html?date=' + AS_OF + '"]').count(), 1);
     assert.deepEqual(r.errors, []);
     await r.ctx.close();
+  } finally { await browser.close(); }
+});
+
+test('C21 keeps the block chosen by a click through the refresh once a minute', { skip: pw ? false : 'нет Playwright', timeout: 120000 }, async () => {
+  const browser = await pw.chromium.launch();
+  try {
+    const { pg, ctx, errors, calls } = await open(browser, 'c21-data-flow.html', { width: 1440, clock: true });
+    await pg.click('#b-ocp .what');
+    await pg.mouse.move(2, 2);  // наведение снято: подсвечен выбранный щелчком
+    assert.equal(await pg.locator('.c21-svg path.hl').count(), 2);
+    const before = calls.filter(c => c.startsWith('/api/v1/dataflow')).length;
+    await pg.clock.fastForward(61000);
+    await pg.waitForTimeout(500);
+    assert.ok(calls.filter(c => c.startsWith('/api/v1/dataflow')).length > before, 'обновление раз в минуту');
+    assert.equal(await pg.locator('.c21-svg path.hl').count(), 2, 'после обновления связи выбранного блока подсвечены');
+    assert.ok(await pg.locator('.c21-flow.hlon').count() === 1 && await pg.locator('.c21-b.hl').count() > 0);
+    assert.deepEqual(errors, []);
+    await ctx.close();
+  } finally { await browser.close(); }
+});
+
+test('the day trades line of C01 counts what C20 shows under the same header filter, a book without positions too', { skip: pw ? false : 'нет Playwright', timeout: 120000 }, async () => {
+  const browser = await pw.chromium.launch();
+  // TR-4: книга, которой нет среди книг прогона (сделка «книги нет среди книг с позициями»), деск Credit, в долларах
+  const T = Object.assign({}, TRADES, { rows: TRADES.rows.concat([row('TR-4', 'XBOOK', { desk: 'Credit', ccy: 'USD', intraday: 'other_book', pnl_rub: null })]) });
+  try {
+    for (const filt of [{ desk: 'Credit' }, { ccy: 'USD' }, { entity: 'Головной банк', ccy: 'RUB' }, { books: ['OFZ', 'XBOOK'] }]) {
+      const store = { 'concepts-filter': JSON.stringify(filt) };
+      let r = await open(browser, 'c20-trades.html', { store, trades: T });
+      const shown = (await r.pg.$$eval('table[data-vk="c20-trades"] tbody tr', l => l.length)) || 0;
+      await r.ctx.close();
+      r = await open(browser, 'c01-cockpit.html', { ready: '#trades .k-dt b', store, trades: T });
+      const line = await r.pg.locator('#trades').innerText();
+      assert.ok(line.includes('Сделки дня: ' + shown + ','), JSON.stringify(filt) + ': C20 ' + shown + ' — C01 ' + line);
+      const sum = new URL(ORIGIN + r.calls.find(c => c.startsWith('/api/v1/trades/summary')));
+      for (const [k, v] of Object.entries(filt)) assert.deepEqual(sum.searchParams.getAll(k), [].concat(v).sort(), k);
+      assert.deepEqual(r.errors, []);
+      await r.ctx.close();
+    }
   } finally { await browser.close(); }
 });

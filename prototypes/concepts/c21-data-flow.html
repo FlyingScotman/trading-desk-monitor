@@ -15,8 +15,8 @@
 .c21-day .s { font-size: 11px; color: var(--fg-3); white-space: nowrap; }
 .c21-day::before { content: ""; position: absolute; left: 0; top: 6px; bottom: 6px; width: 3px; border-radius: 2px; background: var(--c, var(--line-2)); }
 .dst-ok { --c: var(--pos); } .dst-warn { --c: var(--warn); } .dst-bad { --c: var(--neg); }
-/* статус блока: готово / идёт / ждёт / ошибка / выключено */
-.st-ok { --c: var(--pos); } .st-running { --c: var(--accent); } .st-waiting { --c: var(--warn); } .st-error { --c: var(--neg); } .st-off { --c: var(--fg-3); }
+/* статус блока: готово / идёт / ждёт / не пришло (прошлая дата) / ошибка / выключено */
+.st-ok { --c: var(--pos); } .st-running { --c: var(--accent); } .st-waiting { --c: var(--warn); } .st-missing { --c: var(--warn); } .st-error { --c: var(--neg); } .st-off { --c: var(--fg-3); }
 .c21-head { display: flex; gap: 8px 16px; align-items: center; flex-wrap: wrap; font-size: 12.5px; color: var(--fg-2); }
 .c21-head .big { font-size: 18px; font-weight: 650; color: var(--fg); }
 .c21-head b { color: var(--fg); }
@@ -95,7 +95,8 @@
   const server = K.source === 'real' || K.source === 'empty';
   const view = document.getElementById('view'), daysEl = document.getElementById('days');
   const u = new URL(location.href);
-  let on = u.searchParams.get('on') || null, doc = null, open = new Set();
+  // hl — блок, выбранный щелчком: подсветка его связей переживает обновление раз в минуту
+  let on = u.searchParams.get('on') || null, doc = null, open = new Set(), hl = null;
   const COLS = ['source', 'process', 'result'];
   const DAY = { ok: 'всё пришло', warn: 'есть замечания', bad: 'есть проблемы' };
 
@@ -177,6 +178,7 @@
       const x1 = e.a.r + 1, x2 = e.b.l - 3, dx = Math.max(20, (x2 - x1) / 2);
       return '<path class="' + (e.incomplete ? 'bad' : '') + '" data-from="' + esc(e.from) + '" data-to="' + esc(e.to) + '" marker-end="url(#' + (e.incomplete ? 'c21-arb' : 'c21-ar') + ')" d="M' + x1.toFixed(1) + ' ' + e.y1.toFixed(1) + ' C' + (x1 + dx).toFixed(1) + ' ' + e.y1.toFixed(1) + ' ' + (x2 - dx).toFixed(1) + ' ' + e.y2.toFixed(1) + ' ' + x2.toFixed(1) + ' ' + e.y2.toFixed(1) + '"><title>' + esc(e.what + (e.why ? ' — неполные данные: ' + e.why : '')) + '</title></path>';
     }).join('');
+    highlight(hl);  // стрелки нарисованы заново: выбранный щелчком блок снова подсвечен
   }
   function highlight(id) {
     if (!flowEl) return;
@@ -222,12 +224,13 @@
     view.appendChild(wrap);
 
     flowEl.querySelectorAll('[data-more]').forEach(b => b.onclick = e => { e.stopPropagation(); const k = b.dataset.more; open.has(k) ? open.delete(k) : open.add(k); render(); });
-    let hl = null;
+    if (hl && !d.blocks.some(b => b.id === hl)) hl = null;
     flowEl.querySelectorAll('.c21-b').forEach(c => {
       c.onmouseenter = () => highlight(c.dataset.b); c.onmouseleave = () => highlight(hl);
       c.onfocus = () => highlight(c.dataset.b);
       c.onclick = e => { if (e.target.closest('a, button')) return; hl = hl === c.dataset.b ? null : c.dataset.b; highlight(hl); };
     });
+    highlight(hl);
     requestAnimationFrame(drawEdges);
   }
   window.addEventListener('resize', () => requestAnimationFrame(drawEdges));
@@ -263,12 +266,12 @@
       B('backfill', 'process', 'Пересчёт прошлых дат', 'история прогонов: пересчёт дат после изменений', 'waiting', [L('дат с 05.01.2026: посчитано 196 из 203'), L('в очереди — изменились сделки или условия сделок: 7')], { waits: 'очередь: 7 дат', progress: { done: 196, total: 203, text: 'дат посчитано' }, link: { href: 'c11-history.html', text: 'Динамика' } }),
       B('history_load', 'process', 'Догрузка истории', 'история фиксингов и рынка из хаба по частям', 'ok', [L('запросов: выполнено 36, в очереди 0', at(7, 0))], { link: { href: 'c09-market.html', text: 'Рынок' } }),
       B('r_positions', 'result', 'Позиции и риск', 'C03 «Позиции», C02 «Лестница рисков», C01 «Кокпит»', 'ok', [L('позиций 432, книг 3')], { link: { href: 'c03-blotter.html', text: 'Позиции' } }),
-      B('r_trades', 'result', 'Сделки дня', 'C20 «Сделки дня», плитка на кокпите', 'ok', [L('сделок 5, в позициях 2', '2026-10-20T16:40:00')], { link: { href: 'c20-trades.html', text: 'Сделки дня' } }),
+      B('r_trades', 'result', 'Сделки дня', 'C20 «Сделки дня», плитка на кокпите', 'ok', [L('сделок 5, в позициях 2, последняя в 16:40')], { link: { href: 'c20-trades.html', text: 'Сделки дня' } }),
       B('r_ocp', 'result', 'ОВП', 'C16 «ОВП», ОВП в шапке', 'ok', [L('ОВП — отчёт ОВП юрлица за последний рабочий день плюс сделки после даты отчёта')], { dropped: [L('на входе неполные данные: ОВП посчитана без остатков на счетах', null, 'warn')], link: { href: 'c16-ocp.html', text: 'ОВП' } }),
       B('r_pnl', 'result', 'PnL дня', 'C05 «Утренний брифинг», C10 «PnL explain»', 'ok', [L('PnL у позиций: 425 из 432')], { link: { href: 'c05-morning-brief.html', text: 'Брифинг' } }),
       B('r_history', 'result', 'История и PnL за период', 'C11 «Динамика», C19 «PnL за период»', 'ok', [L('основных прогонов с 05.01.2026'), L('ещё не пересчитано дат: 7', null, 'warn')], { link: { href: 'c19-pnl-history.html', text: 'PnL за период' } }),
     ];
-    const S = { ok: 'готово', running: 'идёт', waiting: 'ждёт', error: 'ошибка', off: 'выключено' };
+    const S = { ok: 'готово', running: 'идёт', waiting: 'ждёт', missing: 'не пришло', error: 'ошибка', off: 'выключено' };
     blocks.forEach(b => { b.status_text = S[b.status]; });
     const E = (from, to, what, why) => ({ from, to, what, incomplete: !!why, why: why || null });
     const edges = [E('positions', 'read', 'отчёты о позициях'), E('ocp_report', 'ocp', 'отчёт ОВП'), E('cash', 'ocp', 'остатки на счетах', 'ОВП посчитана без остатков на счетах'),
