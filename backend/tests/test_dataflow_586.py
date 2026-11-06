@@ -207,15 +207,31 @@ def test_no_run_no_red_arrow_and_a_result_takes_its_inputs_wait(store_url, tmp_p
 
 def test_a_stock_with_only_older_parts_waits_for_the_dates_report(store_url, tmp_path, monkeypatch):
     s = _two_dates(monkeypatch, tmp_path, store_url)
-    old = {"cash_balances": [{"valid_date": D("2026-10-14")}], "ocp": [{"valid_date": D("2026-10-15")}]}
+    # 15.10.2026 is a Thursday: a part of 14.10 (the previous business day) is the normal base (TDM#531), 13.10 is old
+    old = {"cash_balances": [{"valid_date": D("2026-10-13")}], "ocp": [{"valid_date": D("2026-10-14")}],
+           "trade_terms": [{"valid_date": D("2026-10-15")}]}
     monkeypatch.setattr(dataflow, "_stock_units", lambda con, ds, d: old.get(ds, []))
     monkeypatch.setattr(dataflow, "_declared", lambda st: {"cash_balances": ["cash_csv"], "ocp": ["ocp_csv"]})
     with store.connect(store_url) as con:
         by = _check_shape(dataflow.build(con, s, D("2026-10-15")))
     cash = by["cash"]
     assert cash["status"] == "waiting", cash
-    assert cash["waits"] == "остатки на счетах за 15.10; пока в силе части с прошлых дат (последняя за 14.10.2026)"
-    assert by["ocp_report"]["status"] == "ok" and by["ocp_report"]["waits"] is None  # the part of the date itself
+    assert cash["waits"] == "остатки на счетах за 15.10; пока в силе части с прошлых дат (последняя за 13.10.2026)"
+    assert by["ocp_report"]["status"] == "ok" and by["ocp_report"]["waits"] is None  # the previous business day's
+
+
+def test_an_error_given_as_text_is_said_in_words():
+    b = {"dropped": []}
+    dataflow._said_error(b, "история фиксингов не прочитана", "OperationalError: server closed the connection")
+    assert [ln["t"] for ln in b["dropped"]] == ["история фиксингов не прочитана: нет связи с хранилищем",
+                                               "для администратора: OperationalError, подробности — в журнале монитора"]
+
+
+def test_the_previous_business_day_skips_the_weekend(tmp_path):
+    from types import SimpleNamespace
+
+    assert dataflow._prev_business_day(SimpleNamespace(snapshot_cache=tmp_path / "none"), D("2026-10-19")) == \
+        D("2026-10-16")
 
 
 def test_errors_in_words_without_codes_or_settings_variables(store_url, tmp_path, monkeypatch):

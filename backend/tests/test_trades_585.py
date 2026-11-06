@@ -143,8 +143,12 @@ def test_the_fetch_of_past_dates_is_told_by_its_marks_the_clock_only_without_the
     doc = trades_history.blank()
     trades_history.apply_mark(doc, "2026-10-20", "fetched", "covered", late, fingerprint=None,
                               files=[{"file": "x.csv", "sha256": "c" * 64, "status": "accepted"}], units=1)
+    # a mark written before 0.2.20 lists its files without sha256: its date is left to the clock
+    trades_history.apply_mark(doc, "2026-10-19", "fetched", "covered", late, fingerprint=None,
+                              files=[{"file": "y.csv", "status": "accepted"}], units=1)
     trades_history.write(s, doc)
     assert trades.history_files(s) == {"2026-10-20": {"c" * 64}}
+    assert trades.origin_of(feed, late, D("2026-10-19"), "d" * 64, trades.history_files(s)) == "history"
     assert trades.history_files(None) is None
 
 

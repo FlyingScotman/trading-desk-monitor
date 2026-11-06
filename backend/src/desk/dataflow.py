@@ -38,12 +38,13 @@ positions, no PnL figures, no folder paths.
 
 from __future__ import annotations
 
+import hashlib
 import logging
 import threading
 import time
 from collections import Counter
 from collections.abc import Callable
-from datetime import UTC, date, datetime
+from datetime import UTC, date, datetime, timedelta
 from typing import Any
 
 import psycopg
@@ -143,6 +144,15 @@ class Flow:
         b["dropped"].append(_line(f"для администратора: {name}, подробности — в журнале монитора"))
 
 
+def _said_error(b: dict[str, Any], what: str, error: Any) -> None:
+    """An error another module gave as text («OperationalError: …»): in words (``FAILED``); only the exception's
+    name, never its text, in a secondary line for the administrator."""
+    name = str(error).split(":", 1)[0].strip()
+    b["dropped"].append(_line(f"{what}: {FAILED.get(name, 'внутренняя ошибка монитора')}", tone="bad"))
+    if name.isidentifier():
+        b["dropped"].append(_line(f"для администратора: {name}, подробности — в журнале монитора"))
+
+
 def _status(b: dict[str, Any], st: str) -> None:
     if ORDER.index(st) > ORDER.index(b["status"]) or b["status"] == "ok":
         b["status"] = st
@@ -228,6 +238,19 @@ def _stock_units(con: psycopg.Connection, dataset: str, d: date) -> list[dict[st
     return store.dataset_rows(con, dataset, d).units if dataset else []
 
 
+def _prev_business_day(settings: Settings, d: date) -> date:
+    """The business day before ``d`` by the stored Russian calendar; Monday..Friday when it is not readable."""
+    try:
+        from .inbox.static_index import business_calendar  # at call time: the inbox is heavy to import
+
+        return business_calendar(settings.snapshot_cache, d).prev_business_day(d)
+    except Exception:  # noqa: BLE001 - no calendar: weekdays only
+        p = d - timedelta(days=1)
+        while p.weekday() >= 5:
+            p -= timedelta(days=1)
+        return p
+
+
 def build(con: psycopg.Connection, settings: Settings, on: date | None = None, *,
           autopilot: dict[str, Any] | None = None, services: Any = None, admin: bool = False,
           now: datetime | None = None) -> dict[str, Any]:
@@ -254,6 +277,7 @@ def build(con: psycopg.Connection, settings: Settings, on: date | None = None, *
     except Exception:  # noqa: BLE001 - no adapter: every source reads «не настроено»
         declared = {}
     past = d < today
+    prev_bd = _prev_business_day(settings, d)
     ap = autopilot or {}
     prog = ap.get("progress") if ap.get("state") == "running" else None
     running_block = STEP_BLOCK.get((prog or {}).get("step"))
@@ -346,7 +370,9 @@ def build(con: psycopg.Connection, settings: Settings, on: date | None = None, *
                 b["got"].insert(0, _line("адаптер этот отчёт не даёт"))
             elif not units:
                 not_come(b, ds, f"{noun} за {dd}")
-            elif given and _as_date(vd) < d:   # the parts of past dates stay in force; the date's report is awaited
+            elif given and _as_date(vd) < prev_bd:
+                # the parts of past dates stay in force; a report of the previous business day is the normal base
+                # (TDM#531 report_base_plus_day, 08 §6.7): only an older last part means the date's report is awaited
                 not_come(b, ds, f"{noun} за {dd}; пока в силе части с прошлых дат (последняя за {_dm(vd)})")
         else:
             rows = (inp.get("rows") or {}).get("accepted", 0)
@@ -460,7 +486,7 @@ def build(con: psycopg.Connection, settings: Settings, on: date | None = None, *
     market_why = None
     if m.get("error"):
         _status(mb, "error")
-        mb["dropped"].append(_line(f"кэш снимков не прочитан: {m['error']}", tone="bad"))
+        _said_error(mb, "кэш снимков не прочитан", m["error"])
     for cut, label in (("eod_final", "окончательное закрытие"), ("eod_preliminary", "предварительное закрытие")):
         x = m.get(cut)
         if x:
@@ -486,7 +512,7 @@ def build(con: psycopg.Connection, settings: Settings, on: date | None = None, *
     fx = (bf or {}).get("fixings_history") or {}
     if fx.get("error"):
         _status(xb, "error")
-        xb["dropped"].append(_line(f"история фиксингов не прочитана: {fx['error']}", tone="bad"))
+        _said_error(xb, "история фиксингов не прочитана", fx["error"])
     elif bf is not None:
         if fx.get("rows"):
             xb["got"].append(_line(f"индексов {fx.get('indices')}, значений {_n(fx.get('rows'))}, "
@@ -866,7 +892,9 @@ def _backfill(con: psycopg.Connection, settings: Settings) -> dict[str, Any]:
     from . import backfill
 
     today = datetime.now(UTC).astimezone(store.MSK).date()
-    key = (str(con.info.dbname) + "@" + str(con.info.host) + ":" + str(con.info.port), str(settings.home), today)
+    # the settings' whole text in the key: a change of the history settings is shown at once, not after the window
+    key = (str(con.info.dbname) + "@" + str(con.info.host) + ":" + str(con.info.port), str(settings.home), today,
+           hashlib.sha256(repr(settings).encode()).hexdigest())
     with _BF_LOCK:
         hit = _BF_CACHE.get(key)
         if hit is not None and _clock() - hit[0] < BACKFILL_TTL_S:

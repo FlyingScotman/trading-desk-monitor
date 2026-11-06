@@ -172,7 +172,7 @@ def apply_mark(doc: dict, day: str, state: str, code: str, now: datetime, *, fin
             if attempts <= len(UNAVAILABLE_DAYS) else None
     m = {"state": state, "code": code, "at": now.isoformat(), "attempts": attempts, "next_at": next_at,
          "fingerprint": fingerprint, "files": [{"file": x["file"], "sha256": x.get("sha256"), "status": x.get("status")}
-                                               for x in (files or [])][:20], "units": units}
+                                               for x in (files or [])][:200], "units": units}
     if sets is not None:
         m["sets"] = sets
     doc["marks"][day] = m

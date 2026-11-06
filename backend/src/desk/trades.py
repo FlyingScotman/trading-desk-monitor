@@ -129,8 +129,13 @@ def history_files(settings: Any) -> dict[str, set[str]] | None:
         marks = trades_history.read(settings).get("marks") or {}
     except Exception:  # noqa: BLE001 - no marks: the fallback of origin_of
         return None
-    return {str(d): {str(f.get("sha256")) for f in (m.get("files") or []) if isinstance(f, dict) and f.get("sha256")}
-            for d, m in marks.items() if isinstance(m, dict)}
+    out: dict[str, set[str]] = {}
+    for d, m in marks.items():
+        files = (m.get("files") or []) if isinstance(m, dict) else []
+        shas = {str(f["sha256"]) for f in files if isinstance(f, dict) and f.get("sha256")}
+        if shas:   # a mark written before 0.2.20 lists its files without sha256: the clock decides for its date
+            out[str(d)] = shas
+    return out
 
 
 def set_origins(con: psycopg.Connection, set_ids: list[int],
