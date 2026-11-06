@@ -2,6 +2,8 @@
 // TDM#604 — one book selection for every day: the demo has days of two kinds (older ones with an entity-level report
 // part without books and a book the newer days lack); with a narrowed selection «месяц» and «3 мес» agree on their
 // common dates and no day holds an unchecked or never-chosen book; the point's tooltip counts the day's books.
+// TDM#603 — the drill-down of a book row: parts with their contributions summing to the cell, the report lines taken out
+// as derivatives against what the positions add, links to C20 and C03, a past day from /ocp of that day's run.
 //   node --test tests/js/ocp_c16_drill.pw.test.js        C16_SHOTS=<dir> also saves screenshots
 'use strict';
 const test = require('node:test'), assert = require('node:assert/strict'), fs = require('node:fs'), path = require('node:path');
@@ -71,4 +73,111 @@ test('C16 demo: one book selection for every day — «месяц» and «3 ме
     assert.deepEqual(errors, []);
     await ctx.close();
   } finally { await browser.close(); }
+});
+
+// TDM#603: щелчок по строке книги — из чего складывается её ОВП за день; по сумме валюты — только эта валюта
+test('C16 demo: a book row opens what its OCP consists of; the total equals the cell; report lines taken out as derivatives (TDM#603)', { skip: pw ? false : 'нет Playwright', timeout: 120000 }, async () => {
+  const browser = await pw.chromium.launch();
+  try {
+    for (const width of [1366, 390]) {
+      const { pg, ctx, errors } = await open(browser, { width, theme: width === 390 ? 'dark' : 'light' });
+      const cellText = await pg.locator('[data-ocp-row="FXB-FWD"] td[data-ocp-c="USD"]').innerText();
+      await pg.locator('[data-ocp-row="FXB-FWD"] td').first().click();
+      const dr = pg.locator('.k-drawer[data-c16-drill]');
+      await dr.locator('[data-c16-drill-ccy]').first().waitFor();
+      assert.deepEqual(await dr.locator('[data-c16-drill-ccy]').evaluateAll(a => a.map(e => e.dataset.c16DrillCcy)), ['USD', 'EUR', 'CNY'], 'все валюты строки');
+      // итог USD = ячейке, и слагаемые складываются в итог
+      const usd = dr.locator('table[data-vk="c16-drill"]').first();
+      const sumRow = await usd.locator('tr[data-c16-sum]').innerText();
+      const num = t => { const s = t.replace(/\s/g, ''), v = parseFloat(s.replace(/[()+−-]/g, '')); return /^\(|^[−-]/.test(s) ? -v : v; };
+      assert.ok(sumRow.includes('= ячейке таблицы') && Math.abs(num(sumRow.split(/\t|\n/).pop()) - num(cellText)) < 0.051, sumRow + ' | ' + cellText);
+      const parts = await usd.locator('tr[data-c16-part] td.n').allInnerTexts();
+      assert.ok(Math.abs(parts.map(num).reduce((a, v) => a + v, 0) - num(sumRow.split(/\t|\n/).pop())) < 0.02, parts.join() + ' vs ' + sumRow);
+      // база с датой отчёта, сделка дня ведёт на C20 с книгой, позиция — на C03
+      assert.match(await dr.innerText(), /База — отчёт ОВП от \d\d\.\d\d\.\d\d/);
+      const trade = await usd.locator('a[href^="c20-trades.html"]').first().getAttribute('href');
+      assert.match(trade, /^c20-trades\.html\?date=\d{4}-\d\d-\d\d&book_id=FXB-FWD$/);
+      assert.match(await usd.locator('a[href^="c03-blotter.html?pos="]').first().getAttribute('href'), /pos=FXB-FWD%7CFWD-1/);
+      // строки отчёта, исключённые как деривативы: вынесено больше, чем добавлено из позиций — предупреждение; типы строк
+      const ex = dr.locator('[data-c16-drill-ccy="USD"] ~ [data-c16-excluded]').first();
+      assert.ok(await ex.isVisible());
+      assert.equal(await dr.locator('[data-c16-exwarn]').count(), 1, 'предупреждение только у USD');
+      const types = await dr.locator('table[data-c16-types]').first().innerText();
+      assert.ok(types.includes('Тип строки B → валютные форварды') && types.includes('Тип строки C: спот оставлен по номиналу'), types);
+      assert.ok(!BAD.test(await dr.innerText()));
+      if (width === 390) assert.ok(await pg.evaluate(() => document.documentElement.scrollWidth <= innerWidth), 'нет прокрутки вбок');
+      if (SHOTS) { fs.mkdirSync(SHOTS, { recursive: true }); await pg.screenshot({ path: path.join(SHOTS, 'c16-603-' + width + '.png') }); }
+      await pg.keyboard.press('Escape');
+      // сумма валюты: только эта валюта; разбор обрезан — «показаны 10 из 14»
+      await pg.locator('[data-ocp-row="FXB-SWAP"] td[data-ocp-c="CNY"]').click();
+      await pg.locator('.k-drawer [data-c16-drill-ccy]').first().waitFor();
+      assert.deepEqual(await pg.locator('.k-drawer [data-c16-drill-ccy]').evaluateAll(a => a.map(e => e.dataset.c16DrillCcy)), ['CNY']);
+      assert.equal(await pg.locator('.k-drawer [data-c16-trunc]').innerText(), 'показаны 10 из 14');
+      // другой день — свой разбор, итог = ячейке того дня
+      const sel = pg.locator('.k-drawer [data-c16-day]');
+      const other = await sel.locator('option').nth(3).getAttribute('value');
+      await sel.selectOption(other);
+      await pg.waitForFunction(d => (document.querySelector('.k-drawer .st') || {}).textContent.includes(d.slice(8, 10) + '.' + d.slice(5, 7)), other);
+      await pg.locator('.k-drawer [data-c16-sum]').first().waitFor();
+      assert.ok((await pg.locator('.k-drawer [data-c16-sum]').first().innerText()).includes('= ячейке таблицы'));
+      assert.deepEqual(errors, []);
+      await ctx.close();
+    }
+  } finally { await browser.close(); }
+});
+
+test('C16 on a run: the drill-down of a past day asks /ocp of that day\'s run (TDM#603)', { skip: pw ? false : 'нет Playwright', timeout: 120000 }, async () => {
+  const { TEXT: RUN } = require('./fixtures/concepts_run');
+  const AS_OF = JSON.parse(RUN).asOf;
+  const prev = s => { const t = new Date(s + 'T00:00:00Z'); do t.setUTCDate(t.getUTCDate() - 1); while (!(t.getUTCDay() % 6)); return t.toISOString().slice(0, 10); };
+  const D1 = prev(AS_OF), B = prev(D1);
+  const L = (amount, extra) => Object.assign({ entity: 'Головной банк', book: 'FXB', books: ['FXB'], ccy: 'USD', amount, source: 'report', reported: null, validDate: B }, extra || {});
+  const FX = { USD: { market: 81.45, cbr: 81.12 } };
+  const hist = { runId: null, asOf: AS_OF, from: D1, to: AS_OF, books: {}, days: [
+    { date: D1, runId: 7, runType: 'EOD', state: 'computed', basis: 'report_plus_outside', fx: FX, lines: [L(5e6)] },
+    { date: AS_OF, runId: 8, runType: 'EOD', state: 'computed', basis: 'report_base_plus_day', fx: FX, lines: [L(3e6, { baseDate: D1, baseKind: 'without_derivatives', parts: {} })] }] };
+  const block = (id, x) => ({ run_id: id, state: 'computed', components: [{ key: 'options', name: 'опционы' }], parts: [{ key: 'base', name: 'база: отчёт ОВП без деривативов' }], published: { basis: x.basis, by_book: [x.line] } });
+  // прошлый день — прежняя методика: отчёт целиком + вне отчёта; текущий — база + PV деривативов
+  const old = block(7, { basis: 'report_plus_outside', line: { entity: 'Головной банк', book_id: 'FXB', books: ['FXB'], ccy: 'USD', amount: 5e6, source: 'report', components: ['options'], outside: { options: 1e6 }, reported: 4e6, valid_date: B } });
+  const now = block(8, { basis: 'report_base_plus_day', line: { entity: 'Головной банк', book_id: 'FXB', books: ['FXB'], ccy: 'USD', amount: 3e6, source: 'report', components: [], outside: {}, reported: 2e6, valid_date: D1, base_date: D1, base_kind: 'without_derivatives',
+    parts: { base: 2e6, derivatives: 1e6, bonds: 0, trades: 0, outside: 0 }, contributions: { base: { items: [{ kind: 'report', valid_date: D1, file: 'ocp.csv', rows: 1, amount: 2e6 }], rest: null }, derivatives: { items: [{ kind: 'position', position_id: 'FXB|F1', derivative: 'fx_forward', amount: 1e6 }], rest: null } },
+    excluded: [{ kind: 'fx_forward', component: 'fx_legs', nominal: 1.02e6, added: 1e6, outside: 0, positions: 1, fallback: false, diff: 2e4 }] } });
+  const b2 = await pw.chromium.launch();
+  try {
+    const ctx = await b2.newContext({ viewport: { width: 1366, height: 900 } }), pg = await ctx.newPage(), errors = [], asked = [];
+    pg.on('pageerror', e => errors.push(e.message));
+    await pg.route('**/*', async route => {
+      const u = new URL(route.request().url()), json = o => route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(o) });
+      if (u.origin !== ORIGIN) return route.abort();
+      if (u.pathname === '/concepts-run.js') return route.fulfill({ status: 200, contentType: 'application/javascript', body: 'window.CONCEPTS_RUN = ' + RUN + ';' });
+      if (u.pathname === '/concepts-data.js') return route.fulfill({ status: 200, contentType: 'application/javascript', body: 'window.DESK_EXTRAS = { notes: [] };' });
+      if (u.pathname === '/api/v1/auth/state') return json({ enabled: false, user: null });
+      if (u.pathname.startsWith('/api/v1/runs/') && u.pathname.endsWith('/ocp')) asked.push(u.pathname);
+      if (u.pathname === '/api/v1/history/ocp') return json(hist);
+      if (u.pathname === '/api/v1/runs/7/ocp') return json(old);
+      if (u.pathname === '/api/v1/runs/8/ocp') return json(now);
+      if (u.pathname.startsWith('/api/')) return route.fulfill({ status: 404, contentType: 'application/json', body: '{}' });
+      const f = path.join(ROOT, decodeURIComponent(u.pathname));
+      if (!f.startsWith(ROOT) || !fs.existsSync(f) || fs.statSync(f).isDirectory()) return route.fulfill({ status: 404, body: '' });
+      return route.fulfill({ status: 200, contentType: TYPES[path.extname(f)] || 'application/octet-stream', body: fs.readFileSync(f) });
+    });
+    await pg.goto(ORIGIN + '/concepts/c16-ocp.html');
+    await pg.waitForSelector('[data-ocp-row="FXB"]');
+    await pg.locator('[data-ocp-row="FXB"] td').first().click();
+    await pg.locator('.k-drawer [data-c16-sum]').waitFor();
+    assert.deepEqual(asked, ['/api/v1/runs/8/ocp'], 'день таблицы — прогон дня');
+    assert.ok((await pg.locator('.k-drawer [data-c16-sum]').innerText()).includes('= ячейке таблицы'));
+    assert.equal(await pg.locator('.k-drawer [data-c16-exwarn]').count(), 0, 'небольшая разница PV и номинала — без предупреждения');
+    await pg.locator('.k-drawer [data-c16-day]').selectOption(D1);
+    await pg.waitForFunction(() => document.querySelector('.k-drawer [data-c16-sum]') && document.querySelector('.k-drawer .st').textContent.includes('#7'));
+    assert.deepEqual(asked, ['/api/v1/runs/8/ocp', '/api/v1/runs/7/ocp'], 'прошлый день — /ocp его прогона, не история');
+    const txt = await pg.locator('.k-drawer [data-c16-dbody]').innerText();
+    assert.ok(txt.includes('целиком, с деривативами') && txt.includes('вне отчёта: опционы') && txt.includes('= ячейке таблицы'), txt);
+    // повторно тот же день — без нового запроса
+    await pg.locator('.k-drawer [data-c16-day]').selectOption(AS_OF);
+    await pg.locator('.k-drawer [data-c16-part="base"]').waitFor();
+    assert.equal(asked.length, 2);
+    assert.deepEqual(errors, []);
+    await ctx.close();
+  } finally { await b2.close(); }
 });

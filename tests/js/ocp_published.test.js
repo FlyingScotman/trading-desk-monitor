@@ -169,7 +169,7 @@ ta('C16: ОВП дня по валютам, общая ОВП в USD — нет�
   assert.ok(!html.includes('data-ocp-ccy="RUB"'));
   assert.ok(html.includes('data-vk="c16-books"') && html.includes('data-ocp-row="AM"') && html.includes('часть отчёта') && html.includes('title="книги: Фонд облигаций, Фонд юаневых облигаций"'), 'часть отчёта по юрлицу — строкой, книги в подсказке');
   assert.ok(html.includes('FX и XCCY</span> <span class="c16-src" title="из позиций: CNY">из позиций</span>'), 'источник строки, когда в таблице есть и отчёт, и из позиций; в CSV — через пробел');
-  assert.ok(/data-ocp-row="IC-BND">[\s\S]*?<td class="n" title="нет курса одной из валют строки"><span class="mut3">—<\/span><\/td><\/tr>/.test(html), 'ОВП строки без курса GBP — не считается');
+  assert.ok(/data-ocp-row="IC-BND"[^>]*>[\s\S]*?<td class="n" title="нет курса одной из валют строки"><span class="mut3">—<\/span><\/td><\/tr>/.test(html), 'ОВП строки без курса GBP — не считается');
   assert.ok(!/Сверка|Перенос ОВП|брейк/.test(html), 'без сверки и переноса');
   assert.ok(!html.includes('Почему отчёта ОВП нет'));
   // история: дни позже месяца назад; день без публикуемой ОВП — пусто; линия — общая ОВП дня
@@ -239,7 +239,7 @@ ta('C16: валюта без курса прогона — по курсу из 
   assert.ok(/data-ocp-total title="сумма USD-эквивалентов валют со знаком\. Пересчитано по курсу из отчёта ОВП: GBP"><div class="l">Общая ОВП<\/div><div class="v"><span class="[^"]*">\+5\.8</.test(html), html);
   assert.ok(/data-ocp-ccy="GBP"[\s\S]*?≈ \+1\.3 mm USD · <span title="Пересчитано по курсу из отчёта ОВП">курса нет<\/span>/.test(html), html);
   assert.ok(html.includes('<th class="n" title="Курса нет. Пересчитано по курсу из отчёта ОВП">GBP'), 'столбец валюты');
-  assert.ok(/data-ocp-row="IC-BND">[\s\S]*?<td class="n"><span class="[^"]*">\(1\.1\)<\/span><\/td><\/tr>/.test(html), 'ОВП книги: −2.4 + 1.25');
+  assert.ok(/data-ocp-row="IC-BND"[^>]*>[\s\S]*?<td class="n"><span class="[^"]*">\(1\.1\)<\/span><\/td><\/tr>/.test(html), 'ОВП книги: −2.4 + 1.25');
   let by = Object.fromEntries(x.chart().series.map(z => [z.name, z.data]));
   near(by.GBP[2], 1.25, 'столбец GBP'); near(by['Общая'][2], 10 - 3.025 - 2.4 + 1.25, 'линия');
   near(by.USD[0], -1, 'USD 19.10'); near(by.CNY[0], 88 * 11 / 82, 'CNY по курсу прогона, USD — отчёта');

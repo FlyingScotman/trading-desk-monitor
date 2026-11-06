@@ -1394,6 +1394,7 @@
 
   // ---------- выезжающие панели ----------
   const stack = [];
+  K.drawer = wide => drawer(wide);  // выезжающая панель страницы (C16, TDM#603): { el, bd, close }
   function drawer(wide) {
     const scrim = h('div', 'k-scrim'), d = h('div', 'k-drawer' + (wide ? ' wide' : ''));
     d.innerHTML = '<div class="hd"><div style="min-width:0;flex:1"><div class="k-crumbs"></div><div class="t"></div><div class="st"></div></div><button class="close" title="Закрыть (Esc)">×</button></div><div class="bd"></div>';
