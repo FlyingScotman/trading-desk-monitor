@@ -1970,7 +1970,7 @@ export interface components {
              * Code
              * @enum {string}
              */
-            code: "no_report" | "stale_report" | "outside_without_terms" | "books_outside_report" | "outside_double_count" | "report_without_derivatives_split" | "derivatives_nominal_fallback" | "base_older" | "trades_not_loaded" | "no_base_run" | "trades_not_valued" | "carried_forward_unit" | "trades_unknown_book" | "derivatives_partial_pv" | "derivatives_unknown_last_flow" | "off_report_excluded";
+            code: "no_report" | "stale_report" | "outside_without_terms" | "books_outside_report" | "outside_double_count" | "report_without_derivatives_split" | "derivatives_nominal_fallback" | "base_older" | "trades_not_loaded" | "no_base_run" | "trades_not_valued" | "carried_forward_unit" | "trades_unknown_book" | "derivatives_partial_pv" | "derivatives_unknown_last_flow" | "off_report_excluded" | "derivative_share" | "balances_older_than_base" | "balances_not_at_base";
             /** Text */
             text: string;
             /**
@@ -2184,6 +2184,13 @@ export interface components {
              * @description report_base_plus_day, TDM#603: the report's row types behind ``excluded``, from the adapter's ``x_derivative_types``: {type, kind, kept: false — its future lines taken out as the kind, true — a spot type left in the base at its nominal, lines, amount}
              */
             derivative_types?: {
+                [key: string]: unknown;
+            }[];
+            /**
+             * Derivative Share
+             * @description report_base_plus_day, DEC18 (TDM#588): a derivative that is nearly the whole gross of a large line {position_id, derivative, amount, share} (gap derivative_share)
+             */
+            derivative_share?: {
                 [key: string]: unknown;
             }[];
         };
@@ -3441,6 +3448,11 @@ export interface components {
              * @description TDM#567: why the published OCP is not on the current methodology (the report without the derivatives + their PV), null when it is
              */
             method_note?: string | null;
+            /**
+             * Left Out
+             * @description Elements of the run's block that do not fit this model, left out of the response so that the rest is still served (the path and the error type, never a value; the monitor's log has the same): empty when the whole block is served
+             */
+            left_out?: string[];
         };
         /** RunPnl */
         RunPnl: {

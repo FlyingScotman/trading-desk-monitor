@@ -400,10 +400,18 @@
     if (RUNS[key]) return RUNS[key];
     if (!server) return (RUNS[key] = Promise.resolve(DEMO_OCP(day)));
     if (id == null) return Promise.reject(new Error('у дня нет прогона'));
-    return (RUNS[key] = fetch('../api/v1/runs/' + encodeURIComponent(id) + '/ocp', { cache: 'no-store' }).then(r => {
-      if (!r.ok) throw new Error(r.status + ' ' + r.statusText);
-      return r.json();
-    }).catch(e => { delete RUNS[key]; throw e; }));
+    const url = '../api/v1/runs/' + encodeURIComponent(id) + '/ocp';
+    return (RUNS[key] = fetch(url, { cache: 'no-store' }).then(r => {
+      if (r.ok) return r.json();
+      // какой запрос, код ответа и что сказал сервер (номер запроса — тот же, что в журнале монитора)
+      return r.text().then(t => {
+        let j = null; try { j = JSON.parse(t); } catch (_) { /* не JSON */ }
+        throw new Error('сервер ответил ' + r.status + (r.statusText ? ' ' + r.statusText : '') + ' на запрос блока ОВП прогона #' + id +
+          ' (GET ' + url.replace('../', '/') + ')' + (j && j.message ? ': ' + j.message : '') +
+          (j && j.request_id ? '; номер запроса ' + j.request_id + ' — по нему ошибка найдётся в журнале монитора' : ''));
+      });
+    }, e => { throw new Error('запрос блока ОВП прогона #' + id + ' не дошёл до сервера: ' + e.message); })
+      .catch(e => { delete RUNS[key]; throw e; }));
   }
   // строка таблицы ↔ строка блока (snake_case) и строка истории (camelCase): книга или часть отчёта по юрлицу с теми же книгами
   const rowKey = (book, entity, books) => book ? 'b|' + book : 'e|' + entity + '|' + (books || []).slice().sort().join(',');
@@ -495,7 +503,9 @@
         COMP = Object.fromEntries((J.components || []).map(c => [c.key, c.name]));
         PARTN = Object.fromEntries((J.parts || []).map(c => [c.key, c.name]));
         const lines = (((J.published || {}).by_book) || []).filter(x => rowKey(x.book_id, x.entity, x.books) === key && x.ccy !== 'RUB' && (!cur || x.ccy === cur)).sort((a, z) => ccyOrder(a.ccy, z.ccy));
-        out.innerHTML = lines.length ? lines.map(x => lineHtml(x, cellOf(x.ccy))).join('') : '<div class="k-empty">В этот день у строки нет ОВП' + (cur ? ' в ' + esc(cur) : '') + '</div>';
+        // часть блока не прошла проверку сервера: показано остальное, пропущенное названо (без сумм)
+        const left = (J.left_out || []).length ? '<div class="k-note warn" data-c16-leftout>Часть разбора не показана: ' + J.left_out.length + ' элем. блока ОВП прогона не прошли проверку сервера (' + esc(J.left_out.slice(0, 3).join('; ') + (J.left_out.length > 3 ? '; …' : '')) + '). Подробности — в журнале монитора.</div>' : '';
+        out.innerHTML = left + (lines.length ? lines.map(x => lineHtml(x, cellOf(x.ccy))).join('') : '<div class="k-empty">В этот день у строки нет ОВП' + (cur ? ' в ' + esc(cur) : '') + '</div>');
         K.tableToolsAll(out);
       }, e => { out.innerHTML = '<div class="k-empty">Разбор не загрузился: ' + esc(e.message) + '</div>'; });
     };

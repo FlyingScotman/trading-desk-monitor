@@ -6,6 +6,7 @@ shortcut: one psycopg connection per request, no pool; fine for a few users, poo
 
 from __future__ import annotations
 
+import copy
 import hashlib
 import json
 import logging
@@ -29,6 +30,7 @@ from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.responses import JSONResponse, RedirectResponse, Response
 from fastapi.staticfiles import StaticFiles
 from psycopg.rows import dict_row
+from pydantic import ValidationError
 from starlette.exceptions import HTTPException
 
 from .. import __version__, lan
@@ -363,14 +365,75 @@ def funding_out(run_id: int, block: dict[str, Any] | None) -> RunFunding:
         fx_liability=b.get("fx_liability"))
 
 
+OCP_LEFT_OUT_PASSES = 5
+OCP_OPTIONAL = frozenset(k for k, f in RunOcp.model_fields.items() if not f.is_required())
+
+
+def _left_out_target(data: dict[str, Any], loc: tuple[Any, ...]) -> tuple[Any, Any] | None:
+    """What a validation error at ``loc`` points at in ``data``: (container, key) of the innermost list element on the
+    path (a gap, a line, a comparison), else of the deepest key the path reaches (the field's default then applies, or
+    the entry of a mapping goes); None: nothing to leave out (a required top-level field)."""
+    node: Any = data
+    item = leaf = None
+    for step in loc:
+        if isinstance(node, list) and isinstance(step, int) and 0 <= step < len(node):
+            item = (node, step)
+        elif isinstance(node, dict) and step in node:
+            leaf = (node, step)
+        else:
+            break
+        node = node[step]
+    return item or (leaf if leaf and not (leaf[0] is data and leaf[1] not in OCP_OPTIONAL) else None)
+
+
+def _valid_ocp(run_id: int, data: dict[str, Any]) -> RunOcp:
+    """``RunOcp`` of ``data``; an element of the block the model does not accept (a value the engine emits that the
+    model does not know yet) is left out and named in ``left_out`` (its path and the error type, never a value: the
+    figures are real positions), so that one element never fails the whole route (0.2.21: every drill-down of the
+    OCP page was a 500 for an unknown gap code). A required field that does not fit still fails it."""
+    left: list[str] = []
+    seen: set[str] = set()
+    for n in range(OCP_LEFT_OUT_PASSES):
+        try:
+            out = RunOcp.model_validate(data)
+            break
+        except ValidationError as e:
+            if n == 0:
+                data = copy.deepcopy(data)  # the run's block is left as stored
+            errors = e.errors(include_input=False, include_url=False)
+            locs = [".".join(map(str, x["loc"])) for x in errors]
+            targets = [_left_out_target(data, x["loc"]) for x in errors]
+            if None in targets:
+                log.error("run %s: the OCP block does not fit the model: %s", run_id,
+                          "; ".join(f"{p}: {x['type']}" for p, x in zip(locs, errors, strict=True)))
+                raise
+            # a required key left out in the previous pass is now missing: said once, at its first error
+            left += [f"{p}: {x['type']}" for p, x in zip(locs, errors, strict=True) if p not in seen]
+            seen |= set(locs)
+            by_container: dict[int, tuple[Any, set[Any]]] = {}
+            for container, key in targets:
+                by_container.setdefault(id(container), (container, set()))[1].add(key)
+            for container, keys in by_container.values():  # a list's elements from the last, so indices hold
+                for k in sorted(keys, reverse=True) if isinstance(container, list) else keys:
+                    del container[k]
+    else:
+        raise ValueError(f"run {run_id}: the OCP block does not fit the model after leaving out {len(left)} elements")
+    if left:
+        log.warning("run %s: OCP block elements left out of the response (they do not fit the model): %s", run_id,
+                    "; ".join(left[:50]))
+        out.left_out = left
+    return out
+
+
 def ocp_out(run_id: int, block: dict[str, Any] | None) -> RunOcp:
-    """``RunOcp`` of a run's OCP block (``publish.ocp_run``); a run before B2 has none."""
+    """``RunOcp`` of a run's OCP block (``publish.ocp_run``); a run before B2 has none. An element the model does not
+    accept is left out and named in ``left_out`` (``_valid_ocp``)."""
     b = block or ocp_run.empty_block(ocp_run.NOT_COMPUTED, ocp_run.STATUS_TEXT[ocp_run.NOT_COMPUTED])
     # v2 of the block (TDM#416) and v3 (TDM#531): an older block has none of them, the model's defaults
     keep = ("sources", "published", "gaps", "derivatives_check", "parts", "derivatives_pv", "books")
-    out = RunOcp(run_id=run_id, state=b["status"], **{k: b.get(k) for k in RunOcp.model_fields
-                                                      if k not in ("run_id", "state", "published_rows", "method_note")
-                                                      and (k in b or k not in keep)})
+    data = {k: b.get(k) for k in RunOcp.model_fields
+            if k not in ("run_id", "state", "published_rows", "method_note", "left_out") and (k in b or k not in keep)}
+    out = _valid_ocp(run_id, {"run_id": run_id, "state": b["status"], **data})
     # TDM#567: the published lines serialized as the page data and the history do (``ocp_line``), the day's methodology
     out.published_rows = [ocp_line(x) for x in (b.get("published") or {}).get("by_book") or []]
     out.method_note = method_note((b.get("published") or {}).get("basis"), out.published_rows)
