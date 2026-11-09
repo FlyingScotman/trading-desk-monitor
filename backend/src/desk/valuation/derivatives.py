@@ -365,6 +365,10 @@ class SwapTerms:
     float_leg: tuple[str | None, str | None]
     pv_rub: float | None
     notes: tuple[str, ...] = ()
+    float_start: date | None = None
+    float_maturity: date | None = None
+    """The floating leg's own dates where they differ from the fixed leg's (``start`` / ``maturity``; TDM#605, core
+    0.44 ``InterestRateSwap.float_*``): each leg is valued on its own dates, a forward-starting leg included."""
 
     @property
     def label(self) -> str:
@@ -375,8 +379,13 @@ class SwapTerms:
         return self.notional
 
     @property
+    def float_dates(self) -> tuple[date, date]:
+        return self.float_start or self.start, self.float_maturity or self.maturity
+
+    @property
     def end(self) -> date:
-        return self.maturity
+        """The last leg's end."""
+        return max(self.maturity, self.float_dates[1])
 
     @classmethod
     def of(cls, rows: list[dict[str, Any]]) -> SwapTerms:
@@ -410,36 +419,41 @@ class SwapTerms:
             raise NotValued("terms_incomplete", f"trade {tid}: notional_ccy, start_date and maturity_date of both legs")
         if abs(n[0] - n[1]) > 1e-9 * max(abs(n[0]), 1.0):  # type: ignore[operator]
             raise NotValued("swap_notional_mismatch", f"trade {tid}: the legs' notionals differ")
-        if starts[0] != starts[1] or ends[0] != ends[1]:  # core's InterestRateSwap: one pair of dates (core#106)
-            raise NotValued("swap_dates_mismatch", f"сделка {tid}: фиксированная нога {_ru_span(starts[0], ends[0])}, "
-                                                   f"плавающая {_ru_span(starts[1], ends[1])}")
+        for s, e in zip(starts, ends, strict=True):
+            if e <= s:  # type: ignore[operator]
+                raise NotValued("terms_invalid", f"сделка {tid}: нога кончается не позже начала ({_ru_span(s, e)})")
         if n[0] <= 0:  # type: ignore[operator]
             raise NotValued("terms_invalid", f"trade {tid}: notional must be positive")
         notes = []
         product = str(fx.get("product_kind"))
         if (product == "ois") != (code == "RUONIA"):
             notes.append(f"{tid}: product {product} on {code}: valued as a {SWAP_INDEX[code]} swap")
+        if starts[0] != starts[1] or ends[0] != ends[1]:  # each leg on its own dates (TDM#605, core 0.44)
+            notes.append(f"сделка {tid}: ноги со своими датами — фиксированная {_ru_span(starts[0], ends[0])}, "
+                         f"плавающая {_ru_span(starts[1], ends[1])}; каждая оценена по своим")
         pvs = [p for r in rows if (p := _num(r.get("pv_rub"))) is not None]
         return cls(tid, product, str(fx.get("book_id")), SWAP_INDEX[code],
                    "payer" if fx is pay[0] else "receiver", n[0], _num(fx["fixed_rate_pct"]),  # type: ignore[arg-type]
                    _num(fl.get("spread_bp")) or 0.0, starts[0], ends[0],  # type: ignore[arg-type]
                    (_leg_field(fx, "payment_frequency"), _leg_field(fx, "day_count")),
                    (_leg_field(fl, "payment_frequency"), _leg_field(fl, "day_count")),
-                   math.fsum(pvs) if pvs else None, tuple(notes))
+                   math.fsum(pvs) if pvs else None, tuple(notes),
+                   starts[1] if starts[1] != starts[0] else None, ends[1] if ends[1] != ends[0] else None)
 
     def core_swap(self) -> tuple[InterestRateSwap, list[str]]:
         """Core's swap and the notes on its convention; raises ``NotValued``."""
         base = swap_convention(SWAP_SPEC[self.index])
+        fl_start, fl_end = self.float_dates
         fixed, s1 = _leg_schedule(base.fixed_leg, *self.fixed_leg, self.start, self.maturity, f"{self.label} fixed")
-        floating, s2 = _leg_schedule(base.float_leg, *self.float_leg, self.start, self.maturity,
-                                     f"{self.label} float")
+        floating, s2 = _leg_schedule(base.float_leg, *self.float_leg, fl_start, fl_end, f"{self.label} float")
         notes = list(self.notes)
         if not (s1 and s2):
             notes.append(f"{self.label}: convention {base.spec_id} where the terms state no payment frequency or "
                          "day count (provisional)")
         conv = replace(base, fixed_leg=fixed, float_leg=floating)
         swap = InterestRateSwap(self.label, self.side, self.notional, self.fixed_rate_pct / 100.0,  # type: ignore[arg-type]
-                                self.start, self.maturity, conv, self.spread_bp / 1e4)
+                                self.start, self.maturity, conv, self.spread_bp / 1e4,
+                                float_effective_date=self.float_start, float_termination_date=self.float_maturity)
         return swap, notes
 
 
@@ -838,8 +852,8 @@ def _swap_instrument(ctx: Any, s: SwapTerms, iid: str, calendars: dict[str, Cale
                      ) -> tuple[SwapInstrument, list[str]]:
     """Core's swap position of one ``SwapTerms`` (the module docstring); adds its calendar to ``calendars``."""
     bd = ctx.business_date
-    if s.maturity < bd - timedelta(days=FLOW_DAYS + 7):  # long ago, whatever the payment lag, weekends and holidays
-        raise NotValued("settled", f"swap {s.label} matured on {s.maturity}", s.maturity)
+    if s.end < bd - timedelta(days=FLOW_DAYS + 7):  # long ago, whatever the payment lag, weekends and holidays
+        raise NotValued("settled", f"swap {s.label} matured on {s.end}", s.end)
     swap, notes = s.core_swap()
     cid = SWAP_CALENDAR[s.index]
     if cid not in calendars:
@@ -849,8 +863,8 @@ def _swap_instrument(ctx: Any, s: SwapTerms, iid: str, calendars: dict[str, Cale
     try:
         sched = swap_schedule(swap, calendars[cid].calendar)
     except (ValueError, CoreRejection):
-        if s.maturity < bd:  # its dates are outside the calendar of the run: it ended before it
-            raise NotValued("settled", f"swap {s.label} matured on {s.maturity}", s.maturity) from None
+        if s.end < bd:  # its dates are outside the calendar of the run: it ended before it
+            raise NotValued("settled", f"swap {s.label} matured on {s.end}", s.end) from None
         raise
     last = max(p.payment_date for p in (*sched.fixed, *sched.floating))
     if last <= bd:  # core: no flow after the valuation date. By the schedule, not the maturity: the last payment
@@ -862,7 +876,7 @@ def _swap_instrument(ctx: Any, s: SwapTerms, iid: str, calendars: dict[str, Cale
             raise NotValued("no_key_rate_curve", f"no key-rate curve on {bd}: key-rate swaps keep the report's value")
         projection = KEY_RATE_SWAP_CURVE_ID
     fixing = None
-    if s.start < bd:  # a period has started: its known part comes from the fixings
+    if s.float_dates[0] < bd:  # a floating period has started: its known part comes from the fixings
         fixing = FIXING_ID[s.index]
         if fixing not in _fixing_ids(ctx):
             raise NotValued("no_fixings", f"no {fixing} fixings in the run on {bd} for the started swap {s.label}")

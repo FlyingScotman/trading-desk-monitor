@@ -38,7 +38,7 @@ def core_codes() -> set[str]:
 def test_the_scan_finds_the_codes_of_the_issue():
     found = emitted()
     for code in ("terms_incomplete", "terms_invalid", "terms_mixed", "no_rub_curve", "no_foreign_curve", "no_fx_spot",
-                 "no_fx_calendar", "day_count_unsupported", "swap_frequency_unsupported", "swap_dates_mismatch",
+                 "no_fx_calendar", "day_count_unsupported", "swap_frequency_unsupported",
                  "swap_notional_mismatch", "swap_ccy_unsupported", "repo_ccy_unsupported", "ndf_unsupported",
                  "future_terms_incomplete", "settled", "not_valued", "no_reported_value", "repo_index_unsupported"):
         assert code in found, code
