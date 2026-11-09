@@ -16,12 +16,11 @@ from datetime import date
 import pytest
 import test_ocp_run as R
 from fastapi.testclient import TestClient
-from pydantic import ValidationError
 from test_ocp_base_plus_day import BOOKS, POLICY, B, D
 from test_ocp_futures_588 import cash_row
 
 from desk import store
-from desk.api.app import create_app, ocp_out
+from desk.api.app import OcpBlockMismatch, create_app, ocp_out
 from desk.api.models import OcpGap
 from desk.publish import funding_run, ocp_run
 from desk.rules import ocp as O
@@ -148,8 +147,13 @@ def test_an_element_the_model_does_not_accept_is_left_out_not_the_route(caplog):
     assert block["gaps"][0]["code"] == "a_code_of_tomorrow"  # the stored block is left as it is
     assert "gaps.0.code" in caplog.text and "987" not in caplog.text and "a_code_of_tomorrow" not in caplog.text
     assert any(x.amount == secret for x in out.published.by_book)
-    # a required field that does not fit still fails: nothing sensible to serve
+    assert len(out.published_rows) == n_lines - 1  # the page rows leave the same line out
+    # a required field that does not fit still fails: nothing sensible to serve, and no value in the error either
     bad = _block(r, B)
     bad["lines"] = None
-    with pytest.raises(ValidationError):
+    bad["text"] = 987_654_321.5
+    caplog.clear()
+    with caplog.at_level(logging.WARNING, logger="desk.api"), pytest.raises(OcpBlockMismatch) as e:
         ocp_out(1, bad)
+    assert "987" not in str(e.value) and e.value.__cause__ is None and e.value.__suppress_context__
+    assert "lines" in caplog.text and "987" not in caplog.text

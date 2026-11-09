@@ -386,11 +386,17 @@ def _left_out_target(data: dict[str, Any], loc: tuple[Any, ...]) -> tuple[Any, A
     return item or (leaf if leaf and not (leaf[0] is data and leaf[1] not in OCP_OPTIONAL) else None)
 
 
-def _valid_ocp(run_id: int, data: dict[str, Any]) -> RunOcp:
+class OcpBlockMismatch(ValueError):
+    """The OCP block of a run does not fit ``RunOcp`` where nothing can be left out (a required top-level field)."""
+
+
+def _valid_ocp(run_id: int, data: dict[str, Any]) -> tuple[RunOcp, dict[str, Any]]:
     """``RunOcp`` of ``data``; an element of the block the model does not accept (a value the engine emits that the
     model does not know yet) is left out and named in ``left_out`` (its path and the error type, never a value: the
     figures are real positions), so that one element never fails the whole route (0.2.21: every drill-down of the
-    OCP page was a 500 for an unknown gap code). A required field that does not fit still fails it."""
+    OCP page was a 500 for an unknown gap code). A required field that does not fit still fails it, with
+    ``OcpBlockMismatch`` (not the ``ValidationError``, whose text holds the values). Also returns ``data`` as validated
+    (a copy without the left-out elements when there were any)."""
     left: list[str] = []
     seen: set[str] = set()
     for n in range(OCP_LEFT_OUT_PASSES):
@@ -406,7 +412,7 @@ def _valid_ocp(run_id: int, data: dict[str, Any]) -> RunOcp:
             if None in targets:
                 log.error("run %s: the OCP block does not fit the model: %s", run_id,
                           "; ".join(f"{p}: {x['type']}" for p, x in zip(locs, errors, strict=True)))
-                raise
+                raise OcpBlockMismatch(f"run {run_id}: the OCP block does not fit the model") from None
             # a required key left out in the previous pass is now missing: said once, at its first error
             left += [f"{p}: {x['type']}" for p, x in zip(locs, errors, strict=True) if p not in seen]
             seen |= set(locs)
@@ -417,12 +423,13 @@ def _valid_ocp(run_id: int, data: dict[str, Any]) -> RunOcp:
                 for k in sorted(keys, reverse=True) if isinstance(container, list) else keys:
                     del container[k]
     else:
-        raise ValueError(f"run {run_id}: the OCP block does not fit the model after leaving out {len(left)} elements")
+        raise OcpBlockMismatch(f"run {run_id}: the OCP block does not fit the model after leaving out {len(left)} "
+                               "elements")
     if left:
         log.warning("run %s: OCP block elements left out of the response (they do not fit the model): %s", run_id,
                     "; ".join(left[:50]))
         out.left_out = left
-    return out
+    return out, data
 
 
 def ocp_out(run_id: int, block: dict[str, Any] | None) -> RunOcp:
@@ -433,10 +440,12 @@ def ocp_out(run_id: int, block: dict[str, Any] | None) -> RunOcp:
     keep = ("sources", "published", "gaps", "derivatives_check", "parts", "derivatives_pv", "books")
     data = {k: b.get(k) for k in RunOcp.model_fields
             if k not in ("run_id", "state", "published_rows", "method_note", "left_out") and (k in b or k not in keep)}
-    out = _valid_ocp(run_id, {"run_id": run_id, "state": b["status"], **data})
-    # TDM#567: the published lines serialized as the page data and the history do (``ocp_line``), the day's methodology
-    out.published_rows = [ocp_line(x) for x in (b.get("published") or {}).get("by_book") or []]
-    out.method_note = method_note((b.get("published") or {}).get("basis"), out.published_rows)
+    out, data = _valid_ocp(run_id, {"run_id": run_id, "state": b["status"], **data})
+    # TDM#567: the published lines serialized as the page data and the history do (``ocp_line``), the day's methodology;
+    # those of the block as validated, so a line left out is left out here too
+    pub = data.get("published") or {}
+    out.published_rows = [ocp_line(x) for x in pub.get("by_book") or []]
+    out.method_note = method_note(pub.get("basis"), out.published_rows)
     return out
 
 
