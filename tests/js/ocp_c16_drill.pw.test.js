@@ -205,3 +205,52 @@ test('C16 on a run: the drill-down of a past day asks /ocp of that day\'s run (T
     await ctx.close();
   } finally { await b2.close(); }
 });
+
+// 0.2.21: /ocp прогона ответил 500 — панель называет запрос, код ответа, сообщение сервера и номер запроса для журнала;
+// ответ с пропущенными элементами блока (left_out) показывает остальное и говорит, что часть не показана
+test('C16 on a run: a failed /ocp says which request and status; a block with left-out elements still shows the line', { skip: pw ? false : 'нет Playwright', timeout: 120000 }, async () => {
+  const { TEXT: RUN } = require('./fixtures/concepts_run');
+  const AS_OF = JSON.parse(RUN).asOf;
+  const prev = s => { const t = new Date(s + 'T00:00:00Z'); do t.setUTCDate(t.getUTCDate() - 1); while (!(t.getUTCDay() % 6)); return t.toISOString().slice(0, 10); };
+  const D1 = prev(AS_OF);
+  const L = amount => ({ entity: 'Головной банк', book: 'FXB', books: ['FXB'], ccy: 'USD', amount, source: 'derived', reported: null, validDate: null });
+  const FX = { USD: { market: 81.45, cbr: 81.12 } };
+  const hist = { runId: null, asOf: AS_OF, from: D1, to: AS_OF, books: {}, days: [
+    { date: D1, runId: 7, runType: 'EOD', state: 'computed', basis: 'report_base_plus_day', fx: FX, lines: [L(5e6)] },
+    { date: AS_OF, runId: 8, runType: 'EOD', state: 'computed', basis: 'report_base_plus_day', fx: FX, lines: [L(3e6)] }] };
+  const old = { run_id: 7, state: 'computed', components: [], parts: [], left_out: ['gaps.0.code: literal_error'],
+    published: { basis: 'report_base_plus_day', by_book: [{ entity: 'Головной банк', book_id: 'FXB', books: ['FXB'], ccy: 'USD', amount: 5e6, source: 'derived', components: [], outside: {}, reported: null, valid_date: null }] } };
+  const b2 = await pw.chromium.launch();
+  try {
+    const ctx = await b2.newContext({ viewport: { width: 1366, height: 900 } }), pg = await ctx.newPage(), errors = [];
+    pg.on('pageerror', e => errors.push(e.message));
+    await pg.route('**/*', async route => {
+      const u = new URL(route.request().url()), json = (o, status = 200) => route.fulfill({ status, contentType: 'application/json', body: JSON.stringify(o) });
+      if (u.origin !== ORIGIN) return route.abort();
+      if (u.pathname === '/concepts-run.js') return route.fulfill({ status: 200, contentType: 'application/javascript', body: 'window.CONCEPTS_RUN = ' + RUN + ';' });
+      if (u.pathname === '/concepts-data.js') return route.fulfill({ status: 200, contentType: 'application/javascript', body: 'window.DESK_EXTRAS = { notes: [] };' });
+      if (u.pathname === '/api/v1/auth/state') return json({ enabled: false, user: null });
+      if (u.pathname === '/api/v1/history/ocp') return json(hist);
+      if (u.pathname === '/api/v1/runs/8/ocp') return json({ code: 'internal', message: 'internal error', request_id: 'rq-123', details: null }, 500);
+      if (u.pathname === '/api/v1/runs/7/ocp') return json(old);
+      if (u.pathname.startsWith('/api/')) return route.fulfill({ status: 404, contentType: 'application/json', body: '{}' });
+      const f = path.join(ROOT, decodeURIComponent(u.pathname));
+      if (!f.startsWith(ROOT) || !fs.existsSync(f) || fs.statSync(f).isDirectory()) return route.fulfill({ status: 404, body: '' });
+      return route.fulfill({ status: 200, contentType: TYPES[path.extname(f)] || 'application/octet-stream', body: fs.readFileSync(f) });
+    });
+    await pg.goto(ORIGIN + '/concepts/c16-ocp.html');
+    await pg.waitForSelector('[data-ocp-row="FXB"]');
+    await pg.locator('[data-ocp-row="FXB"] td').first().click();
+    await pg.locator('.k-drawer [data-c16-dbody] .k-empty').waitFor();
+    const msg = await pg.locator('.k-drawer [data-c16-dbody]').innerText();
+    assert.ok(msg.includes('Разбор не загрузился') && msg.includes('500') && msg.includes('прогона #8') && msg.includes('/api/v1/runs/8/ocp')
+      && msg.includes('internal error') && msg.includes('rq-123') && msg.includes('журнале монитора'), msg);
+    await pg.locator('.k-drawer [data-c16-day]').selectOption(D1);
+    await pg.locator('.k-drawer [data-c16-leftout]').waitFor();
+    const txt = await pg.locator('.k-drawer [data-c16-dbody]').innerText();
+    assert.ok(txt.includes('Часть разбора не показана: 1') && txt.includes('gaps.0.code') && txt.includes('= ячейке таблицы'), txt);
+    assert.ok(!BAD.test(txt));
+    assert.deepEqual(errors, []);
+    await ctx.close();
+  } finally { await b2.close(); }
+});
