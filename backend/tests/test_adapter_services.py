@@ -80,7 +80,9 @@ def panel():
                 "actions": [{"id": "check", "label": "Проверить", "long": False},
                             {"id": "login", "label": "Войти", "long": True, "confirm": "Откроется окно входа"},
                             {"id": "pick", "label": "Найти", "long": False},
-                            {"id": "list", "label": "Список", "long": False}]}]}
+                            {"id": "list", "label": "Список", "long": False}]}]
+            + ([{"id": "api_v2", "title": "Сервис сделок", "fields": [],
+                 "actions": [{"id": "v2_connect", "label": "Подключить", "long": True}]}] if mode == 'connect' else [])}
 def feeds():
     extra = [{"id": "owned", "title": "Сделки дня", "dataset": "trade_terms", "source": "trade_terms_csv",
               "enabled": True, "ready": True, "books": True, "schedule": None}] if mode == 'books_feed' else []
@@ -95,6 +97,9 @@ def feeds():
         extra += [{"id": "tradeshist", "title": "Сделки дня", "dataset": "trades", "source": "trades_csv",
                    "enabled": True, "ready": True, "books": True, "history": True, "schedule": None,
                    **({"history_from": hf} if hf else {})}]
+    if mode == 'connect':        # the feed a connect hands its first load over to (TDM#615)
+        extra += [{"id": "trades_intraday", "title": "Сделки дня", "dataset": "trades", "source": "trades_csv",
+                   "enabled": False, "ready": True, "schedule": None}]
     if mode == 'history_plain':  # the same feed without the flag: the worker does not work for it
         extra += [{"id": "tradeshist", "title": "Сделки дня", "dataset": "trades", "source": "trades_csv",
                    "enabled": True, "ready": True, "books": True, "schedule": None}]
@@ -110,6 +115,10 @@ def feeds():
 op = one('op')
 if mode == 'hang' and op in ('action', 'feed'):
     time.sleep(60)
+if mode == 'hang_feed' and op == 'feed':
+    time.sleep(60)
+if op == 'describe' and (state / 'describe_delay').exists():
+    time.sleep(float((state / 'describe_delay').read_text()))
 if op in ('describe', 'save'):
     if op == 'save':
         if one('f.url') == 'bad':
@@ -133,6 +142,8 @@ elif op == 'action':
         r = {"state": "complete", "code": "listed", "lines": ["Список"], "choices": [{"id": "x1", "label": "Первый"}]}
     elif a == 'choose':
         r = {"state": "complete", "code": "chosen", "lines": ["Выбрано: " + one('arg')]}
+    elif a == 'v2_connect':
+        r = json.loads((state / 'connect_result').read_text())
     else:
         r = {"state": "complete", "code": "connected", "lines": ["Подключено"],
              "table": {"columns": ["Среда", "Отчётов"], "rows": [["test", 3]]}}
@@ -198,6 +209,9 @@ elif op == 'feed':
             print(json.dumps({"state": "complete", "code": "no_records" if hm == 'no_records_file' else "exported",
                               "dates": [day], "files": [{"file": name, "sha256": hashlib.sha256((out / name).read_bytes()).hexdigest()}]}))
         sys.exit()
+    if one('feed') == 'trades_intraday':  # the first load handed over: nothing new here
+        print(json.dumps({"state": "skipped", "code": "no_change", "files": []}))
+        sys.exit()
     if one('feed') == 'archive':  # kept locally by the adapter: no files
         print(json.dumps({"state": "complete", "code": "archived", "files": [], "counts": {"rows": 3}}))
         sys.exit(0)
@@ -262,11 +276,13 @@ def service(st: Settings, url: str = "", clock: dict | None = None) -> svcs.Adap
     return svcs.AdapterServices(lambda: st, url, now=lambda: clock["t"], today=lambda: FRI, tick_s=3600)
 
 
-def wait_job(s: svcs.AdapterServices) -> dict:
+def wait_job(s: svcs.AdapterServices, *, refreshed: bool = True) -> dict:
+    """The owner's job once finished; ``refreshed``: an action's also once the describe after it is done (its answer
+    is published before that, TDM#615)."""
     until = time.monotonic() + 30
     while time.monotonic() < until:
         job = s.overview()["job"]
-        if job["state"] not in ACTIVE:
+        if job["state"] not in ACTIVE and (not refreshed or job.get("refreshed", False) is not None):
             return job
         time.sleep(0.02)
     pytest.fail("the services job did not finish")
@@ -415,6 +431,167 @@ def test_busy_cancel_and_the_lock_shared_with_acquisition(tmp_path):
             helper_proc.HELPER_LOCK.release()
         assert wait_job(s)["code"] == "connected"
     finally:
+        s.close()
+
+
+def test_an_action_answer_comes_before_its_describe_615(tmp_path):
+    """The answer is published as soon as the helper returns; the describe after it runs as a describe, the owner's
+    next operation is queued meanwhile; the job says its section and whether a login window may open."""
+    st = make(tmp_path)
+    s = service(st)
+    try:
+        assert submit(s, "describe")["code"] == "described"
+        (svcs.state_dir(st) / "describe_delay").write_text("3")
+        t0 = time.monotonic()
+        s.submit("action", {"action": ["check"]})
+        job = wait_job(s, refreshed=False)
+        assert time.monotonic() - t0 < 2.5, "the answer waited for the describe"
+        assert (job["state"], job["code"], job["lines"], job["refreshed"]) == ("complete", "connected", ["Подключено"], None)
+        assert job["finished_at"] and (job["section"], job["login"]) == ("conn", False)
+        assert s.overview()["running"]["kind"] == "describe"
+        queued = s.submit("action", {"action": ["login"]})  # not services_busy: it waits for the describe
+        assert (queued["state"], queued["code"], queued["login"], queued["section"]) == ("queued", "queued", True, "conn")
+        (svcs.state_dir(st) / "describe_delay").unlink()
+        job = wait_job(s)
+        assert (job["code"], job["refreshed"]) == ("logged_in", True)
+        assert [r["op"] for r in requests(st)[-4:]] == ["action", "describe", "action", "describe"]
+        job = submit(s, "action", action="pick")
+        assert job["section"] == "conn"
+        assert submit(s, "action", action="choose", arg="x1")["section"] == "conn"  # the section that offered it
+        assert submit(s, "save", **{"f.url": "https://synthetic.invalid"})["section"] is None
+    finally:
+        s.close()
+
+
+def test_login_flag_and_the_sections_of_a_panel_615():
+    panel = svcs.clean_panel({"sections": [
+        {"id": "a", "actions": [{"id": "login", "label": "Войти", "login": False}, {"id": "go", "label": "Go"}]},
+        {"id": "b", "actions": [{"id": "v2_connect", "label": "Подключить"}, {"id": "open", "label": "Открыть", "login": True}]}]})
+    acts = {a["id"]: a for sec in panel["sections"] for a in sec["actions"]}
+    assert "login" not in acts["go"] and acts["login"]["login"] is False and acts["open"]["login"] is True
+    s = svcs.AdapterServices(lambda: None, "")  # type: ignore[arg-type,return-value]
+    doc = {"panel": panel}
+    assert s._of_action("action", {"action": "login"}, doc) == ("a", False)  # declared: not a login
+    assert s._of_action("action", {"action": "v2_connect"}, doc) == ("b", True)  # by its id
+    assert s._of_action("action", {"action": "open"}, doc) == ("b", True)
+    assert s._of_action("action", {"action": "go"}, doc) == ("a", False)
+    assert s._of_action("save", {}, doc) == (None, False)
+
+
+CHECKLIST = ["Шаг", "Итог", "Секунд", "Код", "id"]
+
+
+@pytest.mark.parametrize("state,code,queued", [
+    ("complete", "connected", True), ("partial", "connected_partially", True), ("partial", "export_incomplete", True),
+    ("error", "login_check_failed", False), ("blocked", "auth_timeout", False)])
+def test_a_connect_that_got_in_runs_the_trades_feed_at_once_615(tmp_path, state, code, queued):
+    """«Подключить сервис сделок»: its table (the checklist) comes back as it is; connected (or only its first load
+    short) queues the feed the adapter hands the first load over to, once, after the describe."""
+    st = make(tmp_path)
+    mode(st, "connect")
+    rows = [["Настройка входа", "✓", 1.2, "v2_configured", "setup"], ["Вход", "✓" if queued else "✗", 30, "logged_in", "login"],
+            ["Первая загрузка сделок", "—", None, "", "trades"]]
+    (svcs.state_dir(st) / "connect_result").write_text(json.dumps(
+        {"state": state, "code": code, "lines": ["✓ Настройка входа: готово (1 с)"], "table": {"columns": CHECKLIST, "rows": rows}}))
+    s = service(st)
+    try:
+        assert submit(s, "describe")["code"] == "described"
+        job = submit(s, "action", action="v2_connect")
+        assert (job["state"], job["code"], job["section"], job["login"]) == (state, code, "api_v2", True)
+        assert job["table"] == {"columns": CHECKLIST, "rows": rows}
+        assert job["feed_queued"] == ("trades_intraday" if queued else None)
+        if queued:
+            _until(lambda: any(r["op"] == "feed" and r["feed"] == "trades_intraday" for r in requests(st)), "not run")
+            _until(lambda: svcs.read_state(st)["runs"].get("trades_intraday", {}).get("last_finished"), "not finished")
+            assert svcs.read_state(st)["runs"]["trades_intraday"]["trigger"] == "manual"
+            assert [r["op"] for r in requests(st)][-3:] == ["action", "describe", "feed"]  # after the describe
+        else:
+            time.sleep(0.3)
+            assert not any(r["op"] == "feed" for r in requests(st))
+        mode(st, "ok")  # an adapter without that feed: nothing queued
+        submit(s, "describe")
+        mode(st, "connect")
+        with s._lock:
+            s._manual.clear()
+        st2 = svcs.read_state(st)
+        st2["feeds"] = [f for f in st2["feeds"] if f["id"] != "trades_intraday"]
+        svcs.write_state(st, st2)
+        assert s._queue_feed(st, "trades_intraday") is None
+    finally:
+        s.close()
+
+
+def _until(cond, what: str, limit: float = 15.0):
+    until = time.monotonic() + limit
+    while time.monotonic() < until:
+        v = cond()
+        if v:
+            return v
+        time.sleep(0.02)
+    pytest.fail(what)
+
+
+def test_the_owner_waits_for_a_named_feed_and_may_stop_it_615(tmp_path):
+    """While a feed runs, the owner's action says which and since when; «Остановить загрузку» kills its helper at
+    once: the run is cancelled (not a failure), due again by its schedule, and the owner's action runs."""
+    st = make(tmp_path)
+    clock = {"t": at(FRI, 9, 0)}
+    s = service(st, "", clock)
+    try:
+        submit(s, "describe")
+        submit(s, "action", action="login")
+        mode(st, "hang_feed")
+        s.run_feed("terms")
+        _until(lambda: (s.overview()["running"] or {}).get("phase") == "fetching", "the feed did not start")
+        job = s.submit("action", {"action": ["check"]})
+        assert job["code"] == "waiting_feed" and job["waiting_for"]["feed"] == "terms"
+        w = s.overview()["job"]
+        assert (w["state"], w["code"]) == ("queued", "waiting_feed")
+        assert {k: w["waiting_for"][k] for k in ("kind", "feed", "title", "phase")} == {
+            "kind": "feed", "feed": "terms", "title": "Условия сделок", "phase": "fetching"}
+        assert w["waiting_for"]["since"] == at(FRI, 9, 0).isoformat()
+        t0 = time.monotonic()
+        s.cancel("feed")
+        job = wait_job(s)
+        assert time.monotonic() - t0 < 10, "the feed's helper was not stopped at once"
+        assert job["code"] == "connected" and "waiting_for" not in job
+        run = svcs.read_state(st)["runs"]["terms"]
+        assert (run["state"], run["code"], run["failures"], run["retry_at"]) == ("cancelled", "cancelled", 0, None)
+        f = next(x for x in svcs.read_state(st)["feeds"] if x["id"] == "terms")
+        assert svcs.next_due(f, run, clock["t"]) == at(FRI, 9, 30)  # by its schedule, no retry step
+    finally:
+        s.close()
+
+
+def test_the_owner_goes_first_while_a_feed_waits_for_the_cycle_lock_615(tmp_path):
+    """A feed whose files wait for the cycle lock runs no helper: the owner's action runs meanwhile; a stop then ends
+    the wait at once and keeps the files for the next run."""
+    from desk.autopilot import CycleLock
+    st = make(tmp_path)
+    clock = {"t": at(FRI, 9, 0)}
+    s = service(st, "", clock)
+    lock = CycleLock(st.home)
+    try:
+        submit(s, "describe")
+        submit(s, "action", action="login")
+        assert lock.acquire()  # an autopilot cycle
+        s.run_feed("terms")
+        _until(lambda: (s.overview()["running"] or {}).get("kind") == "feed"
+               and any(r["op"] == "feed" for r in requests(st)), "the feed did not ask the helper")
+        time.sleep(0.3)
+        job = s.submit("action", {"action": ["check"]})
+        assert job["code"] == "waiting_feed"
+        job = wait_job(s)
+        assert job["code"] == "connected"
+        assert s.overview()["running"]["kind"] == "feed", "the feed still waits for the cycle lock"
+        assert not helper_proc.HELPER_LOCK.acquire(blocking=False)  # kept by the waiting feed
+        s.cancel("feed")
+        _until(lambda: svcs.read_state(st)["runs"]["terms"].get("last_finished"), "the wait was not stopped", 5)
+        run = svcs.read_state(st)["runs"]["terms"]
+        assert (run["state"], run["code"], run["failures"]) == ("cancelled", "cancelled", 0)
+        assert run["pending"]["files"][0]["file"] == "trade_terms_20261015.csv"
+    finally:
+        lock.release()
         s.close()
 
 

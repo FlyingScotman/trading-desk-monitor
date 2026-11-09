@@ -27,6 +27,20 @@ Timeouts: ``describe``/``save`` 60 s, ``action`` 15 min (a browser login waits),
 shutdown kill the process tree. Secrets (``f.<key>`` of a ``secret`` field) are only in the request body: never in
 a job status, the state file, a log line or an error.
 
+The owner's operation waits for no queued background work (TDM#615): a feed that first runs the feed of its list runs
+the owner's operation in between (``_owner_first``), and a feed whose files wait for the cycle lock runs it while it
+waits (no helper process runs then). While it waits for a running feed or history request, GET says which one and
+since when (``job.waiting_for``); «Остановить загрузку» (``cancel("feed")``) kills that helper: the run is
+``cancelled`` (not a failure: no retry step is counted), its files not yet taken in stay pending, and the feed runs
+again by its schedule. An action's answer is published as soon as the helper returns (``job.state``, its lines); the
+describe that follows it runs as a ``describe`` (the next operation of the owner may be queued meanwhile) and sets
+``job.refreshed`` when it is done. ``job.section``: the panel section of the action (a pick list's action: the
+section that offered it), ``job.login``: an action that may open a login window (the action's ``login`` flag, else
+the ids ``LOGIN_ACTIONS``). The action ``CONNECT_ACTION`` (the whole connection to the trades service in one press; its
+``table`` is the checklist of its steps) that ends ``connected``, ``connected_partially`` or ``partial`` (only its
+first load fell short) queues the feed ``CONNECT_FEED`` as «Запустить сейчас» does, after its describe: the adapter
+hands its first load over to that run (``job.feed_queued``).
+
 **Scheduling** (``next_due``). Local wall clock of the work machine. ``{"every_min": N, "from": "HH:MM", "to":
 "HH:MM", "weekdays_only": bool}``: inside the window, N minutes after the last start (at once when never run).
 ``{"daily_at": ["HH:MM", ...], "weekdays_only": bool}``: the first slot after the last start; a feed never run
@@ -98,6 +112,9 @@ KEEP_REQUESTS = 5          # the request files (``trades_file``) kept for diagno
 MAX_REQUEST_TRADES = 50000  # the adapter refuses a longer list (08 §2.2); the monitor then sends none
 KEEP_OUT = 20              # the output folders of the last feed runs kept (the archive keeps accepted files anyway)
 STATE_FILE = "state.json"
+LOGIN_ACTIONS = ("login", "v2_login", "v2_connect")  # a login window may open: the action declares no ``login`` flag
+CONNECT_ACTION, CONNECT_FEED = "v2_connect", "trades_intraday"  # a connect that got in runs that feed at once
+CONNECTED = ("connected", "connected_partially")
 
 _ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,99}")  # dotted keys too (``services.positions.base_url``)
 ID_RE = _ID  # a feed, field or action id (the routes check the feed id of their path with it)
@@ -213,8 +230,11 @@ def clean_panel(p: Any) -> dict:
             if not isinstance(a, dict) or not isinstance(a.get("id"), str) or not _ID.fullmatch(a["id"]):
                 raise Invalid
             actions.add(a["id"])
-            acts.append({"id": a["id"], "label": _str(a.get("label", a["id"]), 200),
-                         "confirm": _opt(a, "confirm", 1000), "long": a.get("long") is True})
+            act = {"id": a["id"], "label": _str(a.get("label", a["id"]), 200),
+                   "confirm": _opt(a, "confirm", 1000), "long": a.get("long") is True}
+            if isinstance(a.get("login"), bool):  # declared: a login window may open (else by the id, LOGIN_ACTIONS)
+                act["login"] = a["login"]
+            acts.append(act)
         sections.append({"id": _str(s.get("id", ""), 64), "title": _opt(s, "title", 200), "help": _opt(s, "help", 4000),
                          "fields": fields, "actions": acts})
     return {"title": _opt(p, "title", 200), "status": _lines(p.get("status"), 50), "sections": sections}
@@ -330,6 +350,15 @@ def clean_action(r: dict) -> dict:
     if r.get("field") is not None:
         out["field"] = _str(r["field"], 100)
     return out
+
+
+def panel_action(panel: dict | None, action_id: str | None) -> tuple[str | None, dict | None]:
+    """(the section id, the declaration) of a panel action; (None, None) when the panel has no such action."""
+    for s in (panel or {}).get("sections", []):
+        for a in s["actions"]:
+            if a["id"] == action_id:
+                return s["id"], a
+    return None, None
 
 
 def clean_feed_result(r: dict) -> dict:
@@ -521,6 +550,7 @@ class AdapterServices:
         self._running: dict | None = None            # what the worker runs now: {"kind", "op"|"feed", "since"}
         self._describe_wanted = False
         self._choose: set[str] = set()                # choose_action ids the last action offered
+        self._choose_section: str | None = None       # ... and the panel section of the action that offered them
         self._avail: tuple[float, dict, Helper | None] | None = None
         self._checked = float("-inf")
         self._describe_failed: tuple[str | None, str, float] | None = None  # (fingerprint, code, monotonic time)
@@ -615,6 +645,11 @@ class AdapterServices:
             job = json.loads(json.dumps(self._job))
             running = dict(self._running) if self._running else None
             queued = [f for f, _ in self._manual]
+        if job.get("state") == "queued":  # what it waits for, as it is now (TDM#615)
+            w = self._waiting_for(running, doc)
+            job["code"] = "waiting_feed" if w else "queued"
+            if w:
+                job["waiting_for"] = w
         out = {**a, "panel": None, "feeds": [], "job": job, "running": running, "scheduler": self._scheduling}
         if not a["available"]:
             return out
@@ -659,17 +694,41 @@ class AdapterServices:
                 if self._pending is not None or (self._running or {}).get("kind") == "op":
                     params.clear()
                     raise ServiceError("services_busy")
-                wait = (self._running or {}).get("feed")
+                wait = self._waiting_for(self._running, doc)
+                section, login = self._of_action(op, params, doc)
                 self._job = {"id": uuid.uuid4().hex, "op": op, "action": params.get("action"), "state": "queued",
                              "code": "waiting_feed" if wait else "queued", "long": self._long(op, params, doc),
-                             "queued_at": _iso(self._now())}
-                self._pending = {"op": op, "params": params, "id": self._job["id"]}
-                job = dict(self._job)
+                             "login": login, "section": section, "queued_at": _iso(self._now())}
+                self._pending = {"op": op, "params": params, "id": self._job["id"], "section": section}
+                job = {**self._job, **({"waiting_for": wait} if wait else {})}  # GET says it as it is then
         finally:
             fields.clear()
         self._ensure_thread()
         self._wake.set()
         return job
+
+    @staticmethod
+    def _waiting_for(running: dict | None, doc: dict) -> dict | None:
+        """The background work an owner's operation waits for: a feed run or a history request (its feed, title, start,
+        phase, the date of a history request); None for none (or a describe: short)."""
+        r = running or {}
+        if r.get("kind") not in ("feed", "history"):
+            return None
+        fid = r.get("feed") or r.get("history_feed")
+        title = next((f["title"] for f in doc.get("feeds") or [] if f["id"] == fid), fid)
+        return {"kind": r["kind"], "feed": fid, "title": title, "since": r.get("since"), "phase": r.get("phase"),
+                **({"date": r["date"]} if r.get("date") else {})}
+
+    def _of_action(self, op: str, params: dict, doc: dict) -> tuple[str | None, bool]:
+        """(the panel section of an action, whether it may open a login window). A pick list's action: the section of
+        the action that offered it; the login: the action's ``login`` flag, else its id in ``LOGIN_ACTIONS``."""
+        if op != "action":
+            return None, False
+        aid = params.get("action")
+        section, decl = panel_action(doc.get("panel"), aid)
+        if decl is None:
+            return (self._choose_section if aid in self._choose else None), False
+        return section, decl["login"] if isinstance(decl.get("login"), bool) else aid in LOGIN_ACTIONS
 
     @staticmethod
     def _long(op: str, params: dict, doc: dict) -> bool:
@@ -730,6 +789,17 @@ class AdapterServices:
         self._ensure_thread()
         self._wake.set()
         return {"state": "queued", "code": "queued", "feed": feed_id}
+
+    def _queue_feed(self, st: Settings, feed_id: str) -> str | None:
+        """The feed queued as «Запустить сейчас» does, by the worker itself (a connect that got in); its id, or None
+        when the adapter describes no such feed. Already queued or running: not twice."""
+        with self._lock:
+            if not any(f["id"] == feed_id for f in read_state(st).get("feeds") or []):
+                return None
+            if feed_id not in [f for f, _ in self._manual] and (self._running or {}).get("feed") != feed_id:
+                self._manual.append((feed_id, None))
+        self._wake.set()
+        return feed_id
 
     def set_enabled(self, feed_id: str, on: bool) -> dict:
         st = self._load()
@@ -856,15 +926,37 @@ class AdapterServices:
             if self._job.get("id") == jid:
                 self._job.update(kw)
 
-    def _run_job(self, job: dict) -> None:
+    def _owner_first(self, *, held: bool = False) -> bool:
+        """The owner's queued operation now, from inside background work that runs no helper process at this point
+        (TDM#615); True when one ran. ``held``: the caller holds ``HELPER_LOCK`` and keeps it. The caller's
+        ``_running`` is restored, and a cancel of the owner's operation does not cancel the background work."""
+        with self._lock:
+            job, self._pending = self._pending, None
+            saved = self._running
+        if job is None:
+            return False
+        try:
+            self._run_job(job, held=held)
+        finally:
+            with self._lock:
+                self._running = saved
+            if not self._stop.is_set():
+                self._cancel.clear()
+        return True
+
+    def _run_job(self, job: dict, *, held: bool = False) -> None:
+        """The owner's operation. An action's answer is published at once; the describe after it runs as a
+        ``describe`` and only sets ``refreshed`` (module doc). ``held``: ``HELPER_LOCK`` is the caller's
+        (``_owner_first``): neither acquired nor released here."""
         op, params, jid = job["op"], job["params"], job["id"]
+        aid = params.get("action")  # ``params`` is cleared by the call
         self._cancel.clear()
         with self._lock:
             self._running = {"kind": "op", "op": op, "since": _iso(self._now()), "phase": "waiting"}
         try:
             st = self._load()
             hp = self._helper(st)
-            if not self._acquire(lambda: self._job_update(jid, state="waiting", code="waiting_acquisition")):
+            if not held and not self._acquire(lambda: self._job_update(jid, state="waiting", code="waiting_acquisition")):
                 raise ServiceError("cancelled", "cancelled")
         except Exception as e:  # noqa: BLE001
             params.clear()
@@ -894,17 +986,30 @@ class AdapterServices:
                 r = clean_action(result)
                 with self._lock:
                     self._choose = {r["choose_action"]} if r.get("choose_action") else set()
+                    self._choose_section = job.get("section") if r.get("choose_action") else None
                     if r.get("panel") is not None:
                         doc = read_state(st)
                         doc["panel"] = r["panel"]
                         write_state(st, doc)
+                    # the answer at once (TDM#615): the describe below neither delays it nor keeps the job running;
+                    # the owner's next operation may be queued meanwhile
+                    self._running = {"kind": "describe", "op": "describe", "since": _iso(self._now()),
+                                     "phase": "refreshing", "after": jid}
+                    if self._job.get("id") == jid:
+                        self._job.update({k: v for k, v in r.items() if k != "panel"}, refreshed=None,
+                                         finished_at=_iso(self._now()))
                 # action results carry no feeds, and their readiness may have changed (a login): describe again
                 try:
                     self._described(st, self._helper(st), self._call(st, hp, "describe", {}), unpause=True)
                     refreshed = True
                 except (ServiceError, Invalid):
                     refreshed = False
-                self._job_update(jid, **{k: v for k, v in r.items() if k != "panel"}, refreshed=refreshed)
+                except Exception:
+                    log.exception("adapter services: the describe after an action failed")
+                    refreshed = False
+                connected = aid == CONNECT_ACTION and (r["code"] in CONNECTED or r["state"] == "partial")
+                self._job_update(jid, refreshed=refreshed, feed_queued=self._queue_feed(st, CONNECT_FEED) if connected
+                                 else None)
         except ServiceError as e:
             self._job_update(jid, state=e.state, code=e.code)
         except Invalid:
@@ -916,9 +1021,10 @@ class AdapterServices:
             params.clear()
             with self._lock:
                 self._running = None
-                self._job["finished_at"] = _iso(self._now()) if self._job.get("id") == jid else self._job.get(
-                    "finished_at")
-            helper_proc.HELPER_LOCK.release()
+                if self._job.get("id") == jid and not self._job.get("finished_at"):
+                    self._job["finished_at"] = _iso(self._now())
+            if not held:
+                helper_proc.HELPER_LOCK.release()
 
     # ---- feeds
 
@@ -978,6 +1084,7 @@ class AdapterServices:
     def _feed(self, st: Settings, f: dict, trigger: str, day: str | None, newest: date | None) -> None:
         if f.get("trades_file"):
             self._ensure_list(st, f, day)
+        self._owner_first()  # the owner's operation asked for meanwhile (the list's feed ran first) goes first
         rid = uuid.uuid4().hex
         started = self._now()
         seen = {"positions_seen": newest.isoformat()} if newest is not None else {}
@@ -1160,11 +1267,20 @@ class AdapterServices:
         log.info("adapter services: feed %s %s/%s", f["id"], state, code)
 
     def _wait_cycle_lock(self, st: Settings) -> CycleLock | None:
+        """The cycle lock, waited for ``LOCK_WAIT_S`` (None then, or on shutdown). Meanwhile no helper process runs: the
+        owner's operation asked for goes first (``HELPER_LOCK`` kept, its time not counted), and «Остановить» stops
+        the wait (``cancelled``: the files stay pending)."""
         lock = CycleLock(st.home)
         until = time.monotonic() + LOCK_WAIT_S
         while True:
             if lock.acquire():
                 return lock
+            if self._cancel.is_set():
+                raise ServiceError("cancelled", "cancelled")
+            t0 = time.monotonic()
+            if self._owner_first(held=True):
+                until += time.monotonic() - t0
+                continue
             if time.monotonic() >= until or self._stop.wait(1.0):
                 return None
 

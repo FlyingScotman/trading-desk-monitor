@@ -234,7 +234,16 @@ ingestion: the monitor's eod and backfill steps recompute a date by the changed 
 list when the answer also names a `choose_action`, and picking calls `action=<choose_action>` with `arg=<id>` (only
 the `choose_action` of the last answer is accepted besides the panel's actions; without one there is no pick list).
 Action answers carry no feeds: every action, and a `save` whose answer has no `feeds`, is followed by a `describe`, so
-the panel and the feeds' `ready` are current. Field, action and feed ids match `[A-Za-z0-9][A-Za-z0-9_.-]{0,99}`
+the panel and the feeds' `ready` are current; the action's answer is shown as soon as the helper returns, the describe
+only refreshes the panel after it (TDM#615). A `table` with exactly the columns `["Шаг", "Итог", "Секунд", "Код",
+"id"]` is a checklist of the action's steps (`Итог` `✓`, `✗` or `—` not reached; the seconds; the step's code and id):
+the page shows it as a list with ✓ / ✗ and the seconds under the action's button, each step with the rest of its line
+`«<mark> <Шаг>: <итог> (N с)»` from `lines`. The action `v2_connect` (the whole connection to the trades service)
+answers so; when it ends `connected`, `connected_partially` or `partial` (only its first load fell short), the monitor
+queues the feed `trades_intraday` after its describe, as «Запустить сейчас» does: the adapter hands the first load over
+to that run. The settings page shows an action's `code` in
+Russian words where it knows the code, else the first of its `lines` (the code only as a tooltip): the first line of a
+failure should say what failed in words. Field, action and feed ids match `[A-Za-z0-9][A-Za-z0-9_.-]{0,99}`
 (dotted keys such as `services.x.base_url` are sent as `f.services.x.base_url`). Unknown keys of an answer are
 ignored. The monitor relies on the JSON `state`, not the exit code; a non-zero exit with `complete`/`partial` is
 `helper_failed`. A `save` may change the adapter's config and so its fingerprint; the monitor then reloads the adapter
@@ -247,7 +256,9 @@ name environments, report names and counts, never secrets.
 
 PANEL: `{"title", "status": [lines], "sections": [{"id", "title", "help", "fields": [{"key", "label", "type":
 "text|url|bool|select|secret|int", "value", "options": [{"value", "label"}], "help", "placeholder"}], "actions":
-[{"id", "label", "confirm"?, "long"}]}]}`. A secret field never carries a value back: the monitor blanks `value`
+[{"id", "label", "confirm"?, "long", "login"?}]}]}`. `login: true`: the action may open a login window (the page then
+says «Если откроется окно входа, завершите вход в нём» while it runs); without the flag the ids `login`, `v2_login` and
+`v2_connect` are taken as login actions. A secret field never carries a value back: the monitor blanks `value`
 whatever the helper sends and keeps only `"set": true|false`.
 
 FEED: `{"id", "title", "dataset", "source", "enabled", "ready", "why_not_ready", "schedule", "after_positions",
@@ -297,7 +308,12 @@ a log line. `GET /api/v1/adapter-services`: availability (`available`, `code`, a
 now; a missing or older-fingerprint cache asks the worker for a `describe`. `POST …/save`, `…/action`, `…/describe`:
 202 with the queued job (one at a time: `services_busy`, 409). `POST …/feeds/<id>/run` (optional `date`): 202 queued;
 `POST …/feeds/<id>/enabled` (`enabled=true|false`): the switch. `POST …/cancel` (`target=job|feed`): a queued job is
-dropped, a running process killed (not once its files are being taken in: `cancel_after_commit_unavailable`).
+dropped, a running process killed (not once its files are being taken in: `cancel_after_commit_unavailable`). The
+owner's operations go before queued feeds; a job that waits for a running feed or history request says which
+(`job.waiting_for`: `kind`, `feed`, `title`, `since`, `phase`, `date` of a history request), and «Остановить загрузку»
+(`target=feed`) stops it: the run is `cancelled`, not a failure, and the feed runs again by its schedule (TDM#615).
+`job.section` is the panel section of the action (where the page shows its result), `job.login` whether a login window
+may open, `job.refreshed` null until the describe after an action is done.
 
 **Settings and «Статус дня».** Settings → «Адаптер и источники» shows the block «Подключение к сервисам» only when
 the capability is declared: the panel rendered generically as text (fields by type, «Сохранить», action buttons with
