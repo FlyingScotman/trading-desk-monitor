@@ -2301,6 +2301,99 @@
         }
       }
     },
+    "/api/v1/positions/provenance": {
+      "get": {
+        "summary": "Position Provenance",
+        "description": "Where a position's data came from (TDM#617, ``provenance.provenance``): the card's collapsed «Откуда\nданные», asked when it is opened. The id is a query parameter (a position id can hold ``|``). What an older run\ndid not record is ``unknown``, not an error; 404 — no such run or position.",
+        "operationId": "position_provenance_api_v1_positions_provenance_get",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Id"
+            }
+          },
+          {
+            "name": "run_id",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Run Id"
+            }
+          },
+          {
+            "name": "as_of",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "format": "date"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "As Of"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PositionProvenance"
+                }
+              }
+            }
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "Not Found"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "Unprocessable Entity"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "Service Unavailable"
+          }
+        }
+      }
+    },
     "/api/v1/autopilot/status": {
       "get": {
         "tags": [
@@ -5382,6 +5475,58 @@
         ],
         "title": "LoginIn"
       },
+      "MarketNeed": {
+        "properties": {
+          "kind": {
+            "type": "string",
+            "enum": [
+              "curve",
+              "fx",
+              "fixing",
+              "quote"
+            ],
+            "title": "Kind"
+          },
+          "id": {
+            "type": "string",
+            "title": "Id"
+          },
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "state": {
+            "type": "string",
+            "enum": [
+              "ok",
+              "replaced",
+              "stale",
+              "missing",
+              "pending",
+              "unknown"
+            ],
+            "title": "State"
+          },
+          "state_text": {
+            "type": "string",
+            "title": "State Text"
+          },
+          "text": {
+            "type": "string",
+            "title": "Text"
+          }
+        },
+        "type": "object",
+        "required": [
+          "kind",
+          "id",
+          "name",
+          "state",
+          "state_text",
+          "text"
+        ],
+        "title": "MarketNeed"
+      },
       "MissingPosition": {
         "properties": {
           "position_id": {
@@ -7022,6 +7167,76 @@
         ],
         "title": "PositionPnl"
       },
+      "PositionProvenance": {
+        "properties": {
+          "run_id": {
+            "type": "integer",
+            "title": "Run Id"
+          },
+          "business_date": {
+            "type": "string",
+            "format": "date",
+            "title": "Business Date"
+          },
+          "position_id": {
+            "type": "string",
+            "title": "Position Id"
+          },
+          "book_id": {
+            "type": "string",
+            "title": "Book Id"
+          },
+          "kind": {
+            "type": "string",
+            "enum": [
+              "bond",
+              "derivative",
+              "other"
+            ],
+            "title": "Kind"
+          },
+          "valued": {
+            "type": "boolean",
+            "title": "Valued"
+          },
+          "off_report": {
+            "type": "boolean",
+            "title": "Off Report"
+          },
+          "sources": {
+            "items": {
+              "$ref": "#/components/schemas/ProvenanceSource"
+            },
+            "type": "array",
+            "title": "Sources"
+          },
+          "mismatches": {
+            "items": {
+              "$ref": "#/components/schemas/ProvenanceMismatch"
+            },
+            "type": "array",
+            "title": "Mismatches"
+          },
+          "market": {
+            "$ref": "#/components/schemas/ProvenanceMarket"
+          }
+        },
+        "type": "object",
+        "required": [
+          "run_id",
+          "business_date",
+          "position_id",
+          "book_id",
+          "kind",
+          "valued",
+          "off_report",
+          "sources",
+          "mismatches",
+          "market"
+        ],
+        "title": "PositionProvenance",
+        "description": "Where a position's data came from (TDM#617, api.provenance): the card's «Откуда данные»."
+      },
       "ProblemDate": {
         "properties": {
           "date": {
@@ -7057,6 +7272,227 @@
         ],
         "title": "ProblemDate",
         "description": "A hub date whose sync failed and that waits for a retry (#146)."
+      },
+      "ProvenanceItem": {
+        "properties": {
+          "dataset": {
+            "type": "string",
+            "title": "Dataset"
+          },
+          "dataset_name": {
+            "type": "string",
+            "title": "Dataset Name",
+            "description": "The monitor's name of the dataset (daystatus.DATASET_NAMES)"
+          },
+          "source": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source",
+            "description": "The adapter's source id"
+          },
+          "file_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "File Name"
+          },
+          "report_date": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Report Date"
+          },
+          "valid_date": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Valid Date"
+          },
+          "loaded_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Loaded At",
+            "description": "When the monitor stored the set"
+          }
+        },
+        "additionalProperties": true,
+        "type": "object",
+        "required": [
+          "dataset",
+          "dataset_name",
+          "source",
+          "file_name",
+          "report_date",
+          "valid_date",
+          "loaded_at"
+        ],
+        "title": "ProvenanceItem",
+        "description": "One set (a file of a dataset) a source has on the deal, with what links it: the report row, a terms leg, a\ntrade, a currency of the book."
+      },
+      "ProvenanceMarket": {
+        "properties": {
+          "basis": {
+            "type": "string",
+            "enum": [
+              "used",
+              "needed",
+              "unknown"
+            ],
+            "title": "Basis",
+            "description": "used: what the valuation used; needed: an unvalued deal, what its terms need; unknown: not recorded"
+          },
+          "text": {
+            "type": "string",
+            "title": "Text"
+          },
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/MarketNeed"
+            },
+            "type": "array",
+            "title": "Items"
+          },
+          "notes": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Notes"
+          }
+        },
+        "type": "object",
+        "required": [
+          "basis",
+          "text",
+          "items",
+          "notes"
+        ],
+        "title": "ProvenanceMarket"
+      },
+      "ProvenanceMismatch": {
+        "properties": {
+          "code": {
+            "type": "string",
+            "enum": [
+              "report_no_terms",
+              "trades_no_report",
+              "terms_no_report",
+              "deal_on_rows",
+              "report_trades_gap"
+            ],
+            "title": "Code"
+          },
+          "text": {
+            "type": "string",
+            "title": "Text"
+          }
+        },
+        "type": "object",
+        "required": [
+          "code",
+          "text"
+        ],
+        "title": "ProvenanceMismatch"
+      },
+      "ProvenanceSource": {
+        "properties": {
+          "key": {
+            "type": "string",
+            "enum": [
+              "positions",
+              "trade_terms",
+              "trades",
+              "ocp",
+              "cash_balances"
+            ],
+            "title": "Key"
+          },
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "level": {
+            "type": "string",
+            "enum": [
+              "deal",
+              "book_ccy"
+            ],
+            "title": "Level",
+            "description": "deal: matched by the deal; book_ccy: by book and currency only (no key of a deal)"
+          },
+          "level_text": {
+            "type": "string",
+            "title": "Level Text"
+          },
+          "state": {
+            "type": "string",
+            "enum": [
+              "present",
+              "absent",
+              "unknown",
+              "not_needed"
+            ],
+            "title": "State",
+            "description": "unknown: the run did not record it (an older run)"
+          },
+          "state_text": {
+            "type": "string",
+            "title": "State Text"
+          },
+          "text": {
+            "type": "string",
+            "title": "Text"
+          },
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/ProvenanceItem"
+            },
+            "type": "array",
+            "title": "Items"
+          }
+        },
+        "type": "object",
+        "required": [
+          "key",
+          "name",
+          "level",
+          "level_text",
+          "state",
+          "state_text",
+          "text",
+          "items"
+        ],
+        "title": "ProvenanceSource"
       },
       "Queued": {
         "properties": {

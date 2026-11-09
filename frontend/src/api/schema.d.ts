@@ -573,6 +573,28 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/positions/provenance": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Position Provenance
+         * @description Where a position's data came from (TDM#617, ``provenance.provenance``): the card's collapsed «Откуда
+         *     данные», asked when it is opened. The id is a query parameter (a position id can hold ``|``). What an older run
+         *     did not record is ``unknown``, not an error; 404 — no such run or position.
+         */
+        get: operations["position_provenance_api_v1_positions_provenance_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/autopilot/status": {
         parameters: {
             query?: never;
@@ -1761,6 +1783,27 @@ export interface components {
             /** Password */
             password: string;
         };
+        /** MarketNeed */
+        MarketNeed: {
+            /**
+             * Kind
+             * @enum {string}
+             */
+            kind: "curve" | "fx" | "fixing" | "quote";
+            /** Id */
+            id: string;
+            /** Name */
+            name: string;
+            /**
+             * State
+             * @enum {string}
+             */
+            state: "ok" | "replaced" | "stale" | "missing" | "pending" | "unknown";
+            /** State Text */
+            state_text: string;
+            /** Text */
+            text: string;
+        };
         /** MissingPosition */
         MissingPosition: {
             /** Position Id */
@@ -2450,6 +2493,37 @@ export interface components {
             } | null;
         };
         /**
+         * PositionProvenance
+         * @description Where a position's data came from (TDM#617, api.provenance): the card's «Откуда данные».
+         */
+        PositionProvenance: {
+            /** Run Id */
+            run_id: number;
+            /**
+             * Business Date
+             * Format: date
+             */
+            business_date: string;
+            /** Position Id */
+            position_id: string;
+            /** Book Id */
+            book_id: string;
+            /**
+             * Kind
+             * @enum {string}
+             */
+            kind: "bond" | "derivative" | "other";
+            /** Valued */
+            valued: boolean;
+            /** Off Report */
+            off_report: boolean;
+            /** Sources */
+            sources: components["schemas"]["ProvenanceSource"][];
+            /** Mismatches */
+            mismatches: components["schemas"]["ProvenanceMismatch"][];
+            market: components["schemas"]["ProvenanceMarket"];
+        };
+        /**
          * ProblemDate
          * @description A hub date whose sync failed and that waits for a retry (#146).
          */
@@ -2462,6 +2536,93 @@ export interface components {
             attempts: number;
             /** Next Attempt */
             next_attempt: string | null;
+        };
+        /**
+         * ProvenanceItem
+         * @description One set (a file of a dataset) a source has on the deal, with what links it: the report row, a terms leg, a
+         *     trade, a currency of the book.
+         */
+        ProvenanceItem: {
+            /** Dataset */
+            dataset: string;
+            /**
+             * Dataset Name
+             * @description The monitor's name of the dataset (daystatus.DATASET_NAMES)
+             */
+            dataset_name: string;
+            /**
+             * Source
+             * @description The adapter's source id
+             */
+            source: string | null;
+            /** File Name */
+            file_name: string | null;
+            /** Report Date */
+            report_date: string | null;
+            /** Valid Date */
+            valid_date: string | null;
+            /**
+             * Loaded At
+             * @description When the monitor stored the set
+             */
+            loaded_at: string | null;
+        } & {
+            [key: string]: unknown;
+        };
+        /** ProvenanceMarket */
+        ProvenanceMarket: {
+            /**
+             * Basis
+             * @description used: what the valuation used; needed: an unvalued deal, what its terms need; unknown: not recorded
+             * @enum {string}
+             */
+            basis: "used" | "needed" | "unknown";
+            /** Text */
+            text: string;
+            /** Items */
+            items: components["schemas"]["MarketNeed"][];
+            /** Notes */
+            notes: string[];
+        };
+        /** ProvenanceMismatch */
+        ProvenanceMismatch: {
+            /**
+             * Code
+             * @enum {string}
+             */
+            code: "report_no_terms" | "trades_no_report" | "terms_no_report" | "deal_on_rows" | "report_trades_gap";
+            /** Text */
+            text: string;
+        };
+        /** ProvenanceSource */
+        ProvenanceSource: {
+            /**
+             * Key
+             * @enum {string}
+             */
+            key: "positions" | "trade_terms" | "trades" | "ocp" | "cash_balances";
+            /** Name */
+            name: string;
+            /**
+             * Level
+             * @description deal: matched by the deal; book_ccy: by book and currency only (no key of a deal)
+             * @enum {string}
+             */
+            level: "deal" | "book_ccy";
+            /** Level Text */
+            level_text: string;
+            /**
+             * State
+             * @description unknown: the run did not record it (an older run)
+             * @enum {string}
+             */
+            state: "present" | "absent" | "unknown" | "not_needed";
+            /** State Text */
+            state_text: string;
+            /** Text */
+            text: string;
+            /** Items */
+            items: components["schemas"]["ProvenanceItem"][];
         };
         /** Queued */
         Queued: {
@@ -5400,6 +5561,57 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["CarryOut"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorOut"];
+                };
+            };
+            /** @description Unprocessable Entity */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorOut"];
+                };
+            };
+            /** @description Service Unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorOut"];
+                };
+            };
+        };
+    };
+    position_provenance_api_v1_positions_provenance_get: {
+        parameters: {
+            query: {
+                id: string;
+                run_id?: number | null;
+                as_of?: string | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PositionProvenance"];
                 };
             };
             /** @description Not Found */

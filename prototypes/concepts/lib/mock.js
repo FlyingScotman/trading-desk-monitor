@@ -934,6 +934,39 @@
     return { v: n || !arr.length ? s : null, n, miss: arr.length - n };
   };
   M.sum = (arr, f) => M.sumX(arr, f).v;
+  // «Откуда данные» карточки (TDM#617) в демо — та же форма, что GET /api/v1/positions/provenance (lib/real.js:
+  // M.posProvenance); источники и файлы вымышлены. У каждого третьего дериватива условий сделки нет — видно расхождение
+  // и то, каких рыночных данных не хватает для оценки по условиям
+  M.posProvenance = function (id) {
+    const p = M.pos[id];
+    if (!p) return Promise.resolve({ error: 'нет такой позиции в демо' });
+    const der = M.deal(p), noTerms = der && hash(String(id)) % 3 === 0, at = AS_OF + 'T15:05:00+03:00';
+    const NAMES = { positions: 'Позиции', trade_terms: 'Условия сделок', trades: 'Сделки дня', ocp: 'ОВП', cash_balances: 'Остатки на счетах' };
+    const item = (ds, extra) => Object.assign({ dataset: ds, dataset_name: NAMES[ds], source: 'demo_' + ds, file_name: 'demo_' + ds + '_' + AS_OF.replace(/-/g, '') + '.csv', report_date: AS_OF, valid_date: AS_OF, loaded_at: at }, extra || {});
+    const src = (key, level, state, text, items) => ({ key, name: NAMES[key], level, level_text: level === 'deal' ? 'по сделке' : 'по книге и валюте', state,
+      state_text: { present: 'есть', absent: 'нет данных', unknown: 'нет сведений', not_needed: 'не нужны' }[state], text, items: items || [] });
+    const ccys = p.ccy && p.ccy !== 'RUB' ? [p.ccy] : [];
+    const st = { ok: 'есть', missing: 'нет', replaced: 'заменена', stale: 'устарела' };
+    const need = (kind, cid, name, state, text) => ({ kind, id: cid, name, state, state_text: st[state], text: text || '' });
+    const market = !der ? { basis: 'used', text: 'что использовала оценка сделки', notes: [], items: [need('quote', 'quote', 'котировка бумаги', 'ok', 'демо'), need('curve', 'RUB OFZ', 'ОФЗ (КБД MOEX)', 'ok')] }
+      : noTerms ? { basis: 'needed', text: 'сделка не оценена: что нужно для оценки по её условиям и есть ли это в рыночных данных прогона', notes: [],
+        items: [need('curve', 'RUB RUONIA', 'RUB RUONIA OIS', 'ok', 'дисконтирование рублёвых потоков')].concat(ccys.map(c => need('fx', c, 'курс ' + c + '/RUB (спот)', 'ok')), ccys.map(c => need('curve', c + ' FX', c + ': кривая валюты (FX implied)', 'missing', 'в рыночных данных прогона кривой нет'))) }
+        : { basis: 'used', text: 'что использовала оценка сделки', notes: [], items: [need('curve', 'RUB RUONIA', 'RUB RUONIA OIS', 'ok', 'дисконтирование рублёвых потоков')].concat(ccys.map(c => need('fx', c, 'курс ' + c + '/RUB (спот)', 'ok'))) };
+    return Promise.resolve({ data: {
+      run_id: 0, business_date: AS_OF, position_id: String(id), book_id: p.book, kind: der ? 'derivative' : 'bond', valued: !noTerms, off_report: false,
+      sources: [
+        src('positions', 'deal', 'present', 'строка отчёта позиций', [item('positions', { ref: String(hash(String(id)) % 400 + 2) })]),
+        der ? (noTerms ? src('trade_terms', 'deal', 'absent', 'условий этой сделки в загруженных наборах нет')
+          : src('trade_terms', 'deal', 'present', 'условия сделки', [item('trade_terms', { trade_id: 'DEMO-' + id, product_kind: 'fx_forward' })]))
+          : src('trade_terms', 'deal', 'not_needed', 'облигация: условия выпуска — из статики хаба, условия сделки не нужны'),
+        src('trades', 'deal', 'absent', 'в списке сделок дня этой позиции нет'),
+        src('ocp', 'book_ccy', ccys.length ? 'present' : 'absent', ccys.length ? 'строки по книге и валюте, у сделки своего ключа нет' : 'по книге и валюте сделки строк нет', ccys.map(c => item('ocp', { ccy: c, has_row: true }))),
+        src('cash_balances', 'book_ccy', 'absent', 'по книге и валюте сделки строк нет'),
+      ],
+      mismatches: noTerms ? [{ code: 'report_no_terms', text: 'есть в отчёте позиций, но условия сделки не загружены' }] : [],
+      market,
+    } });
+  };
   // публикуемая ОВП демо — производная от FX-дельт позиций по книгам (источник «из позиций»), той же формы, что D.OCP
   // сервера: в демо шапка и C06 показывают ОВП, а не «ОВП нет» (TDM#566)
   (function () {

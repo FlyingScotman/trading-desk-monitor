@@ -461,6 +461,45 @@ APPROX_TEXT = {"market_value": "по рыночной стоимости (без
                "reported_value": "по отчёту банка", "assumed": "PV принят 0 (MV в отчёте нет)"}
 
 
+PROVENANCE_STATE = {"present": "есть", "absent": "нет данных", "unknown": "нет сведений", "not_needed": "не нужны"}
+"""TDM#617: whether a source has data on a deal, as the card's «Откуда данные» says it (``api.provenance``)."""
+PROVENANCE_LEVEL = {"deal": "по сделке", "book_ccy": "по книге и валюте"}
+"""What a source is matched by: the deal itself, or only its book and currency (the OCP report and the balances have no
+key of a deal)."""
+MARKET_STATE = {"ok": "есть", "replaced": "заменена", "stale": "устарела", "missing": "нет", "pending": "ещё не наступил",
+                "unknown": "нет сведений"}
+"""TDM#617: the state of a market input a deal's valuation used or needs."""
+MISMATCH_TEXT = {
+    "report_no_terms": "есть в отчёте позиций, но условия сделки не загружены",
+    "trades_no_report": "пришла из списка сделок сервиса, но её нет в отчёте позиций",
+    "terms_no_report": "условия загружены, строки в отчёте позиций нет",
+    "deal_on_rows": "одна сделка на нескольких строках отчёта позиций (строк: {n}): условия не отнести к одной строке",
+    "report_trades_gap": "количество в отчёте позиций не сходится с началом дня и сделками дня",
+}
+"""TDM#617: the mismatches between a deal's sources, in words."""
+PROVENANCE_TEXT = {
+    "report_row": "строка отчёта позиций",
+    "report_no_row": "отчёт позиций книги загружен, строки этой позиции в нём нет",
+    "report_no_book": "отчёта позиций этой книги в прогоне нет",
+    "terms_rows": "условия сделки",
+    "terms_none": "условий этой сделки в загруженных наборах нет",
+    "terms_book_none": "условия сделок этой книги в прогон не загружались",
+    "terms_bond": "облигация: условия выпуска — из статики хаба, условия сделки не нужны",
+    "terms_not_needed": "для этой строки условия сделки не используются",
+    "trades_rows": "сделки дня из списка сделок",
+    "trades_none": "в списке сделок дня этой позиции нет",
+    "trades_no_lineage": "нет сведений: прогон не записал, какие сделки дня он читал",
+    "book_ccy_rows": "строки по книге и валюте, у сделки своего ключа нет",
+    "book_ccy_none": "по книге и валюте сделки строк нет",
+    "book_ccy_later": "после прогона загружен более новый отчёт",
+    "no_lineage": "нет сведений: прогон сделан версией, которая этого не записывала",
+    "market_used": "что использовала оценка сделки",
+    "market_needed": "сделка не оценена: что нужно для оценки по её условиям и есть ли это в рыночных данных прогона",
+    "market_unknown": "нет сведений: прогон не записал, какие рыночные данные использовала оценка",
+}
+"""TDM#617: the card's «Откуда данные» in words (``api.provenance``)."""
+
+
 def approx(con, run: dict[str, Any]) -> list[dict[str, Any]]:
     """The module doc's valued-but-not-by-core positions: [{key, quality, kind, text, n, mvRub, ids}], largest
     first."""
