@@ -29,7 +29,11 @@ a job status, the state file, a log line or an error.
 
 The owner's operation waits for no queued background work (TDM#615): a feed that first runs the feed of its list runs
 the owner's operation in between (``_owner_first``), and a feed whose files wait for the cycle lock runs it while it
-waits (no helper process runs then). While it waits for a running feed or history request, GET says which one and
+waits (no helper process runs then). An owner's operation run in that wait may change the adapter's config folder
+(a connect, a save): the files then were fetched under the old configuration, so the run ends ``cancelled``/
+``adapter_reconfigured`` (not a failure: no retry step, its files stay pending) and the same feed is queued again at
+once, to run under the new one; a change with no owner's operation in the wait stays ``error``/``adapter_changed``.
+While it waits for a running feed or history request, GET says which one and
 since when (``job.waiting_for``); «Остановить загрузку» (``cancel("feed")``) kills that helper: the run is
 ``cancelled`` (not a failure: no retry step is counted), its files not yet taken in stay pending, and the feed runs
 again by its schedule. An action's answer is published as soon as the helper returns (``job.state``, its lines); the
@@ -115,6 +119,7 @@ STATE_FILE = "state.json"
 LOGIN_ACTIONS = ("login", "v2_login", "v2_connect")  # a login window may open: the action declares no ``login`` flag
 CONNECT_ACTION, CONNECT_FEED = "v2_connect", "trades_intraday"  # a connect that got in runs that feed at once
 CONNECTED = ("connected", "connected_partially")
+RECONFIGURED = "adapter_reconfigured"  # the owner changed the adapter's config while a feed waited (``_ingest``)
 
 _ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,99}")  # dotted keys too (``services.positions.base_url``)
 ID_RE = _ID  # a feed, field or action id (the routes check the feed id of their path with it)
@@ -554,6 +559,7 @@ class AdapterServices:
         self._avail: tuple[float, dict, Helper | None] | None = None
         self._checked = float("-inf")
         self._describe_failed: tuple[str | None, str, float] | None = None  # (fingerprint, code, monotonic time)
+        self._owner_runs = 0  # the owner's operations run inside background work (``_owner_first``; worker thread)
 
     # ---- thread
 
@@ -790,14 +796,16 @@ class AdapterServices:
         self._wake.set()
         return {"state": "queued", "code": "queued", "feed": feed_id}
 
-    def _queue_feed(self, st: Settings, feed_id: str) -> str | None:
-        """The feed queued as «Запустить сейчас» does, by the worker itself (a connect that got in); its id, or None
-        when the adapter describes no such feed. Already queued or running: not twice."""
+    def _queue_feed(self, st: Settings, feed_id: str, day: str | None = None) -> str | None:
+        """The feed queued as «Запустить сейчас» does, by the worker itself (a connect that got in, a run whose wait
+        saw the owner change the adapter's config); its id, or None when the adapter describes no such feed. Not
+        queued a second time while it already waits in the queue or is the work running now; once that run is over,
+        it may be queued again."""
         with self._lock:
             if not any(f["id"] == feed_id for f in read_state(st).get("feeds") or []):
                 return None
             if feed_id not in [f for f, _ in self._manual] and (self._running or {}).get("feed") != feed_id:
-                self._manual.append((feed_id, None))
+                self._manual.append((feed_id, day))
         self._wake.set()
         return feed_id
 
@@ -935,6 +943,7 @@ class AdapterServices:
             saved = self._running
         if job is None:
             return False
+        self._owner_runs += 1
         try:
             self._run_job(job, held=held)
         finally:
@@ -1082,6 +1091,7 @@ class AdapterServices:
             return dict(run)
 
     def _feed(self, st: Settings, f: dict, trigger: str, day: str | None, newest: date | None) -> None:
+        asked = day  # the date asked for: a run queued again (``RECONFIGURED``) asks the same
         if f.get("trades_file"):
             self._ensure_list(st, f, day)
         self._owner_first()  # the owner's operation asked for meanwhile (the list's feed ran first) goes first
@@ -1176,6 +1186,8 @@ class AdapterServices:
                 self._running = None
             helper_proc.HELPER_LOCK.release()
             self._prune(st)
+        if outcome["code"] == RECONFIGURED:  # queued before the outcome is published: GET never shows it as over
+            self._queue_feed(st, f["id"], asked)
         self._finish(st, f, prev, outcome, started)
 
     @staticmethod
@@ -1257,6 +1269,8 @@ class AdapterServices:
             if f.get("history"):
                 with self._lock:   # a feed run got in: the history of its trades need not wait for a login
                     self._history_unwait(st)
+        elif state == "cancelled" and code == RECONFIGURED:
+            pass  # not a failure and no retry step: the same feed is queued again at once (``_feed``)
         elif state == "cancelled":
             n = int(prev.get("failures") or 0)  # a cancelled retry waits for its next step, never again at once
             rec.update(failures=n, retry_at=_iso(now + backoff(n)) if n else None)
@@ -1268,8 +1282,8 @@ class AdapterServices:
 
     def _wait_cycle_lock(self, st: Settings) -> CycleLock | None:
         """The cycle lock, waited for ``LOCK_WAIT_S`` (None then, or on shutdown). Meanwhile no helper process runs: the
-        owner's operation asked for goes first (``HELPER_LOCK`` kept, its time not counted), and «Остановить» stops
-        the wait (``cancelled``: the files stay pending)."""
+        owner's operation asked for goes first (``HELPER_LOCK`` kept, its time not counted, ``_owner_runs`` counts
+        it), and «Остановить» stops the wait (``cancelled``: the files stay pending)."""
         lock = CycleLock(st.home)
         until = time.monotonic() + LOCK_WAIT_S
         while True:
@@ -1303,7 +1317,9 @@ class AdapterServices:
             paths.append(p)
         if self._cancel.is_set():
             raise ServiceError("cancelled", "cancelled")
+        runs = self._owner_runs
         lock = self._wait_cycle_lock(st) if wait else self._try_cycle_lock(st)
+        owner = self._owner_runs != runs  # the owner's operation ran in the wait (it may have changed the config)
         if lock is None:
             raise ServiceError("calculation_busy", "error")
         try:
@@ -1311,7 +1327,8 @@ class AdapterServices:
                 if self._running:
                     self._running["phase"] = "ingesting"
             if fingerprint(str(hp.root), hp.handle.config_dir) != hp.handle.fingerprint:
-                raise ServiceError("adapter_changed", "error")
+                # the owner's operation in the wait changed the config (a connect, a save): expected, run again
+                raise ServiceError(RECONFIGURED, "cancelled") if owner else ServiceError("adapter_changed", "error")
             files, dates, accepted = [], set(), 0
             with store.connect(self._url) as con:
                 for p in paths:

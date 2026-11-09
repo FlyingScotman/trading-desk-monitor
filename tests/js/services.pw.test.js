@@ -39,7 +39,7 @@ const BF = {enabled:true, from:'2026-01-05', to:'2026-10-15', dates:10, done:8, 
 
 async function setup(browser, {width = 1440, available = true, code = 'available', hash = '#adapter/services', http = 200, noLogin = false,
   history = HIST, bf = null, waitsHistory = false, waitFeed = false, cancelRefused = false, connectOk = false} = {}) {
-  const ctx = await browser.newContext({viewport:{width, height:1000}}), pg = await ctx.newPage(), errors = [], posts = [], dialogs = [];
+  const ctx = await browser.newContext({viewport:{width, height:1000}}), pg = await ctx.newPage(), errors = [], posts = [], dialogs = [], summaries = [];
   const hist = history ? JSON.parse(JSON.stringify(history)) : null;
   let job = {state:'idle', code:'idle'}, polls = 0, feedRun = -1;
   const feeds = JSON.parse(JSON.stringify(FEEDS));
@@ -63,12 +63,12 @@ async function setup(browser, {width = 1440, available = true, code = 'available
       const ti = feeds.find(x => x.id === 'trades_intraday');
       if (ti && feedRun >= 0 && ++feedRun === 2) Object.assign(ti, {queued:false, running:true});
       if (ti && feedRun === 4) Object.assign(ti, {running:false, last:{last_started:new Date().toISOString(), last_finished:new Date().toISOString(),
-        state:'complete', code:'exported', files:[], failures:0, needs_login:false}});
+        state:'complete', code:'exported', files:[], dates:['2026-10-16'], failures:0, needs_login:false}});
       return json(available ? {available, code, name:'synthetic', version:'0.1', panel:PANEL, feeds, job, running:null, scheduler:true}
         : {available:false, code, panel:null, feeds:[], job});
     }
     if (u.pathname === '/api/v1/backfill/status' && bf) return json(bf);
-    if (u.pathname === '/api/v1/trades/summary') return json({date:'2026-10-16', trades:12, live:12, cancelled:0});
+    if (u.pathname === '/api/v1/trades/summary') return summaries.push(u.searchParams.get('date')), json({date:'2026-10-16', trades:12, live:12, cancelled:0});
     if (u.pathname === '/api/v1/adapter-services/history' && req.method() === 'GET') return hist ? json(hist) : json({message:'нет'}, 404);
     if (u.pathname.startsWith('/api/v1/adapter-services/')) {
       assert.strictEqual(req.method(), 'POST');
@@ -102,8 +102,10 @@ async function setup(browser, {width = 1440, available = true, code = 'available
           feedRun = 0;
         }
         else if (a === 'v2_connect') job = {...base, id:'j6', state:'error', code:'login_check_failed',
-          lines:['✓ Настройка входа: готово (1 с)', '✗ Проверка API: сервер не ответил (20 с)', 'Что сделать: проверьте адрес'],
+          lines:['✓ Настройка входа: готово (1 с)', '⚠ Портфели книг: подобраны для 1 из 2 книг (2 с)', '✗ Проверка API: сервер не ответил (20 с)',
+            'Что сделать: проверьте адрес'],
           table:{columns:['Шаг', 'Итог', 'Секунд', 'Код', 'id'], rows:[['Настройка входа', '✓', 1.4, 'v2_configured', 'setup'],
+            ['Портфели книг', '⚠', 2, 'portfolios_chosen', 'portfolios'],
             ['Проверка API', '✗', 20, 'timeout', 'check'], ['Первая загрузка сделок', '—', null, '', 'trades']]}};
         else if (a === 'odd') job = {...base, id:'j7', state:'partial', code:'zz_unknown_code', lines:['Сделано не всё: 2 из 3', 'Подробности']};
         else job = {...base, id:'j5', state:'complete', code:'connected', lines:['Подключено', EVIL],
@@ -132,7 +134,7 @@ async function setup(browser, {width = 1440, available = true, code = 'available
     return route.fulfill({status:200, contentType:TYPES[path.extname(file)] || 'application/octet-stream', body:fs.readFileSync(file)});
   });
   await pg.goto(ORIGIN + '/settings.html' + hash);
-  return {ctx, pg, errors, posts, dialogs};
+  return {ctx, pg, errors, posts, dialogs, summaries};
 }
 
 test('services block in Settings', {skip: pw ? false : 'нет Playwright'}, async t => {
@@ -232,7 +234,7 @@ test('services block in Settings', {skip: pw ? false : 'нет Playwright'}, asy
       } finally { await ctx.close(); }
     });
 
-    await t.test('no button shows a bare code; a checklist of steps with ✓/✗ and seconds', async () => {
+    await t.test('no button shows a bare code; a checklist of steps with ✓/⚠/✗ and seconds', async () => {
       const {ctx, pg, errors} = await setup(browser, {width:390});
       try {
         await pg.waitForFunction(() => !document.getElementById('svc-save').disabled);
@@ -243,7 +245,20 @@ test('services block in Settings', {skip: pw ? false : 'нет Playwright'}, asy
         assert.strictEqual(await v2.locator('.svc-st').getAttribute('title'), 'код: login_check_failed');
         const steps = await v2.locator('.svc-steps li').evaluateAll(n => n.map(x => [x.className, x.innerText.replace(/\s+/g, ' ').trim(), x.title]));
         assert.deepStrictEqual(steps, [['ok', '✓ Настройка входа: готово 1,4 с', 'код: v2_configured'],
+          ['warn', '⚠ Портфели книг: подобраны для 1 из 2 книг 2 с', 'код: portfolios_chosen'],
           ['bad', '✗ Проверка API: сервер не ответил 20 с', 'код: timeout'], ['skip', '— Первая загрузка сделок', '']]);
+        // ⚠ — свой цвет (--warn) в обеих темах, не серый «не дошли»; знак остаётся текстом
+        for (const theme of ['light', 'dark']) {
+          const c = await v2.evaluate((host, th) => {
+            document.documentElement.dataset.theme = th;
+            const probe = document.createElement('span'); probe.style.color = 'var(--warn)'; host.append(probe);
+            const want = getComputedStyle(probe).color; probe.remove();
+            const col = sel => getComputedStyle(host.querySelector(sel)).color;
+            return {want, warn: col('.svc-steps li.warn .mk'), skip: col('.svc-steps li.skip .mk')};
+          }, theme);
+          assert.strictEqual(c.warn, c.want, theme + ': ⚠ in the warning colour');
+          assert.notStrictEqual(c.warn, c.skip, theme + ': ⚠ is not drawn as «not reached»');
+        }
         assert.deepStrictEqual(await v2.locator('.at-lines li').allTextContents(), ['Что сделать: проверьте адрес'], 'step lines only in the checklist');
         assert.strictEqual(await v2.locator('table').count(), 0, 'the checklist instead of the table');
         await pg.locator('button[data-action=odd]').click();
@@ -257,7 +272,7 @@ test('services block in Settings', {skip: pw ? false : 'нет Playwright'}, asy
     });
 
     await t.test('a connect that got in: the checklist, then the trades feed it queued, the count and C20', async () => {
-      const {ctx, pg, errors} = await setup(browser, {connectOk:true});
+      const {ctx, pg, errors, summaries} = await setup(browser, {connectOk:true});
       try {
         await pg.waitForFunction(() => !document.getElementById('svc-save').disabled);
         await pg.locator('button[data-action=v2_connect]').click();
@@ -268,6 +283,7 @@ test('services block in Settings', {skip: pw ? false : 'нет Playwright'}, asy
           ['✓ Настройка входа: готово 1,4 с', '✓ Первая загрузка сделок: 12 сделок 4 с']);
         await v2.getByText(/Сделки дня: (загрузка в очереди|загружаются)…/).waitFor();
         await v2.getByText(/^Сделки дня: 12 сделок\./).waitFor({timeout:15000});
+        assert.deepStrictEqual(summaries, ['2026-10-16'], 'counted for the business date the feed brought');
         assert.strictEqual(await v2.getByRole('link', {name:/Открыть C20/}).getAttribute('href'), 'concepts/c20-trades.html');
         assert.deepStrictEqual(errors, []);
       } finally { await ctx.close(); }

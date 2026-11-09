@@ -145,6 +145,8 @@ elif op == 'action':
     elif a == 'v2_connect':
         r = json.loads((state / 'connect_result').read_text())
     else:
+        if (state / 'check_writes_config').exists():  # the action keeps what it found in the adapter's config folder
+            (Path(one('config_dir')) / 'found.json').write_text(json.dumps({"env": "test"}))
         r = {"state": "complete", "code": "connected", "lines": ["Подключено"],
              "table": {"columns": ["Среда", "Отчётов"], "rows": [["test", 3]]}}
     print(json.dumps(r))
@@ -590,6 +592,74 @@ def test_the_owner_goes_first_while_a_feed_waits_for_the_cycle_lock_615(tmp_path
         run = svcs.read_state(st)["runs"]["terms"]
         assert (run["state"], run["code"], run["failures"]) == ("cancelled", "cancelled", 0)
         assert run["pending"]["files"][0]["file"] == "trade_terms_20261015.csv"
+    finally:
+        lock.release()
+        s.close()
+
+
+def _feed_waiting_for_the_cycle_lock(s: svcs.AdapterServices, st: Settings) -> None:
+    s.run_feed("terms")
+    _until(lambda: (s.overview()["running"] or {}).get("kind") == "feed"
+           and any(r["op"] == "feed" for r in requests(st)), "the feed did not ask the helper")
+    time.sleep(0.3)
+
+
+def test_an_owner_action_that_changes_the_config_in_the_wait_runs_the_feed_again_615(tmp_path):
+    """The owner's action run while a feed's files wait for the cycle lock writes the adapter's config folder (as a
+    connect or a save does): the files were fetched under the old configuration. Not an error: no failure, no retry
+    step, the files stay pending and the same feed is queued again at once, to run under the new configuration."""
+    from desk.autopilot import CycleLock
+    st = make(tmp_path)
+    clock = {"t": at(FRI, 9, 0)}
+    s = service(st, "", clock)
+    lock = CycleLock(st.home)
+    try:
+        submit(s, "describe")
+        submit(s, "action", action="login")
+        (svcs.state_dir(st) / "check_writes_config").write_text("1")
+        assert lock.acquire()  # an autopilot cycle
+        _feed_waiting_for_the_cycle_lock(s, st)
+        s.submit("action", {"action": ["check"]})
+        assert wait_job(s)["code"] == "connected"
+        assert (st.private_adapter_config / "found.json").is_file()
+        assert s.overview()["running"]["kind"] == "feed", "the feed still waits for the cycle lock"
+        again = mock.Mock()
+        s._feed_by_id = again  # the run queued again is seen, not made (the worker's next step calls it)
+        lock.release()
+        _until(lambda: svcs.read_state(st)["runs"]["terms"].get("last_finished"), "the feed did not finish", 10)
+        run = svcs.read_state(st)["runs"]["terms"]
+        assert (run["state"], run["code"]) == ("cancelled", svcs.RECONFIGURED)
+        assert not run.get("failures") and not run.get("retry_at")
+        assert run["pending"]["files"][0]["file"] == "trade_terms_20261015.csv"
+        f = next(x for x in svcs.read_state(st)["feeds"] if x["id"] == "terms")
+        assert svcs.next_due(f, run, clock["t"]) == at(FRI, 9, 30)  # by its schedule, no retry step
+        _until(lambda: again.called, "the feed was not queued again", 5)
+        again.assert_called_once_with("terms", None, trigger="manual")
+    finally:
+        lock.release()
+        s.close()
+
+
+def test_a_config_change_in_the_wait_without_an_owner_action_is_still_adapter_changed_615(tmp_path):
+    from desk.autopilot import CycleLock
+    st = make(tmp_path)
+    clock = {"t": at(FRI, 9, 0)}
+    s = service(st, "", clock)
+    lock = CycleLock(st.home)
+    try:
+        submit(s, "describe")
+        submit(s, "action", action="login")
+        assert lock.acquire()
+        _feed_waiting_for_the_cycle_lock(s, st)
+        (st.private_adapter_config / "found.json").write_text("{}")  # changed by something else than the owner's action
+        lock.release()
+        _until(lambda: svcs.read_state(st)["runs"]["terms"].get("last_finished"), "the feed did not finish", 10)
+        run = svcs.read_state(st)["runs"]["terms"]
+        assert (run["state"], run["code"], run["failures"]) == ("error", "adapter_changed", 1)
+        assert run["retry_at"] == (clock["t"] + timedelta(minutes=5)).isoformat()
+        assert run["pending"]["files"][0]["file"] == "trade_terms_20261015.csv"
+        with s._lock:
+            assert not s._manual  # not queued again
     finally:
         lock.release()
         s.close()

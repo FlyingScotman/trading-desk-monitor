@@ -11,6 +11,7 @@
     helper_unavailable: 'В комплекте адаптера нет модуля подключения к сервисам.',
     runtime_unavailable: 'Укажите и сохраните «Python для получения данных» (подраздел «Условия сделок» → «Дополнительно»).',
     adapter_changed: 'Адаптер или его настройки только что изменились. Нажмите «Обновить».',
+    adapter_reconfigured: 'Настройки адаптера изменились во время ожидания — загрузка запущена заново.',
     settings_invalid: 'Проверьте настройки программы.', local_only: 'Подключение к сервисам настраивается только на компьютере с программой.',
     origin_invalid: 'Откройте настройки по локальному адресу программы.', status_unknown: 'Нет связи с программой. Обновите страницу.',
     loading: 'Загрузка панели адаптера…', queued: 'Ожидает очереди…', waiting_feed: 'Ждёт окончания фоновой загрузки…',
@@ -82,13 +83,15 @@
     login_restored: 'Вход восстановлен по сохранённому ключу.', source_enabled: 'Источник сделок включён.',
     source_on: 'Источник сделок уже включён.', v2_configured: 'Вход настроен.', exported: 'Выгрузка выполнена.'
   };
-  // таблица-чек-лист шагов действия (подключение сервиса сделок): строка = шаг, «Итог» ✓ / ✗ / — (не дошли)
+  // таблица-чек-лист шагов действия (подключение сервиса сделок): строка = шаг, «Итог» ✓ / ⚠ (готово с предупреждением,
+  // например портфели подобраны не для всех книг) / ✗ / — (не дошли). ok: true / 'warn' / false / null
   const CHECKLIST = ['Шаг', 'Итог', 'Секунд', 'Код', 'id'];
+  const MARK = {'✓': true, '⚠': 'warn', '⚠\uFE0F': 'warn', '✗': false};
   function checklist(job) {
     const t = job.table;
     if (!t || !Array.isArray(t.columns) || t.columns.join('|') !== CHECKLIST.join('|')) return null;
     const lines = (job.lines || []).slice(), steps = t.rows.map(([title, mark, sec, code, id]) => {
-      const ok = mark === '✓' ? true : mark === '✗' ? false : null, head = String(mark || '') + ' ' + String(title || '');
+      const ok = Object.prototype.hasOwnProperty.call(MARK, mark) ? MARK[mark] : null, head = String(mark || '') + ' ' + String(title || '');
       // строка адаптера «✓ <шаг>: <итог> (N с)» — итог шага: в чек-лист, не второй раз списком
       const i = lines.findIndex(l => typeof l === 'string' && l.startsWith(head));
       const line = i < 0 ? '' : lines.splice(i, 1)[0].slice(head.length).replace(/^:\s*/, '').replace(/\s*\(\d+(?:[.,]\d+)?\s*с\)\s*$/, '');
@@ -104,7 +107,8 @@
     source_disabled: 'источник выключен', helper_timeout: 'время ожидания истекло', helper_response_invalid: 'некорректный ответ модуля',
     files_not_accepted: 'файлы не приняты', calculation_busy: 'занят расчёт, повтор позже', ingestion_busy: 'загрузка занята, повтор позже',
     runtime_unavailable: 'нет Python для получения данных', adapter_unavailable: 'адаптер не загружен',
-    feed_source_invalid: 'источник не объявлен адаптером', cancelled: '', export_incomplete: 'выгружено не всё',
+    feed_source_invalid: 'источник не объявлен адаптером', cancelled: '',
+    adapter_reconfigured: 'настройки адаптера изменились во время ожидания — загрузка запущена заново', export_incomplete: 'выгружено не всё',
     books_not_covered: 'не все книги покрыты', books_not_mapped: 'книги не сопоставлены', books_unmapped: 'книги не сопоставлены',
     date_unavailable: 'дата недоступна', scope_empty: 'нечего загружать', scope_changed: 'отчёт позиций менялся, повтор позже',
     scope_report_ambiguous: 'неоднозначный отчёт позиций', result_too_large: 'слишком большой ответ', failed: 'не выполнено',
@@ -244,8 +248,8 @@
     if (ck && ck.steps.length) {
       const ol = el('ol', null, 'svc-steps');
       for (const x of ck.steps) {
-        const li = el('li', null, x.ok === true ? 'ok' : x.ok === false ? 'bad' : 'skip');
-        li.append(el('span', x.ok === true ? '✓' : x.ok === false ? '✗' : '—', 'mk'), el('span', (x.title || x.id || '') + (x.line ? ': ' + x.line : '')));
+        const li = el('li', null, x.ok === true ? 'ok' : x.ok === 'warn' ? 'warn' : x.ok === false ? 'bad' : 'skip');
+        li.append(el('span', x.ok === true ? '✓' : x.ok === 'warn' ? '⚠' : x.ok === false ? '✗' : '—', 'mk'), el('span', (x.title || x.id || '') + (x.line ? ': ' + x.line : '')));
         if (typeof x.seconds === 'number') li.append(el('span', secs(x.seconds), 'sec'));
         if (x.code) li.title = 'код: ' + x.code;
         ol.append(li);
@@ -287,16 +291,21 @@
     else if (!done) t += f.running ? 'загружаются…' : 'загрузка в очереди…';
     else if (['complete', 'partial', 'skipped'].includes(last.state)) {
       if (dayTrades && dayTrades.job === job.id && dayTrades.n != null) t += dayTrades.n + ' ' + plural3(dayTrades.n, 'сделка', 'сделки', 'сделок') + '.';
-      else { t += RUN[last.state] + '.'; if (!dayTrades || dayTrades.job !== job.id) countTrades(job.id); }
+      else { t += RUN[last.state] + '.'; if (!dayTrades || dayTrades.job !== job.id) countTrades(job.id, feedDay(last)); }
     } else { const c = runCode(last); t += (RUN[last.state] || 'не загружены') + (c ? ' (' + c + ')' : '') + '.'; }
     const a = el('a', 'Открыть C20 «Сделки дня» →'); a.href = 'concepts/c20-trades.html';
     p.append(document.createTextNode(t + ' '), a);
     return p;
   }
-  async function countTrades(id) {
+  // рабочий день, за который загрузка принесла сделки: последняя из её дат; нет дат — сводка берёт последний день со сделками
+  function feedDay(last) {
+    const ds = (Array.isArray(last.dates) ? last.dates : []).concat(last.date || []).filter(d => /^\d{4}-\d{2}-\d{2}$/.test(d)).sort();
+    return ds.length ? ds[ds.length - 1] : null;
+  }
+  async function countTrades(id, day) {
     dayTrades = {job: id, n: null};
     try {
-      const res = await fetch('/api/v1/trades/summary', {cache: 'no-store'});
+      const res = await fetch('/api/v1/trades/summary' + (day ? '?date=' + encodeURIComponent(day) : ''), {cache: 'no-store'});
       if (!res.ok) return;
       const r = await res.json();
       if (typeof r.trades === 'number' && dayTrades.job === id) { dayTrades.n = r.trades; if (data) renderResult(data.job); }

@@ -236,11 +236,12 @@ the `choose_action` of the last answer is accepted besides the panel's actions; 
 Action answers carry no feeds: every action, and a `save` whose answer has no `feeds`, is followed by a `describe`, so
 the panel and the feeds' `ready` are current; the action's answer is shown as soon as the helper returns, the describe
 only refreshes the panel after it (TDM#615). A `table` with exactly the columns `["Шаг", "Итог", "Секунд", "Код",
-"id"]` is a checklist of the action's steps (`Итог` `✓`, `✗` or `—` not reached; the seconds; the step's code and id):
-the page shows it as a list with ✓ / ✗ and the seconds under the action's button, each step with the rest of its line
-`«<mark> <Шаг>: <итог> (N с)»` from `lines`. The action `v2_connect` (the whole connection to the trades service)
-answers so; when it ends `connected`, `connected_partially` or `partial` (only its first load fell short), the monitor
-queues the feed `trades_intraday` after its describe, as «Запустить сейчас» does: the adapter hands the first load over
+"id"]` is a checklist of the action's steps (`Итог` `✓` done, `⚠` done with a warning, e.g. portfolios found for only
+some of the books, `✗` failed or `—` not reached; the seconds; the step's code and id): the page shows it as a list
+with ✓ / ⚠ / ✗ / — (the mark itself, not only its colour) and the seconds under the action's button, each step with
+the rest of its line `«<mark> <Шаг>: <итог> (N с)»` from `lines`. The action `v2_connect` (the whole connection to the
+trades service) answers so; when it ends `connected`, `connected_partially` or `partial` (only its first load fell
+short), the monitor queues the feed `trades_intraday` after its describe, as «Запустить сейчас» does: the adapter hands the first load over
 to that run. The settings page shows an action's `code` in
 Russian words where it knows the code, else the first of its `lines` (the code only as a tooltip): the first line of a
 failure should say what failed in words. Field, action and feed ids match `[A-Za-z0-9][A-Za-z0-9_.-]{0,99}`
@@ -292,7 +293,10 @@ Source precedence, scopes and completeness are the ordinary ones; an identical f
 All files rejected: `files_not_accepted`; some: `partial` Files produced but not taken in (the cycle lock stayed busy, the store
 failed, a cancel) are kept as the feed's `pending` output and taken in at its next run, before the helper is asked
 again: a helper that remembers what it produced may answer `no_change` then. A cancelled retry keeps its failures and
-waits for its next backoff step.
+waits for its next backoff step. While the files wait for the cycle lock the owner's operation runs (TDM#615); when it
+changed the adapter's config folder (a connect, a save), the run ends `cancelled`/`adapter_reconfigured` (not a
+failure, no retry step), its files stay pending and the same feed is queued again at once, under the new
+configuration. A config change with no such operation in the wait stays `adapter_changed`, an error.
 
 **Recompute.** After accepted units the affected runs are made again at once (`desk.recompute.after_inputs`), so the
 owner's screens update without any action: for each business date D of the accepted units the EOD run of D when the
