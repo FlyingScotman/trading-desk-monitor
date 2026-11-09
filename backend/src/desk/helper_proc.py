@@ -133,7 +133,10 @@ def run(python: Path, entry: Path, fields: dict[str, str | list[str]], *, timeou
     finally:
         if proc is not None:
             runner._kill_tree(proc)
-            proc.wait(timeout=5)
+            try:
+                proc.wait(timeout=5)  # bounded: a process that outlives its kill does not hold the caller
+            except subprocess.TimeoutExpired:
+                pass
             for stream in (proc.stdin, proc.stdout):
                 if stream is not None and not stream.closed:
                     stream.close()

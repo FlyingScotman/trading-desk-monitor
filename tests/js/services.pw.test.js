@@ -14,7 +14,9 @@ const PANEL = {title:'Тестовые сервисы', status:['Среда: т�
   {key:'verbose', label:'Подробно', type:'bool', value:false, help:'', placeholder:''},
   {key:'port', label:'Порт', type:'int', value:443, help:'', placeholder:''}],
   actions:[{id:'check', label:'Проверить', confirm:'', long:false}, {id:'login', label:'Войти', confirm:'Откроется окно входа', long:true},
-    {id:'pick', label:'Найти', confirm:'', long:false}]}]};
+    {id:'pick', label:'Найти', confirm:'', long:false}]},
+  {id:'v2', title:'Второй сервис', help:'', fields:[], actions:[{id:'v2_check', label:'Проверить второй', confirm:'', long:true},
+    {id:'v2_connect', label:'Подключить', confirm:'', long:true}, {id:'odd', label:'Странное', confirm:'', long:false}]}]};
 const FEEDS = [
   {id:'terms', title:'Условия сделок', dataset:'trade_terms', source:'s1', enabled:true, enabled_default:true, ready:true, why_not_ready:'',
    schedule:{every_min:30, from:'08:00', to:'20:00', weekdays_only:true}, after_positions:true, running:false, queued:false,
@@ -36,10 +38,10 @@ const BF = {enabled:true, from:'2026-01-05', to:'2026-10-15', dates:10, done:8, 
   next:[], problem_dates:[], hub_problem_dates:[], stalled:null, oldest_run:'2026-01-05', first_positions:'2026-01-05', inbox_scanned_from:null};
 
 async function setup(browser, {width = 1440, available = true, code = 'available', hash = '#adapter/services', http = 200, noLogin = false,
-  history = HIST, bf = null, waitsHistory = false} = {}) {
-  const ctx = await browser.newContext({viewport:{width, height:1000}}), pg = await ctx.newPage(), errors = [], posts = [], dialogs = [];
+  history = HIST, bf = null, waitsHistory = false, waitFeed = false, cancelRefused = false, connectOk = false} = {}) {
+  const ctx = await browser.newContext({viewport:{width, height:1000}}), pg = await ctx.newPage(), errors = [], posts = [], dialogs = [], summaries = [];
   const hist = history ? JSON.parse(JSON.stringify(history)) : null;
-  let job = {state:'idle', code:'idle'}, polls = 0;
+  let job = {state:'idle', code:'idle'}, polls = 0, feedRun = -1;
   const feeds = JSON.parse(JSON.stringify(FEEDS));
   if (waitsHistory) feeds[0].waits_history = true;
   if (noLogin) { feeds[1].last = {last_started:'2026-10-16T08:30:00+03:00', state:'complete', code:'fetched', needs_login:false, failures:0}; }
@@ -57,10 +59,16 @@ async function setup(browser, {width = 1440, available = true, code = 'available
       polls++;
       if (http !== 200) return json({message:'нет'}, http);
       if (job.state === 'running' && polls > 3) job = job.next;  // the long action ends after a few polls
+      if (job.state === 'queued' && job.waiting_for && job.stopped && polls > 1) job = job.next;  // the feed stopped: the action runs
+      const ti = feeds.find(x => x.id === 'trades_intraday');
+      if (ti && feedRun >= 0 && ++feedRun === 2) Object.assign(ti, {queued:false, running:true});
+      if (ti && feedRun === 4) Object.assign(ti, {running:false, last:{last_started:new Date().toISOString(), last_finished:new Date().toISOString(),
+        state:'complete', code:'exported', files:[], dates:['2026-10-16'], failures:0, needs_login:false}});
       return json(available ? {available, code, name:'synthetic', version:'0.1', panel:PANEL, feeds, job, running:null, scheduler:true}
         : {available:false, code, panel:null, feeds:[], job});
     }
     if (u.pathname === '/api/v1/backfill/status' && bf) return json(bf);
+    if (u.pathname === '/api/v1/trades/summary') return summaries.push(u.searchParams.get('date')), json({date:'2026-10-16', trades:12, live:12, cancelled:0});
     if (u.pathname === '/api/v1/adapter-services/history' && req.method() === 'GET') return hist ? json(hist) : json({message:'нет'}, 404);
     if (u.pathname.startsWith('/api/v1/adapter-services/')) {
       assert.strictEqual(req.method(), 'POST');
@@ -74,12 +82,33 @@ async function setup(browser, {width = 1440, available = true, code = 'available
       }
       if (op === 'action') {
         const a = p.get('action');
-        if (a === 'login') { polls = 0; job = {id:'j2', op:'action', state:'running', code:'running', long:true, started_at:new Date().toISOString(),
-          next:{id:'j2', op:'action', state:'complete', code:'logged_in', lines:['Вход выполнен']}}; }
-        else if (a === 'pick') job = {id:'j3', op:'action', state:'complete', code:'found', lines:['Найдено 2'], choose_action:'choose',
+        const sec = a.startsWith('v2') || a === 'odd' ? 'v2' : 'conn', base = {op:'action', action:a, section:sec};
+        if (a === 'login' || a === 'v2_check') { polls = 0; job = {...base, id:'j2' + a, state:'running', code:'running', long:true, login:a === 'login',
+          started_at:new Date().toISOString(), next:a === 'login' ? {...base, id:'j2' + a, state:'complete', code:'logged_in', lines:['Вход выполнен']}
+            : {...base, id:'j2' + a, state:'error', code:'failed', lines:['Проверка: сервер не ответил за 20 с', 'Что сделать: проверьте адрес']}}; }
+        else if (waitFeed && a === 'check') { polls = 0; job = {...base, id:'jw', state:'queued', code:'waiting_feed',
+          waiting_for:{kind:'feed', feed:'terms', title:'Сделки дня', since:new Date(Date.now() - 190000).toISOString(), phase:'fetching'},
+          next:{...base, id:'jw', state:'complete', code:'checked', lines:['Все сервисы отвечают']}}; }
+        else if (a === 'pick') job = {...base, id:'j3', state:'complete', code:'found', lines:['Найдено 2'], choose_action:'choose',
           choices:[{id:'x1', label:'Первый'}, {id:'x2', label:EVIL}]};
-        else if (a === 'choose') job = {id:'j4', op:'action', state:'complete', code:'chosen', lines:['Выбрано: ' + p.get('arg')]};
-        else job = {id:'j5', op:'action', state:'complete', code:'connected', lines:['Подключено', EVIL],
+        else if (a === 'choose') job = {...base, id:'j4', state:'complete', code:'chosen', lines:['Выбрано: ' + p.get('arg')]};
+        else if (a === 'v2_connect' && connectOk) {
+          job = {...base, id:'j8', state:'complete', code:'connected', feed_queued:'trades_intraday', finished_at:new Date(Date.now() - 1000).toISOString(),
+            lines:['✓ Настройка входа: готово (1 с)', '✓ Первая загрузка сделок: 12 сделок (4 с)'],
+            table:{columns:['Шаг', 'Итог', 'Секунд', 'Код', 'id'], rows:[['Настройка входа', '✓', 1.4, 'v2_configured', 'setup'],
+              ['Первая загрузка сделок', '✓', 4, 'exported', 'trades']]}};
+          feeds.push({id:'trades_intraday', title:'Сделки дня', dataset:'trades', source:'s3', enabled:false, enabled_default:false, ready:true,
+            schedule:null, after_positions:false, running:false, queued:true, next_run:null, last:{}});
+          feedRun = 0;
+        }
+        else if (a === 'v2_connect') job = {...base, id:'j6', state:'error', code:'login_check_failed',
+          lines:['✓ Настройка входа: готово (1 с)', '⚠ Портфели книг: подобраны для 1 из 2 книг (2 с)', '✗ Проверка API: сервер не ответил (20 с)',
+            'Что сделать: проверьте адрес'],
+          table:{columns:['Шаг', 'Итог', 'Секунд', 'Код', 'id'], rows:[['Настройка входа', '✓', 1.4, 'v2_configured', 'setup'],
+            ['Портфели книг', '⚠', 2, 'portfolios_chosen', 'portfolios'],
+            ['Проверка API', '✗', 20, 'timeout', 'check'], ['Первая загрузка сделок', '—', null, '', 'trades']]}};
+        else if (a === 'odd') job = {...base, id:'j7', state:'partial', code:'zz_unknown_code', lines:['Сделано не всё: 2 из 3', 'Подробности']};
+        else job = {...base, id:'j5', state:'complete', code:'connected', lines:['Подключено', EVIL],
           table:{columns:['Среда', 'Отчётов'], rows:[['test', 3], [EVIL, null]]}};
         return json({...job, state:'queued', code:'queued'}, 202);
       }
@@ -93,6 +122,10 @@ async function setup(browser, {width = 1440, available = true, code = 'available
       }
       if (op === 'enabled') { const f = feeds.find(x => u.pathname.includes('/' + x.id + '/')); f.enabled = p.get('enabled') === 'true'; return json({state:'complete', code:'saved'}); }
       if (op === 'run') { feeds.find(x => u.pathname.includes('/' + x.id + '/')).queued = true; return json({state:'queued', code:'queued'}, 202); }
+      if (op === 'cancel' && p.get('target') === 'feed' && job.waiting_for) {
+        if (cancelRefused) return json({state:'blocked', code:'cancel_after_commit_unavailable'}, 409);
+        job.stopped = true; polls = 0; return json(job);
+      }
       return json({state:'idle', code:'idle'});
     }
     if (u.pathname.startsWith('/api/')) return json({}, 404);
@@ -101,7 +134,7 @@ async function setup(browser, {width = 1440, available = true, code = 'available
     return route.fulfill({status:200, contentType:TYPES[path.extname(file)] || 'application/octet-stream', body:fs.readFileSync(file)});
   });
   await pg.goto(ORIGIN + '/settings.html' + hash);
-  return {ctx, pg, errors, posts, dialogs};
+  return {ctx, pg, errors, posts, dialogs, summaries};
 }
 
 test('services block in Settings', {skip: pw ? false : 'нет Playwright'}, async t => {
@@ -148,18 +181,23 @@ test('services block in Settings', {skip: pw ? false : 'нет Playwright'}, asy
         await pg.locator('#svc-f-url').fill('https://synthetic.invalid');
 
         await pg.locator('button[data-action=check]').click();
-        await pg.locator('#svc-result table').waitFor();
-        const res = await pg.locator('#svc-result').innerText();
-        assert.ok(res.includes('Подключено') && res.includes('Отчётов') && res.includes(EVIL));
-        assert.strictEqual(await pg.locator('#svc-result img').count(), 0);
+        const conn = pg.locator('.svc-sres[data-for=conn]');
+        await conn.locator('table').waitFor();
+        const res = await conn.innerText();
+        assert.ok(res.includes('Сервис подключён.') && res.includes('Подключено') && res.includes('Отчётов') && res.includes(EVIL), res);
+        assert.strictEqual(await pg.locator('#svc-card img').count(), 0);
+        assert.strictEqual(await pg.locator('#svc-result').innerText(), '', 'not at the bottom of the panel');
         const overflow = await pg.locator('#svc-card').evaluate(n => n.scrollWidth > n.clientWidth + 1);
         assert.strictEqual(overflow, false, 'no horizontal overflow on a phone');
 
         await pg.locator('button[data-action=pick]').click();
         await pg.locator('#svc-choice').waitFor();
         await pg.locator('#svc-choice').selectOption('x2');
+        assert.strictEqual(await conn.locator('.svc-st').textContent(), 'Найдено 2', 'an unknown code: the first line, not the code');
+        assert.strictEqual(await conn.locator('.svc-st').getAttribute('title'), 'код: found');
         await pg.locator('#svc-choose').click();
         await pg.getByText('Выбрано: x2', {exact:true}).waitFor();
+        assert.strictEqual(await conn.locator('.svc-st').textContent(), 'Выбрано: x2');
         p = posts.filter(x => x[0].endsWith('/action')).pop()[1];
         assert.strictEqual(p.get('action'), 'choose'); assert.strictEqual(p.get('arg'), 'x2');
 
@@ -174,13 +212,107 @@ test('services block in Settings', {skip: pw ? false : 'нет Playwright'}, asy
       try {
         await pg.waitForFunction(() => !document.getElementById('svc-save').disabled);
         await pg.locator('button[data-action=login]').click();  // its confirm is accepted
-        await pg.getByText(/Выполняется… \d+:\d\d Если откроется окно входа/).waitFor();
+        const conn = pg.locator('.svc-sres[data-for=conn]');
+        await conn.getByText(/Выполняется… \d+:\d\d Если откроется окно входа, завершите вход в нём\./).waitFor();
         assert.ok(await pg.locator('#svc-cancel').isVisible());
+        assert.ok(await conn.getByRole('button', {name:'Отменить'}).isVisible());
         assert.ok(await pg.locator('#svc-save').isDisabled());
-        await pg.getByText('Вход выполнен', {exact:true}).waitFor({timeout:10000});
+        assert.strictEqual(await pg.locator('#svc-status').textContent(), '', 'the state is under the section, not at the top');
+        await conn.getByText('Вход выполнен', {exact:true}).waitFor({timeout:10000});
+        assert.strictEqual(await conn.locator('.svc-st').textContent(), 'Вход выполнен.');
         assert.ok(posts.some(x => x[1].get('action') === 'login'));
+        // a long action that is not a login: no hint of a login window; its failure in words, its lines under its own button
+        await pg.locator('button[data-action=v2_check]').click();
+        const v2 = pg.locator('.svc-sres[data-for=v2]');
+        await v2.getByText(/Выполняется… \d+:\d\d/).waitFor();
+        assert.doesNotMatch(await v2.innerText(), /окно входа/);
+        await v2.getByText('Ошибка. Проверка: сервер не ответил за 20 с', {exact:true}).waitFor({timeout:10000});
+        assert.strictEqual(await v2.locator('.svc-st').getAttribute('title'), 'код: failed');
+        assert.ok((await v2.innerText()).includes('Что сделать: проверьте адрес'));
+        assert.strictEqual(await conn.locator('.svc-st').textContent(), 'Вход выполнен.', 'the result of the other section stays');
         assert.deepStrictEqual(errors, []);
       } finally { await ctx.close(); }
+    });
+
+    await t.test('no button shows a bare code; a checklist of steps with ✓/⚠/✗ and seconds', async () => {
+      const {ctx, pg, errors} = await setup(browser, {width:390});
+      try {
+        await pg.waitForFunction(() => !document.getElementById('svc-save').disabled);
+        await pg.locator('button[data-action=v2_connect]').click();
+        const v2 = pg.locator('.svc-sres[data-for=v2]');
+        await v2.locator('.svc-steps').waitFor();
+        assert.strictEqual(await v2.locator('.svc-st').textContent(), 'Ошибка. Вход выполнен, но сервис не ответил на проверочный запрос.');
+        assert.strictEqual(await v2.locator('.svc-st').getAttribute('title'), 'код: login_check_failed');
+        const steps = await v2.locator('.svc-steps li').evaluateAll(n => n.map(x => [x.className, x.innerText.replace(/\s+/g, ' ').trim(), x.title]));
+        assert.deepStrictEqual(steps, [['ok', '✓ Настройка входа: готово 1,4 с', 'код: v2_configured'],
+          ['warn', '⚠ Портфели книг: подобраны для 1 из 2 книг 2 с', 'код: portfolios_chosen'],
+          ['bad', '✗ Проверка API: сервер не ответил 20 с', 'код: timeout'], ['skip', '— Первая загрузка сделок', '']]);
+        // ⚠ — свой цвет (--warn) в обеих темах, не серый «не дошли»; знак остаётся текстом
+        for (const theme of ['light', 'dark']) {
+          const c = await v2.evaluate((host, th) => {
+            document.documentElement.dataset.theme = th;
+            const probe = document.createElement('span'); probe.style.color = 'var(--warn)'; host.append(probe);
+            const want = getComputedStyle(probe).color; probe.remove();
+            const col = sel => getComputedStyle(host.querySelector(sel)).color;
+            return {want, warn: col('.svc-steps li.warn .mk'), skip: col('.svc-steps li.skip .mk')};
+          }, theme);
+          assert.strictEqual(c.warn, c.want, theme + ': ⚠ in the warning colour');
+          assert.notStrictEqual(c.warn, c.skip, theme + ': ⚠ is not drawn as «not reached»');
+        }
+        assert.deepStrictEqual(await v2.locator('.at-lines li').allTextContents(), ['Что сделать: проверьте адрес'], 'step lines only in the checklist');
+        assert.strictEqual(await v2.locator('table').count(), 0, 'the checklist instead of the table');
+        await pg.locator('button[data-action=odd]').click();
+        await v2.getByText('Подробности', {exact:true}).waitFor();
+        assert.strictEqual(await v2.locator('.svc-st').textContent(), 'Выполнено частично. Сделано не всё: 2 из 3');
+        assert.strictEqual(await v2.locator('.at-lines li').count(), 1, 'the first line is in the state, not twice');
+        assert.doesNotMatch(await pg.locator('#svc-card').innerText(), /zz_unknown_code|login_check_failed/);
+        assert.strictEqual(await pg.locator('#svc-card').evaluate(n => n.scrollWidth > n.clientWidth + 1), false);
+        assert.deepStrictEqual(errors, []);
+      } finally { await ctx.close(); }
+    });
+
+    await t.test('a connect that got in: the checklist, then the trades feed it queued, the count and C20', async () => {
+      const {ctx, pg, errors, summaries} = await setup(browser, {connectOk:true});
+      try {
+        await pg.waitForFunction(() => !document.getElementById('svc-save').disabled);
+        await pg.locator('button[data-action=v2_connect]').click();
+        const v2 = pg.locator('.svc-sres[data-for=v2]');
+        await v2.locator('.svc-steps').waitFor();
+        assert.strictEqual(await v2.locator('.svc-st').textContent(), 'Сервис подключён.');
+        assert.deepStrictEqual(await v2.locator('.svc-steps li').evaluateAll(n => n.map(x => x.innerText.replace(/\s+/g, ' ').trim())),
+          ['✓ Настройка входа: готово 1,4 с', '✓ Первая загрузка сделок: 12 сделок 4 с']);
+        await v2.getByText(/Сделки дня: (загрузка в очереди|загружаются)…/).waitFor();
+        await v2.getByText(/^Сделки дня: 12 сделок\./).waitFor({timeout:15000});
+        assert.deepStrictEqual(summaries, ['2026-10-16'], 'counted for the business date the feed brought');
+        assert.strictEqual(await v2.getByRole('link', {name:/Открыть C20/}).getAttribute('href'), 'concepts/c20-trades.html');
+        assert.deepStrictEqual(errors, []);
+      } finally { await ctx.close(); }
+    });
+
+    await t.test('an action that waits for a background feed names it and may stop it', async () => {
+      const {ctx, pg, errors, posts} = await setup(browser, {waitFeed:true});
+      try {
+        await pg.waitForFunction(() => !document.getElementById('svc-save').disabled);
+        await pg.locator('button[data-action=check]').click();
+        const conn = pg.locator('.svc-sres[data-for=conn]');
+        await conn.getByText(/^Ждёт окончания фоновой загрузки «Сделки дня», идёт 3:1\d\.$/).waitFor();
+        const stop = conn.getByRole('button', {name:'Остановить загрузку'});
+        assert.match(await stop.getAttribute('title'), /не считается ошибкой и запустится снова по своему расписанию/);
+        await stop.click();
+        await conn.getByText('Все сервисы отвечают', {exact:true}).waitFor({timeout:10000});
+        assert.strictEqual(await conn.locator('.svc-st').textContent(), 'Проверка сервисов завершена.');
+        assert.deepStrictEqual(posts.filter(x => x[0].endsWith('/cancel')).map(x => Object.fromEntries(x[1])), [{target:'feed'}]);
+        assert.deepStrictEqual(errors, []);
+      } finally { await ctx.close(); }
+      const o = await setup(browser, {waitFeed:true, cancelRefused:true});
+      try {
+        await o.pg.waitForFunction(() => !document.getElementById('svc-save').disabled);
+        await o.pg.locator('button[data-action=check]').click();
+        const conn = o.pg.locator('.svc-sres[data-for=conn]');
+        await conn.getByRole('button', {name:'Остановить загрузку'}).click();
+        await conn.getByText('Данные уже загружаются в базу: отмена на этой фазе недоступна.', {exact:true}).waitFor();
+        assert.deepStrictEqual(o.errors, []);
+      } finally { await o.ctx.close(); }
     });
 
     await t.test('feeds: schedule, last run, «нужен вход», the switch and «Запустить сейчас»', async () => {

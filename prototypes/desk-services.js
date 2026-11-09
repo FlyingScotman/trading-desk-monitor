@@ -11,6 +11,7 @@
     helper_unavailable: 'В комплекте адаптера нет модуля подключения к сервисам.',
     runtime_unavailable: 'Укажите и сохраните «Python для получения данных» (подраздел «Условия сделок» → «Дополнительно»).',
     adapter_changed: 'Адаптер или его настройки только что изменились. Нажмите «Обновить».',
+    adapter_reconfigured: 'Настройки адаптера изменились во время ожидания — загрузка запущена заново.',
     settings_invalid: 'Проверьте настройки программы.', local_only: 'Подключение к сервисам настраивается только на компьютере с программой.',
     origin_invalid: 'Откройте настройки по локальному адресу программы.', status_unknown: 'Нет связи с программой. Обновите страницу.',
     loading: 'Загрузка панели адаптера…', queued: 'Ожидает очереди…', waiting_feed: 'Ждёт окончания фоновой загрузки…',
@@ -23,21 +24,105 @@
     helper_response_invalid: 'Модуль подключения вернул некорректный ответ.', helper_failed: 'Модуль подключения завершился с ошибкой.',
     operation_failed: 'Операция не выполнена.', config_invalid: 'Проверьте настройки подключения.',
     cancel_after_commit_unavailable: 'Данные уже загружаются в базу: отмена на этой фазе недоступна.',
-    history_unsupported: 'Адаптер не умеет сделки прошлых дат.'
+    history_unsupported: 'Адаптер не умеет сделки прошлых дат.',
+    adapter_unavailable: 'Адаптер не загружен.', services_unavailable: 'Адаптер не описывает подключение к сервисам.',
+    calculation_busy: 'Занят расчёт: данные будут приняты при следующем запуске.', ingestion_busy: 'Загрузка данных занята: повтор позже.',
+    files_not_accepted: 'Файлы не приняты.', feed_source_invalid: 'Источник загрузки не объявлен адаптером.'
   };
-  const STATE = {complete: 'Готово.', partial: 'Выполнено частично.', blocked: 'Остановлено.', error: 'Ошибка.'};
+  // итоги действий адаптера (#615): слова вместо кода. Неизвестный код — первая строка итога, код — во всплывающей подсказке
+  const CODE = {
+    checked: 'Проверка сервисов завершена.', applied: 'Найденные настройки применены.',
+    nothing_to_apply: 'Применять нечего: проверка ничего нового не нашла.',
+    environments_loaded: 'Список окружений загружен.', environment_chosen: 'Окружение выбрано.',
+    environments_covered: 'Окружения подобраны по книгам.', environments_not_matched: 'Окружения по книгам не подобрались.',
+    environments_unknown: 'Окружения ещё не загружены.', environment_missing: 'Не выбрано окружение.',
+    coverage_cleared: 'Подбор окружений сброшен.',
+    logged_in: 'Вход выполнен.', login_check_failed: 'Вход выполнен, но сервис не ответил на проверочный запрос.',
+    login_not_needed: 'Вход не нужен.', login_pending: 'Вход начат: завершите его в браузере.',
+    login_required: 'Нужен вход в сервис.', logged_out: 'Выход выполнен: сохранённые ключи забыты.',
+    redirect_taken: 'Адрес возврата после входа подставлен.', redirect_missing: 'Не задан адрес возврата после входа.',
+    redirect_not_found: 'Адрес возврата после входа не найден.',
+    apikey_saved: 'Ключ API принят.', apikey_missing: 'Нет ключа API.',
+    product_checked: 'Проверка продукта завершена.', reports_listed: 'Список отчётов получен.',
+    names_listed: 'Список названий получен.', listed: 'Список получен.',
+    history_probed: 'Проверка прошлых дат завершена.', history_applied: 'Глубина истории применена.',
+    portfolios_chosen: 'Портфели книг подобраны.', portfolios_not_matched: 'Портфели для книг не подобрались.',
+    portfolios_missing: 'Портфели книг ещё не подобраны.',
+    connected: 'Сервис подключён.', connected_partially: 'Сервис подключён частично.',
+    no_positions: 'Нет позиций: сначала загрузите позиции.', config_incomplete: 'В настройках не заполнены нужные поля.',
+    config_missing: 'Нет файла настроек подключения.', access_denied: 'Нет доступа: у учётной записи нет прав на этот сервис.',
+    unknown_action: 'Адаптер не знает этого действия. Нажмите «Обновить».', not_configured: 'Подключение не настроено.',
+    source_disabled: 'Источник выключен в настройках адаптера.', service_disabled: 'Сервис выключен в настройках.',
+    service_not_configured: 'Не задан адрес сервиса.', not_allowed: 'Такой запрос адаптер не выполняет.',
+    auth_required: 'Вход не выполнен.', auth_failed: 'Вход не выполнен: сервер входа отказал.',
+    auth_cancelled: 'Вход отменён.', auth_timeout: 'Вход не завершён вовремя.',
+    auth_state_mismatch: 'Ответ входа пришёл не на этот запрос: войдите снова.',
+    auth_endpoint_missing: 'Не заданы адреса входа.', auth_redirect_rejected: 'Сервер входа не принял адрес возврата после входа.',
+    auth_port_busy: 'Порт для возврата после входа занят другой программой: закройте её и войдите снова.',
+    auth_port_reserved: 'Порт для возврата после входа зарезервирован системой: перезагрузите компьютер или выберите другой адрес возврата.',
+    auth_pending_missing: 'Вход через браузер не начат или его срок истёк: войдите снова.',
+    dpapi_unavailable: 'Защищённое хранение ключей недоступно на этом компьютере.', dpapi_failed: 'Защищённое хранение ключей не сработало.',
+    secret_missing: 'Сохранённого ключа нет.', windows_auth_unavailable: 'Вход учётной записью Windows здесь недоступен.',
+    winhttp_failed: 'Запрос через систему Windows не выполнен.',
+    connection_failed: 'Нет соединения с сервером.', tls_failed: 'Ошибка проверки сертификата сервера.',
+    timeout: 'Сервер не ответил вовремя.', http_error: 'Сервер ответил ошибкой.', http_not_allowed: 'Адрес без шифрования (http) запрещён.',
+    response_too_large: 'Ответ сервера слишком большой.', response_invalid: 'Сервер ответил в неожиданном виде.',
+    result_too_large: 'Итог действия слишком большой.', discovery_failed: 'Настройки входа на сервере не найдены.',
+    out_dir_missing: 'Нет папки для выгрузок.', date_invalid: 'Неверная дата.', date_unavailable: 'Сервис не отдаёт эту дату.',
+    write_failed: 'Файл не записан.', export_failed: 'Выгрузка не выполнена.', export_incomplete: 'Выгружено не всё.',
+    export_unreadable: 'Выгрузку не удалось прочитать.', nothing_changed: 'Изменённых сделок нет.',
+    no_trade_ids: 'В ответе нет номеров сделок.', trade_id_invalid: 'Номер сделки — только цифры.',
+    probe_unavailable: 'Эта проверка не входит в комплект адаптера.', recon_unavailable: 'Сверка не входит в комплект адаптера.',
+    envelope_missing: 'Нет выгрузки позиций на эту дату.', file_not_found: 'Файл не найден.',
+    marketdata_target_missing: 'Не задана цель рыночных данных.', filter_invalid: 'Фильтр выгрузки задан не по правилам сервиса.',
+    books_not_covered: 'Не все книги покрыты.', books_not_mapped: 'Книги сервиса не сопоставлены с книгами монитора.',
+    books_unmapped: 'Книги сервиса не сопоставлены с книгами монитора.',
+    scope_empty: 'Загружать нечего.', scope_changed: 'Отчёт позиций изменился во время чтения: повторите позже.',
+    scope_report_ambiguous: 'Отчётов позиций несколько, непонятно, какой брать.',
+    failed: 'Операция не выполнена.', error: 'Операция не выполнена.', partial: 'Выполнено частично.',
+    login_restored: 'Вход восстановлен по сохранённому ключу.', source_enabled: 'Источник сделок включён.',
+    source_on: 'Источник сделок уже включён.', v2_configured: 'Вход настроен.', exported: 'Выгрузка выполнена.'
+  };
+  // таблица-чек-лист шагов действия (подключение сервиса сделок): строка = шаг, «Итог» ✓ / ⚠ (готово с предупреждением,
+  // например портфели подобраны не для всех книг) / ✗ / — (не дошли). ok: true / 'warn' / false / null
+  const CHECKLIST = ['Шаг', 'Итог', 'Секунд', 'Код', 'id'];
+  const MARK = {'✓': true, '⚠': 'warn', '⚠\uFE0F': 'warn', '✗': false};
+  function checklist(job) {
+    const t = job.table;
+    if (!t || !Array.isArray(t.columns) || t.columns.join('|') !== CHECKLIST.join('|')) return null;
+    const lines = (job.lines || []).slice(), steps = t.rows.map(([title, mark, sec, code, id]) => {
+      const ok = Object.prototype.hasOwnProperty.call(MARK, mark) ? MARK[mark] : null, head = String(mark || '') + ' ' + String(title || '');
+      // строка адаптера «✓ <шаг>: <итог> (N с)» — итог шага: в чек-лист, не второй раз списком
+      const i = lines.findIndex(l => typeof l === 'string' && l.startsWith(head));
+      const line = i < 0 ? '' : lines.splice(i, 1)[0].slice(head.length).replace(/^:\s*/, '').replace(/\s*\(\d+(?:[.,]\d+)?\s*с\)\s*$/, '');
+      return {id: id || '', title: title == null ? '' : String(title), ok, seconds: typeof sec === 'number' ? sec : null, code: code || null, line};
+    });
+    return {steps, lines};
+  }
+  const STATE = {complete: 'Готово.', partial: 'Выполнено частично.', blocked: 'Остановлено.', error: 'Ошибка.', cancelled: 'Отменено.'};
   const RUN = {complete: 'получено', partial: 'получено частично', skipped: 'нечего загружать', blocked: 'остановлено',
-    error: 'ошибка', cancelled: 'отменено'};
+    error: 'ошибка', cancelled: 'остановлено'};
   const RUN_CODE = {login_required: 'нужен вход', not_configured: 'не настроено', feed_disabled: 'выключено в адаптере',
     no_change: 'изменений нет', no_books: 'нет книг с позициями', not_due: 'ещё рано', no_positions: 'нет позиций', config_invalid: 'проверьте настройки',
     source_disabled: 'источник выключен', helper_timeout: 'время ожидания истекло', helper_response_invalid: 'некорректный ответ модуля',
     files_not_accepted: 'файлы не приняты', calculation_busy: 'занят расчёт, повтор позже', ingestion_busy: 'загрузка занята, повтор позже',
     runtime_unavailable: 'нет Python для получения данных', adapter_unavailable: 'адаптер не загружен',
-    feed_source_invalid: 'источник не объявлен адаптером', cancelled: 'отменено'};
+    feed_source_invalid: 'источник не объявлен адаптером', cancelled: '',
+    adapter_reconfigured: 'настройки адаптера изменились во время ожидания — загрузка запущена заново', export_incomplete: 'выгружено не всё',
+    books_not_covered: 'не все книги покрыты', books_not_mapped: 'книги не сопоставлены', books_unmapped: 'книги не сопоставлены',
+    date_unavailable: 'дата недоступна', scope_empty: 'нечего загружать', scope_changed: 'отчёт позиций менялся, повтор позже',
+    scope_report_ambiguous: 'неоднозначный отчёт позиций', result_too_large: 'слишком большой ответ', failed: 'не выполнено',
+    timeout: 'сервер не ответил вовремя', connection_failed: 'нет соединения', access_denied: 'нет доступа',
+    http_error: 'сервер ответил ошибкой', portfolios_missing: 'портфели книг не подобраны', apikey_missing: 'нет ключа API',
+    config_incomplete: 'настройки не заполнены', export_failed: 'выгрузка не выполнена'};
   const FILE = {accepted: 'принят', partially_accepted: 'принят частично', superseded: 'заменён более новым', duplicate: 'повтор',
     rejected: 'отклонён', failed: 'ошибка чтения', timed_out: 'таймаут чтения', match_failed: 'не распознан', ignored: 'не формат адаптера'};
   const ACTIVE = ['queued', 'waiting', 'running'];
+  const GENERIC = ['failed', 'error', 'partial', 'operation_failed'];
+  const LOGIN_HINT = 'Если откроется окно входа, завершите вход в нём.';
   let data = null, panelJson = null, typed = {}, timer = null, ticker = null;
+  let notice = null;  // отказ «Остановить»/«Отменить» ждущего действия: {text, job}, виден рядом с его кнопками
+  const kept = {};  // раздел панели → последнее действие его кнопок: итог виден, пока в разделе не нажата другая кнопка
   const el = (tag, text, cls) => { const n = document.createElement(tag); if (text !== undefined && text !== null) n.textContent = text; if (cls) n.className = cls; return n; };
   const when = s => s ? new Date(s).toLocaleString('ru-RU', {day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit'}) : '—';
   const busy = () => !!(data && data.job && ACTIVE.includes(data.job.state));
@@ -103,11 +188,12 @@
         const row = el('div', null, 'row'); row.style.cssText = 'margin-top:10px;flex-wrap:wrap';
         for (const a of s.actions) {
           const b = el('button', a.label, 'ibtn'); b.type = 'button'; b.dataset.action = a.id;
-          b.addEventListener('click', () => { if (!a.confirm || window.confirm(a.confirm)) submit('action', {action: a.id}); });
+          b.addEventListener('click', () => { if (!a.confirm || window.confirm(a.confirm)) submit('action', {action: a.id}, s.id); });
           row.append(b);
         }
         box.append(row);
       }
+      const res = el('div', null, 'svc-sres'); res.dataset.for = s.id; box.append(res);
       host.append(box);
     }
     buttons();
@@ -116,59 +202,174 @@
     const on = !!(data && data.available && data.panel) && !busy();
     $('save').disabled = !on || !fields().length;
     $('panel').querySelectorAll('button[data-action]').forEach(b => { b.disabled = !on; });
-    $('result').querySelectorAll('button').forEach(b => { b.disabled = !on; });
+    $('card').querySelectorAll('button[data-pick]').forEach(b => { b.disabled = !on; });
     $('cancel').hidden = !busy();
   }
 
-  function status(text) { $('status').textContent = text || ''; }
-  function jobText(job) {
-    if (!job || job.state === 'idle') return '';
+  function status(text) { const n = $('status'); n.textContent = text || ''; n.removeAttribute('title'); }
+  const clock = since => { const sec = Math.max(0, Math.round((Date.now() - new Date(since)) / 1000)); return Math.floor(sec / 60) + ':' + String(sec % 60).padStart(2, '0'); };
+  const dm = d => d ? d.slice(8, 10) + '.' + d.slice(5, 7) : '';
+  // чего ждёт действие владельца: идущая фоновая загрузка (её название и сколько идёт)
+  function waitText(w) {
+    return 'Ждёт окончания фоновой загрузки «' + (w.title || w.feed) + '»' + (w.kind === 'history' && w.date ? ' за ' + dm(w.date) : '') +
+      (w.since ? ', идёт ' + clock(w.since) : '') + (w.phase === 'ingesting' ? ' (данные уже записываются в базу)' : '') + '.';
+  }
+  // строка состояния действия: {text, cls, title (код), skip — первая строка итога уже в строке состояния}
+  function jobView(job) {
+    if (!job || job.state === 'idle') return {text: ''};
     if (ACTIVE.includes(job.state)) {
+      if (job.state === 'queued' && job.waiting_for) return {text: waitText(job.waiting_for), cls: 'warn'};
       let t = TEXT[job.code] || TEXT.running;
       if (job.state === 'running' && job.started_at) {
-        const sec = Math.max(0, Math.round((Date.now() - new Date(job.started_at)) / 1000));
-        t += ' ' + Math.floor(sec / 60) + ':' + String(sec % 60).padStart(2, '0');
-        if (job.long) t += ' Если откроется окно входа, завершите вход в нём.';
+        t += ' ' + clock(job.started_at);
+        if (job.login) t += ' ' + LOGIN_HINT;  // только у действий входа (#615)
       }
-      return t;
+      return {text: t};
     }
-    if (job.op === 'action' && !TEXT[job.code]) return (STATE[job.state] || '') + ' ' + job.code;
+    const cls = ['error', 'blocked'].includes(job.state) ? 'bad' : job.state === 'partial' ? 'warn' : '';
+    const title = job.code ? 'код: ' + job.code : '';
     if (job.code === 'config_invalid' && job.field) {
       const f = fields().find(x => x.key === job.field);
-      return 'Проверьте поле «' + (f ? f.label : job.field) + '».';
+      return {text: 'Проверьте поле «' + (f ? f.label : job.field) + '».', cls: 'bad', title};
     }
-    return TEXT[job.code] || ((STATE[job.state] || 'Операция не выполнена.') + ' ' + job.code);
+    const prefix = job.state === 'complete' ? '' : (STATE[job.state] || 'Операция не выполнена.') + ' ';
+    const ck = checklist(job), first = (ck ? ck.lines : job.lines || [])[0];
+    // общий код («не выполнено») скажет меньше, чем первая строка адаптера: тогда строка
+    const words = GENERIC.includes(job.code) && first ? null : TEXT[job.code] || CODE[job.code];
+    if (words) return {text: (job.state === 'partial' && /частично/.test(words) || prefix.trim() === words ? '' : prefix) + words, cls, title};
+    if (first) return {text: prefix + first, cls, title, skip: 1};
+    return {text: (prefix.trim() || 'Готово.'), cls, title};
   }
-  function renderResult(job) {
-    const host = $('result'); host.replaceChildren();
-    $('panel').querySelectorAll('[aria-invalid]').forEach(n => { n.removeAttribute('aria-invalid'); n.style.borderColor = ''; });
-    if (!job || ACTIVE.includes(job.state)) return;
-    const bad = job.code === 'config_invalid' && job.field && document.getElementById('svc-f-' + job.field);
-    if (bad) { bad.setAttribute('aria-invalid', 'true'); bad.style.borderColor = 'var(--neg)'; }
-    if ((job.lines || []).length) { const ul = el('ul', null, 'at-lines'); ul.append(...job.lines.map(t => el('li', t))); host.append(ul); }
-    if (job.table && job.table.columns) {
+  function jobText(job) { return jobView(job).text; }
+  const secs = v => v < 10 ? String(Math.round(v * 10) / 10).replace('.', ',') + ' с' : v < 60 ? Math.round(v) + ' с' : Math.floor(Math.round(v) / 60) + ' мин ' + Math.round(v) % 60 + ' с';
+  // итог действия: шаги ✓/✗ (если адаптер их дал), строки, таблица, список выбора
+  function resultNodes(job, view, current) {
+    const out = [], ck = checklist(job);
+    if (ck && ck.steps.length) {
+      const ol = el('ol', null, 'svc-steps');
+      for (const x of ck.steps) {
+        const li = el('li', null, x.ok === true ? 'ok' : x.ok === 'warn' ? 'warn' : x.ok === false ? 'bad' : 'skip');
+        li.append(el('span', x.ok === true ? '✓' : x.ok === 'warn' ? '⚠' : x.ok === false ? '✗' : '—', 'mk'), el('span', (x.title || x.id || '') + (x.line ? ': ' + x.line : '')));
+        if (typeof x.seconds === 'number') li.append(el('span', secs(x.seconds), 'sec'));
+        if (x.code) li.title = 'код: ' + x.code;
+        ol.append(li);
+      }
+      out.push(ol);
+    }
+    const lines = (ck ? ck.lines : job.lines || []).slice(view.skip || 0);
+    if (lines.length) { const ul = el('ul', null, 'at-lines'); ul.append(...lines.map(t => el('li', t))); out.push(ul); }
+    if (job.feed_queued) out.push(feedLine(job));
+    if (job.table && job.table.columns && !ck) {
       const wrap = el('div'); wrap.style.cssText = 'overflow-x:auto;margin-top:8px';
       const t = el('table', null, 't'), hr = el('tr');
       job.table.columns.forEach(c => hr.append(el('th', c)));
       const head = el('thead'); head.append(hr); const tb = el('tbody');
       for (const row of job.table.rows) { const tr = el('tr'); row.forEach(c => tr.append(el('td', c == null ? '' : String(c)))); tb.append(tr); }
-      t.append(head, tb); wrap.append(t); host.append(wrap);
+      t.append(head, tb); wrap.append(t); out.push(wrap);
     }
-    if (Array.isArray(job.choices) && job.choices.length && job.choose_action) {
+    // список выбора — только у последнего действия: адаптер принимает выбор лишь из последнего ответа
+    if (current && Array.isArray(job.choices) && job.choices.length && job.choose_action) {
       const row = el('div', null, 'row'); row.style.cssText = 'margin-top:8px;flex-wrap:wrap';
       const sel = el('select', null, 'inp'); sel.id = 'svc-choice'; sel.style.maxWidth = '100%';
       const empty = el('option', 'Выберите…'); empty.value = ''; sel.append(empty);
       for (const c of job.choices) { const o = el('option', c.label); o.value = c.id; sel.append(o); }
-      const b = el('button', 'Выбрать', 'ibtn'); b.type = 'button'; b.id = 'svc-choose';
-      b.addEventListener('click', () => { if (sel.value) submit('action', {action: job.choose_action, arg: sel.value}); });
-      row.append(sel, b); host.append(row);
+      const b = el('button', 'Выбрать', 'ibtn'); b.type = 'button'; b.id = 'svc-choose'; b.dataset.pick = '1';
+      b.addEventListener('click', () => { if (sel.value) submit('action', {action: job.choose_action, arg: sel.value}, job.section); });
+      row.append(sel, b); out.push(row);
     }
+    return out;
+  }
+  // подключение дошло: первая загрузка идёт фоновой загрузкой (её запуск поставил монитор) — как она идёт и ссылка на C20
+  let dayTrades = null;  // {job, n}: сделки дня по C20 после этой загрузки, спрошены один раз
+  const plural3 = (n, a, b, c) => n % 100 > 10 && n % 100 < 15 ? c : n % 10 === 1 ? a : n % 10 > 1 && n % 10 < 5 ? b : c;
+  function feedLine(job) {
+    const f = ((data && data.feeds) || []).find(x => x.id === job.feed_queued), last = (f && f.last) || {};
+    const p = el('p', null, 'svc-feedline'); p.style.margin = '6px 0 0';
+    const done = !!(f && !f.running && !f.queued && last.last_finished && job.finished_at && last.last_finished >= job.finished_at);
+    let t = 'Сделки дня: ';
+    if (!f) t += 'загрузка поставлена в очередь.';
+    else if (!done) t += f.running ? 'загружаются…' : 'загрузка в очереди…';
+    else if (['complete', 'partial', 'skipped'].includes(last.state)) {
+      if (dayTrades && dayTrades.job === job.id && dayTrades.n != null) t += dayTrades.n + ' ' + plural3(dayTrades.n, 'сделка', 'сделки', 'сделок') + '.';
+      else { t += RUN[last.state] + '.'; if (!dayTrades || dayTrades.job !== job.id) countTrades(job.id, feedDay(last)); }
+    } else { const c = runCode(last); t += (RUN[last.state] || 'не загружены') + (c ? ' (' + c + ')' : '') + '.'; }
+    const a = el('a', 'Открыть C20 «Сделки дня» →'); a.href = 'concepts/c20-trades.html';
+    p.append(document.createTextNode(t + ' '), a);
+    return p;
+  }
+  // рабочий день, за который загрузка принесла сделки: последняя из её дат; нет дат — сводка берёт последний день со сделками
+  function feedDay(last) {
+    const ds = (Array.isArray(last.dates) ? last.dates : []).concat(last.date || []).filter(d => /^\d{4}-\d{2}-\d{2}$/.test(d)).sort();
+    return ds.length ? ds[ds.length - 1] : null;
+  }
+  async function countTrades(id, day) {
+    dayTrades = {job: id, n: null};
+    try {
+      const res = await fetch('/api/v1/trades/summary' + (day ? '?date=' + encodeURIComponent(day) : ''), {cache: 'no-store'});
+      if (!res.ok) return;
+      const r = await res.json();
+      if (typeof r.trades === 'number' && dayTrades.job === id) { dayTrades.n = r.trades; if (data) renderResult(data.job); }
+    } catch (_) { /* без счёта: ссылка остаётся */ }
+  }
+  // кнопки, пока действие ждёт: остановить фоновую загрузку, которую оно ждёт, или отменить само действие
+  function liveButtons(job, withCancel) {
+    const row = el('div', null, 'row'); row.style.cssText = 'margin-top:4px;flex-wrap:wrap;gap:12px';
+    if (job.state === 'queued' && job.waiting_for) {
+      const stop = el('button', 'Остановить загрузку', 'lnk'); stop.type = 'button'; stop.dataset.stopFeed = '1';
+      stop.title = 'Загрузка «' + (job.waiting_for.title || job.waiting_for.feed) + '» прервётся; она не считается ошибкой и запустится снова по своему расписанию.';
+      stop.addEventListener('click', () => cancel('feed'));
+      row.append(stop);
+    }
+    if (withCancel) { const c = el('button', 'Отменить', 'lnk'); c.type = 'button'; c.addEventListener('click', () => cancel('job')); row.append(c); }
+    if (notice && notice.job === job.id) row.append(el('span', notice.text, 'hint'));
+    return row;
+  }
+  const hostOf = sec => $('panel').querySelector('.svc-sres[data-for="' + CSS.escape(sec) + '"]');
+  const sectionOf = job => job && job.op === 'action' && job.section && hostOf(job.section) ? job.section : null;
+  function markField(job) {
+    $('panel').querySelectorAll('[aria-invalid]').forEach(n => { n.removeAttribute('aria-invalid'); n.style.borderColor = ''; });
+    const bad = job && !ACTIVE.includes(job.state) && job.code === 'config_invalid' && job.field && document.getElementById('svc-f-' + job.field);
+    if (bad) { bad.setAttribute('aria-invalid', 'true'); bad.style.borderColor = 'var(--neg)'; }
+  }
+  // итог действия — под кнопками его раздела (#615); без раздела (сохранение, «Обновить») — внизу, под «Сохранить»
+  function renderResult(job) {
+    markField(job);
+    const sec = sectionOf(job), mine = sec && kept[sec];
+    // строка, которую раздел показал сам (ожидание ответа или отказ), держится, пока сервер не сообщит о новом действии
+    if (sec && !(mine && mine.local && mine.after === job.id)) kept[sec] = job;
+    for (const k of Object.keys(kept)) if (!kept[k].local && ACTIVE.includes(kept[k].state) && (!job || kept[k].id !== job.id)) delete kept[k];
+    $('panel').querySelectorAll('.svc-sres').forEach(host => {
+      const j = kept[host.dataset.for];
+      host.replaceChildren();
+      if (!j) return;
+      const v = j.local ? {text: j.text, cls: j.cls} : jobView(j), st = el('p', v.text, 'svc-st' + (v.cls ? ' ' + v.cls : ''));
+      st.setAttribute('role', 'status'); st.setAttribute('aria-live', 'polite');
+      if (v.title) st.title = v.title;
+      host.append(st);
+      if (j.local) return;
+      if (ACTIVE.includes(j.state)) host.append(liveButtons(j, true));
+      else host.append(...resultNodes(j, v, !!job && j.id === job.id));
+    });
+    const host = $('result'); host.replaceChildren();
+    if (!job || sec) return;
+    if (ACTIVE.includes(job.state)) { if (job.waiting_for) host.append(liveButtons(job, false)); return; }
+    host.append(...resultNodes(job, jobView(job), true));
   }
 
   function scheduleText(s, after) {
     let t = !s ? 'вручную' : s.every_min ? 'каждые ' + s.every_min + ' мин, ' + s.from + '–' + s.to : (s.weekdays_only ? 'по будням' : 'ежедневно') + ' в ' + s.daily_at.join(', ');
     if (s && s.every_min && s.weekdays_only) t += ', по будням';
     return after ? t + '; и после новых позиций' : t;
+  }
+  // код последнего запуска словами: короткие слова строки фида, иначе слова итога, иначе первая строка адаптера
+  function runCode(last) {
+    const c = last.code;
+    if (!c) return '';
+    if (Object.prototype.hasOwnProperty.call(RUN_CODE, c)) return RUN_CODE[c];
+    if (['complete', 'partial'].includes(last.state)) return '';
+    const w = TEXT[c] || CODE[c];
+    if (w) return w.charAt(0).toLowerCase() + w.slice(1).replace(/\.$/, '');
+    return (last.lines || [])[0] || c;
   }
   function renderFeeds() {
     const host = $('feeds'), feeds = (data && data.feeds) || [];
@@ -185,8 +386,10 @@
       box.addEventListener('change', () => enable(f.id, box.checked, box));
       const lastTd = el('td'); lastTd.dataset.l = 'Последний запуск'; sw.dataset.l = 'Включено'; 
       if (last.last_started) {
-        const code = !last.code ? '' : RUN_CODE[last.code] || (['complete', 'partial'].includes(last.state) ? '' : last.code);
-        lastTd.append(el('div', when(last.last_finished || last.last_started) + ' · ' + (f.running ? 'идёт' : (RUN[last.state] || last.state || '')) + (code && !f.running ? ' (' + code + ')' : '')));
+        const code = runCode(last);
+        const head = el('div', when(last.last_finished || last.last_started) + ' · ' + (f.running ? 'идёт' : (RUN[last.state] || last.state || '')) + (code && !f.running ? ' (' + code + ')' : ''));
+        if (last.code) head.title = 'код: ' + last.code;
+        lastTd.append(head);
         const more = [];
         for (const x of last.files || []) more.push(x.file + ': ' + (FILE[x.status] || x.status));
         if ((last.recomputed || []).length) more.push('Пересчитаны: ' + last.recomputed.map(r => r.label + ' (#' + r.run_id + ')').join(', '));
@@ -248,16 +451,25 @@
     renderPanel(); renderFeeds();
     const job = data.job;
     if (!data.available) status(TEXT[data.code] || data.code);
-    else if (job && job.state !== 'idle') status(jobText(job));
+    else if (job && job.state !== 'idle' && sectionOf(job)) status('');  // состояние — под кнопкой раздела
+    else if (job && job.state !== 'idle') { const v = jobView(job); status(v.text); if (v.title) $('status').title = v.title; }
     else if (!data.panel) status(data.describe_error ? 'Панель адаптера не загрузилась: ' + (TEXT[data.describe_error] || data.describe_error) + '. Нажмите «Обновить».' : TEXT.loading);
     else status('');
     renderResult(job); buttons();
     clearTimeout(timer); clearInterval(ticker);
     if (busy()) {
       timer = setTimeout(refresh, 1000);
-      if (job.state === 'running') ticker = setInterval(() => status(jobText(data.job)), 1000);
+      if (job.state === 'running' || job.waiting_for) ticker = setInterval(tick, 1000);
     } else if (data.available && (!data.panel && !data.describe_error || data.running || (data.feeds || []).some(f => f.queued || f.running)))
       timer = setTimeout(refresh, 2500);
+  }
+  function tick() {  // отсчёт времени между опросами: в разделе действия или в общей строке
+    const job = data && data.job;
+    if (!job) return;
+    const sec = sectionOf(job), v = jobView(job);
+    if (!sec) { status(v.text); return; }
+    const n = hostOf(sec).querySelector('.svc-st');
+    if (n) n.textContent = v.text;
   }
   async function refresh() {
     try {
@@ -277,15 +489,20 @@
       headers: {'Content-Type': 'application/x-www-form-urlencoded'}, body: b});
     return [res, await res.json().catch(() => ({}))];
   }
-  async function submit(op, extra) {
+  async function submit(op, extra, sec) {
     const b = op === 'describe' ? new URLSearchParams() : body(extra);
     forgetSecrets();
-    status(TEXT.queued);
+    // новое действие раздела: прежний итог раздела убран, состояние — сразу под его кнопками
+    const say = (text, cls) => {
+      if (sec && hostOf(sec)) { kept[sec] = {local: true, text, cls, after: data && data.job && data.job.id}; renderResult(data && data.job); }
+      else status(text);
+    };
+    say(TEXT.queued, '');
     try {
       const [res, job] = await post('/' + op, b);
-      if (!res.ok) { status(TEXT[job.code] || TEXT.operation_failed); return; }
+      if (!res.ok) { say(TEXT[job.code] || TEXT.operation_failed, 'bad'); return; }
       data = Object.assign({}, data, {job}); render();
-    } catch (_) { status(TEXT.status_unknown); }
+    } catch (_) { say(TEXT.status_unknown, 'bad'); }
     finally { for (const k of [...b.keys()]) b.delete(k); }
     refresh();
   }
@@ -305,10 +522,11 @@
     refresh();
   }
   async function cancel(target) {
+    const job = data && data.job, say = t => { if (job && ACTIVE.includes(job.state)) notice = {text: t, job: job.id}; else status(t); };
     try {
       const [res, r] = await post('/cancel', new URLSearchParams({target}));
-      if (!res.ok) status(TEXT[r.code] || TEXT.operation_failed);
-    } catch (_) { status(TEXT.status_unknown); }
+      if (!res.ok) say(TEXT[r.code] || TEXT.operation_failed);
+    } catch (_) { say(TEXT.status_unknown); }
     refresh();
   }
   // ---- сделки прошлых дат (TDM#569): GET/POST /api/v1/adapter-services/history[/refetch]. Слова — desk-backfill-text.js ----
