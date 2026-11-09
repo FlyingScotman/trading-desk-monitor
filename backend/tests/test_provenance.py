@@ -80,7 +80,9 @@ def seeded(store_url):
                                         ("D1", "otc", "RUB", "T5", None), ("D2", "otc", "RUB", "T5", None),
                                         ("BND", "bond", "RUB", None, None), ("CCS2", "otc", "CNY", "T6", None),
                                         ("FX4", "fx", "CNY", "T8", "2026-11-20"), ("NA1", None, "RUB", "Z1", None),
-                                        ("NA2", None, "RUB", "T10", None), ("NDF1", "fx", "USD", "T11", "2026-11-20")):
+                                        ("NA2", None, "RUB", "T10", None), ("NDF1", "fx", "USD", "T11", "2026-11-20"),
+                                        ("FUT1", "fx", "USD", None, "2026-12-15"), ("IRS1", "otc", "RUB", "T13", None),
+                                        ("IRS2", "otc", "RUB", "T14", None), ("REPO1", "otc", "RUB", "T15", None)):
             con.execute("INSERT INTO position_input (set_id, position_id, secid, quantity, asset_class, ccy, deal_id,"
                         " value_date, src) VALUES (%s, %s, NULL, NULL, %s, %s, %s, %s, %s)",
                         (ps, pid, cls, ccy, deal, vd, f"row {pid}"))
@@ -96,6 +98,20 @@ def seeded(store_url):
             {"trade_id": "T11", "book_id": "B1", "product_kind": "fx_forward", "base_ccy": "USD", "quote_ccy": "RUB",
              "ndf": True, "fixing_date": BD.isoformat()},
             {"trade_id": "T1", "book_id": "B2", "product_kind": "fx_forward", "base_ccy": "EUR", "quote_ccy": "RUB"},
+            # one trade, a leg per position: each position takes only its own leg
+            {"trade_id": "T12", "leg_id": "a", "position_id": "FXA", "book_id": "B1", "product_kind": "fx_swap",
+             "base_ccy": "USD", "quote_ccy": "RUB"},
+            {"trade_id": "T12", "leg_id": "b", "position_id": "FXB", "book_id": "B1", "product_kind": "fx_swap",
+             "base_ccy": "USD", "quote_ccy": "RUB"},
+            # floating legs not started yet (no fixing needed) and started (fixings needed); a REPO on RUSFAR
+            {"trade_id": "T13", "leg_id": "fix", "book_id": "B1", "product_kind": "irs", "ccy": "RUB",
+             "fixed_rate_pct": "9", "start_date": "2026-12-01"},
+            {"trade_id": "T13", "leg_id": "flt", "book_id": "B1", "product_kind": "irs", "ccy": "RUB",
+             "index_code": "RUONIA", "start_date": "2026-12-01"},
+            {"trade_id": "T14", "leg_id": "flt", "book_id": "B1", "product_kind": "irs", "ccy": "RUB",
+             "index_code": "KEY_RATE", "start_date": "2026-01-15"},
+            {"trade_id": "T15", "book_id": "B1", "product_kind": "repo", "ccy": "RUB", "index_code": "RUSFAR",
+             "start_date": "2026-10-01"},
             {"trade_id": "T5", "book_id": "B1", "product_kind": "irs", "ccy": "RUB", "fixed_rate_pct": "10"},
             {"trade_id": "T7", "book_id": "B1", "product_kind": "fx_forward", "base_ccy": "USD", "quote_ccy": "RUB"},
         ]
@@ -106,6 +122,11 @@ def seeded(store_url):
             # a newer version than the run took in: not «в позициях»
             {"trade_id": "tr-2", "trade_version": 3, "status": "live", "book_id": "B1", "position_id": "N1",
              "asset_class": "bond", "side": "sell", "trade_date": BD.isoformat(), "quantity": "1"},
+            # a trade amended into another book: its current version is not this position's
+            {"trade_id": "tr-3", "trade_version": 1, "status": "live", "book_id": "B1", "position_id": "N1",
+             "asset_class": "bond", "side": "buy", "trade_date": BD.isoformat(), "quantity": "1"},
+            {"trade_id": "tr-3", "trade_version": 2, "status": "live", "book_id": "B2", "position_id": "N1",
+             "asset_class": "bond", "side": "buy", "trade_date": BD.isoformat(), "quantity": "1"},
             # the same number in another book: not this position's
             {"trade_id": "T1", "trade_version": 1, "status": "live", "book_id": "B2", "asset_class": "fx",
              "side": "buy", "trade_date": BD.isoformat()}], source="trades_csv")
@@ -148,6 +169,16 @@ def seeded(store_url):
                                         "extra": {"quality": "exact"}})
         _pos(con, rid, "NA2", 13, reason="no_rub_curve: synthetic")
         _pos(con, rid, "NDF1", 14, reason="no_fx_calendar: synthetic")
+        # a CCS valued on the FX-implied CNY curve: the XCCY curve it wants first was not in the market
+        _pos(con, rid, "CCS3", 15, fact={"ccy": "CNY", "extra": {"quality": "assumed", "core": {
+            "product": "ccs", "rub_curve": "RUB RUONIA", "curves": ["RUB RUONIA", "CNY FX"], "trades": ["T3"]}}})
+        _pos(con, rid, "FXA", 16, fact={"ccy": "USD", "extra": {"quality": "exact", "core": {
+            "product": "fx_swap", "rub_curve": "RUB RUONIA", "foreign_curves": ["USD FX"], "trades": ["T12"]}}})
+        _pos(con, rid, "FUT1", 17, fact={"ccy": "USD", "extra": {"quality": "exact", "core": {
+            "product": "fx_future", "rub_curve": "RUB RUONIA", "foreign_curves": ["USD FX"], "trades": None}}})
+        _pos(con, rid, "IRS1", 18, reason="no_rub_curve: synthetic")
+        _pos(con, rid, "IRS2", 19, reason="no_rub_curve: synthetic")
+        _pos(con, rid, "REPO1", 20, reason="no_fixings: REPO T15 on RUSFAR")
         con.execute("UPDATE run SET status = 'complete', completed_at = now() WHERE run_id = %s", (rid,))
         old = _run(con, {}, [ps])   # an old run: no lineage at all
         _pos(con, old, "FX2", 1, reason="no_reported_value")
@@ -381,3 +412,49 @@ def test_trades_of_the_book_their_version_and_earlier_dates(seeded):
     assert all(i["feed_title"] is None for i in by.values())   # report folders, not a feed
     _, src, _ = _get(c, rid, "FX1")   # T1 of another book is not this deal
     assert src["trades"]["state"] == "absent"
+
+
+def test_a_valued_ccs_on_a_curve_it_does_not_want_first_shows_it_replaced(seeded):
+    c, rid, _ = seeded
+    m = _market(_get(c, rid, "CCS3")[0])   # no XCCY curve in the run: the CCS took the FX-implied one
+    assert m[("curve", "CNY FX")]["state"] == "replaced" and "CNY XCCY" in m[("curve", "CNY FX")]["text"]
+    assert m[("curve", "RUB RUONIA")]["state"] == "ok"
+
+
+def test_a_trade_amended_into_another_book_is_not_the_positions(seeded):
+    c, rid, _ = seeded
+    _, src, _ = _get(c, rid, "N1")
+    assert "tr-3" not in {i["trade_id"] for i in src["trades"]["items"]}
+
+
+def test_a_position_takes_only_its_own_legs_of_a_trade(seeded):
+    c, rid, _ = seeded
+    _, src, _ = _get(c, rid, "FXA")
+    assert [(i["trade_id"], i["leg_id"]) for i in src["trade_terms"]["items"]] == [("T12", "a")]
+
+
+def test_an_fx_future_by_ticker_needs_no_terms(seeded):
+    c, rid, _ = seeded
+    j, src, mism = _get(c, rid, "FUT1")
+    assert j["valued"] and src["trade_terms"]["state"] == "not_needed" and mism == []
+    assert "тикеру" in src["trade_terms"]["text"]
+
+
+def test_fixings_are_needed_once_a_floating_period_has_started(seeded):
+    c, rid, _ = seeded
+    m = _market(_get(c, rid, "IRS1")[0])   # starts after the business date: no fixing yet
+    assert not any(k[0] == "fixing" for k in m), m
+    m = _market(_get(c, rid, "IRS2")[0])   # started: the key rate's fixings and its curve
+    assert m[("fixing", "KEY_RATE")]["state"] == "ok" and m[("curve", "RUB KEY")]["state"] == "ok"
+    m = _market(_get(c, rid, "REPO1")[0])  # a REPO on RUSFAR is not valued: no «фиксинги RUSFAR — есть»
+    assert m[("fixing", "RUSFAR")]["state"] == "missing" and m[("fixing", "RUSFAR")]["name"] == "индекс RUSFAR"
+
+
+def test_one_deal_on_rows_says_why_only_for_ambiguous_terms():
+    from desk.api import provenance as pv
+
+    assert pv._mismatch_text("deal_on_rows", 2, "terms_ambiguous: T5") == (
+        "одна сделка на нескольких строках отчёта позиций: условия не отнести к одной строке (строк: 2)")
+    assert pv._mismatch_text("deal_on_rows", 3, None) == "одна сделка на нескольких строках отчёта позиций (строк: 3)"
+    assert pv._mismatch_text("deal_on_rows", 1, "terms_ambiguous") == (
+        "одна сделка на нескольких строках отчёта позиций: условия не отнести к одной строке")
