@@ -2552,7 +2552,7 @@ export interface components {
              * Reason
              * @enum {string}
              */
-            reason: "not_valued" | "reported_no_risk" | "no_risk" | "implausible" | "no_curve" | "no_spot" | "ndf_no_terms";
+            reason: "not_valued" | "reported_no_risk" | "no_risk" | "implausible" | "no_curve" | "no_spot" | "ndf_no_terms" | "ndf_unsupported";
             /** Text */
             text: string;
             /** N */

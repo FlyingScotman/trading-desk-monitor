@@ -303,6 +303,13 @@ def _amounts(x: Mapping[str, Any] | None, policy: OcpPolicy) -> dict[str, float]
     return out
 
 
+def is_ndf(product: str, group: str, terms: Iterable[Mapping[str, Any]] = ()) -> bool:
+    """An NDF by core's product (``fx_ndf`` in it), the report's product group (the word ``ndf`` in it) or its trade
+    terms (``ndf``): the rule of ``derivative_kind`` (also ``valuation.positions.is_ndf_row``, TDM#616)."""
+    words = set(re.split(r"[^a-z0-9]+", str(group or "").lower())) - {""}
+    return "fx_ndf" in str(product or "").lower() or "ndf" in words or any(_truthy(t.get("ndf")) for t in terms)
+
+
 def product_group(rep: Any) -> str:
     """The report's ``x_product_group`` of a row (``extra.reported``, its ``x_*`` flat or under ``x``), lower case;
     "" without one (as ``publish.summary.product_group``)."""
@@ -941,7 +948,7 @@ def derivative_kind(row: Mapping[str, Any], terms: Sequence[Mapping[str, Any]],
         return None
     if fut == "fx":
         return "fx_future"
-    if "fx_ndf" in product or "ndf" in words or any(_truthy(t.get("ndf")) for t in terms):
+    if is_ndf(product, group, terms):
         return "ndf"
     if "option" in product or "option" in group:
         return "fx_option"

@@ -7291,7 +7291,8 @@
               "implausible",
               "no_curve",
               "no_spot",
-              "ndf_no_terms"
+              "ndf_no_terms",
+              "ndf_unsupported"
             ],
             "title": "Reason"
           },

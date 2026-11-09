@@ -22,7 +22,8 @@ as core's ``FxSwap``):
   (core: RUB risk only); a fixing due today and not yet published is projected (``fixing_pending``); one past without
   a fixing in the snapshot is a core rejection, so the row keeps the report's value. TDM#616 (core 0.45, BACKLOG #135):
   ``settle_ccy`` is the leg's ``settlement_currency``: an X/RUB NDF settled in X pays ``N (1 - K / fixing)`` X (risk on
-  the RUB and the foreign curve, its FX delta core's ``fx_delta_foreign``); a cross NDF settled in its base or quote
+  the RUB and the foreign curve, its FX delta core's ``fx_delta_foreign``; ``ocp_amount`` the notional, once fixed
+  core's FX delta: the known amount it owes); a cross NDF settled in its base or quote
   currency is a ``FxCrossForward`` with the fixing terms, fixed by core from both currencies' RUB fixings of the source
   (risk on RUB and both foreign curves, ``fx_delta_base`` / ``fx_delta_quote``). Not valued (``ndf_unsupported``): a
   cross NDF settled in RUB with a ``fixing_date`` (core rejects fixing terms there; without one it is cash-settled in
@@ -830,7 +831,8 @@ def core_legs(ctx: Any, leg: TermsLeg, iid: str, options: FxOptions, curve_of: d
             notes.append(f"{leg.label}: NDF without fixing_date, valued as cash-settled on its value date")
             source = None
     settles_in = settle if leg.ndf and settle != "RUB" else None
-    if not rub:
+    if not rub:  # a cross NDF is fixed by core at CBR(X) / CBR(Y) of its source (both RUB fixings): a contract fixing on
+        # another source is projected as if on the CBR cross before its fixing date, and keeps the report's rule after
         trade = FxCrossForward(leg.label, leg.base, leg.quote, 1.0,
                                FxForwardLeg(leg.value_date, leg.sign * leg.n_base, leg.rate, pay, fixing_date=fixing,
                                             fixing_source=source if fixing else None, settlement_currency=settles_in))
@@ -1353,9 +1355,9 @@ class _Acc:
     repos: list[dict[str, Any]] = field(default_factory=list)
     fixing_ids: set[str] = field(default_factory=set)
     ocp_core: dict[str, float] = field(default_factory=lambda: defaultdict(float))
-    """TDM#616: the OCP amount per currency of the NDFs settled in a foreign currency and the cross NDFs: core's FX delta
-    (``fx_delta_foreign``, ``fx_delta_base`` / ``fx_delta_quote``), not the terms' nominal (a fixed one owes a known
-    amount of its settlement currency, not its notional)."""
+    """TDM#616: the nominal OCP amount per currency of a FIXED NDF settled in a foreign currency and a fixed cross NDF:
+    core's FX delta (``fx_delta_foreign``, ``fx_delta_base`` / ``fx_delta_quote``), the known amount it owes in its
+    settlement currency, not its notional. An unfixed one keeps the terms' notional, as a RUB-settled NDF."""
     ocp_legs: set[int] = field(default_factory=set)
     """``id`` of the ``TermsLeg`` whose OCP amount is in ``ocp_core``."""
     flows: list[dict[str, Any]] | None = field(default_factory=list)
@@ -1683,11 +1685,12 @@ def value(ctx: Any, requests: list[Request], *, options: FxOptions, second_order
             a.curves |= {row.base_curve_id, row.quote_curve_id}
             a.fallback_from |= {c for c in (row.base_curve_fallback_from, row.quote_curve_fallback_from) if c}
             a.products.add("fx_cross")
-            if t is not None and t.ndf:  # TDM#616: a cross NDF (core 0.45): its OCP amount is core's FX delta
+            if t is not None and t.ndf:  # TDM#616: a cross NDF (core 0.45); fixed, its OCP amount is core's FX delta
                 a.products.add("fx_ndf")
-                a.ocp_core[row.base_currency] += row.fx_delta_base
-                a.ocp_core[row.quote_currency] += row.fx_delta_quote
-                a.ocp_legs.add(id(t))
+                if any(lv.fixing_rate is not None for lv in row.legs):
+                    a.ocp_core[row.base_currency] += row.fx_delta_base
+                    a.ocp_core[row.quote_currency] += row.fx_delta_quote
+                    a.ocp_legs.add(id(t))
             a.legs += [_ui_leg(t, lv, row.base_currency, cross=True) for lv in row.legs]
             for lv in row.legs:
                 _fixing(a, t, lv, flags.get(row.position_id, ()))
@@ -1704,7 +1707,8 @@ def value(ctx: Any, requests: list[Request], *, options: FxOptions, second_order
                 a.fallback_from.add(row.curve_fallback_from)
             a.products.add("fx_ndf" if t is not None and t.ndf else "fx_swap" if t is not None and t.leg_id
                            else "fx_forward")
-            if t is not None and t.ndf and (t.settle_ccy or "RUB") != "RUB":  # TDM#616: settled in its currency
+            if t is not None and t.ndf and (t.settle_ccy or "RUB") != "RUB" and any(
+                    lv.fixing_rate is not None for lv in row.legs):  # TDM#616: fixed, settled in its currency
                 a.ocp_core[row.currency] += row.fx_delta_foreign
                 a.ocp_legs.add(id(t))
             for lv in row.legs:

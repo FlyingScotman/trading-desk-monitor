@@ -33,6 +33,7 @@ from desk.curves.rates import RUONIA_OIS_CURVE_ID
 from desk.marketdata.bundle import SnapshotDir
 from desk.orchestrator import prepare
 from desk.publish import tdm_run
+from desk.rules import ocp as O
 from desk.store import PositionInputs
 from desk.valuation import derivatives as dv
 from desk.valuation import positions as pv1
@@ -84,8 +85,8 @@ def test_x_rub_ndf_settled_in_its_currency(ctx, valued):
     assert set(v.curve_buckets) == {"RUB RUONIA", "USD FX"}  # rates risk on both curves
     assert all(abs(sum(bs.values())) > 100 for bs in v.curve_buckets.values())
     assert v.extra["legs"][0]["settlement_ccy"] == "USD" and v.extra["fixings"][0]["status"] == "open"
-    # the OCP amount is core's FX delta, the spot equivalent, not the notional
-    assert v.extra["ocp_amount"] == {"USD": pytest.approx(v.fx_delta["USD"], rel=1e-12)}
+    # unfixed: the nominal OCP amount is the notional, as a RUB-settled NDF's; the FX delta core's spot equivalent
+    assert v.extra["ocp_amount"] == {"USD": -1e6}
     assert -1e6 < v.fx_delta["USD"] < -0.98e6
     # core's own engine on the same inputs, the leg settled in USD
     spot, curve = ctx.fx.spots["USD"], ctx.fx.curves["USD FX"].curve
@@ -121,7 +122,26 @@ def test_cross_ndf_has_risk_on_both_foreign_curves(valued, pid):
     assert {"fx_cross", "fx_ndf"} <= set(v.extra["core"]["product"].split("+"))
     assert {"USD FX", "CNY FX"} <= set(v.curve_buckets)
     assert v.fx_delta["USD"] > 0 > v.fx_delta["CNY"]
-    assert v.extra["ocp_amount"] == {c: pytest.approx(d, rel=1e-12) for c, d in v.fx_delta.items()}
+    assert v.extra["ocp_amount"] == {"USD": 2e6, "CNY": -14e6}  # unfixed: the notionals
+
+
+def _ocp(v, basis):
+    """The OCP amount of a valued row on ``basis`` (``rules.ocp.classify`` of its published shape)."""
+    row = {"instr_type": "FX", "fx_delta": dict(v.fx_delta), "extra": dict(v.extra)}
+    return O.classify(row, [], {}, BD, O.OcpPolicy(amount_basis=basis))[1]
+
+
+@pytest.mark.parametrize(("pid", "fixed"), [("P-N1", False), ("P-N6", True), ("P-N2", False), ("P-N7", True)])
+def test_ocp_on_both_bases(valued, pid, fixed):
+    """Spot equivalent: core's FX delta. Nominal: the notionals while unfixed (as a RUB-settled NDF), the known amount
+    owed in the settlement currency once fixed (core's FX delta)."""
+    v = valued[pid]
+    assert _ocp(v, O.AmountBasis.SPOT_EQUIVALENT) == pytest.approx(v.fx_delta, rel=1e-12)
+    nominal = _ocp(v, O.AmountBasis.NOMINAL)
+    if fixed:
+        assert nominal == pytest.approx(v.fx_delta, rel=1e-12)
+    else:
+        assert nominal == {"P-N1": {"USD": -1e6}, "P-N2": {"USD": 2e6, "CNY": -14e6}}[pid]
 
 
 def test_cross_ndf_settlement_and_fixing(ctx, valued):
@@ -162,10 +182,12 @@ def test_published_rows_and_the_risk_table(ctx):
                    "deal_id": "N5", "mv_rub": 5000.0, "x_product_group": "fx_ndf"},
         "FXB|NT": {"asset_class": "fx", "ccy": "USD", "amount_ccy": 3e6, "value_date": date(2027, 1, 20),
                    "mv_rub": 7000.0, "x": {"x_product_group": "fx_ndf"}},
+        "FXB|N4": {"asset_class": "fx", "ccy": "USD", "amount_ccy": 2e6, "value_date": date(2026, 12, 17),
+                   "deal_id": "N4", "mv_rub": 9000.0, "x_product_group": "fx_ndf"},
     }
-    bp = pv1.plan(ctx, _inputs(extra, [USD_IN_USD, CROSS_IN_CNY, EUR_NO_CURVE]))
+    bp = pv1.plan(ctx, _inputs(extra, [USD_IN_USD, CROSS_IN_CNY, EUR_NO_CURVE, CROSS_IN_RUB]))
     rows = {pid: tdm_run.direct_row(ctx, "FXB", pid, bp.direct[pid], x, None) for pid, x in extra.items()}
-    n1, n2, n5, nt = rows.values()
+    n1, n2, n5, nt, n4 = rows.values()
     assert set(n1["risk"]) == {"RUB RUONIA", "USD FX"} and n1["extra"]["valuation"] == "computed"
     assert {"USD FX", "CNY FX"} <= set(n2["risk"]) and set(n2["fx_delta"]) == {"USD", "CNY"}
     # no EUR curve: the report's value, no risk, the reason «нет данных: нет кривой EUR»
@@ -177,6 +199,10 @@ def test_published_rows_and_the_risk_table(ctx):
     assert nt["extra"]["risk_missing"]["reason"] == "ndf_no_terms"
     assert nt["extra"]["risk_missing"]["text"].startswith("NDF без условий сделки: процентный риск не считается")
     assert nt["fx_delta"] == {"USD": 3e6} and nt["extra"]["fx_delta_basis"].startswith("notional")
+    # a RUB-settled cross NDF with its fixing: core does not value it, the card and the table say so in words
+    assert n4["risk"] == {} and n4["extra"]["not_exact_reason"] == "ndf_unsupported"
+    assert n4["extra"]["risk_missing"] == {"reason": "ndf_unsupported", "text": pv1.RISK_MISSING["ndf_unsupported"]}
+    assert n4["fx_delta"] == {"USD": 2e6}
 
     fx = {c: r[0] for c, r in ctx.fx.rates.items()}
     t = concepts.risk_table([{"position_id": pid, "fact": f} for pid, f in rows.items()], fx)
@@ -184,9 +210,34 @@ def test_published_rows_and_the_risk_table(ctx):
     usd = next(r for r in t["rows"] if (r["ccy"], r["level"], r["kind"]) == ("USD", "kind", "FX_FWD"))
     eur = next(r for r in t["rows"] if (r["ccy"], r["level"], r["kind"]) == ("EUR", "kind", "FX_FWD"))
     assert usd["dv01_by_curve_rub"].get("USD FX")  # the valued NDFs' foreign curve risk is in the table
-    assert {m["reason"]: m["text"] for m in usd["risk_missing"]} == {"ndf_no_terms": pv1.RISK_MISSING["ndf_no_terms"]}
+    assert {m["reason"]: m["text"] for m in usd["risk_missing"]} == {
+        "ndf_no_terms": pv1.RISK_MISSING["ndf_no_terms"], "ndf_unsupported": pv1.RISK_MISSING["ndf_unsupported"]}
     assert eur["risk_missing"] == [{"reason": "no_curve", "text": "нет данных: нет кривой EUR", "n": 1, "ccy": "EUR"}]
     assert "reported_no_risk" not in {m["reason"] for r in t["rows"] for m in r["risk_missing"]}
+
+
+def test_otc_rows(ctx):
+    """The OTC path: an NDF without terms and without the report's risk says why; a row with the report's DV01 linked to
+    terms in a currency without a curve keeps that risk and gets no «нет данных» (it would contradict it)."""
+    extra = {
+        "FXB|OTC-NT": {"asset_class": "otc", "ccy": "USD", "source_instrument_id": "OTC-NT", "mv_rub": 100.0,
+                       "x": {"x_product_group": "fx_ndf"}},
+        "FXB|OTC-N5": {"asset_class": "otc", "ccy": "EUR", "source_instrument_id": "N5", "deal_id": "N5",
+                       "mv_rub": 200.0, "risk_dv01_rub": -50.0, "maturity_date": date(2027, 1, 20),
+                       "x_product_group": "fx_ndf"},
+        "FXB|OTC-N5B": {"asset_class": "otc", "ccy": "EUR", "source_instrument_id": "N5B", "deal_id": "N5B",
+                        "mv_rub": 200.0, "x_product_group": "fx_ndf"},
+    }
+    bp = pv1.plan(ctx, _inputs(extra, [EUR_NO_CURVE, {**EUR_NO_CURVE, "trade_id": "N5B"}]))
+    nt, n5, n5b = (bp.direct[k].valuation for k in extra)
+    assert nt.extra["risk_missing"]["reason"] == "ndf_no_terms"
+    assert n5.curve_buckets and "risk_missing" not in n5.extra  # the report's DV01 stays, not contradicted
+    assert n5b.extra["risk_missing"] == {"reason": "no_curve", "ccy": "EUR", "text": "нет данных: нет кривой EUR"}
+
+
+def test_ndf_row_predicate_is_the_ocps():
+    assert pv1.is_ndf_row({"x": {"x_product_group": "fx_ndf"}}) and pv1.is_ndf_row({"x_product_group": "NDF"})
+    assert pv1.is_ndf_row({}, [{"ndf": True}]) and not pv1.is_ndf_row({"x_product_group": "fx_forward"})
 
 
 def test_a_run_before_616_keeps_its_reason():

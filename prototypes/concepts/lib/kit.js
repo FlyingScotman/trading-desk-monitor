@@ -2851,7 +2851,7 @@
         (p.whyNot && p.whyNot.fix && p.whyNot.fix.href ? ' · <a href="' + esc(p.whyNot.fix.href) + '">' + esc(p.whyNot.fix.label) + ' →</a>' : '') + '</div>' : '') +
       (p.riskProblem ? '<div class="k-note risk-problem" style="overflow-wrap:anywhere;margin:8px 0;color:var(--warn)"><b>Риск не в суммах (невозможный риск):</b> ' + esc(p.riskProblem) + '</div>' : '') +
       // #616: почему у дериватива без оценки ядром нет процентного риска (нет кривой валюты, NDF без условий сделки)
-      (p.riskMissing && !p.notValued ? '<div class="k-note risk-missing" style="overflow-wrap:anywhere;margin:8px 0;color:var(--warn)"><b>Процентного риска нет:</b> ' + esc(p.riskMissing.text) + '</div>' : '') +
+      (p.riskMissing && !p.notValued && !Object.values(p.dv01ByCurve || {}).some(v => v) ? '<div class="k-note risk-missing" style="overflow-wrap:anywhere;margin:8px 0;color:var(--warn)"><b>Процентного риска нет:</b> ' + esc(p.riskMissing.text) + '</div>' : '') +
       K.curveProxyNote(p) +
       '<div class="k-sec">Параметры</div>' + K.fieldsHtml(fields) +
       (p.legs && p.legs.length ? '<div class="k-sec">Ноги сделки <span class="sp"></span><span class="mut3" style="text-transform:none;letter-spacing:0">' + p.legs.length + '</span></div>' + K.legsHtml(p) : '') +

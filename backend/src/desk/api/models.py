@@ -557,7 +557,8 @@ class Aggregates(BaseModel):
 
 
 class RiskMissing(BaseModel):
-    reason: Literal["not_valued", "reported_no_risk", "no_risk", "implausible", "no_curve", "no_spot", "ndf_no_terms"]
+    reason: Literal["not_valued", "reported_no_risk", "no_risk", "implausible", "no_curve", "no_spot", "ndf_no_terms",
+                    "ndf_unsupported"]
     text: str
     n: int
     ccy: str | None = Field(default=None, description="no_curve / no_spot: the currency without a curve or a spot "
