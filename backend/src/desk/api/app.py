@@ -229,16 +229,19 @@ def _cached(request: Request, run: dict[str, Any], model) -> Response:
     return Response(body, media_type="application/json", headers=headers)
 
 
-def _trade_feeds() -> list[dict[str, Any]]:
-    """The adapter services' feeds as the adapter titled them (``adapter_services.read_state``), for the card's «Откуда
-    данные» (TDM#617); none when the settings or the services' state cannot be read."""
+def _trade_sources() -> tuple[list[dict[str, Any]], dict[str, set[str]] | None]:
+    """For the card's «Откуда данные» (TDM#617): the adapter services' feeds as the adapter titled them
+    (``adapter_services.read_state``) and the marks of the fetch of past dates (``trades.history_files``); none when
+    the settings or the services' state cannot be read."""
     try:
+        from .. import trades
         from ..adapter_services import read_state
 
-        return [{"id": f.get("id"), "title": f.get("title"), "dataset": f.get("dataset")}
-                for f in read_state(load_settings()).get("feeds") or [] if isinstance(f, dict)]
-    except Exception:  # noqa: BLE001 - only the feed's title is missing then
-        return []
+        st = load_settings()
+        return ([{"id": f.get("id"), "title": f.get("title"), "dataset": f.get("dataset")}
+                 for f in read_state(st).get("feeds") or [] if isinstance(f, dict)], trades.history_files(st))
+    except Exception:  # noqa: BLE001 - only the feed's title is missing then, the origin falls back on the clock
+        return [], None
 
 
 def _json_bytes(x: Any) -> bytes:
@@ -1086,7 +1089,7 @@ def create_app(store_url: str, static_dir: Path | None = None, app_dir: Path | N
         run = resolve_run(con, as_of, run_id)
         if run is None:
             raise ApiError(404, "not_found", f"run {run_id} not found" if run_id else "no runs")
-        out = provenance.provenance(con, run, id, _trade_feeds())
+        out = provenance.provenance(con, run, id, *_trade_sources())
         if out is None:
             raise ApiError(404, "not_found", f"no position {id} in run {run['run_id']}")
         return _cached(request, run, PositionProvenance(**out))

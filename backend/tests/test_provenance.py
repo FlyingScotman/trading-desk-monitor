@@ -22,7 +22,9 @@ LINEAGE_FX = {"spots": {"USD": "80 cbr, value 2026-10-21", "CNY": "11 cbr, value
               "curves": {"USD FX": {"status": "ok"}, "EUR FX": {"status": "missing", "error": "no quotes"}},
               "index_fixings": {}, "fixings": []}
 LINEAGE_RATES = {"status": {"ruonia_ois": "ok", "key_rate_swap": "ok", "fixings": "ok"},
-                 "fixings": {"RUONIA": {"rows": 30, "latest": "2026-10-19"}, "KEY_RATE": {"rows": 30}}}
+                 "fixings": {"RUONIA": {"rows": 30, "latest": "2026-10-19",   # a day without a publication: bridged
+                                        "bridged_days": [{"date": "2026-10-05", "from": "2026-10-02"}]},
+                             "KEY_RATE": {"rows": 30}}}
 
 
 def _file(con, sha: str, name: str) -> None:
@@ -67,16 +69,18 @@ def _pos(con, rid: int, pid: str, n: int, *, fact: dict | None = None, reason: s
 def seeded(store_url):
     with store.connect(store_url) as con:
         for k, name in (("a", "positions_20261020.csv"), ("b", "terms_20261020.csv"), ("c", "trades_20261020.csv"),
-                        ("d", "ocp_20261020.csv")):
+                        ("d", "ocp_20261020.csv"), ("e", "trades_20261019.csv")):
             _file(con, SHA[k], name)
         ps = con.execute(
             "INSERT INTO position_set (book_id, valid_date, revision, source_name, source_file_sha256, source,"
             " report_date, inbox_file_sha256) VALUES ('B1', %s, 1, 'positions_20261020.csv', %s, 'positions_csv', %s,"
             " %s) RETURNING set_id", (BD, SHA["a"], BD, SHA["a"])).fetchone()[0]
         for pid, cls, ccy, deal, vd in (("FX1", "fx", "USD", "T1", "2026-11-20"), ("FX2", "fx", "USD", "T9", "2026-11-20"),
-                                        ("FX3", "fx", "EUR", "T4", "2026-11-20"), ("CCS1", "otc", "CNY", "T3", None),
+                                        ("FX3", "fx", "CNY", "T4", "2026-11-20"), ("CCS1", "otc", "CNY", "T3", None),
                                         ("D1", "otc", "RUB", "T5", None), ("D2", "otc", "RUB", "T5", None),
-                                        ("BND", "bond", "RUB", None, None)):
+                                        ("BND", "bond", "RUB", None, None), ("CCS2", "otc", "CNY", "T6", None),
+                                        ("FX4", "fx", "CNY", "T8", "2026-11-20"), ("NA1", None, "RUB", "Z1", None),
+                                        ("NA2", None, "RUB", "T10", None), ("NDF1", "fx", "USD", "T11", "2026-11-20")):
             con.execute("INSERT INTO position_input (set_id, position_id, secid, quantity, asset_class, ccy, deal_id,"
                         " value_date, src) VALUES (%s, %s, NULL, NULL, %s, %s, %s, %s, %s)",
                         (ps, pid, cls, ccy, deal, vd, f"row {pid}"))
@@ -84,29 +88,47 @@ def seeded(store_url):
             {"trade_id": "T1", "book_id": "B1", "product_kind": "fx_forward", "base_ccy": "USD", "quote_ccy": "RUB"},
             {"trade_id": "T3", "leg_id": "1", "book_id": "B1", "product_kind": "ccs", "ccy": "RUB", "index_code": "RUONIA"},
             {"trade_id": "T3", "leg_id": "2", "book_id": "B1", "product_kind": "ccs", "ccy": "CNY", "fixed_rate_pct": "3"},
-            {"trade_id": "T4", "book_id": "B1", "product_kind": "fx_forward", "base_ccy": "EUR", "quote_ccy": "RUB"},
+            {"trade_id": "T4", "book_id": "B1", "product_kind": "fx_forward", "base_ccy": "CNY", "quote_ccy": "RUB"},
+            {"trade_id": "T6", "leg_id": "1", "book_id": "B1", "product_kind": "ccs", "ccy": "RUB", "index_code": "RUONIA"},
+            {"trade_id": "T6", "leg_id": "2", "book_id": "B1", "product_kind": "ccs", "ccy": "CNY", "fixed_rate_pct": "2"},
+            {"trade_id": "T8", "book_id": "B1", "product_kind": "fx_forward", "base_ccy": "CNY", "quote_ccy": "RUB"},
+            {"trade_id": "T10", "book_id": "B1", "product_kind": "ois", "ccy": "RUB", "fixed_rate_pct": "9"},
+            {"trade_id": "T11", "book_id": "B1", "product_kind": "fx_forward", "base_ccy": "USD", "quote_ccy": "RUB",
+             "ndf": True, "fixing_date": BD.isoformat()},
+            {"trade_id": "T1", "book_id": "B2", "product_kind": "fx_forward", "base_ccy": "EUR", "quote_ccy": "RUB"},
             {"trade_id": "T5", "book_id": "B1", "product_kind": "irs", "ccy": "RUB", "fixed_rate_pct": "10"},
             {"trade_id": "T7", "book_id": "B1", "product_kind": "fx_forward", "base_ccy": "USD", "quote_ccy": "RUB"},
         ]
         ts = _dataset(con, "trade_terms", SHA["b"], "terms_20261020.csv", terms, source="terms_csv")
         tr = _dataset(con, "trades", SHA["c"], "trades_20261020.csv", [
             {"trade_id": "tr-1", "trade_version": 1, "status": "live", "book_id": "B1", "position_id": "N1",
-             "asset_class": "bond", "side": "buy", "trade_date": BD.isoformat(), "quantity": "5"}], source="trades_csv")
+             "asset_class": "bond", "side": "buy", "trade_date": BD.isoformat(), "quantity": "5"},
+            # a newer version than the run took in: not «в позициях»
+            {"trade_id": "tr-2", "trade_version": 3, "status": "live", "book_id": "B1", "position_id": "N1",
+             "asset_class": "bond", "side": "sell", "trade_date": BD.isoformat(), "quantity": "1"},
+            # the same number in another book: not this position's
+            {"trade_id": "T1", "trade_version": 1, "status": "live", "book_id": "B2", "asset_class": "fx",
+             "side": "buy", "trade_date": BD.isoformat()}], source="trades_csv")
+        # a trade of the day before: the start of the day of a book whose report is older
+        tr0 = _dataset(con, "trades", SHA["e"], "trades_20261019.csv", [
+            {"trade_id": "tr-0", "trade_version": 1, "status": "live", "book_id": "B1", "position_id": "N1",
+             "asset_class": "bond", "side": "buy", "trade_date": "2026-10-19", "quantity": "2"}],
+            source="trades_csv", valid=date(2026, 10, 19))
         _dataset(con, "ocp", SHA["d"], "ocp_20261020.csv", [{"book_id": "B1", "entity": "E1", "ccy": "USD"}],
                  source="ocp_csv", scope={"entity": "E1", "book_id": "B1"})
         lineage = {"positions": {"set_ids": [ps], "trade_terms": [{"scope": {"book_id": "B1"}, "set_id": ts}],
                                  "off_report": {"list": [{"book": "B1", "trade_id": "T7", "state": "included"}]}},
                    "rates": LINEAGE_RATES, "fx": LINEAGE_FX, "stale_datasets": {},
-                   "intraday_trades": {"set_ids": [tr], "versions": {"tr-1": 1}, "skipped_ids": {}}}
+                   "intraday_trades": {"set_ids": [tr0, tr], "versions": {"tr-1": 1, "tr-2": 2}, "skipped_ids": {}}}
         rid = _run(con, lineage, [ps])
         core = {"rub_curve": "RUB RUONIA", "foreign_curves": ["USD FX"], "trades": ["T1"]}
         _pos(con, rid, "FX1", 1, fact={"ccy": "USD", "fx_delta": {"USD": 1.0},
                                        "extra": {"quality": "exact", "core": core, "fx_rates": {"USD": 80.0}}})
         _pos(con, rid, "FX2", 2, fact={"ccy": "USD", "extra": {"quality": "assumed",
                                                                "not_exact_reason": "no_trade_terms: synthetic"}})
-        _pos(con, rid, "FX3", 3, fact={"ccy": "EUR", "extra": {"quality": "assumed", "core": {
-            "rub_curve": "RUB RUONIA", "foreign_curves": ["USD FX"], "trades": ["T4"],
-            "curve_fallback_from": ["EUR FX"]}, "fx_rates": {"EUR": 90.0}}})
+        _pos(con, rid, "FX3", 3, fact={"ccy": "CNY", "extra": {"quality": "assumed", "core": {
+            "rub_curve": "RUB RUONIA", "foreign_curves": ["CNY XCCY", "USD FX"], "trades": ["T4"],
+            "curve_fallback_from": ["CNY FX"]}, "fx_rates": {"CNY": 11.0}}})
         _pos(con, rid, "CCS1", 4, reason="no_foreign_curve: no CNY curve in the run")
         _pos(con, rid, "D1", 5, reason="terms_ambiguous: trade T5")
         _pos(con, rid, "D2", 6, reason="terms_ambiguous: trade T5")
@@ -118,6 +140,14 @@ def seeded(store_url):
         _pos(con, rid, "N1", 9, fact={"ccy": "RUB", "instr_type": "BOND", "risk": {"RUB OFZ": [1.0]},
                                       "extra": {"quality": "stale_price"}},
              pnl={"extra": {"trades": [{"trade_id": "tr-1", "pnl_rub": 0.0}]}})
+        # core did not value these: the value they got instead (the report's, the FX forward's 0) is no valuation
+        _pos(con, rid, "CCS2", 10, fact={"ccy": "CNY", "extra": {"quality": "reported_value"}},
+             reason="terms_invalid: synthetic")
+        _pos(con, rid, "FX4", 11, reason="no_foreign_curve: no CNY curve in the run")
+        _pos(con, rid, "NA1", 12, fact={"ccy": "RUB", "instr_type": "BOND", "risk": {"RUB OFZ": [1.0]},
+                                        "extra": {"quality": "exact"}})
+        _pos(con, rid, "NA2", 13, reason="no_rub_curve: synthetic")
+        _pos(con, rid, "NDF1", 14, reason="no_fx_calendar: synthetic")
         con.execute("UPDATE run SET status = 'complete', completed_at = now() WHERE run_id = %s", (rid,))
         old = _run(con, {}, [ps])   # an old run: no lineage at all
         _pos(con, old, "FX2", 1, reason="no_reported_value")
@@ -186,7 +216,7 @@ def test_a_service_trade_not_in_the_report(seeded):
     assert src["trade_terms"]["state"] == "not_needed"
     t = src["trades"]
     assert t["state"] == "present"
-    (tr,) = t["items"]
+    tr = next(i for i in t["items"] if i["trade_id"] == "tr-1")
     assert tr["trade_id"] == "tr-1" and tr["state"] == "applied" and tr["state_text"] == "в позициях"
     assert tr["origin"] == "file" and tr["file_name"] == "trades_20261020.csv" and tr["dataset_name"] == "Сделки дня"
     assert mism == ["trades_no_report"]
@@ -205,9 +235,10 @@ def test_a_missing_curve_on_a_valued_deal(seeded):
     c, rid, _ = seeded
     j, _, _ = _get(c, rid, "FX3")
     m = _market(j)
-    assert m[("curve", "EUR FX")]["state"] == "missing"
-    assert m[("curve", "USD FX")]["state"] == "replaced" and "EUR FX" in m[("curve", "USD FX")]["text"]
-    assert m[("curve", "USD FX")]["state_text"] == "заменена"
+    assert m[("curve", "CNY FX")]["state"] == "missing"
+    assert m[("curve", "CNY XCCY")]["state"] == "replaced" and "CNY FX" in m[("curve", "CNY XCCY")]["text"]
+    assert m[("curve", "CNY XCCY")]["state_text"] == "заменена"
+    assert m[("curve", "USD FX")]["state"] == "ok"   # only the curve of the currency that fell back is replaced
 
 
 def test_a_missing_curve_on_an_unvalued_deal_names_every_need(seeded):
@@ -218,9 +249,9 @@ def test_a_missing_curve_on_an_unvalued_deal_names_every_need(seeded):
     m = _market(j)
     assert m[("curve", "RUB RUONIA")]["state"] == "ok"
     assert m[("fx", "CNY")]["state"] == "ok"                      # the spot is there
-    assert m[("curve", "CNY FX")]["state"] == "missing"           # the curve is not: not just the first failure
-    assert m[("curve", "CNY FX")]["state_text"] == "нет"
-    assert m[("fixing", "RUONIA")]["state"] == "ok"               # the floating RUB leg's index
+    cny = m[("curve", "CNY XCCY")]                                 # a CCS leg: the XCCY curve first, then the others
+    assert cny["state"] == "missing" and cny["state_text"] == "нет" and "CNY FX" in cny["text"]
+    assert m[("fixing", "RUONIA")]["state"] == "ok"               # the floating RUB leg's index (a bridged day is no gap)
     assert any("кривой валюты сделки" in n for n in j["market"]["notes"])  # the reason in the coverage's words
 
 
@@ -273,3 +304,80 @@ def test_a_published_run_names_what_each_derivative_used(published):  # noqa: F8
     assert any(k[0] == "fixing" for k in m), m   # the NDF's fixing
     m = _market(_get(c, rid, "DB|F1")[0])
     assert any(k[0] == "curve" and k[1].startswith("CNY") for k in m), m
+
+
+def test_a_derivative_core_did_not_value_is_not_valued_whatever_its_fallback_value(seeded):
+    c, rid, _ = seeded
+    j, _, _ = _get(c, rid, "CCS2")   # the report's MV, core refused the terms
+    assert not j["valued"] and j["market"]["basis"] == "needed"
+    m = _market(j)
+    assert m[("curve", "RUB RUONIA")]["state"] == "ok" and m[("fx", "CNY")]["state"] == "ok"
+    assert m[("curve", "CNY XCCY")]["state"] == "missing" and m[("fixing", "RUONIA")]["state"] == "ok"
+    notes = " ".join(j["market"]["notes"])
+    assert "условия сделки противоречивы" in notes and "оценка не по условиям сделки: по отчёту банка" in notes
+    j, _, mism = _get(c, rid, "FX2")   # an FX forward without terms: the notional, PV 0
+    assert not j["valued"] and j["market"]["basis"] == "needed" and mism == ["report_no_terms"]
+    m = _market(j)
+    assert m[("fx", "USD")]["state"] == "ok" and m[("curve", "USD FX")]["state"] == "ok"
+    assert any("условий сделки нет" in n for n in j["market"]["notes"])
+
+
+def test_the_foreign_curve_is_the_one_the_valuation_would_take(seeded, store_url):
+    c, rid, _ = seeded
+    m = _market(_get(c, rid, "FX4")[0])   # neither CNY curve: both named
+    assert m[("curve", "CNY FX")]["state"] == "missing" and "CNY XCCY" in m[("curve", "CNY FX")]["text"]
+
+    def rerun(fx: dict) -> int:   # the same inputs on a market of other curves (a complete run never changes)
+        with store.connect(store_url) as con:
+            lin, sets = con.execute("SELECT lineage, position_set_ids FROM run WHERE run_id = %s", (rid,)).fetchone()
+            r = _run(con, {**lin, "fx": {**lin["fx"], **fx}}, sets)
+            _pos(con, r, "FX4", 1, reason="no_foreign_curve: synthetic")
+            _pos(con, r, "CCS1", 2, reason="no_foreign_curve: synthetic")
+            con.execute("UPDATE run SET status = 'complete', completed_at = now() WHERE run_id = %s", (r,))
+        return r
+
+    xccy = {"curves": {**LINEAGE_FX["curves"], "CNY XCCY": {"status": "ok"}}}   # XCCY built, FX-implied not
+    r = rerun(xccy)
+    m = _market(_get(c, r, "FX4")[0])   # an FX forward on fx_implied: XCCY is its fallback
+    assert m[("curve", "CNY XCCY")]["state"] == "replaced" and "CNY FX" in m[("curve", "CNY XCCY")]["text"]
+    assert _market(_get(c, r, "CCS1")[0])[("curve", "CNY XCCY")]["state"] == "ok"   # a CCS leg: XCCY first
+    r = rerun({**xccy, "options": {"foreign_curve": "xccy"}})   # the setting fx_foreign_curve = xccy
+    assert _market(_get(c, r, "FX4")[0])[("curve", "CNY XCCY")]["state"] == "ok"
+
+
+def test_a_row_without_asset_class_is_a_derivative_only_when_terms_name_it(seeded):
+    c, rid, _ = seeded
+    j, src, mism = _get(c, rid, "NA1")   # a deal_id no terms have: a bond, as the valuation took it
+    assert j["kind"] == "bond" and src["trade_terms"]["state"] == "not_needed" and mism == []
+    j, src, _ = _get(c, rid, "NA2")
+    assert j["kind"] == "derivative" and [i["trade_id"] for i in src["trade_terms"]["items"]] == ["T10"]
+
+
+def test_an_ndf_fixing_of_the_business_date_is_pending(seeded):
+    c, rid, _ = seeded
+    f = _market(_get(c, rid, "NDF1")[0])[("fixing", "USD 2026-10-20")]
+    assert f["state"] == "pending" and f["state_text"] == "ещё не наступил"
+
+
+def test_index_fixings_states():
+    from desk.api import provenance as pv
+
+    lin = {"rates": LINEAGE_RATES, "fx": {"index_fixings": {
+        "RUSFARCNY": {"rows": 9, "latest": "2026-10-16", "unpublished_business_days": ["2026-10-19"]}}}}
+    assert pv._fixings_state(lin, "RUONIA")[0] == "ok"            # bridged days inside the history: no gap
+    assert pv._fixings_state(lin, "RUSFARCNY")[0] == "stale"      # the latest carried over unpublished days
+    assert pv._fixings_state(lin, "SOFR")[0] == "missing"
+    assert pv._fixings_state({}, "RUONIA")[0] == "unknown"
+
+
+def test_trades_of_the_book_their_version_and_earlier_dates(seeded):
+    c, rid, _ = seeded
+    _, src, _ = _get(c, rid, "N1")
+    by = {i["trade_id"]: i for i in src["trades"]["items"]}
+    assert set(by) == {"tr-0", "tr-1", "tr-2"}
+    assert by["tr-1"]["state"] == "applied"
+    assert by["tr-2"]["state"] == "pending" and by["tr-2"]["state_text"] == "ждёт прогона"   # version 3, the run took 2
+    assert by["tr-0"]["state"] == "earlier_date" and "2026-10-19" in by["tr-0"]["state_text"]
+    assert all(i["feed_title"] is None for i in by.values())   # report folders, not a feed
+    _, src, _ = _get(c, rid, "FX1")   # T1 of another book is not this deal
+    assert src["trades"]["state"] == "absent"

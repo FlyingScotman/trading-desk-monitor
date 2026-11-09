@@ -11,16 +11,19 @@
     ``extra.core.trades``; a derivative off the report: its own trade), from the sets the run read
     (``lineage.positions.trade_terms``; a book without them: the sets in force at ``positions_known_at``);
   - ``trades``: the day's trades of the trades service the run read (``lineage.intraday_trades.set_ids``) that name the
-    position, its deal or a trade the run put in it, with where the file came from (``trades.origin_of``), the feed's
-    title the adapter gave (``feeds``) and the trade's state in the day's book (``trades.STATE_TEXT``);
+    position, its deal or a trade the run put in it, in its book, with where the file came from
+    (``trades.origin_of``), the feed's title when only one feed delivers trades, and the trade's state in the day's book
+    as the trades screen says it (``trades._intraday_state``; a trade of an earlier date: the start of the day);
   - ``ocp`` and ``cash_balances``: by book and currency only (no key of a deal), the sets in force at the run's
     ``positions_known_at`` (``store.dataset_set_ids``), and whether a newer report came after the run;
 
 - ``mismatches``: the sources in words (``coverage.MISMATCH_TEXT``): a report row without terms, a position the trades
   opened that the report does not have, terms without a report row, one deal on several report rows, a report that
   differs from the start of the day plus the trades;
-- ``market``: the market data the valuation used (a valued position: its fact) or, for an unvalued derivative, what
-  its terms need (RUB curve; per foreign currency its FX spot and FX-implied curve; a floating index its curve and
+- ``market``: the market data the valuation used (a valued position: its fact; a derivative counts as valued only when
+  core valued it from its terms, not with the report's value it got instead) or, for an unvalued derivative, what its
+  terms need (RUB curve; per foreign currency its FX spot and the curve the valuation would take, by the run's setting
+  ``fx_foreign_curve`` and a CCS leg's XCCY first, a fallback only: ``replaced``; a floating index its curve and
   fixings; an NDF its CBR fixing), each with its state in the run's market (``coverage.MARKET_STATE``): every need,
   not just the first failure.
 
@@ -34,6 +37,7 @@ from datetime import date, datetime
 from typing import Any
 
 from .. import store, trades
+from ..curves import fx as fxcurves
 from ..daystatus import DATASET_NAMES
 from ..valuation import derivatives as dv
 from . import coverage as cv
@@ -103,9 +107,10 @@ def _terms_sets(con, run: dict[str, Any], book: str) -> list[int] | None:
     pos = (run.get("lineage") or {}).get("positions")
     if not isinstance(pos, dict):
         return None
-    units = pos.get("trade_terms")
-    if isinstance(units, list) and any(str((u.get("scope") or {}).get("book_id")) == book for u in units):
-        return sorted({int(u["set_id"]) for u in units if u.get("set_id") is not None})
+    units = [u for u in pos.get("trade_terms") or () if isinstance(u, dict)
+             and str((u.get("scope") or {}).get("book_id")) == book and u.get("set_id") is not None]
+    if units:
+        return sorted({int(u["set_id"]) for u in units})
     return [r["set_id"] for r in con.execute(
         "SELECT DISTINCT ON (scope_key) set_id FROM dataset_set WHERE dataset = 'trade_terms' AND valid_date <= %s"
         f" AND recorded_at <= %s ORDER BY scope_key, {store.CURRENT_SET}",
@@ -118,13 +123,18 @@ def _terms(con, run: dict[str, Any], pid: str, book: str, x: dict[str, Any], fac
     ids = _terms_sets(con, run, book)
     if ids is None:
         return [], {}, False
-    rows = [{**r["data"], "_set_id": r["set_id"]} for r in con.execute(
-        "SELECT set_id, data FROM dataset_row WHERE set_id = ANY(%s) AND data->>'book_id' = %s ORDER BY set_id, row_no",
-        (ids, book)).fetchall()]
     core = ((fact or {}).get("extra") or {}).get("core") or {}
     wanted = {str(t) for t in core.get("trades") or ()}
     if off_trade:
         wanted.add(off_trade)
+    # the candidate trades of the link rule (``derivatives._link``): the legs naming the position, the trade of its
+    # deal_id or of its position_id; then every leg of those trades of the book
+    names = sorted(wanted | {str(v) for v in (x.get("deal_id"), pid) if v})
+    rows = [{**r["data"], "_set_id": r["set_id"]} for r in con.execute(
+        "SELECT set_id, data FROM dataset_row WHERE set_id = ANY(%(ids)s) AND data->>'book_id' = %(b)s"
+        " AND data->>'trade_id' IN (SELECT data->>'trade_id' FROM dataset_row WHERE set_id = ANY(%(ids)s)"
+        "  AND data->>'book_id' = %(b)s AND (data->>'position_id' = %(p)s OR data->>'trade_id' = ANY(%(n)s)))"
+        " ORDER BY set_id, row_no", {"ids": ids, "b": book, "p": pid, "n": names}).fetchall()]
     if wanted:
         got = [r for r in rows if str(r.get("trade_id")) in wanted]
     else:
@@ -154,8 +164,8 @@ def _terms_source(kind: str, got: list[dict[str, Any]], sets: dict[int, dict[str
 
 # ---- the day's trades -------------------------------------------------------------------------------------------
 
-def _trades(con, run: dict[str, Any], pid: str, book: str, ids: set[str], feeds: list[dict[str, Any]] | None
-            ) -> tuple[dict[str, Any], int]:
+def _trades(con, run: dict[str, Any], pid: str, book: str, ids: set[str], feeds: list[dict[str, Any]] | None,
+            history: dict[str, set[str]] | None = None) -> tuple[dict[str, Any], int]:
     """(the source, how many trades name the position): the current version of each trade of the sets the run read
     that names the position (its ``position_id`` in the book) or one of ``ids`` (the deal, its terms' trades, the trades
     the run put in the position)."""
@@ -165,11 +175,11 @@ def _trades(con, run: dict[str, Any], pid: str, book: str, ids: set[str], feeds:
     rows = con.execute(
         "SELECT r.set_id, r.data, s.source, s.source_name, s.report_date, s.recorded_at, s.valid_date"
         " FROM dataset_row r JOIN dataset_set s USING (set_id) WHERE r.set_id = ANY(%s)"
-        " AND ((r.data->>'position_id' = %s AND r.data->>'book_id' = %s) OR r.data->>'trade_id' = ANY(%s))"
-        " ORDER BY r.set_id", (list(t.get("set_ids") or []), pid, book, sorted(ids))).fetchall()
+        " AND r.data->>'book_id' = %s AND (r.data->>'position_id' = %s OR r.data->>'trade_id' = ANY(%s))"
+        " ORDER BY r.set_id", (list(t.get("set_ids") or []), book, pid, sorted(ids))).fetchall()
     cur: dict[str, dict[str, Any]] = {}
-    for r in rows:   # the highest version of a trade, an equal one: the newer set
-        tid = str(r["data"].get("trade_id"))
+    for r in rows:   # per (date, trade) the highest version, an equal one: the newer set
+        tid = (r["valid_date"], str(r["data"].get("trade_id")))
         try:
             v = int(r["data"].get("trade_version") or 0)
         except (TypeError, ValueError):
@@ -179,22 +189,29 @@ def _trades(con, run: dict[str, Any], pid: str, book: str, ids: set[str], feeds:
             cur[tid] = {**r, "_v": v}
     if not cur:
         return _source("trades", "deal", "absent", cv.PROVENANCE_TEXT["trades_none"]), 0
-    origins = {r["set_id"]: trades.origin_of(r["path"], r["at"], r["valid_date"], r["sha256"]) for r in con.execute(
+    origins = {r["set_id"]: trades.origin_of(r["path"], r["at"], r["valid_date"], r["sha256"], history) for r in con.execute(
         "SELECT s.set_id, s.recorded_at AS at, s.valid_date, f.path, f.sha256 FROM dataset_set s"
         " JOIN inbox_file f ON f.sha256 = s.inbox_file_sha256 WHERE s.set_id = ANY(%s)",
         (sorted({r["set_id"] for r in cur.values()}),)).fetchall()}
+    # the feed's title only when one feed delivers trades: the folder of a feed's run does not say which feed it was
     titles = [f["title"] for f in feeds or () if f.get("dataset") == "trades" and f.get("title")]
-    versions, skipped = t.get("versions") or {}, t.get("skipped_ids") or {}
+    title = titles[0] if len(titles) == 1 else None
+    run_t = {"versions": t.get("versions") or {}, "skipped_ids": t.get("skipped_ids") or {},
+             "truncated": bool(t.get("truncated"))}
+    bd = run["business_date"]
     items = []
-    for tid, r in sorted(cur.items()):
+    for (vd, tid), r in sorted(cur.items(), key=lambda kv: (kv[0][0] or bd, kv[0][1])):
         d = r["data"]
-        state = ("applied" if tid in versions else skipped.get(tid)
-                 or ("unknown" if t.get("truncated") else trades.effect(d, run["business_date"]) or "pending"))
+        if vd is not None and vd < bd:   # a trade of an earlier date: in the start of the day of a carried book
+            state, text = "earlier_date", cv.PROVENANCE_TEXT["trade_earlier"].format(day=vd.isoformat())
+        else:   # as the trades screen says it (``trades._intraday_state``: applied only at the version the run took)
+            state = trades._intraday_state(d, bd, run_t, True)
+            text = trades.STATE_TEXT.get(state, state)
         origin = origins.get(r["set_id"])
         items.append(_set_item("trades", r, trade_id=tid, trade_version=d.get("trade_version"), status=d.get("status"),
-                               side=d.get("side"), state=state, state_text=trades.STATE_TEXT.get(state, state),
+                               side=d.get("side"), state=state, state_text=text,
                                origin=origin, origin_text=trades.ORIGIN_TEXT.get(origin or ""),
-                               feed_title=", ".join(titles) if origin in ("feed", "history") and titles else None))
+                               feed_title=title if origin in ("feed", "history") else None))
     return _source("trades", "deal", "present", cv.PROVENANCE_TEXT["trades_rows"], items), len(items)
 
 
@@ -206,6 +223,13 @@ def _set_ids(con, bd: date, known_at: datetime) -> dict[str, list[int]]:
         "SELECT dataset, array_agg(set_id ORDER BY set_id) AS ids FROM (SELECT DISTINCT ON (dataset, scope_key) dataset,"
         " set_id FROM dataset_set WHERE dataset = ANY(%s) AND valid_date <= %s AND recorded_at <= %s"
         f" ORDER BY dataset, scope_key, {store.CURRENT_SET}) s GROUP BY dataset", (list(BOOK_CCY), bd, known_at))}
+
+
+def _book_sets(con, ids: list[int], book: str) -> list[int]:
+    """Of ``ids`` the sets whose scope is ``book`` or names no book (an entity's)."""
+    return [r["set_id"] for r in con.execute(
+        "SELECT set_id FROM dataset_set WHERE set_id = ANY(%s) AND (scope->>'book_id' = %s OR NOT scope ? 'book_id')"
+        " ORDER BY set_id", (ids, book)).fetchall()] if ids else []
 
 
 def _book_ccy(con, run: dict[str, Any], book: str, ccys: list[str]) -> list[dict[str, Any]]:
@@ -242,7 +266,7 @@ def _book_ccy(con, run: dict[str, Any], book: str, ccys: list[str]) -> list[dict
             items = [_set_item(ds, r) for r in seen.values()]
         has = any(i.get("has_row", True) for i in items) if items else False
         text = cv.PROVENANCE_TEXT["book_ccy_rows" if has else "book_ccy_none"]
-        if now.get(ds, []) != ids:
+        if _book_sets(con, now.get(ds, []), book) != _book_sets(con, ids, book):
             text += "; " + cv.PROVENANCE_TEXT["book_ccy_later"]
         out.append(_source(ds, "book_ccy", "present" if has else "absent", text, items))
     return out
@@ -283,19 +307,58 @@ def _fixings_state(lin: dict[str, Any], code: str) -> tuple[str, str]:
         return ("unknown", "") if not lin.get("rates") and not lin.get("fx") else ("missing", "фиксингов индекса нет")
     if r.get("status") not in (None, "ok") or not r.get("rows", 1):
         return "missing", "фиксингов индекса нет"
-    if r.get("unpublished_business_days") or r.get("bridged_days"):
+    if r.get("unpublished_business_days"):
         return "stale", "последний фиксинг перенесён на непубликованные дни"
-    return "ok", (f"последний {r['latest']}" if r.get("latest") else "")
+    return "ok", "; ".join(p for p in ((f"последний {r['latest']}" if r.get("latest") else ""),
+                                     "дни без публикации — по предыдущему значению" if r.get("bridged_days") else "") if p)
 
 
 INDEX_NEEDS = {"RUONIA": ("RUB_RUONIA_OIS", "ruonia_ois", "RUONIA"), "KEY_RATE": ("RUB_KEY_RATE_SWAP", "key_rate_swap", "KEY_RATE")}
 """A RUB index of a floating leg -> (its curve, its status in ``lineage.rates.status``, its fixings)."""
 
 
+def _curve_name(cid: str, names: dict[str, str]) -> str:
+    if cid in names:
+        return names[cid]
+    if cid == fxcurves.XCCY_CURVE_ID:
+        return "CNY: XCCY к RUONIA"
+    return f"{cid[:3]}: кривая валюты (FX implied)" if cid.endswith(" FX") else cid
+
+
+def _curve_order(lin: dict[str, Any], ccy: str, ccs: bool) -> list[str]:
+    """The curves a deal's ``ccy`` leg is valued on, the first one wanted, the rest its fallbacks, as
+    ``valuation.derivatives`` takes them: an FX forward's by the run's setting ``fx_foreign_curve``
+    (``FxMarket.fx_curve_ids``: the chosen kind, else the other), a CCS leg's the XCCY curve first."""
+    opt = ((lin.get("fx") or {}).get("options") or {}).get("foreign_curve") or fxcurves.FxOptions().foreign_curve
+    try:
+        primary, alts = fxcurves.FxMarket().fx_curve_ids(ccy, fxcurves.FxOptions(foreign_curve=opt))
+    except Exception:  # noqa: BLE001 - an unknown setting of an older run: the default order
+        primary, alts = fxcurves.FxMarket().fx_curve_ids(ccy, fxcurves.FxOptions())
+    first = [fxcurves.XCCY_CURVE_ID] if ccs and ccy == "CNY" else []
+    return list(dict.fromkeys([*first, primary, *alts]))
+
+
+def _foreign_curve(lin: dict[str, Any], ccy: str, ccs: bool, names: dict[str, str]) -> dict[str, Any]:
+    """The foreign curve of a ``ccy`` leg: the wanted one with its state; only a fallback there: ``replaced``; none of
+    them: ``missing``."""
+    order = _curve_order(lin, ccy, ccs)
+    for cid in order:
+        st, why = _curve_state(lin, cid)
+        if st == "missing":
+            continue
+        if cid == order[0]:
+            return _need("curve", cid, _curve_name(cid, names), st, why)
+        return _need("curve", cid, _curve_name(cid, names), "replaced",
+                     f"вместо {order[0]}: её нет в рыночных данных прогона" + (f"; {why}" if why else ""))
+    return _need("curve", order[0], _curve_name(order[0], names), "missing",
+                 "в рыночных данных прогона нет ни одной из кривых: " + ", ".join(order))
+
+
 def _needed(lin: dict[str, Any], terms: list[dict[str, Any]], x: dict[str, Any], bd: date,
             names: dict[str, str]) -> list[dict[str, Any]]:
     """What an unvalued derivative's terms need, each with its state in the run's market: the RUB curve; per foreign
-    currency its spot and FX-implied curve; per floating index its curve and fixings; per NDF leg its CBR fixing."""
+    currency its spot and its curve (``_foreign_curve``); per floating index its curve and fixings; per NDF leg its CBR
+    fixing (one of the business date not yet published: pending, as the valuation projects it)."""
     out = [_need("curve", "RUB RUONIA", names.get("RUB RUONIA", "RUB RUONIA OIS"), _rub_state(lin, "ruonia_ois"),
                  "дисконтирование рублёвых потоков")]
     ccys = sorted({c for t in terms for k in ("base_ccy", "quote_ccy", "ccy", "settle_ccy") if (c := _ccy(t.get(k)))}
@@ -307,8 +370,12 @@ def _needed(lin: dict[str, Any], terms: list[dict[str, Any]], x: dict[str, Any],
         spot = (fx.get("spots") or {}).get(c)
         out.append(_need("fx", c, f"курс {c}/RUB (спот)", "ok" if isinstance(spot, str) else "unknown" if not fx
                          else "missing", "" if isinstance(spot, str) or not fx else "курса нет в срезе хаба"))
-        st, why = _curve_state(lin, f"{c} FX") if fx else ("unknown", "")
-        out.append(_need("curve", f"{c} FX", names.get(f"{c} FX", f"{c}: кривая валюты (FX implied)"), st, why))
+        if not fx:
+            out.append(_need("curve", fxcurves.implied_curve_id(c), _curve_name(fxcurves.implied_curve_id(c), names),
+                             "unknown"))
+            continue
+        ccs = any(t.get("product_kind") == "ccs" and _ccy(t.get("ccy")) == c for t in terms)
+        out.append(_foreign_curve(lin, c, ccs, names))
     for t in terms:
         code = str(t.get("index_code") or "").strip().upper()
         if not code:
@@ -334,8 +401,9 @@ def _needed(lin: dict[str, Any], terms: list[dict[str, Any]], x: dict[str, Any],
         d = str(t["fixing_date"])
         if c is None:
             continue
-        if d > bd.isoformat():
-            out.append(_need("fixing", f"{c} {d}", f"фиксинг ЦБ {c} на {d}", "pending", "дата фиксинга после даты прогона"))
+        if d > bd.isoformat() or (d == bd.isoformat() and f"{c} {d}" not in fixed):
+            out.append(_need("fixing", f"{c} {d}", f"фиксинг ЦБ {c} на {d}", "pending",
+                             "дата фиксинга после даты прогона" if d > bd.isoformat() else "фиксинг дня ещё не опубликован"))
         else:
             out.append(_need("fixing", f"{c} {d}", f"фиксинг ЦБ {c} на {d}",
                              "ok" if f"{c} {d}" in fixed else "unknown" if not fx else "missing"))
@@ -367,8 +435,10 @@ def _used(lin: dict[str, Any], fact: dict[str, Any], names: dict[str, str]) -> l
         for c in core.get("curves") or core.get("foreign_curves") or ():
             c = CURVE_NAMES.get(c, c)
             st, why = _curve_state(lin, c) if c in ((lin.get("fx") or {}).get("curves") or {}) else ("ok", "")
-            out.append(_need("curve", c, names.get(c, c), "replaced" if fb else st,
-                             ("вместо " + ", ".join(sorted(fb)) + " (кривой нет в срезе)") if fb else why))
+            # the curve that stood in: of the currency of a curve that fell back (``FxMarket.fx_curve_ids``)
+            instead = sorted(f for f in fb if f != c and f[:4] == c[:4])
+            out.append(_need("curve", c, names.get(c, c), "replaced" if instead else st,
+                             ("вместо " + ", ".join(instead) + " (её нет в срезе)") if instead else why))
         for c in sorted(fb):
             out.append(_need("curve", c, names.get(c, c), "missing", "кривой нет в срезе: оценка на запасной"))
         for c, rate in sorted((ex.get("fx_rates") or {}).items()):
@@ -404,7 +474,9 @@ def _used(lin: dict[str, Any], fact: dict[str, Any], names: dict[str, str]) -> l
 
 
 def _market(con, run: dict[str, Any], kind: str, fact: dict[str, Any] | None, terms: list[dict[str, Any]],
-            x: dict[str, Any], reason: str | None) -> dict[str, Any]:
+            x: dict[str, Any], reason: str | None, fallback: str | None = None) -> dict[str, Any]:
+    """``fact``: the valuation's (a derivative only when core valued it); ``fallback``: the quality of the value an
+    unvalued derivative was given instead (the report's, or 0), said in a note."""
     lin = run.get("lineage") or {}
     ref = con.execute("SELECT data FROM run_reference WHERE run_id = %s AND kind = 'curves'",
                       (run["run_id"],)).fetchone()
@@ -417,6 +489,8 @@ def _market(con, run: dict[str, Any], kind: str, fact: dict[str, Any] | None, te
         if not items:
             return {"basis": "unknown", "text": cv.PROVENANCE_TEXT["market_unknown"], "items": [], "notes": notes}
         return {"basis": "used", "text": cv.PROVENANCE_TEXT["market_used"], "items": items, "notes": notes}
+    if fallback:
+        notes.insert(0, "оценка не по условиям сделки: " + cv.APPROX_TEXT.get(fallback, fallback))
     if reason:
         notes.insert(0, "почему не оценена: " + cv.why_of(reason, x, None)["why"])
     if kind == "derivative" and (terms or x.get("ccy")):
@@ -430,12 +504,16 @@ def _market(con, run: dict[str, Any], kind: str, fact: dict[str, Any] | None, te
 # ---- the position -----------------------------------------------------------------------------------------------
 
 def _kind(x: dict[str, Any], fact: dict[str, Any] | None, bd: date, off: bool) -> str:
-    """``bond``, ``derivative`` (valued from its terms) or ``other`` (a spot FX row, a future, ...)."""
+    """``bond``, ``derivative`` (valued from its terms), ``other`` (a spot FX row, a future, ...) or ``linked`` (a row
+    without ``asset_class`` but with a ``deal_id``: a derivative when terms link to it, else a bond, as
+    ``valuation.positions``)."""
     if off or ((fact or {}).get("extra") or {}).get("core"):
         return "derivative"
     cls = str(x.get("asset_class") or "").lower()
-    if cls in TERMS_KINDS or (not cls and x.get("deal_id")):
+    if cls in TERMS_KINDS:
         return "derivative"
+    if not cls and x.get("deal_id"):   # a derivative only when terms name it (TDM#501), else a bond
+        return "linked"
     if cls == "fx":
         vd = x.get("value_date")
         vd = date.fromisoformat(vd) if isinstance(vd, str) else vd
@@ -446,8 +524,11 @@ def _kind(x: dict[str, Any], fact: dict[str, Any] | None, bd: date, off: bool) -
     return "other"
 
 
-def provenance(con, run: dict[str, Any], pid: str, feeds: list[dict[str, Any]] | None = None) -> dict[str, Any] | None:
-    """The module doc's answer for position ``pid`` of ``run``; None: no such position in the run."""
+def provenance(con, run: dict[str, Any], pid: str, feeds: list[dict[str, Any]] | None = None,
+               history: dict[str, set[str]] | None = None) -> dict[str, Any] | None:
+    """The module doc's answer for position ``pid`` of ``run``; None: no such position in the run. ``feeds``: the
+    adapter services' feeds (``adapter_services.read_state``), ``history``: the marks of the fetch of past dates
+    (``trades.history_files``), for where a trade's file came from."""
     p = con.execute("SELECT position_id, book_id, secid, quality, reason, fact, pnl, no_pnl FROM run_position"
                     " WHERE run_id = %s AND position_id = %s", (run["run_id"], pid)).fetchone()
     if p is None:
@@ -464,6 +545,12 @@ def provenance(con, run: dict[str, Any], pid: str, feeds: list[dict[str, Any]] |
     x = {**(ex.get("reported") or {}), **(row or {})}
     kind = _kind(x, fact, bd, off_trade is not None)
     got, sets, known = _terms(con, run, pid, book, x, fact, off_trade) if kind != "bond" else ([], {}, True)
+    if kind == "linked":
+        kind = "derivative" if got else "bond"
+    # a derivative is valued only by core from its terms; a fact without core is the value it got instead
+    # (``valuation.positions._not_by_core``: the report's MV, or 0 for an FX forward): not valued
+    by_core = fact is not None and (kind != "derivative" or bool(ex.get("core")))
+    reason = p.get("reason") or (None if by_core else ex.get("not_exact_reason"))
     pos = lin.get("positions") or {}
     any_units = any(str((u.get("scope") or {}).get("book_id")) == book for u in pos.get("trade_terms") or ())
     terms_src = _terms_source(kind, got, sets, known, any_units or bool(got))
@@ -473,7 +560,7 @@ def provenance(con, run: dict[str, Any], pid: str, feeds: list[dict[str, Any]] |
         for t in (block.get("extra") or {}).get("trades") or block.get("trades") or ():
             if isinstance(t, dict) and t.get("trade_id") is not None:
                 ids.add(str(t["trade_id"]))
-    trades_src, n_trades = _trades(con, run, pid, book, ids, feeds)
+    trades_src, n_trades = _trades(con, run, pid, book, ids, feeds, history)
     ccys = sorted({c for c in (_ccy(x.get("ccy")), _ccy((fact or {}).get("ccy")),
                                *(_ccy(k) for k in ((fact or {}).get("fx_delta") or {})),
                                *(_ccy(t.get(k)) for t in got for k in ("base_ccy", "quote_ccy", "ccy"))) if c})
@@ -484,15 +571,17 @@ def provenance(con, run: dict[str, Any], pid: str, feeds: list[dict[str, Any]] |
         mism.append("trades_no_report")
     if row is None and got:
         mism.append("terms_no_report")
-    if same > 1 or str(p.get("reason") or "").startswith("terms_ambiguous"):
+    if same > 1 or str(reason or "").startswith("terms_ambiguous"):
         mism.append("deal_on_rows")
     gap = ((ex.get("reported") or {}).get("x") or {}).get("trades_report_gap")   # the run's, not the stored row's
     if gap is not None:
         mism.append("report_trades_gap")
     return {
         "run_id": run["run_id"], "business_date": bd.isoformat(), "position_id": pid, "book_id": book, "kind": kind,
-        "valued": fact is not None, "off_report": off_trade is not None,
+        "valued": by_core, "off_report": off_trade is not None,
         "sources": [rep_src, terms_src, trades_src, *_book_ccy(con, run, book, ccys)],
-        "mismatches": [{"code": m, "text": cv.MISMATCH_TEXT[m].format(n=same)} for m in mism],
-        "market": _market(con, run, kind, fact, got, x, p.get("reason")),
+        "mismatches": [{"code": m, "text": cv.MISMATCH_TEXT[m] + (f" (строк: {same})" if m == "deal_on_rows" and same > 1
+                                                                 else "")} for m in mism],
+        "market": _market(con, run, kind, fact if by_core else None, got, x, reason,
+                          None if by_core or fact is None else (ex.get("quality") or p.get("quality"))),
     }
