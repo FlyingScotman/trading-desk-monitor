@@ -1,17 +1,20 @@
 """TDM#605: swap legs with dates of their own. A CCS (core's ``XccySwap`` takes each leg's periods) is valued with each
 leg's periods and exchanges on that leg's start and maturity: a maturity a day apart, a foreign leg starting later;
-common dates value as before. An IRS (core's ``InterestRateSwap``: one pair of dates, core#106) is still refused, its
-reason naming both legs' dates. On the hub's contract 1.4 golden snapshot of 15.10.2026, synthetic trades."""
+common dates value as before. An IRS (core 0.44 ``InterestRateSwap`` with the floating leg's own dates, core#106) is
+valued with each leg on its own dates: a maturity a day apart, a floating leg starting after the valuation date. On the hub's contract 1.4 golden snapshot of 15.10.2026, synthetic trades."""
 
 from __future__ import annotations
 
+from datetime import date
+
 import pytest
-from test_swaps_repo_tdm45 import BD, FIX, ccs, ccs_plan, leg
+from test_swaps_repo_tdm45 import BD, FIX, ccs, ccs_plan, inputs, leg
 
 from desk.api import coverage
 from desk.marketdata.bundle import SnapshotDir
 from desk.orchestrator import prepare
 from desk.valuation import derivatives as dv
+from desk.valuation import positions as pv1
 
 
 @pytest.fixture(scope="module")
@@ -67,13 +70,43 @@ def test_a_leg_ending_before_it_starts_is_invalid():
     assert e.value.reason == "terms_invalid"
 
 
-def test_an_irs_with_legs_of_different_dates_names_both(ctx):
-    t = [leg("S1", "fix", "pay", fixed_rate_pct="15.5"),
-         leg("S1", "flt", "receive", index_code="RUONIA", start_date="2026-10-07", maturity_date="2028-10-09")]
+def irs(fl_start="2026-10-06", fl_end="2028-10-06"):
+    return [leg("S1", "fix", "pay", fixed_rate_pct="15.5"),
+            leg("S1", "flt", "receive", index_code="RUONIA", start_date=fl_start, maturity_date=fl_end)]
+
+
+def irs_value(ctx, terms):
+    o = pv1.plan(ctx, inputs(terms, ("S1",))).direct["S1"]
+    assert o.core_not_valued is None and o.valuation is not None, (o.reason, o.detail, o.core_not_valued)
+    return o.valuation
+
+
+def test_an_irs_with_legs_ending_a_day_apart_is_valued_on_each_legs_dates(ctx):
+    t = dv.SwapTerms.of(irs(fl_end="2028-10-09"))
+    assert (t.float_start, t.float_maturity) == (None, date(2028, 10, 9)) and t.end == date(2028, 10, 9)
+    swap, _ = t.core_swap()
+    assert swap.leg_dates("fixed")[1] == date(2028, 10, 6) and swap.leg_dates("float")[1] == date(2028, 10, 9)
+    v, common = irs_value(ctx, irs(fl_end="2028-10-09")), irs_value(ctx, irs())
+    assert v.pv_rub != common.pv_rub and abs(v.pv_rub - common.pv_rub) < 0.01 * abs(common.pv_rub) + 1e6
+    assert any("ноги со своими датами" in a and "плавающая 06.10.2026–09.10.2028" in a for a in v.assumptions), \
+        v.assumptions
+
+
+def test_an_irs_whose_floating_leg_starts_later_needs_no_fixing_for_it(ctx):
+    t = dv.SwapTerms.of(irs(fl_start="2026-11-16"))
+    assert t.float_dates == (date(2026, 11, 16), date(2028, 10, 6)) and t.float_dates[0] > BD
+    v = irs_value(ctx, irs(fl_start="2026-11-16"))
+    assert v.pv_rub != irs_value(ctx, irs()).pv_rub
+
+
+def test_an_irs_leg_ending_before_it_starts_is_invalid():
     with pytest.raises(dv.NotValued) as e:
-        dv.SwapTerms.of(t)
-    code, detail = e.value.reason, e.value.detail
-    assert code == "swap_dates_mismatch"
-    assert detail == "сделка S1: фиксированная нога 06.10.2026–06.10.2028, плавающая 07.10.2026–09.10.2028"
-    why = coverage.explain(f"{code}: {detail}", "IRS", None, None)
+        dv.SwapTerms.of(irs(fl_start="2028-10-07", fl_end="2028-10-06"))
+    assert e.value.reason == "terms_invalid"
+
+
+def test_an_old_runs_leg_dates_reason_still_reads(ctx):
+    # runs before 0.2.21 stored swap_dates_mismatch; its explanation stays readable
+    detail = "сделка S1: фиксированная нога 06.10.2026–06.10.2028, плавающая 07.10.2026–09.10.2028"
+    why = coverage.explain(f"swap_dates_mismatch: {detail}", "IRS", None, None)
     assert "IRS" in why["why"] and why["detail"] == detail
