@@ -2393,7 +2393,7 @@
     swap_frequency_unsupported: 'частота выплат не поддерживается', day_count_unsupported: 'база начисления не поддерживается', swap_index_unsupported: 'индекс не поддерживается (IRS: RUONIA и ключевая ставка; рублёвая нога CCS: RUONIA, ключевая ставка, RUSFAR или фикс)',
     swap_ccy_unsupported: 'валюта свопа не RUB', repo_ccy_unsupported: 'валюта РЕПО не RUB', terms_incomplete: 'условия сделки неполные', terms_invalid: 'условия сделки не приняты ядром', settled: 'сделка исполнена',
     no_foreign_curve: 'нет кривой валюты сделки в прогоне', no_fx_spot: 'нет спот-курса валюты в прогоне', no_fx_calendar: 'нет календаря валюты в статике хаба',
-    ndf_unsupported: 'NDF с расчётами не в рублях или кросс-NDF ядром не оценивается', future_terms_incomplete: 'у фьючерса в срезе хаба нет базовой валюты, цены, лота или даты исполнения',
+    ndf_unsupported: 'кросс-NDF с расчётом в рублях и фиксингом или NDF с расчётом в валюте не из пары ядром не оценивается', future_terms_incomplete: 'у фьючерса в срезе хаба нет базовой валюты, цены, лота или даты исполнения',
     core_missing_market_data: 'ядру не хватило рыночных данных (кривой, курса или фиксинга за начало периода)', core_undeclared_fixing_gap: 'пропуск в истории фиксингов внутри периода сделки' };
   K.rcReason = c => !c ? '' : RC_REASON[c] || (/^core_/.test(c) ? 'ядро отклонило: ' + c.slice(5) : c);
   const rcProd = s => s ? String(s).split('+').map(x => RC_PROD[x] || x).join(' + ') : '—';
@@ -2850,6 +2850,8 @@
         (p.whyNot && p.whyNot.todo ? '<br><b>Что сделать:</b> ' + esc(p.whyNot.todo) : '') +
         (p.whyNot && p.whyNot.fix && p.whyNot.fix.href ? ' · <a href="' + esc(p.whyNot.fix.href) + '">' + esc(p.whyNot.fix.label) + ' →</a>' : '') + '</div>' : '') +
       (p.riskProblem ? '<div class="k-note risk-problem" style="overflow-wrap:anywhere;margin:8px 0;color:var(--warn)"><b>Риск не в суммах (невозможный риск):</b> ' + esc(p.riskProblem) + '</div>' : '') +
+      // #616: почему у дериватива без оценки ядром нет процентного риска (нет кривой валюты, NDF без условий сделки)
+      (p.riskMissing && !p.notValued ? '<div class="k-note risk-missing" style="overflow-wrap:anywhere;margin:8px 0;color:var(--warn)"><b>Процентного риска нет:</b> ' + esc(p.riskMissing.text) + '</div>' : '') +
       K.curveProxyNote(p) +
       '<div class="k-sec">Параметры</div>' + K.fieldsHtml(fields) +
       (p.legs && p.legs.length ? '<div class="k-sec">Ноги сделки <span class="sp"></span><span class="mut3" style="text-transform:none;letter-spacing:0">' + p.legs.length + '</span></div>' + K.legsHtml(p) : '') +

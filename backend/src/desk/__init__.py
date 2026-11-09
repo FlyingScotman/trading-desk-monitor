@@ -10,7 +10,7 @@ __version__ = "0.2.23"
 # buckets, coverage). A run records ``logic_version()`` in its lineage; the autopilot recomputes the latest positions
 # date once when its default run was made by another logic version; the backfill (desk.backfill, R23) recomputes the
 # older dates in the background.
-VALUATION_VERSION = 31  # 2: risk per curve (R8); 3: static display fields (R9 D1-D6, D8: names, coupons, issuers);
+VALUATION_VERSION = 32  # 2: risk per curve (R8); 3: static display fields (R9 D1-D6, D8: names, coupons, issuers);
 # 4: RUB bonds discounted on RUONIA OIS + Z-spread, flash PnL on the bond's own curves;
 # 5: a key-rate floater on a fallback rung books its projection on RUB KEY, the run log names missing rates inputs
 # 6: a bond's offer, its next 18 months of flows and the day's quote (G-spread, volume) in extra (concept pages)
@@ -73,6 +73,10 @@ VALUATION_VERSION = 31  # 2: risk per curve (R8); 3: static display fields (R9 D
 # 31: the run's rates hold every currency of its OCP (the report's JPY, KZT, GEL: the CBR rate per unit where MOEX has
 # none, TDM#602); CNH is CNY in every dataset (setting ccy_aliases, TDM#601); a business day without a published RUONIA
 # takes the previous rate (TDM#606); a CCS's legs each on their own dates (TDM#605)
+# 32: core 0.45 (TDM#616): an X/RUB NDF settled in its foreign currency and a cross NDF settled in its base or quote
+# currency valued by core (rates risk on the RUB and the foreign curves, the OCP amount core's FX delta), a cross
+# NDF settled in RUB without a fixing date projected; why an FX derivative without core has no rates risk
+# (extra.risk_missing: no curve of a currency, an NDF without its terms)
 
 
 def logic_version() -> str:

@@ -378,6 +378,8 @@
     // TDM#591: стоимость из отчёта в валюте строки, пересчитанная по курсу ЦБ — пометка в карточке
     p.reportedCcy = ex.reported_ccy && typeof ex.reported_ccy === 'object' ? ex.reported_ccy.text || null : null;
     p.whyNot = d.notValued && ex.why && typeof ex.why === 'object' ? ex.why : null;
+    // #616: почему у дериватива без оценки ядром нет процентного риска (нет кривой валюты, NDF без условий сделки)
+    p.riskMissing = ex.risk_missing && typeof ex.risk_missing === 'object' && ex.risk_missing.text ? ex.risk_missing : null;
     p.estReason = p.whyNot ? p.whyNot.why + (p.whyNot.detail ? ' (' + p.whyNot.detail + ')' : '')
       : ex.reason || ex.not_exact_reason || (Array.isArray(ex.assumptions) ? ex.assumptions.join('; ') : '') || '';
     p.ratingInfo = d.ratingInfo || null; p.ratingAgency = (d.ratingInfo || {}).agency || null;  // рейтинг деска (R25)
