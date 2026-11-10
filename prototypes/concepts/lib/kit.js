@@ -22,6 +22,9 @@
  *  KIT.palette()          — поиск по всему (Ctrl+K или «/»): позиции, эмитенты, книги, команды страницы
  *  KIT.aliasName(p), KIT.aliasBind(el, p, onSaved) — имя бумаги в карточке: алиас и серое биржевое имя, ✎ — правка на
  *                           месте, ⟲ — история; KIT.setAlias(isin, alias) — подставить алиас во все позиции бумаги (R33)
+ *  KIT.whenData(load, fn), KIT.loadingNote(text), KIT.dataError(text) — данные, что приходят после страницы (TDM#629): каркас и
+ *                           «Загрузка…» сразу, fn — когда загрузчики lib/real.js (M.loadMarket, M.loadHistory…) ответили; сбой — полоса
+ *                           «Не загрузилось … Повторить»; html[data-ready] — страница нарисована
  *  KIT.ratesCorePanel(el), KIT.ratesCoreModel(list) — свопы и РЕПО, оценённые ядром (#201): фиксинги RUONIA / КС, ядро и
  *                           отчёт, риск по кривым RUONIA и КС, «предварительно» (quality assumed); нет данных — словами
  *  KIT.fundingLine(p), KIT.fundingPanel(el) — фондирование (B1): строка карточки позиции и панель кокпита по книгам,
@@ -666,6 +669,42 @@
   K.live = (el, ev, fn) => { const off = K.on(ev, () => { if (!el.isConnected) return off(); fn(); }); return off; };
   K.onFilter = fn => K.on('filter', fn);
 
+  // ---------- данные, которые приходят после страницы (TDM#629) ----------
+  // lib/real.js грузит всё сверх прогона асинхронно и сообщает событием concepts-data на document: { name } — пришло
+  // (алиасы бумаг — страницы перерисовываются, как при K.setAlias), { name, error } — сбой запроса (полоса ниже).
+  // K.whenData(load, fn): страница сразу показывает каркас и строку «Загрузка данных…», load() возвращает обещание
+  // загрузчиков (M.loadMarket(), M.loadHistory(ids, from)…; несколько — Promise.all), fn рисует страницу, когда данные пришли.
+  // В демо и из файла ждать нечего: fn сразу. Сбой загрузки не останавливает страницу (рисуется без этих данных, как раньше
+  // при пустом ответе), но не молчит: полоса «не загрузилось: … · Повторить». html[data-ready="1"] — страница нарисована.
+  // K.loadingNote — строка «загрузка» для части страницы (панель, таблица), которая ждёт свои данные.
+  K.loadingNote = (text) => '<div class="k-loading k-note" role="status">' + esc(text || 'Загрузка данных…') + '</div>';
+  const pageHost = () => document.querySelector('.k-page') || document.body;
+  const readyMark = () => { try { document.documentElement.dataset.ready = '1'; document.documentElement.dataset.readyAt = String(Math.round(performance.now())); } catch (e) { } };
+  K.dataError = text => {
+    const host = pageHost();
+    if (Array.from(host.querySelectorAll('.k-load-err')).some(x => x.dataset.t === text)) return;
+    const b = document.createElement('div');
+    b.className = 'k-note k-load-err'; b.dataset.t = text; b.setAttribute('role', 'alert');
+    b.innerHTML = '<b>Не загрузилось:</b> ' + esc(text) + ' · <a href="#" data-a="retry">Повторить</a>';
+    b.querySelector('[data-a=retry]').onclick = e => { e.preventDefault(); location.reload(); };
+    host.insertBefore(b, host.firstChild);
+  };
+  K.whenData = (load, fn) => {
+    if (K.source !== 'real' || !load) { fn(); readyMark(); return; }
+    const host = pageHost(), note = document.createElement('div');
+    note.innerHTML = K.loadingNote(); host.insertBefore(note, host.firstChild);
+    let done = false;
+    const run = () => { if (done) return; done = true; note.remove(); try { K.notesChanged(); fn(); readyMark(); } catch (e) { setTimeout(() => { throw e; }); } };
+    let p; try { p = load(); } catch (e) { p = Promise.reject(e); }
+    Promise.resolve(p).then(run, e => { K.dataError(e && e.message ? e.message : 'сбой загрузки'); run(); });
+  };
+  document.addEventListener('concepts-data', e => {
+    const d = (e && e.detail) || {};
+    if (d.error) return K.dataError(d.error);
+    if (d.name === 'aliases') { fire('alias'); fire('filter'); }
+    fire('data');
+  });
+
   // ---------- фильтр книг (верхний уровень) ----------
   // portsOff — скрытые портфели (колонка Portfolio отчёта, x_portfolio адаптера; '—' — позиции без неё): новые
   // портфели прогона и закрытых раньше в периоде позиций (M.pnlClosed) видны, пока их не сняли; сохранённые, которых нет
@@ -1202,6 +1241,16 @@
     const u = new URL(location.href); ['run_id', 'as_of', 'demo'].forEach(k => u.searchParams.delete(k)); Object.keys(sel).forEach(k => u.searchParams.set(k, sel[k]));
     location.href = u.toString();
   }
+  const notesChipHtml = () => '<span class="k-chip" data-a="notes" title="Чего нет в данных прогона" style="border-color:var(--warn)">ⓘ ' + M.notes.length + '</span>';
+  // заметки, добавленные после шапки (данные, пришедшие позже страницы: история рынка, TDM#629): число в чипе, чипа не было — появляется
+  K.notesChanged = () => {
+    const bar = document.querySelector('.k-top');
+    if (!bar || K.source === 'empty' || !M.notes || !M.notes.length) return;
+    const nb = bar.querySelector('[data-a=notes]');
+    if (nb) { nb.textContent = 'ⓘ ' + M.notes.length; return; }
+    const anchor = bar.querySelector('[data-a=search]');
+    if (anchor) { anchor.insertAdjacentHTML('beforebegin', notesChipHtml()); bindSrc(bar); }
+  };
   function bindSrc(bar) {
     const ch = bar.querySelector('[data-a=src]'), nb = bar.querySelector('[data-a=notes]');
     if (nb) nb.onclick = e => {
@@ -1341,7 +1390,7 @@
       (opt.extra || '') +
       '<span class="k-chip" data-a="ofzview" title="Как показан риск ОФЗ: «RUONIA + базис» — риск к котировкам OIS RUONIA и риск к базису КБД − RUONIA, два разных риска ядра (с 0.2.7); «КБД» — ОФЗ на своей кривой (par-риск КБД = базис)">ОФЗ: ' + K.OFZ_VIEWS[M.ofzView || 'basis'] + ' ▾</span>' +
       '<span class="k-chip" data-a="repr" title="' + esc('Валюта отчёта.\n' + K.REPR_NOTE.map(x => x[0][0].toUpperCase() + x[0].slice(1) + ': ' + x[1] + '.').join('\n')) + '">в ' + K.repr + ' ' + K.SYM[K.repr] + ' ▾</span>' +
-      srcChip() + (K.source === 'empty' ? '' : runBadgeChip()) + (K.source !== 'empty' && M.notes && M.notes.length ? '<span class="k-chip" data-a="notes" title="Чего нет в данных прогона" style="border-color:var(--warn)">ⓘ ' + M.notes.length + '</span>' : '') +
+      srcChip() + (K.source === 'empty' ? '' : runBadgeChip()) + (K.source !== 'empty' && M.notes && M.notes.length ? notesChipHtml() : '') +
       '<button class="k-btn" data-a="search">Поиск <span class="k-kbd">Ctrl K</span></button>' +
       '<button class="k-btn" data-a="numfmt"></button>' +
       '<button class="k-btn" data-a="view" title="Вид: формат отрицательных чисел, когда прогон считается устаревшим" aria-haspopup="dialog">⚙</button>' +
@@ -2463,10 +2512,13 @@
   };
   // состояние параллельного отчёта словами; '' — посчитан
   const parNote = par => !par ? 'параллельный отчёт ядро / отчёт для прогона не запрашивался: допуска и строк «по отчёту» нет'
+    : par.state === 'loading' ? 'параллельный отчёт ядро / отчёт загружается: допуска и строк «по отчёту» пока нет'
     : par.state === 'unavailable' ? 'параллельный отчёт ядро / отчёт недоступен' + (par.status ? ' (HTTP ' + par.status + ')' : '') + ': допуска и строк «по отчёту» нет'
       : par.state === 'not_computed' ? 'параллельный отчёт ядро / отчёт для этого прогона не посчитан (прогон до него): допуска и строк «по отчёту» нет' : '';
   K.ratesCorePanel = (el, list) => {
     const R = K.ratesCoreModel(list), { core, rows, trades, totals: T } = R, tol = R.tolerance, pn = parNote(R.par);
+    // параллельный отчёт приходит отдельным запросом (TDM#629): панель рисуется сразу, по ответу — заново
+    if (R.par && R.par.state === 'loading' && M.loadDeriv) M.loadDeriv().then(() => { if (el.isConnected) K.ratesCorePanel(el, list); });
     el.innerHTML = '';
     if (!rows.length) {
       K.noData(el, 'в прогоне нет свопов и РЕПО, оценённых ядром (extra.swaps / extra.repos): прогон до оценки свопов ядром или в нём нет условий сделок');
@@ -2808,9 +2860,13 @@
     const a = e.target && e.target.closest && e.target.closest('a[data-carry-pos]');
     if (a) a.href = K.carryLink(a.getAttribute('data-carry-pos'));
   }, true));
-  K.card = function (id) {
+  // again — панель этой карточки, которую рисуем заново, когда пришла вся история бумаги (TDM#629)
+  K.card = function (id, again) {
     const p = M.pos[id]; if (!p) return;
-    const o = drawer(true); o.title = p.name; o.charts = [];
+    const o = again || drawer(true); o.title = p.name;
+    const keepScroll = again ? o.bd.scrollTop : 0;
+    if (again) { (o.charts || []).forEach(c => c.dispose()); o.bd.innerHTML = ''; }
+    o.charts = [];
     const te = o.el.querySelector('.t');
     te.innerHTML = '<span style="color:' + K.issuerColor(p.issuer) + '">●</span> ' + K.aliasName(p) + ' ' + K.ccyTag(p.ccy);
     K.aliasBind(te, p, () => { o.title = p.name; });
@@ -2836,6 +2892,13 @@
       ['Кэрри / день', '<span class="' + f.cls(p.carryDay) + '">' + f.k(p.carryDay) + '</span> <small>тыс ₽</small>', false, K.tips.carry],
       ['Фондирование / день', K.fundingDayHtml(p) + ' <small>тыс ₽</small>', false, K.tips.funding], ['Контрагент', esc(p.cpty || '—')],
     ]).concat(K.curveRiskFields(p));  // у облигаций тоже (R32)
+    // вся история облигации приходит отдельным запросом (M.loadDeep): карточка рисуется сразу с историей из прогонов, по ответу —
+    // заново с полной (если панель ещё открыта); сбой — полоса «не загрузилось» (kit.js, concepts-data), карточка остаётся как есть
+    if (isBond && !again && M.loadDeep && M.hasDeep && !M.hasDeep(p.id)) {
+      o.bd.insertAdjacentHTML('beforebegin', '<div class="k-note k-deep-wait" style="padding:6px 16px">История бумаги загружается…</div>');
+      const wait = o.bd.previousElementSibling;
+      M.loadDeep(p.id).then(d => { if (wait) wait.remove(); if (d && o.el.isConnected) K.card(p.id, o); }, () => { if (wait) wait.remove(); });
+    }
     if (isBond && p.kind === 'IN' && M.posHistory) {  // линкер: последние ICPI / IR / BEI MOEX (контракт 1.2), если есть
       const LH = M.posHistory(p.id, { deep: true }), last = a => { for (let i = (a || []).length - 1; i >= 0; i--) if (a[i] != null) return a[i]; return null; };
       if (LH.icpi || LH.bei) fields.push(['ICPI (MOEX)', last(LH.icpi) == null ? '—' : f.n(last(LH.icpi), 4)], ['IR / BEI (MOEX)', f.pct(last(LH.ir)) + ' <small>/ ' + f.pct(last(LH.bei)) + '</small>']);
@@ -2905,6 +2968,7 @@
     if (isBond) {
       K.flows(o.bd.querySelector('.cfs'), p);
     }
+    if (again) o.bd.scrollTop = keepScroll;
     return o;
   };
 

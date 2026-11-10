@@ -21,9 +21,10 @@ function el() {
 // answers: очередь ответов fetch — {status, body} или Error (нет связи); calls — сколько раз спросили
 function load(answers) {
   const document = { addEventListener() {}, createElement: el, documentElement: el(), body: el(), querySelector() { return null; }, querySelectorAll() { return []; }, getElementById: () => el() };
-  class XHR { open() {} send() { this.status = 404; } }
+  class XHR { constructor() { throw new Error('синхронный запрос запрещён (TDM#629)'); } }
   const net = { calls: 0 };
-  const fetch = () => {
+  const fetch = u => {
+    if (/instruments\/aliases$/.test(u)) return Promise.resolve({ status: 404, ok: false, statusText: '', json: () => Promise.resolve(null) });  // алиасы — не график
     net.calls++;
     const a = answers.shift();
     if (a instanceof Error) return Promise.reject(a);

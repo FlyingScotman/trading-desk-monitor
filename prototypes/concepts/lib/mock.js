@@ -934,6 +934,16 @@
     return { v: n || !arr.length ? s : null, n, miss: arr.length - n };
   };
   M.sum = (arr, f) => M.sumX(arr, f).v;
+  // загрузчики данных как у lib/real.js (TDM#629): в демо всё уже в памяти, ждать нечего (KIT.whenData выполняет страницу сразу)
+  M.netErrors = [];
+  M.loadHistory = () => Promise.resolve([]);
+  M.loadDeep = id => Promise.resolve(M.posHistory(id));
+  M.hasDeep = () => true;
+  M.loadMarket = () => Promise.resolve(null);
+  M.loadCal = () => Promise.resolve(M.marketCal);
+  M.loadDeriv = () => Promise.resolve(M.derivParallel());
+  M.calLoading = () => false;
+  M.aliasesReady = Promise.resolve(null);
   // публикуемая ОВП демо — производная от FX-дельт позиций по книгам (источник «из позиций»), той же формы, что D.OCP
   // сервера: в демо шапка и C06 показывают ОВП, а не «ОВП нет» (TDM#566)
   (function () {

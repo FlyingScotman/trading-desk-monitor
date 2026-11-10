@@ -35,23 +35,30 @@
  *    сумма FX-дельт позиций ею не подменяется). FX-дельта позиций (p.fxDeltaBy) и PnL FX от неё не зависят.
  *  - свопы и РЕПО, оценённые ядром (#201): p.ratesCore — сделки (extra.swaps / extra.repos), фиксинги (extra.index_fixings),
  *    сверка с отчётом (reported_pv_rub / pv_diff_rub), provisional — quality 'assumed'; null — нет. M.indexFixings — фиксинги
- *    прогона по индексу; M.derivParallel() — лениво, /api/v1/runs/{id}/derivatives (ядро и отчёт по позициям): state
- *    'computed' / 'not_computed', 'unavailable' (status — код HTTP) — сервер не ответил; null — у прогона нет номера.
- * История позиции (M.posHistory) — синхронный запрос /api/v1/history/positions: первые две позиции по одной,
- * дальше сразу все (страницы C11, C13 просят историю всех позиций). Кроме цен рынка в ней номинал, DV01, CS01,
- * базис, MV и DV01 по кривым каждого прогона (M.histSource = 'runs': история риска — настоящая, не «номинал ×
- * сегодняшние чувствительности»).
- * Имена бумаг (батч 1, п. 3, R33): алиас по ISIN — GET /api/v1/instruments/aliases синхронно, до сборки позиций;
- * p.name = алиас ?? биржевое имя (p.exchName), p.alias — алиас или null, поиск — по обоим (p.searchBase + алиас).
- * Алиас не входит в строки прогона: тот же алиас — и у старых прогонов. Изменение — M.aliasApi.put (PUT
- * /api/v1/instruments/alias, только с компьютера сервера: иначе 403 и карточка — только чтение), история —
- * M.aliasApi.history; карточка (kit.js, K.aliasEdit) подставляет новое имя во все позиции бумаги.
- * Календарь рынка (M.marketCal) — тоже лениво, /api/v1/calendar/market: агрегаты по дням, типам и валютам из
- * статики хаба; строки за ячейкой — M.marketCal.flows({...}) тем же запросом с фильтром.
- * M.posHistory(id, { deep: true }) —
- * вся история бумаги (с 2024-01-03 через API истории хаба: карточка), с Z-спредом MOEX (zspr), дисконт-маржой
- * флоатера по прогонам (dm) и ICPI / IR / BEI линкера, когда они есть.
- * История рынка (M.marketHistory()) — тоже лениво, синхронно, один раз: /api/v1/history/market (изменения выпусков
+ *    прогона по индексу; M.derivParallel() — /api/v1/runs/{id}/derivatives (ядро и отчёт по позициям), заполняет M.loadDeriv():
+ *    state 'loading' — ответа ещё нет, 'computed' / 'not_computed', 'unavailable' (status — код HTTP) — сервер не ответил;
+ *    null — у прогона нет номера.
+ * Сеть (TDM#629): данные сверх прогона грузятся только асинхронно (fetch), по одному запросу на адрес в пределах
+ * страницы (общий кэш обещаний), и страница не ждёт их главным потоком. Читалки M.posHistory / M.marketHistory /
+ * M.marketCal / M.derivParallel остаются синхронными, но отдают то, что уже пришло (до этого — запасной вид без данных:
+ * история из прогона, null, «загрузка»); чтобы данные пришли, страница просит их загрузчиками, которые возвращают
+ * обещание: M.loadHistory(ids, from), M.loadDeep(id), M.loadMarket(), M.loadCal(), M.loadDeriv() (KIT.whenData(...)
+ * ждёт их, рисуя каркас и «загрузку»). Сбой запроса — не молчание: M.netErrors и событие concepts-data (kit.js
+ * показывает полосу с «Повторить»); «данных нет» (404) — не сбой.
+ * История позиции (M.posHistory): цены рынка, номинал, DV01, CS01, базис, MV и DV01 по кривым каждого прогона
+ * (M.histSource = 'runs': история риска — настоящая, не «номинал × сегодняшние чувствительности»); M.loadHistory(ids, from)
+ * просит только нужные бумаги и период (ids — список, null — все; from — дата, null — вся история).
+ * Имена бумаг (батч 1, п. 3, R33): алиас по ISIN — GET /api/v1/instruments/aliases (запрос уходит в начале real.js, ответ
+ * подставляется по приходу: p.name = алиас ?? биржевое имя (p.exchName), p.alias — алиас или null, поиск — по обоим (p.searchBase
+ * + алиас); страницы перерисовываются по событиям 'alias' и 'filter'). Алиас не входит в строки прогона: тот же алиас — и у
+ * старых прогонов. Изменение — M.aliasApi.put (PUT /api/v1/instruments/alias, только с компьютера сервера: иначе 403 и
+ * карточка — только чтение), история — M.aliasApi.history; карточка (kit.js, K.aliasEdit) подставляет новое имя во все
+ * позиции бумаги.
+ * Календарь рынка (M.marketCal) — тоже по запросу, /api/v1/calendar/market: агрегаты по дням, типам и валютам из
+ * статики хаба; строки за ячейкой — M.marketCal.flows({...}) тем же запросом с фильтром (обещание).
+ * M.loadDeep(id) — вся история бумаги (с 2024-01-03 через API истории хаба: карточка), с Z-спредом MOEX (zspr),
+ * дисконт-маржой флоатера по прогонам (dm) и ICPI / IR / BEI линкера, когда они есть.
+ * История рынка (M.marketHistory()) — по запросу, один раз: /api/v1/history/market (изменения выпусков
  * за 1Д/1Н/1М/3М/с начала года, индексы и фиксинги, курсы ЦБ, кривые RUONIA OIS / КС-свопов / КБД по датам);
  * null, если её нет. Страницы, которым она не нужна, её не грузят.
  */
@@ -99,6 +106,32 @@
   // 'ruonia_basis' (0.2.7, #213): риск RUONIA и базис ОФЗ посчитаны ядром порознь; 'kbd_par' (0.2.6) — RUONIA ОФЗ = её базис
   if (M.ofzView === 'basis' && M.ofzScheme === 'kbd_par') M.notes.push('прогон 0.2.6: риск ОФЗ к RUONIA в нём — тот же риск, что базис (приближение); с 0.2.7 они посчитаны порознь');
   const runQ = 'run_id=' + encodeURIComponent((D.source || {}).runId || '');
+
+  // ---------- сеть (TDM#629): только асинхронно, один запрос на адрес ----------
+  // getJson(path) → обещание { status, body, error }, никогда не отклоняется. Один адрес — один запрос на страницу
+  // (обещание в NET, пока ответ — сбой, кроме «данных нет» 404: сбой следующий вызов спросит снова). Событие
+  // concepts-data на document: { name } — данные пришли (kit.js: алиасы → перерисовка), { name, error } — сбой (kit.js
+  // показывает полосу с «Повторить»); сбои копятся в M.netErrors.
+  const NET = {};
+  M.netErrors = [];
+  const emit = detail => { try { document.dispatchEvent(new CustomEvent('concepts-data', { detail })); } catch (e) { } };
+  function getJson(path) {
+    if (NET[path]) return NET[path];
+    const bad = (status, error) => { delete NET[path]; return { status, body: null, error }; };
+    const p = typeof fetch !== 'function' ? Promise.resolve(bad(0, 'нет fetch'))
+      : fetch(path).then(r => {
+        if (r.status !== 200) return r.status === 404 ? { status: 404, body: null } : bad(r.status, 'ошибка сервера ' + r.status + (r.statusText ? ' ' + r.statusText : ''));
+        return r.json().then(body => ({ status: 200, body }), e => bad(200, 'ответ не разобран' + (e && e.message ? ': ' + e.message : '')));
+      }, e => bad(0, 'нет связи с сервером' + (e && e.message ? ': ' + e.message : '')));
+    return (NET[path] = p);
+  }
+  // сбой запроса — не молчание: в M.netErrors (по одному на «что») и событием
+  function failed(what, r) {
+    if (!r || !r.error) return;
+    const text = what + ': ' + r.error;
+    if (!M.netErrors.some(x => x.what === what)) M.netErrors.push({ what, text, status: r.status });
+    emit({ name: what, error: text, status: r.status });
+  }
   (D.riskNotes || []).forEach(n => M.notes.push(n.text + (n.detail ? ' (' + n.detail + ')' : '')));
   if (!D.pnlAvailable && D.pnlReasonText) M.notes.push('PnL: ' + D.pnlReasonText);
   if (!window.DESK_EXTRAS) M.notes.push((window.CONCEPTS_LOAD_ERROR || {}).data ? '/concepts-data.js не загрузился (ошибка сервера или нет связи): история, потоки и рынок пусты' : 'нет данных /concepts-data.js: история, потоки и рынок пусты');
@@ -280,10 +313,9 @@
 
   // ---------- имена бумаг: алиасы по ISIN (R33) ----------
   const LOOPBACK = /^(127\.\d+\.\d+\.\d+|localhost|\[?::1\]?)$/i;
+  // запрос уходит сразу, пока сервер ждёт нас, а подставляются алиасы по приходу (после сборки позиций ниже)
   M.aliases = {};
-  ((getJson('../api/v1/instruments/aliases') || {}).aliases || []).forEach(a => {
-    if (a && a.isin && a.alias) M.aliases[a.isin] = { alias: a.alias, changedBy: a.changed_by, changedAt: a.changed_at };
-  });
+  const aliasReq = getJson('../api/v1/instruments/aliases');
   async function aliasCall(method, path, body) {
     try {
       const r = await fetch(path, method === 'PUT' ? { method, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) } : {});
@@ -506,6 +538,18 @@
   M.defaultOrder = (a, b) => ((M.ccyOrder[a.ccy] ?? 99) - (M.ccyOrder[b.ccy] ?? 99)) || (groupOrder[a.group] - groupOrder[b.group]) ||
     (a.issuerName || '').localeCompare(b.issuerName || '', 'ru') || ((kindOrder[a.kind] || 0) - (kindOrder[b.kind] || 0)) || (a.tenor - b.tenor);
   positions.sort(M.defaultOrder);
+  // алиасы по приходу ответа (TDM#629): имя, поиск; страницы перерисует kit.js по событию (p.name читают при каждой отрисовке)
+  M.applyAliases = list => {
+    let n = 0;
+    (list || []).forEach(a => { if (a && a.isin && a.alias) { M.aliases[a.isin] = { alias: a.alias, changedBy: a.changed_by, changedAt: a.changed_at }; n++; } });
+    if (!n) return false;
+    positions.forEach(p => {
+      const a = p.isin && M.aliases[p.isin];
+      if (a) { p.alias = a.alias; p.name = a.alias; p.searchText = a.alias.toLowerCase() + ' ' + p.searchBase; }
+    });
+    return true;
+  };
+  M.aliasesReady = aliasReq.then(r => { failed('алиасы бумаг', r); if (r.body && M.applyAliases(r.body.aliases)) emit({ name: 'aliases' }); return r; });
   // фиксинги индексов, прочитанные свопами и РЕПО прогона (#201): одна история на прогон, у позиций — та же; пропуски и
   // объявленные неопубликованные дни — объединение по позициям. Пропуск внутри истории — заметка в шапке: позицию,
   // которая его читает, ядро не оценивает, она остаётся по отчёту
@@ -522,18 +566,19 @@
   // параллельный отчёт по деривативам (#201, TDM#49): GET /api/v1/runs/{id}/derivatives — оценка ядром и из отчёта по
   // позициям, статус, расхождение и допуск. Лениво, один раз; state 'not_computed' — прогон до блока, 'unavailable' —
   // сервер не ответил (status — код HTTP, 0 — нет связи); null — у прогона нет номера (запрашивать нечего)
+  // до ответа — state 'loading'; M.loadDeriv() — запрос (один на страницу), обещание ответа
   let parCache;
+  const parRunId = (D.source || {}).runId;
   M.derivParallel = function () {
-    if (parCache !== undefined) return parCache;
-    const id = (D.source || {}).runId;
-    if (id == null) return (parCache = null);
-    let status = 0, j = null;
-    try {
-      const x = new XMLHttpRequest(); x.open('GET', '../api/v1/runs/' + encodeURIComponent(id) + '/derivatives', false); x.send();
-      status = x.status; if (status === 200) j = JSON.parse(x.responseText);
-    } catch (e) { j = null; }
-    parCache = M.parseDerivParallel(j) || { state: 'unavailable', status, tolerance: null, totals: null, rows: [] };
-    return parCache;
+    if (parRunId == null) return null;
+    return parCache || { state: 'loading', status: 0, tolerance: null, totals: null, rows: [] };
+  };
+  M.loadDeriv = function () {
+    if (parRunId == null) return Promise.resolve(null);
+    return getJson('../api/v1/runs/' + encodeURIComponent(parRunId) + '/derivatives').then(r => {
+      parCache = M.parseDerivParallel(r.body) || { state: 'unavailable', status: r.status, tolerance: null, totals: null, rows: [] };
+      return parCache;
+    });
   };
   M.parseDerivParallel = j => {
     if (!isObj(j)) return null;
@@ -596,31 +641,46 @@
     M.hist.ofzSpr01 = M.hist.ofzSpr01.map((v, i) => v == null ? null : v + (pk[i] || 0));
   }
 
-  // ---------- история позиции (лениво, синхронно) ----------
-  const histCache = {}, deepCache = {}; let misses = 0, all = false;
-  function fetchHist(ids, from) {
-    try {
-      const x = new XMLHttpRequest();
-      x.open('GET', '../api/v1/history/positions?' + runQ + (ids ? '&ids=' + encodeURIComponent(ids.join(',')) : '') + (from ? '&from=' + from : ''), false);
-      x.send();
-      if (x.status !== 200) return null;
-      return JSON.parse(x.responseText);
-    } catch (e) { return null; }
+  // ---------- история позиции (по запросу, асинхронно) ----------
+  // Кэш — по позициям: ряд бумаги со своей осью дат и с границей from, с которой он загружен ('' — вся история). Запрос
+  // берёт только то, чего в кэше нет или что загружено с более поздней даты (ids — список или null — все, from — дата или
+  // null — вся история); длинный список — частями (адрес не длиннее нескольких КБ), все бумаги сразу — без ids.
+  // M.posHistory — синхронно, из кэша; нет ряда (не загружен, у бумаги нет истории) — единственная точка прогона.
+  const histCache = {}, histFrom = {}, deepCache = {};
+  const HIST_CHUNK = 150;
+  const histUrl = (ids, from) => '../api/v1/history/positions?' + runQ + (ids ? '&ids=' + encodeURIComponent(ids.join(',')) : '') + (from ? '&from=' + from : '');
+  const needHist = (id, from) => histFrom[id] === undefined || histFrom[id] > (from || '');
+  function putHist(j, ids, from, into, fromBy) {
+    // ряд, уже загруженный с той же или более ранней даты, не заменяется
+    const newer = pid => fromBy[pid] === undefined || fromBy[pid] > (from || '');
+    Object.entries(j.series || {}).forEach(([pid, s]) => { if (newer(pid)) { into[pid] = Object.assign({ dates: j.dates, runAt: j.runAt }, s); fromBy[pid] = from || ''; } });
+    (ids || []).forEach(pid => { if (newer(pid)) { into[pid] = into[pid] || null; fromBy[pid] = from || ''; } });
   }
+  M.loadHistory = function (ids, from) {
+    from = from || '';
+    const all = M.positions.map(p => p.id), want = (ids || all).filter(id => M.pos[id] && needHist(id, from));
+    if (!want.length) return Promise.resolve([]);
+    const asAll = !ids && want.length > all.length / 2;  // почти все — одним запросом без ids (тот же адрес, что греет сервер)
+    const parts = asAll ? [null] : Array.from({ length: Math.ceil(want.length / HIST_CHUNK) }, (_, i) => want.slice(i * HIST_CHUNK, (i + 1) * HIST_CHUNK));
+    return Promise.all(parts.map(part => getJson(histUrl(part, from)).then(r => {
+      if (r.body) putHist(r.body, part || all, from, histCache, histFrom); else failed('история позиций', r);
+      return r;
+    }))).then(rs => rs.filter(r => r.error));
+  };
+  // вся история одной бумаги (карточка): с 2000-01-01 — то есть с начала истории хаба
+  M.loadDeep = function (id) {
+    if (id in deepCache) return Promise.resolve(deepCache[id]);
+    return getJson(histUrl([id], '2000-01-01')).then(r => {
+      const j = r.body;
+      if (r.error) failed('история бумаги', r);
+      else deepCache[id] = j && j.series && j.series[id] ? Object.assign({ dates: j.dates, runAt: j.runAt }, j.series[id]) : null;
+      return deepCache[id] || null;
+    });
+  };
+  M.hasDeep = id => id in deepCache;
   const OPT = ['zspr', 'dm', 'dmPx', 'icpi', 'ir', 'bei', 'cpi', 'ofzSpr', 'ofzRuo', 'dmNote'];  // dmNote: почему DM нет (#33)
   M.posHistory = function (id, opts) {
-    if (opts && opts.deep) {
-      if (!(id in deepCache)) { const j = fetchHist([id], '2000-01-01'); deepCache[id] = j && j.series && j.series[id] ? Object.assign({ dates: j.dates, runAt: j.runAt }, j.series[id]) : null; }
-      if (deepCache[id] && deepCache[id].dates.length) {
-        return conv(deepCache[id], { deep: true }, id);
-      }
-    }
-    if (!histCache[id] && !all) {
-      misses++;
-      const j = fetchHist(misses > 2 ? null : [id]);
-      if (misses > 2) all = true;
-      if (j) Object.entries(j.series || {}).forEach(([pid, s]) => histCache[pid] = Object.assign({ dates: j.dates, runAt: j.runAt }, s));
-    }
+    if (opts && opts.deep && deepCache[id] && deepCache[id].dates.length) return conv(deepCache[id], { deep: true }, id);
     const p = M.pos[id], s = histCache[id];
     if (!s || !s.dates.length) {
       const c = {}; Object.keys(p.dv01ByCurve).forEach(id => { if (p.dv01ByCurve[id] && (id !== 'RUB OFZ' || M.ofzView === 'kbd')) c[id] = [p.dv01ByCurve[id]]; });  // ОФЗ-ИН: basis01 = 0
@@ -657,27 +717,27 @@
     return o;
   }
 
-  // ---------- история рынка (лениво, синхронно, один раз) ----------
-  let market;
-  M.marketHistory = function () {
-    if (market !== undefined) return market;
-    market = null;
-    try {
-      const x = new XMLHttpRequest();
-      x.open('GET', '../api/v1/history/market?' + runQ, false);
-      x.send();
-      if (x.status === 200) market = JSON.parse(x.responseText);
-    } catch (e) { market = null; }
-    if (market) {
-      // индексы, которых нет в прогоне (RUSFAR, RUSFAR CNY, SOFR, €STR, CPI г/г), — из фиксингов хаба
-      Object.entries(market.indices || {}).forEach(([k, v]) => { if (M.indices[k] == null && v.value != null) M.indices[k] = v.value; });
-      (market.notes || []).forEach(n => M.notes.push(n));
-    }
-    // кросс-курсы (R25): ряды хаба (контракт 1.3) или кросс курсов ЦБ с сервера; без истории рынка — по курсам прогона
-    M.crosses = market && market.crosses && Object.keys(market.crosses).length ? market.crosses : Object.fromEntries(
-      [['EUR/USD', 'EUR', 'USD'], ['USD/CNY', 'USD', 'CNY']].filter(([, b, q]) => M.fx[b] && M.fx[q] && M.fx[b] !== 1 && M.fx[q] !== 1)
-        .map(([pr, b, q]) => [pr, { value: M.fx[b] / M.fx[q], kind: 'run', label: 'кросс курсов прогона', chgPct: [M.fxChgPct && M.fxChgPct[b] != null && M.fxChgPct[q] != null ? ((1 + M.fxChgPct[b] / 100) / (1 + M.fxChgPct[q] / 100) - 1) * 100 : null] }]));
-    return market;
+  // ---------- история рынка (по запросу, один раз) ----------
+  // M.marketHistory() — синхронно: null, пока M.loadMarket() не ответил (или данных нет). Кросс-курсы M.crosses — после него.
+  let market = null, marketP = null;
+  M.marketHistory = () => market;
+  M.loadMarket = function () {
+    if (marketP) return marketP;
+    return (marketP = getJson('../api/v1/history/market?' + runQ).then(r => {
+      failed('история рынка', r);
+      market = r.status === 200 ? r.body : null;
+      if (r.error) marketP = null;  // сбой: следующий вызов спросит снова
+      if (market) {
+        // индексы, которых нет в прогоне (RUSFAR, RUSFAR CNY, SOFR, €STR, CPI г/г), — из фиксингов хаба
+        Object.entries(market.indices || {}).forEach(([k, v]) => { if (M.indices[k] == null && v.value != null) M.indices[k] = v.value; });
+        (market.notes || []).forEach(n => M.notes.push(n));
+      }
+      // кросс-курсы (R25): ряды хаба (контракт 1.3) или кросс курсов ЦБ с сервера; без истории рынка — по курсам прогона
+      M.crosses = market && market.crosses && Object.keys(market.crosses).length ? market.crosses : Object.fromEntries(
+        [['EUR/USD', 'EUR', 'USD'], ['USD/CNY', 'USD', 'CNY']].filter(([, b, q]) => M.fx[b] && M.fx[q] && M.fx[b] !== 1 && M.fx[q] !== 1)
+          .map(([pr, b, q]) => [pr, { value: M.fx[b] / M.fx[q], kind: 'run', label: 'кросс курсов прогона', chgPct: [M.fxChgPct && M.fxChgPct[b] != null && M.fxChgPct[q] != null ? ((1 + M.fxChgPct[b] / 100) / (1 + M.fxChgPct[q] / 100) - 1) * 100 : null] }]));
+      return market;
+    }));
   };
 
   // ---------- потоки, рынок, ЦБ ----------
@@ -724,21 +784,17 @@
     return flowCache[id];
   };
 
-  // ---------- календарь рынка (лениво: только страницам, которые его просят) ----------
+  // ---------- календарь рынка (по запросу: только страницам, которые его просят) ----------
+  // M.marketCal — синхронно: null, пока M.loadCal() не ответил (M.calLoading() — идёт запрос) или календаря нет.
+  // marketCal.flows(q) — обещание { count, amount, rows } (в демо — сразу объект: страницы оборачивают в Promise.resolve).
   const RUB_K = () => (M.toRepr && M.toRepr.RUB) || 1;  // рублёвые суммы — в валюте отчёта, как и всё на страницах
-  function getJson(path) {
-    try { const x = new XMLHttpRequest(); x.open('GET', path, false); x.send(); return x.status === 200 ? JSON.parse(x.responseText) : null; } catch (e) { return null; }
-  }
-  let calCache;
-  Object.defineProperty(M, 'marketCal', { configurable: true, get() {
-    if (calCache !== undefined) return calCache;
-    const c = getJson('../api/v1/calendar/market?' + runQ);
-    if (!c || c.missing) { calCache = null; return null; }
+  let calCache = null, calP = null, calBusy = false;
+  const buildCal = c => {
     const held = new Set(c.held || []), k = RUB_K(), F = c.fields;
     const rows = (key, conv) => (c[key] || []).map(r => { const o = {}; F[key].forEach((f, i) => o[f] = r[i]); if (conv) conv(o); return o; });
     const posBySec = {}; D.positions.forEach(p => { if (p.instrumentId) posBySec[p.instrumentId] = p.id; });
     const named = o => { const p = o.pos && M.pos[o.pos]; if (p && p.alias && o.name) o.name = p.alias; };  // алиас бумаги в портфеле (R33)
-    calCache = {
+    return {
       source: 'real', staticDate: c.staticDate, asOf: c.asOf, horizonEnd: c.horizonEnd, bigRub: c.bigRub * k,
       types: c.types.map(id => ({ id, label: c.typeLabels[id] || id })), ccys: c.ccys || [], coverage: c.coverage || {},
       rub: rows('rub', o => { o.amount *= k; o.bigAmount *= k; o.estAmount *= k; }),
@@ -749,16 +805,32 @@
       notes: ['календарь рынка — по статике хаба на ' + c.staticDate + ': купоны (ещё не объявленные — по последнему, «прогноз»), амортизации, погашения и оферты всех выпусков × объём выпуска MOEX'],
       flows(q) {  // строки за ячейкой: {market, from, to, type, kind, ccy, sector, big, issuer, secid}
         const qs = Object.entries(q || {}).filter(([, v]) => v != null && v !== false && v !== '').map(([a, v]) => a + '=' + encodeURIComponent(v)).join('&');
-        const j = getJson('../api/v1/calendar/market?' + runQ + '&' + qs);
-        if (!j) return { count: 0, amount: 0, rows: [] };
-        const kk = q && q.market === 'rub' ? k : 1;
-        j.amount = (j.amount || 0) * kk;
-        j.rows.forEach(r => { r.amount = r.amount == null ? null : r.amount * kk; r.pos = posBySec[r.secid] || null; named(r); });
-        return j;
+        return getJson('../api/v1/calendar/market?' + runQ + '&' + qs).then(r => {
+          if (!r.body) { failed('строки календаря рынка', r); return { count: 0, amount: 0, rows: [], error: r.error || null }; }
+          // ответ один на адрес и может читаться не раз: пересчёт валюты — на копии, а не на общем теле ответа
+          const j = Object.assign({}, r.body, { rows: (r.body.rows || []).map(x => Object.assign({}, x)) });
+          const kk = q && q.market === 'rub' ? k : 1;
+          j.amount = (j.amount || 0) * kk;
+          j.rows.forEach(r2 => { r2.amount = r2.amount == null ? null : r2.amount * kk; r2.pos = posBySec[r2.secid] || null; named(r2); });
+          return j;
+        });
       },
     };
-    return calCache;
-  } });
+  };
+  M.calLoading = () => calBusy;
+  M.loadCal = function () {
+    if (calP) return calP;
+    calBusy = true;
+    return (calP = getJson('../api/v1/calendar/market?' + runQ).then(r => {
+      calBusy = false;
+      failed('календарь рынка', r);
+      if (r.error) calP = null;  // сбой: следующий вызов спросит снова
+      const c = r.body;
+      calCache = !c || c.missing ? null : buildCal(c);
+      return calCache;
+    }));
+  };
+  Object.defineProperty(M, 'marketCal', { configurable: true, get() { return calCache; } });
 
   // ---------- как в mock.js ----------
   function priceFromYield(cpn, y, T, f) {
