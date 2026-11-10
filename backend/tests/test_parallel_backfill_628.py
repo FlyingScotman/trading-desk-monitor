@@ -379,16 +379,317 @@ def test_a_closed_pipeline_lets_the_waiting_dates_go():
         except parallel.Aborted as e:
             err.append(e)
 
-    t = threading.Thread(target=wait)
+    t = threading.Thread(target=wait, daemon=True)
     t.start()
     time.sleep(0.2)
-    with shared.cond:
-        shared.abort.value = 1
-        shared.cond.notify_all()
+    shared.abort.value = 1  # all close() does here: no lock, no condition for a dead process to hold
     t.join(5)
     assert len(err) == 1 and not t.is_alive()
     g.finish()  # nothing to wait for, nothing advanced
     assert shared.done.value == 0
+
+
+def test_a_dropped_date_does_not_publish_and_does_not_hold_the_others_up():
+    import multiprocessing
+
+    shared = parallel.Shared(multiprocessing.get_context("spawn"))
+    g0, g1, g2 = (parallel.Gate(shared, i) for i in range(3))
+    assert not g1.skipped()
+    shared.skip[1] = 1
+    shared.used = 3  # what ``Pipeline.submit`` keeps: the flags the next ``reset`` clears
+    assert g1.skipped() and not g0.skipped() and not g2.skipped()
+    with pytest.raises(parallel.Skipped):
+        g1.before_publish()
+    g0.before_publish()
+    g0.finish()
+    g1.finish()  # waits for its turn, then lets the next one through
+    g2.before_publish()
+    g2.finish()
+    assert shared.done.value == 3
+    shared.reset()  # the next pass on the same processes starts clean
+    assert shared.done.value == 0 and not parallel.Gate(shared, 1).skipped()
+
+
+def test_a_date_that_waits_for_its_turn_gives_up_when_its_turn_cannot_come(monkeypatch):
+    import multiprocessing
+
+    shared = parallel.Shared(multiprocessing.get_context("spawn"))
+    monkeypatch.setattr(parallel, "TURN_TIMEOUT_S", 0.3)
+    with pytest.raises(parallel.Aborted, match="did not come"):
+        parallel.Gate(shared, 2).wait_turn()
+
+
+def test_a_failed_read_of_the_carried_spreads_is_remembered_and_raised_at_every_lookup():
+    calls: list[int] = []
+
+    def load() -> dict[str, Any]:
+        calls.append(1)
+        if len(calls) == 1:
+            raise ValueError("the store hiccuped")
+        return {"A": 1}
+
+    lazy = parallel.LazyCarried(load)
+    assert lazy.error is None
+    with pytest.raises(ValueError, match="hiccuped"):
+        lazy.get("A")
+    assert isinstance(lazy.error, ValueError) and not lazy.loaded
+    with pytest.raises(ValueError, match="hiccuped"):  # not read again: the run is the one that failed
+        len(lazy)
+    assert len(calls) == 1
+
+
+# ---- a process that dies while the others wait for their turn: nothing waits for ever
+
+def _gate_job(seq: int) -> int:
+    g = parallel.Gate(parallel._SHARED, seq)
+    if seq == 0:
+        time.sleep(2.0)  # seq 1 and 2 are asleep in wait_turn meanwhile
+        os._exit(3)  # the process of the first date dies (kill, out of memory)
+    g.wait_turn()
+    return seq
+
+
+def _gate_init(shared: parallel.Shared) -> None:
+    parallel._SHARED = shared
+
+
+def test_a_process_that_dies_while_the_others_wait_for_their_turn_does_not_hang_the_close():
+    """TDM#628 review: the order was kept with a ``multiprocessing.Condition``; ``notify_all`` of a closing pipeline waits
+    for every sleeper, and the sleepers were killed with the broken pool: the close never returned."""
+    import multiprocessing
+    from concurrent.futures import ProcessPoolExecutor
+    from concurrent.futures.process import BrokenProcessPool
+
+    ctx = multiprocessing.get_context("spawn")
+    shared = parallel.Shared(ctx)
+    pool = ProcessPoolExecutor(max_workers=3, mp_context=ctx, initializer=_gate_init, initargs=(shared,))
+    futs = [pool.submit(_gate_job, i) for i in range(3)]
+    with pytest.raises(BrokenProcessPool):
+        futs[0].result(timeout=60)
+    closed = threading.Event()
+
+    def close() -> None:
+        shared.abort.value = 1
+        closed.set()
+
+    threading.Thread(target=close, daemon=True).start()
+    assert closed.wait(10), "closing the pipeline hung on the sleepers of a dead pool"
+    pool.shutdown(wait=False, cancel_futures=True)
+
+
+def die_late(bad: str, after_s: float) -> None:
+    """A pool process's hook: the run of ``bad`` dies (``os._exit``, as an out-of-memory kill) ``after_s`` seconds in, the
+    later dates meanwhile computed and waiting for their turn."""
+    real = dayrun.eod_run
+
+    def run(settings, d, **kw):
+        if d == bad:
+            time.sleep(after_s)
+            os._exit(3)
+        return real(settings, d, **kw)
+
+    dayrun.eod_run = run
+
+
+def in_thread(fn, limit_s: float):
+    """``fn()`` in a thread, its result, or a failure of the test when it does not return in ``limit_s``."""
+    box: list[Any] = []
+    t = threading.Thread(target=lambda: box.append(fn()), daemon=True)
+    t.start()
+    t.join(limit_s)
+    assert not t.is_alive(), f"did not return in {limit_s} s"
+    return box[0]
+
+
+def test_a_process_that_dies_in_the_middle_while_later_dates_wait_costs_no_date_and_the_call_returns(
+        tmp_path, cache, store_url, pg_server):
+    load(store_url, tmp_path, "2026-10-12", 10)
+    s = settings(tmp_path, cache, store_url)
+    res = in_thread(lambda: backfill.run(s, plan(store_url, s), store_url=store_url, out=lambda line: None, workers=3,
+                                         pool_init=(die_late, ("2026-10-13", 12.0))), 300)
+    assert res["done"] == RUN_DATES and not res["failed"] and res["left"] == 0 and res["complete"]
+    assert run_order(store_url) == RUN_DATES  # once each, in the order of the dates
+    other = second_store(pg_server)
+    load(other, tmp_path, "2026-10-12", 10)
+    s1 = settings(tmp_path, cache, other)
+    backfill.run(s1, plan(other, s1), store_url=other, out=lambda line: None)
+    same_runs(runs(store_url), runs(other))
+
+
+def hang_date(bad: str) -> None:
+    real = dayrun.eod_run
+
+    def run(settings, d, **kw):
+        if d == bad:
+            time.sleep(3600)  # a process that does not answer
+        return real(settings, d, **kw)
+
+    dayrun.eod_run = run
+
+
+def test_a_process_that_does_not_answer_is_ended_after_the_timeout_and_the_dates_run_one_after_the_other(
+        tmp_path, cache, store_url, monkeypatch):
+    load(store_url, tmp_path, "2026-10-12", 10)
+    s = settings(tmp_path, cache, store_url)
+    monkeypatch.setattr(parallel, "RESULT_TIMEOUT_S", 40.0)
+    monkeypatch.setattr(parallel, "CLOSE_GRACE_S", 5.0)
+    t0 = time.monotonic()
+    res = in_thread(lambda: backfill.run(s, plan(store_url, s), store_url=store_url, out=lambda line: None, workers=2,
+                                         pool_init=(hang_date, ("2026-10-13",))), 400)
+    assert res["done"] == RUN_DATES and not res["failed"] and res["left"] == 0
+    assert run_order(store_url) == RUN_DATES
+    assert time.monotonic() - t0 < 300
+
+
+def late_death(plan_: tuple) -> None:
+    """A pool process's hook: ``plan_`` is ((date, seconds, what), ...): after the date's run is published the process
+    waits ``seconds`` and then ``exit``s (dies) or ``sleep``s (does not return)."""
+    real = dayrun.eod_run
+    by_date = {d: (sec, what) for d, sec, what in plan_}
+
+    def run(settings, d, **kw):
+        rid = real(settings, d, **kw)
+        if d in by_date:
+            sec, what = by_date[d]
+            time.sleep(sec)
+            if what == "exit":
+                os._exit(3)
+            time.sleep(3600)
+        return rid
+
+    dayrun.eod_run = run
+
+
+def test_a_date_a_process_published_before_the_pool_broke_is_not_made_again(tmp_path, cache, store_url):
+    """The process of 13.10 dies after it published, the process of 14.10 published and never answers: both futures are
+    lost with the pool, the runs are in the store. Neither date is made a second time."""
+    load(store_url, tmp_path, "2026-10-12", 10)
+    s = settings(tmp_path, cache, store_url)
+    hook = (late_death, ((("2026-10-13", 8.0, "exit"), ("2026-10-14", 1.0, "sleep")),))
+    res = in_thread(lambda: backfill.run(s, plan(store_url, s), store_url=store_url, out=lambda line: None, workers=3,
+                                         pool_init=hook), 300)
+    assert res["done"] == RUN_DATES and not res["failed"] and res["left"] == 0
+    assert run_order(store_url) == RUN_DATES  # not one run twice
+    assert not plan(store_url, s).todo
+
+
+def test_the_second_pass_does_not_make_again_a_run_a_process_published_before_the_pool_broke(tmp_path, cache, store_url):
+    load(store_url, tmp_path, "2026-10-12", 10)
+    s = settings(tmp_path, cache, store_url)
+    backfill.run(s, plan(store_url, s), store_url=store_url, out=lambda line: None)
+    hook = (late_death, ((("2026-10-14", 8.0, "exit"), ("2026-10-13", 1.0, "sleep")),))
+    res = in_thread(lambda: backfill.run_second(s, plan(store_url, s), store_url=store_url, out=lambda line: None,
+                                                workers=3, pool_init=hook), 300)
+    assert res["done"] == NEWEST_FIRST and not res["failed"] and not res["moved"]
+    assert run_order(store_url) == RUN_DATES + NEWEST_FIRST  # one new run of each date
+    assert not plan(store_url, s).second_todo
+
+
+# ---- the pool that cannot start, the pool that serves several passes, the dropped date
+
+def test_a_pool_that_cannot_start_is_the_sequential_run_with_a_warning(tmp_path, cache, store_url, monkeypatch):
+    load(store_url, tmp_path, "2026-10-12", 10)
+    s = settings(tmp_path, cache, store_url)
+
+    def no_semaphores(*a, **kw):
+        raise OSError(28, "No space left on device (semaphores)")
+
+    monkeypatch.setattr(parallel, "Pipeline", no_semaphores)
+    lines: list[str] = []
+    first = backfill.run(s, plan(store_url, s), store_url=store_url, out=lines.append, workers=3)
+    assert first["done"] == RUN_DATES and not first["failed"] and first["complete"]
+    assert any(x.startswith("WARN backfill: the processes cannot be started (OSError") and "one after the other" in x
+               for x in lines)
+    lines.clear()
+    second = backfill.run_second(s, plan(store_url, s), store_url=store_url, out=lines.append, workers=3)
+    assert second["done"] == NEWEST_FIRST and not second["failed"]
+    assert any(x.startswith("WARN backfill: the processes cannot be started") for x in lines)
+    assert run_order(store_url) == RUN_DATES + NEWEST_FIRST
+
+
+def test_one_set_of_processes_serves_both_passes_and_starts_again_after_a_broken_pass(tmp_path, cache, store_url):
+    load(store_url, tmp_path, "2026-10-12", 10)
+    s = settings(tmp_path, cache, store_url)
+    pool = parallel.Pool(2)
+    try:
+        backfill.run(s, plan(store_url, s), store_url=store_url, out=lambda line: None, workers=2, pool=pool)
+        ex = pool.executor
+        assert ex is not None  # kept for the next pass
+        pids = {p.pid for p in ex._processes.values()}
+        res = backfill.run_second(s, plan(store_url, s), store_url=store_url, out=lambda line: None, workers=2,
+                                  pool=pool)
+        assert res["done"] == NEWEST_FIRST and pool.executor is ex  # the same processes
+        assert {p.pid for p in pool.executor._processes.values()} == pids
+        assert run_order(store_url) == RUN_DATES + NEWEST_FIRST
+    finally:
+        pool.close()
+    assert pool.executor is None
+
+
+def test_a_pool_whose_pass_broke_is_replaced_for_the_next_pass(tmp_path, cache, store_url):
+    load(store_url, tmp_path, "2026-10-12", 10)
+    s = settings(tmp_path, cache, store_url)
+    pool = parallel.Pool(2, init=(break_date, ("2026-10-13", "die")))
+    try:
+        res = backfill.run(s, plan(store_url, s), store_url=store_url, out=lambda line: None, workers=2, pool=pool)
+        assert res["done"] == RUN_DATES and pool.executor is None  # the broken processes are gone
+        res = backfill.run_second(s, plan(store_url, s), store_url=store_url, out=lambda line: None, workers=2,
+                                  pool=pool)  # a new set starts (its hook kills 13.10 again: the rest runs here)
+        assert res["done"] == NEWEST_FIRST and not res["failed"] and pool.executor is None
+    finally:
+        pool.close()
+
+
+def test_a_dropped_date_is_not_published_and_the_dates_after_it_go_on(tmp_path, cache, store_url):
+    """``Pipeline.discard``: the date the run passed over (as the sequential run passes over it) is not computed when it has
+    not started and not published when it has; the order goes on without it."""
+    load(store_url, tmp_path, "2026-10-12", 10)
+    s = settings(tmp_path, cache, store_url)
+    pipe = parallel.Pipeline(s, 1, store_url=store_url, snapshots=str(cache), no_gamma=True, wait_carried=True)
+    try:
+        for d in RUN_DATES[:3]:
+            pipe.submit(d)
+        pipe.discard(RUN_DATES[1])  # one process: it is queued behind the first
+        assert not pipe.has(RUN_DATES[1]) and pipe.pending == 2
+        assert pipe.result(RUN_DATES[0])["rid"]
+        assert pipe.result(RUN_DATES[2])["rid"]  # its turn came although the date before it was dropped
+        assert pipe.peak_mb > 0  # the most a process held, from the answers
+    finally:
+        pipe.close()
+    assert run_order(store_url) == [RUN_DATES[0], RUN_DATES[2]]
+
+
+def nice_to_file(path: str) -> None:
+    with open(path, "a", encoding="utf-8") as f:
+        f.write(f"{os.nice(0)}\n")
+
+
+def test_the_processes_of_the_pool_work_below_the_owners_programs(tmp_path, cache, store_url, monkeypatch):
+    if os.name == "nt":
+        pytest.skip("POSIX niceness")
+    load(store_url, tmp_path, "2026-10-12", 10)
+    s = settings(tmp_path, cache, store_url)
+    mine = os.nice(0)
+    out = tmp_path / "nice.log"
+    backfill.run(s, plan(store_url, s), store_url=store_url, out=lambda line: None, workers=2,
+                 pool_init=(nice_to_file, (str(out),)))
+    assert {int(x) for x in out.read_text().split()} == {mine + parallel.WORKER_NICE}
+
+
+def test_the_priority_is_lowered_per_platform_and_a_failure_is_not_fatal(monkeypatch):
+    calls: list[int] = []
+    monkeypatch.setattr(parallel.sys, "platform", "linux")
+    monkeypatch.setattr(os, "nice", lambda n: calls.append(n))
+    parallel._lower_priority()
+    assert calls == [parallel.WORKER_NICE]
+
+    def refuse(n):
+        raise PermissionError("no")
+
+    monkeypatch.setattr(os, "nice", refuse)
+    parallel._lower_priority()  # not fatal
+    monkeypatch.setattr(parallel.sys, "platform", "win32")  # no windll here: the failure is swallowed as well
+    parallel._lower_priority()
 
 
 # ---- settings, the autopilot

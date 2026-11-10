@@ -681,46 +681,20 @@ def cmd_backfill(a: argparse.Namespace) -> int:
     print(backfill.text(p, dry_run=a.dry_run))
     if a.dry_run or not (p.todo or p.second_todo):
         return 0
-    lock = CycleLock(st.home)
-    contexts = ContextCache()
-    done = failed = 0
-    t0 = time.perf_counter()
-    complete = True  # every date of the first pass went through: the second pass follows (TDM#627)
+    from .parallel import Pool
+
     workers = int(getattr(st, "backfill_workers", 1))
-    chunk = workers * 4 if workers > 1 else 1  # dates a hold of the cycle lock: the processes' start is paid once
-    for i in range(chunk, len(p.todo) + chunk, chunk):
-        batch = p.todo[i - chunk:i]
-        i = min(i, len(p.todo))
-        waited = False
-        while not lock.acquire():
-            if not waited:
-                print("  waiting for the autopilot's cycle (desk serve) to end ...")
-                waited = True
-            time.sleep(5)
-        try:
-            one = backfill.Plan(p.date_from, p.date_to, batch, p.hub, p.rows)
-            res = backfill.run(st, one, store_url=url, client=client, out=print, contexts=contexts, workers=workers)
-        finally:
-            lock.release()
-        done += len(res["done"])
-        failed += len(res["failed"])
-        for d, err in res["failed"]:
-            print(f"  {d} FAILED: {err}")
-        for d in res["unconverged"]:
-            print(f"  {d} still stale after its run: tried again next time (#23)")
-        for d in res["skipped"]:
-            print(f"  {d} skipped: its bundle is not cached and the hub is off")
-        complete = complete and res["complete"]
-        el = time.perf_counter() - t0
-        print(f"[{i}/{len(p.todo)}] {batch[-1].date} done; {el:.0f} s, about {el / i * (len(p.todo) - i):.0f} s left")
-    print(f"backfill: {done} dates run, {failed} failed, in {time.perf_counter() - t0:.0f} s")
-    if complete:  # the second derivatives of the dates run without them, the newest first
-        with _store(a) as con:
-            p2 = backfill.plan(con, st, d_from, d_to, rows)
-        second = p2.second_todo
-        for i in range(chunk, len(second) + chunk, chunk):
-            batch = second[i - chunk:i]
-            i = min(i, len(second))
+    pool = Pool(workers) if workers > 1 else None  # one set of processes for every batch of both passes
+    try:
+        lock = CycleLock(st.home)
+        contexts = ContextCache()
+        done = failed = 0
+        t0 = time.perf_counter()
+        complete = True  # every date of the first pass went through: the second pass follows (TDM#627)
+        chunk = workers * 4 if workers > 1 else 1  # dates a hold of the cycle lock: the processes' start is paid once
+        for i in range(chunk, len(p.todo) + chunk, chunk):
+            batch = p.todo[i - chunk:i]
+            i = min(i, len(p.todo))
             waited = False
             while not lock.acquire():
                 if not waited:
@@ -728,27 +702,60 @@ def cmd_backfill(a: argparse.Namespace) -> int:
                     waited = True
                 time.sleep(5)
             try:
-                one = backfill.Plan(p2.date_from, p2.date_to, batch, p2.hub, p2.rows)
-                res = backfill.run_second(st, one, store_url=url, out=print, contexts=contexts, workers=workers)
+                one = backfill.Plan(p.date_from, p.date_to, batch, p.hub, p.rows)
+                res = backfill.run(st, one, store_url=url, client=client, out=print, contexts=contexts, workers=workers, pool=pool)
             finally:
                 lock.release()
+            done += len(res["done"])
             failed += len(res["failed"])
             for d, err in res["failed"]:
-                print(f"  {d} second derivatives FAILED: {err}")
+                print(f"  {d} FAILED: {err}")
+            for d in res["unconverged"]:
+                print(f"  {d} still stale after its run: tried again next time (#23)")
             for d in res["skipped"]:
-                print(f"  {d} skipped: its bundle is not cached")
-            for d in res["moved"]:
-                print(f"  {d} changed its inputs meanwhile: run again by the first pass next time")
-            if res["stopped"]:
-                print(f"  stopped: {res['stopped']}")
-                failed += 1
-                break
+                print(f"  {d} skipped: its bundle is not cached and the hub is off")
+            complete = complete and res["complete"]
             el = time.perf_counter() - t0
-            print(f"[second {i}/{len(second)}] {batch[-1].date} done; {el:.0f} s")
-        if second:
-            print(f"backfill: second derivatives of {len(second)} dates, {failed} failed in all, "
-                  f"in {time.perf_counter() - t0:.0f} s")
-    return 1 if failed else 0
+            print(f"[{i}/{len(p.todo)}] {batch[-1].date} done; {el:.0f} s, about {el / i * (len(p.todo) - i):.0f} s left")
+        print(f"backfill: {done} dates run, {failed} failed, in {time.perf_counter() - t0:.0f} s")
+        if complete:  # the second derivatives of the dates run without them, the newest first
+            with _store(a) as con:
+                p2 = backfill.plan(con, st, d_from, d_to, rows)
+            second = p2.second_todo
+            for i in range(chunk, len(second) + chunk, chunk):
+                batch = second[i - chunk:i]
+                i = min(i, len(second))
+                waited = False
+                while not lock.acquire():
+                    if not waited:
+                        print("  waiting for the autopilot's cycle (desk serve) to end ...")
+                        waited = True
+                    time.sleep(5)
+                try:
+                    one = backfill.Plan(p2.date_from, p2.date_to, batch, p2.hub, p2.rows)
+                    res = backfill.run_second(st, one, store_url=url, out=print, contexts=contexts, workers=workers, pool=pool)
+                finally:
+                    lock.release()
+                failed += len(res["failed"])
+                for d, err in res["failed"]:
+                    print(f"  {d} second derivatives FAILED: {err}")
+                for d in res["skipped"]:
+                    print(f"  {d} skipped: its bundle is not cached")
+                for d in res["moved"]:
+                    print(f"  {d} changed its inputs meanwhile: run again by the first pass next time")
+                if res["stopped"]:
+                    print(f"  stopped: {res['stopped']}")
+                    failed += 1
+                    break
+                el = time.perf_counter() - t0
+                print(f"[second {i}/{len(second)}] {batch[-1].date} done; {el:.0f} s")
+            if second:
+                print(f"backfill: second derivatives of {len(second)} dates, {failed} failed in all, "
+                      f"in {time.perf_counter() - t0:.0f} s")
+        return 1 if failed else 0
+    finally:
+        if pool is not None:
+            pool.close()
 
 
 def cmd_prune(a: argparse.Namespace) -> int:

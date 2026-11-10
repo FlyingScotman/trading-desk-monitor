@@ -534,6 +534,35 @@ def _submit(pipe: Any, date: str) -> bool:
     return True
 
 
+def _open_pipeline(out: Callable[[str], None], settings: Settings, workers: int, **kw: Any) -> Any:
+    """The pool for a pass, or None when it cannot be made (no semaphores, no process, no connection for the orphans):
+    the pass then runs the dates one after the other in this process, said (``WARN``)."""
+    from . import parallel
+
+    try:
+        return parallel.Pipeline(settings, workers, **kw)
+    except Exception as e:  # noqa: BLE001 - the sequential run is the answer, whatever the pool says
+        msg = (f"backfill: the processes cannot be started ({type(e).__name__}: {e}): "
+               "the dates run one after the other")
+        log.warning("%s", msg)
+        out("WARN " + msg)
+        return None
+
+
+def _published(con: psycopg.Connection, settings: Settings, p: Plan, day: Day, *, second: bool = False) -> int | None:
+    """After the pool broke: the run a process of it published for ``day`` before it died (the date is current now,
+    but was not in the plan; ``second``: it has a newer run than the plan's, with the second derivatives), else None.
+    Such a date is not made again: the sequential run would have made it once."""
+    d = date.fromisoformat(day.date)
+    now_ = next((x for x in plan(con, settings, d, d, p.rows if p.hub or not second else None).days
+                 if x.date == day.date), None)
+    if now_ is None or now_.status != "done":
+        return None
+    if second and (now_.run_id == day.run_id or now_.second == "todo"):
+        return None
+    return now_.run_id
+
+
 def _eod(pipe: Any, date: str, alone: Callable[[], int | None], out: Callable[[str], None]) -> Any:
     """The run of ``date``: its answer from the pool when it was given to it (the lines it printed first, as
     ``dayrun.eod_run`` prints them), else ``alone()``. ``PIPE_BROKEN`` when a process of the pool died."""
@@ -551,7 +580,7 @@ def run(settings: Settings, p: Plan, *, store_url: str | None = None, client: An
         budget_s: float | None = None, out: Callable[[str], None] = print,
         progress: Callable[[int, int, str], None] | None = None, contexts: Any = None,
         exclude: set[str] | frozenset[str] = frozenset(), now: datetime | None = None,
-        hub_answered: bool = False, workers: int = 1, pool_init: Any = None) -> dict[str, Any]:
+        hub_answered: bool = False, workers: int = 1, pool_init: Any = None, pool: Any = None) -> dict[str, Any]:
     """Step 3 (module doc) over the plan's ``todo`` dates, oldest first, until ``budget_s`` seconds have passed
     (None: all), but ``exclude`` (the dates the autopilot's eod step ran or failed this cycle). ``client``: a
     ``HubClient`` for the bundles not cached (None: only the cached dates run). ``now``: the run's start, for the
@@ -572,7 +601,10 @@ def run(settings: Settings, p: Plan, *, store_url: str | None = None, client: An
     order, so everything below (the stall, the problem dates, the budget) works on them as on dates run one after the
     other. The budget cuts what has not started: the dates already submitted (at most ``workers`` + 1) are finished.
     The runs are the sequential run's, to the last bit (``test_parallel_backfill_628``). ``pool_init``: (function, args)
-    each process of the pool calls when it starts (a test's hook; the function of an importable module)."""
+    each process of the pool calls when it starts (a test's hook; the function of an importable module). ``pool``: a
+    ``parallel.Pool`` of the caller's that serves the passes of a cycle in turn (its processes start once and keep their
+    prepared markets); none: this run starts its own and ends it. If the processes cannot start, or one dies, the dates
+    run one after the other here (said), and a date a process published before it died is not made again."""
     from . import parallel
     from .dayrun import ContextCache, eod_run
 
@@ -607,6 +639,7 @@ def run(settings: Settings, p: Plan, *, store_url: str | None = None, client: An
     tried = 0  # dates attempted this run (done or failed), for the time budget
     through = False  # the stall standing at the start is over: a date got past its phase
     pipe = None
+    broke = False  # the pool broke: a date may have been published by a process that was in flight
     prefetched: dict[str, Any] = {}  # date -> downloaded (bool), SKIP or the error its bundle step raised (workers > 1)
     blocked: list[int] = []  # the index of a date whose bundle step failed ahead: the dates after it wait for the loop
 
@@ -667,8 +700,9 @@ def run(settings: Settings, p: Plan, *, store_url: str | None = None, client: An
 
     try:
         if workers > 1 and len(todo) > 1:
-            pipe = parallel.Pipeline(settings, workers, store_url=store_url or store.resolve_url(settings),
-                                     snapshots=str(cache_dir), no_gamma=True, wait_carried=True, init=pool_init)
+            pipe = _open_pipeline(out, settings, workers, store_url=store_url or store.resolve_url(settings),
+                                  snapshots=str(cache_dir), no_gamma=True, wait_carried=True, init=pool_init,
+                                  pool=pool)
         for i, day in enumerate(todo):
             if pipe is not None:
                 fill(i)
@@ -699,21 +733,19 @@ def run(settings: Settings, p: Plan, *, store_url: str | None = None, client: An
                 phase = "run"
                 out(f"backfill {day.date}: {day.why}")
                 t1 = time.monotonic()
-                rid = _eod(pipe, day.date, partial(eod_run, settings, day.date, snapshots=cache_dir, store_url=store_url,
-                                                   report_dir=None, out=indented, contexts=contexts, read_model=False,
-                                                   no_gamma=True), out)
+                alone = partial(eod_run, settings, day.date, snapshots=cache_dir, store_url=store_url, report_dir=None,
+                                out=indented, contexts=contexts, read_model=False, no_gamma=True)
+                if broke:  # a date the processes published before the pool broke is not made again
+                    con = con or store.connect(store_url or store.resolve_url(settings))
+                    rid = _published(con, settings, p, day) or alone()
+                else:
+                    rid = _eod(pipe, day.date, alone, out)
                 if rid is PIPE_BROKEN:  # a process of the pool died: this date and the rest one after the other
                     pipe.close()
-                    pipe = None
+                    pipe, broke = None, True
                     prefetched.clear()
                     con = con or store.connect(store_url or store.resolve_url(settings))
-                    d = date.fromisoformat(day.date)
-                    now_ = next((x for x in plan(con, settings, d, d, p.rows).days if x.date == day.date), None)
-                    if now_ is not None and now_.status == "done":  # its process published it before the pool broke
-                        rid = now_.run_id
-                    else:
-                        rid = eod_run(settings, day.date, snapshots=cache_dir, store_url=store_url, report_dir=None,
-                                      out=indented, contexts=contexts, read_model=False, no_gamma=True)
+                    rid = _published(con, settings, p, day) or alone()
                 if rid is not None:
                     # one after the other: this date's time; in the pool: the pass's time a date, what the ETA wants
                     st["seconds_per_date"] = round((time.monotonic() - (t0 if workers > 1 else t1))
@@ -832,7 +864,7 @@ MISMATCH_SHOWN = 3
 def run_second(settings: Settings, p: Plan, *, store_url: str | None = None, budget_s: float | None = None,
                out: Callable[[str], None] = print, progress: Callable[[int, int, str], None] | None = None,
                contexts: Any = None, exclude: set[str] | frozenset[str] = frozenset(),
-               workers: int = 1, pool_init: Any = None) -> dict[str, Any]:
+               workers: int = 1, pool_init: Any = None, pool: Any = None) -> dict[str, Any]:
     """The second pass of the history (TDM#627, module doc): the dates of ``p`` whose default run was made without
     the second derivatives (``Day.second`` ``todo``), the newest first, until ``budget_s`` seconds have passed (None:
     all), but ``exclude``. A date's run is made again in full from the cache (``eod_run``; no download: a date whose
@@ -851,7 +883,7 @@ def run_second(settings: Settings, p: Plan, *, store_url: str | None = None, bud
     ``progress(x, m, date)`` as ``run``'s: ``x`` the dates with the second derivatives, ``m`` all that have a run.
     An error of the store or the network stops the pass (tried again next cycle); another error is the date's, counted
     the same way. ``workers`` > 1: the dates in that many processes at once, published newest first as one after the
-    other (``run``, ``desk.parallel``). Returns {done: [dates], failed: [(date, error)], moved: [dates], skipped: [dates
+    other (``run``, ``desk.parallel``; ``pool``: the same). Returns {done: [dates], failed: [(date, error)], moved: [dates], skipped: [dates
     not cached], mismatch: [(date, what differs)], left: n, stopped: the transient error or None, seconds}."""
     from . import parallel
     from .dayrun import ContextCache, eod_run
@@ -878,6 +910,7 @@ def run_second(settings: Settings, p: Plan, *, store_url: str | None = None, bud
     con: psycopg.Connection | None = None
     tried = 0
     pipe = None
+    broke = False  # the pool broke: a run may have been published by a process that was in flight
     have = set(SnapshotDir(cache_dir).market_dates())
 
     def fill(i: int) -> None:
@@ -895,8 +928,9 @@ def run_second(settings: Settings, p: Plan, *, store_url: str | None = None, bud
     try:
         if workers > 1 and len(todo) > 1:
             # newest first, each date reads the dates before it, which this pass publishes later: no read waits
-            pipe = parallel.Pipeline(settings, workers, store_url=store_url or store.resolve_url(settings),
-                                     snapshots=str(cache_dir), no_gamma=False, wait_carried=False, init=pool_init)
+            pipe = _open_pipeline(out, settings, workers, store_url=store_url or store.resolve_url(settings),
+                                  snapshots=str(cache_dir), no_gamma=False, wait_carried=False, init=pool_init,
+                                  pool=pool)
         for i, day in enumerate(todo):
             if pipe is not None:
                 fill(i)
@@ -912,21 +946,18 @@ def run_second(settings: Settings, p: Plan, *, store_url: str | None = None, bud
             try:
                 out(f"backfill {day.date}: second derivatives (the run {day.run_id} has none)")
                 t1 = time.monotonic()
-                rid = _eod(pipe, day.date, partial(eod_run, settings, day.date, snapshots=cache_dir, store_url=store_url,
-                                                   report_dir=None, out=indented, contexts=contexts, read_model=False),
-                           out)
+                alone = partial(eod_run, settings, day.date, snapshots=cache_dir, store_url=store_url, report_dir=None,
+                                out=indented, contexts=contexts, read_model=False)
+                if broke:  # a run the processes published before the pool broke is not made again
+                    con = con or store.connect(store_url or store.resolve_url(settings))
+                    rid = _published(con, settings, p, day, second=True) or alone()
+                else:
+                    rid = _eod(pipe, day.date, alone, out)
                 if rid is PIPE_BROKEN:  # a process of the pool died: this date and the rest one after the other
                     pipe.close()
-                    pipe = None
+                    pipe, broke = None, True
                     con = con or store.connect(store_url or store.resolve_url(settings))
-                    d = date.fromisoformat(day.date)
-                    now_ = next((x for x in plan(con, settings, d, d, p.rows if p.hub else None).days
-                                 if x.date == day.date), None)
-                    if now_ is not None and now_.status == "done" and now_.run_id != day.run_id:
-                        rid = now_.run_id  # its process published it before the pool broke
-                    else:
-                        rid = eod_run(settings, day.date, snapshots=cache_dir, store_url=store_url, report_dir=None,
-                                      out=indented, contexts=contexts, read_model=False)
+                    rid = _published(con, settings, p, day, second=True) or alone()
                 if rid is None:
                     raise RuntimeError("no run created (no positions for the date)")
                 st["seconds_per_date_second"] = round((time.monotonic() - (t0 if workers > 1 else t1))
