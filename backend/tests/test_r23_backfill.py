@@ -352,10 +352,11 @@ def test_autopilot_step_after_the_eod_step_within_its_budget(tmp_path, cache, st
     assert steps["eod"]["detail"].startswith("2026-10-15 run")  # the latest date in the eod step
     assert steps["backfill"]["status"] == "ok" and "ran 1 dates (2026-10-12..2026-10-12)" in steps["backfill"]["detail"]
     assert "2 dates in the next cycles" in steps["backfill"]["detail"]
-    ap.run_cycle(hub=False)
-    ap.run_cycle(hub=False)
-    st = ap.run_cycle(hub=False)
-    b = next(x for x in st["steps"] if x["name"] == "backfill")
+    for _ in range(8):  # a date a cycle on that budget: the first pass (12.-14.10), then the second derivatives (TDM#627)
+        st = ap.run_cycle(hub=False)
+        b = next(x for x in st["steps"] if x["name"] == "backfill")
+        if b["detail"].startswith("up to date"):
+            break
     assert b["detail"].startswith("up to date (2026-10-01..2026-11-30: 4 of 4 dates")  # 15.10 by the eod step (#23)
     assert default_dates(store_url) == DATES[1:]
     off = settings(tmp_path, cache, store_url, backfill=False)

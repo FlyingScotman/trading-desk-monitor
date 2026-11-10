@@ -100,7 +100,10 @@ every ``inbox_poll_seconds`` and on ``POST /api/v1/autopilot/run``):
    first cycle of the process or a cycle the owner asked for (``trigger(manual=True)``, ``desk cycle``), nor when
    the store is unreachable (the plan has just read it, ``backfill.no_wait``) or the downloads are and the hub is off
    this cycle. Nothing left to run ends it. The sync step read the hub this cycle: the backfill takes a bundle that
-   does not come for the date's own (``hub_answered``).
+   does not come for the date's own (``hub_answered``). Two passes (TDM#627): the runs of the dates it computes are made
+   without the second derivatives; once every date of the window has its run (the first pass went through all of its
+   dates), what is left of the cycle's budget makes the dates again with them, the newest first
+   (``backfill.run_second``), and the cycles after it go on until none lacks them.
 8. **status** (``status()``, the shape of ``GET /api/v1/autopilot/status``). While a cycle runs, ``message`` and
    ``progress`` ({"step": "sync"|"scan"|"eod"|"intraday"|"history"|"backfill", "done": int, "total": int|null, "detail": str})
    follow it live: hub dates fetched of those to fetch, report files done of those offered, EOD dates run of those
@@ -983,41 +986,65 @@ class Autopilot:
         p = backfill.plan(con, settings, d_from, today, rows)
         s = p.summary()
         span = (f"{s['from']}..{s['to']}: {s['done']} of {s['dates'] - s['no_positions'] - s['no_market']} dates with "
-                f"positions have their run" + (f", {s['failed']} failed before" if s["failed"] else ""))
+                f"positions have their run" + (f", {s['failed']} failed before" if s["failed"] else "")
+                + (f", second derivatives {s['second']['done']} of {s['second']['done'] + s['second']['todo']}"
+                   if s["second"]["todo"] else ""))
         if not p.todo:
             backfill.drop_stall(settings, hub=p.hub)  # nothing left to run: a later outage is a new one (TDM#447)
-        if not [d for d in p.todo if d.date not in exclude]:
+        todo = [d for d in p.todo if d.date not in exclude]
+        if not todo and not [d for d in p.second_todo if d.date not in exclude]:
             return "ok", "; ".join(parts + [f"up to date ({span})"])
-        # stalled on the store or the network (#447): its dates not tried again before its wait, unless the process
-        # started or the cycle was asked for, the store is the cause (the plan above just read it), or the downloads
-        # are and the hub is off this cycle (only the cached dates would run)
-        stall, now_ok, self._stall_now = backfill.state(settings).get("stall"), self._stall_now, False
-        if (stall and set(stall.get("dates") or []) & {d.date for d in p.todo} and stall.get("next_attempt")
-                and not now_ok and not backfill.no_wait(stall)
-                and not (stall.get("phase") == "bundle" and client is None)
-                and self._now() < datetime.fromisoformat(stall["next_attempt"])):
-            return "error", "; ".join(parts + [_stall_text(stall), span])
         if self._contexts is None:
             self._contexts = ContextCache()
-        res = backfill.run(settings, p, store_url=url, client=client, budget_s=float(settings.backfill_budget_s),
-                           out=self._eod_line, contexts=self._contexts, exclude=exclude, now=self._now(),
-                           hub_answered=client is not None and self._hub_answered,
-                           progress=lambda i, n, d: self._progress("backfill", i, n, d))
-        if res["done"]:
-            ran.append(f"история {len(res['done'])} дат")
-            parts.append(f"ran {len(res['done'])} dates ({res['done'][0]}..{res['done'][-1]}) in {res['seconds']} s")
-        if res["stalled"]:  # the store or the network, not the dates (#447)
-            parts.append(_stall_text(res["stalled"]))
-        parts += [f"{d} failed ({e})" for d, e in res["failed"]
-                  if not res["stalled"] or d not in res["stalled"]["dates"]][:5]
-        if res["unconverged"]:
-            parts.append(f"still stale after the run, tried again next cycle: {', '.join(res['unconverged'][:5])}")
-        if res["skipped"]:
-            parts.append(f"{len(res['skipped'])} dates not cached and no hub")
-        if res["left"]:
-            parts.append(f"{res['left']} dates in the next cycles")
+        budget = float(settings.backfill_budget_s)
+        res = None
+        if todo:
+            # stalled on the store or the network (#447): its dates not tried again before its wait, unless the process
+            # started or the cycle was asked for, the store is the cause (the plan above just read it), or the downloads
+            # are and the hub is off this cycle (only the cached dates would run)
+            stall, now_ok, self._stall_now = backfill.state(settings).get("stall"), self._stall_now, False
+            if (stall and set(stall.get("dates") or []) & {d.date for d in p.todo} and stall.get("next_attempt")
+                    and not now_ok and not backfill.no_wait(stall)
+                    and not (stall.get("phase") == "bundle" and client is None)
+                    and self._now() < datetime.fromisoformat(stall["next_attempt"])):
+                return "error", "; ".join(parts + [_stall_text(stall), span])
+            res = backfill.run(settings, p, store_url=url, client=client, budget_s=budget,
+                               out=self._eod_line, contexts=self._contexts, exclude=exclude, now=self._now(),
+                               hub_answered=client is not None and self._hub_answered,
+                               progress=lambda i, n, d: self._progress("backfill", i, n, d))
+            if res["done"]:
+                ran.append(f"история {len(res['done'])} дат")
+                parts.append(f"ran {len(res['done'])} dates ({res['done'][0]}..{res['done'][-1]}) in {res['seconds']} s")
+            if res["stalled"]:  # the store or the network, not the dates (#447)
+                parts.append(_stall_text(res["stalled"]))
+            parts += [f"{d} failed ({e})" for d, e in res["failed"]
+                      if not res["stalled"] or d not in res["stalled"]["dates"]][:5]
+            if res["unconverged"]:
+                parts.append(f"still stale after the run, tried again next cycle: {', '.join(res['unconverged'][:5])}")
+            if res["skipped"]:
+                parts.append(f"{len(res['skipped'])} dates not cached and no hub")
+            if res["left"]:
+                parts.append(f"{res['left']} dates in the next cycles")
+        failed2: list[tuple[str, str]] = []
+        # TDM#627: the second pass once the first has gone through every date, in what is left of the cycle's budget
+        if res is None or (res["complete"] and res["seconds"] < budget):
+            p2 = p if res is None else backfill.plan(con, settings, d_from, today, rows)
+            if [d for d in p2.second_todo if d.date not in exclude]:
+                res2 = backfill.run_second(settings, p2, store_url=url, budget_s=budget - (res["seconds"] if res else 0.0),
+                                           out=self._eod_line, contexts=self._contexts, exclude=exclude,
+                                           progress=lambda i, n, d: self._progress("backfill", i, n, d))
+                if res2["done"]:
+                    ran.append(f"гамма {len(res2['done'])} дат")
+                    parts.append(f"second derivatives of {len(res2['done'])} dates ({res2['done'][0]}..{res2['done'][-1]}) "
+                                 f"in {res2['seconds']} s")
+                failed2 = res2["failed"]
+                parts += [f"{d} second derivatives failed ({e})" for d, e in failed2][:5]
+                if res2["stopped"]:
+                    parts.append(f"second derivatives stopped, tried again next cycle: {res2['stopped']}")
+                if res2["left"]:
+                    parts.append(f"{res2['left']} dates of the second derivatives in the next cycles")
         parts.append(span)
-        return ("error" if res["failed"] else "ok"), "; ".join(parts)
+        return ("error" if (res and res["failed"]) or failed2 else "ok"), "; ".join(parts)
 
     def _scan(self, settings: Settings, con: psycopg.Connection) -> tuple[str, str]:
         from .inbox import scan

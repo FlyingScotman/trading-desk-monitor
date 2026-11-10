@@ -132,7 +132,12 @@ def eod_run(settings: Settings, d: str, *, snapshots: str | Path | None = None, 
 
     ``on_close`` (the autopilot's morning run, #21): (date, cut) of an earlier close: the book of ``d`` valued on
     that close, published as a ``run_type`` run of ``d`` with cut ``prev_close`` (lineage ``market_close``) and
-    without a flash PnL (the day's first intraday cut brings it)."""
+    without a flash PnL (the day's first intraday cut brings it).
+
+    ``no_gamma``: value without the second derivatives (the Hessian: 17 s against 42 s a date of 2000 positions); the
+    run says so (lineage ``second_order`` false, TDM#627): its ``gamma`` is empty and its bonds' ``convexity`` null, the
+    value, the first derivatives and the PnL are those of a full run. The first pass of the backfill runs so; the
+    second pass makes the date's run again with them (``backfill.run_second``)."""
     snapshots = snapshots or settings.snapshot_cache
     sd = SnapshotDir(Path(snapshots))
     t0 = time.perf_counter()
@@ -322,7 +327,7 @@ def eod_run(settings: Settings, d: str, *, snapshots: str | Path | None = None, 
                                                     inputs=inputs, carried_from=carried, pnl_basis=basis,
                                                     core_results=[bp.core_result] if bp.core_result else None,
                                                     unlinked_rates=rates_left, off_report=orp,
-                                                    intraday_trades=intraday_trades,
+                                                    intraday_trades=intraday_trades, second_order=not no_gamma,
                                                     **({"business_date": run_date, "cut_type": "prev_close"}
                                                        if on_close else {}))
         out(f"desk run {run_id}: {status}, {len(warnings)} warnings")

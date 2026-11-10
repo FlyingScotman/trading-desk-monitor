@@ -2670,6 +2670,12 @@ export interface components {
              * @description IR|<curve>|<bucket>, then CS, then FX|<ccy>
              */
             factors: string[];
+            /**
+             * Second Order
+             * @description false: the run has no second derivatives yet (the first pass of the history, TDM#627): every position's gamma is empty because it is not computed, not because it is zero, and the Taylor estimate is linear; show it as such
+             * @default true
+             */
+            second_order?: boolean;
             /** Positions */
             positions: components["schemas"]["RiskPosition"][];
             /** @description The published OCP for the FX shock (TDM#577); absent from a payload built outside the risk route */
@@ -3123,6 +3129,12 @@ export interface components {
              * @description Set when the flash PnL is not against the previous business day's eod_final: what it is against («PnL от 15.10 (закрытие): нет закрытия 16.10»)
              */
             pnl_basis?: string | null;
+            /**
+             * Second Order
+             * @description false: the run was valued without the second derivatives (the first pass of the history, TDM#627): its positions' gamma is empty and the bonds' convexity null because they are not computed yet, not because they are zero; the second pass makes the date's run again with them. True: it has them (and every run made before this flag)
+             * @default true
+             */
+            second_order?: boolean;
             /** Market Snapshot Id */
             market_snapshot_id: string;
             /** Static Snapshot Id */
@@ -3288,6 +3300,12 @@ export interface components {
              * @description Set when the flash PnL is not against the previous business day's eod_final: what it is against («PnL от 15.10 (закрытие): нет закрытия 16.10»)
              */
             pnl_basis?: string | null;
+            /**
+             * Second Order
+             * @description false: the run was valued without the second derivatives (the first pass of the history, TDM#627): its positions' gamma is empty and the bonds' convexity null because they are not computed yet, not because they are zero; the second pass makes the date's run again with them. True: it has them (and every run made before this flag)
+             * @default true
+             */
+            second_order?: boolean;
             /** Market Snapshot Id */
             market_snapshot_id: string;
             /** Static Snapshot Id */
@@ -3638,6 +3656,12 @@ export interface components {
             method: string;
             /** Definition Hash */
             definition_hash: string;
+            /**
+             * Taylor Second Order
+             * @description false: the base run has no second derivatives yet (TDM#627), so the Taylor estimate of every position is linear; the exact repricing is not affected
+             * @default true
+             */
+            taylor_second_order?: boolean;
             coverage: components["schemas"]["ResultCoverage"];
             /**
              * Totals

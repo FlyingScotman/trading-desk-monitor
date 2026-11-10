@@ -678,12 +678,13 @@ def cmd_backfill(a: argparse.Namespace) -> int:
             print(line or "inbox: reports from the start date read before (--rescan reads them again)")
         p = backfill.plan(con, st, d_from, d_to, rows)
     print(backfill.text(p, dry_run=a.dry_run))
-    if a.dry_run or not p.todo:
+    if a.dry_run or not (p.todo or p.second_todo):
         return 0
     lock = CycleLock(st.home)
     contexts = ContextCache()
     done = failed = 0
     t0 = time.perf_counter()
+    complete = True  # every date of the first pass went through: the second pass follows (TDM#627)
     for i, day in enumerate(p.todo, 1):
         waited = False
         while not lock.acquire():
@@ -704,9 +705,40 @@ def cmd_backfill(a: argparse.Namespace) -> int:
             print(f"  {d} still stale after its run: tried again next time (#23)")
         for d in res["skipped"]:
             print(f"  {d} skipped: its bundle is not cached and the hub is off")
+        complete = complete and res["complete"]
         el = time.perf_counter() - t0
         print(f"[{i}/{len(p.todo)}] {day.date} done; {el:.0f} s, about {el / i * (len(p.todo) - i):.0f} s left")
     print(f"backfill: {done} dates run, {failed} failed, in {time.perf_counter() - t0:.0f} s")
+    if complete:  # the second derivatives of the dates run without them, the newest first
+        with _store(a) as con:
+            p2 = backfill.plan(con, st, d_from, d_to, rows)
+        second = p2.second_todo
+        for i, day in enumerate(second, 1):
+            waited = False
+            while not lock.acquire():
+                if not waited:
+                    print("  waiting for the autopilot's cycle (desk serve) to end ...")
+                    waited = True
+                time.sleep(5)
+            try:
+                one = backfill.Plan(p2.date_from, p2.date_to, [day], p2.hub, p2.rows)
+                res = backfill.run_second(st, one, store_url=url, out=print, contexts=contexts)
+            finally:
+                lock.release()
+            failed += len(res["failed"])
+            for d, err in res["failed"]:
+                print(f"  {d} second derivatives FAILED: {err}")
+            for d in res["skipped"]:
+                print(f"  {d} skipped: its bundle is not cached")
+            if res["stopped"]:
+                print(f"  stopped: {res['stopped']}")
+                failed += 1
+                break
+            el = time.perf_counter() - t0
+            print(f"[second {i}/{len(second)}] {day.date} done; {el:.0f} s")
+        if second:
+            print(f"backfill: second derivatives of {len(second)} dates, {failed} failed in all, "
+                  f"in {time.perf_counter() - t0:.0f} s")
     return 1 if failed else 0
 
 

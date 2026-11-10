@@ -44,6 +44,10 @@ class RunHeader(BaseModel):
     pnl_basis: str | None = Field(None, description="Set when the flash PnL is not against the previous business "
                                                     "day's eod_final: what it is against («PnL от 15.10 (закрытие): "
                                                     "нет закрытия 16.10»)")
+    second_order: bool = Field(True, description="false: the run was valued without the second derivatives (the first "
+                               "pass of the history, TDM#627): its positions' gamma is empty and the bonds' convexity "
+                               "null because they are not computed yet, not because they are zero; the second pass makes "
+                               "the date's run again with them. True: it has them (and every run made before this flag)")
     market_snapshot_id: str
     static_snapshot_id: str
     coverage: dict[str, Any] | None = Field(description="{book: {quality: n}, _total: {...}}")
@@ -809,6 +813,9 @@ class RiskPayload(BaseModel):
     curves: list[str] = Field(description="The curves a scenario may shock: the run's, those of the risk and "
                                           "the RUB curves core reprices (sorted)")
     factors: list[str] = Field(description="IR|<curve>|<bucket>, then CS, then FX|<ccy>")
+    second_order: bool = Field(True, description="false: the run has no second derivatives yet (the first pass of the "
+                               "history, TDM#627): every position's gamma is empty because it is not computed, not "
+                               "because it is zero, and the Taylor estimate is linear; show it as such")
     positions: list[RiskPosition]
     ocp: RiskOcp | None = Field(None, description="The published OCP for the FX shock (TDM#577); absent from a payload "
                                                   "built outside the risk route")
@@ -863,6 +870,9 @@ class ResultCoverage(BaseModel):
 class ScenarioResult(BaseModel):
     method: str
     definition_hash: str
+    taylor_second_order: bool = Field(True, description="false: the base run has no second derivatives yet (TDM#627), so "
+                                      "the Taylor estimate of every position is linear; the exact repricing is not "
+                                      "affected")
     coverage: ResultCoverage
     totals: dict[str, ResultTotals] = Field(description="Per book and _total")
     positions: list[ResultPosition]

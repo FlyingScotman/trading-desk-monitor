@@ -206,7 +206,8 @@ def _header(row: dict[str, Any]) -> dict[str, Any]:
     return {**row, "as_of": row["business_date"], "published_at": row["completed_at"],
             "label": slice_label(row["business_date"], row["cut_type"], row.get("cut_ts"), row["run_type"],
                                  (row.get("lineage") or {}).get("market_close")),
-            "pnl_basis": basis.get("label")}
+            "pnl_basis": basis.get("label"),
+            "second_order": (row.get("lineage") or {}).get("second_order", True)}
 
 
 def _run_or_404(con, run_id: int) -> dict[str, Any]:

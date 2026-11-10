@@ -60,6 +60,11 @@ FX revaluation of its currency funding liability in ``fx_funding``, the position
 net of funding)."""
 
 
+SECOND_ORDER_OFF = ("вторые производные (гамма) не посчитаны: быстрый первый проход истории; риск первого порядка, "
+                    "стоимость и PnL — окончательные, гамму досчитает второй проход; оценка сценария линейная")
+"""The run log line of a run valued without the second derivatives (TDM#627)."""
+
+
 def _finite(x: Any) -> Any:
     if isinstance(x, float):
         return x if math.isfinite(x) else None
@@ -80,7 +85,7 @@ def publish(con: psycopg.Connection, ctx: EodContext, positions: list[tuple[str,
             pnl_basis: dict[str, Any] | None = None, core_results: list[Any] | None = None,
             business_date: date | None = None, cut_type: str | None = None,
             unlinked_rates: list[str] | None = None, off_report: dict[str, Any] | None = None,
-            intraday_trades: dict[str, Any] | None = None) -> tuple[int, str, list[str]]:
+            intraday_trades: dict[str, Any] | None = None, second_order: bool = True) -> tuple[int, str, list[str]]:
     """positions: (position_id, book_id, outcome) of ``inputs`` (``store.positions_for``); ``carried_from``:
     the carried spreads the valuation got; ``pnl_basis``: what the flash PnL is measured against
     (``desk.dayrun.pnl_basis``, lineage ``pnl_basis``); ``core_results``: core results of the run besides those its
@@ -91,7 +96,10 @@ def publish(con: psycopg.Connection, ctx: EodContext, positions: list[tuple[str,
     ``ctx`` as cut ``prev_close``; lineage ``market_close`` names that close. ``intraday_trades``: the day's trades an
     INTRADAY run added to the book (``desk.trades.apply_intraday``, TDM#557), lineage ``intraday_trades``.
     ``off_report``: the derivatives outside the positions report (``valuation.offreport.summary``, TDM#468), lineage
-    ``positions.off_report``."""
+    ``positions.off_report``. ``second_order``: whether the run was valued with the second derivatives (the Hessian: the
+    positions' ``gamma`` and the bonds' ``convexity``); False: the first pass of the history (TDM#627) left them out, the
+    run says so (lineage ``second_order``, its log) and ``gamma`` is empty, not zero: the second pass of the backfill
+    makes the date's run again with them."""
     outcomes = [o for _, _, o in positions]
     results = {r.result_sha256: r for r in [*(o.core_result for o in outcomes), *(core_results or ())] if r}
     bodies = {sha: portfolio_result_to_json(r).decode() for sha, r in results.items()}  # raises unless verified
@@ -119,12 +127,15 @@ def publish(con: psycopg.Connection, ctx: EodContext, positions: list[tuple[str,
         "cut_ts": ctx.market.snapshot.doc.get("cut_ts"),
         "market_business_date": ctx.market.snapshot.business_date,  # the header shows it when older (#22)
         "pnl_basis": pnl_basis,
+        "second_order": second_order,
     }
     if intraday_trades is not None:
         lineage["intraday_trades"] = intraday_trades
     if bd != ctx.business_date:  # the morning run (#21): the close the book of ``bd`` is valued on
         lineage["market_close"] = {"date": ctx.business_date.isoformat(), "cut_type": ctx.market.snapshot.cut_type}
     content = run_content(ctx, positions, prev, lineage, inputs)
+    if not second_order:
+        content.log.append(("INFO", SECOND_ORDER_OFF))
     if block and block["mode"] == "include":
         if block["trades"]:
             content.log.append(("INFO", (f"деривативы вне отчёта позиций включены настройкой: сделок {block['trades']}, "
