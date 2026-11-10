@@ -2056,14 +2056,37 @@
     const idxAt = y => { let lo = 0, hi = n - 1; while (lo < hi) { const m = (lo + hi + 1) >> 1; if (off[m] <= y) lo = m; else hi = m - 1; } return lo; };
     const spacer = px => '<tr class="k-vs" aria-hidden="true"><td colspan="' + NC + '" style="height:' + Math.max(0, Math.round(px * 100) / 100) + 'px;padding:0;border:0"></td></tr>';
     const textLen = s => s.indexOf('<') < 0 ? s.length : s.replace(/<[^>]*>/g, '').length;
-    // мерные строки: для каждой колонки — строка с самым длинным текстом ячейки
+    // мерные строки: для каждой колонки — строка с самой длинной ячейкой по тексту. Ячейки всех строк не считаем (их тысячи,
+    // это сотня миллисекунд): кандидатов отбирают по значению колонки (item.raw()): самые длинные по записи, наибольшее и
+    // наименьшее число, по одной строке на каждое из немногих разных значений (у такой колонки значение — ключ сортировки,
+    // а на экране подпись другой длины: валюта, тип, рейтинг); текст ячеек считаем только у кандидатов
     const measure = () => {
       if (meas != null) return meas;
+      const rows = items.filter(it => it.k === 'row' && it.cells);
+      const skip = new Set(o.noMeas || []);
+      let pick;
+      if (rows.length && rows[0].raw) {
+        const L = [], few = [], cand = new Set(), MAXV = 40;
+        for (const it of rows) {
+          const rw = it.raw();
+          for (let j = 0; j < rw.length; j++) {
+            const x = rw[j]; if (x == null || x === '' || skip.has(j)) continue;
+            const c = L[j] || (L[j] = { top: [], hi: null, lo: null, seen: new Map(), many: false });
+            const l = typeof x === 'string' ? x.length : String(x).length;
+            if (c.top.length < 3 || l > c.top[c.top.length - 1][0]) { c.top.push([l, it]); c.top.sort((p, q) => q[0] - p[0]); if (c.top.length > 3) c.top.pop(); }
+            if (typeof x === 'number') { if (!c.hi || x > c.hi[0]) c.hi = [x, it]; if (!c.lo || x < c.lo[0]) c.lo = [x, it]; }
+            if (!c.many) { if (!c.seen.has(x)) { if (c.seen.size >= MAXV) { c.many = true; c.seen = null; } else c.seen.set(x, it); } }
+          }
+        }
+        L.forEach(c => { c.top.forEach(t => cand.add(t[1])); if (c.hi) cand.add(c.hi[1]); if (c.lo) cand.add(c.lo[1]); });
+        L.forEach(c => { if (!c.many) c.seen.forEach(it => cand.add(it)); });
+        pick = [...cand];
+        if (!pick.length) pick = rows.slice(0, 1);
+      } else pick = rows;
       const best = [], who = [];
-      for (const it of items) {
-        if (it.k !== 'row' || !it.cells) continue;
+      for (const it of pick) {
         const cs = it.cells();
-        for (let j = 0; j < cs.length; j++) { const L = textLen(cs[j]); if (best[j] == null || L > best[j]) { best[j] = L; who[j] = it; } }
+        for (let j = 0; j < cs.length; j++) { const L2 = textLen(cs[j]); if (best[j] == null || L2 > best[j]) { best[j] = L2; who[j] = it; } }
       }
       return meas = [...new Set(who)].filter(Boolean).map(it => '<tr class="k-vm" aria-hidden="true" style="visibility:collapse">' + it.cells().join('') + '</tr>').join('');
     };
@@ -2077,7 +2100,7 @@
         if (!tb) return false;
         let ch = false;
         for (const [k, sel] of [['row', 'tr.row'], ['grp', 'tr.grp']]) {
-          const L = [...tb.querySelectorAll(sel)].slice(0, 24); if (!L.length) continue;
+          const L = [...tb.querySelectorAll(sel)].slice(0, 8); if (!L.length) continue;
           const hh = L.reduce((s, tr) => s + tr.getBoundingClientRect().height, 0) / L.length;
           if (hh > 4 && Math.abs(hh - hs[k]) > 0.2) { hs[k] = Math.round(hh * 100) / 100; ch = true; }
         }
@@ -2261,7 +2284,7 @@
         if (level >= groups.length) {
           list.forEach(r => {
             const cells = () => (opts.stripe ? ['<td class="stripe" style="background:' + opts.stripe(r) + '"></td>'] : []).concat(C.map(c => cell(c, r)));
-            items.push({ k: 'row', cells, html: () => '<tr class="row ' + (opts.rowCls ? opts.rowCls(r) : '') + '" data-id="' + esc(r.id) + '">' + cells().join('') + '</tr>' });
+            items.push({ k: 'row', cells, raw: () => (opts.stripe ? [null] : []).concat(C.map(c => val(c, r))), html: () => '<tr class="row ' + (opts.rowCls ? opts.rowCls(r) : '') + '" data-id="' + esc(r.id) + '">' + cells().join('') + '</tr>' });
           });
           return;
         }

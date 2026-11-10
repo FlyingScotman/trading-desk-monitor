@@ -138,7 +138,7 @@ body { display: flex; flex-direction: column; height: 100vh; overflow: hidden; }
     chg: { label: 'Δ цены', num: true, val: r => r.price == null ? null : r.price - r.prevPrice, csvHead: 'Δ цены, % ном.', fmt: v => v == null ? '<span class="mut3">—</span>' : '<span class="' + f.cls(v) + '">' + f.s(v, 2) + '</span>' },
     bidask: { label: 'Bid / Ask', num: true, val: r => r.bid, fmt: (v, r) => v == null ? '<span class="mut3">—</span>' : '<span class="mut">' + f.px(r.bid) + ' / ' + f.px(r.ask) + '</span>' },
     // в CSV — изменение цены за 30 дней числом (то же значение, что у сортировки, #277)
-    spark: { label: 'Цена 30д', val: r => r.price == null ? null : K.sparkChange(H(r.id).price, 30), title: 'сортировка — по изменению за 30 дней (окно спарклайна)',
+    spark: { label: 'Цена 30д', noMeas: true, val: r => r.price == null ? null : K.sparkChange(H(r.id).price, 30), title: 'сортировка — по изменению за 30 дней (окно спарклайна)',
       csvHead: 'Δ цены за 30д, % ном.', csvNum: true, csvFmt: v => v == null ? '' : f.n(v, 3),
       fmt: (v, r) => v == null ? (sparkWait ? '<span class="mut3" title="история цен загружается">…</span>' : '<span class="mut3">—</span>') : K.spark(H(r.id).price.slice(-30), 70, 16, v >= 0 ? K.css('--pos') : K.css('--neg')) },
     ytm: { label: 'Дох.', num: true, val: r => r.ytm, fmt: v => f.pct(v) },
@@ -236,7 +236,7 @@ body { display: flex; flex-direction: column; height: 100vh; overflow: hidden; }
       if (hide) { items.push({ k: 'hid', reset, html: () => '<tr class="csvrow" hidden data-csv-keep="1"><td class="stripe"></td>' + cells().join('') + '</tr>' }); return; }
       visible.push(r.id); idxOf.set(r.id, items.length);
       const stripe = () => '<td class="stripe" style="background:' + colorOf(r) + '"></td>';
-      items.push({ k: 'row', reset, cells: () => [stripe()].concat(cells()),
+      items.push({ k: 'row', reset, cells: () => [stripe()].concat(cells()), raw: () => [null].concat(CL.map(c => c.noMeas ? null : c.val(r))),
         html: () => '<tr class="row' + (r.id === st.sel ? ' sel' : '') + '" data-id="' + r.id + '" style="--tint:' + tintOf(r) + '">' + stripe() + cells().join('') + '</tr>' });
     };
     function emit(list, level, path, title, hide) {
