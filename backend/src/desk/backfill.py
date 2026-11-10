@@ -66,7 +66,9 @@ again in full, the newest first, from the cache: the same inputs give the same v
 to the last bit, and the new run supersedes the first pass's with the gamma added. Both passes are cut by the same
 budget and resume where they stopped: a date's state is its default run (``Day.second``). The current date (the
 autopilot's eod and intraday steps) and every other run are full. ``status``: ``pass`` (``first``, ``second``, ``done``)
-and ``second`` (the dates ``done``, ``todo``, ``failed``, ``next``, ``problem_dates``, ``eta_s``).
+and ``second`` (the dates ``done``, ``todo``, ``failed``, ``next``, ``problem_dates``, ``eta_s``, ``mismatched`` and
+``mismatch_dates``). The second pass checks the new run's totals per book against the replaced run's and warns of a
+difference; a date it cannot make current is given up under its inputs, not under a run (``run_second``).
 
 The bundles of the backfilled dates stay in the snapshot cache (each date's market and static snapshot, several MB a
 date: ``--dry-run`` says how many are to be downloaded).
@@ -132,6 +134,8 @@ class Day:
     hub or in the cache), ``failed`` (failed before on the same inputs)."""
     why: str | None = None
     sig: list = field(default_factory=list)
+    """The inputs the plan was made on (position sets, market, previous close, logic, private inputs, late sets): a
+    failed date is remembered under it; a ``done`` date has it too (the second pass's give-up is remembered under it)."""
     market_id: str | None = None
     cached: bool = False
     prev_date: str | None = None
@@ -357,12 +361,12 @@ def plan(con: psycopg.Connection, settings: Settings, date_from: date, date_to: 
         sig = [ids, snap, prev, logic, ih, store.dataset_set_ids(con, date.fromisoformat(d)),
                store.reference_rev_ids(con, revs=revs)]
         if why is None:
-            giveup = second_failed.get(d) or {}
+            giveup = second_failed.get(d) or {}  # the give-up is of the date's inputs, not of a run (TDM#627)
             second = ("done" if run["second_order"] else
-                      "failed" if giveup.get("run_id") == run["run_id"] and giveup.get("attempts", 0) >= MAX_ATTEMPTS
+                      "failed" if giveup.get("sig") == sig and giveup.get("attempts", 0) >= MAX_ATTEMPTS
                       else "todo")
-            days.append(Day(d, "done", market_id=snap, cached=is_cached, prev_date=pd, prev_cut=pcut, second=second,
-                            run_id=run["run_id"]))
+            days.append(Day(d, "done", sig=sig, market_id=snap, cached=is_cached, prev_date=pd, prev_cut=pcut,
+                            second=second, run_id=run["run_id"]))
         elif failed.get(d) == sig:
             days.append(Day(d, "failed", why, sig, snap, is_cached, pd, pcut))
         else:
@@ -694,6 +698,30 @@ def run(settings: Settings, p: Plan, *, store_url: str | None = None, client: An
             "complete": not cut and stall is None}
 
 
+def totals_diff(old: dict[str, Any] | None, new: dict[str, Any] | None) -> list[str]:
+    """How the totals per book of two runs (``run.totals``: PV, DV01, CS01 and the PnL components) differ, one entry
+    each, ``[]`` when they are equal to the last bit; the book missing from one of the runs is one entry."""
+    old, new = old or {}, new or {}
+    out = []
+    for book in sorted(set(old) | set(new)):
+        a, b = old.get(book), new.get(book)
+        if a is None or b is None:
+            out.append(f"{book}: only in the {'new' if a is None else 'replaced'} run")
+            continue
+        for k in sorted(set(a) | set(b)):
+            x, y = a.get(k), b.get(k)
+            if isinstance(x, dict) or isinstance(y, dict):
+                x, y = x or {}, y or {}
+                out += [f"{book} {k}.{c}: {x.get(c)} -> {y.get(c)}" for c in sorted(set(x) | set(y)) if x.get(c) != y.get(c)]
+            elif x != y:
+                out.append(f"{book} {k}: {x} -> {y}")
+    return out
+
+
+MISMATCH_SHOWN = 3
+"""How many of the differing totals a warning of the second pass names."""
+
+
 def run_second(settings: Settings, p: Plan, *, store_url: str | None = None, budget_s: float | None = None,
                out: Callable[[str], None] = print, progress: Callable[[int, int, str], None] | None = None,
                contexts: Any = None, exclude: set[str] | frozenset[str] = frozenset()) -> dict[str, Any]:
@@ -702,13 +730,20 @@ def run_second(settings: Settings, p: Plan, *, store_url: str | None = None, bud
     all), but ``exclude``. A date's run is made again in full from the cache (``eod_run``; no download: a date whose
     bundle is not cached is left): the inputs are the first pass's, so its value, first derivatives and PnL come out
     the same to the last bit, and the new run supersedes the first pass's with the ``gamma`` and the bonds' ``convexity``
-    added (a run is never changed, ADR-006). A date is never made current by this pass: when its inputs changed
-    since the plan, its new run reads the new ones, and the next plan says what is still to do.
+    added (a run is never changed, ADR-006). The new run's totals per book are checked against the replaced run's
+    (``totals_diff``): a difference is a warning (the log, ``mismatch`` here, ``status`` ``second.mismatch_dates``), the
+    new run stays: the inputs are not frozen on it, the screens show it as any default run.
+    A date is never made current by this pass. When its inputs changed since the plan (a report, a hub correction), its
+    new run read the new ones and its totals are not compared; when the run read the old ones and the plan now wants
+    the date again, the date is ``moved`` (not a failure: the next plan says what is to do, the first pass runs it
+    again). When the inputs are the plan's and the date is still not current (a reason that comes with the
+    full run), that is the date's failure, remembered under the date's inputs (``state["second"]``, not under the run:
+    every pass makes a new one), so the cycles do not run the date through both passes for ever: after ``MAX_ATTEMPTS``
+    on the same inputs it is left (``Day.second`` ``failed``).
     ``progress(x, m, date)`` as ``run``'s: ``x`` the dates with the second derivatives, ``m`` all that have a run.
-    An error of the store or the network stops the pass (tried again next cycle); another error is the date's: after
-    ``MAX_ATTEMPTS`` on the same run it is left (``Day.second`` ``failed``, ``state["second"]``).
-    Returns {done: [dates], failed: [(date, error)], skipped: [dates not cached], left: n, stopped: the transient error
-    or None, seconds}."""
+    An error of the store or the network stops the pass (tried again next cycle); another error is the date's, counted
+    the same way. Returns {done: [dates], failed: [(date, error)], moved: [dates], skipped: [dates not cached],
+    mismatch: [(date, what differs)], left: n, stopped: the transient error or None, seconds}."""
     from .dayrun import ContextCache, eod_run
 
     t0 = time.monotonic()
@@ -716,11 +751,15 @@ def run_second(settings: Settings, p: Plan, *, store_url: str | None = None, bud
     todo = [d for d in p.second_todo if d.date not in exclude]
     done: list[str] = []
     failed: list[tuple[str, str]] = []
+    moved: list[str] = []
     skipped: list[str] = []
+    mismatch: list[tuple[str, str]] = []
     stopped: str | None = None
     cache_dir = Path(settings.snapshot_cache)
     st = state(settings)
-    fails = st.setdefault("second", {}).setdefault("failed", {})
+    st2 = st.setdefault("second", {})
+    fails = st2.setdefault("failed", {})
+    odd = st2.setdefault("mismatched", {})
     total = p.count_second("done") + p.count_second("todo") + p.count_second("failed")
     con: psycopg.Connection | None = None
     tried = 0
@@ -746,9 +785,21 @@ def run_second(settings: Settings, p: Plan, *, store_url: str | None = None, bud
                 d = date.fromisoformat(day.date)
                 again = next((x for x in plan(con, settings, d, d, p.rows if p.hub else None).days
                               if x.date == day.date), None)
+                if again is not None and again.status != "done" and again.sig != day.sig:
+                    log.info("backfill second pass %s: its inputs changed meanwhile (%s); the first pass runs it again",
+                             day.date, again.why or again.status)
+                    moved.append(day.date)
+                    continue
                 if again is None or again.status != "done" or again.run_id == day.run_id or again.second == "todo":
                     raise RuntimeError(f"the new run does not make the date current: "
                                        f"{again.why if again is not None and again.why else again and again.status}")
+                diff = []
+                if again.sig == day.sig:  # the same inputs: the same totals (else the new run read newer ones)
+                    diff = totals_diff(*(con.execute("SELECT totals FROM run WHERE run_id = %s", (r,)).fetchone()[0]
+                                         for r in (day.run_id, again.run_id)))
+                else:
+                    log.info("backfill second pass %s: its inputs changed meanwhile, the new run read the new ones: "
+                             "the totals are not compared", day.date)
             except Exception as e:  # one date's error must not stop the others
                 if transient(e):
                     stopped = f"{type(e).__name__}: {e}"
@@ -756,20 +807,35 @@ def run_second(settings: Settings, p: Plan, *, store_url: str | None = None, bud
                     break
                 err = f"{type(e).__name__}: {e}"
                 old = fails.get(day.date) or {}
-                n = old.get("attempts", 0) + 1 if old.get("run_id") == day.run_id else 1
-                fails[day.date] = {"run_id": day.run_id, "attempts": n, "error": err}
+                n = old.get("attempts", 0) + 1 if old.get("sig") == day.sig else 1
+                fails[day.date] = {"sig": day.sig, "run_id": day.run_id, "attempts": n, "error": err}
                 log.exception("backfill second pass %s failed (%d of %d)", day.date, n, MAX_ATTEMPTS)
                 failed.append((day.date, err))
                 continue
             fails.pop(day.date, None)
             done.append(day.date)
+            if diff:  # the full run does not reproduce the first pass's totals: the date's numbers moved under the owner
+                more = f" (and {len(diff) - MISMATCH_SHOWN} more)" if len(diff) > MISMATCH_SHOWN else ""
+                what = "; ".join(diff[:MISMATCH_SHOWN]) + more
+                msg = (f"backfill second pass {day.date}: the totals of the new run {again.run_id} differ from the "
+                       f"replaced run {day.run_id}: {what}")
+                log.warning("%s", msg)
+                out("WARN " + msg)
+                mismatch.append((day.date, what))
+                odd[day.date] = {"run_id": again.run_id, "replaced": day.run_id, "diff": what}
+            else:
+                odd.pop(day.date, None)
     finally:
         if con is not None:
             con.close()
-        for x in [x for x in fails if x not in {d.date for d in p.days if d.second in ("todo", "failed")}]:
+        # only the dates of this plan (``desk backfill`` passes one date at a time): the others' memory stays
+        for x in [x for x in fails if x in {d.date for d in p.days if d.second not in ("todo", "failed")}]:
             fails.pop(x)  # the date has its second derivatives (or no run): nothing to remember
+        for x in [x for x in odd if x in {d.date for d in p.days if d.status != "done"}]:
+            odd.pop(x)  # the date has no run in force
         save_state(settings, st)
-    return {"done": done, "failed": failed, "skipped": skipped, "left": len(todo) - len(done) - len(failed) - len(skipped),
+    return {"done": done, "failed": failed, "moved": moved, "skipped": skipped, "mismatch": mismatch,
+            "left": len(todo) - len(done) - len(failed) - len(skipped) - len(moved),
             "stopped": stopped, "seconds": round(time.monotonic() - t0, 1)}
 
 
@@ -821,7 +887,11 @@ def status(con: psycopg.Connection, settings: Settings, today: date | None = Non
     # TDM#627: the second pass (the second derivatives of the dates the first pass made without them), the dates it gave up on
     sec2 = st.get("seconds_per_date_second")
     gave_up = (st.get("second") or {}).get("failed", {})
+    odd = (st.get("second") or {}).get("mismatched", {})
+    mismatch = [{"date": d.date, "run_id": d.run_id, "diff": odd[d.date].get("diff")} for d in p.days
+                if d.status == "done" and (odd.get(d.date) or {}).get("run_id") == d.run_id]  # of the run in force
     second = {**s["second"], "total": s["second"]["done"] + s["second"]["todo"] + s["second"]["failed"],
+              "mismatched": len(mismatch), "mismatch_dates": mismatch[:50],
               "problem_dates": [{"date": d.date, "error": (gave_up.get(d.date) or {}).get("error"),
                                  "attempts": (gave_up.get(d.date) or {}).get("attempts")}
                                 for d in p.days if d.second == "failed"][:50],

@@ -91,10 +91,12 @@ UNIT_STATUS = {"accepted": "принято", "rejected": "отклонено", "
 """A file's parts (books, entities) by status, as the feed counts them."""
 
 RUN_CHANGES = {"positions": "позиции", "market": "снимок рынка", "prev_market": "снимок прошлого дня",
-               "program": "версия программы", "cut": "срез (окончательное закрытие вместо предварительного)",
+               "program": "версия программы", "second_order": "досчитаны вторые производные",
+               "cut": "срез (окончательное закрытие вместо предварительного)",
                **store.LATE_DATASETS, **store.LATE_REFERENCE}
 """What changed against the run a run superseded; ``ocp`` / ``cash_balances``: the OCP report or the balances in force
-on the date were recorded between the two runs (``store.late_inputs``, TDM#181)."""
+on the date were recorded between the two runs (``store.late_inputs``, TDM#181); ``second_order``: the second pass
+of the history (TDM#627) replaced a run made without the second derivatives, nothing else differs."""
 
 LATEST = "(SELECT DISTINCT ON (sha256) * FROM inbox_file_status ORDER BY sha256, status_id DESC)"
 
@@ -353,6 +355,7 @@ def _runs(con: psycopg.Connection, day: date) -> list[dict[str, Any]]:
     rows = _rows(con, "SELECT r.run_id, r.run_type, r.cut_type, r.cut_ts, r.status, r.started_at, r.completed_at,"
                       " r.supersedes_run_id, r.error, r.position_set_ids, r.market_snapshot_id, r.positions_known_at,"
                       " r.prev_market_snapshot_id, r.lineage->>'logic_version' AS logic_version,"
+                      " (r.lineage->>'second_order') IS DISTINCT FROM 'false' AS second_order,"
                       " r.coverage->'_total' AS coverage,"
                       f" r.run_id IN ({store.DEFAULT_RUNS}) AS is_default,"
                       f" r.run_id IN ({store.CURRENT_RUNS}) AS is_current"
@@ -377,6 +380,8 @@ def _runs(con: psycopg.Connection, day: date) -> list[dict[str, Any]]:
                 changed.append("prev_market")
             if old["logic_version"] != r["logic_version"]:
                 changed.append("program")
+            if not old["second_order"] and r["second_order"]:  # the second pass of the history (TDM#627)
+                changed.append("second_order")
             if old["positions_known_at"] and r["positions_known_at"]:
                 a = store.dataset_set_ids(con, day, known_at=old["positions_known_at"])
                 b = store.dataset_set_ids(con, day, known_at=r["positions_known_at"])

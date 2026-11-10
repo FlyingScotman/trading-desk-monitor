@@ -730,6 +730,8 @@ def cmd_backfill(a: argparse.Namespace) -> int:
                 print(f"  {d} second derivatives FAILED: {err}")
             for d in res["skipped"]:
                 print(f"  {d} skipped: its bundle is not cached")
+            for d in res["moved"]:
+                print(f"  {d} changed its inputs meanwhile: run again by the first pass next time")
             if res["stopped"]:
                 print(f"  stopped: {res['stopped']}")
                 failed += 1

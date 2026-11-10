@@ -261,9 +261,9 @@ PnL сделок облигации, чья позиция начала дня �
 без условий (`lost`, `new_trades.py:228-232`) его нет в прогоне. В итоги не входит ни на одном экране
 (`concepts_run.py:315` → все факторы null; `pnl_history.amounts(None)`), а C20 показывает PnL таких сделок
 (`trades.py:480-491` читает и `no_pnl.trades`). Флаги `trades_not_in_pnl`, `trades_mixed_valuation`,
-`trades_report_gap`, `trades_mixed_units` ставятся в журнале прогона (`cli.py:319, 355-366`) и на строке
+`trades_report_gap`, `trades_mixed_units` ставятся в журнале прогона (`dayrun.py:233-241, 284-296`) и на строке
 (`x.trades_mixed_units` `trades.py:382`, `x.trades_report_gap` `trades.py:407`, `x.trades_mixed_valuation` и
-`x.trades_not_in_pnl` `cli.py:363-366`); в интерфейсе их нет. В случае `lost` у лотов «по отчёту» в PnL входит ΔPV отчётов
+`x.trades_not_in_pnl` `dayrun.py:293-296`); в интерфейсе их нет. В случае `lost` у лотов «по отчёту» в PnL входит ΔPV отчётов
 с купленным/проданным количеством по полной стоимости (D23).
 Исправление: пометка на C20 «не в PnL» и в карточке позиции, счётчики сделок вне PnL в `lineage` прогона (FlyingScotman/trading-desk-monitor#570); включать ли PnL сделок при позиции начала дня без PnL —
 вопрос владельцу. Объём S (пометки) / M (если включать).

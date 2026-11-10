@@ -1039,6 +1039,9 @@ class Autopilot:
                                  f"in {res2['seconds']} s")
                 failed2 = res2["failed"]
                 parts += [f"{d} second derivatives failed ({e})" for d, e in failed2][:5]
+                parts += [f"{d} totals differ from the replaced run ({w})" for d, w in res2["mismatch"]][:5]
+                if res2["moved"]:
+                    parts.append(f"{len(res2['moved'])} dates changed their inputs meanwhile: the first pass runs them again")
                 if res2["stopped"]:
                     parts.append(f"second derivatives stopped, tried again next cycle: {res2['stopped']}")
                 if res2["left"]:
