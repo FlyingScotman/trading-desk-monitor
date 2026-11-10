@@ -275,7 +275,7 @@ table.mini td.n, table.mini th.n { text-align: right; font-variant-numeric: tabu
   // ---------- режим «Валютные бонды РФ»: одна валюта за раз, суммы разных валют не складываются ----------
   function renderFx(view, kpis) {
     const C = M.marketCal;
-    if (!C) { view.innerHTML = '<div class="k-empty">календаря рынка нет: статика хаба ещё не разобрана (появится после прогона)</div>'; return; }
+    if (!C) { calEmpty(view); return; }
     const ccys = C.ccys.length ? C.ccys : ['USD'];
     if (!ccys.includes(st.fxCcy)) st.fxCcy = ccys.includes('USD') ? 'USD' : ccys[0];
     const ccy = st.fxCcy, e = end(), P = per(), cats = periods(e, P);
@@ -346,7 +346,7 @@ table.mini td.n, table.mini th.n { text-align: right; font-variant-numeric: tabu
   // ---------- режим «Рублёвый рынок»: агрегаты по типам выпусков (рейтингов в данных хаба нет) ----------
   function renderRub(view, kpis) {
     const C = M.marketCal;
-    if (!C) { view.innerHTML = '<div class="k-empty">календаря рынка нет: статика хаба ещё не разобрана (появится после прогона)</div>'; return; }
+    if (!C) { calEmpty(view); return; }
     const e = end(), P = per(), cats = periods(e, P), from = U.addDays(M.asOf, 1);
     const fmt = v => f.bn(v, 1), unit = 'bn ₽';  // суммы рынка пересчитаны в валюту отчёта (lib/real.js, lib/mock.js: marketCal)
     const inH = d => d > M.asOf && d <= e;
@@ -447,19 +447,32 @@ table.mini td.n, table.mini th.n { text-align: right; font-variant-numeric: tabu
     renderBar();
     if (st.mode === 'pf') renderPf(view, kpis);
     else {
-      // календарь рынка приходит отдельным запросом (TDM#629): пока его нет — «загрузка», по ответу — заново
-      if (!M.marketCal && !calAsked && !calDone && M.loadCal && M.calLoading) {
-        calAsked = true;
+      // календарь рынка приходит отдельным запросом (TDM#629): пока его нет — «загрузка», по ответу — заново. Сбой запроса
+      // (5xx, нет связи, ответ не разобран) — не «статика ещё не разобрана»: это 404 / missing; для сбоя — своя строка
+      const cs = M.calStatus ? M.calStatus() : {};
+      if (!M.marketCal && M.loadCal && !calBroken && (!cs.state || cs.state === 'loading' || calRetry)) {
         view.innerHTML = K.loadingNote('Загрузка календаря рынка…');
-        M.loadCal().then(() => { calAsked = false; calDone = true; if (st.mode !== 'pf') render(); });
+        if (!calAsked) {
+          calAsked = true; calRetry = false;
+          M.loadCal().then(null, e => { calBroken = 'ответ не разобран' + (e && e.message ? ': ' + e.message : ''); })
+            .then(() => { calAsked = false; if (st.mode !== 'pf') render(); });
+        }
         return;
       }
-      if (!M.marketCal && calAsked) { view.innerHTML = K.loadingNote('Загрузка календаря рынка…'); return; }
       if (st.mode === 'fx') renderFx(view, kpis); else renderRub(view, kpis);
     }
   }
-  let calAsked = false, calDone = false;
+  let calAsked = false, calBroken = null, calRetry = false;
+  // календаря нет: статика хаба не разобрана (404, «missing») или запрос не удался — это разные причины
+  function calEmpty(el) {
+    const cs = M.calStatus ? M.calStatus() : {}, err = calBroken || (cs.state === 'failed' ? cs.error || 'сбой запроса' : null);
+    el.innerHTML = err ? '<div class="k-empty">календарь рынка не загрузился: ' + esc(err) + ' · <a href="#" data-a="retry">Повторить</a></div>'
+      : '<div class="k-empty">календаря рынка нет: статика хаба ещё не разобрана (появится после прогона)</div>';
+    const a = el.querySelector('[data-a=retry]');
+    if (a) a.onclick = e => { e.preventDefault(); calBroken = null; calRetry = true; render(); };
+  }
   K.onFilter(() => { if (st.mode === 'pf') render(); });
+  K.onAlias(render);  // имена бумаг: в портфеле — из позиций, в календаре рынка — M.marketCal (алиасы могли прийти позже него)
   K.on('numfmt', () => { if (st.mode !== 'pf') render(); });  // рынок (fx, rub) от фильтра не зависит (#153)
   K.commands([['pf', 'Наш портфель'], ['fx', 'Валютные бонды РФ'], ['rub', 'Рублёвый рынок']].map(([k, t]) => ({ label: 'Календарь: ' + t, run: () => { st.mode = k; save(); render(); } })));
   render();

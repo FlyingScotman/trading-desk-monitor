@@ -291,7 +291,10 @@ table.mini tr.put td:first-child { box-shadow: inset 3px 0 0 var(--warn); }
     const hel = K.h('div', 'ch'); hp2.querySelector('.bd').appendChild(hel);
     // история — только бумаг эмитента и за год (TDM#629): запрос приходит отдельно, график рисуется по ответу
     const drawYear = () => {
-    const Hs = L.map(p => ({ p, h: M.posHistory(p.id) })), dates = Hs[0].h.dates;
+    // ряды бумаг пришли разными запросами (по 150 бумаг, догрузка при смене фильтра) — оси дат у них разные: сводим по ДАТЕ
+    // на общую ось (K.histAxis / K.histOn), а не по номеру точки
+    const raw = L.map(p => ({ p, h: M.posHistory(p.id) })), dates = K.histAxis(raw.map(x => x.h));
+    const Hs = raw.map(({ p, h }) => ({ p, h: K.histOn(h, dates) }));
     const daily = dates.map((_, i) => i === 0 ? 0 : sumBy(Hs, ({ p, h }) => { const n = h.notional[i - 1], fx = M.toRepr[p.ccy]; const dp = h.price[i] != null && h.price[i - 1] != null ? h.price[i] - h.price[i - 1] : 0; return n * dp / 100 * fx * (p.indexation || 1) + (p.notional ? (p.carryDay + (p.fundingDay || 0)) * n / p.notional : 0); }));
     let cs = 0; const cum = daily.map(v => (cs += v));
     dashCharts.push(K.chart(hel, () => ({

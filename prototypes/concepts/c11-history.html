@@ -70,8 +70,12 @@ tr.row.sel td { background: var(--accent-bg); }
   // на прогонах из базы риск, MV и номинал каждой даты — из прогона этой даты (между прогонами — последний);
   // в демо прогонов по датам нет: риск восстановлен как номинал даты × сегодняшние чувствительности
   const H = {}; M.positions.forEach(p => H[p.id] = M.posHistory(p.id));
+  // все позиции пришли одним запросом и делят ось дат; у позиции без ряда (нет истории) ось — одна точка прогона: такие ряды
+  // и ряды других запросов сводятся на общую ось по ДАТЕ (K.histOn), а не по номеру точки
+  const AXIS = M.positions.reduce((a, p) => H[p.id].dates.length > a.length ? H[p.id].dates : a, []);
+  if (AXIS.length) M.positions.forEach(p => { if (H[p.id].dates !== AXIS) H[p.id] = K.histOn(H[p.id], AXIS); });
   // окно покрыло всю историю (ось начинается позже начала окна): шире загружать нечего — тогда и «всё» не перезагружает страницу
-  const AX0 = (H[M.positions[0].id].dates || [])[0], FULL = WIN.full || !AX0 || AX0 > M.util.addDays(WIN.from, 7);
+  const AX0 = AXIS[0], FULL = WIN.full || !AX0 || AX0 > M.util.addDays(WIN.from, 7);
   const REAL = M.positions.length > 0 && M.positions.every(p => H[p.id].fromRuns);
   // ось — с первой даты, на которую известна хоть одна позиция (на прогоне из базы раньше первого прогона позиций нет;
   // цены рынка там есть, но без номинала история деска была бы нулём, а не «неизвестно»)
@@ -272,7 +276,7 @@ tr.row.sel td { background: var(--accent-bg); }
       rowCls: r => r.id === st.pos ? 'sel' : '',
       onRow: r => { st.pos = r.id; save(); drawPos(); topTbl.redraw(); },
       columns: [
-        { key: 'name', label: 'Позиция', fmt: (v, r) => esc(v) + ' <span class="mut3">' + esc(r.book) + '</span>' },
+        { key: 'name', label: 'Позиция', fmt: (v, r) => K.nameCell(r, v) + ' <span class="mut3">' + esc(r.book) + '</span>' },
         K.posCols.ccy, K.posCols.issuer,
         { key: 'kind', label: 'Тип', filter: r => M.kindLabel[r.kind] || r.kind, fmt: (v, r) => '<span class="tagc">' + esc(M.kindShort[r.kind]) + '</span>' },
         { key: 'not0', label: 'Номинал было', num: true, unit: 'mm в вал.', fmt: v => f.mn(v, 2), title: 'mm в валюте бумаги на дату сравнения' },
@@ -357,6 +361,7 @@ tr.row.sel td { background: var(--accent-bg); }
   }
   drawCtl(); drawRisk(); drawMv(); drawCmp(); drawPnl(); drawTop(); drawPos();
   K.onFilter(() => { chRisk.redraw(); chMv.redraw(); drawCmp(); topTbl.redraw(); drawPos(); });
+  K.onAlias(() => drawPos());  // имена бумаг пришли позже страницы: таблица — K.patchNames, перерисовка страницы (графики риска) не нужна
   K.on('theme', () => { drawCmp(); });
   K.commands([['1M', 21], ['3M', 63], ['6M', 126], ['1Y', 250]].map(([l, n]) => ({ label: 'Период: ' + l, run: () => { if (!setRange(n)) return; save(); drawAll(); } })));
   });
