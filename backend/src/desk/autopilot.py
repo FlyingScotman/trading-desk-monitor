@@ -103,7 +103,9 @@ every ``inbox_poll_seconds`` and on ``POST /api/v1/autopilot/run``):
    does not come for the date's own (``hub_answered``). Two passes (TDM#627): the runs of the dates it computes are made
    without the second derivatives; once every date of the window has its run (the first pass went through all of its
    dates), what is left of the cycle's budget makes the dates again with them, the newest first
-   (``backfill.run_second``), and the cycles after it go on until none lacks them.
+   (``backfill.run_second``), and the cycles after it go on until none lacks them. With ``backfill_workers`` > 1
+   (default ``min(3, cores - 1)``, TDM#628) both passes compute several dates at once in processes of a pool and publish
+   them in order (``desk.parallel``); the budget starts no date after it, the dates already in the pool are finished.
 8. **prune** (setting ``prune_superseded``, on; ``prune_superseded_days``, 7; TDM#634): the runs of a date that a newer run
    replaced (the history's first pass, an older program version, a corrected report) are deleted once the replacement
    is that old, 50 runs and 60 seconds a cycle at most (``store.prune_superseded``), only in a quiet cycle (no run
@@ -1022,6 +1024,7 @@ class Autopilot:
             res = backfill.run(settings, p, store_url=url, client=client, budget_s=budget,
                                out=self._eod_line, contexts=self._contexts, exclude=exclude, now=self._now(),
                                hub_answered=client is not None and self._hub_answered,
+                               workers=int(getattr(settings, "backfill_workers", 1)),
                                progress=lambda i, n, d: self._progress("backfill", i, n, d))
             if res["done"]:
                 ran.append(f"история {len(res['done'])} дат")
@@ -1043,6 +1046,7 @@ class Autopilot:
             if [d for d in p2.second_todo if d.date not in exclude]:
                 res2 = backfill.run_second(settings, p2, store_url=url, budget_s=budget - (res["seconds"] if res else 0.0),
                                            out=self._eod_line, contexts=self._contexts, exclude=exclude,
+                                           workers=int(getattr(settings, "backfill_workers", 1)),
                                            progress=lambda i, n, d: self._progress("backfill", i, n, d))
                 if res2["done"]:
                     ran.append(f"гамма {len(res2['done'])} дат")

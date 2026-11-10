@@ -91,6 +91,9 @@ checkout keeps its old names ``.devdata/inbox`` and ``.devdata/desk_pg``.
                            default runs of the past business dates from this date (2026-01-05, the hub's first
                            eod_final close) with positions, at most this many seconds a cycle (600), after every
                            other step (``desk.backfill``, R23; ``desk backfill`` does the same at once)
+* ``DESK_BACKFILL_WORKERS`` the processes the history of runs is computed in, dates at once (default ``min(3, cores - 1)``,
+                           at least 1; 1: one after the other; ``desk.parallel``, TDM#628): each date is a process's,
+                           the runs are published in the order of the dates, the numbers are those of one process
 * ``DESK_PRUNE_SUPERSEDED``, ``DESK_PRUNE_SUPERSEDED_DAYS``  the autopilot deletes the runs of a date that a newer run
                            replaced (the history's first pass, an older program version, a corrected report) once
                            the replacement is this many days old (on, 7): a date keeps its newest run, a run with a
@@ -216,6 +219,7 @@ JSON_KEYS: dict[str, tuple[str, str]] = {
     "backfill": ("DESK_BACKFILL", "bool"),
     "backfill_from": ("DESK_BACKFILL_FROM", "date"),
     "backfill_budget_s": ("DESK_BACKFILL_BUDGET_S", "num"),
+    "backfill_workers": ("DESK_BACKFILL_WORKERS", "int"),
     "prune_superseded": ("DESK_PRUNE_SUPERSEDED", "bool"),
     "prune_superseded_days": ("DESK_PRUNE_SUPERSEDED_DAYS", "int"),
     # backups of the desk store (desk.backup)
@@ -332,6 +336,7 @@ class Settings:
     backfill: bool = True  # the autopilot computes the default runs of past dates (desk.backfill, R23)
     backfill_from: str = "2026-01-05"  # first date of the backfill (the hub's first eod_final close)
     backfill_budget_s: float = 600.0  # seconds of backfill runs per autopilot cycle (after every other step)
+    backfill_workers: int = 1  # processes the history is computed in (desk.parallel); ``load`` makes it min(3, cores - 1)
     prune_superseded: bool = True  # the autopilot deletes the runs a newer run of their date replaced (TDM#634)
     prune_superseded_days: int = 7  # ... once the replacement is this old
     backup: bool = True  # the daily backup of the desk store by desk serve (desk.backup)
@@ -448,8 +453,8 @@ class Settings:
             ("history_days", str(self.history_days) if self.history_days else "0 (off: the cached dates only)"),
             ("history_bonds_from", self.history_bonds_from.isoformat()),
             ("history_rates_from", self.history_rates_from.isoformat()),
-            ("backfill", (f"on from {self.backfill_from}, {self.backfill_budget_s:g} s a cycle" if self.backfill
-                          else "off")),
+            ("backfill", (f"on from {self.backfill_from}, {self.backfill_budget_s:g} s a cycle, "
+                          f"{self.backfill_workers} process(es)" if self.backfill else "off")),
             ("prune_superseded", (f"on, replaced runs older than {self.prune_superseded_days} days are deleted"
                                   if self.prune_superseded else "off (replaced runs are kept)")),
             ("backup", (f"on at {self.backup_time}, keep {self.backup_keep}, in "
@@ -626,6 +631,16 @@ def _export_proxy(doc: dict[str, Any]) -> None:
 
 
 # ---- load ----------------------------------------------------------------------------------------------------
+
+
+MAX_AUTO_WORKERS = 3
+"""The processes the default ``backfill_workers`` starts at most: the owner's computer stays responsive (#117)."""
+
+
+def auto_workers() -> int:
+    """The default ``backfill_workers`` of ``load``: ``min(3, cores - 1)``, at least 1 (one process: the dates one
+    after the other)."""
+    return max(1, min(MAX_AUTO_WORKERS, (os.cpu_count() or 1) - 1))
 
 
 def load(environ: dict[str, str] | None = None) -> Settings:
@@ -862,6 +877,7 @@ def _build(proc: dict[str, str], doc: dict[str, Any], file_env: dict[str, str], 
         backfill=flag("DESK_BACKFILL", defaults.backfill),
         backfill_from=backfill_from,
         backfill_budget_s=num("DESK_BACKFILL_BUDGET_S", defaults.backfill_budget_s),
+        backfill_workers=count("DESK_BACKFILL_WORKERS", auto_workers()),
         prune_superseded=flag("DESK_PRUNE_SUPERSEDED", defaults.prune_superseded),
         prune_superseded_days=count("DESK_PRUNE_SUPERSEDED_DAYS", defaults.prune_superseded_days),
         backup=flag("DESK_BACKUP", defaults.backup),

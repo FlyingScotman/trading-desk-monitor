@@ -113,7 +113,7 @@ def eod_run(settings: Settings, d: str, *, snapshots: str | Path | None = None, 
             out: Callable[[str], None] = print,
             cut_type: str = "eod_final", market_snapshot_id: str | None = None,
             contexts: ContextCache | None = None, read_model: bool = True,
-            on_close: tuple[str, str] | None = None) -> int | None:
+            on_close: tuple[str, str] | None = None, gate: Any = None) -> int | None:
     """The EOD run of date ``d`` (``desk eod`` without its hub pull; the autopilot calls it too): values the
     books of the store on the cached snapshot of ``d`` and publishes the run. Returns the desk run id, None when
     the store has no positions for the date. Raises on a missing snapshot or a failed publication.
@@ -137,7 +137,15 @@ def eod_run(settings: Settings, d: str, *, snapshots: str | Path | None = None, 
     ``no_gamma``: value without the second derivatives (the Hessian: 17 s against 42 s a date of 2000 positions); the
     run says so (lineage ``second_order`` false, TDM#627): its ``gamma`` is empty and its bonds' ``convexity`` null, the
     value, the first derivatives and the PnL are those of a full run. The first pass of the backfill runs so; the
-    second pass makes the date's run again with them (``backfill.run_second``)."""
+    second pass makes the date's run again with them (``backfill.run_second``).
+
+    ``gate`` (``desk.parallel.Gate``; the backfill's processes, TDM#628): this run is one of several dates computed at
+    once in other processes, published in the order of the dates. The model spreads of the earlier runs
+    (``store.carried_spreads``) are then read at their first lookup, once the dates before this one are published
+    (``gate.carried``), the run is published in its turn (``gate.before_publish``) and says so when it is done
+    (``gate.finish``). The numbers are those of the same date computed alone: the inputs are the same. A gate also
+    leaves the reaping of orphaned runs to the process that started the pool (a run another process is loading is not
+    an orphan)."""
     snapshots = snapshots or settings.snapshot_cache
     sd = SnapshotDir(Path(snapshots))
     t0 = time.perf_counter()
@@ -196,7 +204,7 @@ def eod_run(settings: Settings, d: str, *, snapshots: str | Path | None = None, 
                 f"mismatch {c['mismatch']:>4}  median |dy| {c['median_abs_d_y_bp']} bp")
 
     with store.connect(store_url or store.resolve_url(settings)) as con:
-        for rid in store.reap_orphans(con):
+        for rid in store.reap_orphans(con) if gate is None else ():
             out(f"WARN run {rid} was still loading: marked failed")
         try:  # the run's snapshots in the market history (the bond charts); one query each once loaded
             for snap in (ctx.market.snapshot, ctx.static.snapshot, *((prev.snapshot,) if prev else ())):
@@ -248,7 +256,7 @@ def eod_run(settings: Settings, d: str, *, snapshots: str | Path | None = None, 
             out(f"  {b}: {src.get('source')} {src.get('file_name')}"
                 + (f", report {src['report_date']}" if src.get("report_date") else "")
                 + f", valid {vd}" + (f", carried {age} days" if age else ""))
-        carried = store.carried_spreads(con, before=run_date)
+        carried = gate.carried(con, run_date) if gate is not None else store.carried_spreads(con, before=run_date)
         bp = pv1.plan(ctx, inputs, second_order=not no_gamma)
         orp = offreport.summary(bp.off_report, bp.off_report_matured, "include" if fx_options.off_report else "exclude",
                                 sum(1 for pid in bp.added if bp.direct[pid].valuation is not None))
@@ -323,6 +331,9 @@ def eod_run(settings: Settings, d: str, *, snapshots: str | Path | None = None, 
         by_q = Counter(o.valuation.quality if o.valuation else "not_valued" for _, _, o in positions)
         out(f"book: {ok}/{len(positions)} positions valued (" + ", ".join(f"{q} {n}" for q, n in by_q.most_common())
             + f"), {len(carried)} carried spreads")
+        if gate is not None:
+            carried = dict(carried)  # read now: this date's turn comes after the dates before it are published
+            gate.before_publish()
         run_id, status, warnings = desk_run.publish(con, ctx, positions, prev=prev, run_type=run_type,
                                                     inputs=inputs, carried_from=carried, pnl_basis=basis,
                                                     core_results=[bp.core_result] if bp.core_result else None,
@@ -330,6 +341,8 @@ def eod_run(settings: Settings, d: str, *, snapshots: str | Path | None = None, 
                                                     intraday_trades=intraday_trades, second_order=not no_gamma,
                                                     **({"business_date": run_date, "cut_type": "prev_close"}
                                                        if on_close else {}))
+        if gate is not None:
+            gate.finish()  # published: the next date's turn (its summary and log are nobody's input)
         out(f"desk run {run_id}: {status}, {len(warnings)} warnings")
         for (m,) in con.execute("SELECT message FROM run_log WHERE run_id = %s AND message LIKE %s",
                                 (run_id, "справочник эмитентов%")):

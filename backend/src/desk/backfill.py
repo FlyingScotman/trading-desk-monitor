@@ -27,9 +27,11 @@ upgrade recomputes only the latest date. Nothing ever computed an older date.
 3. **runs**, oldest first: the date's bundle and the previous date's (flash PnL) from the hub when not cached, or
    cached under another snapshot than the hub's of the plan (a correction of an older date, #439) (``cache.sync``), then ``dayrun.eod_run``, the code path of every EOD run. The prepared market of a date is kept for
    the next one (its previous date: ``dayrun.ContextCache``), so each date's static snapshot and curves are built once.
-   One date at a time: a model price carries its bond's spread from the latest earlier run
-   (``store.carried_spreads``), so a date's run depends on the runs before it; dates in parallel would compute
-   other numbers. A date that fails is not tried again on the same inputs (``STATE_FILE``). A run that created
+   A model price carries its bond's spread from the latest earlier run (``store.carried_spreads``), so a date's run
+   depends on the runs before it. One date at a time, or, with ``workers`` > 1 (setting ``backfill_workers``, TDM#628),
+   several in processes of a pool (``desk.parallel``) that keep that dependence: the spreads are read when the
+   valuation first looks one up, once the dates before are published, and the runs are published in the order of the
+   dates, so the runs are those of one process, to the last bit. A date that fails is not tried again on the same inputs (``STATE_FILE``). A run that created
    nothing is the date's failure too. After its run a date is planned again (the same ``plan``): still stale (a
    reason that does not go away, e.g. a hub date whose bundle does not come), it is logged with
    the differing field and tried again next time; after ``MAX_ATTEMPTS`` runs it is a problem date, not tried again
@@ -97,6 +99,7 @@ from collections import OrderedDict
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import UTC, date, datetime, timedelta
+from functools import partial
 from pathlib import Path
 from typing import Any
 
@@ -512,11 +515,43 @@ def _differs(con: psycopg.Connection, day: Day) -> str:
     return "; ".join(f"{k}: run {a}, plan {b}" for k, (a, b) in have.items() if a != b) or "nothing"
 
 
+SKIP = object()
+"""``bundle_step``: the date's bundle is not cached and there is no hub to download it from."""
+PIPE_BROKEN = object()
+"""``_eod``: a process of the pool died."""
+
+
+def _submit(pipe: Any, date: str) -> bool:
+    """Give ``date`` to the pool. False when the pool cannot take it (its processes do not start, or one died): the
+    date and those after it run in this process, one after the other."""
+    try:
+        pipe.submit(date)
+    except Exception as e:  # noqa: BLE001 - spawn refused, a broken pool: the sequential run is the answer
+        pipe.broken = True
+        log.warning("backfill: the processes cannot take %s (%s: %s): the dates run one after the other",
+                    date, type(e).__name__, e)
+        return False
+    return True
+
+
+def _eod(pipe: Any, date: str, alone: Callable[[], int | None], out: Callable[[str], None]) -> Any:
+    """The run of ``date``: its answer from the pool when it was given to it (the lines it printed first, as
+    ``dayrun.eod_run`` prints them), else ``alone()``. ``PIPE_BROKEN`` when a process of the pool died."""
+    from . import parallel
+
+    if pipe is None or not pipe.has(date):
+        return alone()
+    try:
+        return pipe.result(date, lambda line: out("  " + line))["rid"]
+    except parallel.PoolBroken:
+        return PIPE_BROKEN
+
+
 def run(settings: Settings, p: Plan, *, store_url: str | None = None, client: Any = None,
         budget_s: float | None = None, out: Callable[[str], None] = print,
         progress: Callable[[int, int, str], None] | None = None, contexts: Any = None,
         exclude: set[str] | frozenset[str] = frozenset(), now: datetime | None = None,
-        hub_answered: bool = False) -> dict[str, Any]:
+        hub_answered: bool = False, workers: int = 1, pool_init: Any = None) -> dict[str, Any]:
     """Step 3 (module doc) over the plan's ``todo`` dates, oldest first, until ``budget_s`` seconds have passed
     (None: all), but ``exclude`` (the dates the autopilot's eod step ran or failed this cycle). ``client``: a
     ``HubClient`` for the bundles not cached (None: only the cached dates run). ``now``: the run's start, for the
@@ -530,11 +565,23 @@ def run(settings: Settings, p: Plan, *, store_url: str | None = None, client: An
     The first pass of the history (TDM#627): the runs are made without the second derivatives (``eod_run`` with
     ``no_gamma``), 40 % of the time (17 s against 42 s a date of 2000 positions); the dates are current, but their runs say they have no ``gamma`` (lineage
     ``second_order``) until ``run_second`` makes them again. ``complete`` in the result: the run went through all its
-    dates (not stopped by the budget or a stall), so the second pass may follow."""
+    dates (not stopped by the budget or a stall), so the second pass may follow.
+
+    ``workers`` > 1 (TDM#628, ``desk.parallel``): the dates are computed in that many processes at once, each date in
+    one, published in the order of the dates; this process downloads the bundles ahead and takes the dates' answers in
+    order, so everything below (the stall, the problem dates, the budget) works on them as on dates run one after the
+    other. The budget cuts what has not started: the dates already submitted (at most ``workers`` + 1) are finished.
+    The runs are the sequential run's, to the last bit (``test_parallel_backfill_628``). ``pool_init``: (function, args)
+    each process of the pool calls when it starts (a test's hook; the function of an importable module)."""
+    from . import parallel
     from .dayrun import ContextCache, eod_run
 
     t0 = time.monotonic()
     contexts = contexts if contexts is not None else ContextCache()
+
+    def indented(line: str) -> None:
+        out("  " + line)
+
     todo = [d for d in p.todo if d.date not in exclude]
     cut = False  # the run stopped before the end of ``todo``: the budget, or a stall of the store or the network
     done: list[str] = []
@@ -559,6 +606,49 @@ def run(settings: Settings, p: Plan, *, store_url: str | None = None, client: An
     stall: dict[str, Any] | None = None  # the store's or the network's error the run stopped on (#447)
     tried = 0  # dates attempted this run (done or failed), for the time budget
     through = False  # the stall standing at the start is over: a date got past its phase
+    pipe = None
+    prefetched: dict[str, Any] = {}  # date -> downloaded (bool), SKIP or the error its bundle step raised (workers > 1)
+    blocked: list[int] = []  # the index of a date whose bundle step failed ahead: the dates after it wait for the loop
+
+    def bundle_step(day: Day) -> bool | object:
+        """The date's bundle: downloaded when it is not cached, or cached under another snapshot than the plan's
+        (the hub re-published the date or the previous close, #439); an unchanged cached date is not. Returns whether it
+        was downloaded, ``SKIP`` when it is not cached and there is no hub."""
+        sd = SnapshotDir(cache_dir)
+        have = set(sd.market_dates())
+        # The previous close is the plan's, the one the run then picks (``bundle.previous_close``, #203);
+        # a cached eod_preliminary one is not the hub's to sync
+        planned = ((day.date, day.market_id),
+                   (day.prev_date if day.prev_cut == "eod_final" else None, day.sig[2] if day.sig else None))
+        want = [x for x, sid in planned if x and (x not in have or (p.hub and sid and sd.market_id(x) != sid))]
+        if want and client is not None:
+            cache.sync(client, cache_dir, want)
+            return True
+        return False if day.date in have else SKIP
+
+    def fill(i: int) -> None:
+        """Workers > 1: the dates from ``i`` on are given to the pool, up to ``workers`` + ``LOOKAHEAD`` in flight, their
+        bundles downloaded here first (while the processes compute the dates before them). A bundle that fails stops
+        the filling there: the loop reaches that date, raises the error where a date run alone raises it, and goes on."""
+        if pipe.broken:
+            return
+        for j in range(i, min(len(todo), i + workers + parallel.LOOKAHEAD)):
+            d = todo[j]
+            if d.date in prefetched or pipe.has(d.date):
+                continue
+            if blocked and j > blocked[0]:
+                return
+            if budget_s is not None and (j > i or tried) and time.monotonic() - t0 >= budget_s:
+                return  # nothing new starts after the budget (the first date of the run always does)
+            try:
+                r = bundle_step(d)
+            except Exception as e:  # noqa: BLE001 - raised again at its date
+                prefetched[d.date] = e
+                blocked[:] = [j]
+                return
+            prefetched[d.date] = r
+            if r is not SKIP and not _submit(pipe, d.date):
+                return
 
     def loads(phases: set[str]) -> None:  # a date got past the store and the network in ``phases`` (a date run from
         # the cache, ``run`` only, says nothing of the downloads): the passed dates' errors there are their own (#217)
@@ -576,43 +666,58 @@ def run(settings: Settings, p: Plan, *, store_url: str | None = None, client: An
         through, live = through or live is not None, None
 
     try:
+        if workers > 1 and len(todo) > 1:
+            pipe = parallel.Pipeline(settings, workers, store_url=store_url or store.resolve_url(settings),
+                                     snapshots=str(cache_dir), no_gamma=True, wait_carried=True, init=pool_init)
         for i, day in enumerate(todo):
-            if budget_s is not None and tried and time.monotonic() - t0 >= budget_s:
+            if pipe is not None:
+                fill(i)
+            submitted = pipe is not None and pipe.has(day.date)  # a date in the pool is taken whatever the budget says
+            if budget_s is not None and tried and not submitted and time.monotonic() - t0 >= budget_s:
                 cut = True
                 break  # the budget counts every date tried, failed or not, but at least one is tried (#447)
             if (passed and live is not None and day.date == live.get("probe") and i < len(todo) - 1
                     and (problems.get(day.date) or {}).get("attempts", 0) >= MAX_ATTEMPTS):
                 waiting.append(day.date)  # stopped on it run after run as well: the next date tells (#447)
+                if submitted:
+                    pipe.discard(day.date)
                 continue
             tried += 1
             if progress is not None:  # cumulative, not this run's index: «0 из N» for hours read as stopped (TDM#587)
                 progress(p.count("done") + len(done), p.count("done") + p.count("todo") + p.count("failed"), day.date)
             still, phase, downloaded = None, "bundle", False
             try:
-                sd = SnapshotDir(cache_dir)
-                have = set(sd.market_dates())
-                # not cached, or cached under another snapshot than the hub's of the plan (the hub re-published the
-                # date or the previous close, #439): its bundle again; an unchanged cached date is not downloaded.
-                # The previous close is the plan's, the one the run then picks (``bundle.previous_close``, #203);
-                # a cached eod_preliminary one is not the hub's to sync
-                planned = ((day.date, day.market_id),
-                           (day.prev_date if day.prev_cut == "eod_final" else None, day.sig[2] if day.sig else None))
-                want = [x for x, sid in planned
-                        if x and (x not in have or (p.hub and sid and sd.market_id(x) != sid))]
-                if want and client is not None:
-                    cache.sync(client, cache_dir, want)
-                    downloaded = True
-                elif day.date not in have:
+                step = prefetched.pop(day.date) if day.date in prefetched else bundle_step(day)
+                if isinstance(step, Exception):
+                    blocked.clear()  # the loop is at the date whose bundle failed: the dates after it go on
+                    raise step  # the bundle step of a date given to the pool ahead failed: as it fails here
+                if step is SKIP:
                     skipped.append(day.date)
                     tried -= 1  # nothing was tried: no bundle, no time spent
                     continue
+                downloaded = step
                 phase = "run"
                 out(f"backfill {day.date}: {day.why}")
                 t1 = time.monotonic()
-                rid = eod_run(settings, day.date, snapshots=cache_dir, store_url=store_url, report_dir=None,
-                              out=lambda s: out("  " + s), contexts=contexts, read_model=False, no_gamma=True)
+                rid = _eod(pipe, day.date, partial(eod_run, settings, day.date, snapshots=cache_dir, store_url=store_url,
+                                                   report_dir=None, out=indented, contexts=contexts, read_model=False,
+                                                   no_gamma=True), out)
+                if rid is PIPE_BROKEN:  # a process of the pool died: this date and the rest one after the other
+                    pipe.close()
+                    pipe = None
+                    prefetched.clear()
+                    con = con or store.connect(store_url or store.resolve_url(settings))
+                    d = date.fromisoformat(day.date)
+                    now_ = next((x for x in plan(con, settings, d, d, p.rows).days if x.date == day.date), None)
+                    if now_ is not None and now_.status == "done":  # its process published it before the pool broke
+                        rid = now_.run_id
+                    else:
+                        rid = eod_run(settings, day.date, snapshots=cache_dir, store_url=store_url, report_dir=None,
+                                      out=indented, contexts=contexts, read_model=False, no_gamma=True)
                 if rid is not None:
-                    st["seconds_per_date"] = round(time.monotonic() - t1, 1)
+                    # one after the other: this date's time; in the pool: the pass's time a date, what the ETA wants
+                    st["seconds_per_date"] = round((time.monotonic() - (t0 if workers > 1 else t1))
+                                                   / (tried if workers > 1 else 1), 1)
                     con = con or store.connect(store_url or store.resolve_url(settings))
                     d = date.fromisoformat(day.date)
                     again = next((x for x in plan(con, settings, d, d, p.rows).days if x.date == day.date), None)
@@ -673,6 +778,8 @@ def run(settings: Settings, p: Plan, *, store_url: str | None = None, client: An
             problems.pop(day.date, None)
             done.append(day.date)
     finally:
+        if pipe is not None:
+            pipe.close()
         if con is not None:
             con.close()
         if stall is None and hub_answered and any(ph == "bundle" for _, ph in passed):
@@ -724,7 +831,8 @@ MISMATCH_SHOWN = 3
 
 def run_second(settings: Settings, p: Plan, *, store_url: str | None = None, budget_s: float | None = None,
                out: Callable[[str], None] = print, progress: Callable[[int, int, str], None] | None = None,
-               contexts: Any = None, exclude: set[str] | frozenset[str] = frozenset()) -> dict[str, Any]:
+               contexts: Any = None, exclude: set[str] | frozenset[str] = frozenset(),
+               workers: int = 1, pool_init: Any = None) -> dict[str, Any]:
     """The second pass of the history (TDM#627, module doc): the dates of ``p`` whose default run was made without
     the second derivatives (``Day.second`` ``todo``), the newest first, until ``budget_s`` seconds have passed (None:
     all), but ``exclude``. A date's run is made again in full from the cache (``eod_run``; no download: a date whose
@@ -742,12 +850,18 @@ def run_second(settings: Settings, p: Plan, *, store_url: str | None = None, bud
     on the same inputs it is left (``Day.second`` ``failed``).
     ``progress(x, m, date)`` as ``run``'s: ``x`` the dates with the second derivatives, ``m`` all that have a run.
     An error of the store or the network stops the pass (tried again next cycle); another error is the date's, counted
-    the same way. Returns {done: [dates], failed: [(date, error)], moved: [dates], skipped: [dates not cached],
-    mismatch: [(date, what differs)], left: n, stopped: the transient error or None, seconds}."""
+    the same way. ``workers`` > 1: the dates in that many processes at once, published newest first as one after the
+    other (``run``, ``desk.parallel``). Returns {done: [dates], failed: [(date, error)], moved: [dates], skipped: [dates
+    not cached], mismatch: [(date, what differs)], left: n, stopped: the transient error or None, seconds}."""
+    from . import parallel
     from .dayrun import ContextCache, eod_run
 
     t0 = time.monotonic()
     contexts = contexts if contexts is not None else ContextCache()
+
+    def indented(line: str) -> None:
+        out("  " + line)
+
     todo = [d for d in p.second_todo if d.date not in exclude]
     done: list[str] = []
     failed: list[tuple[str, str]] = []
@@ -763,11 +877,33 @@ def run_second(settings: Settings, p: Plan, *, store_url: str | None = None, bud
     total = p.count_second("done") + p.count_second("todo") + p.count_second("failed")
     con: psycopg.Connection | None = None
     tried = 0
+    pipe = None
+    have = set(SnapshotDir(cache_dir).market_dates())
+
+    def fill(i: int) -> None:
+        if pipe.broken:
+            return
+        for j in range(i, min(len(todo), i + workers + parallel.LOOKAHEAD)):
+            d = todo[j]
+            if pipe.has(d.date) or not d.cached or d.date not in have:
+                continue
+            if budget_s is not None and (j > i or tried) and time.monotonic() - t0 >= budget_s:
+                return
+            if not _submit(pipe, d.date):
+                return
+
     try:
-        for day in todo:
-            if budget_s is not None and tried and time.monotonic() - t0 >= budget_s:
+        if workers > 1 and len(todo) > 1:
+            # newest first, each date reads the dates before it, which this pass publishes later: no read waits
+            pipe = parallel.Pipeline(settings, workers, store_url=store_url or store.resolve_url(settings),
+                                     snapshots=str(cache_dir), no_gamma=False, wait_carried=False, init=pool_init)
+        for i, day in enumerate(todo):
+            if pipe is not None:
+                fill(i)
+            if budget_s is not None and tried and not (pipe is not None and pipe.has(day.date)) \
+                    and time.monotonic() - t0 >= budget_s:
                 break
-            if not day.cached or day.date not in set(SnapshotDir(cache_dir).market_dates()):
+            if not day.cached or day.date not in have:
                 skipped.append(day.date)  # nothing to value on; the first pass downloaded it, a prune took it
                 continue
             tried += 1
@@ -776,11 +912,25 @@ def run_second(settings: Settings, p: Plan, *, store_url: str | None = None, bud
             try:
                 out(f"backfill {day.date}: second derivatives (the run {day.run_id} has none)")
                 t1 = time.monotonic()
-                rid = eod_run(settings, day.date, snapshots=cache_dir, store_url=store_url, report_dir=None,
-                              out=lambda x: out("  " + x), contexts=contexts, read_model=False)
+                rid = _eod(pipe, day.date, partial(eod_run, settings, day.date, snapshots=cache_dir, store_url=store_url,
+                                                   report_dir=None, out=indented, contexts=contexts, read_model=False),
+                           out)
+                if rid is PIPE_BROKEN:  # a process of the pool died: this date and the rest one after the other
+                    pipe.close()
+                    pipe = None
+                    con = con or store.connect(store_url or store.resolve_url(settings))
+                    d = date.fromisoformat(day.date)
+                    now_ = next((x for x in plan(con, settings, d, d, p.rows if p.hub else None).days
+                                 if x.date == day.date), None)
+                    if now_ is not None and now_.status == "done" and now_.run_id != day.run_id:
+                        rid = now_.run_id  # its process published it before the pool broke
+                    else:
+                        rid = eod_run(settings, day.date, snapshots=cache_dir, store_url=store_url, report_dir=None,
+                                      out=indented, contexts=contexts, read_model=False)
                 if rid is None:
                     raise RuntimeError("no run created (no positions for the date)")
-                st["seconds_per_date_second"] = round(time.monotonic() - t1, 1)
+                st["seconds_per_date_second"] = round((time.monotonic() - (t0 if workers > 1 else t1))
+                                                      / (tried if workers > 1 else 1), 1)
                 con = con or store.connect(store_url or store.resolve_url(settings))
                 d = date.fromisoformat(day.date)
                 again = next((x for x in plan(con, settings, d, d, p.rows if p.hub else None).days
@@ -826,6 +976,8 @@ def run_second(settings: Settings, p: Plan, *, store_url: str | None = None, bud
             else:
                 odd.pop(day.date, None)
     finally:
+        if pipe is not None:
+            pipe.close()
         if con is not None:
             con.close()
         # only the dates of this plan (``desk backfill`` passes one date at a time): the others' memory stays

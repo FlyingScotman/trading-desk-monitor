@@ -61,7 +61,7 @@ import math
 import statistics
 from bisect import bisect_left
 from collections import defaultdict
-from collections.abc import Iterator
+from collections.abc import Iterator, Mapping
 from dataclasses import dataclass, field, replace
 from datetime import date, timedelta
 from decimal import Decimal
@@ -175,11 +175,15 @@ class FallbackContext:
     history: list[MarketView] | None = None
     """Market snapshots of the previous ``LOOKBACK_DAYS`` calendar days, newest first."""
     medians: dict[tuple[str, Any], tuple[float, int]] | None = None
-    carried: dict[str, CarriedSpread] = field(default_factory=dict)
+    carried: Mapping[str, CarriedSpread] = field(default_factory=dict)
     """Model spreads of the latest earlier run, by secid (empty without a desk store)."""
 
     @classmethod
-    def build(cls, ctx: EodContext, carried: dict[str, CarriedSpread] | None = None) -> FallbackContext:
+    def build(cls, ctx: EodContext, carried: Mapping[str, CarriedSpread] | None = None) -> FallbackContext:
+        # a lazy mapping (``desk.parallel.LazyCarried``: read from the store at its first lookup, after the earlier
+        # dates are published) is kept as it is: a copy would read it at once
+        if carried is not None and not isinstance(carried, dict):
+            return cls(ctx, carried=carried)
         return cls(ctx, carried=dict(carried or {}))
 
     def past_quotes(self, terms: BondTerms) -> Iterator[BondQuote]:

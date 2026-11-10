@@ -686,7 +686,11 @@ def cmd_backfill(a: argparse.Namespace) -> int:
     done = failed = 0
     t0 = time.perf_counter()
     complete = True  # every date of the first pass went through: the second pass follows (TDM#627)
-    for i, day in enumerate(p.todo, 1):
+    workers = int(getattr(st, "backfill_workers", 1))
+    chunk = workers * 4 if workers > 1 else 1  # dates a hold of the cycle lock: the processes' start is paid once
+    for i in range(chunk, len(p.todo) + chunk, chunk):
+        batch = p.todo[i - chunk:i]
+        i = min(i, len(p.todo))
         waited = False
         while not lock.acquire():
             if not waited:
@@ -694,8 +698,8 @@ def cmd_backfill(a: argparse.Namespace) -> int:
                 waited = True
             time.sleep(5)
         try:
-            one = backfill.Plan(p.date_from, p.date_to, [day], p.hub, p.rows)
-            res = backfill.run(st, one, store_url=url, client=client, out=print, contexts=contexts)
+            one = backfill.Plan(p.date_from, p.date_to, batch, p.hub, p.rows)
+            res = backfill.run(st, one, store_url=url, client=client, out=print, contexts=contexts, workers=workers)
         finally:
             lock.release()
         done += len(res["done"])
@@ -708,13 +712,15 @@ def cmd_backfill(a: argparse.Namespace) -> int:
             print(f"  {d} skipped: its bundle is not cached and the hub is off")
         complete = complete and res["complete"]
         el = time.perf_counter() - t0
-        print(f"[{i}/{len(p.todo)}] {day.date} done; {el:.0f} s, about {el / i * (len(p.todo) - i):.0f} s left")
+        print(f"[{i}/{len(p.todo)}] {batch[-1].date} done; {el:.0f} s, about {el / i * (len(p.todo) - i):.0f} s left")
     print(f"backfill: {done} dates run, {failed} failed, in {time.perf_counter() - t0:.0f} s")
     if complete:  # the second derivatives of the dates run without them, the newest first
         with _store(a) as con:
             p2 = backfill.plan(con, st, d_from, d_to, rows)
         second = p2.second_todo
-        for i, day in enumerate(second, 1):
+        for i in range(chunk, len(second) + chunk, chunk):
+            batch = second[i - chunk:i]
+            i = min(i, len(second))
             waited = False
             while not lock.acquire():
                 if not waited:
@@ -722,8 +728,8 @@ def cmd_backfill(a: argparse.Namespace) -> int:
                     waited = True
                 time.sleep(5)
             try:
-                one = backfill.Plan(p2.date_from, p2.date_to, [day], p2.hub, p2.rows)
-                res = backfill.run_second(st, one, store_url=url, out=print, contexts=contexts)
+                one = backfill.Plan(p2.date_from, p2.date_to, batch, p2.hub, p2.rows)
+                res = backfill.run_second(st, one, store_url=url, out=print, contexts=contexts, workers=workers)
             finally:
                 lock.release()
             failed += len(res["failed"])
@@ -738,7 +744,7 @@ def cmd_backfill(a: argparse.Namespace) -> int:
                 failed += 1
                 break
             el = time.perf_counter() - t0
-            print(f"[second {i}/{len(second)}] {day.date} done; {el:.0f} s")
+            print(f"[second {i}/{len(second)}] {batch[-1].date} done; {el:.0f} s")
         if second:
             print(f"backfill: second derivatives of {len(second)} dates, {failed} failed in all, "
                   f"in {time.perf_counter() - t0:.0f} s")
