@@ -6,6 +6,7 @@ data only (the fixture's market shifted to five business days); the pool is real
 
 from __future__ import annotations
 
+import json
 import os
 import shutil
 import threading
@@ -15,12 +16,14 @@ from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
+import psycopg
 import pytest
+from psycopg.rows import dict_row
 from test_market_history import FIX, STATIC, shifted, write
 from test_r23_backfill import DATES, _cycle, load, settings
 from test_two_pass_627 import D0, D1, NEWEST_FIRST, RUN_DATES, plan, runs
 
-from desk import backfill, dayrun, parallel, store
+from desk import backfill, bookfile, dayrun, parallel, store
 from desk.autopilot import Autopilot
 from desk.settings import Settings, auto_workers, check_settings_doc
 from desk.settings import load as load_settings
@@ -583,6 +586,185 @@ def test_the_second_pass_does_not_make_again_a_run_a_process_published_before_th
     assert res["done"] == NEWEST_FIRST and not res["failed"] and not res["moved"]
     assert run_order(store_url) == RUN_DATES + NEWEST_FIRST  # one new run of each date
     assert not plan(store_url, s).second_todo
+
+
+# ---- a bond with no price of its own: its model price carries the spread of an earlier run
+
+NOQ = "RU000A0JXQ44"  # a corporate fixed-rate RUB bond: its quote is dropped on every date but the first
+ALL_NOQ = ["2026-09-01", *DATES]
+
+
+@pytest.fixture
+def cache_noq(tmp_path) -> Path:
+    """The market of ``cache`` from 01.09 too, and ``NOQ`` priced on the first date only (38 days before the others: no
+    stale price, a carried Z): its model price on the later dates carries the spread of the run before it."""
+    c = tmp_path / "cache_noq"
+    c.mkdir()
+    shutil.copy(FIX / f"{STATIC}.json.gz", c)
+    for i, d in enumerate(ALL_NOQ):
+        doc = shifted(d, len(ALL_NOQ) - i, light=False)
+        if d != ALL_NOQ[0]:
+            doc["data"]["bond_quotes"] = [q for q in doc["data"]["bond_quotes"] if q["secid"] != NOQ]
+        write(c, doc)
+    return c
+
+
+def load_noq(url: str, tmp_path: Path, d: str, qty: int) -> None:
+    f = tmp_path / uuid.uuid4().hex[:8] / f"book{d}.csv"  # the same file name in every store: it is in the lineage
+    f.parent.mkdir()
+    f.write_text("position_id,book_id,secid,quantity_bonds\n"
+                 f"P1,OFZ,SU26238RMFS4,{qty}\nP2,CORP,RU000A10BRM5,3\nP3,CORP,{NOQ},7\nP4,CORP,RU000A100GW5,2\n",
+                 encoding="utf-8")
+    with store.connect(url) as con:
+        bookfile.load_book(con, f, d, out=lambda s: None)
+
+
+def _strip(x: Any) -> Any:
+    """Without the time the positions were read at (``known_at``): the one thing two stores loaded apart differ in."""
+    if isinstance(x, dict):
+        return {k: _strip(v) for k, v in x.items() if k != "known_at"}
+    if isinstance(x, list):
+        return [_strip(v) for v in x]
+    return x
+
+
+def _logline(m: str) -> str:
+    return "lineage " + json.dumps(_strip(json.loads(m[8:])), sort_keys=True) if m.startswith("lineage ") else m
+
+
+def dump(url: str) -> list[dict[str, Any]]:
+    """Every run of the store, run after run: header, every row, model spreads (with their source text), references,
+    core result hashes and the log lines."""
+    out = []
+    with store.connect(url) as con:
+        cur = con.cursor(row_factory=dict_row)
+        for r in cur.execute("SELECT * FROM run ORDER BY run_id").fetchall():
+            rid = r["run_id"]
+            hdr = {k: v for k, v in r.items() if k not in ("started_at", "completed_at", "positions_known_at",
+                                                           "backend_git_sha")}
+            hdr["lineage"] = json.dumps(_strip(dict(hdr.pop("lineage"))), sort_keys=True, default=str)
+            out.append({
+                "hdr": json.dumps(hdr, sort_keys=True, default=str),
+                "rows": cur.execute("SELECT * FROM run_position WHERE run_id = %s ORDER BY ord", (rid,)).fetchall(),
+                "ms": cur.execute("SELECT * FROM model_spread WHERE run_id = %s ORDER BY secid", (rid,)).fetchall(),
+                "ref": cur.execute("SELECT kind, data FROM run_reference WHERE run_id = %s ORDER BY kind",
+                                   (rid,)).fetchall(),
+                "cr": cur.execute("SELECT result_sha256, label FROM run_core_result WHERE run_id = %s ORDER BY 1",
+                                  (rid,)).fetchall(),
+                "log": [_logline(m) for (m,) in con.execute(
+                    "SELECT message FROM run_log WHERE run_id = %s ORDER BY seq", (rid,))]})
+    return out
+
+
+def differences(a: list[dict[str, Any]], b: list[dict[str, Any]]) -> list[str]:
+    """Where two dumps differ: the run, the part of it and the first thing that is not the same."""
+    out = [f"{len(a)} runs against {len(b)}"] if len(a) != len(b) else []
+    for i, (x, y) in enumerate(zip(a, b, strict=False)):
+        for k in x:
+            if x[k] != y[k]:
+                if isinstance(x[k], list):
+                    first = next(((u, v) for u, v in zip(x[k], y[k], strict=False) if u != v), (len(x[k]), len(y[k])))
+                    out.append(f"run {i} {k}: {str(first)[:600]}")
+                else:
+                    j = next((n for n, (u, v) in enumerate(zip(x[k], y[k], strict=False)) if u != v), 0)
+                    out.append(f"run {i} {k}: ...{x[k][max(0, j - 80):j + 120]} / ...{y[k][max(0, j - 80):j + 120]}")
+    return out
+
+
+def no_gate() -> None:
+    """A pool process's hook (the control): the carried spreads are read at once, as if no order were kept."""
+    def carried(self, con, run_date):
+        return store.carried_spreads(con, before=run_date)
+
+    parallel.Gate.carried = carried
+
+
+def history_in(pg_server, tmp_path: Path, cache_dir: Path, workers: int, init: Any = None) -> list[dict[str, Any]]:
+    """Both passes of the history of a store with the books of 01.09 and 14.10 (a second report: the dates after it read
+    other positions), ``workers`` processes."""
+    url = second_store(pg_server)
+    load_noq(url, tmp_path, "2026-09-01", 10)
+    load_noq(url, tmp_path, "2026-10-14", 12)
+    s = Settings(home=tmp_path / f"home_{uuid.uuid4().hex[:6]}", snapshot_cache=cache_dir, store_url=url,
+                 backfill_workers=workers)
+
+    def plan_() -> backfill.Plan:
+        with store.connect(url) as con:
+            return backfill.plan(con, s, date(2026, 8, 25), date(2026, 10, 15))
+
+    r1 = backfill.run(s, plan_(), store_url=url, out=lambda line: None, workers=workers, pool_init=init)
+    r2 = backfill.run_second(s, plan_(), store_url=url, out=lambda line: None, workers=workers, pool_init=init)
+    assert not r1["failed"] and not r2["failed"] and not r2["moved"]
+    if init is None:  # (the control's second pass reads other spreads than its first: its totals may well differ)
+        assert not r2["mismatch"]
+    return dump(url)
+
+
+def test_a_model_price_carries_the_same_spread_text_and_all_in_the_pool_as_one_after_the_other(
+        tmp_path, cache_noq, pg_server):
+    """Review of TDM#628: a bond whose quote is on the first date only is valued by model on the later dates with the
+    spread of the run before it (``model_spread``, ``run_position.fact``, the source text names the date and the run). The
+    pool reads it once the dates before are published, so both passes are one calculation to the last bit; with the order
+    off (the control) the later dates read an older run's spread and the runs differ."""
+    seq = history_in(pg_server, tmp_path, cache_noq, 1)
+    model = [(r["hdr"], row["pv_rub"]) for r in seq for row in r["rows"]
+             if row["secid"] == NOQ and row["quality"] == "model_price"]
+    sources = {m["source"] for r in seq for m in r["ms"] if m["secid"] == NOQ}
+    assert len(model) >= 8 and sources and all("carried" in x or "last market Z" in x or "Z" in x for x in sources), \
+        "the scenario must make the model price from a carried spread, or the check proves nothing"
+    par = history_in(pg_server, tmp_path, cache_noq, 3)
+    assert not differences(seq, par), differences(seq, par)[:5]
+    off = history_in(pg_server, tmp_path, cache_noq, 3, init=(no_gate, ()))
+    assert differences(seq, off), "the control: without the gate the pool must read other spreads, else the test shows nothing"
+
+
+def make_flaky(bad: str):
+    """``store.carried_spreads`` that fails once, for date ``bad`` (the connection dropped), then works."""
+    real = store.carried_spreads
+    state = {"failed": False}
+
+    def read(con, before):
+        if before.isoformat() == bad and not state["failed"]:
+            state["failed"] = True
+            raise psycopg.OperationalError("the store dropped the connection")
+        return real(con, before)
+
+    return read
+
+
+def flaky_carried(bad: str) -> None:
+    store.carried_spreads = make_flaky(bad)
+
+
+def test_a_store_error_reading_the_carried_spreads_fails_the_date_in_the_pool_as_it_does_one_after_the_other(
+        tmp_path, cache_noq, pg_server, monkeypatch):
+    """The first lookup of the spreads is inside the fallback ladder, which values a bond whose data fail at par proxy;
+    an error of the store there is not the bond's: the date fails (here: a stall of the store), it is not published
+    with a par proxy because the next read of the spreads worked."""
+    bad = "2026-10-14"
+
+    def one(workers: int, init: Any, patch: bool) -> tuple[dict[str, Any], list[str]]:
+        url = second_store(pg_server)
+        load_noq(url, tmp_path, "2026-09-01", 10)
+        load_noq(url, tmp_path, "2026-10-14", 12)
+        s = Settings(home=tmp_path / f"home_{uuid.uuid4().hex[:6]}", snapshot_cache=cache_noq, store_url=url)
+        with store.connect(url) as con:
+            p = backfill.plan(con, s, date(2026, 8, 25), date(2026, 10, 15))
+        if patch:
+            monkeypatch.setattr(store, "carried_spreads", make_flaky(bad))
+        res = backfill.run(s, p, store_url=url, out=lambda line: None, workers=workers, pool_init=init,
+                           now=datetime(2026, 10, 20, 9, 0, tzinfo=UTC))
+        monkeypatch.undo()
+        return res, run_order(url)
+
+    seq, seq_order = one(1, None, True)
+    par, par_order = one(3, (flaky_carried, (bad,)), False)
+    assert [d for d, _ in seq["failed"]] == [bad] and "OperationalError" in seq["failed"][0][1]
+    assert seq["stalled"] and seq["stalled"]["date"] == bad and bad not in seq_order
+    assert [d for d, _ in par["failed"]] == [bad] and "OperationalError" in par["failed"][0][1]
+    assert par["stalled"] and par["stalled"]["date"] == bad
+    assert bad not in par_order and [d for d in par_order if d < bad] == [d for d in seq_order if d < bad]
+    # (a date already in flight after it, 15.10, may be published: its process does not wait for the failed date's)
 
 
 # ---- the pool that cannot start, the pool that serves several passes, the dropped date
