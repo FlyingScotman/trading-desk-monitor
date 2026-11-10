@@ -62,20 +62,23 @@ by which method. ``fxPartial``: the FX is one of its two parts only (TDM#414, #5
 EXTRA_KEYS_READ = ("assumptions", "core", "curve_proxy", "dm_bp", "funding", "g_spread_bp", "horizon_kind",
                    "index_fixings", "issue_size", "lat_name", "legs", "not_exact_reason", "offer_date", "offer_kind",
                    "ofz_basis01", "ofz_ruonia01", "pv_diff_rub", "quality", "quote", "reason", "reported",
-                   "reported_ccy", "reported_pv_rub", "repos", "risk_problem", "spread_buckets", "swaps", "why")
+                   "reported_ccy", "reported_pv_rub", "repos", "risk_missing", "risk_problem", "spread_buckets", "swaps",
+                   "why")
 """The keys of a position's ``extra`` (the row's own, passed through) that ``lib/real.js`` reads, some only on rows
 a plain bond book does not have: an FX deal's ``legs``, a rates-core trade's ``swaps`` / ``repos`` / ``core``, a
-not-valued row's ``reported``, an impossible risk's ``risk_problem`` (TDM#170, TDM#460), a bond on the proxy curve's
+not-valued row's ``reported``, an impossible risk's ``risk_problem`` (TDM#170, TDM#460), why a derivative valued without core
+has no rates risk (``risk_missing``, TDM#616), a bond on the proxy curve's
 ``curve_proxy`` (TDM#31). ``tests/js/ui_pack6.test.js`` keeps it equal to what ``real.js`` reads (TDM#324)."""
 EXTRA_NESTED_KEYS = {
     "curve_proxy": ("curve", "instead_of", "reason", "text"),
     "funding": ("amount_rub", "default_rate", "in_pnl", "lines", "reason", "rule_source", "state"),
     "funding.lines[]": ("base", "body_ccy", "ccy", "days", "default_rate", "interest_ccy", "interest_rub", "kind",
                         "rate_expr", "rate_pct", "rule_id", "rule_source"),
+    "risk_missing": ("ccy", "reason", "text"),
     "legs[]": ("base_forward_rate", "buy_amount", "buy_ccy", "contract_rate", "core_rate_quote", "df", "fixing_date",
                "fixing_rate", "fixing_source", "fwd_rate", "leg", "payment_date", "points", "pv_rub",
                "quote_forward_rate", "rate_quote", "sell_amount", "sell_ccy", "settlement", "settlement_ccy",
-               "trade_id", "value_date"),
+               "settlement_ccy_assumed", "trade_id", "value_date"),
 }
 """The keys of the nested structures of a position's ``extra`` the pages read (TDM#337): ``curve_proxy`` an object
 (``publish.tdm_run.curve_proxy``, TDM#31), ``funding`` an object (``publish.funding_run``: a position's state, amount

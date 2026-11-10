@@ -69,6 +69,12 @@ ISSUE_TEXT = {
     "same_valid_date": "другая дата отчёта даёт тот же рабочий день",
     "pnl_parts_mismatch": "части PnL не сходятся с итогом",
     "unmapped_index": "индекс ноги не сопоставлен: сделка «не оценено» — экран «Индексы ставок» в настройках",
+    # TDM#616: an NDF whose terms name no settlement currency; the adapter gave it its default (a setting, RUB as
+    # shipped), x_settle_ccy_assumed
+    "ndf_settle_ccy_assumed": ("NDF без валюты расчёта в условиях сделки: принята валюта по умолчанию из настроек "
+                               "адаптера"),
+    "ndf_settle_ccy_assumed_rub": ("NDF без валюты расчёта в условиях сделки: принята валюта по умолчанию из настроек "
+                                   "адаптера"),
 }
 
 LEVELS = {"input.rejected": "error", "input.failed": "error", "input.match_failed": "error", "run.failed": "error",

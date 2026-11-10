@@ -2393,7 +2393,7 @@
     swap_frequency_unsupported: 'частота выплат не поддерживается', day_count_unsupported: 'база начисления не поддерживается', swap_index_unsupported: 'индекс не поддерживается (IRS: RUONIA и ключевая ставка; рублёвая нога CCS: RUONIA, ключевая ставка, RUSFAR или фикс)',
     swap_ccy_unsupported: 'валюта свопа не RUB', repo_ccy_unsupported: 'валюта РЕПО не RUB', terms_incomplete: 'условия сделки неполные', terms_invalid: 'условия сделки не приняты ядром', settled: 'сделка исполнена',
     no_foreign_curve: 'нет кривой валюты сделки в прогоне', no_fx_spot: 'нет спот-курса валюты в прогоне', no_fx_calendar: 'нет календаря валюты в статике хаба',
-    ndf_unsupported: 'NDF с расчётами не в рублях или кросс-NDF ядром не оценивается', future_terms_incomplete: 'у фьючерса в срезе хаба нет базовой валюты, цены, лота или даты исполнения',
+    ndf_unsupported: 'NDF с расчётом в валюте не из пары сделки ядром не оценивается', future_terms_incomplete: 'у фьючерса в срезе хаба нет базовой валюты, цены, лота или даты исполнения',
     core_missing_market_data: 'ядру не хватило рыночных данных (кривой, курса или фиксинга за начало периода)', core_undeclared_fixing_gap: 'пропуск в истории фиксингов внутри периода сделки' };
   K.rcReason = c => !c ? '' : RC_REASON[c] || (/^core_/.test(c) ? 'ядро отклонило: ' + c.slice(5) : c);
   const rcProd = s => s ? String(s).split('+').map(x => RC_PROD[x] || x).join(' + ') : '—';
@@ -2656,7 +2656,10 @@
       ['Курс сделки', l => rate(l.contractRate) + (l.rateQuote ? ' <small>' + esc(l.rateQuote) + '</small>' : ''), null, ['Курс сделки', 'Котировка'], l => [rateCsv(l.contractRate), l.rateQuote || '']]]
       .concat(L.some(l => fwd(l) != null) ? [['Форвард', l => rate(fwd(l))]] : [])
       .concat(any('points') ? [['Пойнты', l => l.points == null ? '—' : f.s(l.points, 4)]] : [])
-      .concat(any('settlement') ? [['Расчёт', l => esc(SET[l.settlement] || l.settlement || '—') + (l.settlementCcy ? ' <small>в ' + esc(l.settlementCcy) + '</small>' : ''), null,
+      // #616: валюта расчёта NDF не указана в условиях сделки — принята валюта по умолчанию (адаптер: x_settle_ccy_assumed,
+      // его настройка; монитор без неё — RUB)
+      .concat(any('settlement') ? [['Расчёт', l => esc(SET[l.settlement] || l.settlement || '—') + (l.settlementCcy ? ' <small>в ' + esc(l.settlementCcy) + '</small>' : '') +
+        (l.settlementCcyAssumed ? '<br><small class="settle-assumed" style="color:var(--warn)">валюта расчёта не указана в условиях — принята ' + esc(l.settlementCcy || 'RUB') + '</small>' : ''), null,
         ['Расчёт', 'Вал расчёта'], l => [SET[l.settlement] || l.settlement || '', l.settlementCcy || '']]] : [])
       .concat(any('fixingDate') ? [['Фиксинг', l => l.fixingDate ? f.date(l.fixingDate) + (l.fixingSource ? ' <small>' + esc(l.fixingSource) + '</small>' : '') + (l.fixingRate != null ? ' <small>' + rate(l.fixingRate) + '</small>' : '') : '—', l => l.fixingDate,
         ['Фиксинг', 'Источник фиксинга', 'Курс фиксинга'], l => [l.fixingDate ? f.date(l.fixingDate) : '', l.fixingSource || '', rateCsv(l.fixingRate)]]] : [])
@@ -2850,7 +2853,9 @@
         (p.whyNot && p.whyNot.todo ? '<br><b>Что сделать:</b> ' + esc(p.whyNot.todo) : '') +
         (p.whyNot && p.whyNot.fix && p.whyNot.fix.href ? ' · <a href="' + esc(p.whyNot.fix.href) + '">' + esc(p.whyNot.fix.label) + ' →</a>' : '') + '</div>' : '') +
       (p.riskProblem ? '<div class="k-note risk-problem" style="overflow-wrap:anywhere;margin:8px 0;color:var(--warn)"><b>Риск не в суммах (невозможный риск):</b> ' + esc(p.riskProblem) + '</div>' : '') +
-      K.curveProxyNote(p) +
+      // #616: почему у дериватива без оценки ядром нет процентного риска (нет кривой валюты, NDF без условий сделки)
+      (p.riskMissing && !p.notValued && !Object.values(p.dv01ByCurve || {}).some(v => v) ? '<div class="k-note risk-missing" style="overflow-wrap:anywhere;margin:8px 0;color:var(--warn)"><b>Процентного риска нет:</b> ' + esc(p.riskMissing.text) + '</div>' : '') +
+      K.curveProxyNote(p) + '<div class="prov"></div>' +
       '<div class="k-sec">Параметры</div>' + K.fieldsHtml(fields) +
       (p.legs && p.legs.length ? '<div class="k-sec">Ноги сделки <span class="sp"></span><span class="mut3" style="text-transform:none;letter-spacing:0">' + p.legs.length + '</span></div>' + K.legsHtml(p) : '') +
       '<div class="k-sec">PnL <span class="sp"></span><span class="mut3" style="text-transform:none;letter-spacing:0">тыс ₽</span></div>' +
@@ -2902,6 +2907,7 @@
     }));
     o.charts.push(rc);
     K.cardTableTools(o.bd, p);
+    K.provenanceSection(o.bd.querySelector('.prov'), p.id);  // «Откуда данные» (TDM#617): свёрнут, грузится при раскрытии
     if (isBond) {
       K.flows(o.bd.querySelector('.cfs'), p);
     }
@@ -3058,6 +3064,73 @@
       '<div style="max-height:360px;overflow:auto"><table class="k-tbl k-cflows"><thead><tr><th>Дата</th><th>Тип</th><th class="n">Сумма, ' + p.ccy + '</th><th class="n">≈ mm ₽</th></tr></thead><tbody>' +
       cf.map(c => '<tr' + (offer && c.date > offer ? ' style="opacity:.55"' : '') + '><td data-date="' + esc(c.date) + '">' + f.date(c.date) + '</td><td>' + (c.amort ? 'амортизация' : KIND[c.kind] || c.kind) + (c.est ? ' <span class="mut3">прогноз</span>' : '') + '</td><td class="n">' + f.n(c.amount, 0) + '</td><td class="n">' + f.mn(c.amountRub, 1) + '</td></tr>').join('') +
       '</tbody><tfoot><tr><td></td><td>Итого без оферт</td><td></td><td class="n">' + f.mn(sum, 1) + '</td></tr></tfoot></table></div>';
+  };
+
+  // ---------- «Откуда данные» карточки позиции (TDM#617) ----------
+  // K.provenanceSection(el, id): кнопка «Откуда данные», раздел свёрнут; при первом раскрытии — запрос M.posProvenance(id)
+  // (/api/v1/positions/provenance; до раскрытия ничего не спрашивается), дальше раскрытие и сворачивание — без запросов.
+  // Внутри: источники сделки (есть ли по ней данные, набор данных, код источника адаптера, файл, дата отчёта, когда
+  // загружен), расхождения словами и рыночные данные оценки (есть / заменена / устарела / нет). Чего прогон не записал —
+  // «нет сведений», отсутствующие данные — «нет данных», не ноль. Все тексты — через esc
+  const PROV_CLS = { present: 'ok', ok: 'ok', absent: 'bad', missing: 'bad', unknown: 'unk', not_needed: 'unk', pending: 'unk', replaced: 'warn', stale: 'warn' };
+  const provWhen = s => s ? esc(String(s).length > 10 ? K.mskTime(s, true) : f.date(s)) : '<span class="mut3">—</span>';
+  K.provenanceHtml = function (d) {
+    const chip = (state, text, cls) => '<span class="k-prov-st ' + (cls || PROV_CLS[state] || 'unk') + '" data-state="' + esc(state) + '">' + esc(text || state) + '</span>';
+    const part = (l, v) => v == null || v === '' ? '' : '<span class="k-prov-kv"><span class="mut3">' + l + '</span> ' + v + '</span>';
+    const item = it => '<li>' + [
+      it.ccy ? part('валюта', '<b>' + esc(it.ccy) + '</b>' + (it.has_row === false ? ' <span class="mut3">нет данных</span>' : '')) : '',
+      it.trade_id ? part('сделка', '<span class="mono">' + esc(it.trade_id) + '</span>' + (it.leg_id ? ' <span class="mut3">нога ' + esc(it.leg_id) + '</span>' : '') + (it.product_kind ? ' <span class="mut3">' + esc(it.product_kind) + '</span>' : '')) : '',
+      it.state_text ? part('в позициях дня', esc(it.state_text)) : '',
+      it.level_text ? part('уровень', esc(it.level_text)) : '',
+      it.has_row === false ? '' : part('набор', esc(it.dataset_name || it.dataset)),
+      part('источник', it.source ? '<span class="mono">' + esc(it.source) + '</span>' : null),
+      part('откуда', it.origin_text ? esc(it.origin_text) + (it.feed_title ? ' · ' + esc(it.feed_title) : '') : null),
+      part('файл', it.file_name ? '<span class="mono">' + esc(it.file_name) + '</span>' : null),
+      part('строка', it.ref ? esc(it.ref) : null),
+      it.has_row === false ? '' : part('отчёт за', provWhen(it.report_date)),
+      it.has_row === false ? '' : part('загружен', provWhen(it.loaded_at)),
+    ].join('') + '</li>';
+    // «нет данных» у сделок дня и остатков — обычное дело (сделок по позиции не было, остатков по валюте нет): серым;
+    // красным — только пробел, который мешает оценке (строки отчёта позиций, условий сделки)
+    const NORMAL_ABSENCE = { trades: 1, cash_balances: 1, ocp: 1 };
+    const src = s => '<div class="k-prov-src" data-src="' + esc(s.key) + '"><div class="k-prov-h"><b>' + esc(s.name) + '</b>' +
+      (s.level && s.level !== 'deal' ? ' <span class="k-tag">' + esc(s.level_text || 'по книге и валюте') + '</span>' : '') + ' ' +
+      chip(s.state, s.state_text, s.state === 'absent' && NORMAL_ABSENCE[s.key] ? 'unk' : null) +
+      '<span class="mut" style="flex:1 1 200px">' + esc(s.text) + '</span></div>' +
+      (s.items && s.items.length ? '<ul class="k-prov-items">' + s.items.map(item).join('') + '</ul>' : '') + '</div>';
+    const m = d.market || { items: [], notes: [] };
+    return (d.mismatches && d.mismatches.length ? '<div class="k-prov-mism"><b>Расхождения:</b><ul>' + d.mismatches.map(x => '<li data-code="' + esc(x.code) + '">' + esc(x.text) + '</li>').join('') + '</ul></div>' : '') +
+      '<div class="k-prov-sub">Источники</div>' + (d.sources || []).map(src).join('') +
+      '<div class="k-prov-sub">Рыночные данные</div><div class="mut" style="font-size:11.5px;margin-bottom:4px">' + esc(m.text || '') + '</div>' +
+      ((m.notes || []).length ? '<ul class="k-prov-notes">' + m.notes.map(n => '<li>' + esc(n) + '</li>').join('') + '</ul>' : '') +
+      (m.items && m.items.length ? '<div style="overflow:auto"><table class="k-tbl k-prov-mkt"><thead><tr><th>Что</th><th>Состояние</th><th>Пояснение</th></tr></thead><tbody>' +
+        m.items.map(i => '<tr data-id="' + esc(i.id) + '"><td>' + esc(i.name || i.id) + (i.name && i.name !== i.id ? ' <span class="mut3 mono">' + esc(i.id) + '</span>' : '') + '</td><td>' + chip(i.state, i.state_text) + '</td><td class="k-prov-why">' + esc(i.text || '') + '</td></tr>').join('') +
+        '</tbody></table></div>' : m.basis === 'none' ? '' : '<div class="k-empty">нет сведений</div>');  // «не использовались» — без списка
+  };
+  K.provenanceSection = function (el, id) {
+    if (!el) return;
+    el.innerHTML = '<div class="k-provsec"><button type="button" class="k-btn k-prov-btn" aria-expanded="false">Откуда данные <span class="k-prov-ar">▸</span></button><div class="k-prov-bd" hidden></div></div>';
+    el.dataset.pos = id;
+    const btn = el.querySelector('.k-prov-btn'), bd = el.querySelector('.k-prov-bd');
+    let asked = false;
+    const load = () => {
+      asked = true;
+      bd.innerHTML = '<div class="k-empty">загрузка…</div>';
+      if (!M.posProvenance) { bd.innerHTML = '<div class="k-empty">нет сведений: сервер не отдаёт, откуда данные</div>'; return; }
+      M.posProvenance(id).then(x => {
+        if (!el.isConnected || el.dataset.pos !== String(id)) return;
+        x = x || {};
+        if (x.error || !x.data) { asked = false; bd.innerHTML = '<div class="k-empty">не загружено: ' + esc(x.error || 'нет ответа') + '</div>'; return; }
+        bd.innerHTML = K.provenanceHtml(x.data);
+      });
+    };
+    btn.onclick = e => {
+      e.stopPropagation();
+      const open = bd.hidden;
+      bd.hidden = !open; btn.setAttribute('aria-expanded', String(open));
+      el.querySelector('.k-prov-ar').textContent = open ? '▾' : '▸';
+      if (open && !asked) load();
+    };
   };
 
   // ---------- палитра поиска ----------
