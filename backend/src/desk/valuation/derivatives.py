@@ -23,12 +23,13 @@ as core's ``FxSwap``):
   a fixing in the snapshot is a core rejection, so the row keeps the report's value. TDM#616 (core 0.45, BACKLOG #135):
   ``settle_ccy`` is the leg's ``settlement_currency``: an X/RUB NDF settled in X pays ``N (1 - K / fixing)`` X (risk on
   the RUB and the foreign curve, its FX delta core's ``fx_delta_foreign``; ``ocp_amount`` the notional, once fixed
-  core's FX delta: the known amount it owes); a cross NDF settled in its base or quote
+  the known amount it owes, core's ``settlement_amount``); a cross NDF settled in its base or quote
   currency is a ``FxCrossForward`` with the fixing terms, fixed by core from both currencies' RUB fixings of the source
   (risk on RUB and both foreign curves, ``fx_delta_base`` / ``fx_delta_quote``). Not valued (``ndf_unsupported``): a
   cross NDF settled in RUB with a ``fixing_date`` (core rejects fixing terms there; without one it is cash-settled in
   RUB on its value date, said), an NDF settled in a currency outside its pair. A currency without a curve or a spot in
-  the run: ``no_foreign_curve`` / ``no_fx_spot`` naming it (``NotValued.ccy``), the row's risk «нет данных».
+  the run: ``no_foreign_curve`` / ``no_fx_spot`` naming it and what is missing (``NotValued.ccy``, ``.missing``), the
+  row's risk «нет данных».
 - X/Y without RUB: ``FxCrossForward`` (``FxCrossInstrument`` on the joint settlement calendar of X and Y).
 - The RUB leg is discounted on RUONIA OIS (``RUB RUONIA``), the foreign leg on the currency's curve
   (``FxMarket.fx_curve_ids``: setting ``fx_foreign_curve``, default the FX-implied curve ``<CCY> FX``; CNY's other
@@ -222,7 +223,8 @@ fall in (D-1, D] to the change of PV."""
 
 
 class NotValued(Exception):
-    def __init__(self, reason: str, detail: str = "", last: date | None = None, ccy: str | None = None) -> None:
+    def __init__(self, reason: str, detail: str = "", last: date | None = None, ccy: str | None = None,
+                 missing: str | None = None) -> None:
         super().__init__(f"{reason}: {detail}" if detail else reason)
         self.reason, self.detail = reason, detail
         self.last = last
@@ -230,6 +232,9 @@ class NotValued(Exception):
         self.ccy = ccy
         """``no_foreign_curve`` / ``no_fx_spot`` of an FX leg: the currency the run has no curve or spot of (TDM#616:
         the row's risk is «нет данных: нет кривой <ccy>», ``positions.RISK_MISSING``)."""
+        self.missing = missing
+        """With ``ccy``: what of it the run lacks, ``curve``, ``spot`` (its spot and settlement calendar) or
+        ``curve_spot`` (both)."""
 
 
 def _num(v: Any) -> float | None:
@@ -819,10 +824,14 @@ def core_legs(ctx: Any, leg: TermsLeg, iid: str, options: FxOptions, curve_of: d
         raise NotValued("ndf_unsupported", f"{leg.label}: a cross NDF {leg.base}/{leg.quote} settled in RUB with "
                                            "its fixing (core 0.45: fixing terms on a RUB-settled cross not supported)")
     for c in (leg.base, leg.quote):
-        if c != "RUB" and c not in ctx.fx.spots:
-            raise NotValued("no_fx_spot", f"{c} on {bd}", ccy=c)
+        if c != "RUB" and c not in ctx.fx.spots:  # TDM#616: and its curve? (built only on a spot, CNY XCCY apart)
+            present = {e.curve_id for e in ctx.core_market.curves}
+            primary, alts = ctx.fx.fx_curve_ids(c, options)
+            curve = any(i in present for i in (primary, *alts))
+            raise NotValued("no_fx_spot", f"{c} on {bd}" + ("" if curve else f", no {c} curve in the run"), ccy=c,
+                            missing="spot" if curve else "curve_spot")
         if c != "RUB" and c not in curve_of:
-            raise NotValued("no_foreign_curve", f"no {c} curve in the run", ccy=c)
+            raise NotValued("no_foreign_curve", f"no {c} curve in the run", ccy=c, missing="curve")
     pay = fixing = source = None
     if leg.ndf:  # TDM#616 (core 0.45): settled in RUB, the foreign currency of X/RUB, or the base or quote of a cross
         pay = leg.value_date
@@ -1355,9 +1364,10 @@ class _Acc:
     repos: list[dict[str, Any]] = field(default_factory=list)
     fixing_ids: set[str] = field(default_factory=set)
     ocp_core: dict[str, float] = field(default_factory=lambda: defaultdict(float))
-    """TDM#616: the nominal OCP amount per currency of a FIXED NDF settled in a foreign currency and a fixed cross NDF:
-    core's FX delta (``fx_delta_foreign``, ``fx_delta_base`` / ``fx_delta_quote``), the known amount it owes in its
-    settlement currency, not its notional. An unfixed one keeps the terms' notional, as a RUB-settled NDF."""
+    """TDM#616: the nominal OCP amount per currency of a FIXED NDF settled in a foreign currency (X/RUB or a cross):
+    the known amount it owes in its settlement currency (core's ``settlement_amount``, ``_known_amount``), not its
+    notional. An unfixed one keeps the terms' notional, as a RUB-settled NDF; the spot-equivalent basis takes core's
+    FX delta (``fx_delta``) of every one."""
     ocp_legs: set[int] = field(default_factory=set)
     """``id`` of the ``TermsLeg`` whose OCP amount is in ``ocp_core``."""
     flows: list[dict[str, Any]] | None = field(default_factory=list)
@@ -1685,12 +1695,9 @@ def value(ctx: Any, requests: list[Request], *, options: FxOptions, second_order
             a.curves |= {row.base_curve_id, row.quote_curve_id}
             a.fallback_from |= {c for c in (row.base_curve_fallback_from, row.quote_curve_fallback_from) if c}
             a.products.add("fx_cross")
-            if t is not None and t.ndf:  # TDM#616: a cross NDF (core 0.45); fixed, its OCP amount is core's FX delta
+            if t is not None and t.ndf:  # TDM#616: a cross NDF (core 0.45); fixed, it owes a known amount
                 a.products.add("fx_ndf")
-                if any(lv.fixing_rate is not None for lv in row.legs):
-                    a.ocp_core[row.base_currency] += row.fx_delta_base
-                    a.ocp_core[row.quote_currency] += row.fx_delta_quote
-                    a.ocp_legs.add(id(t))
+                _known_amount(a, t, row.legs)
             a.legs += [_ui_leg(t, lv, row.base_currency, cross=True) for lv in row.legs]
             for lv in row.legs:
                 _fixing(a, t, lv, flags.get(row.position_id, ()))
@@ -1707,10 +1714,8 @@ def value(ctx: Any, requests: list[Request], *, options: FxOptions, second_order
                 a.fallback_from.add(row.curve_fallback_from)
             a.products.add("fx_ndf" if t is not None and t.ndf else "fx_swap" if t is not None and t.leg_id
                            else "fx_forward")
-            if t is not None and t.ndf and (t.settle_ccy or "RUB") != "RUB" and any(
-                    lv.fixing_rate is not None for lv in row.legs):  # TDM#616: fixed, settled in its currency
-                a.ocp_core[row.currency] += row.fx_delta_foreign
-                a.ocp_legs.add(id(t))
+            if t is not None and t.ndf and (t.settle_ccy or "RUB") != "RUB":  # TDM#616: fixed, owes a known amount
+                _known_amount(a, t, row.legs)
             for lv in row.legs:
                 a.legs.append(_ui_leg(t, lv, row.currency))
                 _fixing(a, t, lv, flags.get(row.position_id, ()))
@@ -1731,6 +1736,19 @@ def value(ctx: Any, requests: list[Request], *, options: FxOptions, second_order
             a.flows = flows[r.position_id]
             out[r.position_id] = _valuation(ctx, r, a, notes[r.position_id], result)
     return out, result
+
+
+def _known_amount(a: _Acc, t: TermsLeg, legs: Any) -> None:
+    """TDM#616: a FIXED NDF leg settled in a foreign currency owes a known amount of it (core's ``settlement_amount``,
+    paid on its payment date): that is its nominal OCP amount (``ocp_amount``), in place of the terms' notionals. An
+    unfixed one keeps the notionals, as a RUB-settled NDF."""
+    fixed = [lv for lv in legs if lv.fixing_rate is not None and lv.settlement_currency and
+             lv.settlement_amount is not None]
+    if not fixed:
+        return
+    for lv in fixed:
+        a.ocp_core[lv.settlement_currency] += lv.settlement_amount
+    a.ocp_legs.add(id(t))
 
 
 def _fixing(a: _Acc, t: TermsLeg | None, lv: Any, flags: Any) -> None:

@@ -7291,6 +7291,7 @@
               "implausible",
               "no_curve",
               "no_spot",
+              "no_curve_spot",
               "ndf_no_terms",
               "ndf_unsupported"
             ],
@@ -7314,7 +7315,7 @@
               }
             ],
             "title": "Ccy",
-            "description": "no_curve / no_spot: the currency without a curve or a spot in the run (TDM#616)"
+            "description": "no_curve / no_spot / no_curve_spot: the currency without a curve, a spot or both in the run (TDM#616)"
           }
         },
         "type": "object",

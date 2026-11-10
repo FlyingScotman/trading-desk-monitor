@@ -14,6 +14,7 @@ EUR; CBR fixings of 14 and 15 October) and synthetic trades (invented amounts):
 
 from __future__ import annotations
 
+from dataclasses import replace
 from datetime import UTC, date, datetime
 
 import pytest
@@ -113,7 +114,7 @@ def test_fixed_ndf_settled_in_usd_owes_a_known_usd_amount(ctx, valued):
                                      "status": "fixed", "fixing_rate": fixing}
     owed = 1e6 * (1 - 83.0 / fixing)  # N (1 - K / fixing) USD on the payment date
     assert v.fx_delta["USD"] == pytest.approx(owed, rel=1e-3)  # paid on the spot date: barely discounted
-    assert v.extra["ocp_amount"] == {"USD": pytest.approx(v.fx_delta["USD"], rel=1e-12)}  # not the 1m notional
+    assert v.extra["ocp_amount"] == {"USD": pytest.approx(owed, rel=1e-12)}  # the amount owed, not the 1m notional
 
 
 @pytest.mark.parametrize("pid", ["P-N2", "P-N3", "P-N8"])
@@ -131,17 +132,88 @@ def _ocp(v, basis):
     return O.classify(row, [], {}, BD, O.OcpPolicy(amount_basis=basis))[1]
 
 
+def _owed(ctx, pid):
+    """The known amount a fixed NDF owes in its settlement currency, from its terms and the CBR fixings of 14.10."""
+    on = date(2026, 10, 14)
+    usd = cbr(ctx, "USD", on)
+    if pid == "P-N6":  # USD/RUB settled in USD: N (1 - K / fixing) USD
+        return {"USD": 1e6 * (1 - 83.0 / usd)}
+    return {"CNY": 2e6 * (usd / cbr(ctx, "CNY", on) - 7.0)}  # USD/CNY settled in CNY: N (fixing - K) CNY
+
+
 @pytest.mark.parametrize(("pid", "fixed"), [("P-N1", False), ("P-N6", True), ("P-N2", False), ("P-N7", True)])
-def test_ocp_on_both_bases(valued, pid, fixed):
+def test_ocp_on_both_bases(ctx, valued, pid, fixed):
     """Spot equivalent: core's FX delta. Nominal: the notionals while unfixed (as a RUB-settled NDF), the known amount
-    owed in the settlement currency once fixed (core's FX delta)."""
+    owed in the settlement currency once fixed (core's settlement_amount: not the delta, which is discounted)."""
     v = valued[pid]
     assert _ocp(v, O.AmountBasis.SPOT_EQUIVALENT) == pytest.approx(v.fx_delta, rel=1e-12)
     nominal = _ocp(v, O.AmountBasis.NOMINAL)
     if fixed:
-        assert nominal == pytest.approx(v.fx_delta, rel=1e-12)
+        assert nominal == pytest.approx(_owed(ctx, pid), rel=1e-9)
+        assert set(nominal) == set(v.fx_delta)
     else:
         assert nominal == {"P-N1": {"USD": -1e6}, "P-N2": {"USD": 2e6, "CNY": -14e6}}[pid]
+
+
+@pytest.mark.parametrize("pid", ["P-N6", "P-N7"])
+def test_fixed_ndf_paid_later_owes_its_amount_not_the_delta(ctx, pid):
+    """Paid after its spot date, a fixed NDF's FX delta is the amount discounted to the spot date; the nominal OCP
+    amount is the amount owed (core's settlement_amount), undiscounted."""
+    r = {"P-N6": FIXED_IN_USD, "P-N7": CROSS_FIXED}[pid]
+    late = {**r, "value_date": "2026-11-16"}  # fixed on 14.10 for a month later
+    out, _ = dv.value(ctx, [dv.Request(pid, "FXB", {"ccy": r["base_ccy"]}, [dv.TermsLeg.of(late)])],
+                      options=fxcurves.FxOptions())
+    v = out[pid]
+    assert v.extra["fixings"][0]["status"] == "fixed"
+    assert v.extra["ocp_amount"] == pytest.approx(_owed(ctx, pid), rel=1e-9)
+    assert _ocp(v, O.AmountBasis.NOMINAL) == pytest.approx(_owed(ctx, pid), rel=1e-9)
+    assert _ocp(v, O.AmountBasis.SPOT_EQUIVALENT) == pytest.approx(v.fx_delta, rel=1e-12)
+    ccy, owed = next(iter(_owed(ctx, pid).items()))
+    assert abs(v.fx_delta[ccy]) < abs(owed) and v.fx_delta[ccy] != pytest.approx(owed, rel=1e-6)  # discounted
+
+
+def test_cross_ndf_fixing_due_today_is_pending(ctx):
+    """A cross NDF fixing today whose fixing is not published yet: projected, its fixing ``pending``."""
+    t = terms("NP", "USD", "CNY", "buy", 2e6, 14e6, "2026-10-19", ndf=True, settle_ccy="CNY", fixing_date=DATE,
+              fixing_source="CBR")
+    gone = tuple(f for f in ctx.core_market.fx_fixings if f.fixing_date != BD)
+    c = replace(ctx, core_market=replace(ctx.core_market, fx_fixings=gone))  # fx_risk_market derives from it
+    out, _ = dv.value(c, [dv.Request("P-NP", "FXB", {"ccy": "USD"}, [dv.TermsLeg.of(t)])],
+                      options=fxcurves.FxOptions())
+    v = out["P-NP"]
+    assert not isinstance(v, dv.NotValued), v
+    assert v.extra["fixings"] == [{"trade_id": "NP", "fixing_date": DATE, "source": "CBR", "status": "pending"}]
+    assert "fixing_pending" in v.extra["core"]["model_flags"]
+    assert {"USD FX", "CNY FX"} <= set(v.curve_buckets)
+    assert v.extra["ocp_amount"] == {"USD": 2e6, "CNY": -14e6}  # not fixed yet: the notionals
+
+
+def test_no_spot_and_no_curve_name_what_is_missing(ctx):
+    """No spot (no settlement calendar in the hub's static) but a curve: «нет спот-курса»; neither: both named."""
+    spots = {k: v for k, v in ctx.fx.spots.items() if k not in ("CNY", "USD")}
+    no_usd_curve = tuple(e for e in ctx.core_market.curves if e.curve_id != "USD FX")
+    c = replace(ctx, fx=replace(ctx.fx, spots=spots), core_market=replace(ctx.core_market, curves=no_usd_curve))
+    cny = terms("NC", "CNY", "RUB", "buy", 1e6, 12.6e6, "2027-01-20", ndf=True, settle_ccy="CNY")
+    usd = terms("NU", "USD", "RUB", "buy", 1e6, 86e6, "2027-01-20", ndf=True, settle_ccy="USD")
+    out, _ = dv.value(c, [dv.Request(f"P-{r['trade_id']}", "FXB", {"ccy": r["base_ccy"]}, [dv.TermsLeg.of(r)])
+                          for r in (cny, usd)], options=fxcurves.FxOptions())
+    assert (out["P-NC"].reason, out["P-NC"].ccy, out["P-NC"].missing) == ("no_fx_spot", "CNY", "spot")  # CNY XCCY
+    assert (out["P-NU"].reason, out["P-NU"].ccy, out["P-NU"].missing) == ("no_fx_spot", "USD", "curve_spot")
+    assert pv1.risk_missing(pv1.MISSING_CODES["spot"], "CNY")["text"] == \
+        "нет данных: нет спот-курса CNY (нет календаря расчётов)"
+    assert pv1.risk_missing(pv1.MISSING_CODES["curve_spot"], "USD")["text"] == "нет данных: нет кривой и курса USD"
+    # published and in the risk table
+    extra = {"FXB|NC": {"asset_class": "fx", "ccy": "CNY", "amount_ccy": 1e6, "value_date": date(2027, 1, 20),
+                        "deal_id": "NC", "mv_rub": 100.0, "x_product_group": "fx_ndf"}}
+    row = tdm_run.direct_row(c, "FXB", "FXB|NC", pv1.plan(c, _inputs(extra, [cny])).direct["FXB|NC"],
+                             extra["FXB|NC"], None)
+    assert row["risk"] == {} and row["extra"]["risk_missing"] == {
+        "reason": "no_spot", "ccy": "CNY", "text": "нет данных: нет спот-курса CNY (нет календаря расчётов)"}
+    t = concepts.risk_table([{"position_id": "FXB|NC", "fact": row}], {"CNY": 12.5})
+    RiskTable(run_id=1, **t)
+    cell = next(r for r in t["rows"] if (r["ccy"], r["level"], r["kind"]) == ("CNY", "kind", "FX_FWD"))
+    assert cell["risk_missing"] == [{"reason": "no_spot", "text": "нет данных: нет спот-курса CNY (нет календаря "
+                                                                 "расчётов)", "n": 1, "ccy": "CNY"}]
 
 
 def test_cross_ndf_settlement_and_fixing(ctx, valued):
@@ -164,7 +236,7 @@ def test_rub_settled_cross_with_fixing_and_a_third_currency_are_unsupported(valu
 
 def test_no_curve_is_no_data_never_a_zero(valued):
     e = valued["P-N5"]
-    assert isinstance(e, dv.NotValued) and (e.reason, e.ccy) == ("no_foreign_curve", "EUR")
+    assert isinstance(e, dv.NotValued) and (e.reason, e.ccy, e.missing) == ("no_foreign_curve", "EUR", "curve")
 
 
 def _inputs(extra, trade_terms):

@@ -345,20 +345,23 @@ NO_TERMS = "no_trade_terms"
 """Reason of an FX forward row without its trade's terms: the report's value (or 0) and the notional as FX delta."""
 RISK_MISSING = {
     "no_curve": "нет данных: нет кривой {ccy}",
-    "no_spot": "нет данных: нет курса {ccy}",
+    "no_spot": "нет данных: нет спот-курса {ccy} (нет календаря расчётов)",
+    "no_curve_spot": "нет данных: нет кривой и курса {ccy}",
     "ndf_no_terms": ("NDF без условий сделки: процентный риск не считается — нужны условия сделки (валюта расчёта, "
                      "дата фиксинга)"),
     "ndf_unsupported": ("NDF: такой вид ядро пока не оценивает — кросс-NDF с расчётом в рублях и датой фиксинга или "
                         "валюта расчёта не из пары; процентный риск не считается"),
 }
 """TDM#616: why a derivative row valued without core has no rates risk, when it is not «the report gave none»: a
-currency of its trade without a curve or a spot in the run (``no_curve``, ``no_spot``: «нет данных», the owner's
+currency of its trade without a curve or a spot in the run (``no_curve``, ``no_spot``, ``no_curve_spot``: «нет
+данных», the owner's
 default, never a zero), an NDF without its trade's terms (``ndf_no_terms``), an NDF core does not value
 (``ndf_unsupported``). Only on a row without risk of its own (the report's DV01 is kept and not contradicted). Published as ``extra.risk_missing``
 ``{reason, ccy, text}`` (``risk_missing``); the risk table (``api.concepts.risk_table``) and the pages
 (``lib/instr.js``) show it in place of «оценена по отчёту, риска в отчёте нет»."""
-CURVE_REASONS = {"no_foreign_curve": "no_curve", "no_fx_spot": "no_spot"}
-"""``valuation.derivatives`` reason -> ``RISK_MISSING`` code, when the reason names its currency (``NotValued.ccy``)."""
+MISSING_CODES = {"curve": "no_curve", "spot": "no_spot", "curve_spot": "no_curve_spot"}
+"""What of a currency the run lacks (``NotValued.missing`` of ``no_foreign_curve`` / ``no_fx_spot``, with
+``NotValued.ccy``) -> ``RISK_MISSING`` code."""
 
 
 def risk_missing(reason: str, ccy: str | None = None) -> dict[str, Any]:
@@ -368,7 +371,8 @@ def risk_missing(reason: str, ccy: str | None = None) -> dict[str, Any]:
 
 def is_ndf_row(x: dict[str, Any], terms: list[dict[str, Any]] | None = None) -> bool:
     """A positions row the report calls an NDF (its product group, under ``x`` or flat, has the word ``ndf``) or whose
-    trade terms say ``ndf``: the OCP's rule (``rules.ocp.is_ndf``)."""
+    trade terms say ``ndf``: ``rules.ocp.is_ndf``, the rule of ``derivative_kind`` (``classify``'s OCP component
+    ``ndf`` takes the group ``fx_ndf`` only)."""
     return is_ndf("", product_group(x), terms or ())
 
 
@@ -470,8 +474,8 @@ def _not_by_core(o: Outcome, e: dv.NotValued) -> Outcome:
     o.detail = o.detail or e.detail
     o.core_not_valued = (e.reason, e.detail)
     if o.valuation is not None and not o.valuation.curve_buckets:  # TDM#616: why no rates risk (none reported)
-        if e.reason in CURVE_REASONS and e.ccy:  # «нет данных: нет кривой <ccy>»
-            o.valuation.extra["risk_missing"] = risk_missing(CURVE_REASONS[e.reason], e.ccy)
+        if e.ccy and e.missing in MISSING_CODES:  # «нет данных: нет кривой <ccy>»
+            o.valuation.extra["risk_missing"] = risk_missing(MISSING_CODES[e.missing], e.ccy)
         elif e.reason == "ndf_unsupported":
             o.valuation.extra["risk_missing"] = risk_missing("ndf_unsupported")
     return o
