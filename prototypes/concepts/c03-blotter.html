@@ -313,7 +313,7 @@ body { display: flex; flex-direction: column; height: 100vh; overflow: hidden; }
 
   // ---------- карточка справа ----------
   const card = document.getElementById('card');
-  card.innerHTML = '<div class="cd-hd"></div><div class="cd-bd"><div class="cd-ev-box"></div><div class="k-sec">Параметры</div><div class="cd-fields"></div>' +
+  card.innerHTML = '<div class="cd-hd"></div><div class="cd-bd"><div class="cd-ev-box"></div><div class="cd-prov"></div><div class="k-sec">Параметры</div><div class="cd-fields"></div>' +
     '<div class="k-sec">История <span class="sp"></span><span class="hseg"></span></div><div class="cd-h" style="height:180px"></div>' +
     '<div class="k-sec">PnL дня <span class="sp"></span><span class="mut3" style="text-transform:none;letter-spacing:0">тыс ₽</span></div><div class="cd-pnl"></div>' +
     '<div class="k-sec">Риск по бакетам <span class="sp"></span><span class="mut3" style="text-transform:none;letter-spacing:0">тыс ₽/бп</span></div><div class="cd-r" style="height:150px"></div>' +
@@ -357,6 +357,7 @@ body { display: flex; flex-direction: column; height: 100vh; overflow: hidden; }
     const soon = isBond && p.tenor < 0.25;
     $('.cd-ev-box').innerHTML = '<div class="cd-ev' + (soon ? ' soon' : '') + '"><span class="mut">' + evTxt + '</span><span class="big">' + f.date(p.event.date) + '</span>' + (p.event.date ? '<span class="mut">через ' + f.yrs(p.tenor) + '</span>' : '') +
       (p.offer ? '<span class="sp" style="flex:1"></span><span class="mut3">погашение ' + f.date(p.maturity) + '</span>' : '') + '</div>';
+    K.provenanceSection($('.cd-prov'), p.id);  // «Откуда данные» (TDM#617): свёрнут, грузится при раскрытии
     const F = (isBond ? [
       ['Номинал', f.mn(p.notional, 0) + ' <small>mm ' + p.ccy + '</small>'], ['MV', f.mn(p.mv, 1) + ' <small>mm ₽</small>'],
       ['Цена', f.px(p.price) + ' <small class="' + f.cls(p.price - p.prevPrice) + '">' + f.s(p.price - p.prevPrice, 2) + '</small>'], ['Bid / Ask', '<small>' + f.px(p.bid) + ' / ' + f.px(p.ask) + '</small>'],

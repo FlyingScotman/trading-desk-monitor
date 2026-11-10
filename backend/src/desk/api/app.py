@@ -45,7 +45,7 @@ from ..settings import REPO_ROOT
 from ..settings import load as load_settings
 from ..store import CURRENT_RUNS, slice_label
 from . import auth as authn
-from . import compat, concepts, concepts_run, ocp_history, pnl_checks, pnl_history, pnl_period
+from . import compat, concepts, concepts_run, ocp_history, pnl_checks, pnl_history, pnl_period, provenance
 from .autopilot_routes import router as autopilot_router
 from .models import (
     COMPAT,
@@ -60,6 +60,7 @@ from .models import (
     Position,
     PositionList,
     PositionPnl,
+    PositionProvenance,
     Ready,
     RiskPayload,
     RiskTable,
@@ -227,6 +228,21 @@ def _cached(request: Request, run: dict[str, Any], model) -> Response:
     if tag in [t.strip() for t in request.headers.get("if-none-match", "").split(",")]:
         return Response(status_code=304, headers=headers)
     return Response(body, media_type="application/json", headers=headers)
+
+
+def _trade_sources() -> tuple[list[dict[str, Any]], dict[str, set[str]] | None]:
+    """For the card's «Откуда данные» (TDM#617): the adapter services' feeds as the adapter titled them
+    (``adapter_services.read_state``) and the marks of the fetch of past dates (``trades.history_files``); none when
+    the settings or the services' state cannot be read."""
+    try:
+        from .. import trades
+        from ..adapter_services import read_state
+
+        st = load_settings()
+        return ([{"id": f.get("id"), "title": f.get("title"), "dataset": f.get("dataset")}
+                 for f in read_state(st).get("feeds") or [] if isinstance(f, dict)], trades.history_files(st))
+    except Exception:  # noqa: BLE001 - only the feed's title is missing then, the origin falls back on the clock
+        return [], None
 
 
 def _json_bytes(x: Any) -> bytes:
@@ -1065,6 +1081,19 @@ def create_app(store_url: str, static_dir: Path | None = None, app_dir: Path | N
         if out is None:
             raise ApiError(404, "not_found", f"no position {id} in run {run['run_id']}")
         return out
+
+    @app.get("/api/v1/positions/provenance", response_model=PositionProvenance)
+    def position_provenance(con: Con, request: Request, id: str, run_id: int | None = None, as_of: date | None = None):
+        """Where a position's data came from (TDM#617, ``provenance.provenance``): the card's collapsed «Откуда
+        данные», asked when it is opened. The id is a query parameter (a position id can hold ``|``). What an older run
+        did not record is ``unknown``, not an error; 404 — no such run or position."""
+        run = resolve_run(con, as_of, run_id)
+        if run is None:
+            raise ApiError(404, "not_found", f"run {run_id} not found" if run_id else "no runs")
+        out = provenance.provenance(con, run, id, *_trade_sources())
+        if out is None:
+            raise ApiError(404, "not_found", f"no position {id} in run {run['run_id']}")
+        return _cached(request, run, PositionProvenance(**out))
 
     @app.get("/api/v1/calendar/market", include_in_schema=False)
     def market_calendar(con: Con, request: Request, run_id: int | None = None, as_of: date | None = None,

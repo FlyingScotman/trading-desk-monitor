@@ -95,6 +95,73 @@ class PositionList(BaseModel):
     positions: list[Position]
 
 
+ProvenanceState = Literal["present", "absent", "unknown", "not_needed"]
+MarketState = Literal["ok", "replaced", "stale", "missing", "pending", "unknown"]
+
+
+class ProvenanceItem(BaseModel):
+    """One set (a file of a dataset) a source has on the deal, with what links it: the report row, a terms leg, a
+    trade, a currency of the book."""
+    model_config = ConfigDict(extra="allow")
+    dataset: str
+    dataset_name: str = Field(description="The monitor's name of the dataset (daystatus.DATASET_NAMES)")
+    source: str | None = Field(description="The adapter's source id")
+    file_name: str | None
+    report_date: date | None
+    valid_date: date | None
+    loaded_at: datetime | None = Field(description="When the monitor stored the set")
+
+
+class ProvenanceSource(BaseModel):
+    key: Literal["positions", "trade_terms", "trades", "ocp", "cash_balances"]
+    name: str
+    level: Literal["deal", "book_ccy", "entity_ccy"] = Field(
+        description="deal: matched by the deal; book_ccy: by book and currency only (no key of a deal); entity_ccy: "
+                    "by the book's legal entity and currency (an OCP report without books)")
+    level_text: str
+    state: ProvenanceState = Field(description="unknown: the run did not record it (an older run)")
+    state_text: str
+    text: str
+    items: list[ProvenanceItem]
+
+
+class ProvenanceMismatch(BaseModel):
+    code: Literal["report_no_terms", "trades_no_report", "terms_no_report", "deal_on_rows", "report_trades_gap"]
+    text: str
+
+
+class MarketNeed(BaseModel):
+    kind: Literal["curve", "fx", "fixing", "quote"]
+    id: str
+    name: str
+    state: MarketState
+    state_text: str
+    text: str
+
+
+class ProvenanceMarket(BaseModel):
+    basis: Literal["used", "needed", "none", "unknown"] = Field(
+        description="used: what the valuation used; needed: an unvalued deal, what its terms need; none: no market "
+                    "data used (not valued, or the report's value); unknown: not recorded")
+    text: str
+    items: list[MarketNeed]
+    notes: list[str]
+
+
+class PositionProvenance(BaseModel):
+    """Where a position's data came from (TDM#617, api.provenance): the card's «Откуда данные»."""
+    run_id: int
+    business_date: date
+    position_id: str
+    book_id: str
+    kind: Literal["bond", "derivative", "other"]
+    valued: bool
+    off_report: bool
+    sources: list[ProvenanceSource]
+    mismatches: list[ProvenanceMismatch]
+    market: ProvenanceMarket
+
+
 class PnlSums(BaseModel):
     """Sums over the positions with a flash PnL; null when none has one."""
 
@@ -561,9 +628,12 @@ class Aggregates(BaseModel):
 
 
 class RiskMissing(BaseModel):
-    reason: Literal["not_valued", "reported_no_risk", "no_risk", "implausible"]
+    reason: Literal["not_valued", "reported_no_risk", "no_risk", "implausible", "no_curve", "no_spot", "no_curve_spot",
+                    "ndf_no_terms", "ndf_unsupported"]
     text: str
     n: int
+    ccy: str | None = Field(default=None, description="no_curve / no_spot / no_curve_spot: the currency without a "
+                                                      "curve, a spot or both in the run (TDM#616)")
 
 
 OFZ_BASIS = ("the OFZ basis to RUONIA OIS, RUB per bp, in the ofz_view 'basis' only (0 in 'kbd'): since 0.2.7 a fixed "

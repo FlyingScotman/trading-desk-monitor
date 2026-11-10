@@ -218,7 +218,8 @@ def test_shape_errors_catch_typos_337():
 
 def test_ui_leg_keys_are_the_contract():
     """``EXTRA_NESTED_KEYS["legs[]"]`` is what ``_ui_leg`` gives over its branches (TDM#337): a leg without terms, a
-    deliverable leg read the other way round (RUB base), an NDF with a fixing, a cross leg."""
+    deliverable leg read the other way round (RUB base), an NDF with a fixing, an NDF whose settlement currency the adapter
+    assumed (TDM#616), a cross leg."""
     from datetime import date
     from types import SimpleNamespace as NS
 
@@ -233,6 +234,7 @@ def test_ui_leg_keys_are_the_contract():
     got = set(_ui_leg(None, lv, "USD"))
     got |= set(_ui_leg(leg(base="RUB", quote="USD", side="sell"), lv, "USD"))
     got |= set(_ui_leg(leg(ndf=True, settle_ccy="RUB", fixing_source="CBR", fixing_date=date(2026, 10, 30)), lv, "USD"))
+    got |= set(_ui_leg(leg(ndf=True, settle_ccy="RUB", settle_assumed=True), lv, "USD"))  # TDM#616: RUB taken
     got |= set(_ui_leg(leg(base="USD", quote="CNY"), lv, "USD", cross=True))
     assert got == set(EXTRA_NESTED_KEYS["legs[]"])
 
