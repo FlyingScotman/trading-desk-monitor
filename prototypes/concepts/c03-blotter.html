@@ -207,7 +207,7 @@ body { display: flex; flex-direction: column; height: 100vh; overflow: hidden; }
 
   // ---------- таблица ----------
   const tbl = document.getElementById('tbl');
-  let visible = [];
+  let visible = [], win = null, idxOf = new Map();  // win — окно строк длинной таблицы (K.vwin, TDM#630); idxOf — номер строки позиции в её списке
   function sumCell(c, list, title) {
     if (!c.sum || !list.length) return '<td></td>';
     // ни одно слагаемое не посчитано (все null, #333, B1; nullable — #168) — «—», а не «0»; посчитана часть — сумма
@@ -217,24 +217,30 @@ body { display: flex; flex-direction: column; height: 100vh; overflow: hidden; }
     return '<td class="n">' + K.d({ title: title + ' · ' + c.label, unit: c.unit, fmt: c.sfmt, rows: list.map(p => ({ p, v: c.sum(p) })) }, c.sfmt(tot), c.neutral ? '' : null) + '</td>';
   }
   function render() {
+    if (win) { win.destroy(); win = null; }
     const L = rows(), CL = cols(), G = GROUPS[st.grouping] || [];
     pnlMax = Math.max(1, ...L.map(p => Math.abs(p.pnl.total)));
-    visible = [];
+    visible = []; idxOf = new Map();
     const firstSum = CL.findIndex(c => c.sum), span = firstSum < 0 ? CL.length : Math.max(1, firstSum);
     const head = '<thead><tr><th class="stripe"></th>' + CL.map(c => {
       const si = st.sort.findIndex(s => s[0] === c.key);
       return '<th class="sortable' + (c.num ? ' n' : '') + '" data-k="' + c.key + '"' + (c.csvHead ? ' data-csv="' + esc(c.csvHead) + '"' : '') + ' title="' + esc(c.title || 'щелчок — сортировка, Shift+щелчок — добавить колонку') + '">' + (c.tip ? '<span class="k-hint">' + c.label + '</span>' : c.label) + (si >= 0 ? '<span class="si">' + (st.sort[si][1] > 0 ? '▲' : '▼') + (st.sort.length > 1 ? si + 1 : '') + '</span>' : '') + K.fltIcon(c, st.filters) + '</th>';
     }).join('') + '</tr></thead>';
-    let body = '';
+    // строки таблицы по порядку (K.vwin): строка позиции, строка группы, спрятанная строка свёрнутой группы; HTML — по требованию
+    const items = [];
     // hide — позиция свёрнутой группы: строка скрыта, но идёт в CSV (data-csv-keep, #277): выгрузка — все позиции
     const leaf = (r, hide) => {
-      const cells = CL.map(c => { const v = c.val(r); return '<td class="' + (c.num ? 'n' : '') + '"' + (c.date && v ? ' data-date="' + esc(v) + '"' : '') + (c.csvFmt ? K.csvv(() => c.csvFmt(v, r)) : '') + (c.csvNum ? ' data-csv-n' : '') + '>' + (c.fmt ? c.fmt(v, r) : esc(v)) + '</td>'; }).join('');
-      if (hide) return '<tr class="csvrow" hidden data-csv-keep="1"><td class="stripe"></td>' + cells + '</tr>';
-      visible.push(r.id);
-      return '<tr class="row' + (r.id === st.sel ? ' sel' : '') + '" data-id="' + r.id + '" style="--tint:' + tintOf(r) + '"><td class="stripe" style="background:' + colorOf(r) + '"></td>' + cells + '</tr>';
+      let cs = null;
+      const cells = () => cs || (cs = CL.map(c => { const v = c.val(r); return '<td class="' + (c.num ? 'n' : '') + '"' + (c.date && v ? ' data-date="' + esc(v) + '"' : '') + (c.csvFmt ? K.csvv(() => c.csvFmt(v, r)) : '') + (c.csvNum ? ' data-csv-n' : '') + '>' + (c.fmt ? c.fmt(v, r) : esc(v)) + '</td>'; }));
+      const reset = () => { cs = null; };
+      if (hide) { items.push({ k: 'hid', reset, html: () => '<tr class="csvrow" hidden data-csv-keep="1"><td class="stripe"></td>' + cells().join('') + '</tr>' }); return; }
+      visible.push(r.id); idxOf.set(r.id, items.length);
+      const stripe = () => '<td class="stripe" style="background:' + colorOf(r) + '"></td>';
+      items.push({ k: 'row', reset, cells: () => [stripe()].concat(cells()),
+        html: () => '<tr class="row' + (r.id === st.sel ? ' sel' : '') + '" data-id="' + r.id + '" style="--tint:' + tintOf(r) + '">' + stripe() + cells().join('') + '</tr>' });
     };
     function emit(list, level, path, title, hide) {
-      if (level >= G.length) { list.forEach(r => body += leaf(r, hide)); return; }
+      if (level >= G.length) { list.forEach(r => leaf(r, hide)); return; }
       const g = G[level], m = new Map();
       list.forEach(r => { const k = g.key(r); if (!m.has(k)) m.set(k, []); m.get(k).push(r); });
       // группы — обычные поля (R31): сортировка по столбцу упорядочивает и их на каждом уровне (итог — по сумме группы)
@@ -246,16 +252,21 @@ body { display: flex; flex-direction: column; height: 100vh; overflow: hidden; }
         const lbl = g.label ? g.label(k, sub) : esc(k);
         const t = (title ? title + ' · ' : '') + String(k);
         // строка группы — оформление: в CSV не идёт, как группы K.table (#277)
-        body += '<tr class="grp l' + Math.min(level, 2) + '" data-g="' + esc(p) + '" data-csv-skip="1"><td class="stripe" style="background:' + (g.color ? g.color(k, sub) : 'transparent') + '"></td>' +
+        items.push({ k: 'grp', html: () => '<tr class="grp l' + Math.min(level, 2) + '" data-g="' + esc(p) + '" data-csv-skip="1"><td class="stripe" style="background:' + (g.color ? g.color(k, sub) : 'transparent') + '"></td>' +
           '<td colspan="' + span + '" style="padding-left:' + (7 + level * 14) + 'px"><span class="gl"><span class="tw">' + (col ? '▸' : '▾') + '</span>' + lbl + ' <span class="mut3" style="font-weight:400">' + sub.length + '</span></span></td>' +
-          CL.slice(span).map(c => sumCell(c, sub, t)).join('') + '</tr>';
+          CL.slice(span).map(c => sumCell(c, sub, t)).join('') + '</tr>' });
         emit(sub, level + 1, p, t, col);
       });
     }
     emit(L, 0, '', '');
     const foot = '<tfoot><tr><td></td><td colspan="' + span + '">Итого <span class="mut3" style="font-weight:400">' + L.length + ' поз.</span></td>' + CL.slice(span).map(c => sumCell(c, L, 'Итого')).join('') + '</tr></tfoot>';
     const sc = tbl.scrollTop;
+    // длинная таблица — окном строк (K.vwin: на экране ~тридцать строк, не две тысячи); выгрузка CSV берёт все строки из полной копии
+    let body;
+    if (items.length > K.VWIN_MIN) { win = K.vwin(items, { cols: CL.length + 1, rowH: 24 }); win.dirty = () => { items.forEach(i => i.reset && i.reset()); win && win.repaint(); }; body = win.html(); }
+    else body = items.map(i => i.html()).join('');
     tbl.innerHTML = '<table class="k-tbl">' + head + '<tbody>' + (body || '<tr><td colspan="' + (CL.length + 1) + '" class="k-empty">ничего не найдено</td></tr>') + '</tbody>' + foot + '</table>';
+    if (win) win.attach(tbl.querySelector('table'));
     K.tableTools(tbl, { viewKey: 'c03-blotter', title: 'Блоттер позиций' });
     tbl.scrollTop = sc;
     tbl.querySelectorAll('th .k-flt').forEach(ic => ic.onclick = e => {
@@ -269,18 +280,27 @@ body { display: flex; flex-direction: column; height: 100vh; overflow: hidden; }
       else st.sort = i >= 0 && st.sort.length === 1 ? (st.sort[0][1] > 0 ? [[k, -1]] : []) : [[k, C[k].num ? -1 : 1]];
       render();
     });
-    tbl.querySelectorAll('tr.grp').forEach(tr => tr.onclick = e => { if (e.target.closest('[data-dr]')) return; st.collapsed[tr.dataset.g] = !st.collapsed[tr.dataset.g]; render(); });
-    tbl.querySelectorAll('tr.row').forEach(tr => {
-      tr.onclick = e => { if (e.target.closest('[data-dr]')) return; select(tr.dataset.id, false); };
-      tr.ondblclick = () => K.card(tr.dataset.id);
-    });
     if (!st.sel || !M.pos[st.sel] || !visible.includes(st.sel)) { if (visible.length) select(visible[0], false); else showCard(null); }
     renderSub(L);
   }
+  // строки и группы — по одному обработчику на таблицу: строки окна приходят и уходят при прокрутке
+  tbl.addEventListener('click', e => {
+    if (e.target.closest('[data-dr]')) return;
+    const g = e.target.closest('tr.grp'), r = e.target.closest('tr.row');
+    if (g) { st.collapsed[g.dataset.g] = !st.collapsed[g.dataset.g]; render(); }
+    else if (r) select(r.dataset.id, false);
+  });
+  tbl.addEventListener('dblclick', e => { const r = e.target.closest('tr.row'); if (r) K.card(r.dataset.id); });
   function select(id, scroll) {
     st.sel = id; save();
     tbl.querySelectorAll('tr.row.sel').forEach(x => x.classList.remove('sel'));
-    const tr = tbl.querySelector('tr.row[data-id="' + id + '"]');
+    let tr = tbl.querySelector('tr.row[data-id="' + id + '"]');
+    if (!tr && win && idxOf.has(id)) {  // строки нет в окне: листаем к ней (оценка высоты строки), окно рисует её и соседей
+      const i = idxOf.get(id), top = win.offsetOf(i), hh = win.rowH(i), foot = tbl.querySelector('tfoot').offsetHeight;
+      if (scroll) tbl.scrollTop = Math.max(0, top - (tbl.clientHeight - foot - hh) / 2);
+      win.paint(true);
+      tr = tbl.querySelector('tr.row[data-id="' + id + '"]');
+    }
     if (tr) { tr.classList.add('sel'); if (scroll) { const head = tbl.querySelector('thead').offsetHeight, foot = tbl.querySelector('tfoot').offsetHeight; const top = tr.offsetTop - head, bot = tr.offsetTop + tr.offsetHeight + foot; if (top < tbl.scrollTop) tbl.scrollTop = top; else if (bot > tbl.scrollTop + tbl.clientHeight) tbl.scrollTop = bot - tbl.clientHeight; } }
     showCard(id);
   }

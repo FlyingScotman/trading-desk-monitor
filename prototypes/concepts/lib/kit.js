@@ -2084,6 +2084,7 @@
         if (ch) build();
         return ch;
       },
+      rowH(i) { return hs[items[i].k]; },
       offsetOf(i) { return (tb ? tb.offsetTop : 0) + off[Math.max(0, Math.min(n, i))]; },
       // полоса таблицы, видимая на экране (с учётом всех прокручиваемых предков), в px от верха tbody; null — таблицы не видно
       band() {
