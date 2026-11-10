@@ -25,9 +25,10 @@
   core valued it from its terms, not with the report's value it got instead) or, for an unvalued derivative, what its
   terms need (RUB curve; per foreign currency its FX spot and the curve the valuation would take, by the run's setting
   ``fx_foreign_curve`` and a CCS leg's XCCY first, a fallback only: ``replaced``; a floating index its curve and
-  fixings; an NDF the CBR fixing of each foreign currency of its pair, both of a cross NDF), each with its state in the run's market (``coverage.MARKET_STATE``): every need,
-  not just the first failure. Its notes say why a derivative valued without core has no rates risk
-(``extra.risk_missing``, TDM#616) and an NDF whose terms name no settlement currency (the one taken).
+  fixings; an NDF the CBR fixing of each foreign currency of its pair, both of a cross NDF), each with its
+  state in the run's market (``coverage.MARKET_STATE``): every need, not just the first failure. Its notes say
+  why a derivative valued without core has no rates risk (``extra.risk_missing``, TDM#616) and, for an NDF
+  whose terms name no settlement currency, the one taken.
 
 What an old run did not record is ``unknown`` («нет сведений»), never an error; missing data is ``absent`` / ``missing``,
 never a zero. Nothing here reads a report's values beyond keys and dates."""
