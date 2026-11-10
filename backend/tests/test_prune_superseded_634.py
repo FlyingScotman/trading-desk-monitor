@@ -438,7 +438,8 @@ def test_the_prune_step_leaves_the_space_to_autovacuum_and_vacuums_a_server_with
 def test_the_prune_settings(tmp_path):
     from desk.settings import Settings, check_settings_doc, load
 
-    assert Settings().prune_superseded is True and Settings().prune_superseded_days == 7
+    assert Settings().prune_superseded is True
+    assert Settings().prune_superseded_days == 14 == Settings().backup_keep  # not less than the backups' 14 days
     assert not check_settings_doc({"prune_superseded": False, "prune_superseded_days": 14})
     assert check_settings_doc({"prune_superseded_days": 0}) == ["prune_superseded_days: must be a whole number >= 1"]
     assert check_settings_doc({"prune_superseded": "no"}) == ["prune_superseded: must be true or false"]
@@ -461,7 +462,7 @@ def test_the_cli_prunes_and_compacts(tmp_path, cache, store_url, monkeypatch, ca
     out = capsys.readouterr().out
     assert "deleted 4 replaced runs" in out and "VACUUM FULL" in out and "the files shrank by" in out
     assert counts(store_url)["run"] == 4
-    assert cli.main(["prune"]) == 0 and "no runs replaced 7 days ago or longer" in capsys.readouterr().out
+    assert cli.main(["prune"]) == 0 and "no runs replaced 14 days ago or longer" in capsys.readouterr().out
 
 
 def test_a_pruned_history_is_recomputed_the_same_to_the_last_bit(tmp_path, cache, store_url):

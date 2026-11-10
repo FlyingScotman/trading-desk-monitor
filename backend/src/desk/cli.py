@@ -1057,7 +1057,7 @@ def main(argv: list[str] | None = None) -> int:
     pr = sub.add_parser("prune", help="delete the runs a newer run of their date replaced (what the autopilot's "
                         "prune step does a little per cycle)")
     pr.add_argument("--days", type=int, help="delete runs replaced at least this many days ago (default: the setting "
-                    "prune_superseded_days, 7)")
+                    "prune_superseded_days, 14)")
     pr.add_argument("--dry-run", action="store_true", help="only say how many runs would be deleted")
     pr.add_argument("--compact", action="store_true", help="then rewrite the run tables to give the disk the space "
                     "back (VACUUM FULL: the monitor cannot read the runs meanwhile)")

@@ -97,7 +97,7 @@ checkout keeps its old names ``.devdata/inbox`` and ``.devdata/desk_pg``.
                            one process; the processes work below the owner's programs in priority
 * ``DESK_PRUNE_SUPERSEDED``, ``DESK_PRUNE_SUPERSEDED_DAYS``  the autopilot deletes the runs of a date that a newer run
                            replaced (the history's first pass, an older program version, a corrected report) once
-                           the replacement is this many days old (on, 7): a date keeps its newest run, a run with a
+                           the replacement is this many days old (on, 14: not less than the backups kept): a date keeps its newest run, a run with a
                            scenario job stays (``desk.store.prune_superseded``, TDM#634); ``desk prune`` does it at once
 * ``DESK_BACKUP``, ``DESK_BACKUP_DIR``, ``DESK_BACKUP_KEEP``, ``DESK_BACKUP_TIME``  the daily backup of the desk store
                            (``desk.backup``; on): ``pg_dump`` into this folder (default ``<home>/backups``; better
@@ -340,7 +340,7 @@ class Settings:
     backfill_workers: int = 1  # processes the history is computed in (desk.parallel): 1, one date after the other, until
     # the pool is checked on the work machine (Windows, ``spawn`` from desk.exe); then a number from 2 up by the setting
     prune_superseded: bool = True  # the autopilot deletes the runs a newer run of their date replaced (TDM#634)
-    prune_superseded_days: int = 7  # ... once the replacement is this old
+    prune_superseded_days: int = 14  # ... once the replacement is this old: not less than the backups kept (backup_keep 14)
     backup: bool = True  # the daily backup of the desk store by desk serve (desk.backup)
     backup_dir: Path | None = None  # None: <home>/backups; better another disk or a network share
     backup_keep: int = 14  # nightly and manual backups kept, the newest
