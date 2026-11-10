@@ -47,7 +47,8 @@
  * показывает полосу с «Повторить»); «данных нет» (404) — не сбой.
  * История позиции (M.posHistory): цены рынка, номинал, DV01, CS01, базис, MV и DV01 по кривым каждого прогона
  * (M.histSource = 'runs': история риска — настоящая, не «номинал × сегодняшние чувствительности»); M.loadHistory(ids, from)
- * просит только нужные бумаги и период (ids — список, null — все; from — дата, null — вся история).
+ * просит только нужные бумаги и период (ids — список, null — все; from — дата, null — год до даты прогона, как
+ * у сервера по умолчанию; граница, с которой ряд загружен, запоминается датой).
  * Имена бумаг (батч 1, п. 3, R33): алиас по ISIN — GET /api/v1/instruments/aliases (запрос уходит в начале real.js, ответ
  * подставляется по приходу: p.name = алиас ?? биржевое имя (p.exchName), p.alias — алиас или null, поиск — по обоим (p.searchBase
  * + алиас); страницы перерисовываются по событиям 'alias' и 'filter'). Алиас не входит в строки прогона: тот же алиас — и у
@@ -117,12 +118,14 @@
   const emit = detail => { try { document.dispatchEvent(new CustomEvent('concepts-data', { detail })); } catch (e) { } };
   function getJson(path) {
     if (NET[path]) return NET[path];
-    const bad = (status, error) => { delete NET[path]; return { status, body: null, error }; };
-    const p = typeof fetch !== 'function' ? Promise.resolve(bad(0, 'нет fetch'))
+    const bad = (status, error) => ({ status, body: null, error });
+    const base = typeof fetch !== 'function' ? Promise.resolve(bad(0, 'нет fetch'))
       : fetch(path).then(r => {
         if (r.status !== 200) return r.status === 404 ? { status: 404, body: null } : bad(r.status, 'ошибка сервера ' + r.status + (r.statusText ? ' ' + r.statusText : ''));
         return r.json().then(body => ({ status: 200, body }), e => bad(200, 'ответ не разобран' + (e && e.message ? ': ' + e.message : '')));
       }, e => bad(0, 'нет связи с сервером' + (e && e.message ? ': ' + e.message : '')));
+    // сбой забывается после того, как обещание уже лежит в NET (иначе в ветке без fetch оно оставалось бы там навсегда)
+    const p = base.then(x => { if (x.error && NET[path] === p) delete NET[path]; return x; });
     return (NET[path] = p);
   }
   // сбой запроса — не молчание: в M.netErrors (по одному на «что») и событием
@@ -547,6 +550,7 @@
       const a = p.isin && M.aliases[p.isin];
       if (a) { p.alias = a.alias; p.name = a.alias; p.searchText = a.alias.toLowerCase() + ' ' + p.searchBase; }
     });
+    if (calCache && calCache.renameCal) calCache.renameCal();
     return true;
   };
   M.aliasesReady = aliasReq.then(r => { failed('алиасы бумаг', r); if (r.body && M.applyAliases(r.body.aliases)) emit({ name: 'aliases' }); return r; });
@@ -642,22 +646,27 @@
   }
 
   // ---------- история позиции (по запросу, асинхронно) ----------
-  // Кэш — по позициям: ряд бумаги со своей осью дат и с границей from, с которой он загружен ('' — вся история). Запрос
-  // берёт только то, чего в кэше нет или что загружено с более поздней даты (ids — список или null — все, from — дата или
-  // null — вся история); длинный список — частями (адрес не длиннее нескольких КБ), все бумаги сразу — без ids.
-  // M.posHistory — синхронно, из кэша; нет ряда (не загружен, у бумаги нет истории) — единственная точка прогона.
+  // Кэш — по позициям: ряд бумаги со своей осью дат (она — у запроса, из которого ряд пришёл: у разных запросов оси
+  // разные, ряды разных бумаг по одному номеру точки не сложить — KIT.histAxis / KIT.histOn сводят их по ДАТЕ) и
+  // граница from — самая ранняя дата, с которой ряд загружен. Запрос без from сервер считает за HIST_DAYS (365) дней до
+  // даты прогона (api/concepts.py HISTORY_DAYS): граница у него — эта дата, а не «вся история». Запрос берёт только то, чего
+  // в кэше нет или что загружено с более поздней даты (ids — список или null — все, from — дата или null — по умолчанию);
+  // длинный список — частями (адрес не длиннее нескольких КБ), все бумаги сразу — без ids.
+  // M.posHistory — синхронно, из кэша; нет ряда (не загружен, у бумаги нет истории) — единственная точка прогона;
+  // M.histLoaded(id) — ряд бумаги загружен хотя бы за год (карточка не загруженной просит его, K.card).
   const histCache = {}, histFrom = {}, deepCache = {};
-  const HIST_CHUNK = 150;
-  const histUrl = (ids, from) => '../api/v1/history/positions?' + runQ + (ids ? '&ids=' + encodeURIComponent(ids.join(',')) : '') + (from ? '&from=' + from : '');
-  const needHist = (id, from) => histFrom[id] === undefined || histFrom[id] > (from || '');
+  const HIST_CHUNK = 150, HIST_DAYS = 365, DEF_FROM = addDays(D.asOf, -HIST_DAYS);
+  const histUrl = (ids, from) => '../api/v1/history/positions?' + runQ + (ids ? '&ids=' + encodeURIComponent(ids.join(',')) : '') + (from && from !== DEF_FROM ? '&from=' + from : '');
+  const needHist = (id, from) => histFrom[id] === undefined || histFrom[id] > from;
   function putHist(j, ids, from, into, fromBy) {
     // ряд, уже загруженный с той же или более ранней даты, не заменяется
-    const newer = pid => fromBy[pid] === undefined || fromBy[pid] > (from || '');
-    Object.entries(j.series || {}).forEach(([pid, s]) => { if (newer(pid)) { into[pid] = Object.assign({ dates: j.dates, runAt: j.runAt }, s); fromBy[pid] = from || ''; } });
-    (ids || []).forEach(pid => { if (newer(pid)) { into[pid] = into[pid] || null; fromBy[pid] = from || ''; } });
+    const newer = pid => fromBy[pid] === undefined || fromBy[pid] > from;
+    Object.entries(j.series || {}).forEach(([pid, s]) => { if (newer(pid)) { into[pid] = Object.assign({ dates: j.dates, runAt: j.runAt }, s); fromBy[pid] = from; } });
+    (ids || []).forEach(pid => { if (newer(pid)) { into[pid] = into[pid] || null; fromBy[pid] = from; } });
   }
+  M.histLoaded = id => histFrom[id] !== undefined && histFrom[id] <= DEF_FROM;
   M.loadHistory = function (ids, from) {
-    from = from || '';
+    from = from || DEF_FROM;
     const all = M.positions.map(p => p.id), want = (ids || all).filter(id => M.pos[id] && needHist(id, from));
     if (!want.length) return Promise.resolve([]);
     const asAll = !ids && want.length > all.length / 2;  // почти все — одним запросом без ids (тот же адрес, что греет сервер)
@@ -793,7 +802,8 @@
     const held = new Set(c.held || []), k = RUB_K(), F = c.fields;
     const rows = (key, conv) => (c[key] || []).map(r => { const o = {}; F[key].forEach((f, i) => o[f] = r[i]); if (conv) conv(o); return o; });
     const posBySec = {}; D.positions.forEach(p => { if (p.instrumentId) posBySec[p.instrumentId] = p.id; });
-    const named = o => { const p = o.pos && M.pos[o.pos]; if (p && p.alias && o.name) o.name = p.alias; };  // алиас бумаги в портфеле (R33)
+    // алиас бумаги в портфеле (R33); имя хаба помнится в name0: алиасы могут прийти позже календаря (M.applyAliases → renameCal)
+    const named = o => { if (o.name0 === undefined) o.name0 = o.name; const p = o.pos && M.pos[o.pos]; o.name = p && p.alias && o.name0 ? p.alias : o.name0; };
     return {
       source: 'real', staticDate: c.staticDate, asOf: c.asOf, horizonEnd: c.horizonEnd, bigRub: c.bigRub * k,
       types: c.types.map(id => ({ id, label: c.typeLabels[id] || id })), ccys: c.ccys || [], coverage: c.coverage || {},
@@ -803,6 +813,7 @@
       fx: rows('fx'), fxIssuers: rows('fxIssuers'),
       fxEvents: rows('fxEvents', o => { o.held = held.has(o.secid); o.pos = posBySec[o.secid] || null; named(o); }),
       notes: ['календарь рынка — по статике хаба на ' + c.staticDate + ': купоны (ещё не объявленные — по последнему, «прогноз»), амортизации, погашения и оферты всех выпусков × объём выпуска MOEX'],
+      renameCal() { this.rubBig.forEach(named); this.fxEvents.forEach(named); },  // алиасы пришли после календаря
       flows(q) {  // строки за ячейкой: {market, from, to, type, kind, ccy, sector, big, issuer, secid}
         const qs = Object.entries(q || {}).filter(([, v]) => v != null && v !== false && v !== '').map(([a, v]) => a + '=' + encodeURIComponent(v)).join('&');
         return getJson('../api/v1/calendar/market?' + runQ + '&' + qs).then(r => {
@@ -817,18 +828,23 @@
       },
     };
   };
+  // состояние календаря словами для страницы: 'loading' — идёт запрос; 'ready' — есть M.marketCal; 'missing' — календаря нет
+  // (404 или в ответе missing: статика хаба ещё не разобрана); 'failed' — сбой запроса или ответ не разобран (calError — текст);
+  // null — календарь не запрашивали
+  let calState = null, calError = null;
   M.calLoading = () => calBusy;
+  M.calStatus = () => ({ state: calState, error: calError });
   M.loadCal = function () {
     if (calP) return calP;
-    calBusy = true;
+    calBusy = true; calState = 'loading'; calError = null;
     return (calP = getJson('../api/v1/calendar/market?' + runQ).then(r => {
-      calBusy = false;
       failed('календарь рынка', r);
-      if (r.error) calP = null;  // сбой: следующий вызов спросит снова
+      if (r.error) { calP = null; calCache = null; calState = 'failed'; calError = r.error; return null; }  // сбой: следующий вызов спросит снова
       const c = r.body;
-      calCache = !c || c.missing ? null : buildCal(c);
+      try { calCache = !c || c.missing ? null : buildCal(c); } catch (e) { calCache = null; calState = 'failed'; calError = 'ответ не разобран' + (e && e.message ? ': ' + e.message : ''); failed('календарь рынка', { error: calError, status: 200 }); return null; }
+      calState = calCache ? 'ready' : 'missing';
       return calCache;
-    }));
+    }).then(x => { calBusy = false; return x; }));
   };
   Object.defineProperty(M, 'marketCal', { configurable: true, get() { return calCache; } });
 

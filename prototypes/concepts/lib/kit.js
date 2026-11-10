@@ -698,12 +698,48 @@
     let p; try { p = load(); } catch (e) { p = Promise.reject(e); }
     Promise.resolve(p).then(run, e => { K.dataError(e && e.message ? e.message : 'сбой загрузки'); run(); });
   };
+  // ряды истории разных бумаг приходят из разных запросов (деление длинного списка, догрузка при смене фильтра), и ось дат у
+  // каждого запроса своя (сервер строит её как объединение дат), поэтому складывать ряды разных бумаг «по номеру точки» нельзя:
+  // K.histAxis(список историй) — общая ось (у рядов одного запроса она одна и та же — тогда сама эта ось, без пересчёта,
+  // иначе объединение дат по возрастанию); K.histOn(история, ось) — та же история на этой оси, точки сопоставлены по ДАТЕ.
+  // Даты, которых в ряде нет: ряды «между прогонами — последний» (номинал, DV01, CS01, базис, MV, кривые, qty) — значение
+  // последней своей даты (так считает и сервер), прочие (цены, доходности, спреды) — null; до первой своей даты — null.
+  const HIST_CARRY = ['notional', 'dv01', 'cs01', 'basis', 'mv', 'ofzSpr', 'ofzRuo', 'qty'];
+  K.histAxis = hs => {
+    const ref = hs.length ? hs[0].dates : [];
+    if (hs.every(h => h.dates === ref)) return ref;
+    return Array.from(new Set(hs.reduce((a, h) => a.concat(h.dates), []))).sort();
+  };
+  K.histOn = (h, dates) => {
+    if (h.dates === dates) return h;
+    const own = h.dates, n = own.length, at = new Map(own.map((d, i) => [d, i]));
+    const onAxis = (a, carry) => {
+      if (!Array.isArray(a) || a.length !== n) return a;
+      let last = null;
+      return dates.map(d => { const i = at.get(d); if (i === undefined) return carry ? last : null; last = a[i]; return last; });
+    };
+    const o = {};
+    Object.keys(h).forEach(k => {
+      const v = h[k];
+      if (k === 'dates') o.dates = dates;
+      else if (k === 'curves' && v && typeof v === 'object') o.curves = Object.fromEntries(Object.entries(v).map(([c, a]) => [c, onAxis(a, true)]));
+      else if (k === 'pt' && v && typeof v === 'object' && !Array.isArray(v)) {  // номер точки → пометки: номера переводятся на новую ось
+        const pos = new Map(dates.map((d, i) => [d, i])); o.pt = {};
+        Object.keys(v).forEach(i => { const j = pos.get(own[+i]); if (j !== undefined) o.pt[j] = v[i]; });
+      } else o[k] = onAxis(v, HIST_CARRY.includes(k));
+    });
+    return o;
+  };
+  // сообщения lib/real.js: сбой запроса — полоса; алиасы пришли — 'alias' (страницы с именами подписываются на него, K.onAlias) и
+  // точечная замена имён в таблицах (K.nameCell помечает ячейку data-pn). Событие 'filter' по приходу алиасов не рассылается:
+  // оно перерисовывает страницы целиком, а тяжёлые (C03, C04, C11, C13) от этого замирали бы вторично
   document.addEventListener('concepts-data', e => {
     const d = (e && e.detail) || {};
     if (d.error) return K.dataError(d.error);
-    if (d.name === 'aliases') { fire('alias'); fire('filter'); }
+    if (d.name === 'aliases') { K.patchNames(); fire('alias'); }
     fire('data');
   });
+  K.onAlias = fn => K.on('alias', fn);
 
   // ---------- фильтр книг (верхний уровень) ----------
   // portsOff — скрытые портфели (колонка Portfolio отчёта, x_portfolio адаптера; '—' — позиции без неё): новые
@@ -2518,7 +2554,12 @@
   K.ratesCorePanel = (el, list) => {
     const R = K.ratesCoreModel(list), { core, rows, trades, totals: T } = R, tol = R.tolerance, pn = parNote(R.par);
     // параллельный отчёт приходит отдельным запросом (TDM#629): панель рисуется сразу, по ответу — заново
-    if (R.par && R.par.state === 'loading' && M.loadDeriv) M.loadDeriv().then(() => { if (el.isConnected) K.ratesCorePanel(el, list); });
+    // (один ответ — одна перерисовка: повторные вызовы, пока он не пришёл, ждут тот же запрос; список — последний из вызовов)
+    el._rcList = list;
+    if (R.par && R.par.state === 'loading' && M.loadDeriv && !el._rcWait) {
+      el._rcWait = true;
+      M.loadDeriv().then(() => { el._rcWait = false; if (el.isConnected) K.ratesCorePanel(el, el._rcList); });
+    }
     el.innerHTML = '';
     if (!rows.length) {
       K.noData(el, 'в прогоне нет свопов и РЕПО, оценённых ядром (extra.swaps / extra.repos): прогон до оценки свопов ядром или в нём нет условий сделок');
@@ -2892,12 +2933,17 @@
       ['Кэрри / день', '<span class="' + f.cls(p.carryDay) + '">' + f.k(p.carryDay) + '</span> <small>тыс ₽</small>', false, K.tips.carry],
       ['Фондирование / день', K.fundingDayHtml(p) + ' <small>тыс ₽</small>', false, K.tips.funding], ['Контрагент', esc(p.cpty || '—')],
     ]).concat(K.curveRiskFields(p));  // у облигаций тоже (R32)
-    // вся история облигации приходит отдельным запросом (M.loadDeep): карточка рисуется сразу с историей из прогонов, по ответу —
-    // заново с полной (если панель ещё открыта); сбой — полоса «не загрузилось» (kit.js, concepts-data), карточка остаётся как есть
-    if (isBond && !again && M.loadDeep && M.hasDeep && !M.hasDeep(p.id)) {
-      o.bd.insertAdjacentHTML('beforebegin', '<div class="k-note k-deep-wait" style="padding:6px 16px">История бумаги загружается…</div>');
+    // история приходит отдельным запросом: у облигации вся (M.loadDeep), у остальных (своп, РЕПО, FX, CDS) — за год
+    // (M.loadHistory; синхронный M.posHistory отдаёт только то, что уже загружено, TDM#629). Карточка рисуется сразу с тем, что
+    // есть, по ответу — заново с полной историей (если панель ещё открыта); сбой — полоса «не загрузилось» (kit.js,
+    // concepts-data), карточка остаётся как есть
+    const needDeep = isBond && M.loadDeep && M.hasDeep && !M.hasDeep(p.id);
+    const needHist = !isBond && M.loadHistory && M.histLoaded && !M.histLoaded(p.id);
+    if (!again && (needDeep || needHist)) {
+      o.bd.insertAdjacentHTML('beforebegin', '<div class="k-note k-deep-wait" style="padding:6px 16px">История ' + (isBond ? 'бумаги' : 'позиции') + ' загружается…</div>');
       const wait = o.bd.previousElementSibling;
-      M.loadDeep(p.id).then(d => { if (wait) wait.remove(); if (d && o.el.isConnected) K.card(p.id, o); }, () => { if (wait) wait.remove(); });
+      (needDeep ? M.loadDeep(p.id).then(d => !!d) : M.loadHistory([p.id], null).then(errs => !errs.length))
+        .then(ok => { if (wait) wait.remove(); if (ok && o.el.isConnected) K.card(p.id, o); }, () => { if (wait) wait.remove(); });
     }
     if (isBond && p.kind === 'IN' && M.posHistory) {  // линкер: последние ICPI / IR / BEI MOEX (контракт 1.2), если есть
       const LH = M.posHistory(p.id, { deep: true }), last = a => { for (let i = (a || []).length - 1; i >= 0; i--) if (a[i] != null) return a[i]; return null; };
@@ -3000,7 +3046,24 @@
   K.pnlAssumeNote = p => K.pnlAssumed(p) ? '<div class="k-note pnl-assume" style="overflow-wrap:anywhere;margin:4px 0 8px;color:var(--warn)"><b>PnL на допущении:</b> ' + esc(K.pnlAssumed(p)) + '</div>' : '';
 
   // ячейка «Бумага»: у бумаги с алиасом биржевое имя — в подсказке
-  K.nameCell = (r, v) => r && r.alias && r.exchName && r.exchName !== r.alias ? '<span title="' + esc('биржевое имя: ' + r.exchName) + '">' + esc(v == null ? r.name : v) + '</span>' : esc(v == null ? (r && r.name) : v);
+  // Ячейка позиции помечена data-pn: пришли алиасы (TDM#629) — K.patchNames меняет имя в уже нарисованных таблицах на месте
+  K.nameCell = (r, v) => {
+    const pos = r && M.pos[r.id], t = esc(v == null ? (r && r.name) : v), mark = r && r.isin && (pos === r || (pos && Object.getPrototypeOf(r) === pos)) && (v == null || v === r.name) ? ' data-pn="' + esc(String(r.id)) + '"' : '';
+    return r && r.alias && r.exchName && r.exchName !== r.alias ? '<span' + mark + ' title="' + esc('биржевое имя: ' + r.exchName) + '">' + t + '</span>' : mark ? '<span' + mark + '>' + t + '</span>' : t;
+  };
+  // Имена в уже нарисованном: ячейки K.nameCell (data-pn) и элементы с data-card (строка таблицы, ссылка, подпись), чей текст —
+  // биржевое имя бумаги: заменяются на месте, страница целиком не перерисовывается (она тяжёлая: C03 — секунда)
+  K.patchNames = () => {
+    document.querySelectorAll('[data-pn]').forEach(el => {
+      const p = M.pos[el.dataset.pn]; if (!p) return;
+      if (el.textContent !== p.name) el.textContent = p.name;
+      if (p.alias && p.exchName && p.exchName !== p.alias) el.title = 'биржевое имя: ' + p.exchName; else el.removeAttribute('title');
+    });
+    document.querySelectorAll('[data-card]').forEach(el => {
+      const p = M.pos[el.dataset.card]; if (!p || !p.alias || p.alias === p.exchName) return;
+      Array.from(el.tagName === 'TR' ? el.children : [el]).forEach(c => { if (!c.children.length && c.textContent === p.exchName) c.textContent = p.name; });
+    });
+  };
   const canAlias = p => !!(p && p.isin && M.aliasApi);
   const aliasView = p => {
     const ro = M.aliasApi && M.aliasApi.editable === false;

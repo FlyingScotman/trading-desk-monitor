@@ -277,6 +277,7 @@
   K.seg(document.getElementById('gColor'), Object.entries(COLORS).map(([k, g]) => [k, g.t]), S.color, v => { S.color = v; save(); redrawTree(); });
   K.seg(document.getElementById('bubCcy'), [['RUB', 'RUB'], ['fx', 'валютные'], ['all', 'все']], S.bubCcy, v => { S.bubCcy = v; save(); bc.redraw(); });
   K.onFilter(() => { redrawTree(); sc.redraw(); bc.redraw(); });
+  K.onAlias(redrawTree);  // имена бумаг пришли позже страницы: подписи листьев карты (точечные и столбцы перерисовывать не нужно)
   K.on('theme', () => { legend(); });
   K.commands([
     { label: 'Карта: по валютам и типам', run: () => { S.group = 'ccy'; save(); location.reload(); } },

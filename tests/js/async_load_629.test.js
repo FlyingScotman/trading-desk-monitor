@@ -53,6 +53,7 @@ function load(routes, opts) {
   vm.runInContext(P('concepts/lib/kit.js'), ctx);
   return { M: ctx.window.MOCK, K: ctx.window.KIT, net, events, page, ctx };
 }
+const J = x => JSON.parse(JSON.stringify(x));  // объекты vm-контекста — другого «мира»: сравнение по значению
 const hist = (id, dates) => ({ dates, runAt: dates.map(() => null), series: { [id]: { price: dates.map((_, i) => 100 + i), notional: dates.map(() => 1e6), dv01: dates.map(() => -5000) } } });
 const histUrls = net => net.urls.filter(u => /history\/positions/.test(u));
 
@@ -82,11 +83,45 @@ t('история позиций: только нужные бумаги и пе
   await M.loadHistory([a], '2026-06-01');  // нужна более ранняя
   assert.strictEqual(histUrls(net).length, 2);
   assert.ok(histUrls(net)[1].includes('from=2026-06-01'));
-  await M.loadHistory([a], null);  // вся история
+  await M.loadHistory([a], null);  // по умолчанию: сервер отдаёт год до даты прогона
   assert.strictEqual(histUrls(net).length, 3);
   assert.ok(!/from=/.test(histUrls(net)[2]));
   await M.loadHistory([a], '2000-01-01'); await M.loadHistory([a], null);
-  assert.strictEqual(histUrls(net).length, 3, 'вся история покрывает любой период');
+  assert.strictEqual(histUrls(net).length, 4, 'год по умолчанию — не вся история: с 2000 года просим отдельно');
+  assert.ok(histUrls(net)[3].includes('from=2000-01-01'));
+  await M.loadHistory([a], '2001-05-05');
+  assert.strictEqual(histUrls(net).length, 4, 'загруженное с 2000 года покрывает любой более поздний период');
+});
+
+t('запрос без from — это год до даты прогона, а не «вся история»: более ранний период просится отдельно (ревью TDM#629)', async () => {
+  const { M, net } = load({ 'history/positions': u => hist(decodeURIComponent((u.match(/ids=([^&]*)/) || [])[1] || '').split(',')[0] || 'x', ['2026-10-14', '2026-10-15']) });
+  const a = M.positions[0].id, asOf = M.asOf;
+  assert.strictEqual(M.histLoaded(a), false);
+  await M.loadHistory([a], null);
+  assert.strictEqual(histUrls(net).length, 1); assert.ok(!/from=/.test(histUrls(net)[0]), 'адрес по умолчанию — как греет сервер');
+  assert.strictEqual(M.histLoaded(a), true, 'за год загружено');
+  await M.loadHistory([a], M.util.addDays(asOf, -300));  // внутри года — уже есть
+  assert.strictEqual(histUrls(net).length, 1);
+  await M.loadHistory([a], M.util.addDays(asOf, -400));  // раньше года — запрос с датой
+  assert.strictEqual(histUrls(net).length, 2); assert.ok(histUrls(net)[1].includes('from=' + M.util.addDays(asOf, -400)));
+  // граница, с которой ряд загружен, — дата: короткое окно (60 дней) год не покрывает, карточке нужен запрос за год
+  const b = M.positions[1].id;
+  await M.loadHistory([b], M.util.addDays(asOf, -60));
+  assert.strictEqual(M.histLoaded(b), false);
+  await M.loadHistory([b], null);
+  assert.strictEqual(M.histLoaded(b), true); assert.strictEqual(histUrls(net).length, 4);
+});
+
+t('нет fetch: сбой не остаётся в кэше запросов навсегда', async () => {
+  const { M, ctx, events } = load({});
+  ctx.fetch = undefined;
+  assert.strictEqual(await M.loadMarket(), null);
+  assert.ok(/нет fetch/.test(M.netErrors[0].text), JSON.stringify(M.netErrors));
+  assert.ok(events.some(e => e && e.error));
+  ctx.fetch = u =>  // связь появилась
+    Promise.resolve({ status: 200, ok: true, statusText: '', json: () => Promise.resolve({ marketDate: '2026-10-15', indices: {}, curves: {}, notes: [] }) });
+  const m = await M.loadMarket();
+  assert.ok(m && m.marketDate === '2026-10-15', 'следующий вызов спрашивает снова');
 });
 
 t('история всех позиций — одним запросом без ids; длинный список — частями; бумага без истории не запрашивается снова', async () => {
@@ -158,6 +193,90 @@ t('календарь рынка: null до ответа, потом объек�
   assert.strictEqual(M.derivParallel().state, 'computed');
 });
 
+t('календарь: сбой запроса, 404 и «статика не разобрана» — разные состояния; сбой не запоминается', async () => {
+  let mode = 'down';
+  const cal = { staticDate: '2026-10-15', asOf: '2026-10-15', horizonEnd: '2027-10-15', bigRub: 1e10, held: [], fields: { rub: [], rubSector: [], rubBig: [], fx: [], fxIssuers: [], fxEvents: [] },
+    types: [], typeLabels: {}, ccys: [], rub: [], rubSector: [], rubBig: [], fx: [], fxIssuers: [], fxEvents: [] };
+  const { M, events } = load({ 'calendar/market': () => mode === 'down' ? new Error('offline') : mode === '500' ? 500 : mode === '404' ? 404 : mode === 'missing' ? { missing: true } : mode === 'broken' ? { staticDate: 'x' } : cal });
+  assert.strictEqual(M.calStatus().state, null); assert.strictEqual(M.calStatus().error, null);
+  const p = M.loadCal();
+  assert.strictEqual(M.calStatus().state, 'loading'); assert.strictEqual(M.calLoading(), true);
+  assert.strictEqual(await p, null);
+  assert.strictEqual(M.calStatus().state, 'failed'); assert.ok(/нет связи с сервером: offline/.test(M.calStatus().error));
+  assert.strictEqual(M.calLoading(), false);
+  assert.ok(events.some(e => e && e.error && /календарь рынка/.test(e.error)), 'сбой — событием (полоса «Повторить»)');
+  mode = '500'; await M.loadCal();
+  assert.strictEqual(M.calStatus().state, 'failed'); assert.ok(/ошибка сервера 500/.test(M.calStatus().error), 'после сбоя спрашивает снова');
+  mode = 'ok'; const c = await M.loadCal();
+  assert.ok(c && M.calStatus().state === 'ready' && M.marketCal === c, 'после сбоя — ответ');
+  const nf = load({ 'calendar/market': 404 });
+  assert.strictEqual(await nf.M.loadCal(), null);
+  assert.strictEqual(nf.M.calStatus().state, 'missing', '404 — календаря нет, не сбой'); assert.strictEqual(nf.M.calStatus().error, null);
+  assert.strictEqual(nf.M.netErrors.length, 0);
+  const miss = load({ 'calendar/market': { missing: true } });
+  await miss.M.loadCal(); assert.strictEqual(miss.M.calStatus().state, 'missing');
+  const broken = load({ 'calendar/market': { staticDate: 'x' } });  // ответ без полей: сборка падает — не «загрузка» навсегда
+  assert.strictEqual(await broken.M.loadCal(), null);
+  assert.strictEqual(broken.M.calStatus().state, 'failed'); assert.strictEqual(broken.M.calLoading(), false);
+  assert.ok(/ответ не разобран/.test(broken.M.calStatus().error));
+});
+
+t('алиасы по приходу: событие alias и точечная замена имён, без события filter; календарь, пришедший раньше алиасов, переименовывается', async () => {
+  const cal = { staticDate: '2026-10-15', asOf: '2026-10-15', horizonEnd: '2027-10-15', bigRub: 1e10, held: [], fields: { rub: [], rubSector: [], rubBig: ['date', 'kind', 'secid', 'name', 'amount'], fx: [], fxIssuers: [], fxEvents: [] },
+    types: [], typeLabels: {}, ccys: [], rub: [], rubSector: [], rubBig: [['2026-11-01', 'mat', 'SEC1', 'Имя хаба', 5e9]], fx: [], fxIssuers: [], fxEvents: [] };
+  let release;
+  const gate = new Promise(r => { release = r; });
+  const withIsin = D => { D.positions[0].instrumentId = 'SEC1'; D.positions[0].isin = 'SU000TESTISIN'; };
+  const { M, K, ctx } = load({ 'instruments/aliases': () => gate.then(() => ({ aliases: [{ isin: 'SU000TESTISIN', alias: 'Мой алиас', changed_by: 'x', changed_at: '2026-10-15T10:00:00' }] })),
+    'calendar/market': cal }, { mutate: withIsin });
+  const p = M.positions.find(x => x.isin === 'SU000TESTISIN');
+  assert.ok(p && p.name === p.exchName, 'до ответа — имя биржи');
+  const c = await M.loadCal();  // календарь пришёл раньше алиасов
+  assert.strictEqual(c.rubBig[0].pos, p.id); assert.strictEqual(c.rubBig[0].name, 'Имя хаба');
+  // ячейка таблицы, нарисованная до алиасов, помечена data-pn
+  const html = K.nameCell(p, p.name);
+  assert.ok(html.includes('data-pn="' + p.id + '"'), html);
+  const cellA = { dataset: { pn: String(p.id) }, textContent: p.name, title: '', removeAttribute(k) { this[k] = ''; } };
+  ctx.document.querySelectorAll = s => (s === '[data-pn]' ? [cellA] : []);
+  let nFilter = 0, nAlias = 0; K.onFilter(() => nFilter++); K.onAlias(() => nAlias++);
+  release(); await M.aliasesReady; await new Promise(r => setImmediate(r));
+  assert.strictEqual(nAlias, 1, 'страницы с именами подписаны на alias');
+  assert.strictEqual(nFilter, 0, 'filter по приходу алиасов не рассылается: он перерисовывает тяжёлые страницы целиком');
+  assert.strictEqual(p.name, 'Мой алиас');
+  assert.strictEqual(cellA.textContent, 'Мой алиас'); assert.ok(/биржевое имя: /.test(cellA.title));
+  assert.strictEqual(M.marketCal.rubBig[0].name, 'Мой алиас', 'календарь, пришедший раньше алиасов, показывает алиас');
+  // правка человеком (карточка): как раньше — и alias, и filter
+  K.setAlias('SU000TESTISIN', null);
+  assert.strictEqual(nFilter, 1); assert.strictEqual(nAlias, 2);
+  assert.strictEqual(p.name, p.exchName);
+});
+
+t('ряды истории разных запросов: оси разные — сводятся по дате (KIT.histAxis / KIT.histOn), одна ось — без пересчёта', () => {
+  const { K } = load({});
+  // «истина» — один запрос на обе бумаги: общая ось, цена пустая там, где бумага не торговалась, номинал — последний прогона
+  const T = ['2026-10-01', '2026-10-02', '2026-10-03', '2026-10-05'];
+  const truthA = { price: [100, 101, null, 102], notional: [10, 10, 10, 20] }, truthB = { price: [50, null, 51, 52], notional: [null, null, 5, 5] };
+  // два запроса: ось каждого — даты своих котировок и прогонов (10-01 и 10-05 — прогоны, в обеих осях)
+  const A = { dates: ['2026-10-01', '2026-10-02', '2026-10-05'], price: [100, 101, 102], notional: [10, 10, 20], curves: { 'RUB RUONIA': [1, 1, 2] }, pt: { 2: ['method'] }, runAt: [{ id: 1 }, null, { id: 3 }], fromRuns: true };
+  const B = { dates: ['2026-10-01', '2026-10-03', '2026-10-05'], price: [50, 51, 52], notional: [null, 5, 5], fromRuns: true };
+  const axis = K.histAxis([A, B]);
+  assert.deepStrictEqual(JSON.parse(JSON.stringify(axis)), T);
+  const a = K.histOn(A, axis), b = K.histOn(B, axis);
+  assert.deepStrictEqual(J(a.price), truthA.price); assert.deepStrictEqual(J(a.notional), truthA.notional);
+  assert.deepStrictEqual(J(b.price), truthB.price); assert.deepStrictEqual(J(b.notional), truthB.notional);
+  assert.deepStrictEqual(J(a.curves['RUB RUONIA']), [1, 1, 1, 2], 'ряды «между прогонами — последний» — значение последней своей даты');
+  assert.deepStrictEqual(J(a.pt), { 3: ['method'] }, 'номера точек пометок — на новой оси'); assert.strictEqual(a.fromRuns, true);
+  assert.deepStrictEqual(J(a.runAt), [{ id: 1 }, null, null, { id: 3 }]);
+  assert.strictEqual(a.dates, axis);
+  // одна ось (все ряды одного запроса): сама ось, ряды — те же объекты
+  const shared = ['2026-10-01', '2026-10-02'], X = { dates: shared, price: [1, 2] }, Y = { dates: shared, price: [3, 4] };
+  assert.strictEqual(K.histAxis([X, Y]), shared); assert.strictEqual(K.histOn(Y, shared), Y);
+  // дата до первой своей даты — null (нет ни цены, ни номинала), а не чужая
+  const early = K.histOn({ dates: ['2026-10-05'], price: [7], notional: [9] }, T);
+  assert.deepStrictEqual(J(early.price), [null, null, null, 7]); assert.deepStrictEqual(J(early.notional), [null, null, null, 9]);
+  assert.strictEqual(K.histAxis([]).length, 0);
+});
+
 t('карточка: вся история бумаги — отдельный запрос, ответ запоминается; бумага без неё — null, без повторов', async () => {
   const id = () => (ctx2.M.positions.find(p => p.cpn) || ctx2.M.positions[0]).id;
   const ctx2 = load({ 'history/positions': u => ({ dates: ['2024-01-03', '2026-10-15'], runAt: [null, null], series: { [decodeURIComponent(u.match(/ids=([^&]*)/)[1])]: { price: [90, 99], notional: [1, 1], dv01: [-1, -2], zspr: [10, 11] } } }) });
@@ -213,6 +332,9 @@ t('страницы: C05 и C09 ждут историю рынка, C11 — ис
   assert.ok(/M\.loadHistory\(null, M\.util\.addDays\(M\.asOf, -60\)\)/.test(c03) && /M\.loadHistory\(\[p\.id\], null\)/.test(c03), 'C03: спарклайн — 60 дней, карточка — выбранная бумага');
   const c08 = P('concepts/c08-calendar.html');
   assert.ok(/M\.loadCal\(\)/.test(c08) && /whenFlows\(C\.flows/.test(c08), 'C08: календарь и строки — по ответу');
+  assert.ok(/M\.calStatus/.test(c08) && /K\.onAlias\(render\)/.test(c08), 'C08: сбой отличается от «статика не разобрана»; алиасы подставляются и после календаря');
+  assert.ok(/K\.histAxis/.test(c13) && /K\.histOn/.test(c13), 'C13: ряды разных запросов — по дате');
+  assert.ok(/K\.histOn/.test(c11), 'C11: ряды на общей оси по дате');
 });
 
 (async () => {

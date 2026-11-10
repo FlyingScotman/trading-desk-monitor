@@ -336,6 +336,7 @@
   }
   render();
   K.onFilter(render);
+  K.onAlias(render);  // имена бумаг пришли позже страницы
   K.on('theme', render);
   });
 })();

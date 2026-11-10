@@ -245,6 +245,7 @@
   }
   render();
   K.onFilter(render);
+  K.onAlias(render);  // имена бумаг пришли позже страницы
   K.on('theme', render);
   K.commands([{ label: 'PnL: режим день', run: () => { mode = 'day'; render(); } }, { label: 'PnL: режим MTD', run: () => { mode = 'mtd'; render(); } }]);
 })();

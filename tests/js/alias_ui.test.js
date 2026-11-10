@@ -50,7 +50,8 @@ t('прогон: алиас по ISIN — вместо биржевого име
   const ev = []; K.on('alias', () => ev.push('alias')); K.onFilter(() => ev.push('filter'));
   assert.ok(M.positions.every(p => p.alias === null));
   await ready;
-  assert.deepStrictEqual(ev, ['alias', 'filter'], 'страницы перерисуются один раз, когда пришли алиасы');
+  // по приходу — только alias (имена в таблицах меняет K.patchNames); filter перерисовывал бы тяжёлые страницы целиком (ревью TDM#629)
+  assert.deepStrictEqual(ev, ['alias'], 'алиасы пришли: событие alias, без filter');
   assert.ok(urls.some(u => u.endsWith('../api/v1/instruments/aliases')), urls.join(' '));
   const L = M.positions.filter(p => p.isin === 'SU26242RMFS0');
   assert.ok(L.length >= 1);

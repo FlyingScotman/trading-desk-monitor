@@ -188,6 +188,18 @@ t('прогон: панель рисуется сразу, параллельн�
   assert.strictEqual(asked.filter(u => /derivatives$/.test(u)).length, 1);
 });
 
+t('панель просили несколько раз, пока отчёт не пришёл: одна перерисовка по ответу, а не по одной на каждый вызов (ревью TDM#629)', async () => {
+  const { K, ready } = load({ real: true, mutate: withRates, derivatives: { run_id: 42, state: 'computed', tolerance: null, rows: [] } });
+  const box = el();
+  Object.defineProperty(box, 'innerHTML', { get() { return this._h || ''; }, set(v) { this._h = v; this.children.length = 0; } });
+  let draws = 0; const model = K.ratesCoreModel; K.ratesCoreModel = list => { draws++; return model(list); };
+  K.ratesCorePanel(box); K.ratesCorePanel(box); K.ratesCorePanel(box);  // фильтр шапки перерисовывает панель, пока отчёт грузится
+  assert.strictEqual(draws, 3);
+  await ready(); await new Promise(r => setImmediate(r));
+  assert.strictEqual(draws, 4, 'по ответу — одна перерисовка');
+  assert.ok(!html(box).includes('загружается'));
+});
+
 t('демо: та же форма — предварительная сделка, РЕПО, пропуск и неопубликованный день RUONIA, строки по отчёту', async () => {
   const { M, K } = load();
   const core = M.positions.filter(p => p.ratesCore);
