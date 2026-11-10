@@ -127,7 +127,7 @@ t('#277: «Δ цены за 30д» — по окну спарклайна, пе�
   assert.strictEqual(K.sparkChange(null, 30), null);
   assert.strictEqual(K.sparkChange([null, 99, null, 98.5], 30), -0.5);
   const c03 = P('concepts/c03-blotter.html');
-  assert.ok(c03.includes("val: r => r.price == null ? null : K.sparkChange(H(r.id).price, 30)") && c03.includes("fmt: (v, r) => v == null ? '<span class=\"mut3\">—</span>' : K.spark(H(r.id).price.slice(-30)"), 'C03: то же окно, что у спарклайна');
+  assert.ok(c03.includes("val: r => r.price == null ? null : K.sparkChange(H(r.id).price, 30)") && c03.includes("K.spark(H(r.id).price.slice(-30)") && /fmt: \(v, r\) => v == null \? .*<span class="mut3">—<\/span>/.test(c03), 'C03: то же окно, что у спарклайна');
 });
 
 t('#277: CSV C03 — позиции свёрнутых групп идут в CSV (скрытые строки data-csv-keep)', () => {

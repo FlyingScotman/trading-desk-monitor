@@ -104,7 +104,11 @@ body { display: flex; flex-direction: column; height: 100vh; overflow: hidden; }
   }
 
   // ---------- колонки ----------
+  // история позиций приходит отдельными запросами (TDM#629): для «Цена 30д» — по всем позициям, но только за последние ~2 месяца;
+  // для карточки справа — вся история выбранной бумаги. Пока ответа нет, спарклайн — «…», по ответу таблица рисуется заново
   const hist = {}; const H = id => hist[id] || (hist[id] = M.posHistory(id));
+  let sparkWait = M.source === 'real';
+  const fullAsked = {};
   const evName = { put: 'пут', call: 'колл', mat: 'погаш' };
   // «—» без PnL: причина сервера в подсказке (#31: смена кривой дисконтирования — с кривыми вчера и сегодня)
   const pnlNa = r => '<span class="mut3"' + (K.pnlWhy(r) ? ' title="' + esc('нет PnL: ' + K.pnlWhy(r)) + '"' : '') + '>—</span>';
@@ -136,7 +140,7 @@ body { display: flex; flex-direction: column; height: 100vh; overflow: hidden; }
     // в CSV — изменение цены за 30 дней числом (то же значение, что у сортировки, #277)
     spark: { label: 'Цена 30д', val: r => r.price == null ? null : K.sparkChange(H(r.id).price, 30), title: 'сортировка — по изменению за 30 дней (окно спарклайна)',
       csvHead: 'Δ цены за 30д, % ном.', csvNum: true, csvFmt: v => v == null ? '' : f.n(v, 3),
-      fmt: (v, r) => v == null ? '<span class="mut3">—</span>' : K.spark(H(r.id).price.slice(-30), 70, 16, v >= 0 ? K.css('--pos') : K.css('--neg')) },
+      fmt: (v, r) => v == null ? (sparkWait ? '<span class="mut3" title="история цен загружается">…</span>' : '<span class="mut3">—</span>') : K.spark(H(r.id).price.slice(-30), 70, 16, v >= 0 ? K.css('--pos') : K.css('--neg')) },
     ytm: { label: 'Дох.', num: true, val: r => r.ytm, fmt: v => f.pct(v) },
     // в CSV — число, вид спреда (Z / DM) — своей колонкой «Вид спреда» за ним (#276)
     spread: { label: 'Спред', num: true, val: r => r.zspread, fmt: (v, r) => v == null ? '<span class="mut3">—</span>' : f.bp(v) + ' <span class="mut3">' + (r.spreadLabel || '') + '</span>', title: 'Z-спред к RUONIA (фикс) / дисконт-маржа (флоатер), б.п.',
@@ -386,6 +390,10 @@ body { display: flex; flex-direction: column; height: 100vh; overflow: hidden; }
       if (!items.some(x => x[0] === hmode)) hmode = items[0][0];
       K.seg($('.hseg'), items, hmode, v => { hmode = v; hChart.redraw(); });
     }
+    if (M.source === 'real' && !fullAsked[p.id]) {  // вся история выбранной бумаги — по ответу график карточки рисуется заново
+      fullAsked[p.id] = true;
+      M.loadHistory([p.id], null).then(() => { delete hist[p.id]; if (cur && cur.id === p.id) hChart.redraw(); });
+    }
     hChart.redraw(); rChart.redraw();
     $('.cd-rt').innerHTML = K.curveRiskTable(p);
     K.cardTableTools(card, p);  // CSV и ширина таблиц карточки: ноги сделки, риск по кривым (#184)
@@ -421,6 +429,10 @@ body { display: flex; flex-direction: column; height: 100vh; overflow: hidden; }
   K.on('theme', render);
   render();
   if (new URL(location.href).searchParams.get('pos') === st.sel && st.sel) select(st.sel, true);  // позиция по ссылке — в виду
+  if (sparkWait) {
+    const done = () => { sparkWait = false; Object.keys(hist).forEach(k => delete hist[k]); render(); };
+    M.loadHistory(null, M.util.addDays(M.asOf, -60)).then(done, done);
+  }
 })();
 </script>
 </body>

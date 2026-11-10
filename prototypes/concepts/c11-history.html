@@ -51,10 +51,27 @@ tr.row.sel td { background: var(--accent-bg); }
   const M = MOCK, K = KIT, f = K.f, esc = K.esc, css = K.css;
   K.top({ title: 'C11 · Динамика', tag: 'как менялись риск и позиции' });
 
+  // ---------- загрузка истории (TDM#629) ----------
+  // Страница сразу показывает каркас, история всех позиций приходит отдельным запросом и только за нужный период: окно
+  // выбранного периода (st.range, рабочих дней; в календарные дни — с запасом) и даты сравнения; «всё» — вся история. Период
+  // шире загруженного окна — страница открывается заново (выбор сохранён) и грузит больше. Окно считается от даты прогона.
+  const SAVED = (() => { try { return JSON.parse(localStorage.getItem('c11-state') || '{}') || {}; } catch (e) { return {}; } })();
+  const WIN = (() => {
+    if (!(M.source === 'real' && M.asOf)) return { from: null, full: true };
+    const days = Math.min(+SAVED.range || 63, 100000);
+    if (days >= 100000) return { from: null, full: true };
+    let from = M.util.addDays(M.asOf, -Math.ceil(days * 1.5) - 10);
+    if (SAVED.cmpDate && SAVED.cmpDate < from) from = SAVED.cmpDate;  // дата сравнения раньше окна периода
+    return { from, full: false };
+  })();
+  K.whenData(() => M.loadHistory(null, WIN.from), function () {
+
   // ---------- история позиций (учитывает фильтр книг) ----------
   // на прогонах из базы риск, MV и номинал каждой даты — из прогона этой даты (между прогонами — последний);
   // в демо прогонов по датам нет: риск восстановлен как номинал даты × сегодняшние чувствительности
   const H = {}; M.positions.forEach(p => H[p.id] = M.posHistory(p.id));
+  // окно покрыло всю историю (ось начинается позже начала окна): шире загружать нечего — тогда и «всё» не перезагружает страницу
+  const AX0 = (H[M.positions[0].id].dates || [])[0], FULL = WIN.full || !AX0 || AX0 > M.util.addDays(WIN.from, 7);
   const REAL = M.positions.length > 0 && M.positions.every(p => H[p.id].fromRuns);
   // ось — с первой даты, на которую известна хоть одна позиция (на прогоне из базы раньше первого прогона позиций нет;
   // цены рынка там есть, но без номинала история деска была бы нулём, а не «неизвестно»)
@@ -80,9 +97,14 @@ tr.row.sel td { background: var(--accent-bg); }
     : 'история риска и объёмов восстановлена из позиций (номиналы × сегодняшние чувствительности) — работает с фильтром книг';
   const RANGES = [['1M', 21], ['3M', 63], ['6M', 126], ['1Y', 250], ['всё', 100000]];
   const st = { range: 63, cmp: LAST - 5, risk: 'factors', mv: 'type', pnl: 'factors', pos: null, pm: null, top: 'dv01' };
-  try { Object.assign(st, JSON.parse(localStorage.getItem('c11-state') || '{}')); } catch (e) { }
+  Object.assign(st, SAVED);
+  // дата сравнения хранится датой (индекс на оси зависит от окна загрузки); прежний индекс без даты — как в первый раз
+  const cmpAt = st.cmpDate ? DATES.indexOf(st.cmpDate) : -1;
+  st.cmp = cmpAt >= 0 ? cmpAt : LAST - 5;
   st.cmp = Math.min(LAST - 1, Math.max(0, st.cmp));
-  const save = () => { try { localStorage.setItem('c11-state', JSON.stringify(st)); } catch (e) { } };
+  const save = () => { st.cmpDate = DATES[st.cmp] || null; try { localStorage.setItem('c11-state', JSON.stringify(st)); } catch (e) { } };
+  // период шире загруженного окна: выбор уже сохранён — страница открывается заново и грузит больше
+  const setRange = n => { st.range = n; if (!FULL && n > N) { save(); location.reload(); return false; } return true; };
   const from = () => Math.max(0, N - st.range);
   const idxs = () => { const a = []; for (let i = from(); i < N; i++) a.push(i); return a; };
   const agg = (L, fn) => idxs().map(i => L.reduce((s, p) => s + fn(p, i), 0));
@@ -92,7 +114,7 @@ tr.row.sel td { background: var(--accent-bg); }
   const ctl = document.getElementById('ctl');
   function drawCtl() {
     ctl.innerHTML = '<span class="lbl">Период</span><span class="rg"></span><span style="width:12px"></span><span class="lbl">Сравнить с</span><select id="cmpSel"></select><span class="qk"></span><span style="flex:1"></span><span class="k-note">' + SRC_NOTE + '</span>';
-    K.seg(ctl.querySelector('.rg'), RANGES.map(r => [String(r[1]), r[0]]), String(st.range), v => { st.range = +v; if (st.cmp < from()) st.cmp = from(); save(); drawAll(); });
+    K.seg(ctl.querySelector('.rg'), RANGES.map(r => [String(r[1]), r[0]]), String(st.range), v => { if (!setRange(+v)) return; if (st.cmp < from()) st.cmp = from(); save(); drawAll(); });
     const sel = ctl.querySelector('#cmpSel');
     for (let i = LAST - 1; i >= 0; i--) { const o = document.createElement('option'); o.value = i; o.textContent = f.date(DATES[i]) + ' · ' + (LAST - i) + ' р.д. назад'; if (i === st.cmp) o.selected = true; sel.appendChild(o); }
     sel.onchange = () => setCmp(+sel.value);
@@ -296,7 +318,10 @@ tr.row.sel td { background: var(--accent-bg); }
     const inp = bd.querySelector('input');
     inp.onchange = () => { const q = K.list().find(z => z.name === inp.value) || K.list().find(z => z.searchText.includes(inp.value.toLowerCase())); if (q) { st.pos = q.id; save(); drawPos(); if (topTbl) topTbl.redraw(); } };
     // цена, доходность, спред — вся история бумаги (API истории хаба, с 2024), не только дни прогонов
-    const DH = isB && ['price', 'ytm', 'spr'].includes(st.pm) ? M.posHistory(p.id, { deep: true }) : null;
+    // (приходит отдельным запросом: график рисуется сразу по истории прогонов, по ответу — заново; TDM#629)
+    const wantDeep = isB && ['price', 'ytm', 'spr'].includes(st.pm);
+    if (wantDeep && M.hasDeep && !M.hasDeep(p.id)) M.loadDeep(p.id).then(d => { if (d && st.pos === p.id && P.isConnected) drawPos(); });
+    const DH = wantDeep ? M.posHistory(p.id, { deep: true }) : null;
     if (DH && DH.deep) {
       const n0 = Math.max(0, DH.dates.length - st.range), xs = DH.dates.slice(n0), c = K.issuerColor(p.issuer);
       const cut = a => (a || []).slice(n0), mk = DH.dates.indexOf(DATES[st.cmp]) - n0;
@@ -333,7 +358,8 @@ tr.row.sel td { background: var(--accent-bg); }
   drawCtl(); drawRisk(); drawMv(); drawCmp(); drawPnl(); drawTop(); drawPos();
   K.onFilter(() => { chRisk.redraw(); chMv.redraw(); drawCmp(); topTbl.redraw(); drawPos(); });
   K.on('theme', () => { drawCmp(); });
-  K.commands([['1M', 21], ['3M', 63], ['6M', 126], ['1Y', 250]].map(([l, n]) => ({ label: 'Период: ' + l, run: () => { st.range = n; save(); drawAll(); } })));
+  K.commands([['1M', 21], ['3M', 63], ['6M', 126], ['1Y', 250]].map(([l, n]) => ({ label: 'Период: ' + l, run: () => { if (!setRange(n)) return; save(); drawAll(); } })));
+  });
 })();
 </script>
 </body>

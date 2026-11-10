@@ -74,8 +74,10 @@
 <script>
 (function () {
   const M = MOCK, K = KIT, f = K.f, esc = K.esc;
-  const MH = M.marketHistory ? M.marketHistory() : null;  // история рынка (прогон из базы): фиксинги, курсы, кривые по датам
+  let MH = null;  // история рынка (прогон из базы): фиксинги, курсы, кривые по датам; приходит отдельным запросом (TDM#629)
   K.top({ title: 'C05 · Утренний брифинг', tag: 'читается сверху вниз за 2 минуты' });
+  K.whenData(() => M.loadMarket && M.loadMarket(), function () {
+  MH = M.marketHistory ? M.marketHistory() : null;
   const root = document.getElementById('brief');
   const SECS = [['s1', 'Итог'], ['s2', 'Что изменилось'], ['s3', 'Главные вклады'], ['s4', '2 недели'], ['s5', 'Внимание'], ['s6', 'Рынок']];
   K.commands(SECS.map(([id, t]) => ({ label: 'Раздел: ' + t, run: () => document.getElementById(id).scrollIntoView({ behavior: 'smooth' }) })));
@@ -335,6 +337,7 @@
   render();
   K.onFilter(render);
   K.on('theme', render);
+  });
 })();
 </script>
 </body>

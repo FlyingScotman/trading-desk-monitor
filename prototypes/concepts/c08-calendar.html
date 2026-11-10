@@ -185,6 +185,9 @@ table.mini td.n, table.mini th.n { text-align: right; font-variant-numeric: tabu
     scrim.onclick = closeSheet; d.querySelector('.close').onclick = closeSheet;
     return d.querySelector('.bd');
   }
+  // строки за ячейкой приходят отдельным запросом (TDM#629): лист открывается сразу, строки — по ответу (в демо flows — сразу объект)
+  const whenFlows = (r, fn) => r && typeof r.then === 'function' ? r.then(fn) : fn(r);
+  const setSub = (bd, html) => { const x = bd.parentElement && bd.parentElement.querySelector('.st'); if (x) x.innerHTML = html; };
   function closeSheet() { if (sheetEl) { sheetEl.scrim.remove(); sheetEl.d.remove(); sheetEl = null; } }
   document.addEventListener('keydown', e => { if (e.key === 'Escape' && sheetEl && document.querySelectorAll('.k-drawer').length === 1) closeSheet(); }, true);
 
@@ -283,10 +286,14 @@ table.mini td.n, table.mini th.n { text-align: right; font-variant-numeric: tabu
     const kinds = KINDS.filter(k => ev.some(x => x.kind === k));
     const from = U.addDays(M.asOf, 1);
     const open = (title, q) => {
-      const j = C.flows(Object.assign({ market: 'fx', ccy, from, to: e }, q));
-      const bd = sheet(esc(title), j.count + ' событий · ' + fmt(j.amount) + ' ' + unit + (j.count > j.rows.length ? ' · показаны крупнейшие ' + j.rows.length : ''));
-      bd.innerHTML = flowsTable(j.rows, { fmt: v => f.mn(v, 1), unit });
-      K.tableToolsAll(bd);
+      const bd = sheet(esc(title), '');
+      bd.innerHTML = K.loadingNote('Загрузка строк…');
+      whenFlows(C.flows(Object.assign({ market: 'fx', ccy, from, to: e }, q)), j => {
+        if (!bd.isConnected) return;
+        setSub(bd, j.count + ' событий · ' + fmt(j.amount) + ' ' + unit + (j.count > j.rows.length ? ' · показаны крупнейшие ' + j.rows.length : ''));
+        bd.innerHTML = flowsTable(j.rows, { fmt: v => f.mn(v, 1), unit });
+        K.tableToolsAll(bd);
+      });
     };
     const perCcy = ccys.map(c => { const a = C.fx.filter(r => r.ccy === c && inH(r.date)); return { c, cpn: sumBy(a.filter(r => r.kind === 'cpn'), r => r.amount), red: sumBy(a.filter(r => r.kind !== 'cpn'), r => r.amount) }; });
     const nB = M.universeFx.filter(b => b.ccy === ccy);
@@ -352,20 +359,24 @@ table.mini td.n, table.mini th.n { text-align: right; font-variant-numeric: tabu
     const whatLabel = { red: 'Погашения, амортизации и оферты', cpn: 'Купоны', all: 'Все выплаты' }[st.rubWhat];
     const types = C.types.map(t => t.id).filter(t => what.some(x => x.type === t));
     const open = (title, q) => {
-      const j = C.flows(Object.assign({ market: 'rub', from, to: e, big: st.big }, q));
-      const bd = sheet(esc(title), j.count + ' событий · ' + fmt(j.amount) + ' ' + unit + (st.big ? ' · только крупные' : '') + (j.count > j.rows.length ? ' · показаны крупнейшие ' + j.rows.length : ''));
-      // по типу — из агрегатов по дням (все выплаты), а не из показанных строк; с фильтром по сектору — из строк
-      const g = {}, KS = { red: ['amort', 'mat', 'put', 'call'], redemption: ['amort', 'mat'], offer: ['put', 'call'] };
-      const ok = r => r.date >= (q.from || from) && r.date <= (q.to || e) && (!q.type || r.type === q.type) && (!q.kind || (KS[q.kind] ? KS[q.kind].includes(r.kind) : r.kind === q.kind));
-      const add = (type, kind, v, n) => { const o = g[type] = g[type] || { n: 0, cpn: 0, red: 0 }; o.n += n; o[kind === 'cpn' ? 'cpn' : 'red'] += v || 0; };
-      const fromRows = !!(q.sector || q.secid || q.issuer);
-      if (fromRows) j.rows.forEach(r => add(r.type, r.kind, r.amount, 1));
-      else C.rub.filter(ok).forEach(r => add(r.type, r.kind, st.big ? r.bigAmount : r.amount, st.big ? r.bigCount : r.count));
-      const mx = Math.max(1, ...Object.values(g).map(x => x.cpn + x.red));
-      bd.innerHTML = '<div class="k-sec">По типу' + (fromRows && j.count > j.rows.length ? ' (крупнейшие ' + j.rows.length + ')' : '') + '</div><table class="mini" data-vk="c08-sheet-bytype" data-title="Выплаты по типу"><thead><tr><th>Тип</th><th class="n">Событий</th><th class="n">Купоны</th><th class="n">Погаш. + оферты</th><th style="width:30%"></th></tr></thead><tbody>' +
-        C.types.filter(t => g[t.id]).map(t => { const x = g[t.id]; return '<tr><td><b style="color:' + TYPE_C[t.id] + '">■</b> ' + esc(t.label) + '</td><td class="n mut">' + x.n + '</td><td class="n">' + fmt(x.cpn) + '</td><td class="n">' + fmt(x.red) + '</td><td>' + K.bar(x.cpn + x.red, mx, true) + '</td></tr>'; }).join('') + '</tbody></table>' +
-        '<div class="k-sec">Выпуски</div>' + flowsTable(j.rows, { fmt: v => f.bn(v, 2), unit, type: true });
-      K.tableToolsAll(bd);
+      const bd = sheet(esc(title), '');
+      bd.innerHTML = K.loadingNote('Загрузка строк…');
+      whenFlows(C.flows(Object.assign({ market: 'rub', from, to: e, big: st.big }, q)), j => {
+        if (!bd.isConnected) return;
+        setSub(bd, j.count + ' событий · ' + fmt(j.amount) + ' ' + unit + (st.big ? ' · только крупные' : '') + (j.count > j.rows.length ? ' · показаны крупнейшие ' + j.rows.length : ''));
+        // по типу — из агрегатов по дням (все выплаты), а не из показанных строк; с фильтром по сектору — из строк
+        const g = {}, KS = { red: ['amort', 'mat', 'put', 'call'], redemption: ['amort', 'mat'], offer: ['put', 'call'] };
+        const ok = r => r.date >= (q.from || from) && r.date <= (q.to || e) && (!q.type || r.type === q.type) && (!q.kind || (KS[q.kind] ? KS[q.kind].includes(r.kind) : r.kind === q.kind));
+        const add = (type, kind, v, n) => { const o = g[type] = g[type] || { n: 0, cpn: 0, red: 0 }; o.n += n; o[kind === 'cpn' ? 'cpn' : 'red'] += v || 0; };
+        const fromRows = !!(q.sector || q.secid || q.issuer);
+        if (fromRows) j.rows.forEach(r => add(r.type, r.kind, r.amount, 1));
+        else C.rub.filter(ok).forEach(r => add(r.type, r.kind, st.big ? r.bigAmount : r.amount, st.big ? r.bigCount : r.count));
+        const mx = Math.max(1, ...Object.values(g).map(x => x.cpn + x.red));
+        bd.innerHTML = '<div class="k-sec">По типу' + (fromRows && j.count > j.rows.length ? ' (крупнейшие ' + j.rows.length + ')' : '') + '</div><table class="mini" data-vk="c08-sheet-bytype" data-title="Выплаты по типу"><thead><tr><th>Тип</th><th class="n">Событий</th><th class="n">Купоны</th><th class="n">Погаш. + оферты</th><th style="width:30%"></th></tr></thead><tbody>' +
+          C.types.filter(t => g[t.id]).map(t => { const x = g[t.id]; return '<tr><td><b style="color:' + TYPE_C[t.id] + '">■</b> ' + esc(t.label) + '</td><td class="n mut">' + x.n + '</td><td class="n">' + fmt(x.cpn) + '</td><td class="n">' + fmt(x.red) + '</td><td>' + K.bar(x.cpn + x.red, mx, true) + '</td></tr>'; }).join('') + '</tbody></table>' +
+          '<div class="k-sec">Выпуски</div>' + flowsTable(j.rows, { fmt: v => f.bn(v, 2), unit, type: true });
+        K.tableToolsAll(bd);
+      });
     };
     const kp = (label, a, sub, q) => K.kpi(label, a.length ? '<span class="dr" data-q=\'' + JSON.stringify(q) + '\' data-t="' + esc(label.replace(/<[^>]+>/g, '').replace('● ', '').replace('■ ', '')) + '">' + fmt(sumBy(a, x => x.val)) + '</span> <span class="mut" style="font-size:11px">bn ₽</span>' : '<span class="mut3">—</span>', sub);
     const red1 = t => red.filter(x => x.type === t);
@@ -435,9 +446,19 @@ table.mini td.n, table.mini th.n { text-align: right; font-variant-numeric: tabu
     view.innerHTML = ''; kpis.innerHTML = '';
     renderBar();
     if (st.mode === 'pf') renderPf(view, kpis);
-    else if (st.mode === 'fx') renderFx(view, kpis);
-    else renderRub(view, kpis);
+    else {
+      // календарь рынка приходит отдельным запросом (TDM#629): пока его нет — «загрузка», по ответу — заново
+      if (!M.marketCal && !calAsked && !calDone && M.loadCal && M.calLoading) {
+        calAsked = true;
+        view.innerHTML = K.loadingNote('Загрузка календаря рынка…');
+        M.loadCal().then(() => { calAsked = false; calDone = true; if (st.mode !== 'pf') render(); });
+        return;
+      }
+      if (!M.marketCal && calAsked) { view.innerHTML = K.loadingNote('Загрузка календаря рынка…'); return; }
+      if (st.mode === 'fx') renderFx(view, kpis); else renderRub(view, kpis);
+    }
   }
+  let calAsked = false, calDone = false;
   K.onFilter(() => { if (st.mode === 'pf') render(); });
   K.on('numfmt', () => { if (st.mode !== 'pf') render(); });  // рынок (fx, rub) от фильтра не зависит (#153)
   K.commands([['pf', 'Наш портфель'], ['fx', 'Валютные бонды РФ'], ['rub', 'Рублёвый рынок']].map(([k, t]) => ({ label: 'Календарь: ' + t, run: () => { st.mode = k; save(); render(); } })));

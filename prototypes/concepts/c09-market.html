@@ -74,10 +74,12 @@ table.sp td:first-child, table.sp th:first-child { text-align: left; }
 (function () {
   const M = MOCK, K = KIT, f = K.f, esc = K.esc;
   // история рынка (прогон из базы: /api/v1/history/market; демо — нет): изменения выпусков за периоды, фиксинги, кривые по датам
-  const MH = M.marketHistory ? M.marketHistory() : null;
+  let MH = null;  // приходит отдельным запросом (TDM#629)
   const PER = [['1D', 'день'], ['1W', 'неделя'], ['1M', 'месяц'], ['3M', '3 мес'], ['YTD', 'с начала года']];
   const perIdx = k => PER.findIndex(x => x[0] === k);
   K.top({ title: 'C09 · Рынок', tag: 'где что торгуется: карта доходностей, кривые, спреды' });
+  K.whenData(() => M.loadMarket && M.loadMarket(), function () {
+  MH = M.marketHistory ? M.marketHistory() : null;
 
   // ---------- полоса индексов ----------
   const ir = M.util.rng('idxchg');
@@ -331,6 +333,7 @@ table.sp td:first-child, table.sp th:first-child { text-align: left; }
     { label: 'Карта: только наши позиции', run: () => { ours.checked = S.ours = true; save(); ym.redraw(); } },
     { label: 'Карта: весь рынок', run: () => { ours.checked = S.ours = false; save(); ym.redraw(); } },
   ]);
+  });
 })();
 </script>
 </body>
