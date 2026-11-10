@@ -15,6 +15,7 @@ from __future__ import annotations
 import hashlib
 import json
 import math
+import time
 from collections import Counter
 from collections.abc import Iterable
 from dataclasses import dataclass, field
@@ -754,6 +755,112 @@ def prune_intraday(con: psycopg.Connection, business_date: date, keep_run_id: in
                 con.execute("DELETE FROM " + table + " WHERE run_id = ANY(%s)", (ids,))
             con.execute("DELETE FROM run WHERE run_id = ANY(%s)", (ids,))
     return ids
+
+
+PRUNE_LOCK = 0x7DE5C0DE
+"""The advisory lock of ``prune_superseded`` (a second pruner, the CLI beside the autopilot, finds the first busy)."""
+PRUNE_BATCH = 5
+"""Runs one transaction of ``prune_superseded`` deletes: an interrupted prune loses at most this batch."""
+PRUNE_MIN_DAYS = 1
+"""The least ``keep_days`` ``prune_superseded`` accepts: a run replaced today can still be what a page shows."""
+
+_PRUNABLE = (
+    "SELECT r.run_id, r.business_date, r.cut_type FROM run r"
+    " WHERE r.run_type = 'EOD' AND r.status = 'complete' AND r.cut_type IN ('eod_final', 'eod_preliminary')"
+    f" AND r.run_id NOT IN ({CURRENT_RUNS})"  # the run a date shows is never it (nor, so, the default run)
+    # replaced by a newer complete EOD run of the date (a final one replaces any, a preliminary one a preliminary),
+    # and that at least ``days`` days ago: the replaced run stays that long for a look back at the change
+    " AND EXISTS (SELECT 1 FROM run n WHERE n.business_date = r.business_date AND n.run_type = 'EOD'"
+    "  AND n.status = 'complete' AND n.run_id > r.run_id AND n.cut_type IN ('eod_final', 'eod_preliminary')"
+    "  AND (n.cut_type = 'eod_final' OR r.cut_type = 'eod_preliminary')"
+    "  AND n.completed_at < now() - make_interval(days => %(days)s))"
+    # a scenario job on the run (its result is kept for ever) holds it
+    " AND NOT EXISTS (SELECT 1 FROM scenario_job j WHERE j.base_run_id = r.run_id)"
+    " ORDER BY r.business_date, r.run_id")
+
+
+def superseded_runs(con: psycopg.Connection, keep_days: int, limit: int | None = None) -> list[tuple[int, date, str]]:
+    """The runs ``prune_superseded`` may delete, oldest date first: (run_id, business_date, cut_type). Each was
+    replaced by a newer complete EOD run of its date at least ``keep_days`` days ago, is not the run its date shows
+    (``CURRENT_RUNS``) and has no scenario job."""
+    return [(r, d, c) for r, d, c in con.execute(
+        _PRUNABLE + (" LIMIT %(limit)s" if limit else ""), {"days": max(keep_days, PRUNE_MIN_DAYS), "limit": limit})]
+
+
+def _share_bytes(con: psycopg.Connection, ids: list[int]) -> int:
+    """About how many bytes the rows of runs ``ids`` take on disk: per table (with its indexes and TOAST) the table's
+    size by the share of the rows."""
+    total = 0
+    for table in ("run", *RUN_ROW_TABLES):
+        n_all, n = con.execute(
+            "SELECT count(*), count(*) FILTER (WHERE run_id = ANY(%s)) FROM " + table, (ids,)).fetchone()
+        if n_all:
+            total += con.execute("SELECT pg_total_relation_size(%s::regclass)", (table,)).fetchone()[0] * n // n_all
+    return total
+
+
+def prune_superseded(con: psycopg.Connection, keep_days: int, *, limit: int | None = None,
+                     budget_s: float | None = None, dry_run: bool = False) -> dict[str, Any]:
+    """Delete the superseded EOD runs (``superseded_runs``) with their rows (TDM#634): the history of replaced
+    calculations is not read, and a date's two passes leave a run each. The one way the runs, immutable otherwise
+    (ADR-006), are deleted besides ``prune_intraday``: the transaction says ``desk.prune_superseded`` and migration
+    0024's triggers allow only this kind of run (never the newest of a date, never one with a scenario job).
+    ``limit``: at most this many runs; ``budget_s``: stop before the next batch once this many seconds passed;
+    ``dry_run``: only the list. A batch of ``PRUNE_BATCH`` runs is one transaction: an interrupted prune keeps whole
+    runs, and runs again where it stopped (nothing is deleted twice; a second call finds nothing). Returns
+    {runs: [ids], dates: [first, last] or None, bytes: about what the rows took, busy: another prune runs,
+    left: runs still prunable after this call}. The space is the tables' to reuse once ``vacuum_runs`` ran; the
+    files shrink with ``compact_runs``."""
+    t0 = time.monotonic()
+    out: dict[str, Any] = {"runs": [], "dates": None, "bytes": 0, "busy": False, "left": 0}
+    todo = superseded_runs(con, keep_days, limit)
+    if dry_run:
+        ids = [r for r, _, _ in todo]
+        return {**out, "runs": ids, "dates": [str(todo[0][1]), str(todo[-1][1])] if todo else None,
+                "bytes": _share_bytes(con, ids) if ids else 0}
+    dates: list[date] = []
+    for i in range(0, len(todo), PRUNE_BATCH):
+        if budget_s is not None and out["runs"] and time.monotonic() - t0 >= budget_s:
+            break
+        batch = todo[i:i + PRUNE_BATCH]
+        with con.transaction():
+            if not con.execute("SELECT pg_try_advisory_xact_lock(%s)", (PRUNE_LOCK,)).fetchone()[0]:
+                out["busy"] = True
+                break
+            con.execute("SET LOCAL desk.prune_superseded = 'on'")
+            ids = [r for r, _, _ in batch]
+            out["bytes"] += _share_bytes(con, ids)
+            for table in RUN_ROW_TABLES:
+                con.execute("DELETE FROM " + table + " WHERE run_id = ANY(%s)", (ids,))
+            con.execute("DELETE FROM run WHERE run_id = ANY(%s)", (ids,))
+        out["runs"] += ids
+        dates += [d for _, d, _ in batch]
+    out["dates"] = [str(min(dates)), str(max(dates))] if dates else None
+    out["left"] = len(superseded_runs(con, keep_days)) if todo else 0
+    return out
+
+
+def vacuum_runs(con: psycopg.Connection) -> list[str]:
+    """``VACUUM`` of the run tables: the space the deleted runs took goes back to the tables for the next runs (the
+    files do not shrink: ``compact_runs``). Takes no lock that stops reads or writes; needs a connection in
+    autocommit (``connect``). Returns the tables."""
+    tables = [*RUN_ROW_TABLES, "run"]
+    for table in tables:
+        con.execute("VACUUM " + table)
+    return tables
+
+
+def compact_runs(con: psycopg.Connection) -> dict[str, int]:
+    """``VACUUM FULL`` of the run tables: the files shrink to what the runs left take and the disk gets the rest
+    back. Rewrites each table under an exclusive lock, so the monitor cannot read the runs meanwhile (minutes with a
+    year of runs), and needs free disk for the largest table's copy: run by the owner's choice, never by the
+    autopilot. Needs a connection in autocommit. Returns the bytes each table freed (with its indexes and TOAST)."""
+    freed = {}
+    for table in ("run_position", "run_core_result", "run_reference", "run_log", "model_spread", "run_summary", "run"):
+        before = con.execute("SELECT pg_total_relation_size(%s::regclass)", (table,)).fetchone()[0]
+        con.execute("VACUUM FULL " + table)
+        freed[table] = before - con.execute("SELECT pg_total_relation_size(%s::regclass)", (table,)).fetchone()[0]
+    return freed
 
 
 def default_runs(con: psycopg.Connection, since: date) -> dict[date, dict]:

@@ -111,6 +111,7 @@ def _effective(st: Settings) -> dict[str, Any]:
         "history_days": st.history_days,
         "history_bonds_from": st.history_bonds_from.isoformat(), "history_rates_from": st.history_rates_from.isoformat(),
         "backfill": st.backfill, "backfill_from": st.backfill_from, "backfill_budget_s": st.backfill_budget_s,
+        "prune_superseded": st.prune_superseded, "prune_superseded_days": st.prune_superseded_days,
         "logs_dir": str(st.logs_dir), "update_dir": str(st.update_dir) if st.update_dir else None,
     }
 

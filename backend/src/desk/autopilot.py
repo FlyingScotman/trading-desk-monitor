@@ -104,7 +104,13 @@ every ``inbox_poll_seconds`` and on ``POST /api/v1/autopilot/run``):
    without the second derivatives; once every date of the window has its run (the first pass went through all of its
    dates), what is left of the cycle's budget makes the dates again with them, the newest first
    (``backfill.run_second``), and the cycles after it go on until none lacks them.
-8. **status** (``status()``, the shape of ``GET /api/v1/autopilot/status``). While a cycle runs, ``message`` and
+8. **prune** (setting ``prune_superseded``, on; ``prune_superseded_days``, 7; TDM#634): the runs of a date that a newer run
+   replaced (the history's first pass, an older program version, a corrected report) are deleted once the replacement
+   is that old, 50 runs and 60 seconds a cycle at most (``store.prune_superseded``), only in a quiet cycle (no run
+   made, the inbox not draining), last; the step's detail says how many runs and about how many MB, and a prune of
+   32 MB or more is followed by ``VACUUM`` of the run tables. A date keeps its newest run; a run with a scenario job
+   stays.
+9. **status** (``status()``, the shape of ``GET /api/v1/autopilot/status``). While a cycle runs, ``message`` and
    ``progress`` ({"step": "sync"|"scan"|"eod"|"intraday"|"history"|"backfill", "done": int, "total": int|null, "detail": str})
    follow it live: hub dates fetched of those to fetch, report files done of those offered, EOD dates run of those
    to run, history dates loaded of those to load. ``latest_run`` is the newest run shown (``store.CURRENT_RUNS``:
@@ -155,6 +161,9 @@ log = logging.getLogger("desk.autopilot")
 WINDOW_DAYS = 14        # calendar days back from today that the EOD runs are kept current for (~10 business days)
 MAX_EOD_DATES = 10
 RECHECK_S = 3600.0      # cached dates are asked of the hub again this often (corrections)
+PRUNE_RUNS = 50         # replaced runs one cycle's prune step deletes at most (TDM#634); ~7 MB each with 2000 positions
+PRUNE_BUDGET_S = 60.0   # ... and it starts no further batch after this many seconds
+PRUNE_VACUUM_BYTES = 32 * 1_048_576   # a prune that freed this much is followed by VACUUM of the run tables
 MAX_HUB_DATES = 400     # how far back the hub's date list is read at most
 SYNC_EXTRA = 3          # hub dates per cycle beyond autopilot_sync_last; the rest wait for the next cycle
 MISSING_TTL_S = 6 * 3600.0  # a date the hub has no snapshot for is not asked again for this long (per process)
@@ -496,6 +505,8 @@ class Autopilot:
                 if getattr(settings, "backfill", True):
                     steps.append(self._guard("backfill", lambda: self._backfill(settings, con, url, hub, ran)))
                     self._last_backfill = dict(steps[-1])  # TDM#587: shown between the cycles too
+                if getattr(settings, "prune_superseded", True):
+                    steps.append(self._guard("prune", lambda: self._prune(settings, con, ran)))
                 try:
                     latest = latest_run(con)
                 except psycopg.Error:
@@ -1048,6 +1059,32 @@ class Autopilot:
                     parts.append(f"{res2['left']} dates of the second derivatives in the next cycles")
         parts.append(span)
         return ("error" if (res and res["failed"]) or failed2 else "ok"), "; ".join(parts)
+
+    def _prune(self, settings: Settings, con: psycopg.Connection, ran: list[str]) -> tuple[str, str]:
+        """The prune step (TDM#634, ``store.prune_superseded``): the runs a newer run of their date replaced, once the
+        replacement is ``prune_superseded_days`` old, deleted in batches (``PRUNE_RUNS`` at most, ``PRUNE_BUDGET_S``
+        seconds) after the other steps of a quiet cycle: one that made no run and is not draining the inbox, so
+        the calculations of the window never wait for it. The step's detail is the journal line: how many runs, how
+        much the rows took; ``VACUUM`` of the run tables after a big enough batch gives the space back to the tables."""
+        if ran:
+            return "skipped", "a cycle that made runs: the clean-up waits for a quiet one"
+        if self._inbox_waiting:
+            return "skipped", "after the inbox backlog"
+        res = store.prune_superseded(con, int(settings.prune_superseded_days), limit=PRUNE_RUNS, budget_s=PRUNE_BUDGET_S)
+        if res["busy"] and not res["runs"]:
+            return "skipped", "another clean-up of the runs is running"
+        if not res["runs"]:
+            return "ok", "no replaced runs to delete"
+        mb = res["bytes"] / 1_048_576
+        text = (f"удалено {len(res['runs'])} заменённых прогонов ({res['dates'][0]}..{res['dates'][1]}), "
+                f"освобождено ~{mb:,.0f} МБ")
+        if res["bytes"] >= PRUNE_VACUUM_BYTES:
+            t0 = time.monotonic()
+            store.vacuum_runs(con)
+            text += f"; место возвращено таблицам ({time.monotonic() - t0:.0f} с)"
+        if res["left"]:
+            text += f"; ещё {res['left']} в следующих циклах"
+        return "ok", text
 
     def _scan(self, settings: Settings, con: psycopg.Connection) -> tuple[str, str]:
         from .inbox import scan
