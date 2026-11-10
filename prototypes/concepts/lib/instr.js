@@ -103,8 +103,13 @@
     if (p.accrualOnly || !I.RISK_KINDS.has(kind || I.kindOf(p))) return null;  // HTM по начислению — без риска по правилу
     const any = Object.values(p.dv01ByCurve || {}).some(v => v) || p.cs01 || p.basis01 || p.ofzSpr01;
     if (any) return null;
+    // #616: причина точнее «по отчёту» (extra.risk_missing прогона): нет кривой или курса валюты, NDF без условий сделки
+    const rm = p.riskMissing;
+    if (rm && rm.reason) return rm.reason + (rm.ccy ? ':' + rm.ccy : '');
     return p.quality === 'reported_value' ? 'reported_no_risk' : 'no_risk';
   };
+  // слова причины: I.MISSING_TEXT, иначе текст прогона (extra.risk_missing.text, api/concepts.missing_text)
+  I.missingText = x => I.MISSING_TEXT[x.why] || (x.p && x.p.riskMissing && x.p.riskMissing.text) || x.why;
   // ---------- отнесение мер позиции к валюте «по ногам» ----------
   // Одно правило для всех мониторов: таблица «валюта × тип», шапка (DV01 и ОВП по валютам), блоки валют кокпита,
   // ОВП C06, карточка позиции. DV01 кривой — в валюте кривой (у кривой валюта — своя: b3f3643), FX-дельта — по ключам
@@ -271,7 +276,7 @@
       const fmtOf = c => ms.what === 'dv' ? v => f.n(v / 1e3, dvD(c)) : ms.what === 'mm' ? v => f.mn(v, 1) : v => f.n(v, 0);
       const unitTxt = c => ms.what === 'dv' ? 'тыс ' + c + '/бп' : ms.what === 'mm' ? 'mm ' + c : 'поз.';
       const val = r => ms.what === 'n' ? r.ids.size : r.sum(mm);
-      const reasons = miss => { const c = {}; miss.forEach(x => c[x.why] = (c[x.why] || 0) + 1); return Object.entries(c).map(([w, n]) => I.MISSING_TEXT[w] + ' — ' + n).join('; '); };
+      const reasons = miss => { const c = {}; miss.forEach(x => { const r = c[x.why] || (c[x.why] = { text: I.missingText(x), n: 0 }); r.n += 1; }); return Object.values(c).map(r => r.text + ' — ' + r.n).join('; '); };
       const plain = s => String(s).replace(/<[^>]+>/g, '');
       const posRows = r => [...r.ids].concat([...r.legs]).map(id => M.pos[id]).filter(Boolean).map(p => ({ p, v: 1 }));
       // насыщенность — по наибольшей ячейке меры (не по итогам)

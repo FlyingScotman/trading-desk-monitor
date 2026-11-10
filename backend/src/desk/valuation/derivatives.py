@@ -20,8 +20,20 @@ as core's ``FxSwap``):
   provisional), fixed on ``fixing_date`` by ``fixing_source`` mapped to the hub's (setting ``ndf_fixing_sources``,
   default CBR names -> ``CBR``, the CBR official rate set that day, ``curves.fx``). A published fixing freezes the leg
   (core: RUB risk only); a fixing due today and not yet published is projected (``fixing_pending``); one past without
-  a fixing in the snapshot is a core rejection, so the row keeps the report's value. An NDF settled in another currency
-  than RUB, or a cross NDF, is not valued (core BACKLOG #135).
+  a fixing in the snapshot is a core rejection, so the row keeps the report's value. TDM#616 (core 0.45, BACKLOG #135):
+  ``settle_ccy`` is the leg's ``settlement_currency``: an X/RUB NDF settled in X pays ``N (1 - K / fixing)`` X (risk on
+  the RUB and the foreign curve, its FX delta core's ``fx_delta_foreign``; ``ocp_amount`` the notional, once fixed
+  the known amount it owes, core's ``settlement_amount``); a cross NDF settled in its base or quote
+  currency is a ``FxCrossForward`` with the fixing terms, fixed by core from both currencies' RUB fixings of the source
+  (risk on RUB and both foreign curves, ``fx_delta_base`` / ``fx_delta_quote``). A cross NDF settled in RUB (the
+  owner, 10.11.2026: most NDFs, as the exchange's cross futures such as EUR/USD) fixes at the cross of the two CBR
+  fixings of one date and pays ``N R_X - N K R_Y`` RUB: unfixed, risk on RUB and both foreign curves and an FX delta in
+  both currencies; fixed (core sets both fixings from the snapshot), a known RUB amount, RUB risk only. Without a
+  ``fixing_date`` it is cash-settled in RUB on its value date (said). An NDF without ``settle_ccy`` settles in RUB;
+  the adapter's ``x_settle_ccy_assumed`` (the RUB it gave such a trade) goes to the leg (``settlement_ccy_assumed``).
+  Not valued (``ndf_unsupported``): an NDF settled in a currency outside its pair. A currency without a curve or a spot in
+  the run: ``no_foreign_curve`` / ``no_fx_spot`` naming it and what is missing (``NotValued.ccy``, ``.missing``), the
+  row's risk «нет данных».
 - X/Y without RUB: ``FxCrossForward`` (``FxCrossInstrument`` on the joint settlement calendar of X and Y).
 - The RUB leg is discounted on RUONIA OIS (``RUB RUONIA``), the foreign leg on the currency's curve
   (``FxMarket.fx_curve_ids``: setting ``fx_foreign_curve``, default the FX-implied curve ``<CCY> FX``; CNY's other
@@ -215,11 +227,18 @@ fall in (D-1, D] to the change of PV."""
 
 
 class NotValued(Exception):
-    def __init__(self, reason: str, detail: str = "", last: date | None = None) -> None:
+    def __init__(self, reason: str, detail: str = "", last: date | None = None, ccy: str | None = None,
+                 missing: str | None = None) -> None:
         super().__init__(f"{reason}: {detail}" if detail else reason)
         self.reason, self.detail = reason, detail
         self.last = last
         """``settled``: the date of the trade's last flow (a swap's last payment date, not its maturity)."""
+        self.ccy = ccy
+        """``no_foreign_curve`` / ``no_fx_spot`` of an FX leg: the currency the run has no curve or spot of (TDM#616:
+        the row's risk is «нет данных: нет кривой <ccy>», ``positions.RISK_MISSING``)."""
+        self.missing = missing
+        """With ``ccy``: what of it the run lacks, ``curve``, ``spot`` (its spot and settlement calendar) or
+        ``curve_spot`` (both)."""
 
 
 def _num(v: Any) -> float | None:
@@ -259,6 +278,8 @@ class TermsLeg:
     fixing_source: str | None
     pv_rub: float | None
     rate_note: str | None = None
+    settle_assumed: bool = False
+    """``x_settle_ccy_assumed``: the adapter gave the NDF its settlement currency (RUB), its terms name none."""
 
     @property
     def sign(self) -> float:
@@ -285,7 +306,7 @@ class TermsLeg:
             note = f"contract_rate {k:g} differs from notional_quote / notional_base {nq / nb:g}: contract_rate used"
         return cls(str(r["trade_id"]), r.get("leg_id"), str(r.get("product_kind")), str(r.get("book_id")), base, quote,
                    side, nb, nq, k, vd, bool(r.get("ndf")), _ccy(r.get("settle_ccy")), _day(r.get("fixing_date")),
-                   r.get("fixing_source"), _num(r.get("pv_rub")), note)
+                   r.get("fixing_source"), _num(r.get("pv_rub")), note, _truthy(r.get("x_settle_ccy_assumed")))
 
 
 def _months(start: date, end: date) -> int:
@@ -801,17 +822,33 @@ def core_legs(ctx: Any, leg: TermsLeg, iid: str, options: FxOptions, curve_of: d
     if leg.value_date < bd:
         raise NotValued("settled", f"{leg.label} value date {leg.value_date} before {bd}")
     rub = leg.base == "RUB" or leg.quote == "RUB"
-    if leg.ndf and (not rub or (leg.settle_ccy or "RUB") != "RUB"):
-        raise NotValued("ndf_unsupported", f"{leg.label}: an NDF settled in {leg.settle_ccy} or a cross NDF "
-                                           "(core BACKLOG #135)")
+    settle = leg.settle_ccy or "RUB"
+    if leg.ndf and settle not in (leg.base, leg.quote, "RUB"):
+        raise NotValued("ndf_unsupported", f"{leg.label}: an NDF on {leg.base}/{leg.quote} settled in {settle}, "
+                                           "outside its pair (core: RUB, the base or the quote currency)")
     for c in (leg.base, leg.quote):
-        if c != "RUB" and c not in ctx.fx.spots:
-            raise NotValued("no_fx_spot", f"{c} on {bd}")
+        if c != "RUB" and c not in ctx.fx.spots:  # TDM#616: and its curve? (built only on a spot, CNY XCCY apart)
+            present = {e.curve_id for e in ctx.core_market.curves}
+            primary, alts = ctx.fx.fx_curve_ids(c, options)
+            curve = any(i in present for i in (primary, *alts))
+            raise NotValued("no_fx_spot", f"{c} on {bd}" + ("" if curve else f", no {c} curve in the run"), ccy=c,
+                            missing="spot" if curve else "curve_spot")
         if c != "RUB" and c not in curve_of:
-            raise NotValued("no_foreign_curve", f"no {c} curve in the run")
-    if not rub:
+            raise NotValued("no_foreign_curve", f"no {c} curve in the run", ccy=c, missing="curve")
+    pay = fixing = source = None
+    if leg.ndf:  # TDM#616 (core 0.45): settled in RUB, the foreign currency of X/RUB, or the base or quote of a cross
+        pay = leg.value_date
+        fixing, source = leg.fixing_date, options.fixing_source(leg.fixing_source)
+        if fixing is None:
+            notes.append(f"{leg.label}: NDF without fixing_date, valued as cash-settled on its value date")
+            source = None
+    settles_in = settle if leg.ndf and settle != "RUB" else None
+    if not rub:  # a cross NDF is fixed by core at CBR(X) / CBR(Y) of its source (both RUB fixings of the snapshot): a
+        # contract fixing on another source is projected as if on the CBR cross before its fixing date, and keeps the
+        # report's rule after. Settled in RUB (the exchange's cross futures, TDM#616): N R_X - N K R_Y RUB, both fixings
         trade = FxCrossForward(leg.label, leg.base, leg.quote, 1.0,
-                               FxForwardLeg(leg.value_date, leg.sign * leg.n_base, leg.rate))
+                               FxForwardLeg(leg.value_date, leg.sign * leg.n_base, leg.rate, pay, fixing_date=fixing,
+                                            fixing_source=source if fixing else None, settlement_currency=settles_in))
         cal = f"FX:{leg.base}/{leg.quote}"
         return FxCrossInstrument(iid, trade, RUONIA_OIS_CURVE_ID, curve_of[leg.base], curve_of[leg.quote], cal), \
             leg.base, notes
@@ -819,14 +856,8 @@ def core_legs(ctx: Any, leg: TermsLeg, iid: str, options: FxOptions, curve_of: d
         ccy, n, k = leg.base, leg.sign * leg.n_base, leg.rate
     else:  # RUB/X: the desk buys RUB = sells X
         ccy, n, k = leg.quote, -leg.sign * leg.n_quote, 1.0 / leg.rate
-    pay = fixing = source = None
-    if leg.ndf:
-        pay = leg.value_date
-        fixing, source = leg.fixing_date, options.fixing_source(leg.fixing_source)
-        if fixing is None:
-            notes.append(f"{leg.label}: NDF without fixing_date, valued as cash-settled on its value date")
-            source = None
-    fx_leg = FxForwardLeg(leg.value_date, n, k, pay, fixing_date=fixing, fixing_source=source if fixing else None)
+    fx_leg = FxForwardLeg(leg.value_date, n, k, pay, fixing_date=fixing, fixing_source=source if fixing else None,
+                          settlement_currency=settles_in)
     return FxForwardInstrument(iid, FxForward(leg.label, ccy, 1.0, fx_leg), RUONIA_OIS_CURVE_ID, curve_of[ccy]), \
         ccy, notes
 
@@ -1336,6 +1367,13 @@ class _Acc:
     swaps: list[dict[str, Any]] = field(default_factory=list)
     repos: list[dict[str, Any]] = field(default_factory=list)
     fixing_ids: set[str] = field(default_factory=set)
+    ocp_core: dict[str, float] = field(default_factory=lambda: defaultdict(float))
+    """TDM#616: the nominal OCP amount per currency of a FIXED NDF settled in a foreign currency (X/RUB or a cross):
+    the known amount it owes in its settlement currency (core's ``settlement_amount``, ``_known_amount``), not its
+    notional. An unfixed one keeps the terms' notional, as a RUB-settled NDF; the spot-equivalent basis takes core's
+    FX delta (``fx_delta``) of every one."""
+    ocp_legs: set[int] = field(default_factory=set)
+    """``id`` of the ``TermsLeg`` whose OCP amount is in ``ocp_core``."""
     flows: list[dict[str, Any]] | None = field(default_factory=list)
     """``extra.flows`` of the row; None only in tests (flows not recorded: the PnL says so)."""
 
@@ -1452,6 +1490,8 @@ def _ui_leg(t: TermsLeg | None, lv: Any, ccy: str, cross: bool = False) -> dict[
         if t.ndf:
             out.update(settlement_ccy=t.settle_ccy or "RUB", payment_date=lv.payment_date.isoformat(),
                        fixing_source=t.fixing_source)
+            if t.settle_ccy is None or getattr(t, "settle_assumed", False):  # TDM#616: RUB taken, the terms name none
+                out["settlement_ccy_assumed"] = True
             if t.fixing_date is not None:
                 out["fixing_date"] = t.fixing_date.isoformat()
     if cross:
@@ -1480,7 +1520,7 @@ def legs_from_fact(extra: dict[str, Any]) -> list[TermsLeg]:
             "notional_quote": lg["sell_amount"] if buy else lg["buy_amount"], "contract_rate": lg["contract_rate"],
             "value_date": lg["value_date"], "ndf": lg.get("settlement") == "cash",
             "settle_ccy": lg.get("settlement_ccy"), "fixing_date": lg.get("fixing_date"),
-            "fixing_source": lg.get("fixing_source")}))
+            "fixing_source": lg.get("fixing_source"), "x_settle_ccy_assumed": lg.get("settlement_ccy_assumed")}))
     return out
 
 
@@ -1661,7 +1701,12 @@ def value(ctx: Any, requests: list[Request], *, options: FxOptions, second_order
             a.curves |= {row.base_curve_id, row.quote_curve_id}
             a.fallback_from |= {c for c in (row.base_curve_fallback_from, row.quote_curve_fallback_from) if c}
             a.products.add("fx_cross")
+            if t is not None and t.ndf:  # TDM#616: a cross NDF (core 0.45); fixed, it owes a known amount
+                a.products.add("fx_ndf")
+                _known_amount(a, t, row.legs)
             a.legs += [_ui_leg(t, lv, row.base_currency, cross=True) for lv in row.legs]
+            for lv in row.legs:
+                _fixing(a, t, lv, flags.get(row.position_id, ()))
         elif hasattr(row, "contract_id"):  # an FX future
             a.fx_delta[row.currency] += row.fx_delta_foreign
             a.curves.add(row.foreign_curve_id)
@@ -1675,14 +1720,11 @@ def value(ctx: Any, requests: list[Request], *, options: FxOptions, second_order
                 a.fallback_from.add(row.curve_fallback_from)
             a.products.add("fx_ndf" if t is not None and t.ndf else "fx_swap" if t is not None and t.leg_id
                            else "fx_forward")
+            if t is not None and t.ndf and (t.settle_ccy or "RUB") != "RUB":  # TDM#616: fixed, owes a known amount
+                _known_amount(a, t, row.legs)
             for lv in row.legs:
                 a.legs.append(_ui_leg(t, lv, row.currency))
-                if t is not None and t.ndf and t.fixing_date is not None:
-                    status = ("fixed" if lv.fixing_rate is not None else
-                              "pending" if "fixing_pending" in flags.get(row.position_id, ()) else "open")
-                    a.fixings.append({"trade_id": t.label, "fixing_date": t.fixing_date.isoformat(),
-                                      "source": t.fixing_source, "status": status,
-                                      **({"fixing_rate": lv.fixing_rate} if lv.fixing_rate is not None else {})})
+                _fixing(a, t, lv, flags.get(row.position_id, ()))
     for r in requests:
         if r.position_id in out:
             continue
@@ -1700,6 +1742,29 @@ def value(ctx: Any, requests: list[Request], *, options: FxOptions, second_order
             a.flows = flows[r.position_id]
             out[r.position_id] = _valuation(ctx, r, a, notes[r.position_id], result)
     return out, result
+
+
+def _known_amount(a: _Acc, t: TermsLeg, legs: Any) -> None:
+    """TDM#616: a FIXED NDF leg settled in a foreign currency owes a known amount of it (core's ``settlement_amount``,
+    paid on its payment date): that is its nominal OCP amount (``ocp_amount``), in place of the terms' notionals. An
+    unfixed one keeps the notionals, as a RUB-settled NDF."""
+    fixed = [lv for lv in legs if lv.fixing_rate is not None and lv.settlement_currency and
+             lv.settlement_amount is not None]
+    if not fixed:
+        return
+    for lv in fixed:
+        a.ocp_core[lv.settlement_currency] += lv.settlement_amount
+    a.ocp_legs.add(id(t))
+
+
+def _fixing(a: _Acc, t: TermsLeg | None, lv: Any, flags: Any) -> None:
+    """An NDF leg's fixing (fixed / pending / open) into ``a.fixings``: an X/RUB leg's or a cross's (TDM#616)."""
+    if t is None or not t.ndf or t.fixing_date is None:
+        return
+    rate = getattr(lv, "fixing_rate", None)
+    status = "fixed" if rate is not None else "pending" if "fixing_pending" in flags else "open"
+    a.fixings.append({"trade_id": t.label, "fixing_date": t.fixing_date.isoformat(), "source": t.fixing_source,
+                      "status": status, **({"fixing_rate": rate} if rate is not None else {})})
 
 
 def _last_event(t: Any) -> date:
@@ -1970,9 +2035,9 @@ def _valuation(ctx: Any, r: Request, a: _Acc, notes: list[str], result: Any) -> 
     if amount is None:
         amount = math.fsum(t.sign * t.n_base if t.base == ccy else -t.sign * t.n_quote if t.quote == ccy else 0.0
                            for t in r.legs if t.value_date >= bd) if r.future is None else (r.contracts or 0.0)
-    ocp: dict[str, float] = defaultdict(float)
+    ocp: dict[str, float] = defaultdict(float, a.ocp_core)
     for t in r.legs:
-        if t.value_date >= bd:
+        if t.value_date >= bd and id(t) not in a.ocp_legs:
             ocp[t.base] += t.sign * t.n_base
             ocp[t.quote] -= t.sign * t.n_quote
     if r.future is not None:

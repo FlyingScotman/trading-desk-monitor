@@ -7288,7 +7288,12 @@
               "not_valued",
               "reported_no_risk",
               "no_risk",
-              "implausible"
+              "implausible",
+              "no_curve",
+              "no_spot",
+              "no_curve_spot",
+              "ndf_no_terms",
+              "ndf_unsupported"
             ],
             "title": "Reason"
           },
@@ -7299,6 +7304,18 @@
           "n": {
             "type": "integer",
             "title": "N"
+          },
+          "ccy": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Ccy",
+            "description": "no_curve / no_spot / no_curve_spot: the currency without a curve, a spot or both in the run (TDM#616)"
           }
         },
         "type": "object",

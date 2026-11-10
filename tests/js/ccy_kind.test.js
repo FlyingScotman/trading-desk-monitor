@@ -118,6 +118,23 @@ t('риска нет — «без риска» с причиной, не 0; FX-�
   assert.strictEqual(T.total.missing.length, 2);
 });
 
+t('#616: нет кривой валюты и NDF без условий сделки — своя причина прогона, не «оценена по отчёту»', () => {
+  const { M, I } = load(D => {
+    const base = D.positions.find(p => p.instrType === 'XCCY');
+    const ndf = (id, ccy, rm) => ({ id, book: base.book, ccy, instrType: 'FX', notional: 1e6, risk: {}, fxDelta: { [ccy]: 1e6 },
+      extra: { quality: 'reported_value', reported: { x: { x_product_group: 'fx_ndf' } }, risk_missing: rm }, pnl: { available: false } });
+    D.positions.push(ndf('NDF-EUR', 'EUR', { reason: 'no_curve', ccy: 'EUR', text: 'нет данных: нет кривой EUR' }),
+      ndf('NDF-NT', 'USD', { reason: 'ndf_no_terms', text: 'NDF без условий сделки: процентный риск не считается' }));
+  });
+  const eur = M.positions.find(p => p.id === 'NDF-EUR'), nt = M.positions.find(p => p.id === 'NDF-NT');
+  assert.strictEqual(I.missing(eur), 'no_curve:EUR');
+  assert.strictEqual(I.missing(nt), 'ndf_no_terms');
+  const T = I.table(M.positions, { units: 'repr' });
+  const cell = kindRows(block(T, 'EUR')).find(r => r.kind === 'FX_FWD');
+  same(cell.missing.map(m => I.missingText(m)), ['нет данных: нет кривой EUR']);
+  assert.ok(!kindRows(block(T, 'USD')).find(r => r.kind === 'FX_FWD').missing.some(m => m.why === 'reported_no_risk'));
+});
+
 t('та же таблица соответствий, что в api/concepts.py', () => {
   const py = fs.readFileSync(path.join(__dirname, '..', '..', 'backend', 'src', 'desk', 'api', 'concepts.py'), 'utf8');
   const { I } = load();

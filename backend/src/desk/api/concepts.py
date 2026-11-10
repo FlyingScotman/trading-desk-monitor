@@ -57,6 +57,7 @@ from ..publish import summary
 from ..publish.summary import CURVE_MAP, GOV_CLASSES, PNL, is_minfin, kind_of, product_group  # noqa: F401 - the pages' names
 from ..scenario.carry import meetings
 from ..store import DEFAULT_RUNS
+from ..valuation.positions import RISK_MISSING
 from . import pnl_mtd
 
 HIST_RUNS = 260
@@ -967,6 +968,27 @@ MISSING_TEXT = {"not_valued": "не оценена", "reported_no_risk": "оце
                 "no_risk": "риск не посчитан",
                 "implausible": "риск невозможен (|DV01| не сходится с MV и номиналом): не в суммах, причина в журнале "
                                "прогона"}
+"""Why a position of a kind with risk (``RISK_KINDS``) has none; ``RISK_MISSING`` (TDM#616, ``extra.risk_missing`` of
+the fact) the finer reasons of a derivative valued without core: a currency without a curve or a spot («нет данных: нет
+кривой USD», keyed ``no_curve:USD``), an NDF without its trade's terms."""
+
+
+def missing_key(ex: dict[str, Any]) -> str | None:
+    """The risk table's key of a fact's ``extra.risk_missing`` (``<reason>`` or ``<reason>:<ccy>``), None without one
+    the table knows (a run before TDM#616)."""
+    rm = ex.get("risk_missing")
+    if not isinstance(rm, dict) or rm.get("reason") not in RISK_MISSING:
+        return None
+    ccy = rm.get("ccy")
+    return f"{rm['reason']}:{ccy}" if isinstance(ccy, str) and ccy else str(rm["reason"])
+
+
+def missing_text(key: str) -> str:
+    """The words of a risk table's missing key (``MISSING_TEXT``, else ``RISK_MISSING`` with its currency)."""
+    if key in MISSING_TEXT:
+        return MISSING_TEXT[key]
+    reason, _, ccy = key.partition(":")
+    return RISK_MISSING[reason].format(ccy=ccy)
 GROUPS = ("GOV", "SUB", "CORP", "DER", "MM", "OTH")
 
 
@@ -1170,7 +1192,7 @@ def risk_table(items: list[dict[str, Any]], fx: dict[str, float | None],
             elif fx.get(cc) and fx.get(home):  # in the position's currency at the day's rates
                 c["fx_delta_ccy"] += amt * fx[cc] / fx[home]
         if kind in RISK_KINDS and not (curves or f.get("cs01") or f.get("ofz_spr01") or f.get("accrual_only")):
-            why = "reported_no_risk" if (f.get("extra") or {}).get("quality") == "reported_value" else "no_risk"
+            why = missing_key(ex) or ("reported_no_risk" if ex.get("quality") == "reported_value" else "no_risk")
             c["missing"][why] = c["missing"].get(why, 0) + 1
 
     def out(ccy: str, level: str, group: str | None, kind: str | None, cs: list[dict[str, Any]]) -> dict[str, Any]:
@@ -1194,7 +1216,9 @@ def risk_table(items: list[dict[str, Any]], fx: dict[str, float | None],
                 "ofz_spread_kbd_rub": sum(c["ofz_spr"] for c in cs), "dv01_ofz_in_proxy_rub": sum(c["in_proxy"] for c in cs),
                 "cs01_rub": sum(c["cs01"] for c in cs), "fx_delta_ccy": sum(c["fx_delta_ccy"] for c in cs),
                 "n_risk_missing": sum(missing.values()),
-                "risk_missing": [{"reason": k, "text": MISSING_TEXT[k], "n": n} for k, n in sorted(missing.items())]}
+                "risk_missing": [{"reason": k.partition(":")[0], "text": missing_text(k), "n": n,
+                                  **({"ccy": k.partition(":")[2]} if ":" in k else {})}
+                                 for k, n in sorted(missing.items())]}
 
     order = {k: i for i, (k, _, _) in enumerate(INSTR_KINDS)}
     ccys = sorted({c for c, _ in cells}, key=lambda c: (c != "RUB", FX_CCYS.index(c) if c in FX_CCYS else 99, c))

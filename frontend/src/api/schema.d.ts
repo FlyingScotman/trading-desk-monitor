@@ -2552,11 +2552,16 @@ export interface components {
              * Reason
              * @enum {string}
              */
-            reason: "not_valued" | "reported_no_risk" | "no_risk" | "implausible";
+            reason: "not_valued" | "reported_no_risk" | "no_risk" | "implausible" | "no_curve" | "no_spot" | "no_curve_spot" | "ndf_no_terms" | "ndf_unsupported";
             /** Text */
             text: string;
             /** N */
             n: number;
+            /**
+             * Ccy
+             * @description no_curve / no_spot / no_curve_spot: the currency without a curve, a spot or both in the run (TDM#616)
+             */
+            ccy?: string | null;
         };
         /**
          * RiskOcp
