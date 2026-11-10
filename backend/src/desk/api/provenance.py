@@ -10,7 +10,8 @@
     the trade of its ``deal_id``, else of its ``position_id``; a valued derivative: the trades core valued,
     ``extra.core.trades``; a derivative off the report: its own trade), from the sets the run read
     (``lineage.positions.trade_terms``; a book without them: the sets in force at ``positions_known_at``);
-  - ``trades``: the day's trades of the trades service the run read (``lineage.intraday_trades.set_ids``) that name the
+  - ``trades``: the day's trades of the trades service the run read (``lineage.intraday_trades.set_ids``; a run of a
+    version that records it without the block: none came by then, or the setting was off) that name the
     position, its deal or a trade the run put in it, in its book, with where the file came from
     (``trades.origin_of``), the feed's title when only one feed delivers trades, and the trade's state in the day's book
     as the trades screen says it (``trades._intraday_state``; a trade of an earlier date: the start of the day);
@@ -40,6 +41,7 @@ from .. import store, trades
 from ..curves import fx as fxcurves
 from ..daystatus import DATASET_NAMES
 from ..valuation import derivatives as dv
+from . import concepts
 from . import coverage as cv
 
 TERMS_KINDS = ("otc",)
@@ -167,58 +169,93 @@ def _terms_source(kind: str, got: list[dict[str, Any]], sets: dict[int, dict[str
 
 # ---- the day's trades -------------------------------------------------------------------------------------------
 
+TRADES_LINEAGE_FROM = (0, 2, 18)
+"""The first version whose runs say in their lineage which trades of the day they read (``intraday_trades``, TDM#557)."""
+
+
+def _version(v: Any) -> tuple[int, ...] | None:
+    m = re.match(r"(\d+)\.(\d+)\.(\d+)", str(v or ""))
+    return tuple(int(x) for x in m.groups()) if m else None
+
+
+def _trade_sets(con, run: dict[str, Any]) -> tuple[list[int] | None, dict[str, Any] | None, str]:
+    """(the trades sets the run read, its ``intraday_trades`` lineage, why there are none): the lineage's set ids; a run
+    of a version that records them but has no block read none — no trades sets of the date yet at its
+    ``positions_known_at`` (``no_trades``), else the setting ``intraday_trades`` was off (``off``: the sets of the date
+    then); an older run: None (``no_lineage``)."""
+    t = (run.get("lineage") or {}).get("intraday_trades")
+    if isinstance(t, dict) and "set_ids" in t:
+        return list(t.get("set_ids") or []), t, ""
+    v = _version(run.get("backend_version"))
+    if v is None or v < TRADES_LINEAGE_FROM:
+        return None, None, "no_lineage"
+    ids = [r["set_id"] for r in con.execute(
+        "SELECT set_id FROM dataset_set WHERE dataset = 'trades' AND valid_date = %s AND recorded_at <= %s"
+        " ORDER BY set_id", (run["business_date"], run.get("positions_known_at") or run.get("started_at"))).fetchall()]
+    return ids, None, "off" if ids else "no_trades"
+
+
 def _trades(con, run: dict[str, Any], pid: str, book: str, ids: set[str], feeds: list[dict[str, Any]] | None,
             history: dict[str, set[str]] | None = None) -> tuple[dict[str, Any], int]:
     """(the source, how many trades name the position): the current version of each trade of the sets the run read
-    that names the position (its ``position_id`` in the book) or one of ``ids`` (the deal, its terms' trades, the trades
-    the run put in the position)."""
-    t = (run.get("lineage") or {}).get("intraday_trades")
-    if not isinstance(t, dict) or "set_ids" not in t:
+    (``_trade_sets``) that names the position (its ``position_id``) or one of ``ids`` (the deal, its terms' trades, the
+    trades the run put in the position) in any of its versions, as ``store.versioned_rows`` takes it (the highest
+    version, none below any; an equal one: the newer set by ``CURRENT_SET``), and only when that version is of the
+    position's book (an amended trade can move)."""
+    set_ids, t, why = _trade_sets(con, run)
+    if set_ids is None:
         return _source("trades", "deal", "unknown", cv.PROVENANCE_TEXT["trades_no_lineage"]), 0
+    if not set_ids:
+        return _source("trades", "deal", "absent", cv.PROVENANCE_TEXT["trades_no_sets"]), 0
     rows = con.execute(
-        "SELECT r.set_id, r.data, s.source, s.source_name, s.report_date, s.recorded_at, s.valid_date"
-        " FROM dataset_row r JOIN dataset_set s USING (set_id) WHERE r.set_id = ANY(%s)"
-        " AND (r.data->>'position_id' = %s OR r.data->>'trade_id' = ANY(%s))"
-        " ORDER BY r.set_id", (list(t.get("set_ids") or []), pid, sorted(ids))).fetchall()
-    cur: dict[str, dict[str, Any]] = {}
-    for r in rows:   # per (date, trade) the highest version, an equal one: the newer set
-        tid = (r["valid_date"], str(r["data"].get("trade_id")))
+        "WITH s AS (SELECT set_id, source, source_name, report_date, recorded_at, valid_date,"
+        f" row_number() OVER (PARTITION BY valid_date ORDER BY {store.CURRENT_SET}) AS age"
+        " FROM dataset_set WHERE set_id = ANY(%(ids)s))"
+        " SELECT r.set_id, r.data, s.source, s.source_name, s.report_date, s.recorded_at, s.valid_date, s.age"
+        " FROM dataset_row r JOIN s USING (set_id) WHERE r.data->>'trade_id' IN (SELECT data->>'trade_id'"
+        "  FROM dataset_row WHERE set_id = ANY(%(ids)s) AND (data->>'position_id' = %(p)s OR data->>'trade_id' = ANY(%(n)s)))"
+        " ORDER BY r.set_id", {"ids": set_ids, "p": pid, "n": sorted(ids)}).fetchall()
+    cur: dict[tuple, tuple[tuple, dict[str, Any]]] = {}
+    for r in rows:   # per (date, trade) as ``store.versioned_rows``
+        k = (r["valid_date"], str(r["data"].get("trade_id")))
+        v = r["data"].get("trade_version")
         try:
-            v = int(r["data"].get("trade_version") or 0)
+            rank = (-1 if v is None else int(v), -r["age"])
         except (TypeError, ValueError):
-            v = 0
-        old = cur.get(tid)
-        if old is None or v >= old["_v"]:
-            cur[tid] = {**r, "_v": v}
-    # the current version decides the book (``store.versioned_rows`` merges a trade's versions across books: an amended
-    # trade can move): a trade now of another book is not this position's
-    cur = {k: r for k, r in cur.items() if str(r["data"].get("book_id")) == book}
-    if not cur:
+            rank = (-1, -r["age"])
+        if k not in cur or rank > cur[k][0]:
+            cur[k] = (rank, r)
+    # a trade whose current version is of another book, or names another position (and is none of ``ids``), is not this
+    # position's
+    found = {k: r for k, (_, r) in cur.items() if str(r["data"].get("book_id")) == book
+             and (k[1] in ids or not r["data"].get("position_id") or str(r["data"]["position_id"]) == pid)}
+    if not found:
         return _source("trades", "deal", "absent", cv.PROVENANCE_TEXT["trades_none"]), 0
     origins = {r["set_id"]: trades.origin_of(r["path"], r["at"], r["valid_date"], r["sha256"], history) for r in con.execute(
         "SELECT s.set_id, s.recorded_at AS at, s.valid_date, f.path, f.sha256 FROM dataset_set s"
         " JOIN inbox_file f ON f.sha256 = s.inbox_file_sha256 WHERE s.set_id = ANY(%s)",
-        (sorted({r["set_id"] for r in cur.values()}),)).fetchall()}
+        (sorted({r["set_id"] for r in found.values()}),)).fetchall()}
     # the feed's title only when one feed delivers trades: the folder of a feed's run does not say which feed it was
     titles = [f["title"] for f in feeds or () if f.get("dataset") == "trades" and f.get("title")]
     title = titles[0] if len(titles) == 1 else None
-    run_t = {"versions": t.get("versions") or {}, "skipped_ids": t.get("skipped_ids") or {},
-             "truncated": bool(t.get("truncated"))}
+    run_t = {"versions": (t or {}).get("versions") or {}, "skipped_ids": (t or {}).get("skipped_ids") or {},
+             "truncated": bool((t or {}).get("truncated"))}
     bd = run["business_date"]
     items = []
-    for (vd, tid), r in sorted(cur.items(), key=lambda kv: (kv[0][0] or bd, kv[0][1])):
+    for (vd, tid), r in sorted(found.items(), key=lambda kv: (kv[0][0] or bd, kv[0][1])):
         d = r["data"]
         if vd is not None and vd < bd:   # a trade of an earlier date: in the start of the day of a carried book
             state, text = "earlier_date", cv.PROVENANCE_TEXT["trade_earlier"].format(day=vd.isoformat())
         else:   # as the trades screen says it (``trades._intraday_state``: applied only at the version the run took)
-            state = trades._intraday_state(d, bd, run_t, True)
+            state = trades._intraday_state(d, bd, run_t, why != "off")
             text = trades.STATE_TEXT.get(state, state)
         origin = origins.get(r["set_id"])
         items.append(_set_item("trades", r, trade_id=tid, trade_version=d.get("trade_version"), status=d.get("status"),
                                side=d.get("side"), state=state, state_text=text,
                                origin=origin, origin_text=trades.ORIGIN_TEXT.get(origin or ""),
                                feed_title=title if origin in ("feed", "history") else None))
-    return _source("trades", "deal", "present", cv.PROVENANCE_TEXT["trades_rows"], items), len(items)
+    text = cv.PROVENANCE_TEXT["trades_rows"] + ("; " + cv.PROVENANCE_TEXT["trades_off"] if why == "off" else "")
+    return _source("trades", "deal", "present", text, items), len(items)
 
 
 # ---- the OCP report and the balances: by book and currency ------------------------------------------------------
@@ -306,8 +343,12 @@ def _curve_state(lin: dict[str, Any], cid: str) -> tuple[str, str]:
 
 
 def _rub_state(lin: dict[str, Any], what: str) -> str:
-    st = ((lin.get("rates") or {}).get("status") or {}).get(what)
-    return "ok" if st == "ok" else "unknown" if st is None and not lin.get("rates") else "missing"
+    """``lineage.rates.status`` of a RUB curve; a run that did not record the statuses (before ``with_rates`` wrote
+    them, ``rates._inferred_codes``): unknown."""
+    st = (lin.get("rates") or {}).get("status")
+    if not isinstance(st, dict):
+        return "unknown"
+    return "ok" if st.get(what) == "ok" else "missing"
 
 
 def _fixings_state(lin: dict[str, Any], code: str) -> tuple[str, str]:
@@ -541,6 +582,8 @@ def _market(con, run: dict[str, Any], kind: str, fact: dict[str, Any] | None, te
     if kind == "derivative" and (terms or x.get("ccy")):
         if not lin.get("rates") and not lin.get("fx"):
             return {"basis": "unknown", "text": cv.PROVENANCE_TEXT["market_unknown"], "items": [], "notes": notes}
+        if not terms:
+            notes.insert(0, cv.PROVENANCE_TEXT["needed_no_terms"])
         return {"basis": "needed", "text": cv.PROVENANCE_TEXT["market_needed"],
                 "items": _needed(lin, terms, x, run["business_date"], names), "notes": notes}
     return {"basis": "unknown", "text": cv.PROVENANCE_TEXT["market_unknown"], "items": [], "notes": notes}
@@ -567,6 +610,15 @@ def _kind(x: dict[str, Any], fact: dict[str, Any] | None, bd: date, off: bool) -
     if cls == "bond" or (fact or {}).get("instr_type") == "BOND" or not cls:
         return "bond"
     return "other"
+
+
+def _future(x: dict[str, Any], reason: str | None) -> bool:
+    """The report row is an FX future (``concepts.instr_kind``: its product group), or the run's reason names the future
+    it took the row for (``valuation.positions._future_row``: ``future <ticker>: ...``)."""
+    rep = x.get("x") if isinstance(x.get("x"), dict) else {}
+    kind = concepts.instr_kind({"ccy": x.get("ccy"), "asset_class": x.get("asset_class"), "extra": {"reported": rep}})
+    detail = str(reason or "").partition(":")[2].strip()
+    return kind == "FX_FUT" or detail.startswith("future ") or str(reason or "").startswith("future_")
 
 
 def _mismatch_text(code: str, rows: int, reason: str | None) -> str:
@@ -604,6 +656,8 @@ def provenance(con, run: dict[str, Any], pid: str, feeds: list[dict[str, Any]] |
     got, sets, known = _terms(con, run, pid, book, x, fact, off_trade) if kind != "bond" else ([], {}, True)
     if kind == "linked":
         kind = "derivative" if got else "bond"
+    elif kind == "other" and got:   # any non-bond row with terms is valued from them (``valuation.positions``)
+        kind = "derivative"
     # a derivative is valued only by core from its terms; a fact without core is the value it got instead
     # (``valuation.positions._not_by_core``: the report's MV, or 0 for an FX forward): not valued
     by_core = fact is not None and (kind != "derivative" or bool(ex.get("core")))
@@ -611,7 +665,7 @@ def provenance(con, run: dict[str, Any], pid: str, feeds: list[dict[str, Any]] |
     pos = lin.get("positions") or {}
     any_units = any(str((u.get("scope") or {}).get("book_id")) == book for u in pos.get("trade_terms") or ())
     # an FX future valued by its exchange ticker (setting ``futures_by_ticker``): no terms to have
-    by_ticker = "fx_future" in str((ex.get("core") or {}).get("product") or "")
+    by_ticker = "fx_future" in str((ex.get("core") or {}).get("product") or "") or (not got and _future(x, reason))
     terms_src = _terms_source(kind, got, sets, known, any_units or bool(got), by_ticker)
     ids = {str(v) for v in (x.get("deal_id"), off_trade) if v} | {str(r.get("trade_id")) for r in got if r.get("trade_id")}
     for col in ("pnl", "no_pnl"):   # the trades the run put in this position (``pnl.new_trades``)

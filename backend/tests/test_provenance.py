@@ -6,7 +6,7 @@ deal with a missing curve, an old run without lineage. Synthetic data only."""
 from __future__ import annotations
 
 import json
-from datetime import date
+from datetime import date, timedelta
 
 import pytest
 from fastapi.testclient import TestClient
@@ -46,12 +46,12 @@ def _dataset(con, ds: str, sha: str, name: str, rows: list[dict], *, source: str
     return sid
 
 
-def _run(con, lineage: dict, set_ids: list[int]) -> int:
+def _run(con, lineage: dict, set_ids: list[int], *, day: date = BD, version: str = "t") -> int:
     rid = con.execute(
         "INSERT INTO run (run_type, business_date, prev_date, cut_type, market_snapshot_id, static_snapshot_id,"
         " private_inputs_hash, position_set_ids, positions_known_at, core_version, backend_version, lineage)"
-        " VALUES ('EOD', %s, %s, 'eod_final', 'synthetic-market', 'synthetic-static', 'h', %s, now(), 't', 't', %s)"
-        " RETURNING run_id", (BD, date(2026, 10, 19), set_ids, Jsonb(lineage))).fetchone()[0]
+        " VALUES ('EOD', %s, %s, 'eod_final', 'synthetic-market', 'synthetic-static', 'h', %s, now(), 't', %s, %s)"
+        " RETURNING run_id", (day, day - timedelta(days=1), set_ids, version, Jsonb(lineage))).fetchone()[0]
     con.execute("INSERT INTO run_reference VALUES (%s, 'curves', %s)", (rid, Jsonb([
         {"curve_id": "RUB OFZ", "name": "ОФЗ (КБД MOEX)"}, {"curve_id": "USD FX", "name": "USD: из своп-пойнтов"}])))
     return rid
@@ -82,10 +82,15 @@ def seeded(store_url):
                                         ("FX4", "fx", "CNY", "T8", "2026-11-20"), ("NA1", None, "RUB", "Z1", None),
                                         ("NA2", None, "RUB", "T10", None), ("NDF1", "fx", "USD", "T11", "2026-11-20"),
                                         ("FUT1", "fx", "USD", None, "2026-12-15"), ("IRS1", "otc", "RUB", "T13", None),
-                                        ("IRS2", "otc", "RUB", "T14", None), ("REPO1", "otc", "RUB", "T15", None)):
+                                        ("IRS2", "otc", "RUB", "T14", None), ("REPO1", "otc", "RUB", "T15", None),
+                                        ("FXT", "fx", "USD", "T16", "2026-10-20")):
             con.execute("INSERT INTO position_input (set_id, position_id, secid, quantity, asset_class, ccy, deal_id,"
                         " value_date, src) VALUES (%s, %s, NULL, NULL, %s, %s, %s, %s, %s)",
                         (ps, pid, cls, ccy, deal, vd, f"row {pid}"))
+        # an FX future of the report the run did not value by its ticker (no number of contracts)
+        con.execute("INSERT INTO position_input (set_id, position_id, secid, quantity, asset_class, ccy, value_date, x)"
+                    " VALUES (%s, 'FUT2', NULL, NULL, 'fx', 'USD', '2026-12-15', %s)",
+                    (ps, Jsonb({"x_product_group": "fx_future"})))
         terms = [
             {"trade_id": "T1", "book_id": "B1", "product_kind": "fx_forward", "base_ccy": "USD", "quote_ccy": "RUB"},
             {"trade_id": "T3", "leg_id": "1", "book_id": "B1", "product_kind": "ccs", "ccy": "RUB", "index_code": "RUONIA"},
@@ -112,6 +117,8 @@ def seeded(store_url):
              "index_code": "KEY_RATE", "start_date": "2026-01-15"},
             {"trade_id": "T15", "book_id": "B1", "product_kind": "repo", "ccy": "RUB", "index_code": "RUSFAR",
              "start_date": "2026-10-01"},
+            # an FX row settling today (a spot by its date) whose terms the run gave core
+            {"trade_id": "T16", "book_id": "B1", "product_kind": "fx_forward", "base_ccy": "USD", "quote_ccy": "RUB"},
             {"trade_id": "T5", "book_id": "B1", "product_kind": "irs", "ccy": "RUB", "fixed_rate_pct": "10"},
             {"trade_id": "T7", "book_id": "B1", "product_kind": "fx_forward", "base_ccy": "USD", "quote_ccy": "RUB"},
         ]
@@ -126,6 +133,11 @@ def seeded(store_url):
             {"trade_id": "tr-3", "trade_version": 1, "status": "live", "book_id": "B1", "position_id": "N1",
              "asset_class": "bond", "side": "buy", "trade_date": BD.isoformat(), "quantity": "1"},
             {"trade_id": "tr-3", "trade_version": 2, "status": "live", "book_id": "B2", "position_id": "N1",
+             "asset_class": "bond", "side": "buy", "trade_date": BD.isoformat(), "quantity": "1"},
+            # a trade moved to another position of the book: its current version is not this position's
+            {"trade_id": "tr-4", "trade_version": 1, "status": "live", "book_id": "B1", "position_id": "N1",
+             "asset_class": "bond", "side": "buy", "trade_date": BD.isoformat(), "quantity": "1"},
+            {"trade_id": "tr-4", "trade_version": 2, "status": "live", "book_id": "B1", "position_id": "N2",
              "asset_class": "bond", "side": "buy", "trade_date": BD.isoformat(), "quantity": "1"},
             # the same number in another book: not this position's
             {"trade_id": "T1", "trade_version": 1, "status": "live", "book_id": "B2", "asset_class": "fx",
@@ -179,6 +191,9 @@ def seeded(store_url):
         _pos(con, rid, "IRS1", 18, reason="no_rub_curve: synthetic")
         _pos(con, rid, "IRS2", 19, reason="no_rub_curve: synthetic")
         _pos(con, rid, "REPO1", 20, reason="no_fixings: REPO T15 on RUSFAR")
+        _pos(con, rid, "FXT", 21, fact={"ccy": "USD", "extra": {"quality": "reported_value"}},
+             reason="core_invalid_terms: synthetic")
+        _pos(con, rid, "FUT2", 22, reason="no_quantity: future SYNF: no number of contracts")
         con.execute("UPDATE run SET status = 'complete', completed_at = now() WHERE run_id = %s", (rid,))
         old = _run(con, {}, [ps])   # an old run: no lineage at all
         _pos(con, old, "FX2", 1, reason="no_reported_value")
@@ -458,3 +473,54 @@ def test_one_deal_on_rows_says_why_only_for_ambiguous_terms():
     assert pv._mismatch_text("deal_on_rows", 3, None) == "одна сделка на нескольких строках отчёта позиций (строк: 3)"
     assert pv._mismatch_text("deal_on_rows", 1, "terms_ambiguous") == (
         "одна сделка на нескольких строках отчёта позиций: условия не отнести к одной строке")
+
+
+def test_a_current_run_without_trades_lineage_says_why(seeded, store_url):
+    c, rid, _ = seeded
+    with store.connect(store_url) as con:
+        lin, sets = con.execute("SELECT lineage, position_set_ids FROM run WHERE run_id = %s", (rid,)).fetchone()
+        lin = {k: v for k, v in lin.items() if k != "intraday_trades"}
+        quiet = _run(con, lin, sets, day=date(2026, 10, 21), version="0.2.24")   # no trades sets of that date
+        off = _run(con, lin, sets, version="0.2.24")   # trades of the date there: the setting was off
+        for r in (quiet, off):
+            _pos(con, r, "N1", 1, fact={"ccy": "RUB", "instr_type": "BOND", "risk": {"RUB OFZ": [1.0]},
+                                        "extra": {"quality": "exact"}})
+            con.execute("UPDATE run SET status = 'complete', completed_at = now() WHERE run_id = %s", (r,))
+    t = _get(c, quiet, "N1")[1]["trades"]
+    assert t["state"] == "absent" and t["text"].startswith("нет данных: сделок дня на эту дату")
+    t = _get(c, off, "N1")[1]["trades"]
+    assert t["state"] == "present" and "выключен" in t["text"]
+    assert {i["state"] for i in t["items"] if i["trade_id"] == "tr-1"} == {"off"}
+
+
+def test_a_trade_moved_to_another_position_is_not_this_ones(seeded):
+    c, rid, _ = seeded
+    _, src, _ = _get(c, rid, "N1")
+    assert "tr-4" not in {i["trade_id"] for i in src["trades"]["items"]}
+
+
+def test_any_non_bond_row_with_terms_is_a_derivative(seeded):
+    c, rid, _ = seeded
+    j, src, _ = _get(c, rid, "FXT")   # value date = the business date: «other» by its date, but terms link to it
+    assert j["kind"] == "derivative" and not j["valued"] and j["market"]["basis"] == "needed"
+    assert [i["trade_id"] for i in src["trade_terms"]["items"]] == ["T16"]
+
+
+def test_an_old_run_without_rate_statuses_is_unknown():
+    from desk.api import provenance as pv
+
+    assert pv._rub_state({"rates": {"ruonia_ois": {"rows": 3}}}, "ruonia_ois") == "unknown"
+    assert pv._rub_state({}, "ruonia_ois") == "unknown"
+    assert pv._rub_state({"rates": {"status": {"ruonia_ois": "missing"}}}, "ruonia_ois") == "missing"
+
+
+def test_an_unvalued_fx_future_needs_no_terms(seeded):
+    c, rid, _ = seeded
+    j, src, mism = _get(c, rid, "FUT2")
+    assert not j["valued"] and src["trade_terms"]["state"] == "not_needed" and mism == []
+
+
+def test_an_unvalued_derivative_without_terms_says_the_list_is_short(seeded):
+    c, rid, _ = seeded
+    j, _, _ = _get(c, rid, "FX2")
+    assert any(n.startswith("условия сделки не загружены: список неполный") for n in j["market"]["notes"])
