@@ -111,7 +111,9 @@ tr.row.sel td { background: var(--accent-bg); }
   const setRange = n => { st.range = n; if (!FULL && n > N) { save(); location.reload(); return false; } return true; };
   const from = () => Math.max(0, N - st.range);
   const idxs = () => { const a = []; for (let i = from(); i < N; i++) a.push(i); return a; };
-  const agg = (L, fn) => idxs().map(i => L.reduce((s, p) => s + fn(p, i), 0));
+  // sel / fast — те же слагаемые без нулей: у ряда «только позиции вида X» fn даёт 0 всем остальным, и считать её на каждой из
+  // 2000 × 250 пар значит тратить полсекунды на строки и нули; сумма та же (слагаемые в том же порядке, ноль её не меняет)
+  const agg = (L, fn, sel, fast) => { const A = sel ? L.filter(sel) : L, g = sel ? fast : fn; return idxs().map(i => A.reduce((s, p) => s + g(p, i), 0)); };
   const atRows = (L, fn, i) => L.map(p => ({ p, v: fn(p, i) }));
 
   // ---------- панель управления ----------
@@ -152,7 +154,7 @@ tr.row.sel td { background: var(--accent-bg); }
   function riskDefs(L) {
     if (st.risk === 'factors') return [['DV01 ставки', V.dv01, css('--accent')], ['CS01', V.cs01, K.curveColors.CS01], ['Базис ОФЗ', V.basis, K.curveColors['RUB OFZ']]];
     if (st.risk === 'curves') return M.curves.filter(c => L.some(p => p.dv01ByCurve[c.id])).map(c => [c.short, V.curve(c.id), K.curveColors[c.id]]);
-    if (st.risk === 'books') return M.books.filter(b => L.some(p => p.book === b.id && p.dv01)).map((b, k) => [b.id, (p, i) => p.book === b.id ? V.dv01(p, i) : 0, K.PAL[k % K.PAL.length]]);
+    if (st.risk === 'books') return M.books.filter(b => L.some(p => p.book === b.id && p.dv01)).map((b, k) => [b.id, (p, i) => p.book === b.id ? V.dv01(p, i) : 0, K.PAL[k % K.PAL.length], p => p.book === b.id, V.dv01]);
     // по ногам (lib/instr.js): DV01 валюты — по кривым этой валюты (у кривой валюта — своя), не по валюте позиции
     return M.ccys.map(c => [c, M.curves.filter(x => x.ccy === c && x.kind === 'rate').map(x => V.curve(x.id))]).filter(([c, fs]) => fs.length && L.some(p => INSTR.dv01In(p, c)))
       .map(([c, fs]) => [c, (p, i) => fs.reduce((s, fn) => s + fn(p, i), 0), K.ccyColor(c)]);
@@ -160,7 +162,7 @@ tr.row.sel td { background: var(--accent-bg); }
   function drawRisk() {
     K.seg(pRisk.querySelector('.m'), RISKM, st.risk, v => { st.risk = v; save(); chRisk.redraw(); });
     let defs = [];
-    chRisk = series(pRisk.querySelector('.chart'), () => { const L = K.list(); defs = riskDefs(L); return defs.map(([n, fn, c]) => ({ name: n, data: agg(L, fn), color: c })); }, { fmt: v => f.dv(v), tick: 1e3, unit: 'тыс ₽/бп' });
+    chRisk = series(pRisk.querySelector('.chart'), () => { const L = K.list(); defs = riskDefs(L); return defs.map(([n, fn, c, sel, fast]) => ({ name: n, data: agg(L, fn, sel, fast), color: c })); }, { fmt: v => f.dv(v), tick: 1e3, unit: 'тыс ₽/бп' });
     chRisk.on('click', pp => {
       const i = idxs()[pp.dataIndex], d = defs[pp.seriesIndex]; if (!d) return;
       K.drill({ title: d[0] + ' на ' + f.date(DATES[i]), unit: 'тыс ₽/бп', rows: atRows(K.list(), d[1], i), note: REAL ? 'по прогону даты' : 'восстановлено по номиналам' });
@@ -173,14 +175,14 @@ tr.row.sel td { background: var(--accent-bg); }
   const MVM = [['type', 'типы'], ['ccy', 'валюты'], ['book', 'книги']];
   function mvDefs(L) {
     const B = L.filter(p => !M.deal(p));
-    if (st.mv === 'type') return M.typeRows.filter(t => !M.deal(t) && B.some(p => p.group + '.' + p.kind === t.id)).map(t => [t.label, (p, i) => p.group + '.' + p.kind === t.id ? V.mv(p, i) : 0, K.kindColor[t.kind]]);
-    if (st.mv === 'ccy') return M.ccys.filter(c => B.some(p => p.ccy === c)).map(c => [c, (p, i) => p.ccy === c ? V.mv(p, i) : 0, K.ccyColor(c)]);
-    return M.books.filter(b => B.some(p => p.book === b.id)).map((b, k) => [b.id, (p, i) => p.book === b.id ? V.mv(p, i) : 0, K.PAL[k % K.PAL.length]]);
+    if (st.mv === 'type') return M.typeRows.filter(t => !M.deal(t) && B.some(p => p.group + '.' + p.kind === t.id)).map(t => [t.label, (p, i) => p.group + '.' + p.kind === t.id ? V.mv(p, i) : 0, K.kindColor[t.kind], p => p.group + '.' + p.kind === t.id, V.mv]);
+    if (st.mv === 'ccy') return M.ccys.filter(c => B.some(p => p.ccy === c)).map(c => [c, (p, i) => p.ccy === c ? V.mv(p, i) : 0, K.ccyColor(c), p => p.ccy === c, V.mv]);
+    return M.books.filter(b => B.some(p => p.book === b.id)).map((b, k) => [b.id, (p, i) => p.book === b.id ? V.mv(p, i) : 0, K.PAL[k % K.PAL.length], p => p.book === b.id, V.mv]);
   }
   function drawMv() {
     K.seg(pMv.querySelector('.m'), MVM, st.mv, v => { st.mv = v; save(); chMv.redraw(); });
     let defs = [];
-    chMv = series(pMv.querySelector('.chart'), () => { const L = K.list(); defs = mvDefs(L); return defs.map(([n, fn, c]) => ({ name: n, data: agg(L, fn), color: c })); }, { fmt: v => f.bn(v, 1), tick: 1e9, unit: 'bn ₽', stack: true });
+    chMv = series(pMv.querySelector('.chart'), () => { const L = K.list(); defs = mvDefs(L); return defs.map(([n, fn, c, sel, fast]) => ({ name: n, data: agg(L, fn, sel, fast), color: c })); }, { fmt: v => f.bn(v, 1), tick: 1e9, unit: 'bn ₽', stack: true });
     chMv.on('click', pp => {
       const i = idxs()[pp.dataIndex], d = defs[pp.seriesIndex]; if (!d) return;
       K.drill({ title: 'MV · ' + d[0] + ' на ' + f.date(DATES[i]), unit: 'mm ₽', fmt: v => f.mn(v, 0), rows: atRows(K.list(), d[1], i), color: false });
@@ -359,8 +361,9 @@ tr.row.sel td { background: var(--accent-bg); }
     [chRisk, chMv, chPnl].forEach(c => c && c.redraw());
     drawCmp(); if (topTbl) topTbl.redraw(); drawPos();
   }
-  drawCtl(); drawRisk(); drawMv(); drawCmp(); drawPnl(); drawTop(); drawPos();
-  K.onFilter(() => { chRisk.redraw(); chMv.redraw(); drawCmp(); topTbl.redraw(); drawPos(); });
+  // на большой книге куски страницы — по задаче каждый (K.stages): таблица и сравнение — по сотне миллисекунд, одним куском вкладка замирала
+  K.stages([drawCtl, drawRisk, drawMv, drawCmp, drawPnl, drawTop, drawPos], document.getElementById('pTop'));
+  K.onFilter(() => { chRisk && chRisk.redraw(); chMv && chMv.redraw(); drawCmp(); topTbl && topTbl.redraw(); drawPos(); });
   K.onAlias(() => drawPos());  // имена бумаг пришли позже страницы: таблица — K.patchNames, перерисовка страницы (графики риска) не нужна
   K.on('theme', () => { drawCmp(); });
   K.commands([['1M', 21], ['3M', 63], ['6M', 126], ['1Y', 250]].map(([l, n]) => ({ label: 'Период: ' + l, run: () => { if (!setRange(n)) return; save(); drawAll(); } })));

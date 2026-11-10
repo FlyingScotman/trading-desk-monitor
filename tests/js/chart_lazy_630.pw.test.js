@@ -1,7 +1,7 @@
 // Графики на большой книге (TDM#630, K.chart в prototypes/concepts/lib/kit.js): график создаётся, когда его элемент подходит к
 // экрану, по одному в задаче; за экраном и в скрытой вкладке — не создаётся, пока его не покажут. До создания работают on и
 // setOption (ждут), redraw и update (берут описание при создании), dispose (график не создаётся вовсе), raw (создаёт сразу).
-// Порог «большой книги» (KIT.CHART_LAZY_MIN) занижен до 1, чтобы демо-набор шёл тем же путём.
+// Порог «большой книги» (KIT.BIG_BOOK) занижен до 1, чтобы демо-набор шёл тем же путём.
 //   node --test tests/js/chart_lazy_630.pw.test.js
 // Нужен Playwright, который находит require('playwright') (NODE_PATH, как в CI); без него тест пропускается.
 'use strict';
@@ -22,7 +22,7 @@ test('K.chart: график создаётся у экрана по одному
     await pg.goto(PAGE);
     await pg.waitForFunction(() => window.KIT && window.echarts && window.MOCK);
     const r = await pg.evaluate(async () => {
-      const K = window.KIT; K.CHART_LAZY_MIN = 1;
+      const K = window.KIT; K.BIG_BOOK = 1;
       const wrap = document.createElement('div'); wrap.style.cssText = 'position:absolute;left:0;top:0;width:600px';
       const mk = (top, id) => { const d = document.createElement('div'); d.id = id; d.style.cssText = 'position:absolute;left:0;top:' + top + 'px;width:500px;height:200px'; wrap.appendChild(d); return d; };
       document.body.appendChild(wrap);
@@ -58,6 +58,43 @@ test('K.chart: график создаётся у экрана по одному
     assert.strictEqual(r.farStill, false, 'update не создаёт график');
     assert.strictEqual(r.farAfterScroll, true, 'график создан, когда к нему доехали');
     assert.deepStrictEqual(r.farData, [70, 71], 'описание — последнее, из update');
+    assert.deepStrictEqual(errors, []);
+    await ctx.close();
+  } finally { await browser.close(); }
+});
+
+test('K.stages: на малой книге куски страницы идут подряд сразу, на большой — каждый в своей задаче; убранная страница прерывает цепочку', { skip: !pw && 'нет Playwright' }, async () => {
+  const browser = await pw.chromium.launch();
+  try {
+    const ctx = await browser.newContext({ viewport: { width: 1200, height: 800 } }), pg = await ctx.newPage(), errors = [];
+    pg.on('pageerror', e => errors.push('pageerror: ' + e.message));
+    await pg.goto(PAGE);
+    await pg.waitForFunction(() => window.KIT && window.MOCK);
+    const r = await pg.evaluate(async () => {
+      const K = window.KIT, out = {};
+      let log = [];
+      const mk = tag => () => log.push(tag);
+      // малая книга: всё сразу
+      K.BIG_BOOK = 1e9; log = []; await K.stages([mk('a'), mk('b'), mk('c')]); out.small = log.slice(); out.smallSync = (() => { log = []; K.stages([mk('x'), mk('y')]); return log.slice(); })();
+      // большая: первый сразу, остальные — каждый в своей задаче (между ними отдан кадр)
+      K.BIG_BOOK = 1; log = [];
+      const p = K.stages([mk('a'), mk('b'), mk('c')]);
+      out.bigNow = log.slice(); await p; out.bigDone = log.slice();
+      // исключение куска не обрывает цепочку
+      log = []; const spy = console.error; let errs = 0; console.error = () => { errs++; };
+      await K.stages([mk('a'), () => { throw new Error('boom'); }, mk('c')]); console.error = spy; out.afterThrow = log.slice(); out.errs = errs;
+      // страницу убрали — дальше не идём
+      log = []; const el = document.createElement('div'); document.body.appendChild(el);
+      await K.stages([() => { log.push('a'); el.remove(); }, mk('b'), mk('c')], el); out.removed = log.slice();
+      return out;
+    });
+    assert.deepStrictEqual(r.small, ['a', 'b', 'c']);
+    assert.deepStrictEqual(r.smallSync, ['x', 'y'], 'на малой книге — синхронно');
+    assert.deepStrictEqual(r.bigNow, ['a'], 'на большой первый кусок — сразу, остальные позже');
+    assert.deepStrictEqual(r.bigDone, ['a', 'b', 'c']);
+    assert.deepStrictEqual(r.afterThrow, ['a', 'c']);
+    assert.strictEqual(r.errs, 1);
+    assert.deepStrictEqual(r.removed, ['a']);
     assert.deepStrictEqual(errors, []);
     await ctx.close();
   } finally { await browser.close(); }

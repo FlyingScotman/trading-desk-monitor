@@ -214,7 +214,7 @@
         '<div class="k-note">с начала окна: ' + f.mns(HP.total.slice(0, i + 1).some(v => v != null) ? HP.total.slice(0, i + 1).reduce((a, b) => a + (b || 0), 0) : null, 1) + ' mm ₽</div>';
     }
     showDay(selDay);
-    hc.raw.getZr().on('click', e => { const pt = [e.offsetX, e.offsetY]; if (!hc.raw.containPixel('grid', pt)) return; const i = Math.round(hc.raw.convertFromPixel({ xAxisIndex: 0 }, pt[0])); if (i >= 0 && i < n) { showDay(i); hc.raw.setOption({ series: FAC.map(() => ({})).concat([{}, { symbolSize: (v, p) => p.dataIndex === selDay ? 10 : 4 }]) }); } });
+    hc.ready(ch => ch.getZr().on('click', e => { const pt = [e.offsetX, e.offsetY]; if (!ch.containPixel('grid', pt)) return; const i = Math.round(ch.convertFromPixel({ xAxisIndex: 0 }, pt[0])); if (i >= 0 && i < n) { showDay(i); ch.setOption({ series: FAC.map(() => ({})).concat([{}, { symbolSize: (v, p) => p.dataIndex === selDay ? 10 : 4 }]) }); } }));
 
     // ---------- прочее ----------
     const op = panel('«Прочее» — то, что не объяснено факторами', '<span class="k-note">' + u.unit + ' · топ-25 по модулю</span>');

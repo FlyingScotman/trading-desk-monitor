@@ -1628,9 +1628,26 @@
   // и по одному в задаче (setTimeout между ними): создание и первая отрисовка графика — 40-150 мс, и пять графиков страницы
   // одним куском блокировали вкладку на полсекунды (TDM#630); графики за пределами экрана и в скрытых вкладках не создаются
   // совсем, пока их не покажут. Возвращаемый объект работает и до создания: on и setOption ждут его, redraw и update
-  // берут описание на момент создания, raw создаёт график сразу. Так — только на большой книге (K.CHART_LAZY_MIN позиций:
+  // берут описание на момент создания, raw создаёт график сразу, ready(fn) ждёт его. Так — только на большой книге (K.isBig:
   // демо и малые прогоны рисуют графики сразу, как раньше) и при IntersectionObserver (в тестах под vm его нет).
-  K.CHART_LAZY_MIN = 300;  // книга короче — графики дёшевы и создаются сразу, как раньше
+  // большая книга: позиций не меньше K.BIG_BOOK — всё, что на ней тяжело (графики, куски страницы), делится на задачи;
+  // на малой (демо, фикстуры) всё рисуется сразу, как раньше
+  K.BIG_BOOK = 300;
+  K.isBig = () => (M.positions || []).length >= K.BIG_BOOK;
+  // Куски страницы по очереди, каждый в своей задаче (setTimeout между ними): первый — сразу, остальные — после того, как
+  // вкладка отдала кадр и обработала ввод. На малой книге — подряд и сразу. Следующий кусок не начинается, пока страницу не
+  // убрали (isConnected у el, если задан). Возвращает обещание конца (на малой книге — уже выполненное).
+  K.stages = function (fns, el) {
+    if (!K.isBig() || typeof setTimeout !== 'function') { fns.forEach(f => f()); return Promise.resolve(); }
+    return new Promise(done => {
+      const q = fns.slice(), step = () => {
+        const f = q.shift(); if (!f || (el && !el.isConnected)) return done();
+        try { f(); } catch (e) { console.error(e); }
+        setTimeout(step, 0);
+      };
+      step();
+    });
+  };
   const CQ = [];
   let cqRun = false;
   const cqPump = () => {
@@ -1641,9 +1658,9 @@
   // сколько графиков у экрана ещё не создано (тесты ждут их: settle в tests/js/fixtures/pw_pages.js)
   K.chartsPending = () => K.charts.filter(w => w.pending && w.pending()).length;
   K.chart = function (el, optFn) {
-    if (!window.echarts) { el.innerHTML = '<div class="k-empty">нет echarts</div>'; return { on() { }, dispose() { }, setOption() { } }; }
+    if (!window.echarts) { el.innerHTML = '<div class="k-empty">нет echarts</div>'; return { on() { }, dispose() { }, setOption() { }, ready() { } }; }
     let c = null, fit = false, ro = null, io = null, dead = false, queued = false;
-    const todo = [], lazy = typeof IntersectionObserver === 'function' && typeof setTimeout === 'function' && (M.positions || []).length >= K.CHART_LAZY_MIN;
+    const todo = [], lazy = typeof IntersectionObserver === 'function' && typeof setTimeout === 'function' && K.isBig();
     const build = () => {
       const o = Object.assign(K.chartBase(), typeof optFn === 'function' ? optFn() : optFn);
       axisUnits(o); axisTheme(o.xAxis); axisTheme(o.yAxis);
@@ -1657,13 +1674,16 @@
       if (io) { io.disconnect(); io = null; }
       c = echarts.init(el, null, { renderer: 'canvas' });
       c.setOption(build());
-      ro = new ResizeObserver(() => { c.resize(); if (fit && typeof optFn === 'function') c.setOption(build()); }); ro.observe(el);
+      // ResizeObserver сообщает о размере и сразу после observe — без изменения: тогда ничего не делаем (resize тяжёлого графика — 100+ мс)
+      let lw = el.clientWidth, lh = el.clientHeight;
+      ro = new ResizeObserver(() => { if (el.clientWidth === lw && el.clientHeight === lh) return; lw = el.clientWidth; lh = el.clientHeight; c.resize(); if (fit && typeof optFn === 'function') c.setOption(build()); }); ro.observe(el);
       todo.splice(0).forEach(fn => fn(c));
     };
     const w = {
       on: (...a) => c ? c.on(...a) : todo.push(x => x.on(...a)),
       setOption: (o, x) => c ? c.setOption(o, x) : todo.push(cc => cc.setOption(o, x)),
       get raw() { make(); return c; },
+      ready: fn => c ? fn(c) : todo.push(fn),  // дождаться экземпляра ECharts, не создавая его раньше времени
       redraw: () => { if (c && typeof optFn === 'function') c.setOption(build(), true); },
       dispose: () => { dead = true; if (io) io.disconnect(); if (ro) ro.disconnect(); if (c) c.dispose(); const i = K.charts.indexOf(w); if (i >= 0) K.charts.splice(i, 1); const q = CQ.indexOf(make); if (q >= 0) CQ.splice(q, 1); },
       update: fn => { optFn = fn; if (c) c.setOption(build(), true); },
@@ -1787,7 +1807,8 @@
     return 0;
   };
   // sort: [[ключ, ±1]]; col(ключ) → {val(r), sum(r)?} или null (колонки нет)
-  K.rowCmp = (sort, col) => { const C = sort.map(([k]) => col(k)); const vs = r => C.map(c => c ? c.val(r) : null); return (a, b) => cmpList(vs(a), vs(b), sort); };
+  // значения строки считаются один раз на сортировку (не на каждое сравнение: у колонок с тяжёлым val это сотни миллисекунд)
+  K.rowCmp = (sort, col) => { const C = sort.map(([k]) => col(k)), memo = new Map(); const vs = r => { let v = memo.get(r); if (!v) memo.set(r, v = C.map(c => c ? c.val(r) : null)); return v; }; return (a, b) => cmpList(vs(a), vs(b), sort); };
   // Порядок групп одного уровня (валюта, эмитент…). Без сортировки — порядок уровня (order: рубль первым, Минфин первым…).
   // С сортировкой группы — обычные поля: сортируются по тому же столбцу на каждом уровне. Столбец с итогом (DV01, MV, PnL…)
   // — по сумме группы, остальные — по первой строке группы в этом порядке (то есть столбец самой группы — валюта,
