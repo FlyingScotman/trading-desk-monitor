@@ -732,7 +732,9 @@
   };
   // сообщения lib/real.js: сбой запроса — полоса; алиасы пришли — 'alias' (страницы с именами подписываются на него, K.onAlias) и
   // точечная замена имён в таблицах (K.nameCell помечает ячейку data-pn). Событие 'filter' по приходу алиасов не рассылается:
-  // оно перерисовывает страницы целиком, а тяжёлые (C03, C04, C11, C13) от этого замирали бы вторично
+  // оно перерисовывает страницы целиком, а тяжёлые (C03, C11, C13: полная перерисовка на 850 позициях — 0,1–0,3 с) от этого замирали бы вторично.
+  // Тяжёлая страница не подписывается на K.onAlias целиком: таблицы меняет K.patchNames, нужные графики — точечно. Лёгкие (C04: ~10 мс на 850
+  // позициях; C05, C08, C10, C17) подписаны на K.onAlias и перерисовываются целиком, C07 — только подписи карты
   document.addEventListener('concepts-data', e => {
     const d = (e && e.detail) || {};
     if (d.error) return K.dataError(d.error);
@@ -2558,7 +2560,9 @@
     el._rcList = list;
     if (R.par && R.par.state === 'loading' && M.loadDeriv && !el._rcWait) {
       el._rcWait = true;
-      M.loadDeriv().then(() => { el._rcWait = false; if (el.isConnected) K.ratesCorePanel(el, el._rcList); });
+      // отклонённый запрос флаг тоже сбрасывает (следующий вызов панели спросит снова), но панель не перерисовывает: иначе она
+      // снова увидела бы 'loading' и спрашивала бы без конца
+      M.loadDeriv().then(() => { el._rcWait = false; if (el.isConnected) K.ratesCorePanel(el, el._rcList); }, () => { el._rcWait = false; });
     }
     el.innerHTML = '';
     if (!rows.length) {

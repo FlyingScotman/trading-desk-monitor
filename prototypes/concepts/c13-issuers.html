@@ -194,13 +194,13 @@ table.mini tr.put td:first-child { box-shadow: inset 3px 0 0 var(--warn); }
   }
 
   // ---------- дашборд эмитента ----------
-  let dashCharts = [], curRs = null;
+  let dashCharts = [], curRs = null, redrawCurve = null;
   // в узкой панели легенда K.riskStack наезжает на подпись правой оси: прячем подпись и опускаем сетку (и после смены темы)
   const fixRs = () => curRs && curRs.setOption({ grid: { top: 52 }, yAxis: [{}, { name: '' }] });
   K.on('theme', fixRs);
   function panel(title, extra) { const p = K.h('div', 'k-panel'); p.innerHTML = '<div class="hd"><h3>' + title + '</h3><span class="sp"></span>' + (extra || '') + '</div><div class="bd"></div>'; return p; }
   function renderDash() {
-    dashCharts.forEach(c => c.dispose()); dashCharts = [];
+    dashCharts.forEach(c => c.dispose()); dashCharts = []; redrawCurve = null;
     const dash = document.getElementById('dash'); dash.innerHTML = '';
     const x = ISS.find(i => i.id === st.sel);
     if (!x) { dash.innerHTML = '<div class="k-panel"><div class="k-empty">нет эмитентов под фильтром</div></div>'; return; }
@@ -260,7 +260,7 @@ table.mini tr.put td:first-child { box-shadow: inset 3px 0 0 var(--warn); }
       dashCharts.push(curveChart);
     };
     K.seg(cp.querySelector('.cm'), [['ytm', 'доходность'], ['spr', 'спред']], st.curve, v => { st.curve = v; save(); drawCurve(); });
-    drawCurve();
+    drawCurve(); redrawCurve = drawCurve;
     const rp = panel('Риск по бакетам', '<span class="k-note">тыс ₽/бп</span>'); two.appendChild(rp);
     const rel = K.h('div', 'ch'); rp.querySelector('.bd').appendChild(rel);
     const cids = M.curves.filter(c => L.some(p => p.risk[c.id].some(v => Math.abs(v) > 1))).map(c => c.id);
@@ -323,6 +323,8 @@ table.mini tr.put td:first-child { box-shadow: inset 3px 0 0 var(--warn); }
   }
   function renderAll() { build(); renderKpis(); K.seg(document.getElementById('meas'), Object.keys(MEAS).map(k => [k, MEAS[k].t]), st.meas, v => { st.meas = v; save(); renderStrip(); }); renderStrip(); renderList(); renderDash(); }
   K.onFilter(renderAll);
+  // имена бумаг пришли позже страницы: таблицы меняет K.patchNames, подписи точек карты эмитента — только этот график (дашборд целиком не трогаем)
+  K.onAlias(() => { if (redrawCurve) redrawCurve(); });
   K.commands(M.issuers.map(i => ({ label: 'Эмитент: ' + i.name, hint: i.sector, run: () => { if (ISS.find(x => x.id === i.id)) select(i.id, true); } })));
   renderAll();
 })();
