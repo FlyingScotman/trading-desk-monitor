@@ -13,7 +13,7 @@
 //   localStorage до скриптов страницы: запись, дошедшая позже, страницу уже не меняет); не видел — записать снова
 //   (до 5 раз), иначе ошибка.
 // settle(pg) — графики дорисованы: два кадра и 400 мс (отложенные перерисовки страниц, ResizeObserver), затем
-//   не меньше 3 кадров подряд у всех экземпляров ECharts размер совпадает с элементом, анимаций нет, кадр и
+//   не меньше 3 кадров подряд (и ни одного не созданного графика у экрана, K.chartsPending) у всех экземпляров ECharts размер совпадает с элементом, анимаций нет, кадр и
 //   отложенные действия не ждут отрисовки (то же условие, по которому ECharts шлёт событие finished). Не дождались
 //   за 10 с — ошибка.
 'use strict';
@@ -49,7 +49,8 @@ async function openWith(pg, url, ready, store) {
 const settle = async pg => {
   await pg.evaluate(() => new Promise(r => requestAnimationFrame(() => requestAnimationFrame(() => setTimeout(r, 400)))));
   await pg.evaluate(() => new Promise((resolve, reject) => {
-    const busy = () => [...document.querySelectorAll('[_echarts_instance_]')].some(el => {
+    // графики создаются по одному в задаче, когда подходят к экрану (K.chart, TDM#630): не созданные у экрана — ещё работа
+    const busy = () => (window.KIT && KIT.chartsPending && KIT.chartsPending() > 0) || [...document.querySelectorAll('[_echarts_instance_]')].some(el => {
       const inst = window.echarts && echarts.getInstanceByDom(el);
       if (!inst || inst.isDisposed()) return false;
       const zr = inst.getZr();

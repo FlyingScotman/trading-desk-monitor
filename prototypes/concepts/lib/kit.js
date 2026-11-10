@@ -1624,9 +1624,26 @@
     }
   }
   K.axisUnits = axisUnits;
+  // График ECharts. Создаётся не сразу, а когда его элемент вот-вот появится на экране (IntersectionObserver, запас 200 px),
+  // и по одному в задаче (setTimeout между ними): создание и первая отрисовка графика — 40-150 мс, и пять графиков страницы
+  // одним куском блокировали вкладку на полсекунды (TDM#630); графики за пределами экрана и в скрытых вкладках не создаются
+  // совсем, пока их не покажут. Возвращаемый объект работает и до создания: on и setOption ждут его, redraw и update
+  // берут описание на момент создания, raw создаёт график сразу. Так — только на большой книге (K.CHART_LAZY_MIN позиций:
+  // демо и малые прогоны рисуют графики сразу, как раньше) и при IntersectionObserver (в тестах под vm его нет).
+  K.CHART_LAZY_MIN = 300;  // книга короче — графики дёшевы и создаются сразу, как раньше
+  const CQ = [];
+  let cqRun = false;
+  const cqPump = () => {
+    if (cqRun || !CQ.length) return;
+    cqRun = true;
+    setTimeout(() => { cqRun = false; const f = CQ.shift(); try { f(); } catch (e) { console.error(e); } cqPump(); }, 0);
+  };
+  // сколько графиков у экрана ещё не создано (тесты ждут их: settle в tests/js/fixtures/pw_pages.js)
+  K.chartsPending = () => K.charts.filter(w => w.pending && w.pending()).length;
   K.chart = function (el, optFn) {
     if (!window.echarts) { el.innerHTML = '<div class="k-empty">нет echarts</div>'; return { on() { }, dispose() { }, setOption() { } }; }
-    let c = echarts.init(el, null, { renderer: 'canvas' }), fit = false;
+    let c = null, fit = false, ro = null, io = null, dead = false, queued = false;
+    const todo = [], lazy = typeof IntersectionObserver === 'function' && typeof setTimeout === 'function' && (M.positions || []).length >= K.CHART_LAZY_MIN;
     const build = () => {
       const o = Object.assign(K.chartBase(), typeof optFn === 'function' ? optFn() : optFn);
       axisUnits(o); axisTheme(o.xAxis); axisTheme(o.yAxis);
@@ -1635,10 +1652,29 @@
       if (o.legend) o.legend = Object.assign({ textStyle: { color: css('--fg-2') }, inactiveColor: css('--fg-3'), itemWidth: 12, itemHeight: 8 }, o.legend);
       return o;
     };
-    c.setOption(build());
-    const ro = new ResizeObserver(() => { c.resize(); if (fit && typeof optFn === 'function') c.setOption(build()); }); ro.observe(el);
-    const w = { on: (...a) => c.on(...a), setOption: (o, x) => c.setOption(o, x), raw: c, redraw: () => { if (typeof optFn === 'function') c.setOption(build(), true); }, dispose: () => { ro.disconnect(); c.dispose(); const i = K.charts.indexOf(w); if (i >= 0) K.charts.splice(i, 1); }, update: fn => { optFn = fn; c.setOption(build(), true); } };
+    const make = () => {
+      if (c || dead) return;
+      if (io) { io.disconnect(); io = null; }
+      c = echarts.init(el, null, { renderer: 'canvas' });
+      c.setOption(build());
+      ro = new ResizeObserver(() => { c.resize(); if (fit && typeof optFn === 'function') c.setOption(build()); }); ro.observe(el);
+      todo.splice(0).forEach(fn => fn(c));
+    };
+    const w = {
+      on: (...a) => c ? c.on(...a) : todo.push(x => x.on(...a)),
+      setOption: (o, x) => c ? c.setOption(o, x) : todo.push(cc => cc.setOption(o, x)),
+      get raw() { make(); return c; },
+      redraw: () => { if (c && typeof optFn === 'function') c.setOption(build(), true); },
+      dispose: () => { dead = true; if (io) io.disconnect(); if (ro) ro.disconnect(); if (c) c.dispose(); const i = K.charts.indexOf(w); if (i >= 0) K.charts.splice(i, 1); const q = CQ.indexOf(make); if (q >= 0) CQ.splice(q, 1); },
+      update: fn => { optFn = fn; if (c) c.setOption(build(), true); },
+      pending: () => { if (c || dead || !el.isConnected) return false; const r = el.getBoundingClientRect(); return r.width > 0 && r.bottom > -200 && r.top < (window.innerHeight || 1000) + 200; },
+    };
     K.charts.push(w);
+    if (!lazy) make();
+    else {
+      io = new IntersectionObserver(es => { if (es.some(e => e.isIntersecting) && !queued) { queued = true; CQ.push(make); cqPump(); } }, { rootMargin: '200px' });
+      io.observe(el);
+    }
     return w;
   };
 
