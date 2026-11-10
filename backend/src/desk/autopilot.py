@@ -46,7 +46,7 @@ every ``inbox_poll_seconds`` and on ``POST /api/v1/autopilot/run``):
    reason and the ISINs (``inbox.scan.unmapped``, D6).
 4. **intraday** (with the hub and the ``intraday`` setting, R11): on a business day from 10:00 MSK, today's book
    (the latest position sets, carried forward: ``store.positions_for``) valued on the hub's newest ``intraday``
-   cut of today, from 19:45 on its ``eod_preliminary`` cut: the EOD code path (``cli.eod_run``) on another market
+   cut of today, from 19:45 on its ``eod_preliminary`` cut: the EOD code path (``dayrun.eod_run``) on another market
    snapshot, an INTRADAY run (a preliminary one is an EOD run, the date's default until the final). The step asks
    the hub itself, whatever the sync step's outcome (a failed older date never blocks it, #20; the hub found down
    this cycle does, ``hub_error``, #147): one list call
@@ -66,7 +66,7 @@ every ``inbox_poll_seconds`` and on ``POST /api/v1/autopilot/run``):
    **morning** (#21, with or without the hub): on a business day from ``MORNING_FROM`` (07:00 MSK; earlier once a
    current position set has report date today, e.g. today's ``start_of_day`` report, valid the day before), until today has a run on its own market (an EOD run, an intraday cut's
    run), today's book (``store.current_sets``) valued on the previous business day's close in the cache (its
-   ``eod_final``, else its ``eod_preliminary``): ``cli.eod_run(on_close=...)``, an INTRADAY run of today with
+   ``eod_final``, else its ``eod_preliminary``): ``dayrun.eod_run(on_close=...)``, an INTRADAY run of today with
    ``cut_type`` ``prev_close``, lineage ``market_close`` {date, cut_type}, no flash PnL (``pnl_basis`` says why), its
    label «16.10 · закрытие 15.10» (``store.slice_label``). Made again only when the position sets, the close, the
    private inputs hash (#547, as the intraday run) or the logic (``backfill.same_logic``) change, or an ``ocp`` report
@@ -361,7 +361,7 @@ class Autopilot:
         self._history_dates: tuple[float, int, list[tuple[str, str]]] | None = None
         self._static_polled = float("-inf")    # monotonic time the hub's newest static was last asked for (R25)
         self._backfill_rows: tuple[float, str, list[tuple[str, str]]] | None = None  # (listed at, from, hub rows)
-        self._contexts: Any = None  # the backfill's prepared dates, kept between its runs (cli.ContextCache)
+        self._contexts: Any = None  # the backfill's prepared dates, kept between its runs (dayrun.ContextCache)
         self._last_backfill: dict[str, Any] | None = None  # the last finished backfill step, of any cycle (TDM#587)
         self._stall_now = True  # the backfill runs at once, its stall's wait left out: a start or a manual cycle (#447)
         self._hub_answered = False  # this cycle's sync step read the hub: the backfill's downloads are told by it (#447)
@@ -954,7 +954,7 @@ class Autopilot:
     def _backfill(self, settings: Settings, con: psycopg.Connection, url: str | None, hub: bool,
                   ran: list[str]) -> tuple[str, str]:
         """The backfill step (module doc, ``desk.backfill``)."""
-        from .cli import ContextCache
+        from .dayrun import ContextCache
 
         if self._inbox_waiting and self._sync_later:
             return "skipped", "after the inbox backlog"
@@ -1035,7 +1035,7 @@ class Autopilot:
 
     def _eod(self, settings: Settings, con: psycopg.Connection, url: str | None, extra: list[str],
              ran: list[str]) -> tuple[str, str]:
-        from .cli import eod_run
+        from .dayrun import eod_run
 
         self._eod_tried = set()
 
@@ -1063,7 +1063,7 @@ class Autopilot:
             if not n:
                 continue
             snap = sd.market_id(d)
-            pc = previous_close(sd, d)  # cli.eod_run's: the newest earlier close, its final preferred (#203)
+            pc = previous_close(sd, d)  # dayrun.eod_run's: the newest earlier close, its final preferred (#203)
             prev = pc[2] if pc else None
             run = runs.get(date.fromisoformat(d))
             inputs_hash = trades.intraday_inputs(con, date.fromisoformat(d), settings)[0].private_inputs_hash  # TDM#557
@@ -1163,7 +1163,7 @@ class Autopilot:
 
     def _intraday_step(self, settings: Settings, con: psycopg.Connection, url: str | None,
                        ran: list[str]) -> tuple[str, str, str]:
-        from .cli import eod_run
+        from .dayrun import eod_run
 
         if not getattr(settings, "intraday", True):
             return "skipped", "off in the settings (intraday)", "off"
@@ -1210,12 +1210,12 @@ class Autopilot:
         if target is None and last is not None and sorted(last[3]) != ids:
             target = (last[1], "positions changed")
         sd = SnapshotDir(Path(settings.snapshot_cache))
-        pc = previous_close(sd, today.isoformat())  # cli.eod_run's (#203)
+        pc = previous_close(sd, today.isoformat())  # dayrun.eod_run's (#203)
         prev_id = pc[2] if pc else None
         if target is None and last is not None and last[4] != prev_id:
             target = (last[1], "previous close changed")  # the previous close arrived (or was corrected) after it
         inputs_hash = None
-        if last is not None:  # every run values the day's trades too (TDM#557), as cli.eod_run does
+        if last is not None:  # every run values the day's trades too (TDM#557), as dayrun.eod_run does
             inputs_hash = trades.intraday_inputs(con, today, settings)[0].private_inputs_hash
         if target is None and last is not None and last[5] != inputs_hash:
             target = (last[1], "private inputs changed")  # e.g. trade terms of an earlier date, in force today (#547)
@@ -1283,7 +1283,7 @@ class Autopilot:
 
     def _morning_step(self, settings: Settings, con: psycopg.Connection, url: str | None,
                       ran: list[str]) -> tuple[str, str, str]:
-        from .cli import eod_run
+        from .dayrun import eod_run
 
         now = self._now().astimezone(MSK)
         today = now.date()

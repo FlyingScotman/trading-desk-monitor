@@ -14,7 +14,7 @@ import test_slice_s3
 from test_autopilot import cfg, put, steps
 from test_intraday import FRI, at, publish
 
-from desk import store, trades
+from desk import dayrun, store, trades
 from desk.autopilot import Autopilot
 from desk.inbox import scan
 from desk.pnl import new_trades as nt
@@ -1075,9 +1075,8 @@ def test_the_lineage_counts_the_trades_outside_the_total(day, monkeypatch):
 
 
 def test_the_lineage_says_when_there_is_no_previous_close(day, monkeypatch):
-    from desk import cli
 
-    monkeypatch.setattr(cli, "previous_close", lambda sd, d: None)
+    monkeypatch.setattr(dayrun, "previous_close", lambda sd, d: None)
     day.drop(trade_line("S1", "sell", 1000, 62.0, 5_000.0))
     lin = lineage(day.url, day.latest_id())
     assert lin["outside_total"] == nt.outside_total(1, no_prev_close=True)   # the same keys as always, zeros where empty

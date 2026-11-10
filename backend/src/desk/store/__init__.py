@@ -108,7 +108,7 @@ class Loaded:
 def load_positions(con: psycopg.Connection, rows: list[tuple[str, str, str, float]], *, valid_date: date,
                    source_name: str, source_sha256: str, recorded_by: str | None = None,
                    books: list[str] | None = None) -> list[Loaded]:
-    """rows: (position_id, book_id, secid, quantity), as ``cli.read_book`` returns them. The load covers
+    """rows: (position_id, book_id, secid, quantity), as ``bookfile.read_book`` returns them. The load covers
     ``books`` (default: the books of the rows): one position set per book, revision = the previous one of
     (book, valid_date) + 1; a covered book without rows gets an empty set (closed or dropped), unless its
     latest set of the date is empty already. Raises InputError, writing nothing, when a position id is

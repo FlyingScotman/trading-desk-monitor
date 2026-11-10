@@ -5,7 +5,7 @@
 
 Dev only (needs the ``dev`` extra: pgserver, an embedded PostgreSQL). Builds in a temporary folder a store with:
 
-* one real EOD run of the fixture's bonds (``cli.eod_run``), the template: its facts, PnL and references;
+* one real EOD run of the fixture's bonds (``dayrun.eod_run``), the template: its facts, PnL and references;
 * ``--runs`` default EOD runs on consecutive weekdays up to 2026-10-15, each ``--positions`` positions in
   ``--books`` books, cloned from the template's facts (face, PV and risk drifting by date), each position on a
   bond of its own (``SYN0000``...);
@@ -42,7 +42,7 @@ sys.path.insert(1, str(BACKEND / "tests"))  # after any PYTHONPATH: an older che
 import psycopg
 from psycopg.types.json import Jsonb
 
-from desk import cli, store
+from desk import dayrun, store
 from desk.api.app import create_app
 from desk.marketdata.bundle import SnapshotDir, read_bundle
 from desk.orchestrator import prepare
@@ -73,8 +73,8 @@ def template(tmp: Path, url: str) -> int:
     book = tmp / "book.csv"
     book.write_text("position_id,book_id,secid,quantity_bonds\n" + "".join(
         f"T{i:02d},TPL,{s},{1000 + 250 * i}\n" for i, s in enumerate(secids)), encoding="utf-8")
-    kw = {"read_model": False} if "read_model" in inspect.signature(cli.eod_run).parameters else {}
-    rid = cli.eod_run(Settings(home=tmp / "home", snapshot_cache=cache), DATE, store_url=url, book=str(book),
+    kw = {"read_model": False} if "read_model" in inspect.signature(dayrun.eod_run).parameters else {}
+    rid = dayrun.eod_run(Settings(home=tmp / "home", snapshot_cache=cache), DATE, store_url=url, book=str(book),
                       out=lambda s: None, **kw)
     assert rid
     return rid

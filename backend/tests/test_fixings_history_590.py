@@ -12,7 +12,7 @@ from datetime import UTC, date, datetime, timedelta
 import pytest
 from test_swaps_repo_tdm45 import BD, FIX, leg
 
-from desk import backfill, cli, store
+from desk import backfill, dayrun, store
 from desk.marketdata import fixing_history as fh
 from desk.marketdata.bundle import SnapshotDir
 from desk.orchestrator import prepare
@@ -123,8 +123,8 @@ def test_load_status_and_the_card(tmp_path, store_url):
         s = Settings(home=tmp_path / "home", snapshot_cache=tmp_path / "cache", store_url=store_url)
         doc = backfill.status(con, s, today=date(2026, 10, 15))
     assert doc["fixings_history"]["rows"] == 4 and doc["fixings_history"]["loading"] is False
-    assert cli.stored_fixings(store_url, BD).rows["RUONIA"][0]["fixing_date"] == "2026-09-01"
-    assert cli.stored_fixings("postgresql://nobody@127.0.0.1:1/none", BD, out=lambda s: None) is None
+    assert dayrun.stored_fixings(store_url, BD).rows["RUONIA"][0]["fixing_date"] == "2026-09-01"
+    assert dayrun.stored_fixings("postgresql://nobody@127.0.0.1:1/none", BD, out=lambda s: None) is None
 
 
 def test_a_history_before_the_hubs_calendar_is_its_own_publication_calendar(plain):

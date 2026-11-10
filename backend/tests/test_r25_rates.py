@@ -16,7 +16,7 @@ from fastapi.testclient import TestClient
 from test_hub_history import LINKER, TODAY, client, desk_on_api, hub, server, sync  # noqa: F401 - fixtures
 from test_market_history import DATE, FIX, OFZ, fixture_cache
 
-from desk import cli, store
+from desk import dayrun, store
 from desk.api import create_app
 from desk.curves import proxy
 from desk.marketdata import hubhistory
@@ -87,7 +87,7 @@ def _run(tmp_path, store_url):
     cache = fixture_cache(tmp_path)
     book = tmp_path / "book.csv"
     book.write_text(f"position_id,book_id,secid,quantity_bonds\nP1,OFZ,{OFZ},10\nP3,OFZ,{LINKER},7\n", encoding="utf-8")
-    assert cli.eod_run(Settings(home=tmp_path / "home", snapshot_cache=cache), DATE, store_url=store_url,
+    assert dayrun.eod_run(Settings(home=tmp_path / "home", snapshot_cache=cache), DATE, store_url=store_url,
                        book=str(book), no_pnl=True, out=[].append) == 1
 
 

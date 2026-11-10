@@ -25,8 +25,8 @@ upgrade recomputes only the latest date. Nothing ever computed an older date.
    ``logic_version()`` recompute the history; a new release or Windows bundle of the same computation does not). Otherwise it is skipped: nothing
    is computed twice.
 3. **runs**, oldest first: the date's bundle and the previous date's (flash PnL) from the hub when not cached, or
-   cached under another snapshot than the hub's of the plan (a correction of an older date, #439) (``cache.sync``), then ``cli.eod_run``, the code path of every EOD run. The prepared market of a date is kept for
-   the next one (its previous date: ``cli.ContextCache``), so each date's static snapshot and curves are built once.
+   cached under another snapshot than the hub's of the plan (a correction of an older date, #439) (``cache.sync``), then ``dayrun.eod_run``, the code path of every EOD run. The prepared market of a date is kept for
+   the next one (its previous date: ``dayrun.ContextCache``), so each date's static snapshot and curves are built once.
    One date at a time: a model price carries its bond's spread from the latest earlier run
    (``store.carried_spreads``), so a date's run depends on the runs before it; dates in parallel would compute
    other numbers. A date that fails is not tried again on the same inputs (``STATE_FILE``). A run that created
@@ -485,7 +485,7 @@ def run(settings: Settings, p: Plan, *, store_url: str | None = None, client: An
     stall the run stopped on or None, seconds}. ``progress(x, m, date)``, before each date (TDM#587): ``x`` the dates of
     the plan already current (``done``) plus those this run computed, ``m`` the dates with positions and a close
     (done, to run, failed), ``date`` the one computed now: «посчитано x из m, сейчас ДД.ММ», from the first date."""
-    from .cli import ContextCache, eod_run
+    from .dayrun import ContextCache, eod_run
 
     t0 = time.monotonic()
     contexts = contexts if contexts is not None else ContextCache()

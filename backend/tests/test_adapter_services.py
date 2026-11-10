@@ -19,7 +19,7 @@ from fastapi.testclient import TestClient
 from test_r23_backfill import cache, load  # noqa: F401 - the synthetic market fixture
 
 from desk import adapter_services as svcs
-from desk import cli, helper_proc, store
+from desk import bookfile, dayrun, helper_proc, store
 from desk.acquisition import Acquisition, FlowError
 from desk.api import create_app
 from desk.autopilot import Autopilot
@@ -766,14 +766,14 @@ def test_scheduler_login_pause_backoff_restart_and_after_positions(tmp_path, sto
 
 def morning_run(st: Settings) -> int:
     close = ("2026-10-15", "eod_final")
-    return cli.eod_run(st, FRI.isoformat(), report_dir=None, out=lambda _: None, run_type="INTRADAY",
+    return dayrun.eod_run(st, FRI.isoformat(), report_dir=None, out=lambda _: None, run_type="INTRADAY",
                        on_close=close, market_snapshot_id=SnapshotDir(st.snapshot_cache).market_id(*close))
 
 
 def test_feed_ingests_as_its_source_and_recomputes_the_eod_and_todays_run(tmp_path, store_url, cache):  # noqa: F811
     st = make(tmp_path, snapshot_cache=cache, store_url=store_url)
     load(store_url, tmp_path, "2026-10-15", 10)
-    cli.eod_run(st, "2026-10-15", report_dir=None, out=lambda _: None)
+    dayrun.eod_run(st, "2026-10-15", report_dir=None, out=lambda _: None)
     old_morning = morning_run(st)
     with store.connect(store_url) as con:
         old_eod = store.default_runs(con, date(2026, 10, 15))[date(2026, 10, 15)]["run_id"]
@@ -904,7 +904,7 @@ def test_manual_acquisition_recomputes_todays_run_547(tmp_path, store_url, cache
                   acquisition_python=Path(sys.executable), inbox_archive=tmp_path / "archive", inbox_poll_seconds=0,
                   inbox_lookback_days=0, snapshot_cache=cache, store_url=store_url)
     load(store_url, tmp_path, "2026-10-15", 10)
-    cli.eod_run(st, "2026-10-15", report_dir=None, out=lambda _: None)
+    dayrun.eod_run(st, "2026-10-15", report_dir=None, out=lambda _: None)
     old_morning = morning_run(st)
     service_ = Acquisition(lambda: st, store_url, today=lambda: FRI)
     try:
@@ -1104,7 +1104,7 @@ def test_a_feed_of_the_owners_books_gets_them_as_a_repeated_field(tmp_path, stor
         f = tmp_path / "old.csv"   # the inactive book has positions too: only the book list keeps it out
         f.write_text("position_id,book_id,secid,quantity_bonds\nP9,OLD,SU26238RMFS4,3\n", encoding="utf-8")
         with store.connect(store_url) as con:
-            cli._load(con, f, "2026-10-15", out=lambda _: None)
+            bookfile.load_book(con, f, "2026-10-15", out=lambda _: None)
         books = [{"book_id": b, "name": b, "desk": "Test", "book_type": "TRADING", "entity": "TEST", "active": a}
                  for b, a in (("OFZ", True), ("CORP", True), ("OLD", False))]
         with store.connect(store_url) as con:

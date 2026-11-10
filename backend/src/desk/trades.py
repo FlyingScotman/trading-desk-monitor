@@ -7,7 +7,7 @@ a ``trade_id`` is its highest ``trade_version`` over the date's cumulative expor
 ``store.versioned_rows``); a cancelled trade stays with its status, a late booking (``trade_date`` before the date)
 is a trade of the date and is marked ``late``.
 
-**The day's book** (``apply_intraday``, TDM#557): every run of date D (``cli.eod_run``: the autopilot's intraday and
+**The day's book** (``apply_intraday``, TDM#557): every run of date D (``dayrun.eod_run``: the autopilot's intraday and
 morning steps, the preliminary and the final close, a backfill; setting ``intraday_trades``, on by default) values the
 positions of D plus the day's trades. A book whose latest report is older than D (valid before D) is carried: its set
 plus the trades of the days after the report (a late report) plus the trades of D. A book with the report of D (valid
@@ -25,7 +25,7 @@ a run (the autopilot's steps, ``recompute``, ``backfill``, ``acquisition``) take
 run's lineage ``intraday_trades`` says what was applied. The PnL of a changed row is the start-of-day position's plus
 the trades' own (``new_trades``, ``pnl.new_trades``): ``apply_intraday`` hands over, besides the lineage summary,
 ``trades`` (each applied trade of D with the row it hit, its price and accrued), ``rows`` (per changed row: start and
-final quantity) and ``start_inputs`` (the positions at the start of D), which ``cli.eod_run`` takes out before the
+final quantity) and ``start_inputs`` (the positions at the start of D), which ``dayrun.eod_run`` takes out before the
 lineage.
 
 ``view(con, on, book_id, days)`` is ``GET /api/v1/trades``: the date's current trades (optionally of one book), the
@@ -613,7 +613,7 @@ def intraday_inputs(con: psycopg.Connection, day: date, settings: Any,
                     inputs: store.PositionInputs | None = None) -> tuple[store.PositionInputs, dict[str, Any] | None]:
     """The positions of ``day`` as an INTRADAY run values them: ``inputs`` (default ``store.positions_for``) with the
     day's trades applied, and the summary for the lineage. Unchanged, with None, when ``settings.intraday_trades`` is
-    off or there are no positions. The one place that decides it: the run (``cli.eod_run``) and every comparison of an
+    off or there are no positions. The one place that decides it: the run (``dayrun.eod_run``) and every comparison of an
     INTRADAY run's ``private_inputs_hash`` (autopilot, ``recompute``) go through it."""
     if inputs is None:
         inputs = store.positions_for(con, day)

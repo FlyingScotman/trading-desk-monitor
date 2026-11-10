@@ -17,7 +17,7 @@ import pytest
 from fastapi.testclient import TestClient
 from test_market_history import DATE, FIX, FLOATER, OFZ, fixture_cache, rows
 
-from desk import autopilot, cli, store
+from desk import autopilot, cli, dayrun, store
 from desk.api import create_app
 from desk.marketdata import hubhistory
 from desk.marketdata.hub import (
@@ -291,7 +291,7 @@ def desk_on_api(hub, tmp_path, store_url):
     book.write_text(f"position_id,book_id,secid,quantity_bonds\nP1,OFZ,{OFZ},10\nP2,OFZ,{FLOATER},5\n"
                     f"P3,OFZ,{LINKER},7\n", encoding="utf-8")
     out: list[str] = []
-    assert cli.eod_run(Settings(home=tmp_path / "home", snapshot_cache=cache), DATE, store_url=store_url,
+    assert dayrun.eod_run(Settings(home=tmp_path / "home", snapshot_cache=cache), DATE, store_url=store_url,
                        book=str(book), no_pnl=True, out=out.append) == 1, out
     with store.connect(store_url) as con:
         r = sync(con, client(hub, tmp_path), held=hubhistory.held_secids(con))
@@ -369,7 +369,7 @@ def test_market_endpoint_ruonia_lag_and_mid_only_curves(hub, tmp_path, store_url
     cache = fixture_cache(tmp_path)
     book = tmp_path / "book.csv"
     book.write_text(f"position_id,book_id,secid,quantity_bonds\nP1,OFZ,{OFZ},10\n", encoding="utf-8")
-    assert cli.eod_run(Settings(home=tmp_path / "home", snapshot_cache=cache), DATE, store_url=store_url,
+    assert dayrun.eod_run(Settings(home=tmp_path / "home", snapshot_cache=cache), DATE, store_url=store_url,
                        book=str(book), no_pnl=True, out=[].append) == 1
     with store.connect(store_url) as con:
         assert not sync(con, client(hub, tmp_path)).errors
@@ -383,7 +383,7 @@ def test_market_endpoint_without_the_api(store_url, tmp_path):
     cache = fixture_cache(tmp_path)
     book = tmp_path / "book.csv"
     book.write_text(f"position_id,book_id,secid,quantity_bonds\nP1,OFZ,{OFZ},10\n", encoding="utf-8")
-    assert cli.eod_run(Settings(home=tmp_path / "home", snapshot_cache=cache), DATE, store_url=store_url,
+    assert dayrun.eod_run(Settings(home=tmp_path / "home", snapshot_cache=cache), DATE, store_url=store_url,
                        book=str(book), no_pnl=True, out=[].append) == 1
     m = TestClient(create_app(store_url)).get("/api/v1/history/market?run_id=1").json()
     assert m["marketDate"] == DATE and OFZ in m["bonds"] and m["indices"] == {} and m["curves"].keys() == {"OFZ"}

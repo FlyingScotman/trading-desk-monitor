@@ -208,7 +208,7 @@ there is one, else its ``eod_preliminary`` (the previous day's preliminary close
 def previous_market(snapshots: SnapshotDir, business_date: str) -> tuple[str, str] | None:
     """(date, cut_type) of the market snapshot the flash PnL of ``business_date`` is measured against: the newest
     cached close before it, ``eod_final`` preferred over ``eod_preliminary`` on the same date; None without either.
-    Whether it is the previous business day is for the caller (``desk.cli.pnl_basis``), which has the calendar."""
+    Whether it is the previous business day is for the caller (``desk.dayrun.pnl_basis``), which has the calendar."""
     found = [(d, -i, cut) for i, cut in enumerate(PREV_CUTS)
              if (d := snapshots.previous_market_date(business_date, cut))]
     return (max(found)[0], max(found)[2]) if found else None
@@ -217,7 +217,7 @@ def previous_market(snapshots: SnapshotDir, business_date: str) -> tuple[str, st
 def previous_close(snapshots: SnapshotDir, business_date: str,
                    hub: dict[str, str] | None = None) -> tuple[str, str, str] | None:
     """(date, cut_type, market snapshot id) of the previous close of ``business_date``: the one rule of the
-    backfill's plan, the autopilot's eod and intraday steps and ``desk.cli.eod_run`` (#203). ``hub``: the hub's
+    backfill's plan, the autopilot's eod and intraday steps and ``desk.dayrun.eod_run`` (#203). ``hub``: the hub's
     ``eod_final`` closes (date: snapshot id, ``backfill.hub_rows``); None: the cache alone (``previous_market``).
 
     The newest close before the date of the cache and the hub together; on one date an ``eod_final`` over an

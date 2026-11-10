@@ -16,7 +16,7 @@ import test_slice_s3
 from fastapi.testclient import TestClient
 from test_slice_s3 import TOKEN
 
-from desk import autopilot, cli, logic_version, store
+from desk import autopilot, cli, dayrun, logic_version, store
 from desk.api import create_app
 from desk.autopilot import LOCK_FILE, Autopilot, CycleLock, progress_text
 from desk.inbox import scan
@@ -140,7 +140,7 @@ def test_failed_eod_is_not_retried_until_inputs_change(tmp_path, store_url, monk
         calls.append(a[1])
         raise ValueError("boom")
 
-    monkeypatch.setattr(cli, "eod_run", broken)
+    monkeypatch.setattr(dayrun, "eod_run", broken)
     ap = Autopilot(settings_loader=lambda: cfg(tmp_path, store_url), today=lambda: TODAY)
     st = ap.run_cycle()
     assert st["state"] == "error" and steps(st)["eod"] == ("error", "2026-10-15 failed (ValueError: boom)")
@@ -161,20 +161,20 @@ def test_failed_eod_is_retried_once_after_an_upgrade(tmp_path, store_url, monkey
         shutil.copy(p, tmp_path / "cache" / p.name)
     put(tmp_path, "positions_20261016.csv")
     calls = []
-    real = cli.eod_run
+    real = dayrun.eod_run
 
     def broken(*a, **kw):
         calls.append(a[1])
         raise ValueError("time zone not recognized")
 
-    monkeypatch.setattr(cli, "eod_run", broken)
+    monkeypatch.setattr(dayrun, "eod_run", broken)
     monkeypatch.setenv("DESK_BUNDLE_VERSION", "0.2.4-20261022-aaaaaaa")
     ap = Autopilot(settings_loader=lambda: cfg(tmp_path, store_url), today=lambda: TODAY)
     assert steps(ap.run_cycle())["eod"][0] == "error"
     assert steps(ap.run_cycle())["eod"] == ("skipped", "2026-10-15 failed before on the same inputs, not retried")
     assert calls == ["2026-10-15"]
 
-    monkeypatch.setattr(cli, "eod_run", lambda *a, **kw: (calls.append(a[1]), real(*a, **kw))[1])
+    monkeypatch.setattr(dayrun, "eod_run", lambda *a, **kw: (calls.append(a[1]), real(*a, **kw))[1])
     monkeypatch.setenv("DESK_BUNDLE_VERSION", "0.2.5-20261023-bbbbbbb")  # the fixed program installed
     assert steps(ap.run_cycle())["eod"] == ("ok", "2026-10-15 run 1 (no default run)")
     assert steps(ap.run_cycle())["eod"][0] == "skipped" and calls == ["2026-10-15", "2026-10-15"]
@@ -191,7 +191,7 @@ def test_failed_eod_on_a_new_version_is_not_retried_within_it(tmp_path, store_ur
         calls.append(a[1])
         raise ValueError("boom")
 
-    monkeypatch.setattr(cli, "eod_run", broken)
+    monkeypatch.setattr(dayrun, "eod_run", broken)
     monkeypatch.setenv("DESK_BUNDLE_VERSION", "0.2.4-20261022-aaaaaaa")
     ap = Autopilot(settings_loader=lambda: cfg(tmp_path, store_url), today=lambda: TODAY)
     ap.run_cycle()
@@ -271,7 +271,7 @@ def test_upgrade_leaves_older_dates_alone(tmp_path, monkeypatch):
     monkeypatch.setattr(ap_mod.store, "dataset_set_ids", lambda con, *a, **kw: {})  # no OCP report, no balances
     monkeypatch.setattr(ap_mod.store, "reference_rev_ids", lambda con, *a, **kw: {})
     calls: list[str] = []
-    monkeypatch.setattr(cli, "eod_run", lambda settings, d, **kw: calls.append(d) or len(calls) + 2)
+    monkeypatch.setattr(dayrun, "eod_run", lambda settings, d, **kw: calls.append(d) or len(calls) + 2)
     ap = Autopilot(settings_loader=lambda: Settings(home=tmp_path), today=lambda: TODAY)
     ran: list[str] = []
     st = ap._eod(Settings(home=tmp_path, snapshot_cache=tmp_path), None, None, [], ran)
@@ -321,7 +321,7 @@ def test_eod_leaves_past_dates_with_new_trades_to_the_backfill_in_the_trading_ho
     monkeypatch.setattr(ap_mod.store, "dataset_set_ids", lambda con, *a, **kw: {})
     monkeypatch.setattr(ap_mod.store, "reference_rev_ids", lambda con, *a, **kw: {})
     calls: list[str] = []
-    monkeypatch.setattr(cli, "eod_run", lambda settings, d, **kw: calls.append(d) or len(calls) + 2)
+    monkeypatch.setattr(dayrun, "eod_run", lambda settings, d, **kw: calls.append(d) or len(calls) + 2)
     ap = Autopilot(settings_loader=lambda: Settings(home=tmp_path), today=lambda: TODAY,
                    now=lambda: datetime.combine(TODAY, dtime(hh, 0), MSK))
     ap._eod(Settings(home=tmp_path, snapshot_cache=tmp_path, backfill=backfill_on), None, None, [], [])
@@ -360,7 +360,7 @@ def test_eod_still_runs_a_date_the_cycle_was_asked_for_in_the_trading_hours(tmp_
     monkeypatch.setattr(ap_mod.store, "dataset_set_ids", lambda con, *a, **kw: {})
     monkeypatch.setattr(ap_mod.store, "reference_rev_ids", lambda con, *a, **kw: {})
     calls: list[str] = []
-    monkeypatch.setattr(cli, "eod_run", lambda settings, d, **kw: calls.append(d) or len(calls) + 2)
+    monkeypatch.setattr(dayrun, "eod_run", lambda settings, d, **kw: calls.append(d) or len(calls) + 2)
     ap = Autopilot(settings_loader=lambda: Settings(home=tmp_path), today=lambda: TODAY,
                    now=lambda: datetime.combine(TODAY, dtime(11, 0), MSK))
     ap._eod(Settings(home=tmp_path, snapshot_cache=tmp_path), None, None, ["2026-10-14"], [])

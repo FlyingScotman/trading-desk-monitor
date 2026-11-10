@@ -14,7 +14,7 @@ import pytest
 from test_inbox_r22 import CONFIG, GOOD, put
 from test_market_history import FIX, OFZ, STATIC, USD_FACE, shifted, write
 
-from desk import backfill, cli, store
+from desk import backfill, bookfile, cli, dayrun, store
 from desk.autopilot import Autopilot
 from desk.inbox import scan
 from desk.settings import Settings, check_settings_doc
@@ -43,7 +43,7 @@ def load(store_url: str, tmp_path: Path, d: str, qty: int) -> None:
     f.write_text(f"position_id,book_id,secid,quantity_bonds\nP1,OFZ,{OFZ},{qty}\nP2,CORP,{USD_FACE},3\n",
                  encoding="utf-8")
     with store.connect(store_url) as con:
-        cli._load(con, f, d, out=lambda s: None)
+        bookfile.load_book(con, f, d, out=lambda s: None)
 
 
 def default_dates(store_url: str) -> list[str]:
@@ -59,11 +59,11 @@ def test_plan_run_oldest_first_carry_forward_and_skip_unchanged(tmp_path, cache,
     assert [(d.date, d.status) for d in p.days] == [("2026-10-09", "no_positions")] + [(d, "todo") for d in DATES[1:]]
     assert all(d.why == "no default run" and d.cached for d in p.todo) and p.todo[0].prev_date == "2026-10-09"
     prepared = []
-    real = cli.prepare
-    monkeypatch.setattr(cli, "prepare", lambda sd, d, *a, **kw: prepared.append(d) or real(sd, d, *a, **kw))
+    real = dayrun.prepare
+    monkeypatch.setattr(dayrun, "prepare", lambda sd, d, *a, **kw: prepared.append(d) or real(sd, d, *a, **kw))
     ran = []
-    real_run = cli.eod_run
-    monkeypatch.setattr(cli, "eod_run", lambda *a, **kw: ran.append(a[1]) or real_run(*a, **kw))
+    real_run = dayrun.eod_run
+    monkeypatch.setattr(dayrun, "eod_run", lambda *a, **kw: ran.append(a[1]) or real_run(*a, **kw))
     res = backfill.run(s, p, store_url=store_url, out=lambda line: None)
     assert res["done"] == DATES[1:] and ran == DATES[1:] and not res["failed"] and res["left"] == 0
     assert sorted(prepared) == DATES  # each market prepared once: as its own date, then as the next one's previous
@@ -121,14 +121,14 @@ def test_a_release_without_logic_changes_does_not_recompute_the_history(tmp_path
 def test_a_failed_date_is_not_retried_on_the_same_inputs(tmp_path, cache, store_url, monkeypatch):
     load(store_url, tmp_path, "2026-10-14", 10)
     s = settings(tmp_path, cache, store_url)
-    real = cli.eod_run
+    real = dayrun.eod_run
 
     def flaky(settings, d, **kw):
         if d == "2026-10-14":
             raise ValueError("bad bundle")
         return real(settings, d, **kw)
 
-    monkeypatch.setattr(cli, "eod_run", flaky)
+    monkeypatch.setattr(dayrun, "eod_run", flaky)
     with store.connect(store_url) as con:
         res = backfill.run(s, backfill.plan(con, s, date(2026, 10, 1), date(2026, 10, 15)), store_url=store_url,
                            out=lambda line: None)
@@ -145,7 +145,7 @@ def test_a_failed_date_is_retried_once_after_an_upgrade(tmp_path, cache, store_u
     (another bundle VERSION: another ``logic_version()``), and stays failed within a version."""
     load(store_url, tmp_path, "2026-10-14", 10)
     s = settings(tmp_path, cache, store_url)
-    real = cli.eod_run
+    real = dayrun.eod_run
     tried: list[str] = []
 
     def flaky(settings, d, **kw):
@@ -158,7 +158,7 @@ def test_a_failed_date_is_retried_once_after_an_upgrade(tmp_path, cache, store_u
         p = backfill.plan(con, s, date(2026, 10, 1), date(2026, 10, 15))
         return {d.date: d.status for d in p.days if d.status != "no_positions"}
 
-    monkeypatch.setattr(cli, "eod_run", flaky)
+    monkeypatch.setattr(dayrun, "eod_run", flaky)
     monkeypatch.setenv("DESK_BUNDLE_VERSION", "0.2.4-20261022-aaaaaaa")
     with store.connect(store_url) as con:
         backfill.run(s, backfill.plan(con, s, date(2026, 10, 1), date(2026, 10, 15)), store_url=store_url,
@@ -166,7 +166,7 @@ def test_a_failed_date_is_retried_once_after_an_upgrade(tmp_path, cache, store_u
         assert status(con) == {"2026-10-14": "failed", "2026-10-15": "done"}
         monkeypatch.setenv("DESK_BUNDLE_VERSION", "0.2.5-20261023-bbbbbbb")  # the fixed program installed
         assert status(con) == {"2026-10-14": "todo", "2026-10-15": "done"}  # the same build-less logic: 15.10 kept
-        monkeypatch.setattr(cli, "eod_run", lambda settings, d, **kw: (tried.append(d), real(settings, d, **kw))[1])
+        monkeypatch.setattr(dayrun, "eod_run", lambda settings, d, **kw: (tried.append(d), real(settings, d, **kw))[1])
         res = backfill.run(s, backfill.plan(con, s, date(2026, 10, 1), date(2026, 10, 15)), store_url=store_url,
                            out=lambda line: None)
         assert res["done"] == ["2026-10-14"] and not res["failed"]
@@ -183,7 +183,7 @@ def test_a_store_or_network_error_is_not_a_failed_date(tmp_path, cache, store_ur
     never computed again. Such an error stops the run and is not remembered: the next run computes the dates."""
     load(store_url, tmp_path, "2026-10-13", 10)
     s = settings(tmp_path, cache, store_url)
-    real = cli.eod_run
+    real = dayrun.eod_run
     down = {"on": True}
 
     def flaky(settings, d, **kw):
@@ -191,7 +191,7 @@ def test_a_store_or_network_error_is_not_a_failed_date(tmp_path, cache, store_ur
             raise error()
         return real(settings, d, **kw)
 
-    monkeypatch.setattr(cli, "eod_run", flaky)
+    monkeypatch.setattr(dayrun, "eod_run", flaky)
     with store.connect(store_url) as con:
         res = backfill.run(s, backfill.plan(con, s, date(2026, 10, 1), date(2026, 10, 15)), store_url=store_url,
                            out=lambda line: None)
@@ -296,7 +296,7 @@ def test_the_plan_and_the_run_pick_one_previous_close_when_the_hub_and_the_cache
         tmp_path, store_url, monkeypatch, hub_has_it):
     """#203: the hub's list and the cache differ on the previous close of 2026-10-14: the cache holds 2026-10-13 only
     as an ``eod_preliminary``, and the hub lists no final of it (it does not load, or is not published) or does (not
-    synced yet). The plan, the autopilot's eod step and ``cli.eod_run`` pick it by one rule
+    synced yet). The plan, the autopilot's eod step and ``dayrun.eod_run`` pick it by one rule
     (``bundle.previous_close``): the cache's preliminary close, else the hub's final, synced before the run. The date
     converges on its first run, and the next plan has nothing to do."""
     import shutil
@@ -304,7 +304,7 @@ def test_the_plan_and_the_run_pick_one_previous_close_when_the_hub_and_the_cache
     from desk.autopilot import previous_close as autopilot_rule
     from desk.marketdata.bundle import SnapshotDir, previous_close
 
-    assert autopilot_rule is previous_close and cli.previous_close is previous_close
+    assert autopilot_rule is previous_close and dayrun.previous_close is previous_close
     c = tmp_path / "cache"
     c.mkdir()
     shutil.copy(FIX / f"{STATIC}.json.gz", c)
@@ -470,10 +470,10 @@ def test_a_date_the_eod_step_failed_on_other_inputs_is_the_backfills(tmp_path, c
 
 
 def _stale_after_run(monkeypatch, bad: str) -> list[str]:
-    """``cli.eod_run`` whose run of ``bad`` is stamped with an old logic version: the date never becomes current."""
+    """``dayrun.eod_run`` whose run of ``bad`` is stamped with an old logic version: the date never becomes current."""
     from desk.publish import desk_run
 
-    real, stamp = cli.eod_run, desk_run.logic_version
+    real, stamp = dayrun.eod_run, desk_run.logic_version
     tried: list[str] = []
 
     def run(settings, d, **kw):
@@ -481,7 +481,7 @@ def _stale_after_run(monkeypatch, bad: str) -> list[str]:
         monkeypatch.setattr(desk_run, "logic_version", (lambda: "0.0.1+v1+core0") if d == bad else stamp)
         return real(settings, d, **kw)
 
-    monkeypatch.setattr(cli, "eod_run", run)
+    monkeypatch.setattr(dayrun, "eod_run", run)
     return tried
 
 
@@ -519,8 +519,8 @@ def test_a_date_that_does_not_converge_is_a_problem_date_after_two_runs(tmp_path
 def test_a_run_that_created_nothing_is_a_failed_date(tmp_path, cache, store_url, monkeypatch):
     load(store_url, tmp_path, "2026-10-14", 10)
     s = settings(tmp_path, cache, store_url)
-    real = cli.eod_run
-    monkeypatch.setattr(cli, "eod_run", lambda settings, d, **kw: None if d == "2026-10-14" else real(settings, d, **kw))
+    real = dayrun.eod_run
+    monkeypatch.setattr(dayrun, "eod_run", lambda settings, d, **kw: None if d == "2026-10-14" else real(settings, d, **kw))
     with store.connect(store_url) as con:
         res = backfill.run(s, backfill.plan(con, s, date(2026, 10, 1), date(2026, 10, 15)), store_url=store_url,
                            out=lambda line: None)
@@ -537,14 +537,14 @@ def test_a_date_that_keeps_failing_on_the_network_stops_holding_the_queue(tmp_pa
 
     load(store_url, tmp_path, "2026-10-13", 10)
     s = settings(tmp_path, cache, store_url)
-    real = cli.eod_run
+    real = dayrun.eod_run
 
     def flaky(settings, d, **kw):
         if d == "2026-10-14":
             raise HubError("bundle: 502 bad gateway", status=502)
         return real(settings, d, **kw)
 
-    monkeypatch.setattr(cli, "eod_run", flaky)
+    monkeypatch.setattr(dayrun, "eod_run", flaky)
 
     def run():
         with store.connect(store_url) as con:
@@ -565,7 +565,7 @@ def test_a_date_that_keeps_failing_on_the_network_stops_holding_the_queue(tmp_pa
     assert st["stalled"] is None
     res = run()  # tried again every time, not a stall
     assert [d for d, _ in res["failed"]] == ["2026-10-14"] and not res["stalled"]
-    monkeypatch.setattr(cli, "eod_run", real)
+    monkeypatch.setattr(dayrun, "eod_run", real)
     assert run()["done"] == ["2026-10-14"]
     with store.connect(store_url) as con:
         assert backfill.status(con, s, today=date(2026, 10, 15))["problem_dates"] == []
@@ -584,14 +584,14 @@ def test_a_network_down_for_cycles_stalls_the_backfill_without_problem_dates(tmp
     tried a cycle (#208); when the network is back, the dates run and the stall is gone."""
     load(store_url, tmp_path, "2026-10-13", 10)
     s = settings(tmp_path, cache, store_url)
-    real = cli.eod_run
+    real = dayrun.eod_run
     tried: list[str] = []
 
     def down(settings, d, **kw):
         tried.append(d)
         raise error()
 
-    monkeypatch.setattr(cli, "eod_run", down)
+    monkeypatch.setattr(dayrun, "eod_run", down)
 
     def run():
         with store.connect(store_url) as con:
@@ -615,7 +615,7 @@ def test_a_network_down_for_cycles_stalls_the_backfill_without_problem_dates(tmp
         assert type(error()).__name__ in stall["error"] and stall["date"] == "2026-10-13" and stall["next_attempt"]
         since = since or stall["since"]
         assert stall["since"] == since and stall["at"] >= since
-    monkeypatch.setattr(cli, "eod_run", real)
+    monkeypatch.setattr(dayrun, "eod_run", real)
     res = run()
     assert res["done"] == ["2026-10-13", "2026-10-14", "2026-10-15"] and not res["failed"] and not res["stalled"]
     with store.connect(store_url) as con:
@@ -631,7 +631,7 @@ def test_a_date_failing_on_its_data_does_not_hold_the_queue_and_does_not_stall(t
     load(store_url, tmp_path, "2026-10-12", 10)
     s = settings(tmp_path, cache, store_url)
     tried = _stale_after_run(monkeypatch, "2026-10-12")
-    stale = cli.eod_run
+    stale = dayrun.eod_run
 
     def bad(settings, d, **kw):
         if d == "2026-10-14":
@@ -639,7 +639,7 @@ def test_a_date_failing_on_its_data_does_not_hold_the_queue_and_does_not_stall(t
             raise ValueError("bad bundle")
         return stale(settings, d, **kw)
 
-    monkeypatch.setattr(cli, "eod_run", bad)
+    monkeypatch.setattr(dayrun, "eod_run", bad)
 
     def run():
         with store.connect(store_url) as con:
@@ -705,7 +705,7 @@ def test_the_same_network_error_on_every_date_is_a_stall_not_problem_dates(tmp_p
 
     load(store_url, tmp_path, "2026-10-12", 10)
     s = settings(tmp_path, cache, store_url)
-    real, tried, down = cli.eod_run, [], {"on": True}
+    real, tried, down = dayrun.eod_run, [], {"on": True}
 
     def flaky(settings, d, **kw):
         tried.append(d)
@@ -713,7 +713,7 @@ def test_the_same_network_error_on_every_date_is_a_stall_not_problem_dates(tmp_p
             raise TransportError(f"bundle {d}: timed out after 30 s")
         return real(settings, d, **kw)
 
-    monkeypatch.setattr(cli, "eod_run", flaky)
+    monkeypatch.setattr(dayrun, "eod_run", flaky)
     t0 = datetime(2026, 10, 20, 9, 0, tzinfo=UTC)
     res, st = _cycle(s, store_url, t0)
     assert tried == ["2026-10-12"] and res["stalled"]["date"] == "2026-10-12" and st["problem_dates"] == []
@@ -744,7 +744,7 @@ def test_two_dates_failing_on_their_own_do_not_hold_the_queue(tmp_path, cache, s
     (``unreachable``), tried every time, and hold neither the queue nor the backfill for ever."""
     load(store_url, tmp_path, "2026-10-12", 10)
     s = settings(tmp_path, cache, store_url)
-    real, tried = cli.eod_run, []
+    real, tried = dayrun.eod_run, []
 
     def flaky(settings, d, **kw):
         tried.append(d)
@@ -752,7 +752,7 @@ def test_two_dates_failing_on_their_own_do_not_hold_the_queue(tmp_path, cache, s
             raise TimeoutError(f"bundle {d}: timed out")
         return real(settings, d, **kw)
 
-    monkeypatch.setattr(cli, "eod_run", flaky)
+    monkeypatch.setattr(dayrun, "eod_run", flaky)
     t0 = datetime(2026, 10, 20, 9, 0, tzinfo=UTC)
     _cycle(s, store_url, t0)
     for i in (1, 2):  # 12.10 passed over, 13.10 hits it too: as far as it can tell, the environment
@@ -824,7 +824,7 @@ def test_an_old_stall_is_forgotten(tmp_path, cache, store_url, monkeypatch):
 
     load(store_url, tmp_path, "2026-10-12", 10)
     s = settings(tmp_path, cache, store_url)
-    monkeypatch.setattr(cli, "eod_run", lambda settings, d, **kw: (_ for _ in ()).throw(TransportError(f"{d}: reset")))
+    monkeypatch.setattr(dayrun, "eod_run", lambda settings, d, **kw: (_ for _ in ()).throw(TransportError(f"{d}: reset")))
     with store.connect(store_url) as con:
         p = backfill.plan(con, s, date(2026, 10, 1), date(2026, 10, 15))
     st = backfill.state(s)
@@ -886,7 +886,7 @@ def test_autopilot_waits_while_the_backfill_stalls(tmp_path, cache, store_url, m
     ap = Autopilot(settings_loader=lambda: s, store_url=store_url, now=lambda: clock[0])
     ap.run_cycle(hub=False)
     assert default_dates(store_url) == DATES[1:]
-    real, tried, down = cli.eod_run, [], {"on": True}
+    real, tried, down = dayrun.eod_run, [], {"on": True}
 
     def flaky(settings, d, **kw):
         if d != "2026-10-12":  # the latest positions date: the eod step's after an upgrade, it runs
@@ -895,7 +895,7 @@ def test_autopilot_waits_while_the_backfill_stalls(tmp_path, cache, store_url, m
                 raise TransportError("proxy: connection reset")
         return real(settings, d, **kw)
 
-    monkeypatch.setattr(cli, "eod_run", flaky)
+    monkeypatch.setattr(dayrun, "eod_run", flaky)
     monkeypatch.setattr(desk, "VALUATION_VERSION", desk.VALUATION_VERSION + 1)  # an upgrade: the past dates the backfill's
 
     def step() -> dict:
@@ -927,7 +927,7 @@ def test_an_outage_over_all_dates_then_the_oldest_failing_on_its_own(tmp_path, c
     their order, oldest first, and nothing stands."""
     load(store_url, tmp_path, "2026-10-12", 10)
     s = settings(tmp_path, cache, store_url)
-    real, tried, down = cli.eod_run, [], {"on": True}
+    real, tried, down = dayrun.eod_run, [], {"on": True}
 
     def flaky(settings, d, **kw):
         tried.append(d)
@@ -935,7 +935,7 @@ def test_an_outage_over_all_dates_then_the_oldest_failing_on_its_own(tmp_path, c
             raise TimeoutError(f"bundle {d}: timed out")
         return real(settings, d, **kw)
 
-    monkeypatch.setattr(cli, "eod_run", flaky)
+    monkeypatch.setattr(dayrun, "eod_run", flaky)
     t0 = datetime(2026, 10, 20, 9, 0, tzinfo=UTC)
     for i in range(8):
         res, st = _cycle(s, store_url, t0 + timedelta(hours=i))
@@ -956,7 +956,7 @@ def test_the_dates_that_waited_are_not_taken_for_their_own_trouble(tmp_path, cac
     cycle. Only such dates run after later ones, as the oldest passed over does."""
     load(store_url, tmp_path, "2026-10-12", 10)
     s = settings(tmp_path, cache, store_url)
-    real, tried, down = cli.eod_run, [], {"on": True}
+    real, tried, down = dayrun.eod_run, [], {"on": True}
 
     def flaky(settings, d, **kw):
         tried.append(d)
@@ -964,7 +964,7 @@ def test_the_dates_that_waited_are_not_taken_for_their_own_trouble(tmp_path, cac
             raise TimeoutError(f"bundle {d}: timed out")
         return real(settings, d, **kw)
 
-    monkeypatch.setattr(cli, "eod_run", flaky)
+    monkeypatch.setattr(dayrun, "eod_run", flaky)
     t0 = datetime(2026, 10, 20, 9, 0, tzinfo=UTC)
     for i in range(3):
         res, st = _cycle(s, store_url, t0 + timedelta(hours=i))
@@ -1067,7 +1067,7 @@ def test_budget_counts_failed_dates_but_tries_at_least_one(tmp_path, cache, stor
         tried.append(d)
         raise ValueError("bad bundle")
 
-    monkeypatch.setattr(cli, "eod_run", bad)
+    monkeypatch.setattr(dayrun, "eod_run", bad)
     with store.connect(store_url) as con:
         p = backfill.plan(con, s, date(2026, 10, 1), date(2026, 10, 15))
     res = backfill.run(s, p, store_url=store_url, budget_s=0.0, out=lambda line: None)
@@ -1100,14 +1100,14 @@ def test_a_file_error_of_one_date_is_its_failure_not_a_stall(tmp_path, cache, st
     load(store_url, tmp_path, "2026-10-12", 10)
     load(store_url, tmp_path, "2026-10-13", 10)
     s = settings(tmp_path, cache, store_url)
-    real = cli.eod_run
+    real = dayrun.eod_run
 
     def flaky(settings, d, **kw):
         if d == "2026-10-12":
             raise error
         return real(settings, d, **kw)
 
-    monkeypatch.setattr(cli, "eod_run", flaky)
+    monkeypatch.setattr(dayrun, "eod_run", flaky)
     with store.connect(store_url) as con:
         res = backfill.run(s, backfill.plan(con, s, date(2026, 10, 1), date(2026, 10, 15)), store_url=store_url,
                            out=lambda line: None)

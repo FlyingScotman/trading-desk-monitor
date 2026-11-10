@@ -5,7 +5,7 @@ default (EOD) run of D and of the current runs of today when today reads them. T
 former on its next cycle; its intraday and morning steps the latter. After a managed producer (the manual acquisition,
 a services feed) the owner should not wait for either: ``after_inputs`` makes them now.
 
-* ``eod_dates``: for each D the EOD run of D (``cli.eod_run``) when the cache holds its ``eod_final`` close, the store
+* ``eod_dates``: for each D the EOD run of D (``dayrun.eod_run``) when the cache holds its ``eod_final`` close, the store
   has positions for D and its default run is missing or read other inputs (position sets, private inputs hash).
 * ``current_day``: today's shown runs (``store.CURRENT_RUNS``) whose private inputs hash is no longer today's (for an
   INTRADAY run with the day's trades applied, ``trades.intraday_inputs``, TDM#557): the
@@ -46,7 +46,7 @@ def _failed(d: date, label: str, e: Exception, out: dict) -> None:
 def eod_dates(settings: Any, url: str, dates: Iterable[date], *, out: Callable[[str], None] = lambda _: None,
               result: dict | None = None) -> dict:
     """The EOD runs of ``dates`` whose inputs changed (module doc)."""
-    from .cli import eod_run
+    from .dayrun import eod_run
 
     res = result if result is not None else {"runs": [], "failed": []}
     sd = SnapshotDir(Path(settings.snapshot_cache))
@@ -89,7 +89,7 @@ _PRELIMINARY = ("SELECT run_id, market_snapshot_id, cut_ts, private_inputs_hash 
 def current_day(settings: Any, url: str, today: date, *, out: Callable[[str], None] = lambda _: None,
                 result: dict | None = None) -> dict:
     """Today's current runs that read other private inputs than today's, made again (module doc)."""
-    from .cli import eod_run
+    from .dayrun import eod_run
 
     res = result if result is not None else {"runs": [], "failed": []}
     try:

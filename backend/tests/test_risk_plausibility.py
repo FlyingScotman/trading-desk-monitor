@@ -12,7 +12,7 @@ from fastapi.testclient import TestClient
 from test_market_history import OFZ
 from test_r23_concepts import cache_11, desk, extras  # noqa: F401 - fixtures
 
-from desk import cli, store
+from desk import dayrun, store
 from desk.api import compat, concepts, create_app
 from desk.publish import summary
 from desk.publish.summary import risk_problem
@@ -119,7 +119,7 @@ def test_the_run_log_names_the_position(store_url, tmp_path, monkeypatch):
     book = tmp_path / "book.csv"
     book.write_text(f"position_id,book_id,secid,quantity_bonds\nP1,OFZ,{OFZ},1\n", encoding="utf-8")
     lines: list[str] = []
-    assert cli.eod_run(Settings(home=tmp_path / "home", snapshot_cache=cache), "2026-10-15", store_url=store_url,
+    assert dayrun.eod_run(Settings(home=tmp_path / "home", snapshot_cache=cache), "2026-10-15", store_url=store_url,
                        book=str(book), out=lines.append), lines
     with store.connect(store_url) as con:
         log = [m for (m,) in con.execute("SELECT message FROM run_log WHERE level = 'WARN'")]
@@ -141,7 +141,7 @@ def test_book_totals_leave_an_impossible_risk_out(store_url, tmp_path, monkeypat
     book = tmp_path / "book.csv"  # P1: one bond (flagged by the stub above), P2: a thousand (not)
     book.write_text(f"position_id,book_id,secid,quantity_bonds\nP1,OFZ,{OFZ},1\nP2,OFZ,{OFZ},1000\n", encoding="utf-8")
     lines: list[str] = []
-    assert cli.eod_run(Settings(home=tmp_path / "home", snapshot_cache=cache), "2026-10-15", store_url=store_url,
+    assert dayrun.eod_run(Settings(home=tmp_path / "home", snapshot_cache=cache), "2026-10-15", store_url=store_url,
                        book=str(book), out=lines.append), lines
     with store.connect(store_url) as con:
         totals = con.execute("SELECT totals FROM run").fetchone()[0]

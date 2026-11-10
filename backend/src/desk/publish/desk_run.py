@@ -83,7 +83,7 @@ def publish(con: psycopg.Connection, ctx: EodContext, positions: list[tuple[str,
             intraday_trades: dict[str, Any] | None = None) -> tuple[int, str, list[str]]:
     """positions: (position_id, book_id, outcome) of ``inputs`` (``store.positions_for``); ``carried_from``:
     the carried spreads the valuation got; ``pnl_basis``: what the flash PnL is measured against
-    (``desk.cli.pnl_basis``, lineage ``pnl_basis``); ``core_results``: core results of the run besides those its
+    (``desk.dayrun.pnl_basis``, lineage ``pnl_basis``); ``core_results``: core results of the run besides those its
     outcomes carry (``BookPlan.core_result``, the v3 result of the derivatives: stored next to the bonds' v2 results
     even when core valued none of its positions). Returns (run_id, status, warnings). An INTRADAY run supersedes
     nothing: the older intraday runs of its date are deleted once it is complete (``store.prune_intraday``).

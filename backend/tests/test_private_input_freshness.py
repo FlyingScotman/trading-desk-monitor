@@ -7,7 +7,7 @@ from datetime import date
 import pytest
 from test_r23_backfill import cache, load, settings  # noqa: F401 - shared synthetic market fixture
 
-from desk import backfill, cli, store
+from desk import backfill, dayrun, store
 from desk.autopilot import Autopilot
 from desk.inbox import scan
 
@@ -68,7 +68,7 @@ def test_terms_import_correction_deletion_recompute_and_canonical_noops_do_not(e
     s = env
     ap = Autopilot(settings_loader=lambda: s, today=lambda: DAY)
     with store.connect(s.store_url) as con:
-        cli.eod_run(s, DAY.isoformat(), report_dir=None, out=lambda _: None)
+        dayrun.eod_run(s, DAY.isoformat(), report_dir=None, out=lambda _: None)
         positions = store.current_sets(con, DAY)[0]
         for seq, changes in ((1, {}), (4, {"rate": 81}), (5, {"empty": True})):
             old = current(con)
@@ -114,7 +114,7 @@ def test_old_failed_signature_retries_once_and_changed_terms_unlock_failure(env,
         attempts.append(True)
         raise ValueError("synthetic failure")
 
-    monkeypatch.setattr(cli, "eod_run", fail)
+    monkeypatch.setattr(dayrun, "eod_run", fail)
     with store.connect(s.store_url) as con:
         ingest(con, s, 1)
         sig = planner(con, s).todo[0].sig
@@ -167,7 +167,7 @@ def test_ocp_report_or_balances_after_the_run_recompute_the_date(env, path):
     s = env
     ap = Autopilot(settings_loader=lambda: s, today=lambda: DAY)
     with store.connect(s.store_url) as con:
-        cli.eod_run(s, DAY.isoformat(), report_dir=None, out=lambda _: None)
+        dayrun.eod_run(s, DAY.isoformat(), report_dir=None, out=lambda _: None)
         hash_before = current(con)["private_inputs_hash"]
         for name, text, label, why in (
                 ("ocp_20261015.csv", "entity;book_id;ccy;ocp_ccy\nTEST;OFZ;USD;1000\n", "ОВП", "ocp report"),

@@ -267,7 +267,7 @@ class Acquisition:
                 raise FlowError("positions_missing")
 
     def _pipeline(self, st: Settings, p: Provider, params: dict, path: Path, partial: bool) -> None:
-        from .cli import eod_run
+        from .dayrun import eod_run
 
         day = date.fromisoformat(params["date"])
         books = frozenset(params["book"])
