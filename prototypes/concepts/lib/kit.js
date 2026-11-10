@@ -3100,7 +3100,7 @@
       ((m.notes || []).length ? '<ul class="k-prov-notes">' + m.notes.map(n => '<li>' + esc(n) + '</li>').join('') + '</ul>' : '') +
       (m.items && m.items.length ? '<div style="overflow:auto"><table class="k-tbl k-prov-mkt"><thead><tr><th>Что</th><th>Состояние</th><th>Пояснение</th></tr></thead><tbody>' +
         m.items.map(i => '<tr data-id="' + esc(i.id) + '"><td>' + esc(i.name || i.id) + (i.name && i.name !== i.id ? ' <span class="mut3 mono">' + esc(i.id) + '</span>' : '') + '</td><td>' + chip(i.state, i.state_text) + '</td><td class="k-prov-why">' + esc(i.text || '') + '</td></tr>').join('') +
-        '</tbody></table></div>' : '<div class="k-empty">нет сведений</div>');
+        '</tbody></table></div>' : m.basis === 'none' ? '' : '<div class="k-empty">нет сведений</div>');  // «не использовались» — без списка
   };
   K.provenanceSection = function (el, id) {
     if (!el) return;

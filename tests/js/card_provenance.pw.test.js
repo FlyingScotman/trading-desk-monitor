@@ -95,7 +95,7 @@ async function checkSection(pg, root, asked) {
   assert.ok(await bd.locator('.k-prov-src[data-src="cash_balances"] .k-prov-st.unk[data-state="absent"]').count() === 1);
   assert.ok(await bd.locator('.k-prov-src[data-src="trade_terms"] .k-prov-st.bad[data-state="absent"]').count() === 1);
   assert.strictEqual(await root.locator('.k-provsec').count(), 1);
-  assert.strictEqual(await root.locator('.k-prov').count(), 0, 'the class of the «предварительно» tag is not reused');
+  assert.strictEqual(await root.locator('.k-provsec .k-prov').count(), 0, 'the class of the «предварительно» tag is not reused');
   // collapse and open again: no second request
   await btn.click();
   assert.strictEqual(await bd.isVisible(), false);
@@ -113,6 +113,10 @@ test('«Откуда данные» в карточке позиции', { skip:
       try {
         await pg.evaluate(id => KIT.card(id), ID);
         await checkSection(pg, pg.locator('.k-drawer').last(), asked);
+        // «не использовались»: no table and no «нет сведений» under it
+        const none = await pg.evaluate(() => KIT.provenanceHtml({ sources: [], mismatches: [],
+          market: { basis: 'none', text: 'не оценена: рыночные данные не использовались', items: [], notes: [] } }));
+        assert.ok(none.includes('не использовались') && !none.includes('нет сведений') && !none.includes('<table'), none);
         assert.deepStrictEqual(errors, []);
       } finally { await ctx.close(); }
     });

@@ -305,7 +305,9 @@ def _book_ccy(con, run: dict[str, Any], book: str, ccys: list[str]) -> list[dict
             " s.scope->>'book_id' AS scope_book, s.source, s.source_name, s.report_date, s.recorded_at, s.valid_date"
             " FROM dataset_row r JOIN dataset_set s USING (set_id) WHERE r.set_id = ANY(%(ids)s)"
             " AND (r.data->>'book_id' = %(b)s OR (nullif(r.data->>'book_id', '') IS NULL"
-            "  AND (s.scope->>'book_id' = %(b)s OR (NOT s.scope ? 'book_id' AND s.scope->>'entity' = %(e)s))))",
+            "  AND (s.scope->>'book_id' = %(b)s OR (NOT s.scope ? 'book_id' AND s.scope->>'entity' = %(e)s"
+            # an entity's rows do not stand for a book the same set gives rows of its own (``rules.ocp``: ``at_of``)
+            "   AND NOT EXISTS (SELECT 1 FROM dataset_row r2 WHERE r2.set_id = s.set_id AND r2.data->>'book_id' = %(b)s)))))",
             {"ids": ids, "b": book, "e": entity}).fetchall() if ids else []
         by_ccy: dict[str, dict[str, Any]] = {}
         for r in rows:   # a row of the book before one of its entity
@@ -515,6 +517,19 @@ def _unique(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return out
 
 
+REPORT_QUALITIES = ("reported_value", "assumed")
+"""Qualities of a value taken from the report (or assumed), not from market data."""
+
+
+def _report_valued(fact: dict[str, Any]) -> bool:
+    """A value not core's and not from a quote: a row other than a bond valued at the report's figure, or a bond not
+    matched to the hub valued from the report (``publish.tdm_run.direct_row``: no ``price_basis``) or assumed."""
+    ex = fact.get("extra") or {}
+    if ex.get("core") or ex.get("price_basis"):
+        return False
+    return fact.get("instr_type") != "BOND" or (ex.get("quality") or fact.get("quality")) in REPORT_QUALITIES
+
+
 def _used(lin: dict[str, Any], fact: dict[str, Any], names: dict[str, str]) -> list[dict[str, Any]]:
     """What a valued position's valuation used, from its fact: a derivative's curves (a fallback: replaced), FX
     rates and fixings; a bond's quote and curves (a proxy curve: replaced)."""
@@ -555,7 +570,7 @@ def _used(lin: dict[str, Any], fact: dict[str, Any], names: dict[str, str]) -> l
                              f"фиксинг NDF на {f.get('fixing_date')}", st, f.get("source") or ""))
         return out
     q = ex.get("quality") or fact.get("quality")
-    if not ex.get("price_basis") and fact.get("instr_type") != "BOND":
+    if _report_valued(fact):
         # a row valued at the report's figure (or assumed): its curves are the report's risk, not data the run used
         if ex.get("fx_rate") is not None and fact.get("ccy") not in (None, "RUB"):
             return [_need("fx", fact["ccy"], f"курс {fact['ccy']}/RUB", "ok", "пересчёт стоимости отчёта в рубли")]
@@ -594,7 +609,7 @@ def _market(con, run: dict[str, Any], kind: str, fact: dict[str, Any] | None, te
     if fact is not None:
         items = _unique(_used(lin, fact, names))
         ex = fact.get("extra") or {}
-        if not ex.get("core") and not ex.get("price_basis") and fact.get("instr_type") != "BOND":
+        if _report_valued(fact):
             q = ex.get("quality") or ""
             notes.insert(0, "стоимость: " + cv.APPROX_TEXT.get(q, q or "из отчёта позиций"))
             return {"basis": "used" if items else "none", "text": cv.PROVENANCE_TEXT["market_reported"],

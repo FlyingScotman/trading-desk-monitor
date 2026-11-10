@@ -87,7 +87,9 @@ def seeded(store_url):
                                         ("FXT", "fx", "USD", "T16", "2026-10-20"), ("FX5", "fx", "GBP", "T17", "2026-11-20"),
                                         ("OTH1", "other", "RUB", None, None), ("UB1", "bond", "RUB", None, None),
                                         ("FXS1", "fx", "USD", "T18", "2026-11-20"),
-                                        ("FXS2", "fx", "USD", "T18", "2027-01-20")):
+                                        ("FXS2", "fx", "USD", "T18", "2027-01-20"), ("FX6", "fx", "JPY", None, "2026-11-20"),
+                                        ("FX7", "fx", "CHF", None, "2026-11-20"), ("FX8", "fx", "USD", None, "2026-10-20"),
+                                        ("UB2", "bond", "RUB", None, None)):
             con.execute("INSERT INTO position_input (set_id, position_id, secid, quantity, asset_class, ccy, deal_id,"
                         " value_date, src) VALUES (%s, %s, NULL, NULL, %s, %s, %s, %s, %s)",
                         (ps, pid, cls, ccy, deal, vd, f"row {pid}"))
@@ -160,8 +162,13 @@ def seeded(store_url):
                  source="ocp_csv", scope={"entity": "E1", "book_id": "B1"})
         # an OCP report by legal entity only (no book in the rows, book_id is optional in the OCP) — case A — and a
         # report of the book whose rows name no book — case B
-        _dataset(con, "ocp", SHA["d"], "ocp_20261020.csv", [{"entity": "E1", "ccy": "CNY"}, {"entity": "E2", "ccy": "GBP"}],
+        _dataset(con, "ocp", SHA["d"], "ocp_20261020.csv", [{"entity": "E1", "ccy": "CNY"}, {"entity": "E2", "ccy": "GBP"},
+                                                            {"entity": "E1", "ccy": "CHF"}],
                  source="ocp_entity_csv", scope={"entity": "E1"})
+        # a mixed report of the entity: B1's own rows and rows without a book; the latter are not B1's
+        _dataset(con, "ocp", SHA["d"], "ocp_20261020.csv", [{"entity": "E1", "book_id": "B1", "ccy": "CHF"},
+                                                            {"entity": "E1", "ccy": "JPY"}],
+                 source="ocp_mixed_csv", scope={"entity": "E1", "desk": "D1"})
         _dataset(con, "ocp", SHA["d"], "ocp_20261020.csv", [{"entity": "E1", "ccy": "GBP"}],
                  source="ocp_book_csv", scope={"book_id": "B1"})
         lineage = {"positions": {"set_ids": [ps], "trade_terms": [{"scope": {"book_id": "B1"}, "set_id": ts}],
@@ -213,6 +220,12 @@ def seeded(store_url):
         _pos(con, rid, "OTH1", 24, fact={"ccy": "RUB", "risk": {"RUB RUONIA": [1.0]},
                                          "extra": {"quality": "reported_value"}})
         _pos(con, rid, "UB1", 25, reason="no_quote: synthetic")
+        _pos(con, rid, "FX6", 27, reason="no_fx_spot: JPY")
+        _pos(con, rid, "FX7", 28, reason="no_fx_spot: CHF")
+        _pos(con, rid, "FX8", 29, fact={"ccy": "USD", "risk": {"RUB RUONIA": [1.0]},
+                                        "extra": {"quality": "reported_value", "fx_rate": 80.0}})
+        _pos(con, rid, "UB2", 30, fact={"ccy": "RUB", "instr_type": "BOND", "risk": {"RUB OFZ": [1.0]},
+                                        "extra": {"quality": "reported_value"}})
         _pos(con, rid, "FXS1", 26, fact={"ccy": "USD", "extra": {"quality": "exact", "core": {
             "product": "fx_swap", "rub_curve": "RUB RUONIA", "foreign_curves": ["USD FX"], "trades": ["T18"]}}})
         con.execute("UPDATE run SET status = 'complete', completed_at = now() WHERE run_id = %s", (rid,))
@@ -579,3 +592,20 @@ def test_an_fx_swap_as_a_row_per_leg_is_no_deal_on_several_rows(seeded):
     _, src, mism = _get(c, rid, "FXS1")
     assert "deal_on_rows" not in mism and [i["leg_id"] for i in src["trade_terms"]["items"]] == ["near"]
     assert "deal_on_rows" in _get(c, rid, "D1")[2]   # the legs name no row: one deal on two rows
+
+
+def test_an_entity_row_does_not_stand_for_a_book_with_rows_of_its_own(seeded):
+    c, rid, _ = seeded
+    (i,) = _get(c, rid, "FX6")[1]["ocp"]["items"]   # the mixed set names B1: its JPY row without a book is not B1's
+    assert (i["ccy"], i["has_row"]) == ("JPY", False)
+    (i,) = _get(c, rid, "FX7")[1]["ocp"]["items"]   # CHF: B1's own row beats the entity's
+    assert (i["level"], i["source"]) == ("by_book", "ocp_mixed_csv")
+
+
+def test_rows_valued_from_the_report_list_only_the_rate(seeded):
+    c, rid, _ = seeded
+    m = _get(c, rid, "FX8")[0]["market"]   # an FX row at the report's value: only its conversion to roubles
+    assert m["basis"] == "used" and [(i["kind"], i["id"], i["text"]) for i in m["items"]] == [
+        ("fx", "USD", "пересчёт стоимости отчёта в рубли")]
+    m = _get(c, rid, "UB2")[0]["market"]   # a bond not matched to the hub, at the report's value: no curve used
+    assert m["basis"] == "none" and m["items"] == [] and "стоимость: по отчёту банка" in m["notes"]
