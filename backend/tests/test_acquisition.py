@@ -15,7 +15,7 @@ from fastapi.testclient import TestClient
 from test_r23_backfill import cache, load  # noqa: F401 - existing synthetic market fixture
 
 from desk import acquisition as aq
-from desk import cli, helper_proc, store
+from desk import cli, dayrun, helper_proc, store
 from desk.api import auth, create_app
 from desk.autopilot import CycleLock
 from desk.inbox import scan
@@ -323,7 +323,7 @@ def test_real_reference_ingest_and_fresh_eod_preserve_other_books(configured, st
     st = replace(configured, snapshot_cache=cache, store_url=store_url)
     load(store_url, tmp_path, DAY.isoformat(), 10)
     (st.private_adapter_config / "mode").write_text(mode)
-    cli.eod_run(st, DAY.isoformat(), report_dir=None, out=lambda _: None)
+    dayrun.eod_run(st, DAY.isoformat(), report_dir=None, out=lambda _: None)
     with store.connect(store_url) as con:
         previous = store.default_runs(con, DAY)[DAY]
         old_hash = store.positions_for(con, DAY).private_inputs_hash
@@ -401,7 +401,7 @@ def test_manual_cli_eod_uses_same_cycle_lock(configured, monkeypatch):
     from types import SimpleNamespace
 
     calls = []
-    monkeypatch.setattr(cli, "eod_run", lambda *a, **kw: calls.append(True))
+    monkeypatch.setattr(dayrun, "eod_run", lambda *a, **kw: calls.append(True))
     with CycleLock(configured.home):
         assert cli.cmd_eod(SimpleNamespace(settings=configured)) == 2
     assert not calls
@@ -412,7 +412,7 @@ def test_managed_two_book_validation_is_checked_before_any_unit_write(configured
     st = replace(configured, snapshot_cache=cache, store_url=store_url)
     load(store_url, tmp_path, DAY.isoformat(), 10)
     (st.private_adapter_config / "mode").write_text("unit_error" if reject else "two_books")
-    cli.eod_run(st, DAY.isoformat(), report_dir=None, out=lambda _: None)
+    dayrun.eod_run(st, DAY.isoformat(), report_dir=None, out=lambda _: None)
     with store.connect(store_url) as con:
         before = store.positions_for(con, DAY).private_inputs_hash
         old_run = store.default_runs(con, DAY)[DAY]["run_id"]

@@ -25,8 +25,8 @@ upgrade recomputes only the latest date. Nothing ever computed an older date.
    ``logic_version()`` recompute the history; a new release or Windows bundle of the same computation does not). Otherwise it is skipped: nothing
    is computed twice.
 3. **runs**, oldest first: the date's bundle and the previous date's (flash PnL) from the hub when not cached, or
-   cached under another snapshot than the hub's of the plan (a correction of an older date, #439) (``cache.sync``), then ``cli.eod_run``, the code path of every EOD run. The prepared market of a date is kept for
-   the next one (its previous date: ``cli.ContextCache``), so each date's static snapshot and curves are built once.
+   cached under another snapshot than the hub's of the plan (a correction of an older date, #439) (``cache.sync``), then ``dayrun.eod_run``, the code path of every EOD run. The prepared market of a date is kept for
+   the next one (its previous date: ``dayrun.ContextCache``), so each date's static snapshot and curves are built once.
    One date at a time: a model price carries its bond's spread from the latest earlier run
    (``store.carried_spreads``), so a date's run depends on the runs before it; dates in parallel would compute
    other numbers. A date that fails is not tried again on the same inputs (``STATE_FILE``). A run that created
@@ -54,6 +54,19 @@ upgrade recomputes only the latest date. Nothing ever computed an older date.
    ``STALL_BACKOFF_S`` between its runs on a stall (none at its start, in a cycle the owner asked for, nor when the
    store is unreachable); a stall whose dates are no longer to run, or whose last error is older than
    ``STALL_STALE``, is forgotten.
+
+**Two passes** (TDM#627). The second derivatives (the Hessian: the positions' ``gamma``, the bonds' ``convexity``) are
+2.5 times the work of a date (42 s against 17 s with 2000 positions), and only the Taylor estimate of the scenario
+screen reads them (the PnL explain reprices in full, the monitors read the first derivatives). So step 3 is two passes
+over the window: the first makes the runs without them (``eod_run(no_gamma=True)``: the run's lineage says
+``second_order`` false, its log says so, its ``gamma`` is empty, not zero, ``RunHeader.second_order`` and
+``RiskPayload.second_order`` tell the screens), so the whole window has its value, risk and PnL as soon as possible;
+when the first pass has gone through every date (``run``: ``complete``) the second (``run_second``) makes each date
+again in full, the newest first, from the cache: the same inputs give the same value, first derivatives and PnL
+to the last bit, and the new run supersedes the first pass's with the gamma added. Both passes are cut by the same
+budget and resume where they stopped: a date's state is its default run (``Day.second``). The current date (the
+autopilot's eod and intraday steps) and every other run are full. ``status``: ``pass`` (``first``, ``second``, ``done``)
+and ``second`` (the dates ``done``, ``todo``, ``failed``, ``next``, ``problem_dates``, ``eta_s``).
 
 The bundles of the backfilled dates stay in the snapshot cache (each date's market and static snapshot, several MB a
 date: ``--dry-run`` says how many are to be downloaded).
@@ -125,6 +138,12 @@ class Day:
     """The close before the date (``bundle.previous_close``, the run's too, #203): the flash PnL's basis."""
     prev_cut: str | None = None
     """Its cut: ``eod_final``, else a cached ``eod_preliminary`` (not synced from the hub)."""
+    second: str | None = None
+    """The second pass (TDM#627) of a ``done`` date, else None: ``done`` (its run has the second derivatives), ``todo``
+    (its run was made without them: the first pass), ``failed`` (the second pass gave up on that run: ``MAX_ATTEMPTS``
+    errors)."""
+    run_id: int | None = None
+    """The date's default run (a ``done`` date)."""
 
 
 @dataclass
@@ -144,6 +163,15 @@ class Plan:
     def todo(self) -> list[Day]:
         return [d for d in self.days if d.status == "todo"]
 
+    @property
+    def second_todo(self) -> list[Day]:
+        """The dates whose default run lacks the second derivatives (``Day.second``), the newest first: the order of
+        the second pass."""
+        return [d for d in reversed(self.days) if d.second == "todo"]
+
+    def count_second(self, status: str) -> int:
+        return sum(d.second == status for d in self.days)
+
     def to_downloads(self) -> int:
         return sum(1 for d in self.todo if not d.cached)
 
@@ -156,6 +184,8 @@ class Plan:
                 "todo": self.count("todo"), "no_positions": self.count("no_positions"),
                 "no_market": self.count("no_market"), "failed": self.count("failed"), "hub": self.hub,
                 "to_download": self.to_downloads(), "next": [d.date for d in self.todo[:5]],
+                "second": {"done": self.count_second("done"), "todo": self.count_second("todo"),
+                           "failed": self.count_second("failed"), "next": [d.date for d in self.second_todo[:5]]},
                 "todo_by_reason": [{"key": k, "text": REASON_TEXT[k], "n": n}
                                    for k, n in sorted(by.items(), key=lambda kv: (-kv[1], kv[0]))]}
 
@@ -293,7 +323,9 @@ def plan(con: psycopg.Connection, settings: Settings, date_from: date, date_to: 
     dates = sorted({d for d in (hub_ids if hub is not None else cached) if lo <= d <= hi})
     runs = store.default_runs(con, date_from)
     logic = logic_version()
-    failed = state(settings).get("failed", {})
+    st = state(settings)
+    failed = st.get("failed", {})
+    second_failed = (st.get("second") or {}).get("failed", {})
     first_pos = con.execute("SELECT min(valid_date) FROM position_set").fetchone()[0]
     stamp = inputs_stamp(con, settings)
     revs = store.ReferenceRevs(con)  # once for every date (TDM#567)
@@ -325,7 +357,12 @@ def plan(con: psycopg.Connection, settings: Settings, date_from: date, date_to: 
         sig = [ids, snap, prev, logic, ih, store.dataset_set_ids(con, date.fromisoformat(d)),
                store.reference_rev_ids(con, revs=revs)]
         if why is None:
-            days.append(Day(d, "done", market_id=snap, cached=is_cached, prev_date=pd, prev_cut=pcut))
+            giveup = second_failed.get(d) or {}
+            second = ("done" if run["second_order"] else
+                      "failed" if giveup.get("run_id") == run["run_id"] and giveup.get("attempts", 0) >= MAX_ATTEMPTS
+                      else "todo")
+            days.append(Day(d, "done", market_id=snap, cached=is_cached, prev_date=pd, prev_cut=pcut, second=second,
+                            run_id=run["run_id"]))
         elif failed.get(d) == sig:
             days.append(Day(d, "failed", why, sig, snap, is_cached, pd, pcut))
         else:
@@ -484,12 +521,18 @@ def run(settings: Settings, p: Plan, *, store_url: str | None = None, client: An
     still stale after their run, tried again next time], skipped: [dates without a bundle], left: n, stalled: the
     stall the run stopped on or None, seconds}. ``progress(x, m, date)``, before each date (TDM#587): ``x`` the dates of
     the plan already current (``done``) plus those this run computed, ``m`` the dates with positions and a close
-    (done, to run, failed), ``date`` the one computed now: «посчитано x из m, сейчас ДД.ММ», from the first date."""
-    from .cli import ContextCache, eod_run
+    (done, to run, failed), ``date`` the one computed now: «посчитано x из m, сейчас ДД.ММ», from the first date.
+
+    The first pass of the history (TDM#627): the runs are made without the second derivatives (``eod_run`` with
+    ``no_gamma``), 40 % of the time (17 s against 42 s a date of 2000 positions); the dates are current, but their runs say they have no ``gamma`` (lineage
+    ``second_order``) until ``run_second`` makes them again. ``complete`` in the result: the run went through all its
+    dates (not stopped by the budget or a stall), so the second pass may follow."""
+    from .dayrun import ContextCache, eod_run
 
     t0 = time.monotonic()
     contexts = contexts if contexts is not None else ContextCache()
     todo = [d for d in p.todo if d.date not in exclude]
+    cut = False  # the run stopped before the end of ``todo``: the budget, or a stall of the store or the network
     done: list[str] = []
     failed: list[tuple[str, str]] = []
     unconverged: list[str] = []
@@ -531,6 +574,7 @@ def run(settings: Settings, p: Plan, *, store_url: str | None = None, client: An
     try:
         for i, day in enumerate(todo):
             if budget_s is not None and tried and time.monotonic() - t0 >= budget_s:
+                cut = True
                 break  # the budget counts every date tried, failed or not, but at least one is tried (#447)
             if (passed and live is not None and day.date == live.get("probe") and i < len(todo) - 1
                     and (problems.get(day.date) or {}).get("attempts", 0) >= MAX_ATTEMPTS):
@@ -562,7 +606,7 @@ def run(settings: Settings, p: Plan, *, store_url: str | None = None, client: An
                 out(f"backfill {day.date}: {day.why}")
                 t1 = time.monotonic()
                 rid = eod_run(settings, day.date, snapshots=cache_dir, store_url=store_url, report_dir=None,
-                              out=lambda s: out("  " + s), contexts=contexts, read_model=False)
+                              out=lambda s: out("  " + s), contexts=contexts, read_model=False, no_gamma=True)
                 if rid is not None:
                     st["seconds_per_date"] = round(time.monotonic() - t1, 1)
                     con = con or store.connect(store_url or store.resolve_url(settings))
@@ -593,6 +637,7 @@ def run(settings: Settings, p: Plan, *, store_url: str | None = None, client: An
                         continue  # next date tells
                     stall = {**_stall(problems[day.date], err, (passed or [(day.date, phase)])[0][0],
                                       [x for x, _ in passed] + [day.date]), "probe": day.date}
+                    cut = True
                     break  # the rest waits for next time, the dates not problem dates (#447)
                 # the date's own error: it got past the store and the network (the hub answered its download)
                 loads({"bundle"} if phase == "bundle" else {"run", "bundle"} if downloaded else {"run"})
@@ -645,7 +690,87 @@ def run(settings: Settings, p: Plan, *, store_url: str | None = None, client: An
         save_state(settings, st)
     left = len(todo) - len(done) - len(failed) - len(unconverged) - len(skipped)
     return {"done": done, "failed": failed, "unconverged": unconverged, "skipped": skipped, "left": left,
-            "stalled": stall and st["stall"], "seconds": round(time.monotonic() - t0, 1)}
+            "stalled": stall and st["stall"], "seconds": round(time.monotonic() - t0, 1),
+            "complete": not cut and stall is None}
+
+
+def run_second(settings: Settings, p: Plan, *, store_url: str | None = None, budget_s: float | None = None,
+               out: Callable[[str], None] = print, progress: Callable[[int, int, str], None] | None = None,
+               contexts: Any = None, exclude: set[str] | frozenset[str] = frozenset()) -> dict[str, Any]:
+    """The second pass of the history (TDM#627, module doc): the dates of ``p`` whose default run was made without
+    the second derivatives (``Day.second`` ``todo``), the newest first, until ``budget_s`` seconds have passed (None:
+    all), but ``exclude``. A date's run is made again in full from the cache (``eod_run``; no download: a date whose
+    bundle is not cached is left): the inputs are the first pass's, so its value, first derivatives and PnL come out
+    the same to the last bit, and the new run supersedes the first pass's with the ``gamma`` and the bonds' ``convexity``
+    added (a run is never changed, ADR-006). A date is never made current by this pass: when its inputs changed
+    since the plan, its new run reads the new ones, and the next plan says what is still to do.
+    ``progress(x, m, date)`` as ``run``'s: ``x`` the dates with the second derivatives, ``m`` all that have a run.
+    An error of the store or the network stops the pass (tried again next cycle); another error is the date's: after
+    ``MAX_ATTEMPTS`` on the same run it is left (``Day.second`` ``failed``, ``state["second"]``).
+    Returns {done: [dates], failed: [(date, error)], skipped: [dates not cached], left: n, stopped: the transient error
+    or None, seconds}."""
+    from .dayrun import ContextCache, eod_run
+
+    t0 = time.monotonic()
+    contexts = contexts if contexts is not None else ContextCache()
+    todo = [d for d in p.second_todo if d.date not in exclude]
+    done: list[str] = []
+    failed: list[tuple[str, str]] = []
+    skipped: list[str] = []
+    stopped: str | None = None
+    cache_dir = Path(settings.snapshot_cache)
+    st = state(settings)
+    fails = st.setdefault("second", {}).setdefault("failed", {})
+    total = p.count_second("done") + p.count_second("todo") + p.count_second("failed")
+    con: psycopg.Connection | None = None
+    tried = 0
+    try:
+        for day in todo:
+            if budget_s is not None and tried and time.monotonic() - t0 >= budget_s:
+                break
+            if not day.cached or day.date not in set(SnapshotDir(cache_dir).market_dates()):
+                skipped.append(day.date)  # nothing to value on; the first pass downloaded it, a prune took it
+                continue
+            tried += 1
+            if progress is not None:
+                progress(p.count_second("done") + len(done), total, day.date)
+            try:
+                out(f"backfill {day.date}: second derivatives (the run {day.run_id} has none)")
+                t1 = time.monotonic()
+                rid = eod_run(settings, day.date, snapshots=cache_dir, store_url=store_url, report_dir=None,
+                              out=lambda x: out("  " + x), contexts=contexts, read_model=False)
+                if rid is None:
+                    raise RuntimeError("no run created (no positions for the date)")
+                st["seconds_per_date_second"] = round(time.monotonic() - t1, 1)
+                con = con or store.connect(store_url or store.resolve_url(settings))
+                d = date.fromisoformat(day.date)
+                again = next((x for x in plan(con, settings, d, d, p.rows if p.hub else None).days
+                              if x.date == day.date), None)
+                if again is None or again.status != "done" or again.run_id == day.run_id or again.second == "todo":
+                    raise RuntimeError(f"the new run does not make the date current: "
+                                       f"{again.why if again is not None and again.why else again and again.status}")
+            except Exception as e:  # one date's error must not stop the others
+                if transient(e):
+                    stopped = f"{type(e).__name__}: {e}"
+                    log.exception("backfill second pass %s interrupted", day.date)
+                    break
+                err = f"{type(e).__name__}: {e}"
+                old = fails.get(day.date) or {}
+                n = old.get("attempts", 0) + 1 if old.get("run_id") == day.run_id else 1
+                fails[day.date] = {"run_id": day.run_id, "attempts": n, "error": err}
+                log.exception("backfill second pass %s failed (%d of %d)", day.date, n, MAX_ATTEMPTS)
+                failed.append((day.date, err))
+                continue
+            fails.pop(day.date, None)
+            done.append(day.date)
+    finally:
+        if con is not None:
+            con.close()
+        for x in [x for x in fails if x not in {d.date for d in p.days if d.second in ("todo", "failed")}]:
+            fails.pop(x)  # the date has its second derivatives (or no run): nothing to remember
+        save_state(settings, st)
+    return {"done": done, "failed": failed, "skipped": skipped, "left": len(todo) - len(done) - len(failed) - len(skipped),
+            "stopped": stopped, "seconds": round(time.monotonic() - t0, 1)}
 
 
 def _stall(problem: dict[str, Any], error: str, first: str, dates: list[str]) -> dict[str, Any]:
@@ -693,7 +818,17 @@ def status(con: psycopg.Connection, settings: Settings, today: date | None = Non
     except psycopg.Error as e:
         con.rollback()
         fixings = {"error": f"{type(e).__name__}: {e}"}
-    return {**s, "total": s["done"] + s["todo"] + s["failed"], "enabled": bool(getattr(settings, "backfill", True)),
+    # TDM#627: the second pass (the second derivatives of the dates the first pass made without them), the dates it gave up on
+    sec2 = st.get("seconds_per_date_second")
+    gave_up = (st.get("second") or {}).get("failed", {})
+    second = {**s["second"], "total": s["second"]["done"] + s["second"]["todo"] + s["second"]["failed"],
+              "problem_dates": [{"date": d.date, "error": (gave_up.get(d.date) or {}).get("error"),
+                                 "attempts": (gave_up.get(d.date) or {}).get("attempts")}
+                                for d in p.days if d.second == "failed"][:50],
+              "eta_s": round(s["second"]["todo"] * sec2) if isinstance(sec2, (int, float)) and s["second"]["todo"]
+              else None}
+    return {**s, "second": second, "pass": "first" if s["todo"] else "second" if second["todo"] else "done",
+            "total": s["done"] + s["todo"] + s["failed"], "enabled": bool(getattr(settings, "backfill", True)),
             "fixings_history": fixings,
             "oldest_run": oldest.isoformat() if oldest else None,
             "first_positions": first.isoformat() if first else None,
@@ -709,6 +844,9 @@ def text(p: Plan, *, dry_run: bool = False) -> str:
              f"{s['done']} up to date, {s['todo']} to run, {s['no_positions']} without positions"
              + (f", {s['no_market']} without a close" if s['no_market'] else "")
              + (f", {s['failed']} failed before (same inputs)" if s['failed'] else "")]
+    if s["second"]["todo"] or s["second"]["failed"]:  # TDM#627
+        lines.append(f"  second derivatives (gamma): {s['second']['todo']} dates to make again, "
+                     f"{s['second']['done']} have them" + (f", {s['second']['failed']} given up" if s["second"]["failed"] else ""))
     if dry_run:
         for d in p.days:
             if d.status in ("todo", "failed"):

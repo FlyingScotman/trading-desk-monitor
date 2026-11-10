@@ -13,7 +13,7 @@ import test_slice_s3
 from test_autopilot import SNAPS, cfg, put, steps
 from test_intraday import FRI, MON, at, publish
 
-from desk import cli
+from desk import dayrun
 from desk.autopilot import Autopilot
 from desk.inbox import scan
 
@@ -43,7 +43,7 @@ def test_eod_failed_before_is_an_error_with_its_text(tmp_path, store_url, monkey
     def broken(*a, **kw):
         raise ValueError("time zone not recognized")
 
-    monkeypatch.setattr(cli, "eod_run", broken)
+    monkeypatch.setattr(dayrun, "eod_run", broken)
     ap = Autopilot(settings_loader=lambda: cfg(tmp_path, store_url), now=lambda: at(SAT, 9, 0))
     assert steps(ap.run_cycle())["eod"][0] == "error"
     st = ap.run_cycle()
@@ -55,14 +55,14 @@ def test_eod_failed_before_is_an_error_with_its_text(tmp_path, store_url, monkey
 def test_intraday_failed_before_is_an_error_with_its_text(stub, tmp_path, store_url, monkeypatch):
     s = cfg(tmp_path, store_url, stub)
     put(tmp_path, "positions_20261016.csv")
-    real = cli.eod_run
+    real = dayrun.eod_run
 
     def broken(*a, **kw):  # only the run on today's intraday cut fails
         if kw.get("cut_type") == "intraday":
             raise ValueError("boom")
         return real(*a, **kw)
 
-    monkeypatch.setattr(cli, "eod_run", broken)
+    monkeypatch.setattr(dayrun, "eod_run", broken)
     clock = {"t": at(FRI, 9, 0)}
     ap = Autopilot(settings_loader=lambda: s, now=lambda: clock["t"])
     ap.run_cycle()  # the close of 15.10 and the morning run of 16.10

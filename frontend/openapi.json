@@ -7542,6 +7542,12 @@
             "title": "Factors",
             "description": "IR|<curve>|<bucket>, then CS, then FX|<ccy>"
           },
+          "second_order": {
+            "type": "boolean",
+            "title": "Second Order",
+            "description": "false: the run has no second derivatives yet (the first pass of the history, TDM#627): every position's gamma is empty because it is not computed, not because it is zero, and the Taylor estimate is linear; show it as such",
+            "default": true
+          },
           "positions": {
             "items": {
               "$ref": "#/components/schemas/RiskPosition"
@@ -8529,6 +8535,12 @@
             "title": "Pnl Basis",
             "description": "Set when the flash PnL is not against the previous business day's eod_final: what it is against («PnL от 15.10 (закрытие): нет закрытия 16.10»)"
           },
+          "second_order": {
+            "type": "boolean",
+            "title": "Second Order",
+            "description": "false: the run was valued without the second derivatives (the first pass of the history, TDM#627): its positions' gamma is empty and the bonds' convexity null because they are not computed yet, not because they are zero; the second pass makes the date's run again with them. True: it has them (and every run made before this flag)",
+            "default": true
+          },
           "market_snapshot_id": {
             "type": "string",
             "title": "Market Snapshot Id"
@@ -8905,6 +8917,12 @@
             ],
             "title": "Pnl Basis",
             "description": "Set when the flash PnL is not against the previous business day's eod_final: what it is against («PnL от 15.10 (закрытие): нет закрытия 16.10»)"
+          },
+          "second_order": {
+            "type": "boolean",
+            "title": "Second Order",
+            "description": "false: the run was valued without the second derivatives (the first pass of the history, TDM#627): its positions' gamma is empty and the bonds' convexity null because they are not computed yet, not because they are zero; the second pass makes the date's run again with them. True: it has them (and every run made before this flag)",
+            "default": true
           },
           "market_snapshot_id": {
             "type": "string",
@@ -9700,6 +9718,12 @@
           "definition_hash": {
             "type": "string",
             "title": "Definition Hash"
+          },
+          "taylor_second_order": {
+            "type": "boolean",
+            "title": "Taylor Second Order",
+            "description": "false: the base run has no second derivatives yet (TDM#627), so the Taylor estimate of every position is linear; the exact repricing is not affected",
+            "default": true
           },
           "coverage": {
             "$ref": "#/components/schemas/ResultCoverage"

@@ -19,7 +19,7 @@ from fastapi.testclient import TestClient
 from test_autopilot import cfg, put, steps
 from test_market_history import shifted
 
-from desk import cli, store
+from desk import dayrun, store
 from desk.api import create_app
 from desk.autopilot import NO_ANSWER_CYCLES, Autopilot
 from desk.inbox import scan
@@ -226,7 +226,7 @@ def test_pnl_against_a_preliminary_close_when_there_is_no_final(tmp_path, store_
         store.load_positions(con, [("P1", "B1", "SU26238RMFS4", 100.0)], valid_date=date(2026, 10, 15),
                              source_name="t.csv", source_sha256="0" * 64)
     lines: list[str] = []
-    rid = cli.eod_run(Settings(home=tmp_path / "home", snapshot_cache=folder), FRI.isoformat(), store_url=store_url, cut_type="intraday",
+    rid = dayrun.eod_run(Settings(home=tmp_path / "home", snapshot_cache=folder), FRI.isoformat(), store_url=store_url, cut_type="intraday",
                       market_snapshot_id=iid, run_type="INTRADAY", out=lines.append)
     with store.connect(store_url) as con:
         prev, pcut, basis, pnl = con.execute(
@@ -722,7 +722,7 @@ def test_trades_of_the_day_go_into_the_intraday_book(stub, tmp_path, store_url):
     assert steps(ap.run_cycle())["intraday"][1].startswith("up to date")
     s2 = cfg(tmp_path, store_url, stub, intraday_trades=False)  # the setting off: the trades stay out of the book
     with store.connect(store_url) as con:
-        rid = cli.eod_run(s2, FRI.isoformat(), snapshots=s2.snapshot_cache, store_url=store_url, report_dir=None,
+        rid = dayrun.eod_run(s2, FRI.isoformat(), snapshots=s2.snapshot_cache, store_url=store_url, report_dir=None,
                           out=lambda _: None, cut_type="intraday", run_type="INTRADAY",
                           market_snapshot_id=SnapshotDir(tmp_path / "cache").market_id(FRI.isoformat(), "intraday"))
         assert con.execute("SELECT quantity FROM run_position WHERE run_id = %s AND position_id = %s",
@@ -783,14 +783,14 @@ def test_a_failed_intraday_run_is_tried_again_when_an_ocp_report_arrives(stub, t
     base is a changed input (the run is tried again), while without it the failure stays not retried."""
     s = cfg(tmp_path, store_url, stub)
     put(tmp_path, "positions_20261016.csv")
-    real = cli.eod_run
+    real = dayrun.eod_run
 
     def broken(*a, **kw):
         if kw.get("cut_type") == "intraday":
             raise ValueError("boom")
         return real(*a, **kw)
 
-    monkeypatch.setattr(cli, "eod_run", broken)
+    monkeypatch.setattr(dayrun, "eod_run", broken)
     clock = {"t": at(FRI, 9, 0)}
     ap = Autopilot(settings_loader=lambda: s, now=lambda: clock["t"])
     ap.run_cycle()

@@ -46,7 +46,7 @@ every ``inbox_poll_seconds`` and on ``POST /api/v1/autopilot/run``):
    reason and the ISINs (``inbox.scan.unmapped``, D6).
 4. **intraday** (with the hub and the ``intraday`` setting, R11): on a business day from 10:00 MSK, today's book
    (the latest position sets, carried forward: ``store.positions_for``) valued on the hub's newest ``intraday``
-   cut of today, from 19:45 on its ``eod_preliminary`` cut: the EOD code path (``cli.eod_run``) on another market
+   cut of today, from 19:45 on its ``eod_preliminary`` cut: the EOD code path (``dayrun.eod_run``) on another market
    snapshot, an INTRADAY run (a preliminary one is an EOD run, the date's default until the final). The step asks
    the hub itself, whatever the sync step's outcome (a failed older date never blocks it, #20; the hub found down
    this cycle does, ``hub_error``, #147): one list call
@@ -66,7 +66,7 @@ every ``inbox_poll_seconds`` and on ``POST /api/v1/autopilot/run``):
    **morning** (#21, with or without the hub): on a business day from ``MORNING_FROM`` (07:00 MSK; earlier once a
    current position set has report date today, e.g. today's ``start_of_day`` report, valid the day before), until today has a run on its own market (an EOD run, an intraday cut's
    run), today's book (``store.current_sets``) valued on the previous business day's close in the cache (its
-   ``eod_final``, else its ``eod_preliminary``): ``cli.eod_run(on_close=...)``, an INTRADAY run of today with
+   ``eod_final``, else its ``eod_preliminary``): ``dayrun.eod_run(on_close=...)``, an INTRADAY run of today with
    ``cut_type`` ``prev_close``, lineage ``market_close`` {date, cut_type}, no flash PnL (``pnl_basis`` says why), its
    label «16.10 · закрытие 15.10» (``store.slice_label``). Made again only when the position sets, the close, the
    private inputs hash (#547, as the intraday run) or the logic (``backfill.same_logic``) change, or an ``ocp`` report
@@ -100,7 +100,10 @@ every ``inbox_poll_seconds`` and on ``POST /api/v1/autopilot/run``):
    first cycle of the process or a cycle the owner asked for (``trigger(manual=True)``, ``desk cycle``), nor when
    the store is unreachable (the plan has just read it, ``backfill.no_wait``) or the downloads are and the hub is off
    this cycle. Nothing left to run ends it. The sync step read the hub this cycle: the backfill takes a bundle that
-   does not come for the date's own (``hub_answered``).
+   does not come for the date's own (``hub_answered``). Two passes (TDM#627): the runs of the dates it computes are made
+   without the second derivatives; once every date of the window has its run (the first pass went through all of its
+   dates), what is left of the cycle's budget makes the dates again with them, the newest first
+   (``backfill.run_second``), and the cycles after it go on until none lacks them.
 8. **status** (``status()``, the shape of ``GET /api/v1/autopilot/status``). While a cycle runs, ``message`` and
    ``progress`` ({"step": "sync"|"scan"|"eod"|"intraday"|"history"|"backfill", "done": int, "total": int|null, "detail": str})
    follow it live: hub dates fetched of those to fetch, report files done of those offered, EOD dates run of those
@@ -361,7 +364,7 @@ class Autopilot:
         self._history_dates: tuple[float, int, list[tuple[str, str]]] | None = None
         self._static_polled = float("-inf")    # monotonic time the hub's newest static was last asked for (R25)
         self._backfill_rows: tuple[float, str, list[tuple[str, str]]] | None = None  # (listed at, from, hub rows)
-        self._contexts: Any = None  # the backfill's prepared dates, kept between its runs (cli.ContextCache)
+        self._contexts: Any = None  # the backfill's prepared dates, kept between its runs (dayrun.ContextCache)
         self._last_backfill: dict[str, Any] | None = None  # the last finished backfill step, of any cycle (TDM#587)
         self._stall_now = True  # the backfill runs at once, its stall's wait left out: a start or a manual cycle (#447)
         self._hub_answered = False  # this cycle's sync step read the hub: the backfill's downloads are told by it (#447)
@@ -954,7 +957,7 @@ class Autopilot:
     def _backfill(self, settings: Settings, con: psycopg.Connection, url: str | None, hub: bool,
                   ran: list[str]) -> tuple[str, str]:
         """The backfill step (module doc, ``desk.backfill``)."""
-        from .cli import ContextCache
+        from .dayrun import ContextCache
 
         if self._inbox_waiting and self._sync_later:
             return "skipped", "after the inbox backlog"
@@ -983,41 +986,65 @@ class Autopilot:
         p = backfill.plan(con, settings, d_from, today, rows)
         s = p.summary()
         span = (f"{s['from']}..{s['to']}: {s['done']} of {s['dates'] - s['no_positions'] - s['no_market']} dates with "
-                f"positions have their run" + (f", {s['failed']} failed before" if s["failed"] else ""))
+                f"positions have their run" + (f", {s['failed']} failed before" if s["failed"] else "")
+                + (f", second derivatives {s['second']['done']} of {s['second']['done'] + s['second']['todo']}"
+                   if s["second"]["todo"] else ""))
         if not p.todo:
             backfill.drop_stall(settings, hub=p.hub)  # nothing left to run: a later outage is a new one (TDM#447)
-        if not [d for d in p.todo if d.date not in exclude]:
+        todo = [d for d in p.todo if d.date not in exclude]
+        if not todo and not [d for d in p.second_todo if d.date not in exclude]:
             return "ok", "; ".join(parts + [f"up to date ({span})"])
-        # stalled on the store or the network (#447): its dates not tried again before its wait, unless the process
-        # started or the cycle was asked for, the store is the cause (the plan above just read it), or the downloads
-        # are and the hub is off this cycle (only the cached dates would run)
-        stall, now_ok, self._stall_now = backfill.state(settings).get("stall"), self._stall_now, False
-        if (stall and set(stall.get("dates") or []) & {d.date for d in p.todo} and stall.get("next_attempt")
-                and not now_ok and not backfill.no_wait(stall)
-                and not (stall.get("phase") == "bundle" and client is None)
-                and self._now() < datetime.fromisoformat(stall["next_attempt"])):
-            return "error", "; ".join(parts + [_stall_text(stall), span])
         if self._contexts is None:
             self._contexts = ContextCache()
-        res = backfill.run(settings, p, store_url=url, client=client, budget_s=float(settings.backfill_budget_s),
-                           out=self._eod_line, contexts=self._contexts, exclude=exclude, now=self._now(),
-                           hub_answered=client is not None and self._hub_answered,
-                           progress=lambda i, n, d: self._progress("backfill", i, n, d))
-        if res["done"]:
-            ran.append(f"история {len(res['done'])} дат")
-            parts.append(f"ran {len(res['done'])} dates ({res['done'][0]}..{res['done'][-1]}) in {res['seconds']} s")
-        if res["stalled"]:  # the store or the network, not the dates (#447)
-            parts.append(_stall_text(res["stalled"]))
-        parts += [f"{d} failed ({e})" for d, e in res["failed"]
-                  if not res["stalled"] or d not in res["stalled"]["dates"]][:5]
-        if res["unconverged"]:
-            parts.append(f"still stale after the run, tried again next cycle: {', '.join(res['unconverged'][:5])}")
-        if res["skipped"]:
-            parts.append(f"{len(res['skipped'])} dates not cached and no hub")
-        if res["left"]:
-            parts.append(f"{res['left']} dates in the next cycles")
+        budget = float(settings.backfill_budget_s)
+        res = None
+        if todo:
+            # stalled on the store or the network (#447): its dates not tried again before its wait, unless the process
+            # started or the cycle was asked for, the store is the cause (the plan above just read it), or the downloads
+            # are and the hub is off this cycle (only the cached dates would run)
+            stall, now_ok, self._stall_now = backfill.state(settings).get("stall"), self._stall_now, False
+            if (stall and set(stall.get("dates") or []) & {d.date for d in p.todo} and stall.get("next_attempt")
+                    and not now_ok and not backfill.no_wait(stall)
+                    and not (stall.get("phase") == "bundle" and client is None)
+                    and self._now() < datetime.fromisoformat(stall["next_attempt"])):
+                return "error", "; ".join(parts + [_stall_text(stall), span])
+            res = backfill.run(settings, p, store_url=url, client=client, budget_s=budget,
+                               out=self._eod_line, contexts=self._contexts, exclude=exclude, now=self._now(),
+                               hub_answered=client is not None and self._hub_answered,
+                               progress=lambda i, n, d: self._progress("backfill", i, n, d))
+            if res["done"]:
+                ran.append(f"история {len(res['done'])} дат")
+                parts.append(f"ran {len(res['done'])} dates ({res['done'][0]}..{res['done'][-1]}) in {res['seconds']} s")
+            if res["stalled"]:  # the store or the network, not the dates (#447)
+                parts.append(_stall_text(res["stalled"]))
+            parts += [f"{d} failed ({e})" for d, e in res["failed"]
+                      if not res["stalled"] or d not in res["stalled"]["dates"]][:5]
+            if res["unconverged"]:
+                parts.append(f"still stale after the run, tried again next cycle: {', '.join(res['unconverged'][:5])}")
+            if res["skipped"]:
+                parts.append(f"{len(res['skipped'])} dates not cached and no hub")
+            if res["left"]:
+                parts.append(f"{res['left']} dates in the next cycles")
+        failed2: list[tuple[str, str]] = []
+        # TDM#627: the second pass once the first has gone through every date, in what is left of the cycle's budget
+        if res is None or (res["complete"] and res["seconds"] < budget):
+            p2 = p if res is None else backfill.plan(con, settings, d_from, today, rows)
+            if [d for d in p2.second_todo if d.date not in exclude]:
+                res2 = backfill.run_second(settings, p2, store_url=url, budget_s=budget - (res["seconds"] if res else 0.0),
+                                           out=self._eod_line, contexts=self._contexts, exclude=exclude,
+                                           progress=lambda i, n, d: self._progress("backfill", i, n, d))
+                if res2["done"]:
+                    ran.append(f"гамма {len(res2['done'])} дат")
+                    parts.append(f"second derivatives of {len(res2['done'])} dates ({res2['done'][0]}..{res2['done'][-1]}) "
+                                 f"in {res2['seconds']} s")
+                failed2 = res2["failed"]
+                parts += [f"{d} second derivatives failed ({e})" for d, e in failed2][:5]
+                if res2["stopped"]:
+                    parts.append(f"second derivatives stopped, tried again next cycle: {res2['stopped']}")
+                if res2["left"]:
+                    parts.append(f"{res2['left']} dates of the second derivatives in the next cycles")
         parts.append(span)
-        return ("error" if res["failed"] else "ok"), "; ".join(parts)
+        return ("error" if (res and res["failed"]) or failed2 else "ok"), "; ".join(parts)
 
     def _scan(self, settings: Settings, con: psycopg.Connection) -> tuple[str, str]:
         from .inbox import scan
@@ -1035,7 +1062,7 @@ class Autopilot:
 
     def _eod(self, settings: Settings, con: psycopg.Connection, url: str | None, extra: list[str],
              ran: list[str]) -> tuple[str, str]:
-        from .cli import eod_run
+        from .dayrun import eod_run
 
         self._eod_tried = set()
 
@@ -1063,7 +1090,7 @@ class Autopilot:
             if not n:
                 continue
             snap = sd.market_id(d)
-            pc = previous_close(sd, d)  # cli.eod_run's: the newest earlier close, its final preferred (#203)
+            pc = previous_close(sd, d)  # dayrun.eod_run's: the newest earlier close, its final preferred (#203)
             prev = pc[2] if pc else None
             run = runs.get(date.fromisoformat(d))
             inputs_hash = trades.intraday_inputs(con, date.fromisoformat(d), settings)[0].private_inputs_hash  # TDM#557
@@ -1163,7 +1190,7 @@ class Autopilot:
 
     def _intraday_step(self, settings: Settings, con: psycopg.Connection, url: str | None,
                        ran: list[str]) -> tuple[str, str, str]:
-        from .cli import eod_run
+        from .dayrun import eod_run
 
         if not getattr(settings, "intraday", True):
             return "skipped", "off in the settings (intraday)", "off"
@@ -1210,12 +1237,12 @@ class Autopilot:
         if target is None and last is not None and sorted(last[3]) != ids:
             target = (last[1], "positions changed")
         sd = SnapshotDir(Path(settings.snapshot_cache))
-        pc = previous_close(sd, today.isoformat())  # cli.eod_run's (#203)
+        pc = previous_close(sd, today.isoformat())  # dayrun.eod_run's (#203)
         prev_id = pc[2] if pc else None
         if target is None and last is not None and last[4] != prev_id:
             target = (last[1], "previous close changed")  # the previous close arrived (or was corrected) after it
         inputs_hash = None
-        if last is not None:  # every run values the day's trades too (TDM#557), as cli.eod_run does
+        if last is not None:  # every run values the day's trades too (TDM#557), as dayrun.eod_run does
             inputs_hash = trades.intraday_inputs(con, today, settings)[0].private_inputs_hash
         if target is None and last is not None and last[5] != inputs_hash:
             target = (last[1], "private inputs changed")  # e.g. trade terms of an earlier date, in force today (#547)
@@ -1283,7 +1310,7 @@ class Autopilot:
 
     def _morning_step(self, settings: Settings, con: psycopg.Connection, url: str | None,
                       ran: list[str]) -> tuple[str, str, str]:
-        from .cli import eod_run
+        from .dayrun import eod_run
 
         now = self._now().astimezone(MSK)
         today = now.date()

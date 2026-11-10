@@ -20,7 +20,7 @@ from fastapi.testclient import TestClient
 from rub_fixed_income import kbd_effective_yield
 from test_slice_s3 import TOKEN
 
-from desk import autopilot, cli, store
+from desk import autopilot, dayrun, store
 from desk.api import create_app
 from desk.autopilot import HISTORY_PER_CYCLE, Autopilot
 from desk.marketdata import history, hubhistory
@@ -170,7 +170,7 @@ def desk_with_history(store_url, tmp_path):
     book.write_text(f"position_id,book_id,secid,quantity_bonds\nP1,OFZ,{OFZ},10\nP2,OFZ,{FLOATER},5\n",
                     encoding="utf-8")
     lines: list[str] = []
-    rid = cli.eod_run(Settings(home=tmp_path / "home", snapshot_cache=cache), DATE, store_url=store_url,
+    rid = dayrun.eod_run(Settings(home=tmp_path / "home", snapshot_cache=cache), DATE, store_url=store_url,
                       book=str(book), no_pnl=True, out=lines.append)
     assert rid == 1, lines
     with store.connect(store_url) as con:  # desk eod loaded the snapshots it read

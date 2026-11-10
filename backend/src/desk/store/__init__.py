@@ -108,7 +108,7 @@ class Loaded:
 def load_positions(con: psycopg.Connection, rows: list[tuple[str, str, str, float]], *, valid_date: date,
                    source_name: str, source_sha256: str, recorded_by: str | None = None,
                    books: list[str] | None = None) -> list[Loaded]:
-    """rows: (position_id, book_id, secid, quantity), as ``cli.read_book`` returns them. The load covers
+    """rows: (position_id, book_id, secid, quantity), as ``bookfile.read_book`` returns them. The load covers
     ``books`` (default: the books of the rows): one position set per book, revision = the previous one of
     (book, valid_date) + 1; a covered book without rows gets an empty set (closed or dropped), unless its
     latest set of the date is empty already. Raises InputError, writing nothing, when a position id is
@@ -758,14 +758,17 @@ def prune_intraday(con: psycopg.Connection, business_date: date, keep_run_id: in
 
 def default_runs(con: psycopg.Connection, since: date) -> dict[date, dict]:
     """The default run of each business date from ``since`` on: run_id, its snapshots, position sets (sorted),
-    completed_at, private inputs hash, the horizon it read its inputs at (``positions_known_at``: ``late_inputs``) and
-    the ``logic_version`` of the code that made it (lineage; None for a run made before it was recorded)."""
+    completed_at, private inputs hash, the horizon it read its inputs at (``positions_known_at``: ``late_inputs``), the
+    ``logic_version`` of the code that made it (lineage; None for a run made before it was recorded) and
+    ``second_order``: False for a run made without the second derivatives (lineage ``second_order``, TDM#627: the first
+    pass of the history); True for a run with them and for one made before it was recorded."""
     return {r[0]: {"run_id": r[1], "market_snapshot_id": r[2], "prev_market_snapshot_id": r[3],
                    "position_set_ids": sorted(r[4]), "completed_at": r[5], "logic_version": r[6],
-                   "private_inputs_hash": r[7], "positions_known_at": r[8]}
+                   "private_inputs_hash": r[7], "positions_known_at": r[8], "second_order": r[9] != "false"}
             for r in con.execute(
                 "SELECT business_date, run_id, market_snapshot_id, prev_market_snapshot_id, position_set_ids,"
-                " completed_at, lineage->>'logic_version', private_inputs_hash, positions_known_at FROM run"
+                " completed_at, lineage->>'logic_version', private_inputs_hash, positions_known_at,"
+                " lineage->>'second_order' FROM run"
                 f" WHERE run_id IN ({DEFAULT_RUNS}) AND business_date >= %s", (since,))}
 
 

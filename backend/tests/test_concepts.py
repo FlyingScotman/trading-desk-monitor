@@ -13,7 +13,7 @@ import pytest
 from fastapi.testclient import TestClient
 from test_market_history import DATE, FLOATER, OFZ, USD_FACE, fixture_cache, shifted, weekdays_before, write
 
-from desk import cli, store
+from desk import dayrun, store
 from desk.api import concepts, create_app
 from desk.marketdata import history
 from desk.settings import Settings
@@ -34,7 +34,7 @@ def desk(store_url, tmp_path):
         book.write_text(f"position_id,book_id,secid,quantity_bonds\nP1,OFZ,{OFZ},{n}\nP2,OFZ,{FLOATER},5\n"
                         f"P3,CORP,{USD_FACE},3\n", encoding="utf-8")
         lines: list[str] = []
-        assert cli.eod_run(settings, d, store_url=store_url, book=str(book), out=lines.append), lines
+        assert dayrun.eod_run(settings, d, store_url=store_url, book=str(book), out=lines.append), lines
     with store.connect(store_url) as con:
         history.load_cache(con, hist)
     return TestClient(create_app(store_url))

@@ -26,9 +26,18 @@ from .definition import RUB_CURVES, own_spread_shock
 PARTS = ("rates", "spread", "fx", "convexity", "total")
 
 
+def has_second_order(run: Mapping[str, Any]) -> bool:
+    """Whether the run was valued with the second derivatives: its lineage's ``second_order`` (a ``run`` row), else the
+    field of that name a caller took out of it; absent: yes (a run made before the first pass of the history, TDM#627)."""
+    lineage = run.get("lineage")
+    if isinstance(lineage, Mapping) and "second_order" in lineage:
+        return bool(lineage["second_order"])
+    return run.get("second_order") is not False
+
+
 def risk_payload(run: Mapping[str, Any], rows: list[Mapping[str, Any]], reference: Mapping[str, list]
                  ) -> dict[str, Any]:
-    """``run``: ``run_id`` and ``business_date``; ``rows``: ``run_position`` dicts in order (a row without
+    """``run``: ``run_id`` and ``business_date`` (and ``second_order``, ``has_second_order``); ``rows``: ``run_position`` dicts in order (a row without
     ``fact`` is not valued and left out); ``reference``: ``run_reference`` data by kind."""
     valued = [r for r in rows if r.get("fact")]
     issuers = {i["issuer"]: i for i in reference.get("issuers") or []}
@@ -65,7 +74,8 @@ def risk_payload(run: Mapping[str, Any], rows: list[Mapping[str, Any]], referenc
             "delta": sorted([idx[k], x] for k, x in d.items()), "gamma": gamma,
         })
     return {"run_id": run["run_id"], "business_date": str(run["business_date"]), "buckets": list(RISK_BUCKETS),
-            "curves": curves, "factors": factors, "positions": positions}
+            "curves": curves, "factors": factors, "positions": positions,
+            **({} if has_second_order(run) else {"second_order": False})}  # absent: has them (the parity fixture)
 
 
 def run_taylor(payload: Mapping[str, Any], norm: Mapping[str, Any]) -> dict[str, Any]:
