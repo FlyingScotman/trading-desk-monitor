@@ -787,16 +787,37 @@ def superseded_runs(con: psycopg.Connection, keep_days: int, limit: int | None =
         _PRUNABLE + (" LIMIT %(limit)s" if limit else ""), {"days": max(keep_days, PRUNE_MIN_DAYS), "limit": limit})]
 
 
+EXACT_COUNT_ROWS = 100_000
+"""A run table with fewer rows than this (by the planner's count) is counted exactly for ``_share_bytes``; a bigger one
+is taken at the planner's count, not scanned."""
+
+
+def _table_rows(con: psycopg.Connection, table: str) -> int:
+    """How many rows ``table`` has: the planner's count (``pg_class.reltuples``, kept by autovacuum) when it says the table
+    is big, else counted (a small or never analyzed table costs nothing; a full scan of a big one is what to avoid)."""
+    est = con.execute("SELECT reltuples::bigint FROM pg_class WHERE oid = %s::regclass", (table,)).fetchone()[0]
+    if est is not None and est >= EXACT_COUNT_ROWS:
+        return int(est)
+    return con.execute("SELECT count(*) FROM " + table).fetchone()[0]
+
+
 def _share_bytes(con: psycopg.Connection, ids: list[int]) -> int:
     """About how many bytes the rows of runs ``ids`` take on disk: per table (with its indexes and TOAST) the table's
-    size by the share of the rows."""
+    size by the share of its rows that are the runs' (counted by ``run_id``, an index range; the table's own rows are
+    ``_table_rows``). One estimate for a whole prune, made before its first transaction: not a pass over the tables for
+    every batch, and none inside the delete's transaction."""
     total = 0
     for table in ("run", *RUN_ROW_TABLES):
-        n_all, n = con.execute(
-            "SELECT count(*), count(*) FILTER (WHERE run_id = ANY(%s)) FROM " + table, (ids,)).fetchone()
-        if n_all:
+        n = con.execute("SELECT count(*) FROM " + table + " WHERE run_id = ANY(%s)", (ids,)).fetchone()[0]
+        if n and (n_all := max(_table_rows(con, table), n)):
             total += con.execute("SELECT pg_total_relation_size(%s::regclass)", (table,)).fetchone()[0] * n // n_all
     return total
+
+
+def autovacuum_on(con: psycopg.Connection) -> bool:
+    """The server's autovacuum is on (the embedded server's default): it gives the space of deleted runs back to the
+    tables, so no explicit ``VACUUM`` of ours is needed."""
+    return con.execute("SELECT current_setting('autovacuum')").fetchone()[0] == "on"
 
 
 def prune_superseded(con: psycopg.Connection, keep_days: int, *, limit: int | None = None,
@@ -811,13 +832,18 @@ def prune_superseded(con: psycopg.Connection, keep_days: int, *, limit: int | No
     {runs: [ids], dates: [first, last] or None, bytes: about what the rows took, busy: another prune runs,
     left: runs still prunable after this call}. The space is the tables' to reuse once ``vacuum_runs`` ran; the
     files shrink with ``compact_runs``."""
+    if not con.autocommit or con.info.transaction_status != psycopg.pq.TransactionStatus.IDLE:
+        # a batch is a transaction of its own (an interrupted prune keeps whole runs): in a transaction already, or
+        # without autocommit, the whole prune would be one, and the batches nothing but savepoints
+        raise ValueError("prune_superseded needs a connection in autocommit, outside a transaction (store.connect)")
     t0 = time.monotonic()
     out: dict[str, Any] = {"runs": [], "dates": None, "bytes": 0, "busy": False, "left": 0}
     todo = superseded_runs(con, keep_days, limit)
+    ids_all = [r for r, _, _ in todo]
+    total_bytes = _share_bytes(con, ids_all) if ids_all else 0  # one estimate, before anything is deleted
     if dry_run:
-        ids = [r for r, _, _ in todo]
-        return {**out, "runs": ids, "dates": [str(todo[0][1]), str(todo[-1][1])] if todo else None,
-                "bytes": _share_bytes(con, ids) if ids else 0}
+        return {**out, "runs": ids_all, "dates": [str(todo[0][1]), str(todo[-1][1])] if todo else None,
+                "bytes": total_bytes}
     dates: list[date] = []
     for i in range(0, len(todo), PRUNE_BATCH):
         if budget_s is not None and out["runs"] and time.monotonic() - t0 >= budget_s:
@@ -829,13 +855,13 @@ def prune_superseded(con: psycopg.Connection, keep_days: int, *, limit: int | No
                 break
             con.execute("SET LOCAL desk.prune_superseded = 'on'")
             ids = [r for r, _, _ in batch]
-            out["bytes"] += _share_bytes(con, ids)
             for table in RUN_ROW_TABLES:
                 con.execute("DELETE FROM " + table + " WHERE run_id = ANY(%s)", (ids,))
             con.execute("DELETE FROM run WHERE run_id = ANY(%s)", (ids,))
         out["runs"] += ids
         dates += [d for _, d, _ in batch]
     out["dates"] = [str(min(dates)), str(max(dates))] if dates else None
+    out["bytes"] = total_bytes * len(out["runs"]) // len(todo) if todo else 0  # what was deleted of what was estimated
     out["left"] = len(superseded_runs(con, keep_days)) if todo else 0
     return out
 

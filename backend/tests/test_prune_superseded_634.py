@@ -53,6 +53,16 @@ def age_all(url: str, days: int, only: set[str] | None = None) -> None:
     age(url, {r: days + (0 if r in default else 1) for r, d in rows if only is None or d in only})
 
 
+class SpyConnection(psycopg.Connection):
+    """A connection that records every statement with the state of its transaction at that moment."""
+
+    log: list[tuple[str, bool]]
+
+    def execute(self, query, params=None, **kw):
+        self.log.append((str(query), self.info.transaction_status == psycopg.pq.TransactionStatus.INTRANS))
+        return super().execute(query, params, **kw)
+
+
 def two_passes(tmp_path, cache, store_url):
     s, _ = first_pass(tmp_path, cache, store_url)
     second_pass(s, store_url)
@@ -218,17 +228,18 @@ def test_an_interrupted_prune_keeps_whole_runs_and_finishes_next_time(tmp_path, 
     two_passes(tmp_path, cache, store_url)
     age_all(store_url, 30)
     monkeypatch.setattr(store, "PRUNE_BATCH", 2)
-    real = store._share_bytes
-    seen = []
+    deletes = 1 + len(store.RUN_ROW_TABLES)  # statements of one batch
 
-    def dies_on_the_second_batch(con, ids):
-        seen.append(ids)
-        if len(seen) == 2:
-            raise KeyboardInterrupt  # the process is stopped between two statements of the batch
-        return real(con, ids)
+    class Dies(SpyConnection):
+        def execute(self, query, params=None, **kw):
+            if str(query).startswith("DELETE FROM") and sum(
+                    q.startswith("DELETE FROM") for q, _ in self.log) == deletes + 2:
+                raise KeyboardInterrupt  # the process is stopped between two statements of the second batch
+            return super().execute(query, params, **kw)
 
-    monkeypatch.setattr(store, "_share_bytes", dies_on_the_second_batch)
-    with store.connect(store_url) as con, pytest.raises(KeyboardInterrupt):
+    con = Dies.connect(store_url, autocommit=True)
+    con.log = []
+    with con, pytest.raises(KeyboardInterrupt):
         store.prune_superseded(con, 7)
     monkeypatch.undo()
     c = counts(store_url)
@@ -278,6 +289,73 @@ def test_a_run_that_replaced_nothing_or_whose_replaced_run_is_there_is_not_marke
         store.prune_superseded(con, 7)
         (r,) = daystatus._runs(con, date(2026, 10, 14))
     assert r["supersedes_run_id"] == r2["supersedes_run_id"] and r["supersedes_pruned"] is True
+
+
+def test_the_size_of_what_is_deleted_is_estimated_once_and_never_inside_a_delete_transaction(
+        tmp_path, cache, store_url, monkeypatch):
+    """A count(*) of every run table per batch, inside the transaction that deletes, was a full scan of seven tables
+    (millions of rows each) a batch: one estimate a call, before the first transaction."""
+    two_passes(tmp_path, cache, store_url)
+    age_all(store_url, 30)
+
+    def prune(batch: int) -> tuple[dict, list[tuple[str, bool]]]:
+        monkeypatch.setattr(store, "PRUNE_BATCH", batch)
+        con = SpyConnection.connect(store_url, autocommit=True)
+        con.log = []
+        try:
+            res = store.prune_superseded(con, 7, dry_run=True)
+            assert res["bytes"] > 0
+            return res, con.log
+        finally:
+            con.close()
+
+    _, one = prune(5)
+    _, many = prune(1)
+    assert [q for q, _ in one] == [q for q, _ in many]  # a dry run: the list and the estimate, however it is batched
+    con = SpyConnection.connect(store_url, autocommit=True)
+    con.log = []
+    monkeypatch.setattr(store, "PRUNE_BATCH", 1)  # four batches
+    try:
+        res = store.prune_superseded(con, 7)
+    finally:
+        con.close()
+    assert len(res["runs"]) == 4 and res["bytes"] > 0
+    counts_ = [(q, tx) for q, tx in con.log if "count(*)" in q]
+    assert counts_ and not [q for q, tx in counts_ if tx]  # no count inside a delete's transaction
+    assert len([q for q, _ in counts_ if q.startswith("SELECT count(*) FROM run_position")]) <= 2  # not one per batch
+    assert len([q for q, _ in con.log if q.startswith("SELECT pg_total_relation_size")]) <= 7  # a table's size, once
+
+
+def test_a_big_table_is_taken_at_the_planners_count_not_scanned(store_url, monkeypatch):
+    seen: list[str] = []
+    with store.connect(store_url) as con:
+        real = psycopg.Connection.execute
+
+        def spy(self, query, *a, **kw):
+            seen.append(str(query))
+            return real(self, query, *a, **kw)
+
+        monkeypatch.setattr(psycopg.Connection, "execute", spy)
+        monkeypatch.setattr(store, "EXACT_COUNT_ROWS", 0)  # every table counts as big
+        con.execute("ANALYZE run")
+        n = store._table_rows(con, "run")
+        assert n >= 0 and not [q for q in seen if q.startswith("SELECT count(*)")]  # reltuples only
+        monkeypatch.setattr(store, "EXACT_COUNT_ROWS", 10**12)  # none does: counted
+        store._table_rows(con, "run")
+        assert [q for q in seen if q.startswith("SELECT count(*) FROM run")]
+
+
+def test_prune_wants_a_connection_in_autocommit_outside_a_transaction(tmp_path, cache, store_url):
+    two_passes(tmp_path, cache, store_url)
+    age_all(store_url, 30)
+    # no autocommit: the whole prune would be one transaction
+    with psycopg.connect(store_url) as con, pytest.raises(ValueError, match="autocommit"):
+        store.prune_superseded(con, 7)
+    with store.connect(store_url) as con, con.transaction(), pytest.raises(ValueError, match="outside a transaction"):
+        store.prune_superseded(con, 7, dry_run=True)
+    assert counts(store_url)["run"] == 8  # nothing was deleted
+    with store.connect(store_url) as con:
+        assert len(store.prune_superseded(con, 7)["runs"]) == 4
 
 
 # ---- the autopilot's step, the settings, the command line
