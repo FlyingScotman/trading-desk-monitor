@@ -358,6 +358,12 @@ def test_prune_wants_a_connection_in_autocommit_outside_a_transaction(tmp_path, 
         assert len(store.prune_superseded(con, 7)["runs"]) == 4
 
 
+def test_the_embedded_server_has_autovacuum_on(store_url):
+    """The prune step leaves the space to it (``store.autovacuum_on``)."""
+    with store.connect(store_url) as con:
+        assert store.autovacuum_on(con) is True
+
+
 # ---- the autopilot's step, the settings, the command line
 
 def test_the_autopilot_prunes_in_a_quiet_cycle_and_says_how_much(tmp_path, cache, store_url, caplog):
@@ -391,6 +397,42 @@ def test_the_prune_step_is_off_with_the_setting_and_waits_for_the_retention(tmp_
                     store_url=store_url, today=lambda: date(2026, 10, 15))
     step = {x["name"]: x for x in ap2.run_cycle(hub=False)["steps"]}["prune"]
     assert step["status"] == "ok" and step["detail"] == "no replaced runs to delete"  # the replacement is minutes old
+
+
+def fake_prune(mb: int):
+    def prune(con, days, **kw):
+        return {"runs": [1, 2], "dates": ["2026-10-12", "2026-10-13"], "bytes": mb * 1_048_576, "busy": False, "left": 0}
+
+    return prune
+
+
+def test_the_prune_step_leaves_the_space_to_autovacuum_and_vacuums_a_server_without_it_once_a_day(
+        tmp_path, cache, store_url, monkeypatch):
+    from datetime import UTC, datetime, timedelta
+
+    clock = [datetime(2026, 10, 20, 9, 0, tzinfo=UTC)]
+    ap = Autopilot(settings_loader=lambda: settings(tmp_path, cache, store_url), store_url=store_url,
+                   today=lambda: date(2026, 10, 20), now=lambda: clock[0])
+    vacuums: list[int] = []
+    monkeypatch.setattr(store, "vacuum_runs", lambda con: vacuums.append(1) or [])
+    monkeypatch.setattr(store, "prune_superseded", fake_prune(100))
+    s = settings(tmp_path, cache, store_url)
+    with store.connect(store_url) as con:
+        status, detail = ap._prune(s, con, [])
+        assert status == "ok" and "место вернёт автоочистка" in detail and not vacuums  # autovacuum is on: no VACUUM of ours
+        monkeypatch.setattr(store, "autovacuum_on", lambda con: False)
+        _, detail = ap._prune(s, con, [])
+        assert len(vacuums) == 1 and "место возвращено таблицам" in detail
+        clock[0] += timedelta(hours=6)  # the same day: the cycle does not wait for another
+        _, detail = ap._prune(s, con, [])
+        assert len(vacuums) == 1 and "возвращено" not in detail
+        clock[0] += timedelta(hours=19)  # the next day
+        ap._prune(s, con, [])
+        assert len(vacuums) == 2
+        monkeypatch.setattr(store, "prune_superseded", fake_prune(1))  # a small prune is not worth one
+        clock[0] += timedelta(days=2)
+        ap._prune(s, con, [])
+        assert len(vacuums) == 2
 
 
 def test_the_prune_settings(tmp_path):

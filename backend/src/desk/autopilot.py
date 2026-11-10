@@ -107,12 +107,14 @@ every ``inbox_poll_seconds`` and on ``POST /api/v1/autopilot/run``):
    (default 1: off until the pool is checked on the work machine, TDM#628) both passes compute several dates at once in
    processes of a pool (one for both passes of the cycle) and publish them in order (``desk.parallel``); the budget
    starts no date after it, the dates already in the pool are finished.
-8. **prune** (setting ``prune_superseded``, on; ``prune_superseded_days``, 7; TDM#634): the runs of a date that a newer run
+8. **prune** (setting ``prune_superseded``, on; ``prune_superseded_days``, 14: not less than the 14 daily backups, so
+   every backup kept holds a run when it is deleted; TDM#634): the runs of a date that a newer run
    replaced (the history's first pass, an older program version, a corrected report) are deleted once the replacement
    is that old, 50 runs and 60 seconds a cycle at most (``store.prune_superseded``), only in a quiet cycle (no run
-   made, the inbox not draining), last; the step's detail says how many runs and about how many MB, and a prune of
-   32 MB or more is followed by ``VACUUM`` of the run tables. A date keeps its newest run; a run with a scenario job
-   stays.
+   made, the inbox not draining), last; the step's detail says how many runs and about how many MB. The space goes
+   back to the tables by the server's autovacuum (on in the embedded server); only on a server where it is off a
+   prune of 32 MB or more is followed by ``VACUUM`` of the run tables, once a day at most. A date keeps its newest
+   run; a run with a scenario job stays.
 9. **status** (``status()``, the shape of ``GET /api/v1/autopilot/status``). While a cycle runs, ``message`` and
    ``progress`` ({"step": "sync"|"scan"|"eod"|"intraday"|"history"|"backfill", "done": int, "total": int|null, "detail": str})
    follow it live: hub dates fetched of those to fetch, report files done of those offered, EOD dates run of those
@@ -166,7 +168,8 @@ MAX_EOD_DATES = 10
 RECHECK_S = 3600.0      # cached dates are asked of the hub again this often (corrections)
 PRUNE_RUNS = 50         # replaced runs one cycle's prune step deletes at most (TDM#634); ~7 MB each with 2000 positions
 PRUNE_BUDGET_S = 60.0   # ... and it starts no further batch after this many seconds
-PRUNE_VACUUM_BYTES = 32 * 1_048_576   # a prune that freed this much is followed by VACUUM of the run tables
+PRUNE_VACUUM_BYTES = 32 * 1_048_576   # a prune that freed this much, on a server without autovacuum, is followed by VACUUM
+PRUNE_VACUUM_EVERY = timedelta(days=1)   # ... of the run tables, at most this often (it takes minutes with a year of runs)
 MAX_HUB_DATES = 400     # how far back the hub's date list is read at most
 SYNC_EXTRA = 3          # hub dates per cycle beyond autopilot_sync_last; the rest wait for the next cycle
 MISSING_TTL_S = 6 * 3600.0  # a date the hub has no snapshot for is not asked again for this long (per process)
@@ -373,6 +376,7 @@ class Autopilot:
         self._hub_first: str | None = None     # the hub's oldest date, when its whole list was read (#27)
         self._no_answer: dict[str, int] = {}   # hub date -> cycles in a row its bundle got no answer at all (#217)
         self._inbox_waiting = 0                # files the last scan left waiting for a calendar (R22)
+        self._vacuumed_at: datetime | None = None   # the last explicit VACUUM of the run tables (server without autovacuum)
         self._history_dates: tuple[float, int, list[tuple[str, str]]] | None = None
         self._static_polled = float("-inf")    # monotonic time the hub's newest static was last asked for (R25)
         self._backfill_rows: tuple[float, str, list[tuple[str, str]]] | None = None  # (listed at, from, hub rows)
@@ -1084,7 +1088,9 @@ class Autopilot:
         replacement is ``prune_superseded_days`` old, deleted in batches (``PRUNE_RUNS`` at most, ``PRUNE_BUDGET_S``
         seconds) after the other steps of a quiet cycle: one that made no run and is not draining the inbox, so
         the calculations of the window never wait for it. The step's detail is the journal line: how many runs, how
-        much the rows took; ``VACUUM`` of the run tables after a big enough batch gives the space back to the tables."""
+        much the rows took. The space of the deleted runs goes back to the tables by the server's autovacuum; a server
+        where it is off gets an explicit ``VACUUM`` of the run tables after a big enough prune, once a day at most (a
+        cycle of daily calculations must not wait for one every time)."""
         if ran:
             return "skipped", "a cycle that made runs: the clean-up waits for a quiet one"
         if self._inbox_waiting:
@@ -1098,9 +1104,13 @@ class Autopilot:
         text = (f"удалено {len(res['runs'])} заменённых прогонов ({res['dates'][0]}..{res['dates'][1]}), "
                 f"освобождено ~{mb:,.0f} МБ")
         if res["bytes"] >= PRUNE_VACUUM_BYTES:
-            t0 = time.monotonic()
-            store.vacuum_runs(con)
-            text += f"; место возвращено таблицам ({time.monotonic() - t0:.0f} с)"
+            if store.autovacuum_on(con):
+                text += "; место вернёт автоочистка сервера"
+            elif self._vacuumed_at is None or self._now() - self._vacuumed_at >= PRUNE_VACUUM_EVERY:
+                t0 = time.monotonic()
+                store.vacuum_runs(con)
+                self._vacuumed_at = self._now()
+                text += f"; место возвращено таблицам ({time.monotonic() - t0:.0f} с)"
         if res["left"]:
             text += f"; ещё {res['left']} в следующих циклах"
         return "ok", text
