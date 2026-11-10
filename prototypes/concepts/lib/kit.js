@@ -2030,6 +2030,130 @@
     a.href = u; a.download = name; document.body.appendChild(a); a.click(); a.remove(); setTimeout(() => URL.revokeObjectURL(u), 1000);
   };
 
+  // ---------- окно строк длинной таблицы (TDM#630) ----------
+  // Таблица в две-пять тысяч строк на странице — десятки тысяч узлов: их разбор и раскладка блокируют вкладку на секунды,
+  // хотя на экране строк тридцать. K.vwin держит в таблице только строки около видимой области (экран и запас по
+  // экрану сверху и снизу), остальное — две пустые строки-распорки нужной высоты, так что полоса прокрутки и положение
+  // прокрутки те же, что у полной таблицы. Высоту строки берёт по первым нарисованным (строки таблиц однострочные).
+  // Ширину колонок задаёт не окно, а «мерные» строки: у каждой колонки самая широкая ячейка по тексту всей таблицы
+  // лежит в окне невидимой строкой (visibility: collapse — в раскладке колонок участвует, высоты не имеет), так что
+  // колонки не прыгают при прокрутке. Что теряется: поиск браузера (Ctrl+F) и выделение мышью видят только строки окна
+  // (у таблиц есть свой поиск, выгрузка CSV — по всем строкам); печать выводит все строки (beforeprint).
+  // Таблицы короче K.VWIN_MIN строк рисуются как раньше, целиком.
+  // items: [{k: 'row' | 'grp' | 'hid', html(), cells?()}] в порядке таблицы; 'hid' — строка, которой на экране нет, но она
+  // идёт в выгрузку (свёрнутая группа C03), cells() — ячейки строки (для мерных строк). o: {cols — число колонок (colspan
+  // распорки), rowH, grpH — первая оценка высоты строки и строки группы, px}.
+  // v = K.vwin(items, o): v.html() — содержимое tbody для вставки в таблицу (первое окно), v.attach(table) — после
+  // вставки, v.paint(force) — выбрать строки окна заново, v.offsetOf(i) — отступ строки i от верха таблицы, v.destroy().
+  K.VWIN_MIN = 400;
+  const VW = K._vw = new Set();
+  K.vwin = function (items, o) {
+    o = o || {};
+    const n = items.length, NC = o.cols || 1, hs = { row: o.rowH || 26, grp: o.grpH || 26, hid: 0 };
+    let off = null, table = null, tb = null, a = 0, z = 0, raf = 0, io = null, clip = [], full = false, gone = false, meas = null, fixes = 0;
+    const build = () => { off = new Float64Array(n + 1); for (let i = 0; i < n; i++) off[i + 1] = off[i] + hs[items[i].k]; };
+    build();
+    const idxAt = y => { let lo = 0, hi = n - 1; while (lo < hi) { const m = (lo + hi + 1) >> 1; if (off[m] <= y) lo = m; else hi = m - 1; } return lo; };
+    const spacer = px => '<tr class="k-vs" aria-hidden="true"><td colspan="' + NC + '" style="height:' + Math.max(0, Math.round(px * 100) / 100) + 'px;padding:0;border:0"></td></tr>';
+    const textLen = s => s.indexOf('<') < 0 ? s.length : s.replace(/<[^>]*>/g, '').length;
+    // мерные строки: для каждой колонки — строка с самым длинным текстом ячейки
+    const measure = () => {
+      if (meas != null) return meas;
+      const best = [], who = [];
+      for (const it of items) {
+        if (it.k !== 'row' || !it.cells) continue;
+        const cs = it.cells();
+        for (let j = 0; j < cs.length; j++) { const L = textLen(cs[j]); if (best[j] == null || L > best[j]) { best[j] = L; who[j] = it; } }
+      }
+      return meas = [...new Set(who)].filter(Boolean).map(it => '<tr class="k-vm" aria-hidden="true" style="visibility:collapse">' + it.cells().join('') + '</tr>').join('');
+    };
+    const rowsHtml = (lo, hi) => { let s = ''; for (let i = lo; i < hi; i++) if (items[i].k !== 'hid') s += items[i].html(); return s; };
+    const fill = (lo, hi) => { a = lo; z = hi; return measure() + spacer(off[lo]) + rowsHtml(lo, hi) + spacer(off[n] - off[hi]); };
+    const v = {
+      items, get from() { return a; }, get to() { return z; },
+      html() { return fill(0, Math.min(n, o.first || 60)); },
+      // реальная высота строк окна вместо оценки: по строкам обоих видов (одна и та же строка могла быть не рисована)
+      calibrate() {
+        if (!tb) return false;
+        let ch = false;
+        for (const [k, sel] of [['row', 'tr.row'], ['grp', 'tr.grp']]) {
+          const L = [...tb.querySelectorAll(sel)].slice(0, 24); if (!L.length) continue;
+          const hh = L.reduce((s, tr) => s + tr.getBoundingClientRect().height, 0) / L.length;
+          if (hh > 4 && Math.abs(hh - hs[k]) > 0.2) { hs[k] = Math.round(hh * 100) / 100; ch = true; }
+        }
+        if (ch) build();
+        return ch;
+      },
+      offsetOf(i) { return (tb ? tb.offsetTop : 0) + off[Math.max(0, Math.min(n, i))]; },
+      // полоса таблицы, видимая на экране (с учётом всех прокручиваемых предков), в px от верха tbody; null — таблицы не видно
+      band() {
+        const r = tb.getBoundingClientRect(); if (!r.width && !r.height) return null;
+        let t = 0, b = window.innerHeight || 1000;
+        for (const e of clip) { const q = e.getBoundingClientRect(); if (q.top > t) t = q.top; if (q.bottom < b) b = q.bottom; }
+        return [t - r.top, b - r.top];
+      },
+      paint(force) {
+        if (gone || full || !tb) return;
+        if (!tb.isConnected) { v.destroy(); return; }
+        const bd = v.band(); if (!bd) return;
+        const H = Math.max(200, bd[1] - bd[0]), buf = Math.max(400, H);
+        const need0 = idxAt(Math.max(0, bd[0] - buf * 0.3)), need1 = Math.min(n, idxAt(Math.max(0, bd[1] + buf * 0.3)) + 1);
+        if (!force && a <= need0 && z >= need1 && (z - a) > 0) return;
+        let lo = idxAt(Math.max(0, bd[0] - buf)), hi = Math.min(n, idxAt(Math.max(0, bd[1] + buf)) + 1);
+        hi = Math.min(n, Math.max(hi, lo + 40)); lo = Math.max(0, Math.min(lo, hi - 40));
+        tb.innerHTML = fill(lo, hi);
+        watch();
+        // оценка высоты не сошлась с настоящей — пересчитать распорки и окно (не больше двух раз подряд)
+        if (v.calibrate() && fixes++ < 2) v.paint(true); else fixes = 0;
+      },
+      // все строки без распорок (печать): окно — снова после неё
+      setFull(on) {
+        if (!tb || gone) return;
+        full = on;
+        if (on) { tb.innerHTML = measure() + rowsHtml(0, n); a = 0; z = n; } else v.paint(true);
+      },
+      // полная таблица (шапка, все строки, включая скрытые, подвал) без вставки в страницу: выгрузка CSV читает строки из неё
+      full() {
+        const t = document.createElement('table'), body = document.createElement('tbody');
+        if (table.tHead) t.appendChild(table.tHead.cloneNode(true));
+        body.innerHTML = items.map(it => it.html()).join('');
+        t.appendChild(body);
+        if (table.tFoot) t.appendChild(table.tFoot.cloneNode(true));
+        if (K.accMarkAll) K.accMarkAll(t);
+        return t;
+      },
+      attach(t) {
+        table = t; tb = t.tBodies[0]; t.__vfull = v.full; t.__vwin = v;
+        clip = []; for (let e = t.parentElement; e && e !== document.body && e !== document.documentElement; e = e.parentElement) { const ov = getComputedStyle(e).overflowY; if (ov && ov !== 'visible') clip.push(e); }
+        t.style.overflowAnchor = 'none';
+        VW.add(v);
+        if (v.calibrate()) v.paint(true); else v.paint(false);
+        watch();
+      },
+      schedule() { if (!raf && !gone) raf = requestAnimationFrame(() => { raf = 0; v.paint(false); }); },
+      // данные ячеек устарели (пришли алиасы): строки окна — заново
+      repaint() { if (tb && !full) v.paint(true); },
+      destroy() { gone = true; VW.delete(v); if (io) io.disconnect(); io = null; },
+    };
+    // окно догоняет прокрутку любого предка и страницы; распорки под наблюдением — запасной путь (таблицу показали, прокрутки не было)
+    const watch = () => {
+      if (typeof IntersectionObserver !== 'function' || !tb) return;
+      if (io) io.disconnect();
+      io = new IntersectionObserver(() => v.schedule());
+      tb.querySelectorAll('tr.k-vs').forEach(x => io.observe(x));
+    };
+    return v;
+  };
+  if (typeof document !== 'undefined' && document.addEventListener) {
+    const sched = () => VW.forEach(w => w.schedule());
+    document.addEventListener('scroll', sched, true);
+    if (typeof window !== 'undefined' && window.addEventListener) {
+      window.addEventListener('resize', sched);
+      window.addEventListener('beforeprint', () => VW.forEach(w => w.setFull(true)));
+      window.addEventListener('afterprint', () => VW.forEach(w => w.setFull(false)));
+    }
+  }
+
   // ---------- таблица ----------
   // единица колонки (#105): opts.columns[].unit, если её нет в подписи (подпись с «,» — «MV, mm ₽» — уже с единицей);
   // в шапке таблицы — второй строкой под подписью, в CSV — в заголовке через запятую
@@ -2052,13 +2176,13 @@
     let tools = null, fltChip = null;
     if (opts.search !== false || opts.tools || opts.groupable) {
       tools = h('div', 'k-tbl-tools'); el.appendChild(tools);
-      if (opts.search !== false) { const i = h('input', 'k-input'); i.placeholder = 'поиск в таблице…'; i.oninput = () => { st.q = i.value.toLowerCase(); draw(); }; tools.appendChild(i); }
+      if (opts.search !== false) { const i = h('input', 'k-input'); i.placeholder = 'поиск в таблице…'; i.oninput = () => { st.q = i.value.toLowerCase(); draw(true); }; tools.appendChild(i); }
       if (opts.groupable) {
         const g = h('span'); tools.appendChild(g);
-        K.seg(g, [['flat', 'плоская'], ['grp', opts.groupLabel || 'валюта → эмитент']], 'flat', v => { st.grouped = v === 'grp'; st.collapsed = {}; draw(); });
+        K.seg(g, [['flat', 'плоская'], ['grp', opts.groupLabel || 'валюта → эмитент']], 'flat', v => { st.grouped = v === 'grp'; st.collapsed = {}; draw(true); });
       }
       tools.appendChild(h('span', 'k-note', 'щелчок по заголовку — сортировка · Shift+щелчок — по нескольким · ⏷ — фильтр по значениям'));
-      fltChip = h('span', 'k-chip on'); fltChip.style.display = 'none'; fltChip.onclick = () => { st.filters = {}; draw(); }; tools.appendChild(fltChip);
+      fltChip = h('span', 'k-chip on'); fltChip.style.display = 'none'; fltChip.onclick = () => { st.filters = {}; draw(true); }; tools.appendChild(fltChip);
       if (opts.tools) { const sp = h('span'); sp.style.flex = '1'; tools.appendChild(sp); opts.tools(tools); }
     }
     const wrap = h('div', 'k-tbl-wrap'); if (opts.maxHeight) wrap.style.maxHeight = opts.maxHeight; el.appendChild(wrap);
@@ -2071,7 +2195,7 @@
     let lay = K.viewLayout(K.viewStore.get(vkey), colKeys());  // {order: [key], w: {key: px}} — проверенная форма
     const fixedW = () => !!lay.w && cols().some(c => lay.w[c.key]);
     const resetBtn = h('button', 'k-tbtn', '⟲ вид'); resetBtn.title = 'сбросить ширину и порядок колонок этой таблицы';
-    resetBtn.onclick = () => { lay = {}; K.viewStore.reset(vkey); draw(); };
+    resetBtn.onclick = () => { lay = {}; K.viewStore.reset(vkey); draw(true); };
     const csvBtn = h('button', 'k-tbtn', '⤓ CSV');
     csvBtn.title = 'выгрузить в CSV (Excel): колонки — в текущем порядке, строки — после поиска, фильтров и сортировки; номер прогона и дата среза — в первой строке и в имени файла';
     csvBtn.onclick = () => K.download(csvName(), '\uFEFF' + csv(), 'text/csv;charset=utf-8');
@@ -2080,6 +2204,7 @@
     const saveLay = () => { K.viewStore.set(vkey, lay); paintCtl(); };
     let noClickTill = 0;  // после перетаскивания щелчок по заголовку — не сортировка
     let shown = [];       // строки на экране: после поиска, фильтров и сортировки (их и выгружает CSV)
+    let memo = new WeakMap(), win = null, curGroups = [];  // ячейки строк (HTML) — одни и те же при сортировке и фильтре; окно строк длинной таблицы
     // видимые колонки в сохранённом порядке; новых в сохранённом порядке нет — они в конце, в исходном порядке
     const cols = () => {
       const C = opts.columns.filter(c => !c.hidden), o = lay.order;
@@ -2094,7 +2219,11 @@
       if (!st.sort.length) return rows;
       return rows.slice().sort(K.rowCmp(st.sort, colOf));
     }
-    function draw() {
+    // keep — перерисовка по действию в самой таблице (сортировка, фильтр, поиск, группы, ширина): данные те же, ячейки строк
+    // берутся из памяти; по событию страницы (данные, формат чисел, redraw) ячейки считаются заново
+    function draw(keep) {
+      if (keep !== true) memo = new WeakMap();
+      if (win) { win.destroy(); win = null; }
       let rows = opts.rowsFn ? opts.rowsFn() : opts.rows;
       if (st.q) rows = rows.filter(r => (r.searchText || JSON.stringify(r)).toLowerCase().includes(st.q));
       const base = rows;
@@ -2107,7 +2236,8 @@
       // заданные ширины: фиксированная раскладка по colgroup, таблица — шириной суммы колонок
       const cg = fixedW() ? '<colgroup>' + (opts.stripe ? '<col style="width:4px">' : '') + C.map(c => '<col data-k="' + esc(c.key) + '" style="width:' + (lay.w[c.key] || 100) + 'px">').join('') + '</colgroup>' : '';
       const tw = fixedW() ? ' k-fixed" style="width:' + C.reduce((s, c) => s + (lay.w[c.key] || 100), opts.stripe ? 4 : 0) + 'px' : '';
-      const cell = (c, r) => { const v = val(c, r); return '<td class="' + (c.num ? 'n ' : '') + (c.cls ? (typeof c.cls === 'function' ? c.cls(v, r) : c.cls) : '') + '"' + (c.style ? ' style="' + c.style(v, r) + '"' : '') + '>' + (c.fmt ? c.fmt(v, r) : esc(v)) + '</td>'; };
+      const cell0 = (c, r) => { const v = val(c, r); return '<td class="' + (c.num ? 'n ' : '') + (c.cls ? (typeof c.cls === 'function' ? c.cls(v, r) : c.cls) : '') + '"' + (c.style ? ' style="' + c.style(v, r) + '"' : '') + '>' + (c.fmt ? c.fmt(v, r) : esc(v)) + '</td>'; };
+      const cell = (c, r) => { let m = memo.get(r); if (!m) memo.set(r, m = {}); return m[c.key] != null ? m[c.key] : (m[c.key] = cell0(c, r)); };
       const sumCell = (c, list) => {
         if (!c.sum) return '<td></td>';
         const fn = typeof c.sum === 'function' ? c.sum : r => val(c, r);
@@ -2119,15 +2249,21 @@
         if (c.drill !== false && list.length && list[0].searchText) return '<td class="n">' + K.d({ title: (c.drillTitle || c.label.replace(/<[^>]+>/g, '')), unit: c.unit, fmt: v => fm(v, {}), rows: list.map(p => ({ p, v: typeof c.sum === 'function' ? fn(p) : fn(p) || 0 })) }, fm(tot, {})) + '</td>';
         return '<td class="n ' + (c.sumNeutral ? '" style="color:var(--fg)' : f.cls(tot)) + '">' + fm(tot, {}) + '</td>';
       };
-      let body = '';
-      const groups = opts.groupBy || (st.grouped && opts.groupable) || [];
+      const items = [];
+      const groups = curGroups = opts.groupBy || (st.grouped && opts.groupable) || [];
       const nCols = C.length + (opts.stripe ? 1 : 0);
       // подпись группы и «Итого» — в первой колонке без итога (колонку с итогом могли перенести на первое место, #102);
       // span группы — только по колонкам без итога; если итог есть у всех колонок, подпись — в первой
       const li = Math.max(0, C.findIndex(c => !c.sum));
       const spanAt = G => { let n = 1; while (n < (G.span || 1) && li + n < C.length && !C[li + n].sum) n++; return n; };
       function emit(list, level, path) {
-        if (level >= groups.length) { list.forEach(r => { body += '<tr class="row ' + (opts.rowCls ? opts.rowCls(r) : '') + '" data-id="' + esc(r.id) + '">' + (opts.stripe ? '<td class="stripe" style="background:' + opts.stripe(r) + '"></td>' : '') + C.map(c => cell(c, r)).join('') + '</tr>'; }); return; }
+        if (level >= groups.length) {
+          list.forEach(r => {
+            const cells = () => (opts.stripe ? ['<td class="stripe" style="background:' + opts.stripe(r) + '"></td>'] : []).concat(C.map(c => cell(c, r)));
+            items.push({ k: 'row', cells, html: () => '<tr class="row ' + (opts.rowCls ? opts.rowCls(r) : '') + '" data-id="' + esc(r.id) + '">' + cells().join('') + '</tr>' });
+          });
+          return;
+        }
         const G = groups[level], buckets = new Map();
         list.forEach(r => { const k = G.key(r); if (!buckets.has(k)) buckets.set(k, []); buckets.get(k).push(r); });
         // группы — обычные поля (R31): после щелчка по заголовку сортируются и они; сортировка страницы по умолчанию
@@ -2135,18 +2271,23 @@
         const keys = K.groupKeys([...buckets.keys()], k => buckets.get(k), st.groupSort && !G.fixed ? st.sort : [], colOf, G.order);
         keys.forEach(k => {
           const sub = buckets.get(k), p = path + '/' + k, col = st.collapsed[p] != null ? st.collapsed[p] : !!G.collapsed;
-          body += '<tr class="grp l' + level + '" data-g="' + esc(p) + '">' + (opts.stripe ? '<td class="stripe" style="background:' + (G.color ? G.color(k, sub) : 'transparent') + '"></td>' : '') +
-            C.map((c, i) => i === li ? '<td colspan="' + spanAt(G) + '" style="padding-left:' + (8 + level * 14) + 'px"><span class="tw">' + (col ? '▸' : '▾') + '</span>' + (G.label ? G.label(k, sub) : esc(k)) + ' <span class="mut3" style="font-weight:400">' + sub.length + '</span></td>' : (i > li && i < li + spanAt(G) ? '' : sumCell(c, sub))).join('') + '</tr>';
+          items.push({ k: 'grp', html: () => '<tr class="grp l' + level + '" data-g="' + esc(p) + '">' + (opts.stripe ? '<td class="stripe" style="background:' + (G.color ? G.color(k, sub) : 'transparent') + '"></td>' : '') +
+            C.map((c, i) => i === li ? '<td colspan="' + spanAt(G) + '" style="padding-left:' + (8 + level * 14) + 'px"><span class="tw">' + (col ? '▸' : '▾') + '</span>' + (G.label ? G.label(k, sub) : esc(k)) + ' <span class="mut3" style="font-weight:400">' + sub.length + '</span></td>' : (i > li && i < li + spanAt(G) ? '' : sumCell(c, sub))).join('') + '</tr>' });
           if (!col) emit(sub, level + 1, p);
         });
       }
       emit(rows, 0, '');
       const foot = opts.footer === false ? '' : '<tfoot><tr>' + (opts.stripe ? '<td></td>' : '') + C.map((c, i) => i === li ? '<td>Итого <span class="mut3" style="font-weight:400">' + (opts.footCount ? esc(opts.footCount(rows)) : rows.length) + '</span></td>' : sumCell(c, rows)).join('') + '</tr></tfoot>';
+      // длинная таблица — окном строк (K.vwin); короткая — вся, как раньше
+      let body;
+      if (items.length > K.VWIN_MIN) { win = K.vwin(items, { cols: nCols }); win.dirty = () => { memo = new WeakMap(); win && win.repaint(); }; body = win.html(); }
+      else body = items.map(it => it.html()).join('');
       wrap.innerHTML = '<table class="k-tbl' + tw + '">' + cg + head + '<tbody>' + (body || '<tr><td colspan="' + nCols + '" class="k-empty">ничего не найдено</td></tr>') + '</tbody>' + foot + '</table>';
+      if (win) win.attach(wrap.querySelector('table'));
       wrap.querySelectorAll('th .k-flt').forEach(ic => ic.onclick = e => {
         e.stopPropagation();
         const c = opts.columns.find(x => x.key === ic.dataset.flt);
-        K.colFilter(ic, K.fltItems(K.applyFilters(base, st.filters, colOf, c.key), c), st.filters[c.key] || null, v => { st.filters[c.key] = v; draw(); });
+        K.colFilter(ic, K.fltItems(K.applyFilters(base, st.filters, colOf, c.key), c), st.filters[c.key] || null, v => { st.filters[c.key] = v; draw(true); });
       });
       wrap.querySelectorAll('th.sortable').forEach(th => th.onclick = e => {
         if (Date.now() < noClickTill) return;
@@ -2154,13 +2295,18 @@
         if (e.shiftKey) { if (i >= 0) { if (st.sort[i][1] > 0) st.sort[i][1] = -1; else st.sort.splice(i, 1); } else st.sort.push([k, 1]); }
         else st.sort = i >= 0 && st.sort.length === 1 ? (st.sort[0][1] > 0 ? [[k, -1]] : []) : [[k, 1]];
         st.groupSort = true;
-        draw();
+        draw(true);
       });
       bindLayout();
       paintCtl();
-      wrap.querySelectorAll('tr.grp').forEach(tr => tr.onclick = e => { if (e.target.closest('[data-dr]')) return; const p = tr.dataset.g; const G = groups[(p.match(/\//g) || []).length - 1]; const cur = st.collapsed[p] != null ? st.collapsed[p] : !!(G && G.collapsed); st.collapsed[p] = !cur; draw(); });
-      wrap.querySelectorAll('tr.row').forEach(tr => tr.onclick = e => { if (e.target.closest('[data-dr]')) return; const id = tr.dataset.id; const r = rows.find(x => String(x.id) === id); if (opts.onRow) opts.onRow(r); else if (M.pos[id]) K.card(id); });
     }
+    // щелчок по строке и по строке группы — один обработчик на таблицу: строки окна (K.vwin) приходят и уходят при прокрутке
+    wrap.addEventListener('click', e => {
+      const tr = e.target.closest && e.target.closest('tbody tr');
+      if (!tr || e.target.closest('[data-dr]')) return;
+      if (tr.classList.contains('grp')) { const p = tr.dataset.g; const G = curGroups[(p.match(/\//g) || []).length - 1]; const cur = st.collapsed[p] != null ? st.collapsed[p] : !!(G && G.collapsed); st.collapsed[p] = !cur; draw(true); }
+      else if (tr.classList.contains('row')) { const id = tr.dataset.id; const r = shown.find(x => String(x.id) === id); if (opts.onRow) opts.onRow(r); else if (M.pos[id]) K.card(id); }
+    });
     // ---------- раскладка мышкой (#102) ----------
     const heads = () => [...wrap.querySelectorAll('th[data-k]')];
     const tableW = () => cols().reduce((s, c) => s + (lay.w[c.key] || 100), opts.stripe ? 4 : 0);  // только видимые колонки
@@ -2181,7 +2327,7 @@
       let w = 0;
       wrap.querySelectorAll('th .k-rsz').forEach(x => { x.style.display = 'none'; });  // ручка — во всю ячейку, не в счёт
       cells.forEach(c => { rg.selectNodeContents(c); const cs = getComputedStyle(c); w = Math.max(w, rg.getBoundingClientRect().width + parseFloat(cs.paddingLeft) + parseFloat(cs.paddingRight)); });
-      ensureW(); lay.w[k] = Math.min(2000, Math.max(32, Math.ceil(w) + 4)); saveLay(); draw();
+      ensureW(); lay.w[k] = Math.min(2000, Math.max(32, Math.ceil(w) + 4)); saveLay(); draw(true);
     }
     function drag(e, onMove, onUp) {
       const mv = ev => onMove(ev), up = ev => { document.removeEventListener('mousemove', mv); document.removeEventListener('mouseup', up); onUp(ev); };
@@ -2195,7 +2341,7 @@
         hd.onmousedown = e => {
           if (e.button !== 0) return;
           e.preventDefault(); e.stopPropagation();
-          if (!fixedW()) { ensureW(); draw(); }
+          if (!fixedW()) { ensureW(); draw(true); }
           const x0 = e.clientX, w0 = lay.w[k];
           document.body.classList.add('k-col-resizing');
           drag(e, ev => setW(k, w0 + ev.clientX - x0), ev => {
@@ -2226,7 +2372,7 @@
           let at = to > from ? to - 1 : to;
           if (to == null || at === from) return;
           keys.splice(from, 1); keys.splice(at, 0, k);
-          lay.order = keys; saveLay(); draw();
+          lay.order = keys; saveLay(); draw(true);
         });
       });
     }
@@ -2247,8 +2393,8 @@
     }
     const csvName = () => K.csvFileName(el, opts);
     draw();
-    const api = { redraw: draw, state: st, csv, csvName, setSort: s => { st.sort = s; draw(); }, setFilter: (k, v) => { st.filters[k] = v; draw(); }, setGrouped: g => { st.grouped = !!g; draw(); }, el,
-      viewKey: vkey, layout: () => JSON.parse(JSON.stringify(lay)), setLayout: v => { lay = K.viewLayout(v, colKeys()); saveLay(); draw(); }, resetView: () => resetBtn.onclick() };
+    const api = { redraw: draw, state: st, csv, csvName, setSort: s => { st.sort = s; draw(true); }, setFilter: (k, v) => { st.filters[k] = v; draw(true); }, setGrouped: g => { st.grouped = !!g; draw(true); }, el,
+      viewKey: vkey, layout: () => JSON.parse(JSON.stringify(lay)), setLayout: v => { lay = K.viewLayout(v, colKeys()); saveLay(); draw(true); }, resetView: () => resetBtn.onclick() };
     if (opts.autoFilter !== false && !opts.rows) K.live(el, 'filter', draw);
     else K.live(el, 'numfmt', draw);  // формат отрицательных чисел (#153): таблица без перерисовки по фильтру
     return api;
@@ -2305,10 +2451,11 @@
   K.accToMinus = t => String(t).replace(/^\((\d[\d,]*(?:\.\d+)?[^()]*)\)$/, '-$1').replace(/\((\d[\d,]*(?:\.\d+)?%?)\)/g, '-$1');
   K.tableCsv = (table, opts) => {
     opts = opts || {};
+    if (table.__vfull) table = table.__vfull();  // длинная таблица с окном строк (K.vwin): все строки — из полной копии
     const tx = c => c ? K.htmlText(c.innerHTML) : '';
     const hd = rowsOf(table.tHead), hr = hd.length ? hd[hd.length - 1] : null;
     // скрытая строка с data-csv-keep — на экране её нет, в CSV есть (позиции свёрнутой группы блоттера C03, #277)
-    const skip = tr => (!(tr.dataset && tr.dataset.csvKeep) && (tr.hidden || (tr.style && tr.style.display === 'none'))) || (tr.dataset && tr.dataset.csvSkip) || (tr.cells.length === 1 && /(^|\s)k-empty(\s|$)/.test(tr.cells[0].className || ''));
+    const skip = tr => (tr.classList && (tr.classList.contains('k-vs') || tr.classList.contains('k-vm'))) || (!(tr.dataset && tr.dataset.csvKeep) && (tr.hidden || (tr.style && tr.style.display === 'none'))) || (tr.dataset && tr.dataset.csvSkip) || (tr.cells.length === 1 && /(^|\s)k-empty(\s|$)/.test(tr.cells[0].className || ''));
     const body = [...table.tBodies].reduce((a, b) => a.concat(rowsOf(b)), []).concat(rowsOf(table.tFoot)).filter(tr => !skip(tr)).map(cellsOf);
     // подписи CSV у заголовка с data-csv="a|b": по одной на колонку экрана; лишние (больше, чем colspan) — колонки
     // CSV сразу за последней колонкой заголовка (#258: «Номинал, mm в вал.|Вал» — число и валюта по отдельности)
@@ -3072,6 +3219,7 @@
   // Имена в уже нарисованном: ячейки K.nameCell (data-pn) и элементы с data-card (строка таблицы, ссылка, подпись), чей текст —
   // биржевое имя бумаги: заменяются на месте, страница целиком не перерисовывается (она тяжёлая: C03 — секунда)
   K.patchNames = () => {
+    VW.forEach(w => w.dirty && w.dirty());  // длинные таблицы (K.vwin): ячейки вне окна — из памяти, их тоже обновить
     document.querySelectorAll('[data-pn]').forEach(el => {
       const p = M.pos[el.dataset.pn]; if (!p) return;
       if (el.textContent !== p.name) el.textContent = p.name;
