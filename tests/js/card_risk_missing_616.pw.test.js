@@ -67,7 +67,10 @@ test('#616: card note «Процентного риска нет»', { skip: pw 
       assert.deepStrictEqual(a.errors, []);
       assert.ok(a.text.includes('валюта расчёта не указана в условиях — принята RUB'), 'the leg says RUB was taken');
       const b = await card(browser, 'SYN_NDF_GIVEN', false, [{ ...leg, settlement_ccy_assumed: undefined }]);
-      assert.ok(!b.text.includes('принята RUB'), 'a settlement currency in the terms: no note');
+      assert.ok(!b.text.includes('не указана в условиях'), 'a settlement currency in the terms: no note');
+      // the adapter's default is a setting: the note names the currency it took
+      const c = await card(browser, 'SYN_NDF_ASSUMED_USD', false, [{ ...leg, settlement_ccy: 'USD' }]);
+      assert.ok(c.text.includes('валюта расчёта не указана в условиях — принята USD'), 'the taken currency is named');
     });
   } finally {
     await browser.close();

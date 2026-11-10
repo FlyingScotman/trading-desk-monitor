@@ -415,7 +415,7 @@ def test_adapter_warning_for_an_assumed_settlement_currency_is_in_words():
 
     from desk import daystatus
 
-    want = "NDF без валюты расчёта в условиях сделки: принята валюта по умолчанию (RUB) — проверьте в настройках адаптера"
+    want = "NDF без валюты расчёта в условиях сделки: принята валюта по умолчанию из настроек адаптера"
     for code in ("ndf_settle_ccy_assumed", "ndf_settle_ccy_assumed_rub"):
         assert daystatus._codes(Counter({("warning", code): 3})) == [
             {"severity": "warning", "code": code, "count": 3, "text": want}]

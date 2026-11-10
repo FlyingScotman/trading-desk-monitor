@@ -2656,9 +2656,10 @@
       ['Курс сделки', l => rate(l.contractRate) + (l.rateQuote ? ' <small>' + esc(l.rateQuote) + '</small>' : ''), null, ['Курс сделки', 'Котировка'], l => [rateCsv(l.contractRate), l.rateQuote || '']]]
       .concat(L.some(l => fwd(l) != null) ? [['Форвард', l => rate(fwd(l))]] : [])
       .concat(any('points') ? [['Пойнты', l => l.points == null ? '—' : f.s(l.points, 4)]] : [])
-      // #616: валюта расчёта NDF не указана в условиях сделки — принята RUB (адаптер: x_settle_ccy_assumed)
+      // #616: валюта расчёта NDF не указана в условиях сделки — принята валюта по умолчанию (адаптер: x_settle_ccy_assumed,
+      // его настройка; монитор без неё — RUB)
       .concat(any('settlement') ? [['Расчёт', l => esc(SET[l.settlement] || l.settlement || '—') + (l.settlementCcy ? ' <small>в ' + esc(l.settlementCcy) + '</small>' : '') +
-        (l.settlementCcyAssumed ? '<br><small class="settle-assumed" style="color:var(--warn)">валюта расчёта не указана в условиях — принята RUB</small>' : ''), null,
+        (l.settlementCcyAssumed ? '<br><small class="settle-assumed" style="color:var(--warn)">валюта расчёта не указана в условиях — принята ' + esc(l.settlementCcy || 'RUB') + '</small>' : ''), null,
         ['Расчёт', 'Вал расчёта'], l => [SET[l.settlement] || l.settlement || '', l.settlementCcy || '']]] : [])
       .concat(any('fixingDate') ? [['Фиксинг', l => l.fixingDate ? f.date(l.fixingDate) + (l.fixingSource ? ' <small>' + esc(l.fixingSource) + '</small>' : '') + (l.fixingRate != null ? ' <small>' + rate(l.fixingRate) + '</small>' : '') : '—', l => l.fixingDate,
         ['Фиксинг', 'Источник фиксинга', 'Курс фиксинга'], l => [l.fixingDate ? f.date(l.fixingDate) : '', l.fixingSource || '', rateCsv(l.fixingRate)]]] : [])

@@ -74,9 +74,12 @@ VALUATION_VERSION = 32  # 2: risk per curve (R8); 3: static display fields (R9 D
 # none, TDM#602); CNH is CNY in every dataset (setting ccy_aliases, TDM#601); a business day without a published RUONIA
 # takes the previous rate (TDM#606); a CCS's legs each on their own dates (TDM#605)
 # 32: core 0.45 (TDM#616): an X/RUB NDF settled in its foreign currency and a cross NDF settled in its base or quote
-# currency valued by core (rates risk on the RUB and the foreign curves, the OCP amount core's FX delta), a cross
-# NDF settled in RUB without a fixing date projected; why an FX derivative without core has no rates risk
-# (extra.risk_missing: no curve of a currency, an NDF without its terms)
+# currency valued by core (rates risk on the RUB and the foreign curves, the OCP amount core's FX delta; on the nominal
+# basis the notionals, a fixed foreign-settled one its settlement_amount), a cross NDF settled in RUB valued by core
+# with its fixing date too (the two CBR fixings of the snapshot, the exchange's cross futures) and projected without
+# one; an NDF without settle_ccy settles in RUB (legs: settlement_ccy_assumed); why an FX derivative without core has
+# no rates risk (extra.risk_missing: no curve or spot of a currency, an NDF without its terms or settled outside its
+# pair)
 
 
 def logic_version() -> str:
