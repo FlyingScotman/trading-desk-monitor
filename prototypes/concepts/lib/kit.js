@@ -2393,7 +2393,7 @@
     swap_frequency_unsupported: 'частота выплат не поддерживается', day_count_unsupported: 'база начисления не поддерживается', swap_index_unsupported: 'индекс не поддерживается (IRS: RUONIA и ключевая ставка; рублёвая нога CCS: RUONIA, ключевая ставка, RUSFAR или фикс)',
     swap_ccy_unsupported: 'валюта свопа не RUB', repo_ccy_unsupported: 'валюта РЕПО не RUB', terms_incomplete: 'условия сделки неполные', terms_invalid: 'условия сделки не приняты ядром', settled: 'сделка исполнена',
     no_foreign_curve: 'нет кривой валюты сделки в прогоне', no_fx_spot: 'нет спот-курса валюты в прогоне', no_fx_calendar: 'нет календаря валюты в статике хаба',
-    ndf_unsupported: 'кросс-NDF с расчётом в рублях и фиксингом или NDF с расчётом в валюте не из пары ядром не оценивается', future_terms_incomplete: 'у фьючерса в срезе хаба нет базовой валюты, цены, лота или даты исполнения',
+    ndf_unsupported: 'NDF с расчётом в валюте не из пары сделки ядром не оценивается', future_terms_incomplete: 'у фьючерса в срезе хаба нет базовой валюты, цены, лота или даты исполнения',
     core_missing_market_data: 'ядру не хватило рыночных данных (кривой, курса или фиксинга за начало периода)', core_undeclared_fixing_gap: 'пропуск в истории фиксингов внутри периода сделки' };
   K.rcReason = c => !c ? '' : RC_REASON[c] || (/^core_/.test(c) ? 'ядро отклонило: ' + c.slice(5) : c);
   const rcProd = s => s ? String(s).split('+').map(x => RC_PROD[x] || x).join(' + ') : '—';
@@ -2656,7 +2656,9 @@
       ['Курс сделки', l => rate(l.contractRate) + (l.rateQuote ? ' <small>' + esc(l.rateQuote) + '</small>' : ''), null, ['Курс сделки', 'Котировка'], l => [rateCsv(l.contractRate), l.rateQuote || '']]]
       .concat(L.some(l => fwd(l) != null) ? [['Форвард', l => rate(fwd(l))]] : [])
       .concat(any('points') ? [['Пойнты', l => l.points == null ? '—' : f.s(l.points, 4)]] : [])
-      .concat(any('settlement') ? [['Расчёт', l => esc(SET[l.settlement] || l.settlement || '—') + (l.settlementCcy ? ' <small>в ' + esc(l.settlementCcy) + '</small>' : ''), null,
+      // #616: валюта расчёта NDF не указана в условиях сделки — принята RUB (адаптер: x_settle_ccy_assumed)
+      .concat(any('settlement') ? [['Расчёт', l => esc(SET[l.settlement] || l.settlement || '—') + (l.settlementCcy ? ' <small>в ' + esc(l.settlementCcy) + '</small>' : '') +
+        (l.settlementCcyAssumed ? '<br><small class="settle-assumed" style="color:var(--warn)">валюта расчёта не указана в условиях — принята RUB</small>' : ''), null,
         ['Расчёт', 'Вал расчёта'], l => [SET[l.settlement] || l.settlement || '', l.settlementCcy || '']]] : [])
       .concat(any('fixingDate') ? [['Фиксинг', l => l.fixingDate ? f.date(l.fixingDate) + (l.fixingSource ? ' <small>' + esc(l.fixingSource) + '</small>' : '') + (l.fixingRate != null ? ' <small>' + rate(l.fixingRate) + '</small>' : '') : '—', l => l.fixingDate,
         ['Фиксинг', 'Источник фиксинга', 'Курс фиксинга'], l => [l.fixingDate ? f.date(l.fixingDate) : '', l.fixingSource || '', rateCsv(l.fixingRate)]]] : [])

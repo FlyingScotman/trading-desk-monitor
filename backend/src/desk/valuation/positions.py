@@ -349,8 +349,8 @@ RISK_MISSING = {
     "no_curve_spot": "нет данных: нет кривой и курса {ccy}",
     "ndf_no_terms": ("NDF без условий сделки: процентный риск не считается — нужны условия сделки (валюта расчёта, "
                      "дата фиксинга)"),
-    "ndf_unsupported": ("NDF: такой вид ядро пока не оценивает — кросс-NDF с расчётом в рублях и датой фиксинга или "
-                        "валюта расчёта не из пары; процентный риск не считается"),
+    "ndf_unsupported": ("NDF: такой вид ядро пока не оценивает — валюта расчёта не из пары сделки; процентный риск не "
+                        "считается"),
 }
 """TDM#616: why a derivative row valued without core has no rates risk, when it is not «the report gave none»: a
 currency of its trade without a curve or a spot in the run (``no_curve``, ``no_spot``, ``no_curve_spot``: «нет

@@ -1,6 +1,6 @@
 // TDM#616: the position card of a derivative valued without core says why it has no rates risk (extra.risk_missing:
 // no curve of a currency, an NDF without terms, an NDF core does not value) — and says nothing when the row has the
-// report's risk. Synthetic API-shaped data only.
+// report's risk; a leg whose settlement currency was taken as RUB says so. Synthetic API-shaped data only.
 'use strict';
 const test = require('node:test');
 const assert = require('assert');
@@ -13,7 +13,7 @@ const LABEL = 'Процентного риска нет:';
 const TEXT = 'нет данных: нет кривой INR';
 const TYPES = { '.html': 'text/html', '.js': 'application/javascript', '.css': 'text/css', '.json': 'application/json', '.svg': 'image/svg+xml', '.png': 'image/png' };
 
-async function card(browser, id, withRisk) {
+async function card(browser, id, withRisk, legs) {
   const ctx = await browser.newContext({ viewport: { width: 1440, height: 1000 } });
   const pg = await ctx.newPage(), errors = [];
   pg.on('pageerror', e => errors.push(e.message));
@@ -24,7 +24,8 @@ async function card(browser, id, withRisk) {
   D.positions.push({ ...fx, id, name: 'Synthetic NDF', isin: null, ccy: 'USD', notValued: false, mv: 1, mvRub: 80,
     risk: withRisk ? { [curve]: risky.risk[curve] } : {}, fxDelta: { USD: 1e6 }, instrType: 'FX', segment: 'Деривативы',
     assetClass: 'FX', extra: { quality: 'reported_value', not_exact_reason: 'no_foreign_curve',
-      reported: { x: { x_product_group: 'fx_ndf' } }, risk_missing: { reason: 'no_curve', ccy: 'INR', text: TEXT } } });
+      reported: { x: { x_product_group: 'fx_ndf' } }, risk_missing: { reason: 'no_curve', ccy: 'INR', text: TEXT },
+      ...(legs ? { legs } : {}) } });
   await pg.route('**/*', route => {
     const u = new URL(route.request().url());
     if (u.origin !== ORIGIN) return route.abort();
@@ -57,6 +58,16 @@ test('#616: card note «Процентного риска нет»', { skip: pw 
       const { text, errors } = await card(browser, 'SYN_NDF_REPORT_RISK', true);
       assert.deepStrictEqual(errors, []);
       assert.ok(!text.includes(LABEL), 'a row with risk must not say it has none');
+    });
+    await t.test('settlement currency taken as RUB: said on the leg', async () => {
+      const leg = { leg: 'single', trade_id: 'T', value_date: '2026-12-17', buy_ccy: 'EUR', buy_amount: 1e6, sell_ccy: 'USD',
+        sell_amount: 1.08e6, contract_rate: 1.08, rate_quote: 'EUR/USD', settlement: 'cash', settlement_ccy: 'RUB',
+        settlement_ccy_assumed: true, payment_date: '2026-12-17', fixing_date: '2026-12-15', fixing_source: 'CBR' };
+      const a = await card(browser, 'SYN_NDF_ASSUMED', false, [leg]);
+      assert.deepStrictEqual(a.errors, []);
+      assert.ok(a.text.includes('валюта расчёта не указана в условиях — принята RUB'), 'the leg says RUB was taken');
+      const b = await card(browser, 'SYN_NDF_GIVEN', false, [{ ...leg, settlement_ccy_assumed: undefined }]);
+      assert.ok(!b.text.includes('принята RUB'), 'a settlement currency in the terms: no note');
     });
   } finally {
     await browser.close();

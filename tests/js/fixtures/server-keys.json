@@ -242,6 +242,7 @@
    "sell_ccy",
    "settlement",
    "settlement_ccy",
+   "settlement_ccy_assumed",
    "trade_id",
    "value_date"
   ],

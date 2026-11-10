@@ -78,7 +78,7 @@ EXTRA_NESTED_KEYS = {
     "legs[]": ("base_forward_rate", "buy_amount", "buy_ccy", "contract_rate", "core_rate_quote", "df", "fixing_date",
                "fixing_rate", "fixing_source", "fwd_rate", "leg", "payment_date", "points", "pv_rub",
                "quote_forward_rate", "rate_quote", "sell_amount", "sell_ccy", "settlement", "settlement_ccy",
-               "trade_id", "value_date"),
+               "settlement_ccy_assumed", "trade_id", "value_date"),
 }
 """The keys of the nested structures of a position's ``extra`` the pages read (TDM#337): ``curve_proxy`` an object
 (``publish.tdm_run.curve_proxy``, TDM#31), ``funding`` an object (``publish.funding_run``: a position's state, amount

@@ -6,7 +6,12 @@ EUR; CBR fixings of 14 and 15 October) and synthetic trades (invented amounts):
 - an X/RUB NDF settled in its foreign currency is valued by core: risk on the RUB and the foreign curve, the OCP amount
   core's FX delta (a fixed one owes a known amount of its settlement currency, not its notional);
 - a cross NDF settled in its base or quote currency: risk on both foreign curves, the FX delta in both, its fixing
-  from both currencies' CBR fixings; a RUB-settled cross with a fixing date is ``ndf_unsupported``, said in words;
+  from both currencies' CBR fixings;
+- a cross NDF settled in RUB (EUR/USD, as the exchange's cross futures; the owner, 10.11.2026): unfixed, risk on RUB and
+  both foreign curves, the FX delta in both; fixed, a known RUB amount (RUB risk only); a fixing missing after its
+  date falls back to the report with core's reason; due today and unpublished, pending. Settled outside its pair:
+  ``ndf_unsupported``, said in words;
+- an NDF without ``settle_ccy`` settles in RUB; the adapter's ``x_settle_ccy_assumed`` shows on its leg;
 - an NDF whose currency has no curve in the run: «нет данных: нет кривой EUR», no risk (never a zero);
 - an NDF without its trade's terms: its own reason, not «оценена по отчёту, риска в отчёте нет»; the OCP as before;
 - a RUB-settled X/RUB NDF is valued as before.
@@ -227,11 +232,93 @@ def test_cross_ndf_settlement_and_fixing(ctx, valued):
     assert set(v.fx_delta) == {"CNY"}  # a known CNY amount
 
 
-def test_rub_settled_cross_with_fixing_and_a_third_currency_are_unsupported(valued):
-    for pid in ("P-N4", "P-N9"):
-        assert isinstance(valued[pid], dv.NotValued) and valued[pid].reason == "ndf_unsupported"
+def test_a_settlement_currency_outside_the_pair_is_unsupported(valued):
+    assert isinstance(valued["P-N9"], dv.NotValued) and valued["P-N9"].reason == "ndf_unsupported"
     why, todo = coverage.CAUSES["ndf_unsupported"]
-    assert "кросс-NDF" in why and "в рублях" in why and todo
+    assert "не из пары" in why and "кросс-NDF" not in why and todo
+    assert not isinstance(valued["P-N4"], dv.NotValued)  # a RUB-settled cross with its fixing: valued since 4ce0d6e
+
+
+# --- cross NDFs settled in RUB (EUR/USD) ------------------------------------------------------------------------
+
+
+@pytest.fixture(scope="module")
+def eur_ctx(ctx):
+    """The run with a synthetic EUR FX-implied curve (the fixture has none): USD's quotes scaled by EUR/USD spot."""
+    usd = next(e for e in ctx.core_market.curves if e.curve_id == "USD FX")
+    k = ctx.fx.spots["EUR"].rub_per_unit / ctx.fx.spots["USD"].rub_per_unit
+    qs = tuple(replace(q, points=q.points * k) if hasattr(q, "points") else replace(q, outright=q.outright * k)
+               for q in usd.curve.quotes)
+    eur = replace(usd, curve_id="EUR FX", spec_id="eur_fx_implied_v1", curve=replace(usd.curve, currency="EUR",
+                                                                                     quotes=qs))
+    return replace(ctx, core_market=replace(ctx.core_market, curves=(*ctx.core_market.curves, eur)))
+
+
+def eurusd(tid, vd, fix, **kw):
+    return terms(tid, "EUR", "USD", "buy", 1e6, 1.08e6, vd, ndf=True, fixing_date=fix, fixing_source="ЦБ", **kw)
+
+
+def _value(c, *rows):
+    return dv.value(c, [dv.Request(f"P-{r['trade_id']}", "FXB", {"ccy": r["base_ccy"]}, [dv.TermsLeg.of(r)])
+                        for r in rows], options=fxcurves.FxOptions())[0]
+
+
+def test_eurusd_rub_settled_unfixed(eur_ctx):
+    v = _value(eur_ctx, eurusd("E1", "2026-12-17", "2026-12-15", settle_ccy="RUB"))["P-E1"]
+    assert {"fx_cross", "fx_ndf"} <= set(v.extra["core"]["product"].split("+"))
+    assert set(v.curve_buckets) == {"RUB RUONIA", "EUR FX", "USD FX"}
+    assert v.fx_delta["EUR"] > 0.98e6 and -1.08e6 < v.fx_delta["USD"] < -0.98 * 1.08e6
+    assert v.extra["legs"][0]["settlement_ccy"] == "RUB" and v.extra["fixings"][0]["status"] == "open"
+    assert _ocp(v, O.AmountBasis.SPOT_EQUIVALENT) == pytest.approx(v.fx_delta, rel=1e-12)  # both currencies
+    assert _ocp(v, O.AmountBasis.NOMINAL) == {"EUR": 1e6, "USD": -1.08e6}  # the terms' notionals
+
+
+def test_eurusd_rub_settled_fixed_is_a_known_rub_amount(ctx, eur_ctx):
+    on = date(2026, 10, 14)
+    v = _value(eur_ctx, eurusd("E2", "2026-10-16", "2026-10-14", settle_ccy="RUB"))["P-E2"]
+    eur, usd = cbr(ctx, "EUR", on), cbr(ctx, "USD", on)
+    assert v.extra["fixings"][0]["status"] == "fixed"
+    assert v.extra["fixings"][0]["fixing_rate"] == pytest.approx(eur / usd, rel=1e-12)
+    assert not v.fx_delta and set(v.curve_buckets) <= {"RUB RUONIA"}  # RUB risk only
+    df = v.extra["legs"][0]["df"]
+    assert v.pv_rub == pytest.approx(1e6 * (eur - 1.08 * usd) * df, rel=1e-9)  # N R_X - N K R_Y, paid in RUB
+    # the OCP as a fixed RUB-settled X/RUB NDF: no FX delta (spot equivalent), the notionals on the nominal basis
+    assert _ocp(v, O.AmountBasis.SPOT_EQUIVALENT) == {}
+    assert _ocp(v, O.AmountBasis.NOMINAL) == {"EUR": 1e6, "USD": -1.08e6}
+
+
+def test_eurusd_fixing_missing_after_its_date_falls_back(ctx, eur_ctx):
+    gone = tuple(f for f in eur_ctx.core_market.fx_fixings
+                 if not (f.currency == "USD" and f.fixing_date == date(2026, 10, 14)))
+    c = replace(eur_ctx, core_market=replace(eur_ctx.core_market, fx_fixings=gone))
+    e = _value(c, eurusd("E4", "2026-10-16", "2026-10-14", settle_ccy="RUB"))["P-E4"]
+    assert isinstance(e, dv.NotValued) and e.reason == "core_missing_market_data" and "USD" in e.detail
+    assert e.reason.removeprefix("core_") in coverage.CORE_CAUSES  # said in words
+    extra = {"FXB|E4": {"asset_class": "fx", "ccy": "EUR", "amount_ccy": 1e6, "value_date": date(2026, 10, 16),
+                        "deal_id": "E4", "mv_rub": 100.0, "x_product_group": "fx_ndf"}}
+    o = pv1.plan(c, _inputs(extra, [eurusd("E4", "2026-10-16", "2026-10-14", settle_ccy="RUB")])).direct["FXB|E4"]
+    assert o.reason == "core_missing_market_data" and o.valuation.quality == "reported_value"
+
+
+def test_eurusd_fixing_due_today_is_pending(eur_ctx):
+    gone = tuple(f for f in eur_ctx.core_market.fx_fixings if f.fixing_date != BD)
+    c = replace(eur_ctx, core_market=replace(eur_ctx.core_market, fx_fixings=gone))
+    v = _value(c, eurusd("E5", "2026-10-19", DATE, settle_ccy="RUB"))["P-E5"]
+    assert not isinstance(v, dv.NotValued), v
+    assert v.extra["fixings"][0]["status"] == "pending" and "fixing_pending" in v.extra["core"]["model_flags"]
+    assert set(v.fx_delta) == {"EUR", "USD"}
+
+
+def test_ndf_without_a_settlement_currency_settles_in_rub(eur_ctx):
+    """No ``settle_ccy``: RUB, as a RUB-settled one; the leg says the currency was taken (the adapter's
+    ``x_settle_ccy_assumed``, or none given at all)."""
+    out = _value(eur_ctx, eurusd("E6", "2026-12-17", "2026-12-15"),
+                 eurusd("E7", "2026-12-17", "2026-12-15", settle_ccy="RUB", x_settle_ccy_assumed=True),
+                 eurusd("E8", "2026-12-17", "2026-12-15", settle_ccy="RUB"))
+    assert out["P-E6"].pv_rub == pytest.approx(out["P-E8"].pv_rub, rel=1e-12)
+    assert [out[k].extra["legs"][0].get("settlement_ccy_assumed") for k in ("P-E6", "P-E7", "P-E8")] == [
+        True, True, None]
+    assert out["P-E7"].extra["legs"][0]["settlement_ccy"] == "RUB"
 
 
 def test_no_curve_is_no_data_never_a_zero(valued):
@@ -254,12 +341,12 @@ def test_published_rows_and_the_risk_table(ctx):
                    "deal_id": "N5", "mv_rub": 5000.0, "x_product_group": "fx_ndf"},
         "FXB|NT": {"asset_class": "fx", "ccy": "USD", "amount_ccy": 3e6, "value_date": date(2027, 1, 20),
                    "mv_rub": 7000.0, "x": {"x_product_group": "fx_ndf"}},
-        "FXB|N4": {"asset_class": "fx", "ccy": "USD", "amount_ccy": 2e6, "value_date": date(2026, 12, 17),
-                   "deal_id": "N4", "mv_rub": 9000.0, "x_product_group": "fx_ndf"},
+        "FXB|N9": {"asset_class": "fx", "ccy": "USD", "amount_ccy": 2e6, "value_date": date(2026, 12, 17),
+                   "deal_id": "N9", "mv_rub": 9000.0, "x_product_group": "fx_ndf"},
     }
-    bp = pv1.plan(ctx, _inputs(extra, [USD_IN_USD, CROSS_IN_CNY, EUR_NO_CURVE, CROSS_IN_RUB]))
+    bp = pv1.plan(ctx, _inputs(extra, [USD_IN_USD, CROSS_IN_CNY, EUR_NO_CURVE, THIRD_CCY]))
     rows = {pid: tdm_run.direct_row(ctx, "FXB", pid, bp.direct[pid], x, None) for pid, x in extra.items()}
-    n1, n2, n5, nt, n4 = rows.values()
+    n1, n2, n5, nt, n9 = rows.values()
     assert set(n1["risk"]) == {"RUB RUONIA", "USD FX"} and n1["extra"]["valuation"] == "computed"
     assert {"USD FX", "CNY FX"} <= set(n2["risk"]) and set(n2["fx_delta"]) == {"USD", "CNY"}
     # no EUR curve: the report's value, no risk, the reason «нет данных: нет кривой EUR»
@@ -271,10 +358,10 @@ def test_published_rows_and_the_risk_table(ctx):
     assert nt["extra"]["risk_missing"]["reason"] == "ndf_no_terms"
     assert nt["extra"]["risk_missing"]["text"].startswith("NDF без условий сделки: процентный риск не считается")
     assert nt["fx_delta"] == {"USD": 3e6} and nt["extra"]["fx_delta_basis"].startswith("notional")
-    # a RUB-settled cross NDF with its fixing: core does not value it, the card and the table say so in words
-    assert n4["risk"] == {} and n4["extra"]["not_exact_reason"] == "ndf_unsupported"
-    assert n4["extra"]["risk_missing"] == {"reason": "ndf_unsupported", "text": pv1.RISK_MISSING["ndf_unsupported"]}
-    assert n4["fx_delta"] == {"USD": 2e6}
+    # an NDF settled outside its pair: core does not value it, the card and the table say so in words
+    assert n9["risk"] == {} and n9["extra"]["not_exact_reason"] == "ndf_unsupported"
+    assert n9["extra"]["risk_missing"] == {"reason": "ndf_unsupported", "text": pv1.RISK_MISSING["ndf_unsupported"]}
+    assert n9["fx_delta"] == {"USD": 2e6}
 
     fx = {c: r[0] for c, r in ctx.fx.rates.items()}
     t = concepts.risk_table([{"position_id": pid, "fact": f} for pid, f in rows.items()], fx)
@@ -319,3 +406,16 @@ def test_a_run_before_616_keeps_its_reason():
     row = next(r for r in t["rows"] if r["level"] == "kind")
     assert row["risk_missing"] == [{"reason": "reported_no_risk", "text": concepts.MISSING_TEXT["reported_no_risk"],
                                     "n": 1}]
+
+
+def test_adapter_warning_for_an_assumed_settlement_currency_is_in_words():
+    """The adapter's unit warning ``ndf_settle_ccy_assumed`` (an NDF without a settlement currency in its terms, given
+    the configured default RUB, ``x_settle_ccy_assumed``) has its words on the inbox screens (``daystatus``)."""
+    from collections import Counter
+
+    from desk import daystatus
+
+    want = "NDF без валюты расчёта в условиях сделки: принята валюта по умолчанию (RUB) — проверьте в настройках адаптера"
+    for code in ("ndf_settle_ccy_assumed", "ndf_settle_ccy_assumed_rub"):
+        assert daystatus._codes(Counter({("warning", code): 3})) == [
+            {"severity": "warning", "code": code, "count": 3, "text": want}]
