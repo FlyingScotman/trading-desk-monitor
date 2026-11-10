@@ -726,6 +726,21 @@
     return flowCache[id];
   };
 
+  // ---------- откуда данные позиции (лениво, раздел карточки «Откуда данные», TDM#617): /api/v1/positions/provenance —
+  // источники сделки (строка отчёта позиций, условия сделки, сделки дня, ОВП и остатки по книге и валюте), расхождения
+  // словами и рыночные данные оценки. Спрашивается только при первом раскрытии раздела; ответ запоминается, сбой — нет
+  // (следующее раскрытие спросит снова). Промис {data} или {error} ----------
+  const provCache = {};
+  M.posProvenance = function (id) {
+    if (!provCache[id]) provCache[id] = fetch('../api/v1/positions/provenance?' + runQ + '&id=' + encodeURIComponent(id)).then(r => {
+      if (r.status === 404) return { error: 'сервер не нашёл позицию в прогоне' };
+      if (!r.ok) return { error: 'ошибка сервера ' + r.status + (r.statusText ? ' ' + r.statusText : '') };
+      return r.json().then(j => ({ data: j }));
+    }).catch(e => ({ error: 'нет связи с сервером' + (e && e.message ? ': ' + e.message : '') }))
+      .then(x => { if (!x.data) delete provCache[id]; return x; });
+    return provCache[id];
+  };
+
   // ---------- календарь рынка (лениво: только страницам, которые его просят) ----------
   const RUB_K = () => (M.toRepr && M.toRepr.RUB) || 1;  // рублёвые суммы — в валюте отчёта, как и всё на страницах
   function getJson(path) {
