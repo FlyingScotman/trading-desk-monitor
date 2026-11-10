@@ -111,8 +111,9 @@ class ProvenanceItem(BaseModel):
 class ProvenanceSource(BaseModel):
     key: Literal["positions", "trade_terms", "trades", "ocp", "cash_balances"]
     name: str
-    level: Literal["deal", "book_ccy"] = Field(description="deal: matched by the deal; book_ccy: by book and currency "
-                                                           "only (no key of a deal)")
+    level: Literal["deal", "book_ccy", "entity_ccy"] = Field(
+        description="deal: matched by the deal; book_ccy: by book and currency only (no key of a deal); entity_ccy: "
+                    "by the book's legal entity and currency (an OCP report without books)")
     level_text: str
     state: ProvenanceState = Field(description="unknown: the run did not record it (an older run)")
     state_text: str
@@ -135,8 +136,9 @@ class MarketNeed(BaseModel):
 
 
 class ProvenanceMarket(BaseModel):
-    basis: Literal["used", "needed", "unknown"] = Field(description="used: what the valuation used; needed: an unvalued "
-                                                                    "deal, what its terms need; unknown: not recorded")
+    basis: Literal["used", "needed", "none", "unknown"] = Field(
+        description="used: what the valuation used; needed: an unvalued deal, what its terms need; none: no market "
+                    "data used (not valued, or the report's value); unknown: not recorded")
     text: str
     items: list[MarketNeed]
     notes: list[str]

@@ -226,7 +226,7 @@ table.mini + .k-tbl-ctlbar-m { position: static; background: transparent; }
 .k-tag { font-size: 11px; padding: 1px 7px; border-radius: 999px; border: 1px solid var(--line-2); color: var(--fg-2); white-space: nowrap; }
 
 /* «Откуда данные» карточки позиции (TDM#617): свёрнутый раздел, токены темы — светлая и тёмная одинаково */
-.k-prov { margin: 10px 0 4px; }
+.k-provsec { margin: 10px 0 4px; }
 .k-prov-btn { gap: 6px; }
 .k-prov-ar { color: var(--fg-3); font-size: 11px; }
 .k-prov-bd { margin-top: 8px; padding: 8px 10px; border: 1px solid var(--line); border-radius: 6px; background: var(--panel-2); overflow-wrap: anywhere; }

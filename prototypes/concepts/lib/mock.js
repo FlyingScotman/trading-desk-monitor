@@ -960,7 +960,7 @@
           : src('trade_terms', 'deal', 'present', 'условия сделки', [item('trade_terms', { trade_id: 'DEMO-' + id, product_kind: 'fx_forward' })]))
           : src('trade_terms', 'deal', 'not_needed', 'облигация: условия выпуска — из статики хаба, условия сделки не нужны'),
         src('trades', 'deal', 'absent', 'в списке сделок дня этой позиции нет'),
-        src('ocp', 'book_ccy', ccys.length ? 'present' : 'absent', ccys.length ? 'строки по книге и валюте, у сделки своего ключа нет' : 'по книге и валюте сделки строк нет', ccys.map(c => item('ocp', { ccy: c, has_row: true }))),
+        src('ocp', 'book_ccy', ccys.length ? 'present' : 'not_needed', ccys.length ? 'строки по книге и валюте, у сделки своего ключа нет' : 'не нужны: ОВП по рублям не ведётся', ccys.map(c => item('ocp', { ccy: c, has_row: true, level: 'by_book', level_text: 'по книге' }))),
         src('cash_balances', 'book_ccy', 'absent', 'по книге и валюте сделки строк нет'),
       ],
       mismatches: noTerms ? [{ code: 'report_no_terms', text: 'есть в отчёте позиций, но условия сделки не загружены' }] : [],

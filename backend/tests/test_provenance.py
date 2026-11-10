@@ -52,6 +52,7 @@ def _run(con, lineage: dict, set_ids: list[int], *, day: date = BD, version: str
         " private_inputs_hash, position_set_ids, positions_known_at, core_version, backend_version, lineage)"
         " VALUES ('EOD', %s, %s, 'eod_final', 'synthetic-market', 'synthetic-static', 'h', %s, now(), 't', %s, %s)"
         " RETURNING run_id", (day, day - timedelta(days=1), set_ids, version, Jsonb(lineage))).fetchone()[0]
+    con.execute("INSERT INTO run_reference VALUES (%s, 'books', %s)", (rid, Jsonb([{"book_id": "B1", "entity": "E1"}])))
     con.execute("INSERT INTO run_reference VALUES (%s, 'curves', %s)", (rid, Jsonb([
         {"curve_id": "RUB OFZ", "name": "ОФЗ (КБД MOEX)"}, {"curve_id": "USD FX", "name": "USD: из своп-пойнтов"}])))
     return rid
@@ -83,7 +84,10 @@ def seeded(store_url):
                                         ("NA2", None, "RUB", "T10", None), ("NDF1", "fx", "USD", "T11", "2026-11-20"),
                                         ("FUT1", "fx", "USD", None, "2026-12-15"), ("IRS1", "otc", "RUB", "T13", None),
                                         ("IRS2", "otc", "RUB", "T14", None), ("REPO1", "otc", "RUB", "T15", None),
-                                        ("FXT", "fx", "USD", "T16", "2026-10-20")):
+                                        ("FXT", "fx", "USD", "T16", "2026-10-20"), ("FX5", "fx", "GBP", "T17", "2026-11-20"),
+                                        ("OTH1", "other", "RUB", None, None), ("UB1", "bond", "RUB", None, None),
+                                        ("FXS1", "fx", "USD", "T18", "2026-11-20"),
+                                        ("FXS2", "fx", "USD", "T18", "2027-01-20")):
             con.execute("INSERT INTO position_input (set_id, position_id, secid, quantity, asset_class, ccy, deal_id,"
                         " value_date, src) VALUES (%s, %s, NULL, NULL, %s, %s, %s, %s, %s)",
                         (ps, pid, cls, ccy, deal, vd, f"row {pid}"))
@@ -119,6 +123,11 @@ def seeded(store_url):
              "start_date": "2026-10-01"},
             # an FX row settling today (a spot by its date) whose terms the run gave core
             {"trade_id": "T16", "book_id": "B1", "product_kind": "fx_forward", "base_ccy": "USD", "quote_ccy": "RUB"},
+            # an FX swap given as a row per leg, each leg naming its row
+            {"trade_id": "T18", "leg_id": "near", "position_id": "FXS1", "book_id": "B1", "product_kind": "fx_swap",
+             "base_ccy": "USD", "quote_ccy": "RUB"},
+            {"trade_id": "T18", "leg_id": "far", "position_id": "FXS2", "book_id": "B1", "product_kind": "fx_swap",
+             "base_ccy": "USD", "quote_ccy": "RUB"},
             {"trade_id": "T5", "book_id": "B1", "product_kind": "irs", "ccy": "RUB", "fixed_rate_pct": "10"},
             {"trade_id": "T7", "book_id": "B1", "product_kind": "fx_forward", "base_ccy": "USD", "quote_ccy": "RUB"},
         ]
@@ -149,6 +158,12 @@ def seeded(store_url):
             source="trades_csv", valid=date(2026, 10, 19))
         _dataset(con, "ocp", SHA["d"], "ocp_20261020.csv", [{"book_id": "B1", "entity": "E1", "ccy": "USD"}],
                  source="ocp_csv", scope={"entity": "E1", "book_id": "B1"})
+        # an OCP report by legal entity only (no book in the rows, book_id is optional in the OCP) — case A — and a
+        # report of the book whose rows name no book — case B
+        _dataset(con, "ocp", SHA["d"], "ocp_20261020.csv", [{"entity": "E1", "ccy": "CNY"}, {"entity": "E2", "ccy": "GBP"}],
+                 source="ocp_entity_csv", scope={"entity": "E1"})
+        _dataset(con, "ocp", SHA["d"], "ocp_20261020.csv", [{"entity": "E1", "ccy": "GBP"}],
+                 source="ocp_book_csv", scope={"book_id": "B1"})
         lineage = {"positions": {"set_ids": [ps], "trade_terms": [{"scope": {"book_id": "B1"}, "set_id": ts}],
                                  "off_report": {"list": [{"book": "B1", "trade_id": "T7", "state": "included"}]}},
                    "rates": LINEAGE_RATES, "fx": LINEAGE_FX, "stale_datasets": {},
@@ -194,6 +209,12 @@ def seeded(store_url):
         _pos(con, rid, "FXT", 21, fact={"ccy": "USD", "extra": {"quality": "reported_value"}},
              reason="core_invalid_terms: synthetic")
         _pos(con, rid, "FUT2", 22, reason="no_quantity: future SYNF: no number of contracts")
+        _pos(con, rid, "FX5", 23, reason="no_fx_spot: GBP")
+        _pos(con, rid, "OTH1", 24, fact={"ccy": "RUB", "risk": {"RUB RUONIA": [1.0]},
+                                         "extra": {"quality": "reported_value"}})
+        _pos(con, rid, "UB1", 25, reason="no_quote: synthetic")
+        _pos(con, rid, "FXS1", 26, fact={"ccy": "USD", "extra": {"quality": "exact", "core": {
+            "product": "fx_swap", "rub_curve": "RUB RUONIA", "foreign_curves": ["USD FX"], "trades": ["T18"]}}})
         con.execute("UPDATE run SET status = 'complete', completed_at = now() WHERE run_id = %s", (rid,))
         old = _run(con, {}, [ps])   # an old run: no lineage at all
         _pos(con, old, "FX2", 1, reason="no_reported_value")
@@ -309,9 +330,8 @@ def test_a_valued_bond(seeded):
     assert j["mismatches"][0]["text"] == "количество в отчёте позиций не сходится с началом дня и сделками дня"
     m = _market(j)
     assert m[("curve", "RUB OFZ")]["name"] == "ОФЗ (КБД MOEX)" and m[("quote", "quote")]["state"] == "ok"
-    # a RUB position has no currency of the OCP: the book's OCP report itself, by book only
-    assert src["ocp"]["state"] == "present" and [i["file_name"] for i in src["ocp"]["items"]] == ["ocp_20261020.csv"]
-    assert "ccy" not in src["ocp"]["items"][0]
+    # a RUB position: no OCP to have
+    assert src["ocp"]["state"] == "not_needed" and src["ocp"]["text"] == "не нужны: ОВП по рублям не ведётся"
 
 
 def test_an_old_run_without_lineage_says_no_information(seeded):
@@ -524,3 +544,38 @@ def test_an_unvalued_derivative_without_terms_says_the_list_is_short(seeded):
     c, rid, _ = seeded
     j, _, _ = _get(c, rid, "FX2")
     assert any(n.startswith("условия сделки не загружены: список неполный") for n in j["market"]["notes"])
+
+
+def test_an_ocp_report_by_entity_or_without_books_in_its_rows(seeded):
+    c, rid, _ = seeded
+    ocp = _get(c, rid, "CCS1")[1]["ocp"]   # A: the entity's report, rows without a book (not E2's GBP row)
+    assert ocp["state"] == "present" and ocp["level"] == "entity_ccy" and ocp["level_text"] == "по юрлицу и валюте"
+    (i,) = ocp["items"]
+    assert (i["ccy"], i["has_row"], i["source"], i["level"]) == ("CNY", True, "ocp_entity_csv", "by_entity")
+    ocp = _get(c, rid, "FX5")[1]["ocp"]    # B: the book's report, its rows name no book: by the book
+    assert ocp["state"] == "present" and ocp["level"] == "book_ccy"
+    (i,) = ocp["items"]
+    assert (i["ccy"], i["source"], i["level"], i["level_text"]) == ("GBP", "ocp_book_csv", "by_book", "по книге")
+
+
+def test_a_row_valued_at_the_reports_figure_used_no_market_data(seeded):
+    c, rid, _ = seeded
+    j = _get(c, rid, "OTH1")[0]
+    assert j["valued"] and j["market"]["basis"] == "none" and j["market"]["items"] == []   # no «RUB RUONIA — есть»
+    assert j["market"]["text"].startswith("оценка по отчёту позиций: рыночные данные не использовались")
+    assert "стоимость: по отчёту банка" in j["market"]["notes"]
+
+
+def test_an_unvalued_bond_used_no_market_data(seeded):
+    c, rid, _ = seeded
+    j = _get(c, rid, "UB1")[0]
+    assert not j["valued"] and j["market"]["basis"] == "none"
+    assert j["market"]["text"] == "не оценена: рыночные данные не использовались"
+    assert any("котировки" in n for n in j["market"]["notes"])
+
+
+def test_an_fx_swap_as_a_row_per_leg_is_no_deal_on_several_rows(seeded):
+    c, rid, _ = seeded
+    _, src, mism = _get(c, rid, "FXS1")
+    assert "deal_on_rows" not in mism and [i["leg_id"] for i in src["trade_terms"]["items"]] == ["near"]
+    assert "deal_on_rows" in _get(c, rid, "D1")[2]   # the legs name no row: one deal on two rows

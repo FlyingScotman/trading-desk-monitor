@@ -91,6 +91,11 @@ async function checkSection(pg, root, asked) {
   assert.strictEqual((await miss.innerText()).trim(), 'нет');
   assert.strictEqual(await bd.locator('.k-prov-mkt tr[data-id="CNY"] .k-prov-st').getAttribute('data-state'), 'ok');
   assert.ok(text.includes('почему не оценена'));
+  // no balances in the currency is normal: a muted chip, not a red one; a missing terms row stays red
+  assert.ok(await bd.locator('.k-prov-src[data-src="cash_balances"] .k-prov-st.unk[data-state="absent"]').count() === 1);
+  assert.ok(await bd.locator('.k-prov-src[data-src="trade_terms"] .k-prov-st.bad[data-state="absent"]').count() === 1);
+  assert.strictEqual(await root.locator('.k-provsec').count(), 1);
+  assert.strictEqual(await root.locator('.k-prov').count(), 0, 'the class of the «предварительно» tag is not reused');
   // collapse and open again: no second request
   await btn.click();
   assert.strictEqual(await bd.isVisible(), false);

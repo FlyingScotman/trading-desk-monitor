@@ -463,9 +463,11 @@ APPROX_TEXT = {"market_value": "по рыночной стоимости (без
 
 PROVENANCE_STATE = {"present": "есть", "absent": "нет данных", "unknown": "нет сведений", "not_needed": "не нужны"}
 """TDM#617: whether a source has data on a deal, as the card's «Откуда данные» says it (``api.provenance``)."""
-PROVENANCE_LEVEL = {"deal": "по сделке", "book_ccy": "по книге и валюте"}
-"""What a source is matched by: the deal itself, or only its book and currency (the OCP report and the balances have no
-key of a deal)."""
+PROVENANCE_LEVEL = {"deal": "по сделке", "book_ccy": "по книге и валюте", "entity_ccy": "по юрлицу и валюте"}
+"""What a source is matched by: the deal itself, or only its book (or its legal entity) and currency (the OCP report and
+the balances have no key of a deal)."""
+PROVENANCE_ROW_LEVEL = {"by_book": "по книге", "by_entity": "по юрлицу книги"}
+"""The level an OCP row matched at: a row of the book, or a row of the book's legal entity without a book."""
 MARKET_STATE = {"ok": "есть", "replaced": "заменена", "stale": "устарела", "missing": "нет", "pending": "ещё не наступил",
                 "unknown": "нет сведений"}
 """TDM#617: the state of a market input a deal's valuation used or needs."""
@@ -496,11 +498,15 @@ PROVENANCE_TEXT = {
     "trades_off": "расчёт по сделкам дня в прогоне был выключен (Настройки): в позиции они не входили",
     "book_ccy_rows": "строки по книге и валюте, у сделки своего ключа нет",
     "book_ccy_none": "по книге и валюте сделки строк нет",
+    "entity_ccy_rows": "строки по юрлицу книги и валюте (в отчёте нет разбивки по книгам), у сделки своего ключа нет",
+    "ocp_rub": "не нужны: ОВП по рублям не ведётся",
     "book_ccy_later": "после прогона загружен более новый отчёт",
     "no_lineage": "нет сведений: прогон сделан версией, которая этого не записывала",
     "market_used": "что использовала оценка сделки",
     "market_needed": "сделка не оценена: что нужно для оценки по её условиям и есть ли это в рыночных данных прогона",
     "market_unknown": "нет сведений: прогон не записал, какие рыночные данные использовала оценка",
+    "market_not_valued": "не оценена: рыночные данные не использовались",
+    "market_reported": "оценка по отчёту позиций: рыночные данные не использовались (кроме пересчёта в рубли)",
     "needed_no_terms": ("условия сделки не загружены: список неполный — только то, что видно по строке отчёта позиций "
                         "(валюта); что нужно ещё, скажут условия"),
 }

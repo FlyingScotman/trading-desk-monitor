@@ -279,8 +279,11 @@ def _book_sets(con, ids: list[int], book: str, entity: str | None) -> list[int]:
 
 
 def _book_ccy(con, run: dict[str, Any], book: str, ccys: list[str]) -> list[dict[str, Any]]:
-    """Per dataset of ``BOOK_CCY`` the sets in force at the run's ``positions_known_at`` with rows of ``book``, per
-    currency of the position (the OCP: foreign only) whether a row has it; ``later``: the sets in force now differ."""
+    """Per dataset of ``BOOK_CCY`` the sets in force at the run's ``positions_known_at`` and, per currency of the
+    position (the OCP: foreign only; a RUB-only deal: not needed), whether a row has it, at the level the report has
+    (``rules.ocp``): a row of the book (``by_book``), else, an OCP row without ``book_id`` (optional in the OCP; the
+    cash balances always name the book) in a set of the book's scope (``by_book``) or of the book's legal entity
+    (``by_entity``); ``later``: the sets of the book in force now differ."""
     bd, then = run["business_date"], run.get("positions_known_at")
     if then is None:
         return [_source(ds, "book_ccy", "unknown", cv.PROVENANCE_TEXT["no_lineage"]) for ds in BOOK_CCY]
@@ -292,32 +295,42 @@ def _book_ccy(con, run: dict[str, Any], book: str, ccys: list[str]) -> list[dict
     out = []
     for ds in BOOK_CCY:
         ids = at.get(ds, [])
-        rows = con.execute(
-            "SELECT r.set_id, r.data->>'ccy' AS ccy, s.source, s.source_name, s.report_date, s.recorded_at, s.valid_date"
-            " FROM dataset_row r JOIN dataset_set s USING (set_id) WHERE r.set_id = ANY(%s) AND r.data->>'book_id' = %s",
-            (ids, book)).fetchall() if ids else []
-        by_ccy: dict[str, dict[str, Any]] = {}
-        for r in rows:
-            c = _ccy(r["ccy"])
-            if c:
-                by_ccy.setdefault(c, r)
+        later = _book_sets(con, now.get(ds, []), book, entity) != _book_sets(con, ids, book, entity)
         want = [c for c in ccys if c != "RUB"] if ds == "ocp" else ccys
+        if ds == "ocp" and not want:   # no foreign currency in the deal: no OCP to have
+            out.append(_source(ds, "book_ccy", "not_needed", cv.PROVENANCE_TEXT["ocp_rub"]))
+            continue
+        rows = con.execute(
+            "SELECT r.set_id, r.data->>'ccy' AS ccy, nullif(r.data->>'book_id', '') AS row_book,"
+            " s.scope->>'book_id' AS scope_book, s.source, s.source_name, s.report_date, s.recorded_at, s.valid_date"
+            " FROM dataset_row r JOIN dataset_set s USING (set_id) WHERE r.set_id = ANY(%(ids)s)"
+            " AND (r.data->>'book_id' = %(b)s OR (nullif(r.data->>'book_id', '') IS NULL"
+            "  AND (s.scope->>'book_id' = %(b)s OR (NOT s.scope ? 'book_id' AND s.scope->>'entity' = %(e)s))))",
+            {"ids": ids, "b": book, "e": entity}).fetchall() if ids else []
+        by_ccy: dict[str, dict[str, Any]] = {}
+        for r in rows:   # a row of the book before one of its entity
+            c = _ccy(r["ccy"])
+            lvl = "by_book" if r["row_book"] == book or r["scope_book"] == book else "by_entity"
+            if c and (c not in by_ccy or (lvl == "by_book" and by_ccy[c]["_lvl"] == "by_entity")):
+                by_ccy[c] = {**r, "_lvl": lvl}
         items = []
         for c in want:
             r = by_ccy.get(c)
-            items.append(_set_item(ds, r, ccy=c, has_row=True) if r else
+            items.append(_set_item(ds, r, ccy=c, has_row=True, level=r["_lvl"], level_text=cv.PROVENANCE_ROW_LEVEL[r["_lvl"]])
+                         if r else
                          {"dataset": ds, "dataset_name": DATASET_NAMES.get(ds, ds), "ccy": c, "has_row": False,
                           "source": None, "file_name": None, "report_date": None, "valid_date": None, "loaded_at": None})
-        if not want and rows:  # a position without a foreign currency: the book's sets themselves
-            seen: dict[int, dict[str, Any]] = {}
-            for r in rows:
-                seen.setdefault(r["set_id"], r)
-            items = [_set_item(ds, r) for r in seen.values()]
-        has = any(i.get("has_row", True) for i in items) if items else False
+        has = any(i["has_row"] for i in items)
+        entity_only = has and all(i.get("level") == "by_entity" for i in items if i["has_row"])
         text = cv.PROVENANCE_TEXT["book_ccy_rows" if has else "book_ccy_none"]
-        if _book_sets(con, now.get(ds, []), book, entity) != _book_sets(con, ids, book, entity):
+        if entity_only:
+            text = cv.PROVENANCE_TEXT["entity_ccy_rows"]
+        if later:
             text += "; " + cv.PROVENANCE_TEXT["book_ccy_later"]
-        out.append(_source(ds, "book_ccy", "present" if has else "absent", text, items))
+        src = _source(ds, "book_ccy", "present" if has else "absent", text, items)
+        if entity_only:
+            src.update(level="entity_ccy", level_text=cv.PROVENANCE_LEVEL["entity_ccy"])
+        out.append(src)
     return out
 
 
@@ -415,6 +428,9 @@ def _index_needs(lin: dict[str, Any], t: dict[str, Any], code: str, trade_start:
     is one item «нет» with why, never «фиксинги — есть» beside a deal the run did not value for it."""
     kind = str(t.get("product_kind") or "")
     start = str(t.get("start_date") or trade_start or "")
+    # the valuation compares the schedule's adjusted start (``derivatives._swap_instrument``: ``float_dates[0]``); the
+    # terms' unadjusted start_date differs from it only when it falls on a holiday, and then by a day or two: building
+    # the schedule here would need the run's calendars, which the API does not have
     started = kind == "repo" or not start or start < bd.isoformat()
     unsupported = _need("fixing", code, f"индекс {code}", "missing",
                         "индекс не поддерживается для этого вида сделки: в рыночных данных монитора его нет")
@@ -539,14 +555,19 @@ def _used(lin: dict[str, Any], fact: dict[str, Any], names: dict[str, str]) -> l
                              f"фиксинг NDF на {f.get('fixing_date')}", st, f.get("source") or ""))
         return out
     q = ex.get("quality") or fact.get("quality")
-    if ex.get("price_basis") or fact.get("instr_type") == "BOND":
-        st, why = {"stale_price": ("stale", "котировки дня нет: цена прежнего дня"),
-                   "model_price": ("replaced", "котировки нет: модельная цена"),
-                   "par_proxy": ("replaced", "котировки нет: по номиналу"),
-                   "reported_value": ("replaced", "котировки нет: стоимость из отчёта позиций")}.get(q, ("ok", ""))
-        if st == "ok" and ex.get("price_basis"):
-            why = f"цена: {ex['price_basis']}"
-        out.append(_need("quote", "quote", "котировка бумаги", st, why))
+    if not ex.get("price_basis") and fact.get("instr_type") != "BOND":
+        # a row valued at the report's figure (or assumed): its curves are the report's risk, not data the run used
+        if ex.get("fx_rate") is not None and fact.get("ccy") not in (None, "RUB"):
+            return [_need("fx", fact["ccy"], f"курс {fact['ccy']}/RUB", "ok", "пересчёт стоимости отчёта в рубли")]
+        return []
+    # a bond: its quote, its curves
+    st, why = {"stale_price": ("stale", "котировки дня нет: цена прежнего дня"),
+               "model_price": ("replaced", "котировки нет: модельная цена"),
+               "par_proxy": ("replaced", "котировки нет: по номиналу"),
+               "reported_value": ("replaced", "котировки нет: стоимость из отчёта позиций")}.get(q, ("ok", ""))
+    if st == "ok" and ex.get("price_basis"):
+        why = f"цена: {ex['price_basis']}"
+    out.append(_need("quote", "quote", "котировка бумаги", st, why))
     proxy = ex.get("curve_proxy") or {}
     for c in (fact.get("risk") or {}):
         if proxy.get("curve") == c:
@@ -572,6 +593,12 @@ def _market(con, run: dict[str, Any], kind: str, fact: dict[str, Any] | None, te
              for k, v in sorted((lin.get("stale_datasets") or {}).items())]
     if fact is not None:
         items = _unique(_used(lin, fact, names))
+        ex = fact.get("extra") or {}
+        if not ex.get("core") and not ex.get("price_basis") and fact.get("instr_type") != "BOND":
+            q = ex.get("quality") or ""
+            notes.insert(0, "стоимость: " + cv.APPROX_TEXT.get(q, q or "из отчёта позиций"))
+            return {"basis": "used" if items else "none", "text": cv.PROVENANCE_TEXT["market_reported"],
+                    "items": items, "notes": notes}
         if not items:
             return {"basis": "unknown", "text": cv.PROVENANCE_TEXT["market_unknown"], "items": [], "notes": notes}
         return {"basis": "used", "text": cv.PROVENANCE_TEXT["market_used"], "items": items, "notes": notes}
@@ -586,6 +613,8 @@ def _market(con, run: dict[str, Any], kind: str, fact: dict[str, Any] | None, te
             notes.insert(0, cv.PROVENANCE_TEXT["needed_no_terms"])
         return {"basis": "needed", "text": cv.PROVENANCE_TEXT["market_needed"],
                 "items": _needed(lin, terms, x, run["business_date"], names), "notes": notes}
+    if kind != "derivative":   # not valued at all: no market data was used
+        return {"basis": "none", "text": cv.PROVENANCE_TEXT["market_not_valued"], "items": [], "notes": notes}
     return {"basis": "unknown", "text": cv.PROVENANCE_TEXT["market_unknown"], "items": [], "notes": notes}
 
 
@@ -684,7 +713,10 @@ def provenance(con, run: dict[str, Any], pid: str, feeds: list[dict[str, Any]] |
         mism.append("trades_no_report")
     if row is None and got:
         mism.append("terms_no_report")
-    if same > 1 or str(reason or "").startswith("terms_ambiguous"):
+    # several report rows of one deal_id are one deal on several rows unless each takes its own leg (an FX swap given
+    # as a row per leg, the legs naming their positions): the run's terms_ambiguous, or no leg names this position
+    if str(reason or "").startswith("terms_ambiguous") or (
+            same > 1 and not any(str(t.get("position_id") or "") == pid for t in got)):
         mism.append("deal_on_rows")
     gap = ((ex.get("reported") or {}).get("x") or {}).get("trades_report_gap")   # the run's, not the stored row's
     if gap is not None:

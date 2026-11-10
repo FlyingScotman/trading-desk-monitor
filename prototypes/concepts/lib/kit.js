@@ -3070,12 +3070,13 @@
   const PROV_CLS = { present: 'ok', ok: 'ok', absent: 'bad', missing: 'bad', unknown: 'unk', not_needed: 'unk', pending: 'unk', replaced: 'warn', stale: 'warn' };
   const provWhen = s => s ? esc(String(s).length > 10 ? K.mskTime(s, true) : f.date(s)) : '<span class="mut3">—</span>';
   K.provenanceHtml = function (d) {
-    const chip = (state, text) => '<span class="k-prov-st ' + (PROV_CLS[state] || 'unk') + '" data-state="' + esc(state) + '">' + esc(text || state) + '</span>';
+    const chip = (state, text, cls) => '<span class="k-prov-st ' + (cls || PROV_CLS[state] || 'unk') + '" data-state="' + esc(state) + '">' + esc(text || state) + '</span>';
     const part = (l, v) => v == null || v === '' ? '' : '<span class="k-prov-kv"><span class="mut3">' + l + '</span> ' + v + '</span>';
     const item = it => '<li>' + [
       it.ccy ? part('валюта', '<b>' + esc(it.ccy) + '</b>' + (it.has_row === false ? ' <span class="mut3">нет данных</span>' : '')) : '',
       it.trade_id ? part('сделка', '<span class="mono">' + esc(it.trade_id) + '</span>' + (it.leg_id ? ' <span class="mut3">нога ' + esc(it.leg_id) + '</span>' : '') + (it.product_kind ? ' <span class="mut3">' + esc(it.product_kind) + '</span>' : '')) : '',
       it.state_text ? part('в позициях дня', esc(it.state_text)) : '',
+      it.level_text ? part('уровень', esc(it.level_text)) : '',
       it.has_row === false ? '' : part('набор', esc(it.dataset_name || it.dataset)),
       part('источник', it.source ? '<span class="mono">' + esc(it.source) + '</span>' : null),
       part('откуда', it.origin_text ? esc(it.origin_text) + (it.feed_title ? ' · ' + esc(it.feed_title) : '') : null),
@@ -3084,8 +3085,12 @@
       it.has_row === false ? '' : part('отчёт за', provWhen(it.report_date)),
       it.has_row === false ? '' : part('загружен', provWhen(it.loaded_at)),
     ].join('') + '</li>';
+    // «нет данных» у сделок дня и остатков — обычное дело (сделок по позиции не было, остатков по валюте нет): серым;
+    // красным — только пробел, который мешает оценке (строки отчёта позиций, условий сделки)
+    const NORMAL_ABSENCE = { trades: 1, cash_balances: 1, ocp: 1 };
     const src = s => '<div class="k-prov-src" data-src="' + esc(s.key) + '"><div class="k-prov-h"><b>' + esc(s.name) + '</b>' +
-      (s.level === 'book_ccy' ? ' <span class="k-tag">' + esc(s.level_text || 'по книге и валюте') + '</span>' : '') + ' ' + chip(s.state, s.state_text) +
+      (s.level && s.level !== 'deal' ? ' <span class="k-tag">' + esc(s.level_text || 'по книге и валюте') + '</span>' : '') + ' ' +
+      chip(s.state, s.state_text, s.state === 'absent' && NORMAL_ABSENCE[s.key] ? 'unk' : null) +
       '<span class="mut" style="flex:1 1 200px">' + esc(s.text) + '</span></div>' +
       (s.items && s.items.length ? '<ul class="k-prov-items">' + s.items.map(item).join('') + '</ul>' : '') + '</div>';
     const m = d.market || { items: [], notes: [] };
@@ -3099,7 +3104,7 @@
   };
   K.provenanceSection = function (el, id) {
     if (!el) return;
-    el.innerHTML = '<div class="k-prov"><button type="button" class="k-btn k-prov-btn" aria-expanded="false">Откуда данные <span class="k-prov-ar">▸</span></button><div class="k-prov-bd" hidden></div></div>';
+    el.innerHTML = '<div class="k-provsec"><button type="button" class="k-btn k-prov-btn" aria-expanded="false">Откуда данные <span class="k-prov-ar">▸</span></button><div class="k-prov-bd" hidden></div></div>';
     el.dataset.pos = id;
     const btn = el.querySelector('.k-prov-btn'), bd = el.querySelector('.k-prov-bd');
     let asked = false;

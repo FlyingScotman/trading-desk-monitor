@@ -2573,10 +2573,10 @@ export interface components {
         ProvenanceMarket: {
             /**
              * Basis
-             * @description used: what the valuation used; needed: an unvalued deal, what its terms need; unknown: not recorded
+             * @description used: what the valuation used; needed: an unvalued deal, what its terms need; none: no market data used (not valued, or the report's value); unknown: not recorded
              * @enum {string}
              */
-            basis: "used" | "needed" | "unknown";
+            basis: "used" | "needed" | "none" | "unknown";
             /** Text */
             text: string;
             /** Items */
@@ -2605,10 +2605,10 @@ export interface components {
             name: string;
             /**
              * Level
-             * @description deal: matched by the deal; book_ccy: by book and currency only (no key of a deal)
+             * @description deal: matched by the deal; book_ccy: by book and currency only (no key of a deal); entity_ccy: by the book's legal entity and currency (an OCP report without books)
              * @enum {string}
              */
-            level: "deal" | "book_ccy";
+            level: "deal" | "book_ccy" | "entity_ccy";
             /** Level Text */
             level_text: string;
             /**
