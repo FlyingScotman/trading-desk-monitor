@@ -284,7 +284,7 @@
     { label: 'Карта: по книгам', run: () => { S.group = 'book'; save(); location.reload(); } },
     { label: 'Карта: по секторам', run: () => { S.group = 'sector'; save(); location.reload(); } },
   ]);
-  redrawTree();
+  legend(); members();  // карта и дерево уже построены выше (K.chart берёт описание при создании): второй redrawTree() рисовал карту заново
 })();
 </script>
 </body>
