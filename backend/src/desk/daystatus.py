@@ -90,6 +90,10 @@ EVENT_TEXT = {
 UNIT_STATUS = {"accepted": "принято", "rejected": "отклонено", "superseded": "заменено"}
 """A file's parts (books, entities) by status, as the feed counts them."""
 
+SUPERSEDES_PRUNED = "заменённый расчёт удалён (хранится только актуальный)"
+"""Why a run that superseded another says nothing of what changed: the replaced run was deleted (TDM#634), there is
+nothing to compare with (``supersedes_pruned``); the screen shows this instead of «входы те же (пересчёт)»."""
+
 RUN_CHANGES = {"positions": "позиции", "market": "снимок рынка", "prev_market": "снимок прошлого дня",
                "program": "версия программы", "second_order": "досчитаны вторые производные",
                "cut": "срез (окончательное закрытие вместо предварительного)",
@@ -351,7 +355,9 @@ def _copies(con: psycopg.Connection, day: date) -> list[dict[str, Any]]:
 
 def _runs(con: psycopg.Connection, day: date) -> list[dict[str, Any]]:
     """The runs of ``day``, oldest first: type, cut, status, default or shown, which run each superseded and which
-    superseded it, and what changed against the run it superseded (positions, market, previous close, program)."""
+    superseded it, and what changed against the run it superseded (positions, market, previous close, program).
+    ``supersedes_pruned``: the run it superseded was deleted (TDM#634), so ``changed`` is empty for want of a run to
+    compare with, not because the inputs are the same; ``supersedes_pruned_text`` says so."""
     rows = _rows(con, "SELECT r.run_id, r.run_type, r.cut_type, r.cut_ts, r.status, r.started_at, r.completed_at,"
                       " r.supersedes_run_id, r.error, r.position_set_ids, r.market_snapshot_id, r.positions_known_at,"
                       " r.prev_market_snapshot_id, r.lineage->>'logic_version' AS logic_version,"
@@ -368,6 +374,7 @@ def _runs(con: psycopg.Connection, day: date) -> list[dict[str, Any]]:
     out = []
     for r in rows:
         old = by_id.get(r["supersedes_run_id"])
+        pruned = bool(r["supersedes_run_id"]) and old is None  # the run it replaced is gone (``store.prune_superseded``)
         changed = []
         if old:
             if old["cut_type"] != r["cut_type"]:
@@ -396,6 +403,7 @@ def _runs(con: psycopg.Connection, day: date) -> list[dict[str, Any]]:
                     "is_default": r["is_default"], "is_current": r["is_current"],
                     "supersedes_run_id": r["supersedes_run_id"], "superseded_by": later.get(r["run_id"], []),
                     "changed": changed, "changed_text": [RUN_CHANGES[c] for c in changed],
+                    "supersedes_pruned": pruned, "supersedes_pruned_text": SUPERSEDES_PRUNED if pruned else None,
                     "position_sets": len(r["position_set_ids"] or []), "coverage": r["coverage"], "error": err})
     return out
 

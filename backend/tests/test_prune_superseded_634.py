@@ -15,7 +15,7 @@ from fastapi.testclient import TestClient
 from test_r23_backfill import load, settings
 from test_two_pass_627 import RUN_DATES, cache, first_pass, plan, runs, second_pass
 
-from desk import backfill, store
+from desk import backfill, daystatus, store
 from desk.api import create_app
 from desk.autopilot import Autopilot
 from desk.marketdata.bundle import SnapshotDir
@@ -95,6 +95,9 @@ def test_the_two_passes_leave_a_replaced_run_per_date_and_only_those_are_pruned(
     day = client.get("/api/v1/inbox", params={"on": RUN_DATES[-1]}).json()
     assert [r["run_id"] for r in day["runs"]] == [default[RUN_DATES[-1]]]  # the day page lists the one that is left
     assert day["runs"][0]["changed"] == []  # what it replaced is gone: nothing to compare with
+    # ... and the page is told so, to say it rather than «the inputs are the same» (daystatus.SUPERSEDES_PRUNED)
+    assert day["runs"][0]["supersedes_pruned"] is True
+    assert day["runs"][0]["supersedes_pruned_text"] == "заменённый расчёт удалён (хранится только актуальный)"
 
 
 def test_the_replaced_run_is_deleted_by_its_age_not_the_dates_and_the_newest_is_never_deleted(tmp_path, cache, store_url):
@@ -262,6 +265,19 @@ def test_the_space_goes_back_to_the_tables_and_the_disk_on_request(tmp_path, cac
         assert abs(sum(freed.values()) - res["bytes"]) < 0.3 * res["bytes"] + 200_000  # what was estimated is what came back
     assert counts(store_url)["run"] == 4 and counts(store_url)["run_position"] > 0
     assert runs(store_url).keys() == default.keys()  # the runs that are left read as before
+
+
+def test_a_run_that_replaced_nothing_or_whose_replaced_run_is_there_is_not_marked_pruned(tmp_path, cache, store_url):
+    two_passes(tmp_path, cache, store_url)
+    with store.connect(store_url) as con:
+        r1, r2 = daystatus._runs(con, date(2026, 10, 14))
+    assert r1["supersedes_pruned"] is False and r1["supersedes_pruned_text"] is None
+    assert r2["supersedes_pruned"] is False and r2["supersedes_pruned_text"] is None and r2["changed"]
+    age_all(store_url, 30)
+    with store.connect(store_url) as con:
+        store.prune_superseded(con, 7)
+        (r,) = daystatus._runs(con, date(2026, 10, 14))
+    assert r["supersedes_run_id"] == r2["supersedes_run_id"] and r["supersedes_pruned"] is True
 
 
 # ---- the autopilot's step, the settings, the command line
