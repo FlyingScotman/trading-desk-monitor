@@ -104,8 +104,9 @@ every ``inbox_poll_seconds`` and on ``POST /api/v1/autopilot/run``):
    without the second derivatives; once every date of the window has its run (the first pass went through all of its
    dates), what is left of the cycle's budget makes the dates again with them, the newest first
    (``backfill.run_second``), and the cycles after it go on until none lacks them. With ``backfill_workers`` > 1
-   (default ``min(3, cores - 1)``, TDM#628) both passes compute several dates at once in processes of a pool and publish
-   them in order (``desk.parallel``); the budget starts no date after it, the dates already in the pool are finished.
+   (default 1: off until the pool is checked on the work machine, TDM#628) both passes compute several dates at once in
+   processes of a pool (one for both passes of the cycle) and publish them in order (``desk.parallel``); the budget
+   starts no date after it, the dates already in the pool are finished.
 8. **prune** (setting ``prune_superseded``, on; ``prune_superseded_days``, 7; TDM#634): the runs of a date that a newer run
    replaced (the history's first pass, an older program version, a corrected report) are deleted once the replacement
    is that old, 50 runs and 60 seconds a cycle at most (``store.prune_superseded``), only in a quiet cycle (no run

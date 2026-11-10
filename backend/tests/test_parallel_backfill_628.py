@@ -25,7 +25,7 @@ from test_two_pass_627 import D0, D1, NEWEST_FIRST, RUN_DATES, plan, runs
 
 from desk import backfill, bookfile, dayrun, parallel, store
 from desk.autopilot import Autopilot
-from desk.settings import Settings, auto_workers, check_settings_doc
+from desk.settings import Settings, check_settings_doc
 from desk.settings import load as load_settings
 from desk.store import MIGRATIONS, migrate
 
@@ -876,18 +876,13 @@ def test_the_priority_is_lowered_per_platform_and_a_failure_is_not_fatal(monkeyp
 
 # ---- settings, the autopilot
 
-def test_the_settings_of_the_processes(tmp_path, monkeypatch):
-    assert Settings().backfill_workers == 1  # a Settings made by hand is the sequential run
-    assert 1 <= auto_workers() <= 3
-    monkeypatch.setattr(os, "cpu_count", lambda: 1)
-    assert auto_workers() == 1
-    monkeypatch.setattr(os, "cpu_count", lambda: 4)
-    assert auto_workers() == 3
-    monkeypatch.setattr(os, "cpu_count", lambda: 64)
-    assert auto_workers() == 3  # the owner's computer stays responsive
+def test_the_settings_of_the_processes(tmp_path):
+    """Off by default: the pool is not checked on the work machine (spawn from desk.exe on Windows); the owner turns it on
+    by the setting once it is."""
+    assert Settings().backfill_workers == 1
     env = {"DESK_HOME": str(tmp_path), "DESK_ENV_FILE": str(tmp_path / "none.env")}
-    assert load_settings(env).backfill_workers == 3
-    assert load_settings({**env, "DESK_BACKFILL_WORKERS": "2"}).backfill_workers == 2
+    assert load_settings(env).backfill_workers == 1
+    assert load_settings({**env, "DESK_BACKFILL_WORKERS": "3"}).backfill_workers == 3
     assert not check_settings_doc({"backfill_workers": 2})
     assert check_settings_doc({"backfill_workers": 0}) == ["backfill_workers: must be a whole number >= 1"]
 
