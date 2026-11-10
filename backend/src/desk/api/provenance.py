@@ -25,8 +25,9 @@
   core valued it from its terms, not with the report's value it got instead) or, for an unvalued derivative, what its
   terms need (RUB curve; per foreign currency its FX spot and the curve the valuation would take, by the run's setting
   ``fx_foreign_curve`` and a CCS leg's XCCY first, a fallback only: ``replaced``; a floating index its curve and
-  fixings; an NDF its CBR fixing), each with its state in the run's market (``coverage.MARKET_STATE``): every need,
-  not just the first failure.
+  fixings; an NDF the CBR fixing of each foreign currency of its pair, both of a cross NDF), each with its state in the run's market (``coverage.MARKET_STATE``): every need,
+  not just the first failure. Its notes say why a derivative valued without core has no rates risk
+(``extra.risk_missing``, TDM#616) and an NDF whose terms name no settlement currency (the one taken).
 
 What an old run did not record is ``unknown`` («нет сведений»), never an error; missing data is ``absent`` / ``missing``,
 never a zero. Nothing here reads a report's values beyond keys and dates."""
@@ -41,6 +42,7 @@ from .. import store, trades
 from ..curves import fx as fxcurves
 from ..daystatus import DATASET_NAMES
 from ..valuation import derivatives as dv
+from ..valuation.positions import RISK_MISSING
 from . import concepts
 from . import coverage as cv
 
@@ -460,8 +462,9 @@ def _index_needs(lin: dict[str, Any], t: dict[str, Any], code: str, trade_start:
 def _needed(lin: dict[str, Any], terms: list[dict[str, Any]], x: dict[str, Any], bd: date,
             names: dict[str, str]) -> list[dict[str, Any]]:
     """What an unvalued derivative's terms need, each with its state in the run's market: the RUB curve; per foreign
-    currency its spot and its curve (``_foreign_curve``); per floating index its curve and fixings; per NDF leg its CBR
-    fixing (one of the business date not yet published: pending, as the valuation projects it)."""
+    currency its spot and its curve (``_foreign_curve``); per floating index its curve and fixings; per NDF leg the CBR
+    fixing of each foreign currency of its pair (a cross NDF fixes at the cross of both, TDM#616; one of the business
+    date not yet published: pending, as the valuation projects it)."""
     out = [_need("curve", "RUB RUONIA", names.get("RUB RUONIA", "RUB RUONIA OIS"), _rub_state(lin, "ruonia_ois"),
                  "дисконтирование рублёвых потоков")]
     ccys = sorted({c for t in terms for k in ("base_ccy", "quote_ccy", "ccy", "settle_ccy") if (c := _ccy(t.get(k)))}
@@ -493,17 +496,37 @@ def _needed(lin: dict[str, Any], terms: list[dict[str, Any]], x: dict[str, Any],
     for t in terms:
         if t.get("ndf") not in (True, "true", "True", 1, "1") or not t.get("fixing_date"):
             continue
-        c = next((c for k in ("base_ccy", "quote_ccy") if (c := _ccy(t.get(k))) and c != "RUB"), None)
         d = str(t["fixing_date"])
-        if c is None:
-            continue
-        if d > bd.isoformat() or (d == bd.isoformat() and f"{c} {d}" not in fixed):
-            out.append(_need("fixing", f"{c} {d}", f"фиксинг ЦБ {c} на {d}", "pending",
-                             "дата фиксинга после даты прогона" if d > bd.isoformat() else "фиксинг дня ещё не опубликован"))
-        else:
-            out.append(_need("fixing", f"{c} {d}", f"фиксинг ЦБ {c} на {d}",
-                             "ok" if f"{c} {d}" in fixed else "unknown" if not fx else "missing"))
+        for c in dict.fromkeys(c for k in ("base_ccy", "quote_ccy") if (c := _ccy(t.get(k))) and c != "RUB"):
+            if d > bd.isoformat() or (d == bd.isoformat() and f"{c} {d}" not in fixed):
+                out.append(_need("fixing", f"{c} {d}", f"фиксинг ЦБ {c} на {d}", "pending",
+                                 "дата фиксинга после даты прогона" if d > bd.isoformat()
+                                 else "фиксинг дня ещё не опубликован"))
+            else:
+                out.append(_need("fixing", f"{c} {d}", f"фиксинг ЦБ {c} на {d}",
+                                 "ok" if f"{c} {d}" in fixed else "unknown" if not fx else "missing"))
     return _unique(out)
+
+
+def _ndf_notes(terms: list[dict[str, Any]], ex: dict[str, Any]) -> list[str]:
+    """TDM#616 in the market notes: why a derivative valued without core has no rates risk (``extra.risk_missing``, the
+    words of ``valuation.positions.RISK_MISSING``), and the settlement currency taken for an NDF whose terms name none
+    (the valued legs' ``settlement_ccy_assumed``; terms without ``settle_ccy`` settle in RUB, or the adapter's default
+    it marked ``x_settle_ccy_assumed``)."""
+    out = []
+    rm = ex.get("risk_missing")
+    if isinstance(rm, dict) and rm.get("reason") in RISK_MISSING:
+        ccy = rm.get("ccy") if isinstance(rm.get("ccy"), str) else ""
+        out.append("процентного риска нет: " + RISK_MISSING[rm["reason"]].format(ccy=ccy))
+    taken = {str(lg.get("settlement_ccy") or "RUB") for lg in ex.get("legs") or ()
+             if isinstance(lg, dict) and lg.get("settlement_ccy_assumed")}
+    for t in terms:
+        if t.get("ndf") in (True, "true", "True", 1, "1"):
+            c = _ccy(t.get("settle_ccy"))
+            if c is None or t.get("x_settle_ccy_assumed") in (True, "true", "True", 1, "1"):
+                taken.add(c or "RUB")
+    out += [f"NDF: валюта расчёта не указана в условиях — принята {c}" for c in sorted(taken)]
+    return out
 
 
 def _unique(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -596,9 +619,11 @@ def _used(lin: dict[str, Any], fact: dict[str, Any], names: dict[str, str]) -> l
 
 
 def _market(con, run: dict[str, Any], kind: str, fact: dict[str, Any] | None, terms: list[dict[str, Any]],
-            x: dict[str, Any], reason: str | None, fallback: str | None = None) -> dict[str, Any]:
+            x: dict[str, Any], reason: str | None, fallback: str | None = None,
+            got: dict[str, Any] | None = None) -> dict[str, Any]:
     """``fact``: the valuation's (a derivative only when core valued it); ``fallback``: the quality of the value an
-    unvalued derivative was given instead (the report's, or 0), said in a note."""
+    unvalued derivative was given instead (the report's, or 0), said in a note; ``got``: the ``extra`` of the fact the
+    position got either way (its ``risk_missing``, its legs: ``_ndf_notes``)."""
     lin = run.get("lineage") or {}
     ref = con.execute("SELECT data FROM run_reference WHERE run_id = %s AND kind = 'curves'",
                       (run["run_id"],)).fetchone()
@@ -606,6 +631,7 @@ def _market(con, run: dict[str, Any], kind: str, fact: dict[str, Any] | None, te
              if isinstance(c, dict) and c.get("curve_id")}
     notes = [f"в срезе хаба устарели данные «{k}»" + (f": {'; '.join(str(r) for r in v[:3])}" if v else "")
              for k, v in sorted((lin.get("stale_datasets") or {}).items())]
+    notes = _ndf_notes(terms, got or {}) + notes
     if fact is not None:
         items = _unique(_used(lin, fact, names))
         ex = fact.get("extra") or {}
@@ -742,5 +768,5 @@ def provenance(con, run: dict[str, Any], pid: str, feeds: list[dict[str, Any]] |
         "sources": [rep_src, terms_src, trades_src, *_book_ccy(con, run, book, ccys)],
         "mismatches": [{"code": m, "text": _mismatch_text(m, same, reason)} for m in mism],
         "market": _market(con, run, kind, fact if by_core else None, got, x, reason,
-                          None if by_core or fact is None else (ex.get("quality") or p.get("quality"))),
+                          None if by_core or fact is None else (ex.get("quality") or p.get("quality")), ex),
     }

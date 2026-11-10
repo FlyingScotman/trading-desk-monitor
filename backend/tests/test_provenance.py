@@ -609,3 +609,45 @@ def test_rows_valued_from_the_report_list_only_the_rate(seeded):
         ("fx", "USD", "пересчёт стоимости отчёта в рубли")]
     m = _get(c, rid, "UB2")[0]["market"]   # a bond not matched to the hub, at the report's value: no curve used
     assert m["basis"] == "none" and m["items"] == [] and "стоимость: по отчёту банка" in m["notes"]
+
+
+def test_a_cross_ndf_needs_both_foreign_curves_and_both_cbr_fixings():
+    from desk.api import provenance as pv
+
+    lin = {"rates": LINEAGE_RATES, "fx": {**LINEAGE_FX, "fixings": ["USD 2026-10-16"]}}
+    cross = [{"trade_id": "N1", "product_kind": "fx_forward", "base_ccy": "EUR", "quote_ccy": "USD", "ndf": True,
+              "fixing_date": "2026-10-16"}]   # settled in RUB (no settle_ccy): fixes at the cross of two CBR rates
+    m = {(i["kind"], i["id"]): i["state"] for i in pv._needed(lin, cross, {"ccy": "EUR"}, BD, {})}
+    assert m[("fixing", "USD 2026-10-16")] == "ok" and m[("fixing", "EUR 2026-10-16")] == "missing"
+    assert {k for k in m if k[0] == "fx"} == {("fx", "EUR"), ("fx", "USD")}
+    assert {k[1][:3] for k in m if k[0] == "curve"} >= {"RUB", "EUR", "USD"}
+    # an X/RUB NDF settled in its foreign currency: the one fixing of X
+    usd = [{"trade_id": "N2", "product_kind": "fx_forward", "base_ccy": "USD", "quote_ccy": "RUB", "ndf": True,
+            "settle_ccy": "USD", "fixing_date": "2026-11-20"}]
+    assert [i["id"] for i in pv._needed(lin, usd, {"ccy": "USD"}, BD, {}) if i["kind"] == "fixing"] == ["USD 2026-11-20"]
+    assert pv._ndf_notes(usd, {}) == []
+
+
+def test_ndf_notes_say_why_no_rates_risk_and_the_settlement_currency_taken():
+    from desk.api import provenance as pv
+
+    assert pv._ndf_notes([], {"risk_missing": {"reason": "no_curve", "ccy": "INR", "text": "?"}}) == [
+        "процентного риска нет: нет данных: нет кривой INR"]
+    assert pv._ndf_notes([], {"risk_missing": {"reason": "ndf_no_terms"}})[0].startswith(
+        "процентного риска нет: NDF без условий сделки")
+    assert pv._ndf_notes([], {"risk_missing": {"reason": "somewhat_new"}}) == []   # a reason the monitor does not know
+    terms = [{"trade_id": "N1", "ndf": True, "base_ccy": "EUR", "quote_ccy": "USD"},
+             {"trade_id": "N2", "ndf": "true", "base_ccy": "USD", "quote_ccy": "RUB", "settle_ccy": "USD",
+              "x_settle_ccy_assumed": True},   # the adapter's default from its settings
+             {"trade_id": "N3", "ndf": True, "base_ccy": "USD", "quote_ccy": "RUB", "settle_ccy": "RUB"},
+             {"trade_id": "F1", "base_ccy": "USD", "quote_ccy": "RUB"}]
+    assert pv._ndf_notes(terms, {}) == ["NDF: валюта расчёта не указана в условиях — принята RUB",
+                                        "NDF: валюта расчёта не указана в условиях — принята USD"]
+    legs = {"legs": [{"settlement_ccy": "RUB", "settlement_ccy_assumed": True}, {"settlement_ccy": "RUB"}]}
+    assert pv._ndf_notes([], legs) == ["NDF: валюта расчёта не указана в условиях — принята RUB"]
+
+
+def test_the_card_says_the_settlement_currency_taken_for_an_ndf(seeded):
+    c, rid, _ = seeded
+    notes = _get(c, rid, "NDF1")[0]["market"]["notes"]   # T11: an NDF whose terms name no settlement currency
+    assert "NDF: валюта расчёта не указана в условиях — принята RUB" in notes
