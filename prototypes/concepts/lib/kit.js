@@ -1366,7 +1366,8 @@
   // (ошибка, попытки, следующая попытка). Догрузка остановилась на ошибке сети или базы (j.stalled) — это не свойство
   // дат: коротко «⚠ догрузка стоит: <причина>, повтор в ЧЧ:ММ · N из M дат», в подсказке — с какого времени, ошибка
   // целиком и проблемные даты. Время — МСК. Серый — остались только проблемные даты. j — GET /api/v1/backfill/status;
-  // null — индикатора нет.
+  // null — индикатора нет. Два прохода (TDM#627, j.pass / j.second): «проход 1 из 2» — стоимость, риск и PnL, «проход 2 из 2» — вторые
+  // производные; чип виден, пока идёт любой из них, и пропадает, когда pass == done и вторые производные есть у всех дат.
   const dmy = iso => iso ? iso.slice(8, 10) + '.' + iso.slice(5, 7) + '.' + iso.slice(0, 4) : '';
   const BF_WHY = { 'no default run': 'нет прогона', 'positions changed': 'изменились позиции', 'market snapshot changed': 'исправлен рынок',
     'previous snapshot changed': 'изменилось прошлое закрытие', 'private inputs changed': 'изменились условия сделок', 'program updated': 'обновилась программа',
@@ -1380,24 +1381,31 @@
   const bfList = (head, L) => L.length ? '\n' + head + ' (' + L.length + '):\n' + L.slice(0, 15).join('\n') + (L.length > 15 ? '\n… ещё ' + (L.length - 15) : '') + '\n' : '';
   K.backfillStatus = function (j) {
     if (!j) return null;
-    const on = j.enabled !== false, todo = on ? j.todo || 0 : 0, D = BT().dates(j);
+    // два прохода (TDM#627): pass first / second / done; ответ без pass — как раньше (P == null)
+    const on = j.enabled !== false, P = on ? BT().passes(j) : null, todo = on ? j.todo || 0 : 0, secTodo = P && P.pass === 'second' ? 1 : 0, D = BT().dates(j);
     const conv = D.conv.map(p => dmy(p.date) + ' — ' + (p.error && p.error.indexOf('does not converge') === 0 ? 'не сходится после пересчёта (' + (BF_WHY[p.why] || p.why) + ')'
       : (BF_WHY[p.why] || p.why || 'расчёт упал') + (p.error ? ': ' + p.error : '')) + (p.attempts ? ', попыток: ' + p.attempts : ''));
     const load = D.load.map(p => dmy(p.date) + (p.kind === 'unreachable' ? ' — не загружается: ' + (p.error || 'ошибка') + (p.attempts ? ', попыток: ' + p.attempts : '')
       : ' — с хаба не загружается: ' + (p.error || 'ошибка') + ', попыток: ' + p.attempts + (p.next_attempt ? ', следующая попытка ' + bfWhen(p.next_attempt) : '')));
+    const noSecond = P ? P.problems : [], gaveUp = P ? P.failed2 : 0;  // даты, у которых второй проход не смог посчитать вторые производные
     const st = BT().stall(j);  // только пока есть даты к расчёту
-    if (!todo && !conv.length && !load.length) return null;
-    const total = j.total != null ? j.total : (j.done || 0) + (j.todo || 0) + (j.failed || 0), grey = !todo;
+    if (!todo && !secTodo && !conv.length && !load.length && !gaveUp) return null;
+    const total = j.total != null ? j.total : (j.done || 0) + (j.todo || 0) + (j.failed || 0), grey = !todo && !secTodo;
     const nm = (j.done || 0) + ' из ' + total + ' дат';
-    const lists = bfList('Не сходятся', conv) + bfList('Не загружаются', load) + 'Подробности — Настройки → «История прогонов».';
+    const lists = bfList('Не сходятся', conv) + bfList('Не загружаются', load) + bfList('Вторые производные не посчитались', noSecond) + 'Подробности — Настройки → «История прогонов».';
     if (st) return { text: '⚠ догрузка ' + st.text + ' · ' + nm, title: st.title + '\nГотово ' + nm + '.\n' + lists, grey: false, stall: true };
-    const eta = todo && j.eta_s ? (j.eta_s < 5400 ? Math.max(1, Math.round(j.eta_s / 60)) + ' мин' : Math.round(j.eta_s / 3600) + ' ч') : null;
-    const title = (grey ? 'Остались только проблемные даты.' + (conv.length ? ' Не сходятся — сервер пересчитает их, когда изменятся данные или программа.' : '') +
+    const eta = P ? (todo || secTodo ? P.eta || (todo && j.eta_s ? BT().eta(j.eta_s) : null) : null) : (todo && j.eta_s ? BT().eta(j.eta_s) : null);
+    const nextDates = (P ? P.next : j.next || []).map(dmy).join(', ');
+    const rest = (grey ? 'Остались только проблемные даты.' + (conv.length || gaveUp ? ' ' + (conv.length ? 'Не сходятся' : 'Вторые производные не посчитались') + ' — сервер пересчитает их, когда изменятся данные или программа.' : '') +
         (load.length ? ' Не загружаются — сервер пробует снова сам, по расписанию.' : '') + ' '
       : 'Сервер досчитывает прошлые даты с ' + dmy(j.from) + ', от самой ранней: история риска, PnL с начала месяца и года и позиции прошлых дат появляются по мере расчёта (обновите страницу). ' +
-        'Следующие: ' + (j.next || []).map(dmy).join(', ') + '.' + (eta ? ' Осталось расчёта ≈ ' + eta + ' (по одной дате за раз, между циклами автопилота).' : '') + ' ') + lists;
-    const text = '⟳ догрузка истории ' + nm + (conv.length ? ' · ' + bfN(conv.length, ' не сходится', ' не сходятся') : '') +
-      (load.length ? ' · ' + bfN(load.length, ' не загружается', ' не загружаются') : '');
+        'Следующие: ' + nextDates + '.' + (eta ? ' Осталось расчёта ≈ ' + eta + ' (по одной дате за раз, между циклами автопилота).' : '') + ' ');
+    // пересчёт идёт в два прохода: сначала стоимость, риск и PnL, потом вторые производные, которые читает только оценка сценариев
+    const passes = P ? P.first + '.\n' + P.second + '.' + (P.pass === 'second' ? '\nПока их нет, оценка сценариев на этой дате линейная; стоимость, риск и PnL уже посчитаны.' : '') + '\n' : '';
+    const title = passes + rest + lists;
+    const head = P && !P.done ? P.short : nm;
+    const text = '⟳ догрузка истории' + (P && !P.done ? ', ' : ' ') + head + (conv.length ? ' · ' + bfN(conv.length, ' не сходится', ' не сходятся') : '') +
+      (load.length ? ' · ' + bfN(load.length, ' не загружается', ' не загружаются') : '') + (gaveUp ? ' · ' + P.noSecond : '');
     return { text, title, grey, stall: false };
   };
   function backfillChip(bar) {

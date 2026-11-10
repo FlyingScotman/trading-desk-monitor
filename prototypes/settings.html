@@ -1600,12 +1600,14 @@ function renderSummary(){
   it(ap ? 'ok' : 'warn', '#autopilot', 'Автообновление', ap ? 'включено' : 'выключено');
   const b = SUM.bf, T = window.DESK_BACKFILL_TEXT;
   if (b) {
-    const withPos = Math.max(0, (b.dates || 0) - (b.no_positions || 0) - (b.no_market || 0)), stall = T.stall(b), D = T.dates(b);
+    const withPos = Math.max(0, (b.dates || 0) - (b.no_positions || 0) - (b.no_market || 0)), stall = T.stall(b), D = T.dates(b), P = b.enabled ? T.passes(b) : null;
     const bad = [D.conv.length ? T.n(D.conv.length, ' не сходится', ' не сходятся') : '', D.load.length ? T.n(D.load.length, ' не загружается', ' не загружаются') : ''].filter(Boolean).join(', ');
     if (!b.enabled) it('', '#bf', 'История прогонов', 'не считается', 'включается в «Автообновлении»');
     else if (stall) it('warn', '#bf', 'История прогонов', 'стоит — ' + stall.why + stall.retry, stall.title);
     else if (bad) it('warn', '#bf', 'История прогонов', b.done + ' из ' + withPos + ' · ' + bad, 'даты — в «Диагностика → История прогонов»');
+    else if (P && !P.done) it('', '#bf', 'История прогонов', P.short, P.first + '. ' + P.second + '.');
     else if (b.todo) it('', '#bf', 'История прогонов', b.done + ' из ' + withPos, 'посчитано дат с позициями; остальные догружаются в фоне');
+    else if (P && P.failed2) it('warn', '#bf', 'История прогонов', 'посчитана, ' + P.noSecond, 'вторые производные нужны только быстрой оценке сценариев; подробности — «Диагностика → История прогонов»');
     else it('ok', '#bf', 'История прогонов', 'посчитана, ' + plural(b.done || 0, 'дата', 'даты', 'дат'));
   }
   const fi = items.find(x => x.href === '#dirs');
@@ -1627,7 +1629,8 @@ function renderBfSum(){
   note.hidden = true; note.textContent = '';
   if (!b) { el.textContent = ''; return; }
   const withPos = Math.max(0, (b.dates || 0) - (b.no_positions || 0) - (b.no_market || 0)), stall = T.stall(b), D = T.dates(b);
-  el.textContent = !b.enabled ? 'сейчас не считается' : 'посчитано ' + b.done + ' из ' + plural(withPos, 'даты', 'дат', 'дат') +
+  const P = b.enabled ? T.passes(b) : null;  // два прохода (TDM#627): «посчитано» — только когда готовы оба
+  el.textContent = !b.enabled ? 'сейчас не считается' : (P && !P.done ? P.short : 'посчитано ' + b.done + ' из ' + plural(withPos, 'даты', 'дат', 'дат') + (P ? (P.failed2 ? ', ' + P.noSecond : ', вторые производные тоже') : '')) +
     (D.conv.length ? ', ' + T.n(D.conv.length, ' не сходится', ' не сходятся') : '') + (D.load.length ? ', ' + T.n(D.load.length, ' не загружается', ' не загружаются') : '');
   // застой — строкой в карточке, со ссылкой на ход расчёта
   if (stall) { note.hidden = false; note.append('Догрузка ' + stall.text + '. ', h('a', {href:'#bf'}, 'подробнее →')); note.title = stall.title; }
@@ -2372,12 +2375,23 @@ function mountTabs(a, reload){
         (p.error && p.error.indexOf('does not converge') === 0 ? 'не сходится после пересчёта' : (p.error || 'расчёт упал')) + tries(p));
       const nl = D.load.map(p => dd(p.date) + ' — ' + (p.kind === 'unreachable' ? (p.error || 'ошибка') + tries(p)
         : 'с хаба: ' + (p.error || 'ошибка') + tries(p) + (p.next_attempt ? ', следующая попытка ' + at(p.next_attempt) : '')));
+      // TDM#627: пересчёт идёт в два прохода — сначала стоимость, риск и PnL каждой даты без вторых производных, потом вторые
+      // производные (выпуклость, гамма) от самых новых дат; «готово» — когда pass == done. Ответ без pass — прежний сервер, строк нет
+      const P = T.passes(s), p2 = P ? P.problems.map(x => x.replace(/^(\d\d\.\d\d\.\d{4}) — /, '$1 — вторые производные: ')) : [];
+      const passRows = !P ? [] : [
+        ['Ход пересчёта', P.done ? (P.failed2 ? 'готово, но вторые производные не посчитаны у ' + P.failed2 + ' ' + (P.failed2 % 10 === 1 && P.failed2 % 100 !== 11 ? 'даты' : 'дат') : 'готово: оба прохода')
+          : 'идёт проход ' + (P.pass === 'first' ? '1' : '2') + ' из 2' + (s.enabled ? '' : ' (история прогонов выключена)')],
+        ['Проход 1 из 2', P.first.replace(/^Проход 1 из 2: /, '')],
+        ['Проход 2 из 2', P.second.replace(/^Проход 2 из 2: /, '') + (P.pass === 'second' && P.next.length ? '\nближайшие ' + P.next.map(dd).join(', ') : '')
+          + (P.pass === 'second' ? '\nПока вторых производных у даты нет, быстрая оценка сценариев на ней считает только по первому порядку.' : '')],
+      ].concat(p2.length ? [['Не вышло во втором проходе', P.failed2 + ':\n' + p2.join('\n')]] : []);
       const rows = [
         ['Включено', s.enabled ? 'да' : 'нет (настройка в «Автообновлении»)'],
+        ...passRows,
         ['Даты', dd(s.from) + ' — ' + dd(s.to) + ': ' + s.dates + ' рабочих дат' + (s.hub ? '' : ' (по загруженным срезам)')],
-        ['Посчитано', s.done + ' из ' + withPos + ' дат с позициями'],
+        [P ? 'Посчитано в проходе 1' : 'Посчитано', s.done + ' из ' + withPos + ' дат с позициями'],
         // TDM#587: «осталось по причинам» и дата, которая считается сейчас
-        ['Осталось', s.todo ? s.todo + (s.todo_by_reason && s.todo_by_reason.length ? ': ' + s.todo_by_reason.map(x => x.text + ' — ' + x.n).join(', ') : '')
+        [P ? 'Осталось в проходе 1' : 'Осталось', s.todo ? s.todo + (s.todo_by_reason && s.todo_by_reason.length ? ': ' + s.todo_by_reason.map(x => x.text + ' — ' + x.n).join(', ') : '')
           + (s.current && s.current.date ? '\nсейчас считается ' + dd(s.current.date) + ' (посчитано ' + s.current.done + ' из ' + s.current.total + ')' : '')
           + (s.next && s.next.length ? '\nближайшие ' + s.next.map(dd).join(', ') : '') : '—'],
         ['Без позиций', s.no_positions + (s.first_positions ? ' (позиции в базе с ' + dd(s.first_positions) + ')' : '')],
