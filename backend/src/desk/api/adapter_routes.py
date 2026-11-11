@@ -21,7 +21,10 @@ by hand.
   file changed since the action built them (``stale``: the page runs the action again), the replay job and, for a kind
   in ``CHOICE_SIGNALS`` (TDM#565), ``signal``: ``{code, count, files, latest}`` — the issue codes the last reading of
   the trade terms files of the last ``SIGNAL_DAYS`` days carries (codes and counts only, no value), ``null`` when none
-  or no store.
+  or no store. ``state`` (TDM#651, ``desk.index_choices``): why there is no table from the adapter (``code``, ``level``,
+  ``text`` in the owner's words with what to press); without the adapter's table the ``trade_index_codes`` kind gets one
+  built from the names in the loaded trade terms (``choices_source`` ``store``, ``read_only`` when the adapter has no tab
+  to save into). 404 (no adapter, it does not load, no such action) carries the same ``state`` in ``details``.
 * ``POST /api/v1/adapter/choices/{kind}`` ``{"values": {row key: option value | null}, "replay": true,
   "base_sha256"?}``: writes the values into the settings tab's object the choices name (``save``: a value sets the
   row's key, null removes it, and the row's ``replaces`` spellings go), as a form save of that tab (its schema checked,
@@ -42,7 +45,7 @@ from typing import Annotated, Any
 import psycopg
 from fastapi import APIRouter, Body, Depends, Request
 
-from .. import adapter_jobs, inbox_replay, settings_forms
+from .. import adapter_jobs, inbox_replay, index_choices, settings_forms
 from ..inbox import scan, tools
 from ..settings import Settings, SettingsError, load
 from .app import ApiError
@@ -169,7 +172,9 @@ def _choice_action(st: Settings, kind: str) -> tuple[Any, dict]:
     h = scan.adapter(st)
     decl = next((a for a in h.actions if a.get("choices") == kind), None)
     if decl is None:
-        raise ApiError(404, "not_found", f"the adapter has no action for {kind}: update the adapter")
+        # the owner's words in details.state: why there is no screen (no adapter, it does not load, no such action)
+        raise ApiError(404, "not_found", f"the adapter has no action for {kind}: update the adapter",
+                       {"state": index_choices.adapter_state(h, kind)})
     return h, decl
 
 
@@ -177,6 +182,23 @@ def _choices(st: Settings, decl: dict) -> tuple[dict | None, dict | None]:
     j = adapter_jobs.job(st.home, f"action:{decl['id']}")
     res = (j or {}).get("result") or {}
     return j, res.get("choices")
+
+
+def _screen_choices(st: Settings, h: Any, decl: dict, store_url: str | None) -> tuple[dict | None, dict | None, str | None]:
+    """(the action's last job, the screen's choices, where they come from): the adapter's own table, else for the
+    ``trade_index_codes`` kind the table the monitor builds from the names in the loaded trade terms (TDM#651:
+    ``desk.index_choices``), else None."""
+    j, ch = _choices(st, decl)
+    if ch:
+        return j, ch, "adapter"
+    if decl.get("choices") != index_choices.KIND:
+        return j, None, None
+    rep = {x["source"] for x in inbox_replay.sources(None, st)}
+    sc = index_choices.stored_choices(st, h, store_url, rep)
+    if sc is None:
+        return j, None, None
+    sc["file_sha256"] = adapter_jobs.choices_file_sha(st, h, sc)
+    return j, sc, "store"
 
 
 def _signal(store_url: str | None, kind: str) -> dict[str, Any] | None:
@@ -217,15 +239,19 @@ def _signal(store_url: str | None, kind: str) -> dict[str, Any] | None:
 def get_choices(kind: str, request: Request) -> dict[str, Any]:
     st = _settings()
     h, decl = _choice_action(st, kind)
-    j, ch = _choices(st, decl)
+    store_url = getattr(request.app.state, "store_url", None)
+    j, ch, source = _screen_choices(st, h, decl, store_url)
+    running = adapter_jobs.running("action") == f"action:{decl['id']}"
     now = adapter_jobs.choices_file_sha(st, h, ch) if ch else None
-    return {"action": decl, "running": adapter_jobs.running("action") == f"action:{decl['id']}",
+    return {"action": decl, "running": running,
             "job": {k: v for k, v in (j or {}).items() if k != "result"} if j else None,
             "ok": ((j or {}).get("result") or {}).get("ok"),
             "summary": ((j or {}).get("result") or {}).get("summary") or [],
-            "choices": ch, "file_sha256": now, "stale": bool(ch) and now != ch.get("file_sha256"),
+            "choices": ch, "choices_source": source, "file_sha256": now,
+            "stale": source == "adapter" and now != ch.get("file_sha256"),
+            "state": index_choices.state(j, running, ch, source, kind),
             "replay": inbox_replay.job(st), "replay_running": inbox_replay.running(),
-            "signal": _signal(getattr(request.app.state, "store_url", None), kind)}
+            "signal": _signal(store_url, kind)}
 
 
 def _start_replay(st: Any, request: Request, r: Any, reason: str) -> dict[str, Any]:
@@ -255,12 +281,15 @@ def _start_replay(st: Any, request: Request, r: Any, reason: str) -> dict[str, A
 def save_choices(kind: str, body: JsonBody, request: Request) -> dict[str, Any]:
     st = _settings()
     h, decl = _choice_action(st, kind)
-    _j, ch = _choices(st, decl)
+    _j, ch, _source = _screen_choices(st, h, decl, getattr(request.app.state, "store_url", None))
     if not ch:
         raise ApiError(409, "invalid_parameter", f"run «{decl['title']}» first: there is nothing to save yet")
     values = body.get("values")
     if not isinstance(values, dict):
         raise ApiError(422, "invalid_parameter", "values must be an object row key -> option value")
+    if ch.get("read_only"):
+        raise ApiError(409, "invalid_parameter", "the adapter's tab for the index codes is not readable here: "
+                                                 "update the adapter")
     rows = {r["key"] for r in ch["rows"]}
     opts = [o["value"] for o in ch["options"]]
     bad = [k for k, v in values.items() if k not in rows or v not in opts]

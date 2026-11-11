@@ -46,7 +46,15 @@ function server(opts) {
     if (p === '/api/v1/settings' && method === 'GET') return { home: 'C:\\desk', inbox_dirs: [], effective: {}, env_overrides: [], error: null };
     if (p === '/api/v1/adapter/choices/trade_index_codes' && method === 'GET') {
       if (o.old) return { __status: 404 };
-      return { action: { id: 'index_names', title: 'Индексы ставок в условиях сделок' }, running: false, ok: true, summary: [], stale: false, signal: st.saved ? null : signalNow(),
+      if (o.noAdapter) return { __status: 404, body: { code: 'not_found', message: 'the adapter has no action', details: { state: { code: 'adapter_error', level: 'bad', text: 'Экран «Индексы ставок»: версия договора адаптера не подходит к этому монитору: обновите адаптер или монитор (Настройки → «Обновления»).' } } } };
+      if (o.failed) return { action: { id: 'index_names', title: 'Индексы ставок в условиях сделок' }, running: false, ok: null, summary: [], stale: false, signal: null, choices: null, choices_source: null,
+        job: { state: 'timeout', error_code: 'timeout', started_at: new Date(Date.now() - 60000).toISOString(), finished_at: new Date(Date.now() - 50000).toISOString() },
+        state: { code: 'job_timeout', level: 'bad', text: 'Адаптер не дал индексы: адаптер не успел прочитать условия сделок за отведённое время. Нажмите «Обновить».' } };
+      if (o.store) return { action: { id: 'index_names', title: 'Индексы ставок в условиях сделок' }, running: false, ok: false, summary: ['Файлов условий сделок в папках отчётов нет'], stale: false, signal: null,
+        choices: { ...CHOICES, source: 'store', read_only: false, replay: null }, choices_source: 'store',
+        job: { state: 'done', started_at: new Date(Date.now() - 60000).toISOString(), finished_at: new Date(Date.now() - 50000).toISOString() },
+        state: { code: 'adapter_declined', level: 'warn', text: 'Адаптер ответил, что индексов нет: Файлов условий сделок в папках отчётов нет.' } };
+      return { choices_source: 'adapter', state: { code: 'ok', level: 'ok', text: '' }, action: { id: 'index_names', title: 'Индексы ставок в условиях сделок' }, running: false, ok: true, summary: [], stale: false, signal: st.saved ? null : signalNow(),
         job: { state: 'done', started_at: new Date(Date.now() - 60000).toISOString(), finished_at: new Date(Date.now() - 50000).toISOString() }, choices };
     }
     if (p === '/api/v1/adapter/choices/trade_index_codes' && method === 'POST') {
@@ -80,7 +88,7 @@ async function page(browser, st, url, width) {
     if (u.pathname.startsWith('/api/') || u.pathname.startsWith('/health')) {
       let body = null; try { body = req.postDataJSON(); } catch (e) { /* GET */ }
       const out = st.handle(u, req.method(), body);
-      if (out && out.__status) return route.fulfill({ status: out.__status, contentType: 'application/json', body: '{"message":"адаптер не отдаёт этот экран"}' });
+      if (out && out.__status) return route.fulfill({ status: out.__status, contentType: 'application/json', body: JSON.stringify(out.body || { message: 'адаптер не отдаёт этот экран' }) });
       return out ? route.fulfill({ status: req.method() === 'POST' && /run$/.test(u.pathname) ? 202 : 200, contentType: 'application/json', body: JSON.stringify(out) })
         : route.fulfill({ status: 404, contentType: 'application/json', body: '{"message":"нет в тесте"}' });
     }
@@ -160,6 +168,33 @@ test('Индексы ставок (TDM#565)', { skip: pw ? false : 'нет Playw
       await r.pg.waitForFunction(() => /warn/.test(document.querySelector('a[data-sec="indexes"] .dot').className));
       const item = await r.pg.evaluate(() => window.DeskSettings.statusItems().filter(x => x.k === 'Индексы ставок')[0].text);
       assert.ok(/^5 сделок без сопоставления/.test(item), item);
+      assert.deepStrictEqual(r.errors, []);
+      await r.ctx.close();
+    });
+    await t.test('адаптер не загружен (404 с причиной): причина и что нажать, не общее «обновите»', async () => {
+      const r = await page(browser, server({ noAdapter: true }), '/settings.html#indexes', 390);
+      const box = r.pg.locator('[data-slot="index-codes"]');
+      await box.locator('.note', { hasText: 'версия договора адаптера не подходит' }).waitFor();
+      assert.ok(/Настройки → «Обновления»/.test(await box.innerText()));
+      assert.deepStrictEqual(r.errors, []);
+      await r.ctx.close();
+    });
+    await t.test('действие упало: на экране причина, а не «индексов ещё нет»', async () => {
+      const r = await page(browser, server({ failed: true }), '/settings.html#indexes', 390);
+      const box = r.pg.locator('[data-slot="index-codes"]');
+      await box.locator('.note', { hasText: 'не успел прочитать условия' }).waitFor();
+      assert.ok(!/Индексов ещё нет/.test(await box.innerText()) && !/Индексы не получены/.test(await box.innerText()));
+      assert.ok(await box.locator('button', { hasText: 'Обновить' }).isEnabled());
+      assert.deepStrictEqual(r.errors, []);
+      await r.ctx.close();
+    });
+    await t.test('адаптер не ответил, но названия в загруженных условиях есть: таблица из монитора, выбор доступен', async () => {
+      const r = await page(browser, server({ store: true }), '/settings.html#indexes', 390);
+      const box = r.pg.locator('[data-slot="index-codes"]');
+      await box.locator('.note', { hasText: 'Адаптер ответил, что индексов нет' }).waitFor();
+      await box.locator('.ic-row', { hasText: 'IDX_FAKE_CNY_ON' }).waitFor();
+      assert.ok(/уже загруженных в монитор/.test(await box.innerText()));
+      assert.ok(await box.locator('button', { hasText: 'Сохранить' }).isEnabled());
       assert.deepStrictEqual(r.errors, []);
       await r.ctx.close();
     });

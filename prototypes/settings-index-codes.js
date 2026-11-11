@@ -115,13 +115,21 @@
         return { title: col.title, value: typeof v === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(v) ? T.dm(v) : T.n(v) };
       });
   };
-  // нужно ли запустить действие само: нет результата, файл настроек менялся после него, результат старый
+  // нужно ли запустить действие само: действие не запускалось, файл настроек менялся после результата, результат старый.
+  // Упавшее, отказавшееся или пустое действие само не повторяется (кнопка «Обновить»): иначе причина мигает и пропадает.
   T.needsRun = function (r, now) {
     if (!r || r.running) return false;
-    if (!r.choices) return true;
+    if (r.choices_source !== 'adapter') return !r.job;
     if (r.stale) return true;
     var at = r.job && (r.job.finished_at || r.job.started_at);
     return !at || (now || Date.now()) - new Date(at).getTime() > MAX_AGE_H * 3600 * 1000;
+  };
+  // что сказать вместо таблицы или над ней: {cls, text} по state, который отдаёт монитор (desk.index_choices); '' — нечего
+  T.stateNote = function (data) {
+    var st = data && data.state;
+    if (!st || !st.text) return null;
+    if (st.level === 'ok') return null;
+    return { cls: st.level === 'bad' ? 'err' : st.level === 'warn' ? 'warn' : '', text: st.text };
   };
   // ход «Сохранить и пересчитать»: {state: 'replay'|'recalc'|'done'|'fail', text}
   T.progress = function (replay, auto, savedAt) {
@@ -189,9 +197,11 @@
     el.textContent = '';
     if (!r) { el.append(h('p', { class: 'mut' }, 'Загружаю…')); return; }
     if (r.error) {
-      el.append(h('div', { class: 'note ' + (r.status === 404 ? 'warn' : 'err') }, r.status === 404
-        ? 'Адаптер не отдаёт индексы ставок для этого экрана: обновите адаптер (Настройки → Обновления). Пока такие сделки в мониторе «не оценено».'
-        : 'Не удалось загрузить: ' + r.error));
+      var why = r.status === 404 && r.state && r.state.text;
+      el.append(h('div', { class: 'note ' + (why ? (r.state.level === 'bad' ? 'err' : 'warn') : r.status === 404 ? 'warn' : 'err') },
+        why ? why + ' Пока такие сделки в мониторе «не оценено».'
+          : r.status === 404 ? 'Адаптер не отдаёт индексы ставок для этого экрана: обновите адаптер (Настройки → Обновления). Пока такие сделки в мониторе «не оценено».'
+            : 'Не удалось загрузить: ' + r.error));
       return;
     }
     var ch = r.choices, running = r.running;
@@ -209,10 +219,13 @@
           : 'Индексы ниже уже выбраны: нажмите «Перечитать отчёты за период» (Адаптер и источники), чтобы сделки пересчитались.')));
     }
     if (running && !ch) { el.append(h('p', { class: 'mut' }, 'Адаптер читает последние файлы условий сделок…')); return; }
+    var sn = T.stateNote(r);
     if (!ch) {
-      el.append(h('div', { class: 'note ' + (r.ok === false ? 'warn' : '') }, r.ok === false ? 'Индексы не получены: ' + (r.summary || []).join('; ') : 'Индексов ещё нет: нажмите «Обновить».'));
+      el.append(h('div', { class: 'note ' + (sn ? sn.cls : '') }, sn ? sn.text : 'Индексов ещё нет: нажмите «Обновить».'));
       return;
     }
+    if (sn && r.choices_source === 'store') el.append(h('div', { class: 'note ' + sn.cls }, sn.text));
+    if (r.choices_source === 'store') el.append(h('p', { class: 'hint', style: 'margin:0 0 10px' }, 'Список взят из условий сделок, уже загруженных в монитор.'));
     var rows = T.order(ch.rows || []);
     var nOpen = T.filter(ch, S.sel, rows, 'open').length;
     var nAttn = T.filter(ch, S.sel, rows, 'attention').length;
@@ -232,16 +245,18 @@
     (ch.notes || []).forEach(function (n) { el.append(h('p', { class: 'hint' }, n)); });
     var diff = T.changes(ch, S.sel), nd = Object.keys(diff).length;
     var bySuggest = Object.keys(diff).filter(function (k) { var x = (ch.rows || []).filter(function (y) { return y.key === k; })[0]; return x && x.value == null && diff[k] === x.suggested; }).length;
-    var save = h('button', { class: 'btn', type: 'button', disabled: S.saving || running || !ch.replay, onclick: saveAll }, 'Сохранить и пересчитать');
+    var save = h('button', { class: 'btn', type: 'button', disabled: S.saving || running || ch.read_only, onclick: saveAll }, ch.replay ? 'Сохранить и пересчитать' : 'Сохранить');
     var reset = h('button', { class: 'ibtn', type: 'button', disabled: S.saving || !nd, onclick: function () { S.sel = T.saved(ch); render(); } }, 'Вернуть сохранённое');
     var when = ch.replay ? T.dm(ch.replay.to) : '—';
-    el.append(h('div', { class: 'ic-bar' }, save, reset, h('span', { class: 'mut3' }, nd ? 'Будет записано: ' + T.names(nd) + (bySuggest ? ' (по подсказке — ' + bySuggest + ')' : '') + '; затем перечитаю условия за ' + when + ' и пересчитаю сделки.'
+    el.append(h('div', { class: 'ic-bar' }, save, reset, h('span', { class: 'mut3' }, ch.read_only ? 'Только просмотр: записать выбор отсюда нельзя.' : !ch.replay
+      ? (nd ? 'Будет записано: ' + T.names(nd) + '. Условия потом перечитайте кнопкой «Перечитать отчёты за период» (Адаптер и источники).' : 'Изменений нет.')
+      : nd ? 'Будет записано: ' + T.names(nd) + (bySuggest ? ' (по подсказке — ' + bySuggest + ')' : '') + '; затем перечитаю условия за ' + when + ' и пересчитаю сделки.'
       : 'Изменений нет. Кнопка всё равно перечитает условия за ' + when + ' и пересчитает сделки.')));
     el.append(S.steps = S.steps || h('div', { class: 'ic-steps', 'aria-live': 'polite' }));
   }
   function rowEl(ch, x) {
     var v = T.cur(S.sel, x);
-    var sel = h('select', { class: 'inp ic-sel', 'aria-label': 'Индекс хаба для «' + x.label + '»', disabled: S.saving, onchange: function () { S.sel[x.key] = this.value === '' ? null : this.value; render(); } },
+    var sel = h('select', { class: 'inp ic-sel', 'aria-label': 'Индекс хаба для «' + x.label + '»', disabled: S.saving || ch.read_only, onchange: function () { S.sel[x.key] = this.value === '' ? null : this.value; render(); } },
       (ch.options || []).map(function (o) {
         var t = o.title + (o.value != null && o.value === x.suggested ? ' — предложено' : '');
         return h('option', { value: o.value == null ? '' : o.value, selected: o.value === v }, t);
@@ -264,7 +279,7 @@
       render();
       if (r.running) poll();
       else if (autorun && T.needsRun(r)) runAction();
-    }, function (e) { S.data = { error: e.message, status: e.status }; render(); });
+    }, function (e) { S.data = { error: e.message, status: e.status, state: e.details && e.details.state }; render(); });
   }
   function runAction() {
     var id = S.data && S.data.action && S.data.action.id;
@@ -293,6 +308,10 @@
     S.api('POST', URL, { values: values, replay: true, base_sha256: ch.file_sha256 == null ? null : ch.file_sha256 }).then(function (res) {
       var rev = res.saved && res.saved.revision;
       if (S.toast) S.toast(res.changed ? 'Сохранено: ' + T.names(res.changed) + (rev ? ' · правка №' + rev.rev_id : '') : 'Соответствие не менялось', 'ok');
+      if (!ch.replay && !res.replay) {
+        S.saving = false; step('Соответствие сохранено. Чтобы условия обновились, нажмите «Перечитать отчёты за период» (Адаптер и источники).', 'ok');
+        S.sel = {}; load(false); return;
+      }
       if (!res.replay || !res.replay.started) {
         S.saving = false; step('Соответствие сохранено, но условия не перечитаны: ' + ((res.replay && res.replay.error) || 'адаптер не сказал, что перечитать') + '.', 'warn');
         load(false); return;

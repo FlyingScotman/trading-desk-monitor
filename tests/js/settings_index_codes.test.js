@@ -72,13 +72,31 @@ t('точка в меню: ноги по строкам без сохранён�
   assert.strictEqual(T.attention({ error: 'x' }).n, 0);
 });
 
-t('действие запускается само: нет результата, файл менялся, результат старый; не во время работы', () => {
+t('действие запускается само: не запускалось, файл менялся, результат старый; не во время работы', () => {
   const now = Date.parse('2026-11-05T12:00:00Z');
-  assert.strictEqual(T.needsRun({ choices: null }, now), true);
-  assert.strictEqual(T.needsRun({ choices: {}, stale: true, job: { finished_at: '2026-11-05T11:59:00Z' } }, now), true);
-  assert.strictEqual(T.needsRun({ choices: {}, stale: false, job: { finished_at: '2026-11-05T11:00:00Z' } }, now), false);
-  assert.strictEqual(T.needsRun({ choices: {}, stale: false, job: { finished_at: '2026-11-05T05:00:00Z' } }, now), true);
-  assert.strictEqual(T.needsRun({ choices: null, running: true }, now), false);
+  const ad = { choices_source: 'adapter', choices: {} };
+  assert.strictEqual(T.needsRun({ choices: null, job: null }, now), true);
+  assert.strictEqual(T.needsRun({ ...ad, stale: true, job: { finished_at: '2026-11-05T11:59:00Z' } }, now), true);
+  assert.strictEqual(T.needsRun({ ...ad, stale: false, job: { finished_at: '2026-11-05T11:00:00Z' } }, now), false);
+  assert.strictEqual(T.needsRun({ ...ad, stale: false, job: { finished_at: '2026-11-05T05:00:00Z' } }, now), true);
+  assert.strictEqual(T.needsRun({ choices: null, job: null, running: true }, now), false);
+});
+
+t('упавшее или отказавшееся действие само не повторяется: причина не мигает (TDM#651)', () => {
+  const now = Date.parse('2026-11-05T12:00:00Z');
+  const failed = { state: 'failed', error_code: 'timeout', finished_at: '2026-11-05T11:59:00Z' };
+  assert.strictEqual(T.needsRun({ choices: null, choices_source: null, job: failed }, now), false);
+  assert.strictEqual(T.needsRun({ choices: { rows: [] }, choices_source: 'store', job: failed }, now), false);
+  assert.strictEqual(T.needsRun({ choices: { rows: [] }, choices_source: 'store', job: null }, now), true);
+});
+
+t('причина вместо общего сообщения: stateNote по состоянию монитора (TDM#651)', () => {
+  assert.strictEqual(T.stateNote(null), null);
+  assert.strictEqual(T.stateNote({ state: { code: 'ok', level: 'ok', text: '' } }), null);
+  assert.deepStrictEqual(plain(T.stateNote({ state: { code: 'job_timeout', level: 'bad', text: 'Адаптер не дал индексы: тайм-аут.' } })),
+    { cls: 'err', text: 'Адаптер не дал индексы: тайм-аут.' });
+  assert.deepStrictEqual(plain(T.stateNote({ state: { code: 'adapter_empty', level: 'warn', text: 'пусто' } })), { cls: 'warn', text: 'пусто' });
+  assert.deepStrictEqual(plain(T.stateNote({ state: { code: 'never_run', level: 'info', text: 'нажмите' } })), { cls: '', text: 'нажмите' });
 });
 
 t('ход «Сохранить и пересчитать»: ожидание скана, перечитывание, пересчёт, итог', () => {
