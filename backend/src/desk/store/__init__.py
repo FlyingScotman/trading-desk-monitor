@@ -965,7 +965,9 @@ def spread_values(con: psycopg.Connection, pairs: list[tuple[int, str]]) -> dict
         "  WHERE p.run_id = ANY(%(ids)s::bigint[]) AND p.quality IN ('exact', 'assumed')"
         "  AND jsonb_typeof(p.fact->'spread_bp') = 'number'"
         ") x ORDER BY run_id, secid, pri",
-        {"r": [r for r, _ in pairs], "s": [s for _, s in pairs], "ids": sorted({r for r, _ in pairs})}).fetchall()
+        {"r": [r for r, _ in pairs], "s": [s for _, s in pairs], "ids": sorted({r for r, _ in pairs})},
+        prepare=False).fetchall()  # no server-side prepared plan: after five runs on one connection psycopg switches
+    # to the generic plan, which reads the whole table for these arrays (30 times slower, TDM#660)
     out: dict[tuple[int, str], float] = {}
     seen: set[tuple[int, str]] = set()
     for rid, secid, z in rows:

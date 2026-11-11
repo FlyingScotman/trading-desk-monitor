@@ -140,7 +140,7 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import urlsplit
 
-from . import funding_settings
+from . import fsretry, funding_settings
 from .inbox.runner import is_path_spec
 from .inbox.schema import parse_ccy_aliases, set_ccy_aliases
 from .updater import adapter_store
@@ -911,9 +911,12 @@ def env_overrides(environ: dict[str, str] | None = None) -> list[str]:
 # ---- writing -------------------------------------------------------------------------------------------------
 
 
-def atomic_write_text(path: Path, text: str, *, private: bool = False) -> Path:
+def atomic_write_text(path: Path, text: str, *, private: bool = False, replace_wait_s: float = fsretry.REPLACE_WAIT_S) -> Path:
     """UTF-8 text via a temporary file in the same folder and ``os.replace``: readers never see half a file.
-    ``private``: mode 0600 on POSIX (on Windows the per-user profile folder already restricts access)."""
+    ``private``: mode 0600 on POSIX (on Windows the per-user profile folder already restricts access).
+    On Windows a file that someone has open for reading cannot be replaced for a moment (``PermissionError``
+    WinError 5/32): the replace is tried again for ``replace_wait_s`` (``desk.fsretry``; 0: once, the caller retries);
+    when it still fails, the temporary file is removed and the error is raised, the old file stays."""
     path.parent.mkdir(parents=True, exist_ok=True)
     fd, tmp = tempfile.mkstemp(prefix=f".{path.name}.", suffix=".tmp", dir=path.parent)
     try:
@@ -923,7 +926,7 @@ def atomic_write_text(path: Path, text: str, *, private: bool = False) -> Path:
             f.write(text)
             f.flush()
             os.fsync(f.fileno())
-        os.replace(tmp, path)
+        fsretry.replace(tmp, path, replace_wait_s)
     except BaseException:
         try:
             os.unlink(tmp)

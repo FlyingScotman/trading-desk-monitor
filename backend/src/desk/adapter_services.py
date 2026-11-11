@@ -96,7 +96,7 @@ from datetime import time as dtime
 from pathlib import Path
 from typing import Any
 
-from . import backfill, helper_proc, recompute, store, terms_plan, trades_history
+from . import backfill, fsretry, helper_proc, recompute, store, terms_plan, trades_history
 from .autopilot import CycleLock
 from .inbox import scan
 from .inbox.loader import AdapterHandle, check_services, fingerprint, load_adapter
@@ -139,6 +139,14 @@ class ServiceError(Exception):
     def __init__(self, code: str, state: str = "blocked"):
         super().__init__(code)
         self.code, self.state = code, state
+
+
+class StateUnavailable(ServiceError):
+    """The services' state file is in use by something else and could not be read or written within a couple of
+    seconds (Windows: an open reader blocks the replace). The owner sees «Повторите позже», not a server error."""
+
+    def __init__(self) -> None:
+        super().__init__("state_unavailable")
 
 
 class Invalid(Exception):
@@ -482,23 +490,48 @@ def state_dir(st: Settings) -> Path:
     return Path(st.home) / "adapter-services"
 
 
-def read_state(st: Settings) -> dict:
-    try:
-        doc = json.loads((state_dir(st) / STATE_FILE).read_text(encoding="utf-8"))
-        if isinstance(doc, dict) and doc.get("version") == VERSION:
-            return doc
-    except (OSError, ValueError):
-        pass
+def _empty_state() -> dict:
     return {"version": VERSION, "fingerprint": None, "described_at": None, "panel": None, "feeds": [],
             "enabled": {}, "runs": {}}
 
 
+def read_state(st: Settings) -> dict:
+    """The persisted state. An empty document only when there is no file yet, or the file is not a document of this
+    version (a new version, a damaged file: the next write replaces it). A file that cannot be read now (on Windows:
+    another reader or an antivirus holds it; tried again for ``fsretry.REPLACE_WAIT_S``) is never taken for an empty
+    one: the callers write the document back, so an empty one would wipe the list of services, the switches and the
+    history of runs. It raises ``StateUnavailable`` instead."""
+    path = state_dir(st) / STATE_FILE
+    try:
+        text = fsretry.retry(lambda: path.read_text(encoding="utf-8"), fsretry.REPLACE_WAIT_S)
+    except FileNotFoundError:
+        return _empty_state()
+    except OSError as e:
+        log.warning("adapter services: the state is not readable: %s", type(e).__name__)
+        raise StateUnavailable() from e
+    try:
+        doc = json.loads(text)
+    except ValueError:
+        return _empty_state()
+    return doc if isinstance(doc, dict) and doc.get("version") == VERSION else _empty_state()
+
+
 def write_state(st: Settings, doc: dict) -> None:
+    """The state through a temporary file and ``os.replace``, which is tried again while a reader holds the file
+    (``fsretry``). When it still fails: ``StateUnavailable``, the old file stays, no temporary file is left."""
     d = state_dir(st)
-    d.mkdir(parents=True, exist_ok=True)
     tmp = d / (STATE_FILE + ".tmp")
-    tmp.write_text(json.dumps(doc, ensure_ascii=False, default=str), encoding="utf-8")
-    os.replace(tmp, d / STATE_FILE)
+    try:
+        d.mkdir(parents=True, exist_ok=True)
+        tmp.write_text(json.dumps(doc, ensure_ascii=False, default=str), encoding="utf-8")
+        fsretry.replace(tmp, d / STATE_FILE)
+    except OSError as e:
+        try:
+            tmp.unlink(missing_ok=True)
+        except OSError:
+            pass
+        log.warning("adapter services: the state is not written: %s", type(e).__name__)
+        raise StateUnavailable() from e
 
 
 def _enabled(doc: dict, feed: dict) -> bool:

@@ -106,7 +106,7 @@ from typing import Any
 
 import psycopg
 
-from . import logic_version, store, trades
+from . import fsretry, logic_version, store, trades
 from .marketdata import cache
 from .marketdata.bundle import SnapshotDir, previous_close
 from .marketdata.hub import HubError, TransportError
@@ -226,20 +226,25 @@ def reason_key(why: str | None) -> str:
 
 
 def state(settings: Settings) -> dict[str, Any]:
-    try:
-        return json.loads((Path(settings.home) / STATE_FILE).read_text(encoding="utf-8"))
+    path = Path(settings.home) / STATE_FILE
+    try:  # on Windows the file may be held for a moment by the writer's replace or a reader: tried again
+        return json.loads(fsretry.retry(lambda: path.read_text(encoding="utf-8"), fsretry.REPLACE_WAIT_S))
     except (OSError, ValueError):
         return {}
 
 
 def save_state(settings: Settings, st: dict[str, Any]) -> None:
     path = Path(settings.home) / STATE_FILE
+    tmp = path.with_suffix(".part")
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
-        tmp = path.with_suffix(".part")
         tmp.write_text(json.dumps(st, indent=1, ensure_ascii=False), encoding="utf-8")
-        tmp.replace(path)
+        fsretry.replace(tmp, path)  # again while a reader holds the file (Windows), up to 2 s
     except OSError as e:
+        try:
+            tmp.unlink(missing_ok=True)
+        except OSError:
+            pass
         log.warning("backfill: state not saved: %s", e)
 
 

@@ -46,7 +46,6 @@ time of the last request (``Service._feed_due_soon``).
 from __future__ import annotations
 
 import json
-import os
 from datetime import date, datetime, timedelta
 from datetime import time as dtime
 from pathlib import Path
@@ -54,7 +53,7 @@ from typing import Any
 
 import psycopg
 
-from . import backfill, store
+from . import backfill, fsretry, store
 from .autopilot import PRELIM_FROM, in_trading_hours
 from .inbox.timesem import MSK
 from .settings import Settings
@@ -91,7 +90,8 @@ def blank() -> dict:
 
 def read(st: Settings) -> dict:
     try:
-        doc = json.loads(path(st).read_text(encoding="utf-8"))
+        p = path(st)
+        doc = json.loads(fsretry.retry(lambda: p.read_text(encoding="utf-8"), fsretry.REPLACE_WAIT_S))
         if isinstance(doc, dict) and doc.get("version") == VERSION and isinstance(doc.get("marks"), dict):
             return {**blank(), **doc}
     except (OSError, ValueError):
@@ -104,8 +104,12 @@ def write(st: Settings, doc: dict) -> None:
     p = path(st)
     p.parent.mkdir(parents=True, exist_ok=True)
     tmp = p.with_name(FILE + ".tmp")
-    tmp.write_text(json.dumps(doc, ensure_ascii=False, default=str), encoding="utf-8")
-    os.replace(tmp, p)
+    try:
+        tmp.write_text(json.dumps(doc, ensure_ascii=False, default=str), encoding="utf-8")
+        fsretry.replace(tmp, p)  # again while a reader holds the file (Windows), up to 2 s
+    except OSError:
+        tmp.unlink(missing_ok=True)
+        raise
 
 
 def _ts(v: Any) -> datetime | None:

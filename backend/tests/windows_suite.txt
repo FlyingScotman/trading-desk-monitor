@@ -43,6 +43,7 @@ tests/test_inbox_p1.py
 tests/test_inbox_r22.py
 tests/test_adapter_tools.py
 tests/test_adapter_services.py
+tests/test_state_files_busy.py
 tests/test_index_codes_choices.py
 tests/test_index_choices_651.py
 tests/test_ocp_types_e2e.py
