@@ -16,7 +16,8 @@ Dev only (needs the ``dev`` extra: pgserver, an embedded PostgreSQL). Builds in 
 
 Then it serves the API on 127.0.0.1 and times each data request twice (cold: the first after start; warm: the next,
 ETag-less) with its size, raw and gzip, and prints them as JSON. ``--serve PORT`` keeps serving on PORT afterwards
-(for ``prototypes/concepts/tools/tti.js``); Ctrl+C stops it. Run it on an older checkout (``PYTHONPATH`` to that
+(for ``prototypes/concepts/tools/tti.js``); Ctrl+C stops it. ``--run-api`` also times the per-run API (positions, risk,
+risk-table, pnl, aggregates, ...) of the newest run: first answer, repeats, and the conditional request with the ETag (TDM#631). Run it on an older checkout (``PYTHONPATH`` to that
 checkout's ``backend/src``) for the numbers before a change. Synthetic data only.
 """
 
@@ -32,6 +33,7 @@ import sys
 import tempfile
 import threading
 import time
+import urllib.error
 import urllib.request
 from datetime import date, timedelta
 from pathlib import Path
@@ -226,6 +228,49 @@ def fetch(url: str, gz: bool = True) -> tuple[float, int, int, int]:
     return dt, len(raw), len(body), st
 
 
+def fetch_tagged(url: str, etag: str | None = None) -> tuple[float, int, int, int, str | None]:
+    """``fetch`` with the ETag in and out: (seconds, raw bytes, wire bytes, status, ETag); a 304 has no body."""
+    headers = {"Accept-Encoding": "gzip", **({"If-None-Match": etag} if etag else {})}
+    t0 = time.perf_counter()
+    try:
+        with urllib.request.urlopen(urllib.request.Request(url, headers=headers), timeout=600) as r:
+            body, enc, st, tag = r.read(), r.headers.get("Content-Encoding"), r.status, r.headers.get("ETag")
+    except urllib.error.HTTPError as e:
+        if e.code != 304:
+            raise
+        body, enc, st, tag = b"", None, 304, e.headers.get("ETag")
+    dt = time.perf_counter() - t0
+    raw = gzip.decompress(body) if enc == "gzip" and body else body
+    return dt, len(raw), len(body), st, tag
+
+
+RUN_ROUTES = (("positions", "/positions"), ("risk", "/risk"), ("pnl", "/pnl"), ("risk-table", "/risk-table"),
+              ("aggregates book", "/aggregates?dims=book"), ("aggregates book,instr_type", "/aggregates?dims=book,instr_kind"),
+              ("funding", "/funding"), ("ocp", "/ocp"), ("derivatives", "/derivatives"), ("run detail", ""),
+              ("scenario-results", "/scenario-results"))
+
+
+def run_api(base: str, rid: int, repeat: int = 3) -> dict:
+    """The per-run API (``/api/v1/runs/{id}/...``) of one run: each route ``repeat`` times, then once with the ETag of the
+    last answer (what a browser does): seconds, raw and gzip kilobytes, status. TDM#631: the first answer builds the
+    body, the next ones should come from the cache and the conditional one should be a 304."""
+    out = {}
+    for name, tail in RUN_ROUTES:
+        url = f"{base}/api/v1/runs/{rid}{tail}"
+        res, tag = [], None
+        try:
+            for _ in range(repeat):
+                dt, raw, wire, status, tag = fetch_tagged(url)
+                res.append({"s": round(dt, 3), "kb": raw // 1024, "gzip_kb": wire // 1024, "status": status})
+            dt, _, _, status, _ = fetch_tagged(url, tag)
+            cond = {"s": round(dt, 3), "status": status}
+        except Exception as e:  # noqa: BLE001 - a route the older code lacks
+            out[name] = {"error": str(e)[:80]}
+            continue
+        out[name] = {"first": res[0], "repeat": res[1:], "conditional": cond}
+    return out
+
+
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--positions", type=int, default=600)
@@ -234,6 +279,7 @@ def main() -> int:
     ap.add_argument("--bonds", type=int, default=3000)
     ap.add_argument("--static", type=int, default=4500)
     ap.add_argument("--serve", type=int, default=0)
+    ap.add_argument("--run-api", action="store_true", help="also time the per-run API of the newest run (TDM#631)")
     ap.add_argument("--profile", action="store_true", help="profile the history and extras builds, then stop")
     a = ap.parse_args()
     import pgserver
@@ -293,6 +339,10 @@ def main() -> int:
                     break
                 res.append({"s": round(dt, 3), "kb": raw // 1024, "gzip_kb": wire // 1024, "status": status})
             out["requests"][name] = {"cold": res[0], "warm": res[1] if len(res) > 1 else None}
+        if a.run_api:
+            with store.connect(url) as con:
+                newest = con.execute("SELECT max(run_id) FROM run WHERE status = 'complete'").fetchone()[0]
+            out["run_api"] = run_api(base, newest)
         try:  # R23: serve builds the newest run's bodies ahead (a new run invalidates the cache)
             from desk.api.app import BodyCache, warm_bodies
 

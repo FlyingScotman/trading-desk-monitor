@@ -37,6 +37,7 @@ from .. import __version__, lan
 from ..marketdata import history
 from ..publish import ocp_run
 from ..publish.funding_run import NOT_COMPUTED, REPORTING_CCY, STATUS_TEXT
+from ..run_cache import RunBodyCache
 from ..scenario import carry, jobs
 from ..scenario.definition import definition_hash, normalize
 from ..scenario.fx_ocp import fx_ocp
@@ -230,6 +231,25 @@ def _cached(request: Request, run: dict[str, Any], model) -> Response:
     return Response(body, media_type="application/json", headers=headers)
 
 
+def _run_cached(request: Request, run: dict[str, Any], key: tuple, build: Callable[[], Any],
+                extra: Any = None) -> Response:
+    """The per-run answers that are big and never change (TDM#631, ``desk.run_cache``): ``build()`` makes the model (a read
+    of the run's rows, the validation, the JSON) once per ``key`` (a route and its parameters, the run id after the name)
+    and per ``extra`` (what else the body depends on); the body, its gzip and its ETag are kept, a repeat is a memory read
+    and the browser's ``If-None-Match`` a 304. A run that is not complete is built fresh each time."""
+    if run["status"] != "complete":
+        return Response(build().model_dump_json().encode(), media_type="application/json")
+    key = (key[0], run["run_id"], *key[1:])
+    entry = request.app.state.run_cache.get_or_build(key, (run["status"], str(run["completed_at"]), extra),
+                                                     lambda: build().model_dump_json().encode())
+    headers = {"ETag": entry.etag, "Cache-Control": "no-cache", "Vary": "Accept-Encoding"}
+    if entry.etag in [t.strip() for t in request.headers.get("if-none-match", "").split(",")]:
+        return Response(status_code=304, headers=headers)
+    if "gzip" in request.headers.get("accept-encoding", ""):
+        return Response(entry.gz, media_type="application/json", headers={**headers, "Content-Encoding": "gzip"})
+    return Response(entry.body, media_type="application/json", headers=headers)
+
+
 def _trade_sources() -> tuple[list[dict[str, Any]], dict[str, set[str]] | None]:
     """For the card's «Откуда данные» (TDM#617): the adapter services' feeds as the adapter titled them
     (``adapter_services.read_state``) and the marks of the fetch of past dates (``trades.history_files``); none when
@@ -285,13 +305,16 @@ def warm_bodies(app: FastAPI, summaries: bool = True) -> list[str]:
     """Build the pages' bodies of the newest run shown (``/desk-data.js``, ``/api/v1/concepts/run`` and
     ``/concepts-run.js`` made of it, ``/concepts-data.js``, every position's history, the market calendar) into the
     cache when the store changed since they were built, so that the first page load after a new run finds them ready
-    (``serve`` runs it every ``WARM_S``). ``summaries=False``: the runs' summaries are still being rebuilt
+    (``serve`` runs it every ``WARM_S``; it also drops the per-run API's bodies of runs that are gone, ``run_cache``).
+    ``summaries=False``: the runs' summaries are still being rebuilt
     (``prewarm_summaries``), the bodies that read them (``/concepts-data.js``, the history) wait for it.
     Returns the bodies built."""
     cache: BodyCache = app.state.body_cache
     built = []
     with psycopg.connect(app.state.store_url, row_factory=dict_row, autocommit=True, connect_timeout=5,
                          options="-c default_transaction_read_only=on") as con:
+        # the per-run API's finished bodies of a run another process deleted (a prune by the CLI) are dropped (TDM#631)
+        app.state.run_cache.retain([r["run_id"] for r in con.execute("SELECT run_id FROM run")])
         run = resolve_run(con)
         if run is None:
             return built
@@ -544,6 +567,7 @@ def create_app(store_url: str, static_dir: Path | None = None, app_dir: Path | N
     app.state.instance = uuid.uuid4().hex[:16]  # /health/live's X-Desk-Instance: the LAN self-check knows its server
     app.state.lan_probe = None  # desk.lan.probe_all once serve has started (the settings page's «Сеть»)
     app.state.body_cache = BodyCache()
+    app.state.run_cache = RunBodyCache()  # the per-run API's finished bodies (TDM#631)
     app.state.carry_cache = BodyCache(carry.CACHE_SIZE)  # the forward carry's bodies (TDM#66), apart from the pages'
     app.state.carry_ctx = {}  # the runs' contexts the forward carry rebuilt (scenario.exact._context)
     app.state.auth = auth or authn.AuthConfig()
@@ -659,45 +683,59 @@ def create_app(store_url: str, static_dir: Path | None = None, app_dir: Path | N
     def positions(con: Con, run_id: int, request: Request, book: str | None = None,
                   quality: str | None = Query(None, description="exact, assumed, market_value, ...")):
         run = _run_or_404(con, run_id)
-        sql = ("SELECT p.*, a.alias FROM run_position p"  # the alias in force now (alias_routes), not frozen
-               " LEFT JOIN instrument_alias a ON a.isin = p.fact->>'isin' WHERE p.run_id = %s")
-        args: list[Any] = [run_id]
-        for col, v in (("book_id", book), ("quality", quality)):
-            if v is not None:
-                sql += f" AND p.{col} = %s"
-                args.append(v)
-        rows = con.execute(sql + " ORDER BY ord", args).fetchall()  # whole: a book is <= 2k positions
-        return _cached(request, run, PositionList(run_id=run_id, positions=[Position(**r) for r in rows]))
+
+        def build() -> PositionList:
+            sql = ("SELECT p.*, a.alias FROM run_position p"  # the alias in force now (alias_routes), not frozen
+                   " LEFT JOIN instrument_alias a ON a.isin = p.fact->>'isin' WHERE p.run_id = %s")
+            args: list[Any] = [run_id]
+            for col, v in (("book_id", book), ("quality", quality)):
+                if v is not None:
+                    sql += f" AND p.{col} = %s"
+                    args.append(v)
+            rows = con.execute(sql + " ORDER BY ord", args).fetchall()  # whole: a book is <= 2k positions
+            return PositionList(run_id=run_id, positions=[Position(**r) for r in rows])
+
+        # the aliases are joined at read time: the revision of the newest one is part of what the body depends on
+        alias_rev = con.execute("SELECT coalesce(max(rev_id), 0) AS r FROM instrument_alias_rev").fetchone()["r"] \
+            if run["status"] == "complete" else None
+        return _run_cached(request, run, ("positions", book, quality), build, alias_rev)
 
     @app.get("/api/v1/runs/{run_id}/pnl", response_model=RunPnl)
     def pnl(con: Con, run_id: int, request: Request):
         run = _run_or_404(con, run_id)
-        rows = con.execute("SELECT position_id, book_id, pnl, no_pnl FROM run_position WHERE run_id = %s"
-                           " AND quality IS NOT NULL ORDER BY ord", (run_id,)).fetchall()
-        out, totals = [], {}
-        for r in rows:
-            comp = {k: v for k, v in r["pnl"].items() if k != "extra"} if r["pnl"] else None
-            out.append(PositionPnl(position_id=r["position_id"], book_id=r["book_id"], components=comp,
-                                   total=_total(comp), extra=(r["pnl"] or {}).get("extra"),
-                                   no_pnl=r["no_pnl"]))
-            for key in (r["book_id"], "_total"):
-                t = totals.setdefault(key, {**dict.fromkeys((*PNL_KEYS, "total")), "n_positions": 0, "n_pnl": 0})
-                t["n_positions"] += 1
-                if comp:  # sums stay null, not 0, while no position of the key has a PnL
-                    t["n_pnl"] += 1
-                    for k, x in {**{k: comp.get(k) or 0.0 for k in PNL_KEYS}, "total": _total(comp)}.items():
-                        t[k] = (t[k] or 0.0) + x
-        return _cached(request, run, RunPnl(run_id=run_id, positions=out,
-                                            totals={k: PnlSums(**v) for k, v in totals.items()}))
+
+        def build() -> RunPnl:
+            rows = con.execute("SELECT position_id, book_id, pnl, no_pnl FROM run_position WHERE run_id = %s"
+                               " AND quality IS NOT NULL ORDER BY ord", (run_id,)).fetchall()
+            out, totals = [], {}
+            for r in rows:
+                comp = {k: v for k, v in r["pnl"].items() if k != "extra"} if r["pnl"] else None
+                out.append(PositionPnl(position_id=r["position_id"], book_id=r["book_id"], components=comp,
+                                       total=_total(comp), extra=(r["pnl"] or {}).get("extra"),
+                                       no_pnl=r["no_pnl"]))
+                for key in (r["book_id"], "_total"):
+                    t = totals.setdefault(key, {**dict.fromkeys((*PNL_KEYS, "total")), "n_positions": 0, "n_pnl": 0})
+                    t["n_positions"] += 1
+                    if comp:  # sums stay null, not 0, while no position of the key has a PnL
+                        t["n_pnl"] += 1
+                        for k, x in {**{k: comp.get(k) or 0.0 for k in PNL_KEYS}, "total": _total(comp)}.items():
+                            t[k] = (t[k] or 0.0) + x
+            return RunPnl(run_id=run_id, positions=out, totals={k: PnlSums(**v) for k, v in totals.items()})
+
+        return _run_cached(request, run, ("pnl",), build)
 
     @app.get("/api/v1/runs/{run_id}/funding", response_model=RunFunding)
     def funding(con: Con, run_id: int, request: Request):
         """The run's funding (B1): by book (with the write-off) and entity, its lines and problems; state
         ``not_configured`` when the adapter gave no funding rules, ``not_computed`` for a run before B1."""
         run = _run_or_404(con, run_id)
-        row = con.execute("SELECT data FROM run_reference WHERE run_id = %s AND kind = 'funding'",
-                          (run_id,)).fetchone()
-        return _cached(request, run, funding_out(run_id, row["data"] if row else None))
+
+        def build() -> RunFunding:
+            row = con.execute("SELECT data FROM run_reference WHERE run_id = %s AND kind = 'funding'",
+                              (run_id,)).fetchone()
+            return funding_out(run_id, row["data"] if row else None)
+
+        return _run_cached(request, run, ("funding",), build)
 
     @app.get("/api/v1/runs/{run_id}/ocp", response_model=RunOcp)
     def ocp(con: Con, run_id: int, request: Request):
@@ -712,22 +750,30 @@ def create_app(store_url: str, static_dir: Path | None = None, app_dir: Path | N
         and the transfers per book; state ``no_report`` without a report in force, ``not_computed`` for a run before
         B2."""
         run = _run_or_404(con, run_id)
-        row = con.execute("SELECT data FROM run_reference WHERE run_id = %s AND kind = 'ocp'", (run_id,)).fetchone()
-        return _cached(request, run, ocp_out(run_id, row["data"] if row else None))
+
+        def build() -> RunOcp:
+            row = con.execute("SELECT data FROM run_reference WHERE run_id = %s AND kind = 'ocp'",
+                              (run_id,)).fetchone()
+            return ocp_out(run_id, row["data"] if row else None)
+
+        return _run_cached(request, run, ("ocp",), build)
 
     @app.get("/api/v1/runs/{run_id}/derivatives", response_model=RunDerivatives)
     def derivatives(con: Con, run_id: int, request: Request):
         """Derivatives computed by core from their terms next to the report's PV, per position, book and product
         (``publish.derivatives_parallel``); state ``not_computed`` for a run before the block."""
         run = _run_or_404(con, run_id)
-        row = con.execute("SELECT data FROM run_reference WHERE run_id = %s AND kind = 'derivatives_parallel'",
-                          (run_id,)).fetchone()
-        b = row["data"] if row else None
-        out = RunDerivatives(run_id=run_id, state="computed" if b else "not_computed",
-                             tolerance=(b or {}).get("tolerance"), totals=(b or {}).get("totals"),
-                             by_book=(b or {}).get("by_book") or {}, by_product=(b or {}).get("by_product") or {},
-                             reasons=(b or {}).get("reasons") or {}, rows=(b or {}).get("rows") or [])
-        return _cached(request, run, out)
+
+        def build() -> RunDerivatives:
+            row = con.execute("SELECT data FROM run_reference WHERE run_id = %s AND kind = 'derivatives_parallel'",
+                              (run_id,)).fetchone()
+            b = row["data"] if row else None
+            return RunDerivatives(run_id=run_id, state="computed" if b else "not_computed",
+                                  tolerance=(b or {}).get("tolerance"), totals=(b or {}).get("totals"),
+                                  by_book=(b or {}).get("by_book") or {}, by_product=(b or {}).get("by_product") or {},
+                                  reasons=(b or {}).get("reasons") or {}, rows=(b or {}).get("rows") or [])
+
+        return _run_cached(request, run, ("derivatives",), build)
 
     @app.get("/api/v1/runs/{run_id}/aggregates", response_model=Aggregates)
     def aggregates(con: Con, run_id: int, request: Request,
@@ -739,26 +785,30 @@ def create_app(store_url: str, static_dir: Path | None = None, app_dir: Path | N
                            {"allowed": [*DIMS, *PY_DIMS]})
         names = list(dict.fromkeys(names))
         run = _run_or_404(con, run_id)
-        cols = [DIMS[d] for d in names if d in DIMS]  # whitelisted: safe to format into the SQL
-        sums = ", ".join(f"sum((pnl->>'{k}')::float8) AS {k}" for k in PNL_KEYS)
-        if any(d in PY_DIMS for d in names):
-            rows = _py_grouped(con, run_id, names, cols)
-        else:
-            rows = con.execute(
-                f"SELECT {', '.join(f'{c} AS k{i}' for i, c in enumerate(cols))}, count(*) AS n_positions,"
-                f" count(fact) AS n_valued, count(pnl) AS n_pnl, sum(pv_rub) AS pv_rub,"
-                f" sum(dv01_rub) AS dv01_rub, sum(cs01_rub) AS cs01_rub, {sums}"
-                f" FROM run_position WHERE run_id = %s"
-                f" GROUP BY {', '.join(cols)} ORDER BY {', '.join(cols)}", (run_id,)).fetchall()
-        out = []
-        for r in rows:
-            p = {k: r[k] for k in PNL_KEYS}
-            have = [v for v in p.values() if v is not None]
-            out.append(AggregateRow(key={d: r[f"k{i}"] for i, d in enumerate(names)},
-                                    **{k: r[k] for k in ("n_positions", "n_valued", "n_pnl", "pv_rub",
-                                                         "dv01_rub", "cs01_rub")},
-                                    pnl=p | {"total": sum(have) if have else None}))
-        return _cached(request, run, Aggregates(run_id=run_id, dims=names, rows=out))
+
+        def build() -> Aggregates:
+            cols = [DIMS[d] for d in names if d in DIMS]  # whitelisted: safe to format into the SQL
+            sums = ", ".join(f"sum((pnl->>'{k}')::float8) AS {k}" for k in PNL_KEYS)
+            if any(d in PY_DIMS for d in names):
+                rows = _py_grouped(con, run_id, names, cols)
+            else:
+                rows = con.execute(
+                    f"SELECT {', '.join(f'{c} AS k{i}' for i, c in enumerate(cols))}, count(*) AS n_positions,"
+                    f" count(fact) AS n_valued, count(pnl) AS n_pnl, sum(pv_rub) AS pv_rub,"
+                    f" sum(dv01_rub) AS dv01_rub, sum(cs01_rub) AS cs01_rub, {sums}"
+                    f" FROM run_position WHERE run_id = %s"
+                    f" GROUP BY {', '.join(cols)} ORDER BY {', '.join(cols)}", (run_id,)).fetchall()
+            out = []
+            for r in rows:
+                p = {k: r[k] for k in PNL_KEYS}
+                have = [v for v in p.values() if v is not None]
+                out.append(AggregateRow(key={d: r[f"k{i}"] for i, d in enumerate(names)},
+                                        **{k: r[k] for k in ("n_positions", "n_valued", "n_pnl", "pv_rub",
+                                                             "dv01_rub", "cs01_rub")},
+                                        pnl=p | {"total": sum(have) if have else None}))
+            return Aggregates(run_id=run_id, dims=names, rows=out)
+
+        return _run_cached(request, run, ("aggregates", tuple(names)), build)
 
     @app.get("/api/v1/runs/{run_id}/risk-table", response_model=RiskTable)
     def risk_table(con: Con, run_id: int, request: Request,
@@ -775,22 +825,29 @@ def create_app(store_url: str, static_dir: Path | None = None, app_dir: Path | N
         """Aggregated risk as a matrix: currencies x instrument types (UI-02, R38; ``concepts.risk_table``)."""
         run = _run_or_404(con, run_id)
         books = [b.strip() for b in book.split(",") if b.strip()] if book else None
-        items, fx = concepts.risk_items(con, run, books)
-        gov = concepts.gov_issuers(con, run_id)
-        return _cached(request, run, RiskTable(run_id=run_id,
-                                               **concepts.risk_table(items, fx, attribution, gov, ofz_view)))
+
+        def build() -> RiskTable:
+            items, fx = concepts.risk_items(con, run, books)
+            gov = concepts.gov_issuers(con, run_id)
+            return RiskTable(run_id=run_id, **concepts.risk_table(items, fx, attribution, gov, ofz_view))
+
+        return _run_cached(request, run, ("risk-table", attribution, tuple(books or ()), ofz_view), build)
 
     @app.get("/api/v1/runs/{run_id}/risk", response_model=RiskPayload)
     def risk(con: Con, run_id: int, request: Request):
         run = _run_or_404(con, run_id)
-        rows = con.execute("SELECT * FROM run_position WHERE run_id = %s AND fact IS NOT NULL ORDER BY ord",
-                           (run_id,)).fetchall()
-        ref = {r["kind"]: r["data"] for r in con.execute("SELECT kind, data FROM run_reference WHERE run_id = %s",
-                                                         (run_id,))}
-        payload = risk_payload(run, rows, ref)
-        payload["ocp"] = fx_ocp(concepts_run.ocp_status(ref.get("ocp")), payload, rows,
-                             ((ref.get("ocp") or {}).get("policy") or {}).get("amount_basis"))  # TDM#577
-        return _cached(request, run, RiskPayload(**payload))
+
+        def build() -> RiskPayload:
+            rows = con.execute("SELECT * FROM run_position WHERE run_id = %s AND fact IS NOT NULL ORDER BY ord",
+                               (run_id,)).fetchall()
+            ref = {r["kind"]: r["data"] for r in con.execute("SELECT kind, data FROM run_reference WHERE run_id = %s",
+                                                             (run_id,))}
+            payload = risk_payload(run, rows, ref)
+            payload["ocp"] = fx_ocp(concepts_run.ocp_status(ref.get("ocp")), payload, rows,
+                                    ((ref.get("ocp") or {}).get("policy") or {}).get("amount_basis"))  # TDM#577
+            return RiskPayload(**payload)
+
+        return _run_cached(request, run, ("risk",), build)
 
     # ---- bonds
     @app.get("/api/v1/bonds/history", response_model=BondHistory)

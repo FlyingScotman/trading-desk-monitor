@@ -90,7 +90,7 @@ def read_pidfile(pgdata: Path) -> Pid | None:
 
 def is_postgres(pid: int, pgdata: Path) -> bool | None:
     """Is process ``pid`` a postgres of this data directory: True, False (gone, or another program that got the pid),
-    None (cannot tell: no psutil, access denied)."""
+    None (cannot tell: no psutil, access denied, a postgres whose folder is not this one by name)."""
     try:
         import psutil
     except ImportError:
@@ -105,7 +105,10 @@ def is_postgres(pid: int, pgdata: Path) -> bool | None:
             cwd = p.cwd()  # a postmaster works in its data directory
         except (psutil.AccessDenied, OSError):
             return True
-        return Path(cwd).resolve() == pgdata.resolve() or str(pgdata) in " ".join(p.cmdline())
+        # the same folder under another spelling (case, 8.3 names, a link) is not proof of another cluster: only "cannot
+        # tell" then, and a file of a live postmaster is never removed on that
+        same = os.path.normcase(os.path.realpath(cwd)) == os.path.normcase(os.path.realpath(pgdata))
+        return True if same else None
     except psutil.NoSuchProcess:
         return False
     except psutil.AccessDenied:

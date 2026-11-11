@@ -34,6 +34,7 @@ from ..inbox.spi import (  # stdlib only, no cycle
     STOCK_DATASETS,
     VERSIONED_DATASETS,
 )
+from ..run_cache import forget_runs  # the per-run API's finished bodies go with their runs (TDM#631)
 from ..settings import REPO_ROOT, Settings, SettingsError
 from ..valuation.fallback import CarriedSpread
 
@@ -758,6 +759,7 @@ def prune_intraday(con: psycopg.Connection, business_date: date, keep_run_id: in
             for table in RUN_ROW_TABLES:
                 con.execute("DELETE FROM " + table + " WHERE run_id = ANY(%s)", (ids,))
             con.execute("DELETE FROM run WHERE run_id = ANY(%s)", (ids,))
+    forget_runs(ids)
     return ids
 
 
@@ -864,6 +866,7 @@ def prune_superseded(con: psycopg.Connection, keep_days: int, *, limit: int | No
             for table in RUN_ROW_TABLES:
                 con.execute("DELETE FROM " + table + " WHERE run_id = ANY(%s)", (ids,))
             con.execute("DELETE FROM run WHERE run_id = ANY(%s)", (ids,))
+        forget_runs(ids)
         out["runs"] += ids
         dates += [d for _, d, _ in batch]
     out["dates"] = [str(min(dates)), str(max(dates))] if dates else None
