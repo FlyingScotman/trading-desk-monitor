@@ -429,6 +429,7 @@ def main(argv: list[str] | None = None) -> int:
         for f in sorted(logs.glob("*")) if logs.is_dir() else []:
             if f.is_file():
                 print(f"--- {f.name} (tail) ---\n{tail(f, 12)}")
+        print(f"FAILED: {e}", flush=True)  # again at the very end: the first line is far above the long tails
         return 1
     log("OK " + json.dumps(summary))
     return 0
