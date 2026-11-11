@@ -90,6 +90,19 @@ test('настройки: «История прогонов» показывае
       assert.deepStrictEqual(errors, []);
       await ctx.close();
     });
+    // TDM#660: дата, у которой перенесённый спред устарел, стоит в очереди с этой причиной; прогоны до проверки названы «неизвестно»
+    await t.test('очередь: «перенесённый спред устарел — N»; даты с неизвестным спредом названы, пересчёта они не ждут (TDM#660)', async () => {
+      const st = { ...BASE, carry_unknown: 7, todo_by_reason: [{ key: 'carry', text: 'перенесённый спред устарел', n: 3 }, { key: 'market', text: 'хаб поправил срез', n: 1 }] };
+      const { pg, ctx, errors } = await open(browser, st);
+      const q = await row(pg, 'Осталось в проходе 1');
+      assert.ok(q.includes('перенесённый спред устарел — 3, хаб поправил срез — 1'), q);
+      const u = await row(pg, 'Перенесённый спред');
+      assert.ok(u.startsWith('у 7 дат неизвестно, не устарел ли он') && u.includes('сделаны до этой проверки'), u);
+      const { pg: pg2, ctx: ctx2 } = await open(browser, { ...BASE, carry_unknown: 0 });
+      assert.strictEqual(await pg2.locator('#bf-rows td.k', { hasText: 'Перенесённый спред' }).count(), 0);
+      assert.deepStrictEqual(errors, []);
+      await ctx.close(); await ctx2.close();
+    });
   } finally {
     await browser.close();
   }

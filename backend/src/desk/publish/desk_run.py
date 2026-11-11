@@ -50,7 +50,7 @@ from ..marketdata.adapter import MarketView
 from ..orchestrator import EodContext, Outcome
 from ..pnl.flash import _json_safe
 from ..store import PNL_COMPONENTS, PositionInputs
-from ..valuation.fallback import CarriedSpread, used_model_spreads
+from ..valuation.fallback import SPREAD_EPS_BP, CarriedSpread, used_model_spreads
 from . import derivatives_parallel, funding_run, fx_liability, ocp_run
 from .tdm_run import RunContent, git_sha, run_content
 
@@ -104,7 +104,13 @@ def publish(con: psycopg.Connection, ctx: EodContext, positions: list[tuple[str,
     results = {r.result_sha256: r for r in [*(o.core_result for o in outcomes), *(core_results or ())] if r}
     bodies = {sha: portfolio_result_to_json(r).decode() for sha, r in results.items()}  # raises unless verified
     spreads = used_model_spreads(outcomes)
-    carried = sum(1 for s in spreads if (c := (carried_from or {}).get(s.secid)) and c.z_spread_bp == s.z_spread_bp)
+    # the spreads the model prices carried: per bond the date of the run they come from and their value (TDM#660: the
+    # plan of the history compares them with what that date holds now; a run's id is no key, a replaced run of the same
+    # date holds the same spread)
+    sources = {s.secid: {"date": c.business_date.isoformat(), "z_bp": c.z_spread_bp}
+               for s in sorted(spreads, key=lambda x: x.secid)
+               if (c := (carried_from or {}).get(s.secid)) and abs(c.z_spread_bp - s.z_spread_bp) <= SPREAD_EPS_BP}
+    carried = len(sources)
     bd = business_date or ctx.business_date
     swaps = _unlinked_swaps(unlinked_rates)
     block = ({k: v for k, v in off_report.items() if k != "gap_trades"}
@@ -124,6 +130,7 @@ def publish(con: psycopg.Connection, ctx: EodContext, positions: list[tuple[str,
         "core_results": [{"result_sha256": sha, "schema": r.schema_version, "label": r.run_id.rsplit("-", 1)[-1]}
                          for sha, r in results.items()],
         "model_spreads": {"carried": carried, "new": len(spreads) - carried},
+        "carried_spread_sources": sources,
         "cut_ts": ctx.market.snapshot.doc.get("cut_ts"),
         "market_business_date": ctx.market.snapshot.business_date,  # the header shows it when older (#22)
         "pnl_basis": pnl_basis,

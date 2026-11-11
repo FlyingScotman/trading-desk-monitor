@@ -158,6 +158,11 @@ class CarriedSpread:
     reuses only a spread to its own discount curve (a run before the RUONIA switch had spreads to the KBD)."""
 
 
+SPREAD_EPS_BP = 1e-6
+"""Two Z-spreads this close (a millionth of a basis point) are one: a model price valued by core at a carried spread gives
+back the spread it was priced at to the last digits but one, not always to the last bit."""
+
+
 def used_model_spreads(outcomes: list[Outcome]) -> list[CarriedSpread]:
     """The spreads the model-price valuations of ``outcomes`` used, one per secid, for the store."""
     out = {o.secid: CarriedSpread(o.secid, v.z_spread_bp, v.valuation_date, v.model_spread_source, v.spread_curve)

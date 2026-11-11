@@ -110,6 +110,7 @@ from .marketdata import cache
 from .marketdata.bundle import SnapshotDir, previous_close
 from .marketdata.hub import HubError, TransportError
 from .settings import Settings
+from .valuation.fallback import SPREAD_EPS_BP
 
 log = logging.getLogger("desk.backfill")
 
@@ -151,6 +152,10 @@ class Day:
     errors)."""
     run_id: int | None = None
     """The date's default run (a ``done`` date)."""
+    carry: str | None = None
+    """What the plan knows of the spreads the date's model prices carried (TDM#660), for a ``done`` date: ``unknown``
+    (its run was made before the run recorded where they came from, and says it carried some: not told stale, not told
+    current), else None."""
 
 
 @dataclass
@@ -191,6 +196,7 @@ class Plan:
                 "todo": self.count("todo"), "no_positions": self.count("no_positions"),
                 "no_market": self.count("no_market"), "failed": self.count("failed"), "hub": self.hub,
                 "to_download": self.to_downloads(), "next": [d.date for d in self.todo[:5]],
+                "carry_unknown": sum(d.carry == "unknown" for d in self.days),
                 "second": {"done": self.count_second("done"), "todo": self.count_second("todo"),
                            "failed": self.count_second("failed"), "next": [d.date for d in self.second_todo[:5]]},
                 "todo_by_reason": [{"key": k, "text": REASON_TEXT[k], "n": n}
@@ -200,7 +206,7 @@ class Plan:
 REASON_TEXT = {"program": "новая версия расчёта", "no_run": "ещё не считалась", "positions": "изменились позиции",
                "market": "хаб поправил срез", "previous": "хаб поправил прошлое закрытие",
                "private_inputs": "изменились сделки или условия сделок", "late": "поздний отчёт ОВП или остатков",
-               "other": "другое"}
+               "carry": "перенесённый спред устарел", "other": "другое"}
 """TDM#587: why a date is to run (``plan``'s ``why``) -> the words of «Осталось» on «История прогонов»."""
 
 
@@ -210,6 +216,7 @@ def reason_key(why: str | None) -> str:
     return ("no_run" if w == "no default run" else "positions" if w == "positions changed"
             else "market" if w == "market snapshot changed" else "previous" if w == "previous snapshot changed"
             else "private_inputs" if w == "private inputs changed" else "program" if w == "program updated"
+            else "carry" if w == CARRY_WHY
             else "late" if w.endswith("changed after the run") else "other")
 
 
@@ -319,6 +326,59 @@ def late_why(con: psycopg.Connection, d: date, run: dict | None, revs: store.Ref
     return " and ".join(LATE_WHY[x] for x in late) + " changed after the run" if late else None
 
 
+CARRY_WHY = "carried spread stale"
+"""``plan``'s ``why`` of a date whose run carried a spread that is not what its source date holds now (TDM#660)."""
+_CARRY_MEMO: OrderedDict[tuple, dict[tuple[int, str], float]] = OrderedDict()
+CARRY_MEMO_SIZE = 8
+_CARRY_LOCK = threading.Lock()
+
+
+def _spread_values(con: psycopg.Connection, pairs: set[tuple[int, str]]) -> dict[tuple[int, str], float]:
+    """``store.spread_values`` of (run_id, secid) pairs, remembered by the set of pairs (a run's rows never change): the
+    plan reads it at each poll of the status."""
+    key = tuple(sorted(pairs))
+    with _CARRY_LOCK:
+        hit = _CARRY_MEMO.get(key)
+        if hit is not None:
+            _CARRY_MEMO.move_to_end(key)
+            return hit
+    got = store.spread_values(con, sorted({r for r, _ in pairs}), sorted({s for _, s in pairs}))
+    with _CARRY_LOCK:
+        _CARRY_MEMO[key] = got
+        while len(_CARRY_MEMO) > CARRY_MEMO_SIZE:
+            _CARRY_MEMO.popitem(last=False)
+    return got
+
+
+def stale_spreads(con: psycopg.Connection, runs: dict[date, dict], date_from: date) -> dict[date, list[tuple[str, str, float, float | None]]]:
+    """Per date of ``runs`` (``store.default_runs``) the spreads its run carried that its source date no longer holds:
+    (secid, source date, the spread carried, the spread the source date's default run holds now, None: none). The
+    source is a date, not a run: a run replaced by the same date's run of the second pass (TDM#627) or of the same
+    calculation holds the same spread and is no change, while a run that was deleted (``store.prune_superseded``,
+    TDM#634) with nothing in its place, or a date recalculated to another spread, is. A run made before the sources were
+    recorded (``spread_sources`` None) has none to compare: it is not listed (``Day.carry`` says it is unknown)."""
+    want = {d: r["spread_sources"] for d, r in runs.items() if r.get("spread_sources")}
+    if not want:
+        return {}
+    sources = {date.fromisoformat(v["date"]) for srcs in want.values() for v in srcs.values()}
+    by_date = {d: r["run_id"] for d, r in runs.items()}
+    early = min(sources)
+    if early < date_from:  # a source before the plan's first date: its default run is read apart
+        by_date.update({d: r["run_id"] for d, r in store.default_runs(con, early).items() if d < date_from})
+    pairs = {(by_date[date.fromisoformat(v["date"])], secid) for srcs in want.values() for secid, v in srcs.items()
+             if date.fromisoformat(v["date"]) in by_date}
+    now = _spread_values(con, pairs) if pairs else {}
+    out: dict[date, list[tuple[str, str, float, float | None]]] = {}
+    for d, srcs in want.items():
+        for secid, v in sorted(srcs.items()):
+            src = date.fromisoformat(v["date"])
+            rid = by_date.get(src)
+            held = now.get((rid, secid)) if rid is not None else None
+            if held is None or abs(held - v["z_bp"]) > SPREAD_EPS_BP:
+                out.setdefault(d, []).append((secid, v["date"], v["z_bp"], held))
+    return out
+
+
 def plan(con: psycopg.Connection, settings: Settings, date_from: date, date_to: date,
          hub: list[tuple[str, str]] | None = None) -> Plan:
     """What the backfill would do (module doc, step 2). ``hub``: the hub's (date, snapshot id) rows (``hub_rows``);
@@ -329,6 +389,8 @@ def plan(con: psycopg.Connection, settings: Settings, date_from: date, date_to: 
     hub_ids = dict(hub or [])
     dates = sorted({d for d in (hub_ids if hub is not None else cached) if lo <= d <= hi})
     runs = store.default_runs(con, date_from)
+    stale = stale_spreads(con, runs, date_from)  # TDM#660: the carried spreads their source dates no longer hold
+    todo_dates: set[date] = set()  # the dates of the plan that will be made again: a date that carried from one is stale
     logic = logic_version()
     st = state(settings)
     failed = st.get("failed", {})
@@ -361,6 +423,14 @@ def plan(con: psycopg.Connection, settings: Settings, date_from: date, date_to: 
                else "private inputs changed" if run["private_inputs_hash"] != ih
                else late
                or ("program updated" if not same_logic(run.get("logic_version"), logic) else None))
+        carry = None
+        if why is None:  # the run is current by its inputs; are the spreads its model prices carried?
+            srcs = run["spread_sources"]
+            if srcs is None:  # a run from before the sources were recorded: unknown, never told stale for that
+                carry = "unknown" if (run.get("spreads_carried") or 0) > 0 else None
+            elif date.fromisoformat(d) in stale or any(date.fromisoformat(v["date"]) in todo_dates
+                                                       for v in srcs.values()):
+                why = CARRY_WHY  # (the second: its source date is made again, so its spread may be another)
         sig = [ids, snap, prev, logic, ih, store.dataset_set_ids(con, date.fromisoformat(d)),
                store.reference_rev_ids(con, revs=revs)]
         if why is None:
@@ -369,11 +439,12 @@ def plan(con: psycopg.Connection, settings: Settings, date_from: date, date_to: 
                       "failed" if giveup.get("sig") == sig and giveup.get("attempts", 0) >= MAX_ATTEMPTS
                       else "todo")
             days.append(Day(d, "done", sig=sig, market_id=snap, cached=is_cached, prev_date=pd, prev_cut=pcut,
-                            second=second, run_id=run["run_id"]))
+                            second=second, run_id=run["run_id"], carry=carry))
         elif failed.get(d) == sig:
             days.append(Day(d, "failed", why, sig, snap, is_cached, pd, pcut))
         else:
             days.append(Day(d, "todo", why, sig, snap, is_cached, pd, pcut))
+            todo_dates.add(date.fromisoformat(d))
     return Plan(lo, hi, days, hub is not None, hub)
 
 
@@ -512,7 +583,11 @@ def _differs(con: psycopg.Connection, day: Day) -> str:
                             late[0] if late else None)}
     if len(late) > 1:  # a signature from before the policy revisions counted (TDM#567) lacks it: stale once
         have["late_reference"] = (store.reference_rev_ids(con, run["positions_known_at"]), late[1])
-    return "; ".join(f"{k}: run {a}, plan {b}" for k, (a, b) in have.items() if a != b) or "nothing"
+    out = [f"{k}: run {a}, plan {b}" for k, (a, b) in have.items() if a != b]
+    d = date.fromisoformat(day.date)
+    out += [f"carried spread of {secid}: run {z:g} bp from {src}, {'none' if held is None else f'{held:g} bp'} there now"
+            for secid, src, z, held in stale_spreads(con, {d: run}, d).get(d, [])[:5]]
+    return "; ".join(out) or "nothing"
 
 
 SKIP = object()

@@ -907,14 +907,19 @@ def default_runs(con: psycopg.Connection, since: date) -> dict[date, dict]:
     completed_at, private inputs hash, the horizon it read its inputs at (``positions_known_at``: ``late_inputs``), the
     ``logic_version`` of the code that made it (lineage; None for a run made before it was recorded) and
     ``second_order``: False for a run made without the second derivatives (lineage ``second_order``, TDM#627: the first
-    pass of the history); True for a run with them and for one made before it was recorded."""
+    pass of the history); True for a run with them and for one made before it was recorded. ``spread_sources``: the
+    carried spreads the run's model prices used, ``{secid: {"date", "z_bp"}}`` (lineage ``carried_spread_sources``,
+    TDM#660; ``{}``: none were carried), None for a run made before it was recorded; ``spreads_carried``: how many
+    spreads the run says it carried (lineage ``model_spreads.carried``, older than ``spread_sources``)."""
     return {r[0]: {"run_id": r[1], "market_snapshot_id": r[2], "prev_market_snapshot_id": r[3],
                    "position_set_ids": sorted(r[4]), "completed_at": r[5], "logic_version": r[6],
-                   "private_inputs_hash": r[7], "positions_known_at": r[8], "second_order": r[9] != "false"}
+                   "private_inputs_hash": r[7], "positions_known_at": r[8], "second_order": r[9] != "false",
+                   "spread_sources": r[10], "spreads_carried": int(r[11]) if r[11] is not None else None}
             for r in con.execute(
                 "SELECT business_date, run_id, market_snapshot_id, prev_market_snapshot_id, position_set_ids,"
                 " completed_at, lineage->>'logic_version', private_inputs_hash, positions_known_at,"
-                " lineage->>'second_order' FROM run"
+                " lineage->>'second_order', lineage->'carried_spread_sources',"
+                " lineage->'model_spreads'->>'carried' FROM run"
                 f" WHERE run_id IN ({DEFAULT_RUNS}) AND business_date >= %s", (since,))}
 
 
@@ -938,6 +943,31 @@ def carried_spreads(con: psycopg.Connection, before: date) -> dict[str, CarriedS
         ") x ORDER BY secid, business_date DESC, run_id DESC, pri", {"d": before}).fetchall()
     return {s: CarriedSpread(s, z, d, src or f"last market Z {z:.0f} bp on {d} (run {rid})", c or "RUB OFZ")
             for s, z, d, rid, src, c in rows if math.isfinite(z)}
+
+
+def spread_values(con: psycopg.Connection, run_ids: list[int], secids: list[str]) -> dict[tuple[int, str], float]:
+    """The Z-spread each of the runs ``run_ids`` holds for each of ``secids``, as ``carried_spreads`` reads it: the model
+    spread a model price used, or the bond's market Z (exact or assumed) in that run; a bond the run holds no spread for
+    is absent. What the plan (``backfill.plan``, TDM#660) compares a run's carried spreads with."""
+    if not run_ids or not secids:
+        return {}
+    rows = con.execute(
+        "SELECT run_id, secid, z FROM ("
+        " SELECT m.run_id, m.secid, m.z_spread_bp AS z, 1 AS pri FROM model_spread m"
+        "  WHERE m.run_id = ANY(%(r)s) AND m.secid = ANY(%(s)s)"
+        " UNION ALL"
+        " SELECT p.run_id, p.secid, (p.fact->>'spread_bp')::float8, 0 FROM run_position p"
+        "  WHERE p.run_id = ANY(%(r)s) AND p.secid = ANY(%(s)s)"
+        "   AND p.quality IN ('exact', 'assumed') AND jsonb_typeof(p.fact->'spread_bp') = 'number'"
+        ") x ORDER BY run_id, secid, pri", {"r": list(run_ids), "s": list(secids)}).fetchall()
+    out: dict[tuple[int, str], float] = {}
+    seen: set[tuple[int, str]] = set()
+    for rid, secid, z in rows:
+        if (rid, secid) not in seen:  # the first of a pair, as ``carried_spreads`` takes it; a non-finite one is none
+            seen.add((rid, secid))
+            if z is not None and math.isfinite(z):
+                out[(rid, secid)] = z
+    return out
 
 
 RUN_EVENT_SQL = ("INSERT INTO event (type, valid_date, run_id, detail)"
