@@ -189,7 +189,7 @@
         '<td class="mut">' + time(r.completed_at || r.started_at) + '</td>' +
         '<td class="c14-chain">' + (r.supersedes_run_id ? '#' + r.supersedes_run_id : '<span class="mut3">—</span>') + '</td>' +
         '<td class="c14-chain">' + (r.superseded_by.length ? r.superseded_by.map(x => '#' + x).join(', ') : '<span class="mut3">—</span>') + '</td>' +
-        '<td class="wrap mut">' + (r.changed_text.length ? esc(r.changed_text.join(', ')) : r.supersedes_run_id ? 'входы те же (пересчёт)' : '') + '</td></tr>').join('') + '</tbody></table>'
+        '<td class="wrap mut">' + (r.changed_text.length ? esc(r.changed_text.join(', ')) : r.supersedes_pruned ? esc(r.supersedes_pruned_text || 'заменённый расчёт удалён (хранится только актуальный)') : r.supersedes_run_id ? 'входы те же (пересчёт)' : '') + '</td></tr>').join('') + '</tbody></table>'
       : '<div class="k-empty">Прогонов за эту дату нет</div>';
     K.tableToolsAll(rp.querySelector('.bd'));
     left.appendChild(rp);
@@ -280,6 +280,7 @@
         market: { eod_final: { snapshot_id: 'demo', cut_ts: at(19, 0), known_at: at(21, 40), corrections: 0, store: { status: 'loaded', rows: 2100 } }, eod_preliminary: { snapshot_id: 'demo0', cut_ts: at(19, 0), known_at: at(19, 25), corrections: 0 }, intraday: { count: 18, latest_cut_ts: at(18, 30) } },
         runs: [
           { run_id: 38, run_type: 'INTRADAY', label: '20.10 18:30 МСК · внутри дня', status: 'complete', started_at: at(18, 31), completed_at: at(18, 33), is_default: false, is_current: false, supersedes_run_id: null, superseded_by: [], changed_text: [], error: null },
+          { run_id: 39, run_type: 'INTRADAY', label: '20.10 18:30 МСК · внутри дня', status: 'complete', started_at: at(19, 10), completed_at: at(19, 14), is_default: false, is_current: false, supersedes_run_id: 36, superseded_by: [], changed_text: [], supersedes_pruned: true, supersedes_pruned_text: 'заменённый расчёт удалён (хранится только актуальный)', error: null },
           { run_id: 40, run_type: 'EOD', label: '20.10 · закрытие предв.', status: 'complete', started_at: at(19, 30), completed_at: at(19, 34), is_default: false, is_current: false, supersedes_run_id: null, superseded_by: [42], changed_text: [], error: null },
           { run_id: 41, run_type: 'EOD', label: '20.10 · закрытие', status: 'failed', started_at: at(21, 45), completed_at: null, is_default: false, is_current: false, supersedes_run_id: 40, superseded_by: [], changed_text: ['срез (окончательное закрытие вместо предварительного)'], error: 'orphaned: still loading after 01:00:00, reaped' },
           { run_id: 42, run_type: 'EOD', label: '20.10 · закрытие', status: 'complete', started_at: at(22, 50), completed_at: at(22, 55), is_default: true, is_current: true, supersedes_run_id: 40, superseded_by: [], changed_text: ['срез (окончательное закрытие вместо предварительного)', 'позиции'], error: null }],
