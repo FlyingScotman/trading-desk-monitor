@@ -119,5 +119,24 @@ jobs:
           & $py -c "import subprocess,sys,os;os.makedirs('D:/probe_pw/c');r=subprocess.run([sys.argv[1],'-D','D:/probe_pw/c','--auth=trust','--auth-local=trust','--encoding=utf8','-U','postgres'],capture_output=True,text=True);print('(c) rc',r.returncode,r.stderr.strip()[-200:])" $initdb
           # (d) with the environment the driver gives (no PYTHON*, PATH only)
           & $py -c "import subprocess,sys,os;r=subprocess.run([sys.argv[1],'-D','D:/probe_pw/d','--auth=trust','--auth-local=trust','--encoding=utf8','-U','postgres'],capture_output=True,text=True,creationflags=0x200|0x08000000);print('(d) rc',r.returncode,r.stderr.strip()[-200:])" $initdb
+          # (e) as (c) after a pause of 5 s
+          & $py -c "import subprocess,sys,os,time;os.makedirs('D:/probe_pw/e');time.sleep(5);r=subprocess.run([sys.argv[1],'-D','D:/probe_pw/e','--auth=trust','--auth-local=trust','--encoding=utf8','-U','postgres'],capture_output=True,text=True);print('(e) rc',r.returncode,r.stderr.strip()[-200:])" $initdb
+          # (f) the directory made by pwsh
+          New-Item -ItemType Directory D:\probe_pw\f | Out-Null
+          & $initdb -D D:\probe_pw\f --auth=trust --auth-local=trust --encoding=utf8 -U postgres 2>&1 | Select-Object -Last 2
+          Write-Host "(f) exit $LASTEXITCODE"
+          # (g) as (c), a second directory in the same parent, and the owner / acl printed
+          & $py -c "import subprocess,sys,os;os.makedirs('D:/probe_pw/g');print(subprocess.run(['icacls','D:/probe_pw/g'],capture_output=True,text=True).stdout);print(subprocess.run(['icacls','D:/probe_pw/f'],capture_output=True,text=True).stdout)"
+          Get-Acl D:\probe_pw\g | Format-List Owner, AccessToString
+          Get-Acl D:\probe_pw\f | Format-List Owner, AccessToString
+          exit 0
+      - name: "initdb from a bash step, a directory made by python first (control)"
+        if: always()
+        shell: bash
+        run: |
+          set +e
+          PY=.venv/Scripts/python.exe
+          INITDB=$($PY -c "import pgserver,pathlib;print(pathlib.Path(pgserver.__file__).parent/'pginstall'/'bin'/'initdb.exe')")
+          $PY -c "import subprocess,sys,os;os.makedirs('D:/probe_bs/c');r=subprocess.run([sys.argv[1],'-D','D:/probe_bs/c','--auth=trust','--auth-local=trust','--encoding=utf8','-U','postgres'],capture_output=True,text=True);print('(bash c) rc',r.returncode,r.stderr.strip()[-200:])" "$INITDB"
           exit 0
 
