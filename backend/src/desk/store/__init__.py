@@ -48,8 +48,12 @@ MSK_DAY = "(recorded_at AT TIME ZONE INTERVAL '+03:00')::date"
 _LOCK = 0x6465736B  # "desk": one migrator at a time
 
 
-def connect(url: str) -> psycopg.Connection:
-    return psycopg.connect(url, autocommit=True)
+def connect(url: str, connect_timeout: float | None = None) -> psycopg.Connection:
+    """A connection (autocommit). ``connect_timeout`` (seconds): for a caller that treats "no store" as an answer and must
+    not stand in a connect that never ends (Windows keeps a connection to a port nobody listens on for seconds)."""
+    if connect_timeout is None:
+        return psycopg.connect(url, autocommit=True)
+    return psycopg.connect(url, autocommit=True, connect_timeout=max(1, round(connect_timeout)))
 
 
 def resolve_url(settings: Settings) -> str:

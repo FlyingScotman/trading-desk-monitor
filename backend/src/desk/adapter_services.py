@@ -1038,8 +1038,8 @@ class AdapterServices:
     # ---- feeds
 
     def _newest_positions(self) -> date | None:
-        try:
-            with store.connect(self._url) as con:
+        try:  # a bounded connect: with no store reachable this answers "none" and the feed goes on (and can be stopped)
+            with store.connect(self._url, connect_timeout=3) as con:
                 return con.execute("SELECT max(valid_date) FROM position_set").fetchone()[0]
         except Exception:  # noqa: BLE001 - no store: no after_positions trigger this tick
             return None
