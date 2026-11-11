@@ -105,13 +105,13 @@ def test_disk_never_touches_network_paths_and_has_a_budget(tmp_path: Path) -> No
 def test_pythons_are_found_not_run(tmp_path: Path) -> None:
     exe = tmp_path / "Python311" / "python.exe"
     exe.parent.mkdir()
-    exe.write_text("never run")
+    exe.write_text("never run", encoding="utf-8")
     stub = tmp_path / "WindowsApps" / "python.exe"
     stub.parent.mkdir()
-    stub.write_text("store stub")
+    stub.write_text("store stub", encoding="utf-8")
     own = tmp_path / "own" / "python"
     own.parent.mkdir()
-    own.write_text("this program")
+    own.write_text("this program", encoding="utf-8")
     found = sd.pythons({"PATH": ""}, sd.Disk(), registry=lambda: [(str(exe), "3.11"), (str(stub), "3.12"), (str(exe), "3.11"),
                                                        ("\\\\server\\share\\python.exe", "3.10")], own=str(own))
     assert [(f["path"], f["source"], f["version"], f["own"]) for f in found] == [

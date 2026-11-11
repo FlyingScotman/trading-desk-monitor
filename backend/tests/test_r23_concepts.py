@@ -14,7 +14,7 @@ import pytest
 from fastapi.testclient import TestClient
 from test_market_history import DATE, FIX, FLOATER, MARKET, OFZ, STATIC, USD_FACE, shifted, write
 
-from desk import VALUATION_VERSION, cli, store
+from desk import VALUATION_VERSION, dayrun, store
 from desk.api import concepts, create_app
 from desk.marketdata import static_facts
 from desk.marketdata.bundle import Snapshot, read_bundle
@@ -62,7 +62,7 @@ def desk(store_url, tmp_path):
         book.write_text(f"position_id,book_id,secid,quantity_bonds\nP1,OFZ,{OFZ},{n}\nP2,OFZ,{FLOATER},5\n"
                         f"P3,CORP,{USD_FACE},3\nP4,CORP,{RZD},4\n", encoding="utf-8")
         lines: list[str] = []
-        assert cli.eod_run(settings, d, store_url=store_url, book=str(book), out=lines.append), lines
+        assert dayrun.eod_run(settings, d, store_url=store_url, book=str(book), out=lines.append), lines
     return TestClient(create_app(store_url))
 
 
@@ -329,16 +329,23 @@ def test_bodies_cached_by_store_state_gzip_and_etag(desk, store_url, tmp_path, m
     real = concepts.extras
     monkeypatch.setattr(concepts, "extras", lambda *a, **kw: calls.append(1) or real(*a, **kw))
     r1 = desk.get("/concepts-data.js", headers={"Accept-Encoding": "gzip"})
-    r2 = desk.get("/concepts-data.js")
-    assert len(calls) == 1 and r1.headers["etag"] == r2.headers["etag"] and r1.text == r2.text
+    r2 = desk.get("/concepts-data.js", headers={"Accept-Encoding": "identity"})  # the client's own default is gzip
+    # the gzip and the plain body are two representations: two ETags (as the per-run answers', ``_conditional``)
+    assert len(calls) == 1 and r1.headers["etag"] == r2.headers["etag"][:-1] + '-gz"' and r1.text == r2.text
     assert r1.headers.get("content-encoding") == "gzip" and "accept-encoding" in r1.headers["vary"].lower()
-    assert desk.get("/concepts-data.js", headers={"If-None-Match": r1.headers["etag"]}).status_code == 304
+    gz, plain = {"Accept-Encoding": "gzip"}, {"Accept-Encoding": "identity"}
+    assert desk.get("/concepts-data.js", headers={**gz, "If-None-Match": r1.headers["etag"]}).status_code == 304
+    assert desk.get("/concepts-data.js", headers={**gz, "If-None-Match": r2.headers["etag"]}).status_code == 200
+    assert desk.get("/concepts-data.js", headers={**plain, "If-None-Match": r2.headers["etag"]}).status_code == 304
+    assert desk.get("/concepts-data.js", headers={**plain, "If-None-Match": r1.headers["etag"]}).status_code == 200
+    # a weak validator (a proxy may weaken it) and a list of tags match as well
+    assert desk.get("/concepts-data.js", headers={**gz, "If-None-Match": f'"x", W/{r1.headers["etag"]}'}).status_code == 304
     h1 = desk.get("/api/v1/history/positions").json()
     assert desk.get("/api/v1/history/positions").json() == h1
     cache, *_ = cache_11(tmp_path / "again")  # a new run: the bodies are built again
     book = tmp_path / "b.csv"
     book.write_text(f"position_id,book_id,secid,quantity_bonds\nP1,OFZ,{OFZ},11\n", encoding="utf-8")
-    assert cli.eod_run(Settings(home=tmp_path / "home", snapshot_cache=cache), DATE, store_url=store_url,
+    assert dayrun.eod_run(Settings(home=tmp_path / "home", snapshot_cache=cache), DATE, store_url=store_url,
                        book=str(book), out=lambda s: None)
     r3 = desk.get("/concepts-data.js")
     assert len(calls) == 2 and r3.headers["etag"] != r1.headers["etag"]
@@ -348,7 +355,7 @@ def test_concepts_data_without_static_facts_says_so(store_url, tmp_path):
     cache, *_ = cache_11(tmp_path)
     book = tmp_path / "b.csv"
     book.write_text(f"position_id,book_id,secid,quantity_bonds\nP1,OFZ,{OFZ},11\n", encoding="utf-8")
-    assert cli.eod_run(Settings(home=tmp_path / "home", snapshot_cache=cache), DATE, store_url=store_url,
+    assert dayrun.eod_run(Settings(home=tmp_path / "home", snapshot_cache=cache), DATE, store_url=store_url,
                        book=str(book), out=lambda s: None, read_model=False)
     c = TestClient(create_app(store_url))
     x = extras(c)

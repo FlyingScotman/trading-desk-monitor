@@ -576,11 +576,55 @@ def _tail(path: Path, max_bytes: int = LOG_TAIL_BYTES) -> tuple[list[str], bool]
     return lines, size > max_bytes
 
 
+# PostgreSQL's own log (``postgres.log``, TDM#518: beside the data directory, in the logs folder): `%m [%p] ` prefix,
+# then LEVEL, two spaces, text. DETAIL / STATEMENT / CONTEXT / QUERY / HINT lines, the lines of a statement and the
+# LOG lines that log one (``statement:``, ``duration: … statement:``, ``execute …:``) carry
+# the values of the data (a key, a row, the SQL text), so they are never read into the diagnostics, and the primary
+# message keeps a quoted word only where it names an object (a constraint, a table, a column), not where it quotes a value.
+PG_LINE = re.compile(r"^(\d{4}-\d\d-\d\d) (\d\d:\d\d:\d\d)(?:[,.](\d{1,6}))?(?: [\w+-]+)? \[\d+\](?:[^:]{0,80}?)? "
+                     r"(DEBUG\d?|INFO|NOTICE|WARNING|ERROR|LOG|FATAL|PANIC|DETAIL|HINT|STATEMENT|CONTEXT|QUERY|LOCATION):\s+(.*)$")
+PG_LEVELS = {"WARNING": "WARNING", "ERROR": "ERROR", "FATAL": "ERROR", "PANIC": "CRITICAL"}
+PG_SKIP = ("DETAIL", "HINT", "STATEMENT", "CONTEXT", "QUERY", "LOCATION")
+PG_NAMES = re.compile(r"""(?:constraint|relation|table|column|index|sequence|schema|database|role|extension|function|type|"""
+                      r"""trigger|view|operator|language|tablespace|publication|subscription) +"[\w$.]{1,63}\"""")
+PG_STATEMENT = re.compile(r"statement:|^duration:|^(?:execute|parse|bind)\b[^:]{0,60}:", re.IGNORECASE)
+"""A LOG line of ``log_statement`` / ``log_min_duration_statement``: the SQL text, with whatever value was written into
+it unquoted (a number, a bare word) and not masked by ``PG_QUOTED``. Such a line is not read at all."""
+PG_QUOTED = re.compile(r"\"[^\"]*\"|'[^']*'")
+
+
+def _pg_message(text: str) -> str:
+    keep = {m.span() for m in PG_NAMES.finditer(text)}
+
+    def mask(m: re.Match) -> str:
+        return m.group(0) if any(a <= m.start() and m.end() <= b for a, b in keep) else "…"
+
+    return PG_QUOTED.sub(mask, text)
+
+
+def _pg_records(lines: list[str]) -> list[dict[str, Any]]:
+    """The records of PostgreSQL's log: level and primary message only (see ``PG_LINE``)."""
+    recs: list[dict[str, Any]] = []
+    for line in lines:
+        m = PG_LINE.match(line)
+        if not m:
+            continue  # the tail of a statement, a continuation: may hold values
+        d, t, frac, level, msg = m.groups()
+        if level in PG_SKIP or PG_STATEMENT.search(msg):
+            continue
+        at = datetime.fromisoformat(f"{d}T{t}" + (f".{frac.ljust(6, '0')}" if frac else ""))
+        recs.append({"at": at, "day": d, "level": PG_LEVELS.get(level, "INFO"), "logger": "postgres",
+                     "message": _pg_message(msg), "extra": []})
+    return recs
+
+
 def _records(path: Path) -> tuple[list[dict[str, Any]], bool]:
     """The log records of a file's tail: {at (datetime | None), day, level, logger, message, extra: [lines]}.
     A line that is no record continues the previous one (a traceback); before any record it stands alone."""
     lines, cut = _tail(path)
     stem = path.name.split(".")[0]
+    if stem == "postgres":
+        return _pg_records(lines), cut
     recs: list[dict[str, Any]] = []
     day = None
     for line in lines:

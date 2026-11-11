@@ -231,6 +231,7 @@ def reprice_run(snapshots: SnapshotDir, run: Mapping[str, Any], rows: list[Mappi
                                  "blended": 0.0, "n_positions": 0, "n_exact": 0})
     missing = [{"position_id": x["position_id"], "reason": x["code"]} for x in positions if x["exact"] is None]
     return {"method": METHOD, "definition_hash": h,
+            **({} if payload.get("second_order", True) else {"taylor_second_order": False}),  # TDM#627: no gamma yet
             "coverage": {"status": "partial" if missing else "complete", "n_positions": len(positions),
                          "n_exact": len(positions) - len(missing), "missing": missing},
             "totals": totals, "positions": positions}

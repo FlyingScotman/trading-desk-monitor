@@ -339,6 +339,7 @@
   }
   K.commands(PRESETS.map(p => ({ label: 'Пресет: ' + p.t, hint: p.s, run: () => { applyPreset(p); render(); } })));
   K.onFilter(render);
+  K.onAlias(render);  // имена бумаг пришли позже страницы (подписи треемапа и таблицы). Страница лёгкая: полная перерисовка ~10 мс на 850 позициях (C03 — ~300 мс), поэтому целиком
   K.on('theme', render);
   render();
 })();

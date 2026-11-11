@@ -21,7 +21,7 @@ from test_autopilot import cfg, put, steps
 from test_intraday import FRI, MON, STATIC, at, body, publish, run_rows
 from test_market_history import FIX, MARKET, NO_API, FakeHub, market_doc, shifted, write
 
-from desk import autopilot, cli, store
+from desk import autopilot, dayrun, store
 from desk.api import create_app
 from desk.api.compat import risk_notes
 from desk.autopilot import Autopilot
@@ -101,7 +101,7 @@ def test_the_run_log_and_the_risk_pages_say_what_is_missing(tmp_path, store_url)
     with store.connect(store_url) as con:
         store.load_positions(con, [("P1", "B1", OFZ, 100.0), ("P2", "B1", KEY, 50.0)], valid_date=date(2026, 10, 15),
                              source_name="t.csv", source_sha256="0" * 64)
-    rid = cli.eod_run(Settings(home=tmp_path / "home", snapshot_cache=folder), DATE, store_url=store_url,
+    rid = dayrun.eod_run(Settings(home=tmp_path / "home", snapshot_cache=folder), DATE, store_url=store_url,
                       out=lambda _: None)
     with store.connect(store_url) as con:
         log = con.execute("SELECT level, message FROM run_log WHERE run_id = %s ORDER BY seq", (rid,)).fetchall()

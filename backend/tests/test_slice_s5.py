@@ -11,7 +11,7 @@ import pytest
 from rub_fixed_income import portfolio_result_from_json
 from test_slice_s2 import prev_outcome, shifted_prev
 
-from desk import cli, store
+from desk import cli, dayrun, store
 from desk.marketdata.adapter import MarketView
 from desk.marketdata.bundle import SnapshotDir
 from desk.orchestrator import Outcome, attach_pnl, prepare, value
@@ -196,13 +196,13 @@ def test_cli_revalues_the_previous_date_with_the_same_carried_spreads(store_url,
     sentinel = {MODEL: CarriedSpread(MODEL, 123.0, date.fromisoformat(DATE) - timedelta(days=7), "test")}
     monkeypatch.setattr(store, "carried_spreads", lambda con, before: sentinel)
     monkeypatch.setattr(SnapshotDir, "previous_market_date", lambda self, d, cut="eod_final": DATE)  # one date,
-    monkeypatch.setattr(cli, "attach_pnl", lambda *a: None)  # so no PnL between the "two" dates
+    monkeypatch.setattr(dayrun, "attach_pnl", lambda *a: None)  # so no PnL between the "two" dates
     calls = []
 
     def recording(ctx, requests, **kw):
         calls.append(kw)
         return value(ctx, requests, **kw)
 
-    monkeypatch.setattr(cli, "value", recording)
+    monkeypatch.setattr(dayrun, "value", recording)
     assert cli.main(["eod", "--date", DATE, "--snapshots", str(FIX), "--book", str(csv), "--report-dir", ""]) == 0
     assert len(calls) == 2 and all(c["carried_spreads"] is sentinel for c in calls)

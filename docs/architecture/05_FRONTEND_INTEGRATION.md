@@ -56,6 +56,7 @@ Notes:
 - Responses use the shared coverage vocabulary ([01](01_SYSTEM_OVERVIEW.md) §6). Missing values are `null` with a state, never `0`.
 - Greeks use a factor dictionary plus integer indices ([03](03_CALCULATION_SPLIT.md) §4).
 - ETags on run-scoped resources. A run is immutable, so these responses are cacheable indefinitely; attachments carry their own revision in the ETag.
+- The big per-run answers (`/api/v1/runs/{id}/positions`, `risk`, `risk-table`, `pnl`, `aggregates`, `funding`, `ocp`, `derivatives`) are kept finished in the server's memory per run and parameters (`desk.run_cache`, TDM#631): the body, its gzip made once and the ETag; a repeat is a memory read (10-20 ms for a 15 MB `positions`), a conditional request a 304. Bounded (`DESK_RUN_CACHE_MB`, default 256, 0 turns it off, least recently used dropped), cleared for a run that is deleted (`store.prune_intraday`, `prune_superseded`; the serve loop for a deletion by another process) and rebuilt when what else the body depends on changes (the aliases in `positions`). A run that is not `complete` is never cached.
 - SSE must not be buffered by the reverse proxy.
 
 ## 3 Frontend structure (target)

@@ -61,7 +61,7 @@ import math
 import statistics
 from bisect import bisect_left
 from collections import defaultdict
-from collections.abc import Iterator
+from collections.abc import Iterator, Mapping
 from dataclasses import dataclass, field, replace
 from datetime import date, timedelta
 from decimal import Decimal
@@ -158,6 +158,11 @@ class CarriedSpread:
     reuses only a spread to its own discount curve (a run before the RUONIA switch had spreads to the KBD)."""
 
 
+SPREAD_EPS_BP = 1e-6
+"""Two Z-spreads this close (a millionth of a basis point) are one: a model price valued by core at a carried spread gives
+back the spread it was priced at to the last digits but one, not always to the last bit."""
+
+
 def used_model_spreads(outcomes: list[Outcome]) -> list[CarriedSpread]:
     """The spreads the model-price valuations of ``outcomes`` used, one per secid, for the store."""
     out = {o.secid: CarriedSpread(o.secid, v.z_spread_bp, v.valuation_date, v.model_spread_source, v.spread_curve)
@@ -175,11 +180,15 @@ class FallbackContext:
     history: list[MarketView] | None = None
     """Market snapshots of the previous ``LOOKBACK_DAYS`` calendar days, newest first."""
     medians: dict[tuple[str, Any], tuple[float, int]] | None = None
-    carried: dict[str, CarriedSpread] = field(default_factory=dict)
+    carried: Mapping[str, CarriedSpread] = field(default_factory=dict)
     """Model spreads of the latest earlier run, by secid (empty without a desk store)."""
 
     @classmethod
-    def build(cls, ctx: EodContext, carried: dict[str, CarriedSpread] | None = None) -> FallbackContext:
+    def build(cls, ctx: EodContext, carried: Mapping[str, CarriedSpread] | None = None) -> FallbackContext:
+        # a lazy mapping (``desk.parallel.LazyCarried``: read from the store at its first lookup, after the earlier
+        # dates are published) is kept as it is: a copy would read it at once
+        if carried is not None and not isinstance(carried, dict):
+            return cls(ctx, carried=carried)
         return cls(ctx, carried=dict(carried or {}))
 
     def past_quotes(self, terms: BondTerms) -> Iterator[BondQuote]:

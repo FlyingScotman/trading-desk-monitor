@@ -293,7 +293,7 @@ wheels = [
 
 [[package]]
 name = "desk-backend"
-version = "0.2.24"
+version = "0.2.25"
 source = { editable = "." }
 dependencies = [
     { name = "argon2-cffi" },
@@ -322,7 +322,7 @@ requires-dist = [
     { name = "pgserver", marker = "extra == 'dev'", specifier = ">=0.1.4" },
     { name = "psycopg", extras = ["binary"], specifier = ">=3.2" },
     { name = "pytest", marker = "extra == 'dev'", specifier = ">=8.0" },
-    { name = "rub-fixed-income-core", git = "https://github.com/FlyingScotman/rub-fixed-income-core.git?rev=e32ccf3398b388f5d4c4cfc09a008be64f52b649" },
+    { name = "rub-fixed-income-core", git = "https://github.com/FlyingScotman/rub-fixed-income-core.git?rev=85f8138c1725ad37cca3d0d70be2b142a36bc91e" },
     { name = "ruff", marker = "extra == 'dev'", specifier = ">=0.8" },
     { name = "truststore", specifier = ">=0.10" },
     { name = "uvicorn", specifier = ">=0.30" },
@@ -921,7 +921,7 @@ wheels = [
 [[package]]
 name = "rub-fixed-income-core"
 version = "0.45.0"
-source = { git = "https://github.com/FlyingScotman/rub-fixed-income-core.git?rev=e32ccf3398b388f5d4c4cfc09a008be64f52b649#e32ccf3398b388f5d4c4cfc09a008be64f52b649" }
+source = { git = "https://github.com/FlyingScotman/rub-fixed-income-core.git?rev=85f8138c1725ad37cca3d0d70be2b142a36bc91e#85f8138c1725ad37cca3d0d70be2b142a36bc91e" }
 dependencies = [
     { name = "numpy", version = "2.4.6", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.12'" },
     { name = "numpy", version = "2.5.4", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.12'" },

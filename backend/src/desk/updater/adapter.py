@@ -50,7 +50,6 @@ logged to ``<home>/logs/update.log``; the token never is.
 
 from __future__ import annotations
 
-import errno
 import hashlib
 import json
 import os
@@ -67,7 +66,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-from .. import update
+from .. import fsretry, update
 from ..settings import Settings, adapter_config_dir, atomic_write_text
 from . import adapter_store, downloads, net, service
 from .release import _SHA, agree, parse_sums
@@ -91,8 +90,8 @@ WATCH_TIMEOUT_S = service.WATCH_TIMEOUT_S
 WATCH_POLL_S = service.WATCH_POLL_S
 ROOT_KEEP = ("readme", "license")  # root files of the zip copied next to the package (and ADAPTER_RELEASE.json)
 ACTIVE = ("starting", "downloading", "verifying", "waiting_browser", "installing")
-BUSY_WAIT_S = 15.0  # how long a file operation is retried while Windows says the file or folder is in use
-BUSY_WINERRORS = (5, 32, 33)  # access denied, sharing violation, lock violation
+BUSY_WAIT_S = fsretry.BUSY_WAIT_S  # how long a file operation is retried while Windows says the file or folder is in use
+BUSY_WINERRORS = fsretry.BUSY_WINERRORS  # access denied, sharing violation, lock violation
 COMPILE_TIMEOUT_S = 120.0  # the precompile of a new release folder (``_precompile``)
 
 _lock = threading.RLock()
@@ -116,28 +115,12 @@ def now() -> str:
 
 
 _sleep = time.sleep  # tests: no real pauses
-
-
-def busy(e: OSError) -> bool:
-    """Windows' "the file or folder is in use" (or POSIX's EACCES / EBUSY): worth another try a moment later."""
-    return (isinstance(e, PermissionError) or getattr(e, "winerror", None) in BUSY_WINERRORS
-            or e.errno in (errno.EACCES, errno.EBUSY))
+busy = fsretry.busy
 
 
 def retry(fn: Any, budget_s: float | None = None) -> Any:
-    """``fn()``, again while it fails with ``busy``: pauses from 0.1 s doubling up to 2 s, ``budget_s``
-    (``BUSY_WAIT_S``) in all; then the last error."""
-    budget = BUSY_WAIT_S if budget_s is None else budget_s
-    pause, waited = 0.1, 0.0
-    while True:
-        try:
-            return fn()
-        except OSError as e:
-            if not busy(e) or waited >= budget:
-                raise
-            d = min(pause, budget - waited)
-            _sleep(d)
-            waited, pause = waited + d, min(pause * 2, 2.0)
+    """``fsretry.retry`` with this module's pauses (``_sleep``) and budget (``BUSY_WAIT_S``)."""
+    return fsretry.retry(fn, BUSY_WAIT_S if budget_s is None else budget_s, sleep=lambda d: _sleep(d))
 
 
 def os_code(e: OSError) -> str:
@@ -600,7 +583,7 @@ def _discard(folder: Path) -> bool:
 
 def _write_current(home: Path, doc: dict[str, Any]) -> None:
     text = json.dumps(doc, ensure_ascii=False, indent=1) + "\n"
-    retry(lambda: atomic_write_text(adapter_store.current_path(home), text))
+    retry(lambda: atomic_write_text(adapter_store.current_path(home), text, replace_wait_s=0))
 
 
 def _runner_specs() -> set[str]:

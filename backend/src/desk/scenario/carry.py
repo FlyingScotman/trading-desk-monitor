@@ -551,7 +551,7 @@ def run_for_context(run: Mapping[str, Any]) -> dict[str, Any]:
     lineage = run.get("lineage") or {}
     return {"run_id": run["run_id"], "business_date": run["business_date"], "cut_type": run["cut_type"],
             "market_snapshot_id": run["market_snapshot_id"], "quote_curve_risk": lineage.get("quote_curve_risk"),
-            "ofz_scheme": lineage.get("ofz_scheme")}
+            "ofz_scheme": lineage.get("ofz_scheme"), "second_order": lineage.get("second_order", True)}
 
 
 def forward_carry(con: psycopg.Connection, snapshots: SnapshotDir, run: Mapping[str, Any], h: str, ks: str = "flat",

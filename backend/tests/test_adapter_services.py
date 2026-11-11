@@ -19,7 +19,7 @@ from fastapi.testclient import TestClient
 from test_r23_backfill import cache, load  # noqa: F401 - the synthetic market fixture
 
 from desk import adapter_services as svcs
-from desk import cli, helper_proc, store
+from desk import bookfile, dayrun, helper_proc, store
 from desk.acquisition import Acquisition, FlowError
 from desk.api import create_app
 from desk.autopilot import Autopilot
@@ -242,11 +242,11 @@ def make(tmp_path: Path, services: object = None, **kw) -> Settings:
     root.mkdir(exist_ok=True)
     cfg.mkdir(exist_ok=True)
     cap = {"version": 1, "entry": "helpers/services.py"} if services is None else services
-    (root / "__init__.py").write_text(ADAPTER.replace("SERVICES", repr(cap)))
+    (root / "__init__.py").write_text(ADAPTER.replace("SERVICES", repr(cap)), encoding="utf-8")
     (root / "helpers").mkdir(exist_ok=True)
-    (root / "helpers" / "services.py").write_text(HELPER)
+    (root / "helpers" / "services.py").write_text(HELPER, encoding="utf-8")
     (cfg / "books.csv").write_text("book_id;name;desk;book_type;entity;active\n"
-                                   "OFZ;Synthetic;Test;TRADING;TEST;1\nCORP;Other;Test;TRADING;TEST;1\n")
+                                   "OFZ;Synthetic;Test;TRADING;TEST;1\nCORP;Other;Test;TRADING;TEST;1\n", encoding="utf-8")
     return Settings(home=tmp_path / "home", private_adapter=str(root), private_adapter_config=cfg,
                     acquisition_python=Path(sys.executable), inbox_archive=tmp_path / "archive",
                     inbox_poll_seconds=0, inbox_lookback_days=0, **kw)
@@ -265,12 +265,12 @@ def _fresh():
 def mode(st: Settings, value: str) -> None:
     d = svcs.state_dir(st)
     d.mkdir(parents=True, exist_ok=True)
-    (d / "mode").write_text(value)
+    (d / "mode").write_text(value, encoding="utf-8")
 
 
 def requests(st: Settings) -> list[dict]:
     path = svcs.state_dir(st) / "requests.jsonl"
-    return [json.loads(x) for x in path.read_text().splitlines()] if path.exists() else []
+    return [json.loads(x) for x in path.read_text(encoding="utf-8").splitlines()] if path.exists() else []
 
 
 def service(st: Settings, url: str = "", clock: dict | None = None) -> svcs.AdapterServices:
@@ -316,6 +316,7 @@ def no_secret(*values: object) -> None:
 
 # ---- capability --------------------------------------------------------------------------------------------------
 
+@pytest.mark.skipif(os.name == "nt", reason="a symlink (needs a privilege on Windows)")
 @pytest.mark.parametrize("cap,code", [
     (False, "services_unavailable"), ({"version": 2, "entry": "helpers/services.py"}, "capability_invalid"),
     ({"version": 1, "entry": "../outside.py"}, "capability_invalid"), ({"version": 1, "entry": "/abs.py"}, "capability_invalid"),
@@ -325,9 +326,9 @@ def test_capability_detection_and_containment(tmp_path, cap, code):
     st = make(tmp_path, cap if cap is not False else None)
     if cap is False:
         (Path(st.private_adapter) / "__init__.py").write_text(
-            ADAPTER.replace('    d["services"] = SERVICES\n', ""))
+            ADAPTER.replace('    d["services"] = SERVICES\n', ""), encoding="utf-8")
     if cap and cap.get("entry") == "escape.py":
-        (tmp_path / "outside.py").write_text("print('{}')")
+        (tmp_path / "outside.py").write_text("print('{}')", encoding="utf-8")
         os.symlink(tmp_path / "outside.py", Path(st.private_adapter) / "escape.py")
     a = service(st).availability()[0]
     assert a["code"] == code and a["available"] == (code == "available")
@@ -364,7 +365,7 @@ def test_panel_save_secrets_actions_and_choices(tmp_path, monkeypatch, caplog):
         assert o["panel"]["status"] == ["Среда: prod"]
         assert next(f for f in o["panel"]["sections"][0]["fields"] if f["key"] == "sched.terms.daily_at")["value"] == "08:30"
         assert next(f for f in o["panel"]["sections"][0]["fields"] if f["key"] == "password")["set"] is True
-        assert (svcs.state_dir(st) / "secret.txt").read_text() == SECRET  # reached the helper, by stdin only
+        assert (svcs.state_dir(st) / "secret.txt").read_text(encoding="utf-8") == SECRET  # reached the helper, by stdin only
         # an empty secret is "unchanged": not sent at all
         assert submit(s, "save", **{"f.url": "https://synthetic.invalid", "f.password": ""})["code"] == "saved"
         reqs = requests(st)
@@ -443,7 +444,7 @@ def test_an_action_answer_comes_before_its_describe_615(tmp_path):
     s = service(st)
     try:
         assert submit(s, "describe")["code"] == "described"
-        (svcs.state_dir(st) / "describe_delay").write_text("3")
+        (svcs.state_dir(st) / "describe_delay").write_text("3", encoding="utf-8")
         t0 = time.monotonic()
         s.submit("action", {"action": ["check"]})
         job = wait_job(s, refreshed=False)
@@ -494,7 +495,7 @@ def test_a_connect_that_got_in_runs_the_trades_feed_at_once_615(tmp_path, state,
     rows = [["Настройка входа", "✓", 1.2, "v2_configured", "setup"], ["Вход", "✓" if queued else "✗", 30, "logged_in", "login"],
             ["Первая загрузка сделок", "—", None, "", "trades"]]
     (svcs.state_dir(st) / "connect_result").write_text(json.dumps(
-        {"state": state, "code": code, "lines": ["✓ Настройка входа: готово (1 с)"], "table": {"columns": CHECKLIST, "rows": rows}}))
+        {"state": state, "code": code, "lines": ["✓ Настройка входа: готово (1 с)"], "table": {"columns": CHECKLIST, "rows": rows}}), encoding="utf-8")
     s = service(st)
     try:
         assert submit(s, "describe")["code"] == "described"
@@ -616,7 +617,7 @@ def test_an_owner_action_that_changes_the_config_in_the_wait_runs_the_feed_again
     try:
         submit(s, "describe")
         submit(s, "action", action="login")
-        (svcs.state_dir(st) / "check_writes_config").write_text("1")
+        (svcs.state_dir(st) / "check_writes_config").write_text("1", encoding="utf-8")
         assert lock.acquire()  # an autopilot cycle
         _feed_waiting_for_the_cycle_lock(s, st)
         s.submit("action", {"action": ["check"]})
@@ -651,7 +652,7 @@ def test_a_config_change_in_the_wait_without_an_owner_action_is_still_adapter_ch
         submit(s, "action", action="login")
         assert lock.acquire()
         _feed_waiting_for_the_cycle_lock(s, st)
-        (st.private_adapter_config / "found.json").write_text("{}")  # changed by something else than the owner's action
+        (st.private_adapter_config / "found.json").write_text("{}", encoding="utf-8")  # changed by something else than the owner's action
         lock.release()
         _until(lambda: svcs.read_state(st)["runs"]["terms"].get("last_finished"), "the feed did not finish", 10)
         run = svcs.read_state(st)["runs"]["terms"]
@@ -766,14 +767,14 @@ def test_scheduler_login_pause_backoff_restart_and_after_positions(tmp_path, sto
 
 def morning_run(st: Settings) -> int:
     close = ("2026-10-15", "eod_final")
-    return cli.eod_run(st, FRI.isoformat(), report_dir=None, out=lambda _: None, run_type="INTRADAY",
+    return dayrun.eod_run(st, FRI.isoformat(), report_dir=None, out=lambda _: None, run_type="INTRADAY",
                        on_close=close, market_snapshot_id=SnapshotDir(st.snapshot_cache).market_id(*close))
 
 
 def test_feed_ingests_as_its_source_and_recomputes_the_eod_and_todays_run(tmp_path, store_url, cache):  # noqa: F811
     st = make(tmp_path, snapshot_cache=cache, store_url=store_url)
     load(store_url, tmp_path, "2026-10-15", 10)
-    cli.eod_run(st, "2026-10-15", report_dir=None, out=lambda _: None)
+    dayrun.eod_run(st, "2026-10-15", report_dir=None, out=lambda _: None)
     old_morning = morning_run(st)
     with store.connect(store_url) as con:
         old_eod = store.default_runs(con, date(2026, 10, 15))[date(2026, 10, 15)]["run_id"]
@@ -895,16 +896,16 @@ def test_manual_acquisition_recomputes_todays_run_547(tmp_path, store_url, cache
     root, cfg = tmp_path / "adapter", tmp_path / "config"
     root.mkdir()
     cfg.mkdir()
-    (root / "__init__.py").write_text(ta.ADAPTER)
-    (root / "collect.py").write_text(ta.HELPER)
-    (cfg / "mode").write_text("success")
+    (root / "__init__.py").write_text(ta.ADAPTER, encoding="utf-8")
+    (root / "collect.py").write_text(ta.HELPER, encoding="utf-8")
+    (cfg / "mode").write_text("success", encoding="utf-8")
     (cfg / "books.csv").write_text("book_id;name;desk;book_type;entity;active\n"
-                                   "OFZ;Synthetic;Test;TRADING;TEST;1\nCORP;Other;Test;TRADING;TEST;1\n")
+                                   "OFZ;Synthetic;Test;TRADING;TEST;1\nCORP;Other;Test;TRADING;TEST;1\n", encoding="utf-8")
     st = Settings(home=tmp_path / "home", private_adapter=str(root), private_adapter_config=cfg,
                   acquisition_python=Path(sys.executable), inbox_archive=tmp_path / "archive", inbox_poll_seconds=0,
                   inbox_lookback_days=0, snapshot_cache=cache, store_url=store_url)
     load(store_url, tmp_path, "2026-10-15", 10)
-    cli.eod_run(st, "2026-10-15", report_dir=None, out=lambda _: None)
+    dayrun.eod_run(st, "2026-10-15", report_dir=None, out=lambda _: None)
     old_morning = morning_run(st)
     service_ = Acquisition(lambda: st, store_url, today=lambda: FRI)
     try:
@@ -932,7 +933,7 @@ def test_autopilot_morning_run_follows_new_trade_terms(tmp_path, store_url, cach
         assert ap._morning(st, con, store_url, [])[2] == {"reason": "up_to_date"}
     f = tmp_path / "drop" / "trade_terms_20261015.csv"
     f.parent.mkdir()
-    f.write_text(";".join(TERMS_HEADER) + "\nSYNTH-TRADE;OFZ;fx_forward;2026-10-01;2026-12-17;USD;RUB;buy;10;800;80\n")
+    f.write_text(";".join(TERMS_HEADER) + "\nSYNTH-TRADE;OFZ;fx_forward;2026-10-01;2026-12-17;USD;RUB;buy;10;800;80\n", encoding="utf-8")
     with store.connect(store_url) as con:
         res = scan.ingest_feed(con, st, f, source="trade_terms_csv", handle=scan.adapter(st))
         assert res.files == {"accepted": 1}
@@ -999,7 +1000,7 @@ def test_routes_are_local_admin_same_origin_and_never_echo_secrets(tmp_path, sto
 def _listing(st: Settings, tmp_path: Path, store_url: str, name: str, body: str, source: str) -> None:
     f = tmp_path / "drop" / name
     f.parent.mkdir(exist_ok=True)
-    f.write_text(body)
+    f.write_text(body, encoding="utf-8")
     with store.connect(store_url) as con:
         assert scan.ingest_feed(con, st, f, source=source, handle=scan.adapter(st)).files == {"accepted": 1}
 
@@ -1015,7 +1016,7 @@ def test_a_terms_feed_gets_the_request_file_of_the_trade_list_561(tmp_path, stor
         submit(s, "describe")
         assert [f["trades_file"] for f in svcs.read_state(st)["feeds"] if f["id"] == "planned"] == [True]
         load(store_url, tmp_path, "2026-10-15", 10)
-        (svcs.state_dir(st) / "logged_in").write_text("1")
+        (svcs.state_dir(st) / "logged_in").write_text("1", encoding="utf-8")
         run = run_feed(s, st, "planned", clock)  # no list stored: the helper is called without the field
         assert run["state"] == "complete" and "plan" not in run
         assert requests(st)[-1]["trades_file"] == [] and requests(st)[-1]["op"] == "feed"
@@ -1061,8 +1062,8 @@ def test_a_terms_feed_first_gets_the_list_of_its_date_561(tmp_path, store_url, c
         with store.connect(store_url) as con:
             store.store_books(con, [{"book_id": b, "name": b, "desk": "Test", "book_type": "TRADING", "entity": "TEST",
                                      "active": True} for b in ("OFZ", "CORP")], "fp")
-        (svcs.state_dir(st) / "logged_in").write_text("1")
-        (svcs.state_dir(st) / "tlist.csv").write_text("trade_id;trade_version;book_id;status\nT-1;;OFZ;live\n")
+        (svcs.state_dir(st) / "logged_in").write_text("1", encoding="utf-8")
+        (svcs.state_dir(st) / "tlist.csv").write_text("trade_id;trade_version;book_id;status\nT-1;;OFZ;live\n", encoding="utf-8")
         run = run_feed(s, st, "planned", clock)
         feeds_called = [(r["feed"], r["date"], bool(r["trades_file"])) for r in requests(st) if r["op"] == "feed"]
         assert feeds_called == [("tlist", "2026-10-15", False), ("planned", "2026-10-15", True)], feeds_called
@@ -1104,14 +1105,14 @@ def test_a_feed_of_the_owners_books_gets_them_as_a_repeated_field(tmp_path, stor
         f = tmp_path / "old.csv"   # the inactive book has positions too: only the book list keeps it out
         f.write_text("position_id,book_id,secid,quantity_bonds\nP9,OLD,SU26238RMFS4,3\n", encoding="utf-8")
         with store.connect(store_url) as con:
-            cli._load(con, f, "2026-10-15", out=lambda _: None)
+            bookfile.load_book(con, f, "2026-10-15", out=lambda _: None)
         books = [{"book_id": b, "name": b, "desk": "Test", "book_type": "TRADING", "entity": "TEST", "active": a}
                  for b, a in (("OFZ", True), ("CORP", True), ("OLD", False))]
         with store.connect(store_url) as con:
             store.store_books(con, books, "fp")
         run = run_feed(s, st, "owned", clock)
         assert run["code"] == "login_required"  # the helper asked for a login: it was called
-        (svcs.state_dir(st) / "logged_in").write_text("1")
+        (svcs.state_dir(st) / "logged_in").write_text("1", encoding="utf-8")
         run = run_feed(s, st, "owned", clock)
         assert run["state"] == "complete", run
         assert [r["book"] for r in requests(st) if r["op"] == "feed"] == [["CORP", "OFZ"]] * 2
@@ -1145,3 +1146,28 @@ def test_prune_keeps_the_pending_files_of_the_history_of_trades(tmp_path):
     trades_history.write(st, doc)
     svcs.AdapterServices._prune(st)
     assert keep.is_dir()
+
+
+def test_newest_positions_waits_five_seconds_and_warns_once_per_failed_streak(store_url, caplog):
+    """A store that does not answer reads as «no positions» for the feeds, no longer in silence: one warning a streak,
+    again after an answer in between; a connect waits as long as the store's other readers (5 s)."""
+    import logging
+
+    s = svcs.AdapterServices(lambda: None, store_url, tick_s=3600)  # type: ignore[arg-type,return-value]
+    seen: list[object] = []
+    real = store.connect
+
+    def down(url, **kw):
+        seen.append(kw.get("connect_timeout"))
+        raise OSError("no store")
+
+    with caplog.at_level(logging.WARNING, logger="desk.adapter_services"):
+        with mock.patch.object(store, "connect", down):
+            assert s._newest_positions() is None and s._newest_positions() is None
+        warned = [r for r in caplog.records if "newest positions" in r.getMessage()]
+        assert len(warned) == 1 and seen == [5, 5] and "no store" not in warned[0].getMessage()
+        with mock.patch.object(store, "connect", real):
+            s._newest_positions()  # the store answered (no positions: None, but the streak is over)
+        with mock.patch.object(store, "connect", down):
+            s._newest_positions()
+        assert len([r for r in caplog.records if "newest positions" in r.getMessage()]) == 2

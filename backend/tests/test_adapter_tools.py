@@ -8,6 +8,7 @@ from __future__ import annotations
 import dataclasses
 import json
 import os
+import threading
 import time
 from collections.abc import Iterator
 from pathlib import Path
@@ -156,7 +157,7 @@ def test_status_panels_checked_bad_ones_dropped_failures_without_messages(home: 
     r = c.get("/api/v1/adapter/status").json()
     assert r["error_code"] == "failed" and "RuntimeError" in r["error"] and "123" not in json.dumps(r)
     (tmp_path / "status_mode.txt").write_text("sleep", encoding="utf-8")
-    (home / "settings.json").write_text(json.dumps({**json.loads((home / "settings.json").read_text()),
+    (home / "settings.json").write_text(json.dumps({**json.loads((home / "settings.json").read_text(encoding="utf-8")),
                                                     "adapter_status_timeout_s": 1}), encoding="utf-8")
     t0 = time.monotonic()
     r = c.get("/api/v1/adapter/status").json()
@@ -263,7 +264,13 @@ def test_output_file_names() -> None:
 # ---- the kit -------------------------------------------------------------------------------------------------------
 
 
-def test_check_runs_the_kit_in_the_background_and_keeps_the_result(home: Path, tmp_path: Path) -> None:
+def test_check_runs_the_kit_in_the_background_and_keeps_the_result(home: Path, tmp_path: Path, monkeypatch) -> None:
+    # The second request must meet a job that still runs: the kit is held until it has been refused. Without the hold the
+    # test depended on the race of two requests and the kit's child (on Windows each request waits for the audit's
+    # connection to the closed store port, about 2 s, and the kit was done by then).
+    gate = threading.Event()
+    real_kit = adapter_jobs._run_kit
+    monkeypatch.setattr(adapter_jobs, "_run_kit", lambda argv, timeout_s: (gate.wait(60), real_kit(argv, timeout_s))[1])
     c = _client()
     r = c.get("/api/v1/adapter/check").json()
     assert r["job"] is None and not r["running"] and r["timeout_s"] == 1800
@@ -272,6 +279,7 @@ def test_check_runs_the_kit_in_the_background_and_keeps_the_result(home: Path, t
     r = c.post("/api/v1/adapter/check", json={})
     assert r.status_code == 202 and r.json()["running"]
     assert c.post("/api/v1/adapter/check", json={}).status_code == 409
+    gate.set()
     j = _wait(c, "/api/v1/adapter/check")["job"]
     assert j["state"] == "done", j
     assert j["request"]["dirs"] == [str(tmp_path / "inbox")]
@@ -312,7 +320,7 @@ def test_kit_argv_keeps_a_path_starting_with_a_dash(home: Path, tmp_path: Path, 
 
 
 def test_check_timeout_kills_the_kit(home: Path) -> None:
-    doc = json.loads((home / "settings.json").read_text())
+    doc = json.loads((home / "settings.json").read_text(encoding="utf-8"))
     (home / "settings.json").write_text(json.dumps({**doc, "adapter_kit_timeout_s": 0.01}), encoding="utf-8")
     c = _client()
     assert c.post("/api/v1/adapter/check", json={}).status_code == 202
@@ -321,7 +329,7 @@ def test_check_timeout_kills_the_kit(home: Path) -> None:
 
 
 def test_with_sign_in_the_tools_are_the_admins(home: Path, store_url: str) -> None:
-    doc = json.loads((home / "settings.json").read_text())
+    doc = json.loads((home / "settings.json").read_text(encoding="utf-8"))
     (home / "settings.json").write_text(json.dumps({**doc, "auth": True}), encoding="utf-8")
     from desk.api import auth
 
@@ -362,3 +370,18 @@ def test_a_job_whose_result_is_not_json_still_ends(tmp_path: Path) -> None:
         time.sleep(0.01)
     assert adapter_jobs.job(tmp_path, "check")["state"] == "done"
     adapter_jobs.reset()
+
+
+def test_check_payload_takes_running_from_the_job_it_returns(home: Path, monkeypatch) -> None:
+    """The job and the running flag were two reads: a check that ended between them gave a finished job with «running»
+    (the page kept polling and showed «running» until it was reloaded). The flag now comes from the job's own state."""
+    c = _client()
+    finished = {"key": "check", "state": "done", "started_at": "t", "finished_at": "t", "request": {"dirs": []},
+                "error": None, "error_code": None}
+    monkeypatch.setattr(adapter_jobs, "job", lambda home, key: dict(finished))
+    monkeypatch.setattr(adapter_jobs, "running", lambda kind: "check")  # the flag of a moment before the end
+    r = c.get("/api/v1/adapter/check").json()
+    assert r["job"]["state"] == "done" and r["running"] is False
+    monkeypatch.setattr(adapter_jobs, "job", lambda home, key: {**finished, "state": "running", "finished_at": None})
+    monkeypatch.setattr(adapter_jobs, "running", lambda kind: None)  # a job that started after the flag was read
+    assert c.get("/api/v1/adapter/check").json()["running"] is True

@@ -205,7 +205,7 @@ def test_curl_gets_the_token_in_its_config_file_only(tmp_path, monkeypatch):
     seen = {}
 
     def runner(cmd, **kw):
-        seen["cmd"], seen["cfg"] = cmd, Path(cmd[cmd.index("-K") + 1]).read_text()
+        seen["cmd"], seen["cfg"] = cmd, Path(cmd[cmd.index("-K") + 1]).read_text(encoding="utf-8")
         heads = Path(cmd[cmd.index("-D") + 1])
         status = seen["status"]
         heads.write_bytes(f"HTTP/1.1 {status} X\r\nX-GitHub-Request-Id: 1\r\n\r\n".encode())
@@ -521,11 +521,12 @@ def test_find_in_downloads_and_install_found(home, tmp_path):
     assert r.status_code == 200 and r.json()["version"] == "0.5.0"
 
 
+@pytest.mark.skipif(os.name == "nt", reason="POSIX file modes")
 def test_the_token_route_never_returns_the_token(home, tmp_path):
     c = client()
     r = c.put("/api/v1/settings/github-token", json={"token": TOKEN})
     assert r.status_code == 200 and r.json() == {"github_token_set": True, "github_token_source": "file"}
-    assert (home / "github_token").read_text().strip() == TOKEN
+    assert (home / "github_token").read_text(encoding="utf-8").strip() == TOKEN
     if os.name != "nt":
         assert (home / "github_token").stat().st_mode & 0o077 == 0
     s = c.get("/api/v1/settings").json()

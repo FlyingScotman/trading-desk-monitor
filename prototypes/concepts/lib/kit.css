@@ -339,3 +339,8 @@ table.k-tbl.k-compact { width: auto; font-size: 12px; }
 .k-dt b, .k-dtl b { color: var(--fg); font-variant-numeric: tabular-nums; }
 .k-dt .s { font-size: 11.5px; margin-top: 2px; overflow-wrap: anywhere; }
 .k-tag.sd-n { border-color: var(--warn); color: var(--warn); padding: 0 4px; margin-left: 4px; text-decoration: none; }
+
+/* данные приходят после страницы (TDM#629, kit.js K.whenData / K.loadingNote / K.dataError) */
+.k-loading { padding: 10px 14px; border: 1px dashed var(--line-2); border-radius: 6px; }
+.k-load-err { padding: 8px 14px; border: 1px solid var(--warn); border-radius: 6px; color: var(--warn); }
+.k-load-err a { color: inherit; text-decoration: underline; }

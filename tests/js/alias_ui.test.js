@@ -15,33 +15,43 @@ function el() {
     appendChild(c) { this.children.push(c); return c; }, append(...c) { this.children.push(...c); },
     querySelector() { return null; }, querySelectorAll() { return []; }, addEventListener() {}, setAttribute() {}, remove() {} };
 }
-// opts.aliases — ответ GET /api/v1/instruments/aliases; opts.fetch — заглушка fetch; opts.host — location.hostname
+// opts.aliases — ответ GET /api/v1/instruments/aliases (приходит асинхронно: await ready); opts.fetch — заглушка fetch для
+// остальных запросов; opts.host — location.hostname. Синхронных запросов нет (TDM#629): XMLHttpRequest бросает.
 function load(opts) {
   opts = opts || {};
-  const document = { addEventListener() {}, createElement: el, documentElement: el(), body: el(), querySelector() { return null; }, querySelectorAll() { return []; }, getElementById: () => el() };
+  const handlers = {};  // события document: real.js шлёт concepts-data, kit.js слушает (TDM#629)
+  const document = { addEventListener(t, f) { (handlers[t] = handlers[t] || []).push(f); }, dispatchEvent(e) { (handlers[e.type] || []).forEach(f => f(e)); }, createElement: el, documentElement: el(), body: el(), querySelector() { return null; }, querySelectorAll() { return []; }, getElementById: () => el() };
   const urls = [];
-  class XHR {
-    open(m, u) { this.u = u; urls.push(u); }
-    send() {
-      if (/instruments\/aliases$/.test(this.u) && opts.aliases) { this.status = 200; this.responseText = JSON.stringify(opts.aliases); }
-      else this.status = 404;
+  class XHR { constructor() { throw new Error('синхронный запрос запрещён (TDM#629)'); } }
+  const fetch = (u, o) => {
+    urls.push(u);
+    if (/instruments\/aliases$/.test(u) && !(o && o.method)) {
+      if (opts.aliases) return Promise.resolve({ status: 200, json: () => Promise.resolve(opts.aliases) });
+      if (!opts.fetch) return Promise.resolve({ status: 404 });
     }
-  }
+    return opts.fetch ? opts.fetch(u, o) : Promise.reject(new Error('нет сети'));
+  };
   const ctx = { window: {}, document, URLSearchParams, console, location: { href: 'http://x/', search: '', hostname: opts.host || '127.0.0.1' }, setTimeout,
     localStorage: { getItem() { return null; }, setItem() {} }, getComputedStyle: () => ({ getPropertyValue: () => '#888' }), MutationObserver: class { observe() {} },
-    XMLHttpRequest: XHR, fetch: opts.fetch };
+    XMLHttpRequest: XHR, fetch, CustomEvent: class { constructor(type, init) { this.type = type; this.detail = init && init.detail; } } };
   ctx.window = ctx;
   vm.createContext(ctx);
   if (opts.real) { loadRun(ctx); vm.runInContext(P('concepts/lib/real.js'), ctx); }
   else vm.runInContext(P('concepts/lib/mock.js'), ctx);
   vm.runInContext(P('concepts/lib/kit.js'), ctx);
   vm.runInContext(P('concepts/lib/instr.js'), ctx);
-  return { M: ctx.window.MOCK, K: ctx.window.KIT, D: ctx.window.CONCEPTS_RUN, urls };
+  return { M: ctx.window.MOCK, K: ctx.window.KIT, D: ctx.window.CONCEPTS_RUN, urls, ready: ctx.window.MOCK.aliasesReady };
 }
 
-t('прогон: алиас по ISIN — вместо биржевого имени, поиск по обоим, бумаги без алиаса как были', () => {
+t('прогон: алиас по ISIN — вместо биржевого имени, поиск по обоим, бумаги без алиаса как были', async () => {
   const at = '2026-10-22T09:00:00+00:00';
-  const { M, D, urls } = load({ real: true, aliases: { aliases: [{ isin: 'SU26242RMFS0', alias: 'ОФЗ-2029 (26242)', changed_by: 'local', changed_at: at }] } });
+  const { M, K, D, urls, ready } = load({ real: true, aliases: { aliases: [{ isin: 'SU26242RMFS0', alias: 'ОФЗ-2029 (26242)', changed_by: 'local', changed_at: at }] } });
+  // запрос уходит при загрузке, а имена подставляются по ответу (TDM#629): до него — биржевые, по ответу — алиас и событие страницам
+  const ev = []; K.on('alias', () => ev.push('alias')); K.onFilter(() => ev.push('filter'));
+  assert.ok(M.positions.every(p => p.alias === null));
+  await ready;
+  // по приходу — только alias (имена в таблицах меняет K.patchNames); filter перерисовывал бы тяжёлые страницы целиком (ревью TDM#629)
+  assert.deepStrictEqual(ev, ['alias'], 'алиасы пришли: событие alias, без filter');
   assert.ok(urls.some(u => u.endsWith('../api/v1/instruments/aliases')), urls.join(' '));
   const L = M.positions.filter(p => p.isin === 'SU26242RMFS0');
   assert.ok(L.length >= 1);
@@ -55,15 +65,16 @@ t('прогон: алиас по ISIN — вместо биржевого име
   assert.strictEqual(D.positions.find(d => d.isin === 'SU26242RMFS0').name, 'ОФЗ 26242', 'данные прогона не меняются');
 });
 
-t('прогон: сервер без алиасов (или без ответа) — биржевые имена, страница работает', () => {
-  const { M } = load({ real: true });
+t('прогон: сервер без алиасов (или без ответа) — биржевые имена, страница работает', async () => {
+  const { M, ready } = load({ real: true });
+  await ready;
   assert.deepStrictEqual(Object.keys(M.aliases), []);
   assert.ok(M.positions.every(p => p.alias === null && p.name === p.exchName));
 });
 
 t('прогон: правка — PUT /api/v1/instruments/alias с JSON; с чужого адреса — только чтение без запроса', async () => {
   const calls = [];
-  const fetch = (u, o) => { calls.push([u, o]); return Promise.resolve({ status: 200, json: () => Promise.resolve({ isin: 'SU26242RMFS0', alias: 'X', changed_by: 'local', changed_at: 'z', changed: true }) }); };
+  const fetch = (u, o) => { if (!/instruments\/aliases$/.test(u)) calls.push([u, o]); return Promise.resolve({ status: 200, json: () => Promise.resolve({ isin: 'SU26242RMFS0', alias: 'X', changed_by: 'local', changed_at: 'z', changed: true }) }); };
   const { M } = load({ real: true, fetch });
   assert.strictEqual(M.aliasApi.editable, true);
   const r = await M.aliasApi.put('SU26242RMFS0', 'X');

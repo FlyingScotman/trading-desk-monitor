@@ -50,7 +50,7 @@ from ..marketdata.adapter import MarketView
 from ..orchestrator import EodContext, Outcome
 from ..pnl.flash import _json_safe
 from ..store import PNL_COMPONENTS, PositionInputs
-from ..valuation.fallback import CarriedSpread, used_model_spreads
+from ..valuation.fallback import SPREAD_EPS_BP, CarriedSpread, used_model_spreads
 from . import derivatives_parallel, funding_run, fx_liability, ocp_run
 from .tdm_run import RunContent, git_sha, run_content
 
@@ -58,6 +58,11 @@ PNL_KEYS = (*PNL_COMPONENTS, "total")
 """Run totals per book: the components sum to ``total`` (a foreign-face bond's FX revaluation is in ``fx_gross``, the
 FX revaluation of its currency funding liability in ``fx_funding``, the position's funding in ``funding``: ``total`` is
 net of funding)."""
+
+
+SECOND_ORDER_OFF = ("вторые производные (гамма) не посчитаны: быстрый первый проход истории; риск первого порядка, "
+                    "стоимость и PnL — окончательные, гамму досчитает второй проход; оценка сценария линейная")
+"""The run log line of a run valued without the second derivatives (TDM#627)."""
 
 
 def _finite(x: Any) -> Any:
@@ -80,10 +85,10 @@ def publish(con: psycopg.Connection, ctx: EodContext, positions: list[tuple[str,
             pnl_basis: dict[str, Any] | None = None, core_results: list[Any] | None = None,
             business_date: date | None = None, cut_type: str | None = None,
             unlinked_rates: list[str] | None = None, off_report: dict[str, Any] | None = None,
-            intraday_trades: dict[str, Any] | None = None) -> tuple[int, str, list[str]]:
+            intraday_trades: dict[str, Any] | None = None, second_order: bool = True) -> tuple[int, str, list[str]]:
     """positions: (position_id, book_id, outcome) of ``inputs`` (``store.positions_for``); ``carried_from``:
     the carried spreads the valuation got; ``pnl_basis``: what the flash PnL is measured against
-    (``desk.cli.pnl_basis``, lineage ``pnl_basis``); ``core_results``: core results of the run besides those its
+    (``desk.dayrun.pnl_basis``, lineage ``pnl_basis``); ``core_results``: core results of the run besides those its
     outcomes carry (``BookPlan.core_result``, the v3 result of the derivatives: stored next to the bonds' v2 results
     even when core valued none of its positions). Returns (run_id, status, warnings). An INTRADAY run supersedes
     nothing: the older intraday runs of its date are deleted once it is complete (``store.prune_intraday``).
@@ -91,12 +96,21 @@ def publish(con: psycopg.Connection, ctx: EodContext, positions: list[tuple[str,
     ``ctx`` as cut ``prev_close``; lineage ``market_close`` names that close. ``intraday_trades``: the day's trades an
     INTRADAY run added to the book (``desk.trades.apply_intraday``, TDM#557), lineage ``intraday_trades``.
     ``off_report``: the derivatives outside the positions report (``valuation.offreport.summary``, TDM#468), lineage
-    ``positions.off_report``."""
+    ``positions.off_report``. ``second_order``: whether the run was valued with the second derivatives (the Hessian: the
+    positions' ``gamma`` and the bonds' ``convexity``); False: the first pass of the history (TDM#627) left them out, the
+    run says so (lineage ``second_order``, its log) and ``gamma`` is empty, not zero: the second pass of the backfill
+    makes the date's run again with them."""
     outcomes = [o for _, _, o in positions]
     results = {r.result_sha256: r for r in [*(o.core_result for o in outcomes), *(core_results or ())] if r}
     bodies = {sha: portfolio_result_to_json(r).decode() for sha, r in results.items()}  # raises unless verified
     spreads = used_model_spreads(outcomes)
-    carried = sum(1 for s in spreads if (c := (carried_from or {}).get(s.secid)) and c.z_spread_bp == s.z_spread_bp)
+    # the spreads the model prices carried: per bond the date of the run they come from and their value (TDM#660: the
+    # plan of the history compares them with what that date holds now; a run's id is no key, a replaced run of the same
+    # date holds the same spread)
+    sources = {s.secid: {"date": c.business_date.isoformat(), "z_bp": c.z_spread_bp}
+               for s in sorted(spreads, key=lambda x: x.secid)
+               if (c := (carried_from or {}).get(s.secid)) and abs(c.z_spread_bp - s.z_spread_bp) <= SPREAD_EPS_BP}
+    carried = len(sources)
     bd = business_date or ctx.business_date
     swaps = _unlinked_swaps(unlinked_rates)
     block = ({k: v for k, v in off_report.items() if k != "gap_trades"}
@@ -116,15 +130,19 @@ def publish(con: psycopg.Connection, ctx: EodContext, positions: list[tuple[str,
         "core_results": [{"result_sha256": sha, "schema": r.schema_version, "label": r.run_id.rsplit("-", 1)[-1]}
                          for sha, r in results.items()],
         "model_spreads": {"carried": carried, "new": len(spreads) - carried},
+        "carried_spread_sources": sources,
         "cut_ts": ctx.market.snapshot.doc.get("cut_ts"),
         "market_business_date": ctx.market.snapshot.business_date,  # the header shows it when older (#22)
         "pnl_basis": pnl_basis,
+        "second_order": second_order,
     }
     if intraday_trades is not None:
         lineage["intraday_trades"] = intraday_trades
     if bd != ctx.business_date:  # the morning run (#21): the close the book of ``bd`` is valued on
         lineage["market_close"] = {"date": ctx.business_date.isoformat(), "cut_type": ctx.market.snapshot.cut_type}
     content = run_content(ctx, positions, prev, lineage, inputs)
+    if not second_order:
+        content.log.append(("INFO", SECOND_ORDER_OFF))
     if block and block["mode"] == "include":
         if block["trades"]:
             content.log.append(("INFO", (f"деривативы вне отчёта позиций включены настройкой: сделок {block['trades']}, "

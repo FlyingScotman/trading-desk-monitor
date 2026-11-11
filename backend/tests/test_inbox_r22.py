@@ -17,7 +17,7 @@ from pathlib import Path
 import pytest
 from fastapi.testclient import TestClient
 
-from desk import cli, diagnostics, store
+from desk import cli, dayrun, diagnostics, store
 from desk.api import create_app
 from desk.autopilot import Autopilot
 from desk.inbox import conformance, scan, static_index
@@ -210,6 +210,7 @@ def test_a_scan_rebuilds_the_index_at_most_once_and_the_next_not_at_all(con, tmp
 # ---- listing and the lookback ---------------------------------------------------------------------------------
 
 
+@pytest.mark.skipif(os.name == "nt", reason="a symlink (needs a privilege on Windows)")
 def test_one_listing_with_stats_skips_temp_hidden_and_linked_folders(tmp_path):
     root = tmp_path / "in"
     (root / "sub" / "deeper").mkdir(parents=True)
@@ -228,6 +229,7 @@ def test_one_listing_with_stats_skips_temp_hidden_and_linked_folders(tmp_path):
     assert deep == ["a.csv", "sub/c.csv", "sub/deeper/d.csv"]  # a linked folder is not followed
 
 
+@pytest.mark.skipif(os.name == "nt", reason="a symlink (needs a privilege on Windows)")
 def test_a_recursive_listing_skips_dot_folders_such_as_the_settings_checks_copy(tmp_path):
     """TDM#130: the settings page's check copies the config folder into ``.desk-settings-check-*`` beside it, with
     its subfolders linked; a recursive inbox folder above it offers none of that, only the real files."""
@@ -283,7 +285,7 @@ def test_eod_waits_for_the_inbox_backlog_except_the_latest_date(tmp_path, store_
     with store.connect(store_url) as c:
         assert scan.scan(c, s).files.get("accepted")
     ran: list[str] = []
-    monkeypatch.setattr(cli, "eod_run", lambda settings, d, **kw: ran.append(d))
+    monkeypatch.setattr(dayrun, "eod_run", lambda settings, d, **kw: ran.append(d))
     waiting = Counter(waiting_calendar=4)
     monkeypatch.setattr(scan, "scan", lambda *a, **kw: scan.ScanResult("ok stub", files=waiting))
     ap = Autopilot(settings_loader=lambda: s, today=lambda: date(2026, 10, 19))

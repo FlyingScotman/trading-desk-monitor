@@ -15,7 +15,8 @@ from .acquisition_routes import form, guard
 router = APIRouter()
 NO_STORE = {"Cache-Control": "no-store"}
 FORBIDDEN = ("local_only", "origin_invalid")
-CONFLICT = ("services_busy", "feed_busy", "services_unavailable", "cancel_after_commit_unavailable")
+CONFLICT = ("services_busy", "feed_busy", "services_unavailable", "cancel_after_commit_unavailable",
+            "state_unavailable")
 
 
 def fail(code: str, state: str = "blocked") -> JSONResponse:
@@ -31,9 +32,9 @@ def _service(request: Request):
 async def overview(request: Request):
     try:
         guard(request)
-    except FlowError as e:
+        return JSONResponse(await run_in_threadpool(_service(request).overview), headers=NO_STORE)
+    except (FlowError, ServiceError) as e:  # ServiceError: the state file is in use (state_unavailable)
         return fail(e.code, e.state)
-    return JSONResponse(await run_in_threadpool(_service(request).overview), headers=NO_STORE)
 
 
 async def _op(request: Request, op: str):
@@ -120,9 +121,9 @@ async def history(request: Request):
     PnL, the problems. No value of a trade."""
     try:
         guard(request)
-    except FlowError as e:
+        return JSONResponse(await run_in_threadpool(_service(request).history), headers=NO_STORE)
+    except (FlowError, ServiceError) as e:
         return fail(e.code, e.state)
-    return JSONResponse(await run_in_threadpool(_service(request).history), headers=NO_STORE)
 
 
 def _bool(v: str) -> bool:

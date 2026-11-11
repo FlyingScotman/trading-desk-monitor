@@ -35,9 +35,9 @@ class Machine:
         self.home = tmp_path / "home"
         self.env = {"DESK_HOME": str(self.home)}
         (self.root / "wheelhouse").mkdir(parents=True)
-        (self.root / "VERSION").write_text("1.0-x\n")
+        (self.root / "VERSION").write_text("1.0-x\n", encoding="utf-8")
         (self.root / "wheelhouse" / WHEEL).write_bytes(b"wheel 1")
-        (self.root / "wheelhouse" / "requirements.txt").write_text("desk-backend==0.1.0\nfoo==1\n")
+        (self.root / "wheelhouse" / "requirements.txt").write_text("desk-backend==0.1.0\nfoo==1\n", encoding="utf-8")
         (self.home / "logs").mkdir(parents=True)
         for name, value in (("ROOT", self.root), ("APP", self.root / "app"), ("WHEELHOUSE", self.root / "wheelhouse"),
                             ("ADAPTER", self.root / "adapter"), ("ENV", self.root / "env"),
@@ -58,22 +58,22 @@ class Machine:
         monkeypatch.setattr(deskctl.subprocess, "run", self.fake_run)
 
     def mirror_json(self, text: str = '{"schema": 1}') -> None:
-        (self.root / "wheelhouse" / "mirror.json").write_text(text)
+        (self.root / "wheelhouse" / "mirror.json").write_text(text, encoding="utf-8")
 
     def fake_install(self, **kw):
         self.installs.append(kw)
         if self.install_error is not None:
             raise self.install_error
-        (deskctl.SCRIPTS / "desk").write_text("")
+        (deskctl.SCRIPTS / f"desk{deskctl.EXE}").write_text("", encoding="utf-8")
         return types.SimpleNamespace(ok=True)
 
     def fake_run(self, cmd, **kw):
         self.calls.append([str(c) for c in cmd])
         if "venv" in cmd:
             deskctl.SCRIPTS.mkdir(parents=True)
-            (deskctl.SCRIPTS / "python").write_text("")
-        elif "pip" in cmd and "--no-index" in cmd and not (deskctl.SCRIPTS / "desk").exists():
-            (deskctl.SCRIPTS / "desk").write_text("")  # the full path's offline install
+            (deskctl.SCRIPTS / f"python{deskctl.EXE}").write_text("", encoding="utf-8")
+        elif "pip" in cmd and "--no-index" in cmd and not (deskctl.SCRIPTS / f"desk{deskctl.EXE}").exists():
+            (deskctl.SCRIPTS / f"desk{deskctl.EXE}").write_text("", encoding="utf-8")  # the full path's offline install
         rc = self.migrate_rc if cmd and cmd[-1] == "db-migrate" else 0
         return subprocess.CompletedProcess(cmd, rc, "", "")
 
@@ -81,10 +81,10 @@ class Machine:
         """An installed env of an earlier version (a marker only when ``complete``)."""
         scripts = deskctl.ENV / "bin"
         scripts.mkdir(parents=True)
-        (scripts / "desk").write_text("")
-        (deskctl.ENV / "who").write_text(name)
+        (scripts / f"desk{deskctl.EXE}").write_text("", encoding="utf-8")
+        (deskctl.ENV / "who").write_text(name, encoding="utf-8")
         if complete:
-            deskctl.MARKER.write_text(json.dumps({"version": "0.9-old", "root": str(self.root)}))
+            deskctl.MARKER.write_text(json.dumps({"version": "0.9-old", "root": str(self.root)}), encoding="utf-8")
         return deskctl.ENV
 
 
@@ -104,7 +104,7 @@ def test_full_bundle_installs_as_before(m):
     pip = [c for c in m.calls if "pip" in c]
     assert m.installs == [] and len(pip) == 1 and "--no-index" in pip[0]
     assert not deskctl.env_old().exists()
-    assert json.loads(deskctl.MARKER.read_text())["kind"] == "full"
+    assert json.loads(deskctl.MARKER.read_text(encoding="utf-8"))["kind"] == "full"
 
 
 def test_mirror_bundle_installs_through_the_loader(m):
@@ -112,11 +112,11 @@ def test_mirror_bundle_installs_through_the_loader(m):
     deskctl.ensure_env(m.env)
     assert not [c for c in m.calls if "pip" in c]  # no direct pip run of the launcher
     kw = m.installs[0]
-    assert kw["python"] == deskctl.SCRIPTS / "python" and kw["wheelhouse"] == deskctl.WHEELHOUSE
+    assert kw["python"] == deskctl.SCRIPTS / f"python{deskctl.EXE}" and kw["wheelhouse"] == deskctl.WHEELHOUSE
     assert kw["log_dir"] == m.home / "logs" and kw["cache"] == m.home / "cache" / "mirror-wheels"
     assert kw["cache"].is_dir() and kw["settings"].strict is False
     assert m.calls[-1][-1] == "db-migrate"
-    marker = json.loads(deskctl.MARKER.read_text())
+    marker = json.loads(deskctl.MARKER.read_text(encoding="utf-8"))
     assert marker["kind"] == "mirror" and marker["mirror"] == deskctl.sha256(m.root / "wheelhouse/mirror.json")
     assert any("зеркала pip этой машины" in s for s in m.said) and not any("без интернета" in s for s in m.said)
 
@@ -126,7 +126,7 @@ def test_success_removes_env_old(m):
     m.old_env()
     legacy = deskctl.ENV / ".devdata"
     legacy.mkdir()
-    (legacy / "keep.txt").write_text("data")
+    (legacy / "keep.txt").write_text("data", encoding="utf-8")
     deskctl.ensure_env(m.env)
     assert not deskctl.env_old().exists() and not (deskctl.ENV / "who").exists()
     assert len(list(m.home.glob("legacy-devdata-*/keep.txt"))) == 1 and deskctl.env_complete()
@@ -140,8 +140,8 @@ def test_loader_failure_restores_env_old(m):
         deskctl.ensure_env(m.env)
     text = str(e.value)
     assert str(m.home / "logs") in text and "Нет пакета foo." in text and "Прежнее окружение возвращено" in text
-    assert (deskctl.ENV / "who").read_text() == "old-env" and not deskctl.env_old().exists()
-    assert json.loads(deskctl.MARKER.read_text())["version"] == "0.9-old"
+    assert (deskctl.ENV / "who").read_text(encoding="utf-8") == "old-env" and not deskctl.env_old().exists()
+    assert json.loads(deskctl.MARKER.read_text(encoding="utf-8"))["version"] == "0.9-old"
 
 
 def test_migrate_failure_without_an_old_env_leaves_nothing(m):
@@ -158,7 +158,7 @@ def test_migrate_failure_restores_env_old(m):
     m.migrate_rc = 1
     with pytest.raises(deskctl.Fail, match=re.escape(str(m.home / "logs"))):
         deskctl.ensure_env(m.env)
-    assert (deskctl.ENV / "who").read_text() == "old-env" and not deskctl.env_old().exists()
+    assert (deskctl.ENV / "who").read_text(encoding="utf-8") == "old-env" and not deskctl.env_old().exists()
 
 
 def test_failed_cleanup_of_env_old_is_a_warning(m, monkeypatch):
@@ -181,26 +181,26 @@ def test_interrupted_install_restores_env_old_on_the_next_start(m):
     m.mirror_json()
     m.old_env(name="previous").rename(deskctl.env_old())  # the cut-off run: env.old is the good one ...
     (deskctl.ENV / "bin").mkdir(parents=True)  # ... and env\ is half made, without a marker
-    (deskctl.ENV / "bin" / "partial").write_text("")
+    (deskctl.ENV / "bin" / "partial").write_text("", encoding="utf-8")
     deskctl.ensure_env(m.env)
     # restored, then (its marker is of 0.9-old) installed anew as usual
     assert not deskctl.env_old().exists() and not (deskctl.ENV / "bin" / "partial").exists()
-    assert m.installs and json.loads(deskctl.MARKER.read_text())["version"] == "1.0-x"
+    assert m.installs and json.loads(deskctl.MARKER.read_text(encoding="utf-8"))["version"] == "1.0-x"
     assert any("возвращаю прежнее окружение" in s for s in m.said)
 
 
 def test_interrupted_install_without_env_at_all(m):
     m.old_env(name="previous").rename(deskctl.env_old())
     deskctl.settle_env_old(m.env)
-    assert (deskctl.ENV / "who").read_text() == "previous" and not deskctl.env_old().exists()
+    assert (deskctl.ENV / "who").read_text(encoding="utf-8") == "previous" and not deskctl.env_old().exists()
 
 
 def test_env_old_next_to_a_valid_env_is_just_deleted(m):
     m.old_env()
     deskctl.env_old().mkdir()
-    (deskctl.env_old() / "x").write_text("")
+    (deskctl.env_old() / "x").write_text("", encoding="utf-8")
     deskctl.settle_env_old(m.env)
-    assert not deskctl.env_old().exists() and (deskctl.ENV / "who").read_text() == "old-env"
+    assert not deskctl.env_old().exists() and (deskctl.ENV / "who").read_text(encoding="utf-8") == "old-env"
 
 
 def test_env_old_is_not_taken_back_while_desk_runs(m, monkeypatch):
@@ -244,10 +244,10 @@ def test_the_loader_gets_the_pip_environment(m, monkeypatch):
 def test_settings_from_files_and_strict_flag(m):
     m.mirror_json()
     assert deskctl.mirror_settings(m.env).strict is False
-    (m.home / "mirror.ini").write_text("[mirror]\nindex_url = https://idx.example/simple\n")
+    (m.home / "mirror.ini").write_text("[mirror]\nindex_url = https://idx.example/simple\n", encoding="utf-8")
     s = deskctl.mirror_settings(m.env)
     assert s.index_url == "https://idx.example/simple" and not s.strict
-    (m.root / "mirror.ini").write_text("[mirror]\nstrict = true\n")  # the bundle folder is read first
+    (m.root / "mirror.ini").write_text("[mirror]\nstrict = true\n", encoding="utf-8")  # the bundle folder is read first
     s = deskctl.mirror_settings(m.env)
     assert s.strict and s.index_url == ""
     (m.root / "mirror.ini").unlink()
@@ -295,12 +295,12 @@ def test_mirror_bundle_with_new_wheels_only_reinstalls_them(m):
     deskctl.ensure_env(m.env)
     m.installs.clear()
     m.calls.clear()
-    (m.root / "VERSION").write_text("1.1-y\n")
+    (m.root / "VERSION").write_text("1.1-y\n", encoding="utf-8")
     (m.root / "wheelhouse" / WHEEL).write_bytes(b"wheel 2")
     deskctl.ensure_env(m.env)
     pip = [c for c in m.calls if "pip" in c]
     assert m.installs == [] and len(pip) == 1 and "--no-index" in pip[0] and "--no-deps" in pip[0]
-    assert not deskctl.env_old().exists() and json.loads(deskctl.MARKER.read_text())["version"] == "1.1-y"
+    assert not deskctl.env_old().exists() and json.loads(deskctl.MARKER.read_text(encoding="utf-8"))["version"] == "1.1-y"
 
 
 def test_desk_environ_names_the_kind(m, monkeypatch):
@@ -322,8 +322,8 @@ def test_keyboard_interrupt_in_the_loader_rolls_back_and_propagates(m):
     m.install_error = KeyboardInterrupt()
     with pytest.raises(KeyboardInterrupt):
         deskctl.ensure_env(m.env)
-    assert (deskctl.ENV / "who").read_text() == "old-env" and not deskctl.env_old().exists()
-    assert json.loads(deskctl.MARKER.read_text())["version"] == "0.9-old"
+    assert (deskctl.ENV / "who").read_text(encoding="utf-8") == "old-env" and not deskctl.env_old().exists()
+    assert json.loads(deskctl.MARKER.read_text(encoding="utf-8"))["version"] == "0.9-old"
 
 
 def test_hot_update_passes_strict_mirror_to_the_new_launcher(m, monkeypatch):
@@ -334,7 +334,7 @@ def test_hot_update_passes_strict_mirror_to_the_new_launcher(m, monkeypatch):
     monkeypatch.setattr(deskctl, "apply_update", lambda env, staged: None)
     monkeypatch.setattr(deskctl, "run_child", lambda cmd, env: commands.append(cmd) or 0)
     for strict in (True, False):
-        (upd / "pending.json").write_text(json.dumps({"version": "2.0", "staged": str(m.home / "staged")}))
+        (upd / "pending.json").write_text(json.dumps({"version": "2.0", "staged": str(m.home / "staged")}), encoding="utf-8")
         monkeypatch.setattr(deskctl, "STRICT_MIRROR", strict)
         assert deskctl.hot_update(m.env, ["--port", "8123"]) == 0
     assert ("--strict-mirror" in commands[0]) and "--verify-update" in commands[0]
@@ -380,13 +380,13 @@ def test_rename_gives_up_after_five_attempts(m, monkeypatch, pauses):
     with pytest.raises(deskctl.Fail, match="Не удалось убрать прежнее окружение"):
         deskctl.ensure_env(m.env)
     assert state["calls"] == deskctl.RENAME_TRIES == 5 and len(pauses) == 4
-    assert (deskctl.ENV / "who").read_text() == "old-env"
+    assert (deskctl.ENV / "who").read_text(encoding="utf-8") == "old-env"
 
 
 def test_undo_reports_whether_the_previous_env_is_back(m, monkeypatch, pauses):
     m.old_env().rename(deskctl.env_old())
     deskctl.ENV.mkdir()
-    assert deskctl._undo_mirror(m.env, True) is True and (deskctl.ENV / "who").read_text() == "old-env"
+    assert deskctl._undo_mirror(m.env, True) is True and (deskctl.ENV / "who").read_text(encoding="utf-8") == "old-env"
     assert deskctl._undo_mirror(m.env, False) is True  # nothing to bring back
 
 
@@ -407,5 +407,5 @@ def test_undo_that_cannot_return_the_env_says_the_next_start_will(m, monkeypatch
     text = str(e.value)
     assert "Прежнее окружение не удалось вернуть сейчас; его вернёт следующий запуск start.bat" in text
     assert "Прежнее окружение возвращено." not in text
-    assert deskctl.env_old().exists() and (deskctl.env_old() / "who").read_text() == "old-env"
+    assert deskctl.env_old().exists() and (deskctl.env_old() / "who").read_text(encoding="utf-8") == "old-env"
     assert deskctl._undo_mirror(m.env, True) is False

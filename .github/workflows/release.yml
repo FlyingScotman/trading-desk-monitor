@@ -14,6 +14,7 @@ name: release
 # Re-running for an existing tag (Run workflow with the tag filled in) replaces its assets.
 # Only a v-tag starts this workflow: a tag without v (or a release made by hand on GitHub) stays empty; tag-format.yml
 # fails on such a tag with what to do, and check-tag below rejects a non-v tag given to Run workflow.
+# The release job waits for the Windows check (windows-bundle.yml, TDM#639): install, update, rollback, stop on Windows.
 
 on:
   push:
@@ -33,7 +34,17 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  # TDM#639: the bundle is installed, started, updated, rolled back and stopped on Windows with CPython 3.11 before it is
+  # published (windows-bundle.yml, the same build command as below); a release without that check is not made
+  windows:
+    uses: ./.github/workflows/windows-bundle.yml
+    with:
+      # the commit, not the branch name: «Run workflow» on main with an empty tag reads main again in each job, hours
+      # apart, and the commit checked on Windows could differ from the one released (github.sha is the same in all jobs)
+      ref: ${{ github.event.inputs.tag || github.sha }}
+
   release:
+    needs: windows
     runs-on: ubuntu-latest
     timeout-minutes: 90
     env:
@@ -42,7 +53,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: ${{ github.event.inputs.tag || github.ref }}
+          ref: ${{ github.event.inputs.tag || github.sha }}  # the commit the Windows check ran on (see above)
           fetch-depth: 0
       - name: Release tag («Run workflow» without a tag makes v<backend version> on main)
         if: github.event_name == 'workflow_dispatch' && github.event.inputs.tag == ''
@@ -74,6 +85,8 @@ jobs:
         run: |
           backend/.venv/bin/ruff check backend
           (cd backend && .venv/bin/python -m pytest -q -p no:cacheprovider)
+          # all the seeds of the pool's failure property (the default run, and ci.yml's job per push, take part of them)
+          (cd backend && .venv/bin/python -m pytest -q -p no:cacheprovider -m full_property)
           backend/.venv/bin/python -m pytest -q -p no:cacheprovider tests
       - name: The previous release's mirror bundle, as published (base of the patches)
         # the patch is made against the bytes that were delivered, never a rebuild that only has the same version

@@ -6,7 +6,7 @@
 const fs = require('fs'), path = require('path'), vm = require('vm'), assert = require('assert');
 const { loadRun } = require('./fixtures/concepts_run');
 const P = f => fs.readFileSync(path.join(__dirname, '..', '..', 'prototypes', f), 'utf8');
-let n = 0; const t = (name, f) => { f(); n++; console.log('ok', name); };
+let n = 0; const T = []; const t = (name, f) => T.push([name, f]);
 const near = (a, b, msg) => assert.ok(Math.abs(a - b) <= 1e-9 * Math.max(1, Math.abs(a), Math.abs(b)), msg + ': ' + a + ' vs ' + b);
 
 const KBD = [0, 0, 0, 0, 120, 250, 900, 1800, 400, 0, 0].map(v => -v);  // par-бакеты КБД: 1M–6M нули
@@ -147,18 +147,16 @@ t('#213 история «КБД»: из RUONIA вычитается риск RUO
   assert.deepStrictEqual(Array.from(O['RUB RUONIA']), [-9000 + 3000, -9100 + 3100]);
 });
 
-t('#213 история позиции: «RUONIA + базис» — RUONIA и базис как в прогонах; «КБД» — RUONIA минус её риск RUONIA (ofzRuo)', () => {
-  const xhr = (id) => function () {
-    this.open = () => {};
-    this.send = () => { this.status = 200; this.responseText = JSON.stringify({ dates: ['2026-10-22', '2026-10-23'], runAt: [null, null],
+t('#213 история позиции: «RUONIA + базис» — RUONIA и базис как в прогонах; «КБД» — RUONIA минус её риск RUONIA (ofzRuo)', async () => {
+  // история приходит асинхронно (TDM#629): M.loadHistory, затем синхронное чтение M.posHistory
+  const answer = (id) => (u) => Promise.resolve({ status: /history\/positions/.test(u) ? 200 : 404, json: () => Promise.resolve({ dates: ['2026-10-22', '2026-10-23'], runAt: [null, null],
       series: { [id]: { price: [100, 101], notional: [1, 1], dv01: [-505, -506], basis: [-500, -501], ofzRuo: [-505, null],
-        curves: { 'RUB RUONIA': [-505, -506] } } } }); };
-  };
-  const run = view => { let id; const { M } = load(view, 'ruonia_basis', (D, ctx) => { computed(D); id = D.positions[0].id; ctx.XMLHttpRequest = xhr(id); }); return M.posHistory(id); };
-  const b = run(null);  // до #213 здесь падало: «p is not defined»
+        curves: { 'RUB RUONIA': [-505, -506] } } } }) });
+  const run = async view => { let id; const { M } = load(view, 'ruonia_basis', (D, ctx) => { computed(D); id = D.positions[0].id; ctx.fetch = answer(id); }); await M.loadHistory([id], null); return M.posHistory(id); };
+  const b = await run(null);  // до #213 здесь падало: «p is not defined»
   assert.deepStrictEqual(Array.from(b.curves['RUB RUONIA']), [-505, -506]);
   assert.deepStrictEqual(Array.from(b.basis), [-500, -501]);
-  const k = run('kbd');
+  const k = await run('kbd');
   assert.deepStrictEqual(Array.from(k.curves['RUB RUONIA']), [0, -506 + 501]);  // null: прогон без ofzRuo — базис
   assert.deepStrictEqual(Array.from(k.curves['RUB OFZ']), [-500, -501]);
 });
@@ -192,4 +190,7 @@ t('#467 КБД-флоатер' + ': «КБД» оставляет RUONIA − б�
   assert.strictEqual(K.basis01, 0);
   near(B.basis01, sum(FB), 'базис01');
 });
-console.log(n + ' tests passed');
+(async () => {
+  for (const [name, f] of T) { await f(); n++; console.log('ok', name); }
+  console.log(n + ' tests passed');
+})().catch(e => { console.error(e); process.exit(1); });

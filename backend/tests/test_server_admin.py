@@ -182,7 +182,7 @@ def test_restart_and_what_runs_without_the_launcher(store_url, home: Path):
     assert c.get("/api/v1/server").json()["restart_needed"] == ["port"]
 
     (home / "restart").mkdir(exist_ok=True)
-    (home / "restart/last.json").write_text(json.dumps({"kind": "network", "ok": False, "message": "порт занят"}))
+    (home / "restart/last.json").write_text(json.dumps({"kind": "network", "ok": False, "message": "порт занят"}), encoding="utf-8")
     assert c.get("/api/v1/server").json()["last"]["message"] == "порт занят"
 
 
@@ -275,30 +275,30 @@ def test_launcher_rolls_back_a_network_change_that_does_not_start(tmp_path: Path
     (home / "tls").mkdir(parents=True)
     env = {"DESK_HOME": str(home)}
     crt, key = home / "tls/desk.crt", home / "tls/desk.key"
-    crt.write_text("old cert")
-    key.write_text("old key")
-    (home / "settings.json").write_text(json.dumps({"hub_url": "https://hub", "port": 8100}))
+    crt.write_text("old cert", encoding="utf-8")
+    key.write_text("old key", encoding="utf-8")
+    (home / "settings.json").write_text(json.dumps({"hub_url": "https://hub", "port": 8100}), encoding="utf-8")
     assert not deskctl.rollback_network(env, "x")  # nothing staged, nothing known to be good
 
     files = restart.backup_files(home, [crt, key, home / "tls/none.pem"])
     restart.stage_network_change(home, {"port": 8100, "bind_host": None, "auth": None}, files=files,
                                  expect={"host": "0.0.0.0", "port": 8443, "https": True})
     (home / "settings.json").write_text(json.dumps({"hub_url": "https://hub", "port": 8443, "bind_host": "0.0.0.0",
-                                                    "auth": True}))
-    crt.write_text("new cert")
+                                                    "auth": True}), encoding="utf-8")
+    crt.write_text("new cert", encoding="utf-8")
     assert deskctl.network_pending(env)["expect"]["port"] == 8443
     assert deskctl.rollback_network(env, "сервер не запустился, код 3")
-    assert json.loads((home / "settings.json").read_text()) == {"hub_url": "https://hub", "port": 8100}
-    assert crt.read_text() == "old cert" and key.read_text() == "old key"
+    assert json.loads((home / "settings.json").read_text(encoding="utf-8")) == {"hub_url": "https://hub", "port": 8100}
+    assert crt.read_text(encoding="utf-8") == "old cert" and key.read_text(encoding="utf-8") == "old key"
     last = restart.last(home)
     assert last["kind"] == "network" and not last["ok"] and "код 3" in last["message"] and "прежние" in last["message"]
     assert deskctl.network_pending(env) is None and restart.pending(home) is None
 
     # a good start is remembered; a plain restart that then fails goes back to it
     deskctl.save_good(env)
-    (home / "settings.json").write_text(json.dumps({"hub_url": "https://hub", "port": 9999}))
+    (home / "settings.json").write_text(json.dumps({"hub_url": "https://hub", "port": 9999}), encoding="utf-8")
     assert deskctl.rollback_network(env, "сервер не ответил")
-    assert json.loads((home / "settings.json").read_text())["port"] == 8100
+    assert json.loads((home / "settings.json").read_text(encoding="utf-8"))["port"] == 8100
     assert not deskctl.rollback_network(env, "again")  # already the good one: the caller reports the failure
 
     restart.stage_network_change(home, {"port": 8100}, expect={"host": "127.0.0.1", "port": 8200, "https": False})
@@ -313,7 +313,7 @@ def test_the_launcher_drops_the_staged_change_before_it_records_the_outcome(tmp_
     home = tmp_path / "home"
     home.mkdir()
     env = {"DESK_HOME": str(home)}
-    (home / "settings.json").write_text(json.dumps({"port": 8200}))
+    (home / "settings.json").write_text(json.dumps({"port": 8200}), encoding="utf-8")
     restart.stage_network_change(home, {"port": 8100}, expect={"host": "127.0.0.1", "port": 8200, "https": False})
     seen: list[bool] = []
     write = deskctl._write_json
@@ -351,16 +351,16 @@ def test_restart_from_the_page_end_to_end(tmp_path: Path):
     version = "0.1.0-20261022-ddddddd"
     root = tmp_path / "DeskMonitor"
     (root / "app").mkdir(parents=True)
-    (root / "VERSION").write_text(version + "\n")
+    (root / "VERSION").write_text(version + "\n", encoding="utf-8")
     (root / "app/deskctl.py").write_bytes((REPO / "backend/windows/deskctl.py").read_bytes())
     scripts = root / "env" / "bin"
     scripts.mkdir(parents=True)
-    (scripts / "desk").write_text(STUB.format(python=sys.executable))
+    (scripts / "desk").write_text(STUB.format(python=sys.executable), encoding="utf-8")
     (scripts / "desk").chmod(0o755)
-    (root / "env/desk-bundle.json").write_text(json.dumps({"version": version, "root": str(root.resolve())}))
+    (root / "env/desk-bundle.json").write_text(json.dumps({"version": version, "root": str(root.resolve())}), encoding="utf-8")
     home, port = tmp_path / "home", free_port()
     home.mkdir()
-    (home / "settings.json").write_text(json.dumps({"port": port}))
+    (home / "settings.json").write_text(json.dumps({"port": port}), encoding="utf-8")
     env = {k: v for k, v in os.environ.items() if not k.startswith("DESK_")}
     env.update(DESK_HOME=str(home), DESK_ENV_FILE=str(tmp_path / "none.env"), BROWSER="true")
     with open(tmp_path / "launcher.log", "wb") as log:
@@ -384,9 +384,9 @@ def test_restart_from_the_page_end_to_end(tmp_path: Path):
                     return j
             except (OSError, ValueError):
                 pass
-            assert proc.poll() is None, (tmp_path / "launcher.log").read_text(errors="replace")
+            assert proc.poll() is None, (tmp_path / "launcher.log").read_text(errors="replace", encoding="utf-8")
             time.sleep(0.5)
-        raise AssertionError(f"{what}:\n" + (tmp_path / "launcher.log").read_text(errors="replace"))
+        raise AssertionError(f"{what}:\n" + (tmp_path / "launcher.log").read_text(errors="replace", encoding="utf-8"))
 
     try:
         first = until(port, lambda j: j["can_restart"], "the server did not start")
@@ -410,7 +410,7 @@ def test_restart_from_the_page_end_to_end(tmp_path: Path):
             squatter.listen()
             j = until(new, lambda j: j["last"]["kind"] == "network" and not j["last"]["ok"], "no rollback", 120)
         assert j["running"]["port"] == new and not j["pending"] and "прежние" in j["last"]["message"]
-        assert json.loads((home / "settings.json").read_text())["port"] == new
+        assert json.loads((home / "settings.json").read_text(encoding="utf-8"))["port"] == new
     finally:
         try:
             os.killpg(proc.pid, signal.SIGTERM)

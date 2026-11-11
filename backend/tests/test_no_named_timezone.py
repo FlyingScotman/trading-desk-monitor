@@ -11,10 +11,32 @@ import re
 from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 
+import psycopg
 import pytest
 from psycopg.types.json import Jsonb
 
 from desk import store
+
+# The same sessions as POSIX offsets, for a PostgreSQL without time zone data (the Windows bundle, #155): it takes no
+# zone name, not even UTC, but it takes an offset that names no file.
+POSIX_ZONE = {"UTC": "<+00>0", "America/New_York": "<-05>5", "Asia/Tokyo": "<+09>-9"}
+
+
+def set_session_zone(con, name: str) -> None:
+    """``SET TIME ZONE name``; where the server has no zone data, the same offset as a POSIX string."""
+    try:
+        con.execute(f"SET TIME ZONE '{name}'")
+    except psycopg.errors.InvalidParameterValue:
+        con.execute(f"SET TIME ZONE '{POSIX_ZONE[name]}'")
+
+
+def has_zone_data(con) -> bool:
+    try:
+        con.execute("SELECT '2026-01-01'::timestamptz AT TIME ZONE 'Europe/Moscow'")
+    except psycopg.errors.Error:
+        return False
+    return True
+
 
 SRC = Path(__file__).resolve().parents[1] / "src"
 
@@ -43,6 +65,9 @@ def test_the_fixed_offset_is_the_moscow_day(store_url):
     """``AT TIME ZONE INTERVAL '+03:00'`` (east of UTC, unlike a POSIX string offset) gives the same Moscow day as the
     named zone (the test Postgres has tz data), every half hour over two years, for any session TimeZone."""
     with store.connect(store_url) as con:
+        if not has_zone_data(con):
+            pytest.skip("this PostgreSQL has no time zone data (the Windows bundle): there is no named zone to compare "
+                        "with, the fixed offset is the only one the product uses")
         for tz in ("UTC", "America/New_York", "Asia/Tokyo"):
             con.execute(f"SET TIME ZONE '{tz}'")
             bad = con.execute(
@@ -80,7 +105,7 @@ def test_revisions_without_valid_from_take_effect_on_the_moscow_day_they_were_re
         _rule(con, "1", BEFORE - timedelta(days=5))
         _rule(con, "2", BEFORE)
         _rule(con, "3", MIDNIGHT)
-        con.execute(f"SET TIME ZONE '{session_tz}'")
+        set_session_zone(con, session_tz)
 
         def book(on: str, known_at: datetime = LATER) -> str:
             return store.current_books(con, date.fromisoformat(on), known_at)[0]["book_type"]

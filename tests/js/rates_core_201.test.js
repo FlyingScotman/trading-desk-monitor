@@ -9,7 +9,7 @@
 const fs = require('fs'), path = require('path'), vm = require('vm'), assert = require('assert');
 const { loadRun } = require('./fixtures/concepts_run');
 const P = f => fs.readFileSync(path.join(__dirname, '..', '..', 'prototypes', f), 'utf8');
-let n = 0; const t = (name, f) => { f(); n++; console.log('ok', name); };
+let n = 0; const T = []; const t = (name, f) => T.push([name, f]);
 const NB = 11, at = (k, v) => Array.from({ length: NB }, (_, i) => i === k ? v : 0);
 
 // маленький DOM: столько, сколько нужно K.table и панели без вёрстки; html(el) — вся разметка поддерева
@@ -25,13 +25,16 @@ function load(opts) {
   opts = opts || {};
   const document = { addEventListener() {}, createElement: el, documentElement: el(), body: el(), querySelector() { return null; }, querySelectorAll() { return []; }, getElementById: () => el() };
   const asked = [];
-  class XHR {
-    open(m, url) { asked.push(url); this.url = url; }
-    send() { const j = opts.derivatives; this.status = j ? 200 : 404; this.responseText = j ? JSON.stringify(j) : ''; }
-  }
+  // параллельный отчёт приходит асинхронно (TDM#629): fetch заглушки, ответ — после M.loadDeriv() (ready); синхронных запросов нет
+  class XHR { constructor() { throw new Error('синхронный запрос запрещён (TDM#629)'); } }
+  const fetch = url => {
+    asked.push(url);
+    const j = /derivatives$/.test(url) ? opts.derivatives : null;
+    return Promise.resolve({ status: j ? 200 : 404, ok: !!j, statusText: '', json: () => Promise.resolve(j) });
+  };
   const ctx = { window: {}, document, URLSearchParams, console, location: { href: 'http://x/', search: '', hostname: '127.0.0.1' }, setTimeout,
     localStorage: { getItem() { return null; }, setItem() {} }, getComputedStyle: () => ({ getPropertyValue: () => '#888' }), MutationObserver: class { observe() {} },
-    XMLHttpRequest: XHR };
+    XMLHttpRequest: XHR, fetch };
   ctx.window = ctx;
   vm.createContext(ctx);
   if (opts.real) {
@@ -40,7 +43,7 @@ function load(opts) {
     vm.runInContext(P('concepts/lib/real.js'), ctx);
   } else vm.runInContext(P('concepts/lib/mock.js'), ctx);
   vm.runInContext(P('concepts/lib/kit.js'), ctx);
-  return { M: ctx.window.MOCK, K: ctx.window.KIT, D: ctx.window.CONCEPTS_RUN, asked };
+  return { M: ctx.window.MOCK, K: ctx.window.KIT, D: ctx.window.CONCEPTS_RUN, asked, ready: () => ctx.window.MOCK.loadDeriv ? ctx.window.MOCK.loadDeriv() : Promise.resolve() };
 }
 
 // строки прогона в форме tdm_run.direct_row (backend valuation/derivatives.py: _swap_fact, _repo_fact, index_fixings)
@@ -69,7 +72,7 @@ function withRates(D) {
         RUONIA: Object.assign({}, RUONIA, { latest: '2026-10-12', latest_rate_pct: 16.1, missing_business_days: ['2026-05-04'] }) } } }));
 }
 
-t('прогон: extra.swaps / extra.repos / index_fixings — в p.ratesCore, фиксинги прогона — в M.indexFixings', () => {
+t('прогон: extra.swaps / extra.repos / index_fixings — в p.ratesCore, фиксинги прогона — в M.indexFixings', async () => {
   const { M } = load({ real: true, mutate: withRates });
   const s = M.pos.S1.ratesCore, r = M.pos.S2.ratesCore;
   assert.strictEqual(s.trades.length, 1);
@@ -99,7 +102,7 @@ t('прогон: extra.swaps / extra.repos / index_fixings — в p.ratesCore, �
   assert.strictEqual(M.positions.filter(p => p.ratesCore).length, 2, 'остальные строки — null');
 });
 
-t('прогон: панель C02 — фиксинги, «предварительно» с допущениями, риск по двум кривым, обе таблицы', () => {
+t('прогон: панель C02 — фиксинги, «предварительно» с допущениями, риск по двум кривым, обе таблицы', async () => {
   const { M, K } = load({ real: true, mutate: withRates });
   const box = el(), R = K.ratesCorePanel(box), out = html(box);
   assert.strictEqual(R.rows.length, 2); assert.strictEqual(R.trades.length, 2);
@@ -119,10 +122,12 @@ t('прогон: панель C02 — фиксинги, «предварител
   assert.ok(!/NaN|undefined/.test(out), 'без NaN/undefined');
 });
 
-t('прогон без extra.swaps (старый): нет данных словами, не падает; /derivatives не ответил — «недоступен», не молча', () => {
-  const { M, K, asked } = load({ real: true, mutate: runId });
+t('прогон без extra.swaps (старый): нет данных словами, не падает; /derivatives не ответил — «недоступен», не молча', async () => {
+  const { M, K, asked, ready } = load({ real: true, mutate: runId });
   assert.ok(M.positions.every(p => p.ratesCore === null));
   assert.deepStrictEqual(Object.keys(M.indexFixings), []);
+  assert.strictEqual(M.derivParallel().state, 'loading', 'до ответа — «загрузка», не «недоступен» и не пусто');
+  await ready();
   const par = M.derivParallel();
   assert.deepStrictEqual([par.state, par.status, par.rows.length], ['unavailable', 404, 0], 'нет ответа /derivatives — состояние и код');
   assert.ok(asked.includes('../api/v1/runs/42/derivatives'), asked.join(' '));
@@ -144,18 +149,21 @@ t('прогон без extra.swaps (старый): нет данных слов�
   assert.ok(!/NaN|undefined/.test(html(box2)), html(box2));
 });
 
-t('прогон: параллельный отчёт /derivatives — допуск, «выше допуска», строки по отчёту с причиной', () => {
+t('прогон: параллельный отчёт /derivatives — допуск, «выше допуска», строки по отчёту с причиной', async () => {
   const derivatives = { run_id: 5, state: 'computed', tolerance: { abs_rub: 10000, rel: 0.01, provisional: true }, totals: { n: 3 },
     by_book: {}, by_product: {}, reasons: { ccs_unsupported: 1 }, rows: [
       { position_id: 'S1', book_id: 'B', product: 'ois', status: 'both', used: 'computed', computed_pv_rub: 2.5e6, imported_pv_rub: 2.4e6, diff_rub: 1e5, over: true },
       { position_id: 'C9', book_id: 'B', product: 'ccs', status: 'imported_only', used: 'imported', computed_pv_rub: null, imported_pv_rub: 3e5, reason: 'ccs_unsupported' },
       { position_id: 'F1', book_id: 'B', product: 'fx_forward', status: 'both', used: 'computed', computed_pv_rub: 1, imported_pv_rub: 1, diff_rub: 0, over: false },
       { position_id: 'X', book_id: 'B', product: 'repo', status: 'imported_only', used: 'imported', computed_pv_rub: null, imported_pv_rub: 1, reason: 'core_fixing_missing' }] };
-  const { M, K } = load({ real: true, mutate: withRates, derivatives });
+  const { M, K, ready, asked } = load({ real: true, mutate: withRates, derivatives });
+  await ready();
   const par = M.derivParallel();
   assert.strictEqual(par.state, 'computed'); assert.strictEqual(par.rows.length, 4);
   assert.deepStrictEqual([par.rows[1].positionId, par.rows[1].imported, par.rows[1].computed, par.rows[1].reason], ['C9', 3e5, null, 'ccs_unsupported']);
   assert.strictEqual(M.derivParallel(), par, 'один запрос на страницу');
+  await M.loadDeriv(); await M.loadDeriv();
+  assert.strictEqual(asked.filter(u => /derivatives$/.test(u)).length, 1, 'один адрес — один запрос');
   const R = K.ratesCoreModel();
   assert.strictEqual(R.rows.find(r => r.id === 'S1').over, true);
   const rep = R.rows.filter(r => r.src === 'по отчёту');
@@ -168,7 +176,31 @@ t('прогон: параллельный отчёт /derivatives — допус
   assert.deepStrictEqual(Array.from(M.parseDerivParallel({ state: 'not_computed', rows: [] }).rows), []);
 });
 
-t('демо: та же форма — предварительная сделка, РЕПО, пропуск и неопубликованный день RUONIA, строки по отчёту', () => {
+t('прогон: панель рисуется сразу, параллельный отчёт приходит отдельным запросом — по ответу панель рисуется заново (TDM#629)', async () => {
+  const { K, ready, asked } = load({ real: true, mutate: withRates, derivatives: { run_id: 42, state: 'computed', tolerance: { abs_rub: 10000, rel: 0.01, provisional: true }, rows: [] } });
+  const box = el();  // как в браузере: присваивание innerHTML убирает дочерние узлы
+  Object.defineProperty(box, 'innerHTML', { get() { return this._h || ''; }, set(v) { this._h = v; this.children.length = 0; } });
+  K.ratesCorePanel(box);
+  assert.ok(html(box).includes('загружается'), 'до ответа — «загружается», а не «недоступен»');
+  assert.ok(!html(box).includes('недоступен'));
+  await ready(); await new Promise(r => setImmediate(r));
+  assert.ok(!html(box).includes('загружается') && html(box).includes('допуск'), html(box).slice(0, 300));
+  assert.strictEqual(asked.filter(u => /derivatives$/.test(u)).length, 1);
+});
+
+t('панель просили несколько раз, пока отчёт не пришёл: одна перерисовка по ответу, а не по одной на каждый вызов (ревью TDM#629)', async () => {
+  const { K, ready } = load({ real: true, mutate: withRates, derivatives: { run_id: 42, state: 'computed', tolerance: null, rows: [] } });
+  const box = el();
+  Object.defineProperty(box, 'innerHTML', { get() { return this._h || ''; }, set(v) { this._h = v; this.children.length = 0; } });
+  let draws = 0; const model = K.ratesCoreModel; K.ratesCoreModel = list => { draws++; return model(list); };
+  K.ratesCorePanel(box); K.ratesCorePanel(box); K.ratesCorePanel(box);  // фильтр шапки перерисовывает панель, пока отчёт грузится
+  assert.strictEqual(draws, 3);
+  await ready(); await new Promise(r => setImmediate(r));
+  assert.strictEqual(draws, 4, 'по ответу — одна перерисовка');
+  assert.ok(!html(box).includes('загружается'));
+});
+
+t('демо: та же форма — предварительная сделка, РЕПО, пропуск и неопубликованный день RUONIA, строки по отчёту', async () => {
   const { M, K } = load();
   const core = M.positions.filter(p => p.ratesCore);
   assert.ok(core.length >= 5);
@@ -209,8 +241,9 @@ function withMore(D) {
   D.positions.push(Object.assign({}, b, { id: 'C9', name: 'CCS USD/RUB', mvRub: 3e5, mv: 3e5, risk: { 'RUB RUONIA': at(2, 300000) }, extra: { valuation: 'reported', quality: 'reported_value' } }));
 }
 
-t('ревью: итоги PV по строкам с обеими оценками, строки «по отчёту» и их риск — отдельно', () => {
-  const { K } = load({ real: true, mutate: withMore, derivatives: DER });
+t('ревью: итоги PV по строкам с обеими оценками, строки «по отчёту» и их риск — отдельно', async () => {
+  const { K, ready } = load({ real: true, mutate: withMore, derivatives: DER });
+  await ready();
   const box = el(), R = K.ratesCorePanel(box), T = R.totals, out = html(box);
   // S1 (2.5 / 2.4), S3 (−4 / −3.9); S2 — без отчёта, C9 — по отчёту
   assert.ok(Math.abs(T.pv - (2.5e6 - 4e6)) < 1e-6 && Math.abs(T.rep - (2.4e6 - 3.9e6)) < 1e-6);
@@ -233,8 +266,9 @@ t('ревью: итоги PV по строкам с обеими оценкам�
   assert.ok(!/class="n (pos|neg)"[^<]*>0\.00/.test(out));
 });
 
-t('ревью: CSV — числа числами, имя без меток, отметки отдельной колонкой', () => {
-  const { K } = load({ real: true, mutate: withMore, derivatives: DER });
+t('ревью: CSV — числа числами, имя без меток, отметки отдельной колонкой', async () => {
+  const { K, ready } = load({ real: true, mutate: withMore, derivatives: DER });
+  await ready();
   const box = el(); K.ratesCorePanel(box);
   const csv = csvOf(K, box, 0), head = cells(csv[2]), col = name => head.findIndex(h => h.startsWith(name));
   const row = cells(csv.find(l => l.startsWith('OIS RUONIA 2Y,')));
@@ -250,8 +284,9 @@ t('ревью: CSV — числа числами, имя без меток, от
   assert.ok(/>\(1\.50\)<\/td><td[^>]*>\(1\.50\)<\/td><td[^>]*>0\.00<\/td>/.test(tf), tf);
 });
 
-t('ревью: перенос фиксинга и прочие допущения — раздельные счётчики; перенос сверх объявленного — ⚠', () => {
-  const { K, M } = load({ real: true, mutate: withMore, derivatives: DER });
+t('ревью: перенос фиксинга и прочие допущения — раздельные счётчики; перенос сверх объявленного — ⚠', async () => {
+  const { K, M, ready } = load({ real: true, mutate: withMore, derivatives: DER });
+  await ready();
   const box = el(), R = K.ratesCorePanel(box), out = html(box);
   assert.deepStrictEqual([R.totals.nProv, R.totals.nCarry], [1, 1]);
   assert.ok(out.includes('предварительно 1') && out.includes('фикс. перенесён 1'));
@@ -261,11 +296,13 @@ t('ревью: перенос фиксинга и прочие допущени�
   assert.ok(/⚠ не опубликован за 13\.10\.26, 14\.10\.26.*больше, чем объявлено/.test(K.rcFixingsHtml()));
 });
 
-t('ревью: /derivatives не посчитан или недоступен — строкой; причины бэкенда — словами; строки без позиции — по книге фильтра', () => {
-  const { K } = load({ real: true, mutate: withRates, derivatives: { run_id: 42, state: 'not_computed', rows: [] } });
+t('ревью: /derivatives не посчитан или недоступен — строкой; причины бэкенда — словами; строки без позиции — по книге фильтра', async () => {
+  const { K, ready } = load({ real: true, mutate: withRates, derivatives: { run_id: 42, state: 'not_computed', rows: [] } });
+  await ready();
   const box = el(); K.ratesCorePanel(box);
   assert.ok(html(box).includes('не посчитан (прогон до него)'));
-  const { K: K2 } = load({ real: true, mutate: withRates });
+  const { K: K2, ready: ready2 } = load({ real: true, mutate: withRates });
+  await ready2();
   const b2 = el(); K2.ratesCorePanel(b2);
   assert.ok(html(b2).includes('недоступен (HTTP 404)'));
   ['repo_index_unsupported', 'no_key_rate_curve', 'no_rub_curve', 'swap_dates_mismatch', 'swap_notional_mismatch', 'terms_mixed', 'not_valued']
@@ -282,13 +319,13 @@ t('ревью: /derivatives не посчитан или недоступен �
   assert.ok(repo.ratesCore.pv > 0.99 * repo.ratesCore.trades[0].notional && repo.dv01ByCurve['RUB RUONIA'] < 0);
 });
 
-t('C02: панель свопов и РЕПО — через K.ratesCorePanel и перерисовывается фильтром шапки', () => {
+t('C02: панель свопов и РЕПО — через K.ratesCorePanel и перерисовывается фильтром шапки', async () => {
   const c02 = P('concepts/c02-risk-ladder.html');
   assert.ok(c02.includes('id="rates"') && /K\.ratesCorePanel\(document\.querySelector\('#rates \.bd'\)\)/.test(c02));
   assert.ok(/K\.onFilter\(\(\) => \{[^}]*drawRates\(\)/.test(c02));
 });
 
-t('TDM#565: сторона CCS — по фиксу, а при двух плавающих ногах — по валютной ноге', () => {
+t('TDM#565: сторона CCS — по фиксу, а при двух плавающих ногах — по валютной ноге', async () => {
   const { K } = load();
   // рублёвый фикс против юаней на RUSFARCNY: side считается по фиксу (плачу рублёвый фикс)
   const fixRub = { product: 'ccs', foreignIndex: 'RUSFARCNY', fixedRate: 15 };
@@ -304,4 +341,7 @@ t('TDM#565: сторона CCS — по фиксу, а при двух плав�
   assert.strictEqual(K.rcSide('repo', { product: 'repo' }), 'РЕПО (привлечение)');
 });
 
-console.log(n + ' tests passed');
+(async () => {
+  for (const [name, f] of T) { await f(); n++; console.log('ok', name); }
+  console.log(n + ' tests passed');
+})().catch(e => { console.error(e); process.exit(1); });

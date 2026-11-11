@@ -1,0 +1,114 @@
+name: windows-bundle
+
+# TDM#639: the bundle without packages (DeskMonitorMirror-<version>.zip) installed, started, updated, rolled back and
+# stopped on Windows with CPython 3.11, the target of the owner's machine (the rest of the CI is Ubuntu and CPython 3.12).
+# Called by ci.yml (pull requests and pushes that touch backend/windows, the updater, the builder or the dependencies) and by
+# release.yml (a release is not built without it). Nothing is published: the zips are workflow artifacts, kept 3 days.
+#
+# build   (ubuntu): the bundle the way release.yml builds it (build_windows_bundle.py --mirror-only, no patches), then the
+#                   "next" build of the same tree with one source file changed (a -dirty<time> version, a different
+#                   desk_backend wheel: newer than the first, so the update reinstalls a wheel too)
+# windows (windows-latest): backend/tools/ci_windows_bundle.py: the layout (our two wheels only, DEC15), the first start
+#                   (mirror_install.py takes the third-party packages from PyPI, the pip index of this machine, with the
+#                   lock's hashes: --strict-mirror), the update to the next build and the rollback through the settings
+#                   page's API, an interruption of the launcher and a hard kill of the server with its database, the start
+#                   after that, stop. The full bundle with third-party wheels is never built or published (AGENTS.md).
+
+on:
+  workflow_call:
+    inputs:
+      ref:
+        description: "what to build and check (release.yml passes the tag it releases); empty: the ref of the caller"
+        type: string
+        default: ""
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref }}
+          fetch-depth: 0
+      - uses: astral-sh/setup-uv@v5
+      - name: Python 3.11 with pip (the bundle builder downloads win_amd64 / cp311 wheels with it)
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: The bundle without packages, as release.yml builds it (nothing is published)
+        run: python3.11 backend/tools/build_windows_bundle.py --out dist/old --mirror-only
+      - name: Only the bundle without packages was built (the full one is never made, DEC15)
+        run: |
+          shopt -s nullglob
+          full=(dist/old/DeskMonitor-[0-9]*.zip)
+          mirror=(dist/old/DeskMonitorMirror-*.zip)
+          ls -la dist/old
+          if [ "${#full[@]}" -ne 0 ] || [ "${#mirror[@]}" -ne 1 ]; then
+            echo "expected exactly one DeskMonitorMirror-<version>.zip and no full bundle" >&2
+            exit 1
+          fi
+      - name: The next build (one source file changed, so a newer version and a different desk_backend wheel)
+        run: |
+          echo "# CI: the next build" >> backend/src/desk/__init__.py
+          python3.11 backend/tools/build_windows_bundle.py --out dist/new --mirror-only --allow-dirty --no-repro-check
+          git checkout -- backend/src/desk/__init__.py
+          ls -la dist/new
+      - uses: actions/upload-artifact@v4
+        with:
+          name: bundle-old
+          path: dist/old/DeskMonitorMirror-*.zip
+          retention-days: 3
+      - uses: actions/upload-artifact@v4
+        with:
+          name: bundle-new
+          path: dist/new/DeskMonitorMirror-*.zip
+          retention-days: 3
+
+  windows:
+    needs: build
+    runs-on: windows-latest
+    timeout-minutes: 75
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref }}
+      - name: CPython 3.11 for the driver (the bundle brings its own runtime)
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - uses: actions/download-artifact@v4
+        with:
+          name: bundle-old
+          path: dl/old
+      - uses: actions/download-artifact@v4
+        with:
+          name: bundle-new
+          path: dl/new
+      - name: Install, start, update, roll back, interrupt, crash, start, stop
+        shell: pwsh
+        run: |
+          $old = (Get-ChildItem dl/old -Filter 'DeskMonitorMirror-*.zip').FullName
+          $new = (Get-ChildItem dl/new -Filter 'DeskMonitorMirror-*.zip').FullName
+          python -X utf8 backend/tools/ci_windows_bundle.py --old $old --new $new --work "$env:RUNNER_TEMP\dm"
+      - name: Logs of the run
+        if: always()
+        shell: pwsh
+        run: |
+          $dst = "logs-out"
+          New-Item -ItemType Directory -Force $dst | Out-Null
+          $w = "$env:RUNNER_TEMP\dm"
+          Copy-Item "$w\launcher-*.log", "$w\summary.json" $dst -ErrorAction SilentlyContinue
+          Copy-Item "$w\home\logs" "$dst\home-logs" -Recurse -ErrorAction SilentlyContinue
+          Copy-Item "$w\home\updates\*.json" $dst -ErrorAction SilentlyContinue
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: windows-bundle-logs
+          path: logs-out
+          retention-days: 7
+          if-no-files-found: ignore

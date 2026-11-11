@@ -15,6 +15,7 @@ from __future__ import annotations
 import hashlib
 import json
 import math
+import time
 from collections import Counter
 from collections.abc import Iterable
 from dataclasses import dataclass, field
@@ -33,6 +34,7 @@ from ..inbox.spi import (  # stdlib only, no cycle
     STOCK_DATASETS,
     VERSIONED_DATASETS,
 )
+from ..run_cache import forget_runs  # the per-run API's finished bodies go with their runs (TDM#631)
 from ..settings import REPO_ROOT, Settings, SettingsError
 from ..valuation.fallback import CarriedSpread
 
@@ -46,23 +48,31 @@ MSK_DAY = "(recorded_at AT TIME ZONE INTERVAL '+03:00')::date"
 _LOCK = 0x6465736B  # "desk": one migrator at a time
 
 
-def connect(url: str) -> psycopg.Connection:
-    return psycopg.connect(url, autocommit=True)
+def connect(url: str, connect_timeout: float | None = None) -> psycopg.Connection:
+    """A connection (autocommit). ``connect_timeout`` (seconds): for a caller that treats "no store" as an answer and must
+    not stand in a connect that never ends (Windows keeps a connection to a port nobody listens on for seconds)."""
+    if connect_timeout is None:
+        return psycopg.connect(url, autocommit=True)
+    return psycopg.connect(url, autocommit=True, connect_timeout=max(1, round(connect_timeout)))
 
 
 def resolve_url(settings: Settings) -> str:
     """``DESK_STORE_URL``, else the embedded server in ``settings.pg_dir`` (pgserver; ``<home>/pg``, in the dev
     checkout ``.devdata/desk_pg``), database ``desk``. It keeps running after the process exits, so later
-    commands share it."""
+    commands share it. A server that was stopped in an emergency recovers first, which takes minutes: this waits for
+    it, saying so on the console, and a start that cannot succeed raises ``embedded.StoreStartError`` (a
+    ``SettingsError``) with the tail of the server's log (``desk.store.embedded``)."""
     if settings.store_url:
         return settings.store_url
     try:
-        import pgserver
+        import pgserver  # noqa: F401 - embedded.get_server imports it again; this is the message for a missing one
     except ImportError:
         raise SettingsError("set DESK_STORE_URL (postgresql://...): the embedded dev store needs pgserver, "
                             "which is not installed (uv sync --extra dev)") from None
     settings.pg_dir.parent.mkdir(parents=True, exist_ok=True)
-    server = pgserver.get_server(settings.pg_dir, cleanup_mode=None)
+    from . import embedded  # pgserver's start with the recovery of a crashed cluster (TDM#518)
+
+    server = embedded.get_server(settings.pg_dir)
     if "1 row" not in server.psql("SELECT 1 FROM pg_database WHERE datname = 'desk';"):
         server.psql("CREATE DATABASE desk ENCODING 'UTF8' TEMPLATE template0;")
     return server.get_uri("desk")
@@ -108,7 +118,7 @@ class Loaded:
 def load_positions(con: psycopg.Connection, rows: list[tuple[str, str, str, float]], *, valid_date: date,
                    source_name: str, source_sha256: str, recorded_by: str | None = None,
                    books: list[str] | None = None) -> list[Loaded]:
-    """rows: (position_id, book_id, secid, quantity), as ``cli.read_book`` returns them. The load covers
+    """rows: (position_id, book_id, secid, quantity), as ``bookfile.read_book`` returns them. The load covers
     ``books`` (default: the books of the rows): one position set per book, revision = the previous one of
     (book, valid_date) + 1; a covered book without rows gets an empty set (closed or dropped), unless its
     latest set of the date is empty already. Raises InputError, writing nothing, when a position id is
@@ -753,20 +763,166 @@ def prune_intraday(con: psycopg.Connection, business_date: date, keep_run_id: in
             for table in RUN_ROW_TABLES:
                 con.execute("DELETE FROM " + table + " WHERE run_id = ANY(%s)", (ids,))
             con.execute("DELETE FROM run WHERE run_id = ANY(%s)", (ids,))
+    forget_runs(ids)
     return ids
 
 
-def default_runs(con: psycopg.Connection, since: date) -> dict[date, dict]:
-    """The default run of each business date from ``since`` on: run_id, its snapshots, position sets (sorted),
-    completed_at, private inputs hash, the horizon it read its inputs at (``positions_known_at``: ``late_inputs``) and
-    the ``logic_version`` of the code that made it (lineage; None for a run made before it was recorded)."""
+PRUNE_LOCK = 0x7DE5C0DE
+"""The advisory lock of ``prune_superseded`` (a second pruner, the CLI beside the autopilot, finds the first busy)."""
+PRUNE_BATCH = 5
+"""Runs one transaction of ``prune_superseded`` deletes: an interrupted prune loses at most this batch."""
+PRUNE_MIN_DAYS = 1
+"""The least ``keep_days`` ``prune_superseded`` accepts: a run replaced today can still be what a page shows."""
+
+_PRUNABLE = (
+    "SELECT r.run_id, r.business_date, r.cut_type FROM run r"
+    " WHERE r.run_type = 'EOD' AND r.status = 'complete' AND r.cut_type IN ('eod_final', 'eod_preliminary')"
+    f" AND r.run_id NOT IN ({CURRENT_RUNS})"  # the run a date shows is never it (nor, so, the default run)
+    # replaced by a newer complete EOD run of the date (a final one replaces any, a preliminary one a preliminary),
+    # and that at least ``days`` days ago: the replaced run stays that long for a look back at the change
+    " AND EXISTS (SELECT 1 FROM run n WHERE n.business_date = r.business_date AND n.run_type = 'EOD'"
+    "  AND n.status = 'complete' AND n.run_id > r.run_id AND n.cut_type IN ('eod_final', 'eod_preliminary')"
+    "  AND (n.cut_type = 'eod_final' OR r.cut_type = 'eod_preliminary')"
+    "  AND n.completed_at < now() - make_interval(days => %(days)s))"
+    # a scenario job on the run (its result is kept for ever) holds it
+    " AND NOT EXISTS (SELECT 1 FROM scenario_job j WHERE j.base_run_id = r.run_id)"
+    " ORDER BY r.business_date, r.run_id")
+
+
+def superseded_runs(con: psycopg.Connection, keep_days: int, limit: int | None = None) -> list[tuple[int, date, str]]:
+    """The runs ``prune_superseded`` may delete, oldest date first: (run_id, business_date, cut_type). Each was
+    replaced by a newer complete EOD run of its date at least ``keep_days`` days ago, is not the run its date shows
+    (``CURRENT_RUNS``) and has no scenario job."""
+    return [(r, d, c) for r, d, c in con.execute(
+        _PRUNABLE + (" LIMIT %(limit)s" if limit else ""), {"days": max(keep_days, PRUNE_MIN_DAYS), "limit": limit})]
+
+
+EXACT_COUNT_ROWS = 100_000
+"""A run table with fewer rows than this (by the planner's count) is counted exactly for ``_share_bytes``; a bigger one
+is taken at the planner's count, not scanned."""
+
+
+def _table_rows(con: psycopg.Connection, table: str) -> int:
+    """How many rows ``table`` has: the planner's count (``pg_class.reltuples``, kept by autovacuum) when it says the table
+    is big, else counted (a small or never analyzed table costs nothing; a full scan of a big one is what to avoid)."""
+    est = con.execute("SELECT reltuples::bigint FROM pg_class WHERE oid = %s::regclass", (table,)).fetchone()[0]
+    if est is not None and est >= EXACT_COUNT_ROWS:
+        return int(est)
+    return con.execute("SELECT count(*) FROM " + table).fetchone()[0]
+
+
+def _share_bytes(con: psycopg.Connection, ids: list[int]) -> int:
+    """About how many bytes the rows of runs ``ids`` take on disk: per table (with its indexes and TOAST) the table's
+    size by the share of its rows that are the runs' (counted by ``run_id``, an index range; the table's own rows are
+    ``_table_rows``). One estimate for a whole prune, made before its first transaction: not a pass over the tables for
+    every batch, and none inside the delete's transaction."""
+    total = 0
+    for table in ("run", *RUN_ROW_TABLES):
+        n = con.execute("SELECT count(*) FROM " + table + " WHERE run_id = ANY(%s)", (ids,)).fetchone()[0]
+        if n and (n_all := max(_table_rows(con, table), n)):
+            total += con.execute("SELECT pg_total_relation_size(%s::regclass)", (table,)).fetchone()[0] * n // n_all
+    return total
+
+
+def autovacuum_on(con: psycopg.Connection) -> bool:
+    """The server's autovacuum is working (the embedded server's default): it gives the space of deleted runs back to the
+    tables, so no explicit ``VACUUM`` of ours is needed. It works only with ``autovacuum`` and ``track_counts`` both on
+    (the server counts the dead rows for it); with the counts off the setting alone would say it does."""
+    on, counts = con.execute("SELECT current_setting('autovacuum'), current_setting('track_counts')").fetchone()
+    return on == "on" and counts == "on"
+
+
+def prune_superseded(con: psycopg.Connection, keep_days: int, *, limit: int | None = None,
+                     budget_s: float | None = None, dry_run: bool = False) -> dict[str, Any]:
+    """Delete the superseded EOD runs (``superseded_runs``) with their rows (TDM#634): the history of replaced
+    calculations is not read, and a date's two passes leave a run each. The one way the runs, immutable otherwise
+    (ADR-006), are deleted besides ``prune_intraday``: the transaction says ``desk.prune_superseded`` and migration
+    0024's triggers allow only this kind of run (never the newest of a date, never one with a scenario job).
+    ``limit``: at most this many runs; ``budget_s``: stop before the next batch once this many seconds passed;
+    ``dry_run``: only the list. A batch of ``PRUNE_BATCH`` runs is one transaction: an interrupted prune keeps whole
+    runs, and runs again where it stopped (nothing is deleted twice; a second call finds nothing). Returns
+    {runs: [ids], dates: [first, last] or None, bytes: about what the rows took, busy: another prune runs,
+    left: runs still prunable after this call}. The space is the tables' to reuse once ``vacuum_runs`` ran; the
+    files shrink with ``compact_runs``."""
+    if not con.autocommit or con.info.transaction_status != psycopg.pq.TransactionStatus.IDLE:
+        # a batch is a transaction of its own (an interrupted prune keeps whole runs): in a transaction already, or
+        # without autocommit, the whole prune would be one, and the batches nothing but savepoints
+        raise ValueError("prune_superseded needs a connection in autocommit, outside a transaction (store.connect)")
+    t0 = time.monotonic()
+    out: dict[str, Any] = {"runs": [], "dates": None, "bytes": 0, "busy": False, "left": 0}
+    todo = superseded_runs(con, keep_days, limit)
+    ids_all = [r for r, _, _ in todo]
+    total_bytes = _share_bytes(con, ids_all) if ids_all else 0  # one estimate, before anything is deleted
+    if dry_run:
+        return {**out, "runs": ids_all, "dates": [str(todo[0][1]), str(todo[-1][1])] if todo else None,
+                "bytes": total_bytes}
+    dates: list[date] = []
+    for i in range(0, len(todo), PRUNE_BATCH):
+        if budget_s is not None and out["runs"] and time.monotonic() - t0 >= budget_s:
+            break
+        batch = todo[i:i + PRUNE_BATCH]
+        with con.transaction():
+            if not con.execute("SELECT pg_try_advisory_xact_lock(%s)", (PRUNE_LOCK,)).fetchone()[0]:
+                out["busy"] = True
+                break
+            con.execute("SET LOCAL desk.prune_superseded = 'on'")
+            ids = [r for r, _, _ in batch]
+            for table in RUN_ROW_TABLES:
+                con.execute("DELETE FROM " + table + " WHERE run_id = ANY(%s)", (ids,))
+            con.execute("DELETE FROM run WHERE run_id = ANY(%s)", (ids,))
+        forget_runs(ids)
+        out["runs"] += ids
+        dates += [d for _, d, _ in batch]
+    out["dates"] = [str(min(dates)), str(max(dates))] if dates else None
+    out["bytes"] = total_bytes * len(out["runs"]) // len(todo) if todo else 0  # what was deleted of what was estimated
+    out["left"] = len(superseded_runs(con, keep_days)) if todo else 0
+    return out
+
+
+def vacuum_runs(con: psycopg.Connection) -> list[str]:
+    """``VACUUM`` of the run tables: the space the deleted runs took goes back to the tables for the next runs (the
+    files do not shrink: ``compact_runs``). Takes no lock that stops reads or writes; needs a connection in
+    autocommit (``connect``). Returns the tables."""
+    tables = [*RUN_ROW_TABLES, "run"]
+    for table in tables:
+        con.execute("VACUUM " + table)
+    return tables
+
+
+def compact_runs(con: psycopg.Connection) -> dict[str, int]:
+    """``VACUUM FULL`` of the run tables: the files shrink to what the runs left take and the disk gets the rest
+    back. Rewrites each table under an exclusive lock, so the monitor cannot read the runs meanwhile (minutes with a
+    year of runs), and needs free disk for the largest table's copy: run by the owner's choice, never by the
+    autopilot. Needs a connection in autocommit. Returns the bytes each table freed (with its indexes and TOAST)."""
+    freed = {}
+    for table in ("run_position", "run_core_result", "run_reference", "run_log", "model_spread", "run_summary", "run"):
+        before = con.execute("SELECT pg_total_relation_size(%s::regclass)", (table,)).fetchone()[0]
+        con.execute("VACUUM FULL " + table)
+        freed[table] = before - con.execute("SELECT pg_total_relation_size(%s::regclass)", (table,)).fetchone()[0]
+    return freed
+
+
+def default_runs(con: psycopg.Connection, since: date, until: date | None = None) -> dict[date, dict]:
+    """The default run of each business date from ``since`` on (to ``until``, when given: a plan of one date does not
+    read the history after it, TDM#660): run_id, its snapshots, position sets (sorted),
+    completed_at, private inputs hash, the horizon it read its inputs at (``positions_known_at``: ``late_inputs``), the
+    ``logic_version`` of the code that made it (lineage; None for a run made before it was recorded) and
+    ``second_order``: False for a run made without the second derivatives (lineage ``second_order``, TDM#627: the first
+    pass of the history); True for a run with them and for one made before it was recorded. ``spread_sources``: the
+    carried spreads the run's model prices used, ``{secid: {"date", "z_bp"}}`` (lineage ``carried_spread_sources``,
+    TDM#660; ``{}``: none were carried), None for a run made before it was recorded; ``spreads_carried``: how many
+    spreads the run says it carried (lineage ``model_spreads.carried``, older than ``spread_sources``)."""
     return {r[0]: {"run_id": r[1], "market_snapshot_id": r[2], "prev_market_snapshot_id": r[3],
                    "position_set_ids": sorted(r[4]), "completed_at": r[5], "logic_version": r[6],
-                   "private_inputs_hash": r[7], "positions_known_at": r[8]}
+                   "private_inputs_hash": r[7], "positions_known_at": r[8], "second_order": r[9] != "false",
+                   "spread_sources": r[10], "spreads_carried": int(r[11]) if r[11] is not None else None}
             for r in con.execute(
                 "SELECT business_date, run_id, market_snapshot_id, prev_market_snapshot_id, position_set_ids,"
-                " completed_at, lineage->>'logic_version', private_inputs_hash, positions_known_at FROM run"
-                f" WHERE run_id IN ({DEFAULT_RUNS}) AND business_date >= %s", (since,))}
+                " completed_at, lineage->>'logic_version', private_inputs_hash, positions_known_at,"
+                " lineage->>'second_order', lineage->'carried_spread_sources',"
+                " lineage->'model_spreads'->>'carried' FROM run"
+                f" WHERE run_id IN ({DEFAULT_RUNS}) AND business_date >= %s AND business_date <= %s",
+                (since, until or date.max))}
 
 
 def carried_spreads(con: psycopg.Connection, before: date) -> dict[str, CarriedSpread]:
@@ -789,6 +945,37 @@ def carried_spreads(con: psycopg.Connection, before: date) -> dict[str, CarriedS
         ") x ORDER BY secid, business_date DESC, run_id DESC, pri", {"d": before}).fetchall()
     return {s: CarriedSpread(s, z, d, src or f"last market Z {z:.0f} bp on {d} (run {rid})", c or "RUB OFZ")
             for s, z, d, rid, src, c in rows if math.isfinite(z)}
+
+
+def spread_values(con: psycopg.Connection, pairs: list[tuple[int, str]]) -> dict[tuple[int, str], float]:
+    """The Z-spread each (run_id, secid) of ``pairs`` holds, as ``carried_spreads`` reads it: the model spread a model
+    price used, or the bond's market Z (exact or assumed) in that run; a pair the run holds no spread for is absent. What
+    the plan (``backfill.plan``, TDM#660) compares a run's carried spreads with."""
+    if not pairs:
+        return {}
+    # (``run_id = ANY`` beside the join with the pairs: the planner reads the rows of these runs by the key of
+    # ``run_position`` instead of the whole table, which every plan of a date would otherwise read: TDM#660)
+    rows = con.execute(
+        "WITH w AS (SELECT * FROM unnest(%(r)s::bigint[], %(s)s::text[]) AS t(run_id, secid))"
+        " SELECT run_id, secid, z FROM ("
+        " SELECT m.run_id, m.secid, m.z_spread_bp AS z, 1 AS pri FROM model_spread m JOIN w USING (run_id, secid)"
+        "  WHERE m.run_id = ANY(%(ids)s::bigint[])"
+        " UNION ALL"
+        " SELECT p.run_id, p.secid, (p.fact->>'spread_bp')::float8, 0 FROM run_position p JOIN w USING (run_id, secid)"
+        "  WHERE p.run_id = ANY(%(ids)s::bigint[]) AND p.quality IN ('exact', 'assumed')"
+        "  AND jsonb_typeof(p.fact->'spread_bp') = 'number'"
+        ") x ORDER BY run_id, secid, pri",
+        {"r": [r for r, _ in pairs], "s": [s for _, s in pairs], "ids": sorted({r for r, _ in pairs})},
+        prepare=False).fetchall()  # no server-side prepared plan: after five runs on one connection psycopg switches
+    # to the generic plan, which reads the whole table for these arrays (30 times slower, TDM#660)
+    out: dict[tuple[int, str], float] = {}
+    seen: set[tuple[int, str]] = set()
+    for rid, secid, z in rows:
+        if (rid, secid) not in seen:  # the first of a pair, as ``carried_spreads`` takes it; a non-finite one is none
+            seen.add((rid, secid))
+            if z is not None and math.isfinite(z):
+                out[(rid, secid)] = z
+    return out
 
 
 RUN_EVENT_SQL = ("INSERT INTO event (type, valid_date, run_id, detail)"

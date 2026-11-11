@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 
 import pytest
@@ -13,21 +14,24 @@ def test_defaults_without_env_file(tmp_path: Path) -> None:
     s = load({"DESK_ENV_FILE": str(tmp_path / "missing.env")})
     assert s.hub_url is None  # the hub address is per installation, never a default
     assert s.hub_token is None and s.hub_token_source == "not set"
-    assert s.snapshot_cache == REPO_ROOT / ".devdata" / "snapshots"
+    # the default home: the checkout's .devdata on POSIX, %LOCALAPPDATA%\\DeskMonitor on Windows (settings.desk_home)
+    home = Path.home() / "AppData" / "Local" / "DeskMonitor" if os.name == "nt" else REPO_ROOT / ".devdata"
+    assert s.snapshot_cache == home / "snapshots"
     assert not hasattr(s, "db")  # the tdm SQLite store is gone (#294)
 
 
 def test_env_file_and_environment_precedence(tmp_path: Path) -> None:
     env = tmp_path / "desk.env"
+    abs_reports = tmp_path / "abs" / "reports"  # absolute on every platform ("/abs/reports" has no drive on Windows)
     env.write_text(
         "# comment\nDESK_HUB_URL=https://hub.example/\nDESK_SNAPSHOT_CACHE=cache  # inline\n"
-        "DESK_REPORT_DIR='/abs/reports'\nDESK_HUB_TIMEOUT_S=5\n",
+        f"DESK_REPORT_DIR='{abs_reports}'\nDESK_HUB_TIMEOUT_S=5\n",
         encoding="utf-8",
     )
     s = load({"DESK_ENV_FILE": str(env), "DESK_HUB_TIMEOUT_S": "7"})
     assert s.hub_url == "https://hub.example"
     assert s.snapshot_cache == REPO_ROOT / "cache"
-    assert s.report_dir == Path("/abs/reports")
+    assert s.report_dir == abs_reports
     assert s.hub_timeout_s == 7.0
 
 
@@ -68,16 +72,20 @@ def test_store_url_is_masked_and_checked(tmp_path: Path) -> None:
 
 def test_inbox_and_adapter_settings(tmp_path: Path) -> None:
     s = load({"DESK_ENV_FILE": str(tmp_path / "none")})
-    assert s.private_adapter is None and s.inbox_dirs == () and s.inbox_archive == REPO_ROOT / ".devdata" / "inbox"
+    # the archive's default folder: the checkout's .devdata/inbox on POSIX, <home>\\inbox-archive on Windows
+    archive = Path.home() / "AppData" / "Local" / "DeskMonitor" / "inbox-archive" if os.name == "nt" \
+        else REPO_ROOT / ".devdata" / "inbox"
+    assert s.private_adapter is None and s.inbox_dirs == () and s.inbox_archive == archive
     assert (s.inbox_poll_seconds, s.adapter_match_timeout_s, s.adapter_read_timeout_s, s.inbox_max_file_mb) == \
         (60, 60, 600, 500)
     assert s.adapter_check_timeout_s == 60 and dict(s.describe())["adapter_check_timeout_s"] == "60"
     assert load({"DESK_ENV_FILE": str(tmp_path / "none"), "DESK_ADAPTER_CHECK_TIMEOUT_S": "90"}).adapter_check_timeout_s == 90
+    cfg, dir_a = tmp_path / "cfg", tmp_path / "in" / "a"  # absolute on every platform ("/cfg" has no drive on Windows)
     s = load({"DESK_ENV_FILE": str(tmp_path / "none"), "DESK_PRIVATE_ADAPTER": "adapters/tda",
-              "DESK_PRIVATE_ADAPTER_CONFIG": "/cfg", "DESK_PRIVATE_ADAPTER_SHA256": "ab" * 32,
-              "DESK_INBOX_DIRS": "/in/a; in/b/** ;", "DESK_INBOX_POLL_SECONDS": "5", "DESK_INBOX_MAX_FILE_MB": "1.5"})
-    assert s.private_adapter == str(REPO_ROOT / "adapters" / "tda") and s.private_adapter_config == Path("/cfg")
-    assert s.inbox_dirs == (Path("/in/a"), REPO_ROOT / "in" / "b" / "**")  # the recursive marker is kept
+              "DESK_PRIVATE_ADAPTER_CONFIG": str(cfg), "DESK_PRIVATE_ADAPTER_SHA256": "ab" * 32,
+              "DESK_INBOX_DIRS": f"{dir_a}; in/b/** ;", "DESK_INBOX_POLL_SECONDS": "5", "DESK_INBOX_MAX_FILE_MB": "1.5"})
+    assert s.private_adapter == str(REPO_ROOT / "adapters" / "tda") and s.private_adapter_config == cfg
+    assert s.inbox_dirs == (dir_a, REPO_ROOT / "in" / "b" / "**")  # the recursive marker is kept
     assert str(s.inbox_dirs[1]).endswith("**") and s.inbox_poll_seconds == 5 and s.inbox_max_file_mb == 1.5
     assert load({"DESK_ENV_FILE": str(tmp_path / "none"), "DESK_PRIVATE_ADAPTER": "tda"}).private_adapter == "tda"
     shown = dict(s.describe())

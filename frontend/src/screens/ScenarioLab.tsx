@@ -7,6 +7,7 @@ import { StatusChip } from '../components/StatusChip';
 import { num, smln } from '../format';
 import { FxPanel } from '../components/FxPanel';
 import { fxShock } from '../taylor/fxshock';
+import { firstOrderTitle, secondPending } from '../taylor/secondOrder';
 import { type NormDef, canon, normalize, runTaylor } from '../taylor/taylor';
 
 const ACCURACY_BP = 500;
@@ -94,6 +95,8 @@ export function ScenarioLab() {
   const absMv = payload?.positions.reduce((s, p) => s + Math.abs(p.pv_rub), 0) ?? 0;
   const firstOnlyMv = payload && posTaylor
     ? posTaylor.positions.reduce((s, r, i) => s + (r.second_order ? 0 : Math.abs(payload.positions[i].pv_rub)), 0) : 0;
+  // the reason: the second pass of the history has not made this date's second derivatives yet, or the positions have none (TDM#627)
+  const pending = secondPending(payload, job?.status === 'done' && job.base_run_id === payload?.run_id ? result : null);
   const maxMove = posTaylor?.positions.reduce((m, r) => Math.max(m, r.max_move_bp), 0) ?? 0;
   const cov = result?.coverage;
   const tot = result?.totals._total;
@@ -139,7 +142,7 @@ export function ScenarioLab() {
                 <div className="side">
                   <span>{payload.business_date} · прогон #{payload.run_id} · {payload.positions.length} позиций · все книги деска, фильтр книг мониторов не применяется</span>
                   <div className="chips">
-                    {firstOnlyMv > 0 && <StatusChip tone="warn" title="У этих позиций нет гаммы (резервные ступени оценки)">
+                    {(firstOnlyMv > 0 || pending) && <StatusChip tone="warn" title={firstOrderTitle(pending)}>
                       только 1-й порядок · {num(firstOnlyMv / (absMv || 1) * 100, 0)} % MV</StatusChip>}
                     {maxMove > ACCURACY_BP && <StatusChip tone="crit" title={`Сдвиг до ${num(maxMove)} б.п.: вне области точности 2-го порядка`}>
                       &gt;{ACCURACY_BP} б.п.: нужен точный расчёт</StatusChip>}

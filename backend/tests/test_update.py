@@ -116,7 +116,7 @@ def test_full_zip_stages_only_what_changed(old_new, tmp_path):
     staged = Path(doc["staged"])
     assert staged == tmp_path / "home" / "updates" / "staged" / NEW
     assert (staged / "files/app/prototypes/new.js").read_bytes() == b"new"
-    assert json.loads((staged / "update.json").read_text())["files"] == doc["files"]
+    assert json.loads((staged / "update.json").read_text(encoding="utf-8"))["files"] == doc["files"]
     assert tree(root) == tree(tmp_path / "old")  # the server never writes into the bundle
 
 
@@ -130,7 +130,7 @@ def test_patch_zip_of_the_builder_stages_and_checks_its_base(old_new, tmp_path):
     assert doc["delete"] == ["app/prototypes/old.js"]
     (root / "wheelhouse/desk_backend-0.1.0-py3-none-any.whl").write_bytes(b"other")  # another installed build
     (root / "MANIFEST.sha256").write_text(build.sha256(root / "wheelhouse/desk_backend-0.1.0-py3-none-any.whl")
-                                          + "  wheelhouse/desk_backend-0.1.0-py3-none-any.whl\n")
+                                          + "  wheelhouse/desk_backend-0.1.0-py3-none-any.whl\n", encoding="utf-8")
     with pytest.raises(update.UpdateError, match=f"для версии {OLD}"):
         update.stage(patch, root, tmp_path / "home")
 
@@ -149,8 +149,8 @@ def test_python_changes_and_the_same_version_are_refused(old_new, tmp_path):
 def test_adapter_is_kept_unless_the_full_zip_brings_one(old_new, tmp_path):
     root, _, _ = old_new
     (root / "adapter/pkg").mkdir(parents=True)
-    (root / "adapter/pkg/__init__.py").write_text("old")
-    (root / "adapter/pkg/gone.py").write_text("old")
+    (root / "adapter/pkg/__init__.py").write_text("old", encoding="utf-8")
+    (root / "adapter/pkg/gone.py").write_text("old", encoding="utf-8")
     plain = full_zip(stage_dir(tmp_path / "a", bundle(NEW)), tmp_path / "a.zip")
     assert not [r for r in update.stage(plain, root, tmp_path / "h")["delete"] if r.startswith("adapter/")]
     withad = full_zip(stage_dir(tmp_path / "b", bundle(NEW, {"adapter/pkg/__init__.py": b"new"})), tmp_path / "b.zip")
@@ -171,7 +171,8 @@ def manifest_of(files: dict[str, bytes]) -> bytes:
 @pytest.mark.parametrize("extra, match", [
     ({"DeskMonitor/../evil.txt": b"x"}, "Недопустимый путь"),
     ({"/etc/evil": b"x"}, "Недопустимый путь"),
-    ({"DeskMonitor\\app\\x.py": b"x"}, "Недопустимый путь"),
+    # zipfile itself turns a backslash of a name into «/» on Windows: there it is an ordinary name, not in the manifest
+    ({"DeskMonitor\\app\\x.py": b"x"}, "нет в MANIFEST" if os.name == "nt" else "Недопустимый путь"),
     ({"C:/evil.txt": b"x"}, "Недопустимый путь"),
     ({"DeskMonitor/app/con.txt": b"x"}, "Недопустимый путь"),
     ({"DeskMonitor/app/x. ": b"x"}, "Недопустимый путь"),
@@ -259,9 +260,9 @@ def test_apply_backs_up_and_rolls_back(launcher, tmp_path):
     deskctl.apply_update(env, Path(doc["staged"]))
     assert tree(root) == tree(new) and deskctl.version() == NEW
     upd = Path(env["DESK_HOME"]) / "updates"
-    applying = json.loads((upd / "applying.json").read_text())
+    applying = json.loads((upd / "applying.json").read_text(encoding="utf-8"))
     assert applying["version"] == NEW and applying["from_version"] == OLD
-    backup = json.loads((upd / "backup" / OLD / "backup.json").read_text())
+    backup = json.loads((upd / "backup" / OLD / "backup.json").read_text(encoding="utf-8"))
     assert backup["created"] == ["app/prototypes/new.js"] and "app/prototypes/old.js" in backup["replaced"]
     assert deskctl.rollback_update(env)
     assert tree(root) == old_tree and not (upd / "applying.json").exists() and not (root / "app/prototypes/new.js").exists()
@@ -281,7 +282,7 @@ def test_apply_backs_up_and_rolls_back(launcher, tmp_path):
     finally:
         deskctl.record_update = record
     assert seen == [True]
-    last = json.loads((upd / "last.json").read_text())
+    last = json.loads((upd / "last.json").read_text(encoding="utf-8"))
     assert last["ok"] and last["version"] == NEW and last["from_version"] == OLD
     assert not (upd / "applying.json").exists() and not Path(doc["staged"]).exists() and tree(root) == tree(new)
 
@@ -307,10 +308,10 @@ def test_apply_refuses_unsafe_or_damaged_staging(launcher, tmp_path):
                                  ({}, ["../outside.txt"], "пути"),
                                  ({"app/x.js": "0" * 64}, [], "повреждён")):
         (staged / "update.json").write_text(json.dumps({"version": NEW, "from_version": OLD, "files": files,
-                                                        "delete": delete}))
+                                                        "delete": delete}), encoding="utf-8")
         with pytest.raises(deskctl.Fail, match=match):
             deskctl.apply_update(env, staged)
-    (staged / "update.json").write_text(json.dumps({"version": NEW, "from_version": "0.0.1", "files": {}, "delete": []}))
+    (staged / "update.json").write_text(json.dumps({"version": NEW, "from_version": "0.0.1", "files": {}, "delete": []}), encoding="utf-8")
     with pytest.raises(deskctl.Fail, match="для версии 0.0.1"):
         deskctl.apply_update(env, staged)
     assert tree(root) == old_tree and not (Path(env["DESK_HOME"]) / "updates/applying.json").exists()
@@ -335,7 +336,7 @@ def test_hot_update_rolls_back_when_the_new_version_does_not_confirm(launcher, t
     assert deskctl.hot_update(env, ["--port", "8123"]) is None
     assert calls and calls[0][-2:] == ["--port", "8123"]
     assert tree(root) == old_tree and not (home / "updates/pending.json").exists()
-    last = json.loads((home / "updates/last.json").read_text())
+    last = json.loads((home / "updates/last.json").read_text(encoding="utf-8"))
     assert not last["ok"] and last["version"] == NEW and "код 1" in last["message"] and OLD in last["message"]
     assert deskctl.hot_update(env, []) is None  # a plain restart: nothing pending
 
@@ -343,13 +344,13 @@ def test_hot_update_rolls_back_when_the_new_version_does_not_confirm(launcher, t
 def test_changed_wheels_and_the_quick_venv_update(launcher, monkeypatch):
     env, root, _ = launcher
     deskctl.SCRIPTS.mkdir(parents=True)
-    deskctl.desk_exe().write_text("")
-    deskctl.MARKER.write_text(json.dumps(deskctl.env_marker()))
+    deskctl.desk_exe().write_text("", encoding="utf-8")
+    deskctl.MARKER.write_text(json.dumps(deskctl.env_marker()), encoding="utf-8")
     have = deskctl.env_marker()
     assert deskctl.changed_wheels(have, have) == []
     assert deskctl.changed_wheels({"version": OLD, "root": str(root)}, have) is None  # a marker of an older launcher
     assert deskctl.changed_wheels({**have, "requirements": "x"}, have) is None
-    (root / "VERSION").write_text(NEW + "\n")
+    (root / "VERSION").write_text(NEW + "\n", encoding="utf-8")
     (root / "wheelhouse/desk_backend-0.1.0-py3-none-any.whl").write_bytes(b"wheel 2")
     calls = []
     monkeypatch.setattr(deskctl.subprocess, "run", lambda cmd, **k: calls.append(cmd) or
@@ -359,12 +360,12 @@ def test_changed_wheels_and_the_quick_venv_update(launcher, monkeypatch):
     deskctl.ensure_env(env)
     pip = [c for c in calls if "pip" in c]
     assert len(pip) == 1 and "--no-deps" in pip[0] and pip[0][-1].endswith("desk_backend-0.1.0-py3-none-any.whl")
-    assert calls[-1][-1] == "db-migrate" and json.loads(deskctl.MARKER.read_text())["version"] == NEW
+    assert calls[-1][-1] == "db-migrate" and json.loads(deskctl.MARKER.read_text(encoding="utf-8"))["version"] == NEW
     calls.clear()
     deskctl.ensure_env(env)
     assert calls == []  # current now
-    (root / "VERSION").write_text(BAD + "\n")
-    (root / "wheelhouse/requirements.txt").write_text("desk-backend==0.1.0\nnew-dep==1\n")
+    (root / "VERSION").write_text(BAD + "\n", encoding="utf-8")
+    (root / "wheelhouse/requirements.txt").write_text("desk-backend==0.1.0\nnew-dep==1\n", encoding="utf-8")
     with pytest.raises(deskctl.Fail, match="окружение Python"):  # made anew: python -m venv (stubbed, so no venv)
         deskctl.ensure_env(env)
     assert any("venv" in c for c in calls)
@@ -482,15 +483,15 @@ def test_hot_update_end_to_end(tmp_path):
     shutil.copytree(old, root)
     scripts = root / "env" / "bin"
     scripts.mkdir(parents=True)
-    (scripts / "desk").write_text(STUB.format(python=sys.executable))
-    (scripts / "python").write_text(f'#!/bin/sh\nexec "{sys.executable}" "$@"\n')
+    (scripts / "desk").write_text(STUB.format(python=sys.executable), encoding="utf-8")
+    (scripts / "python").write_text(f'#!/bin/sh\nexec "{sys.executable}" "$@"\n', encoding="utf-8")
     for f in scripts.iterdir():
         f.chmod(0o755)
     wh = root / "wheelhouse"
     (root / "env/desk-bundle.json").write_text(json.dumps({
         "version": OLD, "root": str(root.resolve()), "python": f"{sys.executable} {sys.version}",
         "requirements": build.sha256(wh / "requirements.txt"),
-        "wheels": {p.name: build.sha256(p) for p in sorted(wh.glob("*.whl"))}}))
+        "wheels": {p.name: build.sha256(p) for p in sorted(wh.glob("*.whl"))}}), encoding="utf-8")
     home, port = tmp_path / "home", _free_port()
     env = {k: v for k, v in os.environ.items() if not k.startswith("DESK_")}
     env.update(DESK_HOME=str(home), DESK_ENV_FILE=str(tmp_path / "none.env"), DESK_PORT=str(port), BROWSER="true")
@@ -514,9 +515,9 @@ def test_hot_update_end_to_end(tmp_path):
                     return j
             except (OSError, ValueError):
                 pass
-            assert proc.poll() is None, (tmp_path / "launcher.log").read_text(errors="replace")
+            assert proc.poll() is None, (tmp_path / "launcher.log").read_text(errors="replace", encoding="utf-8")
             time.sleep(0.5)
-        raise AssertionError(f"{what}:\n" + (tmp_path / "launcher.log").read_text(errors="replace"))
+        raise AssertionError(f"{what}:\n" + (tmp_path / "launcher.log").read_text(errors="replace", encoding="utf-8"))
 
     try:
         j = until(lambda j: j["current_version"] == OLD, "the old version did not start")
@@ -529,7 +530,7 @@ def test_hot_update_end_to_end(tmp_path):
         assert j["last"]["ok"] and j["last"]["version"] == NEW and j["last"]["from_version"] == OLD
         assert tree(root) == tree(new)
         assert (home / "updates/backup" / OLD / "files/app/prototypes/old.js").read_bytes() == b"old"
-        assert json.loads((root / "env/desk-bundle.json").read_text())["version"] == NEW
+        assert json.loads((root / "env/desk-bundle.json").read_text(encoding="utf-8"))["version"] == NEW
 
         status, item = call("POST", f"/api/v1/update/upload?name={broken.name}", broken.read_bytes(), "application/zip")
         assert item["kind"] == "full" and item["error"] is None, item
@@ -539,7 +540,7 @@ def test_hot_update_end_to_end(tmp_path):
                   and j["current_version"] == NEW, "the broken version was not rolled back")
         assert not j["last"]["ok"] and "код" in j["last"]["message"] and NEW in j["last"]["message"]
         assert tree(root) == tree(new)
-        assert "Обновление Desk Monitor" in (home / "logs/update.log").read_text()
+        assert "Обновление Desk Monitor" in (home / "logs/update.log").read_text(encoding="utf-8")
     finally:
         try:
             os.killpg(proc.pid, signal.SIGTERM)
@@ -555,8 +556,8 @@ def test_a_patch_without_the_adapter_keeps_the_installed_one(old_new, tmp_path):
     """The owner's bundle has the private adapter; a patch built from a bundle without it must not delete it."""
     root, new, old_zip = old_new
     (root / "adapter/pkg").mkdir(parents=True)
-    (root / "adapter/pkg/__init__.py").write_text("private")
-    with (root / "MANIFEST.sha256").open("a") as f:  # the installed manifest lists the adapter (a -with-adapter build)
+    (root / "adapter/pkg/__init__.py").write_text("private", encoding="utf-8")
+    with (root / "MANIFEST.sha256").open("a", encoding="utf-8", newline="\n") as f:  # the installed manifest lists the adapter (a -with-adapter build)
         f.write(build.sha256(root / "adapter/pkg/__init__.py") + "  adapter/pkg/__init__.py\n")
     patch = build.write_patch(old_zip, new, NEW, tmp_path, STAMP)
     doc = update.stage(patch, root, tmp_path / "home")
@@ -603,7 +604,7 @@ def test_a_patch_only_needs_the_files_it_does_not_ship(old_new, tmp_path):
     (root / "app/prototypes/settings.html").write_bytes(b"<p>another build</p>")  # the patch ships this one
     have = update.installed_manifest(root)
     have["app/prototypes/settings.html"] = build.sha256(root / "app/prototypes/settings.html")
-    (root / "MANIFEST.sha256").write_text("".join(f"{d}  {r}\n" for r, d in sorted(have.items())))
+    (root / "MANIFEST.sha256").write_text("".join(f"{d}  {r}\n" for r, d in sorted(have.items())), encoding="utf-8")
     doc = update.stage(patch, root, tmp_path / "home")
     assert "app/prototypes/settings.html" in doc["files"]
 
@@ -613,10 +614,10 @@ def test_patches_leave_the_installed_adapter_alone(old_new, tmp_path):
     that lists adapter files without shipping them no longer demands the installed adapter to be that one."""
     root, new, old_zip = old_new
     (root / "adapter/pkg").mkdir(parents=True)
-    (root / "adapter/pkg/__init__.py").write_text("installed adapter, version 1")
-    (root / "adapter/pkg/old.py").write_text("x")
+    (root / "adapter/pkg/__init__.py").write_text("installed adapter, version 1", encoding="utf-8")
+    (root / "adapter/pkg/old.py").write_text("x", encoding="utf-8")
     (new / "adapter/pkg").mkdir(parents=True)
-    (new / "adapter/pkg/__init__.py").write_text("adapter, version 2")
+    (new / "adapter/pkg/__init__.py").write_text("adapter, version 2", encoding="utf-8")
     build.write_manifest(new, f"# DeskMonitor {NEW}\n")
     patch = build.write_patch(old_zip, new, NEW, tmp_path, STAMP)
     with zipfile.ZipFile(patch) as z:

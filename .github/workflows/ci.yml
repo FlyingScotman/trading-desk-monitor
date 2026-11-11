@@ -8,7 +8,7 @@ on:
 jobs:
   test:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4
       - name: Banned terms (list in the BANNED_TERMS secret; skipped with a warning without it)
@@ -29,9 +29,128 @@ jobs:
         run: backend/.venv/bin/ruff check backend
       - name: Backend tests (embedded PostgreSQL)
         working-directory: backend
-        run: .venv/bin/python -m pytest -q -p no:cacheprovider
+        run: .venv/bin/python -m pytest -q -p no:cacheprovider --durations=25
       - name: Root tests
         run: backend/.venv/bin/python -m pytest -q -p no:cacheprovider tests
+
+  # The rest of the seeds of the pool's failure property (backend/tests/test_parallel_backfill_628.py, marker
+  # full_property): the default run of «test» takes six, this job the other 18, beside it, so the push still has all 24.
+  parallel-property:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+      - name: Python 3.12 venv with the backend and dev tools
+        working-directory: backend
+        run: |
+          uv venv -p 3.12 .venv
+          uv pip install -p .venv -e ".[dev]"
+      - name: Failures at random in the pool (the other seeds)
+        working-directory: backend
+        run: .venv/bin/python -m pytest -q -p no:cacheprovider --durations=5 -m full_property
+
+  # TDM#639: Windows and CPython 3.11 are the target of the owner's machine, the jobs above are Ubuntu and 3.12. The two
+  # Windows jobs run when the change can touch what only Windows runs (any code under backend/src/, the launcher and
+  # installer, the bundle builder, the dependencies, the workflows, and the test files that backend/tests/windows_suite.txt
+  # lists) and on every push to main; the job below says so.
+  # A skipped job counts as passed for a required check, but the checks named «windows-bundle / build», «windows-bundle /
+  # windows» (the called workflow's jobs) and «backend-windows» are all skipped together and then no check of those names
+  # exists at all (the only one left is «windows-bundle»), so none of them can be required. Require the one check
+  # «windows-gate» (the last job of the three): it always runs and is green when the Windows jobs passed or were not needed.
+  windows-paths:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      run: ${{ steps.f.outputs.run }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - id: f
+        env:
+          EVENT: ${{ github.event_name }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          BEFORE: ${{ github.event.before }}
+          PATTERN: >-
+            ^(backend/windows/|backend/src/|backend/tools/(build_windows_bundle|release_assets|ci_windows_bundle|bundle-build-constraints)|backend/(pyproject\.toml|uv\.lock)|backend/tests/windows_suite\.txt|\.github/workflows/(ci|windows-bundle|release)\.yml|docs/INSTALL_BACKEND_WINDOWS\.md)
+        run: |
+          base=""
+          if [ "$EVENT" = "pull_request" ]; then base="$BASE_SHA"; elif [ "$EVENT" = "push" ]; then base="$BEFORE"; fi
+          # a push to a branch other than main is compared with main, not with the previous push: an earlier push of the
+          # same branch that changed the launcher must not be forgotten by the next push that changed a workflow only
+          if [ "$EVENT" = "push" ] && [ "${GITHUB_REF}" != "refs/heads/main" ] && git fetch --quiet origin main 2>/dev/null; then
+            base=$(git merge-base FETCH_HEAD "$GITHUB_SHA" 2>/dev/null || echo "$base")
+          fi
+          run=false
+          if [ "${GITHUB_REF}" = "refs/heads/main" ] && [ "$EVENT" = "push" ]; then
+            run=true
+          elif [ -z "$base" ] || echo "$base" | grep -qE '^0+$' || ! git cat-file -e "$base^{commit}" 2>/dev/null; then
+            run=true   # a new branch, a force push, a manual run: no base to compare with
+          else
+            git diff --name-only "$base" "$GITHUB_SHA" > "$RUNNER_TEMP/changed"
+            # the test files of the Windows suite (backend/tests/windows_suite.txt, paths relative to backend/)
+            grep -v '^[[:space:]]*#' backend/tests/windows_suite.txt | tr -d '\r' | grep -v '^[[:space:]]*$' \
+              | sed 's|^|backend/|' > "$RUNNER_TEMP/suite"
+            if grep -E "$PATTERN" "$RUNNER_TEMP/changed" || grep -Fxf "$RUNNER_TEMP/suite" "$RUNNER_TEMP/changed"; then
+              run=true
+            fi
+          fi
+          echo "run=$run" >> "$GITHUB_OUTPUT"
+          echo "Windows jobs: $run"
+
+  windows-bundle:
+    needs: windows-paths
+    if: needs.windows-paths.outputs.run == 'true'
+    uses: ./.github/workflows/windows-bundle.yml
+
+  backend-windows:
+    needs: windows-paths
+    if: needs.windows-paths.outputs.run == 'true'
+    runs-on: windows-latest
+    timeout-minutes: 45
+    steps:
+      - name: Keep line endings as they are in the repository (the bundle is built from LF files)
+        run: git config --global core.autocrlf false
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+      - name: CPython 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Venv with the backend and dev tools (core from the commit pinned in pyproject, embedded PostgreSQL)
+        working-directory: backend
+        shell: bash
+        run: |
+          uv venv -p 3.11 .venv
+          uv pip install -p .venv/Scripts/python.exe -e ".[dev]"
+      - name: Backend tests that run on Windows (the list and what is left out and why are in backend/tests/windows_suite.txt)
+        working-directory: backend
+        shell: bash
+        run: |
+          files=$(grep -v '^[[:space:]]*#' tests/windows_suite.txt | grep -v '^[[:space:]]*$' | tr -d '\r')
+          .venv/Scripts/python.exe -m pytest -q -p no:cacheprovider --durations=15 $files
+
+  # The one check to require for Windows (see the comment above): a failed, cancelled or skipped-by-mistake Windows job fails it.
+  windows-gate:
+    if: always()
+    needs: [windows-paths, windows-bundle, backend-windows]
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - env:
+          NEEDED: ${{ needs.windows-paths.outputs.run }}
+          PATHS: ${{ needs.windows-paths.result }}
+          BUNDLE: ${{ needs.windows-bundle.result }}
+          BACKEND: ${{ needs.backend-windows.result }}
+        run: |
+          echo "windows-paths=$PATHS (run=$NEEDED) windows-bundle=$BUNDLE backend-windows=$BACKEND"
+          [ "$PATHS" = "success" ] || { echo "the check that decides about the Windows jobs failed" >&2; exit 1; }
+          if [ "$NEEDED" = "true" ]; then
+            [ "$BUNDLE" = "success" ] && [ "$BACKEND" = "success" ] || { echo "a Windows job did not pass" >&2; exit 1; }
+          else
+            echo "the change cannot affect what only Windows runs: the Windows jobs were not needed"
+          fi
 
   js:
     runs-on: ubuntu-latest

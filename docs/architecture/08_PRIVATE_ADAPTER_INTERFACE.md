@@ -410,6 +410,13 @@ issues (§6.3), nothing in them but the files of an action may hold a cell value
       owner), never in `issues`, `summary`, status panels or logs. `GET /api/v1/adapter/choices/trade_index_codes`
       also gives `signal` (`{code, count, files, latest}` or `null`): the `unmapped_index` issue codes (a count of
       trades, no name) of the newest trade terms files, so the settings page marks the screen before it is opened.
+      Without the adapter's table (TDM#651: the action failed, timed out, was refused or gave an empty answer) the
+      monitor builds the same `choices` from the `x_index` names of the `trade_terms` rows in force in its store
+      (`desk.index_choices`; `choices_source` `store`): the options are the codes the adapter's tab `index_codes` takes
+      (its schema's `enum`, with the `oneOf` titles), a save goes into that tab as for the adapter's table; when the
+      adapter has no such tab the table is `read_only`. The `GET` answer carries `state` (`{code, level, text}`): why
+      the screen has no adapter table, in the owner's words and with the button to press; for an adapter that does
+      not load or has no such action the answer is 404 with the same `state` in `details`.
 
 **Values.** All values crossing the boundary are JSON types: `dict`, `list`, `str`, `int`, `float`, `bool`, `None`.
 - Dates are `YYYY-MM-DD`. Timestamps are ISO 8601; one without an offset is Europe/Moscow.

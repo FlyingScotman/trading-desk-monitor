@@ -11,6 +11,8 @@
  *  T.stall(j)             — {why, retry, text, title} застоя или null (догрузка выключена, дат к расчёту нет):
  *                           «стоит: <причина>, повтор в ЧЧ:ММ» (retry — «, повтор в ЧЧ:ММ», пусто, когда время
  *                           прошло или автопилот выключен), в подсказке — с какого времени, дата и ошибка целиком;
+ *  T.passes(j)            — два прохода пересчёта истории (TDM#627): строки «Проход 1 из 2 …» / «Проход 2 из 2 …», коротко для чипа,
+ *                           проблемные даты второго прохода; null — ответ прежнего сервера, без pass;
  *  T.history(h)           — сделки прошлых дат (TDM#569, GET /api/v1/adapter-services/history): {unsupported, summary,
  *                           applied, runs, next, problems}: слова экрана «Подключение к сервисам» и строка «История
  *                           прогонов» («PnL сделок учтён в X датах, ждут пересчёта Y»).
@@ -33,6 +35,34 @@
     return (t.slice(0, 10) === today.slice(0, 10) ? '' : t.slice(8, 10) + '.' + t.slice(5, 7) + ' ') + t.slice(11, 16);
   };
   T.n = function (n, one, many) { return n + (n % 10 === 1 && n % 100 !== 11 ? one : many); };
+  // число с формой слова: 1 дата, 2 даты, 5 дат
+  T.plural = function (n, one, few, many) {
+    var m = n % 100, k = n % 10;
+    return n + ' ' + (m > 10 && m < 15 ? many : k === 1 ? one : k >= 2 && k <= 4 ? few : many);
+  };
+  // оценка времени: «5 мин» до полутора часов, дальше в часах
+  T.eta = function (s) { return s < 5400 ? Math.max(1, Math.round(s / 60)) + ' мин' : Math.round(s / 3600) + ' ч'; };
+  // ---- два прохода пересчёта истории (TDM#627): pass и second в GET /api/v1/backfill/status ----
+  // Первый проход считает стоимость, риск и PnL каждой даты без вторых производных (дёшево), второй досчитывает вторые
+  // производные от самых новых дат; читает их только быстрая оценка сценариев. «Готово» — только когда pass == «done».
+  // Ответ без pass (прежний сервер) — null: страницы показывают по-старому.
+  T.SECOND = 'вторые производные (выпуклость, гамма)';
+  T.passes = function (j) {
+    var p = j && j.pass;
+    if (p !== 'first' && p !== 'second' && p !== 'done') return null;
+    var sec = j.second || {}, d1 = j.done || 0, m1 = j.total != null ? j.total : d1 + (j.todo || 0) + (j.failed || 0),
+      d2 = sec.done || 0, m2 = sec.total != null ? sec.total : d2 + (sec.todo || 0) + (sec.failed || 0),
+      eta = p === 'second' && sec.todo && sec.eta_s ? T.eta(sec.eta_s) : null, failed2 = sec.failed || 0,
+      tries = function (x) { return x.attempts ? ', попыток: ' + x.attempts : ''; };
+    return { pass: p, done: p === 'done', eta: eta, failed2: failed2, next: p === 'second' ? sec.next || [] : j.next || [],
+      first: 'Проход 1 из 2: стоимость, риск и PnL — ' + d1 + ' из ' + m1 + ' дат' + (p === 'first' ? '' : j.failed ? ', остальные не сходятся' : ', готово'),
+      second: 'Проход 2 из 2: ' + T.SECOND + ' — ' + (p === 'first' ? 'начнётся, когда первый проход посчитает все даты'
+        : d2 + ' из ' + m2 + ' дат' + (eta ? ', осталось ≈ ' + eta : '') + (p === 'done' ? (failed2 ? ', не вышло у ' + failed2 : ', готово') : '')),
+      // коротко, для чипа шапки и сводки Настроек
+      short: p === 'first' ? 'проход 1 из 2: ' + d1 + ' из ' + m1 + ' дат' : p === 'second' ? 'проход 2 из 2 (вторые производные): ' + d2 + ' из ' + m2 + ' дат' : '',
+      noSecond: failed2 ? T.plural(failed2, 'дата', 'даты', 'дат') + ' без вторых производных' : '',
+      problems: (sec.problem_dates || []).map(function (x) { return dmy(x.date) + ' — ' + (x.error || 'расчёт упал') + tries(x); }) };
+  };
   T.dates = function (j) {
     var on = j && j.enabled !== false, seen = {}, conv = [], load = [];
     (on ? j.problem_dates || [] : []).forEach(function (p) { seen[p.date] = 1; (p.kind === 'unreachable' ? load : conv).push(p); });

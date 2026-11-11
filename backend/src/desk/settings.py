@@ -91,6 +91,14 @@ checkout keeps its old names ``.devdata/inbox`` and ``.devdata/desk_pg``.
                            default runs of the past business dates from this date (2026-01-05, the hub's first
                            eod_final close) with positions, at most this many seconds a cycle (600), after every
                            other step (``desk.backfill``, R23; ``desk backfill`` does the same at once)
+* ``DESK_BACKFILL_WORKERS`` the processes the history of runs is computed in, dates at once (default 1: one after the
+                           other; from 2 up: ``desk.parallel``, TDM#628, not yet checked on the work machine): each date
+                           is a process's, the runs are published in the order of the dates, the numbers are those of
+                           one process; the processes work below the owner's programs in priority
+* ``DESK_PRUNE_SUPERSEDED``, ``DESK_PRUNE_SUPERSEDED_DAYS``  the autopilot deletes the runs of a date that a newer run
+                           replaced (the history's first pass, an older program version, a corrected report) once
+                           the replacement is this many days old (on, 14: not less than the backups kept): a date keeps its newest run, a run with a
+                           scenario job stays (``desk.store.prune_superseded``, TDM#634); ``desk prune`` does it at once
 * ``DESK_BACKUP``, ``DESK_BACKUP_DIR``, ``DESK_BACKUP_KEEP``, ``DESK_BACKUP_TIME``  the daily backup of the desk store
                            (``desk.backup``; on): ``pg_dump`` into this folder (default ``<home>/backups``; better
                            another disk or a network share), the newest 14 kept, made by ``desk serve`` at the first
@@ -132,7 +140,7 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import urlsplit
 
-from . import funding_settings
+from . import fsretry, funding_settings
 from .inbox.runner import is_path_spec
 from .inbox.schema import parse_ccy_aliases, set_ccy_aliases
 from .updater import adapter_store
@@ -155,6 +163,10 @@ _REPO_RE = re.compile(r"[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})/[A-Za-z0-9._-]{1,100}"
 ADAPTER_CONFIG_DIR = "adapter-config"
 ADAPTER_OUTPUT_DIR = "adapter-output"  # the files of the adapter's actions (08 §3 run_action), scanned as an inbox folder
 _LOCAL_HOSTS = ("localhost", "127.0.0.1", "::1")
+
+BACKFILL_WORKERS_MAX = 8
+"""The most processes ``backfill_workers`` may ask for (the settings screen and ``settings.json`` alike): each takes about a
+gigabyte of memory and a core of the owner's PC; the program's own choice goes up to three."""
 
 # settings.json key -> (DESK_* variable, kind); kinds are checked by check_settings_doc
 OFF_REPORT_MODES = ("exclude", "include")
@@ -212,6 +224,9 @@ JSON_KEYS: dict[str, tuple[str, str]] = {
     "backfill": ("DESK_BACKFILL", "bool"),
     "backfill_from": ("DESK_BACKFILL_FROM", "date"),
     "backfill_budget_s": ("DESK_BACKFILL_BUDGET_S", "num"),
+    "backfill_workers": ("DESK_BACKFILL_WORKERS", "int0"),
+    "prune_superseded": ("DESK_PRUNE_SUPERSEDED", "bool"),
+    "prune_superseded_days": ("DESK_PRUNE_SUPERSEDED_DAYS", "int"),
     # backups of the desk store (desk.backup)
     "backup": ("DESK_BACKUP", "bool"),
     "backup_dir": ("DESK_BACKUP_DIR", "path"),
@@ -326,6 +341,10 @@ class Settings:
     backfill: bool = True  # the autopilot computes the default runs of past dates (desk.backfill, R23)
     backfill_from: str = "2026-01-05"  # first date of the backfill (the hub's first eod_final close)
     backfill_budget_s: float = 600.0  # seconds of backfill runs per autopilot cycle (after every other step)
+    backfill_workers: int = 0  # processes the history is computed in (desk.parallel): 0, automatic (``parallel.workers_for``:
+    # up to 3, one core and some memory left to the owner's programs); 1, one date after the other, as before TDM#628
+    prune_superseded: bool = True  # the autopilot deletes the runs a newer run of their date replaced (TDM#634)
+    prune_superseded_days: int = 14  # ... once the replacement is this old: not less than the backups kept (backup_keep 14)
     backup: bool = True  # the daily backup of the desk store by desk serve (desk.backup)
     backup_dir: Path | None = None  # None: <home>/backups; better another disk or a network share
     backup_keep: int = 14  # nightly and manual backups kept, the newest
@@ -440,8 +459,11 @@ class Settings:
             ("history_days", str(self.history_days) if self.history_days else "0 (off: the cached dates only)"),
             ("history_bonds_from", self.history_bonds_from.isoformat()),
             ("history_rates_from", self.history_rates_from.isoformat()),
-            ("backfill", (f"on from {self.backfill_from}, {self.backfill_budget_s:g} s a cycle" if self.backfill
-                          else "off")),
+            ("backfill", (f"on from {self.backfill_from}, {self.backfill_budget_s:g} s a cycle, "
+                          + (f"{self.backfill_workers} process(es)" if self.backfill_workers
+                             else "processes: automatic") if self.backfill else "off")),
+            ("prune_superseded", (f"on, replaced runs older than {self.prune_superseded_days} days are deleted"
+                                  if self.prune_superseded else "off (replaced runs are kept)")),
             ("backup", (f"on at {self.backup_time}, keep {self.backup_keep}, in "
                         f"{self.backup_dir or self.home / 'backups'}") if self.backup else "off"),
             ("auth", "on (sign-in with the monitor's accounts)" if self.auth else "off (this computer only)"),
@@ -532,6 +554,8 @@ def check_settings_doc(doc: object) -> list[str]:
             errors.append(f"{key}: must be a whole number >= 1")
         elif kind == "int0" and not (number and v == int(v) and v >= 0):
             errors.append(f"{key}: must be a whole number >= 0")
+        elif key == "backfill_workers" and v > BACKFILL_WORKERS_MAX:
+            errors.append(f"{key}: must be a whole number from 0 to {BACKFILL_WORKERS_MAX} (0: the program chooses)")
         elif kind == "bool" and not isinstance(v, bool):
             errors.append(f"{key}: must be true or false")
         elif kind == "date" and not (isinstance(v, str) and (not v.strip() or _is_date(v.strip()))):
@@ -740,7 +764,7 @@ def _build(proc: dict[str, str], doc: dict[str, Any], file_env: dict[str, str], 
             raise SettingsError(f"{key}: expected a date YYYY-MM-DD, not {v!r}")
         return date.fromisoformat(v) if v else default
 
-    def count(key: str, default: int, least: int = 1) -> int:
+    def count(key: str, default: int, least: int = 1, most: int | None = None) -> int:
         v = env.get(key)  # "0" is a value here (no limit), not unset
         try:
             n = int(v) if v not in (None, "") else default
@@ -748,6 +772,8 @@ def _build(proc: dict[str, str], doc: dict[str, Any], file_env: dict[str, str], 
             raise SettingsError(f"{key}: {e}") from None
         if n < least:
             raise SettingsError(f"{key}: must be >= {least}")
+        if most is not None and n > most:
+            raise SettingsError(f"{key}: must be <= {most}")
         return n
 
     def dirs(value: str | None) -> tuple[Path, ...]:
@@ -852,6 +878,10 @@ def _build(proc: dict[str, str], doc: dict[str, Any], file_env: dict[str, str], 
         backfill=flag("DESK_BACKFILL", defaults.backfill),
         backfill_from=backfill_from,
         backfill_budget_s=num("DESK_BACKFILL_BUDGET_S", defaults.backfill_budget_s),
+        backfill_workers=count("DESK_BACKFILL_WORKERS", defaults.backfill_workers, least=0,
+                                most=BACKFILL_WORKERS_MAX),
+        prune_superseded=flag("DESK_PRUNE_SUPERSEDED", defaults.prune_superseded),
+        prune_superseded_days=count("DESK_PRUNE_SUPERSEDED_DAYS", defaults.prune_superseded_days),
         backup=flag("DESK_BACKUP", defaults.backup),
         backup_dir=_path(get("DESK_BACKUP_DIR")),
         backup_keep=count("DESK_BACKUP_KEEP", defaults.backup_keep),
@@ -881,9 +911,12 @@ def env_overrides(environ: dict[str, str] | None = None) -> list[str]:
 # ---- writing -------------------------------------------------------------------------------------------------
 
 
-def atomic_write_text(path: Path, text: str, *, private: bool = False) -> Path:
+def atomic_write_text(path: Path, text: str, *, private: bool = False, replace_wait_s: float = fsretry.REPLACE_WAIT_S) -> Path:
     """UTF-8 text via a temporary file in the same folder and ``os.replace``: readers never see half a file.
-    ``private``: mode 0600 on POSIX (on Windows the per-user profile folder already restricts access)."""
+    ``private``: mode 0600 on POSIX (on Windows the per-user profile folder already restricts access).
+    On Windows a file that someone has open for reading cannot be replaced for a moment (``PermissionError``
+    WinError 5/32): the replace is tried again for ``replace_wait_s`` (``desk.fsretry``; 0: once, the caller retries);
+    when it still fails, the temporary file is removed and the error is raised, the old file stays."""
     path.parent.mkdir(parents=True, exist_ok=True)
     fd, tmp = tempfile.mkstemp(prefix=f".{path.name}.", suffix=".tmp", dir=path.parent)
     try:
@@ -893,7 +926,7 @@ def atomic_write_text(path: Path, text: str, *, private: bool = False) -> Path:
             f.write(text)
             f.flush()
             os.fsync(f.fileno())
-        os.replace(tmp, path)
+        fsretry.replace(tmp, path, replace_wait_s)
     except BaseException:
         try:
             os.unlink(tmp)

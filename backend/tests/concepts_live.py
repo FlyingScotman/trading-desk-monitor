@@ -22,7 +22,7 @@ sys.path.insert(0, str(Path(__file__).parent))
 
 from test_market_history import DATE, FIX, shifted, weekdays_before, write
 
-from desk import cli, store
+from desk import dayrun, store
 from desk.api.app import create_app
 from desk.marketdata import history
 from desk.marketdata.bundle import SnapshotDir
@@ -71,7 +71,7 @@ def build(tmp: Path, api: bool = True) -> str:
         book = tmp / f"book{d}.csv"
         book.write_text("\n".join(lines) + "\n", encoding="utf-8")
         out: list[str] = []
-        assert cli.eod_run(settings, d, store_url=url, book=str(book), out=out.append), out
+        assert dayrun.eod_run(settings, d, store_url=url, book=str(book), out=out.append), out
     with store.connect(url) as con:
         history.load_cache(con, hist)
         if api:

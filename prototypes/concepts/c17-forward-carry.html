@@ -353,6 +353,7 @@
 
   drawCtl(); drawSteps(); load();
   K.onFilter(render);
+  K.onAlias(render);  // имена бумаг пришли позже страницы (таблица, лидеры, панель позиции): страница лёгкая, строки берут p.name заново
   K.on('theme', render);
   K.on('numfmt', render);
   K.commands(C.HORIZONS.map(x => ({ label: 'Кэрри: горизонт ' + x, run: () => { st.horizon = x; save(); drawCtl(); load(); } }))

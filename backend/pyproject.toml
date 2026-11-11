@@ -1,6 +1,6 @@
 [project]
 name = "desk-backend"
-version = "0.2.24"
+version = "0.2.25"
 description = "Trading Desk Monitor backend: hub snapshots -> core valuation -> desk runs"
 requires-python = ">=3.11"
 dependencies = [
@@ -28,7 +28,7 @@ desk = "desk.cli:main"
 # plain clone of this repository builds. Production pins a wheel built from that commit (06 §7).
 # To work on core and the backend together, override locally (not committed):
 #   uv pip install -e ../../rub-fixed-income-core
-rub-fixed-income-core = { git = "https://github.com/FlyingScotman/rub-fixed-income-core.git", rev = "e32ccf3398b388f5d4c4cfc09a008be64f52b649" }
+rub-fixed-income-core = { git = "https://github.com/FlyingScotman/rub-fixed-income-core.git", rev = "85f8138c1725ad37cca3d0d70be2b142a36bc91e" }
 
 [build-system]
 requires = ["hatchling"]
@@ -40,9 +40,10 @@ packages = ["src/desk"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 # `pytest -m live` checks the real hub in DESK_HUB_URL; the default run never touches the network.
-addopts = "-m 'not live and not bundle'"
+addopts = "-m 'not live and not bundle and not full_property'"
 markers = ["live: needs DESK_HUB_URL and a hub token",
-           "bundle: builds a real wheel of the Windows bundle (uv and PyPI for the pinned build backends)"]
+           "bundle: builds a real wheel of the Windows bundle (uv and PyPI for the pinned build backends)",
+           "full_property: the rest of the seeds of the pool's failure property (ci.yml «parallel-property», release): `pytest -m full_property`"]
 
 [tool.ruff]
 line-length = 110

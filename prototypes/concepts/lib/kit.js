@@ -22,6 +22,9 @@
  *  KIT.palette()          — поиск по всему (Ctrl+K или «/»): позиции, эмитенты, книги, команды страницы
  *  KIT.aliasName(p), KIT.aliasBind(el, p, onSaved) — имя бумаги в карточке: алиас и серое биржевое имя, ✎ — правка на
  *                           месте, ⟲ — история; KIT.setAlias(isin, alias) — подставить алиас во все позиции бумаги (R33)
+ *  KIT.whenData(load, fn), KIT.loadingNote(text), KIT.dataError(text) — данные, что приходят после страницы (TDM#629): каркас и
+ *                           «Загрузка…» сразу, fn — когда загрузчики lib/real.js (M.loadMarket, M.loadHistory…) ответили; сбой — полоса
+ *                           «Не загрузилось … Повторить»; html[data-ready] — страница нарисована
  *  KIT.ratesCorePanel(el), KIT.ratesCoreModel(list) — свопы и РЕПО, оценённые ядром (#201): фиксинги RUONIA / КС, ядро и
  *                           отчёт, риск по кривым RUONIA и КС, «предварительно» (quality assumed); нет данных — словами
  *  KIT.fundingLine(p), KIT.fundingPanel(el) — фондирование (B1): строка карточки позиции и панель кокпита по книгам,
@@ -657,14 +660,93 @@
 
   // ---------- события ----------
   const subs = {};
+  // Поколение данных: растёт при любом событии и при приходе поздних данных (K.patchNames, K.notesChanged, K.whenData; lib/real.js
+  // ведёт M.dataGen по каждому ответу сервера). Память ячеек таблиц (K.table, строки C03) помнит поколение, в котором посчитана, и
+  // при смене считает заново: ячейки, посчитанные до алиасов, истории или деривативов, из памяти не отдаются (TDM#630).
+  K._gen = 0;
+  K.dataGen = () => K._gen + ((M && M.dataGen) || 0);
   // по копии списка: подписка K.live, чей элемент удалён, отписывается во время рассылки — без копии forEach
   // пропустил бы следующего подписчика (страница не перерисовалась бы при второй смене фильтра или формата)
-  function fire(ev) { (subs[ev] || []).slice().forEach(fn => { try { fn(); } catch (e) { console.error(e); } }); }
+  function fire(ev) { K._gen++; (subs[ev] || []).slice().forEach(fn => { try { fn(); } catch (e) { console.error(e); } }); }
   // подписка; возвращает функцию отписки
   K.on = (ev, fn) => { (subs[ev] = subs[ev] || []).push(fn); return () => { const a = subs[ev], i = a.indexOf(fn); if (i >= 0) a.splice(i, 1); }; };
   // перерисовка блока, пока его элемент в документе; отписывается, когда элемент удалён
   K.live = (el, ev, fn) => { const off = K.on(ev, () => { if (!el.isConnected) return off(); fn(); }); return off; };
   K.onFilter = fn => K.on('filter', fn);
+
+  // ---------- данные, которые приходят после страницы (TDM#629) ----------
+  // lib/real.js грузит всё сверх прогона асинхронно и сообщает событием concepts-data на document: { name } — пришло
+  // (алиасы бумаг — страницы перерисовываются, как при K.setAlias), { name, error } — сбой запроса (полоса ниже).
+  // K.whenData(load, fn): страница сразу показывает каркас и строку «Загрузка данных…», load() возвращает обещание
+  // загрузчиков (M.loadMarket(), M.loadHistory(ids, from)…; несколько — Promise.all), fn рисует страницу, когда данные пришли.
+  // В демо и из файла ждать нечего: fn сразу. Сбой загрузки не останавливает страницу (рисуется без этих данных, как раньше
+  // при пустом ответе), но не молчит: полоса «не загрузилось: … · Повторить». html[data-ready="1"] — страница нарисована.
+  // K.loadingNote — строка «загрузка» для части страницы (панель, таблица), которая ждёт свои данные.
+  K.loadingNote = (text) => '<div class="k-loading k-note" role="status">' + esc(text || 'Загрузка данных…') + '</div>';
+  const pageHost = () => document.querySelector('.k-page') || document.body;
+  const readyMark = () => { try { document.documentElement.dataset.ready = '1'; document.documentElement.dataset.readyAt = String(Math.round(performance.now())); } catch (e) { } };
+  K.dataError = text => {
+    const host = pageHost();
+    if (Array.from(host.querySelectorAll('.k-load-err')).some(x => x.dataset.t === text)) return;
+    const b = document.createElement('div');
+    b.className = 'k-note k-load-err'; b.dataset.t = text; b.setAttribute('role', 'alert');
+    b.innerHTML = '<b>Не загрузилось:</b> ' + esc(text) + ' · <a href="#" data-a="retry">Повторить</a>';
+    b.querySelector('[data-a=retry]').onclick = e => { e.preventDefault(); location.reload(); };
+    host.insertBefore(b, host.firstChild);
+  };
+  K.whenData = (load, fn) => {
+    if (K.source !== 'real' || !load) { fn(); readyMark(); return; }
+    const host = pageHost(), note = document.createElement('div');
+    note.innerHTML = K.loadingNote(); host.insertBefore(note, host.firstChild);
+    let done = false;
+    const run = () => { if (done) return; done = true; K._gen++; note.remove(); try { K.notesChanged(); fn(); readyMark(); } catch (e) { setTimeout(() => { throw e; }); } };
+    let p; try { p = load(); } catch (e) { p = Promise.reject(e); }
+    Promise.resolve(p).then(run, e => { K.dataError(e && e.message ? e.message : 'сбой загрузки'); run(); });
+  };
+  // ряды истории разных бумаг приходят из разных запросов (деление длинного списка, догрузка при смене фильтра), и ось дат у
+  // каждого запроса своя (сервер строит её как объединение дат), поэтому складывать ряды разных бумаг «по номеру точки» нельзя:
+  // K.histAxis(список историй) — общая ось (у рядов одного запроса она одна и та же — тогда сама эта ось, без пересчёта,
+  // иначе объединение дат по возрастанию); K.histOn(история, ось) — та же история на этой оси, точки сопоставлены по ДАТЕ.
+  // Даты, которых в ряде нет: ряды «между прогонами — последний» (номинал, DV01, CS01, базис, MV, кривые, qty) — значение
+  // последней своей даты (так считает и сервер), прочие (цены, доходности, спреды) — null; до первой своей даты — null.
+  const HIST_CARRY = ['notional', 'dv01', 'cs01', 'basis', 'mv', 'ofzSpr', 'ofzRuo', 'qty'];
+  K.histAxis = hs => {
+    const ref = hs.length ? hs[0].dates : [];
+    if (hs.every(h => h.dates === ref)) return ref;
+    return Array.from(new Set(hs.reduce((a, h) => a.concat(h.dates), []))).sort();
+  };
+  K.histOn = (h, dates) => {
+    if (h.dates === dates) return h;
+    const own = h.dates, n = own.length, at = new Map(own.map((d, i) => [d, i]));
+    const onAxis = (a, carry) => {
+      if (!Array.isArray(a) || a.length !== n) return a;
+      let last = null;
+      return dates.map(d => { const i = at.get(d); if (i === undefined) return carry ? last : null; last = a[i]; return last; });
+    };
+    const o = {};
+    Object.keys(h).forEach(k => {
+      const v = h[k];
+      if (k === 'dates') o.dates = dates;
+      else if (k === 'curves' && v && typeof v === 'object') o.curves = Object.fromEntries(Object.entries(v).map(([c, a]) => [c, onAxis(a, true)]));
+      else if (k === 'pt' && v && typeof v === 'object' && !Array.isArray(v)) {  // номер точки → пометки: номера переводятся на новую ось
+        const pos = new Map(dates.map((d, i) => [d, i])); o.pt = {};
+        Object.keys(v).forEach(i => { const j = pos.get(own[+i]); if (j !== undefined) o.pt[j] = v[i]; });
+      } else o[k] = onAxis(v, HIST_CARRY.includes(k));
+    });
+    return o;
+  };
+  // сообщения lib/real.js: сбой запроса — полоса; алиасы пришли — 'alias' (страницы с именами подписываются на него, K.onAlias) и
+  // точечная замена имён в таблицах (K.nameCell помечает ячейку data-pn). Событие 'filter' по приходу алиасов не рассылается:
+  // оно перерисовывает страницы целиком, а тяжёлые (C03, C11, C13: полная перерисовка на 850 позициях — 0,1–0,3 с) от этого замирали бы вторично.
+  // Тяжёлая страница не подписывается на K.onAlias целиком: таблицы меняет K.patchNames, нужные графики — точечно. Лёгкие (C04: ~10 мс на 850
+  // позициях; C05, C08, C10, C17) подписаны на K.onAlias и перерисовываются целиком, C07 — только подписи карты
+  document.addEventListener('concepts-data', e => {
+    const d = (e && e.detail) || {};
+    if (d.error) return K.dataError(d.error);
+    if (d.name === 'aliases') { K.patchNames(); fire('alias'); }
+    fire('data');
+  });
+  K.onAlias = fn => K.on('alias', fn);
 
   // ---------- фильтр книг (верхний уровень) ----------
   // portsOff — скрытые портфели (колонка Portfolio отчёта, x_portfolio адаптера; '—' — позиции без неё): новые
@@ -1202,6 +1284,17 @@
     const u = new URL(location.href); ['run_id', 'as_of', 'demo'].forEach(k => u.searchParams.delete(k)); Object.keys(sel).forEach(k => u.searchParams.set(k, sel[k]));
     location.href = u.toString();
   }
+  const notesChipHtml = () => '<span class="k-chip" data-a="notes" title="Чего нет в данных прогона" style="border-color:var(--warn)">ⓘ ' + M.notes.length + '</span>';
+  // заметки, добавленные после шапки (данные, пришедшие позже страницы: история рынка, TDM#629): число в чипе, чипа не было — появляется
+  K.notesChanged = () => {
+    K._gen++;
+    const bar = document.querySelector('.k-top');
+    if (!bar || K.source === 'empty' || !M.notes || !M.notes.length) return;
+    const nb = bar.querySelector('[data-a=notes]');
+    if (nb) { nb.textContent = 'ⓘ ' + M.notes.length; return; }
+    const anchor = bar.querySelector('[data-a=search]');
+    if (anchor) { anchor.insertAdjacentHTML('beforebegin', notesChipHtml()); bindSrc(bar); }
+  };
   function bindSrc(bar) {
     const ch = bar.querySelector('[data-a=src]'), nb = bar.querySelector('[data-a=notes]');
     if (nb) nb.onclick = e => {
@@ -1279,7 +1372,8 @@
   // (ошибка, попытки, следующая попытка). Догрузка остановилась на ошибке сети или базы (j.stalled) — это не свойство
   // дат: коротко «⚠ догрузка стоит: <причина>, повтор в ЧЧ:ММ · N из M дат», в подсказке — с какого времени, ошибка
   // целиком и проблемные даты. Время — МСК. Серый — остались только проблемные даты. j — GET /api/v1/backfill/status;
-  // null — индикатора нет.
+  // null — индикатора нет. Два прохода (TDM#627, j.pass / j.second): «проход 1 из 2» — стоимость, риск и PnL, «проход 2 из 2» — вторые
+  // производные; чип виден, пока идёт любой из них, и пропадает, когда pass == done и вторые производные есть у всех дат.
   const dmy = iso => iso ? iso.slice(8, 10) + '.' + iso.slice(5, 7) + '.' + iso.slice(0, 4) : '';
   const BF_WHY = { 'no default run': 'нет прогона', 'positions changed': 'изменились позиции', 'market snapshot changed': 'исправлен рынок',
     'previous snapshot changed': 'изменилось прошлое закрытие', 'private inputs changed': 'изменились условия сделок', 'program updated': 'обновилась программа',
@@ -1293,24 +1387,31 @@
   const bfList = (head, L) => L.length ? '\n' + head + ' (' + L.length + '):\n' + L.slice(0, 15).join('\n') + (L.length > 15 ? '\n… ещё ' + (L.length - 15) : '') + '\n' : '';
   K.backfillStatus = function (j) {
     if (!j) return null;
-    const on = j.enabled !== false, todo = on ? j.todo || 0 : 0, D = BT().dates(j);
+    // два прохода (TDM#627): pass first / second / done; ответ без pass — как раньше (P == null)
+    const on = j.enabled !== false, P = on ? BT().passes(j) : null, todo = on ? j.todo || 0 : 0, secTodo = P && P.pass === 'second' ? 1 : 0, D = BT().dates(j);
     const conv = D.conv.map(p => dmy(p.date) + ' — ' + (p.error && p.error.indexOf('does not converge') === 0 ? 'не сходится после пересчёта (' + (BF_WHY[p.why] || p.why) + ')'
       : (BF_WHY[p.why] || p.why || 'расчёт упал') + (p.error ? ': ' + p.error : '')) + (p.attempts ? ', попыток: ' + p.attempts : ''));
     const load = D.load.map(p => dmy(p.date) + (p.kind === 'unreachable' ? ' — не загружается: ' + (p.error || 'ошибка') + (p.attempts ? ', попыток: ' + p.attempts : '')
       : ' — с хаба не загружается: ' + (p.error || 'ошибка') + ', попыток: ' + p.attempts + (p.next_attempt ? ', следующая попытка ' + bfWhen(p.next_attempt) : '')));
+    const noSecond = P ? P.problems : [], gaveUp = P ? P.failed2 : 0;  // даты, у которых второй проход не смог посчитать вторые производные
     const st = BT().stall(j);  // только пока есть даты к расчёту
-    if (!todo && !conv.length && !load.length) return null;
-    const total = j.total != null ? j.total : (j.done || 0) + (j.todo || 0) + (j.failed || 0), grey = !todo;
+    if (!todo && !secTodo && !conv.length && !load.length && !gaveUp) return null;
+    const total = j.total != null ? j.total : (j.done || 0) + (j.todo || 0) + (j.failed || 0), grey = !todo && !secTodo;
     const nm = (j.done || 0) + ' из ' + total + ' дат';
-    const lists = bfList('Не сходятся', conv) + bfList('Не загружаются', load) + 'Подробности — Настройки → «История прогонов».';
+    const lists = bfList('Не сходятся', conv) + bfList('Не загружаются', load) + bfList('Вторые производные не посчитались', noSecond) + 'Подробности — Настройки → «История прогонов».';
     if (st) return { text: '⚠ догрузка ' + st.text + ' · ' + nm, title: st.title + '\nГотово ' + nm + '.\n' + lists, grey: false, stall: true };
-    const eta = todo && j.eta_s ? (j.eta_s < 5400 ? Math.max(1, Math.round(j.eta_s / 60)) + ' мин' : Math.round(j.eta_s / 3600) + ' ч') : null;
-    const title = (grey ? 'Остались только проблемные даты.' + (conv.length ? ' Не сходятся — сервер пересчитает их, когда изменятся данные или программа.' : '') +
+    const eta = P ? (todo || secTodo ? P.eta || (todo && j.eta_s ? BT().eta(j.eta_s) : null) : null) : (todo && j.eta_s ? BT().eta(j.eta_s) : null);
+    const nextDates = (P ? P.next : j.next || []).map(dmy).join(', ');
+    const rest = (grey ? 'Остались только проблемные даты.' + (conv.length || gaveUp ? ' ' + (conv.length ? 'Не сходятся' : 'Вторые производные не посчитались') + ' — сервер пересчитает их, когда изменятся данные или программа.' : '') +
         (load.length ? ' Не загружаются — сервер пробует снова сам, по расписанию.' : '') + ' '
       : 'Сервер досчитывает прошлые даты с ' + dmy(j.from) + ', от самой ранней: история риска, PnL с начала месяца и года и позиции прошлых дат появляются по мере расчёта (обновите страницу). ' +
-        'Следующие: ' + (j.next || []).map(dmy).join(', ') + '.' + (eta ? ' Осталось расчёта ≈ ' + eta + ' (по одной дате за раз, между циклами автопилота).' : '') + ' ') + lists;
-    const text = '⟳ догрузка истории ' + nm + (conv.length ? ' · ' + bfN(conv.length, ' не сходится', ' не сходятся') : '') +
-      (load.length ? ' · ' + bfN(load.length, ' не загружается', ' не загружаются') : '');
+        'Следующие: ' + nextDates + '.' + (eta ? ' Осталось расчёта ≈ ' + eta + ' (по одной дате за раз, между циклами автопилота).' : '') + ' ');
+    // пересчёт идёт в два прохода: сначала стоимость, риск и PnL, потом вторые производные, которые читает только оценка сценариев
+    const passes = P ? P.first + '.\n' + P.second + '.' + (P.pass === 'second' ? '\nПока их нет, оценка сценариев на этой дате линейная; стоимость, риск и PnL уже посчитаны.' : '') + '\n' : '';
+    const title = passes + rest + lists;
+    const head = P && !P.done ? P.short : nm;
+    const text = '⟳ догрузка истории' + (P && !P.done ? ', ' : ' ') + head + (conv.length ? ' · ' + bfN(conv.length, ' не сходится', ' не сходятся') : '') +
+      (load.length ? ' · ' + bfN(load.length, ' не загружается', ' не загружаются') : '') + (gaveUp ? ' · ' + P.noSecond : '');
     return { text, title, grey, stall: false };
   };
   function backfillChip(bar) {
@@ -1341,7 +1442,7 @@
       (opt.extra || '') +
       '<span class="k-chip" data-a="ofzview" title="Как показан риск ОФЗ: «RUONIA + базис» — риск к котировкам OIS RUONIA и риск к базису КБД − RUONIA, два разных риска ядра (с 0.2.7); «КБД» — ОФЗ на своей кривой (par-риск КБД = базис)">ОФЗ: ' + K.OFZ_VIEWS[M.ofzView || 'basis'] + ' ▾</span>' +
       '<span class="k-chip" data-a="repr" title="' + esc('Валюта отчёта.\n' + K.REPR_NOTE.map(x => x[0][0].toUpperCase() + x[0].slice(1) + ': ' + x[1] + '.').join('\n')) + '">в ' + K.repr + ' ' + K.SYM[K.repr] + ' ▾</span>' +
-      srcChip() + (K.source === 'empty' ? '' : runBadgeChip()) + (K.source !== 'empty' && M.notes && M.notes.length ? '<span class="k-chip" data-a="notes" title="Чего нет в данных прогона" style="border-color:var(--warn)">ⓘ ' + M.notes.length + '</span>' : '') +
+      srcChip() + (K.source === 'empty' ? '' : runBadgeChip()) + (K.source !== 'empty' && M.notes && M.notes.length ? notesChipHtml() : '') +
       '<button class="k-btn" data-a="search">Поиск <span class="k-kbd">Ctrl K</span></button>' +
       '<button class="k-btn" data-a="numfmt"></button>' +
       '<button class="k-btn" data-a="view" title="Вид: формат отрицательных чисел, когда прогон считается устаревшим" aria-haspopup="dialog">⚙</button>' +
@@ -1373,12 +1474,21 @@
   };
 
   // ---------- кликабельные цифры ----------
+  // Реестр reg растёт с каждой цифрой. Записи, чьи цифры нарисованы блоком, который потом перерисовывают (K.table, C03),
+  // освобождаются вместе с блоком: блок заводит область (K.dScope), на время своей отрисовки включает её (K.dScopeSet), а при
+  // перерисовке освобождает (K.dFree). Освобождённая запись — null: номера остальных не сдвигаются (на них ссылаются
+  // data-dr в разметке и c02, который кладёт в K._reg сам). Вне области записи живут, как раньше.
   const reg = []; K._reg = reg;
+  let dScope = null;
+  K.dScope = () => ({ ids: [] });
+  K.dScopeSet = s => { const p = dScope; dScope = s; return p; };
+  K.dFree = s => { if (s) { s.ids.forEach(i => { reg[i] = null; }); s.ids.length = 0; } };
   K.d = function (spec, text, cls) {
     // spec.nullable (#168, фондирование): ни одно значение не посчитано (все null) — «—», а не 0
     if (spec.nullable && text == null && (spec.rows ? spec.rows.every(r => r.v == null) : spec.list && spec.list.every(p => (typeof spec.val === 'function' ? spec.val(p) : p[spec.val]) == null)))
       return '<span class="mut3" title="не посчитано">—</span>';
     const id = reg.push(spec) - 1;
+    if (dScope) dScope.ids.push(id);
     const v = spec.v != null ? spec.v : spec.rows ? M.sum(spec.rows, 'v') : (spec.list ? M.sum(spec.list, spec.val) : null);
     // сумма по строкам или списку, где ни одно значение не посчитано (M.sum → null, #327, #333), — «—», а не 0
     // (разбор по щелчку остаётся); посчитана часть — сумма посчитанных, как раньше
@@ -1388,7 +1498,7 @@
   };
   document.addEventListener('click', e => {
     const t = e.target.closest('[data-dr]');
-    if (t) { e.stopPropagation(); e.preventDefault(); K.drill(reg[+t.dataset.dr]); return; }
+    if (t) { e.stopPropagation(); e.preventDefault(); if (reg[+t.dataset.dr]) K.drill(reg[+t.dataset.dr]); return; }
     const c = e.target.closest('[data-card]');
     if (c) { e.stopPropagation(); K.card(c.dataset.card); }
   }, true);
@@ -1529,9 +1639,43 @@
     }
   }
   K.axisUnits = axisUnits;
+  // График ECharts. Создаётся не сразу, а когда его элемент вот-вот появится на экране (IntersectionObserver, запас 200 px),
+  // и по одному в задаче (setTimeout между ними): создание и первая отрисовка графика — 40-150 мс, и пять графиков страницы
+  // одним куском блокировали вкладку на полсекунды (TDM#630); графики за пределами экрана и в скрытых вкладках не создаются
+  // совсем, пока их не покажут. Возвращаемый объект работает и до создания: on и setOption ждут его, redraw и update
+  // берут описание на момент создания, raw создаёт график сразу, ready(fn) ждёт его. Так — только на большой книге (K.isBig:
+  // демо и малые прогоны рисуют графики сразу, как раньше) и при IntersectionObserver (в тестах под vm его нет).
+  // большая книга: позиций не меньше K.BIG_BOOK — всё, что на ней тяжело (графики, куски страницы), делится на задачи;
+  // на малой (демо, фикстуры) всё рисуется сразу, как раньше
+  K.BIG_BOOK = 300;
+  K.isBig = () => (M.positions || []).length >= K.BIG_BOOK;
+  // Куски страницы по очереди, каждый в своей задаче (setTimeout между ними): первый — сразу, остальные — после того, как
+  // вкладка отдала кадр и обработала ввод. На малой книге — подряд и сразу. Следующий кусок не начинается, пока страницу не
+  // убрали (isConnected у el, если задан). Возвращает обещание конца (на малой книге — уже выполненное).
+  K.stages = function (fns, el) {
+    if (!K.isBig() || typeof setTimeout !== 'function') { fns.forEach(f => f()); return Promise.resolve(); }
+    return new Promise(done => {
+      const q = fns.slice(), step = () => {
+        const f = q.shift(); if (!f || (el && !el.isConnected)) return done();
+        try { f(); } catch (e) { console.error(e); }
+        setTimeout(step, 0);
+      };
+      step();
+    });
+  };
+  const CQ = [];
+  let cqRun = false;
+  const cqPump = () => {
+    if (cqRun || !CQ.length) return;
+    cqRun = true;
+    setTimeout(() => { cqRun = false; const f = CQ.shift(); try { f(); } catch (e) { console.error(e); } cqPump(); }, 0);
+  };
+  // сколько графиков у экрана ещё не создано (тесты ждут их: settle в tests/js/fixtures/pw_pages.js)
+  K.chartsPending = () => K.charts.filter(w => w.pending && w.pending()).length;
   K.chart = function (el, optFn) {
-    if (!window.echarts) { el.innerHTML = '<div class="k-empty">нет echarts</div>'; return { on() { }, dispose() { }, setOption() { } }; }
-    let c = echarts.init(el, null, { renderer: 'canvas' }), fit = false;
+    if (!window.echarts) { el.innerHTML = '<div class="k-empty">нет echarts</div>'; return { on() { }, dispose() { }, setOption() { }, ready() { } }; }
+    let c = null, fit = false, ro = null, io = null, dead = false, queued = false;
+    const todo = [], lazy = typeof IntersectionObserver === 'function' && typeof setTimeout === 'function' && K.isBig();
     const build = () => {
       const o = Object.assign(K.chartBase(), typeof optFn === 'function' ? optFn() : optFn);
       axisUnits(o); axisTheme(o.xAxis); axisTheme(o.yAxis);
@@ -1540,10 +1684,33 @@
       if (o.legend) o.legend = Object.assign({ textStyle: { color: css('--fg-2') }, inactiveColor: css('--fg-3'), itemWidth: 12, itemHeight: 8 }, o.legend);
       return o;
     };
-    c.setOption(build());
-    const ro = new ResizeObserver(() => { c.resize(); if (fit && typeof optFn === 'function') c.setOption(build()); }); ro.observe(el);
-    const w = { on: (...a) => c.on(...a), setOption: (o, x) => c.setOption(o, x), raw: c, redraw: () => { if (typeof optFn === 'function') c.setOption(build(), true); }, dispose: () => { ro.disconnect(); c.dispose(); const i = K.charts.indexOf(w); if (i >= 0) K.charts.splice(i, 1); }, update: fn => { optFn = fn; c.setOption(build(), true); } };
+    const make = () => {
+      if (c || dead) return;
+      if (io) { io.disconnect(); io = null; }
+      c = echarts.init(el, null, { renderer: 'canvas' });
+      c.setOption(build());
+      // ResizeObserver сообщает о размере и сразу после observe — без изменения: тогда ничего не делаем (resize тяжёлого графика — 100+ мс)
+      let lw = el.clientWidth, lh = el.clientHeight;
+      ro = new ResizeObserver(() => { if (el.clientWidth === lw && el.clientHeight === lh) return; lw = el.clientWidth; lh = el.clientHeight; c.resize(); if (fit && typeof optFn === 'function') c.setOption(build()); }); ro.observe(el);
+      todo.splice(0).forEach(fn => fn(c));
+    };
+    const w = {
+      on: (...a) => c ? c.on(...a) : todo.push(x => x.on(...a)),
+      setOption: (o, x) => c ? c.setOption(o, x) : todo.push(cc => cc.setOption(o, x)),
+      get raw() { make(); return c; },
+      ready: fn => c ? fn(c) : todo.push(fn),  // дождаться экземпляра ECharts, не создавая его раньше времени
+      redraw: () => { if (c && typeof optFn === 'function') c.setOption(build(), true); },
+      dispose: () => { dead = true; if (io) io.disconnect(); if (ro) ro.disconnect(); if (c) c.dispose(); const i = K.charts.indexOf(w); if (i >= 0) K.charts.splice(i, 1); const q = CQ.indexOf(make); if (q >= 0) CQ.splice(q, 1); },
+      update: fn => { optFn = fn; if (c) c.setOption(build(), true); },
+      force: () => { if (!c && !dead && el.isConnected) make(); },  // создать сейчас, не дожидаясь экрана (печать)
+      pending: () => { if (c || dead || !el.isConnected) return false; const r = el.getBoundingClientRect(); return r.width > 0 && r.bottom > -200 && r.top < (window.innerHeight || 1000) + 200; },
+    };
     K.charts.push(w);
+    if (!lazy) make();
+    else {
+      io = new IntersectionObserver(es => { if (es.some(e => e.isIntersecting) && !queued) { queued = true; CQ.push(make); cqPump(); } }, { rootMargin: '200px' });
+      io.observe(el);
+    }
     return w;
   };
 
@@ -1656,7 +1823,8 @@
     return 0;
   };
   // sort: [[ключ, ±1]]; col(ключ) → {val(r), sum(r)?} или null (колонки нет)
-  K.rowCmp = (sort, col) => { const C = sort.map(([k]) => col(k)); const vs = r => C.map(c => c ? c.val(r) : null); return (a, b) => cmpList(vs(a), vs(b), sort); };
+  // значения строки считаются один раз на сортировку (не на каждое сравнение: у колонок с тяжёлым val это сотни миллисекунд)
+  K.rowCmp = (sort, col) => { const C = sort.map(([k]) => col(k)), memo = new Map(); const vs = r => { let v = memo.get(r); if (!v) memo.set(r, v = C.map(c => c ? c.val(r) : null)); return v; }; return (a, b) => cmpList(vs(a), vs(b), sort); };
   // Порядок групп одного уровня (валюта, эмитент…). Без сортировки — порядок уровня (order: рубль первым, Минфин первым…).
   // С сортировкой группы — обычные поля: сортируются по тому же столбцу на каждом уровне. Столбец с итогом (DV01, MV, PnL…)
   // — по сумме группы, остальные — по первой строке группы в этом порядке (то есть столбец самой группы — валюта,
@@ -1935,6 +2103,184 @@
     a.href = u; a.download = name; document.body.appendChild(a); a.click(); a.remove(); setTimeout(() => URL.revokeObjectURL(u), 1000);
   };
 
+  // ---------- окно строк длинной таблицы (TDM#630) ----------
+  // Таблица в две-пять тысяч строк на странице — десятки тысяч узлов: их разбор и раскладка блокируют вкладку на секунды,
+  // хотя на экране строк тридцать. K.vwin держит в таблице только строки около видимой области (экран и запас по
+  // экрану сверху и снизу), остальное — две пустые строки-распорки нужной высоты, так что полоса прокрутки и положение
+  // прокрутки те же, что у полной таблицы. Высоту строки берёт по первым нарисованным (строки таблиц однострочные).
+  // Ширину колонок задаёт не окно, а «мерные» строки: у каждой колонки самая широкая ячейка по тексту всей таблицы
+  // лежит в окне невидимой строкой (visibility: collapse — в раскладке колонок участвует, высоты не имеет), так что
+  // колонки не прыгают при прокрутке. Что теряется: поиск браузера (Ctrl+F) и выделение мышью видят только строки окна
+  // (у таблиц есть свой поиск, выгрузка CSV — по всем строкам); печать выводит все строки (beforeprint).
+  // Таблицы короче K.VWIN_MIN строк рисуются как раньше, целиком.
+  // items: [{k: 'row' | 'grp' | 'hid', html(), cells?()}] в порядке таблицы; 'hid' — строка, которой на экране нет, но она
+  // идёт в выгрузку (свёрнутая группа C03), cells() — ячейки строки (для мерных строк). o: {cols — число колонок (colspan
+  // распорки), rowH, grpH — первая оценка высоты строки и строки группы, px; hkey — ключ таблицы: откалиброванные высоты
+  // запоминаются по нему (K._vh) и берутся новым окном вместо оценки, так что перерисованная таблица не становится на время
+  // короче и прокрутка у её конца не теряется; scope — область реестра K.d (K.dScope), в которой строки окна рисуют свои цифры;
+  // onStale() — поколение данных сменилось (K.dataGen): память ячеек таблицы устарела; items[i].reset() — то же для строки}.
+  // v = K.vwin(items, o): v.html() — содержимое tbody для вставки в таблицу (первое окно), v.attach(table) — после
+  // вставки, v.paint(force) — выбрать строки окна заново, v.offsetOf(i) — отступ строки i от верха таблицы, v.destroy().
+  // Таблице с окном ставятся aria-rowcount (все строки, шапка и итог) и aria-rowindex у строк окна: у экранного диктора
+  // таблица — полная, а не 60 строк.
+  K.VWIN_MIN = 400;
+  K._vh = {};
+  const VW = K._vw = new Set();
+  K.vwin = function (items, o) {
+    o = o || {};
+    const n = items.length, NC = o.cols || 1, sv = (o.hkey && K._vh[o.hkey]) || {}, hs = { row: sv.row || o.rowH || 26, grp: sv.grp || o.grpH || 26, hid: 0 };
+    let off = null, table = null, tb = null, a = 0, z = 0, raf = 0, io = null, clip = [], full = false, gone = false, meas = null, fixes = 0, gen = K.dataGen();
+    const build = () => { off = new Float64Array(n + 1); for (let i = 0; i < n; i++) off[i + 1] = off[i] + hs[items[i].k]; };
+    build();
+    // номер строки для aria-rowindex: шапка — первая, строки без места на экране ('hid') не считаются
+    const ri = new Int32Array(n); let shown = 0;
+    for (let i = 0; i < n; i++) ri[i] = items[i].k === 'hid' ? 0 : (shown += 1) + 1;
+    // данные пришли после того, как ячейки посчитаны (алиасы, история…): память ячеек — заново
+    const stale = () => {
+      const g = K.dataGen(); if (g === gen) return;
+      gen = g; items.forEach(it => it.reset && it.reset()); if (o.onStale) o.onStale();
+    };
+    const inScope = fn => { if (!o.scope) return fn(); const prev = K.dScopeSet(o.scope); try { return fn(); } finally { K.dScopeSet(prev); } };
+    const idxAt = y => { let lo = 0, hi = n - 1; while (lo < hi) { const m = (lo + hi + 1) >> 1; if (off[m] <= y) lo = m; else hi = m - 1; } return lo; };
+    const spacer = px => '<tr class="k-vs" aria-hidden="true"><td colspan="' + NC + '" style="height:' + Math.max(0, Math.round(px * 100) / 100) + 'px;padding:0;border:0"></td></tr>';
+    const textLen = s => s.indexOf('<') < 0 ? s.length : s.replace(/<[^>]*>/g, '').length;
+    // мерные строки: для каждой колонки — строка с самой длинной ячейкой по тексту. Ячейки всех строк не считаем (их тысячи,
+    // это сотня миллисекунд): кандидатов отбирают по значению колонки (item.raw()): самые длинные по записи, наибольшее и
+    // наименьшее число, по одной строке на каждое из немногих разных значений (у такой колонки значение — ключ сортировки,
+    // а на экране подпись другой длины: валюта, тип, рейтинг); текст ячеек считаем только у кандидатов
+    const measure = () => {
+      if (meas != null) return meas;
+      const rows = items.filter(it => it.k === 'row' && it.cells);
+      const skip = new Set(o.noMeas || []);
+      let pick;
+      if (rows.length && rows[0].raw) {
+        const L = [], few = [], cand = new Set(), MAXV = 40;
+        for (const it of rows) {
+          const rw = it.raw();
+          for (let j = 0; j < rw.length; j++) {
+            const x = rw[j]; if (x == null || x === '' || skip.has(j)) continue;
+            const c = L[j] || (L[j] = { top: [], hi: null, lo: null, seen: new Map(), many: false });
+            const l = typeof x === 'string' ? x.length : String(x).length;
+            if (c.top.length < 3 || l > c.top[c.top.length - 1][0]) { c.top.push([l, it]); c.top.sort((p, q) => q[0] - p[0]); if (c.top.length > 3) c.top.pop(); }
+            if (typeof x === 'number') { if (!c.hi || x > c.hi[0]) c.hi = [x, it]; if (!c.lo || x < c.lo[0]) c.lo = [x, it]; }
+            if (!c.many) { if (!c.seen.has(x)) { if (c.seen.size >= MAXV) { c.many = true; c.seen = null; } else c.seen.set(x, it); } }
+          }
+        }
+        L.forEach(c => { c.top.forEach(t => cand.add(t[1])); if (c.hi) cand.add(c.hi[1]); if (c.lo) cand.add(c.lo[1]); });
+        L.forEach(c => { if (!c.many) c.seen.forEach(it => cand.add(it)); });
+        pick = [...cand];
+        if (!pick.length) pick = rows.slice(0, 1);
+      } else pick = rows;
+      const best = [], who = [];
+      for (const it of pick) {
+        const cs = it.cells();
+        for (let j = 0; j < cs.length; j++) { const L2 = textLen(cs[j]); if (best[j] == null || L2 > best[j]) { best[j] = L2; who[j] = it; } }
+      }
+      return meas = [...new Set(who)].filter(Boolean).map(it => '<tr class="k-vm" aria-hidden="true" style="visibility:collapse">' + it.cells().join('') + '</tr>').join('');
+    };
+    const rowsHtml = (lo, hi) => inScope(() => { let s = ''; for (let i = lo; i < hi; i++) if (items[i].k !== 'hid') s += items[i].html().replace('<tr', '<tr aria-rowindex="' + ri[i] + '"'); return s; });
+    const fill = (lo, hi) => { a = lo; z = hi; stale(); return measure() + spacer(off[lo]) + rowsHtml(lo, hi) + spacer(off[n] - off[hi]); };
+    const v = {
+      items, get from() { return a; }, get to() { return z; },
+      html() { return fill(0, Math.min(n, o.first || 60)); },
+      // реальная высота строк окна вместо оценки: по строкам обоих видов (одна и та же строка могла быть не рисована)
+      calibrate() {
+        if (!tb) return false;
+        let ch = false;
+        for (const [k, sel] of [['row', 'tr.row'], ['grp', 'tr.grp']]) {
+          const L = [...tb.querySelectorAll(sel)].slice(0, 8); if (!L.length) continue;
+          const hh = L.reduce((s, tr) => s + tr.getBoundingClientRect().height, 0) / L.length;
+          if (hh > 4 && Math.abs(hh - hs[k]) > 0.2) { hs[k] = Math.round(hh * 100) / 100; ch = true; }
+        }
+        if (ch) { build(); if (o.hkey) K._vh[o.hkey] = { row: hs.row, grp: hs.grp }; }
+        return ch;
+      },
+      rowH(i) { return hs[items[i].k]; },
+      offsetOf(i) { return (tb ? tb.offsetTop : 0) + off[Math.max(0, Math.min(n, i))]; },
+      // полоса таблицы, видимая на экране (с учётом всех прокручиваемых предков), в px от верха tbody; null — таблицы не видно
+      band() {
+        const r = tb.getBoundingClientRect(); if (!r.width && !r.height) return null;
+        let t = 0, b = window.innerHeight || 1000;
+        for (const e of clip) { const q = e.getBoundingClientRect(); if (q.top > t) t = q.top; if (q.bottom < b) b = q.bottom; }
+        return [t - r.top, b - r.top];
+      },
+      paint(force) {
+        if (gone || full || !tb) return;
+        if (!tb.isConnected) { v.destroy(); return; }
+        const bd = v.band(); if (!bd) return;
+        if (K.dataGen() !== gen) force = true;  // память ячеек устарела: строки окна — заново
+        const H = Math.max(200, bd[1] - bd[0]), buf = Math.max(400, H);
+        const need0 = idxAt(Math.max(0, bd[0] - buf * 0.3)), need1 = Math.min(n, idxAt(Math.max(0, bd[1] + buf * 0.3)) + 1);
+        if (!force && a <= need0 && z >= need1 && (z - a) > 0) return;
+        let lo = idxAt(Math.max(0, bd[0] - buf)), hi = Math.min(n, idxAt(Math.max(0, bd[1] + buf)) + 1);
+        hi = Math.min(n, Math.max(hi, lo + 40)); lo = Math.max(0, Math.min(lo, hi - 40));
+        tb.innerHTML = fill(lo, hi);
+        watch();
+        // оценка высоты не сошлась с настоящей — пересчитать распорки и окно (не больше двух раз подряд)
+        if (v.calibrate() && fixes++ < 2) v.paint(true); else fixes = 0;
+      },
+      // все строки без распорок (печать): окно — снова после неё
+      setFull(on) {
+        if (!tb || gone) return;
+        full = on;
+        if (on) { stale(); tb.innerHTML = measure() + rowsHtml(0, n); a = 0; z = n; } else v.paint(true);
+      },
+      // полная таблица (шапка, все строки, включая скрытые, подвал) без вставки в страницу: выгрузка CSV читает строки из неё
+      full() {
+        const t = document.createElement('table'), body = document.createElement('tbody');
+        if (table.tHead) t.appendChild(table.tHead.cloneNode(true));
+        stale();
+        body.innerHTML = inScope(() => items.map(it => it.html()).join(''));
+        t.appendChild(body);
+        if (table.tFoot) t.appendChild(table.tFoot.cloneNode(true));
+        if (K.accMarkAll) K.accMarkAll(t);
+        return t;
+      },
+      attach(t) {
+        table = t; tb = t.tBodies[0]; t.__vfull = v.full; t.__vwin = v;
+        t.setAttribute('aria-rowcount', String(shown + 1 + (t.tFoot ? 1 : 0)));
+        if (t.tHead && t.tHead.rows[0]) t.tHead.rows[0].setAttribute('aria-rowindex', '1');
+        if (t.tFoot && t.tFoot.rows[0]) t.tFoot.rows[0].setAttribute('aria-rowindex', String(shown + 2));
+        clip = []; for (let e = t.parentElement; e && e !== document.body && e !== document.documentElement; e = e.parentElement) { const ov = getComputedStyle(e).overflowY; if (ov && ov !== 'visible') clip.push(e); }
+        t.style.overflowAnchor = 'none';
+        VW.add(v);
+        if (v.calibrate()) v.paint(true); else v.paint(false);
+        watch();
+      },
+      schedule() { if (!raf && !gone) raf = requestAnimationFrame(() => { raf = 0; v.paint(false); }); },
+      // данные ячеек устарели (пришли алиасы): строки окна — заново (память ячеек сбросит paint по смене поколения данных)
+      repaint() { if (tb && !full) v.paint(true); },
+      destroy() { gone = true; VW.delete(v); if (io) io.disconnect(); io = null; },
+    };
+    // окно догоняет прокрутку любого предка и страницы; распорки под наблюдением — запасной путь (таблицу показали, прокрутки не было)
+    const watch = () => {
+      if (typeof IntersectionObserver !== 'function' || !tb) return;
+      if (io) io.disconnect();
+      io = new IntersectionObserver(() => v.schedule());
+      tb.querySelectorAll('tr.k-vs').forEach(x => io.observe(x));
+    };
+    return v;
+  };
+  if (typeof document !== 'undefined' && document.addEventListener) {
+    const sched = () => VW.forEach(w => w.schedule());
+    document.addEventListener('scroll', sched, true);
+    if (typeof window !== 'undefined' && window.addEventListener) {
+      window.addEventListener('resize', sched);
+      // печать: все строки таблиц с окном и все графики, которые ещё ждут своей очереди (иначе напечатаются пустые рамки)
+      window.addEventListener('beforeprint', () => { VW.forEach(w => w.setFull(true)); K.charts.slice().forEach(w => w.force && w.force()); });
+      window.addEventListener('afterprint', () => VW.forEach(w => w.setFull(false)));
+    }
+  }
+
+  // Прокрутка вокруг перерисовки таблицы с окном строк: K.scrollKeep(el) запоминает прокрутку el, его прокручиваемых предков и
+  // страницы и возвращает функцию, которая её восстанавливает (браузер ужимает прокрутку, пока содержимое на миг короче).
+  K.scrollKeep = el => {
+    const L = [];
+    for (let e = el; e; e = e.parentElement) if (e.scrollTop > 0) L.push([e, e.scrollTop]);
+    const se = document.scrollingElement;
+    if (se && se.scrollTop > 0 && !L.some(x => x[0] === se)) L.push([se, se.scrollTop]);
+    return () => L.forEach(([e, y]) => { if (e.scrollTop !== y) e.scrollTop = y; });
+  };
   // ---------- таблица ----------
   // единица колонки (#105): opts.columns[].unit, если её нет в подписи (подпись с «,» — «MV, mm ₽» — уже с единицей);
   // в шапке таблицы — второй строкой под подписью, в CSV — в заголовке через запятую
@@ -1953,17 +2299,21 @@
   //        viewKey — стабильный ключ раскладки латиницей, он же основа имени CSV (без него — страница + id, K.tableKey), title — название в CSV, fileName — основа имени файла CSV (латиницей)}
   K.table = function (el, opts) {
     const st = { sort: opts.sort ? opts.sort.slice() : [], q: '', collapsed: {}, groupSort: false, filters: {}, grouped: false };
+    // таблицу рисуют заново в том же месте (страница перерисовала блок): записи реестра K.d прошлой — освободить; у прошлой
+    // таблицы с окном — прокрутка страницы и предков, чтобы вернуть её после новой
+    if (el.__kd) { K.dFree(el.__kd.draw); K.dFree(el.__kd.cells); }
+    const oldTbl = el.querySelector && el.querySelector('table'), restoreOuter = oldTbl && oldTbl.__vwin ? K.scrollKeep(el) : null;
     el.innerHTML = '';
     let tools = null, fltChip = null;
     if (opts.search !== false || opts.tools || opts.groupable) {
       tools = h('div', 'k-tbl-tools'); el.appendChild(tools);
-      if (opts.search !== false) { const i = h('input', 'k-input'); i.placeholder = 'поиск в таблице…'; i.oninput = () => { st.q = i.value.toLowerCase(); draw(); }; tools.appendChild(i); }
+      if (opts.search !== false) { const i = h('input', 'k-input'); i.placeholder = 'поиск в таблице…'; i.oninput = () => { st.q = i.value.toLowerCase(); draw(true); }; tools.appendChild(i); }
       if (opts.groupable) {
         const g = h('span'); tools.appendChild(g);
-        K.seg(g, [['flat', 'плоская'], ['grp', opts.groupLabel || 'валюта → эмитент']], 'flat', v => { st.grouped = v === 'grp'; st.collapsed = {}; draw(); });
+        K.seg(g, [['flat', 'плоская'], ['grp', opts.groupLabel || 'валюта → эмитент']], 'flat', v => { st.grouped = v === 'grp'; st.collapsed = {}; draw(true); });
       }
       tools.appendChild(h('span', 'k-note', 'щелчок по заголовку — сортировка · Shift+щелчок — по нескольким · ⏷ — фильтр по значениям'));
-      fltChip = h('span', 'k-chip on'); fltChip.style.display = 'none'; fltChip.onclick = () => { st.filters = {}; draw(); }; tools.appendChild(fltChip);
+      fltChip = h('span', 'k-chip on'); fltChip.style.display = 'none'; fltChip.onclick = () => { st.filters = {}; draw(true); }; tools.appendChild(fltChip);
       if (opts.tools) { const sp = h('span'); sp.style.flex = '1'; tools.appendChild(sp); opts.tools(tools); }
     }
     const wrap = h('div', 'k-tbl-wrap'); if (opts.maxHeight) wrap.style.maxHeight = opts.maxHeight; el.appendChild(wrap);
@@ -1976,7 +2326,7 @@
     let lay = K.viewLayout(K.viewStore.get(vkey), colKeys());  // {order: [key], w: {key: px}} — проверенная форма
     const fixedW = () => !!lay.w && cols().some(c => lay.w[c.key]);
     const resetBtn = h('button', 'k-tbtn', '⟲ вид'); resetBtn.title = 'сбросить ширину и порядок колонок этой таблицы';
-    resetBtn.onclick = () => { lay = {}; K.viewStore.reset(vkey); draw(); };
+    resetBtn.onclick = () => { lay = {}; K.viewStore.reset(vkey); draw(true); };
     const csvBtn = h('button', 'k-tbtn', '⤓ CSV');
     csvBtn.title = 'выгрузить в CSV (Excel): колонки — в текущем порядке, строки — после поиска, фильтров и сортировки; номер прогона и дата среза — в первой строке и в имени файла';
     csvBtn.onclick = () => K.download(csvName(), '\uFEFF' + csv(), 'text/csv;charset=utf-8');
@@ -1985,6 +2335,12 @@
     const saveLay = () => { K.viewStore.set(vkey, lay); paintCtl(); };
     let noClickTill = 0;  // после перетаскивания щелчок по заголовку — не сортировка
     let shown = [];       // строки на экране: после поиска, фильтров и сортировки (их и выгружает CSV)
+    let memo = new WeakMap(), win = null, curGroups = [];  // ячейки строк (HTML) — одни и те же при сортировке и фильтре; окно строк длинной таблицы
+    // поколение данных, в котором посчитана память ячеек (K.dataGen), и области реестра K.d: цифры ячеек (живут с памятью) и
+    // всё остальное, что рисует перерисовка (итоги, строки групп, подвал; живут до следующей перерисовки)
+    let memoGen = K.dataGen(), sCells = K.dScope(), sDraw = K.dScope();
+    el.__kd = { cells: sCells, draw: sDraw };
+    const resetMemo = () => { memo = new WeakMap(); memoGen = K.dataGen(); K.dFree(sCells); };
     // видимые колонки в сохранённом порядке; новых в сохранённом порядке нет — они в конце, в исходном порядке
     const cols = () => {
       const C = opts.columns.filter(c => !c.hidden), o = lay.order;
@@ -1999,7 +2355,17 @@
       if (!st.sort.length) return rows;
       return rows.slice().sort(K.rowCmp(st.sort, colOf));
     }
-    function draw() {
+    // keep — перерисовка по действию в самой таблице (сортировка, фильтр, поиск, группы, ширина): данные те же, ячейки строк
+    // берутся из памяти; по событию страницы (данные, формат чисел, redraw) ячейки считаются заново
+    function draw(keep) {
+      if (keep !== true || memoGen !== K.dataGen()) resetMemo();
+      K.dFree(sDraw);
+      const prev = K.dScopeSet(sDraw), hadWin = !!win, restore = hadWin ? K.scrollKeep(wrap) : null;
+      try { drawBody(keep); } finally { K.dScopeSet(prev); }
+      if (restore || win) { if (restore) restore(); if (win) win.paint(false); }
+    }
+    function drawBody(keep) {
+      if (win) { win.destroy(); win = null; }
       let rows = opts.rowsFn ? opts.rowsFn() : opts.rows;
       if (st.q) rows = rows.filter(r => (r.searchText || JSON.stringify(r)).toLowerCase().includes(st.q));
       const base = rows;
@@ -2012,7 +2378,13 @@
       // заданные ширины: фиксированная раскладка по colgroup, таблица — шириной суммы колонок
       const cg = fixedW() ? '<colgroup>' + (opts.stripe ? '<col style="width:4px">' : '') + C.map(c => '<col data-k="' + esc(c.key) + '" style="width:' + (lay.w[c.key] || 100) + 'px">').join('') + '</colgroup>' : '';
       const tw = fixedW() ? ' k-fixed" style="width:' + C.reduce((s, c) => s + (lay.w[c.key] || 100), opts.stripe ? 4 : 0) + 'px' : '';
-      const cell = (c, r) => { const v = val(c, r); return '<td class="' + (c.num ? 'n ' : '') + (c.cls ? (typeof c.cls === 'function' ? c.cls(v, r) : c.cls) : '') + '"' + (c.style ? ' style="' + c.style(v, r) + '"' : '') + '>' + (c.fmt ? c.fmt(v, r) : esc(v)) + '</td>'; };
+      const cell0 = (c, r) => { const v = val(c, r); return '<td class="' + (c.num ? 'n ' : '') + (c.cls ? (typeof c.cls === 'function' ? c.cls(v, r) : c.cls) : '') + '"' + (c.style ? ' style="' + c.style(v, r) + '"' : '') + '>' + (c.fmt ? c.fmt(v, r) : esc(v)) + '</td>'; };
+      const cell = (c, r) => {
+        let m = memo.get(r); if (!m) memo.set(r, m = {});
+        if (m[c.key] != null) return m[c.key];
+        const prev = K.dScopeSet(sCells);  // цифры ячейки живут, пока жива память
+        try { return (m[c.key] = cell0(c, r)); } finally { K.dScopeSet(prev); }
+      };
       const sumCell = (c, list) => {
         if (!c.sum) return '<td></td>';
         const fn = typeof c.sum === 'function' ? c.sum : r => val(c, r);
@@ -2024,15 +2396,21 @@
         if (c.drill !== false && list.length && list[0].searchText) return '<td class="n">' + K.d({ title: (c.drillTitle || c.label.replace(/<[^>]+>/g, '')), unit: c.unit, fmt: v => fm(v, {}), rows: list.map(p => ({ p, v: typeof c.sum === 'function' ? fn(p) : fn(p) || 0 })) }, fm(tot, {})) + '</td>';
         return '<td class="n ' + (c.sumNeutral ? '" style="color:var(--fg)' : f.cls(tot)) + '">' + fm(tot, {}) + '</td>';
       };
-      let body = '';
-      const groups = opts.groupBy || (st.grouped && opts.groupable) || [];
+      const items = [];
+      const groups = curGroups = opts.groupBy || (st.grouped && opts.groupable) || [];
       const nCols = C.length + (opts.stripe ? 1 : 0);
       // подпись группы и «Итого» — в первой колонке без итога (колонку с итогом могли перенести на первое место, #102);
       // span группы — только по колонкам без итога; если итог есть у всех колонок, подпись — в первой
       const li = Math.max(0, C.findIndex(c => !c.sum));
       const spanAt = G => { let n = 1; while (n < (G.span || 1) && li + n < C.length && !C[li + n].sum) n++; return n; };
       function emit(list, level, path) {
-        if (level >= groups.length) { list.forEach(r => { body += '<tr class="row ' + (opts.rowCls ? opts.rowCls(r) : '') + '" data-id="' + esc(r.id) + '">' + (opts.stripe ? '<td class="stripe" style="background:' + opts.stripe(r) + '"></td>' : '') + C.map(c => cell(c, r)).join('') + '</tr>'; }); return; }
+        if (level >= groups.length) {
+          list.forEach(r => {
+            const cells = () => (opts.stripe ? ['<td class="stripe" style="background:' + opts.stripe(r) + '"></td>'] : []).concat(C.map(c => cell(c, r)));
+            items.push({ k: 'row', cells, raw: () => (opts.stripe ? [null] : []).concat(C.map(c => val(c, r))), html: () => '<tr class="row ' + (opts.rowCls ? opts.rowCls(r) : '') + '" data-id="' + esc(r.id) + '">' + cells().join('') + '</tr>' });
+          });
+          return;
+        }
         const G = groups[level], buckets = new Map();
         list.forEach(r => { const k = G.key(r); if (!buckets.has(k)) buckets.set(k, []); buckets.get(k).push(r); });
         // группы — обычные поля (R31): после щелчка по заголовку сортируются и они; сортировка страницы по умолчанию
@@ -2040,18 +2418,25 @@
         const keys = K.groupKeys([...buckets.keys()], k => buckets.get(k), st.groupSort && !G.fixed ? st.sort : [], colOf, G.order);
         keys.forEach(k => {
           const sub = buckets.get(k), p = path + '/' + k, col = st.collapsed[p] != null ? st.collapsed[p] : !!G.collapsed;
-          body += '<tr class="grp l' + level + '" data-g="' + esc(p) + '">' + (opts.stripe ? '<td class="stripe" style="background:' + (G.color ? G.color(k, sub) : 'transparent') + '"></td>' : '') +
-            C.map((c, i) => i === li ? '<td colspan="' + spanAt(G) + '" style="padding-left:' + (8 + level * 14) + 'px"><span class="tw">' + (col ? '▸' : '▾') + '</span>' + (G.label ? G.label(k, sub) : esc(k)) + ' <span class="mut3" style="font-weight:400">' + sub.length + '</span></td>' : (i > li && i < li + spanAt(G) ? '' : sumCell(c, sub))).join('') + '</tr>';
+          // HTML строки группы считается один раз (итоги группы — по всем её строкам): окно, листаясь, берёт его из памяти
+          let hc = null;
+          items.push({ k: 'grp', reset: () => { hc = null; }, html: () => hc != null ? hc : (hc = '<tr class="grp l' + level + '" data-g="' + esc(p) + '">' + (opts.stripe ? '<td class="stripe" style="background:' + (G.color ? G.color(k, sub) : 'transparent') + '"></td>' : '') +
+            C.map((c, i) => i === li ? '<td colspan="' + spanAt(G) + '" style="padding-left:' + (8 + level * 14) + 'px"><span class="tw">' + (col ? '▸' : '▾') + '</span>' + (G.label ? G.label(k, sub) : esc(k)) + ' <span class="mut3" style="font-weight:400">' + sub.length + '</span></td>' : (i > li && i < li + spanAt(G) ? '' : sumCell(c, sub))).join('') + '</tr>') });
           if (!col) emit(sub, level + 1, p);
         });
       }
       emit(rows, 0, '');
       const foot = opts.footer === false ? '' : '<tfoot><tr>' + (opts.stripe ? '<td></td>' : '') + C.map((c, i) => i === li ? '<td>Итого <span class="mut3" style="font-weight:400">' + (opts.footCount ? esc(opts.footCount(rows)) : rows.length) + '</span></td>' : sumCell(c, rows)).join('') + '</tr></tfoot>';
+      // длинная таблица — окном строк (K.vwin); короткая — вся, как раньше
+      let body;
+      if (items.length > K.VWIN_MIN) { win = K.vwin(items, { cols: nCols, hkey: vkey, scope: sDraw, onStale: resetMemo }); body = win.html(); }
+      else body = items.map(it => it.html()).join('');
       wrap.innerHTML = '<table class="k-tbl' + tw + '">' + cg + head + '<tbody>' + (body || '<tr><td colspan="' + nCols + '" class="k-empty">ничего не найдено</td></tr>') + '</tbody>' + foot + '</table>';
+      if (win) win.attach(wrap.querySelector('table'));
       wrap.querySelectorAll('th .k-flt').forEach(ic => ic.onclick = e => {
         e.stopPropagation();
         const c = opts.columns.find(x => x.key === ic.dataset.flt);
-        K.colFilter(ic, K.fltItems(K.applyFilters(base, st.filters, colOf, c.key), c), st.filters[c.key] || null, v => { st.filters[c.key] = v; draw(); });
+        K.colFilter(ic, K.fltItems(K.applyFilters(base, st.filters, colOf, c.key), c), st.filters[c.key] || null, v => { st.filters[c.key] = v; draw(true); });
       });
       wrap.querySelectorAll('th.sortable').forEach(th => th.onclick = e => {
         if (Date.now() < noClickTill) return;
@@ -2059,13 +2444,18 @@
         if (e.shiftKey) { if (i >= 0) { if (st.sort[i][1] > 0) st.sort[i][1] = -1; else st.sort.splice(i, 1); } else st.sort.push([k, 1]); }
         else st.sort = i >= 0 && st.sort.length === 1 ? (st.sort[0][1] > 0 ? [[k, -1]] : []) : [[k, 1]];
         st.groupSort = true;
-        draw();
+        draw(true);
       });
       bindLayout();
       paintCtl();
-      wrap.querySelectorAll('tr.grp').forEach(tr => tr.onclick = e => { if (e.target.closest('[data-dr]')) return; const p = tr.dataset.g; const G = groups[(p.match(/\//g) || []).length - 1]; const cur = st.collapsed[p] != null ? st.collapsed[p] : !!(G && G.collapsed); st.collapsed[p] = !cur; draw(); });
-      wrap.querySelectorAll('tr.row').forEach(tr => tr.onclick = e => { if (e.target.closest('[data-dr]')) return; const id = tr.dataset.id; const r = rows.find(x => String(x.id) === id); if (opts.onRow) opts.onRow(r); else if (M.pos[id]) K.card(id); });
     }
+    // щелчок по строке и по строке группы — один обработчик на таблицу: строки окна (K.vwin) приходят и уходят при прокрутке
+    wrap.addEventListener('click', e => {
+      const tr = e.target.closest && e.target.closest('tbody tr');
+      if (!tr || e.target.closest('[data-dr]')) return;
+      if (tr.classList.contains('grp')) { const p = tr.dataset.g; const G = curGroups[(p.match(/\//g) || []).length - 1]; const cur = st.collapsed[p] != null ? st.collapsed[p] : !!(G && G.collapsed); st.collapsed[p] = !cur; draw(true); }
+      else if (tr.classList.contains('row')) { const id = tr.dataset.id; const r = shown.find(x => String(x.id) === id); if (opts.onRow) opts.onRow(r); else if (M.pos[id]) K.card(id); }
+    });
     // ---------- раскладка мышкой (#102) ----------
     const heads = () => [...wrap.querySelectorAll('th[data-k]')];
     const tableW = () => cols().reduce((s, c) => s + (lay.w[c.key] || 100), opts.stripe ? 4 : 0);  // только видимые колонки
@@ -2081,12 +2471,13 @@
     function fitW(k) {
       const th = heads().find(x => x.dataset.k === k); if (!th) return;
       const i = th.cellIndex, cells = [th];
-      wrap.querySelectorAll('tbody tr.row, tfoot tr').forEach((tr, n) => { if (n < 2000 && tr.cells[i]) cells.push(tr.cells[i]); });
+      // в таблице с окном — и мерные строки (tr.k-vm): в них самая широкая ячейка колонки по всей таблице, а не только по окну
+      wrap.querySelectorAll('tbody tr.row, tbody tr.k-vm, tfoot tr').forEach((tr, n) => { if (n < 2000 && tr.cells[i]) cells.push(tr.cells[i]); });
       const rg = document.createRange();
       let w = 0;
       wrap.querySelectorAll('th .k-rsz').forEach(x => { x.style.display = 'none'; });  // ручка — во всю ячейку, не в счёт
       cells.forEach(c => { rg.selectNodeContents(c); const cs = getComputedStyle(c); w = Math.max(w, rg.getBoundingClientRect().width + parseFloat(cs.paddingLeft) + parseFloat(cs.paddingRight)); });
-      ensureW(); lay.w[k] = Math.min(2000, Math.max(32, Math.ceil(w) + 4)); saveLay(); draw();
+      ensureW(); lay.w[k] = Math.min(2000, Math.max(32, Math.ceil(w) + 4)); saveLay(); draw(true);
     }
     function drag(e, onMove, onUp) {
       const mv = ev => onMove(ev), up = ev => { document.removeEventListener('mousemove', mv); document.removeEventListener('mouseup', up); onUp(ev); };
@@ -2100,7 +2491,7 @@
         hd.onmousedown = e => {
           if (e.button !== 0) return;
           e.preventDefault(); e.stopPropagation();
-          if (!fixedW()) { ensureW(); draw(); }
+          if (!fixedW()) { ensureW(); draw(true); }
           const x0 = e.clientX, w0 = lay.w[k];
           document.body.classList.add('k-col-resizing');
           drag(e, ev => setW(k, w0 + ev.clientX - x0), ev => {
@@ -2131,7 +2522,7 @@
           let at = to > from ? to - 1 : to;
           if (to == null || at === from) return;
           keys.splice(from, 1); keys.splice(at, 0, k);
-          lay.order = keys; saveLay(); draw();
+          lay.order = keys; saveLay(); draw(true);
         });
       });
     }
@@ -2152,8 +2543,9 @@
     }
     const csvName = () => K.csvFileName(el, opts);
     draw();
-    const api = { redraw: draw, state: st, csv, csvName, setSort: s => { st.sort = s; draw(); }, setFilter: (k, v) => { st.filters[k] = v; draw(); }, setGrouped: g => { st.grouped = !!g; draw(); }, el,
-      viewKey: vkey, layout: () => JSON.parse(JSON.stringify(lay)), setLayout: v => { lay = K.viewLayout(v, colKeys()); saveLay(); draw(); }, resetView: () => resetBtn.onclick() };
+    if (restoreOuter) { restoreOuter(); if (win) win.paint(false); }
+    const api = { redraw: draw, state: st, csv, csvName, setSort: s => { st.sort = s; draw(true); }, setFilter: (k, v) => { st.filters[k] = v; draw(true); }, setGrouped: g => { st.grouped = !!g; draw(true); }, el,
+      viewKey: vkey, layout: () => JSON.parse(JSON.stringify(lay)), setLayout: v => { lay = K.viewLayout(v, colKeys()); saveLay(); draw(true); }, resetView: () => resetBtn.onclick() };
     if (opts.autoFilter !== false && !opts.rows) K.live(el, 'filter', draw);
     else K.live(el, 'numfmt', draw);  // формат отрицательных чисел (#153): таблица без перерисовки по фильтру
     return api;
@@ -2210,10 +2602,11 @@
   K.accToMinus = t => String(t).replace(/^\((\d[\d,]*(?:\.\d+)?[^()]*)\)$/, '-$1').replace(/\((\d[\d,]*(?:\.\d+)?%?)\)/g, '-$1');
   K.tableCsv = (table, opts) => {
     opts = opts || {};
+    if (table.__vfull) table = table.__vfull();  // длинная таблица с окном строк (K.vwin): все строки — из полной копии
     const tx = c => c ? K.htmlText(c.innerHTML) : '';
     const hd = rowsOf(table.tHead), hr = hd.length ? hd[hd.length - 1] : null;
     // скрытая строка с data-csv-keep — на экране её нет, в CSV есть (позиции свёрнутой группы блоттера C03, #277)
-    const skip = tr => (!(tr.dataset && tr.dataset.csvKeep) && (tr.hidden || (tr.style && tr.style.display === 'none'))) || (tr.dataset && tr.dataset.csvSkip) || (tr.cells.length === 1 && /(^|\s)k-empty(\s|$)/.test(tr.cells[0].className || ''));
+    const skip = tr => (tr.classList && (tr.classList.contains('k-vs') || tr.classList.contains('k-vm'))) || (!(tr.dataset && tr.dataset.csvKeep) && (tr.hidden || (tr.style && tr.style.display === 'none'))) || (tr.dataset && tr.dataset.csvSkip) || (tr.cells.length === 1 && /(^|\s)k-empty(\s|$)/.test(tr.cells[0].className || ''));
     const body = [...table.tBodies].reduce((a, b) => a.concat(rowsOf(b)), []).concat(rowsOf(table.tFoot)).filter(tr => !skip(tr)).map(cellsOf);
     // подписи CSV у заголовка с data-csv="a|b": по одной на колонку экрана; лишние (больше, чем colspan) — колонки
     // CSV сразу за последней колонкой заголовка (#258: «Номинал, mm в вал.|Вал» — число и валюта по отдельности)
@@ -2463,10 +2856,20 @@
   };
   // состояние параллельного отчёта словами; '' — посчитан
   const parNote = par => !par ? 'параллельный отчёт ядро / отчёт для прогона не запрашивался: допуска и строк «по отчёту» нет'
+    : par.state === 'loading' ? 'параллельный отчёт ядро / отчёт загружается: допуска и строк «по отчёту» пока нет'
     : par.state === 'unavailable' ? 'параллельный отчёт ядро / отчёт недоступен' + (par.status ? ' (HTTP ' + par.status + ')' : '') + ': допуска и строк «по отчёту» нет'
       : par.state === 'not_computed' ? 'параллельный отчёт ядро / отчёт для этого прогона не посчитан (прогон до него): допуска и строк «по отчёту» нет' : '';
   K.ratesCorePanel = (el, list) => {
     const R = K.ratesCoreModel(list), { core, rows, trades, totals: T } = R, tol = R.tolerance, pn = parNote(R.par);
+    // параллельный отчёт приходит отдельным запросом (TDM#629): панель рисуется сразу, по ответу — заново
+    // (один ответ — одна перерисовка: повторные вызовы, пока он не пришёл, ждут тот же запрос; список — последний из вызовов)
+    el._rcList = list;
+    if (R.par && R.par.state === 'loading' && M.loadDeriv && !el._rcWait) {
+      el._rcWait = true;
+      // отклонённый запрос флаг тоже сбрасывает (следующий вызов панели спросит снова), но панель не перерисовывает: иначе она
+      // снова увидела бы 'loading' и спрашивала бы без конца
+      M.loadDeriv().then(() => { el._rcWait = false; if (el.isConnected) K.ratesCorePanel(el, el._rcList); }, () => { el._rcWait = false; });
+    }
     el.innerHTML = '';
     if (!rows.length) {
       K.noData(el, 'в прогоне нет свопов и РЕПО, оценённых ядром (extra.swaps / extra.repos): прогон до оценки свопов ядром или в нём нет условий сделок');
@@ -2811,9 +3214,13 @@
     const a = e.target && e.target.closest && e.target.closest('a[data-carry-pos]');
     if (a) a.href = K.carryLink(a.getAttribute('data-carry-pos'));
   }, true));
-  K.card = function (id) {
+  // again — панель этой карточки, которую рисуем заново, когда пришла вся история бумаги (TDM#629)
+  K.card = function (id, again) {
     const p = M.pos[id]; if (!p) return;
-    const o = drawer(true); o.title = p.name; o.charts = [];
+    const o = again || drawer(true); o.title = p.name;
+    const keepScroll = again ? o.bd.scrollTop : 0;
+    if (again) { (o.charts || []).forEach(c => c.dispose()); o.bd.innerHTML = ''; }
+    o.charts = [];
     const te = o.el.querySelector('.t');
     te.innerHTML = '<span style="color:' + K.issuerColor(p.issuer) + '">●</span> ' + K.aliasName(p) + ' ' + K.ccyTag(p.ccy);
     K.aliasBind(te, p, () => { o.title = p.name; });
@@ -2839,6 +3246,18 @@
       ['Кэрри / день', '<span class="' + f.cls(p.carryDay) + '">' + f.k(p.carryDay) + '</span> <small>тыс ₽</small>', false, K.tips.carry],
       ['Фондирование / день', K.fundingDayHtml(p) + ' <small>тыс ₽</small>', false, K.tips.funding], ['Контрагент', esc(p.cpty || '—')],
     ]).concat(K.curveRiskFields(p));  // у облигаций тоже (R32)
+    // история приходит отдельным запросом: у облигации вся (M.loadDeep), у остальных (своп, РЕПО, FX, CDS) — за год
+    // (M.loadHistory; синхронный M.posHistory отдаёт только то, что уже загружено, TDM#629). Карточка рисуется сразу с тем, что
+    // есть, по ответу — заново с полной историей (если панель ещё открыта); сбой — полоса «не загрузилось» (kit.js,
+    // concepts-data), карточка остаётся как есть
+    const needDeep = isBond && M.loadDeep && M.hasDeep && !M.hasDeep(p.id);
+    const needHist = !isBond && M.loadHistory && M.histLoaded && !M.histLoaded(p.id);
+    if (!again && (needDeep || needHist)) {
+      o.bd.insertAdjacentHTML('beforebegin', '<div class="k-note k-deep-wait" style="padding:6px 16px">История ' + (isBond ? 'бумаги' : 'позиции') + ' загружается…</div>');
+      const wait = o.bd.previousElementSibling;
+      (needDeep ? M.loadDeep(p.id).then(d => !!d) : M.loadHistory([p.id], null).then(errs => !errs.length))
+        .then(ok => { if (wait) wait.remove(); if (ok && o.el.isConnected) K.card(p.id, o); }, () => { if (wait) wait.remove(); });
+    }
     if (isBond && p.kind === 'IN' && M.posHistory) {  // линкер: последние ICPI / IR / BEI MOEX (контракт 1.2), если есть
       const LH = M.posHistory(p.id, { deep: true }), last = a => { for (let i = (a || []).length - 1; i >= 0; i--) if (a[i] != null) return a[i]; return null; };
       if (LH.icpi || LH.bei) fields.push(['ICPI (MOEX)', last(LH.icpi) == null ? '—' : f.n(last(LH.icpi), 4)], ['IR / BEI (MOEX)', f.pct(last(LH.ir)) + ' <small>/ ' + f.pct(last(LH.bei)) + '</small>']);
@@ -2911,6 +3330,7 @@
     if (isBond) {
       K.flows(o.bd.querySelector('.cfs'), p);
     }
+    if (again) o.bd.scrollTop = keepScroll;
     return o;
   };
 
@@ -2942,7 +3362,26 @@
   K.pnlAssumeNote = p => K.pnlAssumed(p) ? '<div class="k-note pnl-assume" style="overflow-wrap:anywhere;margin:4px 0 8px;color:var(--warn)"><b>PnL на допущении:</b> ' + esc(K.pnlAssumed(p)) + '</div>' : '';
 
   // ячейка «Бумага»: у бумаги с алиасом биржевое имя — в подсказке
-  K.nameCell = (r, v) => r && r.alias && r.exchName && r.exchName !== r.alias ? '<span title="' + esc('биржевое имя: ' + r.exchName) + '">' + esc(v == null ? r.name : v) + '</span>' : esc(v == null ? (r && r.name) : v);
+  // Ячейка позиции помечена data-pn: пришли алиасы (TDM#629) — K.patchNames меняет имя в уже нарисованных таблицах на месте
+  K.nameCell = (r, v) => {
+    const pos = r && M.pos[r.id], t = esc(v == null ? (r && r.name) : v), mark = r && r.isin && (pos === r || (pos && Object.getPrototypeOf(r) === pos)) && (v == null || v === r.name) ? ' data-pn="' + esc(String(r.id)) + '"' : '';
+    return r && r.alias && r.exchName && r.exchName !== r.alias ? '<span' + mark + ' title="' + esc('биржевое имя: ' + r.exchName) + '">' + t + '</span>' : mark ? '<span' + mark + '>' + t + '</span>' : t;
+  };
+  // Имена в уже нарисованном: ячейки K.nameCell (data-pn) и элементы с data-card (строка таблицы, ссылка, подпись), чей текст —
+  // биржевое имя бумаги: заменяются на месте, страница целиком не перерисовывается (она тяжёлая: C03 — секунда)
+  K.patchNames = () => {
+    K._gen++;  // память ячеек таблиц — заново; длинные таблицы (K.vwin): строки окна — сразу, остальные при показе
+    VW.forEach(w => w.repaint());
+    document.querySelectorAll('[data-pn]').forEach(el => {
+      const p = M.pos[el.dataset.pn]; if (!p) return;
+      if (el.textContent !== p.name) el.textContent = p.name;
+      if (p.alias && p.exchName && p.exchName !== p.alias) el.title = 'биржевое имя: ' + p.exchName; else el.removeAttribute('title');
+    });
+    document.querySelectorAll('[data-card]').forEach(el => {
+      const p = M.pos[el.dataset.card]; if (!p || !p.alias || p.alias === p.exchName) return;
+      Array.from(el.tagName === 'TR' ? el.children : [el]).forEach(c => { if (!c.children.length && c.textContent === p.exchName) c.textContent = p.name; });
+    });
+  };
   const canAlias = p => !!(p && p.isin && M.aliasApi);
   const aliasView = p => {
     const ro = M.aliasApi && M.aliasApi.editable === false;
