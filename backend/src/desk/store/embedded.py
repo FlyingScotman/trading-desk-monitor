@@ -8,8 +8,10 @@ began it again.
 
 ``get_server`` is ``pgserver.get_server`` with what a crash needs:
 
-* a ``postmaster.pid`` of a process that is gone, or of one that is not this cluster's postgres (the pid was reused),
-  is removed before the start (pgserver would take the second for a running server);
+* a ``postmaster.pid`` of a process that is gone, or of one that is not this cluster's postmaster (the pid was reused,
+  by any program, even by the postgres of another cluster), is removed before the start (pgserver would take the second
+  for a running server). The removal is made under pgserver's own inter-process lock, so two starts at once do not remove
+  each other's fresh file;
 * a postmaster that is up but not ``ready`` (recovering, from an earlier try that timed out) is waited for, up to
   ``RECOVERY_WAIT_S``, with a line on the console every ``HEARTBEAT_S`` saying what is going on, never a trace; a
   postmaster that dies meanwhile is reported with the tail of its log;
@@ -18,7 +20,8 @@ began it again.
   reported with the tail of the log, as ``StoreStartError`` (a ``SettingsError``: ``desk`` prints it, no trace);
 * the server's log is ``<data dir>/../logs/postgres.log``, outside the data directory: on Windows the recovery walks
   the whole data directory, and a log it writes into itself cannot be opened by that walk (``sharing violation``, up to
-  30 s more);
+  30 s more). A big log is rotated only when no postmaster is up (a live one holds the file open: Windows refuses the
+  rename, Linux would leave it writing into the renamed file);
 * on Windows ``pg_ctl`` runs in a console and a process group of its own, so Ctrl+C and the closed window of
   ``start.bat`` do not reach the database. Not provable here (no Windows); the launcher still says "stop.bat".
 
@@ -88,9 +91,26 @@ def read_pidfile(pgdata: Path) -> Pid | None:
     return Pid(pid, status, len(lines) >= PID_LINES)
 
 
+START_SLACK_S = (-2.0, 60.0)
+"""How much later than the process was created the postmaster writes its start time into ``postmaster.pid`` (it is
+written once the postmaster is up: seconds on a slow disk or with an antivirus, never earlier than the process)."""
+
+
+def _same_dir(path: str, pgdata: Path) -> bool | None:
+    try:
+        return os.path.samefile(path, pgdata)  # file ids: case, 8.3 names and links do not matter
+    except OSError:
+        return None
+
+
 def is_postgres(pid: int, pgdata: Path) -> bool | None:
-    """Is process ``pid`` a postgres of this data directory: True, False (gone, or another program that got the pid),
-    None (cannot tell: no psutil, access denied, a postgres whose folder is not this one by name)."""
+    """Is process ``pid`` the postmaster of this data directory: True; False (gone, another program that got the pid,
+    or the postgres of another cluster); None (cannot tell: no psutil, access denied, a file with no start time).
+
+    A postgres is told from its working directory (a postmaster works in its data directory) and from its start time:
+    the line 3 of ``postmaster.pid`` is the second the postmaster started at, a process created long after it is
+    another one, whatever its name. Either proof of "ours" is enough; "another" needs the process to be a postgres
+    of another folder (or one created at another time) with no proof for ours."""
     try:
         import psutil
     except ImportError:
@@ -102,13 +122,22 @@ def is_postgres(pid: int, pgdata: Path) -> bool | None:
         if not p.name().lower().startswith("postgres"):
             return False
         try:
-            cwd = p.cwd()  # a postmaster works in its data directory
+            same_dir = _same_dir(p.cwd(), pgdata)
         except (psutil.AccessDenied, OSError):
+            same_dir = None
+        same_time = None
+        try:
+            started = int(Path(pgdata, "postmaster.pid").read_text(encoding="utf-8", errors="replace").splitlines()[2])
+            same_time = START_SLACK_S[0] <= started - p.create_time() <= START_SLACK_S[1]
+        except (OSError, IndexError, ValueError):
+            pass
+        if same_dir or same_time:
             return True
-        # the same folder under another spelling (case, 8.3 names, a link) is not proof of another cluster: only "cannot
-        # tell" then, and a file of a live postmaster is never removed on that
-        same = os.path.normcase(os.path.realpath(cwd)) == os.path.normcase(os.path.realpath(pgdata))
-        return True if same else None
+        if same_dir is False and same_time is False:
+            return False  # a postgres of another folder, created at another time: the pid was reused
+        if same_dir is None and same_time is False:
+            return False  # cannot read its folder; created at another time than the file says
+        return None
     except psutil.NoSuchProcess:
         return False
     except psutil.AccessDenied:
@@ -116,17 +145,29 @@ def is_postgres(pid: int, pgdata: Path) -> bool | None:
 
 
 def log_path(pgdata: Path) -> Path:
-    """The server's log, beside the data directory (module doc), rotated when big."""
+    """The server's log, beside the data directory (module doc)."""
     folder = pgdata.parent / "logs"
     folder.mkdir(parents=True, exist_ok=True)
     log = folder / "postgres.log"
+    _own_for_pgserver(folder, log)
+    return log
+
+
+def rotate_log(pgdata: Path) -> bool:
+    """Put a big log aside (``postgres.log.1``) before a start. Only while no postmaster of ``pgdata`` is up: a live
+    one holds the file open (Windows: the rename is refused, so nothing would be rotated; Linux: it goes on writing into
+    the renamed file and the next rotation overwrites it). True when rotated."""
+    info = read_pidfile(pgdata)
+    if info is not None and is_postgres(info.pid, pgdata) is not False:
+        return False
+    log = pgdata.parent / "logs" / "postgres.log"
     try:
         if log.stat().st_size > LOG_MAX_BYTES:
             log.replace(log.with_name(log.name + ".1"))
+            return True
     except OSError:
         pass
-    _own_for_pgserver(folder, log)
-    return log
+    return False
 
 
 def _own_for_pgserver(*paths: Path) -> None:
@@ -154,8 +195,10 @@ def log_tail(log: Path, lines: int = LOG_TAIL_LINES) -> str:
 
 
 def heal(pgdata: Path, out: Callable[[str], None] = say) -> bool:
-    """Remove a ``postmaster.pid`` that names no postgres of this data directory (the process is gone, or the pid went
-    to another program): True when removed. A live postmaster's file is never touched."""
+    """Remove a ``postmaster.pid`` that names no postmaster of this data directory (the process is gone, or the pid
+    went to another program, or to another cluster's postgres): True when removed. A live postmaster's file is never
+    touched. The caller holds pgserver's lock (``get_server`` does): a start of another process cannot write a fresh
+    file between the reading and the removal; the file is read once more just before the removal all the same."""
     pf = pgdata / "postmaster.pid"
     info = read_pidfile(pgdata)
     if info is None and not pf.exists():
@@ -168,6 +211,9 @@ def heal(pgdata: Path, out: Callable[[str], None] = say) -> bool:
                 return False
         except OSError:
             return False
+    again = read_pidfile(pgdata)
+    if (again.pid if again else None) != (info.pid if info else None):
+        return False  # replaced meanwhile by a starting postmaster's file
     try:
         pf.unlink()
     except OSError:
@@ -230,6 +276,7 @@ def _server_class() -> Any:
         """pgserver's server whose log is outside the data directory (module doc)."""
 
         def ensure_postgres_running(self) -> None:
+            rotate_log(self.pgdata)
             self.log = log_path(self.pgdata)
             super().ensure_postgres_running()
 
@@ -277,7 +324,8 @@ def get_server(pgdata: Path | str, out: Callable[[str], None] = say) -> Any:
         return cls._instances[pgdata]
     failed = unexpected = 0
     while True:
-        heal(pgdata, out)
+        with cls._lock:  # pgserver's inter-process lock: a start of another process is not writing its file meanwhile
+            heal(pgdata, out)
         info = read_pidfile(pgdata)
         if info is not None and is_postgres(info.pid, pgdata) is not False and not (info.status == "ready" and info.complete):
             wait_ready(pgdata, out, announce=True)  # a postmaster of an earlier try, still recovering

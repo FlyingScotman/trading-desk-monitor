@@ -193,12 +193,17 @@ def test_postmaster_that_dies_while_recovering_is_reported_with_its_log(pgdata: 
     new_process(pgdata)
     (pgdata / "postmaster.pid").write_text((pgdata / "postmaster.pid").read_text().replace("ready", "starting"))
     log = pgdata.parent / "logs" / "postgres.log"
-    log.write_text("FATAL:  could not write to file: No space left on device (invented line)\n", encoding="utf-8")
     monkeypatch.setattr(embedded, "POLL_S", 0.05)
     said: list[str] = []
     import threading
 
-    threading.Timer(0.3, lambda: _kill_tree(pid)).start()
+    def die() -> None:
+        _kill_tree(pid)
+        # written once the postmaster is dead: on Windows a live one holds its log open and refuses the write
+        with log.open("a", encoding="utf-8") as f:
+            f.write("FATAL:  could not write to file: No space left on device (invented line)\n")
+
+    threading.Timer(0.3, die).start()
     with pytest.raises(embedded.StoreStartError) as e:
         embedded.get_server(pgdata, said.append)
     msg = str(e.value)
@@ -275,13 +280,72 @@ def test_resolve_url_uses_the_recovering_start(tmp_path: Path, monkeypatch) -> N
     assert store.resolve_url(st) == "postgresql://fake/desk" and seen == [st.pg_dir]
 
 
-def test_log_is_rotated_when_big(tmp_path: Path, monkeypatch) -> None:
+def test_log_is_rotated_when_big_and_no_postmaster_is_up(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.setattr(embedded, "LOG_MAX_BYTES", 10)
     folder = tmp_path / "logs"
     folder.mkdir()
     (folder / "postgres.log").write_text("x" * 100)
-    log = embedded.log_path(tmp_path / "pg")
-    assert not log.exists() and (folder / "postgres.log.1").read_text() == "x" * 100
+    assert embedded.rotate_log(tmp_path / "pg") is True
+    assert not (folder / "postgres.log").exists() and (folder / "postgres.log.1").read_text() == "x" * 100
+    assert embedded.log_path(tmp_path / "pg") == folder / "postgres.log"
+
+
+def test_log_of_a_live_postmaster_is_not_rotated(pgdata: Path, monkeypatch) -> None:
+    """A live server holds the log open: Windows refuses the rename, Linux would let it write into the renamed file."""
+    server = embedded.get_server(pgdata, lambda m: None)
+    log = pgdata.parent / "logs" / "postgres.log"
+    monkeypatch.setattr(embedded, "LOG_MAX_BYTES", 10)
+    assert log.stat().st_size > 10
+    assert embedded.rotate_log(pgdata) is False and log.is_file() and not log.with_name("postgres.log.1").exists()
+    new_process(pgdata)
+    again = embedded.get_server(pgdata, lambda m: None)  # the live server is taken, nothing is rotated
+    assert _value(again, "SELECT 1") == 1 and _url(again) == _url(server)
+    assert log.is_file() and not log.with_name("postgres.log.1").exists()
+
+
+def test_pid_of_a_postgres_of_another_cluster_is_not_this_clusters_postmaster(pgdata: Path, tmp_path: Path) -> None:
+    """The pid in a left-over ``postmaster.pid`` went to the postmaster of ANOTHER cluster (the name is postgres, only
+    the data directory and the start time tell): the file is stale, and it is removed, the other cluster is left alone."""
+    other = tmp_path / "other"
+    new_process(other)
+    other_server = embedded.get_server(other, lambda m: None)
+    try:
+        embedded.get_server(pgdata, lambda m: None)
+        new_process(pgdata)
+        crash(pgdata)
+        other_pid = embedded.read_pidfile(other).pid
+        lines = (pgdata / "postmaster.pid").read_text().splitlines()
+        lines[0] = str(other_pid)
+        lines[2] = str(int(time.time()) - 3600)  # the crash was an hour ago, the pid went to the other cluster since
+        (pgdata / "postmaster.pid").write_text("\n".join(lines) + "\n")
+        assert embedded.is_postgres(other_pid, pgdata) is False
+        assert embedded.is_postgres(other_pid, other) is True
+        said: list[str] = []
+        server = embedded.get_server(pgdata, said.append)
+        assert _value(server, "SELECT 1") == 1 and embedded.read_pidfile(pgdata).pid != other_pid
+        assert any("убрал" in m for m in said) and _value(other_server, "SELECT 1") == 1
+    finally:
+        _kill_tree(embedded.read_pidfile(other).pid)
+        new_process(other)
+
+
+def test_heal_does_not_remove_a_file_that_a_starting_postmaster_wrote_meanwhile(pgdata: Path, monkeypatch) -> None:
+    """The reading said «stale», then another process's start wrote its fresh file: the second reading stops the removal."""
+    embedded.get_server(pgdata, lambda m: None)
+    new_process(pgdata)
+    dead = crash(pgdata)
+    fresh = (pgdata / "postmaster.pid").read_text().replace(str(dead), str(os.getpid() + 1_000_000), 1)
+    real = embedded.is_postgres
+
+    def late(pid: int, d: Path) -> bool | None:
+        answer = real(pid, d)
+        (pgdata / "postmaster.pid").write_text(fresh)  # the other start writes between the check and the removal
+        return answer
+
+    monkeypatch.setattr(embedded, "is_postgres", late)
+    said: list[str] = []
+    assert embedded.heal(pgdata, said.append) is False and said == []
+    assert (pgdata / "postmaster.pid").read_text() == fresh
 
 
 def test_desk_db_migrate_after_a_killed_server_needs_no_manual_step(tmp_path: Path, monkeypatch, capsys) -> None:

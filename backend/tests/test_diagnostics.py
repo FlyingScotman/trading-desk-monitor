@@ -268,6 +268,33 @@ def test_scrubber_keeps_the_dates_of_the_autopilot_log(tmp_path):
     assert doc["last_cycles"][0]["steps"][0]["detail"] == "pulled 2026-10-16"
 
 
+def test_postgres_log_gives_levels_and_object_names_but_no_value_of_the_data(tmp_path):
+    """TDM#518: postgres.log lives in the logs folder and is read like the others. Its DETAIL / STATEMENT / CONTEXT
+    lines (a key, a row, the SQL text) and the lines of a statement never reach the diagnostics, and a quoted word of
+    a message stays only where it names an object (a constraint), not where it quotes a value."""
+    import json
+
+    from desk.settings import Settings
+
+    log_dir = tmp_path / "logs"
+    log_dir.mkdir()
+    (log_dir / "postgres.log").write_text(
+        "2026-10-16 08:00:00.123 UTC [41] ERROR:  duplicate key value violates unique constraint \"trade_pk\"\n"
+        "2026-10-16 08:00:00.123 UTC [41] DETAIL:  Key (trade_id)=(T-INVENTED-VALUE) already exists.\n"
+        "2026-10-16 08:00:00.123 UTC [41] STATEMENT:  INSERT INTO trade VALUES ('T-INVENTED-VALUE', 'B-INVENTED')\n"
+        "\tINVENTED-CONTINUATION\n"
+        "2026-10-16 08:00:01.000 UTC [41] ERROR:  invalid input syntax for type numeric: \"INVENTED-AMOUNT\"\n"
+        "2026-10-16 08:00:01.000 UTC [41] CONTEXT:  COPY trade, line 3: \"INVENTED-LINE\"\n"
+        "2026-10-16 08:00:02.000 UTC [41] LOG:  checkpoint complete\n"
+        "2026-10-16 08:00:03.000 UTC [41] FATAL:  terminating connection due to administrator command\n",
+        encoding="utf-8")
+    out, _ = diagnostics.logs_section(Settings(home=tmp_path), Scrubber(), datetime(2026, 10, 16, 12))
+    text = json.dumps(out, ensure_ascii=False)
+    assert "INVENTED" not in text, text
+    assert out["by_logger"]["postgres"] == {"ERROR": 3, "INFO": 1}
+    assert any('constraint "trade_pk"' in x["text"] for x in out["recent_warnings_errors"])
+
+
 RESET = ("{d} {t},000 ERROR asyncio Exception in callback _ProactorBasePipeTransport._call_connection_lost(None)\n"
          "handle: <Handle _ProactorBasePipeTransport._call_connection_lost(None)>\n"
          "Traceback (most recent call last):\n"
