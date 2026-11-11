@@ -69,7 +69,9 @@ def test_runs_that_are_deleted_are_forgotten_in_every_cache_of_the_process() -> 
         for rid in (1, 2, 3):
             c.get_or_build(("positions", rid, None), None, lambda: b"x" * 100)
             c.get_or_build(("risk", rid), None, lambda: b"y" * 100)
-    assert run_cache.forget_runs([2]) == 4 and a.stats()["items"] == 4 and b.stats()["items"] == 4
+    assert a.stats()["items"] == b.stats()["items"] == 6
+    run_cache.forget_runs([2])  # (what it returns counts every cache of the process, other tests' too: not this test's)
+    assert a.stats()["items"] == 4 and b.stats()["items"] == 4  # the two bodies of run 2 gone from each of the two caches
     assert a.get(("positions", 2, None), None) is None and a.get(("positions", 1, None), None)
     assert a.retain({1}) == 2 and {k[1] for k in a._items} == {1}  # a run deleted by another process
     assert a.bytes == sum(e.size for e in a._items.values())  # the byte count follows every drop
