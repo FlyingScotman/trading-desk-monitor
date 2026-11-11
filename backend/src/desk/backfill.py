@@ -563,6 +563,13 @@ def _published(con: psycopg.Connection, settings: Settings, p: Plan, day: Day, *
     return now_.run_id
 
 
+def _go_on(pipe: Any, date: str) -> None:
+    """The pass goes on to the next date after ``date`` failed (the sequential run does, and the next date then runs
+    without it): its turn in the pool. A pass that stops on it closes the pipeline instead and does not call this."""
+    if pipe is not None:
+        pipe.release(date)
+
+
 def _eod(pipe: Any, date: str, alone: Callable[[], int | None], out: Callable[[str], None]) -> Any:
     """The run of ``date``: its answer from the pool when it was given to it (the lines it printed first, as
     ``dayrun.eod_run`` prints them), else ``alone()``. ``PIPE_BROKEN`` when a process of the pool died."""
@@ -772,9 +779,11 @@ def run(settings: Settings, p: Plan, *, store_url: str | None = None, client: An
                     log.exception("backfill %s interrupted (%d in a row)", day.date, n)
                     failed.append((day.date, f"{err} (not the date's data: tried again next time)"))
                     if alone and not passed:
+                        _go_on(pipe, day.date)
                         continue  # its own error (later dates loaded meanwhile): it no longer holds the queue (#23)
                     if n >= MAX_ATTEMPTS and not passed:
                         passed.append((day.date, phase))  # stopped on it before: its own error or the network's? the
+                        _go_on(pipe, day.date)
                         continue  # next date tells
                     stall = {**_stall(problems[day.date], err, (passed or [(day.date, phase)])[0][0],
                                       [x for x, _ in passed] + [day.date]), "probe": day.date}
@@ -786,6 +795,7 @@ def run(settings: Settings, p: Plan, *, store_url: str | None = None, client: An
                 fails[day.date] = day.sig
                 _attempt(problems, day, "failed", f"{type(e).__name__}: {e}")
                 failed.append((day.date, f"{type(e).__name__}: {e}"))
+                _go_on(pipe, day.date)
                 continue
             loads({"run", "bundle"} if downloaded else {"run"})
             if rid is None:  # a run that created nothing (no positions for the date after all): the date's failure
@@ -992,6 +1002,7 @@ def run_second(settings: Settings, p: Plan, *, store_url: str | None = None, bud
                 fails[day.date] = {"sig": day.sig, "run_id": day.run_id, "attempts": n, "error": err}
                 log.exception("backfill second pass %s failed (%d of %d)", day.date, n, MAX_ATTEMPTS)
                 failed.append((day.date, err))
+                _go_on(pipe, day.date)
                 continue
             fails.pop(day.date, None)
             done.append(day.date)

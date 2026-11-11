@@ -307,66 +307,92 @@ def test_the_gate_keeps_the_order_of_the_dates():
     import multiprocessing
 
     shared = parallel.Shared(multiprocessing.get_context("spawn"))
+    shared.used = 4
     events: list[str] = []
     gates = [parallel.Gate(shared, i) for i in range(4)]
 
-    def date(i: int, work: float, fail: bool = False) -> None:
+    def date(i: int, work: float) -> None:
         time.sleep(work)
         events.append(f"{i} computed")
-        try:
-            if fail:
-                raise ValueError("boom")
-            gates[i].before_publish()
-            events.append(f"{i} published")
-        except ValueError:
-            pass
-        finally:
-            gates[i].finish()
+        gates[i].before_publish()
+        events.append(f"{i} published")
+        gates[i].finish()
 
-    # the later dates compute faster: they wait for their turn, a failing date does not hold the others up
-    ts = [threading.Thread(target=date, args=(i, w, i == 1)) for i, w in ((0, 0.6), (1, 0.3), (2, 0.1), (3, 0.0))]
+    # the later dates compute faster: they wait for their turn
+    ts = [threading.Thread(target=date, args=(i, w)) for i, w in ((0, 0.6), (1, 0.3), (2, 0.1), (3, 0.0))]
     for t in ts:
         t.start()
     for t in ts:
         t.join(10)
     published = [e for e in events if e.endswith("published")]
-    assert published == ["0 published", "2 published", "3 published"]
-    assert events.index("3 computed") < events.index("0 published") < events.index("2 published")
-    assert shared.done.value == 4
+    assert published == ["0 published", "1 published", "2 published", "3 published"]
+    assert events.index("3 computed") < events.index("0 published")
+    assert shared.done_count() == 4
 
 
-def test_the_carried_spreads_are_read_at_the_first_lookup_and_after_the_turn():
+def test_a_date_that_failed_holds_the_turn_until_the_starting_process_hands_it_on():
+    """TDM#628 second review: a date that fails does not finish by itself. The sequential run goes on to the next date
+    without it, so the next date reads the spreads and publishes without it only when the caller says it goes on
+    (``Pipeline.release``); when the caller stops there it closes the pipeline instead, and the next date does not publish."""
     import multiprocessing
 
     shared = parallel.Shared(multiprocessing.get_context("spawn"))
-    reads: list[str] = []
-    g0, g1 = parallel.Gate(shared, 0), parallel.Gate(shared, 1)
-    lazy0 = parallel.LazyCarried(lambda: reads.append("0") or {"A": 1})
-    assert not lazy0.loaded and reads == []
-    assert lazy0.get("A") == 1 and lazy0.get("B") is None and len(lazy0) == 1 and dict(lazy0) == {"A": 1} and reads == ["0"]
+    shared.used = 3
+    gates = [parallel.Gate(shared, i) for i in range(3)]
+    published: list[int] = []
+    errors: list[BaseException] = []
 
-    class Con:  # a connection whose carried spreads are read at its date's turn
-        pass
+    def date(i: int) -> None:
+        try:
+            gates[i].before_publish()
+            published.append(i)
+            gates[i].finish()
+        except parallel.Aborted as e:
+            errors.append(e)
 
-    import desk.parallel as mod
+    gates[0].before_publish()
+    gates[0].finish()
+    # date 1 failed (it never finishes); dates 2 and 3 wait
+    t2 = threading.Thread(target=date, args=(2,), daemon=True)
+    t2.start()
+    time.sleep(0.5)
+    assert t2.is_alive() and published == [] and shared.done_count() == 1
+    shared.fin[1] = 1  # the caller goes on to the next date: ``Pipeline.release``
+    t2.join(10)
+    assert published == [2] and shared.done_count() == 3
+    # the other ending: the caller stops, the date whose turn comes later does not publish
+    shared.reset()
+    shared.used = 3
+    g = parallel.Gate(shared, 1)
+    t = threading.Thread(target=lambda: errors.append(_raises(g.before_publish)), daemon=True)
+    t.start()
+    time.sleep(0.3)
+    shared.abort.value = 1
+    t.join(10)
+    assert not t.is_alive() and isinstance(errors[-1], parallel.Aborted)
 
-    real = mod.store.carried_spreads
-    mod.store.carried_spreads = lambda con, before: reads.append(f"read before {before}") or {"X": 1}
+
+def _raises(fn) -> BaseException | None:
     try:
-        lazy = g1.carried(Con(), date(2026, 10, 14))
-        assert not lazy.loaded
-        got: list[Any] = []
-        t = threading.Thread(target=lambda: got.append(lazy.get("X")))
-        t.start()
-        time.sleep(0.3)
-        assert t.is_alive() and "read before 2026-10-14" not in reads  # the date before it is not finished
-        g0.finish()
-        t.join(5)
-        assert got == [1] and "read before 2026-10-14" in reads
-        free = parallel.Gate(shared, 7, wait_carried=False).carried(Con(), date(2026, 10, 9))
-        assert free.get("X") == 1  # the second pass's reads wait for nobody
-    finally:
-        mod.store.carried_spreads = real
+        fn()
+    except BaseException as e:  # noqa: BLE001 - the test looks at which
+        return e
+    return None
+
+
+def test_a_closed_pipeline_stops_a_date_whose_turn_has_come_before_it_publishes():
+    """TDM#628 second review: the abort flag was looked at only while a date waited for its turn; a date whose turn had
+    come published after the pass was stopped."""
+    import multiprocessing
+
+    shared = parallel.Shared(multiprocessing.get_context("spawn"))
+    g = parallel.Gate(shared, 0)
+    g.wait_turn()  # the turn is there (the carried spreads were read)
+    shared.abort.value = 1
+    with pytest.raises(parallel.Aborted):
+        g.before_publish()
+    with pytest.raises(parallel.Aborted):
+        parallel.Gate(shared, 0).before_publish()
 
 
 def test_a_closed_pipeline_lets_the_waiting_dates_go():
@@ -388,8 +414,6 @@ def test_a_closed_pipeline_lets_the_waiting_dates_go():
     shared.abort.value = 1  # all close() does here: no lock, no condition for a dead process to hold
     t.join(5)
     assert len(err) == 1 and not t.is_alive()
-    g.finish()  # nothing to wait for, nothing advanced
-    assert shared.done.value == 0
 
 
 def test_a_dropped_date_does_not_publish_and_does_not_hold_the_others_up():
@@ -405,12 +429,12 @@ def test_a_dropped_date_does_not_publish_and_does_not_hold_the_others_up():
         g1.before_publish()
     g0.before_publish()
     g0.finish()
-    g1.finish()  # waits for its turn, then lets the next one through
+    g1.finish()  # (``run_date`` does it for a date that found the flag) lets the next one through
     g2.before_publish()
     g2.finish()
-    assert shared.done.value == 3
+    assert shared.done_count() == 3
     shared.reset()  # the next pass on the same processes starts clean
-    assert shared.done.value == 0 and not parallel.Gate(shared, 1).skipped()
+    assert shared.done_count() == 0 and not parallel.Gate(shared, 1).skipped()
 
 
 def test_a_date_that_waits_for_its_turn_gives_up_when_its_turn_cannot_come(monkeypatch):
@@ -461,14 +485,16 @@ def test_a_process_that_dies_while_the_others_wait_for_their_turn_does_not_hang_
     for every sleeper, and the sleepers were killed with the broken pool: the close never returned."""
     import multiprocessing
     from concurrent.futures import ProcessPoolExecutor
-    from concurrent.futures.process import BrokenProcessPool
+    from multiprocessing.connection import wait as mp_wait
 
     ctx = multiprocessing.get_context("spawn")
     shared = parallel.Shared(ctx)
     pool = ProcessPoolExecutor(max_workers=3, mp_context=ctx, initializer=_gate_init, initargs=(shared,))
-    futs = [pool.submit(_gate_job, i) for i in range(3)]
-    with pytest.raises(BrokenProcessPool):
-        futs[0].result(timeout=60)
+    for i in range(3):
+        pool.submit(_gate_job, i)
+    # the death is read from the sentinels, as ``Pipeline.result`` does: the executor itself may not notice a process
+    # (CPython 3.11, ``spawn``), and a test that waits for its BrokenProcessPool fails in one run of four
+    assert mp_wait([p.sentinel for p in pool._processes.values()], timeout=60), "the process of the first date lives"
     closed = threading.Event()
 
     def close() -> None:
@@ -478,6 +504,106 @@ def test_a_process_that_dies_while_the_others_wait_for_their_turn_does_not_hang_
     threading.Thread(target=close, daemon=True).start()
     assert closed.wait(10), "closing the pipeline hung on the sleepers of a dead pool"
     pool.shutdown(wait=False, cancel_futures=True)
+
+
+def test_a_dead_process_is_seen_from_its_sentinel_when_the_executor_does_not_notice(monkeypatch):
+    """TDM#628 second review: with ``spawn`` CPython 3.11's executor may not watch the process started last, and the
+    answer of a date never came (the call waited ``RESULT_TIMEOUT_S``, half an hour). ``Pipeline.result`` looks at the
+    processes every ``CHECK_S``. Here the future never answers at all, and a process of the executor is gone."""
+    import multiprocessing
+    import types
+    from concurrent.futures import Future
+
+    proc = multiprocessing.get_context("spawn").Process(target=time.sleep, args=(0.3,))
+    proc.start()
+    pipe = parallel.Pipeline.__new__(parallel.Pipeline)
+    pipe._executor = types.SimpleNamespace(_processes={proc.pid: proc})
+    pipe._futures, pipe._seqs, pipe._taken = {"2026-10-12": Future()}, {"2026-10-12": 0}, {}
+    pipe.timeout_s, pipe.broken = 120.0, False
+    closed: list[bool] = []
+    pipe.close = lambda kill=False: closed.append(kill)
+    monkeypatch.setattr(parallel, "CHECK_S", 0.2)
+    t0 = time.monotonic()
+    try:
+        with pytest.raises(parallel.PoolBroken, match="died"):
+            pipe.result("2026-10-12")
+    finally:
+        proc.join(10)
+    assert time.monotonic() - t0 < 30 and pipe.broken and closed == [True]  # the pool is ended at once
+
+
+def test_a_live_pool_is_not_taken_for_dead_while_a_date_takes_long(monkeypatch):
+    """The look at the processes every ``CHECK_S`` does not cut a date that is only slow; the timeout still ends one that
+    does not answer."""
+    import multiprocessing
+    import types
+    from concurrent.futures import Future
+
+    proc = multiprocessing.get_context("spawn").Process(target=time.sleep, args=(60,))
+    proc.start()
+    try:
+        pipe = parallel.Pipeline.__new__(parallel.Pipeline)
+        pipe._executor = types.SimpleNamespace(_processes={proc.pid: proc})
+        fut: Future = Future()
+        pipe._futures, pipe._seqs, pipe._taken = {"d": fut}, {"d": 0}, {}
+        pipe.timeout_s, pipe.broken, pipe.peak_mb = 600.0, False, 0.0
+        pipe.close = lambda kill=False: None
+        monkeypatch.setattr(parallel, "CHECK_S", 0.1)
+        threading.Timer(1.0, lambda: fut.set_result({"rid": 7, "lines": []})).start()
+        assert pipe.result("d")["rid"] == 7 and not pipe.broken
+        pipe._futures, pipe._seqs, pipe.timeout_s = {"d2": Future()}, {"d2": 1}, 0.5
+        with pytest.raises(parallel.PoolBroken, match="no answer"):
+            pipe.result("d2")
+    finally:
+        proc.kill()
+        proc.join(10)
+
+
+PARENT = """
+import sys, time
+from desk import parallel
+if __name__ == "__main__":
+    pool = parallel.Pool(2)
+    ex, _ = pool.acquire()
+    for f in [ex.submit(time.sleep, 1.0), ex.submit(time.sleep, 1.0)]:  # both processes are started (on demand)
+        f.result(120)
+    print(*(p.pid for p in ex._processes.values()), flush=True)
+    time.sleep(600)
+"""
+
+
+def _alive(pid: int) -> bool:
+    try:
+        return Path(f"/proc/{pid}/stat").read_text().rsplit(")", 1)[1].split()[0] != "Z"  # a zombie is gone: not reaped
+    except OSError:
+        return False
+
+
+@pytest.mark.skipif(not Path("/proc/self/stat").exists(), reason="reads the processes from /proc")
+def test_the_processes_of_the_pool_end_when_the_process_that_started_them_is_killed():
+    """TDM#628 second review: after a kill of the starting process (``kill -9``, the end of the task, a crash) the pool's
+    processes waited for work for ever, each holding hundreds of MB. Each watches its parent now (``_init``)."""
+    import signal
+    import subprocess
+    import sys
+
+    parent = subprocess.Popen([sys.executable, "-B", "-c", PARENT], stdout=subprocess.PIPE, text=True)
+    try:
+        pids = [int(x) for x in parent.stdout.readline().split()]
+        assert len(pids) == 2 and all(_alive(p) for p in pids)
+        os.kill(parent.pid, signal.SIGKILL)
+        parent.wait(30)
+        until = time.monotonic() + 30
+        while any(_alive(p) for p in pids) and time.monotonic() < until:
+            time.sleep(0.2)
+        left = [p for p in pids if _alive(p)]
+        for p in left:
+            os.kill(p, signal.SIGKILL)  # (do not leave them behind when the test fails)
+        assert not left, f"the pool's processes {left} live on after their parent was killed"
+    finally:
+        if parent.poll() is None:
+            parent.kill()
+            parent.wait(30)
 
 
 def die_late(bad: str, after_s: float) -> None:
@@ -763,8 +889,152 @@ def test_a_store_error_reading_the_carried_spreads_fails_the_date_in_the_pool_as
     assert seq["stalled"] and seq["stalled"]["date"] == bad and bad not in seq_order
     assert [d for d, _ in par["failed"]] == [bad] and "OperationalError" in par["failed"][0][1]
     assert par["stalled"] and par["stalled"]["date"] == bad
-    assert bad not in par_order and [d for d in par_order if d < bad] == [d for d in seq_order if d < bad]
-    # (a date already in flight after it, 15.10, may be published: its process does not wait for the failed date's)
+    assert par_order == seq_order  # a date in flight after the failed one (15.10) is not published: its turn did not come
+
+
+# ---- failures at random: what is published, and what each run carries, is what the sequential run makes
+
+CARRY_DATES = ["2026-07-24", "2026-09-01", *DATES]
+CARRY_LOADED = "2026-07-24"
+
+
+@pytest.fixture
+def cache_carry(tmp_path) -> Path:
+    """``NOQ`` is priced on the first two dates only (07.24 and 09.01, with different spreads), so on every later date its
+    model price carries the spread of the latest run before the date: the run of 09.01, when it is published."""
+    c = tmp_path / "cache_carry"
+    c.mkdir()
+    shutil.copy(FIX / f"{STATIC}.json.gz", c)
+    for i, d in enumerate(CARRY_DATES):
+        doc = shifted(d, len(CARRY_DATES) - i, light=False)
+        if d not in CARRY_DATES[:2]:
+            doc["data"]["bond_quotes"] = [q for q in doc["data"]["bond_quotes"] if q["secid"] != NOQ]
+        write(c, doc)
+    return c
+
+
+def make_injected(path: str, real: Any):
+    """``dayrun.eod_run`` that fails by the plan in the JSON file ``path``: {cycle, events: [[kind, date, pass, cycle]]}.
+    Deterministic by (cycle, pass, date), not once: a date tried again in the same cycle fails again, whichever process
+    tries it. ``kind``: ``transient`` (the store drops the connection), ``error`` (the date's own error), ``death`` (the
+    process ends at once; only a pool's process dies, this one never)."""
+    import multiprocessing
+
+    def run(settings, d, **kw):
+        plan_ = json.loads(Path(path).read_text())
+        ph = 1 if kw.get("no_gamma") else 2
+        for kind, dd, p, c in plan_["events"]:
+            if dd == d and p == ph and c == plan_["cycle"]:
+                if kind == "transient":
+                    raise psycopg.OperationalError("injected: the store dropped the connection")
+                if kind == "error":
+                    raise ValueError("injected: the date's own error")
+                if kind == "death" and multiprocessing.parent_process() is not None:
+                    os._exit(3)
+        return real(settings, d, **kw)
+
+    return run
+
+
+def inject(path: str) -> None:
+    """A pool process's hook: the failures of ``make_injected``."""
+    dayrun.eod_run = make_injected(path, dayrun.eod_run)
+
+
+def two_cycles(pg_server, tmp_path: Path, cache_dir: Path, workers: int, events: list, monkeypatch):
+    """Two cycles (the first pass of the history, then the second) of a store with one book (07.24) and a failure plan
+    (``make_injected``) that holds in the first cycle only: the runs of the store (``dump``), the order they were
+    published in after each cycle, and what each pass reported."""
+    url = second_store(pg_server)
+    load_noq(url, tmp_path, CARRY_LOADED, 10)
+    s = Settings(home=tmp_path / f"home_{uuid.uuid4().hex[:6]}", snapshot_cache=cache_dir, store_url=url,
+                 backfill_workers=workers)
+    inj = tmp_path / f"inj_{uuid.uuid4().hex[:6]}.json"
+
+    def plan_() -> backfill.Plan:
+        with store.connect(url) as con:
+            return backfill.plan(con, s, date(2026, 7, 20), date(2026, 10, 15))
+
+    pool = parallel.Pool(workers, (inject, (str(inj),))) if workers > 1 else None
+    orders: list[list[str]] = []
+    said: list[Any] = []
+    try:
+        with monkeypatch.context() as m:
+            m.setattr(dayrun, "eod_run", make_injected(str(inj), dayrun.eod_run))
+            for cycle, hour in ((1, 9), (2, 12)):
+                inj.write_text(json.dumps({"cycle": cycle, "events": events}))
+                now = datetime(2026, 10, 20, hour, tzinfo=UTC)
+                r1 = backfill.run(s, plan_(), store_url=url, out=lambda line: None, workers=workers, pool=pool, now=now)
+                r2 = backfill.run_second(s, plan_(), store_url=url, out=lambda line: None, workers=workers, pool=pool)
+                orders.append(run_order(url))
+                said.append((r1["done"], [d for d, _ in r1["failed"]], r1["unconverged"], r2["done"],
+                             [d for d, _ in r2["failed"]], r2["moved"]))
+    finally:
+        if pool is not None:
+            pool.close()
+    return dump(url), orders, said
+
+
+def test_a_date_after_a_store_error_does_not_publish_with_the_spread_of_an_older_run_and_stays_so(
+        tmp_path, cache_carry, pg_server, monkeypatch):
+    """TDM#628 second review: 09.01 fails once on a store error. The sequential run stops there; the pool published the
+    dates after it all the same (the failed date handed its turn on), with the spread of the run before 09.01 instead
+    of 09.01's, and the plan does not call such a date stale: the wrong spread stayed on every date after it, for
+    ever. Now the failed date holds the turn, the dates after it are not published, and two cycles are the sequential
+    run's to the last bit."""
+    events = [["transient", "2026-09-01", 1, 1]]
+    seq, seq_orders, seq_said = two_cycles(pg_server, tmp_path, cache_carry, 1, events, monkeypatch)
+    par, par_orders, par_said = two_cycles(pg_server, tmp_path, cache_carry, 3, events, monkeypatch)
+    assert set(seq_orders[0]) == {"2026-07-24"}, "the scenario: the sequential run stops at the failed date"
+    assert len(seq_orders[1]) > 10 and "2026-09-01" in seq_orders[1]
+    assert par_orders[0] == seq_orders[0]  # nothing is published after the failed date
+    assert par_orders == seq_orders and par_said == seq_said
+    assert not differences(seq, par), differences(seq, par)[:5]
+    def z(quality: str) -> set[float]:
+        return {round(float(row["fact"]["spread_bp"]), 2) for r in par for row in r["rows"]
+                if row["secid"] == NOQ and row["quality"] == quality}
+
+    # the scenario: the dates 07.24 and 09.01 have two spreads of their own, and the model prices carry the later one
+    assert len(z("assumed")) == 2 and len(z("model_price")) == 1 and z("model_price") < z("assumed")
+
+
+def test_a_date_that_fails_with_its_own_error_lets_the_next_date_publish_as_the_sequential_run_does(
+        tmp_path, cache_carry, pg_server, monkeypatch):
+    """The other ending: the date's own error is passed over (the sequential run goes on): the next date publishes
+    without it (the spread of the run before), in the pool as one after the other, in both cycles."""
+    events = [["error", "2026-09-01", 1, 1]]
+    seq, seq_orders, seq_said = two_cycles(pg_server, tmp_path, cache_carry, 1, events, monkeypatch)
+    par, par_orders, par_said = two_cycles(pg_server, tmp_path, cache_carry, 3, events, monkeypatch)
+    assert "2026-09-01" not in seq_orders[0] and "2026-10-09" in seq_orders[0], "the scenario: the run goes on"
+    assert par_orders == seq_orders and par_said == seq_said
+    assert not differences(seq, par), differences(seq, par)[:5]
+
+
+def random_events(seed: int) -> list:
+    """One or two failures of the first cycle: kind, date, pass (the first pass of the history or the second), at random."""
+    import random
+
+    rnd = random.Random(seed)
+    out: list = []
+    for _ in range(rnd.choice((1, 1, 2))):
+        out.append([rnd.choice(("transient", "error", "death")), rnd.choice(CARRY_DATES), rnd.choice((1, 1, 2)), 1])
+    return out
+
+
+@pytest.mark.parametrize("seed", range(24))
+def test_failures_at_random_publish_the_same_dates_with_the_same_numbers_as_the_sequential_run(
+        seed, tmp_path, cache_carry, pg_server, monkeypatch):
+    """The invariant of the pool, whatever fails and wherever: the dates published and the contents of every run are what
+    the sequential run publishes at the same failures (a store error, the date's own error), two cycles on. A process that
+    dies is no failure of the date (the dates it did not publish run one after the other): the sequential run it is
+    compared with does not have it. Fixed seeds, so a run that fails can be run again."""
+    events = random_events(seed)
+    seq, seq_orders, seq_said = two_cycles(pg_server, tmp_path, cache_carry, 1, events, monkeypatch)
+    par, par_orders, par_said = in_thread(
+        lambda: two_cycles(pg_server, tmp_path, cache_carry, 3, events, monkeypatch), 900)
+    assert par_orders == seq_orders, events
+    assert par_said == seq_said, events
+    assert not differences(seq, par), (events, differences(seq, par)[:5])
 
 
 # ---- the pool that cannot start, the pool that serves several passes, the dropped date

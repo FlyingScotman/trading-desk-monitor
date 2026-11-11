@@ -13,6 +13,10 @@ processes keep the order where it counts:
   no model price does not wait at all, and the dates ahead of it in the order go on meanwhile;
 * a run is published in its turn, in the order of the dates, as the runs of the sequential backfill are (a later run's
   funding and OCP read the earlier ones, ``run.supersedes_run_id`` and the default run follow the order);
+* a date that failed does not hand the turn on by itself: the starting process does, when it has taken the answer and
+  decided to go on with the next date (``Pipeline.release``), as the sequential run does; when it stops there (a store
+  or network error stops the pass), the pipeline is closed and the dates after it do not publish. So what is published
+  and what each run carries is what the sequential run would have made at the same failures;
 * the second pass of the history goes newest first and each date reads the dates *before* it, which that pass publishes
   later: its reads need no wait (``wait_carried`` False), its publications keep the order.
 
@@ -26,13 +30,14 @@ A date that fails in its process fails as it would alone (the error comes back, 
 pickled). A process that dies takes the pipeline with it: the dates not yet published are run one after the other, in
 this process, as before, and the run that was loading is reaped as any orphan.
 
-**Nothing here can wait for ever.** The order is kept with shared counters that the dates *poll* (``POLL_S``), never with
+**Nothing here can wait for ever.** The order is kept with shared flags that the dates *poll* (``POLL_S``), never with
 a lock or a condition: a process killed while the others wait for their turn (an out-of-memory kill) leaves nothing
-held, and the pipeline is closed by two stores into shared memory (the abort flag, the done counter), which no dead
-process can block. The starting process waits for an answer at most ``RESULT_TIMEOUT_S`` for one date and for the
-processes to end at most ``CLOSE_GRACE_S`` (then they are terminated); a date waiting for its turn gives up when the
-starting process is gone or after ``TURN_TIMEOUT_S``. Each of these ends as a pool that is broken, which the caller runs
-one after the other.
+held, and the pipeline is closed by a store into shared memory (the abort flag), which no dead process can block.
+The starting process waits for an answer at most ``RESULT_TIMEOUT_S`` for one date, looking at its processes every
+``CHECK_S`` (a process that died is seen at once, whatever the executor itself notices), and for the processes to end at
+most ``CLOSE_GRACE_S`` (then they are terminated); a date waiting for its turn gives up when the starting process is
+gone or after ``TURN_TIMEOUT_S``, and a process of the pool ends when the starting process does (``_init``). Each of
+these ends as a pool that is broken, which the caller runs one after the other.
 """
 
 from __future__ import annotations
@@ -42,6 +47,7 @@ import multiprocessing
 import os
 import pickle
 import sys
+import threading
 import time
 import traceback
 from collections.abc import Callable, Iterator, Mapping
@@ -58,7 +64,9 @@ log = logging.getLogger("desk.parallel")
 LOOKAHEAD = 1
 """Dates in flight beyond the number of processes: a process finishing a date has the next one waiting."""
 POLL_S = 0.1
-"""How often a date waiting for its turn looks at the shared counters (the turns are tens of seconds apart)."""
+"""How often a date waiting for its turn looks at the shared flags (the turns are tens of seconds apart)."""
+CHECK_S = 1.0
+"""How often ``Pipeline.result`` looks at the processes while it waits for an answer."""
 RESULT_TIMEOUT_S = 1800.0
 """The longest the starting process waits for the answer of the date it takes next (the oldest of those in flight: its
 own calculation and publication, a date takes 10 to 60 s); then the pool is broken and the date runs here."""
@@ -68,7 +76,8 @@ they are terminated."""
 TURN_TIMEOUT_S = 7200.0
 """A date waiting for its turn gives up after this long (the dates before it did not finish: a stuck process)."""
 SKIP_CAPACITY = 16384
-"""Dates of one pass that ``Pipeline.discard`` can still stop (the date's number is its place in the shared flags)."""
+"""Dates of one pass the pipeline takes (the date's number is its place in the shared flags); the dates after them are
+the caller's to run one after the other."""
 WORKER_NICE = 5
 
 
@@ -86,22 +95,30 @@ class PoolBroken(RuntimeError):
 
 
 class Shared:
-    """What the starting process creates and every process of the pool is given (``initargs``): the number of dates
-    published (in the order they were submitted), the flag that closes the pipeline and a flag per date that drops it.
-    Plain shared memory, no lock and no condition: a process that dies holds nothing the others wait on."""
+    """What the starting process creates and every process of the pool is given (``initargs``): the flag that closes the
+    pipeline, a flag per date that says it is finished (published, passed over or released by the starting process) and
+    a flag per date that drops it. A date's turn is when the flags of all the dates before it are set. Plain shared
+    memory, no lock and no condition, each flag written by one side: a process that dies holds nothing the others wait
+    on."""
 
     def __init__(self, mp_context: Any) -> None:
-        self.done = mp_context.Value("q", 0, lock=False)
         self.abort = mp_context.Value("b", 0, lock=False)
+        self.fin = mp_context.Array("b", SKIP_CAPACITY, lock=False)
         self.skip = mp_context.Array("b", SKIP_CAPACITY, lock=False)
-        self.used = 0  # the starting process's: how many flags of ``skip`` a pass set (``reset`` clears those)
+        self.used = 0  # the starting process's: how many flags of ``fin`` and ``skip`` a pass set (``reset`` clears those)
+
+    def done_count(self) -> int:
+        """How many dates, from the first, are finished in a row (the date with this number is the next one's turn)."""
+        n = 0
+        while n < self.used and self.fin[n]:
+            n += 1
+        return n
 
     def reset(self) -> None:
         """A new pass on the same processes (nothing of the earlier one is in flight)."""
-        self.done.value = 0
         self.abort.value = 0
         for i in range(self.used):
-            self.skip[i] = 0
+            self.fin[i] = self.skip[i] = 0
         self.used = 0
 
 
@@ -149,34 +166,43 @@ class LazyCarried(Mapping):
 class Gate:
     """One date's place in the order (``seq``: the number it was submitted under). ``dayrun.eod_run`` asks it for the
     carried spreads (``carried``), waits for its turn before it publishes (``before_publish``) and says it is done
-    (``finish``). The turn is when ``seq`` dates before it are finished: published, failed or left."""
+    (``finish``). The turn is when ``seq`` dates before it are finished: published, passed over, or released by the
+    starting process after a failure (``Pipeline.release``). A date that fails does not finish by itself."""
 
     def __init__(self, shared: Shared, seq: int, wait_carried: bool = True) -> None:
         self.shared, self.seq, self.wait_carried = shared, seq, wait_carried
-        self._turn = self._finished = False
+        self._turn = False
+        self._seen = 0  # the dates before this one known to be finished (they stay so within a pass)
 
     def skipped(self) -> bool:
         """The starting process dropped this date (``Pipeline.discard``): it is not to publish."""
         return self.seq < SKIP_CAPACITY and bool(self.shared.skip[self.seq])
 
+    def _ready(self) -> bool:
+        fin = self.shared.fin
+        while self._seen < self.seq and fin[self._seen]:
+            self._seen += 1
+        return self._seen >= self.seq
+
     def wait_turn(self, *, honour_skip: bool = True) -> None:
-        """Poll until the dates before this one are finished. ``Aborted`` when the pipeline is closed, the starting
-        process is gone or ``TURN_TIMEOUT_S`` passed; ``Skipped`` when the date was dropped."""
-        if self._turn:
-            return
+        """Poll until the dates before this one are finished. ``Aborted`` when the pipeline is closed (even when the turn
+        has come: a closed pipeline publishes nothing), the starting process is gone or ``TURN_TIMEOUT_S`` passed;
+        ``Skipped`` when the date was dropped."""
         s = self.shared
         parent = multiprocessing.parent_process()  # None in the starting process itself (the tests' threads)
         t0 = time.monotonic()
-        while s.done.value < self.seq:
+        while True:
             if s.abort.value:
                 raise Aborted(f"date {self.seq} of the pipeline: closed before its turn")
+            if self._turn or self._ready():
+                break
             if honour_skip and self.skipped():
                 raise Skipped(f"date {self.seq} of the pipeline: dropped before its turn")
             if parent is not None and not parent.is_alive():
                 raise Aborted(f"date {self.seq} of the pipeline: the process that started it is gone")
             if time.monotonic() - t0 > TURN_TIMEOUT_S:
                 raise Aborted(f"date {self.seq} of the pipeline: its turn did not come in {TURN_TIMEOUT_S:.0f} s "
-                              f"(done {s.done.value})")
+                              f"(finished in a row: {self._seen})")
             time.sleep(POLL_S)
         self._turn = True
 
@@ -189,22 +215,20 @@ class Gate:
         return LazyCarried(load)
 
     def before_publish(self) -> None:
+        """The date publishes only in its turn, and not once it is dropped or the pipeline is closed: both are looked at
+        last, right before the publication (the turn may have come long ago, with the carried spreads)."""
         if self.skipped():
             raise Skipped(f"date {self.seq} of the pipeline: dropped before it published")
         self.wait_turn()
+        if self.shared.abort.value:
+            raise Aborted(f"date {self.seq} of the pipeline: closed before it published")
+        if self.skipped():
+            raise Skipped(f"date {self.seq} of the pipeline: dropped before it published")
 
     def finish(self) -> None:
-        """This date is done, whatever came of it: the next one's turn. A date that failed (or was dropped) first waits
-        for its own turn, so that the dates finish in the order."""
-        if self._finished:
-            return
-        try:
-            self.wait_turn(honour_skip=False)
-        except Aborted:
-            return
-        s = self.shared
-        s.done.value = max(s.done.value, self.seq + 1)  # only the date whose turn it is writes
-        self._finished = True
+        """This date is published, or passed over without a failure: the next one's turn."""
+        if self.seq < SKIP_CAPACITY:
+            self.shared.fin[self.seq] = 1
 
 
 # ---- the processes of the pool
@@ -261,11 +285,30 @@ def peak_memory_mb() -> float | None:
         return None
 
 
+def _end_with_parent() -> None:
+    """The process ends when the process that started it does (a kill, a crash): a pool's process waits for work for ever
+    otherwise, holding hundreds of MB. A daemon thread waits for the parent's sentinel, then ends the process at once
+    (no cleanup: the connections close with it, the store rolls back what it had open)."""
+    parent = multiprocessing.parent_process()
+    if parent is None:
+        return
+
+    def watch() -> None:
+        try:
+            mp_wait([parent.sentinel])
+        finally:
+            os._exit(1)
+
+    threading.Thread(target=watch, name="pool-parent-watch", daemon=True).start()
+
+
 def _init(shared: Shared, init: tuple[Callable[..., None], tuple] | None) -> None:
-    """A process of the pool starts: its priority, the shared state, a cache of prepared markets of its own."""
+    """A process of the pool starts: it ends with its parent, its priority, the shared state, a cache of prepared
+    markets of its own."""
     global _SHARED, _CONTEXTS
     from .dayrun import ContextCache
 
+    _end_with_parent()
     _lower_priority()
     _SHARED, _CONTEXTS = shared, ContextCache()
     if init is not None:  # a test's hook (a function of an importable module)
@@ -285,7 +328,9 @@ def _portable(e: BaseException) -> BaseException:
 def run_date(spec: dict[str, Any]) -> dict[str, Any]:
     """One date's run in a process of the pool (``dayrun.eod_run`` with its gate). ``spec``: ``settings``, ``date``,
     ``seq``, ``wait_carried``, ``snapshots``, ``store_url``, ``no_gamma``. Returns {rid, lines, seconds, peak_mb} or
-    {error, lines, trace}: the lines the run printed, in order."""
+    {error, lines, trace}: the lines the run printed, in order. The date is finished (its turn handed on) when it
+    published, in ``dayrun.eod_run``, or made nothing and passed without a failure; a date that failed is not: the
+    starting process hands its turn on when it goes on with the next date (``Pipeline.release``)."""
     from . import dayrun
 
     gate = Gate(_SHARED, spec["seq"], spec["wait_carried"])
@@ -297,15 +342,15 @@ def run_date(spec: dict[str, Any]) -> dict[str, Any]:
         rid = dayrun.eod_run(spec["settings"], spec["date"], snapshots=spec["snapshots"], store_url=spec["store_url"],
                              report_dir=None, out=lines.append, contexts=_CONTEXTS, read_model=False,
                              no_gamma=spec["no_gamma"], gate=gate)
+        gate.finish()  # (published: already; a date without positions makes no run and is passed over)
         return {"rid": rid, "lines": lines, "seconds": round(time.monotonic() - t0, 1), "peak_mb": peak_memory_mb()}
     except Aborted as e:
         return {"error": e, "lines": lines, "trace": "", "aborted": True}
     except Skipped as e:
+        gate.finish()  # dropped: nobody waits for it, and nothing was published
         return {"error": e, "lines": lines, "trace": "", "skipped": True}
     except Exception as e:  # noqa: BLE001 - the date's error goes back to the caller, who classifies it
         return {"error": _portable(e), "lines": lines, "trace": traceback.format_exc()}
-    finally:
-        gate.finish()
 
 
 def _stop(executor: ProcessPoolExecutor, *, kill: bool) -> None:
@@ -389,7 +434,9 @@ class Pipeline:
         self.timeout_s = RESULT_TIMEOUT_S if timeout_s is None else timeout_s
         self._futures: dict[str, Future] = {}
         self._seqs: dict[str, int] = {}
+        self._taken: dict[str, int] = {}  # date -> its number, once its answer is taken (``release`` hands its turn on)
         self._dropped: list[Future] = []
+        self._lock = threading.Lock()  # the flags a callback of the executor's thread writes, against ``close``
         self._seq = 0
         self._closed = False
         self.broken = False
@@ -420,6 +467,8 @@ class Pipeline:
     def submit(self, date: str) -> None:
         if self._closed or self.broken:
             raise PoolBroken("the pipeline is closed or broken")
+        if self._seq >= SKIP_CAPACITY:
+            raise PoolBroken(f"a pass of more than {SKIP_CAPACITY} dates: the rest runs one after the other")
         spec = {"settings": self.settings, "date": date, "seq": self._seq, "wait_carried": self.wait_carried,
                 "snapshots": self.snapshots, "store_url": self.store_url, "no_gamma": self.no_gamma}
         try:
@@ -438,18 +487,39 @@ class Pipeline:
         self.close(kill=True)
         return PoolBroken(why)
 
+    def _dead(self) -> bool:
+        """A process of the pool has ended (read from its sentinel, which does not reap it). The executor notices a death
+        itself, but not always (CPython 3.11 with ``spawn``: a process started last may not be watched), so the
+        starting process looks too."""
+        for p in list((getattr(self._executor, "_processes", None) or {}).values()):
+            try:
+                if mp_wait([p.sentinel], 0):
+                    return True
+            except Exception:  # noqa: BLE001 - a process object closed under us: the executor is shutting down
+                return True
+        return False
+
     def result(self, date: str, out: Callable[[str], None] = lambda _: None) -> dict[str, Any]:
         """The date's answer ({rid, lines, seconds}), its lines first given to ``out``; raises the date's own error
         (the original exception when it could be sent back) and ``PoolBroken`` when a process died, did not answer in
-        ``timeout_s`` or the pipeline was closed."""
+        ``timeout_s`` or the pipeline was closed. A date whose answer is an error has not handed its turn on: the caller
+        that goes on with the next date says so (``release``); one that stops closes the pipeline."""
         fut = self._futures.pop(date)
-        self._seqs.pop(date, None)
-        try:
-            ans = fut.result(timeout=self.timeout_s)
-        except BrokenProcessPool as e:
-            raise self._break(f"a process of the pool died ({e})") from e
-        except TimeoutError as e:
-            raise self._break(f"no answer for {date} from the pool in {self.timeout_s:.0f} s") from e
+        seq = self._seqs.pop(date, None)
+        if seq is not None:
+            self._taken[date] = seq
+        until = time.monotonic() + self.timeout_s
+        while True:
+            try:
+                ans = fut.result(timeout=max(0.0, min(CHECK_S, until - time.monotonic())))
+                break
+            except BrokenProcessPool as e:
+                raise self._break(f"a process of the pool died ({e})") from e
+            except TimeoutError as e:
+                if self._dead():
+                    raise self._break(f"a process of the pool died while {date} was computing") from e
+                if time.monotonic() >= until:
+                    raise self._break(f"no answer for {date} from the pool in {self.timeout_s:.0f} s") from e
         for line in ans["lines"]:
             out(line)
         if ans.get("peak_mb"):
@@ -462,6 +532,17 @@ class Pipeline:
             raise ans["error"]
         return ans
 
+    def release(self, date: str) -> None:
+        """The caller has the date's answer and goes on with the next date whatever came of it: the next date's turn. For
+        a date that failed this is what hands the turn on (the sequential run goes on to the next date, which then reads
+        the spreads and publishes without it); a date that published has done so itself. Nothing for a date not taken
+        by ``result``."""
+        seq = self._taken.pop(date, None)
+        if seq is not None:
+            with self._lock:
+                if not self._closed:
+                    self.shared.fin[seq] = 1
+
     def discard(self, date: str) -> None:
         """A date submitted and no longer wanted (the run passed it over, as the sequential run passes over a date it
         does not run): its answer is dropped, and it is not published. A date that has not started is not computed; one
@@ -472,7 +553,23 @@ class Pipeline:
             return
         if seq is not None and seq < SKIP_CAPACITY:
             self.shared.skip[seq] = 1
+            fut.add_done_callback(lambda f, n=seq: self._dropped_done(n, f))
         self._dropped.append(fut)  # not cancelled: the date still has its place in the order (the gate counts it)
+
+    def _dropped_done(self, seq: int, fut: Future) -> None:
+        """A dropped date answered. One that finished itself (it published, or found the flag) needs nothing; one that
+        failed has not handed its turn on, and nobody takes its answer: its turn is handed on here (the executor's
+        thread; ``close`` and this exclude each other, so a flag of a later pass is never written)."""
+        try:
+            if fut.cancelled() or fut.exception() is not None:
+                return
+            ans = fut.result()
+        except Exception:  # noqa: BLE001 - a broken pool: the pass is over
+            return
+        if "error" in ans and not ans.get("aborted") and not ans.get("skipped"):
+            with self._lock:
+                if not self._closed:
+                    self.shared.fin[seq] = 1
 
     def close(self, *, kill: bool = False) -> None:
         """Close the pass: the dates not yet in their turn do not publish (a date already publishing finishes, up to
@@ -480,7 +577,8 @@ class Pipeline:
         Does not hang: after the grace the processes are terminated."""
         if self._closed:
             return
-        self._closed = True
+        with self._lock:
+            self._closed = True
         self.shared.abort.value = 1
         left = [*self._futures.values(), *self._dropped]
         clean = False
@@ -488,6 +586,8 @@ class Pipeline:
             _, not_done = wait(left, timeout=CLOSE_GRACE_S)
             clean = not not_done
         self._futures.clear()
+        self._seqs.clear()
+        self._taken.clear()
         self._dropped.clear()
         if self._owns or kill or not clean or self.broken:
             self.pool.stop(kill=kill or not clean)
