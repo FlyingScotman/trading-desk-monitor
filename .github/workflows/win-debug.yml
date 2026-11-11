@@ -102,4 +102,22 @@ jobs:
         run: |
           uv pip install -p .venv/Scripts/python.exe -e backend
           .venv/Scripts/python.exe .github/probe_db.py "$(pwd)/.venv/Scripts/python.exe"
+      - name: "initdb from a pwsh step (variants)"
+        if: always()
+        shell: pwsh
+        run: |
+          $py = ".venv/Scripts/python.exe"
+          $initdb = & $py -c "import pgserver,pathlib;print(pathlib.Path(pgserver.__file__).parent/'pginstall'/'bin'/'initdb.exe')"
+          Write-Host "initdb=$initdb"
+          New-Item -ItemType Directory -Force D:\probe_pw | Out-Null
+          # (a) directly from pwsh
+          & $initdb -D D:\probe_pw\a --auth=trust --auth-local=trust --encoding=utf8 -U postgres 2>&1 | Select-Object -Last 3
+          Write-Host "(a) exit $LASTEXITCODE"
+          # (b) from python's subprocess.run
+          & $py -c "import subprocess,sys;r=subprocess.run([sys.argv[1],'-D','D:/probe_pw/b','--auth=trust','--auth-local=trust','--encoding=utf8','-U','postgres'],capture_output=True,text=True);print('(b) rc',r.returncode,r.stderr.strip()[-200:])" $initdb
+          # (c) python with mkdir first, as the driver does
+          & $py -c "import subprocess,sys,os;os.makedirs('D:/probe_pw/c');r=subprocess.run([sys.argv[1],'-D','D:/probe_pw/c','--auth=trust','--auth-local=trust','--encoding=utf8','-U','postgres'],capture_output=True,text=True);print('(c) rc',r.returncode,r.stderr.strip()[-200:])" $initdb
+          # (d) with the environment the driver gives (no PYTHON*, PATH only)
+          & $py -c "import subprocess,sys,os;r=subprocess.run([sys.argv[1],'-D','D:/probe_pw/d','--auth=trust','--auth-local=trust','--encoding=utf8','-U','postgres'],capture_output=True,text=True,creationflags=0x200|0x08000000);print('(d) rc',r.returncode,r.stderr.strip()[-200:])" $initdb
+          exit 0
 

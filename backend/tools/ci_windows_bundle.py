@@ -381,7 +381,7 @@ def diagnose_database(b: Bundle) -> None:
         try:
             r = subprocess.run(list(cmd), capture_output=True, text=True, errors="replace", check=False, timeout=120)
             print(f"$ {' '.join(cmd)}  -> {r.returncode}")
-            print("\n".join((r.stdout + r.stderr).splitlines()[:lines]))
+            print("\n".join((r.stdout + r.stderr).splitlines()[-lines:]))
         except (OSError, subprocess.SubprocessError) as e:
             print(f"$ {' '.join(cmd)}  -> {type(e).__name__}: {e}")
 
@@ -428,7 +428,7 @@ def main(argv: list[str] | None = None) -> int:
             diagnose_database(Bundle(a.work / "install" / TOP, a.work / "home", a.port, a.work))
         for f in sorted(logs.glob("*")) if logs.is_dir() else []:
             if f.is_file():
-                print(f"--- {f.name} (tail) ---\n{tail(f, 40)}")
+                print(f"--- {f.name} (tail) ---\n{tail(f, 12)}")
         return 1
     log("OK " + json.dumps(summary))
     return 0
