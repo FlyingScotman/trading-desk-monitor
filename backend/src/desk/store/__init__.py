@@ -815,9 +815,11 @@ def _share_bytes(con: psycopg.Connection, ids: list[int]) -> int:
 
 
 def autovacuum_on(con: psycopg.Connection) -> bool:
-    """The server's autovacuum is on (the embedded server's default): it gives the space of deleted runs back to the
-    tables, so no explicit ``VACUUM`` of ours is needed."""
-    return con.execute("SELECT current_setting('autovacuum')").fetchone()[0] == "on"
+    """The server's autovacuum is working (the embedded server's default): it gives the space of deleted runs back to the
+    tables, so no explicit ``VACUUM`` of ours is needed. It works only with ``autovacuum`` and ``track_counts`` both on
+    (the server counts the dead rows for it); with the counts off the setting alone would say it does."""
+    on, counts = con.execute("SELECT current_setting('autovacuum'), current_setting('track_counts')").fetchone()
+    return on == "on" and counts == "on"
 
 
 def prune_superseded(con: psycopg.Connection, keep_days: int, *, limit: int | None = None,

@@ -364,6 +364,16 @@ def test_the_embedded_server_has_autovacuum_on(store_url):
         assert store.autovacuum_on(con) is True
 
 
+def test_autovacuum_does_not_work_without_the_counts_of_the_server(store_url):
+    """``autovacuum`` on with ``track_counts`` off does nothing (the server does not count the dead rows): the prune
+    step does not leave the space to it. ``track_counts`` is changed for this connection only."""
+    with store.connect(store_url) as con:
+        con.execute("SET track_counts = off")
+        assert store.autovacuum_on(con) is False
+        con.execute("SET track_counts = on")
+        assert store.autovacuum_on(con) is True
+
+
 # ---- the autopilot's step, the settings, the command line
 
 def test_the_autopilot_prunes_in_a_quiet_cycle_and_says_how_much(tmp_path, cache, store_url, caplog):
