@@ -30,3 +30,35 @@ jobs:
         run: |
           args=$(cat ../.github/win-debug-args.txt | tr -d '\r')
           PYTHONUTF8=0 .venv/Scripts/python.exe -m pytest -p no:cacheprovider --tb=short -q $args
+
+  probe:
+    runs-on: windows-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: initdb on D: and C: (TDM#639 probe)
+        shell: bash
+        run: |
+          uv venv -p 3.11 .venv
+          uv pip install -p .venv/Scripts/python.exe pgserver==0.1.4 psutil
+          PY=.venv/Scripts/python.exe
+          INITDB=$($PY -c "import pgserver,pathlib;print(pathlib.Path(pgserver.__file__).parent/'pginstall'/'bin'/'initdb.exe')")
+          echo "initdb: $INITDB"; whoami; whoami /groups | head -20
+          for base in "$RUNNER_TEMP/dm1" "C:/Users/runneradmin/AppData/Local/DeskMonitorProbe" "D:/probe2"; do
+            echo "=== $base"
+            mkdir -p "$base"
+            $PY - "$base" <<'PYEOF'
+          import sys, pathlib
+          p = pathlib.Path(sys.argv[1]) / "pg"
+          p.mkdir(exist_ok=True)
+          print("made", p)
+          PYEOF
+            icacls "$base/pg" || true
+            "$INITDB" -D "$base/pg" --auth=trust --auth-local=trust --encoding=utf8 -U postgres > "$base/initdb.out" 2>&1; echo "initdb exit $?"; tail -5 "$base/initdb.out"
+          done
+          echo "=== fsutil"; fsutil fsinfo volumeinfo D:\\ | head -8 || true
+          echo "=== TEMP=$TEMP RUNNER_TEMP=$RUNNER_TEMP LOCALAPPDATA=$LOCALAPPDATA"
