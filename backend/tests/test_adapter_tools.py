@@ -8,6 +8,7 @@ from __future__ import annotations
 import dataclasses
 import json
 import os
+import threading
 import time
 from collections.abc import Iterator
 from pathlib import Path
@@ -263,7 +264,13 @@ def test_output_file_names() -> None:
 # ---- the kit -------------------------------------------------------------------------------------------------------
 
 
-def test_check_runs_the_kit_in_the_background_and_keeps_the_result(home: Path, tmp_path: Path) -> None:
+def test_check_runs_the_kit_in_the_background_and_keeps_the_result(home: Path, tmp_path: Path, monkeypatch) -> None:
+    # The second request must meet a job that still runs: the kit is held until it has been refused. Without the hold the
+    # test depended on the race of two requests and the kit's child (on Windows each request waits for the audit's
+    # connection to the closed store port, about 2 s, and the kit was done by then).
+    gate = threading.Event()
+    real_kit = adapter_jobs._run_kit
+    monkeypatch.setattr(adapter_jobs, "_run_kit", lambda argv, timeout_s: (gate.wait(60), real_kit(argv, timeout_s))[1])
     c = _client()
     r = c.get("/api/v1/adapter/check").json()
     assert r["job"] is None and not r["running"] and r["timeout_s"] == 1800
@@ -272,6 +279,7 @@ def test_check_runs_the_kit_in_the_background_and_keeps_the_result(home: Path, t
     r = c.post("/api/v1/adapter/check", json={})
     assert r.status_code == 202 and r.json()["running"]
     assert c.post("/api/v1/adapter/check", json={}).status_code == 409
+    gate.set()
     j = _wait(c, "/api/v1/adapter/check")["job"]
     assert j["state"] == "done", j
     assert j["request"]["dirs"] == [str(tmp_path / "inbox")]

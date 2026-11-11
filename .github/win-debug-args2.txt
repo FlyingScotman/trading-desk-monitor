@@ -1,1 +1,1 @@
-tests/test_adapter_tools.py::test_check_runs_the_kit_in_the_background_and_keeps_the_result tests/test_adapter_services.py::test_the_owner_waits_for_a_named_feed_and_may_stop_it_615
+-o faulthandler_timeout=25 -x tests/test_adapter_services.py::test_the_owner_waits_for_a_named_feed_and_may_stop_it_615

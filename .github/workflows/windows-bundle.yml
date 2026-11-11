@@ -89,6 +89,12 @@ jobs:
         with:
           name: bundle-new
           path: dl/new
+      - name: A pgserver of the driver's own, for the diagnostics of a failed first start (the bundle removes its own env)
+        shell: pwsh
+        run: |
+          python -m pip install --quiet pgserver==0.1.4
+          $i = python -c "import pgserver,pathlib;print(pathlib.Path(pgserver.__file__).parent/'pginstall'/'bin'/'initdb.exe')"
+          "CI_INITDB=$i" | Out-File -Append -Encoding utf8 $env:GITHUB_ENV
       - name: Install, start, update, roll back, interrupt, crash, start, stop
         shell: pwsh
         run: |
