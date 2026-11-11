@@ -277,6 +277,10 @@ def phase_update(b: Bundle, new_zip: Path, old: str, new: str) -> None:
     log(f"update to {new} asked, the server restarts")
     wait_for("the new version", lambda: b.version() == new, UPDATE_S, alive=None)
     healthy(b, "after the update", START_S)
+    # the launcher confirms the update from a thread that polls /health/live once a second: the answer of the server comes
+    # first, last.json a moment later
+    wait_for("the launcher's confirmation of the update", lambda: (b.update_state().get("last") or {}).get("version") == new,
+             120, every=1.0)
     last = b.update_state().get("last") or {}
     if last.get("ok") is not True or last.get("version") != new:
         raise CheckFailed(f"the launcher's outcome is not a confirmed update to {new}: {last}")
