@@ -59,6 +59,11 @@ jobs:
         run: |
           base=""
           if [ "$EVENT" = "pull_request" ]; then base="$BASE_SHA"; elif [ "$EVENT" = "push" ]; then base="$BEFORE"; fi
+          # a push to a branch other than main is compared with main, not with the previous push: an earlier push of the
+          # same branch that changed the launcher must not be forgotten by the next push that changed a workflow only
+          if [ "$EVENT" = "push" ] && [ "${GITHUB_REF}" != "refs/heads/main" ] && git fetch --quiet origin main 2>/dev/null; then
+            base=$(git merge-base FETCH_HEAD "$GITHUB_SHA" 2>/dev/null || echo "$base")
+          fi
           run=false
           if [ "${GITHUB_REF}" = "refs/heads/main" ] && [ "$EVENT" = "push" ]; then
             run=true
