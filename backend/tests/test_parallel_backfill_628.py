@@ -1021,7 +1021,15 @@ def random_events(seed: int) -> list:
     return out
 
 
-@pytest.mark.parametrize("seed", range(24))
+# The default run takes six seeds that between them hold every kind of failure (a store error, the date's own error, a
+# process that dies) in each pass, and one or two of them at once; the other 18 (the same property, 15-18 s each: 5 minutes
+# of the Linux job) are marked ``full_property`` and run by the separate job «parallel-property» of ci.yml
+# (``pytest -m full_property``) and by the release workflow.
+DEFAULT_SEEDS = (0, 5, 10, 12, 15, 17)
+SEEDS = [s if s in DEFAULT_SEEDS else pytest.param(s, marks=pytest.mark.full_property) for s in range(24)]
+
+
+@pytest.mark.parametrize("seed", SEEDS)
 def test_failures_at_random_publish_the_same_dates_with_the_same_numbers_as_the_sequential_run(
         seed, tmp_path, cache_carry, pg_server, monkeypatch):
     """The invariant of the pool, whatever fails and wherever: the dates published and the contents of every run are what

@@ -286,7 +286,13 @@ def test_postgres_log_gives_levels_and_object_names_but_no_value_of_the_data(tmp
         "2026-10-16 08:00:01.000 UTC [41] ERROR:  invalid input syntax for type numeric: \"INVENTED-AMOUNT\"\n"
         "2026-10-16 08:00:01.000 UTC [41] CONTEXT:  COPY trade, line 3: \"INVENTED-LINE\"\n"
         "2026-10-16 08:00:02.000 UTC [41] LOG:  checkpoint complete\n"
-        "2026-10-16 08:00:03.000 UTC [41] FATAL:  terminating connection due to administrator command\n",
+        "2026-10-16 08:00:03.000 UTC [41] FATAL:  terminating connection due to administrator command\n"
+        # statements logged by log_statement / log_min_duration_statement: the SQL text may hold an unquoted value
+        "2026-10-16 08:00:04.000 UTC [41] LOG:  statement: UPDATE trade SET amount = INVENTED-9999 WHERE id = 7\n"
+        "2026-10-16 08:00:04.100 UTC [41] LOG:  duration: 3012.4 ms  statement: SELECT INVENTED-WORD FROM trade\n"
+        "2026-10-16 08:00:04.200 UTC [41] LOG:  duration: 5.1 ms  execute <unnamed>: SELECT INVENTED-EXEC\n"
+        "2026-10-16 08:00:04.300 UTC [41] LOG:  execute S_1: INSERT INTO trade VALUES (INVENTED-BIND)\n"
+        "2026-10-16 08:00:04.400 UTC [41] LOG:  duration: 2.5 ms\n",
         encoding="utf-8")
     out, _ = diagnostics.logs_section(Settings(home=tmp_path), Scrubber(), datetime(2026, 10, 16, 12))
     text = json.dumps(out, ensure_ascii=False)

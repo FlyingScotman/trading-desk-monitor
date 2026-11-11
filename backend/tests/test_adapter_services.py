@@ -1146,3 +1146,28 @@ def test_prune_keeps_the_pending_files_of_the_history_of_trades(tmp_path):
     trades_history.write(st, doc)
     svcs.AdapterServices._prune(st)
     assert keep.is_dir()
+
+
+def test_newest_positions_waits_five_seconds_and_warns_once_per_failed_streak(store_url, caplog):
+    """A store that does not answer reads as «no positions» for the feeds, no longer in silence: one warning a streak,
+    again after an answer in between; a connect waits as long as the store's other readers (5 s)."""
+    import logging
+
+    s = svcs.AdapterServices(lambda: None, store_url, tick_s=3600)  # type: ignore[arg-type,return-value]
+    seen: list[object] = []
+    real = store.connect
+
+    def down(url, **kw):
+        seen.append(kw.get("connect_timeout"))
+        raise OSError("no store")
+
+    with caplog.at_level(logging.WARNING, logger="desk.adapter_services"):
+        with mock.patch.object(store, "connect", down):
+            assert s._newest_positions() is None and s._newest_positions() is None
+        warned = [r for r in caplog.records if "newest positions" in r.getMessage()]
+        assert len(warned) == 1 and seen == [5, 5] and "no store" not in warned[0].getMessage()
+        with mock.patch.object(store, "connect", real):
+            s._newest_positions()  # the store answered (no positions: None, but the streak is over)
+        with mock.patch.object(store, "connect", down):
+            s._newest_positions()
+        assert len([r for r in caplog.records if "newest positions" in r.getMessage()]) == 2

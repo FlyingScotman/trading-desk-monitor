@@ -177,17 +177,27 @@ def cached_body(request: Request, con, key: tuple, build: Callable[[], bytes],
     return body, gz
 
 
+def _conditional(request: Request, body: bytes, gz: bytes, etag: str, media_type: str) -> Response:
+    """A kept answer for the client's ``Accept-Encoding`` and ``If-None-Match`` (``cached_response``, ``_run_cached``).
+    The gzip and the plain body are two representations of the answer, so two ETags (``etag`` and its ``-gz`` twin): a
+    strong ETag is one byte-for-byte representation, and a cache between the page and the server must not hand the plain
+    body to a client that asked for gzip. A weak validator (``W/``, which a proxy may add) matches too."""
+    packed = "gzip" in request.headers.get("accept-encoding", "")
+    tag = etag[:-1] + '-gz"' if packed else etag
+    headers = {"ETag": tag, "Cache-Control": "no-cache", "Vary": "Accept-Encoding"}
+    if tag in [t.strip().removeprefix("W/") for t in request.headers.get("if-none-match", "").split(",")]:
+        return Response(status_code=304, headers=headers)
+    if packed:
+        return Response(gz, media_type=media_type, headers={**headers, "Content-Encoding": "gzip"})
+    return Response(body, media_type=media_type, headers=headers)
+
+
 def cached_response(request: Request, con, key: tuple, build: Callable[[], bytes], media_type: str,
                     cache: BodyCache | None = None) -> Response:
     """``build()`` once per store state (``BodyCache``, the app's ``body_cache`` unless ``cache``); a 304 for the
     browser's ETag, the gzip when it accepts it."""
     body, gz, tag = _body_cached(cache or request.app.state.body_cache, con, key, build)
-    headers = {"ETag": tag, "Cache-Control": "no-cache", "Vary": "Accept-Encoding"}
-    if tag in [t.strip() for t in request.headers.get("if-none-match", "").split(",")]:
-        return Response(status_code=304, headers=headers)
-    if "gzip" in request.headers.get("accept-encoding", ""):
-        return Response(gz, media_type=media_type, headers={**headers, "Content-Encoding": "gzip"})
-    return Response(body, media_type=media_type, headers=headers)
+    return _conditional(request, body, gz, tag, media_type)
 
 
 class ApiError(Exception):
@@ -242,16 +252,7 @@ def _run_cached(request: Request, run: dict[str, Any], key: tuple, build: Callab
     key = (key[0], run["run_id"], *key[1:])
     entry = request.app.state.run_cache.get_or_build(key, (run["status"], str(run["completed_at"]), extra),
                                                      lambda: build().model_dump_json().encode())
-    packed = "gzip" in request.headers.get("accept-encoding", "")
-    # the gzip and the plain body are two representations of the answer: two ETags (a strong ETag is one byte-for-byte
-    # representation; a cache between the page and the server must not hand the plain body to a client that asked for gzip)
-    tag = entry.etag[:-1] + '-gz"' if packed else entry.etag
-    headers = {"ETag": tag, "Cache-Control": "no-cache", "Vary": "Accept-Encoding"}
-    if tag in [t.strip().removeprefix("W/") for t in request.headers.get("if-none-match", "").split(",")]:
-        return Response(status_code=304, headers=headers)
-    if packed:
-        return Response(entry.gz, media_type="application/json", headers={**headers, "Content-Encoding": "gzip"})
-    return Response(entry.body, media_type="application/json", headers=headers)
+    return _conditional(request, entry.body, entry.gz, entry.etag, "application/json")
 
 
 def _trade_sources() -> tuple[list[dict[str, Any]], dict[str, set[str]] | None]:

@@ -8,7 +8,7 @@ on:
 jobs:
   test:
     runs-on: ubuntu-latest
-    timeout-minutes: 50
+    timeout-minutes: 35
     steps:
       - uses: actions/checkout@v4
       - name: Banned terms (list in the BANNED_TERMS secret; skipped with a warning without it)
@@ -33,9 +33,27 @@ jobs:
       - name: Root tests
         run: backend/.venv/bin/python -m pytest -q -p no:cacheprovider tests
 
+  # The rest of the seeds of the pool's failure property (backend/tests/test_parallel_backfill_628.py, marker
+  # full_property): the default run of «test» takes six, this job the other 18, beside it, so the push still has all 24.
+  parallel-property:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+      - name: Python 3.12 venv with the backend and dev tools
+        working-directory: backend
+        run: |
+          uv venv -p 3.12 .venv
+          uv pip install -p .venv -e ".[dev]"
+      - name: Failures at random in the pool (the other seeds)
+        working-directory: backend
+        run: .venv/bin/python -m pytest -q -p no:cacheprovider --durations=5 -m full_property
+
   # TDM#639: Windows and CPython 3.11 are the target of the owner's machine, the jobs above are Ubuntu and 3.12. The two
-  # Windows jobs run when the change can touch what only Windows runs (the launcher and installer, the updater, the
-  # embedded store, the bundle builder, the dependencies) and on every push to main; the job below says so.
+  # Windows jobs run when the change can touch what only Windows runs (any code under backend/src/, the launcher and
+  # installer, the bundle builder, the dependencies, the workflows, and the test files that backend/tests/windows_suite.txt
+  # lists) and on every push to main; the job below says so.
   # A skipped job counts as passed for a required check, but the checks named «windows-bundle / build», «windows-bundle /
   # windows» (the called workflow's jobs) and «backend-windows» are all skipped together and then no check of those names
   # exists at all (the only one left is «windows-bundle»), so none of them can be required. Require the one check
@@ -55,7 +73,7 @@ jobs:
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
           BEFORE: ${{ github.event.before }}
           PATTERN: >-
-            ^(backend/windows/|backend/src/desk/(updater/|update\.py|restart\.py|settings\.py|store/|inbox/)|backend/tools/(build_windows_bundle|release_assets|ci_windows_bundle|bundle-build-constraints)|backend/(pyproject\.toml|uv\.lock)|backend/tests/windows_suite\.txt|\.github/workflows/(ci|windows-bundle|release)\.yml|docs/INSTALL_BACKEND_WINDOWS\.md)
+            ^(backend/windows/|backend/src/|backend/tools/(build_windows_bundle|release_assets|ci_windows_bundle|bundle-build-constraints)|backend/(pyproject\.toml|uv\.lock)|backend/tests/windows_suite\.txt|\.github/workflows/(ci|windows-bundle|release)\.yml|docs/INSTALL_BACKEND_WINDOWS\.md)
         run: |
           base=""
           if [ "$EVENT" = "pull_request" ]; then base="$BASE_SHA"; elif [ "$EVENT" = "push" ]; then base="$BEFORE"; fi
@@ -69,8 +87,14 @@ jobs:
             run=true
           elif [ -z "$base" ] || echo "$base" | grep -qE '^0+$' || ! git cat-file -e "$base^{commit}" 2>/dev/null; then
             run=true   # a new branch, a force push, a manual run: no base to compare with
-          elif git diff --name-only "$base" "$GITHUB_SHA" | grep -E "$PATTERN"; then
-            run=true
+          else
+            git diff --name-only "$base" "$GITHUB_SHA" > "$RUNNER_TEMP/changed"
+            # the test files of the Windows suite (backend/tests/windows_suite.txt, paths relative to backend/)
+            grep -v '^[[:space:]]*#' backend/tests/windows_suite.txt | tr -d '\r' | grep -v '^[[:space:]]*$' \
+              | sed 's|^|backend/|' > "$RUNNER_TEMP/suite"
+            if grep -E "$PATTERN" "$RUNNER_TEMP/changed" || grep -Fxf "$RUNNER_TEMP/suite" "$RUNNER_TEMP/changed"; then
+              run=true
+            fi
           fi
           echo "run=$run" >> "$GITHUB_OUTPUT"
           echo "Windows jobs: $run"

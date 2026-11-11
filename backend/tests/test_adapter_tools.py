@@ -370,3 +370,18 @@ def test_a_job_whose_result_is_not_json_still_ends(tmp_path: Path) -> None:
         time.sleep(0.01)
     assert adapter_jobs.job(tmp_path, "check")["state"] == "done"
     adapter_jobs.reset()
+
+
+def test_check_payload_takes_running_from_the_job_it_returns(home: Path, monkeypatch) -> None:
+    """The job and the running flag were two reads: a check that ended between them gave a finished job with «running»
+    (the page kept polling and showed «running» until it was reloaded). The flag now comes from the job's own state."""
+    c = _client()
+    finished = {"key": "check", "state": "done", "started_at": "t", "finished_at": "t", "request": {"dirs": []},
+                "error": None, "error_code": None}
+    monkeypatch.setattr(adapter_jobs, "job", lambda home, key: dict(finished))
+    monkeypatch.setattr(adapter_jobs, "running", lambda kind: "check")  # the flag of a moment before the end
+    r = c.get("/api/v1/adapter/check").json()
+    assert r["job"]["state"] == "done" and r["running"] is False
+    monkeypatch.setattr(adapter_jobs, "job", lambda home, key: {**finished, "state": "running", "finished_at": None})
+    monkeypatch.setattr(adapter_jobs, "running", lambda kind: None)  # a job that started after the flag was read
+    assert c.get("/api/v1/adapter/check").json()["running"] is True

@@ -183,24 +183,8 @@ class Bundle:
         return self.proc
 
     def launcher_gone(self) -> str | None:
-        self._sample_pg()
         rc = self.proc.poll() if self.proc else None
         return None if rc is None else f"the launcher exited with code {rc}"
-
-    def _sample_pg(self) -> None:
-        """Windows only, diagnostics: the permissions of the database folder each time they change (TDM#639: ``initdb``
-        could not change the permissions of a folder the launcher had just made)."""
-        pg = self.home / "pg"
-        if os.name != "nt" or not pg.exists():
-            return
-        try:
-            r = subprocess.run(["icacls", str(pg)], capture_output=True, text=True, errors="replace", check=False, timeout=30)
-        except (OSError, subprocess.SubprocessError):
-            return
-        text = " / ".join(x.strip() for x in r.stdout.splitlines() if x.strip())
-        if text != getattr(self, "_pg_acl", None):
-            self._pg_acl = text
-            log(f"database folder permissions: {text}")
 
     def live(self) -> bool:
         return http("GET", f"{self.url}/health/live", timeout=5)[0] == 200
@@ -395,7 +379,10 @@ def diagnose_database(b: Bundle) -> None:
     sh("attrib", str(pg))
     sh("cmd", "/c", "dir", "/a", str(pg), lines=12)
     sh(str(b.py), "-I", "-c", "import os,sys;print(os.stat(sys.argv[1]));os.chmod(sys.argv[1], 0o700);print('chmod ok')", str(pg))
-    initdb = Path(os.environ.get("CI_INITDB") or b.root / "env" / "Lib" / "site-packages" / "pgserver" / "pginstall" / "bin" / "initdb.exe")
+    initdb = b.root / "env" / "Lib" / "site-packages" / "pgserver" / "pginstall" / "bin" / "initdb.exe"
+    if not initdb.is_file():  # the bundle removes its own environment after a failed first start: nothing to try then
+        print(f"initdb not found ({initdb}): not tried")
+        return
     for where in (b.work / "diag_work", b.home / "diag_home"):
         where.mkdir(exist_ok=True)
         sh(str(initdb), "-D", str(where), "--auth=trust", "--auth-local=trust", "--encoding=utf8", "-U", "postgres",

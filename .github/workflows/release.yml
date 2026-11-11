@@ -85,6 +85,8 @@ jobs:
         run: |
           backend/.venv/bin/ruff check backend
           (cd backend && .venv/bin/python -m pytest -q -p no:cacheprovider)
+          # all the seeds of the pool's failure property (the default run, and ci.yml's job per push, take part of them)
+          (cd backend && .venv/bin/python -m pytest -q -p no:cacheprovider -m full_property)
           backend/.venv/bin/python -m pytest -q -p no:cacheprovider tests
       - name: The previous release's mirror bundle, as published (base of the patches)
         # the patch is made against the bytes that were delivered, never a rebuild that only has the same version

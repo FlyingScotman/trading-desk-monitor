@@ -109,6 +109,7 @@ VERSION = 1
 TIMEOUTS = {"describe": 60.0, "save": 60.0, "action": 900.0, "feed": 1800.0}
 BACKOFF_MIN = (5, 15, 60)
 TICK_S = 30.0
+NEWEST_CONNECT_S = 5  # seconds the feeds' read of the newest positions waits for the store
 RECHECK_S = 600.0          # the scheduler loads the adapter again this often: a new fingerprint is described again
 AVAILABILITY_S = 15.0      # GET's availability is reused this long (the settings page polls while a job runs)
 LOCK_WAIT_S = 1200.0       # a feed's files wait this long for the cycle lock (an autopilot cycle), then retry later
@@ -559,6 +560,7 @@ class AdapterServices:
         self._avail: tuple[float, dict, Helper | None] | None = None
         self._checked = float("-inf")
         self._describe_failed: tuple[str | None, str, float] | None = None  # (fingerprint, code, monotonic time)
+        self._newest_failing = False  # the last read of the newest positions failed (one warning per streak)
         self._owner_runs = 0  # the owner's operations run inside background work (``_owner_first``; worker thread)
 
     # ---- thread
@@ -1038,11 +1040,20 @@ class AdapterServices:
     # ---- feeds
 
     def _newest_positions(self) -> date | None:
-        try:  # a bounded connect: with no store reachable this answers "none" and the feed goes on (and can be stopped)
-            with store.connect(self._url, connect_timeout=3) as con:
-                return con.execute("SELECT max(valid_date) FROM position_set").fetchone()[0]
-        except Exception:  # noqa: BLE001 - no store: no after_positions trigger this tick
+        # A bounded connect: with no store reachable this answers "none" and the feed goes on (and can be stopped). It is
+        # the worker's thread, not a screen (the sign of adapter_routes keeps 3 s): a store that is only slow, as in the
+        # minute after a start, must not read as "no positions", so the wait is the 5 s of the store's other readers.
+        try:
+            with store.connect(self._url, connect_timeout=NEWEST_CONNECT_S) as con:
+                newest = con.execute("SELECT max(valid_date) FROM position_set").fetchone()[0]
+        except Exception as e:  # noqa: BLE001 - no store: no after_positions trigger this tick
+            if not self._newest_failing:
+                self._newest_failing = True
+                log.warning("adapter services: the newest positions could not be read (%s); the feeds that wait for "
+                            "new positions do not start until the store answers", type(e).__name__)
             return None
+        self._newest_failing = False
+        return newest
 
     def _scheduled(self) -> bool:
         st = self._load()

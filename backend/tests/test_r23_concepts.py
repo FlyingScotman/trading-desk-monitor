@@ -329,10 +329,17 @@ def test_bodies_cached_by_store_state_gzip_and_etag(desk, store_url, tmp_path, m
     real = concepts.extras
     monkeypatch.setattr(concepts, "extras", lambda *a, **kw: calls.append(1) or real(*a, **kw))
     r1 = desk.get("/concepts-data.js", headers={"Accept-Encoding": "gzip"})
-    r2 = desk.get("/concepts-data.js")
-    assert len(calls) == 1 and r1.headers["etag"] == r2.headers["etag"] and r1.text == r2.text
+    r2 = desk.get("/concepts-data.js", headers={"Accept-Encoding": "identity"})  # the client's own default is gzip
+    # the gzip and the plain body are two representations: two ETags (as the per-run answers', ``_conditional``)
+    assert len(calls) == 1 and r1.headers["etag"] == r2.headers["etag"][:-1] + '-gz"' and r1.text == r2.text
     assert r1.headers.get("content-encoding") == "gzip" and "accept-encoding" in r1.headers["vary"].lower()
-    assert desk.get("/concepts-data.js", headers={"If-None-Match": r1.headers["etag"]}).status_code == 304
+    gz, plain = {"Accept-Encoding": "gzip"}, {"Accept-Encoding": "identity"}
+    assert desk.get("/concepts-data.js", headers={**gz, "If-None-Match": r1.headers["etag"]}).status_code == 304
+    assert desk.get("/concepts-data.js", headers={**gz, "If-None-Match": r2.headers["etag"]}).status_code == 200
+    assert desk.get("/concepts-data.js", headers={**plain, "If-None-Match": r2.headers["etag"]}).status_code == 304
+    assert desk.get("/concepts-data.js", headers={**plain, "If-None-Match": r1.headers["etag"]}).status_code == 200
+    # a weak validator (a proxy may weaken it) and a list of tags match as well
+    assert desk.get("/concepts-data.js", headers={**gz, "If-None-Match": f'"x", W/{r1.headers["etag"]}'}).status_code == 304
     h1 = desk.get("/api/v1/history/positions").json()
     assert desk.get("/api/v1/history/positions").json() == h1
     cache, *_ = cache_11(tmp_path / "again")  # a new run: the bodies are built again

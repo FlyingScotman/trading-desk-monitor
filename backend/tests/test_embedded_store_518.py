@@ -7,6 +7,7 @@ from __future__ import annotations
 import atexit
 import os
 import subprocess
+import sys
 import time
 from collections.abc import Iterator
 from pathlib import Path
@@ -79,6 +80,39 @@ def test_a_new_cluster_starts_and_its_log_is_beside_the_data_directory(pgdata: P
     assert log.is_file() and log.stat().st_size > 0
     assert not (pgdata / "log").exists()  # the data directory holds no log the recovery would have to walk past
     assert embedded.get_server(pgdata, said.append) is server  # a second call in the process: the same handle
+
+
+def test_folder_and_pid_file_are_prepared_under_pgservers_lock(pgdata: Path, monkeypatch) -> None:
+    """Two first starts: the folder is made (and on Windows removed) and the pid file read only while no other start holds
+    pgserver's inter-process lock, as ``heal`` always was."""
+    cls = embedded._server_class()
+    held: list[bool] = []
+    real_prepare, real_heal = embedded.prepare_dir, embedded.heal
+    monkeypatch.setattr(embedded, "prepare_dir", lambda d, **kw: (held.append(cls._lock.acquired), real_prepare(d, **kw))[1])
+    monkeypatch.setattr(embedded, "heal", lambda d, out=None: (held.append(cls._lock.acquired), real_heal(d, out))[1])
+    embedded.get_server(pgdata, lambda m: None)
+    assert held[:2] == [True, True]
+
+
+_START = (
+    "import sys; from pathlib import Path; from desk.store import embedded; "
+    "s = embedded.get_server(Path(sys.argv[1]), lambda m: print(m, file=sys.stderr)); print(s.get_uri('postgres'))"
+)
+
+
+def test_two_processes_starting_the_first_cluster_at_once_both_get_the_one_server(pgdata: Path) -> None:
+    """The second process must not see the folder of the first one half made (or make it itself again): both get a URL
+    of the same cluster and neither fails."""
+    procs = [
+        subprocess.Popen([sys.executable, "-W", "ignore", "-c", _START, str(pgdata)], stdout=subprocess.PIPE,
+                         stderr=subprocess.PIPE, text=True)
+        for _ in range(2)
+    ]
+    results = [p.communicate(timeout=180) + (p.returncode,) for p in procs]
+    for out, err, code in results:
+        assert code == 0, err
+    assert results[0][0] == results[1][0] and results[0][0].startswith("postgresql://")
+    assert len({embedded.read_pidfile(pgdata).pid}) == 1
 
 
 def test_server_killed_without_a_checkpoint_recovers_and_keeps_its_data(pgdata: Path) -> None:

@@ -577,7 +577,8 @@ def _tail(path: Path, max_bytes: int = LOG_TAIL_BYTES) -> tuple[list[str], bool]
 
 
 # PostgreSQL's own log (``postgres.log``, TDM#518: beside the data directory, in the logs folder): `%m [%p] ` prefix,
-# then LEVEL, two spaces, text. DETAIL / STATEMENT / CONTEXT / QUERY / HINT lines and the lines of a statement carry
+# then LEVEL, two spaces, text. DETAIL / STATEMENT / CONTEXT / QUERY / HINT lines, the lines of a statement and the
+# LOG lines that log one (``statement:``, ``duration: … statement:``, ``execute …:``) carry
 # the values of the data (a key, a row, the SQL text), so they are never read into the diagnostics, and the primary
 # message keeps a quoted word only where it names an object (a constraint, a table, a column), not where it quotes a value.
 PG_LINE = re.compile(r"^(\d{4}-\d\d-\d\d) (\d\d:\d\d:\d\d)(?:[,.](\d{1,6}))?(?: [\w+-]+)? \[\d+\](?:[^:]{0,80}?)? "
@@ -586,6 +587,9 @@ PG_LEVELS = {"WARNING": "WARNING", "ERROR": "ERROR", "FATAL": "ERROR", "PANIC": 
 PG_SKIP = ("DETAIL", "HINT", "STATEMENT", "CONTEXT", "QUERY", "LOCATION")
 PG_NAMES = re.compile(r"""(?:constraint|relation|table|column|index|sequence|schema|database|role|extension|function|type|"""
                       r"""trigger|view|operator|language|tablespace|publication|subscription) +"[\w$.]{1,63}\"""")
+PG_STATEMENT = re.compile(r"statement:|^duration:|^(?:execute|parse|bind)\b[^:]{0,60}:", re.IGNORECASE)
+"""A LOG line of ``log_statement`` / ``log_min_duration_statement``: the SQL text, with whatever value was written into
+it unquoted (a number, a bare word) and not masked by ``PG_QUOTED``. Such a line is not read at all."""
 PG_QUOTED = re.compile(r"\"[^\"]*\"|'[^']*'")
 
 
@@ -606,7 +610,7 @@ def _pg_records(lines: list[str]) -> list[dict[str, Any]]:
         if not m:
             continue  # the tail of a statement, a continuation: may hold values
         d, t, frac, level, msg = m.groups()
-        if level in PG_SKIP:
+        if level in PG_SKIP or PG_STATEMENT.search(msg):
             continue
         at = datetime.fromisoformat(f"{d}T{t}" + (f".{frac.ljust(6, '0')}" if frac else ""))
         recs.append({"at": at, "day": d, "level": PG_LEVELS.get(level, "INFO"), "logger": "postgres",

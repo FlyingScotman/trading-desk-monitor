@@ -344,8 +344,8 @@ def get_server(pgdata: Path | str, out: Callable[[str], None] = say) -> Any:
         return cls._instances[pgdata]
     failed = unexpected = 0
     while True:
-        prepare_dir(pgdata)
-        with cls._lock:  # pgserver's inter-process lock: a start of another process is not writing its file meanwhile
+        with cls._lock:  # pgserver's inter-process lock: no other start makes the folder or writes its file meanwhile
+            prepare_dir(pgdata)
             heal(pgdata, out)
         info = read_pidfile(pgdata)
         if info is not None and is_postgres(info.pid, pgdata) is not False and not (info.status == "ready" and info.complete):

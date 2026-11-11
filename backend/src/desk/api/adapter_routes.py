@@ -71,7 +71,10 @@ def _settings() -> Settings:
 
 
 def _check_payload(st: Settings) -> dict[str, Any]:
-    return {"job": adapter_jobs.job(st.home, "check"), "running": adapter_jobs.running("check") is not None,
+    # «running» from the snapshot of the job itself (its state and the running flag change under one lock): reading the
+    # flag after the job could meet a check that ended in between, and the page showed «running» until it was reloaded
+    job = adapter_jobs.job(st.home, "check")
+    return {"job": job, "running": (job or {}).get("state") == "running",
             "options": adapter_jobs.check_options(st), "timeout_s": st.adapter_kit_timeout_s}
 
 
