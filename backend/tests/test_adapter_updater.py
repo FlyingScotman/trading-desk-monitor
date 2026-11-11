@@ -526,7 +526,7 @@ def test_the_token_route_never_returns_the_token(home, tmp_path):
     c = client()
     r = c.put("/api/v1/settings/github-token", json={"token": TOKEN})
     assert r.status_code == 200 and r.json() == {"github_token_set": True, "github_token_source": "file"}
-    assert (home / "github_token").read_text().strip() == TOKEN
+    assert (home / "github_token").read_text(encoding="utf-8").strip() == TOKEN
     if os.name != "nt":
         assert (home / "github_token").stat().st_mode & 0o077 == 0
     s = c.get("/api/v1/settings").json()

@@ -93,7 +93,7 @@ def test_owner_guides_are_russian_text_the_builder_ships():
 def test_desk_environ_sets_defaults_only(monkeypatch, tmp_path):
     adapter = tmp_path / "adapter" / "pkg"
     adapter.mkdir(parents=True)
-    (adapter / "__init__.py").write_text("")
+    (adapter / "__init__.py").write_text("", encoding="utf-8")
     monkeypatch.setattr(deskctl, "ADAPTER", tmp_path / "adapter")
     monkeypatch.setenv("LOCALAPPDATA", str(tmp_path / "local"))
     monkeypatch.delenv("DESK_HOME", raising=False)
@@ -109,7 +109,7 @@ def test_desk_environ_sets_defaults_only(monkeypatch, tmp_path):
     monkeypatch.setenv("DESK_HOME", str(tmp_path / "mine"))
     monkeypatch.setenv("DESK_DEFAULT_PRIVATE_ADAPTER", "other")
     (tmp_path / "mine").mkdir()
-    (tmp_path / "mine" / "desk.env").write_text("")
+    (tmp_path / "mine" / "desk.env").write_text("", encoding="utf-8")
     env = deskctl.desk_environ()
     assert env["DESK_HOME"] == str(tmp_path / "mine") and env["DESK_DEFAULT_PRIVATE_ADAPTER"] == "other"
     assert env["DESK_ENV_FILE"] == str(tmp_path / "mine" / "desk.env")
@@ -121,15 +121,15 @@ def test_ensure_env_keeps_a_venv_of_this_version_and_folder(monkeypatch, tmp_pat
     monkeypatch.setattr(deskctl, "ENV", env_dir)
     monkeypatch.setattr(deskctl, "SCRIPTS", env_dir / "Scripts")
     monkeypatch.setattr(deskctl, "MARKER", env_dir / "desk-bundle.json")
-    (tmp_path / "VERSION").write_text("1.0-x\n")
+    (tmp_path / "VERSION").write_text("1.0-x\n", encoding="utf-8")
     (env_dir / "Scripts").mkdir(parents=True)
-    deskctl.desk_exe().write_text("")
-    deskctl.MARKER.write_text(json.dumps({"version": "1.0-x", "root": str(tmp_path)}))
+    deskctl.desk_exe().write_text("", encoding="utf-8")
+    deskctl.MARKER.write_text(json.dumps({"version": "1.0-x", "root": str(tmp_path)}), encoding="utf-8")
     calls = []
     monkeypatch.setattr(deskctl.subprocess, "run", lambda *a, **k: calls.append(a))
     deskctl.ensure_env({"DESK_HOME": str(tmp_path / "home")})
     assert calls == []  # nothing to do
-    (tmp_path / "VERSION").write_text("1.1-y\n")
+    (tmp_path / "VERSION").write_text("1.1-y\n", encoding="utf-8")
     monkeypatch.setattr(deskctl, "bundle_processes", lambda: ([4242], []))
     with pytest.raises(deskctl.Fail):  # a new version, but a desk process of this folder still runs
         deskctl.ensure_env({"DESK_HOME": str(tmp_path / "home")})
@@ -157,7 +157,7 @@ def _stop_env(monkeypatch, tmp_path, pg_sequence):
     ``bundle_processes`` says about the postgres pids at each look; returns (said, runs, killed)."""
     home = tmp_path / "home"
     (home / "pg").mkdir(parents=True)
-    (home / "pg" / "postmaster.pid").write_text("1\n")
+    (home / "pg" / "postmaster.pid").write_text("1\n", encoding="utf-8")
     said, runs, killed = [], [], []
     monkeypatch.setattr(deskctl, "pg_ctl", lambda: Path("/x/pg_ctl"))
     monkeypatch.setattr(deskctl, "ENV", tmp_path / "env")
@@ -333,7 +333,7 @@ def test_our_wheels_are_built_by_uv_with_pinned_backends_and_the_commit_time(mon
     assert env["SOURCE_DATE_EPOCH"] == "1760000000" and env["PATH"] == "/bin"
     with zipfile.ZipFile(whl) as z:
         assert z.infolist()[0].date_time == build.zip_stamp(1_760_000_000)
-    pins = dict(ln.split("==") for ln in build.CONSTRAINTS.read_text().splitlines() if ln and not ln.startswith("#"))
+    pins = dict(ln.split("==") for ln in build.CONSTRAINTS.read_text(encoding="utf-8").splitlines() if ln and not ln.startswith("#"))
     assert "hatchling" in pins and "setuptools" not in pins  # the backend of desk-backend and core; no root package
     src = (REPO / "backend/tools/build_windows_bundle.py").read_text(encoding="utf-8")
     assert '"pip", "wheel"' not in src  # pip's wheel cache kept a core wheel of another build: never again
@@ -380,13 +380,13 @@ def test_a_delivered_record_is_the_base_of_local_patches(tmp_path):
     twin = tmp_path / "DeskMonitor-1.0-a-with-adapter.zip"  # the same build delivered as another zip: one record
     shutil.copyfile(delivered_zip, twin)
     assert build.record_delivered(twin, folder) == rec and len(list(rec.parent.iterdir())) == 1
-    assert [ln.split()[3] for ln in rec.read_text().splitlines() if ln.startswith("# delivered")] == \
+    assert [ln.split()[3] for ln in rec.read_text(encoding="utf-8").splitlines() if ln.startswith("# delivered")] == \
         [delivered_zip.name, twin.name]
-    assert build.record_delivered(twin, folder) == rec and rec.read_text().count("# delivered") == 2
+    assert build.record_delivered(twin, folder) == rec and rec.read_text(encoding="utf-8").count("# delivered") == 2
     assert build.newest_delivered(folder) == "1.0-a"
     for v in ("0.9.0-20261002-bbbbbbb", "0.10.0-20261001-aaaaaaa", "0.9.0-20261003-ccccccc"):
         (folder / v).mkdir()
-        (folder / v / "x.sha256").write_text(rec.read_text().replace("1.0-a", v))
+        (folder / v / "x.sha256").write_text(rec.read_text(encoding="utf-8").replace("1.0-a", v), encoding="utf-8")
     assert build.newest_delivered(folder) == "0.10.0-20261001-aaaaaaa"  # by version, then by commit date
     for v in ("0.9.0-20261002-bbbbbbb", "0.10.0-20261001-aaaaaaa", "0.9.0-20261003-ccccccc"):
         shutil.rmtree(folder / v)
@@ -624,7 +624,7 @@ def _full_and_mirror_stage(tmp_path: Path, files: dict[str, bytes] | None = None
     wheels = _lock_set(stage / "wheelhouse")
     pins = ["psycopg==3.2.1", "psycopg-binary==3.2.1", "typing-extensions==4.12.2", "tzdata==2024.1", "fastapi==0.115.0",
             "starlette==0.38.2", "anyio==4.4.0", "colorama==0.4.6", "numpy==1.26.4", "pgserver==0.1.4"]
-    (stage / "wheelhouse/requirements.txt").write_text("\n".join(pins + LOCAL) + "\n")
+    (stage / "wheelhouse/requirements.txt").write_text("\n".join(pins + LOCAL) + "\n", encoding="utf-8")
     header = "# DeskMonitor 1.1-b, repository commit abc\n# no bundled Python (py -3.11)\n"
     doc = build.mirror_doc(wheels, LOCAL)
     mirror = build.make_mirror_stage(stage, tmp_path / "mirror" / "DeskMonitor", doc, header)
@@ -649,9 +649,9 @@ def test_the_mirror_stage_holds_only_our_wheels_requirements_and_mirror_json(tmp
         assert (mirror / rel).read_bytes() == (stage / rel).read_bytes()  # byte for byte the full bundle's
     assert (mirror / "wheelhouse/mirror.json").read_text(encoding="utf-8") == build.mirror_json_text(doc)
     # its own manifest (it lists mirror.json, not the third-party wheels), same header
-    header, entries = build.parse_manifest((mirror / "MANIFEST.sha256").read_text())
+    header, entries = build.parse_manifest((mirror / "MANIFEST.sha256").read_text(encoding="utf-8"))
     assert "wheelhouse/mirror.json" in entries and "wheelhouse/psycopg-3.2.1-py3-none-any.whl" not in entries
-    assert header == build.parse_manifest((stage / "MANIFEST.sha256").read_text())[0]
+    assert header == build.parse_manifest((stage / "MANIFEST.sha256").read_text(encoding="utf-8"))[0]
     assert (build.base_from_zip(_zip_of(mirror, tmp_path)).flavor, build.base_from_zip(_zip_of(stage, tmp_path)).flavor) \
         == ("mirror", "full")
     # the zips are named DeskMonitorMirror-..., with and without the adapter
@@ -678,21 +678,21 @@ def test_check_mirror_refuses_a_wheelhouse_that_does_not_match_requirements(tmp_
     _, mirror, _ = _full_and_mirror_stage(tmp_path)
     wh = mirror / "wheelhouse"
     build.check_mirror(wh)  # as written: fine
-    req = (wh / "requirements.txt").read_text()
-    (wh / "requirements.txt").write_text(req + "extra-pkg==1\n")
+    req = (wh / "requirements.txt").read_text(encoding="utf-8")
+    (wh / "requirements.txt").write_text(req + "extra-pkg==1\n", encoding="utf-8")
     with pytest.raises(SystemExit, match="different packages"):
         build.check_mirror(wh)
-    (wh / "requirements.txt").write_text(req.replace("numpy==1.26.4", "numpy==1.26.5"))
+    (wh / "requirements.txt").write_text(req.replace("numpy==1.26.4", "numpy==1.26.5"), encoding="utf-8")
     with pytest.raises(SystemExit, match="numpy lock"):
         build.check_mirror(wh)
-    (wh / "requirements.txt").write_text(req)
+    (wh / "requirements.txt").write_text(req, encoding="utf-8")
     _whl(wh, "colorama", "0.4.6", [])  # a third-party wheel left behind
     with pytest.raises(SystemExit, match="only our wheels"):
         build.check_mirror(wh)
     (wh / "colorama-0.4.6-py3-none-any.whl").unlink()
-    doc = json.loads((wh / "mirror.json").read_text())
+    doc = json.loads((wh / "mirror.json").read_text(encoding="utf-8"))
     doc["packages"]["numpy"]["requires"].append({"by": "x", "spec": ">=2"})
-    (wh / "mirror.json").write_text(json.dumps(doc))
+    (wh / "mirror.json").write_text(json.dumps(doc), encoding="utf-8")
     with pytest.raises(SystemExit, match="numpy>=2"):
         build.check_mirror(wh)
 
@@ -746,7 +746,7 @@ def test_make_mirror_stage_refuses_a_document_whose_hashes_are_not_the_stage_whe
     wheels = _lock_set(stage / "wheelhouse")
     pins = ["psycopg==3.2.1", "psycopg-binary==3.2.1", "typing-extensions==4.12.2", "tzdata==2024.1", "fastapi==0.115.0",
             "starlette==0.38.2", "anyio==4.4.0", "colorama==0.4.6", "numpy==1.26.4", "pgserver==0.1.4"]
-    (stage / "wheelhouse/requirements.txt").write_text("\n".join(pins + LOCAL) + "\n")
+    (stage / "wheelhouse/requirements.txt").write_text("\n".join(pins + LOCAL) + "\n", encoding="utf-8")
     doc = build.mirror_doc(wheels, LOCAL)
     (stage / "wheelhouse/numpy-1.26.4-py3-none-any.whl").write_bytes(b"another file")  # changed after the document
     with pytest.raises(SystemExit, match=r"numpy-1.26.4.*sha256"):

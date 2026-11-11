@@ -178,7 +178,7 @@ def test_self_signed_certificate_names_this_computer(tmp_path, monkeypatch):
     assert info["sans"] == ["desk-pc", "desk-pc.corp.local", "localhost", "10.1.2.3", "127.0.0.1"]
     assert info["missing"] == ["10.9.9.9"] and info["not_after"]
     assert lan.cert_info(tmp_path / "none.crt") == {"file": str(tmp_path / "none.crt"), "exists": False}
-    (tmp_path / "bad.crt").write_text("not a certificate")
+    (tmp_path / "bad.crt").write_text("not a certificate", encoding="utf-8")
     assert "error" in lan.cert_info(tmp_path / "bad.crt")
     assert lan.cert_info(None) is None
 

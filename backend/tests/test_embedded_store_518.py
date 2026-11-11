@@ -102,9 +102,9 @@ def test_pid_file_of_another_program_is_not_a_running_server(pgdata: Path) -> No
     uri_before = _url(server)
     new_process(pgdata)
     crash(pgdata)
-    lines = (pgdata / "postmaster.pid").read_text().splitlines()
+    lines = (pgdata / "postmaster.pid").read_text(encoding="utf-8").splitlines()
     lines[0] = str(os.getpid())
-    (pgdata / "postmaster.pid").write_text("\n".join(lines) + "\n")
+    (pgdata / "postmaster.pid").write_text("\n".join(lines) + "\n", encoding="utf-8")
     assert embedded.is_postgres(os.getpid(), pgdata) is False
     said: list[str] = []
     server = embedded.get_server(pgdata, said.append)
@@ -122,7 +122,7 @@ def test_a_live_postmaster_file_is_never_removed(pgdata: Path) -> None:
 
 def test_empty_pid_file_is_removed_once_it_is_not_new(pgdata: Path) -> None:
     pgdata.mkdir()
-    (pgdata / "postmaster.pid").write_text("")
+    (pgdata / "postmaster.pid").write_text("", encoding="utf-8")
     assert embedded.heal(pgdata, lambda m: None) is False  # just written: a postmaster may be writing it
     old = time.time() - 60
     os.utime(pgdata / "postmaster.pid", (old, old))
@@ -163,9 +163,9 @@ def test_postmaster_still_recovering_from_an_earlier_try_is_waited_for_not_start
     pid = embedded.read_pidfile(pgdata).pid
     new_process(pgdata)
     # the file as a recovering postmaster writes it: the process is alive, the status is "starting" until it is ready
-    text = (pgdata / "postmaster.pid").read_text()
+    text = (pgdata / "postmaster.pid").read_text(encoding="utf-8")
     starting = text.replace("ready", "starting")
-    (pgdata / "postmaster.pid").write_text(starting)
+    (pgdata / "postmaster.pid").write_text(starting, encoding="utf-8")
     starts: list[list[str]] = []
     real = ps.pg_ctl
     monkeypatch.setattr(ps, "pg_ctl", lambda args, pgdata=None, **kw: starts.append(args) or real(args, pgdata=pgdata, **kw))
@@ -180,7 +180,7 @@ def test_postmaster_still_recovering_from_an_earlier_try_is_waited_for_not_start
     t.start()
     time.sleep(0.6)
     assert not done, "it must wait while the postmaster says «starting»"
-    (pgdata / "postmaster.pid").write_text(text)  # recovery is over
+    (pgdata / "postmaster.pid").write_text(text, encoding="utf-8")  # recovery is over
     t.join(30)
     assert done and _value(done[0], "SELECT 1") == 1 and embedded.read_pidfile(pgdata).pid == pid
     assert starts == []  # no second start of a server that is up
@@ -191,7 +191,7 @@ def test_postmaster_that_dies_while_recovering_is_reported_with_its_log(pgdata: 
     embedded.get_server(pgdata, lambda m: None)
     pid = embedded.read_pidfile(pgdata).pid
     new_process(pgdata)
-    (pgdata / "postmaster.pid").write_text((pgdata / "postmaster.pid").read_text().replace("ready", "starting"))
+    (pgdata / "postmaster.pid").write_text((pgdata / "postmaster.pid").read_text(encoding="utf-8").replace("ready", "starting"), encoding="utf-8")
     log = pgdata.parent / "logs" / "postgres.log"
     monkeypatch.setattr(embedded, "POLL_S", 0.05)
     said: list[str] = []
@@ -213,11 +213,11 @@ def test_postmaster_that_dies_while_recovering_is_reported_with_its_log(pgdata: 
 
 def test_wait_gives_up_with_a_message_when_the_postmaster_stays_busy(pgdata: Path, monkeypatch) -> None:
     embedded.get_server(pgdata, lambda m: None)
-    (pgdata / "postmaster.pid").write_text((pgdata / "postmaster.pid").read_text().replace("ready", "starting"))
+    (pgdata / "postmaster.pid").write_text((pgdata / "postmaster.pid").read_text(encoding="utf-8").replace("ready", "starting"), encoding="utf-8")
     monkeypatch.setattr(embedded, "POLL_S", 0.05)
     with pytest.raises(embedded.StoreStartError, match="всё ещё не готов.*продолжает восстановление.*Ctrl\\+C"):
         embedded.wait_ready(pgdata, lambda m: None, wait_s=0.3)
-    (pgdata / "postmaster.pid").write_text((pgdata / "postmaster.pid").read_text().replace("starting", "ready"))
+    (pgdata / "postmaster.pid").write_text((pgdata / "postmaster.pid").read_text(encoding="utf-8").replace("starting", "ready"), encoding="utf-8")
 
 
 def test_failed_start_on_a_taken_port_is_tried_again_then_reported(pgdata: Path, monkeypatch) -> None:
@@ -284,9 +284,9 @@ def test_log_is_rotated_when_big_and_no_postmaster_is_up(tmp_path: Path, monkeyp
     monkeypatch.setattr(embedded, "LOG_MAX_BYTES", 10)
     folder = tmp_path / "logs"
     folder.mkdir()
-    (folder / "postgres.log").write_text("x" * 100)
+    (folder / "postgres.log").write_text("x" * 100, encoding="utf-8")
     assert embedded.rotate_log(tmp_path / "pg") is True
-    assert not (folder / "postgres.log").exists() and (folder / "postgres.log.1").read_text() == "x" * 100
+    assert not (folder / "postgres.log").exists() and (folder / "postgres.log.1").read_text(encoding="utf-8") == "x" * 100
     assert embedded.log_path(tmp_path / "pg") == folder / "postgres.log"
 
 
@@ -314,10 +314,10 @@ def test_pid_of_a_postgres_of_another_cluster_is_not_this_clusters_postmaster(pg
         new_process(pgdata)
         crash(pgdata)
         other_pid = embedded.read_pidfile(other).pid
-        lines = (pgdata / "postmaster.pid").read_text().splitlines()
+        lines = (pgdata / "postmaster.pid").read_text(encoding="utf-8").splitlines()
         lines[0] = str(other_pid)
         lines[2] = str(int(time.time()) - 3600)  # the crash was an hour ago, the pid went to the other cluster since
-        (pgdata / "postmaster.pid").write_text("\n".join(lines) + "\n")
+        (pgdata / "postmaster.pid").write_text("\n".join(lines) + "\n", encoding="utf-8")
         assert embedded.is_postgres(other_pid, pgdata) is False
         assert embedded.is_postgres(other_pid, other) is True
         said: list[str] = []
@@ -334,18 +334,18 @@ def test_heal_does_not_remove_a_file_that_a_starting_postmaster_wrote_meanwhile(
     embedded.get_server(pgdata, lambda m: None)
     new_process(pgdata)
     dead = crash(pgdata)
-    fresh = (pgdata / "postmaster.pid").read_text().replace(str(dead), str(os.getpid() + 1_000_000), 1)
+    fresh = (pgdata / "postmaster.pid").read_text(encoding="utf-8").replace(str(dead), str(os.getpid() + 1_000_000), 1)
     real = embedded.is_postgres
 
     def late(pid: int, d: Path) -> bool | None:
         answer = real(pid, d)
-        (pgdata / "postmaster.pid").write_text(fresh)  # the other start writes between the check and the removal
+        (pgdata / "postmaster.pid").write_text(fresh, encoding="utf-8")  # the other start writes between the check and the removal
         return answer
 
     monkeypatch.setattr(embedded, "is_postgres", late)
     said: list[str] = []
     assert embedded.heal(pgdata, said.append) is False and said == []
-    assert (pgdata / "postmaster.pid").read_text() == fresh
+    assert (pgdata / "postmaster.pid").read_text(encoding="utf-8") == fresh
 
 
 def test_desk_db_migrate_after_a_killed_server_needs_no_manual_step(tmp_path: Path, monkeypatch, capsys) -> None:

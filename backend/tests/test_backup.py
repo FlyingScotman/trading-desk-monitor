@@ -76,7 +76,7 @@ def test_backup_writes_a_dump_with_its_snapshot_counts(store_url, tmp_path):
 def test_backup_failure_leaves_nothing_and_is_recorded(store_url, tmp_path, monkeypatch):
     """A pg_dump that fails (here a stand-in that exits 1): no file, not even a .partial; the state says why."""
     fake = tmp_path / "pg_dump"
-    fake.write_text("#!/bin/sh\necho 'pg_dump: error: connection failed' >&2\nexit 1\n")
+    fake.write_text("#!/bin/sh\necho 'pg_dump: error: connection failed' >&2\nexit 1\n", encoding="utf-8")
     fake.chmod(0o755)
     real = backup.tool
     monkeypatch.setattr(backup, "tool", lambda name: fake if name == "pg_dump" else real(name))
@@ -146,12 +146,12 @@ def test_retention_keeps_the_newest_and_the_pre_restore_dumps_apart(tmp_path):
     folder.mkdir()
     for day in range(1, 21):
         (folder / f"desk-202610{day:02d}-203000-nightly.dump").write_bytes(b"x")
-        (folder / f"desk-202610{day:02d}-203000-nightly.json").write_text("{}")
+        (folder / f"desk-202610{day:02d}-203000-nightly.json").write_text("{}", encoding="utf-8")
     for day in (2, 9):
         (folder / f"desk-202610{day:02d}-120000-manual.dump").write_bytes(b"x")
     for day in range(1, 6):
         (folder / f"desk-202610{day:02d}-100000-pre-restore.dump").write_bytes(b"x")
-    (folder / "notes.txt").write_text("kept")
+    (folder / "notes.txt").write_text("kept", encoding="utf-8")
     removed = backup.prune(folder, 14)
     left = backup.list_backups(folder)
     regular = [b.name for b in left if b.kind != "pre-restore"]
@@ -240,13 +240,13 @@ def test_restore_check_finds_a_damaged_or_altered_backup(store_url, tmp_path):
     s = _settings(tmp_path)
     b = backup.create(s, store_url)
     meta_path = b.path.with_suffix(".json")
-    meta = json.loads(meta_path.read_text())
+    meta = json.loads(meta_path.read_text(encoding="utf-8"))
     meta["tables"]["audit_log"] += 1
-    meta_path.write_text(json.dumps(meta))
+    meta_path.write_text(json.dumps(meta), encoding="utf-8")
     rep = backup.restore_check(s, store_url, b.path)
     assert not rep["ok"] and any("audit_log: 4 at backup, 3 restored" in p for p in rep["problems"])
     meta["tables"]["audit_log"] -= 1
-    meta_path.write_text(json.dumps(meta))
+    meta_path.write_text(json.dumps(meta), encoding="utf-8")
     data = b.path.read_bytes()
     b.path.write_bytes(data[:-200] + bytes(200))  # same size, other bytes
     rep = backup.restore_check(s, store_url, b.path)
@@ -558,7 +558,7 @@ def test_backup_settings(tmp_path, monkeypatch):
     assert backup.backup_dir(st) == home / "backups"
     home.mkdir()
     (home / "settings.json").write_text(json.dumps({"backup_dir": "copies", "backup_keep": 30, "backup_time": "7:05",
-                                                    "backup": False}))
+                                                    "backup": False}), encoding="utf-8")
     st = load()
     assert (st.backup, st.backup_dir, st.backup_keep, st.backup_time) == (False, home / "copies", 30, "07:05")
     monkeypatch.setenv("DESK_BACKUP_TIME", "25:00")

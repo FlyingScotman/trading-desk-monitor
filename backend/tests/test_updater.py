@@ -596,7 +596,7 @@ def test_the_settings_page_install_refuses_an_older_zip_unless_asked(bundle_env,
     up = bundle_env["home"] / "updates/uploads"
     up.mkdir(parents=True)
     (up / bundle_env["name"]).write_bytes(bundle_env["zip"])
-    (root / "VERSION").write_text(NEWER + "\n")  # the installed bundle says so too
+    (root / "VERSION").write_text(NEWER + "\n", encoding="utf-8")  # the installed bundle says so too
     app, asked = _app()
     c = client_for(app)
     body = {"source": "upload", "name": bundle_env["name"]}
@@ -612,7 +612,7 @@ def test_find_in_downloads_with_a_saved_sha256sums(bundle_env, monkeypatch):
     (dl / name).write_bytes(z)
     j = c.get("/api/v1/update/remote/downloads").json()
     assert j["items"][0]["verified"] is False and "SHA256SUMS" in j["items"][0]["reason"]
-    (dl / "SHA256SUMS").write_text(f"{sha(z)}  {name}\n")
+    (dl / "SHA256SUMS").write_text(f"{sha(z)}  {name}\n", encoding="utf-8")
     it = c.get("/api/v1/update/remote/downloads").json()["items"][0]
     assert it["verified"] and it["compare"] == "newer"
     assert c.post("/api/v1/update/remote/install-found", json={"file": "../x.zip", "sha256": it["sha256"]}).status_code == 422
@@ -694,9 +694,9 @@ def test_rollback_route(old_new, tmp_path, monkeypatch):
     assert c.post("/api/v1/update/rollback", json={}).status_code == 422
     backup = h / "updates/backup" / "0.0.9-20261001-0000000"
     (backup / "files").mkdir(parents=True)
-    (backup / "files/VERSION").write_text("0.0.9-20261001-0000000\n")
+    (backup / "files/VERSION").write_text("0.0.9-20261001-0000000\n", encoding="utf-8")
     (backup / "backup.json").write_text(json.dumps({"version": "0.0.9-20261001-0000000", "to_version": OLD,
-                                                    "replaced": ["VERSION"], "created": []}))
+                                                    "replaced": ["VERSION"], "created": []}), encoding="utf-8")
     assert c.get("/api/v1/update").json()["rollback"] == {"version": "0.0.9-20261001-0000000"}
     r = c.post("/api/v1/update/rollback", json={})
     assert r.status_code == 202 and r.json()["version"] == "0.0.9-20261001-0000000" and asked == [True]
@@ -723,14 +723,14 @@ def test_release_assets_checks_the_zips_and_writes_the_manifests(tmp_path):
         release_assets.check_tag(version)
     doc = release_assets.write(dist, f"v{version}", REPO_NAME, "abc")
     assert doc["version"] == bundle_version and doc["assets"][0]["kind"] == "full" and doc["assets"][0]["flavor"] == "mirror" and not doc["adapter_included"]
-    sums = (dist / "SHA256SUMS").read_text()
+    sums = (dist / "SHA256SUMS").read_text(encoding="utf-8")
     assert release.parse_sums(sums)[f"DeskMonitorMirror-{bundle_version}.zip"] == doc["assets"][0]["sha256"]
-    assert sums.strip() in (dist / "NOTES.md").read_text()
-    rel = release.from_release_json(json.loads((dist / "release.json").read_text()), REPO_NAME)
+    assert sums.strip() in (dist / "NOTES.md").read_text(encoding="utf-8")
+    rel = release.from_release_json(json.loads((dist / "release.json").read_text(encoding="utf-8")), REPO_NAME)
     assert rel.version == bundle_version
     # the notes alone (what the browser reads through the API) carry the checksums
     api = api_doc({f"DeskMonitorMirror-{bundle_version}.zip": (dist / f"DeskMonitorMirror-{bundle_version}.zip").read_bytes()},
-                  tag=f"v{version}", digest=False, body=(dist / "NOTES.md").read_text())
+                  tag=f"v{version}", digest=False, body=(dist / "NOTES.md").read_text(encoding="utf-8"))
     assert release.from_api(api, REPO_NAME).assets[0].sha256 == doc["assets"][0]["sha256"]
     with_adapter = stage_dir(tmp_path / "ad", tu.bundle(bundle_version, {**MIRROR, "adapter/tda/__init__.py": b""}))
     full_zip(with_adapter, dist / f"DeskMonitorMirror-{bundle_version}.zip")
@@ -757,7 +757,7 @@ def test_release_notes_start_with_the_versions_changelog_section(tmp_path):
     release_assets.write(dist, f"v{version}", REPO_NAME, "abc")
     notes = (dist / "NOTES.md").read_text(encoding="utf-8")
     assert notes.startswith(f"Desk Monitor {bundle_version}\n\n{section}\n\n---\n\n")
-    assert release.parse_sums(notes) == release.parse_sums((dist / "SHA256SUMS").read_text())
+    assert release.parse_sums(notes) == release.parse_sums((dist / "SHA256SUMS").read_text(encoding="utf-8"))
 
 
 def test_a_patch_for_another_build_falls_back_to_the_full_zip(bundle_env, monkeypatch, tmp_path):
@@ -805,13 +805,13 @@ def test_release_assets_publishes_one_mirror_zip_and_its_patches_and_refuses_the
         f"DeskMonitorMirror-patch-{old}-to-{v}.zip", f"DeskMonitorMirror-{v}.zip"])
     doc = release_assets.write(dist, f"v{version}", REPO_NAME, "abc")
     assert sorted((a["kind"], a["flavor"]) for a in doc["assets"]) == [("full", "mirror"), ("patch", "mirror")]
-    sums = release.parse_sums((dist / "SHA256SUMS").read_text())
+    sums = release.parse_sums((dist / "SHA256SUMS").read_text(encoding="utf-8"))
     assert set(sums) == {p.name for p in dist.glob("*.zip")}
     notes = (dist / "NOTES.md").read_text(encoding="utf-8")
     assert all(sha in notes for sha in sums.values()) and f"DeskMonitorMirror-{v}.zip — сборка «без пакетов»" in notes
     assert "stop.bat" in notes and "adapter" in notes and "start.bat" in notes  # the one manual change of kind
     assert f"DeskMonitor-{v}.zip" not in notes  # the full zip is not offered
-    rel = release.from_release_json(json.loads((dist / "release.json").read_text()), REPO_NAME)
+    rel = release.from_release_json(json.loads((dist / "release.json").read_text(encoding="utf-8")), REPO_NAME)
     assert rel.version == v and release.full_of(rel, "mirror").name == f"DeskMonitorMirror-{v}.zip"
     assert release.full_of(rel, "full") is None
     # the full kind (the zip or a patch of it) is refused, not left out silently: a glob would upload it
@@ -919,7 +919,7 @@ def test_the_check_of_a_mirror_only_release_is_a_manual_update_not_an_error(bund
         service.start_install(st)
     # a mirror installation of the same release updates as always
     (bundle_env["root"] / "wheelhouse").mkdir(exist_ok=True)
-    (bundle_env["root"] / "wheelhouse/mirror.json").write_text("{}")
+    (bundle_env["root"] / "wheelhouse/mirror.json").write_text("{}", encoding="utf-8")
     again = service.status(st, True, None)
     assert again["update_available"] is True and again["manual_update"] is False
 
@@ -989,11 +989,11 @@ def test_choose_without_a_flavor_follows_the_bundle_folder_then_the_environment(
     rel = _rel(NEW, [full, mfull])
     root = tmp_path / "DeskMonitor"
     (root / "wheelhouse").mkdir(parents=True)
-    (root / "VERSION").write_text(OLD)
+    (root / "VERSION").write_text(OLD, encoding="utf-8")
     monkeypatch.setenv("DESK_BUNDLE_ROOT", str(root))
     monkeypatch.setenv("DESK_BUNDLE_KIND", "full")  # the folder is the truth: no mirror.json yet
     assert release.choose(rel, OLD).asset is full
-    (root / "wheelhouse/mirror.json").write_text("{}")
+    (root / "wheelhouse/mirror.json").write_text("{}", encoding="utf-8")
     assert release.choose(rel, OLD).asset is mfull
     monkeypatch.delenv("DESK_BUNDLE_ROOT")  # a checkout: the environment decides
     monkeypatch.setenv("DESK_BUNDLE_KIND", "mirror")

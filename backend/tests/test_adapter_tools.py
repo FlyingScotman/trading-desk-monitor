@@ -156,7 +156,7 @@ def test_status_panels_checked_bad_ones_dropped_failures_without_messages(home: 
     r = c.get("/api/v1/adapter/status").json()
     assert r["error_code"] == "failed" and "RuntimeError" in r["error"] and "123" not in json.dumps(r)
     (tmp_path / "status_mode.txt").write_text("sleep", encoding="utf-8")
-    (home / "settings.json").write_text(json.dumps({**json.loads((home / "settings.json").read_text()),
+    (home / "settings.json").write_text(json.dumps({**json.loads((home / "settings.json").read_text(encoding="utf-8")),
                                                     "adapter_status_timeout_s": 1}), encoding="utf-8")
     t0 = time.monotonic()
     r = c.get("/api/v1/adapter/status").json()
@@ -312,7 +312,7 @@ def test_kit_argv_keeps_a_path_starting_with_a_dash(home: Path, tmp_path: Path, 
 
 
 def test_check_timeout_kills_the_kit(home: Path) -> None:
-    doc = json.loads((home / "settings.json").read_text())
+    doc = json.loads((home / "settings.json").read_text(encoding="utf-8"))
     (home / "settings.json").write_text(json.dumps({**doc, "adapter_kit_timeout_s": 0.01}), encoding="utf-8")
     c = _client()
     assert c.post("/api/v1/adapter/check", json={}).status_code == 202
@@ -321,7 +321,7 @@ def test_check_timeout_kills_the_kit(home: Path) -> None:
 
 
 def test_with_sign_in_the_tools_are_the_admins(home: Path, store_url: str) -> None:
-    doc = json.loads((home / "settings.json").read_text())
+    doc = json.loads((home / "settings.json").read_text(encoding="utf-8"))
     (home / "settings.json").write_text(json.dumps({**doc, "auth": True}), encoding="utf-8")
     from desk.api import auth
 

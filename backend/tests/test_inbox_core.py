@@ -444,10 +444,10 @@ def test_kit_fails_broken_adapters(tmp_path: Path) -> None:
     flaky = tmp_path / "flaky"
     flaky.mkdir()
     src = (ADAPTERS / "good_adapter" / "__init__.py").read_text(encoding="utf-8")
-    (flaky / "parse.py").write_text((ADAPTERS / "good_adapter" / "parse.py").read_text(encoding="utf-8"))
+    (flaky / "parse.py").write_text((ADAPTERS / "good_adapter" / "parse.py").read_text(encoding="utf-8"), encoding="utf-8")
     (flaky / "__init__.py").write_text(src.replace(
         'rows.append({**rec, "_src": f"R{line}"})',
-        'rows.append({**rec, "_src": f"R{line}", "x_t": 1, "quantity": str(__import__("time").time_ns())})'))
+        'rows.append({**rec, "_src": f"R{line}", "x_t": 1, "quantity": str(__import__("time").time_ns())})'), encoding="utf-8")
     rep = conformance.check(str(flaky), [str(PRIV)], stub_ctx=True, config_dir=str(CONFIG))
     assert rep.problems["nondeterministic"] == 6
 
@@ -565,7 +565,7 @@ def test_timeout_kills_the_process_tree(tmp_path: Path) -> None:
     with pytest.raises(AdapterFailure) as e:
         runner.call_read(h, "x", {}, None, 2)
     assert e.value.kind == "timed_out" and time.monotonic() - t0 < 2 + runner.KILL_WAIT_S + 2
-    pid = int(pidfile.read_text())
+    pid = int(pidfile.read_text(encoding="utf-8"))
     for _ in range(50):
         try:
             os.kill(pid, 0)
@@ -620,9 +620,9 @@ def test_adapter_with_a_wrong_fingerprint_never_runs(tmp_path: Path, monkeypatch
 def test_kit_survives_odd_hits_and_reports_names_only(tmp_path: Path) -> None:
     odd = tmp_path / "odd_adapter"
     odd.mkdir()
-    (odd / "parse.py").write_text((ADAPTERS / "good_adapter" / "parse.py").read_text(encoding="utf-8"))
+    (odd / "parse.py").write_text((ADAPTERS / "good_adapter" / "parse.py").read_text(encoding="utf-8"), encoding="utf-8")
     (odd / "__init__.py").write_text((ADAPTERS / "good_adapter" / "__init__.py").read_text(encoding="utf-8")
-                                     .replace("    return hit(path)", "    return True if 'README' in path else hit(path)"))
+                                     .replace("    return hit(path)", "    return True if 'README' in path else hit(path)"), encoding="utf-8")
     rep = conformance.check(str(odd), [str(PRIV)], stub_ctx=True, config_dir=str(CONFIG))
     assert rep.problems == {"bad_hit": 1} and rep.to_json()["adapter"] == "odd_adapter"
     assert str(tmp_path) not in json.dumps(rep.to_json())

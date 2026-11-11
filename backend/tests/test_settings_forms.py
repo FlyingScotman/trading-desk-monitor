@@ -175,7 +175,7 @@ def test_check_reports_schema_then_the_adapters_dry_run(client: TestClient, home
     assert by_code["unknown_ocp_to"]["row"] == 1 and by_code["unknown_ocp_to"]["new"]
     assert by_code["unknown_ocp_to"]["origin"] == "adapter"
     assert by_code["unknown_entity"]["origin"] == "backend" and by_code["unknown_entity"]["new"]
-    assert j["text"] == file_text(doc) and j["current"]["text"] == (home / "adapter-config" / "books.json").read_text()
+    assert j["text"] == file_text(doc) and j["current"]["text"] == (home / "adapter-config" / "books.json").read_text(encoding="utf-8")
     assert books(home)["books"][1].get("ocp_to") is None  # a check writes nothing
 
     doc = books(home)

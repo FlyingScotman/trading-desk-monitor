@@ -47,7 +47,7 @@ jobs:
           uv pip install -p .venv/Scripts/python.exe pgserver==0.1.4 psutil
           PY=.venv/Scripts/python.exe
           INITDB=$($PY -c "import pgserver,pathlib;print(pathlib.Path(pgserver.__file__).parent/'pginstall'/'bin'/'initdb.exe')")
-          echo "initdb: $INITDB"; whoami; whoami /groups | head -20
+          echo "initdb: $INITDB"; whoami
           for base in "$RUNNER_TEMP/dm1" "C:/Users/runneradmin/AppData/Local/DeskMonitorProbe" "D:/probe2"; do
             echo "=== $base"
             mkdir -p "$base"

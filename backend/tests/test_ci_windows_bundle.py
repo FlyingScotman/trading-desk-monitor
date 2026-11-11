@@ -59,9 +59,9 @@ def test_unpack_makes_a_clean_folder(tmp_path: Path) -> None:
     z = make_zip(tmp_path / "DeskMonitorMirror-a.zip", OLD)
     dest = tmp_path / "install"
     (dest).mkdir()
-    (dest / "stale.txt").write_text("x")
+    (dest / "stale.txt").write_text("x", encoding="utf-8")
     root = ci.unpack(z, dest)
-    assert root == dest / "DeskMonitor" and (root / "VERSION").read_text().strip() == OLD
+    assert root == dest / "DeskMonitor" and (root / "VERSION").read_text(encoding="utf-8").strip() == OLD
     assert not (dest / "stale.txt").exists()
 
 
@@ -133,7 +133,7 @@ class FakeBundle(ci.Bundle):
 def _bundle(tmp_path: Path, url: str, version_file: str) -> FakeBundle:
     root = tmp_path / "DeskMonitor"
     root.mkdir(exist_ok=True)
-    (root / "VERSION").write_text(version_file + "\n")
+    (root / "VERSION").write_text(version_file + "\n", encoding="utf-8")
     b = FakeBundle(root, tmp_path / "home", 0, tmp_path)
     b.url = url
     return b
@@ -153,12 +153,12 @@ def _api(state: dict, *, last_ok: bool = True) -> None:
 
     def install(_b):
         state["version"], state["applied"] = state["new"], True
-        state["version_file"].write_text(state["new"] + "\n")
+        state["version_file"].write_text(state["new"] + "\n", encoding="utf-8")
         return 202, {"restarting": True}
 
     def rollback(_b):
         state["version"] = state["old"]
-        state["version_file"].write_text(state["old"] + "\n")
+        state["version_file"].write_text(state["old"] + "\n", encoding="utf-8")
         return 202, {"restarting": True}
 
     Stub.routes.update({("GET", "/health/live"): ok, ("GET", "/health/ready"): ok, ("GET", "/api/v1/update"): get_update,
@@ -175,7 +175,7 @@ def test_update_then_rollback_phases_follow_the_api(stub: str, tmp_path: Path, m
     ci.phase_update(b, new_zip, OLD, NEW)
     assert b.version() == NEW
     ci.phase_rollback(b, OLD)
-    assert b.version() == OLD and (b.root / "VERSION").read_text().strip() == OLD
+    assert b.version() == OLD and (b.root / "VERSION").read_text(encoding="utf-8").strip() == OLD
     posted = [(m, p) for m, p, _ in Stub.seen if m == "POST"]
     assert posted == [("POST", f"/api/v1/update/upload?name={new_zip.name}"), ("POST", "/api/v1/update/install"),
                       ("POST", "/api/v1/update/rollback")]
