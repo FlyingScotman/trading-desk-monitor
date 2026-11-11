@@ -20,7 +20,7 @@ from psycopg.rows import dict_row
 from test_market_history import FIX, STATIC, shifted, write
 from test_r23_backfill import DATES, load, settings
 
-from desk import backfill, dayrun, store
+from desk import backfill, dayrun, daystatus, store
 from desk.api import create_app
 from desk.autopilot import Autopilot
 from desk.marketdata.bundle import SnapshotDir
@@ -182,7 +182,7 @@ def test_the_second_pass_is_cut_by_the_budget_newest_first_and_resumes(tmp_path,
         assert p.count_second("done") == len(seen)
     assert second_pass(s, store_url)["done"] == NEWEST_FIRST[-1:]
     assert not plan(store_url, s).second_todo
-    assert second_pass(s, store_url) == {"done": [], "failed": [], "skipped": [], "left": 0, "stopped": None,
+    assert second_pass(s, store_url) == {"done": [], "failed": [], "moved": [], "skipped": [], "mismatch": [], "left": 0, "stopped": None,
                                          "seconds": pytest.approx(0, abs=1)}  # nothing left: nothing made again
     assert {r["second_order"] for r in runs(store_url).values()} == {True}
 
@@ -214,6 +214,144 @@ def test_a_second_pass_date_that_fails_does_not_hold_the_others_and_is_left_afte
     # a new run of the date (its inputs changed: the first pass again) forgets the give-up
     load(store_url, tmp_path, "2026-10-14", 12)
     assert [d.date for d in plan(store_url, s).todo] == ["2026-10-14", "2026-10-15"]
+
+
+def test_the_second_pass_checks_the_totals_of_the_new_run_against_the_replaced_one(tmp_path, cache, store_url, caplog):
+    """The second pass's totals per book are the first pass's to the last bit; when they are not (here the first
+    pass's run is made to say another PV and another PnL), the pass warns in the log and the line of its output, the
+    date is still done (the inputs are not frozen), and the status lists it until the date has another run."""
+    s, _ = first_pass(tmp_path, cache, store_url)
+    clean = second_pass(s, store_url, budget_s=0)  # the newest date, nothing tampered with: no warning
+    assert clean["done"] == ["2026-10-15"] and clean["mismatch"] == []
+    with store.connect(store_url) as con:
+        assert backfill.status(con, s, D1)["second"]["mismatched"] == 0
+        rid = runs(store_url)["2026-10-13"]["run_id"]
+        con.execute("ALTER TABLE run DISABLE TRIGGER run_frozen")  # a test of the check: a run is never changed in service
+        con.execute("UPDATE run SET totals = jsonb_set(jsonb_set(totals, '{_total,pv_rub}', "
+                    "to_jsonb((totals->'_total'->>'pv_rub')::float8 + 1.5)), '{OFZ,pnl,carry}', "
+                    "to_jsonb(coalesce((totals->'OFZ'->'pnl'->>'carry')::float8, 0) + 0.25)) WHERE run_id = %s", (rid,))
+        con.execute("ALTER TABLE run ENABLE TRIGGER run_frozen")
+        con.commit()
+    lines: list[str] = []
+    caplog.set_level("WARNING", logger="desk.backfill")
+    res = backfill.run_second(s, plan(store_url, s), store_url=store_url, out=lines.append)
+    assert res["done"] == ["2026-10-14", "2026-10-13", "2026-10-12"] and not res["failed"]
+    assert [d for d, _ in res["mismatch"]] == ["2026-10-13"]
+    what = res["mismatch"][0][1]
+    assert "_total pv_rub" in what and "OFZ pnl.carry" in what
+    assert any(x.startswith("WARN backfill second pass 2026-10-13") and f"replaced run {rid}" in x for x in lines)
+    assert "2026-10-13" in caplog.text and "differ from the replaced run" in caplog.text
+    assert not [x for x in lines if x.startswith("WARN") and "2026-10-12" in x]
+    with store.connect(store_url) as con:
+        st = backfill.status(con, s, D1)
+    new_id = runs(store_url)["2026-10-13"]["run_id"]
+    assert st["second"]["mismatched"] == 1 and st["second"]["mismatch_dates"] == [
+        {"date": "2026-10-13", "run_id": new_id, "diff": what}]
+    assert st["pass"] == "done" and st["second"]["done"] == 4  # a warning, not a failure
+    # the date has another run (its inputs changed): the old warning is not shown for it
+    load(store_url, tmp_path, "2026-10-13", 12)
+    backfill.run(s, plan(store_url, s), store_url=store_url, out=lambda line: None)
+    with store.connect(store_url) as con:
+        assert backfill.status(con, s, D1)["second"]["mismatched"] == 0
+
+
+def test_the_day_page_says_why_the_second_pass_replaced_a_run(tmp_path, cache, store_url):
+    s, _ = first_pass(tmp_path, cache, store_url)
+    second_pass(s, store_url)
+    with store.connect(store_url) as con:
+        r1, r2 = daystatus._runs(con, date(2026, 10, 14))
+    assert r1["changed"] == [] and r1["supersedes_run_id"] is None
+    assert r2["supersedes_run_id"] == r1["run_id"] and r2["is_default"]
+    assert r2["changed"] == ["second_order"] and r2["changed_text"] == ["досчитаны вторые производные"]
+
+
+def test_totals_diff():
+    a = {"_total": {"pv_rub": 1.0, "dv01_rub": 2.0, "cs01_rub": 0.0, "pnl": {"carry": 1.0, "total": 3.0}},
+         "OFZ": {"pv_rub": 1.0, "dv01_rub": 2.0, "cs01_rub": 0.0, "pnl": {"carry": 1.0, "total": 3.0}}}
+    assert backfill.totals_diff(a, a) == [] and backfill.totals_diff(None, None) == []
+    b = {"_total": {**a["_total"], "dv01_rub": 2.0000000000000004, "pnl": {"carry": 1.0, "total": 3.5}}, "NEW": a["OFZ"]}
+    assert backfill.totals_diff(a, b) == [
+        "NEW: only in the new run", "OFZ: only in the replaced run", "_total dv01_rub: 2.0 -> 2.0000000000000004",
+        "_total pnl.total: 3.0 -> 3.5"]
+
+
+def test_a_date_that_the_full_run_never_makes_current_is_given_up_not_run_through_both_passes_for_ever(
+        tmp_path, cache, store_url, monkeypatch):
+    """A reason that comes only with the full run (here: its run says it was made by another program version) used to
+    start every cycle with the first pass and the second again: the run id of the give-up changed with every pass, so
+    nothing was remembered. It is remembered under the date's inputs now: two cycles, then the date is left."""
+    from desk.publish import desk_run
+
+    load(store_url, tmp_path, "2026-10-12", 10)
+    s = settings(tmp_path, cache, store_url)
+    real, stamp, calls = dayrun.eod_run, desk_run.logic_version, []
+
+    def run(settings, d, **kw):
+        calls.append((d, bool(kw.get("no_gamma"))))
+        monkeypatch.setattr(desk_run, "logic_version", (lambda: "0.0.1+v1+core0") if d == "2026-10-13" and not kw.get("no_gamma")
+                            else stamp)
+        return real(settings, d, **kw)
+
+    monkeypatch.setattr(dayrun, "eod_run", run)
+
+    def cycle():
+        first = backfill.run(s, plan(store_url, s), store_url=store_url, out=lambda line: None)
+        return first, backfill.run_second(s, plan(store_url, s), store_url=store_url, out=lambda line: None)
+
+    _, r1 = cycle()
+    assert [d for d, _ in r1["failed"]] == ["2026-10-13"] and r1["done"] == ["2026-10-15", "2026-10-14", "2026-10-12"]
+    assert "program updated" in r1["failed"][0][1] and plan(store_url, s).count_second("failed") == 0  # one attempt
+    _, r2 = cycle()  # the date is the first pass's again (its full run is stale), then the second pass's second attempt
+    assert [d for d, _ in r2["failed"]] == ["2026-10-13"] and r2["done"] == []
+    p = plan(store_url, s)
+    assert [d.date for d in p.todo] == ["2026-10-13"]  # its full run is stale: the first pass's once more
+    assert backfill.state(s)["second"]["failed"]["2026-10-13"]["attempts"] == 2
+    n = len([c for c in calls if c[0] == "2026-10-13"])
+    f3, r3 = cycle()
+    assert f3["done"] == ["2026-10-13"] and r3["done"] == [] and r3["failed"] == [] and r3["left"] == 0
+    assert len([c for c in calls if c[0] == "2026-10-13"]) == n + 1  # only the first pass ran again, not the full run
+    p = plan(store_url, s)
+    assert not p.todo and not p.second_todo and p.count_second("failed") == 1
+    assert cycle()[0]["done"] == [] and len([c for c in calls if c[0] == "2026-10-13"]) == n + 1  # quiet from now on
+    with store.connect(store_url) as con:
+        st = backfill.status(con, s, D1)
+    assert [x["date"] for x in st["second"]["problem_dates"]] == ["2026-10-13"] and st["pass"] == "done"
+    # new inputs for the date: the give-up is forgotten, it is tried again
+    load(store_url, tmp_path, "2026-10-13", 12)
+    assert [d.date for d in plan(store_url, s).todo] == ["2026-10-13", "2026-10-14", "2026-10-15"]
+    assert plan(store_url, s).count_second("failed") == 0
+
+
+def test_a_date_whose_inputs_change_during_the_second_pass_is_moved_not_failed(tmp_path, cache, store_url, monkeypatch):
+    """A report arrives while the second pass values the date: the new run read it, the date is to be run by the first
+    pass again. That is not a failure of the second pass and is not remembered as one."""
+    s, _ = first_pass(tmp_path, cache, store_url)
+    real = dayrun.eod_run
+
+    def late_report(settings, d, **kw):
+        rid = real(settings, d, **kw)
+        if d == "2026-10-14":
+            load(store_url, tmp_path, "2026-10-14", 12)  # after the run read its inputs: the 14th and the 15th change
+        return rid
+
+    monkeypatch.setattr(dayrun, "eod_run", late_report)
+    res = second_pass(s, store_url)
+    assert res["failed"] == [] and res["moved"] == ["2026-10-14"] and res["done"] == ["2026-10-15", "2026-10-13", "2026-10-12"]
+    assert res["left"] == 0 and res["mismatch"] == []
+    p = plan(store_url, s)
+    assert p.count_second("failed") == 0 and backfill.state(s).get("second", {}).get("failed") == {}
+    assert [(d.date, d.why) for d in p.todo] == [("2026-10-14", "positions changed"), ("2026-10-15", "positions changed")]
+    monkeypatch.undo()
+    assert backfill.run(s, p, store_url=store_url, out=lambda line: None)["done"] == ["2026-10-14", "2026-10-15"]
+    assert second_pass(s, store_url)["done"] == ["2026-10-15", "2026-10-14"]
+
+
+def test_a_run_that_read_newer_inputs_is_not_compared_with_the_replaced_one(tmp_path, cache, store_url, monkeypatch):
+    s, _ = first_pass(tmp_path, cache, store_url)
+    p = plan(store_url, s)  # planned on the old inputs
+    load(store_url, tmp_path, "2026-10-14", 12)  # a report between the plan and the run: the new run reads it
+    res = backfill.run_second(s, p, store_url=store_url, out=lambda line: None)
+    assert res["mismatch"] == [] and res["failed"] == [] and "2026-10-14" in res["done"]
 
 
 def test_a_store_or_network_error_stops_the_second_pass_without_marking_the_date(tmp_path, cache, store_url, monkeypatch):
@@ -250,7 +388,7 @@ def test_status_says_which_pass_the_history_is_in(tmp_path, cache, store_url):
         st = backfill.status(con, s, D1)
     assert st["pass"] == "second" and st["todo"] == 0 and st["done"] == 4
     assert st["second"] == {"done": 0, "todo": 4, "failed": 0, "next": NEWEST_FIRST, "total": 4, "problem_dates": [],
-                            "eta_s": None}
+                            "eta_s": None, "mismatched": 0, "mismatch_dates": []}
     second_pass(s, store_url, budget_s=0)
     with store.connect(store_url) as con:
         st = backfill.status(con, s, D1)

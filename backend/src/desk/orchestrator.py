@@ -452,6 +452,11 @@ def value(ctx: EodContext, requests: list[tuple[str, float]], *, second_order: b
                 try:
                     o.valuation = approximate(ctx, o, qty, fb)
                 except Exception as e:  # one bond's bad data must not stop the run: the last rung, flagged
+                    if getattr(carried_spreads, "error", None) is not None:
+                        # not the bond's data: the carried spreads, read at this first lookup (``parallel.LazyCarried``),
+                        # could not be read (the store, the pipeline closed). The run that reads them at its start
+                        # fails with it; so does this one, not a run of par proxies
+                        raise
                     log.warning("fallback ladder failed for %s, valued at par proxy", o.secid, exc_info=True)
                     o.valuation = par_proxy(ctx, o, qty, f"fallback ladder failed: {type(e).__name__}: {e}")
         # a model price: core at the model's price, its flows, risk and carry with it (TDM#441)

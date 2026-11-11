@@ -23,6 +23,7 @@
     desk lan disable                     back to this computer only
     desk cycle [--date D] [--no-hub]     one autopilot cycle: hub sync -> inbox scan -> EOD of changed dates
     desk backfill [--from D] [--to D] [--dry-run]  default runs of the past dates with positions (R23)
+    desk prune [--days N] [--dry-run] [--compact]  delete the runs a newer run of their date replaced (TDM#634)
     desk openapi --out ../frontend/openapi.json   the API's OpenAPI document (stdout without --out)
     desk diagnostics [--out FILE] [--no-hub]       how the desk works here, without private data (R13)
     desk history status [--json]         the market history read from the hub's history API (R24) and why not
@@ -680,40 +681,20 @@ def cmd_backfill(a: argparse.Namespace) -> int:
     print(backfill.text(p, dry_run=a.dry_run))
     if a.dry_run or not (p.todo or p.second_todo):
         return 0
-    lock = CycleLock(st.home)
-    contexts = ContextCache()
-    done = failed = 0
-    t0 = time.perf_counter()
-    complete = True  # every date of the first pass went through: the second pass follows (TDM#627)
-    for i, day in enumerate(p.todo, 1):
-        waited = False
-        while not lock.acquire():
-            if not waited:
-                print("  waiting for the autopilot's cycle (desk serve) to end ...")
-                waited = True
-            time.sleep(5)
-        try:
-            one = backfill.Plan(p.date_from, p.date_to, [day], p.hub, p.rows)
-            res = backfill.run(st, one, store_url=url, client=client, out=print, contexts=contexts)
-        finally:
-            lock.release()
-        done += len(res["done"])
-        failed += len(res["failed"])
-        for d, err in res["failed"]:
-            print(f"  {d} FAILED: {err}")
-        for d in res["unconverged"]:
-            print(f"  {d} still stale after its run: tried again next time (#23)")
-        for d in res["skipped"]:
-            print(f"  {d} skipped: its bundle is not cached and the hub is off")
-        complete = complete and res["complete"]
-        el = time.perf_counter() - t0
-        print(f"[{i}/{len(p.todo)}] {day.date} done; {el:.0f} s, about {el / i * (len(p.todo) - i):.0f} s left")
-    print(f"backfill: {done} dates run, {failed} failed, in {time.perf_counter() - t0:.0f} s")
-    if complete:  # the second derivatives of the dates run without them, the newest first
-        with _store(a) as con:
-            p2 = backfill.plan(con, st, d_from, d_to, rows)
-        second = p2.second_todo
-        for i, day in enumerate(second, 1):
+    from .parallel import Pool
+
+    workers = int(getattr(st, "backfill_workers", 1))
+    pool = Pool(workers) if workers > 1 else None  # one set of processes for every batch of both passes
+    try:
+        lock = CycleLock(st.home)
+        contexts = ContextCache()
+        done = failed = 0
+        t0 = time.perf_counter()
+        complete = True  # every date of the first pass went through: the second pass follows (TDM#627)
+        chunk = workers * 4 if workers > 1 else 1  # dates a hold of the cycle lock: the processes' start is paid once
+        for i in range(chunk, len(p.todo) + chunk, chunk):
+            batch = p.todo[i - chunk:i]
+            i = min(i, len(p.todo))
             waited = False
             while not lock.acquire():
                 if not waited:
@@ -721,25 +702,96 @@ def cmd_backfill(a: argparse.Namespace) -> int:
                     waited = True
                 time.sleep(5)
             try:
-                one = backfill.Plan(p2.date_from, p2.date_to, [day], p2.hub, p2.rows)
-                res = backfill.run_second(st, one, store_url=url, out=print, contexts=contexts)
+                one = backfill.Plan(p.date_from, p.date_to, batch, p.hub, p.rows)
+                res = backfill.run(st, one, store_url=url, client=client, out=print, contexts=contexts, workers=workers, pool=pool)
             finally:
                 lock.release()
+            done += len(res["done"])
             failed += len(res["failed"])
             for d, err in res["failed"]:
-                print(f"  {d} second derivatives FAILED: {err}")
+                print(f"  {d} FAILED: {err}")
+            for d in res["unconverged"]:
+                print(f"  {d} still stale after its run: tried again next time (#23)")
             for d in res["skipped"]:
-                print(f"  {d} skipped: its bundle is not cached")
-            if res["stopped"]:
-                print(f"  stopped: {res['stopped']}")
-                failed += 1
-                break
+                print(f"  {d} skipped: its bundle is not cached and the hub is off")
+            complete = complete and res["complete"]
             el = time.perf_counter() - t0
-            print(f"[second {i}/{len(second)}] {day.date} done; {el:.0f} s")
-        if second:
-            print(f"backfill: second derivatives of {len(second)} dates, {failed} failed in all, "
-                  f"in {time.perf_counter() - t0:.0f} s")
-    return 1 if failed else 0
+            print(f"[{i}/{len(p.todo)}] {batch[-1].date} done; {el:.0f} s, about {el / i * (len(p.todo) - i):.0f} s left")
+        print(f"backfill: {done} dates run, {failed} failed, in {time.perf_counter() - t0:.0f} s")
+        if complete:  # the second derivatives of the dates run without them, the newest first
+            with _store(a) as con:
+                p2 = backfill.plan(con, st, d_from, d_to, rows)
+            second = p2.second_todo
+            for i in range(chunk, len(second) + chunk, chunk):
+                batch = second[i - chunk:i]
+                i = min(i, len(second))
+                waited = False
+                while not lock.acquire():
+                    if not waited:
+                        print("  waiting for the autopilot's cycle (desk serve) to end ...")
+                        waited = True
+                    time.sleep(5)
+                try:
+                    one = backfill.Plan(p2.date_from, p2.date_to, batch, p2.hub, p2.rows)
+                    res = backfill.run_second(st, one, store_url=url, out=print, contexts=contexts, workers=workers, pool=pool)
+                finally:
+                    lock.release()
+                failed += len(res["failed"])
+                for d, err in res["failed"]:
+                    print(f"  {d} second derivatives FAILED: {err}")
+                for d in res["skipped"]:
+                    print(f"  {d} skipped: its bundle is not cached")
+                for d in res["moved"]:
+                    print(f"  {d} changed its inputs meanwhile: run again by the first pass next time")
+                if res["stopped"]:
+                    print(f"  stopped: {res['stopped']}")
+                    failed += 1
+                    break
+                el = time.perf_counter() - t0
+                print(f"[second {i}/{len(second)}] {batch[-1].date} done; {el:.0f} s")
+            if second:
+                print(f"backfill: second derivatives of {len(second)} dates, {failed} failed in all, "
+                      f"in {time.perf_counter() - t0:.0f} s")
+        return 1 if failed else 0
+    finally:
+        if pool is not None:
+            pool.close()
+
+
+def cmd_prune(a: argparse.Namespace) -> int:
+    """``desk prune``: the runs a newer run of their date replaced, deleted at once (``store.prune_superseded``; the
+    autopilot does the same a little per cycle). ``--compact``: then ``VACUUM FULL`` of the run tables, which gives the
+    disk the space back but stops the monitor from reading the runs while it rewrites them."""
+    from .autopilot import CycleLock
+
+    st = a.settings
+    days = a.days if a.days is not None else st.prune_superseded_days
+    with CycleLock(st.home) as held:
+        if not held and not a.dry_run:
+            print("desk prune: a cycle of the autopilot (desk serve) is running; try again when it is done",
+                  file=sys.stderr)
+            return 1
+        with _store(a) as con:
+            res = store.prune_superseded(con, days, dry_run=a.dry_run)
+            if res["busy"]:
+                print("desk prune: another clean-up of the runs is running", file=sys.stderr)
+                return 1
+            what = ("would delete" if a.dry_run else "deleted")
+            if not res["runs"]:
+                print(f"prune: no runs replaced {max(days, store.PRUNE_MIN_DAYS)} days ago or longer")
+            else:
+                print(f"prune: {what} {len(res['runs'])} replaced runs ({res['dates'][0]}..{res['dates'][1]}), "
+                      f"about {res['bytes'] / 1_048_576:,.0f} MB")
+            if a.dry_run:
+                return 0
+            if res["runs"]:
+                tables = store.vacuum_runs(con)
+                print(f"prune: VACUUM of {', '.join(tables)}: the space is the tables' for the next runs")
+            if a.compact:
+                print("prune: VACUUM FULL of the run tables (the monitor cannot read the runs meanwhile) ...")
+                freed = store.compact_runs(con)
+                print(f"prune: the files shrank by {sum(freed.values()) / 1_048_576:,.0f} MB")
+    return 0
 
 
 def cmd_openapi(a: argparse.Namespace) -> int:
@@ -1002,6 +1054,14 @@ def main(argv: list[str] | None = None) -> int:
     bf.add_argument("--rescan", action="store_true", help="read the inbox from the start date again even if done "
                     "before with the same adapter")
     bf.set_defaults(fn=cmd_backfill)
+    pr = sub.add_parser("prune", help="delete the runs a newer run of their date replaced (what the autopilot's "
+                        "prune step does a little per cycle)")
+    pr.add_argument("--days", type=int, help="delete runs replaced at least this many days ago (default: the setting "
+                    "prune_superseded_days, 14)")
+    pr.add_argument("--dry-run", action="store_true", help="only say how many runs would be deleted")
+    pr.add_argument("--compact", action="store_true", help="then rewrite the run tables to give the disk the space "
+                    "back (VACUUM FULL: the monitor cannot read the runs meanwhile)")
+    pr.set_defaults(fn=cmd_prune)
     oa = sub.add_parser("openapi", help="print or write the desk API's OpenAPI document")
     oa.add_argument("--out", help="write it to this file")
     oa.set_defaults(fn=cmd_openapi)

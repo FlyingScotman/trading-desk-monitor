@@ -462,7 +462,7 @@ def test_kit_imports_only_stdlib_and_desk_inbox() -> None:
             "       'pydantic', 'numpy', 'pgserver', 'uvicorn') or (m.startswith('desk.') and\n"
             "       not m.startswith('desk.inbox'))]\n"
             "assert not bad, bad\n")
-    subprocess.run([sys.executable, "-I", "-c", code], check=True)
+    subprocess.run([sys.executable, "-I", "-B", "-c", code], check=True)  # -B: no .pyc left in src/
 
 
 # ---- review fixes (S7a) ----------------------------------------------------------------------------------

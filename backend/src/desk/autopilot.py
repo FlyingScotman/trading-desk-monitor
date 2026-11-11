@@ -103,8 +103,19 @@ every ``inbox_poll_seconds`` and on ``POST /api/v1/autopilot/run``):
    does not come for the date's own (``hub_answered``). Two passes (TDM#627): the runs of the dates it computes are made
    without the second derivatives; once every date of the window has its run (the first pass went through all of its
    dates), what is left of the cycle's budget makes the dates again with them, the newest first
-   (``backfill.run_second``), and the cycles after it go on until none lacks them.
-8. **status** (``status()``, the shape of ``GET /api/v1/autopilot/status``). While a cycle runs, ``message`` and
+   (``backfill.run_second``), and the cycles after it go on until none lacks them. With ``backfill_workers`` > 1
+   (default 1: off until the pool is checked on the work machine, TDM#628) both passes compute several dates at once in
+   processes of a pool (one for both passes of the cycle) and publish them in order (``desk.parallel``); the budget
+   starts no date after it, the dates already in the pool are finished.
+8. **prune** (setting ``prune_superseded``, on; ``prune_superseded_days``, 14: not less than the 14 daily backups, so
+   every backup kept holds a run when it is deleted; TDM#634): the runs of a date that a newer run
+   replaced (the history's first pass, an older program version, a corrected report) are deleted once the replacement
+   is that old, 50 runs and 60 seconds a cycle at most (``store.prune_superseded``), only in a quiet cycle (no run
+   made, the inbox not draining), last; the step's detail says how many runs and about how many MB. The space goes
+   back to the tables by the server's autovacuum (on in the embedded server); only on a server where it is off a
+   prune of 32 MB or more is followed by ``VACUUM`` of the run tables, once a day at most. A date keeps its newest
+   run; a run with a scenario job stays.
+9. **status** (``status()``, the shape of ``GET /api/v1/autopilot/status``). While a cycle runs, ``message`` and
    ``progress`` ({"step": "sync"|"scan"|"eod"|"intraday"|"history"|"backfill", "done": int, "total": int|null, "detail": str})
    follow it live: hub dates fetched of those to fetch, report files done of those offered, EOD dates run of those
    to run, history dates loaded of those to load. ``latest_run`` is the newest run shown (``store.CURRENT_RUNS``:
@@ -155,6 +166,10 @@ log = logging.getLogger("desk.autopilot")
 WINDOW_DAYS = 14        # calendar days back from today that the EOD runs are kept current for (~10 business days)
 MAX_EOD_DATES = 10
 RECHECK_S = 3600.0      # cached dates are asked of the hub again this often (corrections)
+PRUNE_RUNS = 50         # replaced runs one cycle's prune step deletes at most (TDM#634); ~7 MB each with 2000 positions
+PRUNE_BUDGET_S = 60.0   # ... and it starts no further batch after this many seconds
+PRUNE_VACUUM_BYTES = 32 * 1_048_576   # a prune that freed this much, on a server without autovacuum, is followed by VACUUM
+PRUNE_VACUUM_EVERY = timedelta(days=1)   # ... of the run tables, at most this often (it takes minutes with a year of runs)
 MAX_HUB_DATES = 400     # how far back the hub's date list is read at most
 SYNC_EXTRA = 3          # hub dates per cycle beyond autopilot_sync_last; the rest wait for the next cycle
 MISSING_TTL_S = 6 * 3600.0  # a date the hub has no snapshot for is not asked again for this long (per process)
@@ -361,6 +376,7 @@ class Autopilot:
         self._hub_first: str | None = None     # the hub's oldest date, when its whole list was read (#27)
         self._no_answer: dict[str, int] = {}   # hub date -> cycles in a row its bundle got no answer at all (#217)
         self._inbox_waiting = 0                # files the last scan left waiting for a calendar (R22)
+        self._vacuumed_at: datetime | None = None   # the last explicit VACUUM of the run tables (server without autovacuum)
         self._history_dates: tuple[float, int, list[tuple[str, str]]] | None = None
         self._static_polled = float("-inf")    # monotonic time the hub's newest static was last asked for (R25)
         self._backfill_rows: tuple[float, str, list[tuple[str, str]]] | None = None  # (listed at, from, hub rows)
@@ -496,6 +512,8 @@ class Autopilot:
                 if getattr(settings, "backfill", True):
                     steps.append(self._guard("backfill", lambda: self._backfill(settings, con, url, hub, ran)))
                     self._last_backfill = dict(steps[-1])  # TDM#587: shown between the cycles too
+                if getattr(settings, "prune_superseded", True):
+                    steps.append(self._guard("prune", lambda: self._prune(settings, con, ran)))
                 try:
                     latest = latest_run(con)
                 except psycopg.Error:
@@ -956,7 +974,21 @@ class Autopilot:
 
     def _backfill(self, settings: Settings, con: psycopg.Connection, url: str | None, hub: bool,
                   ran: list[str]) -> tuple[str, str]:
-        """The backfill step (module doc, ``desk.backfill``)."""
+        """The backfill step (module doc, ``desk.backfill``). With ``backfill_workers`` > 1 the first and the second
+        pass of the cycle share one set of processes (``parallel.Pool``: started at the first pass that needs them,
+        ended with the step: they hold their prepared markets in memory, which an idle cycle must not keep)."""
+        from .parallel import Pool
+
+        workers = int(getattr(settings, "backfill_workers", 1))
+        pool = Pool(workers) if workers > 1 else None
+        try:
+            return self._backfill_passes(settings, con, url, hub, ran, pool)
+        finally:
+            if pool is not None:
+                pool.close()
+
+    def _backfill_passes(self, settings: Settings, con: psycopg.Connection, url: str | None, hub: bool,
+                         ran: list[str], pool: Any) -> tuple[str, str]:
         from .dayrun import ContextCache
 
         if self._inbox_waiting and self._sync_later:
@@ -1011,6 +1043,7 @@ class Autopilot:
             res = backfill.run(settings, p, store_url=url, client=client, budget_s=budget,
                                out=self._eod_line, contexts=self._contexts, exclude=exclude, now=self._now(),
                                hub_answered=client is not None and self._hub_answered,
+                               workers=int(getattr(settings, "backfill_workers", 1)), pool=pool,
                                progress=lambda i, n, d: self._progress("backfill", i, n, d))
             if res["done"]:
                 ran.append(f"история {len(res['done'])} дат")
@@ -1032,6 +1065,7 @@ class Autopilot:
             if [d for d in p2.second_todo if d.date not in exclude]:
                 res2 = backfill.run_second(settings, p2, store_url=url, budget_s=budget - (res["seconds"] if res else 0.0),
                                            out=self._eod_line, contexts=self._contexts, exclude=exclude,
+                                           workers=int(getattr(settings, "backfill_workers", 1)), pool=pool,
                                            progress=lambda i, n, d: self._progress("backfill", i, n, d))
                 if res2["done"]:
                     ran.append(f"гамма {len(res2['done'])} дат")
@@ -1039,12 +1073,47 @@ class Autopilot:
                                  f"in {res2['seconds']} s")
                 failed2 = res2["failed"]
                 parts += [f"{d} second derivatives failed ({e})" for d, e in failed2][:5]
+                parts += [f"{d} totals differ from the replaced run ({w})" for d, w in res2["mismatch"]][:5]
+                if res2["moved"]:
+                    parts.append(f"{len(res2['moved'])} dates changed their inputs meanwhile: the first pass runs them again")
                 if res2["stopped"]:
                     parts.append(f"second derivatives stopped, tried again next cycle: {res2['stopped']}")
                 if res2["left"]:
                     parts.append(f"{res2['left']} dates of the second derivatives in the next cycles")
         parts.append(span)
         return ("error" if (res and res["failed"]) or failed2 else "ok"), "; ".join(parts)
+
+    def _prune(self, settings: Settings, con: psycopg.Connection, ran: list[str]) -> tuple[str, str]:
+        """The prune step (TDM#634, ``store.prune_superseded``): the runs a newer run of their date replaced, once the
+        replacement is ``prune_superseded_days`` old, deleted in batches (``PRUNE_RUNS`` at most, ``PRUNE_BUDGET_S``
+        seconds) after the other steps of a quiet cycle: one that made no run and is not draining the inbox, so
+        the calculations of the window never wait for it. The step's detail is the journal line: how many runs, how
+        much the rows took. The space of the deleted runs goes back to the tables by the server's autovacuum; a server
+        where it is off gets an explicit ``VACUUM`` of the run tables after a big enough prune, once a day at most (a
+        cycle of daily calculations must not wait for one every time)."""
+        if ran:
+            return "skipped", "a cycle that made runs: the clean-up waits for a quiet one"
+        if self._inbox_waiting:
+            return "skipped", "after the inbox backlog"
+        res = store.prune_superseded(con, int(settings.prune_superseded_days), limit=PRUNE_RUNS, budget_s=PRUNE_BUDGET_S)
+        if res["busy"] and not res["runs"]:
+            return "skipped", "another clean-up of the runs is running"
+        if not res["runs"]:
+            return "ok", "no replaced runs to delete"
+        mb = res["bytes"] / 1_048_576
+        text = (f"удалено {len(res['runs'])} заменённых прогонов ({res['dates'][0]}..{res['dates'][1]}), "
+                f"освобождено ~{mb:,.0f} МБ")
+        if res["bytes"] >= PRUNE_VACUUM_BYTES:
+            if store.autovacuum_on(con):
+                text += "; место вернёт автоочистка сервера"
+            elif self._vacuumed_at is None or self._now() - self._vacuumed_at >= PRUNE_VACUUM_EVERY:
+                t0 = time.monotonic()
+                store.vacuum_runs(con)
+                self._vacuumed_at = self._now()
+                text += f"; место возвращено таблицам ({time.monotonic() - t0:.0f} с)"
+        if res["left"]:
+            text += f"; ещё {res['left']} в следующих циклах"
+        return "ok", text
 
     def _scan(self, settings: Settings, con: psycopg.Connection) -> tuple[str, str]:
         from .inbox import scan
