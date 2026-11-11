@@ -54,6 +54,7 @@ POLL_S = 1.0
 TRIES = 3
 LOG_MAX_BYTES = 20_000_000
 LOG_TAIL_LINES = 25
+HANDLES = {".handle_pids.json"}  # what pgserver may have put into a data directory that has no cluster yet
 PID_LINES = 8  # pid, data dir, start time, port, socket dir, host, shared memory, status
 CREATE_NEW_PROCESS_GROUP = 0x00000200
 CREATE_NO_WINDOW = 0x08000000
@@ -313,17 +314,37 @@ def _forget(cls: Any, pgdata: Path) -> None:
         atexit.unregister(server._cleanup)
 
 
+def prepare_dir(pgdata: Path, *, windows: bool | None = None) -> None:
+    """The data directory before the first ``initdb``. On Windows it is left to ``initdb`` to make it: given an existing
+    empty folder, ``initdb`` "fixes its permissions" (``chmod``) and that fails with «Permission denied» when the
+    folder was made by an elevated process (an administrator's window, the CI runner: the owner is the Administrators
+    group, with an explicit entry), on the first start of the bundle. A folder it makes itself works in every context.
+    An empty folder left by an earlier try (or one with only pgserver's ``.handle_pids.json``) is removed for the
+    same reason. Elsewhere the folder is made here, as ``pgserver.get_server`` does."""
+    win = sys.platform == "win32" if windows is None else windows
+    if not win:
+        pgdata.mkdir(exist_ok=True)
+        return
+    try:
+        if pgdata.is_dir() and not (pgdata / "PG_VERSION").exists() and {p.name for p in pgdata.iterdir()} <= HANDLES:
+            for name in HANDLES:
+                (pgdata / name).unlink(missing_ok=True)
+            pgdata.rmdir()
+    except OSError:
+        pass  # in use or not ours to remove: initdb says so
+
+
 def get_server(pgdata: Path | str, out: Callable[[str], None] = say) -> Any:
     """``pgserver.get_server(pgdata, cleanup_mode=None)`` with the recovery of the module doc; ``StoreStartError``."""
     pgdata = Path(pgdata).expanduser().resolve()
     if not pgdata.parent.exists():
         raise FileNotFoundError(f"Parent directory of pgdata does not exist: {pgdata.parent}")
-    pgdata.mkdir(exist_ok=True)
     cls = _server_class()
     if pgdata in cls._instances:
         return cls._instances[pgdata]
     failed = unexpected = 0
     while True:
+        prepare_dir(pgdata)
         with cls._lock:  # pgserver's inter-process lock: a start of another process is not writing its file meanwhile
             heal(pgdata, out)
         info = read_pidfile(pgdata)

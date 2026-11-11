@@ -1,1 +1,0 @@
--o faulthandler_timeout=25 -x tests/test_adapter_services.py::test_the_owner_waits_for_a_named_feed_and_may_stop_it_615

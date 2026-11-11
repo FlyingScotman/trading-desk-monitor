@@ -280,6 +280,36 @@ def test_resolve_url_uses_the_recovering_start(tmp_path: Path, monkeypatch) -> N
     assert store.resolve_url(st) == "postgresql://fake/desk" and seen == [st.pg_dir]
 
 
+def test_data_directory_is_left_to_initdb_on_windows(tmp_path: Path) -> None:
+    """Windows: initdb makes the folder itself (given an empty one it fails to «fix its permissions» when the folder was
+    made by an elevated process). A folder with a cluster, or with anything else, is never touched."""
+    gone = tmp_path / "gone"
+    embedded.prepare_dir(gone, windows=True)
+    assert not gone.exists()  # absent stays absent
+    empty = tmp_path / "empty"
+    empty.mkdir()
+    embedded.prepare_dir(empty, windows=True)
+    assert not empty.exists()
+    handles = tmp_path / "handles"
+    handles.mkdir()
+    (handles / ".handle_pids.json").write_text("[]", encoding="utf-8")
+    embedded.prepare_dir(handles, windows=True)
+    assert not handles.exists()
+    mine = tmp_path / "mine"
+    mine.mkdir()
+    (mine / "note.txt").write_text("x", encoding="utf-8")
+    embedded.prepare_dir(mine, windows=True)
+    assert (mine / "note.txt").is_file()
+    cluster = tmp_path / "cluster"
+    cluster.mkdir()
+    (cluster / "PG_VERSION").write_text("16", encoding="utf-8")
+    embedded.prepare_dir(cluster, windows=True)
+    assert (cluster / "PG_VERSION").is_file()
+    elsewhere = tmp_path / "posix"
+    embedded.prepare_dir(elsewhere, windows=False)
+    assert elsewhere.is_dir()  # not Windows: made here, as pgserver does
+
+
 def test_log_is_rotated_when_big_and_no_postmaster_is_up(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.setattr(embedded, "LOG_MAX_BYTES", 10)
     folder = tmp_path / "logs"

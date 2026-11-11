@@ -1,1 +1,1 @@
-tests/test_adapter_services.py
+tests/test_embedded_store_518.py tests/test_adapter_tools.py tests/test_inbox_scan.py tests/test_inbox_p1.py
