@@ -1155,14 +1155,15 @@ def test_the_priority_is_lowered_per_platform_and_a_failure_is_not_fatal(monkeyp
 # ---- settings, the autopilot
 
 def test_the_settings_of_the_processes(tmp_path):
-    """Off by default: the pool is not checked on the work machine (spawn from desk.exe on Windows); the owner turns it on
-    by the setting once it is."""
-    assert Settings().backfill_workers == 1
+    """On by default since 11.11.2026: 0 leaves the number of processes to the program (``parallel.workers_for``), 1 is the
+    old sequential run, a number from 2 up is used as it is."""
+    assert Settings().backfill_workers == 0
     env = {"DESK_HOME": str(tmp_path), "DESK_ENV_FILE": str(tmp_path / "none.env")}
-    assert load_settings(env).backfill_workers == 1
+    assert load_settings(env).backfill_workers == 0
     assert load_settings({**env, "DESK_BACKFILL_WORKERS": "3"}).backfill_workers == 3
-    assert not check_settings_doc({"backfill_workers": 2})
-    assert check_settings_doc({"backfill_workers": 0}) == ["backfill_workers: must be a whole number >= 1"]
+    assert load_settings({**env, "DESK_BACKFILL_WORKERS": "1"}).backfill_workers == 1
+    assert not check_settings_doc({"backfill_workers": 2}) and not check_settings_doc({"backfill_workers": 0})
+    assert check_settings_doc({"backfill_workers": -1}) == ["backfill_workers: must be a whole number >= 0"]
 
 
 def test_the_autopilot_computes_the_history_in_the_pool_and_gets_the_same_runs(tmp_path, cache, store_url, pg_server):
