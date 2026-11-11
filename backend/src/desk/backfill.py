@@ -328,28 +328,6 @@ def late_why(con: psycopg.Connection, d: date, run: dict | None, revs: store.Ref
 
 CARRY_WHY = "carried spread stale"
 """``plan``'s ``why`` of a date whose run carried a spread that is not what its source date holds now (TDM#660)."""
-_CARRY_MEMO: OrderedDict[tuple, dict[tuple[int, str], float]] = OrderedDict()
-CARRY_MEMO_SIZE = 8
-_CARRY_LOCK = threading.Lock()
-
-
-def _spread_values(con: psycopg.Connection, pairs: set[tuple[int, str]]) -> dict[tuple[int, str], float]:
-    """``store.spread_values`` of (run_id, secid) pairs, remembered by the set of pairs (a run's rows never change): the
-    plan reads it at each poll of the status."""
-    key = tuple(sorted(pairs))
-    with _CARRY_LOCK:
-        hit = _CARRY_MEMO.get(key)
-        if hit is not None:
-            _CARRY_MEMO.move_to_end(key)
-            return hit
-    got = store.spread_values(con, sorted({r for r, _ in pairs}), sorted({s for _, s in pairs}))
-    with _CARRY_LOCK:
-        _CARRY_MEMO[key] = got
-        while len(_CARRY_MEMO) > CARRY_MEMO_SIZE:
-            _CARRY_MEMO.popitem(last=False)
-    return got
-
-
 def stale_spreads(con: psycopg.Connection, runs: dict[date, dict], date_from: date) -> dict[date, list[tuple[str, str, float, float | None]]]:
     """Per date of ``runs`` (``store.default_runs``) the spreads its run carried that its source date no longer holds:
     (secid, source date, the spread carried, the spread the source date's default run holds now, None: none). The
@@ -367,7 +345,7 @@ def stale_spreads(con: psycopg.Connection, runs: dict[date, dict], date_from: da
         by_date.update({d: r["run_id"] for d, r in store.default_runs(con, early).items() if d < date_from})
     pairs = {(by_date[date.fromisoformat(v["date"])], secid) for srcs in want.values() for secid, v in srcs.items()
              if date.fromisoformat(v["date"]) in by_date}
-    now = _spread_values(con, pairs) if pairs else {}
+    now = store.spread_values(con, sorted(pairs)) if pairs else {}
     out: dict[date, list[tuple[str, str, float, float | None]]] = {}
     for d, srcs in want.items():
         for secid, v in sorted(srcs.items()):

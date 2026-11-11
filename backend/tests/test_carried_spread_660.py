@@ -70,7 +70,6 @@ def unfrozen(url: str) -> Iterator[Any]:
         finally:
             for t, trg in (("run", "run_frozen"), ("model_spread", "model_spread_frozen")):
                 con.execute(f"ALTER TABLE {t} ENABLE TRIGGER {trg}")
-            backfill._CARRY_MEMO.clear()  # (the plan remembers the spreads of a run: in service a run never changes)
 
 
 def shift_spread(url: str, d: str, by: float) -> float:

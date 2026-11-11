@@ -945,21 +945,20 @@ def carried_spreads(con: psycopg.Connection, before: date) -> dict[str, CarriedS
             for s, z, d, rid, src, c in rows if math.isfinite(z)}
 
 
-def spread_values(con: psycopg.Connection, run_ids: list[int], secids: list[str]) -> dict[tuple[int, str], float]:
-    """The Z-spread each of the runs ``run_ids`` holds for each of ``secids``, as ``carried_spreads`` reads it: the model
-    spread a model price used, or the bond's market Z (exact or assumed) in that run; a bond the run holds no spread for
-    is absent. What the plan (``backfill.plan``, TDM#660) compares a run's carried spreads with."""
-    if not run_ids or not secids:
+def spread_values(con: psycopg.Connection, pairs: list[tuple[int, str]]) -> dict[tuple[int, str], float]:
+    """The Z-spread each (run_id, secid) of ``pairs`` holds, as ``carried_spreads`` reads it: the model spread a model
+    price used, or the bond's market Z (exact or assumed) in that run; a pair the run holds no spread for is absent. What
+    the plan (``backfill.plan``, TDM#660) compares a run's carried spreads with."""
+    if not pairs:
         return {}
     rows = con.execute(
-        "SELECT run_id, secid, z FROM ("
-        " SELECT m.run_id, m.secid, m.z_spread_bp AS z, 1 AS pri FROM model_spread m"
-        "  WHERE m.run_id = ANY(%(r)s) AND m.secid = ANY(%(s)s)"
+        "WITH w AS (SELECT * FROM unnest(%(r)s::bigint[], %(s)s::text[]) AS t(run_id, secid))"
+        " SELECT run_id, secid, z FROM ("
+        " SELECT m.run_id, m.secid, m.z_spread_bp AS z, 1 AS pri FROM model_spread m JOIN w USING (run_id, secid)"
         " UNION ALL"
-        " SELECT p.run_id, p.secid, (p.fact->>'spread_bp')::float8, 0 FROM run_position p"
-        "  WHERE p.run_id = ANY(%(r)s) AND p.secid = ANY(%(s)s)"
-        "   AND p.quality IN ('exact', 'assumed') AND jsonb_typeof(p.fact->'spread_bp') = 'number'"
-        ") x ORDER BY run_id, secid, pri", {"r": list(run_ids), "s": list(secids)}).fetchall()
+        " SELECT p.run_id, p.secid, (p.fact->>'spread_bp')::float8, 0 FROM run_position p JOIN w USING (run_id, secid)"
+        "  WHERE p.quality IN ('exact', 'assumed') AND jsonb_typeof(p.fact->'spread_bp') = 'number'"
+        ") x ORDER BY run_id, secid, pri", {"r": [r for r, _ in pairs], "s": [s for _, s in pairs]}).fetchall()
     out: dict[tuple[int, str], float] = {}
     seen: set[tuple[int, str]] = set()
     for rid, secid, z in rows:
