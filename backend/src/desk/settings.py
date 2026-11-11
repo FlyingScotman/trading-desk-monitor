@@ -220,7 +220,7 @@ JSON_KEYS: dict[str, tuple[str, str]] = {
     "backfill": ("DESK_BACKFILL", "bool"),
     "backfill_from": ("DESK_BACKFILL_FROM", "date"),
     "backfill_budget_s": ("DESK_BACKFILL_BUDGET_S", "num"),
-    "backfill_workers": ("DESK_BACKFILL_WORKERS", "int"),
+    "backfill_workers": ("DESK_BACKFILL_WORKERS", "int0"),
     "prune_superseded": ("DESK_PRUNE_SUPERSEDED", "bool"),
     "prune_superseded_days": ("DESK_PRUNE_SUPERSEDED_DAYS", "int"),
     # backups of the desk store (desk.backup)
@@ -337,8 +337,8 @@ class Settings:
     backfill: bool = True  # the autopilot computes the default runs of past dates (desk.backfill, R23)
     backfill_from: str = "2026-01-05"  # first date of the backfill (the hub's first eod_final close)
     backfill_budget_s: float = 600.0  # seconds of backfill runs per autopilot cycle (after every other step)
-    backfill_workers: int = 1  # processes the history is computed in (desk.parallel): 1, one date after the other, until
-    # the pool is checked on the work machine (Windows, ``spawn`` from desk.exe); then a number from 2 up by the setting
+    backfill_workers: int = 0  # processes the history is computed in (desk.parallel): 0, automatic (``parallel.workers_for``:
+    # up to 3, one core and some memory left to the owner's programs); 1, one date after the other, as before TDM#628
     prune_superseded: bool = True  # the autopilot deletes the runs a newer run of their date replaced (TDM#634)
     prune_superseded_days: int = 14  # ... once the replacement is this old: not less than the backups kept (backup_keep 14)
     backup: bool = True  # the daily backup of the desk store by desk serve (desk.backup)
@@ -456,7 +456,8 @@ class Settings:
             ("history_bonds_from", self.history_bonds_from.isoformat()),
             ("history_rates_from", self.history_rates_from.isoformat()),
             ("backfill", (f"on from {self.backfill_from}, {self.backfill_budget_s:g} s a cycle, "
-                          f"{self.backfill_workers} process(es)" if self.backfill else "off")),
+                          + (f"{self.backfill_workers} process(es)" if self.backfill_workers
+                             else "processes: automatic") if self.backfill else "off")),
             ("prune_superseded", (f"on, replaced runs older than {self.prune_superseded_days} days are deleted"
                                   if self.prune_superseded else "off (replaced runs are kept)")),
             ("backup", (f"on at {self.backup_time}, keep {self.backup_keep}, in "
@@ -869,7 +870,7 @@ def _build(proc: dict[str, str], doc: dict[str, Any], file_env: dict[str, str], 
         backfill=flag("DESK_BACKFILL", defaults.backfill),
         backfill_from=backfill_from,
         backfill_budget_s=num("DESK_BACKFILL_BUDGET_S", defaults.backfill_budget_s),
-        backfill_workers=count("DESK_BACKFILL_WORKERS", defaults.backfill_workers),
+        backfill_workers=count("DESK_BACKFILL_WORKERS", defaults.backfill_workers, least=0),
         prune_superseded=flag("DESK_PRUNE_SUPERSEDED", defaults.prune_superseded),
         prune_superseded_days=count("DESK_PRUNE_SUPERSEDED_DAYS", defaults.prune_superseded_days),
         backup=flag("DESK_BACKUP", defaults.backup),

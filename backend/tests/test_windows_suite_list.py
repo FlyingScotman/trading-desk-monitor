@@ -24,4 +24,5 @@ def test_every_listed_file_exists_once() -> None:
 def test_the_launchers_and_the_update_are_on_the_list() -> None:
     files = set(_files())
     assert {"tests/test_windows_bundle.py", "tests/test_deskctl_mirror.py", "tests/test_update.py",
-            "tests/test_embedded_store_518.py", "tests/test_no_named_timezone.py"} <= files
+            "tests/test_embedded_store_518.py", "tests/test_no_named_timezone.py",
+            "tests/test_pool_windows_659.py"} <= files

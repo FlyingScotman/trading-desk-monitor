@@ -186,6 +186,15 @@ def cmd_db_migrate(a: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_pool_check(a: argparse.Namespace) -> int:
+    """Start the processes the history is computed in, let each answer, end them (TDM#659: the bundle's CI runs it on Windows)."""
+    from . import parallel
+
+    res = parallel.check(a.workers)
+    print(json.dumps(res))
+    return 0 if res["ok"] else 1
+
+
 def cmd_runs(a: argparse.Namespace) -> int:
     with _store(a) as con:
         rows = con.execute("SELECT r.run_id, r.run_type, r.business_date, r.cut_type, r.status, r.coverage, r.totals,"
@@ -681,9 +690,9 @@ def cmd_backfill(a: argparse.Namespace) -> int:
     print(backfill.text(p, dry_run=a.dry_run))
     if a.dry_run or not (p.todo or p.second_todo):
         return 0
-    from .parallel import Pool
+    from .parallel import Pool, workers_for
 
-    workers = int(getattr(st, "backfill_workers", 1))
+    workers = workers_for(st)
     pool = Pool(workers) if workers > 1 else None  # one set of processes for every batch of both passes
     try:
         lock = CycleLock(st.home)
@@ -987,6 +996,9 @@ def main(argv: list[str] | None = None) -> int:
     ack.set_defaults(fn=cmd_adapter_check)
     m = sub.add_parser("db-migrate", help="apply the desk store migrations")
     m.set_defaults(fn=cmd_db_migrate)
+    pc = sub.add_parser("pool-check", help="start the processes the history is computed in and let each answer")
+    pc.add_argument("--workers", type=int, default=2)
+    pc.set_defaults(fn=cmd_pool_check)
     r = sub.add_parser("runs", help="list the runs of the desk store")
     r.add_argument("--date", type=_iso)
     r.set_defaults(fn=cmd_runs)

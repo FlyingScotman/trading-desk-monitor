@@ -81,6 +81,106 @@ the caller's to run one after the other."""
 WORKER_NICE = 5
 
 
+AUTO_MAX = 3
+"""The most processes the automatic number goes up to: three processes make a date 2.4 times faster in the dates a minute
+(four cores, two passes), a fourth gives little and takes the PC from its owner."""
+PER_WORKER_MB = 1024
+"""What a process of the pool is taken to need, for the automatic number: its peak was 318 MB in the first pass and 354 MB
+in the second on a book of 2000 bonds (6 dates, the fixture's market; more with derivatives and the market of a real day),
+three times that is allowed."""
+RESERVE_MB = 2048
+"""Memory the automatic number leaves free to the monitor itself, the database and the owner's programs."""
+AUTO_ON_WINDOWS = True
+"""Whether the automatic number may be more than one on Windows (``workers_for``)."""
+
+
+def available_memory_mb() -> float | None:
+    """Memory a new process can take now, MB (``MemAvailable`` on Linux, the available physical memory on Windows); None
+    where it cannot be told. No third-party package: this runs on the owner's machine."""
+    try:
+        if sys.platform == "win32":
+            import ctypes
+            from ctypes import wintypes
+
+            class Status(ctypes.Structure):
+                _fields_ = [("dwLength", wintypes.DWORD), ("dwMemoryLoad", wintypes.DWORD),
+                            ("ullTotalPhys", ctypes.c_ulonglong), ("ullAvailPhys", ctypes.c_ulonglong),
+                            ("ullTotalPageFile", ctypes.c_ulonglong), ("ullAvailPageFile", ctypes.c_ulonglong),
+                            ("ullTotalVirtual", ctypes.c_ulonglong), ("ullAvailVirtual", ctypes.c_ulonglong),
+                            ("ullAvailExtendedVirtual", ctypes.c_ulonglong)]
+
+            st = Status()
+            st.dwLength = ctypes.sizeof(st)
+            if not ctypes.windll.kernel32.GlobalMemoryStatusEx(ctypes.byref(st)):  # type: ignore[attr-defined]
+                return None
+            return round(st.ullAvailPhys / 1_048_576, 1)
+        with open("/proc/meminfo", encoding="ascii") as f:
+            for line in f:
+                if line.startswith("MemAvailable:"):
+                    return round(int(line.split()[1]) / 1024, 1)
+    except Exception:  # noqa: BLE001 - a figure for the default: without it only the cores count
+        return None
+    return None
+
+
+def choose_workers(cpus: int, available_mb: float | None, *, per_worker_mb: float = PER_WORKER_MB,
+                   reserve_mb: float = RESERVE_MB, limit: int = AUTO_MAX) -> int:
+    """The automatic number of processes: at most ``limit``, one core always left to the rest of the PC, and as many as
+    the free memory (less ``reserve_mb``) holds at ``per_worker_mb`` each (unknown memory: only the cores count). 1 is
+    the sequential run: a machine with fewer than three cores, or little memory, computes as before."""
+    n = min(limit, cpus - 1)
+    if available_mb is not None:
+        n = min(n, int((available_mb - reserve_mb) // per_worker_mb))
+    return max(n, 1)
+
+
+def auto_workers() -> int:
+    """``choose_workers`` for this machine now."""
+    if sys.platform == "win32" and not AUTO_ON_WINDOWS:
+        return 1
+    try:
+        cpus = len(os.sched_getaffinity(0))  # type: ignore[attr-defined]  # the cores this process may use (a container's)
+    except AttributeError:
+        cpus = os.cpu_count() or 1
+    return choose_workers(cpus, available_memory_mb())
+
+
+def workers_for(settings: Any) -> int:
+    """The number of processes the history is computed in (``backfill_workers``): what the setting says, and when it says 0
+    (the default), ``auto_workers``. 1: one date after the other in the calling process."""
+    n = int(getattr(settings, "backfill_workers", 0) or 0)
+    return n if n >= 1 else auto_workers()
+
+
+def _probe(i: int) -> dict[str, Any]:
+    """What one process of ``check`` answers: it started (``spawn``), imported the desk, and is another process."""
+    time.sleep(1.0)  # (both processes of the check are busy at once, so the pool starts both)
+    return {"pid": os.getpid(), "ppid": os.getppid(), "peak_mb": peak_memory_mb(), "n": i}
+
+
+def check(workers: int = 2, *, timeout_s: float = 180.0) -> dict[str, Any]:
+    """Start ``workers`` processes the way the history does (``Pool``: ``spawn``, the pool's own initializer), let each
+    answer once and end them: ``{ok, workers, processes, seconds, error}``. The bundle's CI runs it through the program's own
+    launcher on Windows (``desk pool-check``), where nobody had started the pool before the history asked for it."""
+    t0 = time.monotonic()
+    out: dict[str, Any] = {"ok": False, "workers": workers, "processes": 0, "error": None}
+    pool = Pool(workers)
+    try:
+        ex, _ = pool.acquire()
+        answers = [f.result(timeout_s) for f in [ex.submit(_probe, i) for i in range(workers)]]
+        pids = {a["pid"] for a in answers}
+        out.update(processes=len(pids), peak_mb=max((a["peak_mb"] or 0 for a in answers), default=0),
+                   ok=len(pids) == workers and os.getpid() not in pids)
+        if not out["ok"]:
+            out["error"] = f"{len(pids)} processes answered, {workers} asked for"
+    except Exception as e:  # noqa: BLE001 - the answer of a check is its result
+        out["error"] = f"{type(e).__name__}: {e}"
+    finally:
+        pool.close()
+    out["seconds"] = round(time.monotonic() - t0, 1)
+    return out
+
+
 class Aborted(RuntimeError):
     """The pipeline is closed (the run stopped, or a process died): a date waiting for its turn does not publish."""
 

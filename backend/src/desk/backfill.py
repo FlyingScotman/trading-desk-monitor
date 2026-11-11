@@ -1146,13 +1146,22 @@ def status(con: psycopg.Connection, settings: Settings, today: date | None = Non
               else None}
     return {**s, "second": second, "pass": "first" if s["todo"] else "second" if second["todo"] else "done",
             "total": s["done"] + s["todo"] + s["failed"], "enabled": bool(getattr(settings, "backfill", True)),
-            "fixings_history": fixings,
+            "fixings_history": fixings, **_workers(settings),
             "oldest_run": oldest.isoformat() if oldest else None,
             "first_positions": first.isoformat() if first else None,
             "inbox_scanned_from": (st.get("inbox") or {}).get("from"),
             "failed_dates": sorted(st.get("failed", {}))[:20],
             "problem_dates": probs[:50], "stalled": stall,
             "eta_s": round(s["todo"] * sec) if isinstance(sec, (int, float)) and s["todo"] else None}
+
+
+def _workers(settings: Settings) -> dict[str, Any]:
+    """The processes the history is computed in now (``workers``) and whether the setting leaves the number to the program
+    (``workers_auto``, TDM#628): what the screen shows beside the passes."""
+    from . import parallel
+
+    return {"workers": parallel.workers_for(settings),
+            "workers_auto": not int(getattr(settings, "backfill_workers", 0) or 0)}
 
 
 def text(p: Plan, *, dry_run: bool = False) -> str:

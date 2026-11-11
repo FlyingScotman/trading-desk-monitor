@@ -215,3 +215,29 @@ def test_run_refuses_a_full_bundle_before_it_starts_anything(tmp_path: Path) -> 
     same = make_zip(tmp_path / f"DeskMonitorMirror-{OLD}.zip", OLD)
     with pytest.raises(ci.CheckFailed, match="both zips are version"):
         ci.run(same, make_zip(tmp_path / "DeskMonitorMirror-copy.zip", OLD), tmp_path / "work", 18100)
+
+
+def test_the_pool_phase_reads_the_answer_of_desk_pool_check_and_fails_on_a_pool_that_does_not_start(
+        tmp_path: Path, monkeypatch) -> None:
+    """TDM#659: ``desk pool-check`` is run through the bundle's launcher; its last JSON line is the answer."""
+    import subprocess
+
+    b = FakeBundle(tmp_path / "DeskMonitor", tmp_path / "home", 0, tmp_path)
+    seen: list[list[str]] = []
+
+    def fake(answer: str, code: int):
+        def run(argv, **kw):
+            seen.append(argv)
+            return subprocess.CompletedProcess(argv, code, stdout="noise\n" + answer + "\n", stderr="")
+
+        return run
+
+    monkeypatch.setattr(ci.subprocess, "run", fake('{"ok": true, "workers": 2, "processes": 2}', 0))
+    assert ci.phase_pool(b)["processes"] == 2
+    assert seen[0][-4:] == ["desk", "pool-check", "--workers", "2"]
+    monkeypatch.setattr(ci.subprocess, "run", fake('{"ok": false, "error": "BrokenProcessPool"}', 1))
+    with pytest.raises(ci.CheckFailed, match="the pool does not start"):
+        ci.phase_pool(b)
+    monkeypatch.setattr(ci.subprocess, "run", fake("no json here", 0))
+    with pytest.raises(ci.CheckFailed):
+        ci.phase_pool(b)

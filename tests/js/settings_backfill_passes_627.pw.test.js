@@ -103,6 +103,19 @@ test('настройки: «История прогонов» показывае
       assert.deepStrictEqual(errors, []);
       await ctx.close(); await ctx2.close();
     });
+    // TDM#628: сколько процессов считает историю, и выбрано ли число автоматически (прежний сервер без поля — строки нет)
+    await t.test('«Процессов пересчёта»: число и пометка «выбрано автоматически»', async () => {
+      const { pg, ctx, errors } = await open(browser, { ...BASE, workers: 3, workers_auto: true });
+      assert.strictEqual(await row(pg, 'Процессов пересчёта'), '3 (выбрано автоматически)');
+      const { pg: pg2, ctx: ctx2 } = await open(browser, { ...BASE, workers: 2, workers_auto: false });
+      assert.strictEqual(await row(pg2, 'Процессов пересчёта'), '2');
+      const { pg: pg3, ctx: ctx3 } = await open(browser, { ...BASE, workers: 1, workers_auto: true });
+      assert.strictEqual(await row(pg3, 'Процессов пересчёта'), '1 (даты по одной)');
+      const { pg: pg4, ctx: ctx4 } = await open(browser, BASE);
+      assert.strictEqual(await pg4.locator('#bf-rows td.k', { hasText: 'Процессов пересчёта' }).count(), 0);
+      assert.deepStrictEqual(errors, []);
+      await ctx.close(); await ctx2.close(); await ctx3.close(); await ctx4.close();
+    });
   } finally {
     await browser.close();
   }

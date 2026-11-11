@@ -977,9 +977,9 @@ class Autopilot:
         """The backfill step (module doc, ``desk.backfill``). With ``backfill_workers`` > 1 the first and the second
         pass of the cycle share one set of processes (``parallel.Pool``: started at the first pass that needs them,
         ended with the step: they hold their prepared markets in memory, which an idle cycle must not keep)."""
-        from .parallel import Pool
+        from .parallel import Pool, workers_for
 
-        workers = int(getattr(settings, "backfill_workers", 1))
+        workers = workers_for(settings)
         pool = Pool(workers) if workers > 1 else None
         try:
             return self._backfill_passes(settings, con, url, hub, ran, pool)
@@ -1043,7 +1043,7 @@ class Autopilot:
             res = backfill.run(settings, p, store_url=url, client=client, budget_s=budget,
                                out=self._eod_line, contexts=self._contexts, exclude=exclude, now=self._now(),
                                hub_answered=client is not None and self._hub_answered,
-                               workers=int(getattr(settings, "backfill_workers", 1)), pool=pool,
+                               workers=pool.workers if pool is not None else 1, pool=pool,
                                progress=lambda i, n, d: self._progress("backfill", i, n, d))
             if res["done"]:
                 ran.append(f"история {len(res['done'])} дат")
@@ -1065,7 +1065,7 @@ class Autopilot:
             if [d for d in p2.second_todo if d.date not in exclude]:
                 res2 = backfill.run_second(settings, p2, store_url=url, budget_s=budget - (res["seconds"] if res else 0.0),
                                            out=self._eod_line, contexts=self._contexts, exclude=exclude,
-                                           workers=int(getattr(settings, "backfill_workers", 1)), pool=pool,
+                                           workers=pool.workers if pool is not None else 1, pool=pool,
                                            progress=lambda i, n, d: self._progress("backfill", i, n, d))
                 if res2["done"]:
                     ran.append(f"гамма {len(res2['done'])} дат")

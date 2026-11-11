@@ -243,6 +243,23 @@ def healthy(b: Bundle, what: str, timeout: float) -> float:
     return secs
 
 
+def phase_pool(b: Bundle) -> dict[str, Any]:
+    """The processes of the history (``desk pool-check``), started by ``spawn`` from the program's own launcher: the way the
+    owner's machine starts them, where the pool had never run (TDM#659). Two processes, each answers once."""
+    r = subprocess.run(b.cmd("desk", "pool-check", "--workers", "2"), cwd=b.root, env=b.env(), capture_output=True,
+                       text=True, errors="replace", check=False, timeout=600)
+    last = next((ln for ln in reversed(r.stdout.splitlines()) if ln.startswith("{")), "")
+    try:
+        doc = json.loads(last)
+    except ValueError:
+        doc = {}
+    if r.returncode or not doc.get("ok"):
+        raise CheckFailed(f"the pool does not start: exit {r.returncode}, answer {last or r.stdout[-400:]!r}, "
+                          f"{r.stderr[-1500:]}")
+    log(f"the pool of the history: {doc}")
+    return doc
+
+
 def phase_update(b: Bundle, new_zip: Path, old: str, new: str) -> None:
     state = b.update_state()
     if state.get("current_version") != old or not state.get("can_install"):
@@ -341,6 +358,7 @@ def run(old_zip: Path, new_zip: Path, work: Path, port: int) -> dict[str, Any]:
         summary["first_start_s"] = round(healthy(b, "first start", FIRST_START_S))
         if b.version() != old:
             raise CheckFailed(f"the server says version {b.version()!r}, the bundle is {old}")
+        summary["pool"] = phase_pool(b)
         phase_update(b, new_zip, old, new)
         summary["update"] = "ok"
         phase_rollback(b, old)
