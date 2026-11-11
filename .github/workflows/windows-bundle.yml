@@ -94,7 +94,7 @@ jobs:
         run: |
           $old = (Get-ChildItem dl/old -Filter 'DeskMonitorMirror-*.zip').FullName
           $new = (Get-ChildItem dl/new -Filter 'DeskMonitorMirror-*.zip').FullName
-          python backend/tools/ci_windows_bundle.py --old $old --new $new --work "$env:RUNNER_TEMP\dm"
+          python -X utf8 backend/tools/ci_windows_bundle.py --old $old --new $new --work "$env:RUNNER_TEMP\dm"
       - name: Logs of the run
         if: always()
         shell: pwsh

@@ -242,10 +242,14 @@ def _run_cached(request: Request, run: dict[str, Any], key: tuple, build: Callab
     key = (key[0], run["run_id"], *key[1:])
     entry = request.app.state.run_cache.get_or_build(key, (run["status"], str(run["completed_at"]), extra),
                                                      lambda: build().model_dump_json().encode())
-    headers = {"ETag": entry.etag, "Cache-Control": "no-cache", "Vary": "Accept-Encoding"}
-    if entry.etag in [t.strip() for t in request.headers.get("if-none-match", "").split(",")]:
+    packed = "gzip" in request.headers.get("accept-encoding", "")
+    # the gzip and the plain body are two representations of the answer: two ETags (a strong ETag is one byte-for-byte
+    # representation; a cache between the page and the server must not hand the plain body to a client that asked for gzip)
+    tag = entry.etag[:-1] + '-gz"' if packed else entry.etag
+    headers = {"ETag": tag, "Cache-Control": "no-cache", "Vary": "Accept-Encoding"}
+    if tag in [t.strip().removeprefix("W/") for t in request.headers.get("if-none-match", "").split(",")]:
         return Response(status_code=304, headers=headers)
-    if "gzip" in request.headers.get("accept-encoding", ""):
+    if packed:
         return Response(entry.gz, media_type="application/json", headers={**headers, "Content-Encoding": "gzip"})
     return Response(entry.body, media_type="application/json", headers=headers)
 

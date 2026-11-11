@@ -35,9 +35,11 @@ jobs:
 
   # TDM#639: Windows and CPython 3.11 are the target of the owner's machine, the jobs above are Ubuntu and 3.12. The two
   # Windows jobs run when the change can touch what only Windows runs (the launcher and installer, the updater, the
-  # embedded store, the bundle builder, the dependencies) and on every push to main; the job below says so. A skipped
-  # job counts as passed for a required check, so the checks "windows-bundle" and "backend-windows" can be required
-  # without blocking the pull requests that cannot affect them.
+  # embedded store, the bundle builder, the dependencies) and on every push to main; the job below says so.
+  # A skipped job counts as passed for a required check, but the checks named «windows-bundle / build», «windows-bundle /
+  # windows» (the called workflow's jobs) and «backend-windows» are all skipped together and then no check of those names
+  # exists at all (the only one left is «windows-bundle»), so none of them can be required. Require the one check
+  # «windows-gate» (the last job of the three): it always runs and is green when the Windows jobs passed or were not needed.
   windows-paths:
     runs-on: ubuntu-latest
     timeout-minutes: 5
@@ -99,6 +101,27 @@ jobs:
         run: |
           files=$(grep -v '^[[:space:]]*#' tests/windows_suite.txt | grep -v '^[[:space:]]*$' | tr -d '\r')
           .venv/Scripts/python.exe -m pytest -q -p no:cacheprovider $files
+
+  # The one check to require for Windows (see the comment above): a failed, cancelled or skipped-by-mistake Windows job fails it.
+  windows-gate:
+    if: always()
+    needs: [windows-paths, windows-bundle, backend-windows]
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - env:
+          NEEDED: ${{ needs.windows-paths.outputs.run }}
+          PATHS: ${{ needs.windows-paths.result }}
+          BUNDLE: ${{ needs.windows-bundle.result }}
+          BACKEND: ${{ needs.backend-windows.result }}
+        run: |
+          echo "windows-paths=$PATHS (run=$NEEDED) windows-bundle=$BUNDLE backend-windows=$BACKEND"
+          [ "$PATHS" = "success" ] || { echo "the check that decides about the Windows jobs failed" >&2; exit 1; }
+          if [ "$NEEDED" = "true" ]; then
+            [ "$BUNDLE" = "success" ] && [ "$BACKEND" = "success" ] || { echo "a Windows job did not pass" >&2; exit 1; }
+          else
+            echo "the change cannot affect what only Windows runs: the Windows jobs were not needed"
+          fi
 
   js:
     runs-on: ubuntu-latest

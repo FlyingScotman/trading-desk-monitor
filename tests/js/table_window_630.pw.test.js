@@ -100,7 +100,10 @@ test('K.table на 2000 строк: прокрутка рисует нужные
       s.vis.forEach((v, i) => i && assert.strictEqual(v, s.vis[i - 1] + 1, 'строки подряд'));
       const expected = Math.round(((N * 25 - 420) * frac) / 25);
       assert.ok(Math.abs(s.vis[0] - expected) < 60, 'на экране строки около ' + expected + ', а первая ' + s.vis[0]);
-      assert.deepStrictEqual(s.widths, top.widths, 'ширина колонок не меняется при прокрутке ' + frac);
+      // та же ширина колонок, с точностью до субпикселя: getBoundingClientRect даёт дробное число, и 818,5 при разном
+      // положении прокрутки округляется то в 818, то в 819 (в CI так и было); настоящий «прыжок» колонки — десятки пикселей
+      assert.strictEqual(s.widths.length, top.widths.length);
+      s.widths.forEach((x, i) => assert.ok(Math.abs(x - top.widths[i]) <= 1, 'ширина колонки ' + i + ' при прокрутке ' + frac + ': ' + x + ' и ' + top.widths[i]));
     }
     const end = await info(pg, 'w');
     assert.strictEqual(end.last, 'r' + (N - 1), 'внизу — последняя строка');

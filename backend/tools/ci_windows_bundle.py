@@ -356,7 +356,17 @@ def run(old_zip: Path, new_zip: Path, work: Path, port: int) -> dict[str, Any]:
     return summary
 
 
+def utf8_console() -> None:
+    """The console of a runner is cp1252: the logs of the launcher are Russian, and printing them raised
+    UnicodeEncodeError, which hid the real cause of a failed phase. Never raise on output."""
+    for stream in (sys.stdout, sys.stderr):
+        reconfigure = getattr(stream, "reconfigure", None)
+        if reconfigure is not None:
+            reconfigure(encoding="utf-8", errors="replace")
+
+
 def main(argv: list[str] | None = None) -> int:
+    utf8_console()
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     ap.add_argument("--old", type=Path, required=True, help="DeskMonitorMirror-<version>.zip, installed first")
     ap.add_argument("--new", type=Path, required=True, help="the next build, installed over it, then rolled back")
@@ -369,7 +379,7 @@ def main(argv: list[str] | None = None) -> int:
     except CheckFailed as e:
         print(f"::error::{e}")
         for f in sorted(a.work.glob("launcher-*.log")):
-            print(f"--- {f.name} (tail) ---\n{tail(f)}")
+            print(f"--- {f.name} (tail) ---\n{tail(f, 150)}")
         logs = a.work / "home" / "logs"
         for f in sorted(logs.glob("*")) if logs.is_dir() else []:
             if f.is_file():

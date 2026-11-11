@@ -146,7 +146,12 @@ def test_gzip_is_made_once_and_served_to_a_client_that_accepts_it(store_url, boo
     plain = client.get(url, headers={"Accept-Encoding": "identity"})
     assert "content-encoding" not in plain.headers and "Accept-Encoding" in plain.headers["Vary"]
     packed = client.get(url, headers={"Accept-Encoding": "gzip"})
-    assert packed.headers["Content-Encoding"] == "gzip" and packed.headers["ETag"] == plain.headers["ETag"]
+    assert packed.headers["Content-Encoding"] == "gzip"
+    # two representations, two ETags; a 304 answers the ETag of the representation the client asks for
+    assert packed.headers["ETag"] != plain.headers["ETag"] and packed.headers["ETag"].startswith(plain.headers["ETag"][:-1])
+    assert client.get(url, headers={"Accept-Encoding": "gzip", "If-None-Match": packed.headers["ETag"]}).status_code == 304
+    assert client.get(url, headers={"Accept-Encoding": "gzip", "If-None-Match": plain.headers["ETag"]}).status_code == 200
+    assert client.get(url, headers={"Accept-Encoding": "identity", "If-None-Match": plain.headers["ETag"]}).status_code == 304
     entry = next(iter(client.app.state.run_cache._items.values()))
     assert packed.content == plain.content  # the client unpacks it
     assert int(packed.headers["content-length"]) == len(entry.gz) and gzip.decompress(entry.gz) == plain.content  # as stored

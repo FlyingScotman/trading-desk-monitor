@@ -39,7 +39,9 @@ jobs:
   windows:
     uses: ./.github/workflows/windows-bundle.yml
     with:
-      ref: ${{ github.event.inputs.tag || github.ref }}
+      # the commit, not the branch name: «Run workflow» on main with an empty tag reads main again in each job, hours
+      # apart, and the commit checked on Windows could differ from the one released (github.sha is the same in all jobs)
+      ref: ${{ github.event.inputs.tag || github.sha }}
 
   release:
     needs: windows
@@ -51,7 +53,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: ${{ github.event.inputs.tag || github.ref }}
+          ref: ${{ github.event.inputs.tag || github.sha }}  # the commit the Windows check ran on (see above)
           fetch-depth: 0
       - name: Release tag («Run workflow» without a tag makes v<backend version> on main)
         if: github.event_name == 'workflow_dispatch' && github.event.inputs.tag == ''
