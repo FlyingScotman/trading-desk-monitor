@@ -16,11 +16,12 @@ REAL_AUTO = parallel.auto_workers  # (the suite's fixture holds ``auto_workers``
 
 
 @pytest.mark.parametrize("cpus,mb,expected", [
-    (1, None, 1), (2, None, 1), (3, None, 2), (4, None, 3), (8, None, 3), (64, None, 3),  # the cores
+    (1, None, 1), (2, None, 1), (3, None, 2), (4, None, 2), (5, None, 2),  # up to four logical processors (hyper-threads
+    (6, None, 3), (8, None, 3), (64, None, 3),  # of two cores): two at most; three from six
     (8, 16_000, 3), (8, 4_200, 2), (8, 3_200, 1), (8, 2_500, 1), (8, 100, 1), (8, 0, 1),  # the memory left over 2 GB
-    (2, 64_000, 1), (4, 5_200, 3), (4, 5_100, 2),  # the lower of the two
+    (2, 64_000, 1), (4, 5_200, 2), (4, 3_100, 1), (6, 5_200, 3), (6, 5_100, 2),  # the lower of the two
 ])
-def test_the_automatic_number_is_the_lower_of_the_cores_and_the_memory(cpus, mb, expected) -> None:
+def test_the_automatic_number_is_the_lower_of_the_processors_and_the_memory(cpus, mb, expected) -> None:
     assert parallel.choose_workers(cpus, mb) == expected
 
 
@@ -33,8 +34,8 @@ def test_the_automatic_number_follows_the_figures_it_is_given() -> None:
 def test_the_memory_is_told_on_this_machine_or_not_at_all() -> None:
     mb = parallel.available_memory_mb()
     assert mb is None or mb > 0
-    if sys.platform != "win32" and mb is None:
-        pytest.fail("/proc/meminfo is there")
+    if sys.platform in ("win32", "linux"):  # Windows: GlobalMemoryStatusEx; here /proc/meminfo. A None would hide a broken call
+        assert mb is not None, "the free memory is told on this platform"
 
 
 def test_the_setting_decides_and_zero_leaves_it_to_the_program(monkeypatch) -> None:
@@ -89,6 +90,32 @@ def test_the_pool_check_starts_processes_and_each_answers(tmp_path) -> None:
     from desk import cli
 
     assert cli.main(["pool-check", "--workers", "1"]) == 0
+
+
+def slow_unless_first(marker: str, delay: float) -> None:
+    """A pool hook (runs in each process as it starts): the first process to come is quick, the others take ``delay`` s
+    more, as a process behind a virus scanner on Windows may."""
+    import os
+    import time
+
+    try:
+        os.close(os.open(marker, os.O_CREAT | os.O_EXCL))
+    except FileExistsError:
+        time.sleep(delay)
+
+
+def test_the_pool_check_waits_for_a_slow_process_and_does_not_count_one_process_twice(tmp_path) -> None:
+    """The review of #665: with a fixed pause in each probe, a process that started more than the pause after the first
+    left both probes to the first one, one pid, and the Windows bundle's gate failed for a slow start. Now each process
+    answers once all have started: two processes, though the second needs three seconds."""
+    res = parallel.check(2, init=(slow_unless_first, (str(tmp_path / "first"), 3.0)))
+    assert res["ok"] is True and res["processes"] == 2 and res["error"] is None, res
+    assert res["seconds"] >= 3.0, "the first process waited for the second"
+
+
+def test_the_pool_check_says_so_when_the_processes_do_not_all_start(tmp_path) -> None:
+    res = parallel.check(2, barrier_s=1.0, init=(slow_unless_first, (str(tmp_path / "first"), 6.0)))
+    assert res["ok"] is False and res["error"], res  # (one process answered for both: the check does not pass)
 
 
 def test_the_backfill_status_says_how_many_processes_compute_the_history(tmp_path, store_url, monkeypatch) -> None:

@@ -84,6 +84,10 @@ WORKER_NICE = 5
 AUTO_MAX = 3
 """The most processes the automatic number goes up to: three processes make a date 2.4 times faster in the dates a minute
 (four cores, two passes), a fourth gives little and takes the PC from its owner."""
+THREE_FROM_LOGICAL = 6
+"""Logical processors a PC needs for the automatic number to be three. ``os.cpu_count`` counts the threads of a core (the
+hyper-threads) as processors, so «4» may be two cores, and three processes of the history on two cores take the PC from
+its owner: up to four logical processors the number is two at most, five give two as well."""
 PER_WORKER_MB = 1024
 """What a process of the pool is taken to need, for the automatic number: its peak was 318 MB in the first pass and 354 MB
 in the second on a book of 2000 bonds (6 dates, the fixture's market; more with derivatives and the market of a real day),
@@ -125,10 +129,13 @@ def available_memory_mb() -> float | None:
 
 def choose_workers(cpus: int, available_mb: float | None, *, per_worker_mb: float = PER_WORKER_MB,
                    reserve_mb: float = RESERVE_MB, limit: int = AUTO_MAX) -> int:
-    """The automatic number of processes: at most ``limit``, one core always left to the rest of the PC, and as many as
-    the free memory (less ``reserve_mb``) holds at ``per_worker_mb`` each (unknown memory: only the cores count). 1 is
-    the sequential run: a machine with fewer than three cores, or little memory, computes as before."""
+    """The automatic number of processes: at most ``limit``, one logical processor always left to the rest of the PC, not
+    more than two below ``THREE_FROM_LOGICAL`` of them (they may be hyper-threads of two cores), and as many as the free
+    memory (less ``reserve_mb``) holds at ``per_worker_mb`` each (unknown memory: only the processors count). 1 is the
+    sequential run: a machine with fewer than three processors, or little memory, computes as before."""
     n = min(limit, cpus - 1)
+    if cpus < THREE_FROM_LOGICAL:
+        n = min(n, 2)
     if available_mb is not None:
         n = min(n, int((available_mb - reserve_mb) // per_worker_mb))
     return max(n, 1)
@@ -152,27 +159,47 @@ def workers_for(settings: Any) -> int:
     return n if n >= 1 else auto_workers()
 
 
-def _probe(i: int) -> dict[str, Any]:
-    """What one process of ``check`` answers: it started (``spawn``), imported the desk, and is another process."""
-    time.sleep(1.0)  # (both processes of the check are busy at once, so the pool starts both)
-    return {"pid": os.getpid(), "ppid": os.getppid(), "peak_mb": peak_memory_mb(), "n": i}
+PROBE_SLOTS = 64
+"""Processes ``check`` can ask for (the flags of its barrier)."""
+PROBE_BARRIER_S = 60.0
+"""How long a process of ``check`` waits for the others to start (a process on Windows may need many seconds to spawn
+behind a virus scanner); then it answers anyway and the check says they did not start together."""
 
 
-def check(workers: int = 2, *, timeout_s: float = 180.0) -> dict[str, Any]:
+def _probe(i: int, n: int = 1, barrier_s: float = PROBE_BARRIER_S) -> dict[str, Any]:
+    """What one process of ``check`` answers: it started (``spawn``), imported the desk, and is another process. It
+    raises its flag in the shared memory and answers once the ``n`` processes have raised theirs (``met``), so that one
+    process cannot answer for two: while a process waits it takes no second task, and a new one is started for it."""
+    shared, t0 = _SHARED, time.monotonic()
+    met = n <= 1
+    if shared is not None and n > 1:
+        shared.up[i % PROBE_SLOTS] = 1
+        while not (met := all(shared.up[:n])) and time.monotonic() - t0 < barrier_s:
+            time.sleep(0.05)
+    return {"pid": os.getpid(), "ppid": os.getppid(), "peak_mb": peak_memory_mb(), "n": i, "met": met}
+
+
+def check(workers: int = 2, *, timeout_s: float = 180.0, barrier_s: float = PROBE_BARRIER_S,
+          init: tuple[Callable[..., None], tuple] | None = None) -> dict[str, Any]:
     """Start ``workers`` processes the way the history does (``Pool``: ``spawn``, the pool's own initializer), let each
-    answer once and end them: ``{ok, workers, processes, seconds, error}``. The bundle's CI runs it through the program's own
-    launcher on Windows (``desk pool-check``), where nobody had started the pool before the history asked for it."""
+    answer once and end them: ``{ok, workers, processes, seconds, error}``. Each process waits for the others to be up
+    before it answers (``_probe``, at most ``barrier_s``), so a slow start of one of them is no failure of the check,
+    and a pool that cannot start them all is. The bundle's CI runs it through the program's own launcher on Windows
+    (``desk pool-check``), where nobody had started the pool before the history asked for it."""
     t0 = time.monotonic()
     out: dict[str, Any] = {"ok": False, "workers": workers, "processes": 0, "error": None}
-    pool = Pool(workers)
+    pool = Pool(workers, init)
     try:
+        if workers > PROBE_SLOTS:
+            raise ValueError(f"at most {PROBE_SLOTS} processes can be checked")
         ex, _ = pool.acquire()
-        answers = [f.result(timeout_s) for f in [ex.submit(_probe, i) for i in range(workers)]]
+        answers = [f.result(timeout_s) for f in [ex.submit(_probe, i, workers, barrier_s) for i in range(workers)]]
         pids = {a["pid"] for a in answers}
         out.update(processes=len(pids), peak_mb=max((a["peak_mb"] or 0 for a in answers), default=0),
-                   ok=len(pids) == workers and os.getpid() not in pids)
+                   ok=len(pids) == workers and os.getpid() not in pids and all(a["met"] for a in answers))
         if not out["ok"]:
-            out["error"] = f"{len(pids)} processes answered, {workers} asked for"
+            out["error"] = (f"{len(pids)} processes answered, {workers} asked for" if len(pids) != workers else
+                            f"the processes did not all start within {barrier_s:.0f} s")
     except Exception as e:  # noqa: BLE001 - the answer of a check is its result
         out["error"] = f"{type(e).__name__}: {e}"
     finally:
@@ -205,6 +232,7 @@ class Shared:
         self.abort = mp_context.Value("b", 0, lock=False)
         self.fin = mp_context.Array("b", SKIP_CAPACITY, lock=False)
         self.skip = mp_context.Array("b", SKIP_CAPACITY, lock=False)
+        self.up = mp_context.Array("b", PROBE_SLOTS, lock=False)  # ``check``: the processes that are up
         self.used = 0  # the starting process's: how many flags of ``fin`` and ``skip`` a pass set (``reset`` clears those)
 
     def done_count(self) -> int:
