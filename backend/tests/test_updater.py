@@ -217,7 +217,7 @@ def test_curl_errors_and_the_proxy_login(tmp_path, monkeypatch):
     seen = {}
 
     def runner(cmd, **kw):
-        cfg = Path(cmd[cmd.index("-K") + 1]).read_text()
+        cfg = Path(cmd[cmd.index("-K") + 1]).read_text(encoding="utf-8")
         seen["cfg"] = cfg
         heads = Path(cmd[cmd.index("-D") + 1])
         if seen["mode"] == "407":

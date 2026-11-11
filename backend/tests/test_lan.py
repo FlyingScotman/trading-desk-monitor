@@ -9,6 +9,7 @@ never accepts; the self-check must call the first ``ok`` and the second ``no_res
 from __future__ import annotations
 
 import http.server
+import os
 import socket
 import ssl
 import threading
@@ -96,6 +97,11 @@ def test_probe_ok_and_other_server(cert):
         assert lan.probe("127.0.0.1", port, False, instance="abc", timeout=2)["status"] == "http_error"
 
 
+# A closed port: Linux refuses at once, Windows after its SYN retries (about 2 s): a probe that gives up sooner reports a
+# timeout there (the product's own limit, lan.PROBE_TIMEOUT_S, is 3 s).
+REFUSED_S = 5.0 if os.name == "nt" else 1.0
+
+
 def test_probe_no_response_tls_error_refused_timeout(monkeypatch):
     port = free_port()
     with dead_listener("127.0.0.1", port):
@@ -107,7 +113,7 @@ def test_probe_no_response_tls_error_refused_timeout(monkeypatch):
     with http_server(port):  # plain HTTP where the client speaks TLS
         r = lan.probe("127.0.0.1", port, True, timeout=2)
         assert r["status"] == "tls_error", r
-    r = lan.probe("127.0.0.1", port, True, timeout=1)
+    r = lan.probe("127.0.0.1", port, True, timeout=REFUSED_S)
     assert r["status"] == "refused" and r["label"] == "отказ в соединении"
 
     def slow(*_a, **_k):
@@ -207,7 +213,7 @@ def test_status_lines(tmp_path, monkeypatch, cert):
 
     monkeypatch.setattr(lan, "local_addresses", lambda: ["10.1.2.3"])
     st = Settings(home=tmp_path, bind_host="0.0.0.0", port=free_port(), auth=True, tls_cert=cert[0], tls_key=cert[1])
-    doc = lan.status(st, timeout=0.3, firewall_runner=lambda *a, **k: type("R", (), {"returncode": 1})())
+    doc = lan.status(st, timeout=REFUSED_S, firewall_runner=lambda *a, **k: type("R", (), {"returncode": 1})())
     text = "\n".join(lan.status_lines(doc))
     assert doc["network"] and doc["tls"] and doc["firewall"]["present"] is False
     assert "listens on: 0.0.0.0" in text and "ABSENT" in text and "names: desk-pc, localhost, 10.1.2.3, 127.0.0.1" in text

@@ -1,0 +1,32 @@
+name: win-debug
+
+# TEMPORARY (TDM#639): runs the pytest arguments in .github/win-debug-args.txt on Windows with CPython 3.11, so a failing
+# test can be looked at in minutes and not after the whole suite. Removed before the pull request is merged.
+on:
+  push:
+    branches: ["claude/**"]
+    paths: [".github/win-debug-args.txt", ".github/workflows/win-debug.yml"]
+
+jobs:
+  debug:
+    runs-on: windows-latest
+    timeout-minutes: 40
+    steps:
+      - run: git config --global core.autocrlf false
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Venv
+        working-directory: backend
+        shell: bash
+        run: |
+          uv venv -p 3.11 .venv
+          uv pip install -p .venv/Scripts/python.exe -e ".[dev]"
+      - name: Tests
+        working-directory: backend
+        shell: bash
+        run: |
+          args=$(cat ../.github/win-debug-args.txt | tr -d '\r')
+          PYTHONUTF8=0 .venv/Scripts/python.exe -m pytest -p no:cacheprovider --tb=short -q $args

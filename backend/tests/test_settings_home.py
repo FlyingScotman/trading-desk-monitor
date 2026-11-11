@@ -86,18 +86,18 @@ def test_settings_json_values_and_precedence(tmp_path: Path) -> None:
         "inbox_poll_seconds": 30, "autopilot": False, "autopilot_sync_last": 3, "snapshot_drop": "drop",
         "unknown_key": {"kept": True}})
     (tmp_path / "file.env").write_text("DESK_HUB_URL=https://file.example\nDESK_HUB_TIMEOUT_S=99\n"
-                                       "DESK_INBOX_POLL_SECONDS=7\nDESK_REPORT_DIR=/file/reports\n", encoding="utf-8")
+                                       f"DESK_INBOX_POLL_SECONDS=7\nDESK_REPORT_DIR={tmp_path / 'file' / 'reports'}\n", encoding="utf-8")
     e = {"DESK_HOME": str(tmp_path), "DESK_ENV_FILE": str(tmp_path / "file.env")}
     s = load(e)
     assert s.hub_url == "https://json.example" and s.hub_timeout_s == 12  # settings.json > env file
-    assert s.report_dir == Path("/file/reports")  # env file > defaults
+    assert s.report_dir == tmp_path / "file" / "reports"  # env file > defaults
     assert s.hub_ca_bundle == tmp_path / "ca.pem" and s.snapshot_drop == tmp_path / "drop"  # relative to home
     assert s.inbox_dirs == (tmp_path / "in", tmp_path / "sub" / "**")
     assert s.private_adapter == str(tmp_path / "adapters" / "tda") and s.private_adapter_config == tmp_path / "cfg"
     assert (s.inbox_poll_seconds, s.autopilot, s.autopilot_sync_last) == (30, False, 3)
-    s = load({**e, "DESK_HUB_URL": "https://env.example", "DESK_INBOX_DIRS": "/x;/y/**", "DESK_AUTOPILOT": "on",
+    s = load({**e, "DESK_HUB_URL": "https://env.example", "DESK_INBOX_DIRS": f"{tmp_path / 'x'};{tmp_path / 'y'}/**", "DESK_AUTOPILOT": "on",
               "DESK_HUB_TIMEOUT_S": ""})  # environment > settings.json; empty means unset
-    assert s.hub_url == "https://env.example" and s.inbox_dirs == (Path("/x"), Path("/y/**")) and s.autopilot
+    assert s.hub_url == "https://env.example" and s.inbox_dirs == (tmp_path / "x", tmp_path / "y" / "**") and s.autopilot
     assert s.hub_timeout_s == 12
     with pytest.raises(SettingsError, match="DESK_AUTOPILOT"):
         load({**e, "DESK_AUTOPILOT": "maybe"})
@@ -186,12 +186,14 @@ def test_bundle_default_adapter_is_the_lowest_layer(tmp_path: Path) -> None:
     s = load(e)
     assert s.private_adapter == str(bundle) and s.private_adapter_default
     assert "bundle default" in dict(s.describe())["private_adapter"]
-    (tmp_path / "file.env").write_text("DESK_PRIVATE_ADAPTER=/from/file\n", encoding="utf-8")
+    from_file = str(tmp_path / "from" / "file")  # absolute on every platform: a path without a drive is joined to the repository
+    (tmp_path / "file.env").write_text(f"DESK_PRIVATE_ADAPTER={from_file}\n", encoding="utf-8")
     s = load({**e, "DESK_ENV_FILE": str(tmp_path / "file.env")})
-    assert s.private_adapter == "/from/file" and not s.private_adapter_default
+    assert s.private_adapter == from_file and not s.private_adapter_default
     write_json(tmp_path, {"private_adapter": str(tmp_path / "mine")})
     assert load(e).private_adapter == str(tmp_path / "mine")
-    assert load({**e, "DESK_PRIVATE_ADAPTER": "/env/tda"}).private_adapter == "/env/tda"
+    env_tda = str(tmp_path / "env" / "tda")
+    assert load({**e, "DESK_PRIVATE_ADAPTER": env_tda}).private_adapter == env_tda
 
 
 def test_ctx_inbox_dirs_reach_the_adapter(tmp_path: Path) -> None:
@@ -292,11 +294,11 @@ def test_api_settings_round_trip(client: TestClient, home: Path) -> None:
     j = r.json()
     assert j["home"] == str(home) and j["hub_token_set"] is False and j["error"] is None
     assert j["effective"]["snapshot_cache"] == str(home / "snapshots") and j["effective"]["autopilot"] is True
-    body = {"hub_url": "https://hub.example", "inbox_dirs": [{"path": "/r", "label": "Позиции", "recursive": True}],
+    body = {"hub_url": "https://hub.example", "inbox_dirs": [{"path": str(home / "r"), "label": "Позиции", "recursive": True}],
             "autopilot_sync_last": 7, "future_key": 1}
     j = client.put("/api/v1/settings", json=body).json()
     assert j["hub_url"] == "https://hub.example" and j["future_key"] == 1
-    assert j["effective"]["inbox_dirs"] == [str(Path("/r") / "**")] and j["effective"]["autopilot_sync_last"] == 7
+    assert j["effective"]["inbox_dirs"] == [str(home / "r" / "**")] and j["effective"]["autopilot_sync_last"] == 7
     j = client.put("/api/v1/settings", json={"hub_url": None}).json()
     assert "hub_url" not in j and j["future_key"] == 1 and j["inbox_dirs"][0]["label"] == "Позиции"
     r = client.put("/api/v1/settings", json={"hub_timeout_s": -1})

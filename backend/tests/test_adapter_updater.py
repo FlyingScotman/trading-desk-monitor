@@ -205,7 +205,7 @@ def test_curl_gets_the_token_in_its_config_file_only(tmp_path, monkeypatch):
     seen = {}
 
     def runner(cmd, **kw):
-        seen["cmd"], seen["cfg"] = cmd, Path(cmd[cmd.index("-K") + 1]).read_text()
+        seen["cmd"], seen["cfg"] = cmd, Path(cmd[cmd.index("-K") + 1]).read_text(encoding="utf-8")
         heads = Path(cmd[cmd.index("-D") + 1])
         status = seen["status"]
         heads.write_bytes(f"HTTP/1.1 {status} X\r\nX-GitHub-Request-Id: 1\r\n\r\n".encode())

@@ -425,7 +425,8 @@ def test_cli_users_and_lan(store_url, home: Path, monkeypatch, capsys):
     assert run("lan", "status", "--no-probe") == 0
     out = capsys.readouterr().out
     assert "sign-in (auth): on" in out and "names: desk.corp" in out and "firewall rule" in out
-    assert run("lan", "status", "--timeout", "0.5") == 1  # no server on 8443: the self-check fails
+    # no server on 8443: the self-check fails (a closed port is refused at once on Linux, after ~2 s of SYN retries on Windows)
+    assert run("lan", "status", "--timeout", "5" if os.name == "nt" else "0.5") == 1
     assert "refused" in capsys.readouterr().out
     assert run("lan", "enable", "--plain-http") == 0
     doc = json.loads((home / "settings.json").read_text(encoding="utf-8"))

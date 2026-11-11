@@ -921,7 +921,7 @@ def make_injected(path: str, real: Any):
     import multiprocessing
 
     def run(settings, d, **kw):
-        plan_ = json.loads(Path(path).read_text())
+        plan_ = json.loads(Path(path).read_text(encoding="utf-8"))
         ph = 1 if kw.get("no_gamma") else 2
         for kind, dd, p, c in plan_["events"]:
             if dd == d and p == ph and c == plan_["cycle"]:
