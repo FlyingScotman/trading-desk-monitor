@@ -306,7 +306,8 @@ def test_log_of_a_live_postmaster_is_not_rotated(pgdata: Path, monkeypatch) -> N
 def test_pid_of_a_postgres_of_another_cluster_is_not_this_clusters_postmaster(pgdata: Path, tmp_path: Path) -> None:
     """The pid in a left-over ``postmaster.pid`` went to the postmaster of ANOTHER cluster (the name is postgres, only
     the data directory and the start time tell): the file is stale, and it is removed, the other cluster is left alone."""
-    other = tmp_path / "other"
+    other = tmp_path / "other_home" / "pg"  # its own folder: the log (logs\\postgres.log) is one per data directory's parent
+    other.parent.mkdir()
     new_process(other)
     other_server = embedded.get_server(other, lambda m: None)
     try:

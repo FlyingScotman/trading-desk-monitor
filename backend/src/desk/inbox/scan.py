@@ -407,7 +407,10 @@ class _Scan:
                 for x in mine:
                     x["skipped"][skip] += 1
                 continue
+            # poll 0 is "no waiting": a file whose time is a few ms ahead of the clock (Windows: the file system's time is
+            # finer than time.time() of CPython 3.11, a network share's clock may differ) is not "too new" then
             stable = (_last_seen.get(p) == (st.st_size, st.st_mtime_ns) or bool(written and p.startswith(written))
+                      or self.settings.inbox_poll_seconds <= 0
                       or self.now.timestamp() - st.st_mtime >= self.settings.inbox_poll_seconds)
             _last_seen[p] = (st.st_size, st.st_mtime_ns)
             if not stable:
