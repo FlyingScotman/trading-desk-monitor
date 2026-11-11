@@ -232,6 +232,15 @@ def test_never_run_then_each_outcome_of_the_action(env: Path, store_url: str) ->
     assert "плавающих ног" in got["state"]["text"]
 
 
+def test_a_job_seen_running_is_running_even_if_its_flag_is_already_gone() -> None:
+    """The job was read while it ran and finished before the flag was read (the race of the screen's poll): the screen
+    must say «running» and be polled again, not take a job without a result for «the adapter gave no list»."""
+    from desk import index_choices
+
+    job = {"key": "action:index_names", "state": "running", "result": None}
+    assert index_choices.state(job, False, None, None)["code"] == "running"
+
+
 def test_timeout_and_interrupted_job(env: Path, store_url: str) -> None:
     write_settings(env, env / "index_state_adapter_t", adapter_action_timeout_s=1)
     _mode(env, "sleep")

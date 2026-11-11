@@ -104,7 +104,7 @@ def state(job: dict | None, running: bool, choices: dict | None, source: str | N
     None). Texts hold counts, codes and the adapter's own ``summary`` lines (which hold no name), never a name."""
     screen = SCREEN.get(kind, kind)
     res = (job or {}).get("result") or {}
-    if running:
+    if running or (job or {}).get("state") == "running":
         return _st("running", "info", "Адаптер читает последние файлы условий сделок…")
     if job is None:
         return _st("never_run", "info", f"Экран «{screen}» ещё не запрашивал индексы у адаптера: нажмите «Обновить».")
@@ -201,8 +201,8 @@ def _key(name: str) -> str:
 
 def stored_choices(st: Any, h: Any, store_url: str | None, replay_sources: set[str] | None = None) -> dict | None:
     """The screen's ``choices`` built from the store's ``trade_terms`` names and the adapter's tab (module doc), or
-    ``None``: no store, no name stored yet, the adapter does not declare the tab. Same shape as the adapter's, plus
-    ``source`` ``"store"`` and ``read_only`` (the tab or its codes are not readable: the list is shown, a save is not
+    ``None``: no store or no name stored yet. Same shape as the adapter's, plus ``source`` ``"store"`` and
+    ``read_only`` (the adapter does not declare the tab, or the tab names no codes: the list is shown, a save is not
     offered). ``replay_sources``: the adapter's sources, to name the one to read again after a save."""
     names = stored_names(store_url)
     if not names:

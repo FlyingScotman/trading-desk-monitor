@@ -241,7 +241,9 @@ def get_choices(kind: str, request: Request) -> dict[str, Any]:
     h, decl = _choice_action(st, kind)
     store_url = getattr(request.app.state, "store_url", None)
     j, ch, source = _screen_choices(st, h, decl, store_url)
-    running = adapter_jobs.running("action") == f"action:{decl['id']}"
+    # from the snapshot of the job itself: its state and the running flag are changed under one lock, so they cannot
+    # disagree here (reading the flag after the job could see a job that ended in between: a false «no list»)
+    running = (j or {}).get("state") == "running"
     now = adapter_jobs.choices_file_sha(st, h, ch) if ch else None
     return {"action": decl, "running": running,
             "job": {k: v for k, v in (j or {}).items() if k != "result"} if j else None,
