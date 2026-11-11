@@ -356,6 +356,33 @@ def run(old_zip: Path, new_zip: Path, work: Path, port: int) -> dict[str, Any]:
     return summary
 
 
+def diagnose_database(b: Bundle) -> None:
+    """After a failed start: what the data folder and ``initdb`` look like from here (printed into the CI log; the artifacts
+    of a failed run cannot always be opened). Best effort, never raises."""
+    pg = b.home / "pg"
+
+    def sh(*cmd: str, lines: int = 22) -> None:
+        try:
+            r = subprocess.run(list(cmd), capture_output=True, text=True, errors="replace", check=False, timeout=120)
+            print(f"$ {' '.join(cmd)}  -> {r.returncode}")
+            print("\n".join((r.stdout + r.stderr).splitlines()[:lines]))
+        except (OSError, subprocess.SubprocessError) as e:
+            print(f"$ {' '.join(cmd)}  -> {type(e).__name__}: {e}")
+
+    print("--- diagnostics of the database folder ---")
+    sh("icacls", str(b.home), lines=10)
+    sh("icacls", str(pg), lines=10)
+    sh("attrib", str(pg))
+    sh("cmd", "/c", "dir", "/a", str(pg), lines=12)
+    sh(str(b.py), "-I", "-c", "import os,sys;print(os.stat(sys.argv[1]));os.chmod(sys.argv[1], 0o700);print('chmod ok')", str(pg))
+    initdb = b.root / "env" / "Lib" / "site-packages" / "pgserver" / "pginstall" / "bin" / "initdb.exe"
+    for where in (b.work / "diag_work", b.home / "diag_home"):
+        where.mkdir(exist_ok=True)
+        sh(str(initdb), "-D", str(where), "--auth=trust", "--auth-local=trust", "--encoding=utf8", "-U", "postgres",
+           lines=6)
+    sh(str(initdb), "-D", str(pg), "--auth=trust", "--auth-local=trust", "--encoding=utf8", "-U", "postgres", lines=6)
+
+
 def utf8_console() -> None:
     """The console of a runner is cp1252: the logs of the launcher are Russian, and printing them raised
     UnicodeEncodeError, which hid the real cause of a failed phase. Never raise on output."""
@@ -381,6 +408,8 @@ def main(argv: list[str] | None = None) -> int:
         for f in sorted(a.work.glob("launcher-*.log")):
             print(f"--- {f.name} (tail) ---\n{tail(f, 150)}")
         logs = a.work / "home" / "logs"
+        if "initdb" in "".join(tail(f, 400) for f in a.work.glob("launcher-*.log")):
+            diagnose_database(Bundle(a.work / "install" / TOP, a.work / "home", a.port, a.work))
         for f in sorted(logs.glob("*")) if logs.is_dir() else []:
             if f.is_file():
                 print(f"--- {f.name} (tail) ---\n{tail(f, 40)}")
