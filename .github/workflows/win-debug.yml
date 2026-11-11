@@ -29,7 +29,7 @@ jobs:
         shell: bash
         run: |
           args=$(cat ../.github/win-debug-args.txt | tr -d '\r')
-          .venv/Scripts/python.exe -m pytest -p no:cacheprovider --tb=no -q -rf $args > ../out1.txt 2>&1 || true
+          .venv/Scripts/python.exe -m pytest -p no:cacheprovider --tb=no -q -rfE $args > ../out1.txt 2>&1 || true
           grep -E "^(FAILED|ERROR)|passed|failed" ../out1.txt | cut -c1-230 | tail -80
       - name: Tracebacks of chosen tests
         working-directory: backend
@@ -37,8 +37,8 @@ jobs:
         run: |
           args=$(cat ../.github/win-debug-args2.txt | tr -d '\r')
           if [ -n "$args" ]; then
-            .venv/Scripts/python.exe -m pytest -p no:cacheprovider --tb=short -q -x $args > ../out2.txt 2>&1 || true
-            cut -c1-220 ../out2.txt | tail -${TB_LINES:-120}
+            .venv/Scripts/python.exe -m pytest -p no:cacheprovider --tb=short -q $args > ../out2.txt 2>&1 || true
+            cut -c1-220 ../out2.txt | tail -${TB_LINES:-130}
           fi
 
   probe:
