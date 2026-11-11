@@ -129,7 +129,7 @@ jobs:
         shell: bash
         run: |
           files=$(grep -v '^[[:space:]]*#' tests/windows_suite.txt | grep -v '^[[:space:]]*$' | tr -d '\r')
-          .venv/Scripts/python.exe -m pytest -q -p no:cacheprovider $files
+          .venv/Scripts/python.exe -m pytest -q -p no:cacheprovider --durations=15 $files
 
   # The one check to require for Windows (see the comment above): a failed, cancelled or skipped-by-mistake Windows job fails it.
   windows-gate:
