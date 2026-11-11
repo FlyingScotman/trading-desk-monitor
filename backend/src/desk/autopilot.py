@@ -979,7 +979,8 @@ class Autopilot:
         ended with the step: they hold their prepared markets in memory, which an idle cycle must not keep)."""
         from .parallel import Pool, workers_for
 
-        workers = workers_for(settings)
+        workers = workers_for(settings)  # (read from the settings now: a change of the number needs no restart)
+        backfill.note_workers(settings, workers)  # what the screen shows: the pool this cycle starts, not a new estimate
         pool = Pool(workers) if workers > 1 else None
         try:
             return self._backfill_passes(settings, con, url, hub, ran, pool)

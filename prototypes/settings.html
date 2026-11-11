@@ -804,7 +804,7 @@ details.at-last .at-open::before{content:"показать"} details.at-last[ope
               <p class="hint">История риска и PnL за прошлые даты — для графиков и периодов.</p>
               <details class="more"><summary>Как это работает</summary><p>Сервер в фоне считает прошлые даты: по каждой рабочей дате с позициями (отчёт дня, а без него — последний предыдущий отчёт книги) — расчёт на окончательном закрытии. Сначала один раз читает старые отчёты из папок, потом считает даты от самой ранней, в конце каждого цикла и не дольше заданного времени. Уже посчитанные даты с теми же входными данными не пересчитываются. Запустить цикл сразу — кнопка «Обновить» в шапке монитора.</p></details></div>
           </div>
-          <details class="adv" id="adv-bf" data-fold><summary>Дополнительно <span class="mut3">— с какой даты и сколько времени за цикл</span></summary>
+          <details class="adv" id="adv-bf" data-fold><summary>Дополнительно <span class="mut3">— с какой даты, сколько времени за цикл и сколько процессов</span></summary>
           <div class="form">
             <label for="backfill_from">С даты</label>
             <div><input class="inp mono" id="backfill_from" data-key="backfill_from" type="date" style="width:170px" placeholder="2026-01-05">
@@ -812,6 +812,9 @@ details.at-last .at-open::before{content:"показать"} details.at-last[ope
             <label for="backfill_budget_s">Время за цикл</label>
             <div><input class="inp mono num" id="backfill_budget_s" data-key="backfill_budget_s" inputmode="numeric" placeholder="600"> <span class="unit">секунд</span>
               <p class="hint">В каждом цикле. Пусто — 600.</p></div>
+            <label for="backfill_workers">Процессов пересчёта</label>
+            <div><input class="inp mono num" id="backfill_workers" data-key="backfill_workers" inputmode="numeric" placeholder="0"> <span class="unit">0 — выбирает программа</span>
+              <p class="hint">Сколько прошлых дат считается одновременно. 0 или пусто — число выбирает программа (до трёх, и одно ядро ПК всегда остаётся свободным). 1 — по одной дате, как раньше: поставьте 1, если компьютер тормозит, пока идёт пересчёт истории. Можно от 0 до 8. Новое число подхватится со следующего цикла, перезапускать монитор не нужно.</p></div>
           </div></details>
         </div>
       </div>
@@ -1323,11 +1326,13 @@ show(location.hash);
 /* ---------- settings.json ---------- */
 const S = {data:null, dirs:[], dirty:false, adapter:null};
 // поля settings.json со страницы ([data-key]); вид значения — для проверки до отправки (сервер проверяет ещё раз)
-const KIND = {inbox_poll_seconds:'pos', autopilot_sync_last:'posint', inbox_lookback_days:'int0', backfill_budget_s:'pos',
+const KIND = {inbox_poll_seconds:'pos', autopilot_sync_last:'posint', inbox_lookback_days:'int0', backfill_budget_s:'pos', backfill_workers:'int0',
   adapter_check_timeout_s:'pos', backfill_from:'date', history_days:'int0', history_bonds_from:'date', history_rates_from:'date',
   hub_timeout_s:'pos', adapter_match_timeout_s:'pos', adapter_read_timeout_s:'pos', inbox_max_file_mb:'pos',
   adapter_kit_timeout_s:'pos', adapter_status_timeout_s:'pos', adapter_action_timeout_s:'pos', session_idle_minutes:'posint',
   session_max_hours:'posint', login_max_failures:'posint', login_lockout_minutes:'posint'};
+const ZERO = {backfill_workers:'программа выберет сама'};  // что значит 0 в поле, где это не «без ограничения»
+const MAXV = {backfill_workers:8};  // верхняя граница поля (сервер проверяет её же)
 const LEGACY_FLAGS = ['autopilot', 'intraday', 'backfill'];  // пишутся всегда (true / false), как раньше
 function keyLabel(k){ const l = document.querySelector('label[for="' + k + '"]'); return l ? (l.firstChild ? l.firstChild.textContent : l.textContent).trim() : k; }
 
@@ -1433,7 +1438,7 @@ const EFF = [
   ['autopilot','Автообновление'], ['intraday','Расчёт внутри дня'], ['autopilot_sync_last','Загружать последних дат'],
   ['inbox_lookback_days','Брать отчёты не старше, дней'], ['history_days','История котировок, рабочих дней'],
   ['history_bonds_from','История облигаций с'], ['history_rates_from','История ставок и курсов с'],
-  ['backfill','История прогонов'], ['backfill_from','История прогонов с даты'], ['backfill_budget_s','История прогонов: секунд за цикл'], ['logs_dir','Журналы']];
+  ['backfill','История прогонов'], ['backfill_from','История прогонов с даты'], ['backfill_budget_s','История прогонов: секунд за цикл'], ['backfill_workers','История прогонов: процессов пересчёта'], ['logs_dir','Журналы']];
 
 function renderEffective(eff){
   const box = $('eff'); box.textContent = '';
@@ -1443,6 +1448,7 @@ function renderEffective(eff){
     else if (typeof v === 'boolean') v = k === 'autopilot' || k === 'intraday' || k === 'backfill' ? (v ? 'включено' : 'выключено') : (v ? 'да' : 'нет');
     else if (k === 'inbox_lookback_days' && v === 0) v = 'без ограничения';
     else if (k === 'history_days' && v === 0) v = 'не догружать';
+    else if (k === 'backfill_workers' && v === 0) v = 'выбирает программа';
     else if (v == null || v === '') v = '—';
     box.append(h('div', {}, h('div', {class:'l'}, label), h('div', {class:'v mono', style:'white-space:pre-wrap'}, String(v))));
   });
@@ -1659,7 +1665,8 @@ function collect(){
     if (kind === 'pos' || kind === 'posint' || kind === 'int0') {
       const n = Number(v.replace(',', '.'));
       if (!isFinite(n) || (kind === 'pos' && n <= 0)) throw bad('нужно положительное число');
-      if (kind !== 'pos' && (!Number.isInteger(n) || n < (kind === 'int0' ? 0 : 1))) throw bad('нужно целое число' + (kind === 'int0' ? ' (0 — без ограничения)' : ' не меньше 1'));
+      if (kind !== 'pos' && (!Number.isInteger(n) || n < (kind === 'int0' ? 0 : 1))) throw bad('нужно целое число' + (kind === 'int0' ? ' (0 — ' + (ZERO[k] || 'без ограничения') + ')' : ' не меньше 1'));
+      if (MAXV[k] != null && n > MAXV[k]) throw bad('не больше ' + MAXV[k]);
       body[k] = n;
     } else if (kind === 'date') {
       if (!/^\d{4}-\d{2}-\d{2}$/.test(v)) throw bad('дата в виде ГГГГ-ММ-ДД');

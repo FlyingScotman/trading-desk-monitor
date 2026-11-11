@@ -164,6 +164,10 @@ ADAPTER_CONFIG_DIR = "adapter-config"
 ADAPTER_OUTPUT_DIR = "adapter-output"  # the files of the adapter's actions (08 §3 run_action), scanned as an inbox folder
 _LOCAL_HOSTS = ("localhost", "127.0.0.1", "::1")
 
+BACKFILL_WORKERS_MAX = 8
+"""The most processes ``backfill_workers`` may ask for (the settings screen and ``settings.json`` alike): each takes about a
+gigabyte of memory and a core of the owner's PC; the program's own choice goes up to three."""
+
 # settings.json key -> (DESK_* variable, kind); kinds are checked by check_settings_doc
 OFF_REPORT_MODES = ("exclude", "include")
 """``off_report_derivatives`` (TDM#468): the trade_terms derivatives no positions row names are left out or valued."""
@@ -550,6 +554,8 @@ def check_settings_doc(doc: object) -> list[str]:
             errors.append(f"{key}: must be a whole number >= 1")
         elif kind == "int0" and not (number and v == int(v) and v >= 0):
             errors.append(f"{key}: must be a whole number >= 0")
+        elif key == "backfill_workers" and v > BACKFILL_WORKERS_MAX:
+            errors.append(f"{key}: must be a whole number from 0 to {BACKFILL_WORKERS_MAX} (0: the program chooses)")
         elif kind == "bool" and not isinstance(v, bool):
             errors.append(f"{key}: must be true or false")
         elif kind == "date" and not (isinstance(v, str) and (not v.strip() or _is_date(v.strip()))):
@@ -758,7 +764,7 @@ def _build(proc: dict[str, str], doc: dict[str, Any], file_env: dict[str, str], 
             raise SettingsError(f"{key}: expected a date YYYY-MM-DD, not {v!r}")
         return date.fromisoformat(v) if v else default
 
-    def count(key: str, default: int, least: int = 1) -> int:
+    def count(key: str, default: int, least: int = 1, most: int | None = None) -> int:
         v = env.get(key)  # "0" is a value here (no limit), not unset
         try:
             n = int(v) if v not in (None, "") else default
@@ -766,6 +772,8 @@ def _build(proc: dict[str, str], doc: dict[str, Any], file_env: dict[str, str], 
             raise SettingsError(f"{key}: {e}") from None
         if n < least:
             raise SettingsError(f"{key}: must be >= {least}")
+        if most is not None and n > most:
+            raise SettingsError(f"{key}: must be <= {most}")
         return n
 
     def dirs(value: str | None) -> tuple[Path, ...]:
@@ -870,7 +878,8 @@ def _build(proc: dict[str, str], doc: dict[str, Any], file_env: dict[str, str], 
         backfill=flag("DESK_BACKFILL", defaults.backfill),
         backfill_from=backfill_from,
         backfill_budget_s=num("DESK_BACKFILL_BUDGET_S", defaults.backfill_budget_s),
-        backfill_workers=count("DESK_BACKFILL_WORKERS", defaults.backfill_workers, least=0),
+        backfill_workers=count("DESK_BACKFILL_WORKERS", defaults.backfill_workers, least=0,
+                                most=BACKFILL_WORKERS_MAX),
         prune_superseded=flag("DESK_PRUNE_SUPERSEDED", defaults.prune_superseded),
         prune_superseded_days=count("DESK_PRUNE_SUPERSEDED_DAYS", defaults.prune_superseded_days),
         backup=flag("DESK_BACKUP", defaults.backup),

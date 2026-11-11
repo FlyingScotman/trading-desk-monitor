@@ -1206,13 +1206,29 @@ def status(con: psycopg.Connection, settings: Settings, today: date | None = Non
             "eta_s": round(s["todo"] * sec) if isinstance(sec, (int, float)) and s["todo"] else None}
 
 
+def note_workers(settings: Settings, n: int) -> None:
+    """The autopilot's cycle starts its pool with ``n`` processes (``parallel.workers_for``, read from the settings and the
+    free memory of this moment): remembered, so that the screen shows what the pool started with, not a figure worked out
+    again when the page is opened (the free memory is another by then). Written when it changes."""
+    st = state(settings)
+    auto = not int(getattr(settings, "backfill_workers", 0) or 0)
+    if st.get("workers") != {"n": n, "auto": auto}:
+        st["workers"] = {"n": n, "auto": auto}
+        save_state(settings, st)
+
+
 def _workers(settings: Settings) -> dict[str, Any]:
-    """The processes the history is computed in now (``workers``) and whether the setting leaves the number to the program
-    (``workers_auto``, TDM#628): what the screen shows beside the passes."""
+    """The processes the history is computed in (``workers``) and whether the setting leaves the number to the program
+    (``workers_auto``, TDM#628): what the screen shows beside the passes. A number set by the owner is what the next cycle
+    uses. The program's own choice depends on the free memory of the moment, so the screen shows the one the last cycle
+    started its pool with (``note_workers``), and, before the first cycle, what it would choose now."""
     from . import parallel
 
-    return {"workers": parallel.workers_for(settings),
-            "workers_auto": not int(getattr(settings, "backfill_workers", 0) or 0)}
+    asked = int(getattr(settings, "backfill_workers", 0) or 0)
+    seen = state(settings).get("workers")
+    started = seen["n"] if not asked and isinstance(seen, dict) and seen.get("auto") and isinstance(seen.get("n"), int) \
+        and seen["n"] >= 1 else None
+    return {"workers": asked or started or parallel.auto_workers(), "workers_auto": not asked}
 
 
 def text(p: Plan, *, dry_run: bool = False) -> str:
