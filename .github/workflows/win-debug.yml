@@ -97,6 +97,7 @@ jobs:
           try C '/inheritance:r' '/grant:r' "*$SID:(OI)(CI)F" '*S-1-5-18:(OI)(CI)F' '*S-1-5-32-544:(OI)(CI)F' '*S-1-5-32-545:(OI)(CI)RX'
           try D '/grant' "*$SID:(OI)(CI)F"
       - name: "desk db-migrate as the launcher starts it (variants)"
+        if: always()
         shell: bash
         run: |
           uv pip install -p .venv/Scripts/python.exe -e backend
