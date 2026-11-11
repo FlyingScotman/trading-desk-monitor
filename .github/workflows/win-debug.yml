@@ -67,7 +67,7 @@ jobs:
         run: |
           PY=.venv/Scripts/python.exe
           INITDB=$($PY -c "import pgserver,pathlib;print(pathlib.Path(pgserver.__file__).parent/'pginstall'/'bin'/'initdb.exe')")
-          SID=$(whoami.exe /user /fo csv /nh | grep -o 'S-1-[0-9-]*' | head -1); echo "SID=$SID"
+          SID=$(/c/Windows/System32/whoami.exe /user /fo csv /nh | grep -o 'S-1-[0-9-]*' | head -1); echo "SID=$SID"
           try() {
             name=$1; shift
             base="D:/probe_$name"; rm -rf "$base"; mkdir -p "$base"

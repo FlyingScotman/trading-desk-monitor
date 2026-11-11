@@ -64,16 +64,16 @@ class Machine:
         self.installs.append(kw)
         if self.install_error is not None:
             raise self.install_error
-        (deskctl.SCRIPTS / "desk").write_text("", encoding="utf-8")
+        (deskctl.SCRIPTS / f"desk{deskctl.EXE}").write_text("", encoding="utf-8")
         return types.SimpleNamespace(ok=True)
 
     def fake_run(self, cmd, **kw):
         self.calls.append([str(c) for c in cmd])
         if "venv" in cmd:
             deskctl.SCRIPTS.mkdir(parents=True)
-            (deskctl.SCRIPTS / "python").write_text("", encoding="utf-8")
-        elif "pip" in cmd and "--no-index" in cmd and not (deskctl.SCRIPTS / "desk").exists():
-            (deskctl.SCRIPTS / "desk").write_text("", encoding="utf-8")  # the full path's offline install
+            (deskctl.SCRIPTS / f"python{deskctl.EXE}").write_text("", encoding="utf-8")
+        elif "pip" in cmd and "--no-index" in cmd and not (deskctl.SCRIPTS / f"desk{deskctl.EXE}").exists():
+            (deskctl.SCRIPTS / f"desk{deskctl.EXE}").write_text("", encoding="utf-8")  # the full path's offline install
         rc = self.migrate_rc if cmd and cmd[-1] == "db-migrate" else 0
         return subprocess.CompletedProcess(cmd, rc, "", "")
 
@@ -81,7 +81,7 @@ class Machine:
         """An installed env of an earlier version (a marker only when ``complete``)."""
         scripts = deskctl.ENV / "bin"
         scripts.mkdir(parents=True)
-        (scripts / "desk").write_text("", encoding="utf-8")
+        (scripts / f"desk{deskctl.EXE}").write_text("", encoding="utf-8")
         (deskctl.ENV / "who").write_text(name, encoding="utf-8")
         if complete:
             deskctl.MARKER.write_text(json.dumps({"version": "0.9-old", "root": str(self.root)}), encoding="utf-8")
@@ -112,7 +112,7 @@ def test_mirror_bundle_installs_through_the_loader(m):
     deskctl.ensure_env(m.env)
     assert not [c for c in m.calls if "pip" in c]  # no direct pip run of the launcher
     kw = m.installs[0]
-    assert kw["python"] == deskctl.SCRIPTS / "python" and kw["wheelhouse"] == deskctl.WHEELHOUSE
+    assert kw["python"] == deskctl.SCRIPTS / f"python{deskctl.EXE}" and kw["wheelhouse"] == deskctl.WHEELHOUSE
     assert kw["log_dir"] == m.home / "logs" and kw["cache"] == m.home / "cache" / "mirror-wheels"
     assert kw["cache"].is_dir() and kw["settings"].strict is False
     assert m.calls[-1][-1] == "db-migrate"

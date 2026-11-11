@@ -171,7 +171,8 @@ def manifest_of(files: dict[str, bytes]) -> bytes:
 @pytest.mark.parametrize("extra, match", [
     ({"DeskMonitor/../evil.txt": b"x"}, "Недопустимый путь"),
     ({"/etc/evil": b"x"}, "Недопустимый путь"),
-    ({"DeskMonitor\\app\\x.py": b"x"}, "Недопустимый путь"),
+    # zipfile itself turns a backslash of a name into «/» on Windows: there it is an ordinary name, not in the manifest
+    ({"DeskMonitor\\app\\x.py": b"x"}, "нет в MANIFEST" if os.name == "nt" else "Недопустимый путь"),
     ({"C:/evil.txt": b"x"}, "Недопустимый путь"),
     ({"DeskMonitor/app/con.txt": b"x"}, "Недопустимый путь"),
     ({"DeskMonitor/app/x. ": b"x"}, "Недопустимый путь"),
