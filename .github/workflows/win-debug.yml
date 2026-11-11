@@ -5,7 +5,7 @@ name: win-debug
 on:
   push:
     branches: ["claude/**"]
-    paths: [".github/win-debug-args.txt", ".github/workflows/win-debug.yml"]
+    paths: [".github/win-debug-args.txt", ".github/win-debug-args2.txt", ".github/workflows/win-debug.yml", ".github/probe_db.py"]
 
 jobs:
   debug:
