@@ -29,8 +29,7 @@ jobs:
         shell: bash
         run: |
           args=$(cat ../.github/win-debug-args.txt | tr -d '\r')
-          .venv/Scripts/python.exe -m pytest -p no:cacheprovider --tb=no -q -rfE $args > ../out1.txt 2>&1 || true
-          grep -E "^(FAILED|ERROR)|passed|failed" ../out1.txt | cut -c1-230 | tail -80
+          .venv/Scripts/python.exe -m pytest -p no:cacheprovider --tb=no -q -rfE $args > ../out1.txt 2>&1; echo $? > ../rc.txt; true
       - name: Tracebacks of chosen tests
         working-directory: backend
         shell: bash
@@ -42,3 +41,10 @@ jobs:
             .venv/Scripts/python.exe -m pytest -p no:cacheprovider --tb=short -q $args > ../out2.txt 2>&1 || true
             cut -c1-220 ../out2.txt | tail -${TB_LINES:-130}
           fi
+      - name: Result (the list of failures, last in the log; the job fails when a test failed)
+        working-directory: backend
+        shell: bash
+        run: |
+          grep -E "^(FAILED|ERROR)|passed|failed" ../out1.txt | cut -c1-230 | tail -80
+          exit "$(cat ../rc.txt)"
+
