@@ -152,6 +152,47 @@ def test_db_migrate_is_retried_when_postgres_starts_slowly(monkeypatch, tmp_path
         deskctl.migrate_store(env)
 
 
+def _stop_env(monkeypatch, tmp_path, pg_sequence):
+    """``stop_store`` with a fake ``pg_ctl``, a ``postmaster.pid`` in the data folder and ``pg_sequence``: what
+    ``bundle_processes`` says about the postgres pids at each look; returns (said, runs, killed)."""
+    home = tmp_path / "home"
+    (home / "pg").mkdir(parents=True)
+    (home / "pg" / "postmaster.pid").write_text("1\n")
+    said, runs, killed = [], [], []
+    monkeypatch.setattr(deskctl, "pg_ctl", lambda: Path("/x/pg_ctl"))
+    monkeypatch.setattr(deskctl, "ENV", tmp_path / "env")
+    monkeypatch.setattr(deskctl, "say", lambda msg="": said.append(msg))
+    monkeypatch.setattr(deskctl.subprocess, "run", lambda cmd, **k: runs.append(cmd))
+    monkeypatch.setattr(deskctl.time, "sleep", lambda s: None)
+    monkeypatch.setattr(deskctl, "_kill", killed.append)
+    seq = iter(pg_sequence)
+    last = [pg_sequence[-1]]
+    monkeypatch.setattr(deskctl, "bundle_processes", lambda: ([], next(seq, last[0])))
+    return {"DESK_HOME": str(home)}, said, runs, killed
+
+
+def test_stop_store_gives_postgres_time_for_its_checkpoint_and_never_kills_one_that_is_ending(monkeypatch, tmp_path):
+    """TDM#518: a forced end of the database makes the next start a recovery of minutes; the old 10 s grace killed it
+    in the middle of the checkpoint."""
+    env, said, runs, killed = _stop_env(monkeypatch, tmp_path, [[7]] * 40 + [[]])  # ends after 40 s: past the old 10 s
+    deskctl.stop_store(env)
+    assert runs and runs[0][-5:] == ["-m", "fast", "-w", "-t", "180"] and killed == []
+    assert any("ещё завершает работу" in m and "не закрывайте окно" in m for m in said)
+
+
+def test_stop_store_kills_only_after_the_grace_and_says_what_follows(monkeypatch, tmp_path):
+    env, said, _runs, killed = _stop_env(monkeypatch, tmp_path, [[7]])  # never ends
+    deskctl.stop_store(env)
+    assert killed == [[7]]
+    assert any("не остановился за 120 с" in m and "восстановит базу" in m for m in said)
+
+
+def test_the_launcher_says_stop_bat_not_close_the_window():
+    src = (REPO / "backend/windows/deskctl.py").read_text(encoding="utf-8")
+    assert "Остановить: stop.bat. Не закрывайте это окно и не нажимайте Ctrl+C" in src
+    assert "закройте это окно (или Ctrl+C" not in src
+
+
 def test_desk_home_falls_back_to_ascii_and_odd_paths_are_refused(monkeypatch, tmp_path):
     # PostgreSQL writes its paths in the ANSI code page and pgserver reads them as UTF-8; its psql runs unquoted
     monkeypatch.setattr(deskctl, "WIN", True)

@@ -134,9 +134,13 @@ KEEP_BACKUPS = 3
 LOG_MAX_BYTES = 20_000_000
 DEFAULT_PORT = 8100
 # pgserver gives pg_ctl 10 s to start PostgreSQL; on the first start an antivirus scanning postgres.exe can take
-# longer, and the next try usually finds the files already checked
+# longer, and the next try usually finds the files already checked. The recovery after an emergency stop (minutes) is
+# waited for inside desk (desk.store.embedded), not here
 MIGRATE_TRIES = 3
 MIGRATE_PAUSE_S = 5.0
+STOP_FAST_S = 180.0  # pg_ctl stop -m fast: the checkpoint of a big database
+STOP_GRACE_S = 120.0  # then the processes are given this long to end before they are killed
+STOP_SAY_S = 15.0
 
 
 def say(msg: str = "") -> None:
@@ -384,19 +388,30 @@ def _kill(pids: list[int]) -> None:
 
 
 def stop_store(env: dict[str, str]) -> None:
-    """Stop the embedded PostgreSQL clusters served by this venv's pgserver (pg_ctl, then by force)."""
+    """Stop the embedded PostgreSQL clusters served by this venv's pgserver: ``pg_ctl stop -m fast`` (a checkpoint of a
+    big database takes a while), then wait for the processes to end, saying so; only after ``STOP_GRACE_S`` by force
+    (TDM#518: a forced end is what makes the next start a recovery of minutes)."""
     ctl = pg_ctl()
     home = Path(env["DESK_HOME"])
     for data in (home / "pg", ENV / ".devdata" / "desk_pg"):  # DESK_HOME\pg; the pre-DESK_HOME place
         if ctl and (data / "postmaster.pid").is_file():
             say(f"Останавливаю встроенный PostgreSQL ({data}) ...")
-            subprocess.run([str(ctl), "stop", "-D", str(data), "-m", "fast", "-w", "-t", "30"], env=env,
+            subprocess.run([str(ctl), "stop", "-D", str(data), "-m", "fast", "-w", "-t", f"{STOP_FAST_S:g}"], env=env,
                            check=False)
-    for _ in range(10):
+    waited = 0.0
+    while True:
         _, pg = bundle_processes()
         if not pg:
             return
+        if waited >= STOP_GRACE_S:
+            break
+        if waited and waited % STOP_SAY_S < 1:
+            say(f"PostgreSQL ещё завершает работу (записывает данные на диск), прошло {waited:g} с. Подождите, не "
+                "закрывайте окно: так следующий запуск не потребует долгого восстановления.")
         time.sleep(1)
+        waited += 1
+    say(f"PostgreSQL не остановился за {STOP_GRACE_S:g} с: завершаю принудительно. Следующий запуск восстановит базу "
+        "(это занимает несколько минут).")
     _kill(bundle_processes()[1])
 
 
@@ -714,7 +729,8 @@ def update_wheels(env: dict[str, str], changed: list[str]) -> bool:
 def migrate_store(env: dict[str, str]) -> None:
     """``desk db-migrate``, up to ``MIGRATE_TRIES`` times: a first start of the embedded PostgreSQL can exceed
     pgserver's 10 s while an antivirus checks its files."""
-    say("Создаю или обновляю базу (desk db-migrate); при первом запуске PostgreSQL создаёт кластер, до минуты ...")
+    say("Создаю или обновляю базу (desk db-migrate); при первом запуске PostgreSQL создаёт кластер, до минуты; после "
+        "аварийной остановки он сначала восстанавливается, это до нескольких минут ...")
     for n in range(1, MIGRATE_TRIES + 1):
         if not subprocess.run([str(desk_exe()), "db-migrate"], env=env, cwd=str(home_dir(env)),
                               check=False).returncode:
@@ -724,7 +740,7 @@ def migrate_store(env: dict[str, str]) -> None:
                 f"Повтор {n + 1} из {MIGRATE_TRIES} через {MIGRATE_PAUSE_S:g} с ...")
             time.sleep(MIGRATE_PAUSE_S)
     raise Fail(f"desk db-migrate не прошёл за {MIGRATE_TRIES} попытки (сообщения выше). Журнал PostgreSQL: "
-               f"{Path(env['DESK_HOME']) / 'pg' / 'log'}; частые причины и решения: "
+               f"{Path(env['DESK_HOME']) / 'logs' / 'postgres.log'}; частые причины и решения: "
                "app\\INSTALL_BACKEND_WINDOWS.md, раздел «Если что-то не так». "
                "Часто помогает просто запустить ещё раз.")
 
@@ -1174,7 +1190,8 @@ def cmd_start(args: list[str]) -> int:
     log = home / "logs" / "serve.log"
     say(f"  журнал: {log}")
     say_address(addr, port, url)
-    say("Остановить: закройте это окно (или Ctrl+C, или stop.bat).")
+    say("Остановить: stop.bat. Не закрывайте это окно и не нажимайте Ctrl+C: база данных остановится аварийно, и "
+        "следующий запуск будет долго её восстанавливать.")
     say()
 
     browse = not verify  # after an update the settings page reloads itself

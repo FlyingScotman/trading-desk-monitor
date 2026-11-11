@@ -54,16 +54,20 @@ def connect(url: str) -> psycopg.Connection:
 def resolve_url(settings: Settings) -> str:
     """``DESK_STORE_URL``, else the embedded server in ``settings.pg_dir`` (pgserver; ``<home>/pg``, in the dev
     checkout ``.devdata/desk_pg``), database ``desk``. It keeps running after the process exits, so later
-    commands share it."""
+    commands share it. A server that was stopped in an emergency recovers first, which takes minutes: this waits for
+    it, saying so on the console, and a start that cannot succeed raises ``embedded.StoreStartError`` (a
+    ``SettingsError``) with the tail of the server's log (``desk.store.embedded``)."""
     if settings.store_url:
         return settings.store_url
     try:
-        import pgserver
+        import pgserver  # noqa: F401 - embedded.get_server imports it again; this is the message for a missing one
     except ImportError:
         raise SettingsError("set DESK_STORE_URL (postgresql://...): the embedded dev store needs pgserver, "
                             "which is not installed (uv sync --extra dev)") from None
     settings.pg_dir.parent.mkdir(parents=True, exist_ok=True)
-    server = pgserver.get_server(settings.pg_dir, cleanup_mode=None)
+    from . import embedded  # pgserver's start with the recovery of a crashed cluster (TDM#518)
+
+    server = embedded.get_server(settings.pg_dir)
     if "1 row" not in server.psql("SELECT 1 FROM pg_database WHERE datname = 'desk';"):
         server.psql("CREATE DATABASE desk ENCODING 'UTF8' TEMPLATE template0;")
     return server.get_uri("desk")
