@@ -465,6 +465,7 @@ def test_release_workflow_patches_from_the_published_release_and_the_delivered_r
     assert "--patch-from-delivered" in wf and "--patch-base" in wf
 
 
+@pytest.mark.skipif(os.name == "nt", reason="a bash script of the workflow's own step")
 def test_a_tag_without_v_fails_its_own_workflow_and_v_tags_are_left_to_the_release(tmp_path):
     """Issue #75: a tag ``0.2.2`` (no ``v``) never ran release.yml and left an empty release; tag-format.yml fails on
     such a tag (pushed, or a release made by hand) with what to do; release.yml still runs on v-tags only."""

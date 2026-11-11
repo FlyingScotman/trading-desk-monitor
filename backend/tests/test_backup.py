@@ -72,6 +72,7 @@ def test_backup_writes_a_dump_with_its_snapshot_counts(store_url, tmp_path):
     assert last["ok"] and last["file"] == b.name
 
 
+@pytest.mark.skipif(os.name == "nt", reason="a /bin/sh script stands for pg_dump")
 def test_backup_failure_leaves_nothing_and_is_recorded(store_url, tmp_path, monkeypatch):
     """A pg_dump that fails (here a stand-in that exits 1): no file, not even a .partial; the state says why."""
     fake = tmp_path / "pg_dump"

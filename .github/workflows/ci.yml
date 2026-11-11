@@ -33,6 +33,73 @@ jobs:
       - name: Root tests
         run: backend/.venv/bin/python -m pytest -q -p no:cacheprovider tests
 
+  # TDM#639: Windows and CPython 3.11 are the target of the owner's machine, the jobs above are Ubuntu and 3.12. The two
+  # Windows jobs run when the change can touch what only Windows runs (the launcher and installer, the updater, the
+  # embedded store, the bundle builder, the dependencies) and on every push to main; the job below says so. A skipped
+  # job counts as passed for a required check, so the checks "windows-bundle" and "backend-windows" can be required
+  # without blocking the pull requests that cannot affect them.
+  windows-paths:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      run: ${{ steps.f.outputs.run }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - id: f
+        env:
+          EVENT: ${{ github.event_name }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          BEFORE: ${{ github.event.before }}
+          PATTERN: >-
+            ^(backend/windows/|backend/src/desk/(updater/|update\.py|restart\.py|settings\.py|store/|inbox/)|backend/tools/(build_windows_bundle|release_assets|ci_windows_bundle|bundle-build-constraints)|backend/(pyproject\.toml|uv\.lock)|backend/tests/windows_suite\.txt|\.github/workflows/(ci|windows-bundle|release)\.yml|docs/INSTALL_BACKEND_WINDOWS\.md)
+        run: |
+          base=""
+          if [ "$EVENT" = "pull_request" ]; then base="$BASE_SHA"; elif [ "$EVENT" = "push" ]; then base="$BEFORE"; fi
+          run=false
+          if [ "${GITHUB_REF}" = "refs/heads/main" ] && [ "$EVENT" = "push" ]; then
+            run=true
+          elif [ -z "$base" ] || echo "$base" | grep -qE '^0+$' || ! git cat-file -e "$base^{commit}" 2>/dev/null; then
+            run=true   # a new branch, a force push, a manual run: no base to compare with
+          elif git diff --name-only "$base" "$GITHUB_SHA" | grep -E "$PATTERN"; then
+            run=true
+          fi
+          echo "run=$run" >> "$GITHUB_OUTPUT"
+          echo "Windows jobs: $run"
+
+  windows-bundle:
+    needs: windows-paths
+    if: needs.windows-paths.outputs.run == 'true'
+    uses: ./.github/workflows/windows-bundle.yml
+
+  backend-windows:
+    needs: windows-paths
+    if: needs.windows-paths.outputs.run == 'true'
+    runs-on: windows-latest
+    timeout-minutes: 45
+    steps:
+      - name: Keep line endings as they are in the repository (the bundle is built from LF files)
+        run: git config --global core.autocrlf false
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+      - name: CPython 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Venv with the backend and dev tools (core from the commit pinned in pyproject, embedded PostgreSQL)
+        working-directory: backend
+        shell: bash
+        run: |
+          uv venv -p 3.11 .venv
+          uv pip install -p .venv/Scripts/python.exe -e ".[dev]"
+      - name: Backend tests that run on Windows (the list and what is left out and why are in backend/tests/windows_suite.txt)
+        working-directory: backend
+        shell: bash
+        run: |
+          files=$(grep -v '^[[:space:]]*#' tests/windows_suite.txt | grep -v '^[[:space:]]*$' | tr -d '\r')
+          .venv/Scripts/python.exe -m pytest -q -p no:cacheprovider $files
+
   js:
     runs-on: ubuntu-latest
     timeout-minutes: 15

@@ -1,0 +1,48 @@
+# The backend tests that CI runs on Windows with CPython 3.11 (job "backend-windows" of .github/workflows/ci.yml, TDM#639):
+# one test file per line, relative to backend/. The rest of the suite runs on Ubuntu with CPython 3.12 (job "test").
+#
+# What is here: the code that behaves differently on Windows or is only ever run there: the launcher and its installer
+# (deskctl, mirror_install), the updater and the update of the bundle, the embedded PostgreSQL and its recovery
+# (store, embedded), file paths, atomic writes and locks (settings, backup, inbox scan), the adapter's child processes
+# (inbox runner, loader, adapter services), the time zones (Windows has no zoneinfo data), the firewall and the LAN
+# commands, sign-in, and the API over a real store.
+#
+# What is left out, and why:
+# - The calculation tests (test_slice_s1..s4, test_pnl_*, test_ccs_*, test_fx_*, test_ocp*, test_rates_*, test_curves_*,
+#   test_funding_*, test_forward_carry, the golden runs, ...): pure Python and numbers, nothing of the operating system in
+#   them; the Linux job runs them, and their results do not depend on the platform.
+# - Single tests that need POSIX (symlinks, file modes, process groups, a /bin/sh stand-in for an executable) carry
+#   @pytest.mark.skipif(os.name == "nt", reason=...) in their files: the marks are the list of them.
+# - Tests that need the network or a built wheel (the `live` and `bundle` markers) stay off, as everywhere.
+# This file is a list of paths: a file that is not in it is simply not run on Windows. Add a file here when its code has
+# a Windows side. The first runs on a real Windows machine decide what else gets a skipif, with the reason said there.
+
+tests/test_windows_bundle.py
+tests/test_deskctl_mirror.py
+tests/test_mirror_install.py
+tests/test_update.py
+tests/test_updater.py
+tests/test_adapter_updater.py
+tests/test_embedded_store_518.py
+tests/test_ci_windows_bundle.py
+tests/test_settings.py
+tests/test_settings_home.py
+tests/test_settings_forms.py
+tests/test_settings_detect.py
+tests/test_lan.py
+tests/test_server_admin.py
+tests/test_no_named_timezone.py
+tests/test_imports.py
+tests/test_store.py
+tests/test_backup.py
+tests/test_inbox_core.py
+tests/test_inbox_scan.py
+tests/test_inbox_p1.py
+tests/test_inbox_r22.py
+tests/test_adapter_tools.py
+tests/test_adapter_services.py
+tests/test_index_codes_choices.py
+tests/test_index_choices_651.py
+tests/test_ocp_types_e2e.py
+tests/test_auth.py
+tests/test_api.py

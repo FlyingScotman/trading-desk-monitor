@@ -14,6 +14,7 @@ name: release
 # Re-running for an existing tag (Run workflow with the tag filled in) replaces its assets.
 # Only a v-tag starts this workflow: a tag without v (or a release made by hand on GitHub) stays empty; tag-format.yml
 # fails on such a tag with what to do, and check-tag below rejects a non-v tag given to Run workflow.
+# The release job waits for the Windows check (windows-bundle.yml, TDM#639): install, update, rollback, stop on Windows.
 
 on:
   push:
@@ -33,7 +34,15 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  # TDM#639: the bundle is installed, started, updated, rolled back and stopped on Windows with CPython 3.11 before it is
+  # published (windows-bundle.yml, the same build command as below); a release without that check is not made
+  windows:
+    uses: ./.github/workflows/windows-bundle.yml
+    with:
+      ref: ${{ github.event.inputs.tag || github.ref }}
+
   release:
+    needs: windows
     runs-on: ubuntu-latest
     timeout-minutes: 90
     env:

@@ -4,6 +4,7 @@ adapter, conformance kit. No store: everything here is standard library."""
 from __future__ import annotations
 
 import json
+import os
 import re
 import subprocess
 import sys
@@ -552,6 +553,7 @@ def test_match_runs_in_chunks_and_fd1_cannot_corrupt_the_reply(tmp_path: Path) -
     assert len(out) == len(paths) and len({v["pid"] for v in out.values()}) == 2
 
 
+@pytest.mark.skipif(os.name == "nt", reason="os.kill(pid, 0) probes a process (it would terminate one on Windows)")
 def test_timeout_kills_the_process_tree(tmp_path: Path) -> None:
     import os
     import time
@@ -584,6 +586,7 @@ def test_module_adapter_is_fingerprinted_from_what_the_child_imported(monkeypatc
     assert h.ok and h.fingerprint == fp
 
 
+@pytest.mark.skipif(os.name == "nt", reason="a symlink (needs a privilege on Windows)")
 @pytest.mark.parametrize("as_path", [False, True])
 def test_adapter_with_a_wrong_fingerprint_never_runs(tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
                                                     as_path: bool) -> None:

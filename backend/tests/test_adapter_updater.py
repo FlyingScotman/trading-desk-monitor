@@ -521,6 +521,7 @@ def test_find_in_downloads_and_install_found(home, tmp_path):
     assert r.status_code == 200 and r.json()["version"] == "0.5.0"
 
 
+@pytest.mark.skipif(os.name == "nt", reason="POSIX file modes")
 def test_the_token_route_never_returns_the_token(home, tmp_path):
     c = client()
     r = c.put("/api/v1/settings/github-token", json={"token": TOKEN})

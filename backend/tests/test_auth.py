@@ -150,6 +150,7 @@ def test_listen_sockets_bind_the_address():
             x.close()
 
 
+@pytest.mark.skipif(os.name == "nt", reason="POSIX file modes")
 def test_self_signed_certificate_loads(tmp_path: Path):
     crt, key = auth.self_signed_cert(tmp_path / "tls", ["desk-pc", "10.1.2.3"])
     ssl.create_default_context(ssl.Purpose.CLIENT_AUTH).load_cert_chain(crt, key)

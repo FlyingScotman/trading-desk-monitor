@@ -220,6 +220,7 @@ def test_ctx_inbox_dirs_reach_the_adapter(tmp_path: Path) -> None:
 # ---- token -----------------------------------------------------------------------------------------------------
 
 
+@pytest.mark.skipif(os.name == "nt", reason="POSIX file modes")
 def test_token_file_in_home(tmp_path: Path) -> None:
     path = write_hub_token(f"  {TOKEN}\n", tmp_path)
     assert path == tmp_path / "hub_token" and path.read_text(encoding="utf-8") == TOKEN + "\n"

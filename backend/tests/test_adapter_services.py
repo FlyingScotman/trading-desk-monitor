@@ -316,6 +316,7 @@ def no_secret(*values: object) -> None:
 
 # ---- capability --------------------------------------------------------------------------------------------------
 
+@pytest.mark.skipif(os.name == "nt", reason="a symlink (needs a privilege on Windows)")
 @pytest.mark.parametrize("cap,code", [
     (False, "services_unavailable"), ({"version": 2, "entry": "helpers/services.py"}, "capability_invalid"),
     ({"version": 1, "entry": "../outside.py"}, "capability_invalid"), ({"version": 1, "entry": "/abs.py"}, "capability_invalid"),
