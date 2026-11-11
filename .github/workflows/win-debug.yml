@@ -62,3 +62,22 @@ jobs:
           done
           echo "=== fsutil"; fsutil fsinfo volumeinfo D:\\ | head -8 || true
           echo "=== TEMP=$TEMP RUNNER_TEMP=$RUNNER_TEMP LOCALAPPDATA=$LOCALAPPDATA"
+      - name: "initdb in a folder closed by deskctl._private (variants)"
+        shell: bash
+        run: |
+          PY=.venv/Scripts/python.exe
+          INITDB=$($PY -c "import pgserver,pathlib;print(pathlib.Path(pgserver.__file__).parent/'pginstall'/'bin'/'initdb.exe')")
+          SID=$(whoami.exe /user /fo csv /nh | grep -o 'S-1-[0-9-]*' | head -1); echo "SID=$SID"
+          try() {
+            name=$1; shift
+            base="D:/probe_$name"; rm -rf "$base"; mkdir -p "$base"
+            icacls.exe "$(cygpath -w $base)" "$@" > /dev/null; echo "icacls($name) exit $?"
+            $PY -c "import pathlib,sys;pathlib.Path(sys.argv[1],'pg').mkdir()" "$base"
+            icacls.exe "$(cygpath -w $base/pg)" | head -8
+            "$INITDB" -D "$base/pg" --auth=trust --auth-local=trust --encoding=utf8 -U postgres > "$base/o.txt" 2>&1; echo "initdb($name) exit $?"; grep -i "error" "$base/o.txt" | head -3
+          }
+          try A '/inheritance:r' '/grant:r' "*$SID:(OI)(CI)F" '*S-1-5-18:(OI)(CI)F' '*S-1-5-32-544:(OI)(CI)F'
+          try B '/inheritance:r' '/grant:r' "*$SID:(OI)(CI)F" '*S-1-5-18:(OI)(CI)F' '*S-1-5-32-544:(OI)(CI)F' '*S-1-3-0:(OI)(CI)(IO)F'
+          try C '/inheritance:r' '/grant:r' "*$SID:(OI)(CI)F" '*S-1-5-18:(OI)(CI)F' '*S-1-5-32-544:(OI)(CI)F' '*S-1-5-32-545:(OI)(CI)RX'
+          try D '/grant' "*$SID:(OI)(CI)F"
+
