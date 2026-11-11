@@ -660,9 +660,14 @@
 
   // ---------- события ----------
   const subs = {};
+  // Поколение данных: растёт при любом событии и при приходе поздних данных (K.patchNames, K.notesChanged, K.whenData; lib/real.js
+  // ведёт M.dataGen по каждому ответу сервера). Память ячеек таблиц (K.table, строки C03) помнит поколение, в котором посчитана, и
+  // при смене считает заново: ячейки, посчитанные до алиасов, истории или деривативов, из памяти не отдаются (TDM#630).
+  K._gen = 0;
+  K.dataGen = () => K._gen + ((M && M.dataGen) || 0);
   // по копии списка: подписка K.live, чей элемент удалён, отписывается во время рассылки — без копии forEach
   // пропустил бы следующего подписчика (страница не перерисовалась бы при второй смене фильтра или формата)
-  function fire(ev) { (subs[ev] || []).slice().forEach(fn => { try { fn(); } catch (e) { console.error(e); } }); }
+  function fire(ev) { K._gen++; (subs[ev] || []).slice().forEach(fn => { try { fn(); } catch (e) { console.error(e); } }); }
   // подписка; возвращает функцию отписки
   K.on = (ev, fn) => { (subs[ev] = subs[ev] || []).push(fn); return () => { const a = subs[ev], i = a.indexOf(fn); if (i >= 0) a.splice(i, 1); }; };
   // перерисовка блока, пока его элемент в документе; отписывается, когда элемент удалён
@@ -694,7 +699,7 @@
     const host = pageHost(), note = document.createElement('div');
     note.innerHTML = K.loadingNote(); host.insertBefore(note, host.firstChild);
     let done = false;
-    const run = () => { if (done) return; done = true; note.remove(); try { K.notesChanged(); fn(); readyMark(); } catch (e) { setTimeout(() => { throw e; }); } };
+    const run = () => { if (done) return; done = true; K._gen++; note.remove(); try { K.notesChanged(); fn(); readyMark(); } catch (e) { setTimeout(() => { throw e; }); } };
     let p; try { p = load(); } catch (e) { p = Promise.reject(e); }
     Promise.resolve(p).then(run, e => { K.dataError(e && e.message ? e.message : 'сбой загрузки'); run(); });
   };
@@ -1282,6 +1287,7 @@
   const notesChipHtml = () => '<span class="k-chip" data-a="notes" title="Чего нет в данных прогона" style="border-color:var(--warn)">ⓘ ' + M.notes.length + '</span>';
   // заметки, добавленные после шапки (данные, пришедшие позже страницы: история рынка, TDM#629): число в чипе, чипа не было — появляется
   K.notesChanged = () => {
+    K._gen++;
     const bar = document.querySelector('.k-top');
     if (!bar || K.source === 'empty' || !M.notes || !M.notes.length) return;
     const nb = bar.querySelector('[data-a=notes]');
@@ -1468,12 +1474,21 @@
   };
 
   // ---------- кликабельные цифры ----------
+  // Реестр reg растёт с каждой цифрой. Записи, чьи цифры нарисованы блоком, который потом перерисовывают (K.table, C03),
+  // освобождаются вместе с блоком: блок заводит область (K.dScope), на время своей отрисовки включает её (K.dScopeSet), а при
+  // перерисовке освобождает (K.dFree). Освобождённая запись — null: номера остальных не сдвигаются (на них ссылаются
+  // data-dr в разметке и c02, который кладёт в K._reg сам). Вне области записи живут, как раньше.
   const reg = []; K._reg = reg;
+  let dScope = null;
+  K.dScope = () => ({ ids: [] });
+  K.dScopeSet = s => { const p = dScope; dScope = s; return p; };
+  K.dFree = s => { if (s) { s.ids.forEach(i => { reg[i] = null; }); s.ids.length = 0; } };
   K.d = function (spec, text, cls) {
     // spec.nullable (#168, фондирование): ни одно значение не посчитано (все null) — «—», а не 0
     if (spec.nullable && text == null && (spec.rows ? spec.rows.every(r => r.v == null) : spec.list && spec.list.every(p => (typeof spec.val === 'function' ? spec.val(p) : p[spec.val]) == null)))
       return '<span class="mut3" title="не посчитано">—</span>';
     const id = reg.push(spec) - 1;
+    if (dScope) dScope.ids.push(id);
     const v = spec.v != null ? spec.v : spec.rows ? M.sum(spec.rows, 'v') : (spec.list ? M.sum(spec.list, spec.val) : null);
     // сумма по строкам или списку, где ни одно значение не посчитано (M.sum → null, #327, #333), — «—», а не 0
     // (разбор по щелчку остаётся); посчитана часть — сумма посчитанных, как раньше
@@ -1483,7 +1498,7 @@
   };
   document.addEventListener('click', e => {
     const t = e.target.closest('[data-dr]');
-    if (t) { e.stopPropagation(); e.preventDefault(); K.drill(reg[+t.dataset.dr]); return; }
+    if (t) { e.stopPropagation(); e.preventDefault(); if (reg[+t.dataset.dr]) K.drill(reg[+t.dataset.dr]); return; }
     const c = e.target.closest('[data-card]');
     if (c) { e.stopPropagation(); K.card(c.dataset.card); }
   }, true);
@@ -1687,6 +1702,7 @@
       redraw: () => { if (c && typeof optFn === 'function') c.setOption(build(), true); },
       dispose: () => { dead = true; if (io) io.disconnect(); if (ro) ro.disconnect(); if (c) c.dispose(); const i = K.charts.indexOf(w); if (i >= 0) K.charts.splice(i, 1); const q = CQ.indexOf(make); if (q >= 0) CQ.splice(q, 1); },
       update: fn => { optFn = fn; if (c) c.setOption(build(), true); },
+      force: () => { if (!c && !dead && el.isConnected) make(); },  // создать сейчас, не дожидаясь экрана (печать)
       pending: () => { if (c || dead || !el.isConnected) return false; const r = el.getBoundingClientRect(); return r.width > 0 && r.bottom > -200 && r.top < (window.innerHeight || 1000) + 200; },
     };
     K.charts.push(w);
@@ -2099,17 +2115,32 @@
   // Таблицы короче K.VWIN_MIN строк рисуются как раньше, целиком.
   // items: [{k: 'row' | 'grp' | 'hid', html(), cells?()}] в порядке таблицы; 'hid' — строка, которой на экране нет, но она
   // идёт в выгрузку (свёрнутая группа C03), cells() — ячейки строки (для мерных строк). o: {cols — число колонок (colspan
-  // распорки), rowH, grpH — первая оценка высоты строки и строки группы, px}.
+  // распорки), rowH, grpH — первая оценка высоты строки и строки группы, px; hkey — ключ таблицы: откалиброванные высоты
+  // запоминаются по нему (K._vh) и берутся новым окном вместо оценки, так что перерисованная таблица не становится на время
+  // короче и прокрутка у её конца не теряется; scope — область реестра K.d (K.dScope), в которой строки окна рисуют свои цифры;
+  // onStale() — поколение данных сменилось (K.dataGen): память ячеек таблицы устарела; items[i].reset() — то же для строки}.
   // v = K.vwin(items, o): v.html() — содержимое tbody для вставки в таблицу (первое окно), v.attach(table) — после
   // вставки, v.paint(force) — выбрать строки окна заново, v.offsetOf(i) — отступ строки i от верха таблицы, v.destroy().
+  // Таблице с окном ставятся aria-rowcount (все строки, шапка и итог) и aria-rowindex у строк окна: у экранного диктора
+  // таблица — полная, а не 60 строк.
   K.VWIN_MIN = 400;
+  K._vh = {};
   const VW = K._vw = new Set();
   K.vwin = function (items, o) {
     o = o || {};
-    const n = items.length, NC = o.cols || 1, hs = { row: o.rowH || 26, grp: o.grpH || 26, hid: 0 };
-    let off = null, table = null, tb = null, a = 0, z = 0, raf = 0, io = null, clip = [], full = false, gone = false, meas = null, fixes = 0;
+    const n = items.length, NC = o.cols || 1, sv = (o.hkey && K._vh[o.hkey]) || {}, hs = { row: sv.row || o.rowH || 26, grp: sv.grp || o.grpH || 26, hid: 0 };
+    let off = null, table = null, tb = null, a = 0, z = 0, raf = 0, io = null, clip = [], full = false, gone = false, meas = null, fixes = 0, gen = K.dataGen();
     const build = () => { off = new Float64Array(n + 1); for (let i = 0; i < n; i++) off[i + 1] = off[i] + hs[items[i].k]; };
     build();
+    // номер строки для aria-rowindex: шапка — первая, строки без места на экране ('hid') не считаются
+    const ri = new Int32Array(n); let shown = 0;
+    for (let i = 0; i < n; i++) ri[i] = items[i].k === 'hid' ? 0 : (shown += 1) + 1;
+    // данные пришли после того, как ячейки посчитаны (алиасы, история…): память ячеек — заново
+    const stale = () => {
+      const g = K.dataGen(); if (g === gen) return;
+      gen = g; items.forEach(it => it.reset && it.reset()); if (o.onStale) o.onStale();
+    };
+    const inScope = fn => { if (!o.scope) return fn(); const prev = K.dScopeSet(o.scope); try { return fn(); } finally { K.dScopeSet(prev); } };
     const idxAt = y => { let lo = 0, hi = n - 1; while (lo < hi) { const m = (lo + hi + 1) >> 1; if (off[m] <= y) lo = m; else hi = m - 1; } return lo; };
     const spacer = px => '<tr class="k-vs" aria-hidden="true"><td colspan="' + NC + '" style="height:' + Math.max(0, Math.round(px * 100) / 100) + 'px;padding:0;border:0"></td></tr>';
     const textLen = s => s.indexOf('<') < 0 ? s.length : s.replace(/<[^>]*>/g, '').length;
@@ -2147,8 +2178,8 @@
       }
       return meas = [...new Set(who)].filter(Boolean).map(it => '<tr class="k-vm" aria-hidden="true" style="visibility:collapse">' + it.cells().join('') + '</tr>').join('');
     };
-    const rowsHtml = (lo, hi) => { let s = ''; for (let i = lo; i < hi; i++) if (items[i].k !== 'hid') s += items[i].html(); return s; };
-    const fill = (lo, hi) => { a = lo; z = hi; return measure() + spacer(off[lo]) + rowsHtml(lo, hi) + spacer(off[n] - off[hi]); };
+    const rowsHtml = (lo, hi) => inScope(() => { let s = ''; for (let i = lo; i < hi; i++) if (items[i].k !== 'hid') s += items[i].html().replace('<tr', '<tr aria-rowindex="' + ri[i] + '"'); return s; });
+    const fill = (lo, hi) => { a = lo; z = hi; stale(); return measure() + spacer(off[lo]) + rowsHtml(lo, hi) + spacer(off[n] - off[hi]); };
     const v = {
       items, get from() { return a; }, get to() { return z; },
       html() { return fill(0, Math.min(n, o.first || 60)); },
@@ -2161,7 +2192,7 @@
           const hh = L.reduce((s, tr) => s + tr.getBoundingClientRect().height, 0) / L.length;
           if (hh > 4 && Math.abs(hh - hs[k]) > 0.2) { hs[k] = Math.round(hh * 100) / 100; ch = true; }
         }
-        if (ch) build();
+        if (ch) { build(); if (o.hkey) K._vh[o.hkey] = { row: hs.row, grp: hs.grp }; }
         return ch;
       },
       rowH(i) { return hs[items[i].k]; },
@@ -2177,6 +2208,7 @@
         if (gone || full || !tb) return;
         if (!tb.isConnected) { v.destroy(); return; }
         const bd = v.band(); if (!bd) return;
+        if (K.dataGen() !== gen) force = true;  // память ячеек устарела: строки окна — заново
         const H = Math.max(200, bd[1] - bd[0]), buf = Math.max(400, H);
         const need0 = idxAt(Math.max(0, bd[0] - buf * 0.3)), need1 = Math.min(n, idxAt(Math.max(0, bd[1] + buf * 0.3)) + 1);
         if (!force && a <= need0 && z >= need1 && (z - a) > 0) return;
@@ -2191,13 +2223,14 @@
       setFull(on) {
         if (!tb || gone) return;
         full = on;
-        if (on) { tb.innerHTML = measure() + rowsHtml(0, n); a = 0; z = n; } else v.paint(true);
+        if (on) { stale(); tb.innerHTML = measure() + rowsHtml(0, n); a = 0; z = n; } else v.paint(true);
       },
       // полная таблица (шапка, все строки, включая скрытые, подвал) без вставки в страницу: выгрузка CSV читает строки из неё
       full() {
         const t = document.createElement('table'), body = document.createElement('tbody');
         if (table.tHead) t.appendChild(table.tHead.cloneNode(true));
-        body.innerHTML = items.map(it => it.html()).join('');
+        stale();
+        body.innerHTML = inScope(() => items.map(it => it.html()).join(''));
         t.appendChild(body);
         if (table.tFoot) t.appendChild(table.tFoot.cloneNode(true));
         if (K.accMarkAll) K.accMarkAll(t);
@@ -2205,6 +2238,9 @@
       },
       attach(t) {
         table = t; tb = t.tBodies[0]; t.__vfull = v.full; t.__vwin = v;
+        t.setAttribute('aria-rowcount', String(shown + 1 + (t.tFoot ? 1 : 0)));
+        if (t.tHead && t.tHead.rows[0]) t.tHead.rows[0].setAttribute('aria-rowindex', '1');
+        if (t.tFoot && t.tFoot.rows[0]) t.tFoot.rows[0].setAttribute('aria-rowindex', String(shown + 2));
         clip = []; for (let e = t.parentElement; e && e !== document.body && e !== document.documentElement; e = e.parentElement) { const ov = getComputedStyle(e).overflowY; if (ov && ov !== 'visible') clip.push(e); }
         t.style.overflowAnchor = 'none';
         VW.add(v);
@@ -2212,7 +2248,7 @@
         watch();
       },
       schedule() { if (!raf && !gone) raf = requestAnimationFrame(() => { raf = 0; v.paint(false); }); },
-      // данные ячеек устарели (пришли алиасы): строки окна — заново
+      // данные ячеек устарели (пришли алиасы): строки окна — заново (память ячеек сбросит paint по смене поколения данных)
       repaint() { if (tb && !full) v.paint(true); },
       destroy() { gone = true; VW.delete(v); if (io) io.disconnect(); io = null; },
     };
@@ -2230,11 +2266,21 @@
     document.addEventListener('scroll', sched, true);
     if (typeof window !== 'undefined' && window.addEventListener) {
       window.addEventListener('resize', sched);
-      window.addEventListener('beforeprint', () => VW.forEach(w => w.setFull(true)));
+      // печать: все строки таблиц с окном и все графики, которые ещё ждут своей очереди (иначе напечатаются пустые рамки)
+      window.addEventListener('beforeprint', () => { VW.forEach(w => w.setFull(true)); K.charts.slice().forEach(w => w.force && w.force()); });
       window.addEventListener('afterprint', () => VW.forEach(w => w.setFull(false)));
     }
   }
 
+  // Прокрутка вокруг перерисовки таблицы с окном строк: K.scrollKeep(el) запоминает прокрутку el, его прокручиваемых предков и
+  // страницы и возвращает функцию, которая её восстанавливает (браузер ужимает прокрутку, пока содержимое на миг короче).
+  K.scrollKeep = el => {
+    const L = [];
+    for (let e = el; e; e = e.parentElement) if (e.scrollTop > 0) L.push([e, e.scrollTop]);
+    const se = document.scrollingElement;
+    if (se && se.scrollTop > 0 && !L.some(x => x[0] === se)) L.push([se, se.scrollTop]);
+    return () => L.forEach(([e, y]) => { if (e.scrollTop !== y) e.scrollTop = y; });
+  };
   // ---------- таблица ----------
   // единица колонки (#105): opts.columns[].unit, если её нет в подписи (подпись с «,» — «MV, mm ₽» — уже с единицей);
   // в шапке таблицы — второй строкой под подписью, в CSV — в заголовке через запятую
@@ -2253,6 +2299,10 @@
   //        viewKey — стабильный ключ раскладки латиницей, он же основа имени CSV (без него — страница + id, K.tableKey), title — название в CSV, fileName — основа имени файла CSV (латиницей)}
   K.table = function (el, opts) {
     const st = { sort: opts.sort ? opts.sort.slice() : [], q: '', collapsed: {}, groupSort: false, filters: {}, grouped: false };
+    // таблицу рисуют заново в том же месте (страница перерисовала блок): записи реестра K.d прошлой — освободить; у прошлой
+    // таблицы с окном — прокрутка страницы и предков, чтобы вернуть её после новой
+    if (el.__kd) { K.dFree(el.__kd.draw); K.dFree(el.__kd.cells); }
+    const oldTbl = el.querySelector && el.querySelector('table'), restoreOuter = oldTbl && oldTbl.__vwin ? K.scrollKeep(el) : null;
     el.innerHTML = '';
     let tools = null, fltChip = null;
     if (opts.search !== false || opts.tools || opts.groupable) {
@@ -2286,6 +2336,11 @@
     let noClickTill = 0;  // после перетаскивания щелчок по заголовку — не сортировка
     let shown = [];       // строки на экране: после поиска, фильтров и сортировки (их и выгружает CSV)
     let memo = new WeakMap(), win = null, curGroups = [];  // ячейки строк (HTML) — одни и те же при сортировке и фильтре; окно строк длинной таблицы
+    // поколение данных, в котором посчитана память ячеек (K.dataGen), и области реестра K.d: цифры ячеек (живут с памятью) и
+    // всё остальное, что рисует перерисовка (итоги, строки групп, подвал; живут до следующей перерисовки)
+    let memoGen = K.dataGen(), sCells = K.dScope(), sDraw = K.dScope();
+    el.__kd = { cells: sCells, draw: sDraw };
+    const resetMemo = () => { memo = new WeakMap(); memoGen = K.dataGen(); K.dFree(sCells); };
     // видимые колонки в сохранённом порядке; новых в сохранённом порядке нет — они в конце, в исходном порядке
     const cols = () => {
       const C = opts.columns.filter(c => !c.hidden), o = lay.order;
@@ -2303,7 +2358,13 @@
     // keep — перерисовка по действию в самой таблице (сортировка, фильтр, поиск, группы, ширина): данные те же, ячейки строк
     // берутся из памяти; по событию страницы (данные, формат чисел, redraw) ячейки считаются заново
     function draw(keep) {
-      if (keep !== true) memo = new WeakMap();
+      if (keep !== true || memoGen !== K.dataGen()) resetMemo();
+      K.dFree(sDraw);
+      const prev = K.dScopeSet(sDraw), hadWin = !!win, restore = hadWin ? K.scrollKeep(wrap) : null;
+      try { drawBody(keep); } finally { K.dScopeSet(prev); }
+      if (restore || win) { if (restore) restore(); if (win) win.paint(false); }
+    }
+    function drawBody(keep) {
       if (win) { win.destroy(); win = null; }
       let rows = opts.rowsFn ? opts.rowsFn() : opts.rows;
       if (st.q) rows = rows.filter(r => (r.searchText || JSON.stringify(r)).toLowerCase().includes(st.q));
@@ -2318,7 +2379,12 @@
       const cg = fixedW() ? '<colgroup>' + (opts.stripe ? '<col style="width:4px">' : '') + C.map(c => '<col data-k="' + esc(c.key) + '" style="width:' + (lay.w[c.key] || 100) + 'px">').join('') + '</colgroup>' : '';
       const tw = fixedW() ? ' k-fixed" style="width:' + C.reduce((s, c) => s + (lay.w[c.key] || 100), opts.stripe ? 4 : 0) + 'px' : '';
       const cell0 = (c, r) => { const v = val(c, r); return '<td class="' + (c.num ? 'n ' : '') + (c.cls ? (typeof c.cls === 'function' ? c.cls(v, r) : c.cls) : '') + '"' + (c.style ? ' style="' + c.style(v, r) + '"' : '') + '>' + (c.fmt ? c.fmt(v, r) : esc(v)) + '</td>'; };
-      const cell = (c, r) => { let m = memo.get(r); if (!m) memo.set(r, m = {}); return m[c.key] != null ? m[c.key] : (m[c.key] = cell0(c, r)); };
+      const cell = (c, r) => {
+        let m = memo.get(r); if (!m) memo.set(r, m = {});
+        if (m[c.key] != null) return m[c.key];
+        const prev = K.dScopeSet(sCells);  // цифры ячейки живут, пока жива память
+        try { return (m[c.key] = cell0(c, r)); } finally { K.dScopeSet(prev); }
+      };
       const sumCell = (c, list) => {
         if (!c.sum) return '<td></td>';
         const fn = typeof c.sum === 'function' ? c.sum : r => val(c, r);
@@ -2352,8 +2418,10 @@
         const keys = K.groupKeys([...buckets.keys()], k => buckets.get(k), st.groupSort && !G.fixed ? st.sort : [], colOf, G.order);
         keys.forEach(k => {
           const sub = buckets.get(k), p = path + '/' + k, col = st.collapsed[p] != null ? st.collapsed[p] : !!G.collapsed;
-          items.push({ k: 'grp', html: () => '<tr class="grp l' + level + '" data-g="' + esc(p) + '">' + (opts.stripe ? '<td class="stripe" style="background:' + (G.color ? G.color(k, sub) : 'transparent') + '"></td>' : '') +
-            C.map((c, i) => i === li ? '<td colspan="' + spanAt(G) + '" style="padding-left:' + (8 + level * 14) + 'px"><span class="tw">' + (col ? '▸' : '▾') + '</span>' + (G.label ? G.label(k, sub) : esc(k)) + ' <span class="mut3" style="font-weight:400">' + sub.length + '</span></td>' : (i > li && i < li + spanAt(G) ? '' : sumCell(c, sub))).join('') + '</tr>' });
+          // HTML строки группы считается один раз (итоги группы — по всем её строкам): окно, листаясь, берёт его из памяти
+          let hc = null;
+          items.push({ k: 'grp', reset: () => { hc = null; }, html: () => hc != null ? hc : (hc = '<tr class="grp l' + level + '" data-g="' + esc(p) + '">' + (opts.stripe ? '<td class="stripe" style="background:' + (G.color ? G.color(k, sub) : 'transparent') + '"></td>' : '') +
+            C.map((c, i) => i === li ? '<td colspan="' + spanAt(G) + '" style="padding-left:' + (8 + level * 14) + 'px"><span class="tw">' + (col ? '▸' : '▾') + '</span>' + (G.label ? G.label(k, sub) : esc(k)) + ' <span class="mut3" style="font-weight:400">' + sub.length + '</span></td>' : (i > li && i < li + spanAt(G) ? '' : sumCell(c, sub))).join('') + '</tr>') });
           if (!col) emit(sub, level + 1, p);
         });
       }
@@ -2361,7 +2429,7 @@
       const foot = opts.footer === false ? '' : '<tfoot><tr>' + (opts.stripe ? '<td></td>' : '') + C.map((c, i) => i === li ? '<td>Итого <span class="mut3" style="font-weight:400">' + (opts.footCount ? esc(opts.footCount(rows)) : rows.length) + '</span></td>' : sumCell(c, rows)).join('') + '</tr></tfoot>';
       // длинная таблица — окном строк (K.vwin); короткая — вся, как раньше
       let body;
-      if (items.length > K.VWIN_MIN) { win = K.vwin(items, { cols: nCols }); win.dirty = () => { memo = new WeakMap(); win && win.repaint(); }; body = win.html(); }
+      if (items.length > K.VWIN_MIN) { win = K.vwin(items, { cols: nCols, hkey: vkey, scope: sDraw, onStale: resetMemo }); body = win.html(); }
       else body = items.map(it => it.html()).join('');
       wrap.innerHTML = '<table class="k-tbl' + tw + '">' + cg + head + '<tbody>' + (body || '<tr><td colspan="' + nCols + '" class="k-empty">ничего не найдено</td></tr>') + '</tbody>' + foot + '</table>';
       if (win) win.attach(wrap.querySelector('table'));
@@ -2403,7 +2471,8 @@
     function fitW(k) {
       const th = heads().find(x => x.dataset.k === k); if (!th) return;
       const i = th.cellIndex, cells = [th];
-      wrap.querySelectorAll('tbody tr.row, tfoot tr').forEach((tr, n) => { if (n < 2000 && tr.cells[i]) cells.push(tr.cells[i]); });
+      // в таблице с окном — и мерные строки (tr.k-vm): в них самая широкая ячейка колонки по всей таблице, а не только по окну
+      wrap.querySelectorAll('tbody tr.row, tbody tr.k-vm, tfoot tr').forEach((tr, n) => { if (n < 2000 && tr.cells[i]) cells.push(tr.cells[i]); });
       const rg = document.createRange();
       let w = 0;
       wrap.querySelectorAll('th .k-rsz').forEach(x => { x.style.display = 'none'; });  // ручка — во всю ячейку, не в счёт
@@ -2474,6 +2543,7 @@
     }
     const csvName = () => K.csvFileName(el, opts);
     draw();
+    if (restoreOuter) { restoreOuter(); if (win) win.paint(false); }
     const api = { redraw: draw, state: st, csv, csvName, setSort: s => { st.sort = s; draw(true); }, setFilter: (k, v) => { st.filters[k] = v; draw(true); }, setGrouped: g => { st.grouped = !!g; draw(true); }, el,
       viewKey: vkey, layout: () => JSON.parse(JSON.stringify(lay)), setLayout: v => { lay = K.viewLayout(v, colKeys()); saveLay(); draw(true); }, resetView: () => resetBtn.onclick() };
     if (opts.autoFilter !== false && !opts.rows) K.live(el, 'filter', draw);
@@ -3300,7 +3370,8 @@
   // Имена в уже нарисованном: ячейки K.nameCell (data-pn) и элементы с data-card (строка таблицы, ссылка, подпись), чей текст —
   // биржевое имя бумаги: заменяются на месте, страница целиком не перерисовывается (она тяжёлая: C03 — секунда)
   K.patchNames = () => {
-    VW.forEach(w => w.dirty && w.dirty());  // длинные таблицы (K.vwin): ячейки вне окна — из памяти, их тоже обновить
+    K._gen++;  // память ячеек таблиц — заново; длинные таблицы (K.vwin): строки окна — сразу, остальные при показе
+    VW.forEach(w => w.repaint());
     document.querySelectorAll('[data-pn]').forEach(el => {
       const p = M.pos[el.dataset.pn]; if (!p) return;
       if (el.textContent !== p.name) el.textContent = p.name;

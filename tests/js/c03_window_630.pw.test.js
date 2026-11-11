@@ -85,3 +85,96 @@ test('C03 с окном строк: CSV и подвал как у полной �
     await browser.close();
   }
 });
+
+// ---------- замечания ревью ----------
+async function openC03(browser, viewport) {
+  const ctx = await browser.newContext({ viewport: viewport || { width: 1600, height: 700 } });
+  await ctx.addInitScript(() => { try { localStorage.setItem('concepts-theme', 'dark'); localStorage.removeItem('c03-state'); } catch (e) { } });
+  const pg = await ctx.newPage(), errors = [];
+  pg.on('pageerror', e => errors.push('pageerror: ' + e.message));
+  pg.on('console', m => { if (m.type() === 'error') errors.push('console: ' + m.text()); });
+  await pg.goto(PAGE);
+  await pg.waitForFunction(() => window.KIT && document.querySelector('#tbl table') && document.querySelector('#tbl table').__kt);
+  await pg.evaluate(() => { KIT.VWIN_MIN = 10; });
+  return { ctx, pg, errors };
+}
+const settle = pg => pg.evaluate(() => new Promise(r => requestAnimationFrame(() => requestAnimationFrame(() => setTimeout(r, 200)))));
+
+test('C03 с окном: «свернуть» сворачивает все группы верхнего уровня, а не только те, что в окне; «развернуть» раскрывает все', { skip: !pw && 'нет Playwright' }, async () => {
+  const browser = await pw.chromium.launch();
+  try {
+    const { ctx, pg, errors } = await openC03(browser);
+    await pg.click('#sGrp button:has-text("книга")');
+    await settle(pg);
+    const l0 = () => pg.evaluate(() => {
+      const v = document.querySelector('#tbl table').__vwin;
+      const top = v.items.filter(x => x.k === 'grp' && x.html().includes('grp l0'));
+      return { windowed: !!v, groups: top.length, open: top.filter(x => x.html().includes('▾')).length, inWin: document.querySelectorAll('#tbl tr.grp.l0').length, items: v.items.length };
+    });
+    const a = await l0();
+    assert.ok(a.windowed && a.groups > a.inWin + 5, 'групп верхнего уровня больше, чем в окне: ' + JSON.stringify(a));
+    assert.strictEqual(a.open, a.groups);
+    await pg.click('#sub [data-a=collapse]'); await settle(pg);
+    const b = await pg.evaluate(() => { const t = document.querySelector('#tbl table'); return { windowed: !!t.__vwin, grp: t.querySelectorAll('tr.grp.l0').length, open: [...t.querySelectorAll('tr.grp.l0 .tw')].filter(x => x.textContent === '▾').length, rows: t.querySelectorAll('tbody tr.row').length }; });
+    const bm = await pg.evaluate(() => { const v = document.querySelector('#tbl table').__vwin; const L = v ? v.items : []; return { items: L.length, open: L.filter(x => x.k === 'grp' && x.html().includes('▾')).length, rows: L.filter(x => x.k === 'row').length }; });
+    assert.strictEqual(bm.open, 0, 'свёрнуты все группы, не только видимые: ' + JSON.stringify(bm));
+    assert.strictEqual(bm.rows, 0, 'в таблице остались одни строки групп');
+    assert.strictEqual(b.open, 0);
+    await pg.click('#sub [data-a=expand]'); await settle(pg);
+    const c = await l0();
+    assert.strictEqual(c.open, c.groups, 'развернуть — все группы развёрнуты');
+    assert.strictEqual(c.items, a.items);
+    assert.deepStrictEqual(errors, []);
+    await ctx.close();
+  } finally { await browser.close(); }
+});
+
+test('C03 с окном: строки групп берутся из памяти при прокрутке (реестр K.d не растёт), перерисовка освобождает свои записи', { skip: !pw && 'нет Playwright' }, async () => {
+  const browser = await pw.chromium.launch();
+  try {
+    const { ctx, pg, errors } = await openC03(browser);
+    await pg.click('#sGrp button:has-text("книга")');
+    await settle(pg);
+    const pass = () => pg.evaluate(async () => {
+      const h = document.getElementById('tbl'), r0 = KIT._reg.length;
+      for (let i = 0; i <= 40; i++) { h.scrollTop = (h.scrollHeight - h.clientHeight) * (i / 40); await new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r))); }
+      return KIT._reg.length - r0;
+    });
+    await pass();
+    const grow = await pass();
+    assert.ok(grow <= 5, 'за второй проход реестр K.d вырос на ' + grow);
+    // записи прошлой отрисовки освобождены: число живых не растёт от перерисовок
+    const live = () => pg.evaluate(() => KIT._reg.filter(Boolean).length);
+    await pg.evaluate(() => { document.getElementById('tbl').scrollTop = 0; }); await settle(pg);
+    const l1 = await live();
+    for (let k = 0; k < 4; k++) { await pg.click('#tbl th.sortable >> nth=2'); await settle(pg); }
+    assert.ok((await live()) <= l1 + 40, 'живых записей после перерисовок ' + await live() + ', было ' + l1);
+    assert.deepStrictEqual(errors, []);
+    await ctx.close();
+  } finally { await browser.close(); }
+});
+
+test('C03 с окном: ячейка «Цена 30д» из памяти строки считается заново после поздней истории', { skip: !pw && 'нет Playwright' }, async () => {
+  const browser = await pw.chromium.launch();
+  try {
+    const { ctx, pg, errors } = await openC03(browser);
+    await pg.click('#sGrp button:has-text("без групп")'); await settle(pg);
+    const idx = await pg.evaluate(() => [...document.querySelectorAll('#tbl thead th')].findIndex(th => th.textContent.includes('Цена 30д')));
+    assert.ok(idx > 0, 'в наборе колонок есть «Цена 30д»');
+    const cell = () => pg.evaluate(i => document.querySelector('#tbl tbody tr.row').cells[i].innerHTML, idx);
+    const before = await cell();
+    assert.ok(before.includes('<svg') || before.includes('canvas') || before.length > 20, 'спарклайн нарисован');
+    await pg.evaluate(() => {
+      const M = window.MOCK, orig = M.posHistory;
+      M.posHistory = function (id, o) { const h = orig.call(this, id, o); return Object.assign({}, h, { price: h.price.slice().reverse() }); };
+      document.dispatchEvent(new CustomEvent('concepts-data', { detail: { name: 'history' } }));
+    });
+    // окно заново: прокрутка вниз и назад
+    await pg.evaluate(() => { document.getElementById('tbl').scrollTop = document.getElementById('tbl').scrollHeight; }); await settle(pg);
+    await pg.evaluate(() => { document.getElementById('tbl').scrollTop = 0; }); await settle(pg);
+    const after = await cell();
+    assert.notStrictEqual(after, before, 'после поздних данных спарклайн посчитан заново');
+    assert.deepStrictEqual(errors, []);
+    await ctx.close();
+  } finally { await browser.close(); }
+});

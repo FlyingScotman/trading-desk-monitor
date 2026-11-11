@@ -208,6 +208,8 @@ body { display: flex; flex-direction: column; height: 100vh; overflow: hidden; }
   // ---------- таблица ----------
   const tbl = document.getElementById('tbl');
   let visible = [], win = null, idxOf = new Map();  // win — окно строк длинной таблицы (K.vwin, TDM#630); idxOf — номер строки позиции в её списке
+  let top0 = [];  // пути групп верхнего уровня — из модели, а не из строк в DOM (в окне их только часть): «свернуть» сворачивает все
+  const sDraw = K.dScope();  // цифры итогов этой отрисовки в реестре K.d: освобождаются при следующей
   function sumCell(c, list, title) {
     if (!c.sum || !list.length) return '<td></td>';
     // ни одно слагаемое не посчитано (все null, #333, B1; nullable — #168) — «—», а не «0»; посчитана часть — сумма
@@ -217,10 +219,15 @@ body { display: flex; flex-direction: column; height: 100vh; overflow: hidden; }
     return '<td class="n">' + K.d({ title: title + ' · ' + c.label, unit: c.unit, fmt: c.sfmt, rows: list.map(p => ({ p, v: c.sum(p) })) }, c.sfmt(tot), c.neutral ? '' : null) + '</td>';
   }
   function render() {
+    K.dFree(sDraw);
+    const prev = K.dScopeSet(sDraw);
+    try { renderBody(); } finally { K.dScopeSet(prev); }
+  }
+  function renderBody() {
     if (win) { win.destroy(); win = null; }
     const L = rows(), CL = cols(), G = GROUPS[st.grouping] || [];
     pnlMax = Math.max(1, ...L.map(p => Math.abs(p.pnl.total)));
-    visible = []; idxOf = new Map();
+    visible = []; idxOf = new Map(); top0 = [];
     const firstSum = CL.findIndex(c => c.sum), span = firstSum < 0 ? CL.length : Math.max(1, firstSum);
     const head = '<thead><tr><th class="stripe"></th>' + CL.map(c => {
       const si = st.sort.findIndex(s => s[0] === c.key);
@@ -251,24 +258,27 @@ body { display: flex; flex-direction: column; height: 100vh; overflow: hidden; }
         if (hide) return emit(sub, level + 1, p, '', true);  // внутри свёрнутой группы — без строк групп
         const lbl = g.label ? g.label(k, sub) : esc(k);
         const t = (title ? title + ' · ' : '') + String(k);
-        // строка группы — оформление: в CSV не идёт, как группы K.table (#277)
-        items.push({ k: 'grp', html: () => '<tr class="grp l' + Math.min(level, 2) + '" data-g="' + esc(p) + '" data-csv-skip="1"><td class="stripe" style="background:' + (g.color ? g.color(k, sub) : 'transparent') + '"></td>' +
+        // строка группы — оформление: в CSV не идёт, как группы K.table (#277). HTML считается один раз (итоги — по всем строкам
+        // группы): окно, листаясь, берёт его из памяти, реестр K.d не растёт
+        if (level === 0) top0.push(p);
+        let hc = null;
+        items.push({ k: 'grp', reset: () => { hc = null; }, html: () => hc != null ? hc : (hc = '<tr class="grp l' + Math.min(level, 2) + '" data-g="' + esc(p) + '" data-csv-skip="1"><td class="stripe" style="background:' + (g.color ? g.color(k, sub) : 'transparent') + '"></td>' +
           '<td colspan="' + span + '" style="padding-left:' + (7 + level * 14) + 'px"><span class="gl"><span class="tw">' + (col ? '▸' : '▾') + '</span>' + lbl + ' <span class="mut3" style="font-weight:400">' + sub.length + '</span></span></td>' +
-          CL.slice(span).map(c => sumCell(c, sub, t)).join('') + '</tr>' });
+          CL.slice(span).map(c => sumCell(c, sub, t)).join('') + '</tr>') });
         emit(sub, level + 1, p, t, col);
       });
     }
     emit(L, 0, '', '');
     const foot = '<tfoot><tr><td></td><td colspan="' + span + '">Итого <span class="mut3" style="font-weight:400">' + L.length + ' поз.</span></td>' + CL.slice(span).map(c => sumCell(c, L, 'Итого')).join('') + '</tr></tfoot>';
-    const sc = tbl.scrollTop;
+    const keepWin = K.scrollKeep(tbl);  // прокрутка таблицы и страницы: браузер ужимает её, пока содержимое на миг короче
     // длинная таблица — окном строк (K.vwin: на экране ~тридцать строк, не две тысячи); выгрузка CSV берёт все строки из полной копии
     let body;
-    if (items.length > K.VWIN_MIN) { win = K.vwin(items, { cols: CL.length + 1, rowH: 24 }); win.dirty = () => { items.forEach(i => i.reset && i.reset()); win && win.repaint(); }; body = win.html(); }
+    if (items.length > K.VWIN_MIN) { win = K.vwin(items, { cols: CL.length + 1, rowH: 24, hkey: 'c03-blotter', scope: sDraw, onStale: () => Object.keys(hist).forEach(k => delete hist[k]) }); body = win.html(); }
     else body = items.map(i => i.html()).join('');
     tbl.innerHTML = '<table class="k-tbl">' + head + '<tbody>' + (body || '<tr><td colspan="' + (CL.length + 1) + '" class="k-empty">ничего не найдено</td></tr>') + '</tbody>' + foot + '</table>';
     if (win) win.attach(tbl.querySelector('table'));
     K.tableTools(tbl, { viewKey: 'c03-blotter', title: 'Блоттер позиций' });
-    tbl.scrollTop = sc;
+    keepWin(); if (win) win.paint(false);
     tbl.querySelectorAll('th .k-flt').forEach(ic => ic.onclick = e => {
       e.stopPropagation();
       const k = ic.dataset.flt, c = colOf(k);
@@ -326,7 +336,7 @@ body { display: flex; flex-direction: column; height: 100vh; overflow: hidden; }
       if (a.dataset.a === 'unsort') st.sort = [];
       if (a.dataset.a === 'unfilter') st.filters = {};
       if (a.dataset.a === 'expand') st.collapsed = {};
-      if (a.dataset.a === 'collapse') { st.collapsed = {}; tbl.querySelectorAll('tr.grp.l0').forEach(tr => st.collapsed[tr.dataset.g] = true); }
+      if (a.dataset.a === 'collapse') { st.collapsed = {}; top0.forEach(p => st.collapsed[p] = true); }  // все группы верхнего уровня, а не только те, что в окне
       render();
     });
   }

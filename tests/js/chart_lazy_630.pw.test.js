@@ -99,3 +99,34 @@ test('K.stages: на малой книге куски страницы идут 
     await ctx.close();
   } finally { await browser.close(); }
 });
+
+test('K.chart: перед печатью создаются и графики, ждавшие своей очереди (иначе напечатаются пустые рамки)', { skip: !pw && 'нет Playwright' }, async () => {
+  const browser = await pw.chromium.launch();
+  try {
+    const ctx = await browser.newContext({ viewport: { width: 1200, height: 800 } }), pg = await ctx.newPage(), errors = [];
+    pg.on('pageerror', e => errors.push('pageerror: ' + e.message));
+    await pg.goto(PAGE);
+    await pg.waitForFunction(() => window.KIT && window.echarts && window.MOCK);
+    const r = await pg.evaluate(async () => {
+      const K = window.KIT; K.BIG_BOOK = 1;
+      const wrap = document.createElement('div'); wrap.style.cssText = 'position:absolute;left:0;top:0;width:600px';
+      const mk = (top, id) => { const d = document.createElement('div'); d.id = id; d.style.cssText = 'position:absolute;left:0;top:' + top + 'px;width:500px;height:200px'; wrap.appendChild(d); return d; };
+      document.body.appendChild(wrap);
+      const opt = v => () => ({ xAxis: { type: 'category', data: ['a', 'b'] }, yAxis: { type: 'value' }, series: [{ type: 'bar', data: [v, v + 1] }] });
+      const far = mk(7000, 'pfar'), gone = mk(7300, 'pgone');
+      K.chart(far, opt(7)); K.chart(gone, opt(9)).dispose();
+      const inst = el => !!echarts.getInstanceByDom(el);
+      await new Promise(r => setTimeout(r, 300));
+      const out = { before: inst(far) };
+      window.dispatchEvent(new Event('beforeprint'));
+      out.printing = inst(far); out.goneAfter = inst(gone);
+      window.dispatchEvent(new Event('afterprint'));
+      return out;
+    });
+    assert.strictEqual(r.before, false, 'график за экраном не создан');
+    assert.strictEqual(r.printing, true, 'перед печатью график создан');
+    assert.strictEqual(r.goneAfter, false, 'убранный график не создаётся');
+    assert.deepStrictEqual(errors, []);
+    await ctx.close();
+  } finally { await browser.close(); }
+});

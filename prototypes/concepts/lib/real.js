@@ -126,7 +126,8 @@
         return r.json().then(body => ({ status: 200, body }), e => bad(200, 'ответ не разобран' + (e && e.message ? ': ' + e.message : '')));
       }, e => bad(0, 'нет связи с сервером' + (e && e.message ? ': ' + e.message : '')));
     // сбой забывается после того, как обещание уже лежит в NET (иначе в ветке без fetch оно оставалось бы там навсегда)
-    const p = base.then(x => { if (x.error && NET[path] === p) delete NET[path]; return x; });
+    // ответ пришёл: поколение данных (M.dataGen) растёт — память ячеек таблиц (kit.js K.dataGen) считает всё, что получено раньше, устаревшим
+    const p = base.then(x => { if (x.status === 200) M.dataGen = (M.dataGen || 0) + 1; if (x.error && NET[path] === p) delete NET[path]; return x; });
     return (NET[path] = p);
   }
   // сбой запроса — не молчание: в M.netErrors (по одному на «что») и событием
