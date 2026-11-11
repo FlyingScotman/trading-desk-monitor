@@ -74,7 +74,11 @@ jobs:
           echo "=== TEMP=$TEMP RUNNER_TEMP=$RUNNER_TEMP LOCALAPPDATA=$LOCALAPPDATA"
       - name: "initdb in a folder closed by deskctl._private (variants)"
         shell: bash
+        env:
+          MSYS_NO_PATHCONV: "1"
+          MSYS2_ARG_CONV_EXCL: "*"
         run: |
+          set +e
           PY=.venv/Scripts/python.exe
           INITDB=$($PY -c "import pgserver,pathlib;print(pathlib.Path(pgserver.__file__).parent/'pginstall'/'bin'/'initdb.exe')")
           SID=$(/c/Windows/System32/whoami.exe /user /fo csv /nh | grep -o 'S-1-[0-9-]*' | head -1); echo "SID=$SID"
