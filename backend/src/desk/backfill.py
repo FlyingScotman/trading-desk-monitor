@@ -85,6 +85,7 @@ on) and the estimated time left (``eta_s``).
 
 from __future__ import annotations
 
+import contextlib
 import errno
 import http.client
 import json
@@ -156,6 +157,10 @@ class Day:
     """What the plan knows of the spreads the date's model prices carried (TDM#660), for a ``done`` date: ``unknown``
     (its run was made before the run recorded where they came from, and says it carried some: not told stale, not told
     current), else None."""
+    chain: bool = False
+    """A ``todo`` date listed with ``CARRY_WHY`` only because a date it carried from is to run (the chain, TDM#660), not
+    because its own run holds a spread its source holds otherwise now: ``run`` asks the store again before it makes such
+    a date, once the dates before it are done, and leaves it when its source came out with the same spread."""
 
 
 @dataclass
@@ -341,8 +346,8 @@ def stale_spreads(con: psycopg.Connection, runs: dict[date, dict], date_from: da
     sources = {date.fromisoformat(v["date"]) for srcs in want.values() for v in srcs.values()}
     by_date = {d: r["run_id"] for d, r in runs.items()}
     early = min(sources)
-    if early < date_from:  # a source before the plan's first date: its default run is read apart
-        by_date.update({d: r["run_id"] for d, r in store.default_runs(con, early).items() if d < date_from})
+    if early < date_from:  # a source before the plan's first date: its default run is read apart (the dates up to it)
+        by_date.update({d: r["run_id"] for d, r in store.default_runs(con, early, date_from - timedelta(days=1)).items()})
     pairs = {(by_date[date.fromisoformat(v["date"])], secid) for srcs in want.values() for secid, v in srcs.items()
              if date.fromisoformat(v["date"]) in by_date}
     now = store.spread_values(con, sorted(pairs)) if pairs else {}
@@ -366,7 +371,7 @@ def plan(con: psycopg.Connection, settings: Settings, date_from: date, date_to: 
     cached = set(sd.market_dates())
     hub_ids = dict(hub or [])
     dates = sorted({d for d in (hub_ids if hub is not None else cached) if lo <= d <= hi})
-    runs = store.default_runs(con, date_from)
+    runs = store.default_runs(con, date_from, date_to)  # (no later date is planned: none of them is read)
     stale = stale_spreads(con, runs, date_from)  # TDM#660: the carried spreads their source dates no longer hold
     todo_dates: set[date] = set()  # the dates of the plan that will be made again: a date that carried from one is stale
     logic = logic_version()
@@ -401,14 +406,15 @@ def plan(con: psycopg.Connection, settings: Settings, date_from: date, date_to: 
                else "private inputs changed" if run["private_inputs_hash"] != ih
                else late
                or ("program updated" if not same_logic(run.get("logic_version"), logic) else None))
-        carry = None
+        carry, chain = None, False
         if why is None:  # the run is current by its inputs; are the spreads its model prices carried?
             srcs = run["spread_sources"]
             if srcs is None:  # a run from before the sources were recorded: unknown, never told stale for that
                 carry = "unknown" if (run.get("spreads_carried") or 0) > 0 else None
-            elif date.fromisoformat(d) in stale or any(date.fromisoformat(v["date"]) in todo_dates
-                                                       for v in srcs.values()):
-                why = CARRY_WHY  # (the second: its source date is made again, so its spread may be another)
+            elif date.fromisoformat(d) in stale:
+                why = CARRY_WHY  # its source date holds another spread now
+            elif any(date.fromisoformat(v["date"]) in todo_dates for v in srcs.values()):
+                why, chain = CARRY_WHY, True  # its source date is made again, so its spread may be another: ``run`` looks
         sig = [ids, snap, prev, logic, ih, store.dataset_set_ids(con, date.fromisoformat(d)),
                store.reference_rev_ids(con, revs=revs)]
         if why is None:
@@ -421,7 +427,7 @@ def plan(con: psycopg.Connection, settings: Settings, date_from: date, date_to: 
         elif failed.get(d) == sig:
             days.append(Day(d, "failed", why, sig, snap, is_cached, pd, pcut))
         else:
-            days.append(Day(d, "todo", why, sig, snap, is_cached, pd, pcut))
+            days.append(Day(d, "todo", why, sig, snap, is_cached, pd, pcut, chain=chain))
             todo_dates.add(date.fromisoformat(d))
     return Plan(lo, hi, days, hub is not None, hub)
 
@@ -616,6 +622,17 @@ def _published(con: psycopg.Connection, settings: Settings, p: Plan, day: Day, *
     return now_.run_id
 
 
+def _chain_current(con: psycopg.Connection, settings: Settings, p: Plan, day: Day) -> bool:
+    """A date of the chain (``Day.chain``, TDM#660), asked once the dates before it are done: is it current now, with
+    the spreads its source dates hold now? The plan of the date alone has no queue to chain on, only the stored runs:
+    a source that was made again with another spread makes the date stale (``stale_spreads``), one that came out with
+    the same spread, or was not made at all (its own trouble, the date stays queued), leaves it as it is. Current by the
+    same inputs (``Day.sig``): nothing else of the date moved either."""
+    d = date.fromisoformat(day.date)
+    now_ = next((x for x in plan(con, settings, d, d, p.rows).days if x.date == day.date), None)
+    return now_ is not None and now_.status == "done" and now_.sig == day.sig
+
+
 def _go_on(pipe: Any, date: str) -> None:
     """The pass goes on to the next date after ``date`` failed (the sequential run does, and the next date then runs
     without it): its turn in the pool. A pass that stops on it closes the pipeline instead and does not call this."""
@@ -646,7 +663,8 @@ def run(settings: Settings, p: Plan, *, store_url: str | None = None, client: An
     ``HubClient`` for the bundles not cached (None: only the cached dates run). ``now``: the run's start, for the
     stall's times (default: the wall clock). ``hub_answered``: the hub answered this cycle (the autopilot's sync step),
     so a date passed over on its download, no later date to tell, does not load on its own. Returns {done: [dates], failed: [(date, error)], unconverged: [dates
-    still stale after their run, tried again next time], skipped: [dates without a bundle], left: n, stalled: the
+    still stale after their run, tried again next time], skipped: [dates without a bundle], unchanged: [dates of the
+    chain (``Day.chain``, TDM#660) whose sources came out with the same spread: not made again], left: n, stalled: the
     stall the run stopped on or None, seconds}. ``progress(x, m, date)``, before each date (TDM#587): ``x`` the dates of
     the plan already current (``done``) plus those this run computed, ``m`` the dates with positions and a close
     (done, to run, failed), ``date`` the one computed now: «посчитано x из m, сейчас ДД.ММ», from the first date.
@@ -655,6 +673,14 @@ def run(settings: Settings, p: Plan, *, store_url: str | None = None, client: An
     ``no_gamma``), 40 % of the time (17 s against 42 s a date of 2000 positions); the dates are current, but their runs say they have no ``gamma`` (lineage
     ``second_order``) until ``run_second`` makes them again. ``complete`` in the result: the run went through all its
     dates (not stopped by the budget or a stall), so the second pass may follow.
+
+    A date of the chain (``Day.chain``: listed only because a date it carries a spread from is to run, TDM#660) is
+    made again only if that spread came out different: when the run reaches it, the dates before it are done, and the
+    store is asked (``_chain_current``). A source that came out with the same spread, or one that never comes out (its
+    own error every time, passed over), leaves the dates after it as they are: they are not made again every cycle
+    (``unchanged``). The plan keeps listing them while the source is queued (they may be stale); with the pool the date
+    may already be computing ahead: it is dropped when the run reaches it, or, if it got to publish first, a run of the
+    same numbers is the whole cost.
 
     ``workers`` > 1 (TDM#628, ``desk.parallel``): the dates are computed in that many processes at once, each date in
     one, published in the order of the dates; this process downloads the bundles ahead and takes the dates' answers in
@@ -680,6 +706,7 @@ def run(settings: Settings, p: Plan, *, store_url: str | None = None, client: An
     failed: list[tuple[str, str]] = []
     unconverged: list[str] = []
     skipped: list[str] = []
+    unchanged: list[str] = []  # chain dates (``Day.chain``) whose sources came out with the same spread: not made again
     cache_dir = Path(settings.snapshot_cache)
     st = state(settings)
     fails = st.setdefault("failed", {})
@@ -743,6 +770,21 @@ def run(settings: Settings, p: Plan, *, store_url: str | None = None, client: An
             if r is not SKIP and not _submit(pipe, d.date):
                 return
 
+    def current(day: Day) -> bool:
+        """The chain date (``Day.chain``) is current after its sources were made (``_chain_current``). An error of the
+        store asking is no answer: the date runs, and meets it there."""
+        nonlocal con
+        try:
+            con = con or store.connect(store_url or store.resolve_url(settings))
+            return _chain_current(con, settings, p, day)
+        except Exception as e:  # noqa: BLE001 - the date itself says what is wrong with the store
+            log.warning("backfill %s: the chain check failed (%s: %s): the date runs", day.date, type(e).__name__, e)
+            if con is not None:
+                with contextlib.suppress(Exception):
+                    con.close()
+                con = None
+            return False
+
     def loads(phases: set[str]) -> None:  # a date got past the store and the network in ``phases`` (a date run from
         # the cache, ``run`` only, says nothing of the downloads): the passed dates' errors there are their own (#217)
         nonlocal through, live
@@ -764,6 +806,13 @@ def run(settings: Settings, p: Plan, *, store_url: str | None = None, client: An
                                   snapshots=str(cache_dir), no_gamma=True, wait_carried=True, init=pool_init,
                                   pool=pool)
         for i, day in enumerate(todo):
+            if day.chain and current(day):  # (before the pool is asked for it: a date it already took is dropped)
+                if pipe is not None:
+                    pipe.discard(day.date)
+                if isinstance(prefetched.pop(day.date, None), Exception):
+                    blocked.clear()
+                unchanged.append(day.date)
+                continue
             if pipe is not None:
                 fill(i)
             submitted = pipe is not None and pipe.has(day.date)  # a date in the pool is taken whatever the budget says
@@ -778,7 +827,8 @@ def run(settings: Settings, p: Plan, *, store_url: str | None = None, client: An
                 continue
             tried += 1
             if progress is not None:  # cumulative, not this run's index: «0 из N» for hours read as stopped (TDM#587)
-                progress(p.count("done") + len(done), p.count("done") + p.count("todo") + p.count("failed"), day.date)
+                progress(p.count("done") + len(done) + len(unchanged),
+                         p.count("done") + p.count("todo") + p.count("failed"), day.date)
             still, phase, downloaded = None, "bundle", False
             try:
                 step = prefetched.pop(day.date) if day.date in prefetched else bundle_step(day)
@@ -894,8 +944,9 @@ def run(settings: Settings, p: Plan, *, store_url: str | None = None, client: An
         elif through:
             st.pop("stall", None)
         save_state(settings, st)
-    left = len(todo) - len(done) - len(failed) - len(unconverged) - len(skipped)
-    return {"done": done, "failed": failed, "unconverged": unconverged, "skipped": skipped, "left": left,
+    left = len(todo) - len(done) - len(failed) - len(unconverged) - len(skipped) - len(unchanged)
+    return {"done": done, "failed": failed, "unconverged": unconverged, "skipped": skipped, "unchanged": unchanged,
+            "left": left,
             "stalled": stall and st["stall"], "seconds": round(time.monotonic() - t0, 1),
             "complete": not cut and stall is None}
 

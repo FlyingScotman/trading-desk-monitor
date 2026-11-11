@@ -723,6 +723,8 @@ def cmd_backfill(a: argparse.Namespace) -> int:
                 print(f"  {d} still stale after its run: tried again next time (#23)")
             for d in res["skipped"]:
                 print(f"  {d} skipped: its bundle is not cached and the hub is off")
+            if res["unchanged"]:
+                print(f"  {len(res['unchanged'])} dates not made again: the spread they carry came out the same")
             complete = complete and res["complete"]
             el = time.perf_counter() - t0
             print(f"[{i}/{len(p.todo)}] {batch[-1].date} done; {el:.0f} s, about {el / i * (len(p.todo) - i):.0f} s left")

@@ -237,3 +237,131 @@ def test_the_plan_says_the_same_with_the_pool_on_and_off(tmp_path, cache_noq, pg
         out.append((src1, moved, before, json.dumps(after, sort_keys=True, default=str)))
     assert out[0] == out[1]
     assert out[0][2][0] == {"2026-10-12": backfill.CARRY_WHY, "2026-10-13": backfill.CARRY_WHY}
+
+
+# ---- the chain is asked for, not assumed (the review of #665): a source that is queued is not a source that changed
+
+def to_run_again(url: str, d: str = "2026-10-09") -> int:
+    """The date's default run stands for a run made on an older hub snapshot: the date is to run again, with the same
+    inputs it will have the same spread (the market of the date did not move)."""
+    rid = default(url)[d]["run_id"]
+    with unfrozen(url) as con:
+        con.execute("UPDATE run SET market_snapshot_id = 'older-snapshot' WHERE run_id = %s", (rid,))
+    return rid
+
+
+def test_dates_after_a_source_that_never_comes_out_are_not_made_again_every_cycle(tmp_path, cache_noq, store_url, monkeypatch):  # noqa: F811
+    """The source stays queued (its own transient error, every cycle): the dates that carry from it are listed with it
+    (they may be stale), but none of them is made again while the source's run is the one they carried from."""
+    from desk import dayrun
+    from desk.marketdata.hub import TransportError
+
+    s = setup(store_url, tmp_path, cache_noq)
+    both_passes(store_url, s)
+    to_run_again(store_url)
+    real = dayrun.eod_run
+    made: list[str] = []
+
+    def eod(settings, d, *a, **kw):  # the source's bundle never comes; the others are made
+        if str(d) == "2026-10-09":
+            raise TransportError("synthetic: the date's bundle does not come")
+        made.append(str(d))
+        return real(settings, d, *a, **kw)
+
+    monkeypatch.setattr(dayrun, "eod_run", eod)
+    before = default(store_url)
+    seen: list[list[str]] = []
+    for cycle in range(6):
+        p = plan(store_url, s)
+        assert why(p) == {"2026-10-09": "market snapshot changed", "2026-10-12": backfill.CARRY_WHY,
+                          "2026-10-13": backfill.CARRY_WHY}, (cycle, why(p))
+        assert [d.chain for d in p.days] == [False, False, True, True], "the chain is told from a stale date"
+        r = backfill.run(s, p, store_url=store_url, out=lambda line: None, now=NOW)
+        assert not r["done"], (cycle, r)
+        seen.append(r["unchanged"])
+    assert seen[-1] == ["2026-10-12", "2026-10-13"], seen  # (the first cycles stop on the source: a stall, #447)
+    assert not made, f"a date that carries from the stuck source was made again: {made}"
+    with store.connect(store_url) as con:  # the screen: the source is the trouble, the dates after it wait for it
+        shown = backfill.status(con, s, today=D_TO)
+    assert shown["stalled"] and shown["stalled"]["dates"] == ["2026-10-09"], shown["stalled"]
+    assert {x["key"]: x["n"] for x in shown["todo_by_reason"]} == {"market": 1, "carry": 2}
+    after = default(store_url)
+    assert {d: r["run_id"] for d, r in after.items()} == {d: r["run_id"] for d, r in before.items()}
+
+
+@pytest.mark.parametrize("workers", [1, 3])
+def test_dates_after_a_source_made_again_with_the_same_spread_are_not_made_again(tmp_path, cache_noq, pg_server, workers):  # noqa: F811
+    """The source is made again (a hub correction that left its spread as it was, say): the dates after it are asked
+    once it is done and left as they are. With the pool a date may already be computing ahead: then it is made once,
+    with the same spread, and everything else is the same."""
+    url = second_store(pg_server)
+    s = setup(url, tmp_path, cache_noq, workers)
+    both_passes(url, s, workers)
+    old = default(url)
+    to_run_again(url)
+    p = plan(url, s)
+    assert list(why(p)) == ["2026-10-09", "2026-10-12", "2026-10-13"]
+    r = backfill.run(s, p, store_url=url, out=lambda line: None, workers=workers, now=NOW)
+    assert not r["failed"] and not r["unconverged"], r
+    assert "2026-10-09" in r["done"], r
+    assert sorted(r["done"] + r["unchanged"]) == ["2026-10-09", "2026-10-12", "2026-10-13"] and not r["left"], r
+    new = default(url)
+    assert new["2026-10-09"]["run_id"] > old["2026-10-09"]["run_id"]
+    if workers == 1:
+        assert r["unchanged"] == ["2026-10-12", "2026-10-13"]
+        assert all(new[d]["run_id"] == old[d]["run_id"] for d in DATES[2:]), "nothing they carry changed"
+    for d in DATES[1:]:  # the same spread along the chain, whoever made it
+        assert new[d]["spread_sources"][NOQ]["z_bp"] == pytest.approx(old[d]["spread_sources"][NOQ]["z_bp"], abs=1e-6)
+    assert not plan(url, s).todo
+
+
+def test_a_chain_date_is_made_when_its_source_came_out_with_another_spread(tmp_path, cache_noq, store_url):  # noqa: F811
+    """What the check must not lose (the chain of three after a hub correction of the first date is the test above,
+    #660): the source is made again and holds another spread, so the dates after it are made, one after the other."""
+    s = setup(store_url, tmp_path, cache_noq)
+    both_passes(store_url, s)
+    old = default(store_url)
+    correct_first_date(cache_noq)
+    p = plan(store_url, s)
+    assert [d.chain for d in p.days] == [False, False, True, True]
+    r = backfill.run(s, p, store_url=store_url, out=lambda line: None, now=NOW)
+    assert r["done"] == DATES and not r["unchanged"], r
+    new = default(store_url)
+    assert all(new[d]["run_id"] > old[d]["run_id"] for d in DATES)
+
+
+def test_the_plan_of_one_date_reads_nothing_of_the_dates_after_it(tmp_path, cache_noq, store_url, monkeypatch):  # noqa: F811
+    """``run`` plans a date alone after each date it made (and before each date of the chain): what that plan reads
+    (the default runs, the carried spreads it compares) is the date's and its sources', not the whole history from the
+    date on, which made a pass quadratic. Counted, not timed: the same with two dates after it and with none."""
+    s = setup(store_url, tmp_path, cache_noq)
+    both_passes(store_url, s)
+    read = {"runs": 0, "pairs": 0}
+    real_runs, real_values = store.default_runs, store.spread_values
+
+    def runs(con, since, until=None):
+        got = real_runs(con, since, until)
+        read["runs"] += len(got)
+        return got
+
+    def values(con, pairs):
+        read["pairs"] += len(pairs)
+        return real_values(con, pairs)
+
+    monkeypatch.setattr(store, "default_runs", runs)
+    monkeypatch.setattr(store, "spread_values", values)
+
+    def one(d: str) -> tuple[int, int]:
+        read.update(runs=0, pairs=0)
+        day = date.fromisoformat(d)
+        with store.connect(store_url) as con:
+            p = backfill.plan(con, s, day, day)
+        assert [x.status for x in p.days] == ["done"], why(p)
+        return read["runs"], read["pairs"]
+
+    with_later = one("2026-10-09")
+    assert with_later == (2, 1), with_later  # the date's own run and its source's; the one spread it carries
+    with unfrozen(store_url) as con:  # the dates after it have no run any more
+        con.execute("UPDATE run SET status = 'failed' WHERE business_date > '2026-10-09'")
+    assert one("2026-10-09") == with_later
+    assert one("2026-09-01") == (1, 0)  # the first date: no source, nothing carried

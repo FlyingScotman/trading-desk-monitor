@@ -1056,6 +1056,9 @@ class Autopilot:
                 parts.append(f"still stale after the run, tried again next cycle: {', '.join(res['unconverged'][:5])}")
             if res["skipped"]:
                 parts.append(f"{len(res['skipped'])} dates not cached and no hub")
+            if res["unchanged"]:
+                parts.append(f"{len(res['unchanged'])} dates keep the spread they carry (its source came out the same): "
+                             "not made again")
             if res["left"]:
                 parts.append(f"{res['left']} dates in the next cycles")
         failed2: list[tuple[str, str]] = []

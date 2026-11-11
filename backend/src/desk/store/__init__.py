@@ -902,8 +902,9 @@ def compact_runs(con: psycopg.Connection) -> dict[str, int]:
     return freed
 
 
-def default_runs(con: psycopg.Connection, since: date) -> dict[date, dict]:
-    """The default run of each business date from ``since`` on: run_id, its snapshots, position sets (sorted),
+def default_runs(con: psycopg.Connection, since: date, until: date | None = None) -> dict[date, dict]:
+    """The default run of each business date from ``since`` on (to ``until``, when given: a plan of one date does not
+    read the history after it, TDM#660): run_id, its snapshots, position sets (sorted),
     completed_at, private inputs hash, the horizon it read its inputs at (``positions_known_at``: ``late_inputs``), the
     ``logic_version`` of the code that made it (lineage; None for a run made before it was recorded) and
     ``second_order``: False for a run made without the second derivatives (lineage ``second_order``, TDM#627: the first
@@ -920,7 +921,8 @@ def default_runs(con: psycopg.Connection, since: date) -> dict[date, dict]:
                 " completed_at, lineage->>'logic_version', private_inputs_hash, positions_known_at,"
                 " lineage->>'second_order', lineage->'carried_spread_sources',"
                 " lineage->'model_spreads'->>'carried' FROM run"
-                f" WHERE run_id IN ({DEFAULT_RUNS}) AND business_date >= %s", (since,))}
+                f" WHERE run_id IN ({DEFAULT_RUNS}) AND business_date >= %s AND business_date <= %s",
+                (since, until or date.max))}
 
 
 def carried_spreads(con: psycopg.Connection, before: date) -> dict[str, CarriedSpread]:
@@ -951,14 +953,19 @@ def spread_values(con: psycopg.Connection, pairs: list[tuple[int, str]]) -> dict
     the plan (``backfill.plan``, TDM#660) compares a run's carried spreads with."""
     if not pairs:
         return {}
+    # (``run_id = ANY`` beside the join with the pairs: the planner reads the rows of these runs by the key of
+    # ``run_position`` instead of the whole table, which every plan of a date would otherwise read: TDM#660)
     rows = con.execute(
         "WITH w AS (SELECT * FROM unnest(%(r)s::bigint[], %(s)s::text[]) AS t(run_id, secid))"
         " SELECT run_id, secid, z FROM ("
         " SELECT m.run_id, m.secid, m.z_spread_bp AS z, 1 AS pri FROM model_spread m JOIN w USING (run_id, secid)"
+        "  WHERE m.run_id = ANY(%(ids)s::bigint[])"
         " UNION ALL"
         " SELECT p.run_id, p.secid, (p.fact->>'spread_bp')::float8, 0 FROM run_position p JOIN w USING (run_id, secid)"
-        "  WHERE p.quality IN ('exact', 'assumed') AND jsonb_typeof(p.fact->'spread_bp') = 'number'"
-        ") x ORDER BY run_id, secid, pri", {"r": [r for r, _ in pairs], "s": [s for _, s in pairs]}).fetchall()
+        "  WHERE p.run_id = ANY(%(ids)s::bigint[]) AND p.quality IN ('exact', 'assumed')"
+        "  AND jsonb_typeof(p.fact->'spread_bp') = 'number'"
+        ") x ORDER BY run_id, secid, pri",
+        {"r": [r for r, _ in pairs], "s": [s for _, s in pairs], "ids": sorted({r for r, _ in pairs})}).fetchall()
     out: dict[tuple[int, str], float] = {}
     seen: set[tuple[int, str]] = set()
     for rid, secid, z in rows:
