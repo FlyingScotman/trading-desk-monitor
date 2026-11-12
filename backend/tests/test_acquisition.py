@@ -159,6 +159,20 @@ def wait(service, *, phase=None):
     pytest.fail("synthetic acquisition did not reach the expected state")
 
 
+def settled(service, code):
+    """The waiting job's status once its code is ``code``. The job's own thread refreshes the holder every second: it
+    can read the old holder before the test changes it and write it after the test's refresh, so one refresh is not
+    enough; a later one shows the new holder."""
+    until = time.monotonic() + 10
+    while time.monotonic() < until:
+        service._refresh_waiting()
+        status = service.status()
+        if status["code"] == code:
+            return status
+        time.sleep(0.05)
+    pytest.fail(f"the waiting job did not show {code}")
+
+
 def no_secrets(value):
     text = json.dumps(value, default=str)
     assert USER not in text and PASSWORD not in text
@@ -682,12 +696,10 @@ def test_the_waiting_owner_action_names_the_holder_and_survives_an_unknown_one(c
     try:
         assert service.start(fields())["code"] == "waiting_services"
         holders[0] = None
-        service._refresh_waiting()
-        status = service.status()
-        assert status["code"] == "waiting_helper" and "waiting_for" not in status
+        status = settled(service, "waiting_helper")
+        assert "waiting_for" not in status
         holders[0] = RuntimeError  # not a dict: nothing is known, still not a failure
-        service._refresh_waiting()
-        assert service.status()["code"] == "waiting_helper"
+        assert settled(service, "waiting_helper")["phase"] == "waiting"
         service.cancel()
         assert wait(service)["code"] == "cancelled"
     finally:
