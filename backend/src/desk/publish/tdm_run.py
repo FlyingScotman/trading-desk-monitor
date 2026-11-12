@@ -101,6 +101,7 @@ from ..valuation.bonds import (
 )
 from ..valuation.fallback import METHOD as SIMPLE_METHOD
 from ..valuation.fallback import QUALITIES, SimplePnl, fx_rate, market_fx
+from ..valuation.fx_cross import UNCONFIRMED, cross_row, missing_rate, quote_leg
 from ..valuation.positions import normalised
 from .summary import MINFIN_CLASSES, MINFIN_INN, NOT_MINFIN_CLASSES, risk_problem
 
@@ -444,13 +445,13 @@ def fx_future_quote_leg(ctx: EodContext, x: dict[str, Any], base: str, nominal: 
     quote = norm_ccy(str(rep.get("x_sec_cur") or "")).upper() if rep.get("x_sec_cur") else ""
     if not quote or quote in ("RUB", base):
         return None
-    rb, rq = fx_rate(ctx, base), fx_rate(ctx, quote)
-    if rb is None or rq is None:
-        return None, 0.0, (f"FX future {base}/{quote}: no {quote if rq is None else base} rate on {ctx.business_date}, "
+    got = quote_leg(ctx, base, quote, nominal)  # the rule of a forward without terms too (TDM#672)
+    if got is None:
+        return None, 0.0, (f"FX future {base}/{quote}: no {missing_rate(ctx, base, quote)} rate on {ctx.business_date}, "
                            "the quote leg is not in the FX delta")
-    price = rb[0] / rq[0]
-    return quote, -nominal * price, (f"FX future {base}/{quote}: nominal {nominal:g} {base}, quote leg "
-                                     f"{-nominal * price:g} {quote} at the cross {price:.6g} of the run's rates")
+    price, leg = got
+    return quote, leg, (f"FX future {base}/{quote}: nominal {nominal:g} {base}, quote leg "
+                        f"{leg:g} {quote} at the cross {price:.6g} of the run's rates")
 
 
 def direct_row(ctx: EodContext, book: str, pid: str, o: Outcome, x: dict[str, Any], qty: float | None
@@ -469,7 +470,7 @@ def direct_row(ctx: EodContext, book: str, pid: str, o: Outcome, x: dict[str, An
     fx = kind == "fx"
     itype, aclass, segment = DIRECT_KIND.get(kind, DIRECT_KIND["other"])
     why = list(v.assumptions)
-    ccy = x.get("ccy") or "RUB"
+    ccy = ccy0 = x.get("ccy") or "RUB"  # ccy0: the report row's own, for the cross (ccy may be shown in RUB below)
     rate = v.face_rub if fx else (r[0] if (r := fx_rate(ctx, ccy)) else None)
     amount = v.quantity if fx else next((x[f] for f in ("face_outstanding_ccy", "face_amount_ccy")
                                          if x.get(f) is not None), None)
@@ -491,6 +492,7 @@ def direct_row(ctx: EodContext, book: str, pid: str, o: Outcome, x: dict[str, An
     name = x.get("source_instrument_name") or (f"{ccy} {vd or 'spot'}" if fx else x.get("source_instrument_id"))
     if kind == "bond":  # unmapped: the bank's name (D6), else its ISIN
         name = (name or x.get("isin") or pid) + FROM_REPORT
+    unconfirmed = None
     if core:  # core's spot equivalent per currency, not the notional (the OCP amounts are in extra.ocp_amount)
         delta = {c: d for c, d in (v.fx_delta or {}).items() if c != "RUB"}
     elif fx and ccy != "RUB" and (leg := fx_future_quote_leg(ctx, x, ccy, amount)) is not None:
@@ -499,6 +501,12 @@ def direct_row(ctx: EodContext, book: str, pid: str, o: Outcome, x: dict[str, An
         if leg[0]:
             delta[leg[0]] = leg[1]
         why.append(leg[2])
+    elif fx and (cr := cross_row(ctx, o, x, ccy0, v.quantity)) is not None:
+        # TDM#672: a forward on a cross without terms: both legs of the pair, or no FX delta when the unit of its
+        # amount is not confirmed (said in the assumptions, the card and the OCP)
+        delta = dict(cr.delta)
+        why.extend(cr.notes)
+        unconfirmed = cr.unconfirmed if cr.kind == UNCONFIRMED else None
     elif (rc := v.extra.get("reported_ccy")) and not fx:  # TDM#591: the report's value in its currency, as given
         delta = {rc["ccy"]: rc["value"]} if rc["ccy"] != "RUB" else {}
     else:
@@ -527,6 +535,7 @@ def direct_row(ctx: EodContext, book: str, pid: str, o: Outcome, x: dict[str, An
             **({"fx_rate": rate} if ccy != "RUB" else {}), **v.extra, **reported(x),
             **({"ocp_amount": o.ocp_amount} if o.ocp_amount and "ocp_amount" not in v.extra else {}),
             **({"fx_delta_basis": "notional (no trade terms: undiscounted)"} if fx and not core and delta else {}),
+            **({"ocp_unconfirmed": unconfirmed} if unconfirmed else {}),
         },
     }
 

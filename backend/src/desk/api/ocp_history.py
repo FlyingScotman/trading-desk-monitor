@@ -31,6 +31,9 @@ OCP without positions in a run (TDM#556: only the OCP report knows it) from the 
 ``ocpOnly``). A book without a recorded type has the type derived once for the whole period (a bond in any run of
 the period: ``TRADING``, else ``DERIVS``; marked ``typeDerived``), so it does not jump between days. A day's ``books``
 holds only what differs from the period's ``books``; the pages merge it over them (TDM#567).
+
+A day with FX rows on a cross that no trade's terms value and whose currency is not the first of the pair carries
+``unconfirmed`` ``{text, items}``: those rows are not in the OCP (TDM#672, ``rules.ocp.unconfirmed_gap``).
 """
 
 from __future__ import annotations
@@ -195,6 +198,13 @@ def _day_books(x: dict[str, Any], block: dict[str, Any], bonds: set[str]) -> dic
     return out
 
 
+def _unconfirmed(block: dict[str, Any]) -> dict[str, Any]:
+    """``unconfirmed`` of a day (TDM#672): the run's gap of FX rows on a cross whose unit of amount is not confirmed
+    (not in the OCP): ``{"text", "items"}`` (the position ids), as the screen shows it; nothing for a day without one."""
+    g = next((x for x in block.get("gaps") or [] if x.get("code") == O.UNCONFIRMED_GAP), None)
+    return {"unconfirmed": {"text": g.get("text") or "", "items": list(g.get("items") or [])}} if g else {}
+
+
 def history(con, anchor: dict[str, Any], start: date, end: date) -> dict[str, Any]:
     """The published OCP of each day of ``start``..``end`` (see the module docstring)."""
     runs = period_runs(con, anchor, start, end)["runs"]
@@ -230,6 +240,7 @@ def history(con, anchor: dict[str, Any], start: date, end: date) -> dict[str, An
         days.append({"date": r["business_date"], "runId": r["run_id"], "runType": r["run_type"],
                      "state": block.get("status") or ocp_run.NOT_COMPUTED, "basis": block.get("basis"),
                      "methodNote": method_note(block.get("basis"), lines), "books": diff,
-                     "fx": fx, "reportFx": _report_fx(block, r["business_date"]), "lines": lines})
+                     "fx": fx, "reportFx": _report_fx(block, r["business_date"]), "lines": lines,
+                     **_unconfirmed(block)})
     return {"runId": anchor["run_id"], "asOf": anchor["business_date"], "from": start, "to": end,
             "days": days, "books": books}

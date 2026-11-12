@@ -414,7 +414,8 @@ def classify(row: Mapping[str, Any], terms: Sequence[Mapping[str, Any]], books: 
     else:
         basis = "notional" if ex.get("fx_delta_basis") or (fx_like and later and (ndf or own)) else "amount"
     if not delta:
-        return None, {}, basis, ""
+        # TDM#672: a forward on a cross without terms whose unit is not confirmed has no FX delta: said, not silent
+        return None, {}, basis, str((ex.get("ocp_unconfirmed") or {}).get("text") or "")
     if is_transfer(row, terms, books, policy):
         return "transfers", delta, basis, "сделка переноса ОВП: контрагент — книга переноса (ocp_to)"
     if ndf and not policy.include_ndf:
@@ -823,6 +824,26 @@ def _scope_text(scope: Mapping[str, Any] | None) -> str:
 
 
 GAP_LIST = 50
+
+
+UNCONFIRMED_GAP = "fx_unit_unconfirmed"
+"""Gap code (TDM#672): FX rows on a cross without trade terms whose currency is not the first of the pair — the unit of
+their amount is not confirmed, so they have no FX delta and are not in the OCP (``valuation.fx_cross``)."""
+
+
+def unconfirmed_gap(rows: Sequence[Mapping[str, Any]]) -> list[dict[str, Any]]:
+    """The gap ``UNCONFIRMED_GAP`` of the run's rows with ``extra.ocp_unconfirmed``: their position ids and what is
+    missing; none without such a row."""
+    found = [(str(r["position_id"]), (r.get("extra") or {}).get("ocp_unconfirmed")) for r in rows]
+    found = [(pid, u) for pid, u in found if isinstance(u, Mapping)]
+    if not found:
+        return []
+    pairs = sorted({str(u.get("pair") or "") for _, u in found} - {""})
+    return [{"code": UNCONFIRMED_GAP, "items": [pid for pid, _ in found][:GAP_LIST],
+             "text": f"позиций без условий сделки на кросс-паре ({', '.join(pairs[:5])}) не включено в ОВП по позициям: "
+                     f"{len(found)}. Валюта строки отчёта не совпадает с первой валютой пары, единица номинала не "
+                     "подтверждена: по позициям они войдут в ОВП после загрузки условий сделок; если книга есть в "
+                     "отчёте ОВП, там может стоять номинал из отчёта"}]
 
 
 def gaps(lines: Sequence[OcpLine], report_units: Sequence[Mapping[str, Any]],
@@ -1824,12 +1845,12 @@ def compute_ocp(rows: Sequence[Mapping[str, Any]], books: Mapping[str, Mapping[s
                                                        is_business_day)[1]}
         gap = gaps(lines, [u for u in report_units if u.get("set_id") not in old],
                    [x for x in outside if x["book_id"] not in covered], on, policy,
-                   [c for c in comps if c.get("set_id") not in old], is_business_day) + day_gaps
+                   [c for c in comps if c.get("set_id") not in old], is_business_day) + day_gaps + unconfirmed_gap(rows)
         check = derivatives_check(comps, derivs, on, policy, days=days, is_business_day=is_business_day,
                                   units=report_units)
     else:
         pub, pub_notes = published(comps, outside, lines, on, policy)
-        gap = gaps(lines, report_units, outside, on, policy, comps)
+        gap = gaps(lines, report_units, outside, on, policy, comps) + unconfirmed_gap(rows)
     return OcpResult(lines, per_pos, comps, outside, transfers(lines, books, tb, policy),
                      notes + cash_notes + pub_notes, pub, gap, check,
                      [{"book_id": b, "ccy": c, "kind": k, "amount": v}

@@ -3283,6 +3283,8 @@
       (p.riskProblem ? '<div class="k-note risk-problem" style="overflow-wrap:anywhere;margin:8px 0;color:var(--warn)"><b>Риск не в суммах (невозможный риск):</b> ' + esc(p.riskProblem) + '</div>' : '') +
       // #616: почему у дериватива без оценки ядром нет процентного риска (нет кривой валюты, NDF без условий сделки)
       (p.riskMissing && !p.notValued && !Object.values(p.dv01ByCurve || {}).some(v => v) ? '<div class="k-note risk-missing" style="overflow-wrap:anywhere;margin:8px 0;color:var(--warn)"><b>Процентного риска нет:</b> ' + esc(p.riskMissing.text) + '</div>' : '') +
+      // #672: кросс-пара без условий сделки, валюта строки не первая валюта пары: в ОВП не включено
+      (p.ocpUnconfirmed ? '<div class="k-note ocp-unconfirmed" style="overflow-wrap:anywhere;margin:8px 0;color:var(--warn)"><b>Не в ОВП:</b> ' + esc(p.ocpUnconfirmed.text) + '</div>' : '') +
       K.curveProxyNote(p) + '<div class="prov"></div>' +
       '<div class="k-sec">Параметры</div>' + K.fieldsHtml(fields) +
       (p.legs && p.legs.length ? '<div class="k-sec">Ноги сделки <span class="sp"></span><span class="mut3" style="text-transform:none;letter-spacing:0">' + p.legs.length + '</span></div>' + K.legsHtml(p) : '') +

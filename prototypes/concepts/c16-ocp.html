@@ -309,6 +309,13 @@
     }
     wrap.appendChild(sp);
     if (d.state === 'no_report') wrap.appendChild(whyPanel(d.date));
+    // TDM#672: строки кросс-пары без условий сделки, у которых валюта строки не первая валюта пары, в ОВП не входят — сервер называет их (unconfirmed)
+    if (d.unconfirmed && (d.unconfirmed.items || []).length) {
+      const up = panel('Не вошло в ОВП: единица номинала не подтверждена');
+      up.querySelector('.bd').innerHTML = '<div class="k-note" style="color:var(--warn)" data-c16-unconfirmed>' + esc(d.unconfirmed.text) + '</div>' +
+        '<div class="k-note">Позиции: ' + d.unconfirmed.items.map(posLink).join(', ') + '</div>';
+      wrap.appendChild(up);
+    }
 
     // книги × валюты; часть отчёта по юрлицу — своей строкой (по книгам отчёт её не делит)
     const bp = panel('По книгам');

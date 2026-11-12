@@ -2013,7 +2013,7 @@ export interface components {
              * Code
              * @enum {string}
              */
-            code: "no_report" | "stale_report" | "outside_without_terms" | "books_outside_report" | "outside_double_count" | "report_without_derivatives_split" | "derivatives_nominal_fallback" | "base_older" | "trades_not_loaded" | "no_base_run" | "trades_not_valued" | "carried_forward_unit" | "trades_unknown_book" | "derivatives_partial_pv" | "derivatives_unknown_last_flow" | "off_report_excluded" | "derivative_share" | "balances_older_than_base" | "balances_not_at_base";
+            code: "no_report" | "stale_report" | "outside_without_terms" | "books_outside_report" | "outside_double_count" | "report_without_derivatives_split" | "derivatives_nominal_fallback" | "base_older" | "trades_not_loaded" | "no_base_run" | "trades_not_valued" | "carried_forward_unit" | "trades_unknown_book" | "derivatives_partial_pv" | "derivatives_unknown_last_flow" | "off_report_excluded" | "derivative_share" | "balances_older_than_base" | "balances_not_at_base" | "fx_unit_unconfirmed";
             /** Text */
             text: string;
             /**

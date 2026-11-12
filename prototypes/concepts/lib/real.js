@@ -424,6 +424,8 @@
     p.reportedCcy = ex.reported_ccy && typeof ex.reported_ccy === 'object' ? ex.reported_ccy.text || null : null;
     p.whyNot = d.notValued && ex.why && typeof ex.why === 'object' ? ex.why : null;
     // #616: почему у дериватива без оценки ядром нет процентного риска (нет кривой валюты, NDF без условий сделки)
+    // #672: кросс-пара без условий сделки, единица номинала не подтверждена — в ОВП не включено (extra.ocp_unconfirmed)
+    p.ocpUnconfirmed = ex.ocp_unconfirmed && typeof ex.ocp_unconfirmed === 'object' && ex.ocp_unconfirmed.text ? ex.ocp_unconfirmed : null;
     p.riskMissing = ex.risk_missing && typeof ex.risk_missing === 'object' && ex.risk_missing.text ? ex.risk_missing : null;
     p.estReason = p.whyNot ? p.whyNot.why + (p.whyNot.detail ? ' (' + p.whyNot.detail + ')' : '')
       : ex.reason || ex.not_exact_reason || (Array.isArray(ex.assumptions) ? ex.assumptions.join('; ') : '') || '';
