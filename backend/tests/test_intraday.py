@@ -10,7 +10,7 @@ import gzip
 import hashlib
 import json
 import shutil
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from pathlib import Path
 
 import pytest
@@ -33,6 +33,13 @@ FIX = Path(__file__).parent / "fixtures" / "mdhub_v1"
 STATIC = test_slice_s3.STATIC
 server, stub = test_slice_s3.server, test_slice_s3.stub  # the stub hub's fixtures
 FRI, MON = date(2026, 10, 16), date(2026, 10, 19)  # positions_20261016.csv: start of day 16.10, valid 15.10
+
+
+@pytest.fixture(autouse=True)
+def _no_grace(monkeypatch):
+    """These tests follow the intraday step run by run: a replaced run is deleted at once, as the step's «removed» says.
+    The hour a replaced run stays for a page opened on it (TDM#675) is tested in test_run_gone_675."""
+    monkeypatch.setattr(store, "INTRADAY_GRACE", timedelta(0))
 
 
 @pytest.fixture(autouse=True)
@@ -88,6 +95,38 @@ def run_rows(store_url: str) -> list[tuple]:
     with store.connect(store_url) as con:
         return con.execute("SELECT run_id, business_date, run_type, cut_type, prev_date, prev_cut_type,"
                            " supersedes_run_id FROM run ORDER BY run_id").fetchall()
+
+
+def test_the_cycle_deletes_the_replaced_run_after_the_grace_when_no_run_of_the_date_follows(stub, tmp_path, store_url,
+                                                                                         monkeypatch):
+    """TDM#675: the run a cut replaced stays an hour; after the day's last cut no call by date takes it, so each cycle
+    does (``store.prune_intraday_stale``), with the prune setting of the replaced EOD runs off as well."""
+    import dataclasses
+
+    import psycopg
+
+    monkeypatch.setattr(store, "INTRADAY_GRACE", timedelta(minutes=60))  # the default, not the module's zero
+    s = dataclasses.replace(cfg(tmp_path, store_url, stub), prune_superseded=False)
+    put(tmp_path, "positions_20261016.csv")
+    clock = {"t": at(FRI, 9, 0)}
+    ap = Autopilot(settings_loader=lambda: s, now=lambda: clock["t"])
+    ap.run_cycle()  # the morning run on the previous close: run 2
+    publish(stub, FRI, "intraday", "2026-10-16T07:00:00Z", 1)
+    clock["t"] = at(FRI, 10, 6)
+    by = steps(ap.run_cycle())
+    assert by["intraday"] == ("ok", "16.10 10:00 МСК · внутри дня: run 3 (new cut)")  # run 2 is held for its page
+    assert [r[0] for r in run_rows(store_url) if r[2] == "INTRADAY"] == [2, 3]
+    clock["t"] = at(FRI, 10, 20)
+    ap.run_cycle()
+    assert [r[0] for r in run_rows(store_url) if r[2] == "INTRADAY"] == [2, 3]  # within the grace
+    with psycopg.connect(store_url, autocommit=True) as con:  # the cut was made an hour and a half ago
+        con.execute("ALTER TABLE run DISABLE TRIGGER USER")
+        con.execute("UPDATE run SET completed_at = now() - interval '90 minutes' WHERE run_id = 3")
+        con.execute("ALTER TABLE run ENABLE TRIGGER USER")
+    clock["t"] = at(FRI, 11, 40)
+    by = steps(ap.run_cycle())
+    assert by["intraday"][0] == "ok"  # no new cut: nothing made, the clean-up still ran
+    assert [r[0] for r in run_rows(store_url) if r[2] == "INTRADAY"] == [3]
 
 
 def test_intraday_day_preliminary_evening_and_final_next_morning(stub, tmp_path, store_url):

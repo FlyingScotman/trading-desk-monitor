@@ -170,7 +170,7 @@ t('#288: потоки карточки — графика выпуска нет:
   [M.cashflows, M.posFlows] = saved;
   // real.js: 404 — «нет данных», а не сбой; код причины сервера — словами
   const real = P('concepts/lib/real.js');
-  assert.ok(real.includes("if (r.status === 404) return { flows: null, reason: 'сервер не нашёл позицию или её график выпуска' };"));
+  assert.ok(real.includes("{ flows: null, reason: 'сервер не нашёл позицию или её график выпуска' }") && real.includes("if (r.status === 404) return notFoundBody(r)"));  // TDM#675: прогона нет — отдельно
   assert.ok(real.includes(".then(x => { if (!x.flows) delete flowCache[id]; return x; });"), 'сбой и ответ без графика не запоминаются (#166)');
   // вид спреда флоатера без DM ядра — Z (в значении Z), с DM ядра — DM
   assert.ok(real.includes("p.spreadLabel = p.zspread == null ? '' : flt && p.dmSource === 'core' ? 'DM' : 'Z';"));

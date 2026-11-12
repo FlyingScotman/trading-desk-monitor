@@ -206,6 +206,26 @@ class ApiError(Exception):
         self.status, self.code, self.message, self.details = status, code, message, details
 
 
+RUN_NOT_FOUND, NO_RUNS, POSITION_NOT_FOUND = "run_not_found", "no_runs", "position_not_found"
+"""``details.reason`` of a 404 (``code`` stays ``not_found``): the run asked for (``run_id``) is not in the store, there is
+no run at all, the run has no such position. A page keeps the ``run_id`` it was opened on: a run replaced by a newer one
+of its day and deleted (``store.prune_intraday``) is ``run_not_found``, and the page says it is replaced, not that the
+position is lost (TDM#675)."""
+
+
+def run_missing(run_id: int | None, message: str | None = None) -> ApiError:
+    """The 404 of a lazy request whose run is not there: the run asked for (``run_id``) is gone, or there is no run."""
+    if run_id:
+        return ApiError(404, "not_found", message or f"run {run_id} not found",
+                        {"reason": RUN_NOT_FOUND, "run_id": run_id})
+    return ApiError(404, "not_found", message or "no runs", {"reason": NO_RUNS})
+
+
+def position_missing(run_id: int, position_id: str) -> ApiError:
+    return ApiError(404, "not_found", f"no position {position_id} in run {run_id}",
+                    {"reason": POSITION_NOT_FOUND, "run_id": run_id})
+
+
 def _error(request: Request, status: int, code: str, message: str, details: Any = None) -> JSONResponse:
     rid = getattr(request.state, "request_id", None) or uuid.uuid4().hex
     body = ErrorOut(code=code, message=message, request_id=rid,  # type: ignore[arg-type]
@@ -225,7 +245,7 @@ def _header(row: dict[str, Any]) -> dict[str, Any]:
 def _run_or_404(con, run_id: int) -> dict[str, Any]:
     row = con.execute(HEADER_SQL + " WHERE r.run_id = %s", (run_id,)).fetchone()
     if row is None:
-        raise ApiError(404, "not_found", f"run {run_id} not found")
+        raise run_missing(run_id)
     return row
 
 
@@ -529,7 +549,7 @@ def pnl_scope(con: Con, from_: Annotated[date, Query(alias="from")], to: date,
                        f"Period must not exceed {pnl_history.MAX_PERIOD_DAYS} calendar days inclusive")
     run = resolve_run(con, as_of, run_id)
     if run is None:
-        raise ApiError(404, "not_found", "No complete run for the selected history")
+        raise run_missing(run_id, "No complete run for the selected history")
     if to > run["business_date"]:
         raise ApiError(422, "invalid_parameter", "Expected from <= to <= selected run date")
     return {"run": run, "from": from_, "to": to,
@@ -896,7 +916,7 @@ def create_app(store_url: str, static_dir: Path | None = None, app_dir: Path | N
     @app.get("/api/v1/runs/{run_id}/scenario-results", response_model=RunScenarioResults)
     def run_scenario_results(con: Con, run_id: int):
         if con.execute("SELECT 1 FROM run WHERE run_id = %s", (run_id,)).fetchone() is None:
-            raise ApiError(404, "not_found", f"run {run_id} not found")
+            raise run_missing(run_id)
         return {"run_id": run_id, "method": jobs.METHOD, "scenarios": jobs.run_results(con, run_id)}
 
     @app.get("/api/v1/scenario-jobs/{job_id}", response_model=ScenarioJob, response_model_exclude_unset=True)
@@ -1018,7 +1038,7 @@ def create_app(store_url: str, static_dir: Path | None = None, app_dir: Path | N
 
         r = resolve_run(con, as_of, run)
         if r is None:
-            raise ApiError(404, "not_found", f"run {run} not found" if run else "no runs")
+            raise run_missing(run)
         try:
             path = carry.parse_steps(steps) if ks == "steps" else ()
             hdate = carry.horizon_date(r["business_date"], horizon)
@@ -1059,7 +1079,7 @@ def create_app(store_url: str, static_dir: Path | None = None, app_dir: Path | N
                            f"Period must not exceed {pnl_history.MAX_PERIOD_DAYS} calendar days inclusive")
         run = resolve_run(con, as_of, run_id)
         if run is None:
-            raise ApiError(404, "not_found", "No complete run for the selected history")
+            raise run_missing(run_id, "No complete run for the selected history")
         if to > run["business_date"]:
             raise ApiError(422, "invalid_parameter", "Expected from <= to <= selected run date")
         selected = list(dict.fromkeys(k for k in components.split(",") if k))
@@ -1105,7 +1125,7 @@ def create_app(store_url: str, static_dir: Path | None = None, app_dir: Path | N
         from the run's date by default. From the saved runs only: nothing is recomputed."""
         run = resolve_run(con, as_of, run_id)
         if run is None:
-            raise ApiError(404, "not_found", "No complete run for the selected history")
+            raise run_missing(run_id, "No complete run for the selected history")
         try:
             start, end = ocp_history.period(run, from_, to)
         except ValueError as e:
@@ -1120,7 +1140,7 @@ def create_app(store_url: str, static_dir: Path | None = None, app_dir: Path | N
         G-spread, the KBD at the bond's term, face and DV01 by the default runs. For the concept pages' charts."""
         run = resolve_run(con, as_of, run_id)
         if run is None:
-            raise ApiError(404, "not_found", f"run {run_id} not found" if run_id else "no runs")
+            raise run_missing(run_id)
         wanted = [i for i in (ids or "").split(",") if i] or None
         return cached_response(request, con, ("history", run["run_id"], tuple(wanted or ()), from_),
                                lambda: history_body(con, run, write_summaries, wanted, from_), "application/json")
@@ -1134,14 +1154,14 @@ def create_app(store_url: str, static_dir: Path | None = None, app_dir: Path | N
 
         run = resolve_run(con, as_of, run_id)
         if run is None:
-            raise ApiError(404, "not_found", f"run {run_id} not found" if run_id else "no runs")
+            raise run_missing(run_id)
         try:
             snapshots = load().snapshot_cache
         except SettingsError as e:
             raise ApiError(500, "settings", str(e)) from None
         out = concepts.position_flows(con, run, id, Path(snapshots))
         if out is None:
-            raise ApiError(404, "not_found", f"no position {id} in run {run['run_id']}")
+            raise position_missing(run["run_id"], id)
         return out
 
     @app.get("/api/v1/positions/provenance", response_model=PositionProvenance)
@@ -1151,10 +1171,10 @@ def create_app(store_url: str, static_dir: Path | None = None, app_dir: Path | N
         did not record is ``unknown``, not an error; 404 — no such run or position."""
         run = resolve_run(con, as_of, run_id)
         if run is None:
-            raise ApiError(404, "not_found", f"run {run_id} not found" if run_id else "no runs")
+            raise run_missing(run_id)
         out = provenance.provenance(con, run, id, *_trade_sources())
         if out is None:
-            raise ApiError(404, "not_found", f"no position {id} in run {run['run_id']}")
+            raise position_missing(run["run_id"], id)
         return _cached(request, run, PositionProvenance(**out))
 
     @app.get("/api/v1/calendar/market", include_in_schema=False)
@@ -1168,7 +1188,7 @@ def create_app(store_url: str, static_dir: Path | None = None, app_dir: Path | N
         currency and kind); with ``market`` the flows behind a cell, the largest first (``concepts.market_flows``)."""
         run = resolve_run(con, as_of, run_id)
         if run is None:
-            raise ApiError(404, "not_found", f"run {run_id} not found" if run_id else "no runs")
+            raise run_missing(run_id)
         if market is None:
             return cached_response(request, con, ("calendar", run["run_id"]), lambda: calendar_body(con, run),
                                    "application/json")

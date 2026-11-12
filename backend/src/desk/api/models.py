@@ -34,7 +34,8 @@ class RunHeader(BaseModel):
                                          "eod_final, otherwise on eod_preliminary (04 §3)")
     is_current: bool = Field(False, description="The run shown for its date (R11): its default run, otherwise its "
                                                 "latest complete INTRADAY run (today's book on the latest intraday "
-                                                "cut). Only the latest INTRADAY run of a date is kept")
+                                                "cut). Only the latest INTRADAY run of a date is kept; a run it "
+                                                "replaced stays one hour more, for a page opened on it (TDM#675)")
     cut_ts: datetime | None = Field(None, description="Nominal UTC instant of the market cut (the intraday cut "
                                                       "time); null for runs made before R11")
     label: str = Field("", description="The run's market slice as the pages show it: «20.10 14:30 МСК · внутри "

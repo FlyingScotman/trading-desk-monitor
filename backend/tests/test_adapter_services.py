@@ -811,8 +811,9 @@ def test_feed_ingests_as_its_source_and_recomputes_the_eod_and_todays_run(tmp_pa
                                   " AND run_type = 'INTRADAY'", (FRI,)).fetchall()
         assert today.private_inputs_hash != old_hash and today.trade_terms
         assert new_eod["run_id"] != old_eod and new_eod["private_inputs_hash"] != old_hash
-        assert len(morning) == 1 and morning[0][0] != old_morning and morning[0][1:] == (today.private_inputs_hash,
-                                                                                       "prev_close")
+        new_morning = [m for m in morning if m[0] != old_morning]  # the replaced run stays an hour for a page on it (TDM#675)
+        assert len(new_morning) == 1 and new_morning[0][1:] == (today.private_inputs_hash, "prev_close")
+        assert sorted(m[0] for m in morning) == sorted([old_morning, new_morning[0][0]])
         assert [(r["business_date"], r["previous_run_id"]) for r in run["recomputed"]] == [
             ("2026-10-15", old_eod), ("2026-10-16", old_morning)]
         assert run["recomputed"][1]["label"] == "16.10 · закрытие 15.10" and run["recompute_failed"] == []
@@ -924,9 +925,10 @@ def test_manual_acquisition_recomputes_todays_run_547(tmp_path, store_url, cache
         want = store.positions_for(con, FRI).private_inputs_hash
         rows = con.execute("SELECT run_id, private_inputs_hash FROM run WHERE business_date = %s"
                            " AND run_type = 'INTRADAY'", (FRI,)).fetchall()
-    assert len(rows) == 1 and rows[0][0] != old_morning and rows[0][1] == want
+    new = [r for r in rows if r[0] != old_morning]  # the replaced run stays an hour for a page on it (TDM#675)
+    assert len(new) == 1 and new[0][1] == want and len(rows) == 2
     assert [(r["run_id"], r["label"], r["previous_run_id"]) for r in result["recomputed"]] == [
-        (rows[0][0], "16.10 · закрытие 15.10", old_morning)]
+        (new[0][0], "16.10 · закрытие 15.10", old_morning)]
 
 
 def test_autopilot_morning_run_follows_new_trade_terms(tmp_path, store_url, cache):  # noqa: F811

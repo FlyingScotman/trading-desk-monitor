@@ -685,11 +685,19 @@
   K.loadingNote = (text) => '<div class="k-loading k-note" role="status">' + esc(text || 'Загрузка данных…') + '</div>';
   const pageHost = () => document.querySelector('.k-page') || document.body;
   const readyMark = () => { try { document.documentElement.dataset.ready = '1'; document.documentElement.dataset.readyAt = String(Math.round(performance.now())); } catch (e) { } };
-  K.dataError = text => {
+  // Страница устарела (TDM#675): прогон, с которым она открыта, заменён новым и удалён (M.RUN_GONE). Об этом — одна строка на
+  // все запросы страницы и действие «Обновить страницу» (перезагрузка), а не «Не загрузилось» у каждого.
+  K.reloadLink = () => '<a href="#" data-a="reload-page">Обновить страницу</a>';
+  document.addEventListener('click', e => {
+    const a = e.target && e.target.closest && e.target.closest('[data-a=reload-page]');
+    if (a) { e.preventDefault(); location.reload(); }
+  });
+  K.dataError = (text, gone) => {
     const host = pageHost();
     if (Array.from(host.querySelectorAll('.k-load-err')).some(x => x.dataset.t === text)) return;
     const b = document.createElement('div');
     b.className = 'k-note k-load-err'; b.dataset.t = text; b.setAttribute('role', 'alert');
+    if (gone) { b.dataset.gone = '1'; b.innerHTML = esc(text) + ' · ' + K.reloadLink(); host.insertBefore(b, host.firstChild); return; }
     b.innerHTML = '<b>Не загрузилось:</b> ' + esc(text) + ' · <a href="#" data-a="retry">Повторить</a>';
     b.querySelector('[data-a=retry]').onclick = e => { e.preventDefault(); location.reload(); };
     host.insertBefore(b, host.firstChild);
@@ -742,7 +750,7 @@
   // позициях; C05, C08, C10, C17) подписаны на K.onAlias и перерисовываются целиком, C07 — только подписи карты
   document.addEventListener('concepts-data', e => {
     const d = (e && e.detail) || {};
-    if (d.error) return K.dataError(d.error);
+    if (d.error) return K.dataError(d.error, d.gone);
     if (d.name === 'aliases') { K.patchNames(); fire('alias'); }
     fire('data');
   });
@@ -2857,6 +2865,7 @@
   // состояние параллельного отчёта словами; '' — посчитан
   const parNote = par => !par ? 'параллельный отчёт ядро / отчёт для прогона не запрашивался: допуска и строк «по отчёту» нет'
     : par.state === 'loading' ? 'параллельный отчёт ядро / отчёт загружается: допуска и строк «по отчёту» пока нет'
+    : par.state === 'unavailable' && par.gone ? 'параллельный отчёт ядро / отчёт недоступен: ' + M.RUN_GONE + '; допуска и строк «по отчёту» нет'
     : par.state === 'unavailable' ? 'параллельный отчёт ядро / отчёт недоступен' + (par.status ? ' (HTTP ' + par.status + ')' : '') + ': допуска и строк «по отчёту» нет'
       : par.state === 'not_computed' ? 'параллельный отчёт ядро / отчёт для этого прогона не посчитан (прогон до него): допуска и строк «по отчёту» нет' : '';
   K.ratesCorePanel = (el, list) => {
@@ -3494,7 +3503,7 @@
     const err = why && why.error;
     const offer = p.offer || p.yieldDate || null;
     const KIND = { cpn: 'купон', amort: 'амортизация', mat: 'погашение', put: 'пут-оферта', call: 'колл' };
-    if (!cf.length) return '<div class="k-empty">' + (loading ? 'загрузка потоков…' : err ? 'потоки не загружены: ' + esc(err) : 'потоков нет' + (why ? ': ' + esc(why) : '')) + '</div>';
+    if (!cf.length) return '<div class="k-empty">' + (loading ? 'загрузка потоков…' : err ? 'потоки не загружены: ' + esc(err) + (err === M.RUN_GONE ? ' · ' + K.reloadLink() : '') : 'потоков нет' + (why ? ': ' + esc(why) : '')) + '</div>';
     const sum = cf.reduce((s, c) => s + (c.kind === 'put' || c.kind === 'call' || c.amountRub == null ? 0 : c.amountRub), 0);
     return (why ? '<div class="mut" style="font-size:11px;margin-bottom:4px">Расписание до ' + f.date(cf[cf.length - 1].date) + ', полное недоступно: ' + esc(err || why) + '. Показаны потоки прогона.</div>' : '') +
       (note ? '<div class="mut3" style="font-size:11px;margin-bottom:4px">' + esc(note) + '</div>' : '') +
@@ -3559,6 +3568,7 @@
       M.posProvenance(id).then(x => {
         if (!el.isConnected || el.dataset.pos !== String(id)) return;
         x = x || {};
+        if (x.gone) { asked = false; bd.innerHTML = '<div class="k-empty k-prov-gone">' + esc(x.error) + ' · ' + K.reloadLink() + '</div>'; return; }  // прогон страницы заменён (TDM#675)
         if (x.error || !x.data) { asked = false; bd.innerHTML = '<div class="k-empty">не загружено: ' + esc(x.error || 'нет ответа') + '</div>'; return; }
         bd.innerHTML = K.provenanceHtml(x.data);
       });

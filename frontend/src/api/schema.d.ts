@@ -3270,7 +3270,7 @@ export interface components {
             is_default: boolean;
             /**
              * Is Current
-             * @description The run shown for its date (R11): its default run, otherwise its latest complete INTRADAY run (today's book on the latest intraday cut). Only the latest INTRADAY run of a date is kept
+             * @description The run shown for its date (R11): its default run, otherwise its latest complete INTRADAY run (today's book on the latest intraday cut). Only the latest INTRADAY run of a date is kept; a run it replaced stays one hour more, for a page opened on it (TDM#675)
              * @default false
              */
             is_current?: boolean;
@@ -3441,7 +3441,7 @@ export interface components {
             is_default: boolean;
             /**
              * Is Current
-             * @description The run shown for its date (R11): its default run, otherwise its latest complete INTRADAY run (today's book on the latest intraday cut). Only the latest INTRADAY run of a date is kept
+             * @description The run shown for its date (R11): its default run, otherwise its latest complete INTRADAY run (today's book on the latest intraday cut). Only the latest INTRADAY run of a date is kept; a run it replaced stays one hour more, for a page opened on it (TDM#675)
              * @default false
              */
             is_current?: boolean;

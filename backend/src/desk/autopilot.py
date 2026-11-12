@@ -60,7 +60,7 @@ every ``inbox_poll_seconds`` and on ``POST /api/v1/autopilot/run``):
    replay after the owner changed the adapter's settings, TDM#554; the same cut again). The flash PnL is measured against
    the previous business day's ``eod_final``, else the newest earlier final or preliminary close, and the run says
    which (``pnl_basis``). The step's status carries a machine-readable ``reason`` (``INTRADAY_REASONS``) next to its
-   detail. Only the latest INTRADAY run of a date is kept (``store.prune_intraday``); intraday and
+   detail. Only the latest INTRADAY run of a date is kept, and the one it replaced for an hour more (``store.prune_intraday``, TDM#675); intraday and
    preliminary bundles of dates older than ``KEEP_CUT_DAYS`` leave the cache (``cache.prune``) unless a shown run
    reads them. The next morning the date's ``eod_final`` EOD run (step 3) supersedes both.
    **morning** (#21, with or without the hub): on a business day from ``MORNING_FROM`` (07:00 MSK; earlier once a
@@ -514,6 +514,7 @@ class Autopilot:
                     self._last_backfill = dict(steps[-1])  # TDM#587: shown between the cycles too
                 if getattr(settings, "prune_superseded", True):
                     steps.append(self._guard("prune", lambda: self._prune(settings, con, ran)))
+                self._prune_intraday_stale(con)  # not a step and not under ``prune_superseded``: R11's «one per date»
                 try:
                     latest = latest_run(con)
                 except psycopg.Error:
@@ -1086,6 +1087,19 @@ class Autopilot:
                     parts.append(f"{res2['left']} dates of the second derivatives in the next cycles")
         parts.append(span)
         return ("error" if (res and res["failed"]) or failed2 else "ok"), "; ".join(parts)
+
+    def _prune_intraday_stale(self, con: psycopg.Connection) -> None:
+        """Each cycle: the INTRADAY runs a newer one of their date replaced at least ``INTRADAY_GRACE`` ago
+        (``store.prune_intraday_stale``). ``prune_intraday`` runs only when a run of today is made and holds the runs
+        replaced within the grace, so after the day's last cut (from 19:45 the step makes EOD preliminary runs) the last
+        replaced runs would stay for ever (TDM#675). Never fails the cycle."""
+        try:
+            gone = store.prune_intraday_stale(con)
+        except Exception as e:  # noqa: BLE001 - a clean-up; the next cycle tries again
+            log.warning("autopilot: replaced intraday runs not deleted: %s", e)
+            return
+        if gone:
+            log.info("autopilot: removed replaced intraday runs %s", ", ".join(map(str, gone)))
 
     def _prune(self, settings: Settings, con: psycopg.Connection, ran: list[str]) -> tuple[str, str]:
         """The prune step (TDM#634, ``store.prune_superseded``): the runs a newer run of their date replaced, once the

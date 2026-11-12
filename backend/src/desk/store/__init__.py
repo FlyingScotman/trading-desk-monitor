@@ -6,7 +6,7 @@ sets also come from the inbox (``desk.inbox.scan``, ``store_inbox_set``), ordere
 and books from the adapter's ``reference()`` (``store_books``, ``current_books``).
 Runs are immutable once complete or failed (``desk.publish.desk_run`` writes them); the triggers of
 ``migrations/0001_init.sql`` reject any update or delete, except (0010, R11) the delete of an INTRADAY run that is
-no longer the latest of its date, with its rows (``prune_intraday``). Every function here runs its own
+no longer the latest of its date (an hour after its replacement), with its rows (``prune_intraday``). Every function here runs its own
 transactions: pass a connection from ``connect`` (autocommit).
 """
 
@@ -751,18 +751,59 @@ def slice_label(business_date: date | str, cut_type: str | None, cut_ts: datetim
 RUN_ROW_TABLES = ("run_position", "run_reference", "run_log", "run_core_result", "model_spread", "run_summary")
 
 
-def prune_intraday(con: psycopg.Connection, business_date: date, keep_run_id: int) -> list[int]:
-    """Delete the INTRADAY runs of ``business_date`` other than ``keep_run_id`` (complete or failed) with their rows:
-    one intraday run per date stays (R11). A run a scenario job was submitted on is kept. Returns the ids deleted."""
+INTRADAY_GRACE = timedelta(minutes=60)
+"""How long a replaced INTRADAY run stays after the run that replaced it was made (``prune_intraday``). A page keeps the
+``run_id`` it was opened on and reads the rest of its data lazily (a position's sources, flows, history, the calendar);
+the intraday cuts come every half hour, so a run deleted at once left the page it had just given to the owner with
+«run not found» (TDM#675). An hour is two cuts: the page opened on a run still reads it after the next cut and after a
+recompute done by hand; a page left open longer is told to be reloaded. Only a few small runs more stay on the date."""
+
+
+def _drop_runs(con: psycopg.Connection, ids: list[int]) -> None:
+    """Delete INTRADAY runs ``ids`` with their rows (the triggers allow it, 0010), in the caller's transaction."""
+    if ids:
+        for table in RUN_ROW_TABLES:
+            con.execute("DELETE FROM " + table + " WHERE run_id = ANY(%s)", (ids,))
+        con.execute("DELETE FROM run WHERE run_id = ANY(%s)", (ids,))
+
+
+def prune_intraday(con: psycopg.Connection, business_date: date, keep_run_id: int,
+                   grace: timedelta | None = None) -> list[int]:
+    """Delete the INTRADAY runs of ``business_date`` that a newer one replaced, with their rows: the run shown stays
+    (R11). A replaced run stays until the run that replaced it is ``grace`` old (``INTRADAY_GRACE``), so every replaced
+    run younger than that is kept, not only one: the page that was opened on it keeps reading it (TDM#675). A run that
+    failed is deleted at once, a run a scenario job was submitted on is kept, ``keep_run_id`` is never deleted. The runs
+    still held are taken by a later call (the next cut or recompute of the date, or ``prune_intraday_stale``). Returns
+    the ids deleted."""
+    grace = INTRADAY_GRACE if grace is None else grace
     with con.transaction():
         ids = [r for (r,) in con.execute(
-            "SELECT run_id FROM run r WHERE run_type = 'INTRADAY' AND business_date = %s AND run_id <> %s"
+            "SELECT run_id FROM run r WHERE run_type = 'INTRADAY' AND business_date = %(d)s AND run_id <> %(keep)s"
             " AND status <> 'loading' AND NOT EXISTS (SELECT 1 FROM scenario_job j WHERE j.base_run_id = r.run_id)"
-            " ORDER BY run_id", (business_date, keep_run_id))]
-        if ids:
-            for table in RUN_ROW_TABLES:
-                con.execute("DELETE FROM " + table + " WHERE run_id = ANY(%s)", (ids,))
-            con.execute("DELETE FROM run WHERE run_id = ANY(%s)", (ids,))
+            " AND (r.status <> 'complete' OR EXISTS (SELECT 1 FROM run n WHERE n.business_date = r.business_date"
+            "  AND n.run_type = 'INTRADAY' AND n.status = 'complete' AND (n.run_id > r.run_id OR n.run_id = %(keep)s)"
+            "  AND n.completed_at < now() - %(grace)s::interval))"
+            " ORDER BY run_id", {"d": business_date, "keep": keep_run_id, "grace": grace})]
+        _drop_runs(con, ids)
+    forget_runs(ids)
+    return ids
+
+
+def prune_intraday_stale(con: psycopg.Connection, grace: timedelta | None = None) -> list[int]:
+    """Delete the complete INTRADAY runs of any date that are not the newest complete INTRADAY run of their date and
+    were replaced at least ``grace`` ago (``INTRADAY_GRACE``), without a scenario job. ``prune_intraday`` is called only
+    when a new run of a date is made and holds the runs replaced within the grace; after the day's last cut nothing
+    makes a run of the date, so the autopilot calls this each cycle and the date keeps one INTRADAY run (R11, TDM#675).
+    Returns the ids deleted; the run cache forgets them."""
+    grace = INTRADAY_GRACE if grace is None else grace
+    with con.transaction():
+        ids = [r for (r,) in con.execute(
+            "SELECT run_id FROM run r WHERE run_type = 'INTRADAY' AND status = 'complete'"
+            " AND NOT EXISTS (SELECT 1 FROM scenario_job j WHERE j.base_run_id = r.run_id)"
+            " AND EXISTS (SELECT 1 FROM run n WHERE n.business_date = r.business_date AND n.run_type = 'INTRADAY'"
+            "  AND n.status = 'complete' AND n.run_id > r.run_id AND n.completed_at < now() - %(grace)s::interval)"
+            " ORDER BY run_id", {"grace": grace})]
+        _drop_runs(con, ids)
     forget_runs(ids)
     return ids
 
