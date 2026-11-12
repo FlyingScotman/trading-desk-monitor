@@ -431,6 +431,7 @@
     if (i.kind === 'report') bits.push('отчёт ОВП от ' + esc(f.date(i.valid_date)) + (i.file ? ', файл ' + esc(i.file) : '') + (i.rows ? ', строк: ' + esc(i.rows) : ''));
     else if (i.kind === 'report_part') bits.push(esc(i.note || 'часть отчёта') + (i.book_id ? ' (' + esc(bookName(i.book_id)) + ')' : ''));
     else if (i.kind === 'report_nominal') bits.push('номинал отчёта: ' + esc(KIND[i.derivative] || i.derivative) + ' — PV нет');
+    else if (i.kind === 'report_spot_future') bits.push('вынесено из базы: строка отчёта ' + esc([line.ccy, i.value_date ? f.date(i.value_date) : '', i.pair || ''].filter(Boolean).join(', ')) + ' → сделка ' + dl('c03-blotter.html?pos=' + encodeURIComponent(i.position_id || ''), (i.trade_ids && i.trade_ids.length ? i.trade_ids.join(', ') : i.position_id) || '—'));
     else if (i.kind === 'trade') bits.push(dl('c20-trades.html?date=' + encodeURIComponent(i.trade_date || '') + '&book_id=' + encodeURIComponent(i.book_id || line.book_id || ''), 'сделка ' + i.trade_id),
       esc([ASSET[i.asset] || i.asset, LEG[i.leg] && i.asset !== 'fx' ? LEG[i.leg] : '', i.trade_date ? 'заключена ' + f.date(i.trade_date) : '', i.value_date ? 'валютирование ' + f.date(i.value_date) : ''].filter(Boolean).join(' · ')));
     else if (i.kind === 'balance') bits.push('остаток по счёту' + (i.key ? ' ' + esc(i.key) : ''));
@@ -457,6 +458,21 @@
       (ty.length ? '<table class="k-tbl" data-vk="c16-drill-types" data-title="ОВП: строки отчёта по типам" data-c16-types><thead><tr><th>Тип строки отчёта</th><th class="n">сумма<span class="k-thu">mm ' + esc(line.ccy) + '</span></th></tr></thead><tbody>' + ty.map(t => '<tr class="it"><td>' + (t.kept ? esc(t.type) + ': спот оставлен по номиналу в базе' : esc(t.type) + ' → ' + esc(KIND[t.kind] || t.kind)) + ' <span class="mut3">' + esc(t.lines + ' стр.') + '</span></td><td class="n">' + mm2(t.amount) + '</td></tr>').join('') + '</tbody></table>' : '') +
       (warn.length ? '<div class="k-note warn" data-c16-exwarn>Из отчёта вынесено не то, что добавлено из позиций (' + esc(warn.map(x => KIND[x.kind] || x.kind).join(', ')) + '). Возможно, тип строки отчёта отнесён к деривативам, а в позициях его нет (спот, ближняя нога свопа). Проверьте <a href="../settings.html#ovp">Настройки → ОВП: типы строк</a>.</div>' : '');
   }
+  // строки отчёта спот-типа с будущей датой (TDM#693): вынесены из базы и заменены сделкой / не сопоставлены / взяты без дисконтирования
+  const WHY = { no_deal: 'в книге нет сделки с ногой в этой валюте', amount: 'сумма не совпала с номиналом ноги ни одной сделки', sign: 'знак суммы противоположен номиналу ноги', date: 'дата дальше пяти рабочих дней от дат сделки', taken: 'подходящую сделку занимает другая строка' };
+  function spotFutureHtml(line) {
+    const sf = line.spot_future;
+    if (!sf || !((sf.out || []).length || (sf.unmatched || []).length || (sf.df1 || []).length)) return '';
+    const who = x => (x.trade_ids && x.trade_ids.length ? x.trade_ids.join(', ') : x.position_id) || '—';
+    const head = x => esc([line.ccy, x.value_date ? f.date(x.value_date) : '', x.pair || ''].filter(Boolean).join(', '));
+    const rows = (sf.out || []).map(x => '<tr class="it" data-c16-sf-out><td>вынесено из базы: строка отчёта ' + head(x) + ' → сделка ' + dl('c03-blotter.html?pos=' + encodeURIComponent(x.position_id || ''), who(x)) +
+        (x.others && x.others.length ? ' <span class="warn">подошли ещё: ' + esc(x.others.join(', ')) + '; взята ближайшая по дате</span>' : '') + '</td><td class="n">' + mm2(x.amount) + '</td></tr>').concat(
+      (sf.df1 || []).map(x => '<tr class="it" data-c16-sf-df1><td>' + esc(x.note || 'дисконт-фактор 1') + ' · сделка ' + dl('c03-blotter.html?pos=' + encodeURIComponent(x.position_id || ''), who(x)) + ' <span class="mut3">номинал ноги без дисконтирования</span></td><td class="n">' + mm2(x.amount) + '</td></tr>'),
+      (sf.unmatched || []).map(x => '<tr class="it" data-c16-sf-un><td>не сопоставлено: строка отчёта ' + head(x) + ' <span class="warn">осталась в базе по номиналу</span> <span class="mut3">' + esc(WHY[x.why] || x.why || '') + '</span></td><td class="n">' + mm2(x.amount) + '</td></tr>'));
+    return '<div class="k-sec" data-c16-spotfuture>Строки отчёта спот-типа с будущей датой</div>' +
+      '<div class="k-note">Отчёт записывает номинал части валютных деривативов строкой спот-типа на дату расчётов. Такая строка, найденная среди сделок книги, всегда вынесена из базы; вместо неё в ОВП — экспозиция самой сделки.</div>' +
+      '<table class="k-tbl" data-vk="c16-drill-spotfuture" data-title="ОВП: строки спот-типа с будущей датой"><thead><tr><th>Строка отчёта</th><th class="n">сумма<span class="k-thu">mm ' + esc(line.ccy) + '</span></th></tr></thead><tbody>' + rows.join('') + '</tbody></table>';
+  }
   function lineHtml(line, cellV) {
     const ccy = line.ccy, unit = 'mm ' + ccy;
     const same = cellV == null || Math.abs(cellV - line.amount) < 0.5;
@@ -480,7 +496,7 @@
     return '<div class="k-sec" data-c16-drill-ccy="' + esc(ccy) + '">' + esc(ccy) + '<span class="sp"></span><span style="text-transform:none;letter-spacing:0">' + unit + '</span></div>' +
       (line.parts ? '<div class="k-note">База — отчёт ОВП от ' + esc(f.date(line.base_date)) + (line.base_kind === 'book_absent' ? ': книги в нём нет, база 0' : line.base_kind === 'with_derivatives' ? ': ещё с деривативами, их PV не добавлен' : '') + '</div>' : '') +
       '<table class="k-tbl" data-vk="c16-drill" data-title="ОВП: из чего складывается"><thead><tr><th>Слагаемое</th><th class="n">сумма<span class="k-thu">' + unit + '</span></th></tr></thead><tbody>' + body + '<tr class="sum" data-c16-sum><td>Итого ОВП ' + esc(ccy) + check + '</td><td class="n">' + mm2(line.amount) + '</td></tr></tbody></table>' +
-      (marks.length ? '<div class="k-note warn">' + esc(marks.join('; ')) + '</div>' : '') + excludedHtml(line);
+      (marks.length ? '<div class="k-note warn">' + esc(marks.join('; ')) + '</div>' : '') + spotFutureHtml(line) + excludedHtml(line);
   }
   let PARTN = {};
   function drill(r, ccy, date) {
@@ -589,7 +605,8 @@
         trades: bounded([{ kind: 'trade', trade_id: 'D' + (100 + k), book_id: book, leg: 'fx', trade_date: day.date, amount: trd, asset: 'fx', value_date: next2(day.date) }]) };
       if (out) C.outside = bounded([{ kind: 'position', position_id: book + '|OPT-1', book_id: book, component: 'options', amount: out }]);
       return Object.assign(L, { reported: base, base_date: B, set_id: 900 + k, base_kind: 'without_derivatives', components: out ? ['options'] : [], outside: out ? { options: out } : {},
-        parts: { base, derivatives: der, bonds: 0, trades: trd, outside: out }, contributions: C, split_kinds: kinds, fallback: [], partial_pv: [], no_pv: [], excluded, derivative_types: types });
+        parts: { base, derivatives: der, bonds: 0, trades: trd, outside: out }, contributions: C, split_kinds: kinds, fallback: [], partial_pv: [], no_pv: [], excluded, derivative_types: types,
+        spot_future: spot ? { out: [{ value_date: '2026-12-22', pair: 'EUR/USD', src: 'R5', amount: 2e6, book_id: book, position_id: book + '|FWD-1', trade_ids: ['D-1001'], days: 2, others: [] }], unmatched: [{ value_date: '2027-01-15', pair: 'EUR/USD', src: 'R6', amount: 3e5, book_id: book, why: 'no_deal' }], df1: [{ position_id: book + '|FWD-1', trade_ids: ['D-1001'], amount: 2e6, note: 'нет кривой EUR: дисконт-фактор 1' }] } : undefined });
     });
     return { run_id: null, state: 'computed', as_of: day.date, components: Object.entries({ cash: 'кэш и к расчёту', fx_legs: 'PV валютных ног', options: 'опционы', bonds: 'облигации', other: 'прочее' }).map(([key, name]) => ({ key, name })),
       parts: [], published: { basis: 'report_base_plus_day', base_date: B, by_book: by } };

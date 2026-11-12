@@ -519,6 +519,11 @@ class OcpPublishedLine(BaseModel):
         "report_base_plus_day, TDM#603: the report's row types behind ``excluded``, from the adapter's "
         "``x_derivative_types``: {type, kind, kept: false — its future lines taken out as the kind, true — a spot type "
         "left in the base at its nominal, lines, amount}"))
+    spot_future: dict[str, Any] | None = Field(None, description=(
+        "report_base_plus_day, TDM#693: the report's lines of a spot type with a future value date (the adapter's "
+        "``x_spot_future``): out — taken out of the base and replaced by the deal {value_date, pair, amount, "
+        "position_id, trade_ids, days, others}, unmatched — left in the base {value_date, pair, amount, why}, df1 — "
+        "deals taken at the legs' nominal, discount factor 1 {position_id, trade_ids, amount, note}"))
     derivative_share: list[dict[str, Any]] = Field(default_factory=list, description=(
         "report_base_plus_day, DEC18 (TDM#588): a derivative that is nearly the whole gross of a large line "
         "{position_id, derivative, amount, share} (gap derivative_share)"))
@@ -550,7 +555,7 @@ OcpGapCode = Literal["no_report", "stale_report", "outside_without_terms", "book
                      "base_older", "trades_not_loaded", "no_base_run", "trades_not_valued", "carried_forward_unit",
                      "trades_unknown_book", "derivatives_partial_pv", "derivatives_unknown_last_flow",
                      "off_report_excluded", "derivative_share", "balances_older_than_base", "balances_not_at_base",
-                     "fx_unit_unconfirmed"]
+                     "fx_unit_unconfirmed", "spot_future_unmatched", "spot_future_ambiguous", "spot_future_df1", "spot_future_partial"]
 """Every gap code the engine emits (``rules.ocp.gaps``, ``rules.ocp.DAY_GAP_TEXT``, ``publish.ocp_run``): a code
 missing here failed the whole route (0.2.21: ``derivative_share`` and the balances' codes of DEC18)."""
 

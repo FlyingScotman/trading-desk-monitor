@@ -83,6 +83,7 @@ from functools import partial
 from itertools import combinations
 from typing import Any
 
+from . import ocp_spot as S
 from .funding import FundingLiability, OpenDecision
 
 COMPONENTS = ("cash", "fx_legs", "ndf", "futures", "options", "bonds", "funding", "other", "transfers")
@@ -637,8 +638,10 @@ def reconcile(lines: Sequence[OcpLine], report_rows: Sequence[Mapping[str, Any]]
             rb = r.get("book_id") or book
             key = (str(rb) if rb else None, ccy)
             x = reported.setdefault(key, {"ocp_ccy": 0.0, "ocp_rub": None, "rate": None, "src": [], "base": 0.0,
-                                          "derivatives": defaultdict(float), "types": {}})
+                                          "derivatives": defaultdict(float), "types": {}, "spot": []})
             _merge_types(x["types"], derivative_types(_trade_x(r, "x_derivative_types")))
+            x["spot"] += [ln.as_dict() for ln in S.spot_lines(_trade_x(r, "x_spot_future"), ccy=ccy,
+                                                              book_id=str(rb) if rb else None)]
             der = derivative_nominals(r.get("derivatives_ccy"))
             x["ocp_ccy"] += a + math.fsum(der.values())
             x["base"] += a
@@ -674,7 +677,7 @@ def reconcile(lines: Sequence[OcpLine], report_rows: Sequence[Mapping[str, Any]]
             b, ccy = key
             parts = {c: parts_by[key][c] for c in COMPONENTS if abs(parts_by[key].get(c, 0.0)) > 0}
             rep = reported.get(key, {"ocp_ccy": 0.0, "ocp_rub": None, "rate": None, "src": [], "base": 0.0,
-                                     "derivatives": {}, "types": {}})
+                                     "derivatives": {}, "types": {}, "spot": []})
             in_report = _sum(parts, policy.report_components)
             brk = rep["ocp_ccy"] - in_report
             over = abs(brk) > policy.tolerance_ccy
@@ -683,6 +686,7 @@ def reconcile(lines: Sequence[OcpLine], report_rows: Sequence[Mapping[str, Any]]
                 "book_id": b, "ccy": ccy, "reported": rep["ocp_ccy"], "reported_base": rep["base"],
                 "reported_derivatives": dict(rep["derivatives"]), "split": bool(kinds),
                 "derivative_types": _types_out(rep["types"]),
+                "spot_future": rep["spot"],
                 "split_kinds": sorted(kinds),
                 "reported_rub": rep["ocp_rub"],
                 "reported_rate": rep["rate"], "in_report_file": key in reported, "src": rep["src"][:20],
@@ -1049,6 +1053,108 @@ def derivative_lines(rows: Sequence[Mapping[str, Any]], books: Mapping[str, Mapp
     return out
 
 
+SPOT_COMPONENTS = ("fx_legs", "ndf", "futures")
+"""The components of a derivative a report line of a spot type can stand for (``spot_deals``)."""
+
+
+def _code(x: Any) -> str:
+    c = str(x or "").strip().upper()
+    return "RUB" if c in ("RUR", "SUR") else c
+
+
+def _terms_legs(t: Mapping[str, Any], policy: OcpPolicy) -> tuple[dict[str, float], date, frozenset[str]] | None:
+    """The nominal per currency of a ``trade_terms`` row of an FX exchange (an outright, an NDF, a swap leg) and its
+    value date: the desk's side buys (+) the base currency and pays (−) the quote, ``notional_quote`` else the base
+    notional at ``contract_rate`` (the deal's or the forward's rate of its terms); the reporting currency left out.
+    The third item: the currencies whose nominal the terms do not state (the rate gave it), a wider tolerance of the
+    match (``ocp_spot.REL_TOL_RATE``). None: not an FX exchange or incomplete."""
+    base, quote, vd = _code(t.get("base_ccy")), _code(t.get("quote_ccy")), _day(t.get("value_date"))
+    side = str(t.get("side") or "").lower()
+    if not base or not quote or base == quote or side not in ("buy", "sell") or vd is None:
+        return None
+    nb, nq, k = _f(t.get("notional_base")), _f(t.get("notional_quote")), _f(t.get("contract_rate"))
+    derived: set[str] = set()
+    if nb is None and nq is not None and k:
+        nb = nq / k
+        derived.add(base)
+    if nq is None and nb is not None and k:
+        nq = nb * k
+        derived.add(quote)
+    if nb is None or nq is None or nb <= 0 or nq <= 0 or not math.isfinite(nb) or not math.isfinite(nq):
+        return None
+    sign = 1.0 if side == "buy" else -1.0
+    return ({c: v for c, v in ((base, sign * nb), (quote, -sign * nq)) if c != policy.reporting_ccy}, vd,
+            frozenset(derived))
+
+
+def _df1_why(ex: Mapping[str, Any], has_terms: bool) -> str:
+    """Why a deal is at the legs' nominal (the discount factor 1): no terms, a currency the run has no curve or rate of
+    (``extra.risk_missing``), or core's reason."""
+    if not has_terms:
+        return "нет условий сделки"
+    rm = ex.get("risk_missing") if isinstance(ex.get("risk_missing"), Mapping) else {}
+    ccy = str(rm.get("ccy") or "")
+    if rm.get("reason") in ("no_curve", "no_curve_spot") and ccy:
+        return f"нет кривой {ccy}"
+    if rm.get("reason") == "no_spot" and ccy:
+        return f"нет курса {ccy}"
+    reason = ex.get("not_exact_reason")
+    return f"сделка не оценена ({str(reason)[:60]})" if reason else "сделка не оценена"
+
+
+def spot_deals(rows: Sequence[Mapping[str, Any]], books: Mapping[str, Mapping[str, Any]],
+               terms: Mapping[str, Sequence[Mapping[str, Any]]], on: date, policy: OcpPolicy = PROVISIONAL_POLICY
+               ) -> list[S.Deal]:
+    """The FX derivatives of the run (a forward, an NDF, a cross NDF, a future: ``S.MATCH_KINDS``, in a component of
+    ``SPOT_COMPONENTS`` that enters the OCP) a report line of a spot type can be matched with (TDM#693). The legs: those
+    of the deal's terms (the nominal; a leg settled before ``on`` is in ``legs`` for the match, not in ``open_legs``),
+    else the row's ``ocp_amount`` or FX delta (a deal without terms, a future). The dates: the terms' value and fixing
+    dates and every flow date of the row (``_value_dates``). A deal core did not value whose terms are known is
+    ``own_legs``: its legs at the discount factor 1, the reason in ``note``."""
+    out = []
+    for r in rows:
+        pid = str(r["position_id"])
+        t = terms.get(pid, ())
+        comp, _, _, _ = classify(r, t, books, on, policy)
+        if comp not in SPOT_COMPONENTS:
+            continue
+        kind = derivative_kind(r, t, policy, comp)
+        if kind not in S.MATCH_KINDS:
+            continue
+        ex = r.get("extra") or {}
+        legs: dict[str, float] = defaultdict(float)
+        open_legs: dict[str, float] = defaultdict(float)
+        dates = list(_value_dates(r, t))
+        ids: list[str] = []
+        parsed = [(x, p) for x in t if (p := _terms_legs(x, policy)) is not None]
+        by_rate: set[str] = set()
+        for x, (amounts, vd, derived) in parsed:
+            by_rate |= derived
+            for c, v in amounts.items():
+                legs[c] += v
+                if vd >= on:
+                    open_legs[c] += v
+            if d := _day(x.get("fixing_date")):
+                dates.append(d)
+            ids.append(str(x.get("trade_id")))
+        if not parsed:
+            amounts = _amounts(ex.get("ocp_amount") or r.get("fx_delta"), policy)
+            legs, open_legs = defaultdict(float, amounts), defaultdict(float, amounts)
+            deal_id = (ex.get("reported") or {}).get("deal_id")
+            ids = [str(i) for i in ((ex.get("core") or {}).get("trades") or [])] or ([str(deal_id)] if deal_id else [])
+        for lg in ex.get("legs") or ():
+            dates += [d for k in ("fixing_date", "payment_date", "value_date") if isinstance(lg, Mapping)
+                      and (d := _day(lg.get(k)))]
+        if not legs:
+            continue
+        valued = bool(ex.get("core"))
+        own = bool(parsed) and not valued
+        out.append(S.Deal(pid, str(r["book_id"]), kind, comp, dict(legs), dict(open_legs),
+                          tuple(sorted(set(dates))), tuple(dict.fromkeys(ids)), frozenset(by_rate), own,
+                          S.DF1_TEXT.format(why=_df1_why(ex, bool(parsed))) if own else ""))
+    return out
+
+
 @dataclass(frozen=True)
 class BondMove:
     """A foreign-currency bond's revaluation since the base date B, in its currency (``publish.ocp_run``): dirty MV now
@@ -1315,7 +1421,8 @@ def published_day(comparisons: Sequence[Mapping[str, Any]], outside_report: Sequ
                   books: Mapping[str, Mapping[str, Any]] | None = None, units: Sequence[Mapping[str, Any]] = (),
                   days: Mapping[date, BaseDay] | None = None,
                   is_business_day: Callable[[date], bool] | None = None, derivs: Sequence[DerivLine] = (),
-                  rates: Mapping[str, float] | None = None, cash_dates: Mapping[str, date] | None = None
+                  rates: Mapping[str, float] | None = None, cash_dates: Mapping[str, date] | None = None,
+                  spot: Sequence[S.Deal] = ()
                   ) -> tuple[list[dict[str, Any]], list[str], list[dict[str, Any]], set[str]]:
     """The published OCP under ``report_base_plus_day`` (owner, 03.11.2026, TDM#531): (lines, notes, gaps, the books a
     report covers). Per (entity, book or None for an entity-level unit, currency), B the unit's ``valid_date``:
@@ -1334,6 +1441,16 @@ def published_day(comparisons: Sequence[Mapping[str, Any]], outside_report: Sequ
       nominal, marked (``fallback``; ``no_pv`` too in the second case; an NDF never when ``include_ndf`` is off). Some
       of them with a PV: the PV of those and the notional of the others, marked (``partial_pv``). A book absent from the report adds every kind. Rows that are not derivatives (``other`` equities, funds,
       deposits, spots) never enter it;
+    - ``spot`` (TDM#693): a report line of a spot type with a future value date (the adapter's ``x_spot_future``) that
+      matches a forward, an NDF or a future of the same book (``ocp_spot.match``: currency and nominal of a leg, a date
+      within five business days) is **always** taken out of the base (a negative item ``report_spot_future``), and the
+      deal's own exposure stands in its place: its PV where the kind's rule gives it, else its derivative lines, else,
+      for a deal core did not value whose terms are known, the legs' nominal at the discount factor 1 (marked, e.g.
+      «нет кривой EUR: дисконт-фактор 1»), in ``derivatives``. A deal whose component the report does not hold is in
+      ``outside`` already (a deal not valued, with terms: its matched currency's leg at the discount factor 1
+      replaces ``outside``). The replacement is by (position, currency): an unmatched leg of a matched deal keeps
+      its kind's rule (gap ``spot_future_partial``). An unmatched line stays in the base. The line's ``spot_future`` says what was taken out, what
+      was not matched and what was taken at the discount factor 1;
     - ``bonds``: the revaluation of the foreign-currency bonds since B (``BaseDay.bonds``) when the report holds
       ``bonds``;
     - ``trades``: the trades after B (``BaseDay.trades``), but a derivative the positions already hold where its kind
@@ -1357,6 +1474,10 @@ def published_day(comparisons: Sequence[Mapping[str, Any]], outside_report: Sequ
     by_kind: dict[tuple[str, str], list[DerivLine]] = defaultdict(list)
     for d in derivs:
         by_kind[(d.ccy, d.kind)].append(d)  # ccy "": a derivative with no amount (its kind's coverage only)
+    by_pos_ccy: dict[tuple[str, str], list[DerivLine]] = defaultdict(list)
+    for d in derivs:
+        if d.ccy:
+            by_pos_ccy[(d.position_id, d.ccy)].append(d)
     entity_of = {str(b): str(m.get("entity") or "—") for b, m in (books or {}).items()}
     for e, b, _ in derived:
         entity_of.setdefault(b, e)
@@ -1440,10 +1561,28 @@ def published_day(comparisons: Sequence[Mapping[str, Any]], outside_report: Sequ
                                                                       if t.book_id in won}
             if sc["absent"]:
                 ccys |= {x.ccy for x in day.cash or () if x.book_id in won}
+        # TDM#693: the report's spot-type lines with a future date, matched with the deals of the scope's books
+        spot_in = [S.SpotLine.of(d) for c_ in sc["by_ccy"].values() for d in c_.get("spot_future") or ()]
+        allowed = [d for d in spot if d.book_id in won]
+        sm = S.match(spot_in, allowed, is_business_day) if spot_in and allowed else \
+            S.Result(unmatched=[S.Unmatched(x, "no_deal") for x in spot_in])
+        sm_deals = sm.deals()
+        # the replacement goes by pair (position, currency): only the leg a report line was matched on is replaced; the
+        # other legs of the deal are counted as before (and said: ``spot_future_partial``)
+        matched_keys = {(m.deal.position_id, m.line.ccy) for m in sm.matched}
+        own_keys = {(d.position_id, c_) for d in sm_deals if d.own_legs for c_ in d.open_legs
+                    if (d.position_id, c_) in matched_keys}
+        ccys |= {c_ for _, c_ in own_keys}
         if lost:
             notes.append(f"часть отчёта ОВП по юрлицу {sc['entity']} считается итогом юрлица: ОВП книг "
                          + ", ".join(sorted(lost)) + " взята из их части отчёта и из итога юрлица вычтена")
         where = f"книга {sc['book_id']}" if sc["absent"] else _scope_text(sc["scope"] or {"book_id": sc["book_id"]})
+        for d in sm_deals:
+            missing = sorted(c_ for c_ in d.legs if (d.position_id, c_) not in matched_keys)
+            if missing:
+                issues["spot_future_partial"].append(
+                    f"{where}: сделка {', '.join(d.trade_ids) or d.position_id}: нога "
+                    + ", ".join(missing) + " не найдена в отчёте")
         # the kinds whose PV this scope adds: those its report gives apart (a book absent from it: every kind), whose
         # component the report holds (one outside it is in ``outside``)
         kinds = set(sc["kinds"])
@@ -1471,6 +1610,13 @@ def published_day(comparisons: Sequence[Mapping[str, Any]], outside_report: Sequ
                 items["base"].append({"kind": "report", "set_id": sc["set_id"], "valid_date": _iso(sc["valid_date"]),
                                       "file": unit.get("file_name"), "book_id": sc["book_id"],
                                       "rows": c.get("report_rows"), "amount": c.get(figure, c["reported"])})
+            for m in sm.matched:
+                if m.line.ccy == ccy:
+                    items["base"].append({
+                        "kind": "report_spot_future", "book_id": m.line.book_id or sc["book_id"], "amount": -m.line.amount,
+                        "value_date": _iso(m.line.value_date), "pair": m.line.pair, "src": m.line.src,
+                        "position_id": m.deal.position_id, "trade_ids": list(m.deal.trade_ids),
+                        "note": "строка отчёта спот-типа с будущей датой: вынесена из базы, вместо неё — сделка"})
             nominal: dict[str, float] = defaultdict(float, (c or {}).get("reported_derivatives") or {})
             types: dict[tuple[str, str, bool], dict[str, Any]] = {}
             _merge_types(types, (c or {}).get("derivative_types") or ())
@@ -1493,7 +1639,7 @@ def published_day(comparisons: Sequence[Mapping[str, Any]], outside_report: Sequ
             outside_kinds = {x.kind for x in mine if x.component not in policy.report_components}
             for k in DERIVATIVE_KINDS:
                 term = [x for x in by_kind.get((ccy, k), ()) if x.book_id in won and x.in_term
-                        and x.component in policy.report_components]
+                        and x.component in policy.report_components and (x.position_id, ccy) not in own_keys]
                 if k not in kinds:
                     # not apart: its nominal stays in the base. A derivative traded after B that the positions hold
                     # is added only when it is new since B (not in B's run, or every trade of its terms after B);
@@ -1540,6 +1686,30 @@ def published_day(comparisons: Sequence[Mapping[str, Any]], outside_report: Sequ
                     fallback.append(k)
                     issues["derivatives_nominal_fallback"].append(f"{where} {ccy}: {KIND_TEXT[k]}")
             in_pv |= {x.position_id for x in mine if x.component not in policy.report_components}
+            # TDM#693: the exposure of each deal matched with a report line, once (a deal in the PV term above, or whose
+            # component is outside the report, is counted there)
+            at_df1: list[dict[str, Any]] = []
+            for d in sm_deals:
+                got: list[dict[str, Any]] = []
+                last = _iso(max(d.dates)) if d.dates else None
+                if (d.position_id, ccy) not in matched_keys:
+                    continue
+                if d.own_legs:
+                    if amt := d.open_legs.get(ccy):
+                        got.append({"kind": "position", "position_id": d.position_id, "book_id": d.book_id,
+                                    "component": KIND_COMPONENT[d.kind], "basis": "nominal_df1", "last_flow": last,
+                                    "amount": amt, "marker": d.note})
+                        at_df1.append({"position_id": d.position_id, "trade_ids": list(d.trade_ids), "amount": amt,
+                                       "note": d.note})
+                elif d.position_id not in in_pv and d.component in policy.report_components:
+                    got = [{"kind": "position", "position_id": d.position_id, "book_id": d.book_id,
+                            "component": x.component, "basis": x.basis, "last_flow": _iso(x.last_flow),
+                            "amount": x.amount,
+                            **({"marker": "номинал позиции, PV нет"} if x.basis != "spot_equivalent" else {})}
+                           for x in by_pos_ccy.get((d.position_id, ccy), ())]
+                for g in got:
+                    g["note"] = "сопоставлена со строкой отчёта спот-типа"
+                items["derivatives"] += got
             if sc["absent"] and "cash" in policy.report_components:
                 # DEC18 (TDM#588): a book the report on B lacks has base 0; its cash balances (the futures' result in
                 # the currency, the cash of FX deals that move the OCP) come from the cash report, by currency, as of
@@ -1574,7 +1744,7 @@ def published_day(comparisons: Sequence[Mapping[str, Any]], outside_report: Sequ
             added: dict[str, float] = defaultdict(float)
             for b in sorted(won):
                 for x in by_bc.get((b, ccy), ()):
-                    if x.component not in policy.report_components and x.amount:
+                    if x.component not in policy.report_components and x.amount and (x.position_id, ccy) not in own_keys:
                         items["outside"].append({"kind": "position" if x.position_id else "line",
                                                  "position_id": x.position_id or x.key, "book_id": b,
                                                  "component": x.component, "amount": x.amount})
@@ -1611,6 +1781,22 @@ def published_day(comparisons: Sequence[Mapping[str, Any]], outside_report: Sequ
             excluded = [x for x in excluded if x["nominal"] or x["added"] or x["outside"]]
             for x in excluded:
                 x["diff"] = x["nominal"] - x["added"] - x["outside"]
+            sf_out = [{"value_date": _iso(m.line.value_date), "pair": m.line.pair, "src": m.line.src,
+                       "amount": m.line.amount, "book_id": m.line.book_id, "position_id": m.deal.position_id,
+                       "trade_ids": list(m.deal.trade_ids), "days": m.days, "others": list(m.others)}
+                      for m in sm.matched if m.line.ccy == ccy]
+            sf_un = [{"value_date": _iso(u.line.value_date), "pair": u.line.pair, "src": u.line.src,
+                      "amount": u.line.amount, "book_id": u.line.book_id, "why": u.why}
+                     for u in sm.unmatched if u.line.ccy == ccy]
+            for o in sf_out:
+                if o["others"]:
+                    issues["spot_future_ambiguous"].append(
+                        f"{where} {ccy}: строка на {_iso(o['value_date'])} ближе всего к {o['position_id']}, "
+                        f"подходят ещё {', '.join(o['others'][:3])}")
+            if sf_un:
+                issues["spot_future_unmatched"].append(f"{where} {ccy}: {len(sf_un)} стр.")
+            for o in at_df1:
+                issues["spot_future_df1"].append(f"{where} {ccy}: {o['position_id']} — {o['note']}")
             has_report = bool(c) or bool(items["base"])
             line(sc, won, ccy, total, REPORT,
                  components=[k for k in COMPONENTS if added.get(k)], outside={k: v for k, v in added.items() if v},
@@ -1621,6 +1807,8 @@ def published_day(comparisons: Sequence[Mapping[str, Any]], outside_report: Sequ
                  split_kinds=sorted(sc["kinds"]) if not sc["absent"] else [], partial_pv=partial, no_pv=no_pv,
                  base_older=b0 is not None and business_days_between(b0, on, is_business_day) > 1,
                  excluded=excluded, derivative_types=[] if sc["absent"] else _types_out(types),
+                 **({"spot_future": {"out": sf_out, "unmatched": sf_un, "df1": at_df1}}
+                    if sf_out or sf_un or at_df1 else {}),
                  **({"derivative_share": sorted(big, key=lambda x: -abs(x["amount"]))[:CONTRIBUTIONS_MAX]}
                     if big else {}))
     covered = {b for sc in scopes.values() for b in sc["books"]}
@@ -1654,6 +1842,12 @@ DAY_GAP_TEXT = {
     "trades_not_valued": "сделки после базы, которые правило ОВП не оценивает (не облигация и не валюта)",
     "trades_unknown_book": "сделки после базы в книгах, которых нет в справочнике книг: в ОВП не вошли",
     "derivative_share": "один дериватив — почти вся сумма слагаемых строки ОВП (DEC18): проверьте его номинал и вид",
+    "spot_future_unmatched": "строки отчёта ОВП спот-типа с будущей датой не сопоставлены ни с одной сделкой книги: "
+                             "остаются в базе по номиналу",
+    "spot_future_partial": "сделка, чья строка отчёта вынесена из базы, найдена в отчёте не по всем ногам: остальные ноги "
+                           "считаются по прежнему правилу",
+    "spot_future_ambiguous": "строке отчёта ОВП спот-типа подошло несколько сделок: взята ближайшая по дате",
+    "spot_future_df1": "сделка, чья строка отчёта вынесена из базы, не оценена: номиналы ног с дисконт-фактором 1",
     "balances_older_than_base": "книги нет в отчёте ОВП: последние её остатки по счетам старше даты базы — сделки "
                                 "между ними и базой в ОВП не вошли",
     "balances_not_at_base": "книги нет в отчёте ОВП: остатков по счетам на дату базы прогон не прочитал, взяты остатки "
@@ -1839,7 +2033,9 @@ def compute_ocp(rows: Sequence[Mapping[str, Any]], books: Mapping[str, Mapping[s
         pub, pub_notes, day_gaps, covered = published_day(comps, outside, lines, on, policy, books=books,
                                                            units=report_units, days=days,
                                                            is_business_day=is_business_day, derivs=derivs,
-                                                           rates=rates, cash_dates=cash_dates(cash))
+                                                           rates=rates, cash_dates=cash_dates(cash),
+                                                           spot=spot_deals(rows, books, tb, on, policy)
+                                                           if any(c.get("spot_future") for c in comps) else ())
         old = {u.get("set_id") for u in carried_units(report_units, {str(b): str(m.get("entity") or "—")
                                                                      for b, m in books.items()}, on, policy,
                                                        is_business_day)[1]}
