@@ -361,6 +361,62 @@ def zcyc_parameters(trade_date: str | date, params: dict[str, Any], where: str =
     return ZcycParameters(d, b1, b2, b3, t1, tuple(g))  # type: ignore[arg-type]
 
 
+@dataclass(frozen=True)
+class FxFutureQuotes:
+    """The FX futures of one currency for its implied curve (``MarketView.fx_future_quotes``): the rows, one per delivery
+    date, each with ``price`` (RUB per one unit) and ``price_kind`` (``settle``, ``mid`` of bid and offer, ``last``); the
+    contracts left out with the reason; where the prices are from (``eod``: settlement prices, ``intraday``: the cut's
+    quotes, None: there are none); ``why_none``: what the message of a curve without futures says about the sets."""
+
+    rows: list[dict[str, Any]]
+    dropped: dict[str, str]
+    source: str | None
+    why_none: str = ""
+
+
+def _intraday_price(r: dict[str, Any]) -> tuple[float, str] | None:
+    """RUB per one unit of an intraday FORTS row and its kind: the mid of the bid and the offer when both are positive
+    (``mid``), else the last price when it is positive (``last``)."""
+    bid, offer, last = (_f(r.get(k)) for k in ("bid_rub_per_unit", "offer_rub_per_unit", "last_rub_per_unit"))
+    if bid and offer and bid > 0 and offer > 0:
+        return (bid + offer) / 2, "mid"
+    return (last, "last") if last and last > 0 else None
+
+
+def ts_range(stamps: Any) -> tuple[str, str] | None:
+    """The earliest and the latest of ISO timestamps as published (one that does not parse is skipped), None without
+    any."""
+    parsed = []
+    for t in stamps:
+        try:
+            parsed.append((datetime.fromisoformat(str(t)).timestamp(), str(t)))
+        except ValueError:
+            continue
+    return (min(parsed)[1], max(parsed)[1]) if parsed else None
+
+
+def _main_per_delivery(rows: list[dict[str, Any]], volume: str) -> tuple[list[dict[str, Any]], dict[str, str]]:
+    """One contract per delivery date (core refuses two quotes of one date): the main one, by larger open interest, then
+    larger ``volume`` field, then ticker (a fixed order). The others are dropped with the reason. The USD and EUR main
+    contracts (``Si``, ``Eu``) and their mini contracts (``UM``, ``ER``) share delivery dates."""
+    by_date: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    for r in rows:
+        by_date[r["last_del_date"]].append(r)
+    kept, dropped = [], {}
+
+    def size(r: dict[str, Any], field: str) -> Decimal:
+        return _d(r.get(field)) or Decimal(0)
+
+    for day in sorted(by_date):
+        first, *rest = sorted(by_date[day], key=lambda r: (-size(r, "open_position"), -size(r, volume), r["secid"]))
+        kept.append(first)
+        for r in rest:
+            why = ("larger open interest" if size(r, "open_position") != size(first, "open_position") else
+                   "larger volume" if size(r, volume) != size(first, volume) else "ticker order")
+            dropped[r["secid"]] = f"same delivery date as {first['secid']} ({why})"
+    return kept, dropped
+
+
 class MarketView:
     def __init__(self, snap: Snapshot) -> None:
         if snap.kind != "market":
@@ -392,6 +448,9 @@ class MarketView:
         """Contract 1.4: MOEX CETS swaps (swap points as published and per one unit); empty before 1.4."""
         self.futures_prices: list[dict[str, Any]] = d.get("futures_prices") or []
         """Contract 1.4: FORTS settlement prices of the business date (FX, rate and index futures)."""
+        self.futures_prices_intraday: list[dict[str, Any]] = d.get("futures_prices_intraday") or []
+        """An intraday cut's FORTS quotes (latest of the day per contract); EOD cuts leave it empty, as an intraday cut
+        leaves ``futures_prices`` empty."""
         self.curve_quote_sets = d["curve_quote_sets"]
         self.stale = {ds["name"]: ds["stale_reasons"] for ds in snap.doc["datasets"] if ds["stale"]}
 
@@ -491,12 +550,62 @@ class MarketView:
 
     def fx_futures(self, ccy: str) -> list[dict[str, Any]]:
         """Dated FORTS FX futures on ``ccy``/RUB of the business date with a settlement price per one unit
-        (``settle_rub_per_unit``) and a delivery date, by delivery date."""
+        (``settle_rub_per_unit``, also as ``price``) and a delivery date, by delivery date: one contract per
+        delivery date (``_main_per_delivery``; the main USD and EUR contracts and their mini contracts share dates)."""
+        return self._eod_futures(ccy)[0]
+
+    def fx_future_quotes(self, ccy: str) -> FxFutureQuotes:
+        """The futures of ``ccy``/RUB that an FX-implied curve takes, one per delivery date (TDM#695): the end-of-day
+        settlement prices (``fx_futures``); an intraday cut without any of them for the currency (it leaves
+        ``futures_prices`` empty) takes ``futures_prices_intraday``: the mid of the bid and the offer per one unit
+        when both are positive, else the last price (each row says which: ``price_kind``, and when it was quoted:
+        ``quote_ts``). An end-of-day cut never takes intraday quotes. A row whose trade date is before the business
+        date is dropped; a later one stays (the evening session of FORTS trades on the next trading day's date).
+        ``dropped``: the contracts left out, ticker -> reason."""
+        rows, dropped = self._eod_futures(ccy)
+        if rows:
+            return FxFutureQuotes(rows, dropped, "eod")
+        if self.snapshot.cut_type != "intraday":
+            return FxFutureQuotes([], dropped, None, "no futures in futures_prices "
+                                  "(intraday quotes are not used in an end-of-day cut)")
+        rows, more = self._intraday_futures(ccy)
+        return FxFutureQuotes(rows, {**dropped, **more}, "intraday" if rows else None,
+                              "no futures in futures_prices or futures_prices_intraday")
+
+    def _fx_future_rows(self, rows: list[dict[str, Any]], ccy: str) -> list[dict[str, Any]]:
+        return [r for r in rows if r.get("is_fx") and r.get("base_ccy") == ccy and (r.get("quote_ccy") or "RUB") == "RUB"
+                and r.get("contract_type") != "perpetual"]
+
+    def _eod_futures(self, ccy: str) -> tuple[list[dict[str, Any]], dict[str, str]]:
         bd = self.business_date.isoformat()
-        rows = [r for r in self.futures_prices if r.get("is_fx") and r.get("base_ccy") == ccy
-                and (r.get("quote_ccy") or "RUB") == "RUB" and r.get("trade_date") == bd
-                and r.get("settle_rub_per_unit") and r.get("last_del_date") and r.get("contract_type") != "perpetual"]
-        return sorted(rows, key=lambda r: r["last_del_date"])
+        rows, dropped = [], {}
+        for r in self._fx_future_rows(self.futures_prices, ccy):
+            if r.get("trade_date") != bd:
+                continue
+            if not r.get("last_del_date"):
+                dropped[r["secid"]] = "no delivery date"
+            elif not r.get("settle_rub_per_unit"):
+                dropped[r["secid"]] = "no settlement price"
+            else:
+                rows.append({**r, "price": float(Decimal(r["settle_rub_per_unit"])), "price_kind": "settle"})
+        kept, same_date = _main_per_delivery(rows, "volume")
+        return kept, {**dropped, **same_date}
+
+    def _intraday_futures(self, ccy: str) -> tuple[list[dict[str, Any]], dict[str, str]]:
+        bd = self.business_date.isoformat()
+        rows, dropped = [], {}
+        for r in self._fx_future_rows(self.futures_prices_intraday, ccy):
+            if r.get("trade_date") and str(r["trade_date"])[:10] < bd:
+                dropped[r["secid"]] = f"trade date {str(r['trade_date'])[:10]}, before the business date"
+            elif not r.get("last_del_date"):
+                dropped[r["secid"]] = "no delivery date"
+            elif (priced := _intraday_price(r)) is None:
+                dropped[r["secid"]] = "no bid/offer or last price"
+            else:
+                rows.append({**r, "price": priced[0], "price_kind": priced[1],
+                             "quote_ts": r.get("source_ts") or r.get("ts")})
+        kept, same_date = _main_per_delivery(rows, "vol_today")
+        return kept, {**dropped, **same_date}
 
     def future(self, secid: str) -> dict[str, Any] | None:
         """The business date's FORTS row of a contract by its ticker (``SiZ6``), None when the snapshot has none."""

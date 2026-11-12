@@ -345,19 +345,37 @@ def _need(kind: str, cid: str, name: str, state: str, text: str = "") -> dict[st
     return {"kind": kind, "id": cid, "name": name, "state": state, "state_text": cv.MARKET_STATE[state], "text": text}
 
 
+ERROR_TEXT_MAX = 300
+"""The longest reason of a curve's error the card shows (the lineage keeps it whole)."""
+NO_CURVE_TEXT = "в рыночных данных прогона кривой нет"
+
+
 def _curve_state(lin: dict[str, Any], cid: str) -> tuple[str, str]:
     """The state of a foreign curve in the run's market (``lineage.fx.curves``)."""
     info = ((lin.get("fx") or {}).get("curves") or {}).get(cid)
     if not isinstance(info, dict):
-        return "missing", "в рыночных данных прогона кривой нет"
+        return "missing", NO_CURVE_TEXT
     if info.get("status") != "ok":
-        return "missing", "кривая не построена" + (f": {info.get('status')}" if info.get("status") else "")
+        err = str(info["error"]) if info.get("error") else ""
+        return "missing", "кривая не построена" + (f": {info.get('status')}" if info.get("status") else "") + (
+            f". {err[:ERROR_TEXT_MAX]}{'…' if len(err) > ERROR_TEXT_MAX else ''}" if err else "")
     if info.get("stale"):
         return "stale", "котировки кривой не на дату прогона"
     if info.get("proxy"):
         return "replaced", "вместо OIS — прокси по гособлигациям" + (
             f" ({info['source_curve']})" if info.get("source_curve") else "")
+    if info.get("futures_source") == "intraday":  # an FX-implied curve of an intraday cut (TDM#695)
+        return "ok", "по внутридневным котировкам фьючерсов" + (
+            f", на {_msk(info['futures_source_ts'])}" if info.get("futures_source_ts") else "")
     return "ok", ""
+
+
+def _msk(ts: str) -> str:
+    """A hub timestamp as the screen shows times: Moscow time (``ДД.ММ ЧЧ:ММ``); as published when it does not parse."""
+    try:
+        return datetime.fromisoformat(str(ts)).astimezone(store.MSK).strftime("%d.%m %H:%M") + " МСК"
+    except ValueError:
+        return str(ts)
 
 
 def _rub_state(lin: dict[str, Any], what: str) -> str:
@@ -413,6 +431,9 @@ def _foreign_curve(lin: dict[str, Any], ccy: str, ccs: bool, names: dict[str, st
     """The foreign curve of a ``ccy`` leg: the wanted one with its state; only a fallback there: ``replaced``; none of
     them: ``missing``."""
     order = _curve_order(lin, ccy, ccs)
+    # why the wanted curve is not there (an error of its build), unless the run just has no such curve
+    lack = _curve_state(lin, order[0])[1]
+    lack = "" if lack == NO_CURVE_TEXT else lack
     for cid in order:
         st, why = _curve_state(lin, cid)
         if st == "missing":
@@ -420,9 +441,11 @@ def _foreign_curve(lin: dict[str, Any], ccy: str, ccs: bool, names: dict[str, st
         if cid == order[0]:
             return _need("curve", cid, _curve_name(cid, names), st, why)
         return _need("curve", cid, _curve_name(cid, names), "replaced",
-                     f"вместо {order[0]}: её нет в рыночных данных прогона" + (f"; {why}" if why else ""))
+                     f"вместо {order[0]}: её нет в рыночных данных прогона" + (f" ({lack})" if lack else "")
+                     + (f"; {why}" if why else ""))
     return _need("curve", order[0], _curve_name(order[0], names), "missing",
-                 "в рыночных данных прогона нет ни одной из кривых: " + ", ".join(order))
+                 "в рыночных данных прогона нет ни одной из кривых: " + ", ".join(order)
+                 + (f". {order[0]}: {lack}" if lack else ""))
 
 
 def _index_needs(lin: dict[str, Any], t: dict[str, Any], code: str, trade_start: str | None, bd: date,
