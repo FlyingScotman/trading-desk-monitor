@@ -3,8 +3,9 @@
 The rows are ``tdm_run.run_content``, one format for both stores: ``run_position.fact`` is
 ``tdm_run.position_row`` (non-finite floats as null, which jsonb cannot hold), the run log has the
 same lines. The run is inserted as ``loading`` and its rows, the hash-verified core results, the
-model spreads, coverage and totals are written in one transaction that ends with ``complete``; on
-any error the rows roll back and the run is marked ``failed`` with the error. A total PnL is null, not 0,
+model spreads, coverage and totals are written in one transaction with it, which ends with ``complete``; on
+any error the run and its rows roll back and a run of the date is written ``failed`` with the error (a process
+killed in the middle leaves nothing, TDM#697). A total PnL is null, not 0,
 when no position of the book has a flash PnL. The run's ``position_set_ids`` (and lineage ``positions``)
 are the source of truth to reproduce its inputs; ``positions_known_at`` is only the horizon they were read at.
 
@@ -183,7 +184,7 @@ def publish(con: psycopg.Connection, ctx: EodContext, positions: list[tuple[str,
     lineage["funding"] = funding.lineage()
     lineage["fx_liability"] = liab.lineage()
     lineage["ocp"] = ocp.lineage()
-    run_id = con.execute(
+    insert = (
         "INSERT INTO run (run_type, business_date, prev_date, cut_type, supersedes_run_id, market_snapshot_id,"
         " static_snapshot_id, prev_market_snapshot_id, private_inputs_hash, position_set_ids, positions_known_at,"
         " core_version, backend_version, backend_git_sha, lineage, cut_ts, prev_cut_type)"
@@ -191,17 +192,27 @@ def publish(con: psycopg.Connection, ctx: EodContext, positions: list[tuple[str,
         " (SELECT max(run_id) FROM run WHERE business_date = %(bd)s AND run_type = %(type)s AND %(type)s <> 'INTRADAY'"
         "  AND (cut_type = %(cut)s OR %(cut)s = 'eod_final')"  # a final run supersedes the preliminary one (04 §3)
         "  AND status = 'complete'), %(m)s, %(s)s, %(pm)s, %(h)s, %(ids)s, %(known)s, %(core)s, %(be)s, %(sha)s,"
-        " %(lineage)s, %(cut_ts)s, %(pcut)s) RETURNING run_id",
-        {"type": run_type, "bd": bd, "prev": prev.business_date if prev else None,
-         "cut_ts": lineage["cut_ts"], "pcut": prev.snapshot.cut_type if prev else None,
-         "cut": cut_type or ctx.market.snapshot.cut_type, "m": ctx.market.snapshot.id, "s": ctx.static.snapshot.id,
-         "pm": lineage["prev_market_snapshot_id"], "h": inputs.private_inputs_hash, "ids": inputs.set_ids,
-         "known": inputs.known_at, "core": CORE_VERSION, "be": BACKEND_VERSION, "sha": lineage["backend_git_sha"],
-         "lineage": _jsonb(lineage)}).fetchone()[0]
+        " %(lineage)s, %(cut_ts)s, %(pcut)s) RETURNING run_id")
+    args = {"type": run_type, "bd": bd, "prev": prev.business_date if prev else None,
+            "cut_ts": lineage["cut_ts"], "pcut": prev.snapshot.cut_type if prev else None,
+            "cut": cut_type or ctx.market.snapshot.cut_type, "m": ctx.market.snapshot.id, "s": ctx.static.snapshot.id,
+            "pm": lineage["prev_market_snapshot_id"], "h": inputs.private_inputs_hash, "ids": inputs.set_ids,
+            "known": inputs.known_at, "core": CORE_VERSION, "be": BACKEND_VERSION, "sha": lineage["backend_git_sha"],
+            "lineage": _jsonb(lineage)}
+    run_id = None
     try:
+        # The run's row is written in the transaction of its rows, not before it (TDM#697): a process killed in the middle
+        # of its publication (the pool's, when a process of it dies: ``desk.parallel``) leaves no ``loading`` run of the
+        # date behind, which the store could neither complete nor delete (runs are immutable, ``desk_run_frozen``) and
+        # the date run again would stand beside as a second run of it, for an hour until it is reaped as failed.
         with con.transaction(), con.cursor() as cur:
+            run_id = cur.execute(insert, args).fetchone()[0]
             _write(cur, run_id, positions, inputs, content, bodies, results, spreads, funding.pnl_funding)
     except Exception as e:
+        if run_id is None:  # the row itself was not written: nothing to mark
+            raise
+        # the rows and the run went back together: the failure is a run of its own (``failed``, with the error)
+        run_id = con.execute(insert, args).fetchone()[0]
         con.execute("UPDATE run SET status = 'failed', error = %s WHERE run_id = %s",
                     (f"{type(e).__name__}: {e}"[:4000], run_id))
         store.run_event(con, "run.failed", [run_id])
