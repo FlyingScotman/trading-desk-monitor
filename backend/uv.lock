@@ -293,7 +293,7 @@ wheels = [
 
 [[package]]
 name = "desk-backend"
-version = "0.2.25"
+version = "0.2.26"
 source = { editable = "." }
 dependencies = [
     { name = "argon2-cffi" },

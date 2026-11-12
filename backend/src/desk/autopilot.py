@@ -60,7 +60,8 @@ every ``inbox_poll_seconds`` and on ``POST /api/v1/autopilot/run``):
    replay after the owner changed the adapter's settings, TDM#554; the same cut again). The flash PnL is measured against
    the previous business day's ``eod_final``, else the newest earlier final or preliminary close, and the run says
    which (``pnl_basis``). The step's status carries a machine-readable ``reason`` (``INTRADAY_REASONS``) next to its
-   detail. Only the latest INTRADAY run of a date is kept, and the one it replaced for an hour more (``store.prune_intraday``, TDM#675); intraday and
+   detail. Only the latest INTRADAY run of a date is kept, and the runs it replaced for an hour more (``store.prune_intraday``,
+   TDM#675; after the last cut of a day ``store.prune_intraday_stale`` removes them in every cycle); intraday and
    preliminary bundles of dates older than ``KEEP_CUT_DAYS`` leave the cache (``cache.prune``) unless a shown run
    reads them. The next morning the date's ``eod_final`` EOD run (step 3) supersedes both.
    **morning** (#21, with or without the hub): on a business day from ``MORNING_FROM`` (07:00 MSK; earlier once a
