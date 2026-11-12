@@ -212,10 +212,11 @@ def publish(con: psycopg.Connection, ctx: EodContext, positions: list[tuple[str,
         if run_id is None:  # the row itself was not written: nothing to mark
             raise
         # the rows and the run went back together: the failure is a run of its own (``failed``, with the error)
-        run_id = con.execute(insert, args).fetchone()[0]
-        con.execute("UPDATE run SET status = 'failed', error = %s WHERE run_id = %s",
-                    (f"{type(e).__name__}: {e}"[:4000], run_id))
-        store.run_event(con, "run.failed", [run_id])
+        with con.transaction():  # one step: a process killed between the three leaves no ``loading`` run either
+            run_id = con.execute(insert, args).fetchone()[0]
+            con.execute("UPDATE run SET status = 'failed', error = %s WHERE run_id = %s",
+                        (f"{type(e).__name__}: {e}"[:4000], run_id))
+            store.run_event(con, "run.failed", [run_id])
         raise
     return run_id, "complete", [m for level, m in content.log if level == "WARN"]
 
