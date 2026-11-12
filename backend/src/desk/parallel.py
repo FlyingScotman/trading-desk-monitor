@@ -28,7 +28,7 @@ Each has its own connections to the store.
 
 A date that fails in its process fails as it would alone (the error comes back, the original class when it can be
 pickled). A process that dies takes the pipeline with it: the dates not yet published are run one after the other, in
-this process, as before, and the run that was loading is reaped as any orphan.
+this process, as before; the run a killed process was publishing goes with its transaction (TDM#697), so the date has one run.
 
 **Nothing here can wait for ever.** The order is kept with shared flags that the dates *poll* (``POLL_S``), never with
 a lock or a condition: a process killed while the others wait for their turn (an out-of-memory kill) leaves nothing

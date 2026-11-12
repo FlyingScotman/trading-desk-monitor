@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import shutil
 import threading
 import time
@@ -762,19 +763,37 @@ def _logline(m: str) -> str:
     return "lineage " + json.dumps(_strip(json.loads(m[8:])), sort_keys=True) if m.startswith("lineage ") else m
 
 
+def _renumbered(x: Any, ids: dict[int, int]) -> Any:
+    """``x`` with the run ids (``run_id``, ``supersedes_run_id``, ``previous_run_id`` and the like, the «(run N)» of a
+    carried spread's source text) replaced by the run's place in the store (``ids``)."""
+    if isinstance(x, dict):
+        return {k: ids.get(v, v) if (k == "run_id" or k.endswith("_run_id")) and isinstance(v, int) else _renumbered(v, ids)
+                for k, v in x.items()}
+    if isinstance(x, (list, tuple)):
+        return [_renumbered(v, ids) for v in x]
+    if isinstance(x, str):
+        return re.sub(r"\(run (\d+)\)", lambda m: f"(run {ids.get(int(m[1]), int(m[1]))})", x)
+    return x
+
+
 def dump(url: str) -> list[dict[str, Any]]:
     """Every run of the store, run after run: header, every row, model spreads (with their source text), references,
-    core result hashes and the log lines."""
+    core result hashes and the log lines. A run is known by its place in the store, not by its id (TDM#697): a process of
+    the pool killed in the middle of its publication takes the id it had drawn with it (a rolled-back transaction does not
+    give a sequence value back), so the runs after it have other ids than in the store of the sequential run, and are the
+    same runs."""
     out = []
     with store.connect(url) as con:
         cur = con.cursor(row_factory=dict_row)
-        for r in cur.execute("SELECT * FROM run ORDER BY run_id").fetchall():
+        runs = cur.execute("SELECT * FROM run ORDER BY run_id").fetchall()
+        ids = {r["run_id"]: i for i, r in enumerate(runs, 1)}
+        for r in runs:
             rid = r["run_id"]
             hdr = {k: v for k, v in r.items() if k not in ("started_at", "completed_at", "positions_known_at",
                                                            "backend_git_sha")}
             hdr["lineage"] = json.dumps(_strip(dict(hdr.pop("lineage"))), sort_keys=True, default=str)
-            out.append({
-                "hdr": json.dumps(hdr, sort_keys=True, default=str),
+            out.append(_renumbered({
+                "hdr": json.dumps(_renumbered(hdr, ids), sort_keys=True, default=str),
                 "rows": cur.execute("SELECT * FROM run_position WHERE run_id = %s ORDER BY ord", (rid,)).fetchall(),
                 "ms": cur.execute("SELECT * FROM model_spread WHERE run_id = %s ORDER BY secid", (rid,)).fetchall(),
                 "ref": cur.execute("SELECT kind, data FROM run_reference WHERE run_id = %s ORDER BY kind",
@@ -782,7 +801,7 @@ def dump(url: str) -> list[dict[str, Any]]:
                 "cr": cur.execute("SELECT result_sha256, label FROM run_core_result WHERE run_id = %s ORDER BY 1",
                                   (rid,)).fetchall(),
                 "log": [_logline(m) for (m,) in con.execute(
-                    "SELECT message FROM run_log WHERE run_id = %s ORDER BY seq", (rid,))]})
+                    "SELECT message FROM run_log WHERE run_id = %s ORDER BY seq", (rid,))]}, ids))
     return out
 
 

@@ -145,6 +145,32 @@ def test_failed_publish_leaves_a_failed_run_and_no_rows(con, ctx, book, run_inpu
         assert con.execute(f"SELECT count(*) FROM {t}").fetchone()[0] == 0
 
 
+def test_a_publication_cut_short_leaves_no_run_behind(con, ctx, book, run_inputs, monkeypatch):
+    """TDM#697: a process killed in the middle of its publication (the pool's, when a process of it dies) leaves no run of
+    the date: the run's row is in the transaction of its rows, so it goes back with them. A ``loading`` row left outside
+    could be neither completed nor deleted (runs are immutable) and stood beside the date's run made again."""
+    class Killed(BaseException):  # not an Exception: nobody marks the run failed, as in a process that is gone
+        pass
+
+    real = desk_run._write
+
+    def cut_short(cur, run_id, *a, **kw):
+        assert cur.connection.execute("SELECT status FROM run WHERE run_id = %s", (run_id,)).fetchone()[0] == "loading"
+        raise Killed
+
+    outs, prev = run_inputs
+    store.load_positions(con, book, valid_date=ctx.business_date, source_name="b.csv", source_sha256="0" * 64)
+    inputs = store.positions_for(con, ctx.business_date)
+    positions = [("P00", "OFZ", outs[0])]
+    monkeypatch.setattr(desk_run, "_write", cut_short)
+    with pytest.raises(Killed):
+        desk_run.publish(con, ctx, positions, prev=prev, inputs=inputs)
+    assert con.execute("SELECT count(*) FROM run").fetchone()[0] == 0
+    monkeypatch.setattr(desk_run, "_write", real)
+    rid, status, _ = desk_run.publish(con, ctx, positions, prev=prev, inputs=inputs)
+    assert status == "complete" and [r[0] for r in con.execute("SELECT run_id FROM run")] == [rid]
+
+
 def _cli_env(monkeypatch, tmp_path, store_url, book, name="book.csv"):
     monkeypatch.setenv("DESK_ENV_FILE", str(tmp_path / "none.env"))
     monkeypatch.setenv("DESK_STORE_URL", store_url)
