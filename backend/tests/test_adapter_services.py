@@ -20,7 +20,7 @@ from test_r23_backfill import cache, load  # noqa: F401 - the synthetic market f
 
 from desk import adapter_services as svcs
 from desk import bookfile, dayrun, helper_proc, store
-from desk.acquisition import Acquisition, FlowError
+from desk.acquisition import Acquisition
 from desk.api import create_app
 from desk.autopilot import Autopilot
 from desk.inbox import scan
@@ -189,6 +189,8 @@ elif op == 'feed':
             print(json.dumps({"state": "error", "code": "fetch_failed", "lines": ["Сервис не ответил"]}))
         elif hm == 'no_records':
             print(json.dumps({"state": "complete", "code": "no_records", "dates": [day], "files": []}))
+        elif hm == 'no_records_filtered':   # the cut was made by the chosen portfolios (TDM#677)
+            print(json.dumps({"state": "complete", "code": "no_records", "dates": [day], "files": [], "filtered": True}))
         elif hm == 'empty':
             print(json.dumps({"state": "complete", "code": "exported", "dates": [day], "files": []}))
         elif hm == 'wrongdate':
@@ -208,8 +210,9 @@ elif op == 'feed':
             else:
                 (out / name).write_text(TRADES_HEAD.rstrip('\n') + (';price_pct;accrued_ccy' if priced else '') + '\n'
                                         + ''.join(x + '\n' for x in lines))
-            print(json.dumps({"state": "complete", "code": "no_records" if hm == 'no_records_file' else "exported",
-                              "dates": [day], "files": [{"file": name, "sha256": hashlib.sha256((out / name).read_bytes()).hexdigest()}]}))
+            print(json.dumps({"state": "complete", "code": "no_records" if hm.startswith('no_records_file') else "exported",
+                              "dates": [day], "files": [{"file": name, "sha256": hashlib.sha256((out / name).read_bytes()).hexdigest()}],
+                              **({"filtered": True} if hm == 'no_records_file_filtered' else {})}))
         sys.exit()
     if one('feed') == 'trades_intraday':  # the first load handed over: nothing new here
         print(json.dumps({"state": "skipped", "code": "no_change", "files": []}))
@@ -417,9 +420,15 @@ def test_busy_cancel_and_the_lock_shared_with_acquisition(tmp_path):
             time.sleep(0.02)
         with pytest.raises(svcs.ServiceError, match="services_busy"):
             s.submit("action", {"action": ["check"]})
-        acq = Acquisition(lambda: st, "")
-        with pytest.raises(FlowError, match="services_busy"):  # never at the same time as a services helper
-            acq.start({"op": "check", "username": "u", "password": "p"})
+        acq = Acquisition(lambda: st, "", background=s.holder)
+        # never at the same time as a services helper: the owner's acquisition is accepted and waits (TDM#673)
+        job = acq.start({"op": "check", "username": "u", "password": "p"})
+        assert (job["state"], job["phase"], job["code"]) == ("running", "waiting", "waiting_services")
+        assert job["waiting_for"]["kind"] == "op"
+        assert helper_proc.owner_waiting()
+        acq.cancel()
+        _until(lambda: acq.status()["state"] == "cancelled", "the wait was not ended", 5)
+        assert not helper_proc.owner_waiting()
         s.cancel()
         assert wait_job(s)["code"] == "cancelled"
         mode(st, "ok")
@@ -672,6 +681,30 @@ def at(d: date, hh: int, mm: int) -> datetime:
     return datetime(d.year, d.month, d.day, hh, mm, tzinfo=MSK)
 
 
+def test_a_feed_that_ran_longer_than_its_interval_is_not_started_back_to_back():
+    """TDM#677: the next run of a feed with an interval is an interval after the end of a run that took longer than it."""
+    every = {"schedule": svcs.clean_schedule({"every_min": 15, "from": "08:00", "to": "20:00", "weekdays_only": True})}
+    started = at(FRI, 9, 0)
+    run = lambda end: {"last_started": started.isoformat(), **({"last_finished": end.isoformat()} if end else {})}
+    assert svcs.next_due(every, run(at(FRI, 9, 5)), at(FRI, 9, 6)) == at(FRI, 9, 15)     # a short run: by the start
+    assert svcs.next_due(every, run(at(FRI, 9, 15)), at(FRI, 9, 16)) == at(FRI, 9, 30)   # as long as the interval: its end
+    assert svcs.next_due(every, run(at(FRI, 9, 40)), at(FRI, 9, 41)) == at(FRI, 9, 55)   # longer: an interval after the end
+    assert svcs.next_due(every, run(at(FRI, 19, 50)), at(FRI, 19, 51)) == at(MON, 8, 0)  # the window still rules
+    # the end of an earlier run (the new one has not finished): by the start
+    assert svcs.next_due(every, run(at(FRI, 8, 30)), at(FRI, 9, 1)) == at(FRI, 9, 15)
+    assert svcs.next_due(every, run(None), at(FRI, 9, 1)) == at(FRI, 9, 15)
+    # a retry after an error is not changed
+    retry = {**run(at(FRI, 9, 40)), "failures": 1, "retry_at": at(FRI, 9, 45).isoformat()}
+    assert svcs.next_due(every, retry, at(FRI, 9, 41)) == at(FRI, 9, 45)
+
+
+def test_a_filtered_flag_of_a_feed_answer_is_kept_only_when_true():
+    ok = {"state": "complete", "code": "no_records", "files": [], "dates": []}
+    assert "filtered" not in svcs.clean_feed_result(ok)
+    assert "filtered" not in svcs.clean_feed_result({**ok, "filtered": "yes"})
+    assert svcs.clean_feed_result({**ok, "filtered": True})["filtered"] is True
+
+
 def test_schedule_windows_slots_backoff_and_pause():
     every = {"schedule": svcs.clean_schedule({"every_min": 30, "from": "08:00", "to": "20:00", "weekdays_only": True})}
     assert svcs.next_due(every, {}, at(FRI, 9, 0)) == at(FRI, 9, 0)  # never run: at once in the window
@@ -805,8 +838,9 @@ def test_feed_ingests_as_its_source_and_recomputes_the_eod_and_todays_run(tmp_pa
                                   " AND run_type = 'INTRADAY'", (FRI,)).fetchall()
         assert today.private_inputs_hash != old_hash and today.trade_terms
         assert new_eod["run_id"] != old_eod and new_eod["private_inputs_hash"] != old_hash
-        assert len(morning) == 1 and morning[0][0] != old_morning and morning[0][1:] == (today.private_inputs_hash,
-                                                                                       "prev_close")
+        new_morning = [m for m in morning if m[0] != old_morning]  # the replaced run stays an hour for a page on it (TDM#675)
+        assert len(new_morning) == 1 and new_morning[0][1:] == (today.private_inputs_hash, "prev_close")
+        assert sorted(m[0] for m in morning) == sorted([old_morning, new_morning[0][0]])
         assert [(r["business_date"], r["previous_run_id"]) for r in run["recomputed"]] == [
             ("2026-10-15", old_eod), ("2026-10-16", old_morning)]
         assert run["recomputed"][1]["label"] == "16.10 · закрытие 15.10" and run["recompute_failed"] == []
@@ -918,9 +952,10 @@ def test_manual_acquisition_recomputes_todays_run_547(tmp_path, store_url, cache
         want = store.positions_for(con, FRI).private_inputs_hash
         rows = con.execute("SELECT run_id, private_inputs_hash FROM run WHERE business_date = %s"
                            " AND run_type = 'INTRADAY'", (FRI,)).fetchall()
-    assert len(rows) == 1 and rows[0][0] != old_morning and rows[0][1] == want
+    new = [r for r in rows if r[0] != old_morning]  # the replaced run stays an hour for a page on it (TDM#675)
+    assert len(new) == 1 and new[0][1] == want and len(rows) == 2
     assert [(r["run_id"], r["label"], r["previous_run_id"]) for r in result["recomputed"]] == [
-        (rows[0][0], "16.10 · закрытие 15.10", old_morning)]
+        (new[0][0], "16.10 · закрытие 15.10", old_morning)]
 
 
 def test_autopilot_morning_run_follows_new_trade_terms(tmp_path, store_url, cache):  # noqa: F811
@@ -1171,3 +1206,71 @@ def test_newest_positions_waits_five_seconds_and_warns_once_per_failed_streak(st
         with mock.patch.object(store, "connect", down):
             s._newest_positions()
         assert len([r for r in caplog.records if "newest positions" in r.getMessage()]) == 2
+
+
+def test_background_work_stands_aside_for_the_waiting_owner_acquisition_673(tmp_path):
+    """The owner's acquisition waits for the helper: what has not started (the scheduled feeds, the history, the
+    background describe, a scheduled feed's own wait for the lock) does not take the free helper before it."""
+    st = make(tmp_path)
+    s = service(st)
+    s._scheduling = True
+    calls: list[str] = []
+    s._scheduled = lambda: calls.append("scheduled") or False
+    s._history_step = lambda: calls.append("history") or False
+    s._background_describe = lambda: calls.append("describe")
+    helper_proc.owner_wait_begin()
+    try:
+        assert s._step() is False and calls == []
+        s._stop.set()  # a scheduled feed's wait for the lock ends at once, with the lock free and untaken
+        assert s._acquire(lambda: None, background=True) is False and not helper_proc.HELPER_LOCK.locked()
+        s._stop.clear()
+        assert s._acquire(lambda: None) is True  # the owner's own panel operation is not background
+        helper_proc.HELPER_LOCK.release()
+    finally:
+        helper_proc.owner_wait_end()
+    s._step()  # the describe first (its step ends there), then the schedule and the history
+    s._step()
+    assert calls == ["describe", "scheduled", "history"]
+    assert s._acquire(lambda: None, background=True) is True
+    helper_proc.HELPER_LOCK.release()
+
+
+def test_the_acquisition_waits_for_a_named_feed_and_the_owner_may_stop_it_673(tmp_path):
+    """«Найти отчёт и книги» during a feed run: accepted, says which feed and since when; stopping the feed (the same
+    ``cancel("feed")`` as in the panel) frees the helper and the acquisition starts by itself."""
+    st = make(tmp_path)
+    clock = {"t": at(FRI, 9, 0)}
+    s = service(st, "", clock)
+    acq = Acquisition(lambda: st, "", timeout_s=20, background=s.holder)
+    try:
+        submit(s, "describe")
+        mode(st, "hang_feed")
+        s.run_feed("terms")
+        _until(lambda: (s.overview()["running"] or {}).get("phase") == "fetching", "the feed did not start")
+        job = acq.start({"op": "inspect", "date": "2026-10-15"})
+        assert (job["state"], job["phase"], job["code"]) == ("running", "waiting", "waiting_feed")
+        w = job["waiting_for"]
+        assert (w["kind"], w["feed"], w["title"], w["phase"]) == ("feed", "terms", "Условия сделок", "fetching")
+        assert w["since"] == at(FRI, 9, 0).isoformat()
+        s.cancel("feed")
+        _until(lambda: acq.status()["phase"] != "waiting", "the acquisition did not start after the feed was stopped", 20)
+        run = svcs.read_state(st)["runs"]["terms"]
+        assert (run["state"], run["code"], run["failures"]) == ("cancelled", "cancelled", 0)
+        _until(lambda: acq.status()["state"] != "running", "the acquisition did not end", 20)
+        assert acq.status()["code"] != "cancelled"
+        assert not helper_proc.owner_waiting()
+    finally:
+        acq.close()
+        s.close()
+
+
+def test_holder_names_a_feed_and_an_operation_but_not_a_background_describe_673(tmp_path):
+    st = make(tmp_path)
+    s = service(st)
+    assert s.holder() is None
+    s._running = {"kind": "describe", "op": "describe", "since": "2026-11-12T09:00:00+03:00"}
+    assert s.holder() is None
+    s._running = {"kind": "op", "op": "action", "since": "2026-11-12T09:00:00+03:00", "phase": "running"}
+    assert s.holder() == {"kind": "op", "since": "2026-11-12T09:00:00+03:00"}
+    s._running = {"kind": "op", "op": "action", "since": "x", "phase": "waiting"}
+    assert s.holder() is None  # it waits for the lock itself

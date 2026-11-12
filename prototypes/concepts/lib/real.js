@@ -117,12 +117,20 @@
   const NET = {};
   M.netErrors = [];
   const emit = detail => { try { document.dispatchEvent(new CustomEvent('concepts-data', { detail })); } catch (e) { } };
+  // Страница держит номер прогона, с которым открыта (runQ), и дочитывает остальное по нему. Прогон, который заменил более
+  // новый (внутридневной срез, пересчёт) и удалил сервер, отвечает 404 с details.reason 'run_not_found' (TDM#675): это не
+  // «нет данных» и не «нет позиции», а «страница устарела». Тот же 404 у старого сервера (без details) остаётся как был.
+  const RUN_GONE = 'Расчёт, который показывает страница, заменён новым — обновите страницу';
+  M.RUN_GONE = RUN_GONE;
+  const isRunGone = j => !!(j && j.details && j.details.reason === 'run_not_found');
+  const notFoundBody = r => { try { return Promise.resolve(r.json()).then(j => j, () => null); } catch (e) { return Promise.resolve(null); } };
   function getJson(path) {
     if (NET[path]) return NET[path];
-    const bad = (status, error) => ({ status, body: null, error });
+    const bad = (status, error, gone) => ({ status, body: null, error, gone: !!gone });
     const base = typeof fetch !== 'function' ? Promise.resolve(bad(0, 'нет fetch'))
       : fetch(path).then(r => {
-        if (r.status !== 200) return r.status === 404 ? { status: 404, body: null } : bad(r.status, 'ошибка сервера ' + r.status + (r.statusText ? ' ' + r.statusText : ''));
+        if (r.status === 404) return notFoundBody(r).then(j => isRunGone(j) ? bad(404, RUN_GONE, true) : { status: 404, body: null });
+        if (r.status !== 200) return bad(r.status, 'ошибка сервера ' + r.status + (r.statusText ? ' ' + r.statusText : ''));
         return r.json().then(body => ({ status: 200, body }), e => bad(200, 'ответ не разобран' + (e && e.message ? ': ' + e.message : '')));
       }, e => bad(0, 'нет связи с сервером' + (e && e.message ? ': ' + e.message : '')));
     // сбой забывается после того, как обещание уже лежит в NET (иначе в ветке без fetch оно оставалось бы там навсегда)
@@ -133,9 +141,9 @@
   // сбой запроса — не молчание: в M.netErrors (по одному на «что») и событием
   function failed(what, r) {
     if (!r || !r.error) return;
-    const text = what + ': ' + r.error;
+    const text = r.gone ? RUN_GONE : what + ': ' + r.error;  // прогон заменён: одна и та же строка для всех запросов страницы
     if (!M.netErrors.some(x => x.what === what)) M.netErrors.push({ what, text, status: r.status });
-    emit({ name: what, error: text, status: r.status });
+    emit({ name: what, error: text, status: r.status, gone: !!r.gone });
   }
   (D.riskNotes || []).forEach(n => M.notes.push(n.text + (n.detail ? ' (' + n.detail + ')' : '')));
   if (!D.pnlAvailable && D.pnlReasonText) M.notes.push('PnL: ' + D.pnlReasonText);
@@ -416,6 +424,8 @@
     p.reportedCcy = ex.reported_ccy && typeof ex.reported_ccy === 'object' ? ex.reported_ccy.text || null : null;
     p.whyNot = d.notValued && ex.why && typeof ex.why === 'object' ? ex.why : null;
     // #616: почему у дериватива без оценки ядром нет процентного риска (нет кривой валюты, NDF без условий сделки)
+    // #672: кросс-пара без условий сделки, единица номинала не подтверждена — в ОВП не включено (extra.ocp_unconfirmed)
+    p.ocpUnconfirmed = ex.ocp_unconfirmed && typeof ex.ocp_unconfirmed === 'object' && ex.ocp_unconfirmed.text ? ex.ocp_unconfirmed : null;
     p.riskMissing = ex.risk_missing && typeof ex.risk_missing === 'object' && ex.risk_missing.text ? ex.risk_missing : null;
     p.estReason = p.whyNot ? p.whyNot.why + (p.whyNot.detail ? ' (' + p.whyNot.detail + ')' : '')
       : ex.reason || ex.not_exact_reason || (Array.isArray(ex.assumptions) ? ex.assumptions.join('; ') : '') || '';
@@ -584,7 +594,8 @@
   M.loadDeriv = function () {
     if (parRunId == null) return Promise.resolve(null);
     return getJson('../api/v1/runs/' + encodeURIComponent(parRunId) + '/derivatives').then(r => {
-      parCache = M.parseDerivParallel(r.body) || { state: 'unavailable', status: r.status, tolerance: null, totals: null, rows: [] };
+      parCache = M.parseDerivParallel(r.body) || { state: 'unavailable', status: r.status, gone: !!r.gone, tolerance: null, totals: null, rows: [] };
+      if (r.gone) failed('параллельный отчёт ядро / отчёт', r);
       return parCache;
     });
   };
@@ -783,7 +794,7 @@
   const flowCache = {};
   M.posFlows = function (id) {  // повторно — из памяти
     if (!flowCache[id]) flowCache[id] = fetch('../api/v1/positions/flows?' + runQ + '&id=' + encodeURIComponent(id)).then(r => {
-      if (r.status === 404) return { flows: null, reason: 'сервер не нашёл позицию или её график выпуска' };
+      if (r.status === 404) return notFoundBody(r).then(j => isRunGone(j) ? { flows: null, error: RUN_GONE, gone: true } : { flows: null, reason: 'сервер не нашёл позицию или её график выпуска' });
       if (!r.ok) return { flows: null, error: 'ошибка сервера ' + r.status + (r.statusText ? ' ' + r.statusText : '') };
       return r.json().then(j => {
         if (!j || !Array.isArray(j.flows) || !j.flows.length) return { flows: null, reason: FLOW_REASON[j && j.reason] || FLOW_REASON.past };
@@ -800,11 +811,11 @@
   // ---------- откуда данные позиции (лениво, раздел карточки «Откуда данные», TDM#617): /api/v1/positions/provenance —
   // источники сделки (строка отчёта позиций, условия сделки, сделки дня, ОВП и остатки по книге и валюте), расхождения
   // словами и рыночные данные оценки. Спрашивается только при первом раскрытии раздела; ответ запоминается, сбой — нет
-  // (следующее раскрытие спросит снова). Промис {data} или {error} ----------
+  // (следующее раскрытие спросит снова). Промис {data} или {error}; gone — прогон страницы заменён и удалён (RUN_GONE, TDM#675) ----------
   const provCache = {};
   M.posProvenance = function (id) {
     if (!provCache[id]) provCache[id] = fetch('../api/v1/positions/provenance?' + runQ + '&id=' + encodeURIComponent(id)).then(r => {
-      if (r.status === 404) return { error: 'сервер не нашёл позицию в прогоне' };
+      if (r.status === 404) return notFoundBody(r).then(j => isRunGone(j) ? { error: RUN_GONE, gone: true } : { error: 'сервер не нашёл позицию в прогоне' });
       if (!r.ok) return { error: 'ошибка сервера ' + r.status + (r.statusText ? ' ' + r.statusText : '') };
       return r.json().then(j => ({ data: j }));
     }).catch(e => ({ error: 'нет связи с сервером' + (e && e.message ? ': ' + e.message : '') }))

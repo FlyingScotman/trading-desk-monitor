@@ -27,6 +27,27 @@ HELPER_LOCK = threading.Lock()
 """Held by an acquisition job (``desk.acquisition``) and by every services operation (``desk.adapter_services``):
 a services helper never runs at the same time as an acquisition job, nor two services helpers at once."""
 
+_WAITERS = 0
+_WAITERS_LOCK = threading.Lock()
+
+
+def owner_wait_begin() -> None:
+    """The owner's acquisition waits for ``HELPER_LOCK`` (TDM#673): background work that has not started yet stands
+    aside (``owner_waiting``) until ``owner_wait_end``, so the owner is not overtaken by the next scheduled load."""
+    global _WAITERS
+    with _WAITERS_LOCK:
+        _WAITERS += 1
+
+
+def owner_wait_end() -> None:
+    global _WAITERS
+    with _WAITERS_LOCK:
+        _WAITERS = max(0, _WAITERS - 1)
+
+
+def owner_waiting() -> bool:
+    return _WAITERS > 0
+
 
 class HelperFailure(Exception):
     """``code``: ``cancelled``, ``timeout``, ``response_invalid`` (no, overflowing or non-object stdout, stdin not

@@ -45,7 +45,7 @@ from ..marketdata.adapter_rates import FIXING_SOURCE_ORDER
 from ..marketdata.history import kbd
 from ..marketdata.history import latest_market_day as latest_day
 from . import runs
-from .app import ApiError, db
+from .app import db, run_missing
 
 PERIODS = ("1D", "1W", "1M", "3M", "YTD")
 INDICES = (("КС", "KEY_RATE"), ("RUONIA", "RUONIA"), ("RUSFAR", "RUSFAR"), ("RUSFAR CNY", "RUSFARCNY"),
@@ -397,7 +397,7 @@ def history_market(con: Con, request: Request, run_id: int | None = None, as_of:
     """The market's changes, indices, FX and curves by date as of the run (``market_history.market``)."""
     run = runs.resolve_run(con, as_of, run_id)
     if run is None:
-        raise ApiError(404, "not_found", f"run {run_id} not found" if run_id else "no runs")
+        raise run_missing(run_id)
     return _json(request, market(con, run))
 
 

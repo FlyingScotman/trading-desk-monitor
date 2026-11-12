@@ -491,6 +491,12 @@ test('services block in Settings', {skip: pw ? false : 'нет Playwright'}, asy
       try {
         await o.pg.waitForFunction(() => /ждёт конца торговых часов, дальше в/.test((document.getElementById('svc-hist-next') || {}).textContent || ''));
       } finally { await o.ctx.close(); }
+      const empty = {...HIST, enabled:true, gate:'no_trades_week', next_at:null, current:null};   // TDM#677: «Сделки дня» пусты неделю
+      o = await setup(browser, {history: empty});
+      try {
+        await o.pg.waitForFunction(() => /ждёт сделок: «Сделки дня» не принесли ни одной сделки за последние 5 рабочих дней/.test((document.getElementById('svc-hist-next') || {}).textContent || ''));
+        assert.doesNotMatch(await o.pg.locator('#svc-hist-next').textContent(), /дальше в/);
+      } finally { await o.ctx.close(); }
       const now = {...HIST, enabled:true, gate:null, current:'2026-10-14'};
       o = await setup(browser, {history: now, waitsHistory: true});
       try {

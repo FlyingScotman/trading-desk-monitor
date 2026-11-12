@@ -11,6 +11,7 @@ const ROOT = path.join(__dirname, '..', '..', 'prototypes');
 const ORIGIN = 'http://desk.test';
 const TYPES = { '.html': 'text/html', '.js': 'application/javascript', '.css': 'text/css', '.json': 'application/json', '.svg': 'image/svg+xml', '.png': 'image/png' };
 const ID = 'SYN|CCS-617';
+const MOCK_SAY = 'Расчёт, который показывает страница, заменён новым — обновите страницу';
 const NO_TERMS = 'есть в отчёте позиций, но условия сделки не загружены';
 
 function answer(id) {
@@ -36,9 +37,9 @@ function answer(id) {
   };
 }
 
-async function open(browser, { width = 1440 } = {}) {
+async function open(browser, { width = 1440, notFound = '{"code":"not_found"}' } = {}) {
   const ctx = await browser.newContext({ viewport: { width, height: 1000 } });
-  const pg = await ctx.newPage(), errors = [], asked = [];
+  const pg = await ctx.newPage(), errors = [], asked = [], loads = [];
   pg.on('pageerror', e => errors.push(e.message));
   const D = JSON.parse(RUN);
   const base = D.positions.find(p => p.instrType === 'IRS');
@@ -46,6 +47,7 @@ async function open(browser, { width = 1440 } = {}) {
   await pg.route('**/*', route => {
     const u = new URL(route.request().url());
     if (u.origin !== ORIGIN) return route.abort();
+    if (u.pathname === '/concepts-run.js') loads.push(1);
     if (u.pathname === '/concepts-run.js') return route.fulfill({ status: 200, contentType: 'application/javascript', body: 'window.CONCEPTS_RUN = ' + JSON.stringify(D) + ';' });
     if (u.pathname === '/concepts-data.js') return route.fulfill({ status: 200, contentType: 'application/javascript', body: 'window.DESK_EXTRAS = { notes: [] };' });
     if (u.pathname === '/api/v1/auth/state') return route.fulfill({ status: 200, contentType: 'application/json', body: '{"enabled":false,"user":null}' });
@@ -53,7 +55,7 @@ async function open(browser, { width = 1440 } = {}) {
       const id = u.searchParams.get('id');
       asked.push(id);
       return id === ID ? route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(answer(id)) })
-        : route.fulfill({ status: 404, contentType: 'application/json', body: '{"code":"not_found"}' });
+        : route.fulfill({ status: 404, contentType: 'application/json', body: notFound });
     }
     if (u.pathname.startsWith('/api/')) return route.fulfill({ status: 404, contentType: 'application/json', body: '{}' });
     const f = path.join(ROOT, decodeURIComponent(u.pathname));
@@ -62,7 +64,7 @@ async function open(browser, { width = 1440 } = {}) {
   });
   await pg.goto(ORIGIN + '/concepts/c03-blotter.html');
   await pg.waitForFunction(id => window.MOCK && MOCK.pos[id] && MOCK.posProvenance, ID);
-  return { pg, ctx, errors, asked };
+  return { pg, ctx, errors, asked, loads };
 }
 
 async function checkSection(pg, root, asked) {
@@ -142,6 +144,48 @@ test('«Откуда данные» в карточке позиции', { skip:
         await root.locator('.k-prov-btn').click();
         await root.getByText('не загружено').waitFor();
         assert.deepStrictEqual(asked, [other, other]);
+        assert.deepStrictEqual(errors, []);
+      } finally { await ctx.close(); }
+    });
+    // TDM#675: the run the page was opened on is replaced and deleted; the server says «прогона нет» (details.reason), not «нет позиции»
+    const RUN_GONE = '{"code":"not_found","message":"run 7 not found","details":{"reason":"run_not_found","run_id":7}}';
+    const NO_POS = '{"code":"not_found","message":"no position x in run 7","details":{"reason":"position_not_found","run_id":7}}';
+    await t.test('the run is gone: «заменён новым — обновите страницу» and the action «Обновить страницу» reloads the page', async () => {
+      const { pg, ctx, errors, asked, loads } = await open(browser, { notFound: RUN_GONE });
+      try {
+        const other = await pg.evaluate(() => String(MOCK.positions.find(p => p.instrType === 'BOND').id));
+        await pg.evaluate(id => KIT.card(id), other);
+        const root = pg.locator('.k-drawer').last();
+        await root.locator('.k-prov-btn').click();
+        const gone = root.locator('.k-prov-gone');
+        await gone.waitFor();
+        const text = await gone.innerText();
+        assert.ok(text.includes('Расчёт, который показывает страница, заменён новым — обновите страницу'), text);
+        assert.ok(!text.includes('не нашёл позицию') && !text.includes('не загружено'), text);
+        assert.strictEqual(await gone.locator('a[data-a="reload-page"]').innerText(), 'Обновить страницу');
+        assert.deepStrictEqual(asked, [other]);
+        // the page's other lazy requests (history, market, calendar) say it once, in the strip: one line, the same action
+        await pg.evaluate(t => { for (let i = 0; i < 2; i++) document.dispatchEvent(new CustomEvent('concepts-data', { detail: { name: 'история рынка', error: t, gone: true } })); }, MOCK_SAY);
+        const strip = pg.locator('.k-load-err[data-gone="1"]');
+        assert.strictEqual(await strip.count(), 1, 'one strip for all the requests');
+        const st = await strip.innerText();
+        assert.ok(st.includes(MOCK_SAY) && st.includes('Обновить страницу') && !st.includes('Не загрузилось') && !st.includes('Повторить'), st);
+        const before = loads.length;
+        await Promise.all([pg.waitForNavigation(), gone.locator('a[data-a="reload-page"]').click()]);
+        await pg.waitForFunction(() => window.MOCK && MOCK.posProvenance);
+        assert.ok(loads.length > before, 'the page was loaded again (the new run)');
+        assert.deepStrictEqual(errors, []);
+      } finally { await ctx.close(); }
+    });
+    await t.test('the run is there but the position is not: as before, no reload offered', async () => {
+      const { pg, ctx, errors } = await open(browser, { notFound: NO_POS });
+      try {
+        const other = await pg.evaluate(() => String(MOCK.positions.find(p => p.instrType === 'BOND').id));
+        await pg.evaluate(id => KIT.card(id), other);
+        const root = pg.locator('.k-drawer').last();
+        await root.locator('.k-prov-btn').click();
+        await root.getByText('не загружено: сервер не нашёл позицию в прогоне').waitFor();
+        assert.strictEqual(await root.locator('[data-a="reload-page"]').count(), 0);
         assert.deepStrictEqual(errors, []);
       } finally { await ctx.close(); }
     });

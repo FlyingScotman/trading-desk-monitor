@@ -7,7 +7,7 @@ from __future__ import annotations
 import gzip
 import threading
 import time
-from datetime import date
+from datetime import date, timedelta
 
 import psycopg
 import pytest
@@ -214,7 +214,7 @@ def test_pruning_runs_drops_their_bodies_and_the_others_stay(store_url, book, cl
     assert cache.stats()["items"] == 4
     with store.connect(store_url) as con:
         day = con.execute("SELECT business_date FROM run WHERE run_id = %s", (keep,)).fetchone()[0]
-        deleted = store.prune_intraday(con, day, keep)
+        deleted = store.prune_intraday(con, day, keep, grace=timedelta(0))  # no grace: the delete itself
     assert deleted == [drop] and isinstance(day, date)
     assert {k[1] for k in cache._items} == {keep}  # the deleted run's bodies went with it
     assert client.get(f"/api/v1/runs/{drop}/positions").status_code == 404

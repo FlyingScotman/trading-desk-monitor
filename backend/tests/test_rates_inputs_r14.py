@@ -11,7 +11,7 @@ import hashlib
 import json
 import math
 import shutil
-from datetime import date
+from datetime import date, timedelta
 from pathlib import Path
 
 import pytest
@@ -143,6 +143,13 @@ def test_key_rate_floater_proxy_splits_without_changing_the_total():
 
 
 # ---- R17: late and corrected closes
+
+@pytest.fixture(autouse=True)
+def _no_grace(monkeypatch):
+    """These tests follow the intraday step run by run: a replaced run is deleted at once, as the step's «removed» says.
+    The hour a replaced run stays for a page opened on it (TDM#675) is tested in test_run_gone_675."""
+    monkeypatch.setattr(store, "INTRADAY_GRACE", timedelta(0))
+
 
 def test_intraday_run_is_redone_when_the_previous_close_arrives_late(stub, tmp_path, store_url):
     """Monday's intraday run made before Friday's final close was published: the close arrives within the same

@@ -54,6 +54,7 @@ from ..inbox.schema import norm_ccy
 from ..marketdata.adapter import bond_currency
 from ..valuation.derivatives import FLOW_DAYS
 from ..valuation.fallback import SimplePnl, fx_rate, fx_rate_cbr
+from ..valuation.fx_cross import UNCONFIRMED, CrossRow, cross_row
 from .flash import NoPnl
 from .reasons import (
     CORE_FX_METHOD,
@@ -157,6 +158,36 @@ def split_fx(pnl: SimplePnl, prev: EodContext, ctx: EodContext, terms: BondTerms
                         + (f"; at CBR {c1[0]:g} - {c0[0]:g}: {fx_cbr:,.2f}" if fx_cbr is not None else ""))
 
 
+def _fx_cross(prev: EodContext, ctx: EodContext, cr: CrossRow, flag: str) -> DirectPnl:
+    """The PnL by the rate move of a forward on a cross without terms (TDM#672), over the legs of its FX delta
+    (``valuation.fx_cross``), so that the PnL and the OCP agree: each leg x the move of its currency. A unit of the
+    amount that is not confirmed has no FX delta, so no PnL: «nominal of one currency x the move of the other» is
+    never shown. A leg whose currency lacks a rate on either date is left out, said."""
+    if cr.kind == UNCONFIRMED:
+        raise NoPnl("fx_unit_unconfirmed", (cr.unconfirmed or {}).get("text", ""))
+    fx, fx_cbr, parts, skipped = 0.0, 0.0, [], []
+    cbr_ok = True
+    for c, amt in cr.delta.items():
+        r0, r1 = fx_rate(prev, c), fx_rate(ctx, c)
+        if r0 is None or r1 is None:
+            skipped.append(c)
+            continue
+        fx += amt * (r1[0] - r0[0])
+        parts.append(f"{amt:,.2f} {c} x ({r1[0]:g} - {r0[0]:g} {r0[1]})")
+        c0, c1 = fx_rate_cbr(prev, c), fx_rate_cbr(ctx, c)
+        if c0 and c1:
+            fx_cbr += amt * (c1[0] - c0[0])
+        else:
+            cbr_ok = False
+    note = " + ".join(parts) or "no rate of any leg"
+    if skipped:
+        note += f"; no rate of {', '.join(skipped)} on {prev.business_date} or {ctx.business_date}: the leg is not in the PnL"
+    return DirectPnl(FX_METHOD, prev.business_date, ctx.business_date, fx, fx_gross=fx, flag=flag,
+                     fx_gross_cbr=fx_cbr if cbr_ok and parts else None, note=note,
+                     assumption=assumption("fx_rate_carried", f"{', '.join(skipped)} на {prev.business_date:%d.%m.%Y}")
+                     if skipped else None)
+
+
 def _fx_row(prev: EodContext, ctx: EodContext, o: Outcome, x: dict[str, Any]) -> DirectPnl:
     v = o.valuation
     assert v is not None
@@ -164,6 +195,8 @@ def _fx_row(prev: EodContext, ctx: EodContext, o: Outcome, x: dict[str, Any]) ->
     vd = x.get("value_date")
     vd = date.fromisoformat(vd) if isinstance(vd, str) else vd
     flag = FORWARD_FLAG if vd is not None and vd > ctx.business_date else ""
+    if (cr := cross_row(ctx, o, x, ccy, amount)) is not None:   # TDM#672: a forward on a cross without terms
+        return _fx_cross(prev, ctx, cr, flag)
     if ccy == "RUB":
         return DirectPnl(FX_METHOD, prev.business_date, ctx.business_date, 0.0, note="RUB: no FX move")
     r0 = fx_rate(prev, ccy)

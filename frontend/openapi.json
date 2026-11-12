@@ -3,7 +3,7 @@
   "info": {
     "title": "Desk API",
     "description": "Desk API v1 (docs/architecture/05 §2)",
-    "version": "0.2.25"
+    "version": "0.2.26"
   },
   "paths": {
     "/api/v1/auth/state": {
@@ -5955,7 +5955,8 @@
               "off_report_excluded",
               "derivative_share",
               "balances_older_than_base",
-              "balances_not_at_base"
+              "balances_not_at_base",
+              "fx_unit_unconfirmed"
             ],
             "title": "Code"
           },
@@ -8944,7 +8945,7 @@
           "is_current": {
             "type": "boolean",
             "title": "Is Current",
-            "description": "The run shown for its date (R11): its default run, otherwise its latest complete INTRADAY run (today's book on the latest intraday cut). Only the latest INTRADAY run of a date is kept",
+            "description": "The run shown for its date (R11): its default run, otherwise its latest complete INTRADAY run (today's book on the latest intraday cut). Only the latest INTRADAY run of a date is kept; a run it replaced stays one hour more, for a page opened on it (TDM#675)",
             "default": false
           },
           "cut_ts": {
@@ -9327,7 +9328,7 @@
           "is_current": {
             "type": "boolean",
             "title": "Is Current",
-            "description": "The run shown for its date (R11): its default run, otherwise its latest complete INTRADAY run (today's book on the latest intraday cut). Only the latest INTRADAY run of a date is kept",
+            "description": "The run shown for its date (R11): its default run, otherwise its latest complete INTRADAY run (today's book on the latest intraday cut). Only the latest INTRADAY run of a date is kept; a run it replaced stays one hour more, for a page opened on it (TDM#675)",
             "default": false
           },
           "cut_ts": {

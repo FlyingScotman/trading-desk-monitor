@@ -159,6 +159,20 @@ def wait(service, *, phase=None):
     pytest.fail("synthetic acquisition did not reach the expected state")
 
 
+def settled(service, code):
+    """The waiting job's status once its code is ``code``. The job's own thread refreshes the holder every second: it
+    can read the old holder before the test changes it and write it after the test's refresh, so one refresh is not
+    enough; a later one shows the new holder."""
+    until = time.monotonic() + 10
+    while time.monotonic() < until:
+        service._refresh_waiting()
+        status = service.status()
+        if status["code"] == code:
+            return status
+        time.sleep(0.05)
+    pytest.fail(f"the waiting job did not show {code}")
+
+
 def no_secrets(value):
     text = json.dumps(value, default=str)
     assert USER not in text and PASSWORD not in text
@@ -626,4 +640,168 @@ def test_no_login_start_is_never_decided_while_an_inspection_runs(configured):
         service.cancel()
         assert wait(service)["code"] == "cancelled"
     finally:
+        service.close()
+
+
+# --- The owner's action does not bounce off a busy helper (TDM#673) ---
+
+def lock_free():
+    """The helper lock is the last thing a job gives up, after its final status: wait for it before asserting or taking it."""
+    until = time.monotonic() + 10
+    while helper_proc.HELPER_LOCK.locked() and time.monotonic() < until:
+        time.sleep(0.02)
+    return not helper_proc.HELPER_LOCK.locked()
+
+
+def feed_holder():
+    return {"kind": "feed", "feed": "terms", "title": "Synthetic load", "since": "2026-11-12T09:00:00+03:00",
+            "phase": "fetching"}
+
+
+def test_the_owner_action_waits_for_a_busy_helper_and_runs_when_it_is_free(configured):
+    """A background load holds the helper: ``start`` accepts the job (it used to refuse with ``services_busy``), the
+    job says what it waits for and since when, runs nothing, and starts by itself when the helper is released."""
+    st = configured
+    service = aq.Acquisition(lambda: st, "", timeout_s=10, background=feed_holder)
+    assert lock_free() and helper_proc.HELPER_LOCK.acquire(blocking=False)
+    held = True
+    try:
+        job = service.start(fields())
+        assert (job["state"], job["phase"], job["code"]) == ("running", "waiting", "waiting_feed")
+        assert job["waiting_for"] == feed_holder()
+        assert helper_proc.owner_waiting()
+        time.sleep(0.6)  # no free window is taken by a process: it keeps waiting, nothing ran
+        assert service.status()["phase"] == "waiting"
+        assert not (st.home / "acquisition" / job["id"]).exists()
+        with pytest.raises(aq.FlowError, match="acquisition_busy"):  # still one operation of this card at a time
+            service.start(fields())
+        no_secrets(service.status())
+        helper_proc.HELPER_LOCK.release()
+        held = False
+        status = wait(service)
+        assert (status["state"], status["code"]) == ("complete", "connected")
+        assert "waiting_for" not in status
+        assert lock_free() and not helper_proc.owner_waiting()
+    finally:
+        if held:
+            helper_proc.HELPER_LOCK.release()
+        service.close()
+
+
+def test_the_waiting_owner_action_names_the_holder_and_survives_an_unknown_one(configured):
+    st = configured
+    holders = [{"kind": "op", "since": "2026-11-12T09:00:00+03:00"}, None]
+    service = aq.Acquisition(lambda: st, "", timeout_s=10, background=lambda: holders[0])
+    assert lock_free() and helper_proc.HELPER_LOCK.acquire(blocking=False)
+    try:
+        assert service.start(fields())["code"] == "waiting_services"
+        holders[0] = None
+        status = settled(service, "waiting_helper")
+        assert "waiting_for" not in status
+        holders[0] = RuntimeError  # not a dict: nothing is known, still not a failure
+        assert settled(service, "waiting_helper")["phase"] == "waiting"
+        service.cancel()
+        assert wait(service)["code"] == "cancelled"
+    finally:
+        helper_proc.HELPER_LOCK.release()
+        service.close()
+
+
+def test_the_owner_can_cancel_the_wait_and_nothing_is_started(configured):
+    st = configured
+    service = aq.Acquisition(lambda: st, "", timeout_s=10, background=feed_holder)
+    assert lock_free() and helper_proc.HELPER_LOCK.acquire(blocking=False)
+    try:
+        params = fields()
+        service.start(params)
+        assert service.cancel()["code"] == "cancel_requested"
+        status = wait(service)
+        assert (status["state"], status["code"], status["phase"]) == ("cancelled", "cancelled", "waiting")
+        assert not params, "the credentials are dropped with the wait"
+        assert helper_proc.HELPER_LOCK.locked(), "the cancelled wait must not take or release the background's lock"
+        assert not helper_proc.owner_waiting()
+        assert not (st.home / "acquisition").exists()
+        no_secrets(status)
+    finally:
+        helper_proc.HELPER_LOCK.release()
+        service.close()
+    # the card is free again at once
+    service = aq.Acquisition(lambda: st, "", timeout_s=10)
+    try:
+        service.start(fields())
+        assert wait(service)["code"] == "connected"
+    finally:
+        service.close()
+
+
+def test_a_wait_does_not_run_on_settings_that_changed_meanwhile(configured):
+    st = configured
+    service = aq.Acquisition(lambda: st, "", timeout_s=10, background=feed_holder)
+    assert lock_free() and helper_proc.HELPER_LOCK.acquire(blocking=False)
+    held = True
+    try:
+        service.start(fields())
+        (st.private_adapter_config / "changed.txt").write_text("x")  # the owner saved other settings while waiting
+        helper_proc.HELPER_LOCK.release()
+        held = False
+        assert wait(service)["code"] == "adapter_changed"
+        assert not (st.home / "acquisition").exists()
+        assert lock_free()
+    finally:
+        if held:
+            helper_proc.HELPER_LOCK.release()
+        service.close()
+
+
+def test_the_login_mode_is_unknown_until_an_inspection_of_this_adapter_answers(configured):
+    """``login`` stays ``required`` before any inspection (the server never lets a client skip the login), but the
+    page is told that it is not known, so it does not show the fields as if a login were certain."""
+    st = configured
+    for mode, login in (("login_none", "none"), ("login_system2", "required"), ("success", "required")):
+        (st.private_adapter_config / "mode").write_text(mode)
+        service = aq.Acquisition(lambda: st, "", timeout_s=10)
+        try:
+            first = service.availability()
+            assert (first["login"], first["login_known"]) == ("required", False)
+            inspect(st, service)
+            second = service.availability()
+            assert (second["login"], second["login_known"]) == (login, True)
+            (st.private_adapter_config / "changed.txt").write_text(mode)  # another fingerprint: not known again
+            assert service.availability()["login_known"] is False
+            (st.private_adapter_config / "changed.txt").unlink()
+        finally:
+            service.close()
+
+
+def test_a_wait_does_not_run_on_runtime_or_folders_saved_meanwhile(configured):
+    """Not only the adapter's fingerprint: the Python and the folders that go into the run are read again after the wait."""
+    for field, value in (("acquisition_python", Path(sys.executable).parent / "other-python"),
+                         ("inbox_dirs", (Path("/synthetic-other-inbox"),))):
+        current = [configured]
+        service = aq.Acquisition(lambda cur=current: cur[0], "", timeout_s=10, background=feed_holder)
+        assert lock_free() and helper_proc.HELPER_LOCK.acquire(blocking=False)
+        held = True
+        try:
+            service.start(fields())
+            current[0] = replace(configured, **{field: value})
+            helper_proc.HELPER_LOCK.release()
+            held = False
+            assert wait(service)["code"] == "adapter_changed", field
+            assert not (configured.home / "acquisition").exists() and lock_free()
+        finally:
+            if held:
+                helper_proc.HELPER_LOCK.release()
+            service.close()
+
+
+def test_a_background_describe_is_not_named_to_the_owner(configured):
+    st = configured
+    service = aq.Acquisition(lambda: st, "", timeout_s=10, background=lambda: {"kind": "describe", "since": "x"})
+    assert lock_free() and helper_proc.HELPER_LOCK.acquire(blocking=False)
+    try:
+        assert service.start(fields())["code"] == "waiting_helper"
+        service.cancel()
+        assert wait(service)["code"] == "cancelled"
+    finally:
+        helper_proc.HELPER_LOCK.release()
         service.close()

@@ -32,6 +32,8 @@ from desk.inbox import scan
 from desk.inbox.timesem import MSK
 from desk.settings import Settings
 
+_RECENT_RECORDS = trades_history.recent_records   # the real count: ``env`` replaces it by ``Env.today_records``
+
 BOOKS = [{"book_id": b, "name": b, "desk": "Test", "book_type": "TRADING", "entity": "TEST", "active": True}
          for b in ("OFZ", "CORP")]
 D12, D13, D14, D15, FRI = "2026-10-12", "2026-10-13", "2026-10-14", "2026-10-15", date(2026, 10, 16)
@@ -54,6 +56,7 @@ def at(d: date, h: int, m: int = 0) -> datetime:
 class Env:
     def __init__(self, st: Settings, s: svcs.AdapterServices, clock: dict, url: str):
         self.st, self.s, self.clock, self.url = st, s, clock, url
+        self.today_records = 1   # the records the feed's source has in the store for the last working days (TDM#677: the gate)
 
     def step(self, n: int = 1, dt: int = 130) -> list[bool]:
         out = []
@@ -81,7 +84,7 @@ class Env:
 
 
 @pytest.fixture
-def env(tmp_path, store_url, cache, request):  # noqa: F811
+def env(tmp_path, store_url, cache, request, monkeypatch):  # noqa: F811
     st = make(tmp_path, snapshot_cache=cache, store_url=store_url)
     load(store_url, tmp_path, D12, 10)
     with store.connect(store_url) as con:
@@ -92,6 +95,7 @@ def env(tmp_path, store_url, cache, request):  # noqa: F811
     clock = {"t": at(FRI, 21, 0)}
     s = service(st, store_url, clock)
     e = Env(st, s, clock, store_url)
+    monkeypatch.setattr(trades_history, "recent_records", lambda con, source, days: e.today_records)   # the gate is open by default
     try:
         submit(s, "describe")
         submit(s, "action", action="login")
@@ -754,3 +758,141 @@ def test_the_end_of_the_date_is_the_moscow_midnight_whatever_the_session_time_zo
         for tz in ("UTC", "-05:00", "+09:00"):
             con.execute(f"SET TIME ZONE '{tz}'")
             assert trades_history.covered(con, [D15, D14], env.doc) == [D15], tz
+
+
+# ---- TDM#677: an empty answer of a filtered cut is not final; the past waits for the trades of today ------------------
+
+def test_a_filtered_empty_answer_proves_nothing_until_some_date_has_records():
+    mark = trades_history.mark_for
+    assert mark("complete", "no_records", filtered=True, proven=False) == ("unmapped", "filtered_empty")
+    assert mark("complete", "no_records", filtered=True, proven=True) == ("no_trades", "no_records")
+    assert mark("complete", "no_records") == ("no_trades", "no_records")   # an answer not marked filtered: as before
+    assert mark("complete", "no_records", proven=False) == ("no_trades", "no_records")
+    assert trades_history.service_proven({"marks": {}}) is False
+    assert trades_history.service_proven({"marks": {"d": {"state": "no_trades"}, "e": {"state": "fetched", "code": "covered"}}}) is False
+    assert trades_history.service_proven({"marks": {"d": {"state": "fetched", "code": "exported"}}}) is True
+
+
+def test_a_filtered_empty_date_is_asked_again_only_by_a_new_adapter_fingerprint(env):
+    env.s.history_set(None, D14, None)
+    env.put("hist_mode", "no_records_filtered")
+    env.step(2)
+    assert env.marks() == {D14: "unmapped", D15: "unmapped"} and env.doc["marks"][D14]["code"] == "filtered_empty"
+    assert env.s.history()["problems"][0]["code"] == "filtered_empty"
+    for _ in range(3):   # days pass, nothing changes in the adapter: no request at all, not even in the newest window
+        env.clock["t"] += timedelta(days=1)
+        assert env.step() == [False]
+    assert env.asked() == [D14, D15]
+    books = Path(env.st.private_adapter_config) / "books.csv"
+    books.write_text(books.read_text() + "NEW;New;Test;TRADING;TEST;1\n")   # a new version of the adapter's settings
+    submit(env.s, "describe")
+    assert env.step(2) == [True, True] and env.asked() == [D14, D15, D14, D15]
+    assert env.marks() == {D14: "unmapped", D15: "unmapped"}   # still empty: marked again with the new fingerprint ...
+    env.clock["t"] += timedelta(days=1)
+    assert env.step() == [False] and len(env.asked()) == 4     # ... and not asked in a loop
+
+
+def test_a_filtered_empty_date_is_no_trades_once_the_service_has_brought_records_for_another_date(env):
+    env.s.history_set(None, D14, None)
+    env.put("hist_mode_" + D14, "ok")
+    env.put("hist_mode_" + D15, "no_records_filtered")
+    env.step(2)
+    assert env.marks() == {D14: "fetched", D15: "no_trades"}
+
+
+def test_the_past_waits_while_the_source_has_no_trades_for_the_week_and_then_goes_on(env):
+    env.today_records = 0
+    assert env.step(2) == [False, False] and env.asked() == [] and env.marks() == {}
+    h = env.s.history()
+    assert h["gate"] == "no_trades_week" and h["next_at"] is None and h["enabled"] and h["counts"]["todo"] == 4
+    assert env.doc["calls"]["n"] == 0 and env.doc["failures"] == 0
+    env.today_records = 3                                  # records of any of the last 5 working days
+    assert env.step() == [True] and env.asked() == [D12]
+    assert env.s.history()["gate"] is None                 # (the clock has passed the gap)
+    env.today_records = 0                                  # nothing for the whole week again: the past waits again
+    env.clock["t"] += timedelta(minutes=10)
+    assert env.step() == [False] and env.asked() == [D12]
+
+
+def test_while_the_gate_is_closed_only_the_dates_the_owner_asked_again_go(env):
+    env.today_records = 0
+    env.s.history_refetch(D14, D14, True)
+    assert env.s.history()["gate"] is None                 # something to ask: the gate is not shown
+    assert env.step() == [True] and env.asked() == [D14]
+    assert env.step() == [False] and env.s.history()["gate"] == "no_trades_week"
+    env.s._hist_edit(env.st, lambda h: h.update(priority=["2026-01-01"]))   # a stale one: not a candidate
+    assert env.step() == [False] and env.asked() == [D14] and env.s.history()["gate"] == "no_trades_week"
+
+
+def test_the_working_days_skip_the_weekend(env):
+    assert trades_history.work_days(at(date(2026, 10, 19), 8), 3) == [date(2026, 10, 19), date(2026, 10, 16), date(2026, 10, 15)]
+    assert trades_history.work_days(at(date(2026, 10, 17), 8), 2) == [FRI, date(2026, 10, 15)]   # a Saturday
+    assert trades_history.work_days(at(date(2026, 10, 18), 8), 1) == [FRI]
+    assert len(trades_history.work_days(at(FRI, 8))) == trades_history.WORK_DAYS == 5
+
+
+def test_the_trades_of_the_week_are_counted_from_the_store_by_the_feeds_source(env):
+    head = ("trade_id;trade_version;status;trade_date;trade_ts;book_id;position_id;asset_class;"
+            "source_instrument_id;side;quantity;amount_ccy;ccy")
+    row = "TR-1;1;live;2026-10-14;2026-10-14T10:30:00;OFZ;P1;bond;SU26238RMFS4;buy;5;;RUB"
+    days = trades_history.work_days(at(FRI, 21), 5)                       # 16, 15, 14, 13, 12 October
+    f = Path(env.st.home) / "trades_20261014_1800.csv"
+    f.write_text(head + "\n" + row + "\n", encoding="utf-8")
+    with store.connect(env.url) as con:
+        trades_history.recent_records = _RECENT_RECORDS   # the real count, not the fixture's
+        try:
+            assert _RECENT_RECORDS(con, "trades_csv", days) == 0
+            assert trades_history.today_gate(con, "trades_csv", at(FRI, 21)) is not None
+            scan.ingest_feed(con, env.st, f, source="trades_csv", handle=scan.adapter(env.st))
+            assert _RECENT_RECORDS(con, "trades_csv", days) == 1
+            assert trades_history.today_gate(con, "trades_csv", at(FRI, 21)) is None   # an earlier day of the week keeps it open
+            assert trades_history.today_gate(con, "trades_csv", at(date(2026, 10, 19), 8)) is None   # a night, a Monday
+            assert trades_history.today_gate(con, "trades_csv", at(date(2026, 10, 21), 8)) is not None   # 14th is out of 5 days
+            # the records of another source do not open it
+            assert _RECENT_RECORDS(con, "trades_delta_csv", days) == 0
+            assert trades_history.today_gate(con, "other_source", at(FRI, 21))["code"] == "no_trades_week"
+            assert trades_history.today_gate(con, None, at(FRI, 21)) is not None
+            # the last export of the unit with no row (a marker of the book): there are no records now
+            late = Path(env.st.home) / "trades_20261014_1900.csv"
+            late.write_text(head + "\n;;;;;OFZ;;;;;;;\n", encoding="utf-8")
+            scan.ingest_feed(con, env.st, late, source="trades_csv", handle=scan.adapter(env.st))
+            assert _RECENT_RECORDS(con, "trades_csv", days) == 0
+            assert trades_history.today_gate(con, "trades_csv", at(FRI, 21)) is not None
+        finally:
+            trades_history.recent_records = lambda con, source, days: env.today_records
+
+
+def test_a_filtered_empty_date_is_asked_once_more_when_a_date_has_records_and_does_not_come_back(env):
+    env.s.history_set(None, D14, None)
+    env.put("hist_mode", "no_records_filtered")
+    env.step(2)
+    assert env.marks() == {D14: "unmapped", D15: "unmapped"}
+    assert env.step() == [False]
+    env.put("hist_mode_" + D13, "ok")
+    env.s.history_set(None, D13, None)                         # a date that brings records
+    assert env.step(3) == [True, True, True] and env.asked() == [D14, D15, D13, D14, D15]
+    assert env.marks() == {D13: "fetched", D14: "no_trades", D15: "no_trades"}
+    assert env.step() == [False]
+    assert trades_history.due({"state": "unmapped", "code": "books_unmapped", "fingerprint": "a"}, 5, env.clock["t"], "a", None, True) is False
+    assert trades_history.due({"state": "unmapped", "code": "filtered_empty", "fingerprint": "a"}, 5, env.clock["t"], "a", None, False) is False
+    assert trades_history.due({"state": "unmapped", "code": "filtered_empty", "fingerprint": "a"}, 5, env.clock["t"], "a", None, True) is True
+
+
+def test_the_filtered_flag_survives_the_files_waiting_for_the_cycle_lock(env, monkeypatch):
+    env.s.history_set(None, D15, None)
+    env.put("hist_mode", "no_records_file_filtered")        # a file with the header only
+    real = svcs.AdapterServices._try_cycle_lock
+    busy = {"n": 1}
+
+    def maybe(st):
+        if busy["n"]:
+            busy["n"] -= 1
+            return None
+        return real(st)
+
+    monkeypatch.setattr(svcs.AdapterServices, "_try_cycle_lock", staticmethod(maybe))
+    assert env.s._history_step() is True and env.doc["pending"]["filtered"] is True and env.doc["marks"] == {}
+    env.clock["t"] += timedelta(seconds=10)
+    assert env.s._history_step() is True and env.doc["pending"] is None
+    m = env.doc["marks"][D15]
+    assert (m["state"], m["code"]) == ("unmapped", "filtered_empty")

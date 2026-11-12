@@ -128,6 +128,7 @@
   "moex_yield_close_pct",
   "not_exact_reason",
   "ocp",
+  "ocp_unconfirmed",
   "offer_date",
   "offer_kind",
   "ofz_basis01",
@@ -173,6 +174,7 @@
   "lat_name",
   "legs",
   "not_exact_reason",
+  "ocp_unconfirmed",
   "offer_date",
   "offer_kind",
   "ofz_basis01",
@@ -245,6 +247,12 @@
    "settlement_ccy_assumed",
    "trade_id",
    "value_date"
+  ],
+  "ocp_unconfirmed": [
+   "ccy",
+   "pair",
+   "reason",
+   "text"
   ],
   "risk_missing": [
    "ccy",
