@@ -128,6 +128,12 @@ test('C16 demo: a book row opens what its OCP consists of; the total equals the 
       assert.equal(await dr.locator('[data-c16-exwarn]').count(), 1, 'предупреждение только у USD');
       const types = await dr.locator('table[data-c16-types]').first().innerText();
       assert.ok(types.includes('Тип строки B → валютные форварды') && types.includes('Тип строки C: спот оставлен по номиналу'), types);
+      // TDM#693: строки спот-типа с будущей датой — вынесена сделкой, без кривой, не сопоставлена
+      const sf = dr.locator('[data-c16-spotfuture] ~ table[data-vk="c16-drill-spotfuture"]').first();
+      assert.equal(await dr.locator('[data-c16-spotfuture]').count(), 1, 'раздел только у USD');
+      assert.match(await sf.locator('[data-c16-sf-out]').innerText(), /вынесено из базы: строка отчёта USD, 22\.12\.\d\d, EUR\/USD → сделка D-1001/);
+      assert.match(await sf.locator('[data-c16-sf-df1]').innerText(), /нет кривой EUR: дисконт-фактор 1 · сделка D-1001/);
+      assert.match(await sf.locator('[data-c16-sf-un]').innerText(), /не сопоставлено: строка отчёта USD.*осталась в базе/);
       assert.ok(!BAD.test(await dr.innerText()));
       if (width === 390) assert.ok(await pg.evaluate(() => document.documentElement.scrollWidth <= innerWidth), 'нет прокрутки вбок');
       if (SHOTS) { fs.mkdirSync(SHOTS, { recursive: true }); await pg.screenshot({ path: path.join(SHOTS, 'c16-603-' + width + '.png') }); }

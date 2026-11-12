@@ -2013,7 +2013,7 @@ export interface components {
              * Code
              * @enum {string}
              */
-            code: "no_report" | "stale_report" | "outside_without_terms" | "books_outside_report" | "outside_double_count" | "report_without_derivatives_split" | "derivatives_nominal_fallback" | "base_older" | "trades_not_loaded" | "no_base_run" | "trades_not_valued" | "carried_forward_unit" | "trades_unknown_book" | "derivatives_partial_pv" | "derivatives_unknown_last_flow" | "off_report_excluded" | "derivative_share" | "balances_older_than_base" | "balances_not_at_base" | "fx_unit_unconfirmed";
+            code: "no_report" | "stale_report" | "outside_without_terms" | "books_outside_report" | "outside_double_count" | "report_without_derivatives_split" | "derivatives_nominal_fallback" | "base_older" | "trades_not_loaded" | "no_base_run" | "trades_not_valued" | "carried_forward_unit" | "trades_unknown_book" | "derivatives_partial_pv" | "derivatives_unknown_last_flow" | "off_report_excluded" | "derivative_share" | "balances_older_than_base" | "balances_not_at_base" | "fx_unit_unconfirmed" | "spot_future_unmatched" | "spot_future_ambiguous" | "spot_future_df1" | "spot_future_partial";
             /** Text */
             text: string;
             /**
@@ -2229,6 +2229,13 @@ export interface components {
             derivative_types?: {
                 [key: string]: unknown;
             }[];
+            /**
+             * Spot Future
+             * @description report_base_plus_day, TDM#693: the report's lines of a spot type with a future value date (the adapter's ``x_spot_future``): out — taken out of the base and replaced by the deal {value_date, pair, amount, position_id, trade_ids, days, others}, unmatched — left in the base {value_date, pair, amount, why}, df1 — deals taken at the legs' nominal, discount factor 1 {position_id, trade_ids, amount, note}
+             */
+            spot_future?: {
+                [key: string]: unknown;
+            } | null;
             /**
              * Derivative Share
              * @description report_base_plus_day, DEC18 (TDM#588): a derivative that is nearly the whole gross of a large line {position_id, derivative, amount, share} (gap derivative_share)
