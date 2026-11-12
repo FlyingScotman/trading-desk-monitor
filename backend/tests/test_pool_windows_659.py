@@ -22,6 +22,9 @@ from test_two_pass_627 import NEWEST_FIRST, RUN_DATES, plan, runs
 
 from desk import backfill, parallel
 
+# Process pools of their own and the end of a process tree: they run on their own, after the parallel run (marker serial).
+pytestmark = pytest.mark.serial
+
 
 def _history(url: str, tmp_path: Path, cache_dir: Path, workers: int, init=None):
     load(url, tmp_path, "2026-10-12", 10)

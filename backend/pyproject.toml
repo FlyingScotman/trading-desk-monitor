@@ -18,7 +18,7 @@ dependencies = [
 
 [project.optional-dependencies]
 # pgserver: an embedded PostgreSQL for tests and the dev store (DESK_STORE_URL unset)
-dev = ["pytest>=8.0", "ruff>=0.8", "pgserver>=0.1.4", "httpx>=0.27"]
+dev = ["pytest>=8.0", "pytest-xdist>=3.6", "ruff>=0.8", "pgserver>=0.1.4", "httpx>=0.27"]
 
 [project.scripts]
 desk = "desk.cli:main"
@@ -43,7 +43,8 @@ testpaths = ["tests"]
 addopts = "-m 'not live and not bundle and not full_property'"
 markers = ["live: needs DESK_HUB_URL and a hub token",
            "bundle: builds a real wheel of the Windows bundle (uv and PyPI for the pinned build backends)",
-           "full_property: the rest of the seeds of the pool's failure property (ci.yml «parallel-property», release): `pytest -m full_property`"]
+           "full_property: the rest of the seeds of the pool's failure property (ci.yml «parallel-property», release): `pytest -m full_property`",
+           "serial: process pools of its own or measured time, needs the machine to itself and never runs under pytest-xdist (ci.yml: -n 4 -m 'not serial and ...' first, then -m 'serial and ...' without -n; a plain pytest runs both)"]
 
 [tool.ruff]
 line-length = 110

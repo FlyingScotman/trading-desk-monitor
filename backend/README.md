@@ -312,6 +312,8 @@ The tests run slices S1–S3 on the hub's golden fixtures, vendored in `tests/fi
 
 `pytest -m live` checks the real hub in `DESK_HUB_URL` (hub-check and a sync of its latest date); the default run never touches the network.
 
+CI runs the suite in two parts (TDM#678; the jobs `test` and `test-serial`): `pytest -n 4 -m "not serial and not live and not bundle and not full_property"` (pytest-xdist; every worker starts its own embedded PostgreSQL in its own folder, so nothing is shared) and then, without `-n`, `pytest -m "serial and not live and not bundle and not full_property"`. A test marked `serial` starts process pools of its own or measures time, so it needs the machine to itself; under xdist it fails at once (`tests/conftest.py`) instead of running in company. Mark a new test of that kind with `@pytest.mark.serial`. A plain `pytest -q` runs both kinds one after the other, as before. `-m` replaces the default expression of `addopts`, so the CLI expression repeats `not live and not bundle and not full_property`.
+
 ## Layout
 
 | Module | Role | Architecture |

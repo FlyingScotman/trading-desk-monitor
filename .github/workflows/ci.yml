@@ -27,14 +27,38 @@ jobs:
           uv pip install -p .venv -e ".[dev]"
       - name: Lint
         run: backend/.venv/bin/ruff check backend
-      - name: Backend tests (embedded PostgreSQL)
+      # TDM#678: pytest-xdist, 4 workers (the runner has 4 cores). Every worker is its own process with its own embedded
+      # PostgreSQL in its own folder (tests/conftest.py), so no database, port or lock is shared. The tests that need the
+      # machine to themselves (marker serial: process pools of their own, measured time) are not run here but in the job
+      # «test-serial» below, beside this one, one after the other. The two -m expressions are complements: every test runs in
+      # exactly one of the two (-m replaces the default of addopts in pyproject.toml, so its «not live and not bundle and not
+      # full_property» is repeated).
+      - name: Backend tests in parallel (embedded PostgreSQL, pytest-xdist)
         working-directory: backend
-        run: .venv/bin/python -m pytest -q -p no:cacheprovider --durations=25
+        run: .venv/bin/python -m pytest -q -p no:cacheprovider -n 4 --durations=25 -m "not serial and not live and not bundle and not full_property"
       - name: Root tests
         run: backend/.venv/bin/python -m pytest -q -p no:cacheprovider tests
 
+  # TDM#678: the backend tests marked serial (process pools of their own, measured time), one after the other on a machine of
+  # their own: the other half of «test» above (together they are what the whole backend suite was before the split). A branch
+  # protection that requires «test» must require «test-serial» as well, or these tests are not a condition of a merge.
+  test-serial:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+      - name: Python 3.12 venv with the backend and dev tools
+        working-directory: backend
+        run: |
+          uv venv -p 3.12 .venv
+          uv pip install -p .venv -e ".[dev]"
+      - name: Backend tests that need the machine to themselves (marker serial)
+        working-directory: backend
+        run: .venv/bin/python -m pytest -q -p no:cacheprovider --durations=25 -m "serial and not live and not bundle and not full_property"
+
   # The rest of the seeds of the pool's failure property (backend/tests/test_parallel_backfill_628.py, marker
-  # full_property): the default run of «test» takes six, this job the other 18, beside it, so the push still has all 24.
+  # full_property): the default run («test-serial» now) takes six, this job the other 18, beside it, so the push still has all 24.
   parallel-property:
     runs-on: ubuntu-latest
     timeout-minutes: 30
@@ -129,7 +153,11 @@ jobs:
         shell: bash
         run: |
           files=$(grep -v '^[[:space:]]*#' tests/windows_suite.txt | grep -v '^[[:space:]]*$' | tr -d '\r')
-          .venv/Scripts/python.exe -m pytest -q -p no:cacheprovider --durations=15 $files
+          # TDM#678: the same two steps as the Linux job (pytest-xdist with 4 workers, then the tests marked serial one after
+          # the other); not tried on Windows before this change: the first run of this job is the check. If it fails for a
+          # reason of xdist, drop «-n 4» from the first command (the second needs nothing).
+          .venv/Scripts/python.exe -m pytest -q -p no:cacheprovider -n 4 --durations=15 -m "not serial and not live and not bundle and not full_property" $files
+          .venv/Scripts/python.exe -m pytest -q -p no:cacheprovider --durations=15 -m "serial and not live and not bundle and not full_property" $files
 
   # The one check to require for Windows (see the comment above): a failed, cancelled or skipped-by-mistake Windows job fails it.
   windows-gate:

@@ -219,6 +219,7 @@ def test_a_run_from_before_the_sources_were_recorded_is_unknown_not_stale(tmp_pa
     assert [d.carry for d in p.days] == [None, None, "unknown", None] and p.summary()["carry_unknown"] == 1
 
 
+@pytest.mark.serial  # starts a pool of processes (workers 3)
 def test_the_plan_says_the_same_with_the_pool_on_and_off(tmp_path, cache_noq, pg_server):  # noqa: F811
     """The runs of the pool carry the same spreads (``dump`` of #628 compares the lineage), so the plan decides alike;
     here the whole story: the history in both passes, a date made again with another spread, the plan, its run."""
@@ -289,7 +290,7 @@ def test_dates_after_a_source_that_never_comes_out_are_not_made_again_every_cycl
     assert {d: r["run_id"] for d, r in after.items()} == {d: r["run_id"] for d, r in before.items()}
 
 
-@pytest.mark.parametrize("workers", [1, 3])
+@pytest.mark.parametrize("workers", [1, pytest.param(3, marks=pytest.mark.serial)])  # 3: a pool of processes
 def test_dates_after_a_source_made_again_with_the_same_spread_are_not_made_again(tmp_path, cache_noq, pg_server, workers):  # noqa: F811
     """The source is made again (a hub correction that left its spread as it was, say): the dates after it are asked
     once it is done and left as they are. With the pool a date may already be computing ahead: then it is made once,

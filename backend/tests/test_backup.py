@@ -330,6 +330,7 @@ def test_restore_replace_changes_nothing_unconfirmed_or_with_the_server_running(
     assert _count(store_url, "audit_log") == 5
 
 
+@pytest.mark.serial  # the time the check waits is bounded on both sides
 def test_a_connection_that_is_going_away_is_no_other_connection(store_url):
     """A connection its client has closed stays in pg_stat_activity until its server process has exited; on a busy
     machine that is long enough for the restore's check right after its own pg_dump to count it (#485). The check
