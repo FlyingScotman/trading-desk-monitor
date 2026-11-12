@@ -446,6 +446,7 @@ def test_busy_cancel_and_the_lock_shared_with_acquisition(tmp_path):
         s.close()
 
 
+@pytest.mark.serial  # the answer must come within 2.5 s of a 3 s describe
 def test_an_action_answer_comes_before_its_describe_615(tmp_path):
     """The answer is published as soon as the helper returns; the describe after it runs as a describe, the owner's
     next operation is queued meanwhile; the job says its section and whether a login window may open."""

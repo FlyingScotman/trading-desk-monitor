@@ -1177,6 +1177,7 @@ def test_a_full_disk_or_quota_is_a_stall_other_file_errors_are_not():
         assert not backfill.transient(e), e
 
 
+@pytest.mark.serial  # compares the time of the plan cold and warm
 def test_the_plan_with_trades_of_200_dates_remembers_the_inputs_hashes(tmp_path, store_url, monkeypatch):
     """TDM#569: with trades at hundreds of dates the plan (read at each poll of the status) must not fold the trades of
     every date again. The hash of a date is remembered under the stamp of the stored sets: the second plan reads none; a

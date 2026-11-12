@@ -29,6 +29,10 @@ from desk.settings import Settings, check_settings_doc
 from desk.settings import load as load_settings
 from desk.store import MIGRATIONS, migrate
 
+# The tests start process pools of their own and measure how long a stuck or dead process takes to be seen: they run on their
+# own, after the parallel run (pyproject.toml, marker serial).
+pytestmark = pytest.mark.serial
+
 
 @pytest.fixture
 def cache(tmp_path) -> Path:

@@ -1,8 +1,14 @@
 """Shared fixtures. ``store_url``: a fresh, migrated desk store database per test, on one embedded
-PostgreSQL (pgserver) per test session. Tests that need it are skipped when pgserver is missing."""
+PostgreSQL (pgserver) per test session. Tests that need it are skipped when pgserver is missing.
+
+Under pytest-xdist (``-n``, TDM#678; CI) a test session is one worker process: ``pg_server`` starts one embedded PostgreSQL
+in the worker's own directory (``tmp_path_factory`` of the worker: ``popen-gw0`` and so on), so workers share no server, no
+database and no folder; the locks of a process (``helper_proc.HELPER_LOCK``) are per worker as well. Tests marked ``serial``
+(process pools of their own, measured time) are not run under xdist at all: see ``pytest_runtest_setup``."""
 
 from __future__ import annotations
 
+import os
 import uuid
 from collections.abc import Iterator
 
@@ -52,3 +58,14 @@ def store_url(pg_server) -> str:
     url = pg_server.get_uri(name)
     assert migrate(url) == [f.stem for f in sorted(MIGRATIONS.glob("*.sql"))]
     return url
+
+
+@pytest.hookimpl(tryfirst=True)
+def pytest_runtest_setup(item) -> None:
+    """A ``serial`` test needs the machine to itself (it starts process pools of its own or measures time). Under xdist other
+    workers run beside it, so it fails here, loudly, instead of being run in company or skipped: run ``-n N -m "not serial and
+    not live and not bundle and not full_property"`` first and ``-m "serial and not live and not bundle and not full_property"``
+    after it, without ``-n`` (CI does; a plain ``pytest`` runs everything one test after the other)."""
+    if item.get_closest_marker("serial") is not None and os.environ.get("PYTEST_XDIST_WORKER"):
+        pytest.fail("a test marked `serial` was started by an xdist worker: deselect it with -m 'not serial and ...' in the "
+                    "parallel run and run it without -n (see tests/conftest.py)", pytrace=False)

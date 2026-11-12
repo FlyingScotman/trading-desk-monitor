@@ -102,6 +102,7 @@ def test_probe_ok_and_other_server(cert):
 REFUSED_S = 5.0 if os.name == "nt" else 1.0
 
 
+@pytest.mark.serial  # a probe of 0.5 s must be over within 3 s
 def test_probe_no_response_tls_error_refused_timeout(monkeypatch):
     port = free_port()
     with dead_listener("127.0.0.1", port):

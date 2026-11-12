@@ -82,6 +82,7 @@ def test_the_machine_decides_the_automatic_number_and_windows_only_when_the_swit
     assert REAL_AUTO() == 1
 
 
+@pytest.mark.serial  # starts a pool of processes
 def test_the_pool_check_starts_processes_and_each_answers(tmp_path) -> None:
     """``desk pool-check``: the processes of the history start by ``spawn`` and each answers once (the bundle's CI runs it on
     Windows through the program's own launcher)."""
@@ -104,6 +105,7 @@ def slow_unless_first(marker: str, delay: float) -> None:
         time.sleep(delay)
 
 
+@pytest.mark.serial  # waits for a process that starts late (a 3 s pause and the time it takes)
 def test_the_pool_check_waits_for_a_slow_process_and_does_not_count_one_process_twice(tmp_path) -> None:
     """The review of #665: with a fixed pause in each probe, a process that started more than the pause after the first
     left both probes to the first one, one pid, and the Windows bundle's gate failed for a slow start. Now each process
@@ -113,6 +115,7 @@ def test_the_pool_check_waits_for_a_slow_process_and_does_not_count_one_process_
     assert res["seconds"] >= 3.0, "the first process waited for the second"
 
 
+@pytest.mark.serial  # a barrier of 1 s against a process that starts 6 s late
 def test_the_pool_check_says_so_when_the_processes_do_not_all_start(tmp_path) -> None:
     res = parallel.check(2, barrier_s=1.0, init=(slow_unless_first, (str(tmp_path / "first"), 6.0)))
     assert res["ok"] is False and res["error"], res  # (one process answered for both: the check does not pass)

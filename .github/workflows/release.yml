@@ -15,6 +15,12 @@ name: release
 # Only a v-tag starts this workflow: a tag without v (or a release made by hand on GitHub) stays empty; tag-format.yml
 # fails on such a tag with what to do, and check-tag below rejects a non-v tag given to Run workflow.
 # The release job waits for the Windows check (windows-bundle.yml, TDM#639): install, update, rollback, stop on Windows.
+# TDM#678: the tests of the release (backend, the other seeds of the pool's failure property, root) are not run a second
+# time when the workflow ci has already passed them on this very commit: tools/ci_green_for_sha.py looks for a completed
+# run of ci (event push, so it tested this commit and not a merge of a pull request) with the jobs «test», «test-serial»
+# and «parallel-property» green, waits up to 25 min for one that is still running, and says in one line of the log whether the
+# tests are skipped (and which run of ci stands for them) or run in full (and why). No such run, or any doubt: they run
+# in full, as before. Lint, the tag check, the Windows check and the checks of the bundle without packages are always run.
 
 on:
   push:
@@ -28,6 +34,7 @@ on:
 
 permissions:
   contents: write
+  actions: read  # TDM#678: the list of the runs of ci on the released commit (tools/ci_green_for_sha.py)
 
 concurrency:
   group: release
@@ -81,10 +88,31 @@ jobs:
           uv pip install -p .venv -e ".[dev]"
       - name: The tag names the backend version
         run: backend/.venv/bin/python backend/tools/release_assets.py check-tag --tag "$TAG"
-      - name: Lint and tests
+      - name: Lint
+        run: backend/.venv/bin/ruff check backend
+      - name: Has ci already passed the tests on this commit? (TDM#678)
+        id: ci
+        # a tag from before this change has no tools/ci_green_for_sha.py (a rebuild of an old tag, the input «tag»): the step
+        # fails, its outputs stay empty, and the tests below run in full
+        continue-on-error: true
+        # the commit that was checked out (the tag's, or the one the Windows check ran on), not the ref's name
+        run: >
+          python3 tools/ci_green_for_sha.py --repo "$GITHUB_REPOSITORY" --sha "$(git rev-parse HEAD)"
+          --wait-minutes 25
+      - name: Tests (the same as ci.yml; not run when the line above says «tests skipped»)
+        if: steps.ci.outputs.skip != 'true'
+        env:
+          WHY: ${{ steps.ci.outputs.reason }}
         run: |
-          backend/.venv/bin/ruff check backend
-          (cd backend && .venv/bin/python -m pytest -q -p no:cacheprovider)
+          echo "$WHY"
+          if backend/.venv/bin/python -c "import xdist"; then
+            # parallel, then the tests marked serial one after the other (the two -m expressions are complements, see ci.yml)
+            (cd backend && .venv/bin/python -m pytest -q -p no:cacheprovider -n 4 -m "not serial and not live and not bundle and not full_property")
+            (cd backend && .venv/bin/python -m pytest -q -p no:cacheprovider -m "serial and not live and not bundle and not full_property")
+          else
+            # a tag from before TDM#678 (no pytest-xdist in its pyproject, no marker serial): one run, the -m of addopts
+            (cd backend && .venv/bin/python -m pytest -q -p no:cacheprovider)
+          fi
           # all the seeds of the pool's failure property (the default run, and ci.yml's job per push, take part of them)
           (cd backend && .venv/bin/python -m pytest -q -p no:cacheprovider -m full_property)
           backend/.venv/bin/python -m pytest -q -p no:cacheprovider tests
