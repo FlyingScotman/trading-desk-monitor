@@ -57,22 +57,22 @@ def _start(kind: str, fn, store_url: str, who: str, ip: str | None, target: str)
             job["step"] = line
 
     def run() -> None:
-        ok, detail = False, {}
+        # The job leaves «running» only after its audit row is written: whoever sees it done finds the row.
+        ok, detail, outcome = False, {}, {}
         try:
             result = fn(step)
-            with _lock:
-                job.update(state="done", result=result)
+            outcome = {"state": "done", "result": result}
             ok = bool(result.get("ok", True))
             detail = {k: result.get(k) for k in ("file", "size", "rows", "problems") if result.get(k) is not None}
         except Exception as e:  # noqa: BLE001 - shown on the page
-            with _lock:
-                job.update(state="error", error=mask_url(f"{e}" if isinstance(e, backup.BackupError)
-                                                         else f"{type(e).__name__}: {e}"))
-            detail = {"error": job["error"][:300]}
+            error = mask_url(f"{e}" if isinstance(e, backup.BackupError) else f"{type(e).__name__}: {e}")
+            outcome = {"state": "error", "error": error}
+            detail = {"error": error[:300]}
         finally:
-            with _lock:
-                job["finished"] = datetime.now().isoformat(timespec="seconds")
             _audit_quietly(store_url, who, f"backup_{kind}", target, ok, ip, detail)
+            with _lock:
+                job.update(outcome or {"state": "error", "error": "interrupted"},
+                           finished=datetime.now().isoformat(timespec="seconds"))
 
     threading.Thread(target=run, name=f"desk-backup-{kind}", daemon=True).start()
     return dict(job)
