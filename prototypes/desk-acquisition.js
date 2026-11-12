@@ -1,6 +1,9 @@
 /* Explicit local acquisition. Credentials never enter settings, storage, URLs or diagnostic output.
    A provider without a login: the server reports `login: "none"` (from its last inspection of this adapter);
-   then the login fields are hidden and check/fetch go without them. The server, not this page, decides. */
+   then the login fields are hidden and check/fetch go without them. The server, not this page, decides.
+   Before the first inspection of this adapter the way to log in is not known (`login_known: false`): no fields as if a login
+   were certain, a hint instead; the server still refuses a start without credentials until it knows (`credentials_required`).
+   TDM#673: a start while a background load holds the helper is accepted and waits: the job says what it waits for. */
 (() => {
   'use strict';
   const $ = id => document.getElementById('acq-' + id);
@@ -26,12 +29,14 @@
     connection_failed: 'Не удалось подключиться. Проверьте подключение и настройки адаптера.',
     auth_failed: 'Вход во внутреннюю систему не выполнен.', connected: 'Вход проверен. Данные не загружались.',
     connected_open: 'Подключение проверено. Данные не загружались.',
-    acquisition_busy: 'Предыдущая операция ещё выполняется.', services_busy: 'Идёт операция подключения к сервисам или фоновая загрузка. Повторите после её окончания.', calculation_busy: 'Уже выполняется расчёт. Повторите после его завершения.',
+    acquisition_busy: 'Предыдущая операция ещё выполняется.', calculation_busy: 'Уже выполняется расчёт. Повторите после его завершения.',
     starting: 'Подготовка запуска…', acquiring: 'Получение данных…',
     ingesting: 'Проверка и загрузка полученных данных… Отмена уже недоступна.',
     valuating: 'Новый расчёт выбранной даты… Отмена уже недоступна.',
     market_missing: 'Для этой даты нет загруженного рынка.', positions_missing: 'Для выбранных книг нет загруженных позиций на эту дату.',
-    cancelled: 'Операция отменена до загрузки данных.', cancel_requested: 'Отмена запрошена…',
+    cancelled: 'Операция отменена до загрузки данных.', cancelled_waiting: 'Ожидание отменено: ничего не запускалось.',
+    cancel_requested: 'Отмена запрошена…', waiting_helper: 'Ждёт окончания другой операции с адаптером. Запуск начнётся сам.',
+    stop_unavailable: 'Фоновая загрузка уже записывает данные в базу: остановить её сейчас нельзя. Запуск начнётся сам, когда она закончится.',
     cancel_after_commit_unavailable: 'Загрузка уже началась. Дождитесь результата; отмена на этой фазе недоступна.',
     acquisition_timeout: 'Время ожидания истекло. Процесс получения данных остановлен.',
     adapter_changed: 'Адаптер или его настройки изменились. Найдите отчёт заново.',
@@ -48,20 +53,55 @@
     export_failed: 'Не удалось сохранить полученные данные.', export_invalid: 'Некорректные данные для выгрузки.',
     cache_invalid: 'Некорректный журнал выгрузки.', cache_invalidate_failed: 'Не удалось обновить локальную выгрузку.'
   };
-  let reports = [], scopeFingerprint = null, active = false, available = false, timer = null, noLogin = false;
+  let reports = [], scopeFingerprint = null, active = false, available = false, timer = null, noLogin = false, loginKnown = true, loginAsked = false;
   const el = (tag, text) => { const n = document.createElement(tag); if (text !== undefined) n.textContent = text; return n; };
-  function message(code) {
+  const clock = since => { const sec = Math.max(0, Math.round((Date.now() - new Date(since)) / 1000)); return Math.floor(sec / 60) + ':' + String(sec % 60).padStart(2, '0'); };
+  const dm = d => typeof d === 'string' && d.length >= 10 ? d.slice(8, 10) + '.' + d.slice(5, 7) : '';
+  // чего ждёт действие (TDM#673): идущая фоновая загрузка или операция раздела подключения к сервисам, и сколько она идёт
+  function waitText(job) {
+    const w = job.waiting_for || {}, run = w.since ? ', идёт ' + clock(w.since) : '';
+    if (job.code === 'waiting_feed') return 'Ждёт окончания фоновой загрузки «' + (w.title || w.feed || '') + '»' +
+      (w.kind === 'history' && w.date ? ' за ' + dm(w.date) : '') + run + (w.phase === 'ingesting' ? ' (данные уже записываются в базу)' : '') +
+      '. Запуск начнётся сам.';
+    if (job.code === 'waiting_services') return 'Ждёт окончания операции в разделе «Подключение к сервисам»' + run + '. Запуск начнётся сам.';
+    return TEXT.waiting_helper;
+  }
+  function message(code, job) {
     if (code === 'connected' && noLogin) code = 'connected_open';
+    if (job && job.phase === 'waiting' && String(code).startsWith('waiting_')) { $('status').textContent = waitText(job); return; }
+    if (code === 'cancelled' && job && job.phase === 'waiting') code = 'cancelled_waiting';
     $('status').textContent = TEXT[code] || 'Операция не выполнена. Проверьте диагностику программы.';
   }
-  // Only the exact "none" hides the login; anything else (older backend, absent, unknown) keeps the fields.
-  function login(mode) {
-    noLogin = mode === 'none';
+  // Only the exact "none" hides the login; "required" (older backend, absent, unknown value) keeps the fields. `known` false: no
+  // inspection of this adapter has answered yet: neither the fields nor "no login needed", only the hint (TDM#673).
+  // `loginAsked`: the server refused a start without credentials: the fields stay while it does not know better, so the next poll
+  // (still "not known") does not hide them again; the server's own answer ends it.
+  function login(mode, known = true) {
+    if (known) loginAsked = false; else if (loginAsked && available) known = true;
+    noLogin = mode === 'none'; loginKnown = known;
+    const hide = noLogin || !known;
     for (const n of [document.querySelector('label[for=acq-user]'), $('user'), document.querySelector('label[for=acq-password]'),
-      $('password').parentElement]) if (n) n.hidden = noLogin;
+      $('password').parentElement]) if (n) n.hidden = hide;
     if ($('nologin')) $('nologin').hidden = !noLogin;
+    if ($('loginunknown')) $('loginunknown').hidden = known || !available;
     $('check').textContent = noLogin ? 'Проверить подключение' : 'Проверить вход';
-    if (noLogin) { $('user').value = ''; $('password').value = ''; }
+    if (hide) { $('user').value = ''; $('password').value = ''; }
+  }
+  // «Остановить загрузку»: тот же маршрут, что в разделе «Сервисы»; загрузка не считается ошибкой и идёт снова по расписанию
+  function stopLink(w) {
+    const row = el('span'), stop = el('button', 'Остановить загрузку', 'lnk'), note = el('span', '', 'hint');
+    stop.type = 'button'; stop.dataset.stopFeed = '1'; stop.className = 'lnk'; note.className = 'hint'; note.style.marginLeft = '8px';
+    stop.title = 'Загрузка «' + (w.title || w.feed || '') + '» прервётся; она не считается ошибкой и запустится снова по своему расписанию.';
+    stop.addEventListener('click', async () => {
+      note.textContent = '';
+      try {
+        const res = await fetch('/api/v1/adapter-services/cancel', {method:'POST', cache:'no-store',
+          headers:{'Content-Type':'application/x-www-form-urlencoded'}, body:'target=feed'});
+        if (!res.ok) { const r = await res.json().catch(() => ({})); note.textContent = TEXT[r.code === 'cancel_after_commit_unavailable' ? 'stop_unavailable' : 'operation_failed']; }
+      } catch (_) { note.textContent = TEXT.status_unknown; }
+      refresh();
+    });
+    row.append(stop, note); return row;
   }
   function selected() { return [...$('scope').querySelectorAll('input[type=checkbox]:checked')].map(n => n.value); }
   function report() { return reports.find(r => r.id === $('report')?.value); }
@@ -100,10 +140,17 @@
     if (rows.length === 1) select.value = rows[0].id;
     books();
   }
-  // `current`: the status route's answer for the current adapter; it wins over the login an inspection job carries
-  function show(job, current) {
-    if (current !== undefined || job.code === 'scope_ready') login(current !== undefined ? current : job.login);
-    active = job.state === 'running'; message(job.code); $('result').replaceChildren();
+  // `current`: the status route's answer for the current adapter; it wins over the login an inspection job carries;
+  // `known`: whether an inspection of this adapter has answered (an older backend does not say: known)
+  function show(job, current, known = true) {
+    if (current !== undefined || job.code === 'scope_ready') login(current !== undefined ? current : job.login, current !== undefined ? known : true);
+    active = job.state === 'running'; message(job.code, job);
+    // a wait for a background load: its stop link stays put between polls (it is not rebuilt under the owner's mouse)
+    const w = active && job.phase === 'waiting' && job.waiting_for && ['feed', 'history'].includes(job.waiting_for.kind) ? job.waiting_for : null;
+    if (!(w && $('result').querySelector('[data-stop-feed]'))) {
+      $('result').replaceChildren();
+      if (w) $('result').append(stopLink(w));
+    }
     if (job.code === 'scope_ready') { scopeFingerprint = job.adapter_fingerprint; scope(job.reports || []); }
     $('cancel').disabled = !active || ['ingesting', 'valuating'].includes(job.phase);
     if (job.code === 'completed') {
@@ -130,8 +177,9 @@
       const res = await fetch('/api/v1/acquisition', {cache:'no-store'});
       if (!res.ok) { available = false; message(res.status === 403 ? 'local_only' : 'status_unknown'); buttons(); return; }
       const data = await res.json(); available = !!data.available;
-      if (data.job.state === 'idle') { active = false; login(data.login); message(available ? 'idle' : data.code); buttons(); }
-      else show(data.job, data.login || 'required');  // unavailable adapter: no current answer, keep the login
+      const known = data.login_known !== false;
+      if (data.job.state === 'idle') { active = false; login(data.login, known); message(available ? 'idle' : data.code); buttons(); }
+      else show(data.job, data.login || 'required', known);  // unavailable adapter: no current answer, keep the login
     } catch (_) { message('status_unknown'); }
   }
   async function submit(op) {
@@ -143,7 +191,7 @@
       body.set('adapter_fingerprint', scopeFingerprint || '');
     }
     if (op !== 'inspect') {
-      if (!noLogin) { body.set('username', $('user').value); body.set('password', $('password').value); }
+      if (!noLogin && loginKnown) { body.set('username', $('user').value); body.set('password', $('password').value); }
       $('user').value = ''; $('password').value = '';
     }
     active = true; buttons(); message('starting');
@@ -151,7 +199,7 @@
       const res = await fetch('/api/v1/acquisition/start', {method:'POST', cache:'no-store',
         headers:{'Content-Type':'application/x-www-form-urlencoded'}, body});
       const job = await res.json();
-      if (!res.ok) { active = false; if (job.code === 'credentials_required') login('required'); message(job.code); buttons(); } else show(job);
+      if (!res.ok) { active = false; if (job.code === 'credentials_required') { login('required'); loginAsked = true; } message(job.code, job); buttons(); } else show(job);
     } catch (_) { active = false; message('status_unknown'); buttons(); }
     finally { body.delete('username'); body.delete('password'); }
   }

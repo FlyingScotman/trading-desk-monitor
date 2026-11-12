@@ -91,7 +91,21 @@ cannot skip the login on its own (`credentials_required`); the answer is checked
 start, so an inspection still finishing cannot change it in between. Both credentials or neither: one of the two is
 `credentials_required`. Empty `username`/`password` fields are dropped and never forwarded, so a no-login child
 receives neither key; given credentials are forwarded unchanged. The Settings dialog hides the login fields
-while the server says `"none"` and shows them again on `credentials_required`.
+while the server says `"none"` and shows them again on `credentials_required`. `GET /api/v1/acquisition` also says
+`login_known`: `false` until an inspection of the current adapter has answered (the fields are then neither shown as
+if a login were certain nor replaced by "no login needed": the page shows a hint to run the inspection first; the
+refusal without credentials is unchanged). The mode is not read from the adapter's settings: only the adapter's own
+`inspect` answer says it.
+
+**Busy helper** (TDM#673). The owner's `start` is not refused while a background load or a services operation holds
+the helper (`helper_proc.HELPER_LOCK`): it is accepted and the job waits (`phase: "waiting"`, `code`
+`waiting_feed` | `waiting_services` | `waiting_helper`, `waiting_for`: the holder from `AdapterServices.holder`: kind,
+feed, title, `since`, phase). Background work that has not started (scheduled feeds, the history of trades, the
+background describe) stands aside while it waits (`helper_proc.owner_waiting`); the running one is stopped with the
+panel's `POST /api/v1/adapter-services/cancel` (`target=feed`). `POST .../cancel` of the acquisition ends the wait
+(`cancelled` in phase `waiting`: nothing ran); settings of the adapter that changed meanwhile end it as
+`adapter_changed`. One acquisition job at a time as before (`acquisition_busy`); `services_busy` is no longer an
+answer of `start`.
 
 The monitor adds trusted `adapter_root`, `config_dir`, repeated `inbox_dir`, and a unique managed `output_dir`
 to child stdin. The helper runs as `[configured_python, -I, -B, contained_entry]`, in its own process group, with
@@ -136,7 +150,7 @@ previous_run_id}]` and a failed one as `recompute_failed: [{business_date, label
 the acquisition. The autopilot's intraday and morning steps notice the same change on their own ("private inputs
 changed"), so terms that arrive by an inbox folder update today's screen too. An acquisition job and a services
 operation (§2.2) never run at the same time (`desk.helper_proc.HELPER_LOCK`): `start` while a services helper runs is
-refused with `services_busy` (409).
+accepted and waits (see "Busy helper" above).
 
 ### 2.2 Optional services (version 1)
 

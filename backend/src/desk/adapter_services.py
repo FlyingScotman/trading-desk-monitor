@@ -640,6 +640,8 @@ class AdapterServices:
         if manual is not None:
             self._feed_by_id(*manual, trigger="manual")
             return True
+        if helper_proc.owner_waiting():
+            return False   # the owner's acquisition waits for the helper (TDM#673): nothing new starts before it
         if self._describe_wanted or (self._scheduling and time.monotonic() - self._checked >= RECHECK_S):
             self._checked = time.monotonic()
             self._describe_wanted = False
@@ -760,6 +762,24 @@ class AdapterServices:
         return {"kind": r["kind"], "feed": fid, "title": title, "since": r.get("since"), "phase": r.get("phase"),
                 **({"date": r["date"]} if r.get("date") else {})}
 
+    def holder(self) -> dict | None:
+        """What holds ``HELPER_LOCK`` now, for the owner's acquisition that waits for it (TDM#673): a feed run or a
+        history request (``_waiting_for``: its title, start, phase), an owner's operation or a describe (``kind``,
+        ``since``); None when nothing is known (the work just ended, or waits for the lock itself) or for a background
+        describe (short, nothing the owner started: no name to show)."""
+        with self._lock:
+            running = dict(self._running) if self._running else None
+        if not running or running.get("phase") == "waiting":
+            return None
+        if running.get("kind") in ("feed", "history"):
+            try:
+                return self._waiting_for(running, read_state(self._load()))
+            except Exception:  # noqa: BLE001 - the state file in use: the kind is still known
+                return {"kind": running["kind"], "since": running.get("since"), "phase": running.get("phase")}
+        if running.get("kind") == "op":
+            return {"kind": "op", "since": running.get("since")}
+        return None
+
     def _of_action(self, op: str, params: dict, doc: dict) -> tuple[str | None, bool]:
         """(the panel section of an action, whether it may open a login window). A pick list's action: the section of
         the action that offered it; the login: the action's ``login`` flag, else its id in ``LOGIN_ACTIONS``."""
@@ -874,16 +894,20 @@ class AdapterServices:
 
     # ---- running an operation
 
-    def _acquire(self, on_wait: Callable[[], None]) -> bool:
-        """``HELPER_LOCK``, waiting while an acquisition job holds it; False on shutdown or cancellation."""
+    def _acquire(self, on_wait: Callable[[], None], *, background: bool = False) -> bool:
+        """``HELPER_LOCK``, waiting while an acquisition job holds it; False on shutdown or cancellation.
+        ``background``: scheduled work stands aside while the owner's acquisition waits for the lock (TDM#673)."""
         waited = False
-        while not helper_proc.HELPER_LOCK.acquire(timeout=0.25):
+        while True:
+            if not (background and helper_proc.owner_waiting()) and helper_proc.HELPER_LOCK.acquire(timeout=0.25):
+                return True
+            if background and helper_proc.owner_waiting():
+                self._stop.wait(0.25)
             if not waited:
                 on_wait()
                 waited = True
             if self._stop.is_set() or self._cancel.is_set():
                 return False
-        return True
 
     def _call(self, st: Settings, hp: Helper, op: str, extra: dict[str, str | list[str]], *,
               out: Path | None = None) -> dict:
@@ -1168,7 +1192,7 @@ class AdapterServices:
             self._running = {"kind": "feed", "feed": f["id"], "since": _iso(started), "phase": "waiting"}
         try:
             hp = self._helper(st)
-            if not self._acquire(lambda: None):
+            if not self._acquire(lambda: None, background=trigger != "manual"):
                 raise ServiceError("cancelled", "cancelled")
         except Exception as e:  # noqa: BLE001
             err = e if isinstance(e, ServiceError) else ServiceError("settings_invalid", "error")
@@ -1504,8 +1528,8 @@ class AdapterServices:
             log.info("adapter services: history waits (%s)", getattr(e, "code", type(e).__name__))
             return False
         self._cancel.clear()
-        if not helper_proc.HELPER_LOCK.acquire(timeout=0.25):   # an acquisition job or an operation: not waited for
-            return False
+        if helper_proc.owner_waiting() or not helper_proc.HELPER_LOCK.acquire(timeout=0.25):
+            return False   # an acquisition job or an operation (the owner's, waiting: it goes first): not waited for
         started = self._now()
         rid = uuid.uuid4().hex
         self._hist_edit(st, lambda h: trades_history.count_call(h, started))   # counted before the call: a restart too
@@ -1564,8 +1588,8 @@ class AdapterServices:
             return False
         day, started = p["date"], self._now()
         self._cancel.clear()   # a cancel that came after the request must not hold the files for ever
-        if not helper_proc.HELPER_LOCK.acquire(timeout=0.25):   # as every operation; busy: the next step
-            return False
+        if helper_proc.owner_waiting() or not helper_proc.HELPER_LOCK.acquire(timeout=0.25):
+            return False   # as every operation; busy (or the owner's acquisition waits): the next step
         with self._lock:
             self._running = {"kind": "history", "history_feed": f["id"], "date": day, "since": _iso(started),
                              "phase": "ingesting"}

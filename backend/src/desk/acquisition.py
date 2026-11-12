@@ -6,12 +6,18 @@ neither job status nor persistent settings contain them. Provider output is neve
 A provider that needs no login says so in its ``inspect`` result (``"login": "none"``). The service remembers that
 answer for the inspected adapter fingerprint only, in memory; ``check``/``fetch`` without credentials are accepted
 only while the current adapter fingerprint is that one. Absent, unknown or malformed ``login`` keeps the login.
+
+The owner's operation never bounces off a busy helper (TDM#673): while a background load or a services operation holds
+``helper_proc.HELPER_LOCK``, ``start`` accepts it and the job waits (``phase`` ``waiting``, ``code`` ``waiting_feed`` /
+``waiting_services`` / ``waiting_helper``; ``waiting_for``: what holds the helper and since when, from ``background``).
+Background work that has not started yet stands aside for it (``helper_proc.owner_waiting``); ``cancel`` ends the wait.
 """
 from __future__ import annotations
 
 import json
 import re
 import threading
+import time
 import uuid
 from collections import Counter
 from collections.abc import Callable
@@ -123,9 +129,11 @@ def login_mode(result: dict) -> str:
 
 class Acquisition:
     def __init__(self, settings_loader: Callable[[], Settings], store_url: str, *, timeout_s: float = TIMEOUT_S,
-                 today: Callable[[], date] | None = None):
-        """``today``: the Moscow date whose current runs a fetch also recomputes (TDM#547); a clock for tests."""
+                 today: Callable[[], date] | None = None, background: Callable[[], dict | None] | None = None):
+        """``today``: the Moscow date whose current runs a fetch also recomputes (TDM#547); a clock for tests.
+        ``background``: what holds the helper now (``AdapterServices.holder``), for the job that waits for it."""
         self._load, self._url, self._timeout = settings_loader, store_url, timeout_s
+        self._background = background
         self._today = today or (lambda: datetime.now(MSK).date())
         self._lock = threading.Lock()
         self._cancel = threading.Event()
@@ -137,6 +145,11 @@ class Acquisition:
     def _login_for(self, fp: str) -> str:
         with self._lock:
             return self._login[1] if self._login is not None and self._login[0] == fp else "required"
+
+    def _login_known(self, fp: str) -> bool:
+        """Whether an inspection of exactly this adapter answered; before it the login mode is unknown (TDM#673)."""
+        with self._lock:
+            return self._login is not None and self._login[0] == fp
 
     @staticmethod
     def _unchanged(p: Provider) -> bool:
@@ -157,7 +170,8 @@ class Acquisition:
         try:
             p = provider(self._load())
             return {"available": True, "code": "available", "source": p.source,
-                    "name": p.handle.name, "version": p.handle.version, "login": self._login_for(p.handle.fingerprint)}
+                    "name": p.handle.name, "version": p.handle.version, "login": self._login_for(p.handle.fingerprint),
+                    "login_known": self._login_known(p.handle.fingerprint)}
         except FlowError as e:
             return {"available": False, "code": e.code}
         except Exception:  # noqa: BLE001 — settings/plugin errors must never expose external diagnostics
@@ -188,24 +202,81 @@ class Acquisition:
             if self._thread is not None and self._thread.is_alive():
                 params.clear()
                 raise FlowError("acquisition_busy")
-            # one helper job at a time: not while a services operation or feed runs (08 §2.2); released by _work
-            if not helper_proc.HELPER_LOCK.acquire(blocking=False):
-                params.clear()
-                raise FlowError("services_busy")
+            # one helper job at a time (08 §2.2); released by _work. Busy: the job waits for it (TDM#673), it is
+            # not refused: the owner's press must not bounce off a background load
+            held = helper_proc.HELPER_LOCK.acquire(blocking=False)
             if no_login:
                 params.pop("username", None)  # never forward empty credentials
                 params.pop("password", None)
             self._cancel.clear()
             self._status = {"id": uuid.uuid4().hex, "state": "running", "phase": "starting", "code": "starting",
                             "op": params["op"], "date": params.get("date"), "books": params.get("book", [])}
-            self._thread = threading.Thread(target=self._work, args=(st, p, params), daemon=True,
+            if not held:
+                self._status.update(phase="waiting", code="waiting_helper")
+            self._thread = threading.Thread(target=self._work, args=(st, p, params, held), daemon=True,
                                             name="desk-acquisition")
             try:
                 self._thread.start()
             except BaseException:
-                helper_proc.HELPER_LOCK.release()
+                if held:
+                    helper_proc.HELPER_LOCK.release()
                 raise
-            return dict(self._status)
+            job = dict(self._status)
+        if not held:
+            self._refresh_waiting()
+            return self.status()
+        return job
+
+    def _refresh_waiting(self) -> None:
+        """What holds the helper, into the waiting job (title, start): ``waiting_for``, and the code that names it."""
+        w = None
+        if self._background is not None:
+            try:
+                w = self._background()
+            except Exception:  # noqa: BLE001 - nothing is known: the wait is still shown, without a name
+                w = None
+        w = w if isinstance(w, dict) else None
+        code = "waiting_feed" if w and w.get("kind") in ("feed", "history") \
+            else "waiting_services" if w and w.get("kind") == "op" else "waiting_helper"  # a describe: no name
+        with self._lock:
+            if self._status.get("phase") != "waiting" or self._cancel.is_set():
+                return
+            self._status["code"] = code
+            if w is None:
+                self._status.pop("waiting_for", None)
+            else:
+                self._status["waiting_for"] = w
+
+    def _settings_changed(self, st: Settings) -> bool:
+        """The settings that go into a run (adapter, its config, the runtime, the folders) differ from those the job
+        was accepted with: they were saved while it waited (TDM#673)."""
+        try:
+            now = self._load()
+        except Exception:  # noqa: BLE001 - unreadable now: not the settings it was accepted with
+            return True
+        keys = ("private_adapter", "private_adapter_config", "private_adapter_sha256", "acquisition_python",
+                "inbox_dirs", "home", "snapshot_cache")
+        return any(getattr(now, k, None) != getattr(st, k, None) for k in keys)
+
+    def _wait_for_helper(self) -> bool:
+        """``HELPER_LOCK`` for a job accepted while it was busy; False when cancelled (or closed) first. Background
+        work not yet started stands aside meanwhile (``owner_waiting``)."""
+        helper_proc.owner_wait_begin()
+        try:
+            last = float("-inf")
+            while True:
+                if time.monotonic() - last >= 1.0:
+                    last = time.monotonic()
+                    self._refresh_waiting()
+                if self._cancel.is_set():
+                    return False
+                if helper_proc.HELPER_LOCK.acquire(timeout=0.25):
+                    if self._cancel.is_set():
+                        helper_proc.HELPER_LOCK.release()
+                        return False
+                    return True
+        finally:
+            helper_proc.owner_wait_end()
 
     def cancel(self) -> dict:
         with self._lock:
@@ -333,9 +404,19 @@ class Acquisition:
                          valuation={"counts": dict(counts), "reasons": dict(reasons)},
                          recomputed=later["runs"], recompute_failed=later["failed"])
 
-    def _work(self, st: Settings, p: Provider, params: dict) -> None:
+    def _work(self, st: Settings, p: Provider, params: dict, held: bool = True) -> None:
+        """``held``: ``HELPER_LOCK`` is already this job's; else it is waited for first (TDM#673). Released at the end."""
         op = params["op"]
         try:
+            if not held:
+                if not self._wait_for_helper():
+                    raise FlowError("cancelled", "cancelled")
+                held = True
+                with self._lock:
+                    self._status.pop("waiting_for", None)
+                    self._status.update(phase="starting", code="starting")
+                if not self._unchanged(p) or self._settings_changed(st):  # saved meanwhile: not what was asked
+                    raise FlowError("adapter_changed")
             if op == "fetch":
                 self._preconditions(st, params)
             if self._cancel.is_set():
@@ -415,4 +496,5 @@ class Acquisition:
                          .get(phase, "operation_failed"))
         finally:
             params.clear()
-            helper_proc.HELPER_LOCK.release()
+            if held:
+                helper_proc.HELPER_LOCK.release()

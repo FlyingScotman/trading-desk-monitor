@@ -550,8 +550,8 @@ def create_app(store_url: str, static_dir: Path | None = None, app_dir: Path | N
     from ..acquisition import Acquisition
     from ..adapter_services import AdapterServices
 
-    acquisition = Acquisition(load_settings, store_url)
     services = AdapterServices(load_settings, store_url)  # its scheduler starts in ``serve`` (08 §2.2)
+    acquisition = Acquisition(load_settings, store_url, background=services.holder)  # waits for it (TDM#673)
 
     @asynccontextmanager
     async def lifespan(app):

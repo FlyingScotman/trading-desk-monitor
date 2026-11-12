@@ -599,6 +599,7 @@ details.at-last .at-open::before{content:"показать"} details.at-last[ope
             <label for="acq-password">Пароль</label><div><input class="inp" type="password" id="acq-password" autocomplete="new-password" maxlength="4096"><p class="hint">Логин и пароль передаются только этому запуску, в настройки не сохраняются. После отправки поля очищаются.</p></div>
           </div>
           <p class="hint" id="acq-nologin" hidden>Этому источнику вход не нужен: логин и пароль не запрашиваются.</p>
+          <p class="hint" id="acq-loginunknown" hidden>Способ входа станет известен после «Найти отчёт и книги»: если вход нужен, здесь появятся поля логина и пароля.</p>
           <div class="row" style="margin-top:14px;flex-wrap:wrap"><button class="ibtn" id="acq-check" type="button">Проверить вход</button><button class="ibtn" id="acq-fetch" type="button" disabled>Получить и пересчитать</button><button class="ibtn" id="acq-cancel" type="button" disabled>Отменить</button></div>
           <p id="acq-status" role="status" aria-live="polite"></p><div id="acq-result"></div>
           <details class="adv" id="adv-acq" data-fold><summary>Дополнительно <span class="mut3">— Python для получения данных</span></summary>
