@@ -229,6 +229,14 @@ never today's date, and the answer's `dates` must be the asked date or empty. Th
 | `partial` / `export_incomplete` | the export is incomplete (5xx, the network) | asked again after 5 and 15 minutes; the third failure is «недоступно» |
 | `blocked` (`login_required`, `config_invalid`, `source_disabled`), `skipped`, `error` otherwise | as for every feed | no mark; the whole fetch waits (a login) or backs off |
 
+A `complete` / `no_records` answer may carry the optional boolean `filtered: true` (TDM#677): the cut was made by the books'
+portfolios, so a book without records may only be a name the filter missed. While no other date has brought records the
+monitor does not take it for «no trades»: the date is marked «не сопоставлено» (`unmapped`, code `filtered_empty`) and asked
+again after a new adapter fingerprint, and once more when some date has brought records (then the same answer is «без
+сделок»). Without the key (or with `false`) the answer is read as before. Whatever the answer, the fetch of past dates
+does not start while the feed's source has brought no record in the store for any of the last 5 working days (today
+included), except for the dates the owner asked again.
+
 Accepted risk of the adapter: the only trade of the whole environment deleted in the source stays in its date until
 another record appears. The adapter's service source of trades and its hourly source of trades must not be enabled for the same books (the unit of
 a date belongs to one source, §6.6). The files are taken in with one non-blocking try of the cycle lock; a busy lock

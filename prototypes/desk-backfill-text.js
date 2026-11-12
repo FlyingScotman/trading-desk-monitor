@@ -73,11 +73,13 @@
   T.HIST_WAIT = { login_required: 'нужен вход: выполните вход в панели выше', config_invalid: 'проверьте настройки подключения',
     source_disabled: 'источник выключен в адаптере', not_ready: 'загрузка сделок не готова' };
   T.HIST_GATE = { trading_hours: 'ждёт конца торговых часов', daily_limit: 'на сегодня достигнут предел запросов',
-    gap: 'пауза между запросами', backoff: 'повтор после ошибки' };
+    gap: 'пауза между запросами', backoff: 'повтор после ошибки',
+    no_trades_week: 'ждёт сделок: «Сделки дня» не принесли ни одной сделки за последние 5 рабочих дней (пока их нет, прошлые даты не запрашиваются)' };
   T.HIST_REASON = { no_prev_close: 'нет предыдущего закрытия', no_pnl: 'нет PnL позиции на начало дня', lost: 'бумага не оценена',
     unpriced: 'сделки без цены или курса', no_pnl_run: 'PnL в прогоне не считался', unvalued: 'бумага не оценена совсем' };
   T.HIST_CODE = { date_unavailable: 'сервис не отдаёт эту дату', books_unmapped: 'книги сервиса не сопоставлены с книгами монитора',
-    export_incomplete: 'выгрузка неполная', files_not_accepted: 'файлы не приняты', empty: 'пусто, причина не указана' };
+    export_incomplete: 'выгрузка неполная', files_not_accepted: 'файлы не приняты', empty: 'пусто, причина не указана',
+    filtered_empty: 'пусто по выбранным портфелям; повтор после новой версии адаптера' };
   T.history = function (h, now) {
     if (!h) return { unsupported: false, summary: '', applied: '', runs: '', next: '', problems: [] };
     var c = h.counts || {}, a = h.applied, dm = function (d) { return d.slice(8, 10) + '.' + d.slice(5, 7); };

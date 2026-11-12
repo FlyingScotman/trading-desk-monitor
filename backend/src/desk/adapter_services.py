@@ -395,7 +395,7 @@ def clean_feed_result(r: dict) -> dict:
         except ValueError:
             raise Invalid from None
     return {"state": r["state"], "code": r["code"], "files": clean, "dates": sorted(set(dates)),
-            "lines": _lines(r.get("lines"))}
+            "lines": _lines(r.get("lines")), **({"filtered": True} if r.get("filtered") is True else {})}
 
 
 # ---- scheduling ---------------------------------------------------------------------------------------------------
@@ -457,7 +457,12 @@ def next_due(feed: dict, run: dict, now: datetime) -> datetime | None:
         return None
     last = _ts(run.get("last_started"))
     if "every_min" in sched:
-        return next_allowed(sched, now if last is None else last + timedelta(minutes=sched["every_min"]))
+        if last is None:
+            return next_allowed(sched, now)
+        nxt, end = last + timedelta(minutes=sched["every_min"]), _ts(run.get("last_finished"))
+        if end is not None and end >= nxt:   # the run took longer than the interval: not back to back, an interval after its end
+            nxt = end + timedelta(minutes=sched["every_min"])
+        return next_allowed(sched, nxt)
     return next_slot(sched, last if last is not None else _at(now.date(), dtime(0), now))
 
 
@@ -1496,7 +1501,12 @@ class AdapterServices:
         no_books: dict[str, str] = {}
         try:
             with store.connect(self._url) as con:
+                closed = trades_history.today_gate(con, f.get("source"), now) is not None   # module doc, «Trades first»
                 q = trades_history.queue(con, st, h, now, f.get("history_from"), fp)
+                if closed:   # only what the owner asked again (of the candidates) goes
+                    q["order"] = [d for d in q["order"] if d in set(h.get("priority") or [])]
+                    if not q["order"]:
+                        return False
                 for d in q["order"][:20]:
                     books, notes = owner_books(con, date.fromisoformat(d))
                     if books:
@@ -1555,7 +1565,8 @@ class AdapterServices:
                 except Invalid:
                     raise
                 except BaseException:
-                    pending = {"dir": rid, "files": r["files"], "state": r["state"], "code": r["code"], "date": day}
+                    pending = {"dir": rid, "files": r["files"], "state": r["state"], "code": r["code"], "date": day,
+                               **({"filtered": True} if r.get("filtered") else {})}
                     raise
         except ServiceError as e:
             r = {**r, "code": e.code} if pending is not None else {"state": e.state, "code": e.code, "files": [],
@@ -1593,7 +1604,8 @@ class AdapterServices:
         with self._lock:
             self._running = {"kind": "history", "history_feed": f["id"], "date": day, "since": _iso(started),
                              "phase": "ingesting"}
-        r = {"state": p.get("state"), "code": p.get("code"), "files": p["files"], "dates": [day]}
+        r = {"state": p.get("state"), "code": p.get("code"), "files": p["files"], "dates": [day],
+             "filtered": p.get("filtered") is True}
         try:
             ing = self._ingest(st, hp, f, folder, r, recompute_runs=False, wait=False)
         except ServiceError:
@@ -1624,7 +1636,8 @@ class AdapterServices:
         units = int((ing or {}).get("accepted_units") or 0)
         mark, mcode = trades_history.mark_for(
             state, code, files_ok=not bad, units=units, duplicate=any(x["status"] == "duplicate" for x in files),
-            had_files=bool(r.get("files")))
+            had_files=bool(r.get("files")), filtered=bool(r.get("filtered")),
+            proven=trades_history.service_proven(trades_history.read(st)))
         if pending is not None:
             mark, mcode = None, code   # the files wait for the cycle lock: nothing is known of the date yet
 

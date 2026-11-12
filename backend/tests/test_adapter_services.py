@@ -189,6 +189,8 @@ elif op == 'feed':
             print(json.dumps({"state": "error", "code": "fetch_failed", "lines": ["Сервис не ответил"]}))
         elif hm == 'no_records':
             print(json.dumps({"state": "complete", "code": "no_records", "dates": [day], "files": []}))
+        elif hm == 'no_records_filtered':   # the cut was made by the chosen portfolios (TDM#677)
+            print(json.dumps({"state": "complete", "code": "no_records", "dates": [day], "files": [], "filtered": True}))
         elif hm == 'empty':
             print(json.dumps({"state": "complete", "code": "exported", "dates": [day], "files": []}))
         elif hm == 'wrongdate':
@@ -208,8 +210,9 @@ elif op == 'feed':
             else:
                 (out / name).write_text(TRADES_HEAD.rstrip('\n') + (';price_pct;accrued_ccy' if priced else '') + '\n'
                                         + ''.join(x + '\n' for x in lines))
-            print(json.dumps({"state": "complete", "code": "no_records" if hm == 'no_records_file' else "exported",
-                              "dates": [day], "files": [{"file": name, "sha256": hashlib.sha256((out / name).read_bytes()).hexdigest()}]}))
+            print(json.dumps({"state": "complete", "code": "no_records" if hm.startswith('no_records_file') else "exported",
+                              "dates": [day], "files": [{"file": name, "sha256": hashlib.sha256((out / name).read_bytes()).hexdigest()}],
+                              **({"filtered": True} if hm == 'no_records_file_filtered' else {})}))
         sys.exit()
     if one('feed') == 'trades_intraday':  # the first load handed over: nothing new here
         print(json.dumps({"state": "skipped", "code": "no_change", "files": []}))
@@ -676,6 +679,30 @@ def test_a_config_change_in_the_wait_without_an_owner_action_is_still_adapter_ch
 
 def at(d: date, hh: int, mm: int) -> datetime:
     return datetime(d.year, d.month, d.day, hh, mm, tzinfo=MSK)
+
+
+def test_a_feed_that_ran_longer_than_its_interval_is_not_started_back_to_back():
+    """TDM#677: the next run of a feed with an interval is an interval after the end of a run that took longer than it."""
+    every = {"schedule": svcs.clean_schedule({"every_min": 15, "from": "08:00", "to": "20:00", "weekdays_only": True})}
+    started = at(FRI, 9, 0)
+    run = lambda end: {"last_started": started.isoformat(), **({"last_finished": end.isoformat()} if end else {})}
+    assert svcs.next_due(every, run(at(FRI, 9, 5)), at(FRI, 9, 6)) == at(FRI, 9, 15)     # a short run: by the start
+    assert svcs.next_due(every, run(at(FRI, 9, 15)), at(FRI, 9, 16)) == at(FRI, 9, 30)   # as long as the interval: its end
+    assert svcs.next_due(every, run(at(FRI, 9, 40)), at(FRI, 9, 41)) == at(FRI, 9, 55)   # longer: an interval after the end
+    assert svcs.next_due(every, run(at(FRI, 19, 50)), at(FRI, 19, 51)) == at(MON, 8, 0)  # the window still rules
+    # the end of an earlier run (the new one has not finished): by the start
+    assert svcs.next_due(every, run(at(FRI, 8, 30)), at(FRI, 9, 1)) == at(FRI, 9, 15)
+    assert svcs.next_due(every, run(None), at(FRI, 9, 1)) == at(FRI, 9, 15)
+    # a retry after an error is not changed
+    retry = {**run(at(FRI, 9, 40)), "failures": 1, "retry_at": at(FRI, 9, 45).isoformat()}
+    assert svcs.next_due(every, retry, at(FRI, 9, 41)) == at(FRI, 9, 45)
+
+
+def test_a_filtered_flag_of_a_feed_answer_is_kept_only_when_true():
+    ok = {"state": "complete", "code": "no_records", "files": [], "dates": []}
+    assert "filtered" not in svcs.clean_feed_result(ok)
+    assert "filtered" not in svcs.clean_feed_result({**ok, "filtered": "yes"})
+    assert svcs.clean_feed_result({**ok, "filtered": True})["filtered"] is True
 
 
 def test_schedule_windows_slots_backoff_and_pause():

@@ -28,7 +28,10 @@ has a report time after its own end on the Moscow clock is covered (``fetched``/
                                                                             a calendar day, the older ones never
 ``no_trades``  ``complete``/``no_records``                                  as ``fetched``
 ``no_books``   no book of the owner has positions on the date               when the position sets of the date change
-``unmapped``   ``partial``/``books_unmapped``, or no unit taken in at all   a new adapter fingerprint
+``unmapped``   ``partial``/``books_unmapped``, or no unit taken in at all,   a new adapter fingerprint
+               or ``complete``/``no_records`` of a cut the adapter marked
+               ``filtered`` while no other date has brought records
+               (``filtered_empty``: asked once more when some date has)
 ``unavailable````error``/``date_unavailable`` (or ``partial`` too often)    after 1, 3, 7 days, then a new fingerprint
 ``partial``    ``partial``/``export_incomplete``, files not all taken in     after 5 and 15 minutes; the third failure:
                                                                             ``unavailable``
@@ -37,6 +40,17 @@ has a report time after its own end on the Moscow clock is covered (``fetched``/
 No mark: a login or a setting is wanted (``wait``: the whole worker waits for the feed's login or a describe), an error
 of the network, the helper or the store, ``skipped``, the cycle lock busy (the files wait as ``pending`` and are taken in
 at the next step before another date is asked): ``failures``/``retry_at`` hold the whole worker back by ``BACKOFF_MIN``.
+A cut by the chosen portfolios (``filtered``, 08 §2.2) that answers «no records» proves nothing about the books: with
+no date of the service holding records yet (``service_proven``) it is ``unmapped``/``filtered_empty``, asked again only
+by a new adapter fingerprint (never in a loop); once any date has records the same answer is ``no_trades``.
+
+**Trades first** (``today_gate``). The worker asks no past date while the feed's source (``feed["source"]``) has brought no
+record in the store for any of the last ``WORK_DAYS`` working days, today included (``work_days``; a Saturday or a
+Sunday are skipped, the holidays are not known): a service that answered nothing for the whole week answers nothing for
+the past, and every request occupies the adapter. A night, a holiday or a quiet day do not close the gate, the records
+of an earlier day of the week keep it open. While it is closed only the dates the owner asked again (``priority``,
+those that are candidates) are asked. The gate is ``no_trades_week``.
+
 Limits: one date in ``HISTORY_GAP_S`` seconds, ``HISTORY_PER_DAY`` requests a day, none while a feed is due within the
 time of the last request (``Service._feed_due_soon``).
 
@@ -71,6 +85,7 @@ HISTORY_DAY_FROM = dtime(7, 0)
 WHEN = ("off_hours", "any")
 MARKS = ("fetched", "no_trades", "no_books", "unmapped", "unavailable", "partial")
 WAITS = ("login_required", "config_invalid", "source_disabled")
+WORK_DAYS = 5
 COMPLETENESS = ("no_pnl", "lost", "unpriced", "no_prev_close")
 """The keys of the run's lineage ``intraday_trades`` that say how much of the trades is outside the PnL (a count or a
 list or ``{"n": count, "sum": amount}``); without any of them the screen says that it has no information."""
@@ -135,11 +150,14 @@ def lower_bound(settings: Settings, doc: dict, history_from: str | None, today: 
 # ---- marks ---------------------------------------------------------------------------------------------------------
 
 def mark_for(state: str, code: str, *, files_ok: bool = True, units: int = 0, duplicate: bool = False,
-             had_files: bool = True) -> tuple[str | None, str]:
+             had_files: bool = True, filtered: bool = False, proven: bool = True) -> tuple[str | None, str]:
     """The mark an answer gives a date, and the code to show: ``(None, code)``: no mark (the module doc). ``files_ok``:
     every file the answer produced was taken in; ``units``: units taken in; ``duplicate``: a file was a copy of one
-    taken in before."""
+    taken in before; ``filtered``: the adapter says the cut was made by the chosen portfolios; ``proven``: some date has
+    brought records already (``service_proven``)."""
     if state == "complete" and code == "no_records":
+        if filtered and not proven:
+            return "unmapped", "filtered_empty"   # nothing proves the filter is right: asked again by a new fingerprint
         return "no_trades", code   # by the code, not by the files: a file without units is not «not taken in»
     if state == "partial" and code == "books_unmapped":
         return "unmapped", code
@@ -156,6 +174,11 @@ def mark_for(state: str, code: str, *, files_ok: bool = True, units: int = 0, du
             return ("fetched" if state == "complete" else "partial"), code
         return "unmapped", "empty"   # the adapter did not say why there is nothing: «пусто, причина не указана»
     return None, code
+
+
+def service_proven(doc: dict) -> bool:
+    """Has the service brought records for any date (a mark ``fetched`` of its answer, not a covering manual export)?"""
+    return any(m.get("state") == "fetched" and m.get("code") != "covered" for m in doc.get("marks", {}).values())
 
 
 def apply_mark(doc: dict, day: str, state: str, code: str, now: datetime, *, fingerprint: str | None,
@@ -183,8 +206,11 @@ def apply_mark(doc: dict, day: str, state: str, code: str, now: datetime, *, fin
     return m
 
 
-def due(mark: dict | None, idx: int, now: datetime, fingerprint: str | None, sets: str | None = None) -> bool:
-    """Is the date to be asked now (the module doc)? ``idx``: the date's place among the candidates, the newest 0."""
+def due(mark: dict | None, idx: int, now: datetime, fingerprint: str | None, sets: str | None = None,
+        proven: bool = False) -> bool:
+    """Is the date to be asked now (the module doc)? ``idx``: the date's place among the candidates, the newest 0;
+    ``proven``: some date has brought records (``service_proven``): a ``filtered_empty`` date is asked once more then
+    (it cannot be ``filtered_empty`` again, so there is no loop)."""
     if mark is None:
         return True
     state = mark.get("state")
@@ -196,7 +222,7 @@ def due(mark: dict | None, idx: int, now: datetime, fingerprint: str | None, set
     if state == "no_books":
         return mark.get("sets") != sets
     if state == "unmapped":
-        return mark.get("fingerprint") != fingerprint
+        return mark.get("fingerprint") != fingerprint or (proven and mark.get("code") == "filtered_empty")
     if state in ("unavailable", "partial"):
         if state == "unavailable" and mark.get("fingerprint") != fingerprint:
             return True
@@ -280,6 +306,32 @@ def gate(doc: dict, now: datetime) -> dict | None:
     return None
 
 
+def work_days(now: datetime, n: int = WORK_DAYS) -> list[date]:
+    """The last ``n`` working days (Monday to Friday) up to ``now``, today included when it is one."""
+    out, d = [], now.date()
+    while len(out) < n:
+        if d.weekday() < 5:
+            out.append(d)
+        d -= timedelta(days=1)
+    return out
+
+
+def recent_records(con: psycopg.Connection, source: str | None, days: list[date]) -> int:
+    """The records of the source's current sets of the trades on ``days`` (per unit the latest set; a unit whose last
+    export has no row adds nothing). The latest set of a unit is the whole truth of it only for a ``full_snapshot``
+    source (every source of the trades is one now): for ``completeness = increment`` the sets add up and this is wrong."""
+    return int(con.execute(
+        "SELECT coalesce(sum(row_count), 0) FROM (SELECT DISTINCT ON (valid_date, scope_key) row_count FROM dataset_set"
+        " WHERE dataset = 'trades' AND source = %s AND valid_date = ANY(%s)"
+        f" ORDER BY valid_date, scope_key, {store.CURRENT_SET}) s", (source, days)).fetchone()[0])
+
+
+def today_gate(con: psycopg.Connection, source: str | None, now: datetime) -> dict | None:
+    """``{"code": "no_trades_week", "until": None}`` while the source has no record for the last ``WORK_DAYS`` working
+    days (the module doc), else None."""
+    return None if recent_records(con, source, work_days(now)) > 0 else {"code": "no_trades_week", "until": None}
+
+
 def count_call(doc: dict, now: datetime) -> None:
     calls = doc.get("calls") or {}
     day = now.date().isoformat()
@@ -294,11 +346,12 @@ def queue(con: psycopg.Connection, settings: Settings, doc: dict, now: datetime,
     asked = set(doc.get("priority") or [])   # asked again by the owner: a covering set is no answer to that
     cov = covered(con, [d for d in cands if d not in asked], doc)
     todo: set[str] = set()
+    proven = service_proven(doc)
     for i, d in enumerate(cands):
         if d in cov:
             continue
         m = doc["marks"].get(d)
-        if due(m, i, now, fingerprint, sets_signature(con, d) if m and m.get("state") == "no_books" else None):
+        if due(m, i, now, fingerprint, sets_signature(con, d) if m and m.get("state") == "no_books" else None, proven):
             todo.add(d)
     return {"candidates": cands, "covered": cov, "order": order(cands, todo, doc.get("priority") or [])}
 
@@ -439,6 +492,10 @@ def summary(con: psycopg.Connection | None, settings: Settings, doc: dict, *, no
         return out
     cands = candidates(con, settings, doc, now, hist_from)
     out["dates"] = len(cands)
+    if g is None and out["enabled"] and not out["paused"] and feed is not None \
+            and not (set(doc.get("priority") or []) & set(cands)):   # what the owner asked again goes anyway
+        g = today_gate(con, feed.get("source"), now)
+        out["gate"] = g["code"] if g else None
     for i, d in enumerate(cands):
         m = doc["marks"].get(d)
         if m is None:
