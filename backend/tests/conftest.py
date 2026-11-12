@@ -36,6 +36,21 @@ def _no_automatic_pool() -> Iterator[None]:
 
 
 @pytest.fixture(autouse=True, scope="session")
+def _worker_home(tmp_path_factory) -> Iterator[None]:
+    """Under xdist each worker has a desk home of its own. Without one, the tests that do not set ``DESK_HOME`` share the
+    checkout's ``.devdata`` (``%LOCALAPPDATA%\\DeskMonitor`` on Windows) and with it ``cycle.lock``: a CLI ``eod`` of one
+    worker then finds the cycle of another one running (``calculation_busy``). A test that sets ``DESK_HOME`` itself still
+    wins; ``settings.load`` with an environment of its own reads that one; a run without xdist keeps the default home."""
+    if not os.environ.get("PYTEST_XDIST_WORKER") or os.environ.get("DESK_HOME"):
+        yield
+        return
+    mp = pytest.MonkeyPatch()
+    mp.setenv("DESK_HOME", str(tmp_path_factory.mktemp("desk_home")))
+    yield
+    mp.undo()
+
+
+@pytest.fixture(autouse=True, scope="session")
 def _shared_curve_cache() -> Iterator[None]:
     mp = pytest.MonkeyPatch()
     mp.setattr(orch, "new_cache", lambda: SHARED_CACHE)

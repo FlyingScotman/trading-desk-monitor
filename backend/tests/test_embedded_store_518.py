@@ -221,6 +221,7 @@ def test_postmaster_still_recovering_from_an_earlier_try_is_waited_for_not_start
     assert any("ещё восстанавливается" in m for m in said) and server is not None
 
 
+@pytest.mark.serial  # the log line is written 0.3 s after the kill, before the start gives up: timing
 def test_postmaster_that_dies_while_recovering_is_reported_with_its_log(pgdata: Path, monkeypatch) -> None:
     embedded.get_server(pgdata, lambda m: None)
     pid = embedded.read_pidfile(pgdata).pid

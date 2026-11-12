@@ -1255,6 +1255,8 @@ def test_the_acquisition_waits_for_a_named_feed_and_the_owner_may_stop_it_673(tm
         assert w["since"] == at(FRI, 9, 0).isoformat()
         s.cancel("feed")
         _until(lambda: acq.status()["phase"] != "waiting", "the acquisition did not start after the feed was stopped", 20)
+        # the stopped feed writes its run after the helper is free, so the acquisition may start first (CI, 4 workers)
+        _until(lambda: "state" in svcs.read_state(st)["runs"]["terms"], "the stopped feed wrote no run", 20)
         run = svcs.read_state(st)["runs"]["terms"]
         assert (run["state"], run["code"], run["failures"]) == ("cancelled", "cancelled", 0)
         _until(lambda: acq.status()["state"] != "running", "the acquisition did not end", 20)

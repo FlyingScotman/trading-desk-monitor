@@ -103,6 +103,7 @@ from rub_fixed_income import (
 
 from ..marketdata import adapter_rates as ar
 from ..marketdata import fixing_history
+from ..marketdata.adapter import ts_range
 from ..marketdata.bundle import SnapshotError
 from . import proxy as proxies
 from . import rates
@@ -330,20 +331,41 @@ def _swap_quotes(market: Any, ccy: str, cal: BusinessCalendar, bd: date) -> tupl
     return quotes, dropped, max(far_dates, default=None)
 
 
+def _futures_lineage(source: str | None, used: list[dict[str, Any]]) -> dict[str, Any]:
+    """Where the futures that entered the curve are from: ``futures_source`` (``eod`` or ``intraday``); for intraday
+    quotes the kind of each price (``futures_price_kind``: ``mid`` of bid and offer, or ``last``) and the latest and the
+    earliest time of the quotes taken (``futures_source_ts``, ``futures_source_ts_oldest``, as the hub published them)."""
+    if not used or not source:
+        return {}
+    out: dict[str, Any] = {"futures_source": source}
+    if source == "intraday":
+        out["futures_price_kind"] = {f["secid"]: f["price_kind"] for f in used}
+        if span := ts_range(f.get("quote_ts") for f in used):
+            out["futures_source_ts_oldest"], out["futures_source_ts"] = span
+    return out
+
+
 def _implied(market: Any, ccy: str, spot: FxSpot, cal: BusinessCalendar, rub: DiscountCurve, bd: date,
              options: FxOptions) -> tuple[FxImpliedCurveRequest, DiscountCurve, dict[str, Any]]:
     quotes, dropped, last = _swap_quotes(market, ccy, cal, bd)
-    futures = []
+    futures, used, source, none = [], [], None, ""
     if options.implied_futures:
-        for f in market.fx_futures(ccy):
+        found = market.fx_future_quotes(ccy)  # one contract per delivery date, the end of day's or the intraday cut's
+        source, none = found.source, found.why_none
+        dropped.update(found.dropped)
+        for f in found.rows:
             d = date.fromisoformat(f["last_del_date"])
             if d <= spot.value_date or (last is not None and d <= last):
                 dropped[f["secid"]] = "future before the last swap point" if last and d <= last else \
                     "future on or before the spot date"
                 continue
-            futures.append(FxOutrightQuote(f["secid"], d, float(f["settle_rub_per_unit"])))
+            futures.append(FxOutrightQuote(f["secid"], d, f["price"]))
+            used.append(f)
     if not quotes and not futures:
-        raise rates.RatesInputError(f"{bd}: no {ccy} swap point or future in the snapshot")
+        why = "; ".join(f"{k}: {v}" for k, v in list(dropped.items())[:6])
+        more = f" (+{len(dropped) - 6} more)" if len(dropped) > 6 else ""
+        raise rates.RatesInputError(f"{bd}: no {ccy} swap point or future in the snapshot"
+                                    + (f"; left out: {why}{more}" if dropped else f"; {none}" if none else ""))
     anchor = None
     if spot.value_date > bd and not any(q.near_date == bd for q in quotes):
         # No TOD/TOM swap (USD, EUR: futures only): the foreign rate from the business date to the spot date is
@@ -356,7 +378,8 @@ def _implied(market: Any, ccy: str, spot: FxSpot, cal: BusinessCalendar, rub: Di
     return request, curve, {
         "status": "ok", "spec_id": fx_implied_spec_id(ccy), "swaps": [q.label for q in quotes],
         "futures": [q.label for q in futures], "dropped": dropped, "last_node": curve.nodes[-1][0].isoformat(),
-        "rub_curve": rates.RUONIA_OIS_CURVE_ID, **({"anchor": anchor} if anchor else {})}
+        "rub_curve": rates.RUONIA_OIS_CURVE_ID, **({"anchor": anchor} if anchor else {}),
+        **_futures_lineage(source, used)}
 
 
 def _xccy(market: Any, static: Any, spot: FxSpot, rub: DiscountCurve, bd: date
