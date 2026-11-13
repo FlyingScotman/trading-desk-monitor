@@ -38,11 +38,14 @@ const BF = {enabled:true, from:'2026-01-05', to:'2026-10-15', dates:10, done:8, 
   next:[], problem_dates:[], hub_problem_dates:[], stalled:null, oldest_run:'2026-01-05', first_positions:'2026-01-05', inbox_scanned_from:null};
 
 async function setup(browser, {width = 1440, available = true, code = 'available', hash = '#adapter/services', http = 200, noLogin = false,
-  history = HIST, bf = null, waitsHistory = false, waitFeed = false, cancelRefused = false, connectOk = false} = {}) {
+  history = HIST, bf = null, waitsHistory = false, waitFeed = false, cancelRefused = false, connectOk = false, concurrent = false} = {}) {
   const ctx = await browser.newContext({viewport:{width, height:1000}}), pg = await ctx.newPage(), errors = [], posts = [], dialogs = [], summaries = [];
   const hist = history ? JSON.parse(JSON.stringify(history)) : null;
   let job = {state:'idle', code:'idle'}, polls = 0, feedRun = -1;
-  const feeds = JSON.parse(JSON.stringify(FEEDS));
+  const feeds = JSON.parse(JSON.stringify(FEEDS)), panel = JSON.parse(JSON.stringify(PANEL));
+  // #731: the adapter flags a read-only action; a feed is fetching meanwhile (the worker is busy)
+  const running = concurrent ? {kind:'feed', feed:'terms', since:new Date(Date.now() - 20000).toISOString(), phase:'fetching'} : null;
+  if (concurrent) { panel.sections[0].actions.push({id:'peek', label:'Посмотреть', confirm:'', long:false, concurrent:true}); feeds[0].running = true; }
   if (waitsHistory) feeds[0].waits_history = true;
   if (noLogin) { feeds[1].last = {last_started:'2026-10-16T08:30:00+03:00', state:'complete', code:'fetched', needs_login:false, failures:0}; }
   pg.on('pageerror', e => errors.push(e.message));
@@ -64,7 +67,7 @@ async function setup(browser, {width = 1440, available = true, code = 'available
       if (ti && feedRun >= 0 && ++feedRun === 2) Object.assign(ti, {queued:false, running:true});
       if (ti && feedRun === 4) Object.assign(ti, {running:false, last:{last_started:new Date().toISOString(), last_finished:new Date().toISOString(),
         state:'complete', code:'exported', files:[], dates:['2026-10-16'], failures:0, needs_login:false}});
-      return json(available ? {available, code, name:'synthetic', version:'0.1', panel:PANEL, feeds, job, running:null, scheduler:true}
+      return json(available ? {available, code, name:'synthetic', version:'0.1', panel, feeds, job, running, scheduler:true}
         : {available:false, code, panel:null, feeds:[], job});
     }
     if (u.pathname === '/api/v1/backfill/status' && bf) return json(bf);
@@ -86,6 +89,9 @@ async function setup(browser, {width = 1440, available = true, code = 'available
         if (a === 'login' || a === 'v2_check') { polls = 0; job = {...base, id:'j2' + a, state:'running', code:'running', long:true, login:a === 'login',
           started_at:new Date().toISOString(), next:a === 'login' ? {...base, id:'j2' + a, state:'complete', code:'logged_in', lines:['Вход выполнен']}
             : {...base, id:'j2' + a, state:'error', code:'failed', lines:['Проверка: сервер не ответил за 20 с', 'Что сделать: проверьте адрес']}}; }
+        else if (a === 'peek') { polls = 0; job = {...base, id:'jp', state:'running', code:'running', long:false, login:false, started_at:new Date().toISOString(),
+          next:{...base, id:'jp', state:'complete', code:'peeked', lines:['Только чтение: 5 строк'], refreshed:true, finished_at:new Date().toISOString()}};
+          return json(job, 202); }   // the real server answers a flagged action as running at once (#731)
         else if (waitFeed && a === 'check') { polls = 0; job = {...base, id:'jw', state:'queued', code:'waiting_feed',
           waiting_for:{kind:'feed', feed:'terms', title:'Сделки дня', since:new Date(Date.now() - 190000).toISOString(), phase:'fetching'},
           next:{...base, id:'jw', state:'complete', code:'checked', lines:['Все сервисы отвечают']}}; }
@@ -313,6 +319,25 @@ test('services block in Settings', {skip: pw ? false : 'нет Playwright'}, asy
         await conn.getByText('Данные уже загружаются в базу: отмена на этой фазе недоступна.', {exact:true}).waitFor();
         assert.deepStrictEqual(o.errors, []);
       } finally { await o.ctx.close(); }
+    });
+
+    await t.test('an action the adapter flagged as concurrent runs beside a fetching feed: no waiting, its own result (#731)', async () => {
+      const {ctx, pg, errors, posts} = await setup(browser, {concurrent:true});
+      try {
+        await pg.waitForFunction(() => !document.getElementById('svc-save').disabled);
+        assert.match(await pg.locator('#svc-feeds tr[data-feed=terms]').innerText(), /идёт/, 'the feed is fetching meanwhile');
+        const peek = pg.locator('button[data-action=peek]');
+        assert.strictEqual(await peek.isDisabled(), false, 'the action is offered while a feed runs');
+        await peek.click();
+        const conn = pg.locator('.svc-sres[data-for=conn]');
+        await conn.getByText(/^Выполняется… \d+:\d\d$/).waitFor();
+        assert.strictEqual(await conn.getByText(/Ждёт окончания/).count(), 0, 'no «ждёт окончания загрузки» for a flagged action');
+        assert.strictEqual(await conn.getByRole('button', {name:'Остановить загрузку'}).count(), 0, 'there is no feed of its to stop');
+        await conn.getByText('Только чтение: 5 строк', {exact:true}).waitFor({timeout:10000});
+        assert.deepStrictEqual(posts.filter(x => x[0].endsWith('/action')).map(x => x[1].get('action')), ['peek']);
+        assert.match(await pg.locator('#svc-feeds tr[data-feed=terms]').innerText(), /идёт/, 'the feed was not touched by it');
+        assert.deepStrictEqual(errors, []);
+      } finally { await ctx.close(); }
     });
 
     await t.test('feeds: schedule, last run, «нужен вход», the switch and «Запустить сейчас»', async () => {
