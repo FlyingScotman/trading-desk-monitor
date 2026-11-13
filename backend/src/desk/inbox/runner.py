@@ -36,6 +36,7 @@ import signal
 import subprocess
 import sys
 import threading
+import time
 import traceback
 from collections.abc import Iterator
 from contextlib import contextmanager
@@ -53,6 +54,7 @@ DEBUG_ENV = "DESK_PRIVATE_ADAPTER_DEBUG"
 _ENV_KEEP = ("PATH", "SYSTEMROOT", "TEMP", "TMP")
 MATCH_CHUNK = 50      # paths per match call: a folder of hundreds of files is not one timeout
 KILL_WAIT_S = 5.0     # the bounded wait for a killed child
+ABORT_POLL_S = 0.25   # a call that can be aborted looks at its flag this often while it waits for the answer
 _DESK_ROOT = str(Path(__file__).resolve().parents[2])  # the folder holding the desk package
 
 
@@ -351,7 +353,9 @@ class Worker:
         self._p, self._lines = p, lines
         return p
 
-    def call(self, request: dict, timeout_s: float) -> dict:
+    def call(self, request: dict, timeout_s: float, abort: threading.Event | None = None) -> dict:
+        """One request. ``abort``: set from another thread, the call ends at once (``AdapterFailure`` ``failed`` /
+        ``aborted``) and the child is killed, as at a timeout; the next call starts a new one (TDM#521)."""
         p = self._p if self._p is not None and self._p.poll() is None else self._start()
         if "adapter" in request:
             _mark(self, request["adapter"])  # what it imports: until close()
@@ -361,11 +365,19 @@ class Worker:
         except OSError:
             self.close()
             raise AdapterFailure("failed", "runner_exit") from None
-        try:
-            line = self._lines.get(timeout=timeout_s)
-        except queue.Empty:
-            self.close()
-            raise AdapterFailure("timed_out", "timeout") from None
+        deadline = time.monotonic() + timeout_s
+        while True:
+            try:
+                left = deadline - time.monotonic()
+                line = self._lines.get(timeout=timeout_s if abort is None else max(0.0, min(left, ABORT_POLL_S)))
+                break
+            except queue.Empty:
+                if abort is not None and abort.is_set():
+                    self.close()
+                    raise AdapterFailure("failed", "aborted") from None
+                if abort is None or time.monotonic() >= deadline:
+                    self.close()
+                    raise AdapterFailure("timed_out", "timeout") from None
         if line is None:
             self.close()
             raise AdapterFailure("failed", "runner_exit")
@@ -406,13 +418,41 @@ class Pool:
         self._idle: queue.LifoQueue = queue.LifoQueue()
         for w in self._all:
             self._idle.put(w)
+        self._tag_lock = threading.Lock()
+        self._tagged: dict[object, tuple[str, threading.Event]] = {}  # a running or waiting tagged call -> (tag, abort flag)
+        self._dead: set[str] = set()                                  # tags aborted: their calls end at once
 
-    def call(self, request: dict, timeout_s: float) -> dict:
-        w = self._idle.get()
+    def call(self, request: dict, timeout_s: float, tag: str | None = None) -> dict:
+        """``request`` on an idle worker. ``tag`` (a source of reads): ``abort(tag)`` ends the calls of that tag, the
+        ones waiting for a worker and the ones running, and later calls of it fail at once (TDM#521)."""
+        token, flag = object(), None
+        if tag is not None:
+            with self._tag_lock:
+                if tag in self._dead:
+                    raise AdapterFailure("failed", "aborted")
+                flag = threading.Event()
+                self._tagged[token] = (tag, flag)
         try:
-            return w.call(request, timeout_s)
+            w = self._idle.get()
+            try:
+                if flag is not None and flag.is_set():
+                    raise AdapterFailure("failed", "aborted")  # aborted while it waited for a worker
+                return w.call(request, timeout_s, flag)
+            finally:
+                self._idle.put(w)
         finally:
-            self._idle.put(w)
+            if tag is not None:
+                with self._tag_lock:
+                    self._tagged.pop(token, None)
+
+    def abort(self, tag: str) -> None:
+        """End the calls of ``tag``, running or waiting for a worker (a hung read must not keep a worker from the
+        reads of other sources), and every later call of it."""
+        with self._tag_lock:
+            self._dead.add(tag)
+            for t, flag in list(self._tagged.values()):
+                if t == tag:
+                    flag.set()
 
     def each(self, request: dict, timeout_s: float) -> list[dict | AdapterFailure]:
         """``request`` on every worker at once (each started if needed), waiting for all: the responses or the
@@ -460,9 +500,16 @@ def pooled(size: int = 1) -> Iterator[Pool]:
         pool.close()
 
 
-def _call(request: dict, timeout_s: float) -> dict:
+def _call(request: dict, timeout_s: float, tag: str | None = None) -> dict:
     pool = _pool
-    return pool.call(request, timeout_s) if pool is not None else run(request, timeout_s)
+    return pool.call(request, timeout_s, tag) if pool is not None else run(request, timeout_s)
+
+
+def abort_reads(tag: str) -> None:
+    """The reads tagged ``tag`` (``call_read``) stop: see ``Pool.abort``. Nothing outside ``pooled()``."""
+    pool = _pool
+    if pool is not None:
+        pool.abort(tag)
 
 
 def _request(handle: Any, op: str, instruments_index: str | Path | None, **extra: Any) -> dict:
@@ -532,9 +579,10 @@ def call_match(handle: Any, paths: list[str], instruments_index: str | Path | No
     return out
 
 
-def call_read(handle: Any, path: str, hit: dict, instruments_index: str | Path | None, timeout_s: float) -> Any:
+def call_read(handle: Any, path: str, hit: dict, instruments_index: str | Path | None, timeout_s: float,
+              tag: str | None = None) -> Any:
     """The raw ``read`` result (checked by ``validate.check_read``); raises ``AdapterFailure``."""
-    return _result(_call(_request(handle, "read", instruments_index, path=path, hit=hit), timeout_s))
+    return _result(_call(_request(handle, "read", instruments_index, path=path, hit=hit), timeout_s, tag))
 
 
 def _out_dir(output_dir: str | Path | None) -> str | None:

@@ -73,7 +73,7 @@
   F.html = function (v) {
     if (!v) return '';
     return '<div' + (v.cls ? ' class="' + v.cls + '"' : '') + '>' + v.html + '</div>' +
-      (v.more ? '<details><summary>подробнее</summary>' + v.more + '<div class="mut3">файлы по дням — <a href="concepts/c14-day-status.html">C14 «Состояние дня»</a></div></details>' : '');
+      (v.more ? '<details><summary>подробнее</summary>' + v.more + '<div class="mut3">файлы по дням — <a href="concepts/c14-day-status.html">C14 «Статус дня»</a></div></details>' : '');
   };
 
   /* ---------- страница ---------- */

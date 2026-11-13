@@ -868,6 +868,52 @@ def test_feed_ingests_as_its_source_and_recomputes_the_eod_and_todays_run(tmp_pa
         s.close()
 
 
+def test_a_feed_file_left_in_the_scanners_queue_is_kept_pending(tmp_path, store_url, cache, monkeypatch):  # noqa: F811
+    """TDM#521: the adapter gave no books and the store has none, so the scanner leaves the feed's file in its queue
+    (no status). The file lives in the helper's output folder, which no scan lists: the run keeps it pending (as for a
+    busy cycle lock), a pause of ``reference()`` is not asked again by the retry, and it is taken in once books exist,
+    even when the adapter then answers «no change»."""
+    st = make(tmp_path, snapshot_cache=cache, store_url=store_url)
+    load(store_url, tmp_path, "2026-10-15", 10)
+    clock = {"t": at(FRI, 9, 0)}
+    s = service(st, store_url, clock)
+    try:
+        submit(s, "describe")
+        submit(s, "action", action="login")
+        left, real = {"n": 2}, scan.ingest_feed
+
+        def ingest_feed(con, st_, p, *, source, handle):
+            if left["n"]:  # the scanner's word for a file it left in its queue: nothing read, no status
+                left["n"] -= 1
+                res = scan.ScanResult("ok synthetic")
+                res.queued[source] += 1
+                return res
+            return real(con, st_, p, source=source, handle=handle)
+
+        monkeypatch.setattr(scan, "ingest_feed", ingest_feed)
+        run = run_feed(s, st, "terms", clock)
+        assert (run["state"], run["code"], run["failures"]) == ("error", "ingestion_queued", 1)
+        assert run["pending"]["files"][0]["file"] == "trade_terms_20261015.csv"
+        with store.connect(store_url) as con:
+            assert not store.positions_for(con, FRI).trade_terms
+            assert con.execute("SELECT count(*) FROM inbox_file_status").fetchone()[0] == 0  # no status: nothing was lost
+        for _ in range(svcs.KEEP_OUT + 2):  # the pending output survives the pruning
+            (svcs.state_dir(st) / "out" / os.urandom(16).hex()).mkdir()
+        svcs.AdapterServices._prune(st)
+        assert (svcs.state_dir(st) / "out" / run["pending"]["dir"]).is_dir()
+        mode(st, "nochange")  # the adapter will not produce them again
+        run = run_feed(s, st, "terms", clock)  # still no books: the pending file is kept, the helper is not asked
+        assert (run["code"], run["files"]) == ("ingestion_queued", [])
+        assert run["pending"]["files"][0]["file"] == "trade_terms_20261015.csv" and left["n"] == 0
+        run = run_feed(s, st, "terms", clock)  # books exist now: the pending file is taken in before the helper is asked
+        assert (run["state"], run["code"], run["pending"]) == ("skipped", "no_change", None)
+        assert run["files"] == [{"file": "trade_terms_20261015.csv", "status": "accepted"}]
+        with store.connect(store_url) as con:
+            assert store.positions_for(con, FRI).trade_terms
+    finally:
+        s.close()
+
+
 def test_files_not_taken_in_are_taken_in_at_the_next_run(tmp_path, store_url, cache, monkeypatch):  # noqa: F811
     st = make(tmp_path, snapshot_cache=cache, store_url=store_url)
     load(store_url, tmp_path, "2026-10-15", 10)

@@ -437,10 +437,23 @@ def plan(con: psycopg.Connection, settings: Settings, date_from: date, date_to: 
     return Plan(lo, hi, days, hub is not None, hub)
 
 
+BACKFILL_WAIT_H = 1  # reports left in the queue of an adapter that does not answer: the start date is scanned again after this long at the latest
+
+
+def _later(iso: Any, now: datetime) -> bool:
+    try:
+        return datetime.fromisoformat(iso) > now
+    except (TypeError, ValueError):
+        return False
+
+
 def inbox(con: psycopg.Connection, settings: Settings, date_from: date, *, force: bool = False,
           progress: Callable[[int, int | None, str], None] | None = None) -> str | None:
     """Step 1 (module doc): the reports from ``date_from`` on, once per start date and adapter fingerprint unless
-    ``force``. Returns the scan's summary line, None when skipped (done before, or no inbox folders)."""
+    ``force``. Returns the scan's summary line, None when skipped (done before, or no inbox folders, or the reports left
+    in the queue of an adapter that does not answer wait for the end of their pause). A scan that leaves files in the
+    queue is not «done»: it is asked again once the pause ends, at the latest after ``BACKFILL_WAIT_H`` hours, or at once
+    when the adapter or the read timeout changes (``inbox_wait``), not at every cycle (TDM#521)."""
     from .inbox import scan
 
     if not settings.scan_dirs:
@@ -450,12 +463,23 @@ def inbox(con: psycopg.Connection, settings: Settings, date_from: date, *, force
     mark = {"from": date_from.isoformat(), "fingerprint": h.fingerprint}
     if not force and st.get("inbox") == mark:
         return None
+    now = datetime.now(UTC)
+    wait = st.get("inbox_wait")
+    if (not force and isinstance(wait, dict) and wait.get("from") == mark["from"]
+            and wait.get("fingerprint") == mark["fingerprint"]
+            and wait.get("read_timeout") == settings.adapter_read_timeout_s and _later(wait.get("until"), now)):
+        return None
     res = scan.scan(con, settings, since=date_from, progress=progress)
     if res.busy:
         return "inbox: another scan is running; next time"
     if res.ok:
         st = state(settings)
-        st["inbox"] = mark
+        if res.queued:
+            until = scan.hang_report(settings, h).get("retry_at") or (now + timedelta(hours=BACKFILL_WAIT_H)).isoformat()
+            st["inbox_wait"] = {**mark, "read_timeout": settings.adapter_read_timeout_s, "until": until}
+        else:
+            st["inbox"] = mark
+            st.pop("inbox_wait", None)
         save_state(settings, st)
     return "inbox from " + date_from.isoformat() + ": " + "; ".join(res.text().splitlines())
 

@@ -64,6 +64,16 @@ rebuilt only when it lacks a snapshot the scan needs (a new day, a report date o
 snapshots it already holds for dates inside the lookback, so a scan rebuilds it at most once and the next scans
 not at all (``static_index`` format 2: the newest snapshot in full, the older ones as differences).
 
+An adapter that does not answer (TDM#521; ``desk.inbox.hang``): ``reference()`` that times out is not asked again by a
+``scan`` for a pause of 1 h, then 6 h (the stored books are used meanwhile; with none stored, the files wait instead of
+being rejected as ``unknown_book``), and the reads of a source stop after ``hang.SOURCE_STOP_AFTER`` timeouts in a row
+in one scan: its other files are left in the queue, with no status and no sighting (``_Skipped`` rolls their
+transaction back), and a ``scan`` leaves the source alone until its pause ends. A pause ends at once when the adapter's
+fingerprint or ``adapter_read_timeout_s`` changes; ``retry``, ``replay`` and the owner's acquisition ignore pauses, a
+feed's file honours that of ``reference()`` only. When a source stops, its reads started ahead are given up (not yet
+running: cancelled; running: aborted, their worker killed). The scan holding the lock leaves ``scan.running`` in the
+archive folder, so one that finds the lock taken can say how long and what (in Russian).
+
 Files are processed one transaction each: an interrupted scan (``stop.bat``, a crash) keeps every file done so
 far (its sighting), and the next scan goes on with the rest. ``progress(done, total, detail)`` is called as it
 goes (the autopilot status).
@@ -95,7 +105,7 @@ from psycopg.types.json import Jsonb
 
 from .. import store
 from ..settings import Settings, adapter_config_dir
-from . import runner
+from . import hang, runner
 from .conformance import list_entries
 from .loader import AdapterHandle, load_adapter
 from .spi import DATASETS_WITH_BOOK, REFERENCE_KINDS, VERSIONED_DATASETS, AdapterFailure, source_datasets
@@ -130,6 +140,8 @@ MATCH_RETRY_MIN_S = 60.0
 TRANSIENT_RETRY_H = 6     # a file match_failed by a timeout or a crash is offered again after this many hours
 MTIME_SLACK_DAYS = 31     # a file modified this much before the lookback is skipped without asking match
 EVENTS = {"stale_copy": "input.stale", "timed_out": "input.failed"}
+SKIP_NO_BOOKS = "no_books"  # skipped: reference() is unusable and the store has no books to judge the files by (TDM#521)
+SKIP_SOURCE = "source_paused"  # skipped: the source's reads timed out, its files wait in the queue (TDM#521)
 
 _handles: dict[tuple, AdapterHandle] = {}
 _last_seen: dict[str, tuple[int, int]] = {}  # path -> (size, mtime_ns) at this process's previous scan
@@ -165,6 +177,13 @@ def adapter(settings: Settings) -> AdapterHandle:
     return _handles[key]
 
 
+def hang_report(settings: Settings, handle: AdapterHandle | None = None, now: datetime | None = None) -> dict:
+    """What an adapter that does not answer has cost lately (``reference()`` paused, a source stopped), for the
+    screens: ``hang.report`` of this adapter under these settings; ``lines`` empty when nothing is paused (TDM#521)."""
+    h = handle if handle is not None else adapter(settings)
+    return hang.report(settings.inbox_archive, hang.key(h.fingerprint, settings.adapter_read_timeout_s), now)
+
+
 def forget_adapters() -> None:
     """Drop the loaded handles: the next ``adapter()`` loads again (the adapter or its config files changed)."""
     _handles.clear()
@@ -190,6 +209,9 @@ class ScanResult:
     match: Counter = field(default_factory=Counter)     # retried, recovered, warm_<failure>: the match step (R22)
     timings: dict = field(default_factory=dict)         # list_s, match_s, process_s, index_builds
     dirs: dict = field(default_factory=dict)            # per folder listed: exists, files listed, skipped (TDM#445)
+    queued: Counter = field(default_factory=Counter)    # per source: files left unread, in the queue (TDM#521)
+    pauses: list = field(default_factory=list)          # Russian lines: reference() paused, a source stopped (TDM#521)
+    busy_info: dict | None = None                       # the marker of the scan that holds the lock (hang.read_running)
 
     @property
     def ok(self) -> bool:
@@ -202,7 +224,7 @@ class ScanResult:
         if not self.adapter.startswith("ok"):
             return "\n".join([*lines, "ingestion is off"])
         if self.busy:
-            return "\n".join([*lines, "another scan holds the inbox lock: nothing done"])
+            return "\n".join([*lines, hang.busy_text(self.busy_info)])
         lines += [f"files: {c(self.files)}", f"copies: {c(self.copies)}", f"skipped: {c(self.skipped)}",
                   f"units: {c(self.units)}; new revisions {self.revisions}; books revised {self.books_revised}"]
         if self.reference_revised:
@@ -211,7 +233,7 @@ class ScanResult:
             lines.append(f"match: {c(self.match)}")
         if self.timings:
             lines.append("time: " + ", ".join(f"{k} {v:g}" for k, v in self.timings.items()))
-        return "\n".join(lines + ([f"notes: {c(self.notes)}"] if self.notes else []))
+        return "\n".join(lines + ([f"notes: {c(self.notes)}"] if self.notes else []) + self.pauses)
 
 
 @dataclass(frozen=True)
@@ -249,11 +271,20 @@ def _key(report_date: date, report_ts: datetime | None, seq: int | None, generat
                         generated_at.isoformat() if generated_at else None, mtime.timestamp() if mtime else None)
 
 
+class _Skipped(Exception):
+    """``process``: the file is left in the queue. Raised inside the file's transaction, so nothing of it is written
+    (no sighting, no status): a later scan offers it again like a file never seen (TDM#521)."""
+
+    def __init__(self, reason: str, source: str | None = None, date: str | None = None) -> None:
+        super().__init__(reason)
+        self.reason, self.source, self.date = reason, source, date
+
+
 class _Scan:
     def __init__(self, con: psycopg.Connection, settings: Settings, h: AdapterHandle, res: ScanResult,
                  now: datetime, cutoff: date | None = None, progress: Progress | None = None,
                  expected: tuple[str, str, frozenset[str]] | None = None, history_from: str | None = None,
-                 only_source: str | None = None) -> None:
+                 only_source: str | None = None, pausing: bool = False, pause_reference: bool = False) -> None:
         self.con, self.settings, self.h, self.res, self.now = con, settings, h, res, now
         self.cutoff, self._progress = cutoff, progress
         self.history_from = history_from  # the hub's oldest date when known (#27)
@@ -269,9 +300,26 @@ class _Scan:
         self._ref: Future | None = None    # reference() running in parallel with the first reads
         self._ex: ThreadPoolExecutor | None = None
         self._reads: dict[str, Future] = {}  # offer path -> its read, started ahead of the processing
+        self._read_source: dict[str, str] = {}  # offer path -> the source of that read (TDM#521: to give them up)
         self._indexed: set[str] = set()   # report dates the instruments index covers beyond the newest snapshot
+        # TDM#521: an adapter that does not answer. ``pausing``: this scan honours the saved pauses of the sources and of
+        # ``reference()`` (the autopilot's ``scan``); ``pause_reference``: only the pause of ``reference()`` (a feed's
+        # file under the cycle lock). ``retry``, ``replay`` and the owner's acquisition are explicit and always ask.
+        # Every scan records what it finds.
+        self.pausing = pausing
+        self.pause_reference = pausing or pause_reference
+        self.ledger = hang.Ledger(self.archive, hang.key(h.fingerprint, settings.adapter_read_timeout_s))
+        self.running: hang.Running | None = None
+        self._streak: Counter = Counter()     # source -> read timeouts in a row in this scan
+        self._stopped: set[str] = set()       # sources whose reads this scan stopped (K timeouts, or a saved pause)
+        self._books_fallback = False          # the books are the stored ones: reference() failed or is paused
+        self._ref_reason: str | None = None   # why reference() gave no books: the adapter's error class, or its codes
+        self._wait_dates: dict[str, Counter] = {}  # what the queued files wait for (a source, or no_books) -> dates
+        self._queued_by: Counter = Counter()       # ... and how many files wait for each
 
     def progress(self, done: int, total: int | None, detail: str) -> None:
+        if self.running is not None:
+            self.running.update(done, total, detail)
         if self._progress is not None:
             try:
                 self._progress(done, total, detail)
@@ -315,11 +363,27 @@ class _Scan:
             self._books_done = True
         return self._books
 
+    def _reference_paused(self) -> bool:
+        """A ``scan`` does not ask ``reference()`` again while its pause lasts (the saved books are used): the
+        adapter did not answer within the read timeout, and asking at every cycle spent each cycle on the wait (TDM#521)."""
+        return self.pause_reference and self.ledger.reference_paused(self.now) is not None
+
+    def _saved_books(self) -> list[dict]:
+        """The books in force from earlier scans: what validation uses while ``reference()`` is unusable or paused. An
+        empty list here means the store has none, not that the adapter has none: ``process`` leaves such files queued."""
+        self._books_fallback = True
+        return store.current_books(self.con, self.now.astimezone(MSK).date())
+
     def _reference_books(self) -> list[dict] | None:
         """``reference()``: a new ``book_rev`` where a book changed. The books it returns are the ones validation
-        uses; when it fails, those in force from earlier scans."""
+        uses; when it fails or is paused, those in force from earlier scans. A timeout starts a pause, an answer
+        ends it (TDM#521)."""
         if not self._needs_books():
             return None
+        if self._reference_paused():
+            self.res.notes["reference_paused"] += 1
+            self._ref_reason = "paused"
+            return self._saved_books()
         try:
             ref = self._ref.result() if self._ref is not None else \
                 runner.call_reference(self.h, self.index, self.settings.adapter_read_timeout_s)
@@ -327,10 +391,18 @@ class _Scan:
             books = tables["books"]
         except AdapterFailure as f:
             tables, books, issues = {}, None, [{"code": f.kind}]
+            self._ref_reason = f.type  # the exception class, never its message (08 §6.8)
+            if f.kind == "timed_out":
+                self.ledger.reference_failed(self.now)
+                self.ledger.save()
         self.res.notes.update(f"reference_{i['code']}" for i in issues)
+        if books is None and not self._ref_reason:
+            self._ref_reason = ", ".join(sorted({str(i.get("code")) for i in issues if i.get("code")})) or "bad_reference"
         if books is None:
             log.warning("inbox: reference() unusable (%s): the stored books are used", ", ".join(self.res.notes))
-            return store.current_books(self.con, self.now.astimezone(MSK).date())
+            return self._saved_books()
+        self.ledger.reference_answered()
+        self.ledger.save()
         revised = store.store_books(self.con, books, self.h.fingerprint)  # type: ignore[arg-type]
         self.res.books_revised = len(revised)
         if revised:
@@ -553,6 +625,10 @@ class _Scan:
             for i in range(0, total, window):
                 batch = []
                 for o, hit in work[i:i + window]:
+                    if self._waits(hit):  # a stopped source's file: not hashed, not read, stays in the queue (TDM#521)
+                        self._queue(SKIP_SOURCE, hit["source"], self._waiting_date(hit))
+                        done += 1
+                        continue
                     if not o.sha256:
                         try:
                             o = replace(o, sha256=_sha256(o.path))
@@ -564,8 +640,11 @@ class _Scan:
                     self._prefetch(o, hit)
                     batch.append((o, hit))
                 for o, hit in batch:
-                    with self.con.transaction():
-                        self.process(o, hit)
+                    try:
+                        with self.con.transaction():
+                            self.process(o, hit)
+                    except _Skipped as sk:  # the transaction rolled back: the file is as if not seen
+                        self._queue(sk.reason, sk.source, sk.date)
                     done += 1
                     self.progress(done, total, o.name)
         finally:
@@ -643,10 +722,14 @@ class _Scan:
             self.valid_date(decl, hit["report_date"])  # type: ignore[arg-type]
         except CalendarUnavailable:
             return
+        if self._source_stopped(hit["source"]):
+            return  # its files wait in the queue (TDM#521)
         timeout = self.settings.adapter_read_timeout_s
-        if self._ref is None and not self._books_done and self._needs_books():
+        if self._ref is None and not self._books_done and self._needs_books() and not self._reference_paused():
             self._ref = self._ex.submit(runner.call_reference, self.h, self.index, timeout)
-        self._reads[o.path] = self._ex.submit(runner.call_read, self.h, o.path, hit, self.index, timeout)
+        self._read_source[o.path] = hit["source"]
+        self._reads[o.path] = self._ex.submit(runner.call_read, self.h, o.path, hit, self.index, timeout,
+                                              tag=hit["source"])
 
     def _ensure_index(self, dates: list[str]) -> None:
         """The instruments index holding the newest static snapshot and those covering ``dates``: written only when
@@ -677,6 +760,88 @@ class _Scan:
         if dates - self._indexed:
             self._indexed |= dates
             self._ensure_index(sorted(self._indexed))
+
+    # ---- a source whose reads do not answer (TDM#521)
+
+    def _source_stopped(self, source: str) -> bool:
+        """The reads of this source are stopped for the rest of the scan: it timed out ``stop_after`` times in a row
+        in this scan, or a ``scan`` found its saved pause still running. Its files stay in the queue."""
+        if source in self._stopped:
+            return True
+        if self.pausing and self.ledger.source_paused(source, self.now) is not None:
+            self._stopped.add(source)
+            return True
+        return False
+
+    def _waits(self, hit: Any) -> bool:
+        """The file of ``hit`` would be read, and its source is stopped: it waits in the queue."""
+        ok, _, why = self._usable(hit)
+        return ok and not why and not self.too_old(hit["report_date"]) and self._source_stopped(hit["source"])
+
+    def _waiting_date(self, hit: Any) -> str | None:
+        """The date a queued file waits for, for the warning of that day: its business date where a calendar is cached
+        (a ``start_of_day`` report is valid the day before), else its report date."""
+        rd = hit.get("report_date") if isinstance(hit, dict) else None
+        if not isinstance(rd, str):
+            return None
+        decl = self.h.source(hit.get("source"))
+        try:
+            return self.valid_date(decl, rd).isoformat() if decl else rd
+        except (CalendarUnavailable, KeyError, ValueError):
+            return rd
+
+    def _stop_source(self, source: str) -> None:
+        """No more reads of this source in this scan, and those started ahead are given up: the ones not yet running
+        are cancelled, the running ones aborted (their worker is killed), so a hung read neither goes on for the rest
+        of its timeout nor keeps a worker from the reads of other sources."""
+        self._stopped.add(source)
+        for path, src in self._read_source.items():
+            if src == source and (fut := self._reads.get(path)) is not None:
+                fut.cancel()
+        runner.abort_reads(source)
+
+    def _read_timed_out(self, source: str) -> None:
+        self._streak[source] += 1
+        if self._streak[source] >= self.ledger.stop_after(source):
+            log.warning("inbox: %d reads of source %s timed out in a row: the rest of its files wait in the queue",
+                        self._streak[source], source)
+            self.ledger.source_failed(source, self.now)
+            self.ledger.save()
+            self._stop_source(source)
+
+    def _read_answered(self, source: str) -> None:
+        self._streak[source] = 0
+        self.ledger.source_answered(source)
+        self.ledger.save()
+
+    def _queue(self, reason: str, source: str | None, date: str | None = None) -> None:
+        """One file left in the queue: no status, no sighting; counted under ``skipped``, per source and per cause (a
+        stopped source, or ``no_books``) with the date it waits for."""
+        self.res.skipped[reason] += 1
+        if source is not None:
+            self.res.queued[source] += 1
+        cause = "no_books" if reason == SKIP_NO_BOOKS else source
+        if cause is not None:
+            self._queued_by[cause] += 1
+            if date:
+                self._wait_dates.setdefault(cause, Counter())[date] += 1
+
+    def _books_present(self) -> bool:
+        """This scan found books to judge the files by: ``reference()`` answered, or the store has some."""
+        return self._books_done and (not self._books_fallback or bool(self._books))
+
+    def finish(self) -> None:
+        """At the end of the scan: the queue of each stopped source and of the «no books» case into the ledger (what the
+        screens say), and the Russian lines for the result (the same ``hang.report`` lines)."""
+        for src in self._stopped:
+            self.ledger.queued(src, self._queued_by[src], dict(self._wait_dates.get(src, {})))
+        if self._queued_by["no_books"]:
+            self.ledger.books_missing(self.now, self._queued_by["no_books"], dict(self._wait_dates.get("no_books", {})),
+                                      self._ref_reason)
+        elif self._books_present():
+            self.ledger.books_present()
+        self.ledger.save()
+        self.res.pauses = hang.report(self.archive, self.ledger.key, self.now)["lines"]
 
     def _unread(self, o: Offer, status: str, hit: Any = None) -> None:
         src, rd = (hit.get("source"), hit.get("report_date")) if isinstance(hit, dict) else (None, None)
@@ -741,6 +906,8 @@ class _Scan:
         if self.too_old(hit["report_date"]):  # behind the lookback: ledgered once, never archived or read
             self._status(o, TOO_OLD, decl, source=hit["source"], report_date=hit["report_date"])
             return
+        if self._source_stopped(hit["source"]):  # stopped while this window was under way (TDM#521)
+            raise _Skipped(SKIP_SOURCE, hit["source"], self._waiting_date(hit))
         cols = {"source": hit["source"], "report_date": hit["report_date"], "report_ts": parse_ts(hit.get("report_ts")),
                 "seq": hit.get("seq"), "date_from": hit.get("date_from"), "archive_path": self._archive(o)}
         try:
@@ -757,6 +924,10 @@ class _Scan:
                 self._status(o, "waiting_calendar", decl, **cols)
             return
         cols["valid_date"] = vd
+        if any(d in DATASETS_WITH_BOOK for d in source_datasets(decl)) and not self.books and self._books_fallback:
+            # reference() is unusable or paused and the store has no books at all: the book ids cannot be judged, so
+            # the file is not rejected as ``unknown_book`` but left in the queue until the books are there (TDM#521)
+            raise _Skipped(SKIP_NO_BOOKS, hit["source"], vd.isoformat())
         try:
             ahead = self._reads.pop(o.path, None)
             raw = ahead.result() if ahead is not None else \
@@ -764,7 +935,12 @@ class _Scan:
         except AdapterFailure as f:
             log.warning("inbox %s: read %s (%s)", o.sha256[:12], f.kind, f.type)
             self._status(o, f.kind, decl, error_type=f.type, error_frames=f.frames, **cols)
+            if f.kind == "timed_out":
+                self._read_timed_out(hit["source"])
+            else:
+                self._streak[hit["source"]] = 0  # it answered, with an error: the timeouts are no longer in a row
             return
+        self._read_answered(hit["source"])
         c = check_read(decl, hit, raw, books=self.books, contract=self.h.describe["contract"])
         if self.expected is not None:
             source, day, books = self.expected
@@ -918,7 +1094,8 @@ def _session(con: psycopg.Connection, settings: Settings, now: datetime | None,
              progress: Progress | None = None, since: date | None = None,
              expected: tuple[str, str, frozenset[str]] | None = None,
              handle: AdapterHandle | None = None, history_from: str | None = None,
-             only_source: str | None = None) -> ScanResult:
+             only_source: str | None = None, kind: str = "retry", pausing: bool = False,
+             pause_reference: bool = False) -> ScanResult:
     h = handle if handle is not None else adapter(settings)
     res = ScanResult(adapter_line(h))
     if not h.ok:
@@ -926,16 +1103,25 @@ def _session(con: psycopg.Connection, settings: Settings, now: datetime | None,
         return res
     if not con.execute("SELECT pg_try_advisory_lock(%s)", (SCAN_LOCK,)).fetchone()[0]:
         res.busy = True
+        res.busy_info = hang.read_running(settings.inbox_archive)  # who holds it and since when (TDM#521)
         return res
+    running = None
     try:
         now = now or datetime.now(UTC)
         cutoff = since if since is not None else lookback_cutoff(settings, now.astimezone(MSK).date()) if lookback \
             else None
-        s = _Scan(con, settings, h, res, now, cutoff, progress, expected, history_from, only_source)
+        s = _Scan(con, settings, h, res, now, cutoff, progress, expected, history_from, only_source, pausing,
+                  pause_reference)
+        s.running = running = hang.Running(s.archive, kind, datetime.now(UTC))
         with runner.pooled(read_workers()):  # workers start on the first call: an idle scan starts none
-            s.run(offers(s))
-            s.refresh_books()
+            try:
+                s.run(offers(s))
+                s.refresh_books()
+            finally:
+                s.finish()
     finally:
+        if running is not None:
+            running.close()
         con.execute("SELECT pg_advisory_unlock(%s)", (SCAN_LOCK,))
     return res
 
@@ -954,7 +1140,7 @@ def scan(con: psycopg.Connection, settings: Settings, *, now: datetime | None = 
                                        fresh=True, statuses=(*REOFFER, *again), extra=s.reoffer_filter()) \
             + s.transient()
     res = _session(con, settings, now, offers, lookback=True, progress=progress, since=since,
-                   history_from=history_from)
+                   history_from=history_from, kind="scan", pausing=True)
     if not res.ok:  # another scan holds the lock, or no adapter: nothing listed, the previous scan's word stands
         return res
     global last_scan
@@ -994,7 +1180,8 @@ def ingest_produced(con: psycopg.Connection, settings: Settings, path: Path, *, 
     """
     st = path.stat()
     offer = Offer("", str(path), path.name, st.st_size, datetime.fromtimestamp(st.st_mtime, UTC), True)
-    return _session(con, settings, None, lambda _: [offer], expected=(source, day.isoformat(), books), handle=handle)
+    return _session(con, settings, None, lambda _: [offer], expected=(source, day.isoformat(), books), handle=handle,
+                    kind="acquisition")
 
 
 def ingest_feed(con: psycopg.Connection, settings: Settings, path: Path, *, source: str,
@@ -1004,7 +1191,10 @@ def ingest_feed(con: psycopg.Connection, settings: Settings, path: Path, *, sour
     (``feed_source_mismatch``) before it is read. No lookback, no unrelated files. The caller holds the cycle lock."""
     st = path.stat()
     offer = Offer("", str(path), path.name, st.st_size, datetime.fromtimestamp(st.st_mtime, UTC), True)
-    return _session(con, settings, None, lambda _: [offer], handle=handle, only_source=source)
+    # a feed's file runs under the cycle lock: it does not ask a ``reference()`` that is paused (the saved books are used),
+    # or each file would hold the lock for the whole read timeout (TDM#521)
+    return _session(con, settings, None, lambda _: [offer], handle=handle, only_source=source, kind="feed",
+                    pause_reference=True)
 
 
 def retry(con: psycopg.Connection, settings: Settings, statuses: tuple[str, ...] = (*REOFFER, "waiting_calendar"),
@@ -1019,7 +1209,7 @@ def replay(con: psycopg.Connection, settings: Settings, source: str, date_from: 
     """``desk inbox replay``: read the accepted files of a source with business dates in the range again; a new
     revision only where a unit's canonical rows changed (08 §6.6)."""
     return _session(con, settings, now, lambda s: s.known(lambda st, fp: st in READ_DONE, source,
-                                                          (date_from, date_to)))
+                                                          (date_from, date_to)), kind="replay")
 
 
 def status(con: psycopg.Connection, settings: Settings, on: date | None = None) -> dict:
