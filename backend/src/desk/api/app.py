@@ -786,8 +786,10 @@ def create_app(store_url: str, static_dir: Path | None = None, app_dir: Path | N
         and the transfers per book; state ``no_report`` without a report in force, ``not_computed`` for a run before
         B2."""
         run = _run_or_404(con, run_id)
+        failed = False
 
         def build() -> RunOcp:
+            nonlocal failed
             row = con.execute("SELECT data FROM run_reference WHERE run_id = %s AND kind = 'ocp'",
                               (run_id,)).fetchone()
             out = ocp_out(run_id, row["data"] if row else None)
@@ -797,9 +799,13 @@ def create_app(store_url: str, static_dir: Path | None = None, app_dir: Path | N
             except Exception:  # the breakdown (TDM#713) only explains a figure: the answer goes without it
                 log.exception("run %s: the OCP breakdown (origins) failed, the answer goes without it", run_id)
                 out.origins = []
+                failed = True
             return out
 
-        return _run_cached(request, run, ("ocp",), build)
+        resp = _run_cached(request, run, ("ocp",), build)
+        if failed:  # a passing fault (the database) must not keep the answer without the breakdown in the cache
+            request.app.state.run_cache.drop_runs([run_id])
+        return resp
 
     @app.get("/api/v1/runs/{run_id}/derivatives", response_model=RunDerivatives)
     def derivatives(con: Con, run_id: int, request: Request):

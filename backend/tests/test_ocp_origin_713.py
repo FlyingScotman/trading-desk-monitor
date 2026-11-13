@@ -145,9 +145,11 @@ def test_the_route_answers_without_the_breakdown_when_it_fails(store_url, ctx, t
             raise RuntimeError("the sets could not be read")
         return [{"entity": "ENT1"}]  # not an OcpOrigin: the model refuses it
 
+    real = ocp_origin.origins
     monkeypatch.setattr(ocp_origin, "origins", boom)
+    client = TestClient(create_app(store_url))
     with caplog.at_level("ERROR", logger="desk.api"):
-        resp = TestClient(create_app(store_url)).get(f"/api/v1/runs/{rid}/ocp")
+        resp = client.get(f"/api/v1/runs/{rid}/ocp")
     assert resp.status_code == 200
     o = resp.json()
     assert o["origins"] == []
@@ -156,3 +158,6 @@ def test_the_route_answers_without_the_breakdown_when_it_fails(store_url, ctx, t
     assert line["source"] == "derived_stale_report" and line["amount"] == pytest.approx(4_000_000 + 7_000_000 - 500_000)
     logged = [r for r in caplog.records if r.name == "desk.api" and r.exc_info]
     assert logged and str(rid) in logged[0].getMessage()
+    # a passing fault is not kept: once the breakdown reads again, the same server answers it (the run cache)
+    monkeypatch.setattr(ocp_origin, "origins", real)
+    assert client.get(f"/api/v1/runs/{rid}/ocp").json()["origins"]
