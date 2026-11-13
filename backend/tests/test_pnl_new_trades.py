@@ -639,6 +639,48 @@ def test_the_set_the_start_of_the_day_comes_from_is_in_the_inputs_hash(monkeypat
     assert hashes[0] == hashes[1] != hashes[2]
 
 
+def _legacy_hash(inputs_hash, applied, hist=()):
+    """The hash ``apply_intraday`` made of the same trades before the mark ``trades.HELD_MARK`` (TDM#721)."""
+    import hashlib
+    import json
+
+    canon = json.dumps([inputs_hash, list(applied), list(hist), None, {}], sort_keys=True, default=str,
+                       separators=(",", ":"))
+    return hashlib.sha256(canon.encode()).hexdigest()
+
+
+def test_the_inputs_hash_changes_only_for_dates_with_applied_trades(monkeypatch):
+    """TDM#721: the rows hold the ids of their trades and the OCP counts a bond once, so the dates with applied trades
+    (of the day, or of the history of a carried book) get another hash and are made again by the autopilot, ``recompute``
+    and the backfill, and no other date is: a date without an applied trade keeps the hash of its inputs, whatever
+    trades it has (none, cancelled, not bonds, of another day)."""
+    import test_trades_intraday as tti
+
+    settings = SimpleNamespace(intraday_trades=True, off_report_derivatives="exclude")
+    inputs = tti._inputs()   # the hash "h0", the books valid 2026-11-02
+    left_out = [tti._trade(status="cancelled"), tti._trade(trade_id="TR5", asset_class="fx"),
+                tti._trade(trade_id="TR6", trade_date="2026-11-01")]
+    for day_rows in ([], left_out):
+        _days(monkeypatch, {"2026-11-03": day_rows})
+        out, summary = trades.intraday_inputs(None, DAY, settings, inputs)
+        assert out.private_inputs_hash == "h0" and summary["applied"] == 0 and summary["history"] == 0
+    # a trade of the day: another hash than the one the same trades made before the mark, and a stable one
+    _days(monkeypatch, {"2026-11-03": [tti._trade()]})
+    out, _ = trades.intraday_inputs(None, DAY, settings, inputs)
+    _, _, res = trades._fold(inputs.rows, inputs.extra, {"T1", "T2"}, DAY, [tti._trade()], keep_flat=True)
+    assert out.private_inputs_hash not in ("h0", _legacy_hash("h0", res["applied"]))
+    assert trades.intraday_inputs(None, DAY, settings, inputs)[0].private_inputs_hash == out.private_inputs_hash
+    # only the history of a carried book (the day has no trade): also another hash
+    nxt = date(2026, 11, 4)
+    out, summary = trades.intraday_inputs(None, nxt, settings, inputs)
+    _, _, past = trades._fold(inputs.rows, inputs.extra, {"T1", "T2"}, DAY, [tti._trade()])
+    assert summary["history"] == 1 and summary["applied"] == 0
+    assert out.private_inputs_hash not in ("h0", _legacy_hash("h0", [], past["applied"]))
+    # the setting off: no trade is applied, the hash of the inputs
+    off = SimpleNamespace(intraday_trades=False, off_report_derivatives="exclude")
+    assert trades.intraday_inputs(None, DAY, off, inputs)[0].private_inputs_hash == "h0"
+
+
 def test_trades_older_than_the_window_are_said_to_be_dropped(monkeypatch):
     import test_trades_intraday as tti
 

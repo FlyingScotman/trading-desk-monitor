@@ -22,7 +22,7 @@ does not hold opens a row of its own (``position_id`` of the trade; it needs an 
 book says which trades it holds (``x.intraday_trades``: their ``trade_id``), so that the OCP counts the bond once, in
 the bonds' revaluation, and not again as a trade after its base (``rules.ocp.held_trades``, TDM#721). Anything else is
 left out and counted by reason (``SKIP_REASONS``). The private inputs hash covers the trades applied (of D and of the
-days before), so the run is made again when they change or the report of D comes: everything that compares the hash of
+days before; ``HELD_MARK`` is in it, and only there), so the run is made again when they change or the report of D comes: everything that compares the hash of
 a run (the autopilot's steps, ``recompute``, ``backfill``, ``acquisition``) takes it from ``intraday_inputs``; the
 run's lineage ``intraday_trades`` says what was applied. The PnL of a changed row is the start-of-day position's plus
 the trades' own (``new_trades``, ``pnl.new_trades``): ``apply_intraday`` hands over, besides the lineage summary,
@@ -204,6 +204,11 @@ def _times(t: dict[str, Any]) -> str:
     return v.isoformat() if hasattr(v, "isoformat") else str(v or "")
 
 
+HELD_MARK = 1
+"""Part of the inputs hash of a date that has applied trades (of the day or of the days of a carried book's history): the
+rows now carry the trades they hold (``x.intraday_trades``) and the OCP counts a bond once (TDM#721). The hash of such a
+date is another one than before, so the autopilot, ``recompute`` and ``backfill`` make those dates again and no other:
+a date with no applied trade keeps the hash of its inputs. Raise it when what the rows hold changes the numbers again."""
 MAX_HISTORY_DAYS = 7
 """How many days back the trades of a book's days without a report are looked for (``apply_intraday``)."""
 MAX_CUT_DAYS = 60
@@ -628,7 +633,9 @@ def apply_intraday(con: psycopg.Connection, on: date,
                    rows=rows_out,
                    gaps=dict(list(gaps.items())[:MAX_LISTED]))
     summary["start_inputs"] = replace(inputs, rows=[tuple(r) for r in start_rows], extra=start_extra, valid_dates=bvalid)
-    canon = json.dumps([inputs.private_inputs_hash, applied, hist, start_hash, cut], sort_keys=True, default=str, separators=(",", ":"))
+    # (reached only with applied trades, of the day or of the history: a date without any returns above with its hash)
+    canon = json.dumps([inputs.private_inputs_hash, applied, hist, start_hash, cut, {"ocp_held": HELD_MARK}],
+                       sort_keys=True, default=str, separators=(",", ":"))
     return replace(inputs, rows=out_rows, extra=out_extra,  # type: ignore[misc]
                    private_inputs_hash=hashlib.sha256(canon.encode()).hexdigest()), summary
 

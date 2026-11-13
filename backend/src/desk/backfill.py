@@ -264,7 +264,10 @@ def inputs_stamp(con: psycopg.Connection, settings: Settings) -> tuple:
     """What decides every date's ``trades.intraday_inputs`` hash, cheaply (two aggregate queries): the database, the
     position sets, every stored dataset set (the trades of the date and of the 60 days before it, the trade terms), the
     settings that ``trades.intraday_inputs`` reads (``intraday_trades``, ``off_report_derivatives``: the latter puts
-    the off-report trades into the hash), the revisions of the books reference and the reference tables (TDM#587). Sets are never changed, a new revision is a new row, so a changed count
+    the off-report trades into the hash), the revisions of the books reference and the reference tables (TDM#587), and
+    the mark the hash of a date with applied trades carries (``trades.HELD_MARK``, TDM#721: the memo is of this
+    process, the mark is of its code; it is in the key so that the memo never serves a hash made with another mark).
+    Sets are never changed, a new revision is a new row, so a changed count
     or newest id says that some date's inputs changed (TDM#569)."""
     pos = con.execute("SELECT max(set_id), count(*) FROM position_set").fetchone()
     ds = con.execute("SELECT max(set_id), count(*), (SELECT oid FROM pg_database WHERE datname = current_database())"
@@ -273,7 +276,7 @@ def inputs_stamp(con: psycopg.Connection, settings: Settings) -> tuple:
     refs = con.execute("SELECT (SELECT max(rev_id) FROM book_rev), (SELECT count(*) FROM book_rev),"
                        " (SELECT max(rev_id) FROM reference_rev), (SELECT count(*) FROM reference_rev)").fetchone()
     return (tuple(pos), tuple(ds), tuple(refs), bool(getattr(settings, "intraday_trades", True)),
-            str(getattr(settings, "off_report_derivatives", "exclude")))
+            str(getattr(settings, "off_report_derivatives", "exclude")), trades.HELD_MARK)
 
 
 def inputs_hash(con: psycopg.Connection, d: date, settings: Settings, stamp: tuple | None = None) -> str:
