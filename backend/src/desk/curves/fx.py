@@ -10,9 +10,10 @@
   CH_ZURICH), each present in the static snapshot.
 - **FX-implied curves** (``<CCY> FX``, spec ``<ccy>_fx_implied_v1``): the CETS swap points of the currency (``fx_swaps``,
   1.4) chained from the spot, plus the dated FORTS FX futures past the last swap (setting ``fx_implied_futures``, on)
-  as outrights at their delivery date. Core builds the curve in ``value_portfolio`` (``FxImpliedCurveRequest`` on the
-  RUONIA OIS curve); this module builds it once more for the lineage, the run's curve points and to leave out a
-  currency whose quotes do not build (no TOD/TOM anchor, a gap): its lineage says why.
+  as outrights at their delivery date (none of them when the synchronous points below are taken). Core builds the
+  curve in ``value_portfolio`` (``FxImpliedCurveRequest`` on the RUONIA OIS curve); this module builds it once more
+  for the lineage, the run's curve points and to leave out a currency whose quotes do not build (no TOD/TOM anchor, a
+  gap): its lineage says why.
   **Synchronous points** (hub contract 1.9, dataset ``fx_input_pairs``, TDM#729): the hub's group of a currency is one
   spot observation and, in the same minute, the best bid and offer of the first four quarterly FORTS futures, each on its
   own clock. Only the **points** are taken from it: ``mid(future) - mid(spot)`` of that minute, as
@@ -25,9 +26,15 @@
   the spot's and at most ``FX_INPUT_MAX_SKEW_SECONDS`` before it, a spread within ``FX_INPUT_MAX_SPREAD``, no reason from
   the hub, a delivery date after the run's spot date and not already quoted by an exchange swap (the exchange's quote
   stays). No usable future, or a group that is not usable: the curve as before, ``fx_input_group`` of its lineage says
-  why. CNY takes the group only when the cut has no exchange swap points (``FX_INPUT_ONLY_WITHOUT_SWAPS``). The
-  dates of the points count as swap dates: the futures of ``futures_prices`` / ``futures_prices_intraday`` enter only
-  after the last of them. The setting ``fx_implied_futures`` (off) leaves the group out too. Lineage of a curve:
+  why. CNY takes the group only when the cut has no exchange swap points (``FX_INPUT_ONLY_WITHOUT_SWAPS``).
+  **Past the group** (TDM#733, owner's decision of 2026-11-13, option B): when the points are taken, the futures of
+  ``futures_prices`` / ``futures_prices_intraday`` are **not used at all**, neither those on or before the last point's
+  date nor the farther ones (a settlement price beside synchronous points would put the gap between the run's spot and
+  the group's into the slope between them). The curve ends at the group's last point (the last future taken) and
+  beyond it core extends it flat-forward: the forward between the last two nodes holds (the lineage's ``extrapolation``).
+  Each future left out is in ``dropped`` (ticker -> reason). Without the points (no group, or a group not taken, the
+  curve with the points not building) the curve is as before, the far futures included. The setting
+  ``fx_implied_futures`` (off) leaves the group out too. Lineage of a curve:
   ``points_source = fx_input_pairs`` and ``fx_input_group`` (``run_id``, ``content_sha256``, ``known_at``, the spot's
   source, clock, mid and age, ``nodes_used``, ``nodes_dropped`` ticker -> reason) when taken; else ``fx_input_group``
   ``status = not_used`` and ``reason`` (the hub's stale reasons of the dataset such as ``no_completed_capture``, an
@@ -236,8 +243,9 @@ class FxOptions:
     """``fx_foreign_curve``: the curve of an FX forward's foreign leg, ``fx_implied`` (from swap points) or ``xccy``
     (CNY only); the other one is its fallback when absent."""
     implied_futures: bool = True
-    """``fx_implied_futures``: FORTS FX futures past the last swap point extend the implied curve; off also leaves out
-    the points of the hub's synchronous input groups (``_input_points``)."""
+    """``fx_implied_futures``: FORTS FX futures past the last swap point extend the implied curve (not when the points
+    of the hub's synchronous input group are taken: they end the curve, TDM#733); off also leaves out those points
+    (``_input_points``)."""
     spot_source: str = "market"
     """``fx_spot_source``: ``market`` (the FX_MARKET chain, as bonds and the OCP) or ``cets_tom`` (CETS TOM close)."""
     off_report: bool = False
@@ -537,7 +545,9 @@ def _implied_from(market: Any, ccy: str, spot: FxSpot, rub: DiscountCurve, bd: d
                   points: list[FxSwapPointsQuote], group: dict[str, Any] | None
                   ) -> tuple[FxImpliedCurveRequest, DiscountCurve, dict[str, Any]]:
     """The curve of ``_implied`` from the exchange's swap points ``exchange`` (last far date ``last``), the group's
-    ``points`` (none: the curve as before them) and the futures past the last of those dates."""
+    ``points`` and the futures past the last swap point. With the points (TDM#733) no future is taken: the curve ends at
+    the last point and core extends it flat-forward; every future left out is in ``dropped`` with the reason. Without
+    them (none) the curve is as before: the futures past the last swap point, the far ones included."""
     quotes, dropped = list(exchange), dict(swap_dropped)
     last_points = max((q.far_date for q in points), default=None)
     futures, used, source, none = [], [], None, ""
@@ -550,7 +560,8 @@ def _implied_from(market: Any, ccy: str, spot: FxSpot, rub: DiscountCurve, bd: d
             why = ("future before the last swap point" if last is not None and d <= last else
                    "future on or before the spot date" if d <= spot.value_date else
                    f"future not after the last {FX_INPUT_DATASET} point" if last_points is not None and d <= last_points
-                   else "")
+                   else f"future past the last {FX_INPUT_DATASET} point ({last_points.isoformat()}): "
+                        "the curve ends there, flat-forward beyond" if last_points is not None else "")
             if why:
                 dropped[f["secid"]] = why
                 continue
@@ -574,7 +585,10 @@ def _implied_from(market: Any, ccy: str, spot: FxSpot, rub: DiscountCurve, bd: d
         "status": "ok", "spec_id": fx_implied_spec_id(ccy), "swaps": [q.label for q in quotes + points],
         "futures": [q.label for q in futures], "dropped": dropped, "last_node": curve.nodes[-1][0].isoformat(),
         "rub_curve": rates.RUONIA_OIS_CURVE_ID, **({"anchor": anchor} if anchor else {}),
-        **({"points_source": FX_INPUT_DATASET} if points else {}),
+        **({"points_source": FX_INPUT_DATASET,
+            "extrapolation": f"flat-forward beyond {curve.nodes[-1][0].isoformat()} (the forward between the last two "
+                             f"nodes holds): futures past the last {FX_INPUT_DATASET} point are not used (TDM#733)"}
+           if points else {}),
         **({"fx_input_group": group} if group is not None else {}),
         **_futures_lineage(source, used)}
 
