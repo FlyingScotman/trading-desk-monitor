@@ -460,6 +460,37 @@ def store_dataset_set(con: psycopg.Connection, *, dataset: str, scope: dict, val
     return set_id
 
 
+def retire_old_trades(con: psycopg.Connection, *, valid_date: date, source: str, up_to_set_id: int,
+                      keep: Iterable[str], adapter_fingerprint: str) -> int:
+    """The trades of ``valid_date`` replaced whole by an answer (TDM#715): every unit (book) of the date whose current set
+    is of ``source``, is not newer than ``up_to_set_id`` (a set of the adapter whose query had the window of the day
+    before) and has no records in the answer (its ``scope_key`` is not in ``keep``) gets a new revision with no rows, a full
+    snapshot, with the report key of the set it replaces and a later ``recorded_at``: so it is the unit's current set, the
+    date holds what the answer holds, and the older revisions stay (nothing is deleted). A unit already empty, one of
+    another source, one recorded after ``up_to_set_id`` is left alone, so the call is made again at no cost. Returns the
+    number of units emptied. The caller holds the cycle lock."""
+    from ..inbox.validate import (
+        unit_hash,  # at call time: validate imports the inbox schema, which imports the store
+    )
+
+    keep = set(keep)
+    rows = con.execute(
+        "SELECT DISTINCT ON (scope_key) set_id, scope, scope_key, source, priority, report_date, report_ts, seq,"
+        " generated_at, file_mtime, inbox_file_sha256, source_name, row_count, coalesce(completeness, 'full_snapshot')"
+        f" FROM dataset_set WHERE dataset = 'trades' AND valid_date = %s ORDER BY scope_key, {CURRENT_SET}",
+        (valid_date,)).fetchall()
+    n = 0
+    for sid, scope, sk, src, prio, rd, ts, seq, gen, mtime, sha, name, cnt, cpl in rows:
+        if sk in keep or src != source or sid > up_to_set_id or (cnt == 0 and cpl == "full_snapshot"):
+            continue
+        store_dataset_set(con, dataset="trades", scope=scope, valid_date=valid_date, rows=[], source=src, priority=prio,
+                          report_date=rd, report_ts=ts, seq=seq, generated_at=gen, file_mtime=mtime, file_name=name,
+                          sha256=sha, adapter_fingerprint=adapter_fingerprint, unit_hash=unit_hash([]),
+                          completeness="full_snapshot")
+        n += 1
+    return n
+
+
 @dataclass
 class DatasetInputs:
     """``dataset_rows``: the rows of a dataset in force on a date, and per unit where they came from."""
