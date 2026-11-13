@@ -10,6 +10,9 @@
  *
  * Новый прогон после цикла автопилота (GET api/v1/autopilot/status: раз в 30 с, во время цикла раз в 5 с):
  * страница на последнем прогоне перезагружается сама, если вкладка скрыта, иначе — кнопка «Новый прогон — показать»;
+ * скрытая вкладка перезагружается не сразу, а когда сервер построил данные нового прогона (GET
+ * api/v1/runs/{id}/ready?pages=desk раз в 1,5 с, не дольше минуты, #727): иначе её показали бы с пустым экраном на
+ * десятки секунд; не дождалась — не перезагружается, кнопка «Новый прогон — показать» ждёт на странице;
  * страница без данных деска (Настройки, главная) только обновляет список прогонов и шлёт событие desk-nav:new-run.
  * Прогон назван своим срезом рынка (R11): «20.10 14:30 МСК · внутри дня» (портфель дня на внутридневном срезе
  * хаба), «19.10 · закрытие предв.», «19.10 · закрытие»; «последний прогон» — самый новый показываемый (днём —
@@ -281,6 +284,21 @@
     // обновления прогон выглядит как текущий (R14, R17)
     var base = db ? String(D.source.runId) : null, fastUntil = 0, timer = null, busy = false, last = null;
     function schedule() { clearTimeout(timer); timer = setTimeout(poll, Date.now() < fastUntil || (last && last.state === 'running') ? 5000 : 30000); }
+    var warming = null;  // прогон, данных которого скрытая вкладка ждёт (или уже ждала: после таймаута снова не ждём)
+    // данные прогона готовы? (#727: сервер строит их заранее; запрос сам просит сервер построить) done('ready' | 'timeout' | 'error')
+    function whenReady(runId, done) {
+      var end = Date.now() + 60000;
+      (function step() {
+        fetch(root + 'api/v1/runs/' + encodeURIComponent(runId) + '/ready?pages=desk', { cache: 'no-store' }).then(function (r) {
+          if (r.status === 401 || r.status === 403 || r.status === 404) return 'error';
+          return r.ok ? r.json().then(function (j) { return j && j.ready ? 'ready' : null; }, function () { return null; }) : null;
+        }).catch(function () { return null; }).then(function (res) {
+          if (res) return done(res);
+          if (Date.now() + 1500 > end) return done('timeout');
+          setTimeout(step, 1500);
+        });
+      })();
+    }
     function once(runId) {  // одна авто-перезагрузка на прогон: не зациклиться, если сервер его всё же не отдал
       try {
         if (sessionStorage.getItem('desk-nav.reload') === runId) return false;
@@ -321,7 +339,14 @@
         if (base == null && lr) base = lr;  // страница закреплена на прогоне или без данных: новое — после загрузки
         else if (lr && lr !== base) {
           if (!data) { base = lr; picker(); window.dispatchEvent(new CustomEvent('desk-nav:new-run', { detail: j.latest_run })); }
-          else if (!pinned && document.hidden && !Object.keys(stored()).length && once(lr)) { location.reload(); return; }  // другой вкладкой не выбран свой прогон
+          else if (!pinned && document.hidden && !Object.keys(stored()).length && warming !== lr) {  // другой вкладкой не выбран свой прогон
+            warming = lr;  // перезагрузка — когда данные нового прогона готовы, и только если вкладку всё ещё не смотрят
+            whenReady(lr, function (res) {
+              if (res !== 'ready') return;  // не дождались: перезагрузки нет, кнопка на странице; этот прогон больше не ждём
+              if (document.hidden && base !== lr && !Object.keys(stored()).length && once(lr)) location.reload();
+              else warming = null;  // вкладку успели показать: если её снова скроют, перезагрузка по готовым данным — быстрая
+            });
+          }
         }
         render(j);
       }).catch(function () { box.hidden = true; }).then(schedule);

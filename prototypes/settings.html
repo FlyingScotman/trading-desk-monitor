@@ -1086,7 +1086,7 @@ details.at-last .at-open::before{content:"показать"} details.at-last[ope
 
     <!-- ========== Диагностика ========== -->
     <section class="sec" id="sec-diag" data-sec="diag">
-      <div class="sec-h"><div><h1>Диагностика</h1><p>Файл для агента, загрузка позиций по книгам, ход истории прогонов и где что лежит.</p></div></div>
+      <div class="sec-h"><div><h1>Диагностика</h1><p>Файл для агента, загрузка позиций по книгам, ход истории прогонов, медленные запросы и где что лежит.</p></div></div>
 
       <!-- Диагностика (R13; свои стиль и скрипт; данные: /api/v1/diagnostics) -->
       <div class="card" id="dg">
@@ -1154,6 +1154,28 @@ details.at-last .at-open::before{content:"показать"} details.at-last[ope
         <div class="bd">
           <p class="hint" style="margin:0 0 8px">Расчёты прошлых дат для истории риска и PnL. Включается в «Автообновлении». <span id="bf-msg" class="muted"></span></p>
           <table class="t"><tbody id="bf-rows"></tbody></table>
+        </div>
+      </div>
+
+      <!-- Медленные запросы (TDM#727; данные: /api/v1/diagnostics/slow-requests) -->
+      <div class="card" id="sr">
+        <style>
+          #sr .tw{overflow-x:auto;margin-top:10px;border:1px solid var(--line-2);border-radius:6px;max-height:420px}
+          #sr table{border-collapse:collapse;width:100%;font-size:12px}
+          #sr th,#sr td{padding:3px 8px;border-bottom:1px solid var(--line);white-space:nowrap;text-align:left}
+          #sr th{position:sticky;top:0;background:var(--panel-2);color:var(--fg-2);font-weight:500}
+          #sr td.n,#sr th.n{text-align:right;font-family:var(--mono);font-variant-numeric:tabular-nums}
+          #sr tr.slow td{background:var(--warn-bg)}
+        </style>
+        <div class="hd"><h2>Медленные запросы</h2><span class="mut3" id="sr-when"></span><span class="sp"></span><button class="ibtn" id="sr-run" type="button">Обновить</button></div>
+        <div class="bd">
+          <p class="hint" style="margin:0 0 8px">Обращения к серверу монитора, на которые он ответил дольше <span id="sr-thr">2</span> с с последнего запуска (последние 100). Без значений параметров и без данных: какой запрос, какие у него параметры, сколько он шёл, взят ли ответ из памяти или собран заново, какого он размера. Тот же список — в файле диагностики выше. <span id="sr-msg" class="muted"></span></p>
+          <div class="tw" id="sr-tw" hidden>
+            <table>
+              <thead><tr><th>Когда</th><th>Запрос</th><th>Параметры</th><th class="n">Ответ</th><th class="n">Время, мс</th><th>Откуда ответ</th><th class="n">Размер, КБ</th></tr></thead>
+              <tbody id="sr-rows"></tbody>
+            </table>
+          </div>
         </div>
       </div>
 
@@ -2451,6 +2473,40 @@ function mountTabs(a, reload){
     } catch (e) { $('bf-msg').textContent = 'не загрузилось: ' + e.message; }
   }
   $('bf-run').addEventListener('click', load);
+  if (/^https?:$/.test(location.protocol)) load();
+})();
+</script>
+<script>
+'use strict';
+/* ---------- Медленные запросы (TDM#727): /api/v1/diagnostics/slow-requests — последние запросы дольше порога, без значений ---------- */
+(function slowRequests(){
+  const $ = id => document.getElementById(id);
+  const FROM = {hit: 'из памяти', miss: 'собран заново'};
+  async function load(){
+    $('sr-msg').textContent = 'загрузка…';
+    try {
+      const r = await fetch('/api/v1/diagnostics/slow-requests', {headers:{'Accept':'application/json'}, cache:'no-store'});
+      if (!r.ok) throw new Error('HTTP ' + r.status);
+      const j = await r.json(), tb = $('sr-rows');
+      tb.textContent = '';
+      if (j.threshold_s != null) $('sr-thr').textContent = String(j.threshold_s);
+      (j.requests || []).forEach(q => {
+        const tr = document.createElement('tr');
+        if (q.ms >= 10000) tr.className = 'slow';
+        const when = q.at ? new Date(q.at).toLocaleString('ru-RU', {day:'2-digit', month:'2-digit', hour:'2-digit', minute:'2-digit', second:'2-digit'}) : '';
+        [[when], [q.method + ' ' + q.route], [(q.query || []).join(', ') || '—'], [String(q.status), 'n'], [String(q.ms), 'n'],
+         [FROM[q.cache] || '—'], [q.bytes == null ? '—' : String(Math.round(q.bytes / 1024)), 'n']].forEach(([v, c]) => {
+          const td = document.createElement('td'); td.textContent = v; if (c) td.className = c; tr.append(td);
+        });
+        tb.append(tr);
+      });
+      $('sr-tw').hidden = !(j.requests || []).length;
+      $('sr-msg').textContent = (j.requests || []).length ? (j.total > j.requests.length ? 'Всего было ' + j.total + ', показаны последние ' + j.requests.length + '.' : '')
+        : 'С запуска сервера медленных запросов не было.';
+      $('sr-when').textContent = 'на ' + new Date().toLocaleTimeString('ru-RU');
+    } catch (e) { $('sr-msg').textContent = 'не загрузилось: ' + e.message; }
+  }
+  $('sr-run').addEventListener('click', load);
   if (/^https?:$/.test(location.protocol)) load();
 })();
 </script>

@@ -374,7 +374,7 @@ def test_serve_builds_the_newest_runs_bodies_ahead(desk, store_url, monkeypatch)
     from desk.api.app import warm_bodies
 
     app = create_app(store_url)
-    assert warm_bodies(app) == ["desk", "run", "run-js", "extras", "history", "calendar"]
+    assert warm_bodies(app) == ["run", "run-js", "extras", "history", "calendar", "desk"]
     assert warm_bodies(app) == []  # nothing changed
     calls = []
     monkeypatch.setattr(concepts, "extras", lambda *a, **kw: calls.append(1))
@@ -416,7 +416,7 @@ def test_serve_rebuilds_stale_summaries_ahead_newest_first(desk, store_url, monk
     monkeypatch.setattr(summary, "ensure", lambda con, rids: seen.extend(rids) or real_ensure(con, rids))
     assert prewarm_summaries(app, budget_s=0) == len(ids) - 1  # one run a pass at least, the newest
     assert seen == [ids[-1]]
-    assert warm_bodies(app, summaries=False) == ["desk", "run", "run-js", "calendar"]  # the bodies reading summaries wait
+    assert warm_bodies(app, summaries=False) == ["run", "run-js", "calendar", "desk"]  # the bodies reading summaries wait
     assert prewarm_summaries(app) == 0 and seen == ids[::-1]
     with store.connect(store_url) as con:
         assert {r[0] for r in con.execute("SELECT run_id FROM run_summary WHERE version = %s",
@@ -447,7 +447,7 @@ def test_prewarm_turns_off_on_a_store_that_cannot_be_written(desk, store_url, mo
     assert len(built) == (0 if checked else 1)
     n = len(built)
     assert prewarm_summaries(app) == 0 and len(built) == n  # off: nothing built
-    assert warm_bodies(app, summaries=True) == ["desk", "run", "run-js", "extras", "history", "calendar"]  # in memory, as before
+    assert warm_bodies(app, summaries=True) == ["run", "run-js", "extras", "history", "calendar", "desk"]  # in memory, as before
 
 
 def test_prewarm_does_not_retry_a_run_that_fails_to_build(desk, store_url, monkeypatch):

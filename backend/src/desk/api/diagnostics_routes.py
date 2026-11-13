@@ -2,6 +2,9 @@
 preview, or as a file to save (``download=1``: ``desk-diagnostics-<UTC>.json``). Local only, like the settings
 routes: the document has no private data, but it does describe this machine's setup.
 
+``GET /api/v1/diagnostics/slow-requests`` (TDM#727) is the settings page's «Медленные запросы»: the last slow requests
+of this server run (``desk.api.slowlog``), the same list as the file's ``slow_requests``.
+
 ``GET /api/v1/backfill/status`` (R23) is the settings page's «История прогонов» and the header's indicator:
 ``desk.backfill.status`` (dates and counts, the store and the cache only, no hub call; ``todo_by_reason``) and
 ``hub_problem_dates``, the autopilot sync step's ``problem_dates`` (#163); ``step`` the backfill step of this cycle, else
@@ -27,6 +30,23 @@ from .settings_routes import local_only
 router = APIRouter(dependencies=[Depends(local_only)])
 
 
+def slow_of(request: Request) -> dict | None:
+    slow = getattr(request.app.state, "slow", None)
+    return slow.snapshot() if slow is not None else None
+
+
+@router.get("/api/v1/diagnostics/slow-requests")
+def get_slow_requests(request: Request) -> Response:
+    """The settings page's «Медленные запросы» (TDM#727): the last requests this server run answered slower than
+    ``threshold_s`` (``DESK_SLOW_REQUEST_S``, 2 s), the newest first: route as declared (no ids), query parameter names
+    (no values), status, ms, ``cache`` (``hit``, ``miss``: a body was built for it; null: no such cache), bytes."""
+    import json
+
+    return Response(json.dumps(slow_of(request) or {"threshold_s": None, "total": 0, "keep": 0, "requests": []},
+                               ensure_ascii=False), media_type="application/json; charset=utf-8",
+                    headers={"Cache-Control": "no-store"})
+
+
 @router.get("/api/v1/diagnostics")
 def get_diagnostics(request: Request, hub: bool = True, download: bool = False) -> Response:
     """``hub=0`` does not ask the hub (no live check, no list of its snapshots)."""
@@ -34,7 +54,8 @@ def get_diagnostics(request: Request, hub: bool = True, download: bool = False) 
     doc = diagnostics.build(store_url=request.app.state.store_url, autopilot=getattr(request.app.state, "autopilot",
                                                                                      None),
                             hub=hub, started_at=getattr(request.app.state, "started_at", None), now=now,
-                            lan_probe=getattr(request.app.state, "lan_probe", None))
+                            lan_probe=getattr(request.app.state, "lan_probe", None),
+                            slow_requests=slow_of(request))
     headers = {"Cache-Control": "no-store"}
     if download:
         headers["Content-Disposition"] = f'attachment; filename="{diagnostics.file_name(now)}"'
