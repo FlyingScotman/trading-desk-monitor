@@ -69,24 +69,27 @@ def test_a_date_received_before_the_sight_is_due_again_and_one_received_after_is
     old = {"state": "fetched", "code": "exported", "at": (since - timedelta(days=9)).isoformat()}
     new = {**old, "at": (since + timedelta(minutes=1)).isoformat()}
     for state in ("fetched", "no_trades"):
-        assert trades_history.due({**old, "state": state}, 50, now, "fp", since=since)   # an old date, far from the newest
-        assert not trades_history.due({**new, "state": state}, 50, now, "fp", since=since)
+        assert trades_history.due({**old, "state": state}, 50, now, "fp", stale=trades_history.is_stale(old, since))
+        assert not trades_history.due({**new, "state": state}, 50, now, "fp", stale=trades_history.is_stale(new, since))
     assert not trades_history.due(old, 50, now, "fp")                                      # no sight: as before
     covered = {**old, "code": "covered"}
-    assert trades_history.due(covered, 50, now, "fp", since=since)                         # a covered date too
-    assert not trades_history.due({**covered, "at": new["at"]}, 50, now, "fp", since=since)
+    assert trades_history.due(covered, 50, now, "fp", stale=trades_history.is_stale(covered, since))   # covered too
+    assert not trades_history.due({**covered, "at": new["at"]}, 50, now, "fp",
+                                  stale=trades_history.is_stale({**covered, "at": new["at"]}, since))
     for state in ("no_books", "unmapped", "unavailable", "partial"):                       # the rest keeps its own rules
         assert not trades_history.is_stale({"state": state, "at": old["at"]}, since)
 
 
 def test_the_sight_is_noted_once():
     doc = trades_history.blank()
+    doc["pending"] = {"dir": "x", "files": [], "date": D13}   # the older adapter's files wait for the lock
     doc["marks"] = {D13: {"state": "fetched"}, D14: {"state": "no_trades"}, D15: {"state": "unmapped"}}
     now = at(date(2026, 10, 20), 9)
     assert trades_history.note_window(doc, now, 41, NAME, "1.5.0") is True
     assert doc["window"] == {"since": now.isoformat(), "set_id": 41, "adapter": NAME + " 1.5.0", "total": 2}
     assert trades_history.note_window(doc, now + timedelta(days=1), 99, NAME, "1.5.0") is False
     assert doc["window"]["set_id"] == 41
+    assert doc["pending"] is None                  # the older adapter's files that wait for the lock are dropped
 
 
 def test_the_older_dates_are_asked_again_once_and_the_date_is_the_answer_whole(env, monkeypatch):
@@ -201,17 +204,147 @@ def test_a_book_without_records_in_a_cut_by_portfolios_that_proves_nothing_is_no
         assert books_of(con, D13) == {"OFZ": 1, "CORP": 1}
 
 
-def test_a_no_records_answer_proven_empties_the_date(env, monkeypatch):
+def test_a_no_records_answer_empties_the_date_only_after_the_right_adapter_has_brought_records(env, monkeypatch):
     env.s.history_set(None, D13, None)
     old_cut(env, (D13, D14))
     env.step(2)
     right_window(monkeypatch)
-    env.put("hist_mode_" + D13, "no_records")             # whole: the date has no trades in the right window
-    env.step(2)
+    env.put("hist_mode_" + D13, "no_records")
+    for d in (D13, D14):
+        (svcs.state_dir(env.st) / ("hist_extra_" + d)).unlink()
+    assert env.step() == [True] and env.asked()[2:] == [D13]     # the older adapter's marks prove nothing
     with store.connect(env.url) as con:
-        assert books_of(con, D13) == {}                   # the shifted trades of the older window are gone
+        assert books_of(con, D13) == {"OFZ": 1, "CORP": 1}        # the date is not emptied
+    assert env.doc["marks"][D13]["hold"] is True and not trades_history.window_proven(env.doc)
+    env.step()                                                    # the 14th (a date with records) proves the service
+    assert trades_history.window_proven(env.doc) and env.asked()[3:] == [D14]
+    env.step()                                                    # the held date is asked again and is emptied now
+    assert env.asked()[4:] == [D13] and env.marks()[D13] == "no_trades" and "hold" not in env.doc["marks"][D13]
+    with store.connect(env.url) as con:
+        assert books_of(con, D13) == {}                           # the shifted trades of the older window are gone
         assert current(con, D13, "OFZ") == (0, 2)
-    assert env.marks()[D13] == "no_trades"
+    assert env.step(2) == [True, False]                           # the 15th (a new date) once, then nothing
+
+
+def test_a_book_the_answer_was_not_asked_for_keeps_its_trades(env, monkeypatch):
+    """The adapter drops the records of the books the monitor did not ask for: its answer says nothing of them."""
+    env.s.history_set(None, D13, None)
+    old_cut(env, (D13,))
+    env.step()
+    with store.connect(env.url) as con:
+        assert books_of(con, D13) == {"OFZ": 1, "CORP": 1}
+    right_window(monkeypatch)
+    (svcs.state_dir(env.st) / ("hist_extra_" + D13)).unlink()
+    monkeypatch.setattr(svcs, "owner_books", lambda con, on: (["OFZ"], []))   # the CORP book is not asked for any more
+    env.step()
+    with store.connect(env.url) as con:
+        assert books_of(con, D13) == {"OFZ": 1, "CORP": 1}     # nothing said of CORP: its trades stay
+        assert current(con, D13, "CORP") == (1, 1)
+    monkeypatch.setattr(svcs, "owner_books", lambda con, on: (["OFZ", "CORP"], []))
+    env.s.history_refetch(D13, D13, True)                      # asked for both: CORP has no record in the answer
+    env.step()
+    with store.connect(env.url) as con:
+        assert books_of(con, D13) == {"OFZ": 1} and current(con, D13, "CORP") == (0, 2)
+
+
+def test_an_exported_answer_with_no_unit_taken_in_does_not_empty_the_date(env, monkeypatch):
+    env.s.history_set(None, D13, None)
+    old_cut(env, (D13,))
+    env.step()
+    right_window(monkeypatch)
+    env.put("hist_mode_" + D13, "empty")                  # «exported» with no file: the mark is «пусто, причина не указана»
+    env.step()
+    assert env.marks()[D13] == "unmapped" and env.doc["marks"][D13]["code"] == "empty"
+    with store.connect(env.url) as con:
+        assert books_of(con, D13) == {"OFZ": 1, "CORP": 1}
+
+
+def test_the_empty_revision_is_not_the_older_file(env, monkeypatch):
+    env.s.history_set(None, D13, None)
+    old_cut(env, (D13,))
+    env.step()
+    right_window(monkeypatch)
+    (svcs.state_dir(env.st) / ("hist_extra_" + D13)).unlink()
+    env.step()
+    with store.connect(env.url) as con:
+        name, n = con.execute("SELECT source_name, row_count FROM dataset_set WHERE dataset = 'trades' AND valid_date = %s"
+                              " AND scope->>'book_id' = 'CORP' ORDER BY set_id DESC LIMIT 1", (D13,)).fetchone()
+    assert n == 0 and name == store.EMPTIED_NAME
+
+
+def test_files_of_the_older_adapter_waiting_for_the_cycle_lock_are_not_taken_in_after_the_sight(env, monkeypatch):
+    env.s.history_set(None, D13, None)
+    old_cut(env, (D13,))
+    real = svcs.AdapterServices._try_cycle_lock
+    busy = {"n": 1}
+
+    def maybe(st):
+        if busy["n"]:
+            busy["n"] -= 1
+            return None
+        return real(st)
+
+    monkeypatch.setattr(svcs.AdapterServices, "_try_cycle_lock", staticmethod(maybe))
+    assert env.step()[0] is True and env.doc["pending"]["date"] == D13     # the older adapter's answer waits
+    right_window(monkeypatch)
+    (svcs.state_dir(env.st) / ("hist_extra_" + D13)).unlink()
+    env.step(2)                                                 # the sight drops it, the date is asked again
+    assert env.asked() == [D13, D13, D14] and env.doc["pending"] is None
+    with store.connect(env.url) as con:
+        assert books_of(con, D13) == {"OFZ": 1}
+        assert current(con, D13, "OFZ")[1] == 1                 # the older answer was never taken in
+
+
+def test_the_feeds_pending_files_of_the_older_adapter_are_dropped_by_the_sight(env, monkeypatch):
+    old_cut(env, (D15,))
+    monkeypatch.setattr(svcs.AdapterServices, "_wait_cycle_lock", lambda self, st: None)    # the lock is busy
+    run_feed(env.s, env.st, "tradeshist", env.clock)
+    assert svcs.read_state(env.st)["runs"]["tradeshist"]["pending"]["books"]
+    monkeypatch.undo()
+    right_window(monkeypatch)
+    (svcs.state_dir(env.st) / ("hist_extra_" + D15)).unlink()
+    env.clock["t"] += timedelta(minutes=5)
+    run_feed(env.s, env.st, "tradeshist", env.clock)
+    run = svcs.read_state(env.st)["runs"]["tradeshist"]
+    assert run["pending"] is None
+    with store.connect(env.url) as con:
+        assert books_of(con, D15) == {"OFZ": 1}
+
+
+def test_a_failed_asking_again_is_owed_while_the_fetch_is_off_and_is_retried(env, monkeypatch):
+    env.s.history_set(None, D13, None)
+    old_cut(env, (D13, D14))
+    env.step(2)
+    env.s.history_set(False, None, None)
+    right_window(monkeypatch)
+    for d in (D13, D14):
+        (svcs.state_dir(env.st) / ("hist_extra_" + d)).unlink()
+    env.put("hist_mode_" + D13, "partial")                # the service answers an incomplete export for the 13th
+    env.step(2)
+    assert env.marks()[D13] == "partial" and env.doc["marks"][D13]["redo"] is True
+    assert env.s.history()["window"] == {"left": 1, "total": 2}     # not counted as mended
+    (svcs.state_dir(env.st) / ("hist_mode_" + D13)).unlink()
+    env.clock["t"] += timedelta(minutes=6)               # the back-off of a partial answer is over
+    n = len(env.asked())
+    env.step(2)
+    assert env.asked()[n:] == [D13] and env.marks()[D13] == "fetched" and "redo" not in env.doc["marks"][D13]
+    with store.connect(env.url) as con:
+        assert books_of(con, D13) == {"OFZ": 1}
+    assert env.s.history()["window"] is None
+
+
+def test_an_empty_answer_of_the_feed_of_the_day_does_not_wait_for_the_cycle_lock_when_nothing_is_to_empty(env, monkeypatch):
+    env.s.history_set(None, D13, None)
+    right_window(monkeypatch)
+    env.step()                                            # the 13th: records from the right adapter prove the service
+    assert trades_history.window_proven(env.doc)
+    calls = []
+    real = svcs.AdapterServices._wait_cycle_lock
+    monkeypatch.setattr(svcs.AdapterServices, "_wait_cycle_lock", lambda self, st: calls.append(1) or real(self, st))
+    env.put("hist_mode", "no_records")                     # the day's feed answers «no records»; the 15th has no old set
+    env.clock["t"] += timedelta(minutes=5)
+    run = run_feed(env.s, env.st, "tradeshist", env.clock)
+    assert run["state"] == "complete" and calls == []
 
 
 def test_the_files_waiting_for_the_cycle_lock_replace_the_date_whole_when_they_are_taken_in(env, monkeypatch):

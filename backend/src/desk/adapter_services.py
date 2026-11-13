@@ -1198,7 +1198,8 @@ class AdapterServices:
             self._running = {"kind": "feed", "feed": f["id"], "since": _iso(started), "phase": "waiting"}
         try:
             hp = self._helper(st)
-            self._note_window(st, hp)
+            if self._note_window(st, hp):
+                prev = {**prev, "pending": None}   # the older adapter's files are not taken in after the sight of the new
             if not self._acquire(lambda: None, background=trigger != "manual"):
                 raise ServiceError("cancelled", "cancelled")
         except Exception as e:  # noqa: BLE001
@@ -1226,6 +1227,7 @@ class AdapterServices:
                 extra["trades_file"] = str(plan[0])
             if books:  # the whole request within the protocol's limits before the call, the books cut with a note
                 self._fit_books(st, hp, out, extra, books, notes)
+            asked_books = list(extra.get("book") or [])   # the books of the request (``_call`` takes the keys out)
             r = clean_feed_result(self._call(st, hp, "feed", extra, out=out))
             outcome = {k: r[k] for k in ("state", "code", "lines", "dates")}
             if notes:
@@ -1234,18 +1236,19 @@ class AdapterServices:
                 outcome["lines"] = [plan_line(plan[1]), *outcome["lines"]]
             elif note:
                 outcome["lines"] = [note, *outcome["lines"]]
-            if r["state"] in ("complete", "partial") and (r["files"] or self._retire_date(st, hp, f, r, day)):
+            if r["state"] in ("complete", "partial") \
+                    and (r["files"] or self._retire_wanted(st, hp, f, r, day, asked_books)):
                 if not f.get("source_declared", True):
                     raise ServiceError("feed_source_invalid", "error")  # files no declared source would read
                 try:
-                    outcome.update(self._ingest(st, hp, f, out, r, day=day))
+                    outcome.update(self._ingest(st, hp, f, out, r, day=day, books=asked_books))
                 except Invalid:
                     raise
                 except BaseException:
                     # not taken in (the cycle lock, a store failure, a cancel): kept for the next run, since the
                     # adapter may answer ``no_change`` then and never produce these files again
                     self._record(st, f["id"], pending={"dir": rid, "files": r["files"], "state": r["state"],
-                                                       "code": r["code"], "dates": r["dates"],
+                                                       "code": r["code"], "dates": r["dates"], "books": asked_books,
                                                        **({"filtered": True} if r.get("filtered") else {})})
                     raise
             elif drained is not None:
@@ -1381,10 +1384,11 @@ class AdapterServices:
         return lock if lock.acquire() else None
 
     def _ingest(self, st: Settings, hp: Helper, f: dict, out: Path, r: dict, *, recompute_runs: bool = True,
-                wait: bool = True, day: str | None = None) -> dict:
+                wait: bool = True, day: str | None = None, books: list[str] | None = None) -> dict:
         """The produced files through the scanner as the feed's source, then the affected runs (module doc).
         ``recompute_runs`` False and ``wait`` False: the history of trades (one try of the cycle lock, no runs after it).
-        ``day``: the date asked, for ``_retire_date`` (the answer replaces the date whole, TDM#715)."""
+        ``day`` and ``books``: the date and the books asked, for ``_retire_plan`` (the answer replaces the date whole for
+        these books, TDM#715; without ``books`` nothing is emptied)."""
         root = out.resolve()
         paths = []
         for x in r["files"]:
@@ -1423,9 +1427,11 @@ class AdapterServices:
                         dates |= {d for (d,) in units if d is not None}
                         accepted += len(units) if status != "duplicate" else 0
                     files.append({"file": p.name, "status": status})
-                retire = self._retire_date(st, hp, f, r, day)
-                if retire is not None and all(x["status"] in OK_FILE for x in files):
-                    retired = self._retire(con, st, hp, f, retire, shas)
+                retire, _held = self._retire_plan(st, hp, f, r, day, books)
+                # «exported» says something of the date only when the date is marked «received»: a unit taken in, or a copy
+                received = r.get("code") == "no_records" or accepted > 0 or any(x["status"] == "duplicate" for x in files)
+                if retire is not None and received and all(x["status"] in OK_FILE for x in files):
+                    retired = self._retire(con, st, hp, f, retire, shas, books or [])
                     if retired:
                         dates.add(retire)
             rec = recompute.after_inputs(st, self._url, dates, self._today()) if dates and recompute_runs \
@@ -1438,48 +1444,82 @@ class AdapterServices:
                 "files": files, "accepted_units": accepted, "recomputed": rec["runs"],
                 "recompute_failed": rec["failed"], "retired_units": retired}
 
-    def _note_window(self, st: Settings, hp: Helper) -> None:
+    def _note_window(self, st: Settings, hp: Helper) -> bool:
         """The first sight of an adapter whose query of the trades has the right window (``trades_history`` doc, «The
-        window of the query», TDM#715) into the history file, once: before the adapter's first answer is taken in."""
+        window of the query», TDM#715) into the history file, once: before the adapter's first answer is taken in. True
+        when this call wrote it (the pending files of the history feed are dropped then)."""
         if self._window_noted or not trades_history.window_fixed(hp.handle.name, hp.handle.version):
-            return
+            return False
         try:
             with store.connect(self._url) as con:
                 sid = int(con.execute("SELECT coalesce(max(set_id), 0) FROM dataset_set").fetchone()[0])
             now = self._now()
-            self._hist_edit(st, lambda h: trades_history.note_window(h, now, sid, hp.handle.name, str(hp.handle.version)))
+            first = self._hist_edit(st, lambda h: trades_history.note_window(h, now, sid, hp.handle.name,
+                                                                             str(hp.handle.version)))
+            if first:   # files of the older adapter waiting for the cycle lock are dropped (the date is asked again)
+                for f in read_state(st).get("feeds") or []:
+                    if f.get("history") and f.get("books") and f.get("dataset") == "trades" \
+                            and (read_state(st).get("runs", {}).get(f["id"]) or {}).get("pending"):
+                        self._record(st, f["id"], pending=None)
             self._window_noted = True
+            return bool(first)
         except Exception:
             log.info("adapter services: the window of the trades not noted yet", exc_info=True)
+        return False
 
-    def _retire_date(self, st: Settings, hp: Helper, f: dict, r: dict, day: str | None) -> date | None:
-        """The date an answer replaces whole (``store.retire_old_trades``), or None: the feed of the trades of the owner's
-        books, the adapter's window right and noted, the answer complete and whole (a cut by the portfolios that proves
-        nothing is not), one date."""
-        if not (f.get("history") and f.get("books") and f.get("dataset") == "trades") \
+    def _retire_plan(self, st: Settings, hp: Helper, f: dict, r: dict, day: str | None,
+                     books: list[str] | None) -> tuple[date | None, bool]:
+        """``(date, held)``: the date an answer replaces whole (``store.retire_old_trades``), and whether it would but
+        cannot yet. The feed of the trades of the owner's books, the books asked known (an answer says nothing of the
+        others), the adapter's window right and noted, the answer complete, one date. An answer «no records» empties the
+        date only once the adapter with the right window has brought records for some date (``window_proven``), and a
+        cut by the portfolios that proves nothing never does: ``(None, True)`` is «asked again once it is proven»."""
+        if not (f.get("history") and f.get("books") and f.get("dataset") == "trades") or not books \
                 or r.get("state") != "complete" or r.get("code") not in ("exported", "no_records") \
                 or not trades_history.window_fixed(hp.handle.name, hp.handle.version):
-            return None
+            return None, False
         h = trades_history.read(st)
         if not isinstance(h.get("window"), dict) or h["window"].get("set_id") is None:
-            return None
-        if r.get("code") == "no_records" and r.get("filtered") and not trades_history.service_proven(h):
-            return None
+            return None, False
         dates = r.get("dates") or ([day] if day else [])
         try:
-            return date.fromisoformat(dates[0]) if len(dates) == 1 else None
+            on = date.fromisoformat(dates[0]) if len(dates) == 1 else None
         except (TypeError, ValueError):
-            return None
+            return None, False
+        if on is None:
+            return None, False
+        if r.get("code") == "no_records" and ((r.get("filtered") and not trades_history.service_proven(h))
+                                              or not trades_history.window_proven(h)):
+            return None, True
+        return on, False
 
-    def _retire(self, con: Any, st: Settings, hp: Helper, f: dict, day: date, shas: list[str]) -> int:
-        """The date's units of the older window that the answer has no records for, emptied (the books of the answer's
-        files stay as the scanner stored them, whatever the unit's status)."""
+    def _old_units(self, st: Settings, f: dict, on: date, books: list[str], keep: list[str] = ()) -> list[tuple]:
+        """The units ``store.retire_old_trades`` would empty (one query, no cycle lock)."""
+        h = trades_history.read(st)
+        try:
+            with store.connect(self._url) as con:
+                return store.old_trades_units(con, valid_date=on, source=f["source"],
+                                              up_to_set_id=int(h["window"]["set_id"]), books=books, keep=keep)
+        except Exception:
+            log.info("adapter services: old units of the trades not read", exc_info=True)
+            return []
+
+    def _retire_wanted(self, st: Settings, hp: Helper, f: dict, r: dict, day: str | None,
+                       books: list[str] | None) -> bool:
+        """Is an answer with no files worth the cycle lock: it replaces a date that has old units (TDM#715)?"""
+        on, _held = self._retire_plan(st, hp, f, r, day, books)
+        return on is not None and bool(self._old_units(st, f, on, books or []))
+
+    def _retire(self, con: Any, st: Settings, hp: Helper, f: dict, day: date, shas: list[str],
+                books: list[str]) -> int:
+        """The date's units of the older window of the books asked that the answer has no records for, emptied (the
+        books of the answer's files stay as the scanner stored them, whatever the unit's status)."""
         h = trades_history.read(st)
         keep = [store.scope_key(sc) for (sc,) in con.execute(
             "SELECT scope FROM inbox_unit WHERE sha256 = ANY(%s) AND dataset = 'trades' AND valid_date = %s",
             (shas, day))]
         n = store.retire_old_trades(con, valid_date=day, source=f["source"], up_to_set_id=int(h["window"]["set_id"]),
-                                    keep=keep, adapter_fingerprint=hp.handle.fingerprint)
+                                    books=books, keep=keep, adapter_fingerprint=hp.handle.fingerprint)
         if n:
             log.info("adapter services: %s %s: %d books without records in the answer emptied", f["id"], day, n)
         return n
@@ -1496,7 +1536,8 @@ class AdapterServices:
         try:
             drained = self._ingest(st, hp, f, folder, {"files": pending["files"], "state": pending.get("state"),
                                                        "code": pending.get("code"), "dates": pending.get("dates") or [],
-                                                       "filtered": pending.get("filtered") is True}) \
+                                                       "filtered": pending.get("filtered") is True},
+                                  books=[b for b in pending.get("books") or [] if isinstance(b, str)] or None) \
                 if folder.is_dir() else None
         except Invalid:
             drained = None
@@ -1616,24 +1657,28 @@ class AdapterServices:
         r: dict = {"state": "error", "code": "operation_failed", "files": [], "dates": []}
         ing: dict | None = None
         pending: dict | None = None
+        hold = False
         try:
             out = state_dir(st) / "out" / rid
             out.mkdir(parents=True)
             extra: dict[str, str | list[str]] = {"feed": f["id"], "date": day}
             self._fit_books(st, hp, out, extra, books, notes)
+            asked_books = list(extra.get("book") or [])   # the books of the request (``_call`` takes the keys out)
             r = clean_feed_result(self._call(st, hp, "feed", extra, out=out))
             if r["dates"] and r["dates"] != [day]:
                 raise Invalid   # the answer is for another date: not marked
-            if r["state"] in ("complete", "partial") and (r["files"] or self._retire_date(st, hp, f, r, day)):
+            hold = self._retire_held(st, hp, f, r, day, asked_books)
+            if r["state"] in ("complete", "partial") \
+                    and (r["files"] or self._retire_wanted(st, hp, f, r, day, asked_books)):
                 if not f.get("source_declared", True):
                     raise ServiceError("feed_source_invalid", "error")
                 try:
-                    ing = self._ingest(st, hp, f, out, r, recompute_runs=False, wait=False, day=day)
+                    ing = self._ingest(st, hp, f, out, r, recompute_runs=False, wait=False, day=day, books=asked_books)
                 except Invalid:
                     raise
                 except BaseException:
                     pending = {"dir": rid, "files": r["files"], "state": r["state"], "code": r["code"], "date": day,
-                               **({"filtered": True} if r.get("filtered") else {})}
+                               "books": asked_books, **({"filtered": True} if r.get("filtered") else {})}
                     raise
         except ServiceError as e:
             r = {**r, "code": e.code} if pending is not None else {"state": e.state, "code": e.code, "files": [],
@@ -1648,7 +1693,7 @@ class AdapterServices:
                 self._running = None
             helper_proc.HELPER_LOCK.release()
             self._prune(st)
-        self._history_finish(st, day, r, ing, fp, started, pending=pending)
+        self._history_finish(st, day, r, ing, fp, started, pending=pending, adapter=self._adapter_id(hp), hold=hold)
         return True
 
     def _history_drain(self, st: Settings, f: dict, h: dict) -> bool:
@@ -1673,8 +1718,9 @@ class AdapterServices:
                              "phase": "ingesting"}
         r = {"state": p.get("state"), "code": p.get("code"), "files": p["files"], "dates": [day],
              "filtered": p.get("filtered") is True}
+        books = [b for b in p.get("books") or [] if isinstance(b, str)]   # none known (an older pending): nothing emptied
         try:
-            ing = self._ingest(st, hp, f, folder, r, recompute_runs=False, wait=False, day=day)
+            ing = self._ingest(st, hp, f, folder, r, recompute_runs=False, wait=False, day=day, books=books)
         except ServiceError:
             return False   # still busy (or a cancel): kept
         except Invalid:
@@ -1687,11 +1733,28 @@ class AdapterServices:
             with self._lock:
                 self._running = None
             helper_proc.HELPER_LOCK.release()
-        self._history_finish(st, day, r, ing, read_state(st).get("fingerprint"), started, drained=True)
+        self._history_finish(st, day, r, ing, read_state(st).get("fingerprint"), started, drained=True,
+                             adapter=self._adapter_id(hp), hold=self._retire_held(st, hp, f, r, day, books))
         return True
 
+    @staticmethod
+    def _adapter_id(hp: Helper) -> str:
+        return f"{hp.handle.name} {hp.handle.version}"
+
+    def _retire_held(self, st: Settings, hp: Helper, f: dict, r: dict, day: str | None, books: list[str] | None) -> bool:
+        """An answer «no records» that would empty the date's old units but cannot yet (``_retire_plan``): the mark is held
+        and the date is asked again once the adapter has proven the service."""
+        held = self._retire_plan(st, hp, f, r, day, books)[1]
+        if not held:
+            return False
+        try:
+            return bool(self._old_units(st, f, date.fromisoformat(day), books or [])) if day else False
+        except ValueError:
+            return False
+
     def _history_finish(self, st: Settings, day: str, r: dict, ing: dict | None, fp: str | None, started: datetime, *,
-                        pending: dict | None = None, drained: bool = False) -> None:
+                        pending: dict | None = None, drained: bool = False, adapter: str | None = None,
+                        hold: bool = False) -> None:
         """The answer into the date's mark or, with no mark, into the worker's wait / retry (``trades_history`` doc)."""
         now = self._now()
         sha = {x.get("file"): x.get("sha256") for x in r.get("files") or [] if isinstance(x, dict)}
@@ -1717,7 +1780,8 @@ class AdapterServices:
                 h["last"] = {"date": day, "state": "pending", "code": mcode, "at": now.isoformat()}
                 return
             if mark is not None:
-                trades_history.apply_mark(h, day, mark, mcode, now, fingerprint=fp, files=files, units=units)
+                trades_history.apply_mark(h, day, mark, mcode, now, fingerprint=fp, files=files, units=units,
+                                          adapter=adapter, hold=hold)
                 h.update(failures=0, retry_at=None, wait=None,
                          last={"date": day, "state": h["marks"][day]["state"], "code": mcode, "at": now.isoformat()})
                 h["priority"] = [d for d in h.get("priority") or [] if d != day]

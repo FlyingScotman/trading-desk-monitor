@@ -250,9 +250,11 @@ not need a new declaration for it: it knows the first version of an adapter (by 
 (`trades_history.WINDOW_FIXED`) and, the first time it loads such an adapter, notes it (`window` in its history file: the
 time and the newest set id). From then on, once and by itself (also while the fetch of past dates is off), it asks again the
 received dates (`fetched`, `covered`, `no_trades`) marked before that time, and a complete answer for a date, today's
-too, replaces the date whole: a unit (book) of the date from this feed's source, recorded before, with no records in the
-answer gets an empty `full_snapshot` revision (the older revisions stay). A `filtered` `no_records` answer with no date
-yet brought records proves nothing and empties nothing. An adapter that would declare this itself needs a new optional key
+too, replaces the date whole for the books the request named: a unit (book) of the date from this feed's source, recorded
+before, with no records in the answer gets an empty `full_snapshot` revision (the older revisions stay; a book the request
+did not name is not touched, the answer says nothing of it). `exported` with no unit taken in empties nothing. A
+`no_records` answer empties the date only once the adapter with the right window has brought records for some date (a
+`filtered` one with no date yet brought records never does); until then the date is asked again later. An adapter that would declare this itself needs a new optional key
 of the feed (a contract change, to be agreed).
 
 **Operations** (field `op`):
