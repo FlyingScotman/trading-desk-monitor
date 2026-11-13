@@ -92,6 +92,7 @@ from .models import (
 )
 from .ocp_line import method_note, ocp_line
 from .runs import HEADER_SQL, PNL_KEYS, resolve_run
+from .series_cache import SeriesCache
 from .slowlog import SlowLog
 
 log = logging.getLogger("desk.api")
@@ -151,6 +152,11 @@ class BodyCache:
     body again (a page open asks for several at once, and so does every other tab)."""
 
     DEFAULT_SIZE = 128
+    GZIP_LEVEL = 6
+    GZIP_FAST_BYTES = 8 << 20
+    """A body of this size or more is packed at level 1, not ``GZIP_LEVEL``: the history of a year of a big book is
+    86 MB, which takes 2.4 s at level 6 and 0.7 s at level 1 for a tenth more bytes on a local network (TDM#736). The
+    bytes inside are the same, so the ETag (a hash of the plain body) is."""
     DEFAULT_MB = 384
     ENV_MB = "DESK_BODY_CACHE_MB"
 
@@ -197,7 +203,8 @@ class BodyCache:
     def put(self, key: tuple, fp: str, body: bytes) -> tuple[bytes, bytes, str]:
         import gzip
 
-        val = (body, gzip.compress(body, compresslevel=6), '"' + hashlib.sha256(body).hexdigest()[:32] + '"')
+        val = (body, gzip.compress(body, compresslevel=self.GZIP_LEVEL if len(body) < self.GZIP_FAST_BYTES else 1),
+               '"' + hashlib.sha256(body).hexdigest()[:32] + '"')
         with self._lock:
             old = self._items.pop(key, None)
             if old is not None:
@@ -424,9 +431,11 @@ def _json_bytes(x: Any) -> bytes:
     return json.dumps(x, ensure_ascii=False, separators=(",", ":"), default=str).encode()
 
 
-def desk_body(con, run: dict[str, Any]) -> bytes:
-    return ("window.DESK = " + json.dumps(compat.assemble(con, run), ensure_ascii=False, separators=(",", ":"))
-            + ";\n").encode()
+def desk_body(con, run: dict[str, Any], cache: SeriesCache | None = None) -> bytes:
+    """``/desk-data.js``: ``window.DESK`` of the run. ``cache``: the lines of the history of the runs before it kept between
+    builds (``SeriesCache``, TDM#736)."""
+    return ("window.DESK = " + json.dumps(compat.assemble(con, run, cache.days if cache is not None else None),
+                                          ensure_ascii=False, separators=(",", ":")) + ";\n").encode()
 
 
 def run_body(con, run: dict[str, Any]) -> bytes:
@@ -442,8 +451,8 @@ def run_script(cache: BodyCache, con, run: dict[str, Any]) -> bytes:
     return concepts_run.SCRIPT_PREFIX + body + b";\n"
 
 
-def extras_body(con, run: dict[str, Any], writer: Any = None) -> bytes:
-    return concepts.script(concepts.extras(con, run, writer)).encode()
+def extras_body(con, run: dict[str, Any], writer: Any = None, cache: SeriesCache | None = None) -> bytes:
+    return concepts.script(concepts.extras(con, run, writer, cache)).encode()
 
 
 def history_body(con, run: dict[str, Any], writer: Any = None, wanted: list[str] | None = None,
@@ -510,9 +519,11 @@ def warm_bodies(app: FastAPI, summaries: bool = True, run_id: int | None = None)
         warmer = app.state.warmer
         if warmer is not None:
             warmer.building = run["run_id"]
+        series = app.state.series_cache
         builders = {"run": lambda: run_body(con, run), "run-js": lambda: run_script(cache, con, run),
-                    "extras": lambda: extras_body(con, run, writer), "history": lambda: history_body(con, run, writer),
-                    "calendar": lambda: calendar_body(con, run), "desk": lambda: desk_body(con, run)}
+                    "extras": lambda: extras_body(con, run, writer, series),
+                    "history": lambda: history_body(con, run, writer),
+                    "calendar": lambda: calendar_body(con, run), "desk": lambda: desk_body(con, run, series)}
         try:
             for name, extra, reads in WARMED:
                 if reads and not summaries:
@@ -838,6 +849,7 @@ def create_app(store_url: str, static_dir: Path | None = None, app_dir: Path | N
     app.state.instance = uuid.uuid4().hex[:16]  # /health/live's X-Desk-Instance: the LAN self-check knows its server
     app.state.lan_probe = None  # desk.lan.probe_all once serve has started (the settings page's «Сеть»)
     app.state.body_cache = BodyCache()
+    app.state.series_cache = SeriesCache()  # what the bodies take from the runs of earlier dates (TDM#736)
     app.state.slow = SlowLog()  # the requests slower than DESK_SLOW_REQUEST_S (settings → Диагностика)
     app.state.warmer = None  # serve's warm thread: ``Warmer`` (the pages' bodies built when a run is published)
     app.state.run_cache = RunBodyCache()  # the per-run API's finished bodies (TDM#631)
@@ -1208,7 +1220,9 @@ def create_app(store_url: str, static_dir: Path | None = None, app_dir: Path | N
             return Response("/* demo requested: data.js */\n", media_type=JS, headers=NO_STORE)
         run = resolve_run(con, as_of, run_id)
         if run is not None:  # built once per run and store state (R23); the browser still asks every time (R16)
-            body, gz = cached_body(request, con, ("desk", run["run_id"]), lambda: desk_body(con, run), DESK_FP_SQL, run)
+            series = request.app.state.series_cache
+            body, gz = cached_body(request, con, ("desk", run["run_id"]), lambda: desk_body(con, run, series),
+                                   DESK_FP_SQL, run)
             if "gzip" in request.headers.get("accept-encoding", ""):
                 return Response(gz, media_type=JS, headers={**NO_STORE, "Content-Encoding": "gzip",
                                                             "Vary": "Accept-Encoding"})
@@ -1295,8 +1309,9 @@ def create_app(store_url: str, static_dir: Path | None = None, app_dir: Path | N
         run = None if demo else resolve_run(con, as_of, run_id)
         if run is None:
             return Response("/* no run: window.DESK_EXTRAS not set */\n", media_type=JS, headers=NO_STORE)
-        return cached_response(request, con, ("extras", run["run_id"]), lambda: extras_body(con, run, write_summaries), JS,
-                               run=run)
+        series = request.app.state.series_cache
+        return cached_response(request, con, ("extras", run["run_id"]),
+                               lambda: extras_body(con, run, write_summaries, series), JS, run=run)
 
     @app.get("/api/v1/concepts/carry", response_model=CarryOut,
              description="The forward carry of a run to a horizon (TDM#66, ``scenario.carry``): per position core's "

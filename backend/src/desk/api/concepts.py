@@ -45,7 +45,7 @@ import math
 from collections.abc import Callable
 from datetime import date, timedelta
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from psycopg.rows import tuple_row
 
@@ -59,6 +59,9 @@ from ..scenario.carry import meetings
 from ..store import DEFAULT_RUNS
 from ..valuation.positions import RISK_MISSING
 from . import pnl_mtd
+
+if TYPE_CHECKING:
+    from .series_cache import SeriesCache
 
 HIST_RUNS = 260
 """At most this many default runs make the desk series (about a year of business days)."""
@@ -124,16 +127,24 @@ def _runs(con, run: dict[str, Any]) -> list[dict[str, Any]]:
 
 
 def summaries(con, run_ids: list[int], writer: Writer = None,
-              pids: list[str] | None = None) -> dict[int, dict[str, Any]]:
+              pids: list[str] | None = None, pos_of: list[int] | None = None) -> dict[int, dict[str, Any]]:
     """The runs' summaries (``publish.summary``): read, the missing ones written by ``writer`` first, any still
     missing (no writer, a read-only store) built in memory. ``pids``: only ``pos`` of these positions is read (a
-    year of summaries is megabytes of JSON; one position's history needs a few kilobytes of it)."""
+    year of summaries is megabytes of JSON; one position's history needs a few kilobytes of it). ``pos_of``: ``pos``
+    (every position of the run, most of a summary) only of these runs; the others' summaries come without it (TDM#736:
+    ``extras`` reads the positions of the run shown and the one before it, the other dates' sums only)."""
     def read(ids: list[int]) -> dict[int, dict[str, Any]]:
-        if pids is not None:
+        if pids is not None:  # ``data->'pos'`` once per run (the CTE): inside the aggregate it was taken out of the
+            # stored document again for every position asked, 40 s for 150 positions of a year of runs (TDM#736)
             return {r["run_id"]: {"pos": r["pos"] or {}} for r in con.execute(
-                "SELECT run_id, (SELECT jsonb_object_agg(k, data->'pos'->k) FROM unnest(%s::text[]) k"
-                " WHERE data->'pos' ? k) AS pos FROM run_summary WHERE run_id = ANY(%s) AND version = %s",
-                (pids, ids, summary.VERSION))}
+                "WITH s AS MATERIALIZED (SELECT run_id, data->'pos' AS p FROM run_summary"
+                " WHERE run_id = ANY(%s) AND version = %s)"
+                " SELECT run_id, (SELECT jsonb_object_agg(k, p->k) FROM unnest(%s::text[]) k WHERE p ? k) AS pos FROM s",
+                (ids, summary.VERSION, pids))}
+        if pos_of is not None:
+            return {r["run_id"]: r["data"] for r in con.execute(
+                "SELECT run_id, CASE WHEN run_id = ANY(%s) THEN data ELSE data - 'pos' END AS data FROM run_summary"
+                " WHERE run_id = ANY(%s) AND version = %s", (pos_of, ids, summary.VERSION))}
         return {r["run_id"]: r["data"] for r in con.execute(
             "SELECT run_id, data FROM run_summary WHERE run_id = ANY(%s) AND version = %s", (ids, summary.VERSION))}
 
@@ -253,13 +264,15 @@ def trade_of(t: dict[str, Any], pos: list) -> dict[str, Any]:
             **{k: v for k, v in sides.items() if v}, "net": {"bonds": net, "face": net * one if one is not None else None}}
 
 
-def extras(con, run: dict[str, Any], writer: Writer = None) -> dict[str, Any]:
+def extras(con, run: dict[str, Any], writer: Writer = None, cache: SeriesCache | None = None) -> dict[str, Any]:
+    """``window.DESK_EXTRAS`` of the run. ``cache``: the sums of the runs before it kept between builds
+    (``series_cache.SeriesCache``, TDM#736); the same numbers without it."""
     from . import coverage  # it imports this module
 
     runs = _runs(con, run)
     dates = [r["business_date"].isoformat() for r in runs]
     n = len(runs)
-    S = summaries(con, [r["run_id"] for r in runs], writer)
+    S = summaries(con, [r["run_id"] for r in runs], writer, pos_of=[r["run_id"] for r in runs[-2:]])
     sums = [S[r["run_id"]] for r in runs]
     as_of = run["business_date"]
 
@@ -275,7 +288,7 @@ def extras(con, run: dict[str, Any], writer: Writer = None) -> dict[str, Any]:
     cur, prev = sums[-1]["pos"], (sums[-2]["pos"] if prev_ok else None)
     # month and year to date: the PnL report's sums over the period's runs (``pnl_mtd``, TDM#568), also of the
     # positions the run no longer has
-    period = pnl_mtd.totals(con, run, as_of)
+    period = pnl_mtd.totals(con, run, as_of, cache.period if cache is not None else None)
     sums_by_pos = pnl_mtd.by_position(period["positions"])
     trades, trades_known = _trades(con, run["run_id"])
     qty = {(r["run_id"], r["position_id"]): r["quantity"] for r in con.execute(

@@ -32,7 +32,7 @@ from __future__ import annotations
 import math
 from datetime import date, timedelta
 from decimal import Decimal
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from rub_fixed_income import RISK_BUCKETS, RISK_PILLARS
 
@@ -54,6 +54,9 @@ from ..scenario.carry import meeting_rows, meetings
 from ..store import CURRENT_RUNS, DEFAULT_RUNS, slice_label  # noqa: F401 - re-exported, as before
 from .runs import PNL_KEYS, RUONIA_DISCOUNT_VERSION, resolve_run, risk_notes, run_slice  # noqa: F401 - moved (TDM#289)
 from .scope_rule import book_portfolio, portfolio_map, portfolio_of
+
+if TYPE_CHECKING:
+    from .series_cache import Memo
 
 CARRY_HORIZONS = [list(h) for h in carry_horizons]  # the forward carry's (scenario.carry.HORIZONS)
 DEFAULT_CARRY = [{"id": "flat", "name": "КС без изменений", "ks": {"mode": "flat"}}]
@@ -242,7 +245,10 @@ def pnl_state(run: dict[str, Any], positions: list[dict[str, Any]]) -> dict[str,
             "pnlCoverage": {"withPnl": n, "positions": len(positions)}}
 
 
-def assemble(con, run: dict[str, Any]) -> dict[str, Any]:
+def assemble(con, run: dict[str, Any], days: Memo | None = None) -> dict[str, Any]:
+    """``window.DESK`` of a run. ``days``: the lines of ``history`` of the runs before it, kept between builds
+    (``series_cache.SeriesCache.days``, TDM#736): a complete run's line is a function of its rows alone, so a
+    new run of the date reads the rows of the one run it adds, not of a year of them; the same body without it."""
     rid, as_of = run["run_id"], run["business_date"].isoformat()
     ref = {r["kind"]: r["data"]
            for r in con.execute("SELECT kind, data FROM run_reference WHERE run_id = %s", (rid,))}
@@ -423,21 +429,32 @@ def assemble(con, run: dict[str, Any]) -> dict[str, Any]:
     scenarios = [{"id": s["scenario_id"], "name": s["name"], "kind": s["kind"], "description": s["description"],
                   **s["definition"]} for s in con.execute(
         "SELECT * FROM scenario_def WHERE active ORDER BY ord, scenario_id")]
-    hist = con.execute(f"SELECT run_id, business_date FROM run WHERE run_id IN ({DEFAULT_RUNS})"
+    hist = con.execute(f"SELECT run_id, business_date, completed_at FROM run WHERE run_id IN ({DEFAULT_RUNS})"
                        " AND business_date < %s ORDER BY business_date DESC LIMIT %s",
                        (run["business_date"], HISTORY_DAYS - 1)).fetchall()[::-1]
+
+    def day_totals(h: dict[str, Any]) -> tuple[Any, ...]:
+        """``run_totals`` and ``official_state`` of a past run's rows: kept by the run (``days``)."""
+        key = (h["run_id"], h["completed_at"])
+        kept = days.get(key) if days is not None else None
+        if kept is None:
+            rows = con.execute(
+                "SELECT jsonb_build_object('book_id', fact->'book_id', 'dv01', fact->'dv01', 'cs01', fact->'cs01',"
+                " 'extra', jsonb_build_object('risk_problem', fact->'extra'->'risk_problem')) AS fact, pnl"
+                " FROM run_position WHERE run_id = %s AND fact IS NOT NULL", (h["run_id"],)).fetchall()
+            kept = (*run_totals(rows), official_state(rows))
+            if days is not None:
+                days.put(key, kept)
+        return kept
+
     history, cum = [], 0.0
-    for d, rows in [(h["business_date"].isoformat(), con.execute(
-            "SELECT jsonb_build_object('book_id', fact->'book_id', 'dv01', fact->'dv01', 'cs01', fact->'cs01', 'extra',"
-            " jsonb_build_object('risk_problem', fact->'extra'->'risk_problem')) AS fact, pnl FROM run_position"
-            " WHERE run_id = %s AND fact IS NOT NULL", (h["run_id"],)).fetchall()) for h in hist] + [(as_of, prows)]:
-        off, exp, dv01, cs01 = run_totals(rows)
+    for d, (off, exp, dv01, cs01, st) in [(h["business_date"].isoformat(), day_totals(h)) for h in hist] + [
+            (as_of, (*run_totals(prows), official_state(prows)))]:
         cum += off or 0.0
         # officialReceived (TDM#106): pnlOfficial is the official PnL only when it arrived for every book; else, for
         # the books without it, it is the explained PnL plus the FX basis (run_totals), and the pages must not call it
         # official. officialBooks (TDM#489): the official PnL comes per book; a partial day says which books lack it,
         # and its unexplained is over the books with it only (officialBooks.pnlOfficial - officialBooks.pnlExplained)
-        st = official_state(rows)
         history.append({"date": d, "pnlOfficial": off, "pnlExplained": exp, "pnlCum": cum, "dv01": dv01,
                         "cs01": cs01, "officialReceived": st["state"] == "all", "officialState": st["state"],
                         "officialBooks": {k: v for k, v in st.items() if k != "state"}})
