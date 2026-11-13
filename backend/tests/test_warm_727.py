@@ -18,14 +18,24 @@ from psycopg.types.json import Jsonb
 from test_r23_concepts import DATE, PREV, desk  # noqa: F401 - the fixture
 
 from desk import diagnostics, store
+from desk.api import app as app_module
 from desk.api import compat, concepts, concepts_run
-from desk.api.app import BodyCache, Warmer, missing_bodies, warm_bodies
+from desk.api.app import (
+    READY_BODIES,
+    WARMED,
+    BodyCache,
+    Warmer,
+    _warm_key,
+    body_fingerprint,
+    missing_bodies,
+    warm_bodies,
+)
 from desk.api.runs import resolve_run
 from desk.api.slowlog import SlowLog, threshold
 from desk.publish import summary
 from desk.settings import Settings
 
-ALL = ["run", "run-js", "extras", "history", "calendar", "desk"]
+ALL = ["run", "run-js", "extras", "calendar", "desk", "history"]
 
 
 def clone_run(store_url: str, src: int, *, intraday: bool = False) -> int:
@@ -80,7 +90,7 @@ def test_a_run_published_later_leaves_the_bodies_of_the_older_runs_built(desk, s
     assert newest(store_url)["run_id"] == new
     # the older run is as built as it was: a new intraday cut changes nothing it reads
     assert missing(app, store_url, old) == [] and missing(app, store_url, old, "desk") == []
-    assert missing(app, store_url, new) == ["run-js", "extras", "history", "calendar"]  # the new run: nothing yet
+    assert missing(app, store_url, new) == ["run-js", "extras", "calendar"]  # the new run: nothing yet (not the history)
     assert warm_bodies(app) == ALL  # and now it is built, the older run's bodies untouched
     assert missing(app, store_url, new) == [] and missing(app, store_url, old) == []
     calls = []
@@ -100,9 +110,9 @@ def test_a_recomputed_past_date_rebuilds_only_what_reads_the_history(desk, store
     with store.connect(store_url) as con:
         prev = con.execute("SELECT run_id FROM run WHERE business_date = %s", (date.fromisoformat(PREV),)).fetchone()[0]
     clone_run(store_url, prev)  # the earlier date is calculated again: the history of the run changes
-    assert missing(app, store_url, run["run_id"]) == ["extras", "history"]  # run, run-js and calendar read the run only
+    assert missing(app, store_url, run["run_id"]) == ["extras"]  # run, run-js and calendar read the run only
     assert missing(app, store_url, run["run_id"], "desk") == ["desk"]
-    assert warm_bodies(app) == ["extras", "history", "desk"]
+    assert warm_bodies(app) == ["extras", "desk", "history"]  # the history last
     assert missing(app, store_url, run["run_id"]) == []
 
 
@@ -246,7 +256,7 @@ def test_ready_says_what_is_missing_and_asks_the_warm_thread(desk, store_url):  
     rid = newest(store_url)["run_id"]
     r = desk.get(f"/api/v1/runs/{rid}/ready")
     assert r.status_code == 200 and r.headers["cache-control"] == "no-store"
-    assert r.json() == {"run_id": rid, "ready": False, "missing": ["run-js", "extras", "history", "calendar"],
+    assert r.json() == {"run_id": rid, "ready": False, "missing": ["run-js", "extras", "calendar"],
                         "warming": False}
     assert desk.get(f"/api/v1/runs/{rid}/ready?pages=desk").json()["missing"] == ["desk"]
     app.state.warmer = Warmer(store_url)  # serve's: the page's question wakes it for the run
@@ -260,6 +270,31 @@ def test_ready_says_what_is_missing_and_asks_the_warm_thread(desk, store_url):  
     r = desk.get("/api/v1/runs/99999/ready")
     assert r.status_code == 404 and r.json()["details"]["reason"] == "run_not_found"
     assert desk.get(f"/api/v1/runs/{rid}/ready?pages=x").status_code == 422
+
+
+def test_a_page_does_not_wait_for_the_history_of_all_positions(desk, store_url, monkeypatch):  # noqa: F811
+    """TDM#736: the year's history of every position is the slowest body (12 s of 15 at the owner's size) and no page asks for
+    it first (the dynamics page and the position list ask for a window, a card for its own positions): ``ready`` does not
+    wait for it, and the warm thread builds it after the others."""
+    app = desk.app
+    rid = newest(store_url)["run_id"]
+    assert "history" not in READY_BODIES["concepts"] and "history" not in READY_BODIES["desk"]
+    assert WARMED[-1][0] == "history" and [n for n, *_ in WARMED if n in READY_BODIES["concepts"]] == \
+        ["run-js", "extras", "calendar"]
+    seen: list[str] = []
+    real = app_module.history_body
+    monkeypatch.setattr(app_module, "history_body", lambda *a, **kw: (seen.append("history"), real(*a, **kw))[1])
+    assert warm_bodies(app) == ALL
+    assert seen == ["history"]
+    body_cache = app.state.body_cache
+    with psycopg.connect(store_url, row_factory=dict_row, autocommit=True) as con:
+        run = resolve_run(con, None, rid)
+        key = _warm_key("history", rid)
+        assert body_cache.get(key, body_fingerprint(con, key, run)) is not None
+        body_cache._items.pop(key)  # the year's history is not in the cache (not built yet, or pushed out)
+        body_cache.bytes = sum(body_cache._size(v[1]) for v in body_cache._items.values())
+    assert desk.get(f"/api/v1/runs/{rid}/ready").json() == {"run_id": rid, "ready": True, "missing": [], "warming": False}
+    assert warm_bodies(app) == ["history"]  # and the warm thread builds just that
 
 
 def test_an_older_run_a_page_asks_for_is_built_on_request(desk, store_url):  # noqa: F811
@@ -279,7 +314,7 @@ def test_the_summaries_still_being_rebuilt_keep_the_run_not_ready(desk, store_ur
     monkeypatch.setattr(summary, "VERSION", summary.VERSION + 1)  # an upgrade: the series wait for the summaries
     rid = newest(store_url)["run_id"]
     warm_bodies(app, summaries=False)
-    assert desk.get(f"/api/v1/runs/{rid}/ready").json()["missing"] == ["extras", "history"]
+    assert desk.get(f"/api/v1/runs/{rid}/ready").json()["missing"] == ["extras"]
 
 
 # ---- the slow requests --------------------------------------------------------------------------------------------------

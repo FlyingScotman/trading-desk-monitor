@@ -465,14 +465,17 @@ def calendar_body(con, run: dict[str, Any]) -> bytes:
     return _json_bytes(concepts.market_calendar(con, run["business_date"], held) or {"missing": True})
 
 
-WARMED = (("run", None, False), ("run-js", None, False), ("extras", None, True), ("history", None, True),
-          ("calendar", None, False), ("desk", DESK_FP_SQL, False))
+WARMED = (("run", None, False), ("run-js", None, False), ("extras", None, True), ("calendar", None, False),
+          ("desk", DESK_FP_SQL, False), ("history", None, True))
 """The bodies built ahead for a run, in this order: name, the SQL of its extra fingerprint, whether it reads the runs'
-summaries. The order is what a concept page waits for first (the run, its data, the history, the calendar); the
-older pages' ``/desk-data.js`` last."""
-READY_BODIES = {"concepts": ("run-js", "extras", "history", "calendar"), "desk": ("desk",)}
+summaries. The order is what a page waits for first (the run, its data, the calendar; the older pages'
+``/desk-data.js``); the history of every position comes last (TDM#736): it is the slowest body (12 s of the 15 a new
+intraday run takes at 2000 positions and a year of runs) and no page waits for it (``READY_BODIES``)."""
+READY_BODIES = {"concepts": ("run-js", "extras", "calendar"), "desk": ("desk",)}
 """What ``GET /api/v1/runs/{id}/ready`` waits for by the kind of page (``pages``): the concept pages' first requests,
-the older pages' ``/desk-data.js``."""
+the older pages' ``/desk-data.js``. Not the history of all positions (``("history", run_id, (), None)``, a year): the
+pages ask for a window of it (the dynamics page, the position list) or for the positions they show, each its own body,
+built when asked (TDM#736, the owner's decision of 13.11); the warm thread builds the year's body after the others."""
 
 
 def _warm_key(name: str, run_id: int) -> tuple:
