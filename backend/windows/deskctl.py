@@ -529,8 +529,8 @@ def settle_env_old(env: dict[str, str]) -> None:
             say(f"Предупреждение: не удалось удалить остатки прошлой установки {old}: {e}. Удалите папку вручную.")
         return
     if bundle_processes()[0]:
-        raise Fail("Desk Monitor из этой папки ещё работает. Закройте его окно (или запустите stop.bat) "
-                   "и запустите снова.")
+        raise Fail("Desk Monitor из этой папки ещё работает. Остановите его: запустите stop.bat (окно start.bat не "
+                   "закрывайте: база данных остановится аварийно) и запустите снова.")
     say(f"Прошлая установка не закончилась: возвращаю прежнее окружение из {old} ...")
     if ENV.exists():
         stop_store(env)
@@ -660,8 +660,8 @@ def ensure_env(env: dict[str, str], *, force: bool = False) -> None:
     if ENV.exists():
         desk, _ = bundle_processes()
         if desk:
-            raise Fail("Desk Monitor из этой папки ещё работает. Закройте его окно (или запустите stop.bat) "
-                       "и запустите снова.")
+            raise Fail("Desk Monitor из этой папки ещё работает. Остановите его: запустите stop.bat (окно start.bat не "
+                       "закрывайте: база данных остановится аварийно) и запустите снова.")
     marker = env_marker()
     changed = None if force or not desk_exe().is_file() else changed_wheels(have, marker)
     if changed is not None and update_wheels(env, changed):
@@ -1182,7 +1182,8 @@ def cmd_start(args: list[str]) -> int:
             return 0
         if _no_proxy_get(f"{local}/health/live"):
             raise Fail(f"Порт {port} занят другим экземпляром Desk Monitor (старая версия из другой папки?). "
-                       "Закройте его окно или запустите stop.bat в его папке, затем снова start.bat.")
+                       "Запустите stop.bat в его папке (окно его start.bat не закрывайте: база данных остановится "
+                       "аварийно), затем снова start.bat.")
         raise Fail(f"Порт {port} занят другой программой. Кто занял: netstat -ano | findstr :{port} "
                    f"(последняя колонка - PID в Диспетчере задач); если там пусто, порт зарезервирован Windows: "
                    f"netsh interface ipv4 show excludedportrange protocol=tcp. Другой порт: в командной строке "

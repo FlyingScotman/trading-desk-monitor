@@ -243,6 +243,20 @@ a date belongs to one source, §6.6). The files are taken in with one non-blocki
 leaves them pending and they are taken in at the next step, before another date is asked. No run is made after the
 ingestion: the monitor's eod and backfill steps recompute a date by the changed hash of its inputs (§10 `trades`).
 
+**An adapter that asked for the wrong window (TDM#715, no contract change).** The private adapter before 0.9.16 could ask the
+service for the trades of a date with the window a day early, so the set of the date D held the trades of D-1, and a book
+without records in a later cut (a `filtered` export replaces only the books it has records for) kept them. The monitor does
+not need a new declaration for it: it knows the first version of an adapter (by `describe()["name"]`) with the right window
+(`trades_history.WINDOW_FIXED`) and, the first time it loads such an adapter, notes it (`window` in its history file: the
+time and the newest set id). From then on, once and by itself (also while the fetch of past dates is off), it asks again the
+received dates (`fetched`, `covered`, `no_trades`) marked before that time, and a complete answer for a date, today's
+too, replaces the date whole for the books the request named: a unit (book) of the date from this feed's source, recorded
+before, with no records in the answer gets an empty `full_snapshot` revision (the older revisions stay; a book the request
+did not name is not touched, the answer says nothing of it). `exported` with no unit taken in empties nothing. A
+`no_records` answer empties the date only once the adapter with the right window has brought records for some date (a
+`filtered` one with no date yet brought records never does); until then the date is asked again later. An adapter that would declare this itself needs a new optional key
+of the feed (a contract change, to be agreed).
+
 **Operations** (field `op`):
 
 | op | request | answer |

@@ -92,6 +92,9 @@
     if (c.unavailable) sum += ' · недоступно ' + c.unavailable;
     if (c.partial) sum += ' · получено частично ' + c.partial;
     if (c.todo) sum += ' · ждут запроса ' + c.todo;
+    // TDM#715: после исправления адаптера монитор сам заново запрашивает уже полученные даты (ничего нажимать не нужно)
+    var win = h.window && h.window.left ? h.window : null;
+    if (win) sum += '. Исправление адаптера: сделки уже полученных дат запрашиваются заново, осталось ' + win.left + ' из ' + Math.max(win.total || 0, win.left);
     out.summary = sum;
     if (a) {
       var parts = [];
@@ -116,9 +119,9 @@
     }
     if (h.current) out.next = 'Сейчас: ' + dm(h.current);
     else if (h.paused && h.waiting) out.next = T.HIST_WAIT[h.waiting] || h.waiting;
-    else if (!h.enabled) out.next = 'выключено';
+    else if (!h.enabled) out.next = win ? 'догрузка новых дат выключена; уже полученные даты запрашиваются заново' : 'выключено';
     else if (h.gate && T.HIST_GATE[h.gate]) out.next = T.HIST_GATE[h.gate] + (h.next_at ? ', дальше в ' + T.when(h.next_at, now) : '');
-    else if (c.todo) out.next = 'Дальше: сейчас';
+    else if (c.todo || win) out.next = 'Дальше: сейчас';
     else if (h.pending) out.next = 'Файлы ждут окончания расчёта';
     else if ((h.problems || []).length) out.next = 'Ждут повтора: ' + h.problems.length;
     else out.next = 'Все даты получены';

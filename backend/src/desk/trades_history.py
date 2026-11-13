@@ -54,12 +54,33 @@ those that are candidates) are asked. The gate is ``no_trades_week``.
 Limits: one date in ``HISTORY_GAP_S`` seconds, ``HISTORY_PER_DAY`` requests a day, none while a feed is due within the
 time of the last request (``Service._feed_due_soon``).
 
+**The window of the query (TDM#715).** An adapter before ``WINDOW_FIXED`` (the private adapter 0.9.16) asked the service
+for the trades of a date with the window shifted a day back (the setting «местное время со смещением»): the set of the
+date D held the trades of D-1, and a book without records in a later cut kept them (a cut by the chosen portfolios
+replaces only the books it has records for). The monitor mends it by itself, once, with no action of the owner and also
+while the fetch of past dates is switched off: the first time it sees an adapter that is not before ``WINDOW_FIXED``
+(``note_window``) it writes ``window`` into the file: the time (``since``), the newest ``dataset_set`` id (``set_id``:
+the sets up to it are of the older adapter) and the number of the dates received (``total``). Then (a) a mark ``fetched``
+(``covered`` too) or ``no_trades`` made before ``since`` is a date to ask again (``stale``, ``due``): the asking is as
+slow as the fetch of the past (one date in ``HISTORY_GAP_S``), the newest block first; a date whose asking again failed
+(``partial``, ``unavailable``, ``unmapped``) is still owed (``redo``) and retried by the usual rules; (b) the complete
+answer of such a date, and of today's feed, puts an empty revision (``store.retire_old_trades``,
+``adapter_services._ingest``) on every unit (book) of the date that was asked for, has no records in the answer and
+whose current set is of the older adapter: for these books the date is the answer whole, the older revisions stay in the
+history, a book that was not asked for is not touched. «Exported» counts only when the date is marked received; «no
+records» only once the adapter with the right window has brought records for some date (``window_proven``): until then the
+mark is held (``hold``) and the date asked again then. Files of the older adapter that wait for the cycle lock
+(``pending``) are dropped by the sight. A mark made after ``since`` is never stale: nothing is
+asked twice, and a second start does nothing. The PnL of a date follows by itself: the stamp of the inputs
+(``backfill.inputs_stamp``) holds the sets of the datasets, the eod and backfill steps make the date again.
+
 ``summary`` is what ``GET /api/v1/adapter-services/history`` returns: the counts by mark, what the runs say of the dates
 (``applied``: how far the trades are in the PnL, read from the lineage of the date's default run), the problems.
 """
 from __future__ import annotations
 
 import json
+import re
 from datetime import date, datetime, timedelta
 from datetime import time as dtime
 from pathlib import Path
@@ -86,6 +107,10 @@ WHEN = ("off_hours", "any")
 MARKS = ("fetched", "no_trades", "no_books", "unmapped", "unavailable", "partial")
 WAITS = ("login_required", "config_invalid", "source_disabled")
 WORK_DAYS = 5
+WINDOW_FIXED: dict[str, tuple[int, ...]] = {"tda": (0, 9, 16)}
+"""The first version of an adapter (by its ``describe()["name"]``) whose query of the trades of a date has the right
+window; before it the sets of a date hold the trades of the day before (the module doc). An adapter not in the table, or a
+version that is not read, is taken for right: nothing is asked again for it."""
 COMPLETENESS = ("no_pnl", "lost", "unpriced", "no_prev_close")
 """The keys of the run's lineage ``intraday_trades`` that say how much of the trades is outside the PnL (a count or a
 list or ``{"n": count, "sum": amount}``); without any of them the screen says that it has no information."""
@@ -99,7 +124,7 @@ def path(st: Settings) -> Path:
 
 def blank() -> dict:
     return {"version": VERSION, "enabled": True, "from": None, "when": "any", "marks": {}, "priority": [],
-            "pending": None, "calls": {"day": None, "n": 0}, "last_call": None, "last_duration_s": None,
+            "pending": None, "window": None, "calls": {"day": None, "n": 0}, "last_call": None, "last_duration_s": None,
             "wait": None, "failures": 0, "retry_at": None, "last": None}
 
 
@@ -147,6 +172,75 @@ def lower_bound(settings: Settings, doc: dict, history_from: str | None, today: 
     return max(d, date.fromisoformat(history_from)) if history_from else d
 
 
+# ---- the window of the query (TDM#715) -----------------------------------------------------------------------------
+
+def version_tuple(v: Any) -> tuple[int, ...] | None:
+    """``(0, 9, 16)`` of ``"0.9.16"`` (a suffix after the digits is ignored), None for what is not a version."""
+    m = re.match(r"\s*v?(\d+(?:\.\d+)*)", v) if isinstance(v, str) else None
+    return tuple(int(x) for x in m.group(1).split(".")) if m else None
+
+
+def window_fixed(name: Any, version: Any) -> bool:
+    """Is the adapter one whose query of the trades has the right window (``WINDOW_FIXED``)?"""
+    need, have = WINDOW_FIXED.get(name) if isinstance(name, str) else None, version_tuple(version)
+    return need is not None and have is not None and have >= need
+
+
+def window_since(doc: dict) -> datetime | None:
+    w = doc.get("window")
+    return _ts(w.get("since")) if isinstance(w, dict) else None
+
+
+def is_stale(mark: dict | None, since: datetime | None) -> bool:
+    """A received date (``fetched``, ``covered`` too, or ``no_trades``) whose mark is older than the first sight of the
+    adapter with the right window: asked again once."""
+    if since is None or not mark or mark.get("state") not in ("fetched", "no_trades"):
+        return False
+    at = _ts(mark.get("at"))
+    return at is None or at < since
+
+
+def window_proven(doc: dict) -> bool:
+    """Has the adapter with the right window brought records for a date (a mark ``fetched``, not ``covered``, made after
+    the first sight of it by such an adapter)? The older adapter's marks do not count: an answer «no records» of a date
+    empties the date only then (TDM#715)."""
+    since = window_since(doc)
+    if since is None:
+        return False
+    for m in doc.get("marks", {}).values():
+        at = _ts(m.get("at"))
+        name, _, version = str(m.get("adapter") or "").partition(" ")
+        if m.get("state") == "fetched" and m.get("code") != "covered" and at is not None and at >= since \
+                and window_fixed(name, version):
+            return True
+    return False
+
+
+def owed(mark: dict | None, since: datetime | None) -> bool:
+    """A date not yet asked again after the sight of the adapter with the right window: its mark is older (``is_stale``),
+    held (an answer «no records» that could not empty the date yet) or the last asking ended in a failure (``redo``)."""
+    return bool(mark) and (is_stale(mark, since) or bool(mark.get("hold")) or bool(mark.get("redo")))
+
+
+def stale_dates(doc: dict) -> list[str]:
+    """The dates the worker has to ask again also while the fetch of past dates is off: the older marks, the held ones
+    once the adapter has proven the service, and those whose asking failed (retried by the usual rules)."""
+    since, proven = window_since(doc), window_proven(doc)
+    return sorted(d for d, m in doc.get("marks", {}).items()
+                  if is_stale(m, since) or m.get("redo") or (m.get("hold") and proven))
+
+
+def note_window(doc: dict, now: datetime, set_id: int, name: str, version: str) -> bool:
+    """The first sight of an adapter with the right window written into ``doc`` (the module doc); False when it is
+    written already."""
+    if isinstance(doc.get("window"), dict) and doc["window"].get("since"):
+        return False
+    doc["window"] = {"since": now.isoformat(), "set_id": int(set_id), "adapter": f"{name} {version}",
+                     "total": sum(1 for m in doc["marks"].values() if m.get("state") in ("fetched", "no_trades"))}
+    doc["pending"] = None   # files of the older adapter that wait for the cycle lock are dropped: the date is asked again
+    return True
+
+
 # ---- marks ---------------------------------------------------------------------------------------------------------
 
 def mark_for(state: str, code: str, *, files_ok: bool = True, units: int = 0, duplicate: bool = False,
@@ -182,9 +276,14 @@ def service_proven(doc: dict) -> bool:
 
 
 def apply_mark(doc: dict, day: str, state: str, code: str, now: datetime, *, fingerprint: str | None,
-               files: list[dict] | None = None, units: int = 0, sets: str | None = None) -> dict:
-    """The mark of ``day`` written into ``doc`` with its attempts and next time (the module doc); the mark."""
+               files: list[dict] | None = None, units: int = 0, sets: str | None = None, adapter: str | None = None,
+               hold: bool = False) -> dict:
+    """The mark of ``day`` written into ``doc`` with its attempts and next time (the module doc); the mark. ``adapter``:
+    ``"<name> <version>"`` of the adapter that answered (``window_proven``). ``hold``: the answer «no records» of a date
+    received with the older window could not empty it yet (the date is asked again once the service is proven)."""
     prev = doc["marks"].get(day) or {}
+    since = window_since(doc)
+    owes = owed(prev, since)
     attempts, next_at = 0, None
     if state == "partial":
         attempts = int(prev.get("attempts") or 0) + 1 if prev.get("state") == "partial" else 1
@@ -202,19 +301,28 @@ def apply_mark(doc: dict, day: str, state: str, code: str, now: datetime, *, fin
                                                for x in (files or [])][:200], "units": units}
     if sets is not None:
         m["sets"] = sets
+    if adapter:
+        m["adapter"] = adapter
+    if hold and state in ("fetched", "no_trades"):
+        m["hold"] = True
+    elif owes and state in ("partial", "unavailable", "unmapped"):
+        m["redo"] = True   # a date received with the older window whose asking again failed is still owed (TDM#715)
     doc["marks"][day] = m
     return m
 
 
 def due(mark: dict | None, idx: int, now: datetime, fingerprint: str | None, sets: str | None = None,
-        proven: bool = False) -> bool:
+        proven: bool = False, stale: bool = False) -> bool:
     """Is the date to be asked now (the module doc)? ``idx``: the date's place among the candidates, the newest 0;
     ``proven``: some date has brought records (``service_proven``): a ``filtered_empty`` date is asked once more then
-    (it cannot be ``filtered_empty`` again, so there is no loop)."""
+    (it cannot be ``filtered_empty`` again, so there is no loop); ``stale``: a date received with the older window
+    (``is_stale``, or held and the service proven now): asked again, a covered one too (TDM#715)."""
     if mark is None:
         return True
     state = mark.get("state")
     if state in ("fetched", "no_trades"):
+        if stale:
+            return True
         if mark.get("code") == "covered":
             return False
         at = _ts(mark.get("at"))
@@ -285,9 +393,10 @@ def day_start(now: datetime) -> datetime:
     return datetime.combine(now.date() + timedelta(days=1), dtime(0), now.tzinfo)
 
 
-def gate(doc: dict, now: datetime) -> dict | None:
-    """Why the worker does not ask now: ``{"code", "until"}`` (``until``: ISO time or None), or None (it may)."""
-    if not doc.get("enabled"):
+def gate(doc: dict, now: datetime, *, stale_only: bool = False) -> dict | None:
+    """Why the worker does not ask now: ``{"code", "until"}`` (``until``: ISO time or None), or None (it may).
+    ``stale_only``: the fetch is switched off, only the dates received with the older window are asked (TDM#715)."""
+    if not doc.get("enabled") and not stale_only:
         return {"code": "off", "until": None}
     w = doc.get("wait")
     if isinstance(w, dict) and w.get("code") in WAITS:
@@ -340,18 +449,24 @@ def count_call(doc: dict, now: datetime) -> None:
 
 
 def queue(con: psycopg.Connection, settings: Settings, doc: dict, now: datetime, history_from: str | None,
-          fingerprint: str | None) -> dict:
-    """What to ask: ``{"candidates", "covered", "order"}``. The dates ``covered`` get their mark from the caller."""
+          fingerprint: str | None, *, stale_only: bool = False) -> dict:
+    """What to ask: ``{"candidates", "covered", "order"}``. The dates ``covered`` get their mark from the caller.
+    ``stale_only``: only the dates received with the older window (the fetch is off, TDM#715)."""
     cands = candidates(con, settings, doc, now, history_from)
     asked = set(doc.get("priority") or [])   # asked again by the owner: a covering set is no answer to that
-    cov = covered(con, [d for d in cands if d not in asked], doc)
+    cov = [] if stale_only else covered(con, [d for d in cands if d not in asked], doc)
     todo: set[str] = set()
     proven = service_proven(doc)
+    since, wproven = window_since(doc), window_proven(doc)
     for i, d in enumerate(cands):
         if d in cov:
             continue
         m = doc["marks"].get(d)
-        if due(m, i, now, fingerprint, sets_signature(con, d) if m and m.get("state") == "no_books" else None, proven):
+        stale = is_stale(m, since) or bool(m and m.get("hold") and wproven)
+        if stale_only and not (stale or (m and m.get("redo"))):
+            continue
+        if due(m, i, now, fingerprint, sets_signature(con, d) if m and m.get("state") == "no_books" else None, proven,
+               stale):
             todo.add(d)
     return {"candidates": cands, "covered": cov, "order": order(cands, todo, doc.get("priority") or [])}
 
@@ -473,7 +588,7 @@ def summary(con: psycopg.Connection | None, settings: Settings, doc: dict, *, no
         "from_default": default_from(settings, today).isoformat(),
         "backfill_enabled": bool(getattr(settings, "backfill", True)), "paused": False, "waiting": None,
         "counts": {k: 0 for k in (*MARKS, "todo", "covered")}, "dates": 0, "applied": None, "current": None,
-        "last": doc.get("last"), "hint": None, "next_at": None, "gate": None, "problems": [], "pending": bool(doc.get("pending")),
+        "last": doc.get("last"), "window": None, "hint": None, "next_at": None, "gate": None, "problems": [], "pending": bool(doc.get("pending")),
         "calls_today": int((doc.get("calls") or {}).get("n") or 0) if (doc.get("calls") or {}).get("day") == today.isoformat() else 0,
         "limit_per_day": HISTORY_PER_DAY}
     w = doc.get("wait")
@@ -485,7 +600,7 @@ def summary(con: psycopg.Connection | None, settings: Settings, doc: dict, *, no
     out["paused"] = out["waiting"] is not None
     if running and running.get("kind") == "history":
         out["current"] = running.get("date")
-    g = gate(doc, now)
+    g = gate(doc, now, stale_only=feed is not None and bool(stale_dates(doc)))
     out["gate"] = g["code"] if g else None
     out["next_at"] = g["until"] if g else None
     if con is None:
@@ -511,6 +626,10 @@ def summary(con: psycopg.Connection | None, settings: Settings, doc: dict, *, no
     c = out["counts"]   # every past date refused: more likely the settings than the dates (the adapter says so, 08 §2.2)
     out["hint"] = "all_unavailable" if c["unavailable"] >= 3 and not (c["fetched"] or c["no_trades"] or c["unmapped"]) \
         else None
+    since = window_since(doc)
+    left = sum(1 for d in cands if owed(doc["marks"].get(d), since))
+    if left:   # the dates received with the older window not asked again yet (TDM#715)
+        out["window"] = {"left": left, "total": max(left, int((doc.get("window") or {}).get("total") or 0))}
     out["applied"] = applied(con, settings, doc)
     out["applied"].pop("dates", None)
     return out

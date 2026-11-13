@@ -193,6 +193,20 @@ def test_the_launcher_says_stop_bat_not_close_the_window():
     assert "закройте это окно (или Ctrl+C" not in src
 
 
+def test_no_owner_text_advises_closing_the_start_bat_window_to_stop():
+    """TDM#518: closing the window of start.bat (like Ctrl+C) stops the database without its checkpoint, and the next start
+    recovers it for minutes. Every text the owner reads says «stop.bat», none says «or close the window»."""
+    files = ("backend/windows/deskctl.py", "backend/windows/start.bat", "backend/windows/INSTALL.txt",
+             "backend/windows/START_HERE.txt", "backend/tools/build_windows_bundle.py", "docs/INSTALL_BACKEND_WINDOWS.md",
+             "prototypes/desk-backup.js", "README.md")
+    advice = ("или закройте окно", "или закрыть окно", "Закройте его окно", "Close the window to stop")
+    for name in files:
+        text = (REPO / name).read_text(encoding="utf-8")
+        for phrase in advice:
+            if phrase in text:
+                pytest.fail(f"{name} still says {phrase!r}")
+
+
 def test_desk_home_falls_back_to_ascii_and_odd_paths_are_refused(monkeypatch, tmp_path):
     # PostgreSQL writes its paths in the ANSI code page and pgserver reads them as UTF-8; its psql runs unquoted
     monkeypatch.setattr(deskctl, "WIN", True)

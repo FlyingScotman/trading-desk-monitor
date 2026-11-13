@@ -460,6 +460,55 @@ def store_dataset_set(con: psycopg.Connection, *, dataset: str, scope: dict, val
     return set_id
 
 
+EMPTIED_NAME = "(no records in the answer, TDM#715)"
+"""The ``source_name`` of an empty revision that ``retire_old_trades`` puts on a unit: the screens that list the files a
+unit was read from do not show the older file as the content of an empty book."""
+
+
+def old_trades_units(con: psycopg.Connection, *, valid_date: date, source: str, up_to_set_id: int,
+                     books: Iterable[str], keep: Iterable[str] = ()) -> list[tuple]:
+    """The units of the trades of ``valid_date`` that an answer of the owner's ``books`` replaces whole (TDM#715): the book
+    is among the books asked, the unit's current set is of ``source``, is not newer than ``up_to_set_id`` (a set of the
+    adapter whose query had the window of the day before), has rows or is not a full snapshot, and the unit's
+    ``scope_key`` is not in ``keep``. (set_id, scope, priority, report_date, report_ts, seq, generated_at, file_mtime,
+    sha256) of each."""
+    books, keep = set(books), set(keep)
+    if not books:
+        return []
+    rows = con.execute(
+        "SELECT DISTINCT ON (scope_key) set_id, scope, scope_key, source, priority, report_date, report_ts, seq,"
+        " generated_at, file_mtime, inbox_file_sha256, row_count, coalesce(completeness, 'full_snapshot')"
+        f" FROM dataset_set WHERE dataset = 'trades' AND valid_date = %s ORDER BY scope_key, {CURRENT_SET}",
+        (valid_date,)).fetchall()
+    return [(sid, sc, prio, rd, ts, seq, gen, mtime, sha)
+            for sid, sc, sk, src, prio, rd, ts, seq, gen, mtime, sha, cnt, cpl in rows
+            if sk not in keep and src == source and sid <= up_to_set_id and (sc or {}).get("book_id") in books
+            and not (cnt == 0 and cpl == "full_snapshot")]
+
+
+def retire_old_trades(con: psycopg.Connection, *, valid_date: date, source: str, up_to_set_id: int,
+                      books: Iterable[str], keep: Iterable[str], adapter_fingerprint: str) -> int:
+    """The trades of ``valid_date`` replaced whole by an answer for ``books`` (TDM#715): every unit (book) of the date that
+    ``old_trades_units`` lists gets a new revision with no rows, a full snapshot, with the report key of the set it
+    replaces and a later ``recorded_at``: so it is the unit's current set, the date holds what the answer holds, and the
+    older revisions stay (nothing is deleted). A book the answer was not asked for (the answer says nothing of it), a
+    unit already empty, one of another source, one recorded after ``up_to_set_id`` is left alone, so the call is made again
+    at no cost. Returns the number of units emptied. The caller holds the cycle lock."""
+    from ..inbox.validate import (
+        unit_hash,  # at call time: validate imports the inbox schema, which imports the store
+    )
+
+    n = 0
+    for _sid, scope, prio, rd, ts, seq, gen, mtime, sha in old_trades_units(
+            con, valid_date=valid_date, source=source, up_to_set_id=up_to_set_id, books=books, keep=keep):
+        store_dataset_set(con, dataset="trades", scope=scope, valid_date=valid_date, rows=[], source=source,
+                          priority=prio, report_date=rd, report_ts=ts, seq=seq, generated_at=gen, file_mtime=mtime,
+                          file_name=EMPTIED_NAME, sha256=sha, adapter_fingerprint=adapter_fingerprint,
+                          unit_hash=unit_hash([]), completeness="full_snapshot")
+        n += 1
+    return n
+
+
 @dataclass
 class DatasetInputs:
     """``dataset_rows``: the rows of a dataset in force on a date, and per unit where they came from."""

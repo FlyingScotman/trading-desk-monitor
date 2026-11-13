@@ -1,5 +1,5 @@
 @echo off
-rem Desk Monitor - install on first run (offline), then the server and the browser. Close the window to stop.
+rem Desk Monitor - install on first run (offline), then the server and the browser. Stop it with stop.bat: closing this window stops the database abnormally.
 rem Usage: start.bat [--port N]   default port 8100, or the DESK_PORT variable
 rem The logic is in app\deskctl.py, run by the Python bundled in python\ (or by "py -3.11" when absent).
 setlocal

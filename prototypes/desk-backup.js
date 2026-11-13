@@ -92,7 +92,7 @@
       'Прежняя рабочая база остаётся рядом до следующего восстановления.'));
     var ol = el('ol', { class: 'bk-steps' });
     var li1 = el('li'); li1.appendChild(document.createTextNode('Остановить Desk Monitor: двойной щелчок по ')); li1.appendChild(el('code', null, 'stop.bat'));
-    li1.appendChild(document.createTextNode(' в папке программы (или закрыть окно start.bat).')); ol.appendChild(li1);
+    li1.appendChild(document.createTextNode(' в папке программы (окно start.bat не закрывайте: база данных остановится аварийно).')); ol.appendChild(li1);
     var li2 = el('li'); li2.appendChild(document.createTextNode('Открыть командную строку (Пуск → cmd) в папке программы, например '));
     li2.appendChild(el('code', null, 'cd /d C:\\DeskMonitor')); li2.appendChild(document.createTextNode(', и выполнить:'));
     li2.appendChild(el('div', { class: 'mono', style: 'margin:6px 0' }, 'desk.bat restore ' + file + ' --replace'));
