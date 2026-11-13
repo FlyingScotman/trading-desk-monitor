@@ -473,6 +473,12 @@
     const trading = traded ? (r() - 0.4) * Math.abs(p.notionalRub) * 0.0004 : 0;
     p.tradedToday = traded;
     p.tradeToday = traded ? { qty: Math.round((r() - 0.5) * 0.3 * Math.abs(p.notional) / 1e6) * 1e6, price: p.price } : null;
+    if (p.tradeToday && p.cpn && p.price != null) {  // облигация: куплено / продано / нетто в форме сервера (api/concepts.py trade_of), вымышленное; новых r() нет
+      const nb = Math.round(p.tradeToday.qty / 1000), b = 200 + Math.max(0, nb), s = 200 + Math.max(0, -nb);  // номинал бумаги 1000, нетто = nb
+      p.tradeToday.buy = { n: 2, counted: 2, priced: 2, bonds: b, face: b * 1000, avg: p.price - 0.15 };
+      p.tradeToday.sell = { n: 1, counted: 1, priced: 1, bonds: s, face: s * 1000, avg: p.price + 0.1 };
+      p.tradeToday.net = { bonds: nb, face: nb * 1000 };
+    }
     p.pnl = { carry, funding, rates, spread, fx: fxp, trading, other, total: carry + funding + rates + spread + fxp + trading + other };
     p.funding = M.deal(p) || p.book === 'HTM' ? 0 : funding;  // за период (день), как p.funding прогона
     const scale = Math.abs(p.mv || p.notionalRub * 0.02);
