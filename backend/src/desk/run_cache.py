@@ -82,10 +82,15 @@ class RunBodyCache:
 
     def get_or_build(self, key: Key, token: Any, build: Callable[[], bytes]) -> Entry:
         """The entry of ``key`` valid for ``token``, built by ``build()`` (once, however many ask at the same time)."""
+        return self.lookup(key, token, build)[0]
+
+    def lookup(self, key: Key, token: Any, build: Callable[[], bytes]) -> tuple[Entry, bool]:
+        """``get_or_build`` and whether the entry was there (True) or built for this call (False: a slow request that
+        built its body says so, ``desk.api.slowlog``)."""
         e = self.get(key, token)
         if e is not None:
             self.hits += 1
-            return e
+            return e, True
         with self._lock:
             gate = self._building.setdefault(key, threading.Lock())
         with gate:
@@ -93,14 +98,14 @@ class RunBodyCache:
                 e = self.get(key, token)  # built meanwhile by the request that held the gate
                 if e is not None:
                     self.hits += 1
-                    return e
+                    return e, True
                 self.misses += 1
                 t0 = time.perf_counter()
                 body = build()
                 e = Entry(body, gzip.compress(body, compresslevel=6), '"' + hashlib.sha256(body).hexdigest()[:32] + '"',
                           token, time.perf_counter() - t0)
                 self._store(key, e)
-                return e
+                return e, False
             finally:
                 with self._lock:
                     if self._building.get(key) is gate:

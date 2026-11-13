@@ -337,7 +337,8 @@ test('#309 и #308 в браузере', { skip: pw ? false : 'нет Playwright
     await t.test('#319: прогон вышел, пока пустая страница грузилась, — она переходит на него (сверка после загрузки)', async () => {
       let n = 0;
       const run = () => n++ ? null : { status: 200, body: EMPTY('no_runs', 'нет опубликованных прогонов') };  // первый ответ — пусто, дальше прогон
-      const { pg, ctx, errors } = await open(browser, 'c01-cockpit.html', { run, api: { '/api/v1/autopilot/status': { latest_run: { run_id: 1, label: 'тест' } } } });
+      const { pg, ctx, errors } = await open(browser, 'c01-cockpit.html', { run, api: { '/api/v1/autopilot/status': { latest_run: { run_id: 1, label: 'тест' } },
+        '/api/v1/runs/1/ready': { run_id: 1, ready: true, missing: [], warming: false } } });  // #727: переход — когда данные прогона готовы
       await pg.waitForFunction(() => window.CONCEPTS_SOURCE === 'real', null, { timeout: 5000 });
       assert.strictEqual(n, 2, 'одна перезагрузка');
       assert.deepStrictEqual(errors, []);

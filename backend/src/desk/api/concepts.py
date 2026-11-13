@@ -72,21 +72,47 @@ FLOW_LIMIT = 500
 Writer = Callable[[list[int]], None] | None
 """Writes the missing run summaries on a connection of its own (the API's connections are read-only)."""
 
-FINGERPRINT_SQL = (
-    "SELECT (SELECT max(run_id) FROM run WHERE status = 'complete') AS r,"
-    " (SELECT count(*) FROM run WHERE status = 'complete') AS n,"
-    " (SELECT max(completed_at) FROM run WHERE status = 'complete') AS c,"
+MARKET_FP_SQL = (
     " (SELECT max(loaded_at) FROM md_kbd) AS k,"
     " (SELECT max(loaded_at) FROM md_static_summary) AS s,"
     " (SELECT max(snapshot_id) FROM md_cbr_meeting) AS m,"
     " (SELECT max(fetch_id) FROM md_hub_job) AS h, (SELECT sum(rows) FROM md_hub_job) AS hr")
+"""The part of the fingerprints that is the market's: the market history (the snapshots' and the hub history API's,
+``md_hub_job``), the static facts, the CBR meetings."""
+
+FINGERPRINT_SQL = (
+    "SELECT (SELECT max(run_id) FROM run WHERE status = 'complete') AS r,"
+    " (SELECT count(*) FROM run WHERE status = 'complete') AS n,"
+    " (SELECT max(completed_at) FROM run WHERE status = 'complete') AS c," + MARKET_FP_SQL)
+
+HISTORY_FP_SQL = (
+    "SELECT (SELECT max(run_id) FROM run WHERE status = 'complete' AND business_date < %s) AS r,"
+    " (SELECT count(*) FROM run WHERE status = 'complete' AND business_date < %s) AS n,"
+    " (SELECT max(completed_at) FROM run WHERE status = 'complete' AND business_date < %s) AS c,")
 
 
 def fingerprint(con) -> str:
     """What the cached responses depend on: the complete runs, the market history (the snapshots' and the hub
-    history API's, ``md_hub_job``), the static facts, the CBR meetings."""
+    history API's, ``md_hub_job``), the static facts, the CBR meetings. Any new run changes it; the bodies of one run
+    use ``run_fingerprint``."""
     r = con.execute(FINGERPRINT_SQL).fetchone()
     return json.dumps(list(r.values()) if isinstance(r, dict) else list(r), default=str)
+
+
+def run_fingerprint(con, run: dict[str, Any], history: bool = True) -> str:
+    """What the cached bodies *of one run* depend on (TDM#727). A complete run never changes, so the run itself is its
+    id and completion time; a body that also reads the series of the earlier dates (``history``: ``/desk-data.js``,
+    ``/concepts-data.js``, the positions' history: the default runs before the run's date, the dates that have only
+    an intraday run, ``_runs``, ``pnl_history.period_runs``) is also tied to the complete runs of earlier dates (their
+    newest id, count and newest completion: a recomputed past date changes it); the market's part is the same as
+    ``fingerprint``'s. A run published for the run's own date or a later one (the next intraday cut) changes nothing
+    here: the bodies of the runs already built stay valid while the newest run's are built."""
+    if history:
+        d = run["business_date"]
+        r = con.execute(HISTORY_FP_SQL + MARKET_FP_SQL, (d, d, d)).fetchone()
+    else:
+        r = con.execute("SELECT" + MARKET_FP_SQL).fetchone()
+    return json.dumps([run["run_id"], run["completed_at"], *(r.values() if isinstance(r, dict) else r)], default=str)
 
 
 def _runs(con, run: dict[str, Any]) -> list[dict[str, Any]]:

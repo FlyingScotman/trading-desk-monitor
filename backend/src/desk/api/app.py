@@ -6,6 +6,7 @@ shortcut: one psycopg connection per request, no pool; fine for a few users, poo
 
 from __future__ import annotations
 
+import contextlib
 import copy
 import hashlib
 import json
@@ -91,6 +92,7 @@ from .models import (
 )
 from .ocp_line import method_note, ocp_line
 from .runs import HEADER_SQL, PNL_KEYS, resolve_run
+from .slowlog import SlowLog
 
 log = logging.getLogger("desk.api")
 # the local fonts (prototypes/fonts/, #79): Python 3.11's table and a Windows registry may not know .woff2
@@ -138,53 +140,157 @@ def _redirect_to(target: str):
 
 class BodyCache:
     """The concept pages' responses (megabytes of JSON a year of runs) by request key: the body, its gzip and its
-    ETag, valid while the store's ``concepts.fingerprint`` is the same (a new run, market date, static snapshot or
-    CBR meetings change it). At most ``size`` keys, the least recently used dropped."""
+    ETag, valid while the fingerprint it was built under is the same (``concepts.run_fingerprint`` for the bodies of one
+    run, TDM#727: a new run published after it, an intraday cut, does not change it; ``concepts.fingerprint`` for the
+    rest). At most ``size`` keys and ``max_bytes`` (bodies and gzips together; ``DESK_BODY_CACHE_MB``, default
+    ``DEFAULT_MB``: the newest run's bodies and one more run's), the least recently used dropped; a body larger than
+    the whole cache is not kept. Before TDM#727 only the newest run's bodies were valid, so a few runs' bodies are
+    new memory. One build per key at a time: a request that finds the key being built waits for it instead of building
+    the same body again (a page open asks for several at once, and so does every other tab)."""
 
-    def __init__(self, size: int = 24) -> None:
+    DEFAULT_MB = 384
+    ENV_MB = "DESK_BODY_CACHE_MB"
+
+    def __init__(self, size: int = 24, max_bytes: int | None = None) -> None:
         import threading
 
         self.size, self._items, self._lock = size, {}, threading.Lock()
+        self.max_bytes = self.configured_bytes() if max_bytes is None else max_bytes
+        self.bytes = 0
+        self._building: dict[tuple, Any] = {}
+        self.hits = self.misses = 0
+
+    @classmethod
+    def configured_bytes(cls) -> int:
+        """The size from ``DESK_BODY_CACHE_MB`` (a bad value: the default)."""
+        raw = os.environ.get(cls.ENV_MB, "").strip()
+        try:
+            mb = float(raw) if raw else cls.DEFAULT_MB
+        except ValueError:
+            mb = cls.DEFAULT_MB
+        return int(max(0.0, mb) * (1 << 20))
 
     def get(self, key: tuple, fp: str) -> tuple[bytes, bytes, str] | None:
         with self._lock:
             hit = self._items.pop(key, None)
-            if hit is None or hit[0] != fp:
+            if hit is None:
+                return None
+            if hit[0] != fp:  # built for another state of the store: gone
+                self.bytes -= self._size(hit[1])
                 return None
             self._items[key] = hit
             return hit[1]
+
+    @staticmethod
+    def _size(val: tuple[bytes, bytes, str]) -> int:
+        return len(val[0]) + len(val[1])
 
     def put(self, key: tuple, fp: str, body: bytes) -> tuple[bytes, bytes, str]:
         import gzip
 
         val = (body, gzip.compress(body, compresslevel=6), '"' + hashlib.sha256(body).hexdigest()[:32] + '"')
         with self._lock:
-            self._items.pop(key, None)
+            old = self._items.pop(key, None)
+            if old is not None:
+                self.bytes -= self._size(old[1])
+            if self._size(val) > self.max_bytes:  # the cache is off (0) or this body alone does not fit
+                return val
             self._items[key] = (fp, val)
-            while len(self._items) > self.size:
-                self._items.pop(next(iter(self._items)))
+            self.bytes += self._size(val)
+            while self._items and (len(self._items) > self.size or self.bytes > self.max_bytes):
+                self.bytes -= self._size(self._items.pop(next(iter(self._items)))[1])
         return val
+
+    def get_or_build(self, key: tuple, fp: str, build: Callable[[], bytes]) -> tuple[tuple[bytes, bytes, str], bool]:
+        """The body of ``key`` valid for ``fp`` and whether it was there (a hit) or built now; ``build()`` runs once
+        however many ask at the same time."""
+        import threading
+
+        hit = self.get(key, fp)
+        if hit is not None:
+            self.hits += 1
+            return hit, True
+        with self._lock:
+            gate = self._building.setdefault(key, threading.Lock())
+        with gate:
+            try:
+                hit = self.get(key, fp)  # built meanwhile by the request that held the gate
+                if hit is not None:
+                    self.hits += 1
+                    return hit, True
+                self.misses += 1
+                return self.put(key, fp, build()), False
+            finally:
+                with self._lock:
+                    if self._building.get(key) is gate:
+                        del self._building[key]
+
+    def retain(self, run_ids: Any) -> int:
+        """Drop the bodies of every run that is not in ``run_ids`` (the key's second item is the run id): a run a prune
+        deleted. Returns how many."""
+        keep = set(run_ids)
+        with self._lock:
+            gone = [k for k in self._items if len(k) > 1 and isinstance(k[1], int) and k[1] not in keep]
+            for k in gone:
+                self.bytes -= self._size(self._items.pop(k)[1])
+        return len(gone)
+
+    def stats(self) -> dict[str, int]:
+        with self._lock:
+            return {"items": len(self._items), "bytes": self.bytes, "max_bytes": self.max_bytes, "hits": self.hits,
+                    "misses": self.misses}
 
 
 DESK_FP_SQL = "SELECT md5(coalesce(string_agg(s::text, ',' ORDER BY scenario_id), '')) FROM scenario_def s"
 """What ``window.DESK`` reads beyond the runs: the scenario definitions (editable)."""
 
 
-def _body_cached(cache: BodyCache, con, key: tuple, build: Callable[[], bytes],
-                 extra_fp: str | None = None) -> tuple[bytes, bytes, str]:
-    fp = concepts.fingerprint(con) + (str(con.execute(extra_fp).fetchone()) if extra_fp else "")
-    hit = cache.get(key, fp)
-    if hit is None:
-        t0 = time.perf_counter()
-        hit = cache.put(key, fp, build())
+HISTORY_BODIES = frozenset({"desk", "extras", "history"})
+"""The bodies that also read the series of the earlier dates (``concepts.run_fingerprint``): a past date recomputed
+changes them; ``run``, ``run-js`` and ``calendar`` read the run and the market only."""
+
+
+def _note(request: Request | None, hit: bool, size: int) -> None:
+    """What the request's answer came from, for the slow-request list (``SlowLog``): ``miss`` once any body of it was
+    built, the size of the largest body."""
+    if request is not None:
+        st = request.state
+        st.cache = "miss" if (not hit or getattr(st, "cache", None) == "miss") else "hit"
+        st.body_bytes = max(size, getattr(st, "body_bytes", 0))
+
+
+def body_fingerprint(con, key: tuple, run: dict[str, Any] | None, extra_fp: str | None = None) -> str:
+    """The fingerprint a cached body of ``key`` is valid under: the run's own (``concepts.run_fingerprint``, the
+    series of earlier dates for ``HISTORY_BODIES`` only) when the run is known, else the whole store's."""
+    fp = (concepts.run_fingerprint(con, run, key[0] in HISTORY_BODIES) if run is not None
+          else concepts.fingerprint(con))
+    return fp + (str(con.execute(extra_fp).fetchone()) if extra_fp else "")
+
+
+def _body_get(cache: BodyCache, con, key: tuple, build: Callable[[], bytes], extra_fp: str | None = None,
+              run: dict[str, Any] | None = None) -> tuple[tuple[bytes, bytes, str], bool]:
+    """The body of ``key`` (built when it is not in ``cache`` for the fingerprint, once however many ask) and whether
+    it was there. A build is logged with its time and size."""
+    fp = body_fingerprint(con, key, run, extra_fp)
+    t0 = time.perf_counter()
+    val, was = cache.get_or_build(key, fp, build)
+    if not was:
         log.info("built %s in %.0f ms, %d KB (%d KB gzip)", key[0], (time.perf_counter() - t0) * 1e3,
-                 len(hit[0]) // 1024, len(hit[1]) // 1024)
-    return hit
+                 len(val[0]) // 1024, len(val[1]) // 1024)
+    return val, was
+
+
+def _body_cached(cache: BodyCache, con, key: tuple, build: Callable[[], bytes],
+                 extra_fp: str | None = None, run: dict[str, Any] | None = None,
+                 request: Request | None = None) -> tuple[bytes, bytes, str]:
+    val, was = _body_get(cache, con, key, build, extra_fp, run)
+    _note(request, was, len(val[0]))
+    return val
 
 
 def cached_body(request: Request, con, key: tuple, build: Callable[[], bytes],
-                extra_fp: str | None = None) -> tuple[bytes, bytes]:
-    body, gz, _ = _body_cached(request.app.state.body_cache, con, key, build, extra_fp)
+                extra_fp: str | None = None, run: dict[str, Any] | None = None) -> tuple[bytes, bytes]:
+    body, gz, _ = _body_cached(request.app.state.body_cache, con, key, build, extra_fp, run, request)
     return body, gz
 
 
@@ -204,10 +310,10 @@ def _conditional(request: Request, body: bytes, gz: bytes, etag: str, media_type
 
 
 def cached_response(request: Request, con, key: tuple, build: Callable[[], bytes], media_type: str,
-                    cache: BodyCache | None = None) -> Response:
-    """``build()`` once per store state (``BodyCache``, the app's ``body_cache`` unless ``cache``); a 304 for the
-    browser's ETag, the gzip when it accepts it."""
-    body, gz, tag = _body_cached(cache or request.app.state.body_cache, con, key, build)
+                    cache: BodyCache | None = None, run: dict[str, Any] | None = None) -> Response:
+    """``build()`` once per store state (``BodyCache``, the app's ``body_cache`` unless ``cache``; ``run``: the state
+    of that run, ``body_fingerprint``); a 304 for the browser's ETag, the gzip when it accepts it."""
+    body, gz, tag = _body_cached(cache or request.app.state.body_cache, con, key, build, None, run, request)
     return _conditional(request, body, gz, tag, media_type)
 
 
@@ -281,8 +387,9 @@ def _run_cached(request: Request, run: dict[str, Any], key: tuple, build: Callab
     if run["status"] != "complete":
         return Response(build().model_dump_json().encode(), media_type="application/json")
     key = (key[0], run["run_id"], *key[1:])
-    entry = request.app.state.run_cache.get_or_build(key, (run["status"], str(run["completed_at"]), extra),
-                                                     lambda: build().model_dump_json().encode())
+    entry, was = request.app.state.run_cache.lookup(key, (run["status"], str(run["completed_at"]), extra),
+                                                    lambda: build().model_dump_json().encode())
+    _note(request, was, len(entry.body))
     return _conditional(request, entry.body, entry.gz, entry.etag, "application/json")
 
 
@@ -319,7 +426,7 @@ def run_body(con, run: dict[str, Any]) -> bytes:
 def run_script(cache: BodyCache, con, run: dict[str, Any]) -> bytes:
     """``/concepts-run.js``: ``window.CONCEPTS_RUN`` = the cached JSON of ``run_body`` (not assembled again; key
     ``run-js`` holds its own gzip)."""
-    body, _, _ = _body_cached(cache, con, ("run", run["run_id"]), lambda: run_body(con, run))
+    body, _, _ = _body_cached(cache, con, ("run", run["run_id"]), lambda: run_body(con, run), None, run)
     return concepts_run.SCRIPT_PREFIX + body + b";\n"
 
 
@@ -337,12 +444,43 @@ def calendar_body(con, run: dict[str, Any]) -> bytes:
     return _json_bytes(concepts.market_calendar(con, run["business_date"], held) or {"missing": True})
 
 
-def warm_bodies(app: FastAPI, summaries: bool = True) -> list[str]:
+WARMED = (("run", None, False), ("run-js", None, False), ("extras", None, True), ("history", None, True),
+          ("calendar", None, False), ("desk", DESK_FP_SQL, False))
+"""The bodies built ahead for a run, in this order: name, the SQL of its extra fingerprint, whether it reads the runs'
+summaries. The order is what a concept page waits for first (the run, its data, the history, the calendar); the
+older pages' ``/desk-data.js`` last."""
+READY_BODIES = {"concepts": ("run-js", "extras", "history", "calendar"), "desk": ("desk",)}
+"""What ``GET /api/v1/runs/{id}/ready`` waits for by the kind of page (``pages``): the concept pages' first requests,
+the older pages' ``/desk-data.js``."""
+
+
+def _warm_key(name: str, run_id: int) -> tuple:
+    return (name, run_id, (), None) if name == "history" else (name, run_id)
+
+
+def missing_bodies(cache: BodyCache, con, run: dict[str, Any], pages: str = "concepts") -> list[str]:
+    """The bodies a page of this kind asks for first that are not built for the run in its present state (nothing is
+    built here)."""
+    out, base = [], {}  # the run's fingerprint once per kind of body (``HISTORY_BODIES`` or not)
+    for name, extra, _ in WARMED:
+        if name not in READY_BODIES[pages]:
+            continue
+        kind = name in HISTORY_BODIES
+        if kind not in base:
+            base[kind] = concepts.run_fingerprint(con, run, kind)
+        fp = base[kind] + (str(con.execute(extra).fetchone()) if extra else "")
+        if cache.get(_warm_key(name, run["run_id"]), fp) is None:
+            out.append(name)
+    return out
+
+
+def warm_bodies(app: FastAPI, summaries: bool = True, run_id: int | None = None) -> list[str]:
     """Build the pages' bodies of the newest run shown (``/desk-data.js``, ``/api/v1/concepts/run`` and
     ``/concepts-run.js`` made of it, ``/concepts-data.js``, every position's history, the market calendar) into the
     cache when the store changed since they were built, so that the first page load after a new run finds them ready
-    (``serve`` runs it every ``WARM_S``; it also drops the per-run API's bodies of runs that are gone, ``run_cache``).
-    ``summaries=False``: the runs' summaries are still being rebuilt
+    (``serve`` runs it when a run is published and every ``WARM_S``; it also drops the per-run API's bodies of runs
+    that are gone, ``run_cache``). ``run_id``: that complete run instead of the newest shown (a page asked for it,
+    ``GET /api/v1/runs/{id}/ready``). ``summaries=False``: the runs' summaries are still being rebuilt
     (``prewarm_summaries``), the bodies that read them (``/concepts-data.js``, the history) wait for it.
     Returns the bodies built."""
     cache: BodyCache = app.state.body_cache
@@ -350,32 +488,117 @@ def warm_bodies(app: FastAPI, summaries: bool = True) -> list[str]:
     with psycopg.connect(app.state.store_url, row_factory=dict_row, autocommit=True, connect_timeout=5,
                          options="-c default_transaction_read_only=on") as con:
         # the per-run API's finished bodies of a run another process deleted (a prune by the CLI) are dropped (TDM#631)
-        app.state.run_cache.retain([r["run_id"] for r in con.execute("SELECT run_id FROM run")])
-        run = resolve_run(con)
+        ids = [r["run_id"] for r in con.execute("SELECT run_id FROM run")]
+        app.state.run_cache.retain(ids)
+        cache.retain(ids)
+        run = resolve_run(con, None, run_id)
         if run is None:
             return built
         writer = app.state.write_summaries
-        for key, build, extra, reads in ((("desk", run["run_id"]), lambda: desk_body(con, run), DESK_FP_SQL, False),
-                                         (("run", run["run_id"]), lambda: run_body(con, run), None, False),
-                                         (("run-js", run["run_id"]), lambda: run_script(cache, con, run), None, False),
-                                         (("extras", run["run_id"]), lambda: extras_body(con, run, writer), None,
-                                          True),
-                                         (("history", run["run_id"], (), None), lambda: history_body(con, run, writer),
-                                          None, True),
-                                         (("calendar", run["run_id"]), lambda: calendar_body(con, run), None, False)):
-            if reads and not summaries:
-                continue
-            fp = concepts.fingerprint(con) + (str(con.execute(extra).fetchone()) if extra else "")
-            if cache.get(key, fp) is None:
-                cache.put(key, fp, build())
-                built.append(key[0])
+        warmer = app.state.warmer
+        if warmer is not None:
+            warmer.building = run["run_id"]
+        builders = {"run": lambda: run_body(con, run), "run-js": lambda: run_script(cache, con, run),
+                    "extras": lambda: extras_body(con, run, writer), "history": lambda: history_body(con, run, writer),
+                    "calendar": lambda: calendar_body(con, run), "desk": lambda: desk_body(con, run)}
+        try:
+            for name, extra, reads in WARMED:
+                if reads and not summaries:
+                    continue
+                _, was = _body_get(cache, con, _warm_key(name, run["run_id"]), builders[name], extra, run)
+                if not was:
+                    built.append(name)
+        finally:
+            if warmer is not None and warmer.building == run["run_id"]:
+                warmer.building = None
     return built
 
 
 WARM_S = 20.0
-"""How often ``serve`` checks whether the concept pages' bodies need building again."""
+"""How often ``serve`` checks whether the concept pages' bodies need building again, whatever the store says."""
+WATCH_S = 2.0
+"""How often the warm thread asks the store for the newest run (one small query): a run published, by the autopilot
+or by another process, is seen within this, TDM#727."""
+DEBOUNCE_S = 3.0
+"""A new run is built ahead once the newest run has been the same this long: runs that come one after another (a
+history recompute) are built for once, the last of them."""
 PREWARM_S = 5.0
 """Seconds of runs' summaries rebuilt per pass of ``serve``'s warm thread (``prewarm_summaries``)."""
+
+
+class Warmer:
+    """The wake-ups of ``serve``'s warm thread (TDM#727): what makes it build the bodies ahead now instead of at the
+    next ``WARM_S``. A run published (``newest`` of the store changed, asked every ``WATCH_S``, then ``DEBOUNCE_S``
+    quiet) and a page that asks for a run (``request``, from ``GET /api/v1/runs/{id}/ready``)."""
+
+    def __init__(self, store_url: str) -> None:
+        import threading
+
+        self.store_url = store_url
+        self.wake = threading.Event()
+        self._lock = threading.Lock()
+        self._wanted: list[int] = []
+        self._con: psycopg.Connection | None = None
+        self.newest: int | None = None
+        self.building: int | None = None
+        """The run whose bodies the thread is building now (None: idle)."""
+
+    def request(self, run_id: int) -> None:
+        """A page waits for ``run_id``'s bodies: the thread builds them on its next pass (at once when idle)."""
+        with self._lock:
+            if run_id not in self._wanted:
+                self._wanted.append(run_id)
+        self.wake.set()
+
+    def take(self) -> list[int]:
+        """The runs pages asked for since the last call (oldest request first)."""
+        with self._lock:
+            out, self._wanted = self._wanted, []
+        return out
+
+    def newest_run(self) -> int | None:
+        """The newest complete run of the store, None when it cannot be read (the connection is opened again)."""
+        try:
+            if self._con is None or self._con.closed:
+                self._con = psycopg.connect(self.store_url, autocommit=True, connect_timeout=5,
+                                            options="-c default_transaction_read_only=on")
+            row = self._con.execute("SELECT max(run_id) FROM run WHERE status = 'complete'").fetchone()
+            return row[0] if row else None
+        except Exception:  # noqa: BLE001 - the store is down: the next look opens it again
+            if self._con is not None:
+                with contextlib.suppress(Exception):
+                    self._con.close()
+            self._con = None
+            return None
+
+    def mark(self) -> None:
+        """The newest run now: what the pass about to start builds for (``wait`` compares with it)."""
+        self.newest = self.newest_run()
+
+    def wait(self, stop: Callable[[], bool], every: float = WARM_S, watch: float = WATCH_S,
+             quiet: float = DEBOUNCE_S, step: float = 0.1) -> str:
+        """Until there is something to build: ``"requested"`` (a page asked), ``"run"`` (a run was published after the
+        last ``mark`` and the newest has been the same for ``quiet`` seconds) or ``"timer"`` (``every`` seconds
+        passed); ``"stop"`` when ``stop()``. Clears the wake-up."""
+        t_end = time.monotonic() + every
+        seen, changed_at, next_look = self.newest, None, 0.0
+        while True:
+            now = time.monotonic()
+            if stop():
+                return "stop"
+            if self.wake.is_set():
+                self.wake.clear()
+                return "requested"
+            if changed_at is not None and now - changed_at >= quiet:
+                return "run"
+            if now >= t_end:
+                return "timer"
+            if now >= next_look:
+                next_look = now + watch
+                cur = self.newest_run()
+                if cur is not None and cur != seen:
+                    seen, changed_at = cur, now  # a run came: quiet again from here
+            time.sleep(min(step, max(0.0, t_end - now)))
 
 
 def prewarm_summaries(app: FastAPI, budget_s: float = PREWARM_S) -> int:
@@ -603,6 +826,8 @@ def create_app(store_url: str, static_dir: Path | None = None, app_dir: Path | N
     app.state.instance = uuid.uuid4().hex[:16]  # /health/live's X-Desk-Instance: the LAN self-check knows its server
     app.state.lan_probe = None  # desk.lan.probe_all once serve has started (the settings page's «Сеть»)
     app.state.body_cache = BodyCache()
+    app.state.slow = SlowLog()  # the requests slower than DESK_SLOW_REQUEST_S (settings → Диагностика)
+    app.state.warmer = None  # serve's warm thread: ``Warmer`` (the pages' bodies built when a run is published)
     app.state.run_cache = RunBodyCache()  # the per-run API's finished bodies (TDM#631)
     app.state.carry_cache = BodyCache(carry.CACHE_SIZE)  # the forward carry's bodies (TDM#66), apart from the pages'
     app.state.carry_ctx = {}  # the runs' contexts the forward carry rebuilt (scenario.exact._context)
@@ -629,8 +854,12 @@ def create_app(store_url: str, static_dir: Path | None = None, app_dir: Path | N
         t0 = time.perf_counter()
         response = await call_next(request)
         response.headers["X-Request-ID"] = rid
-        log.info("%s %s %s %s %.0fms", rid, request.method, request.url.path, response.status_code,
-                 (time.perf_counter() - t0) * 1e3)
+        seconds = time.perf_counter() - t0
+        log.info("%s %s %s %s %.0fms", rid, request.method, request.url.path, response.status_code, seconds * 1e3)
+        if seconds >= app.state.slow.threshold_s:  # the slow requests, without data values (settings → Диагностика)
+            length = response.headers.get("content-length")
+            app.state.slow.add(request, response.status_code, seconds, int(length) if length and length.isdigit()
+                               else None)
         return response
 
     @app.exception_handler(ApiError)
@@ -967,7 +1196,7 @@ def create_app(store_url: str, static_dir: Path | None = None, app_dir: Path | N
             return Response("/* demo requested: data.js */\n", media_type=JS, headers=NO_STORE)
         run = resolve_run(con, as_of, run_id)
         if run is not None:  # built once per run and store state (R23); the browser still asks every time (R16)
-            body, gz = cached_body(request, con, ("desk", run["run_id"]), lambda: desk_body(con, run), DESK_FP_SQL)
+            body, gz = cached_body(request, con, ("desk", run["run_id"]), lambda: desk_body(con, run), DESK_FP_SQL, run)
             if "gzip" in request.headers.get("accept-encoding", ""):
                 return Response(gz, media_type=JS, headers={**NO_STORE, "Content-Encoding": "gzip",
                                                             "Vary": "Accept-Encoding"})
@@ -1003,7 +1232,7 @@ def create_app(store_url: str, static_dir: Path | None = None, app_dir: Path | N
             return Response(concepts_run.empty_script(concepts_run.empty(as_of, run_id)), media_type=JS,
                             headers=NO_STORE)
         cache = request.app.state.body_cache
-        body, gz = cached_body(request, con, ("run-js", run["run_id"]), lambda: run_script(cache, con, run))
+        body, gz = cached_body(request, con, ("run-js", run["run_id"]), lambda: run_script(cache, con, run), None, run)
         if "gzip" in request.headers.get("accept-encoding", ""):
             return Response(gz, media_type=JS, headers={**NO_STORE, "Content-Encoding": "gzip",
                                                         "Vary": "Accept-Encoding"})
@@ -1023,7 +1252,26 @@ def create_app(store_url: str, static_dir: Path | None = None, app_dir: Path | N
         if r is None:
             e = concepts_run.empty(as_of, run_id)
             raise ApiError(404, "not_found", e["message"], {"reason": e["reason"]})
-        return cached_response(request, con, ("run", r["run_id"]), lambda: run_body(con, r), "application/json")
+        return cached_response(request, con, ("run", r["run_id"]), lambda: run_body(con, r), "application/json", run=r)
+
+    @app.get("/api/v1/runs/{run_id}/ready", include_in_schema=False)
+    def run_ready(con: Con, request: Request, run_id: int,
+                  pages: Literal["concepts", "desk"] = Query("concepts", description="the kind of page that waits: "
+                                                             "the monitors (concepts) or the older pages (desk)")):
+        """Whether the bodies a page asks for first (``READY_BODIES``) are built for a complete run, so that the page
+        opened on it now is answered from memory (TDM#727): the monitors wait for it after ``run.published`` and then
+        reload. Builds nothing itself; when something is missing it asks the warm thread for the run and says what is
+        still to build. 404 for a run that is not there (deleted, not complete)."""
+        run = resolve_run(con, None, run_id)
+        if run is None:
+            raise run_missing(run_id)
+        missing = missing_bodies(request.app.state.body_cache, con, run, pages)
+        warmer = request.app.state.warmer
+        if missing and warmer is not None:
+            warmer.request(run_id)
+        return JSONResponse({"run_id": run_id, "ready": not missing, "missing": missing,
+                             "warming": bool(missing and warmer is not None and warmer.building == run_id)},
+                            headers=NO_STORE)
 
     # ---- concept pages (prototypes/concepts/, lib/real.js): their data beyond window.DESK
     @app.get("/concepts-data.js", include_in_schema=False)
@@ -1035,7 +1283,8 @@ def create_app(store_url: str, static_dir: Path | None = None, app_dir: Path | N
         run = None if demo else resolve_run(con, as_of, run_id)
         if run is None:
             return Response("/* no run: window.DESK_EXTRAS not set */\n", media_type=JS, headers=NO_STORE)
-        return cached_response(request, con, ("extras", run["run_id"]), lambda: extras_body(con, run, write_summaries), JS)
+        return cached_response(request, con, ("extras", run["run_id"]), lambda: extras_body(con, run, write_summaries), JS,
+                               run=run)
 
     @app.get("/api/v1/concepts/carry", response_model=CarryOut,
              description="The forward carry of a run to a horizon (TDM#66, ``scenario.carry``): per position core's "
@@ -1167,7 +1416,8 @@ def create_app(store_url: str, static_dir: Path | None = None, app_dir: Path | N
             raise run_missing(run_id)
         wanted = [i for i in (ids or "").split(",") if i] or None
         return cached_response(request, con, ("history", run["run_id"], tuple(wanted or ()), from_),
-                               lambda: history_body(con, run, write_summaries, wanted, from_), "application/json")
+                               lambda: history_body(con, run, write_summaries, wanted, from_), "application/json",
+                               run=run)
 
     @app.get("/api/v1/positions/flows", include_in_schema=False)
     def position_flows(con: Con, id: str, run_id: int | None = None, as_of: date | None = None):
@@ -1215,7 +1465,7 @@ def create_app(store_url: str, static_dir: Path | None = None, app_dir: Path | N
             raise run_missing(run_id)
         if market is None:
             return cached_response(request, con, ("calendar", run["run_id"]), lambda: calendar_body(con, run),
-                                   "application/json")
+                                   "application/json", run=run)
         held = concepts.held_secids(con, run["run_id"])
         out = concepts.market_flows(con, run["business_date"], market=market, date_from=from_, date_to=to,
                                     type_=type, kind=kind, ccy=ccy, sector=sector, big=big, issuer=issuer,
@@ -1394,6 +1644,7 @@ def serve(store_url: str, host: str = "127.0.0.1", port: int = 8100, static_dir:
     if snapshots is not None:
         jobs.Worker(store_url, SnapshotDir(snapshots)).start()
     app = create_app(store_url, static_dir, adapter_status=adapter_status, auth=auth)
+    app.state.warmer = Warmer(store_url)  # the pages' bodies are built when a run is published (TDM#727)
     app.state.listen = {"host": host, "port": port, "tls": tls is not None}  # the settings page's «Сеть»: what this server listens on
     if autopilot is not None:
         app.state.autopilot = autopilot
@@ -1424,25 +1675,25 @@ def serve(store_url: str, host: str = "127.0.0.1", port: int = 8100, static_dir:
     if restart is not None:  # only under the launcher (start.bat): something must start the server again
         app.state.request_restart = request_restart
 
-    def warm_loop() -> None:  # the concept pages' bodies ready before the first page asks (R23)
+    def warm_loop() -> None:  # the concept pages' bodies ready before the first page asks (R23, TDM#727)
+        warmer: Warmer = app.state.warmer
         while not server.should_exit:
             left = 0
+            warmer.mark()  # the newest run this pass builds for: a run published during it starts the next at once
             try:  # the summaries a new version left stale first, newest first, a pass at a time (TDM#246)
                 left = prewarm_summaries(app)
             except Exception:
                 log.warning("run summaries not rebuilt ahead", exc_info=True)
-            try:
-                built = warm_bodies(app, summaries=not left)
-                if built:
-                    log.info("concept bodies built ahead: %s", ", ".join(built))
-            except Exception:
-                log.warning("concept bodies not built ahead", exc_info=True)
+            for run_id in [None, *warmer.take()]:  # the newest shown, then the runs pages asked for
+                try:
+                    built = warm_bodies(app, summaries=not left, run_id=run_id)
+                    if built:
+                        log.info("concept bodies built ahead: %s", ", ".join(built))
+                except Exception:
+                    log.warning("concept bodies not built ahead", exc_info=True)
             if left:
                 continue  # the next pass at once
-            for _ in range(int(WARM_S * 10)):
-                if server.should_exit:
-                    break
-                time.sleep(0.1)
+            warmer.wait(lambda: server.should_exit)
 
     threading.Thread(target=warm_loop, name="desk-warm", daemon=True).start()
     if not authn.is_loopback(host):

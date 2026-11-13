@@ -23,8 +23,14 @@
  * Реакция страницы прогона на run.published: ОДНА ТОЧКА ВЫБОРА — DESK_LIVE.REACTION (ниже):
  *  - 'switch' (по умолчанию, решение владельца 25.10, #28): страница сама переходит на новый прогон (перезагрузка
  *    на «последний прогон»), один раз на прогон: петли перезагрузок нет (после перезагрузки лента начинается
- *    с текущего момента, а sessionStorage помнит прогон, на который уже переключались). Скрытая вкладка
- *    перезагружается, когда её покажут. После загрузки страница один раз сверяет свой прогон с latest_run: прогон,
+ *    с текущего момента, а sessionStorage помнит прогон, на который уже переключались). Но не сразу (#727):
+ *    цифры остаются на экране, под шапкой — плашка «Пересчитан новый прогон, загружаю… · данные на ЧЧ:ММ МСК» (время
+ *    показанного прогона), а страница ждёт, пока сервер построит данные нового прогона (GET
+ *    ../api/v1/runs/{id}/ready раз в 1,5 с, не дольше L.READY_MS = 60 с), и только потом перезагружается — уже по
+ *    тёплому кэшу, за секунды, а не за десятки секунд пустого экрана. Не дождалась (таймаут, ошибка, прогон исчез) —
+ *    обычная полоса «Доступен новый прогон … — показать», страница не перезагружается. Скрытая вкладка ничего не
+ *    ждёт: когда её покажут, она ждёт готовности и перезагружается. Прогон новее, чем тот, которого ждали, начинает
+ *    ожидание заново. После загрузки страница один раз сверяет свой прогон с latest_run: прогон,
  *    опубликованный, пока она грузилась, тоже переключает;
  *  - 'banner': полоса под шапкой «Доступен новый прогон … — показать», страница не меняется под пользователем.
  *  Какой прогон новый, говорит сервер: GET ../api/v1/autopilot/status → latest_run, прогон, который откроет
@@ -40,7 +46,8 @@
  * Бейдж прогона в шапке (#192, kit.js): каждая подписка сообщает странице о ленте событием окна 'desk:live' —
  * detail { kind: 'events', list } (новые события ленты, все типы, что пришли) и { kind: 'mode', mode }.
  *
- * Чистые функции для тестов (tests/js/live_updates.test.js): newRun, target, decide, reaction, want, react.
+ * Чистые функции для тестов (tests/js/live_updates.test.js): newRun, target, decide, reaction, want, react, waitReady,
+ * hm, noteText.
  */
 (function () {
   'use strict';
@@ -58,6 +65,8 @@
     'input.accepted', 'input.partially_accepted', 'input.superseded', 'input.rejected', 'input.failed',
     'input.match_failed', 'input.waiting_calendar', 'input.ignored', 'input.stale', 'input.duplicate',
     'books.changed', 'reference.changed'];
+  L.READY_MS = 60e3;     // сколько страница ждёт, пока сервер построит данные нового прогона (#727)
+  L.READY_POLL_MS = 1500;
   L.HELLO_MS = 10e3;
   L.RETRY_SSE_MS = 300e3;
   L.MAX_ERRORS = 3;
@@ -238,34 +247,93 @@
     } catch (e) { return id === undefined ? null : undefined; }
   }
   let bar = null;
-  function banner(t, ctx) {
-    if (!bar) {
+  function ensureBar() {
+    if (bar && bar.isConnected) return bar;
+    if (!document.getElementById('k-live-style')) {
       const st = document.createElement('style');
+      st.id = 'k-live-style';
       st.textContent = '.k-live{display:flex;gap:10px;align-items:center;flex-wrap:wrap;padding:6px 14px;background:var(--accent-bg);border-bottom:1px solid var(--accent);font-size:12.5px}' +
         '.k-live .t{flex:1;min-width:200px}.k-live button{font:inherit;cursor:pointer}';
       document.head.appendChild(st);
-      bar = document.createElement('div'); bar.className = 'k-live'; bar.setAttribute('role', 'status'); bar.setAttribute('aria-live', 'polite');
-      const top = document.querySelector('.k-top');
-      if (top) top.after(bar); else document.body.prepend(bar);
     }
+    bar = document.createElement('div'); bar.className = 'k-live'; bar.setAttribute('role', 'status'); bar.setAttribute('aria-live', 'polite');
+    const top = document.querySelector('.k-top');
+    if (top) top.after(bar); else document.body.prepend(bar);
+    return bar;
+  }
+  function banner(t, ctx) {
+    ensureBar();
     bar.innerHTML = '<span class="t">Доступен новый прогон: ' + esc(t.text || ('#' + t.run_id)) + '</span>' +
       '<button class="k-btn" data-a="show">' + (ctx.pinned ? 'Показать последний' : 'Показать') + '</button>' +
       '<button class="k-btn" data-a="close" title="Скрыть до следующего прогона">✕</button>';
     bar.querySelector('[data-a=show]').onclick = () => ctx.pinned ? goLatest() : location.reload();
     bar.querySelector('[data-a=close]').onclick = () => { bar.remove(); bar = null; };
   }
+  // время показанного прогона для плашки: ЧЧ:ММ по Москве (как бейдж прогона в шапке); без времени — ''
+  L.hm = function (iso) {
+    const t = iso ? new Date(iso) : null;
+    if (!t || isNaN(+t)) return '';
+    try { return t.toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit', timeZone: 'Europe/Moscow' }); } catch (e) { return ''; }
+  };
+  L.noteText = function (shownAt) {
+    const hm = L.hm(shownAt);
+    return 'Пересчитан новый прогон, загружаю…' + (hm ? ' · данные на ' + hm + ' МСК' : '');
+  };
+  function note(ctx) {
+    ensureBar();
+    bar.innerHTML = '<span class="t">' + esc(L.noteText(ctx.shownAt)) + '</span>';
+  }
+  // ждать, пока сервер построит данные прогона (#727): GET api/v1/runs/{id}/ready раз в pollMs; 'ready' | 'timeout'
+  // (не дождались) | 'error' (прогона нет, нет доступа) | 'cancelled' (o.task.cancelled: пришёл прогон новее).
+  // Сбой сети и 5xx — не конец: сервер, строящий данные, может отвечать медленно, ждём до таймаута.
+  // o: { base, pages, timeoutMs, pollMs, task, fetch, now, sleep } — подмены для тестов
+  L.waitReady = function (runId, o) {
+    o = o || {};
+    const base = o.base == null ? '../' : o.base, timeoutMs = o.timeoutMs == null ? L.READY_MS : o.timeoutMs;
+    const pollMs = o.pollMs == null ? L.READY_POLL_MS : o.pollMs, doFetch = o.fetch || ((u, init) => fetch(u, init));
+    const now = o.now || Date.now, sleep = o.sleep || (ms => new Promise(r => setTimeout(r, ms)));
+    const url = base + 'api/v1/runs/' + encodeURIComponent(runId) + '/ready' + (o.pages ? '?pages=' + o.pages : '');
+    const end = now() + timeoutMs;
+    const step = () => {
+      if (o.task && o.task.cancelled) return Promise.resolve('cancelled');
+      return doFetch(url, { cache: 'no-store' }).then(r => {
+        if (r.status === 401 || r.status === 403 || r.status === 404) return 'error';
+        if (!r.ok) return null;
+        return r.json().then(j => j && j.ready ? 'ready' : null, () => null);
+      }, () => null).then(res => {
+        if (res) return res;
+        if (o.task && o.task.cancelled) return 'cancelled';
+        if (now() + pollMs > end) return 'timeout';
+        return sleep(pollMs).then(step);
+      });
+    };
+    return step();
+  };
+  // вкладка стала видимой (сразу, если видна); отмена тоже отпускает
+  function whenVisible(task) {
+    if (typeof document === 'undefined' || !document.hidden) return Promise.resolve();
+    return new Promise(res => {
+      const f = () => { if (!document.hidden || (task && task.cancelled)) { document.removeEventListener('visibilitychange', f); res(); } };
+      document.addEventListener('visibilitychange', f);
+    });
+  }
+  // подготовка к переходу на прогон t: скрытая вкладка ждёт, пока её покажут (не все вкладки разом и не под руками
+  // у пользователя), потом — плашка и ожидание готовности данных; 'ready' | 'timeout' | 'error' | 'cancelled'
+  L.prepare = function (t, ctx, task) {
+    return whenVisible(task).then(() => {
+      if (task && task.cancelled) return 'cancelled';
+      note(ctx);
+      return L.waitReady(t.run_id, { pages: 'concepts', task });
+    });
+  };
   function latestRun(base) {  // undefined — статус не получен
     return fetch(base + 'api/v1/autopilot/status', { cache: 'no-store' }).then(r => r.ok ? r.json() : undefined)
       .then(j => j && typeof j === 'object' ? j.latest_run || null : undefined, () => undefined);
   }
-  // скрытая вкладка перезагружается, когда её покажут: не все вкладки разом и не под руками у пользователя
-  function reloadWhenSeen() {
-    if (typeof document === 'undefined' || !document.hidden) return location.reload();
-    const f = () => { if (!document.hidden) { document.removeEventListener('visibilitychange', f); location.reload(); } };
-    document.addEventListener('visibilitychange', f);
-  }
   // реакция на новый прогон e (null — сверка после загрузки: не опубликован ли прогон, пока страница грузилась);
-  // d — зависимости (тесты подменяют): latest() → latest_run | null | undefined, reload, banner, switched
+  // d — зависимости (тесты подменяют): latest() → latest_run | null | undefined, reload, banner, switched,
+  // prepare(t, ctx) → 'ready' | 'timeout' | 'error' | 'cancelled' (#727: дождаться данных нового прогона; без неё —
+  // сразу)
   L.react = function (e, ctx, d) {
     return d.latest().then(lr => {
       const t = e ? L.target(e, lr, ctx) : lr && L.target({}, lr, ctx);
@@ -273,16 +341,29 @@
       // перезагрузка — один раз на прогон в этой вкладке (switched — sessionStorage вкладки). Стойкое расхождение
       // сервера («последний прогон» в статусе автопилота есть, а /concepts-run.js отвечает «прогона нет», #319) даёт
       // одну перезагрузку в каждой новой вкладке, но не цикл: после неё сверка видит switched и ничего не делает
-      if (L.decide(L.reaction(d.storage), ctx, t, d.switched()) === 'switch') { d.switched(t.run_id); d.reload(); return 'switch'; }
+      if (L.decide(L.reaction(d.storage), ctx, t, d.switched()) === 'switch') {
+        d.switched(t.run_id);
+        return (d.prepare ? d.prepare(t, ctx) : Promise.resolve('ready')).then(r => {
+          if (r === 'cancelled') return 'none';  // пришёл прогон новее: его реакция — следующая в очереди
+          if (r === 'ready') { d.reload(); return 'switch'; }
+          d.banner(t, ctx); return 'banner';  // не дождались данных: перезагрузка показала бы пустой экран
+        });
+      }
       if (!e) return 'none';  // сверка при загрузке полосу не показывает (закреплённый прогон сверку не делает)
       d.banner(t, ctx); return 'banner';
     });
   };
   L.watchRuns = function (ctx) {
-    const d = { latest: () => latestRun('../'), reload: reloadWhenSeen, banner, switched };
-    let busy = Promise.resolve();
-    // одно звено не должно остановить реакцию на следующие прогоны (ревью #191)
-    const queue = e => { busy = busy.then(() => L.react(e, ctx, d)).catch(err => console.error(err)); };
+    const d = { latest: () => latestRun('../'), reload: () => location.reload(), banner, switched };
+    let busy = Promise.resolve(), cur = null;
+    // одно звено не должно остановить реакцию на следующие прогоны (ревью #191); прогон новее отменяет ожидание
+    // данных старого (#727): его реакция выходит сразу, а новая начинает ожидание заново
+    const queue = e => {
+      if (cur) cur.cancelled = true;
+      const mine = cur = { cancelled: false };
+      busy = busy.then(() => mine.cancelled ? 'none' : L.react(e, ctx, Object.assign({}, d, { prepare: (t, c) => L.prepare(t, c, mine) })))
+        .catch(err => console.error(err));
+    };
     // курсор ленты берётся после того, как страница получила прогон: прогон, опубликованный в это окно, ловит сверка;
     // и у пустой страницы (#319): первый прогон, вышедший между ответом /concepts-run.js и подпиской, не пропускается
     if (!ctx.pinned) queue(null);
@@ -300,7 +381,8 @@
     const K = window.KIT, M = window.MOCK, src = K ? K.source : window.CONCEPTS_SOURCE;
     if (L.manual || (src !== 'real' && src !== 'empty') || (!K && src !== 'empty')) return;
     const sel = window.CONCEPTS_SEL || {};
-    L.page = L.watchRuns({ source: src, runId: src === 'real' && M && M.run && M.run.id, asOf: src === 'real' && M && M.asOf, pinned: !!(sel.run_id || sel.as_of) });
+    L.page = L.watchRuns({ source: src, runId: src === 'real' && M && M.run && M.run.id, asOf: src === 'real' && M && M.asOf, pinned: !!(sel.run_id || sel.as_of),
+      shownAt: src === 'real' && M && M.run && M.run.publishedAt });
   }
 
   if (typeof window !== 'undefined') {

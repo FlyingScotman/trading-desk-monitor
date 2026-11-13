@@ -13,6 +13,9 @@ fails holds ``{"error": ...}`` and the rest is still there):
 * ``lan``: network access without addresses: where it listens, sign-in, HTTPS, the certificate's name count and
   the names of this computer it lacks (counts), the firewall rule, ``desk serve``'s self-check of its addresses at
   start (``desk.lan``: status, time, detail per address);
+* ``slow_requests`` (TDM#727, only from the running server): the last requests that took longer than the threshold
+  (``DESK_SLOW_REQUEST_S``, 2 s): the route as declared (no ids), the names of the query parameters, status, time,
+  whether the answer came from a cache or a body was built for it, its size; no values;
 * ``autopilot``: the thread's state and its last cycles with each step's status, duration and detail (scrubbed),
   the intraday step's window, next hub slot and what the hub answered; from ``<home>/logs/autopilot.log`` the
   cycles of any process (``desk cycle`` too) and per day each step's outcomes by kind;
@@ -1344,11 +1347,12 @@ def db_section(con: psycopg.Connection, settings: Settings) -> dict[str, Any]:
 
 def build(settings: Settings | None = None, *, store_url: str | None = None, autopilot: Any = None,
           hub: bool = True, started_at: datetime | None = None, now: datetime | None = None,
-          lan_probe: dict[str, Any] | None = None) -> dict[str, Any]:
+          lan_probe: dict[str, Any] | None = None, slow_requests: dict[str, Any] | None = None) -> dict[str, Any]:
     """The diagnostics document (see the module doc). ``settings``: default ``desk.settings.load()``; ``store_url``:
     default ``store.resolve_url``; ``autopilot``: the ``desk serve`` thread when in process; ``hub``: ask the hub
     (a live check and its newest snapshots, at most ``HUB_TIMEOUT_S`` a request); ``started_at``: the server's start
-    (uptime); ``lan_probe``: ``desk serve``'s self-check of its addresses (``desk.lan.probe_all``).
+    (uptime); ``lan_probe``: ``desk serve``'s self-check of its addresses (``desk.lan.probe_all``);
+    ``slow_requests``: the server's slow requests (``desk.api.slowlog.SlowLog.snapshot``).
     Never raises: a section that fails says so in its ``error``."""
     t_all = time.perf_counter()
     now = now or datetime.now(UTC)
@@ -1395,6 +1399,8 @@ def build(settings: Settings | None = None, *, store_url: str | None = None, aut
         section("clock", lambda: clock_section(now))
         section("settings", lambda: settings_section(settings, error, scrub))
         section("lan", lambda: lan_section(settings, lan_probe))
+        if slow_requests is not None:
+            section("slow_requests", lambda: slow_requests)
         logs_and_cycles: dict[str, Any] = {}
 
         def logs() -> dict[str, Any]:
@@ -1420,7 +1426,7 @@ def build(settings: Settings | None = None, *, store_url: str | None = None, aut
         section("backup", lambda: backup.diagnostics(settings))
         doc["build"] = {"duration_s": round(time.perf_counter() - t_all, 2), "sections_s": times,
                         "store_error": scrub.text(store_error) if store_error else None, "hub_asked": bool(hub)}
-        order = ("schema", "generated_at", "privacy", "app", "clock", "settings", "lan", "autopilot", "hub",
+        order = ("schema", "generated_at", "privacy", "app", "clock", "settings", "lan", "slow_requests", "autopilot", "hub",
                  "snapshots", "market_history", "static", "inbox", "positions", "runs", "backfill", "backup", "logs", "db",
                  "build")
         doc = {k: doc[k] for k in order if k in doc}

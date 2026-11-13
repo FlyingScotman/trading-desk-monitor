@@ -60,9 +60,10 @@ function load(opt) {
       if (r && r.status) return Promise.resolve({ ok: false, status: r.status, json: () => Promise.resolve({}) });
       return Promise.resolve({ ok: true, json: () => Promise.resolve(r) });
     },
-    document: { hidden: !!opt.hidden },
+    document: opt.document || { hidden: !!opt.hidden },
     localStorage: { getItem: k => (opt.store || {})[k] ?? null, setItem() {}, removeItem() {} },
   };
+  if (opt.location) ctx.location = opt.location;
   if (opt.es !== false) ctx.EventSource = FakeES;
   const br = opt.br === undefined ? browser() : opt.br;
   if (br) { ctx.BroadcastChannel = br.BroadcastChannel; ctx.navigator = { locks: br.locks }; }
@@ -324,5 +325,174 @@ test('реакция по шагам (L.react): переключение, пол
   // ошибка в звене (banner упал): промис отклонён; watchRuns ловит его в .catch и ждёт следующего прогона
   const bad = Object.assign(deps({ run_id: '45' }, '45'), { banner: () => { throw new Error('boom'); } });
   await assert.rejects(L.react(e, real, bad), /boom/);
-  assert.match(SRC, /busy = busy\.then\(\(\) => L\.react\(e, ctx, d\)\)\.catch\(/);
+  assert.match(SRC, /busy = busy\.then\(\(\) => mine\.cancelled \? 'none' : L\.react\(e, ctx, Object\.assign\(\{\}, d, \{ prepare:[^\n]*\n\s*\.catch\(/);
 });
+
+// #727: новый прогон не опустошает экран — цифры остаются, страница ждёт данные нового прогона и переходит на тёплый кэш
+test('реакция (#727): переключение — только когда данные нового прогона готовы; нет — полоса, перезагрузки нет', async () => {
+  const { L } = load();
+  const calls = [];
+  const deps = (res) => ({
+    latest: () => Promise.resolve({ run_id: '43' }), storage: { getItem: () => null },
+    reload: () => calls.push('reload'), banner: t => calls.push('banner ' + t.run_id),
+    switched: id => { if (id === undefined) return null; calls.push('switched ' + id); },
+    prepare: (t, ctx) => { calls.push('prepare ' + t.run_id); return Promise.resolve(res); }
+  });
+  const real = { source: 'real', runId: '42', pinned: false };
+  const e = { type: 'run.published', run_id: 43, text: 't' };
+  assert.strictEqual(await L.react(e, real, deps('ready')), 'switch');
+  assert.deepStrictEqual(calls.splice(0), ['switched 43', 'prepare 43', 'reload'], 'прогон помечен до ожидания: петли нет');
+  for (const res of ['timeout', 'error']) {
+    assert.strictEqual(await L.react(e, real, deps(res)), 'banner', res);
+    assert.deepStrictEqual(calls.splice(0), ['switched 43', 'prepare 43', 'banner 43'], res + ': страница не перезагружается');
+  }
+  assert.strictEqual(await L.react(e, real, deps('cancelled')), 'none', 'пришёл прогон новее — реакция выходит молча');
+  assert.deepStrictEqual(calls.splice(0), ['switched 43', 'prepare 43']);
+  // закреплённый прогон — как раньше: полоса, ожидания нет
+  assert.strictEqual(await L.react(e, { ...real, pinned: true }, deps('ready')), 'banner');
+  assert.deepStrictEqual(calls.splice(0), ['banner 43']);
+  // без ожидания (d.prepare нет) — сразу, как раньше
+  const bare = deps('ready'); delete bare.prepare;
+  assert.strictEqual(await L.react(e, real, bare), 'switch');
+});
+
+test('готовность (#727): опрос /api/v1/runs/{id}/ready; сбой сети и 5xx — ждём дальше; 404 — ошибка; таймаут; отмена', async () => {
+  const { L } = load();
+  const run = (answers, o) => {
+    const urls = [];
+    let t = 0, i = 0;
+    const fetch = (u) => {
+      urls.push(u);
+      const a = answers[Math.min(i++, answers.length - 1)];
+      if (a === 'net') return Promise.reject(new Error('net'));
+      return Promise.resolve({ ok: typeof a === 'object' || (a >= 200 && a < 300), status: typeof a === 'number' ? a : 200,
+        json: () => Promise.resolve(typeof a === 'object' ? a : {}) });
+    };
+    return L.waitReady(43, Object.assign({ fetch, now: () => t, sleep: ms => { t += ms; return Promise.resolve(); },
+      timeoutMs: 6000, pollMs: 1500 }, o)).then(r => ({ r, urls, t }));
+  };
+  let x = await run([{ ready: false }, 500, 'net', { ready: true }], { pages: 'concepts' });
+  assert.strictEqual(x.r, 'ready');
+  assert.strictEqual(x.urls.length, 4);
+  assert.ok(x.urls.every(u => u === '../api/v1/runs/43/ready?pages=concepts'), x.urls.join());
+  assert.strictEqual((await run([{ ready: true }])).r, 'ready');
+  assert.strictEqual((await run([404])).r, 'error', 'прогона нет (заменён и удалён)');
+  assert.strictEqual((await run([401])).r, 'error');
+  x = await run([{ ready: false }]);
+  assert.strictEqual(x.r, 'timeout');
+  assert.ok(x.t <= 6000 && x.urls.length >= 4, 'опрашивает до таймаута и не дольше: ' + x.urls.length + ' запросов за ' + x.t + ' мс');
+  const task = { cancelled: false };
+  x = await run([{ ready: false }, { ready: false }], { task, sleep: () => { task.cancelled = true; return Promise.resolve(); } });
+  assert.strictEqual(x.r, 'cancelled');
+  assert.strictEqual(L.READY_MS, 60000, 'ждём не дольше минуты');
+});
+
+test('плашка (#727): текст с временем показанного прогона по Москве; без времени — без него', () => {
+  const { L } = load();
+  assert.strictEqual(L.noteText('2026-11-13T11:32:00+00:00'), 'Пересчитан новый прогон, загружаю… · данные на 14:32 МСК');
+  assert.strictEqual(L.noteText('2026-11-13T14:05:00+03:00'), 'Пересчитан новый прогон, загружаю… · данные на 14:05 МСК');
+  assert.strictEqual(L.noteText(null), 'Пересчитан новый прогон, загружаю…');
+  assert.strictEqual(L.noteText('не дата'), 'Пересчитан новый прогон, загружаю…');
+});
+
+// страница с минимальным DOM: плашка живёт в .k-live под шапкой
+function dom(hidden) {
+  const bars = [];
+  const mk = () => ({
+    className: '', innerHTML: '', isConnected: true, attrs: {}, setAttribute(k, v) { this.attrs[k] = v; },
+    after(n) { bars.push(n); }, remove() { this.isConnected = false; },
+    querySelector(sel) { return sel === '[data-a=show]' ? (this.show = this.show || {}) : sel === '[data-a=close]' ? (this.close = this.close || {}) : null; }
+  });
+  const doc = {
+    hidden: !!hidden, listeners: {}, head: { appendChild() {} }, body: { prepend: n => bars.push(n) },
+    getElementById: () => null, createElement: () => mk(), querySelector: () => null,
+    addEventListener(t, f) { (this.listeners[t] = this.listeners[t] || []).push(f); },
+    removeEventListener(t, f) { this.listeners[t] = (this.listeners[t] || []).filter(g => g !== f); }
+  };
+  return { doc, bars };
+}
+
+async function pageWithNewRun(opt) {
+  FakeES.all = [];
+  const { doc, bars } = dom(opt.hidden);
+  const reloads = [], asked = [];
+  let n = 0, status = 0;
+  const { L, ctx } = load({
+    document: doc, location: { reload: () => reloads.push(1), href: 'http://x/concepts/c01.html' },
+    respond: p => {
+      asked.push(p);
+      // сверка при загрузке: нового прогона нет (42); потом, по событию, — 43
+      if (p.startsWith('../api/v1/autopilot/status')) return { latest_run: { run_id: status++ ? 43 : 42, label: '13.11 · внутри дня' } };
+      if (p.includes('/api/v1/runs/43/ready')) return opt.ready(++n);
+      return { events: [], has_more: false, last_id: 5 };
+    }
+  });
+  Object.assign(L, { READY_POLL_MS: 5, READY_MS: opt.timeout || 200 });
+  const shown = '2026-11-13T11:32:00+00:00';
+  L.watchRuns({ source: 'real', runId: '42', asOf: '2026-11-13', pinned: false, shownAt: shown });
+  await tick(20);
+  FakeES.all[0].emit('hello', { after: 5 });
+  FakeES.all[0].emit('run.published', ev(6, 'run.published', { run_id: 43, valid_date: '2026-11-13', text: 'e6' }), 6);
+  return { L, bars, doc, reloads, asked, ctx };
+}
+
+test('страница (#727): новый прогон — плашка с временем, цифры на месте, после готовности — перезагрузка', async () => {
+  const p = await pageWithNewRun({ ready: n => ({ ready: n >= 8, missing: [] }) });
+  await tick(12);
+  assert.strictEqual(p.reloads.length, 0, 'пока данные не готовы — страница не перезагружается');
+  assert.match(p.bars[0].innerHTML, /Пересчитан новый прогон, загружаю… · данные на 14:32 МСК/);
+  assert.ok(!/k-btn/.test(p.bars[0].innerHTML), 'плашка без кнопок: не мешает работать');
+  await tick(100);
+  assert.strictEqual(p.reloads.length, 1, 'готово — одна перезагрузка');
+  assert.ok(p.asked.filter(a => a.includes("/runs/43/ready")).length >= 8);
+});
+
+test('страница (#727): данные не дождались — полоса «Доступен новый прогон», страница не перезагружается', async () => {
+  const p = await pageWithNewRun({ ready: () => ({ ready: false }), timeout: 40 });
+  await tick(150);
+  assert.strictEqual(p.reloads.length, 0);
+  assert.match(p.bars[0].innerHTML, /Доступен новый прогон: 13\.11 · внутри дня · #43/);
+  assert.match(p.bars[0].innerHTML, /data-a="show">Показать</);
+});
+
+test('страница (#727): скрытая вкладка не ждёт; когда её покажут — плашка, готовность, перезагрузка', async () => {
+  const p = await pageWithNewRun({ hidden: true, ready: () => ({ ready: true }) });
+  await tick(40);
+  assert.strictEqual(p.reloads.length, 0);
+  assert.strictEqual(p.asked.filter(a => a.includes('/ready')).length, 0, 'скрытая вкладка сервер не опрашивает');
+  p.doc.hidden = false;
+  (p.doc.listeners.visibilitychange || []).forEach(f => f());
+  await tick(40);
+  assert.strictEqual(p.reloads.length, 1);
+  assert.ok(p.asked.some(a => a.includes('/runs/43/ready')));
+});
+
+test('страница (#727): прогон новее отменяет ожидание старого и начинает своё', async () => {
+  FakeES.all = [];
+  const { doc } = dom(false);
+  const reloads = [], asked = [];
+  let status = 0;
+  const { L } = load({
+    document: doc, location: { reload: () => reloads.push(1), href: 'http://x/c.html' },
+    respond: p => {
+      asked.push(p);
+      if (p.startsWith('../api/v1/autopilot/status')) return { latest_run: { run_id: [42, 43, 44][Math.min(status++, 2)] } };  // сверка при загрузке, событие 43, событие 44
+      if (p.includes('/runs/43/ready')) return { ready: false };
+      if (p.includes('/runs/44/ready')) return { ready: true };
+      return { events: [], has_more: false, last_id: 5 };
+    }
+  });
+  Object.assign(L, { READY_POLL_MS: 5, READY_MS: 500 });
+  L.watchRuns({ source: 'real', runId: '42', asOf: '2026-11-13', pinned: false });
+  await tick(20);
+  FakeES.all[0].emit('hello', { after: 5 });
+  FakeES.all[0].emit('run.published', ev(6, 'run.published', { run_id: 43, valid_date: '2026-11-13' }), 6);
+  await tick(30);
+  FakeES.all[0].emit('run.published', ev(7, 'run.published', { run_id: 44, valid_date: '2026-11-13' }), 7);
+  await tick(100);
+  assert.strictEqual(reloads.length, 1, 'одна перезагрузка — на прогон 44');
+  const last43 = asked.map((a, i) => a.includes('/runs/43/ready') ? i : -1).filter(i => i >= 0).pop();
+  const first44 = asked.findIndex(a => a.includes('/runs/44/ready'));
+  assert.ok(first44 > 0 && last43 < first44, 'опрос прогона 43 прекратился до опроса прогона 44');
+});
+
