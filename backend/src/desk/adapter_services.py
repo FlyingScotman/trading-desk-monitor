@@ -46,12 +46,14 @@ first load fell short) queues the feed ``CONNECT_FEED`` as «Запустить 
 hands its first load over to that run (``job.feed_queued``).
 
 **Actions beside a feed** (TDM#731). A panel action the adapter declares ``"concurrent": true`` (read-only: the adapter
-checks it, 08 §2.2) does not wait for the worker: ``submit`` runs it at once in a helper process of its own, in its own
-thread (``_run_concurrent``), without ``HELPER_LOCK``, so it runs beside a feed, a history request or a describe (and
-beside an acquisition job of ``desk.acquisition``, which holds ``HELPER_LOCK`` alone) and never shows ``waiting_feed``.
-The request carries the field ``concurrent=1``: the helper then saves nothing typed in the panel and answers
+checks it, 08 §2.2) does not wait for a feed: while a feed run or a history request is on (``_waiting_for``; the worker
+is busy and would hold the owner's button for the length of the run), ``submit`` runs it at once in a helper process of
+its own, in its own thread (``_run_concurrent``), without ``HELPER_LOCK``, and it never shows ``waiting_feed``. The
+request carries the field ``concurrent=1``: the helper then saves nothing typed in the panel and answers
 ``settings_unsaved`` for values that differ from the saved ones, so the adapter's config folder does not change under a
-running feed (its fingerprint, compared before the feed's files are taken in). The owner still has one job at a time
+running feed (its fingerprint, compared before the feed's files are taken in). With the worker free (idle, or only a
+describe) there is no feed to protect: the action is queued as any other, saves what is typed, and a describe follows
+it, exactly as before the flag (a feed that starts in the moment between the two makes it wait as before). The owner still has one job at a time
 (``services_busy`` for the next one, whichever way the first runs); the job has its own cancel flag, so «Отменить» ends
 it and «Остановить загрузку» (``cancel("feed")``) ends the feed, each only its own helper. No describe follows such
 an action (it changed nothing): ``job.refreshed`` is true at once. An action the adapter did not flag, and any action of
@@ -764,8 +766,10 @@ class AdapterServices:
                     raise ServiceError("services_busy")
                 section, login = self._of_action(op, params, doc)
                 now = _iso(self._now())
-                if self._concurrent(op, params, doc):
-                    # beside the worker (module doc): started at once, nothing to wait for
+                wait = self._waiting_for(self._running, doc)   # a feed run or a history request is on now
+                if wait and self._concurrent(op, params, doc):
+                    # beside the worker (module doc): started at once, nothing to wait for. With the worker free it is
+                    # queued like any action (the else branch): nothing then runs beside it, so it may save what is typed
                     params["concurrent"] = "1"
                     jid = uuid.uuid4().hex
                     self._job = {"id": jid, "op": op, "action": params.get("action"), "state": "running",
@@ -779,7 +783,6 @@ class AdapterServices:
                     job = dict(self._job)
                 else:
                     thread = None
-                    wait = self._waiting_for(self._running, doc)
                     self._job = {"id": uuid.uuid4().hex, "op": op, "action": params.get("action"), "state": "queued",
                                  "code": "waiting_feed" if wait else "queued", "long": self._long(op, params, doc),
                                  "login": login, "section": section, "queued_at": now}
@@ -803,7 +806,7 @@ class AdapterServices:
     @staticmethod
     def _concurrent(op: str, params: dict, doc: dict) -> bool:
         """The action is declared ``concurrent`` by the cached panel (an action offered by a pick list is not: it runs
-        as always)."""
+        as always). Whether it then runs beside the worker is ``submit``'s: only while a feed or a history request runs."""
         return op == "action" and bool((panel_action(doc.get("panel"), params.get("action"))[1] or {}).get("concurrent"))
 
     @staticmethod

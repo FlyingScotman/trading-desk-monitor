@@ -1391,7 +1391,7 @@ def test_a_flagged_action_runs_beside_a_feed_that_is_still_fetching_731(tmp_path
         assert helper_proc.HELPER_LOCK.locked()
         n = len(requests(st))
         t0 = time.monotonic()
-        job = s.submit("action", {"action": ["peek"]})
+        job = s.submit("action", {"action": ["peek"], "f.url": ["https://typed.example"]})
         assert (job["state"], job["code"]) == ("running", "running") and "waiting_for" not in job
         assert job["started_at"] and job["section"] == "ro" and job["id"]
         done = wait_job(s)
@@ -1404,9 +1404,50 @@ def test_a_flagged_action_runs_beside_a_feed_that_is_still_fetching_731(tmp_path
         assert helper_proc.HELPER_LOCK.locked()
         asked = requests(st)[n:]
         assert [(r["op"], r["action"]) for r in asked] == [("action", "peek")]  # and no describe after it
-        assert "concurrent" in asked[0]["keys"]
+        assert "concurrent" in asked[0]["keys"] and "f.url" in asked[0]["keys"]  # the adapter compares what is typed
         s.cancel("feed")
         _until(lambda: svcs.read_state(st)["runs"]["terms"].get("state") == "cancelled", "the feed was not stopped")
+    finally:
+        s.close()
+
+
+def test_a_flagged_action_with_the_worker_free_is_queued_as_before_and_saves_what_is_typed_731(tmp_path):
+    """No feed runs: nothing to protect, so the flagged action is an ordinary one: queued, no ``concurrent`` field (the
+    helper saves what is typed, as always), and the describe after it."""
+    st, _clock, s = _ready(tmp_path)
+    try:
+        assert s.overview()["running"] is None
+        n = len(requests(st))
+        job = s.submit("action", {"action": ["peek"], "f.url": ["https://typed.example"]})
+        assert (job["state"], job["code"]) == ("queued", "queued") and "waiting_for" not in job
+        done = wait_job(s)
+        assert (done["state"], done["code"], done["lines"]) == ("complete", "peeked", ["Только чтение"])
+        asked = requests(st)[n:]
+        assert [(r["op"], r["action"]) for r in asked] == [("action", "peek"), ("describe", None)]
+        assert "concurrent" not in asked[0]["keys"] and "f.url" in asked[0]["keys"]
+        assert s._conc is None
+    finally:
+        s.close()
+
+
+def test_a_flagged_action_runs_beside_a_history_request_but_is_queued_behind_a_describe_731(tmp_path):
+    """The worker's busy kinds that count are a feed run and a history request (as for ``waiting_for``); a describe is
+    short: the action is queued behind it as always."""
+    _st, _clock, s = _ready(tmp_path)
+    try:
+        with s._lock:
+            s._running = {"kind": "history", "history_feed": "terms", "date": "2026-10-15", "since": at(FRI, 9, 0).isoformat(),
+                          "phase": "fetching"}
+        job = s.submit("action", {"action": ["peek"]})
+        assert (job["state"], job["code"]) == ("running", "running")
+        assert wait_job(s)["code"] == "peeked"
+        with s._lock:
+            s._running = {"kind": "describe", "op": "describe", "since": at(FRI, 9, 0).isoformat()}
+        job = s.submit("action", {"action": ["peek"]})
+        assert (job["state"], job["code"]) == ("queued", "queued") and s._conc is None
+        with s._lock:
+            s._running = None
+        assert wait_job(s)["code"] == "peeked"
     finally:
         s.close()
 
@@ -1452,9 +1493,10 @@ def test_an_older_adapter_that_flags_nothing_runs_everything_as_before_731(tmp_p
 def test_the_owner_has_one_job_at_a_time_whichever_way_it_runs_731(tmp_path):
     st, _clock, s = _ready(tmp_path)
     try:
+        _hanging_feed(s, st)
         job = s.submit("action", {"action": ["peek_slow"]})
         assert job["state"] == "running" and job["long"] is True
-        assert not helper_proc.HELPER_LOCK.locked()      # no lock of its own
+        assert s.overview()["running"]["kind"] == "feed"   # beside the feed, which holds the lock: none of its own
         for name in ("peek", "check", "login"):
             with pytest.raises(svcs.ServiceError) as e:
                 s.submit("action", {"action": [name]})
@@ -1468,6 +1510,8 @@ def test_the_owner_has_one_job_at_a_time_whichever_way_it_runs_731(tmp_path):
         assert (done["id"], done["code"]) == (job["id"], "peeked_slow")
         s.submit("action", {"action": ["peek"]})            # accepted at once: the end of the job and of its slot are one step
         assert wait_job(s)["code"] == "peeked"
+        s.cancel("feed")
+        _until(lambda: svcs.read_state(st)["runs"]["terms"].get("state") == "cancelled", "the feed was not stopped")
         s.submit("action", {"action": ["check"]})           # and an unflagged one after a flagged one
         assert wait_job(s)["code"] == "connected"
     finally:
@@ -1478,8 +1522,11 @@ def test_a_flagged_action_does_not_hold_up_a_feed_731(tmp_path):
     """The other way round: the owner's long read-only action is running and a feed is asked for: it runs to its end."""
     st, clock, s = _ready(tmp_path)
     try:
+        _hanging_feed(s, st)
         s.submit("action", {"action": ["peek_slow"]})
         _until(lambda: any(r["action"] == "peek_slow" for r in requests(st)), "the action did not start")
+        s.cancel("feed")                      # the first feed is stopped, the action goes on
+        _until(lambda: svcs.read_state(st)["runs"]["terms"].get("state") == "cancelled", "the feed was not stopped")
         mode(st, "error")   # the helper answers at once (no store is needed to see the feed run to its end)
         run = run_feed(s, st, "terms", clock)
         assert (run["state"], run["code"]) == ("error", "fetch_failed")
@@ -1521,6 +1568,7 @@ def test_the_two_stops_are_separate_731(tmp_path):
 
 def test_closing_ends_a_running_flagged_action_731(tmp_path):
     st, _clock, s = _ready(tmp_path)
+    _hanging_feed(s, st)
     s.submit("action", {"action": ["peek_slow"]})
     _until(lambda: any(r["action"] == "peek_slow" for r in requests(st)), "the action did not start")
     t0 = time.monotonic()
@@ -1530,8 +1578,8 @@ def test_closing_ends_a_running_flagged_action_731(tmp_path):
 
 
 def test_no_deadlock_between_the_job_the_worker_and_the_routes_731(tmp_path):
-    """Many flagged actions in a row beside a feed that runs and ends, while the page polls and asks for the feed: the lock
-    of the service (job record, ``_running``, ``_conc``) never stops anything."""
+    """Many flagged actions in a row beside a feed, while the page polls: the lock of the service (job record,
+    ``_running``, ``_conc``) never stops anything, and the feed's stop afterwards ends it."""
     import threading
     st, _clock, s = _ready(tmp_path)
     stop, errors = threading.Event(), []
@@ -1546,14 +1594,13 @@ def test_no_deadlock_between_the_job_the_worker_and_the_routes_731(tmp_path):
     poller = threading.Thread(target=poll, daemon=True)
     poller.start()
     try:
-        for i in range(12):
-            if i % 4 == 0 and not (s.overview()["running"] or {}).get("feed"):
-                mode(st, "error")
-                s.run_feed("terms")
+        _hanging_feed(s, st)
+        for _ in range(12):
             job = s.submit("action", {"action": ["peek"]})
             assert job["state"] == "running" and "waiting_for" not in job
             assert wait_job(s)["code"] == "peeked"
-        _until(lambda: s._running is None and not s._manual, "the feeds did not end", 60)
+        s.cancel("feed")
+        _until(lambda: s._running is None and not s._manual, "the feed did not end", 30)
     finally:
         stop.set()
         poller.join(5)
@@ -1568,12 +1615,12 @@ def test_a_flagged_action_that_times_out_ends_the_job_and_frees_the_slot_731(tmp
     try:
         _concurrent_on(st)
         submit(s, "describe")
-        mode(st, "hang")   # the helper sleeps in every action
-        s.submit("action", {"action": ["peek"]})
+        _hanging_feed(s, st)
+        s.submit("action", {"action": ["peek_slow"]})   # waits for «release»: the action's timeout (1 s) ends it
         done = wait_job(s)
         assert (done["state"], done["code"]) == ("error", "helper_timeout")
-        mode(st, "ok")
-        s.submit("action", {"action": ["peek"]})
+        s.submit("action", {"action": ["peek"]})         # the slot is free again, the feed still fetches
         assert wait_job(s)["code"] == "peeked"
+        assert (s.overview()["running"] or {}).get("phase") == "fetching"
     finally:
         s.close()

@@ -174,14 +174,15 @@ the environment. Timeouts: `describe` and `save` 60 s, `action` 15 min (a browse
 Cancellation, a timeout and shutdown kill the process tree. One services process at a time, in one worker thread of
 `desk serve` (`desk.adapter_services`): the owner's operation first, then feeds asked for by hand, then the scheduled
 feeds; never at the same time as an acquisition job (a services operation waits for it: `waiting_acquisition`). The one
-exception is an action the adapter declares `concurrent` (TDM#731, "Actions beside the feeds" below): it runs in a process of
-its own, at once, beside a feed, a history request or a describe, and takes no part in that queue.
+exception is an action the adapter declares `concurrent` (TDM#731, "Actions beside the feeds" below): while a feed run or a
+history request is on, it runs in a process of its own, at once, and takes no part in that queue.
 
 Trusted fields the monitor always adds: `adapter_root`, `config_dir`, repeated `inbox_dir`, `state_dir`
 (`<home>/adapter-services/`, persistent, for the helper's caches and its protected secrets) and, for `feed`, a fresh
 empty `output_dir` (`<home>/adapter-services/out/<run id>/`; the folders of the last 20 runs are kept). A request
 never sets them: the routes accept only `f.<key>` of the cached panel, `action`, `arg` (and `date` for a feed run).
-For an `action` the cached panel declares `concurrent: true` the monitor also adds `concurrent=1` (a request never sets it).
+For an `action` the cached panel declares `concurrent: true`, while a feed run or a history request is on, the monitor also adds
+`concurrent=1` (a request never sets it).
 For a `feed` of a FEED with `books: true` the monitor also adds a repeated `book`: the owner's books (the active books
 of the book list whose current position set on the day has rows, sorted, 1 to 200 values of 1 to 200 characters each). The
 helper may export the whole environment: the books name which of them the adapter's source keeps when it reads the file. With none, the monitor does not call the feed: its outcome is `blocked`, `no_books`.
@@ -266,7 +267,7 @@ of the feed (a contract change, to be agreed).
 |---|---|---|
 | `describe` | — | `{"state": "complete", "code": "described", "panel": PANEL, "feeds": [FEED, …]}` |
 | `save` | `f.<key>` per panel field; a secret only when typed (an empty one is not sent: unchanged) | as `describe` (fresh panel), or `{"state": "blocked", "code": "config_invalid", "field": "<key>"}` |
-| `action` | `action=<id>`, the panel's `f.<key>` as typed, optional `arg`, `concurrent=1` (added for an action the panel flagged) | `{"state": "complete\|partial\|blocked\|error", "code", "lines", "table"?, "panel"?, "choices"?, "choose_action"?}` |
+| `action` | `action=<id>`, the panel's `f.<key>` as typed, optional `arg`, `concurrent=1` (added for a flagged action beside a feed) | `{"state": "complete\|partial\|blocked\|error", "code", "lines", "table"?, "panel"?, "choices"?, "choose_action"?}` |
 | `feed` | `feed=<id>`, optional `date=YYYY-MM-DD`, `output_dir` | `{"state": "complete\|partial\|skipped\|blocked\|error", "code", "files": [{"file", "sha256"}], "dates": […], "lines"}` |
 
 `table` is `{"columns": […], "rows": [[…], …]}` (at most 500 rows); `choices` `[{"id", "label"}]` is shown as a pick
@@ -304,15 +305,19 @@ whatever the helper sends and keeps only `"set": true|false`.
 **Actions beside the feeds** (TDM#731). A feed fetches for tens of seconds and the monitor asks for past dates one after the
 other, so the worker is busy most of the time and the owner's read-only buttons waited for it. `"concurrent": true` on an
 action (default false; anything but the boolean `true` is false) is the adapter's promise that the action may run in a helper
-process of its own **while a feed (or a history request, or a describe) runs in another**. The monitor decides nothing
-about it: it runs the flagged action at once in a thread of its own, without `HELPER_LOCK` (it never shows `waiting_feed`),
-with the request field `concurrent=1`, its own timeout (`action`, 15 min) and its own cancel («Отменить» ends it, «Остановить
-загрузку» ends the feed, each only its own process); no describe follows it. The owner still has one job at a time
-(`services_busy` for the next press, flagged or not), so there is one concurrent action beside the worker, never two. An
-action without the flag, and any action of an adapter that declares none, is queued and waits as before.
+process of its own **while a feed or a history request runs in another**. The monitor decides nothing about it: while a
+feed run or a history request is on (the work `job.waiting_for` names for a queued action), it runs the flagged action at
+once in a thread of its own, without `HELPER_LOCK` (it never shows `waiting_feed`), with the request field `concurrent=1`,
+its own timeout (`action`, 15 min) and its own cancel («Отменить» ends it, «Остановить загрузку» ends the feed, each only its
+own process); no describe follows it. When no feed or history request runs (the worker is idle, or only runs a describe), there
+is nothing to protect and the flagged action is queued like any other: no `concurrent=1`, so the adapter saves what is typed
+in the panel before it runs, and a describe follows. So an adapter handles both requests, with and without the field. The
+owner still has one job at a time (`services_busy` for the next press, flagged or not), so there is one concurrent action
+beside the worker, never two. An action without the flag, and any action of an adapter that declares none, is queued and waits
+as before.
 The flag is a contract the adapter must keep, because the monitor cannot see what the process does:
 
-- *The config folder does not change.* A running feed compares the fingerprint of the config folder (every file in it) before it
+- *The config folder does not change while a feed runs.* A running feed compares the fingerprint of the config folder (every file in it) before it
   takes its files in and ends `adapter_changed` when it moved. A request with `concurrent=1` therefore saves nothing of what
   is typed in the panel: values that differ from the saved ones are answered `blocked`/`settings_unsaved` (the owner saves them
   with the page's «Сохранить» and presses the button again), an action that the adapter did not flag is answered
@@ -378,7 +383,8 @@ panel values and secrets only in POST bodies, never in a URL, a response, the au
 a log line. `GET /api/v1/adapter-services`: availability (`available`, `code`, adapter name and version), the cached
 `panel` and `feeds` (each with `enabled`, `last`, `next_run`, `running`, `queued`), the owner's `job` and what runs
 now; a missing or older-fingerprint cache asks the worker for a `describe`. `POST …/save`, `…/action`, `…/describe`:
-202 with the queued job (one at a time: `services_busy`, 409; a flagged action is `running` already in the answer). `POST …/feeds/<id>/run` (optional `date`): 202 queued;
+202 with the queued job (one at a time: `services_busy`, 409; a flagged action beside a running feed is `running` already in
+the answer). `POST …/feeds/<id>/run` (optional `date`): 202 queued;
 `POST …/feeds/<id>/enabled` (`enabled=true|false`): the switch. `POST …/cancel` (`target=job|feed`): a queued job is
 dropped, a running process killed (not once its files are being taken in: `cancel_after_commit_unavailable`). The
 owner's operations go before queued feeds; a job that waits for a running feed or history request says which
