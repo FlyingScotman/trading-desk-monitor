@@ -61,6 +61,9 @@ checkout keeps its old names ``.devdata/inbox`` and ``.devdata/desk_pg``.
 * ``DESK_INTRADAY``        the autopilot's intraday step (on): today's book on the hub's intraday cuts every half
                            hour, from 19:45 on the preliminary close (R11)
 * ``DESK_INTRADAY_TRADES`` (on) an INTRADAY run adds the day's bond trades to the book (``desk.trades``, TDM#557)
+* ``DESK_INTRADAY_RERUN_MIN_S``  (300; 0: no pause) the intraday step makes today's run again for «private inputs changed»
+                           (a new file of the day's trades or terms) at most this often after the last run of the cut, whoever
+                           made it; the other reasons (a new cut, other positions, a late report) run at once (TDM#732)
 * ``DESK_PROXY_CURVES_FOR_RISK``  (off) the hub's government par-yield proxies of contract 1.3 (``usd_ust_par``,
                            ``eur_aaa_par``, ``eur_bund_par``: UST par, ECB AAA, Bund, **not OIS**) become the points
                            and the day's move of the run's USD / EUR curves, so the rates PnL and the scenario shifts
@@ -201,6 +204,7 @@ JSON_KEYS: dict[str, tuple[str, str]] = {
     "autopilot_sync_last": ("DESK_AUTOPILOT_SYNC_LAST", "int"),
     "intraday": ("DESK_INTRADAY", "bool"),
     "intraday_trades": ("DESK_INTRADAY_TRADES", "bool"),
+    "intraday_rerun_min_s": ("DESK_INTRADAY_RERUN_MIN_S", "int0"),
     "proxy_curves_for_risk": ("DESK_PROXY_CURVES_FOR_RISK", "bool"),
     "quote_curve_risk": ("DESK_QUOTE_CURVE_RISK", "bool"),
     "fx_foreign_curve": ("DESK_FX_FOREIGN_CURVE", "str"),
@@ -312,6 +316,7 @@ class Settings:
     autopilot_sync_last: int = 5
     intraday: bool = True  # the autopilot values today's book on the hub's intraday / preliminary cuts (R11)
     intraday_trades: bool = True  # an INTRADAY run adds the day's bond trades to the book (desk.trades, TDM#557)
+    intraday_rerun_min_s: int = 300  # seconds between two intraday runs for «private inputs changed» (TDM#732; 0: none)
     proxy_curves_for_risk: bool = False  # UST par / ECB AAA / Bund proxies as the run's USD/EUR curves (R25; not OIS)
     # the risk of the USD/EUR proxies (all positions) and of CNY XCCY (FX products) in their par quotes, core 0.38
     # (orchestrator.EodContext.quote_curve_risk, #171); off: their zero rates, as before
@@ -438,6 +443,8 @@ class Settings:
             ("autopilot", "on" if self.autopilot else "off"),
             ("autopilot_sync_last", str(self.autopilot_sync_last)),
             ("intraday", "on" if self.intraday else "off"),
+            ("intraday_rerun_min_s", f"{self.intraday_rerun_min_s} s between runs for changed trades or terms"
+                                      if self.intraday_rerun_min_s else "no pause"),
             ("intraday_trades", "on" if self.intraday_trades else "off"),
             ("proxy_curves_for_risk", "on (UST par / ECB AAA / Bund, not OIS)" if self.proxy_curves_for_risk
              else "off (proxies shown only)"),
@@ -854,6 +861,7 @@ def _build(proc: dict[str, str], doc: dict[str, Any], file_env: dict[str, str], 
         autopilot_sync_last=count("DESK_AUTOPILOT_SYNC_LAST", defaults.autopilot_sync_last),
         intraday=flag("DESK_INTRADAY", defaults.intraday),
         intraday_trades=flag("DESK_INTRADAY_TRADES", defaults.intraday_trades),
+        intraday_rerun_min_s=count("DESK_INTRADAY_RERUN_MIN_S", defaults.intraday_rerun_min_s, least=0),
         proxy_curves_for_risk=flag("DESK_PROXY_CURVES_FOR_RISK", defaults.proxy_curves_for_risk),
         quote_curve_risk=flag("DESK_QUOTE_CURVE_RISK", defaults.quote_curve_risk),
         fx_foreign_curve=choice("DESK_FX_FOREIGN_CURVE", defaults.fx_foreign_curve, ("fx_implied", "xccy")),

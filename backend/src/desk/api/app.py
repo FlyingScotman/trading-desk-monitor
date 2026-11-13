@@ -1660,6 +1660,7 @@ def serve(store_url: str, host: str = "127.0.0.1", port: int = 8100, static_dir:
     app.state.listen = {"host": host, "port": port, "tls": tls is not None}  # the settings page's «Сеть»: what this server listens on
     if autopilot is not None:
         app.state.autopilot = autopilot
+        autopilot.between_dates = app.state.adapter_services.take_in_history  # TDM#732: files of past dates, between its dates
         autopilot.start()
     app.state.adapter_services.start()  # the services' feeds in the background (08 §2.2; idle without the capability)
     # the desk.api logger logs every request with its request id, so no uvicorn access log

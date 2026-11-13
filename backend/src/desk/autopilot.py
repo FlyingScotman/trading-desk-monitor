@@ -57,7 +57,9 @@ every ``inbox_poll_seconds`` and on ``POST /api/v1/autopilot/run``):
    only for a cut newer than the last run's, when the position sets changed, when the previous close it is measured
    against changed (the previous day's ``eod_final`` published late or corrected), when its private inputs hash is
    no longer today's (trade terms of an earlier date, a stock in force today, arrived after it: #547; for an
-   INTRADAY run the hash includes the day's bond trades, ``trades.intraday_inputs``, TDM#557), or when an
+   INTRADAY run the hash includes the day's bond trades, ``trades.intraday_inputs``, TDM#557; only once in
+   ``intraday_rerun_min_s`` seconds, 300, after the last run of the cut, whoever made it, ``recompute.current_day``
+   after an accepted file too: TDM#732; the other reasons run at once), or when an
    ``ocp`` report or ``cash_balances`` in force today were recorded after it read its inputs (``backfill.late_why``: a
    replay after the owner changed the adapter's settings, TDM#554; the same cut again). The flash PnL is measured against
    the previous business day's ``eod_final``, else the newest earlier final or preliminary close, and the run says
@@ -92,7 +94,8 @@ every ``inbox_poll_seconds`` and on ``POST /api/v1/autopilot/run``):
    them. The lookback above does not apply: these dates feed no run.
 7. **backfill** (setting ``backfill``, R23; ``desk.backfill``): the default runs of the past business dates with
    positions from ``backfill_from`` on: once per start date and adapter the inbox reads the older reports; then the
-   dates whose run is missing or stale run, oldest first, for at most ``backfill_budget_s`` seconds a cycle, up to
+   dates whose run is missing or stale run, oldest first (those whose trades the fetch of past dates asked again go
+   first, TDM#732), for at most ``backfill_budget_s`` seconds a cycle, up to
    today: every date its plan calls stale, also inside the eod step's window (#23: an upgrade recomputes there only
    the latest positions date, and these dates stayed stale while the backfill stopped at the window), but the dates
    the eod step ran or failed (a date is not tried twice a cycle, nor again on inputs the eod step failed on). Last in the cycle, after the EOD, intraday and history steps, so the latest date never waits for it; not while the inbox
@@ -109,7 +112,9 @@ every ``inbox_poll_seconds`` and on ``POST /api/v1/autopilot/run``):
    (``backfill.run_second``), and the cycles after it go on until none lacks them. With ``backfill_workers`` > 1
    (default 1: off until the pool is checked on the work machine, TDM#628) both passes compute several dates at once in
    processes of a pool (one for both passes of the cycle) and publish them in order (``desk.parallel``); the budget
-   starts no date after it, the dates already in the pool are finished.
+   starts no date after it, the dates already in the pool are finished. The step holds the cycle lock all that time, so
+   before each date it calls ``between_dates`` (TDM#732; ``desk serve``: ``AdapterServices.take_in_history``): the files
+   of past dates that wait for the lock are taken in there, under the lock the cycle holds, not after the ten minutes.
 8. **prune** (setting ``prune_superseded``, on; ``prune_superseded_days``, 14: not less than the 14 daily backups, so
    every backup kept holds a run when it is deleted; TDM#634): the runs of a date that a newer run
    replaced (the history's first pass, an older program version, a corrected report) are deleted once the replacement
@@ -140,6 +145,7 @@ does nothing (step ``cycle``: ``skipped``, "another cycle running") instead of p
 from __future__ import annotations
 
 import logging
+import math
 import os
 import threading
 import time
@@ -363,6 +369,10 @@ class Autopilot:
         self._cycle = threading.Lock()
         self._lock = threading.Lock()
         self._wake, self._stop = threading.Event(), threading.Event()
+        self.between_dates: Callable[[], Any] | None = None
+        """TDM#732: what the backfill calls between two of its dates, in this thread, which holds the cycle lock
+        (``desk serve`` sets it to ``AdapterServices.take_in_history``): work that waits for the lock is done there, not
+        after a run of ten minutes. Returns the number of things done; its errors are logged and ignored."""
         self._thread: threading.Thread | None = None
         self._failed: dict[str, tuple] = {}
         self._fail_errors: dict[str, str] = {}  # the keys of ``_failed`` -> the error of their failed run (#156)
@@ -977,6 +987,19 @@ class Autopilot:
             parts.append(f"{len(due) - len(todo)} dates in the next cycles")
         return "ok", "; ".join(parts) + f" ({span})"
 
+    def _between_dates(self) -> None:
+        """``backfill.run``'s ``between``: ``between_dates`` (TDM#732), never raises, not once the autopilot is stopping."""
+        hook = self.between_dates
+        if hook is None or self._stop.is_set():
+            return
+        try:
+            n = hook()
+        except Exception:
+            log.exception("autopilot: the work between the dates of the backfill failed")
+            return
+        if n:
+            log.info("autopilot: %s taken in between two dates of the backfill", n)
+
     def _backfill(self, settings: Settings, con: psycopg.Connection, url: str | None, hub: bool,
                   ran: list[str]) -> tuple[str, str]:
         """The backfill step (module doc, ``desk.backfill``). With ``backfill_workers`` > 1 the first and the second
@@ -1049,7 +1072,7 @@ class Autopilot:
             res = backfill.run(settings, p, store_url=url, client=client, budget_s=budget,
                                out=self._eod_line, contexts=self._contexts, exclude=exclude, now=self._now(),
                                hub_answered=client is not None and self._hub_answered,
-                               workers=pool.workers if pool is not None else 1, pool=pool,
+                               workers=pool.workers if pool is not None else 1, pool=pool, between=self._between_dates,
                                progress=lambda i, n, d: self._progress("backfill", i, n, d))
             if res["done"]:
                 ran.append(f"история {len(res['done'])} дат")
@@ -1075,6 +1098,7 @@ class Autopilot:
                 res2 = backfill.run_second(settings, p2, store_url=url, budget_s=budget - (res["seconds"] if res else 0.0),
                                            out=self._eod_line, contexts=self._contexts, exclude=exclude,
                                            workers=pool.workers if pool is not None else 1, pool=pool,
+                                           between=self._between_dates,
                                            progress=lambda i, n, d: self._progress("backfill", i, n, d))
                 if res2["done"]:
                     ran.append(f"гамма {len(res2['done'])} дат")
@@ -1282,6 +1306,15 @@ class Autopilot:
         status, detail, reason = self._intraday_step(settings, con, url, ran)
         return status, detail, {"reason": reason}
 
+    def _rerun_wait(self, settings: Settings, completed: datetime | None) -> int:
+        """Seconds left of ``intraday_rerun_min_s`` (0: none, no wait) since the run that completed at ``completed``.
+        A clock before it (a test's, a skewed one) is not trusted: no wait."""
+        gap = float(getattr(settings, "intraday_rerun_min_s", 0) or 0)
+        if gap <= 0 or completed is None:
+            return 0
+        spent = (self._now() - completed).total_seconds()
+        return max(0, math.ceil(gap - spent)) if spent >= 0 else 0
+
     def _intraday_step(self, settings: Settings, con: psycopg.Connection, url: str | None,
                        ran: list[str]) -> tuple[str, str, str]:
         from .dayrun import eod_run
@@ -1301,7 +1334,7 @@ class Autopilot:
         rtype = "INTRADAY" if cut == "intraday" else "EOD"
         last = con.execute(
             "SELECT run_id, market_snapshot_id, cut_ts, position_set_ids, prev_market_snapshot_id, private_inputs_hash,"
-            " positions_known_at"
+            " positions_known_at, completed_at"
             " FROM run WHERE business_date = %s"
             " AND run_type = %s AND cut_type = %s AND status = 'complete' ORDER BY run_id DESC LIMIT 1",
             (today, rtype, cut)).fetchone()
@@ -1338,8 +1371,14 @@ class Autopilot:
         inputs_hash = None
         if last is not None:  # every run values the day's trades too (TDM#557), as dayrun.eod_run does
             inputs_hash = trades.intraday_inputs(con, today, settings)[0].private_inputs_hash
+        deferred = 0
         if target is None and last is not None and last[5] != inputs_hash:
-            target = (last[1], "private inputs changed")  # e.g. trade terms of an earlier date, in force today (#547)
+            # e.g. trade terms of an earlier date, in force today (#547), a feed of the day's trades every few minutes:
+            # not more often than ``intraday_rerun_min_s`` after the last run, whoever made it (TDM#732: the run after the
+            # accepted file, ``recompute.current_day``, is that run); every other reason runs at once
+            deferred = self._rerun_wait(settings, last[7])
+            if not deferred:
+                target = (last[1], "private inputs changed")
         if target is None and last is not None and (late := late_why(con, today, {"positions_known_at": last[6]})):
             # an OCP report or balances in force today recorded after the run (a replay after the owner changed the
             # adapter's settings, a report that came late): the same cut again, so the OCP follows (TDM#554)
@@ -1347,7 +1386,8 @@ class Autopilot:
         when = "asked the hub" if asked else "next hub check in the next 10-minute slot"
         if target is None:
             if last is not None:
-                return "ok", f"up to date: run {last[0]} on {store.slice_label(today, cut, last[2])} ({when})", \
+                later = f"; private inputs changed, the next run in {deferred} s" if deferred else ""
+                return "ok", f"up to date: run {last[0]} on {store.slice_label(today, cut, last[2])}{later} ({when})", \
                     "up_to_date"
             return "skipped", f"no {cut} cut of {today} on the hub yet ({when})", "no_cut_yet"
         sid, why = target

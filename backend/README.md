@@ -292,6 +292,7 @@ The settings page `http://127.0.0.1:8100/settings.html` (`desk serve`) edits `se
 | `DESK_INBOX_MAX_FILE_MB` | 500 | Larger files are not offered |
 | `DESK_AUTOPILOT` / `DESK_AUTOPILOT_SYNC_LAST` | on / 5 | The `desk serve` autopilot and the number of latest hub dates it keeps in sync |
 | `DESK_INTRADAY` | on | The autopilot's intraday step: today's book on the hub's intraday cuts every half hour, from 19:45 on the preliminary close |
+| `DESK_INTRADAY_RERUN_MIN_S` | 300 | The intraday step makes today's run again for «private inputs changed» (a new file of the day's trades or terms) at most this often after the last run of the cut, whoever made it; the other reasons run at once; 0: no pause |
 | `DESK_HISTORY_DAYS` | 260 | Hub business dates of market history for the bond charts (about a year), fetched by the autopilot a few per cycle, when the hub has no history API; 0: the history step off (the cached dates only) |
 | `DESK_HISTORY_BONDS_FROM` / `DESK_HISTORY_RATES_FROM` | 2024-01-03 / 2010-01-01 | First date read from the hub's history API: bonds / the KBD, curves, fixings and FX (R24) |
 | `DESK_BACKFILL` / `DESK_BACKFILL_FROM` / `DESK_BACKFILL_BUDGET_S` | on / 2026-01-05 / 600 | The autopilot's backfill step (R23): the default runs of the past business dates with positions from this date, at most this many seconds a cycle (one date always finishes) |

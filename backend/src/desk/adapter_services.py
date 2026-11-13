@@ -87,10 +87,14 @@ it keeps) also answers for a past ``date``. When nothing else is due (the owner'
 scheduled feeds), the worker asks it for one past date at a time (``_history_step``): newest block of dates first, the
 limits and the hours of ``trades_history``. It does not touch the feed's own state (``runs``): the schedule, the retries
 and the login pause of today's feed are not affected by it. Unlike a feed run, a history request (a) takes its files in
-with one non-blocking try of the cycle lock: busy, they stay ``pending`` in ``trades_history.json`` and are taken in at
-the next step, before another date is asked, with ``HELPER_LOCK`` free meanwhile; (b) makes no run after the ingestion:
+with one non-blocking try of the cycle lock: busy, they stay ``pending`` in ``trades_history.json`` (a list: up to
+``trades_history.PENDING_MAX`` dates wait, another date is asked meanwhile) with ``HELPER_LOCK`` free, and are taken in at
+the next step, or, while the autopilot's backfill holds the lock for its ten minutes, by it between two of its dates
+(``take_in_history``: it runs in the autopilot's thread under the lock the backfill holds, the helper lock tried once,
+never waited for), so the pace is the gap's, not the cycle's; (b) makes no run after the ingestion:
 the eod and backfill steps do, by the changed hash of the date's inputs (the eod step leaves such dates to the backfill in
-the trading hours). A feed due within the time of the last request is waited for. The answer's date must be the asked one.
+the trading hours). Today's feed waits for the cycle lock without ``HELPER_LOCK`` (``_wait_cycle_lock``: the history
+files can be taken in meanwhile). A feed due within the time of the last request is waited for. The answer's date must be the asked one.
 """
 from __future__ import annotations
 
@@ -165,6 +169,17 @@ class StateUnavailable(ServiceError):
 
 class Invalid(Exception):
     """A helper answer that does not follow the protocol."""
+
+
+class _Held:
+    """The cycle lock of the caller (``_ingest(locked=True)``): the ingestion releases nothing."""
+
+    @staticmethod
+    def release() -> None:
+        return None
+
+
+_HELD = _Held()
 
 
 @dataclass(frozen=True)
@@ -1449,22 +1464,34 @@ class AdapterServices:
         log.info("adapter services: feed %s %s/%s", f["id"], state, code)
 
     def _wait_cycle_lock(self, st: Settings) -> CycleLock | None:
-        """The cycle lock, waited for ``LOCK_WAIT_S`` (None then, or on shutdown). Meanwhile no helper process runs: the
-        owner's operation asked for goes first (``HELPER_LOCK`` kept, its time not counted, ``_owner_runs`` counts
-        it), and «Остановить» stops the wait (``cancelled``: the files stay pending)."""
+        """The cycle lock, waited for ``LOCK_WAIT_S`` (None then, or on shutdown). The caller holds ``HELPER_LOCK``; no
+        helper process runs in the wait, so it is given up (the autopilot takes the files of past dates in between the
+        dates of its backfill, ``take_in_history``, with it) and taken again together with the cycle lock: never waited
+        for with the cycle lock in hand (an acquisition job holds it for minutes), and held again on every way out (the
+        caller's end releases it). Meanwhile the owner's operation asked for goes first (its time not counted,
+        ``_owner_runs`` counts it), and «Остановить» stops the wait (``cancelled``: the files stay pending)."""
         lock = CycleLock(st.home)
         until = time.monotonic() + LOCK_WAIT_S
-        while True:
-            if lock.acquire():
-                return lock
-            if self._cancel.is_set():
-                raise ServiceError("cancelled", "cancelled")
-            t0 = time.monotonic()
-            if self._owner_first(held=True):
-                until += time.monotonic() - t0
-                continue
-            if time.monotonic() >= until or self._stop.wait(1.0):
-                return None
+        helper_proc.HELPER_LOCK.release()
+        got = False
+        try:
+            while True:
+                if lock.acquire():
+                    if helper_proc.HELPER_LOCK.acquire(blocking=False):
+                        got = True
+                        return lock
+                    lock.release()
+                if self._cancel.is_set():
+                    raise ServiceError("cancelled", "cancelled")
+                t0 = time.monotonic()
+                if self._owner_first():
+                    until += time.monotonic() - t0
+                    continue
+                if time.monotonic() >= until or self._stop.wait(1.0):
+                    return None
+        finally:
+            if not got:
+                helper_proc.HELPER_LOCK.acquire()
 
     @staticmethod
     def _try_cycle_lock(st: Settings) -> CycleLock | None:
@@ -1473,11 +1500,13 @@ class AdapterServices:
         return lock if lock.acquire() else None
 
     def _ingest(self, st: Settings, hp: Helper, f: dict, out: Path, r: dict, *, recompute_runs: bool = True,
-                wait: bool = True, day: str | None = None, books: list[str] | None = None) -> dict:
+                wait: bool = True, day: str | None = None, books: list[str] | None = None,
+                locked: bool = False) -> dict:
         """The produced files through the scanner as the feed's source, then the affected runs (module doc).
         ``recompute_runs`` False and ``wait`` False: the history of trades (one try of the cycle lock, no runs after it).
         ``day`` and ``books``: the date and the books asked, for ``_retire_plan`` (the answer replaces the date whole for
-        these books, TDM#715; without ``books`` nothing is emptied)."""
+        these books, TDM#715; without ``books`` nothing is emptied). ``locked``: the caller holds the cycle lock (the
+        autopilot's backfill, ``take_in_history``): none is taken, none released."""
         root = out.resolve()
         paths = []
         for x in r["files"]:
@@ -1488,7 +1517,7 @@ class AdapterServices:
         if self._cancel.is_set():
             raise ServiceError("cancelled", "cancelled")
         runs = self._owner_runs
-        lock = self._wait_cycle_lock(st) if wait else self._try_cycle_lock(st)
+        lock = _HELD if locked else self._wait_cycle_lock(st) if wait else self._try_cycle_lock(st)
         owner = self._owner_runs != runs  # the owner's operation ran in the wait (it may have changed the config)
         if lock is None:
             raise ServiceError("calculation_busy", "error")
@@ -1693,8 +1722,13 @@ class AdapterServices:
                 or sdoc.get("runs", {}).get(f["id"], {}).get("needs_login"):
             return False
         now = self._now()
-        if h.get("pending"):
-            return self._history_drain(st, f, h)
+        waiting = {p.get("date") for p in h["pending"]}   # dates whose files wait for the cycle lock: not asked again
+        if waiting:
+            took = self._history_drain(st, f, h)
+            if took is not None:
+                return took
+            if len(trades_history.read(st)["pending"]) >= trades_history.PENDING_MAX:
+                return False   # the lock stayed busy, up to that many dates wait: nothing more is asked
         if trades_history.gate(h, now, stale_only=stale_only) is not None \
                 or self._feed_due_soon(sdoc, now, h.get("last_duration_s")):
             return False
@@ -1705,6 +1739,7 @@ class AdapterServices:
             with store.connect(self._url) as con:
                 closed = trades_history.today_gate(con, f.get("source"), now) is not None   # module doc, «Trades first»
                 q = trades_history.queue(con, st, h, now, f.get("history_from"), fp, stale_only=stale_only)
+                q["order"] = [d for d in q["order"] if d not in waiting]
                 if closed:   # only what the owner asked again (of the candidates) goes
                     q["order"] = [d for d in q["order"] if d in set(h.get("priority") or [])]
                     if not q["order"]:
@@ -1771,9 +1806,10 @@ class AdapterServices:
                     ing = self._ingest(st, hp, f, out, r, recompute_runs=False, wait=False, day=day, books=asked_books)
                 except Invalid:
                     raise
-                except BaseException:
+                except BaseException as e:
                     pending = {"dir": rid, "files": r["files"], "state": r["state"], "code": r["code"], "date": day,
-                               "books": asked_books, **({"filtered": True} if r.get("filtered") else {})}
+                               "books": asked_books, **({"filtered": True} if r.get("filtered") else {}),
+                               **({"why": e.code} if isinstance(e, ServiceError) else {})}
                     raise
         except ServiceError as e:
             r = {**r, "code": e.code} if pending is not None else {"state": e.state, "code": e.code, "files": [],
@@ -1791,46 +1827,93 @@ class AdapterServices:
         self._history_finish(st, day, r, ing, fp, started, pending=pending, adapter=self._adapter_id(hp), hold=hold)
         return True
 
-    def _history_drain(self, st: Settings, f: dict, h: dict) -> bool:
-        """The files an earlier step could not take in (the cycle lock was busy), tried again with one non-blocking try;
-        no other date is asked before. Gone or changed files: dropped, the date is asked again."""
-        p = h["pending"]
-        if not isinstance(p, dict) or not _RID.fullmatch(str(p.get("dir"))) or not isinstance(p.get("files"), list) \
-                or not isinstance(p.get("date"), str) or not (state_dir(st) / "out" / p["dir"]).is_dir():
-            self._hist_edit(st, lambda d: d.update(pending=None))
-            return False
-        folder = state_dir(st) / "out" / p["dir"]
+    def _history_drain(self, st: Settings, f: dict, h: dict) -> bool | None:
+        """The files earlier steps could not take in (the cycle lock was busy), tried again, one non-blocking try of the
+        cycle lock for each, the oldest first. True: some were taken in (the step ends); False: none could be (a file that
+        is gone or changed is dropped, its date asked again; the helper lock busy, a cancel); None: the lock is busy, the
+        files are kept and the step may ask another date (``PENDING_MAX``)."""
+        entries = []
+        for p in h["pending"]:
+            if not _RID.fullmatch(str(p.get("dir"))) or not isinstance(p.get("files"), list) \
+                    or not isinstance(p.get("date"), str) or not (state_dir(st) / "out" / p["dir"]).is_dir():
+                self._hist_edit(st, lambda d, p=p: d.update(pending=[x for x in d["pending"] if x.get("dir") != p.get("dir")]))
+                return False
+            entries.append(p)
         try:
             hp = self._helper(st)
         except Exception:  # noqa: BLE001
             return False
-        day, started = p["date"], self._now()
         self._cancel.clear()   # a cancel that came after the request must not hold the files for ever
         if helper_proc.owner_waiting() or not helper_proc.HELPER_LOCK.acquire(timeout=0.25):
             return False   # as every operation; busy (or the owner's acquisition waits): the next step
-        with self._lock:
-            self._running = {"kind": "history", "history_feed": f["id"], "date": day, "since": _iso(started),
-                             "phase": "ingesting"}
-        r = {"state": p.get("state"), "code": p.get("code"), "files": p["files"], "dates": [day],
-             "filtered": p.get("filtered") is True}
-        books = [b for b in p.get("books") or [] if isinstance(b, str)]   # none known (an older pending): nothing emptied
         try:
-            ing = self._ingest(st, hp, f, folder, r, recompute_runs=False, wait=False, day=day, books=books)
-        except ServiceError:
-            return False   # still busy (or a cancel): kept
-        except Invalid:
-            self._hist_edit(st, lambda d: d.update(pending=None))
-            return False
+            took, busy = self._take_in(st, f, hp, entries)
+        finally:
+            helper_proc.HELPER_LOCK.release()
+        return True if took else None if busy else False
+
+    def _take_in(self, st: Settings, f: dict, hp: Helper, entries: list[dict], *, locked: bool = False
+                 ) -> tuple[int, bool]:
+        """The caller holds ``HELPER_LOCK``. The ``entries`` (``pending``) taken in one after the other, no cycle lock
+        waited for (``locked``: the caller holds it). ``(dates taken in, the lock was busy)``; a file that fails stays."""
+        took = 0
+        for p in entries:
+            day, started = p["date"], self._now()
+            folder = state_dir(st) / "out" / p["dir"]
+            with self._lock:
+                self._running = {"kind": "history", "history_feed": f["id"], "date": day, "since": _iso(started),
+                                 "phase": "ingesting"}
+            r = {"state": p.get("state"), "code": p.get("code"), "files": p["files"], "dates": [day],
+                 "filtered": p.get("filtered") is True}
+            books = [b for b in p.get("books") or [] if isinstance(b, str)]   # none known (an older pending): nothing emptied
+            try:
+                ing = self._ingest(st, hp, f, folder, r, recompute_runs=False, wait=False, day=day, books=books,
+                                   locked=locked)
+            except ServiceError as e:
+                return took, e.code == "calculation_busy"   # still busy (or a cancel): kept
+            except Invalid:
+                self._hist_edit(st, lambda d, p=p: d.update(pending=[x for x in d["pending"] if x.get("dir") != p["dir"]]))
+                return took, False
+            except Exception:
+                log.exception("adapter services: pending history files of %s not taken in", day)
+                return took, False
+            finally:
+                with self._lock:
+                    self._running = None
+            self._history_finish(st, day, r, ing, read_state(st).get("fingerprint"), started, drained=p["dir"],
+                                 adapter=self._adapter_id(hp), hold=self._retire_held(st, hp, f, r, day, books))
+            took += 1
+        return took, False
+
+    def take_in_history(self) -> int:
+        """Called by the autopilot's backfill between two of its dates, in its thread, which holds the cycle lock: the
+        files of past dates that wait for it are taken in now, under that lock (module doc). Nothing is waited for: the
+        helper lock busy (a feed run, an acquisition job, the owner's operation waiting), a cancel, no adapter: 0. What
+        the worker showed (``_running``) is put back. Returns the dates taken in; never raises."""
+        try:
+            st = self._load()
+            if not trades_history.pending_of(trades_history.read(st)):
+                return 0
+            f = self._history_feed(read_state(st))
+            if f is None or self._cancel.is_set() or helper_proc.owner_waiting() \
+                    or not helper_proc.HELPER_LOCK.acquire(blocking=False):
+                return 0
+        except Exception:  # noqa: BLE001 - the backfill goes on
+            return 0
+        with self._lock:
+            saved = self._running
+        try:
+            entries = [p for p in trades_history.read(st)["pending"] if _RID.fullmatch(str(p.get("dir")))
+                       and isinstance(p.get("files"), list) and isinstance(p.get("date"), str)
+                       and (state_dir(st) / "out" / p["dir"]).is_dir()]
+            return self._take_in(st, f, self._helper(st), entries, locked=True)[0] if entries else 0
         except Exception:
-            log.exception("adapter services: pending history files of %s not taken in", day)
-            return False
+            log.exception("adapter services: history files not taken in between the dates of the backfill")
+            return 0
         finally:
             with self._lock:
-                self._running = None
+                self._running = saved
             helper_proc.HELPER_LOCK.release()
-        self._history_finish(st, day, r, ing, read_state(st).get("fingerprint"), started, drained=True,
-                             adapter=self._adapter_id(hp), hold=self._retire_held(st, hp, f, r, day, books))
-        return True
 
     @staticmethod
     def _adapter_id(hp: Helper) -> str:
@@ -1848,7 +1931,7 @@ class AdapterServices:
             return False
 
     def _history_finish(self, st: Settings, day: str, r: dict, ing: dict | None, fp: str | None, started: datetime, *,
-                        pending: dict | None = None, drained: bool = False, adapter: str | None = None,
+                        pending: dict | None = None, drained: str | None = None, adapter: str | None = None,
                         hold: bool = False) -> None:
         """The answer into the date's mark or, with no mark, into the worker's wait / retry (``trades_history`` doc)."""
         now = self._now()
@@ -1869,9 +1952,9 @@ class AdapterServices:
         def edit(h: dict) -> None:
             h["last_duration_s"] = round((now - started).total_seconds(), 1)
             if drained:
-                h["pending"] = None
+                h["pending"] = [x for x in h["pending"] if x.get("dir") != drained]
             if pending is not None:
-                h["pending"] = pending
+                h["pending"] = [*h["pending"], pending]
                 h["last"] = {"date": day, "state": "pending", "code": mcode, "at": now.isoformat()}
                 return
             if mark is not None:
@@ -1986,9 +2069,7 @@ class AdapterServices:
         base = state_dir(st) / "out"
         keep = {r.get("pending", {}).get("dir") for r in read_state(st).get("runs", {}).values()
                 if isinstance(r, dict) and isinstance(r.get("pending"), dict)}
-        hp_ = trades_history.read(st).get("pending")
-        if isinstance(hp_, dict):   # the files of the history of trades waiting for the cycle lock (TDM#569)
-            keep.add(hp_.get("dir"))
+        keep |= {p.get("dir") for p in trades_history.pending_of(trades_history.read(st))}   # the history files waiting for the cycle lock (TDM#569)
         try:
             dirs = sorted((d for d in base.iterdir() if d.is_dir() and d.name not in keep),
                           key=lambda d: d.stat().st_mtime)

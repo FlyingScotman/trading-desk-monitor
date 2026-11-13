@@ -13,6 +13,7 @@
  *                           прошло или автопилот выключен), в подсказке — с какого времени, дата и ошибка целиком;
  *  T.passes(j)            — два прохода пересчёта истории (TDM#627): строки «Проход 1 из 2 …» / «Проход 2 из 2 …», коротко для чипа,
  *                           проблемные даты второго прохода; null — ответ прежнего сервера, без pass;
+ *  T.pending(h)           — «Файлы ждут окончания расчёта» и причина (TDM#732): файлы дат ждут блокировки расчёта;
  *  T.history(h)           — сделки прошлых дат (TDM#569, GET /api/v1/adapter-services/history): {unsupported, summary,
  *                           applied, runs, next, problems}: слова экрана «Подключение к сервисам» и строка «История
  *                           прогонов» («PnL сделок учтён в X датах, ждут пересчёта Y»).
@@ -80,6 +81,12 @@
   T.HIST_CODE = { date_unavailable: 'сервис не отдаёт эту дату', books_unmapped: 'книги сервиса не сопоставлены с книгами монитора',
     export_incomplete: 'выгрузка неполная', files_not_accepted: 'файлы не приняты', empty: 'пусто, причина не указана',
     filtered_empty: 'пусто по выбранным портфелям; повтор после новой версии адаптера' };
+  // файлы дат, которые ждут блокировки расчёта (pending: сколько дат, или true у прежнего сервера; pending_why — почему)
+  T.pending = function (h) {
+    var n = typeof h.pending === 'number' ? h.pending : 1;
+    return 'Файлы ждут окончания расчёта' + (n > 1 ? ' (' + T.plural(n, 'дата', 'даты', 'дат') + ')' : '')
+      + (h.pending_why === 'calculation_busy' ? ': ждёт блокировки расчёта, файлы принимаются между датами пересчёта истории' : '');
+  };
   T.history = function (h, now) {
     if (!h) return { unsupported: false, summary: '', applied: '', runs: '', next: '', problems: [] };
     var c = h.counts || {}, a = h.applied, dm = function (d) { return d.slice(8, 10) + '.' + d.slice(5, 7); };
@@ -121,8 +128,9 @@
     else if (h.paused && h.waiting) out.next = T.HIST_WAIT[h.waiting] || h.waiting;
     else if (!h.enabled) out.next = win ? 'догрузка новых дат выключена; уже полученные даты запрашиваются заново' : 'выключено';
     else if (h.gate && T.HIST_GATE[h.gate]) out.next = T.HIST_GATE[h.gate] + (h.next_at ? ', дальше в ' + T.when(h.next_at, now) : '');
+    // TDM#732: файлы, которые ждут блокировки расчёта, видны раньше «Дальше: сейчас» (пока шёл перезапрос, их не было видно)
+    else if (h.pending) out.next = T.pending(h);
     else if (c.todo || win) out.next = 'Дальше: сейчас';
-    else if (h.pending) out.next = 'Файлы ждут окончания расчёта';
     else if ((h.problems || []).length) out.next = 'Ждут повтора: ' + h.problems.length;
     else out.next = 'Все даты получены';
     if (h.hint === 'all_unavailable') out.hint = 'Сервис не отдал ни одной прошлой даты. Скорее всего, дело в настройках подключения, а не в датах: проверьте адрес и вход в панели выше.';

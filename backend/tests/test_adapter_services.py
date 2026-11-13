@@ -609,7 +609,8 @@ def test_the_owner_goes_first_while_a_feed_waits_for_the_cycle_lock_615(tmp_path
         job = wait_job(s)
         assert job["code"] == "connected"
         assert s.overview()["running"]["kind"] == "feed", "the feed still waits for the cycle lock"
-        assert not helper_proc.HELPER_LOCK.acquire(blocking=False)  # kept by the waiting feed
+        assert helper_proc.HELPER_LOCK.acquire(blocking=False)  # TDM#732: the waiting feed does not keep it
+        helper_proc.HELPER_LOCK.release()
         s.cancel("feed")
         _until(lambda: svcs.read_state(st)["runs"]["terms"].get("last_finished"), "the wait was not stopped", 5)
         run = svcs.read_state(st)["runs"]["terms"]

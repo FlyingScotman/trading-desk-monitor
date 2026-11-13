@@ -89,7 +89,7 @@ def test_the_sight_is_noted_once():
     assert doc["window"] == {"since": now.isoformat(), "set_id": 41, "adapter": NAME + " 1.5.0", "total": 2}
     assert trades_history.note_window(doc, now + timedelta(days=1), 99, NAME, "1.5.0") is False
     assert doc["window"]["set_id"] == 41
-    assert doc["pending"] is None                  # the older adapter's files that wait for the lock are dropped
+    assert doc["pending"] == []                    # the older adapter's files that wait for the lock are dropped
 
 
 def test_the_older_dates_are_asked_again_once_and_the_date_is_the_answer_whole(env, monkeypatch):
@@ -285,11 +285,11 @@ def test_files_of_the_older_adapter_waiting_for_the_cycle_lock_are_not_taken_in_
         return real(st)
 
     monkeypatch.setattr(svcs.AdapterServices, "_try_cycle_lock", staticmethod(maybe))
-    assert env.step()[0] is True and env.doc["pending"]["date"] == D13     # the older adapter's answer waits
+    assert env.step()[0] is True and env.doc["pending"][0]["date"] == D13     # the older adapter's answer waits
     right_window(monkeypatch)
     (svcs.state_dir(env.st) / ("hist_extra_" + D13)).unlink()
     env.step(2)                                                 # the sight drops it, the date is asked again
-    assert env.asked() == [D13, D13, D14] and env.doc["pending"] is None
+    assert env.asked() == [D13, D13, D14] and env.doc["pending"] == []
     with store.connect(env.url) as con:
         assert books_of(con, D13) == {"OFZ": 1}
         assert current(con, D13, "OFZ")[1] == 1                 # the older answer was never taken in
@@ -363,9 +363,9 @@ def test_the_files_waiting_for_the_cycle_lock_replace_the_date_whole_when_they_a
         return real(st)
 
     monkeypatch.setattr(svcs.AdapterServices, "_try_cycle_lock", staticmethod(maybe))
-    assert env.step()[0] is True and env.doc["pending"] and env.doc["pending"]["date"] == D13
+    assert env.step()[0] is True and env.doc["pending"] and env.doc["pending"][0]["date"] == D13
     env.clock["t"] += timedelta(seconds=10)
-    assert env.s._history_step() is True and env.doc["pending"] is None
+    assert env.s._history_step() is True and env.doc["pending"] == []
     with store.connect(env.url) as con:
         assert books_of(con, D13) == {"OFZ": 1}
 
