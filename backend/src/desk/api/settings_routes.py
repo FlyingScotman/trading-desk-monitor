@@ -107,6 +107,7 @@ def _effective(st: Settings) -> dict[str, Any]:
         "adapter_output_dir": str(st.adapter_output_dir),
         "autopilot": st.autopilot,
         "autopilot_sync_last": st.autopilot_sync_last, "intraday": st.intraday,
+        "intraday_rerun_min_s": st.intraday_rerun_min_s,
         "inbox_lookback_days": st.inbox_lookback_days,
         "history_days": st.history_days,
         "history_bonds_from": st.history_bonds_from.isoformat(), "history_rates_from": st.history_rates_from.isoformat(),

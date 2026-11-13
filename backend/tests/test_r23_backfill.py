@@ -1234,13 +1234,15 @@ def test_the_plan_with_trades_of_200_dates_remembers_the_inputs_hashes(tmp_path,
     assert (n_cold, n_warm) == (200, 0)
     assert [(x.date, x.status, x.why, x.sig) for x in p_cold.days] == [(x.date, x.status, x.why, x.sig) for x in p_warm.days]
     assert t_warm < t_cold and t_warm < t_plain + 1.0, (t_plain, t_cold, t_warm)
-    # a new revision of the trades of one date, 30 days before others (history_cut): the key misses, nothing stale is kept
+    # a new revision of the trades of one date, 30 days before others (history_cut): the key misses for the dates it
+    # reaches (the trades sets of the 60 days up to a date are in its stamp, TDM#732), nothing stale is kept
     export("trades_20261016_1900.csv", {days[100]: "2"})
     _, n_new, p_new = timed()
-    assert n_new == 200
+    reach = [x for x in days if 0 <= (date.fromisoformat(x) - date.fromisoformat(days[100])).days <= trades.MAX_CUT_DAYS]
+    assert n_new == len(reach) and 0 < n_new < 200
     with store.connect(store_url) as con:
-        for x in (days[0], days[99], days[100], days[101], days[130], days[199]):
-            assert backfill.inputs_hash(con, date.fromisoformat(x), s) == real(con, date.fromisoformat(x), s)[0].private_inputs_hash
+        for x in days:   # a date the new set does not reach is a hit of the memo: it must be what the uncached read says
+            assert backfill.inputs_hash(con, date.fromisoformat(x), s) == real(con, date.fromisoformat(x), s)[0].private_inputs_hash, x
     assert {x.date: x.sig[4] for x in p_new.days}[days[100]] != {x.date: x.sig[4] for x in p_warm.days}[days[100]]
     assert timed()[1] == 0
 

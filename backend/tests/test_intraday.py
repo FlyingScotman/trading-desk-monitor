@@ -899,3 +899,53 @@ def test_trade_terms_after_the_runs_recompute_todays_morning_and_intraday_runs(s
     clock["t"] = at(FRI, 10, 9)
     by = steps(ap.run_cycle())
     assert by["intraday"][1].startswith("up to date"), by["intraday"]
+
+
+def test_a_rerun_for_changed_trades_waits_for_the_minimum_interval_after_the_last_run(stub, tmp_path, store_url):
+    """TDM#732: a feed of the day's trades every few minutes must not make the intraday run again every cycle: «private
+    inputs changed» runs at most once in ``intraday_rerun_min_s`` after the last run of the cut, whoever made it; the
+    first run of the day (a new cut) and the other reasons run at once."""
+    s = cfg(tmp_path, store_url, stub)
+    assert s.intraday_rerun_min_s == 300
+    put(tmp_path, "positions_20261016.csv")
+    clock = {"t": at(FRI, 10, 6)}
+    ap = Autopilot(settings_loader=lambda: s, now=lambda: clock["t"])
+    publish(stub, FRI, "intraday", "2026-10-16T07:00:00Z", 1)
+    st = ap.run_cycle()
+    assert steps(st)["intraday"][0] == "ok" and "(new cut)" in steps(st)["intraday"][1], steps(st)["intraday"]
+
+    def newest() -> int:   # the run of the cut the step makes; an older one it replaces is deleted
+        with store.connect(store_url) as con:
+            return con.execute("SELECT max(run_id) FROM run WHERE run_type = 'INTRADAY' AND cut_type = 'intraday'"
+                               ).fetchone()[0]
+    first = newest()
+    with store.connect(store_url) as con:   # the run completed at 10:06 on the clock of the test (a test's own edit of
+        con.execute("SET session_replication_role = replica")   # a frozen run: the trigger that forbids it is off here)
+        con.execute("UPDATE run SET completed_at = %s WHERE run_type = 'INTRADAY'", (at(FRI, 10, 6),))
+        con.execute("SET session_replication_role = DEFAULT")
+    (tmp_path / "in" / "trades_20261016_1100.csv").write_text(
+        TRADES_HEAD + "TR-1;1;live;2026-10-16;2026-10-16T10:30:00;B1;B1|SEC-26238;bond;SEC-26238;buy;1000;;RUB\n",
+        encoding="utf-8")
+    clock["t"] = at(FRI, 10, 8)   # 120 s after the last run: the trades wait
+    st = ap.run_cycle()
+    step = next(x for x in st["steps"] if x["name"] == "intraday")
+    assert step["status"] == "ok" and step["reason"] == "up_to_date" and newest() == first, step
+    assert "private inputs changed, the next run in 180 s" in step["detail"], step["detail"]
+    clock["t"] = at(FRI, 10, 11)  # 300 s: the interval is over
+    by = steps(ap.run_cycle())
+    assert by["intraday"][0] == "ok" and "(private inputs changed)" in by["intraday"][1] and newest() > first, by
+
+
+def test_the_pause_of_the_intraday_rerun_is_a_setting_and_a_wrong_clock_is_not_trusted(tmp_path, store_url):
+    from desk.settings import load
+
+    ap = Autopilot(settings_loader=lambda: None, now=lambda: at(FRI, 12, 0))
+    done = at(FRI, 11, 58)
+    on, off = Settings(intraday_rerun_min_s=300), Settings(intraday_rerun_min_s=0)
+    assert ap._rerun_wait(on, done) == 180 and ap._rerun_wait(off, done) == 0 and ap._rerun_wait(on, None) == 0
+    assert ap._rerun_wait(on, at(FRI, 11, 50)) == 0 and ap._rerun_wait(on, at(FRI, 12, 5)) == 0   # over; a clock before it
+    env = {"DESK_ENV_FILE": str(tmp_path / "none.env")}
+    assert load(env).intraday_rerun_min_s == 300 and load({**env, "DESK_INTRADAY_RERUN_MIN_S": "0"}).intraday_rerun_min_s == 0
+    assert load({**env, "DESK_INTRADAY_RERUN_MIN_S": "45"}).intraday_rerun_min_s == 45
+    assert not check_settings_doc({"intraday_rerun_min_s": 0}) and check_settings_doc({"intraday_rerun_min_s": -1})
+    assert "intraday_rerun_min_s" in JSON_KEYS

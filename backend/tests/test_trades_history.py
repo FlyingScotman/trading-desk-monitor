@@ -464,16 +464,16 @@ def test_a_busy_cycle_lock_keeps_the_files_pending_and_frees_the_helper(env, mon
     monkeypatch.setattr(svcs.AdapterServices, "_try_cycle_lock", staticmethod(maybe))
     assert env.s._history_step() is True
     h = env.doc
-    assert h["marks"] == {} and h["pending"]["date"] == D15 and h["pending"]["files"][0]["file"].endswith(".csv")
+    assert h["marks"] == {} and h["pending"][0]["date"] == D15 and h["pending"][0]["files"][0]["file"].endswith(".csv")
     assert not helper_proc.HELPER_LOCK.locked()                       # free for today's feed and the buttons
-    assert (svcs.state_dir(env.st) / "out" / h["pending"]["dir"]).is_dir()
+    assert (svcs.state_dir(env.st) / "out" / h["pending"][0]["dir"]).is_dir()
     for _ in range(svcs.KEEP_OUT + 2):                                # the pending folder survives the pruning
         (svcs.state_dir(env.st) / "out" / os.urandom(16).hex()).mkdir()
     svcs.AdapterServices._prune(env.st)
-    assert (svcs.state_dir(env.st) / "out" / h["pending"]["dir"]).is_dir()
+    assert (svcs.state_dir(env.st) / "out" / h["pending"][0]["dir"]).is_dir()
     env.clock["t"] += timedelta(seconds=10)    # the gap does not hold the files back; no other date is asked
     assert env.s._history_step() is True
-    assert env.asked() == [D15] and env.marks() == {D15: "fetched"} and env.doc["pending"] is None
+    assert env.asked() == [D15] and env.marks() == {D15: "fetched"} and env.doc["pending"] == []
     with store.connect(env.url) as con:
         assert con.execute("SELECT count(*) FROM dataset_set WHERE dataset = 'trades'").fetchone()[0] == 1
 
@@ -518,7 +518,7 @@ def test_a_pending_folder_that_is_gone_is_dropped_and_the_date_asked_again(env):
     h["pending"] = {"dir": os.urandom(16).hex(), "files": [{"file": "x.csv", "sha256": "0" * 64}], "state": "complete",
                     "code": "exported", "date": D15}
     trades_history.write(env.st, h)
-    assert env.s._history_step() is False and env.doc["pending"] is None
+    assert env.s._history_step() is False and env.doc["pending"] == []
     env.clock["t"] += timedelta(seconds=130)
     assert env.s._history_step() is True and env.marks() == {D15: "fetched"}
 
@@ -687,7 +687,7 @@ def test_pending_files_are_taken_in_after_a_cancel_and_the_helper_lock_is_taken(
     finally:
         helper_proc.HELPER_LOCK.release()
     assert env.s._history_step() is True
-    assert env.doc["pending"] is None and env.marks() == {D15: "fetched"} and not env.s._cancel.is_set()
+    assert env.doc["pending"] == [] and env.marks() == {D15: "fetched"} and not env.s._cancel.is_set()
 
 
 def test_in_pnl_counts_only_the_dates_whose_total_has_the_trades(env):
@@ -891,8 +891,8 @@ def test_the_filtered_flag_survives_the_files_waiting_for_the_cycle_lock(env, mo
         return real(st)
 
     monkeypatch.setattr(svcs.AdapterServices, "_try_cycle_lock", staticmethod(maybe))
-    assert env.s._history_step() is True and env.doc["pending"]["filtered"] is True and env.doc["marks"] == {}
+    assert env.s._history_step() is True and env.doc["pending"][0]["filtered"] is True and env.doc["marks"] == {}
     env.clock["t"] += timedelta(seconds=10)
-    assert env.s._history_step() is True and env.doc["pending"] is None
+    assert env.s._history_step() is True and env.doc["pending"] == []
     m = env.doc["marks"][D15]
     assert (m["state"], m["code"]) == ("unmapped", "filtered_empty")

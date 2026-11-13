@@ -24,7 +24,11 @@ upgrade recomputes only the latest date. Nothing ever computed an older date.
    made by another valuation or core version (``same_logic``: ``VALUATION_VERSION`` and the core version of
    ``logic_version()`` recompute the history; a new release or Windows bundle of the same computation does not). Otherwise it is skipped: nothing
    is computed twice.
-3. **runs**, oldest first: the date's bundle and the previous date's (flash PnL) from the hub when not cached, or
+3. **runs**, oldest first, but for the dates whose trades or terms were asked again (``private inputs changed``: the fetch of
+   past dates, TDM#732), which go before the others, each group oldest first (the order the spreads a run carries want: a
+   newer date run before an older one is made again once the older one has another spread, ``Day.chain``); between two dates
+   the caller's ``between`` runs (the files of past dates that wait for the cycle lock are taken in by the autopilot):
+   the date's bundle and the previous date's (flash PnL) from the hub when not cached, or
    cached under another snapshot than the hub's of the plan (a correction of an older date, #439) (``cache.sync``), then ``dayrun.eod_run``, the code path of every EOD run. The prepared market of a date is kept for
    the next one (its previous date: ``dayrun.ContextCache``), so each date's static snapshot and curves are built once.
    A model price carries its bond's spread from the latest earlier run (``store.carried_spreads``), so a date's run
@@ -163,6 +167,10 @@ class Day:
     a date, once the dates before it are done, and leaves it when its source came out with the same spread."""
 
 
+INPUTS_WHY = "private inputs changed"
+"""``plan``'s ``why`` of a date whose default run read other private inputs (trades, trade terms) than it does now."""
+
+
 @dataclass
 class Plan:
     date_from: str
@@ -178,7 +186,12 @@ class Plan:
 
     @property
     def todo(self) -> list[Day]:
-        return [d for d in self.days if d.status == "todo"]
+        """The dates to run, in the order they run: those whose private inputs changed (``INPUTS_WHY``: the trades of a
+        date asked again, TDM#732) first, then the others; each group oldest first, the order of the spreads a run
+        carries from the runs before it (a newer date run before an older one is made again once the older one has
+        another spread: ``Day.chain``, ``stale_spreads``)."""
+        todo = [d for d in self.days if d.status == "todo"]
+        return [d for d in todo if d.why == INPUTS_WHY] + [d for d in todo if d.why != INPUTS_WHY]
 
     @property
     def second_todo(self) -> list[Day]:
@@ -220,7 +233,7 @@ def reason_key(why: str | None) -> str:
     w = why or ""
     return ("no_run" if w == "no default run" else "positions" if w == "positions changed"
             else "market" if w == "market snapshot changed" else "previous" if w == "previous snapshot changed"
-            else "private_inputs" if w == "private inputs changed" else "program" if w == "program updated"
+            else "private_inputs" if w == INPUTS_WHY else "program" if w == "program updated"
             else "carry" if w == CARRY_WHY
             else "late" if w.endswith("changed after the run") else "other")
 
@@ -260,31 +273,58 @@ HASH_MEMO_SIZE = 4096
 _HASH_LOCK = threading.Lock()   # the autopilot's thread and the API's threads share the memo
 
 
-def inputs_stamp(con: psycopg.Connection, settings: Settings) -> tuple:
-    """What decides every date's ``trades.intraday_inputs`` hash, cheaply (two aggregate queries): the database, the
-    position sets, every stored dataset set (the trades of the date and of the 60 days before it, the trade terms), the
-    settings that ``trades.intraday_inputs`` reads (``intraday_trades``, ``off_report_derivatives``: the latter puts
-    the off-report trades into the hash), the revisions of the books reference and the reference tables (TDM#587), and
-    the mark the hash of a date with applied trades carries (``trades.HELD_MARK``, TDM#721: the memo is of this
-    process, the mark is of its code; it is in the key so that the memo never serves a hash made with another mark).
-    Sets are never changed, a new revision is a new row, so a changed count
-    or newest id says that some date's inputs changed (TDM#569)."""
+class Stamp(tuple):
+    """``inputs_stamp``: the part of the inputs' stamp that is the same for every date (a tuple: stamps are equal when
+    it is), and ``of(d)``, the part of the date: the sets of the trades of the ``trades.MAX_CUT_DAYS`` (60) days up to it
+    (``trades.apply_intraday`` reads the sets of the dates since the book's report, and counts those beyond
+    ``MAX_HISTORY_DAYS`` in the hash as ``history_cut``) and the sets of the trade terms in force on it (a stock: every
+    set valid on or before it), each as (newest set id, count)."""
+
+    trades: list[tuple[date, int, int]]
+    terms: list[tuple[date, int, int]]
+
+    def of(self, d: date) -> tuple:
+        lo = d - timedelta(days=trades.MAX_CUT_DAYS)
+        window = [(sid, n) for vd, sid, n in self.trades if lo <= vd <= d]
+        held = [(sid, n) for vd, sid, n in self.terms if vd <= d]
+        return ((max((x[0] for x in window), default=0), sum(x[1] for x in window)),
+                (max((x[0] for x in held), default=0), sum(x[1] for x in held)))
+
+
+def inputs_stamp(con: psycopg.Connection, settings: Settings) -> Stamp:
+    """What decides every date's ``trades.intraday_inputs`` hash, cheaply (a few aggregate queries): the database, the
+    position sets (all of them: a new one moves what every later date carries), the settings that
+    ``trades.intraday_inputs`` reads (``intraday_trades``, ``off_report_derivatives``: the latter puts the off-report
+    trades into the hash), the revisions of the books reference and the reference tables (TDM#587), and the mark the hash
+    of a date with applied trades carries (``trades.HELD_MARK``, TDM#721: the memo is of this process, the mark is of its
+    code; it is in the key so that the memo never serves a hash made with another mark). These are the tuple. The rest is
+    of the date (``Stamp.of``, TDM#732): of the dataset sets only those the hash reads (``trades``, ``trade_terms``), per
+    date, so a set of another dataset, or of a date out of reach, does not make every hash again (the fetch of past dates
+    puts a set in every two minutes). Sets are never changed, a new revision is a new row, so a changed count or newest id
+    says that some date's inputs changed (TDM#569)."""
     pos = con.execute("SELECT max(set_id), count(*) FROM position_set").fetchone()
-    ds = con.execute("SELECT max(set_id), count(*), (SELECT oid FROM pg_database WHERE datname = current_database())"
-                     " FROM dataset_set").fetchone()
+    oid = con.execute("SELECT oid FROM pg_database WHERE datname = current_database()").fetchone()[0]
     # TDM#587: the books reference and the other reference tables (a book's type or entity read by the day's trades)
     refs = con.execute("SELECT (SELECT max(rev_id) FROM book_rev), (SELECT count(*) FROM book_rev),"
                        " (SELECT max(rev_id) FROM reference_rev), (SELECT count(*) FROM reference_rev)").fetchone()
-    return (tuple(pos), tuple(ds), tuple(refs), bool(getattr(settings, "intraday_trades", True)),
-            str(getattr(settings, "off_report_derivatives", "exclude")), trades.HELD_MARK)
+    stamp = Stamp((tuple(pos), oid, tuple(refs), bool(getattr(settings, "intraday_trades", True)),
+                   str(getattr(settings, "off_report_derivatives", "exclude")), trades.HELD_MARK))
+    stamp.trades, stamp.terms = [], []
+    for ds, vd, sid, n in con.execute("SELECT dataset, valid_date, max(set_id), count(*) FROM dataset_set"
+                                      " WHERE dataset IN ('trades', 'trade_terms') GROUP BY dataset, valid_date"
+                                      " ORDER BY valid_date"):
+        (stamp.trades if ds == "trades" else stamp.terms).append((vd, int(sid), int(n)))
+    return stamp
 
 
-def inputs_hash(con: psycopg.Connection, d: date, settings: Settings, stamp: tuple | None = None) -> str:
+def inputs_hash(con: psycopg.Connection, d: date, settings: Settings, stamp: Stamp | None = None) -> str:
     """``trades.intraday_inputs(...)`` ``private_inputs_hash`` of the date, remembered in this process (an LRU) under
-    ``inputs_stamp``: the plan reads it for every date of the range at each poll of the status, and with the trades of
-    hundreds of dates the work of ``apply_intraday`` (the day's trades, the start of the day, the folds) would be done
-    again and again (TDM#569). A changed stamp is a different key: the work is done once for the new inputs."""
-    key = (stamp if stamp is not None else inputs_stamp(con, settings), d.isoformat())
+    ``inputs_stamp`` and the date's part of it: the plan reads it for every date of the range at each poll of the
+    status, and with the trades of hundreds of dates the work of ``apply_intraday`` (the day's trades, the start of the
+    day, the folds) would be done again and again (TDM#569). A changed stamp is a different key: the work is done once for
+    the new inputs; of the dates only those the changed set can reach (TDM#732)."""
+    stamp = stamp if stamp is not None else inputs_stamp(con, settings)
+    key = (tuple(stamp), stamp.of(d), d.isoformat())
     with _HASH_LOCK:
         hit = _HASH_MEMO.get(key)
         if hit is not None:
@@ -411,7 +451,7 @@ def plan(con: psycopg.Connection, settings: Settings, date_from: date, date_to: 
         why = ("no default run" if run is None else "positions changed" if run["position_set_ids"] != ids
                else "market snapshot changed" if run["market_snapshot_id"] != snap
                else "previous snapshot changed" if prev is not None and run["prev_market_snapshot_id"] != prev
-               else "private inputs changed" if run["private_inputs_hash"] != ih
+               else INPUTS_WHY if run["private_inputs_hash"] != ih
                else late
                or ("program updated" if not same_logic(run.get("logic_version"), logic) else None))
         carry, chain = None, False
@@ -689,8 +729,10 @@ def run(settings: Settings, p: Plan, *, store_url: str | None = None, client: An
         budget_s: float | None = None, out: Callable[[str], None] = print,
         progress: Callable[[int, int, str], None] | None = None, contexts: Any = None,
         exclude: set[str] | frozenset[str] = frozenset(), now: datetime | None = None,
-        hub_answered: bool = False, workers: int = 1, pool_init: Any = None, pool: Any = None) -> dict[str, Any]:
-    """Step 3 (module doc) over the plan's ``todo`` dates, oldest first, until ``budget_s`` seconds have passed
+        hub_answered: bool = False, workers: int = 1, pool_init: Any = None, pool: Any = None,
+        between: Callable[[], Any] | None = None) -> dict[str, Any]:
+    """Step 3 (module doc) over the plan's ``todo`` dates, oldest first (``Plan.todo``: first those whose trades were
+    asked again), until ``budget_s`` seconds have passed
     (None: all), but ``exclude`` (the dates the autopilot's eod step ran or failed this cycle). ``client``: a
     ``HubClient`` for the bundles not cached (None: only the cached dates run). ``now``: the run's start, for the
     stall's times (default: the wall clock). ``hub_answered``: the hub answered this cycle (the autopilot's sync step),
@@ -722,7 +764,11 @@ def run(settings: Settings, p: Plan, *, store_url: str | None = None, client: An
     each process of the pool calls when it starts (a test's hook; the function of an importable module). ``pool``: a
     ``parallel.Pool`` of the caller's that serves the passes of a cycle in turn (its processes start once and keep their
     prepared markets); none: this run starts its own and ends it. If the processes cannot start, or one dies, the dates
-    run one after the other here (said), and a date a process published before it died is not made again."""
+    run one after the other here (said), and a date a process published before it died is not made again.
+
+    ``between`` (TDM#732): called, with no argument, before each date, at the boundary of two: the caller does what must
+    not wait for the end of a run that may take the budget (the autopilot, which holds the cycle lock all that time:
+    the files of past dates that wait for it are taken in by it). Its errors are ignored; its time is the run's."""
     from . import parallel
     from .dayrun import ContextCache, eod_run
 
@@ -838,6 +884,9 @@ def run(settings: Settings, p: Plan, *, store_url: str | None = None, client: An
                                   snapshots=str(cache_dir), no_gamma=True, wait_carried=True, init=pool_init,
                                   pool=pool)
         for i, day in enumerate(todo):
+            if between is not None:
+                with contextlib.suppress(Exception):
+                    between()
             if day.chain and current(day):  # (before the pool is asked for it: a date it already took is dropped)
                 if pipe is not None:
                     pipe.discard(day.date)
@@ -1010,7 +1059,8 @@ MISMATCH_SHOWN = 3
 def run_second(settings: Settings, p: Plan, *, store_url: str | None = None, budget_s: float | None = None,
                out: Callable[[str], None] = print, progress: Callable[[int, int, str], None] | None = None,
                contexts: Any = None, exclude: set[str] | frozenset[str] = frozenset(),
-               workers: int = 1, pool_init: Any = None, pool: Any = None) -> dict[str, Any]:
+               workers: int = 1, pool_init: Any = None, pool: Any = None,
+               between: Callable[[], Any] | None = None) -> dict[str, Any]:
     """The second pass of the history (TDM#627, module doc): the dates of ``p`` whose default run was made without
     the second derivatives (``Day.second`` ``todo``), the newest first, until ``budget_s`` seconds have passed (None:
     all), but ``exclude``. A date's run is made again in full from the cache (``eod_run``; no download: a date whose
@@ -1078,6 +1128,9 @@ def run_second(settings: Settings, p: Plan, *, store_url: str | None = None, bud
                                   snapshots=str(cache_dir), no_gamma=False, wait_carried=False, init=pool_init,
                                   pool=pool)
         for i, day in enumerate(todo):
+            if between is not None:   # as ``run``'s (TDM#732)
+                with contextlib.suppress(Exception):
+                    between()
             if pipe is not None:
                 fill(i)
             if budget_s is not None and tried and not (pipe is not None and pipe.has(day.date)) \

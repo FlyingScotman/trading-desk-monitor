@@ -38,8 +38,9 @@ has a report time after its own end on the Moscow clock is covered (``fetched``/
 =============  ==========================================================  ==========================================
 
 No mark: a login or a setting is wanted (``wait``: the whole worker waits for the feed's login or a describe), an error
-of the network, the helper or the store, ``skipped``, the cycle lock busy (the files wait as ``pending`` and are taken in
-at the next step before another date is asked): ``failures``/``retry_at`` hold the whole worker back by ``BACKOFF_MIN``.
+of the network, the helper or the store, ``skipped``, the cycle lock busy (the files wait as ``pending``, a list, and are taken
+in at the next step, or, while the autopilot's backfill holds the lock, by it between two of its dates; another date is asked
+meanwhile until ``PENDING_MAX`` files wait): ``failures``/``retry_at`` hold the whole worker back by ``BACKOFF_MIN``.
 A cut by the chosen portfolios (``filtered``, 08 §2.2) that answers «no records» proves nothing about the books: with
 no date of the service holding records yet (``service_proven``) it is ``unmapped``/``filtered_empty``, asked again only
 by a new adapter fingerprint (never in a loop); once any date has records the same answer is ``no_trades``.
@@ -52,7 +53,9 @@ of an earlier day of the week keep it open. While it is closed only the dates th
 those that are candidates) are asked. The gate is ``no_trades_week``.
 
 Limits: one date in ``HISTORY_GAP_S`` seconds, ``HISTORY_PER_DAY`` requests a day, none while a feed is due within the
-time of the last request (``Service._feed_due_soon``).
+time of the last request (``Service._feed_due_soon``), none while ``PENDING_MAX`` files wait for the cycle lock. The pace is
+the gap's, not the autopilot's cycle's: the files are taken in between the dates of the backfill (``adapter_services``,
+``take_in_history``), so a date asked again does not wait for the end of a cycle that holds the lock for ten minutes.
 
 **The window of the query (TDM#715).** An adapter before ``WINDOW_FIXED`` (the private adapter 0.9.16) asked the service
 for the trades of a date with the window shifted a day back (the setting «местное время со смещением»): the set of the
@@ -72,7 +75,9 @@ records» only once the adapter with the right window has brought records for so
 mark is held (``hold``) and the date asked again then. Files of the older adapter that wait for the cycle lock
 (``pending``) are dropped by the sight. A mark made after ``since`` is never stale: nothing is
 asked twice, and a second start does nothing. The PnL of a date follows by itself: the stamp of the inputs
-(``backfill.inputs_stamp``) holds the sets of the datasets, the eod and backfill steps make the date again.
+(``backfill.inputs_stamp``, per date: the trades sets of the 60 days up to it, the trade terms in force) says the inputs of
+the date changed, the eod and backfill steps make it again, those whose trades the answer changed first
+(``backfill.run``).
 
 ``summary`` is what ``GET /api/v1/adapter-services/history`` returns: the counts by mark, what the runs say of the dates
 (``applied``: how far the trades are in the PnL, read from the lineage of the date's default run), the problems.
@@ -96,6 +101,9 @@ from .settings import Settings
 VERSION = 1
 FILE = "trades_history.json"
 HISTORY_GAP_S = 120.0
+PENDING_MAX = 4
+"""The files of dates asked that wait for the cycle lock (``pending``): no more are asked while so many wait, up to that
+the worker goes on with the next date, the lock being busy for ten minutes at a time while the autopilot backfills."""
 HISTORY_PER_DAY = 300
 REFRESH_BD = 3
 BLOCK = 10
@@ -124,7 +132,7 @@ def path(st: Settings) -> Path:
 
 def blank() -> dict:
     return {"version": VERSION, "enabled": True, "from": None, "when": "any", "marks": {}, "priority": [],
-            "pending": None, "window": None, "calls": {"day": None, "n": 0}, "last_call": None, "last_duration_s": None,
+            "pending": [], "window": None, "calls": {"day": None, "n": 0}, "last_call": None, "last_duration_s": None,
             "wait": None, "failures": 0, "retry_at": None, "last": None}
 
 
@@ -133,10 +141,19 @@ def read(st: Settings) -> dict:
         p = path(st)
         doc = json.loads(fsretry.retry(lambda: p.read_text(encoding="utf-8"), fsretry.REPLACE_WAIT_S))
         if isinstance(doc, dict) and doc.get("version") == VERSION and isinstance(doc.get("marks"), dict):
-            return {**blank(), **doc}
+            out = {**blank(), **doc}
+            out["pending"] = pending_of(out)
+            return out
     except (OSError, ValueError):
         pass
     return blank()
+
+
+def pending_of(doc: dict) -> list[dict]:
+    """The files that wait for the cycle lock, the oldest first: a list (a file written by the version that held one
+    waiting date has a dict, ``None`` or no key)."""
+    p = doc.get("pending")
+    return [x for x in (p if isinstance(p, list) else [p]) if isinstance(x, dict)]
 
 
 def write(st: Settings, doc: dict) -> None:
@@ -237,7 +254,7 @@ def note_window(doc: dict, now: datetime, set_id: int, name: str, version: str) 
         return False
     doc["window"] = {"since": now.isoformat(), "set_id": int(set_id), "adapter": f"{name} {version}",
                      "total": sum(1 for m in doc["marks"].values() if m.get("state") in ("fetched", "no_trades"))}
-    doc["pending"] = None   # files of the older adapter that wait for the cycle lock are dropped: the date is asked again
+    doc["pending"] = []   # files of the older adapter that wait for the cycle lock are dropped: the date is asked again
     return True
 
 
@@ -588,7 +605,8 @@ def summary(con: psycopg.Connection | None, settings: Settings, doc: dict, *, no
         "from_default": default_from(settings, today).isoformat(),
         "backfill_enabled": bool(getattr(settings, "backfill", True)), "paused": False, "waiting": None,
         "counts": {k: 0 for k in (*MARKS, "todo", "covered")}, "dates": 0, "applied": None, "current": None,
-        "last": doc.get("last"), "window": None, "hint": None, "next_at": None, "gate": None, "problems": [], "pending": bool(doc.get("pending")),
+        "last": doc.get("last"), "window": None, "hint": None, "next_at": None, "gate": None, "problems": [], "pending": len(pending_of(doc)),
+        "pending_why": next((p["why"] for p in pending_of(doc) if isinstance(p.get("why"), str)), None),
         "calls_today": int((doc.get("calls") or {}).get("n") or 0) if (doc.get("calls") or {}).get("day") == today.isoformat() else 0,
         "limit_per_day": HISTORY_PER_DAY}
     w = doc.get("wait")
