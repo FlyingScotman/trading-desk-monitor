@@ -374,6 +374,11 @@ class FxFutureQuotes:
     why_none: str = ""
 
 
+INTRADAY_FUTURES_CUTS = ("intraday", "eod_preliminary")
+"""The cuts whose FX futures may come from ``futures_prices_intraday`` when ``futures_prices`` has none of the currency
+(``eod_final`` takes only the exchange's results)."""
+
+
 def _intraday_price(r: dict[str, Any]) -> tuple[float, str] | None:
     """RUB per one unit of an intraday FORTS row and its kind: the mid of the bid and the offer when both are positive
     (``mid``), else the last price when it is positive (``last``)."""
@@ -449,8 +454,9 @@ class MarketView:
         self.futures_prices: list[dict[str, Any]] = d.get("futures_prices") or []
         """Contract 1.4: FORTS settlement prices of the business date (FX, rate and index futures)."""
         self.futures_prices_intraday: list[dict[str, Any]] = d.get("futures_prices_intraday") or []
-        """An intraday cut's FORTS quotes (latest of the day per contract); EOD cuts leave it empty, as an intraday cut
-        leaves ``futures_prices`` empty."""
+        """An intraday cut's FORTS quotes (latest of the day per contract), and those of an ``eod_preliminary`` cut at its
+        time (hub contract 1.8, TDM#704); an ``eod_final`` cut leaves it empty, as an intraday cut leaves
+        ``futures_prices`` empty."""
         self.curve_quote_sets = d["curve_quote_sets"]
         self.stale = {ds["name"]: ds["stale_reasons"] for ds in snap.doc["datasets"] if ds["stale"]}
 
@@ -555,22 +561,27 @@ class MarketView:
         return self._eod_futures(ccy)[0]
 
     def fx_future_quotes(self, ccy: str) -> FxFutureQuotes:
-        """The futures of ``ccy``/RUB that an FX-implied curve takes, one per delivery date (TDM#695): the end-of-day
-        settlement prices (``fx_futures``); an intraday cut without any of them for the currency (it leaves
-        ``futures_prices`` empty) takes ``futures_prices_intraday``: the mid of the bid and the offer per one unit
-        when both are positive, else the last price (each row says which: ``price_kind``, and when it was quoted:
-        ``quote_ts``). An end-of-day cut never takes intraday quotes. A row whose trade date is before the business
-        date is dropped; a later one stays (the evening session of FORTS trades on the next trading day's date).
-        ``dropped``: the contracts left out, ticker -> reason."""
+        """The futures of ``ccy``/RUB that an FX-implied curve takes, one per delivery date (TDM#695, TDM#704): the
+        end-of-day settlement prices (``fx_futures``); a cut without any of them for the currency takes
+        ``futures_prices_intraday``: the mid of the bid and the offer per one unit when both are positive, else the last
+        price (each row says which: ``price_kind``, and when it was quoted: ``quote_ts``). Those cuts are an ``intraday``
+        one (it leaves ``futures_prices`` empty) and an ``eod_preliminary`` one, before the exchange's history of the day
+        is out: the hub puts the last intraday quotes at the cut there (contract 1.8); a hub that does not leaves the set
+        empty, and the cut has no futures, as before. The currency decides, not the cut: settlement prices of one currency
+        do not keep another's intraday quotes out, and the two are never mixed within one currency. An ``eod_final`` cut
+        never takes intraday quotes. A row whose trade date is before the business date is dropped; a later one stays
+        (the evening session of FORTS trades on the next trading day's date). ``dropped``: the contracts left out,
+        ticker -> reason."""
         rows, dropped = self._eod_futures(ccy)
         if rows:
             return FxFutureQuotes(rows, dropped, "eod")
-        if self.snapshot.cut_type != "intraday":
+        if self.snapshot.cut_type not in INTRADAY_FUTURES_CUTS:
             return FxFutureQuotes([], dropped, None, "no futures in futures_prices "
-                                  "(intraday quotes are not used in an end-of-day cut)")
+                                  "(intraday quotes are not used in the final close)")
         rows, more = self._intraday_futures(ccy)
-        return FxFutureQuotes(rows, {**dropped, **more}, "intraday" if rows else None,
-                              "no futures in futures_prices or futures_prices_intraday")
+        if rows:  # the results' reasons are of rows that are not the curve's: a ticker is either in rows or dropped
+            return FxFutureQuotes(rows, more, "intraday")
+        return FxFutureQuotes([], {**dropped, **more}, None, "no futures in futures_prices or futures_prices_intraday")
 
     def _fx_future_rows(self, rows: list[dict[str, Any]], ccy: str) -> list[dict[str, Any]]:
         return [r for r in rows if r.get("is_fx") and r.get("base_ccy") == ccy and (r.get("quote_ccy") or "RUB") == "RUB"

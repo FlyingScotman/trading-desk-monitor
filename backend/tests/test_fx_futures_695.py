@@ -7,7 +7,9 @@ ones (invented tickers' numbers; no real figures):
   two), the other is in the lineage's ``dropped`` with the reason;
 - an intraday cut has no ``futures_prices`` and no ``fx_swaps``, only ``futures_prices_intraday``: the curve is built
   from it at the mid of bid and offer (else the last price), the lineage says so and gives the latest ``source_ts``;
-- a currency with nothing to build from says why in the message.
+- a currency with nothing to build from says why in the message;
+- a preliminary close (``eod_preliminary``) without the exchange's results takes the hub's last intraday quotes at the
+  cut by the same rules, by currency; a final close never does (TDM#704).
 """
 
 from __future__ import annotations
@@ -128,18 +130,16 @@ def test_end_of_day_prices_win_over_the_intraday_ones(ctx):
     assert quotes.source == "eod" and [(r["secid"], r["price"]) for r in quotes.rows] == [("SiZ6", 85.219)]
 
 
-def test_an_end_of_day_cut_never_takes_intraday_quotes(ctx):
+def test_a_final_close_never_takes_intraday_quotes(ctx):
     def mutate(d):
         intraday_cut(d)
         d["futures_prices_intraday"][0]["trade_date"] = DATE
-    for cut in ("eod_final", "eod_preliminary"):
-        market = market_with(ctx, mutate, cut)
-        quotes = market.fx_future_quotes("USD")
-        assert quotes.rows == [] and quotes.source is None and quotes.dropped == {}
-        _, _, lin = curves_of(ctx, market)
-        assert lin["USD FX"]["status"] == "missing"
-        assert lin["USD FX"]["error"].endswith(
-            "no futures in futures_prices (intraday quotes are not used in an end-of-day cut)")
+    market = market_with(ctx, mutate, "eod_final")
+    quotes = market.fx_future_quotes("USD")
+    assert quotes.rows == [] and quotes.source is None and quotes.dropped == {}
+    _, _, lin = curves_of(ctx, market)
+    assert lin["USD FX"]["status"] == "missing"
+    assert lin["USD FX"]["error"].endswith("no futures in futures_prices (intraday quotes are not used in the final close)")
     assert market_with(ctx, mutate, "intraday").fx_future_quotes("USD").source == "intraday"
 
 
@@ -214,6 +214,94 @@ def test_mid_needs_both_sides_positive(ctx):
     quotes = market.fx_future_quotes("USD")
     assert {r["secid"]: r["price"] for r in quotes.rows} == pytest.approx({"SiZ6": 85.45, "SiH7": 86.0, "SiM7": 86.1})
     assert {r["secid"]: r["price_kind"] for r in quotes.rows} == {"SiZ6": "mid", "SiH7": "last", "SiM7": "mid"}
+
+
+# --- a preliminary close: the hub's last intraday quotes at the cut (TDM#704) --------------------------------------
+
+
+def preliminary(d):
+    """The hub's preliminary close before the exchange's history is out: no results, no swaps, the intraday quotes."""
+    intraday_cut(d)
+
+
+def test_preliminary_close_builds_the_curve_from_the_intraday_futures(ctx):
+    market = market_with(ctx, preliminary, "eod_preliminary")
+    quotes = market.fx_future_quotes("USD")
+    assert quotes.source == "intraday" and [r["secid"] for r in quotes.rows] == ["SiZ6", "SiH7"]
+    _, fx, lin = curves_of(ctx, market)
+    usd = lin["USD FX"]
+    assert usd["status"] == "ok" and usd["futures"] == ["SiZ6", "SiH7"] and usd["futures_source"] == "intraday"
+    assert usd["futures_price_kind"] == {"SiZ6": "mid", "SiH7": "last"}
+    assert usd["futures_source_ts"] == "2026-10-15T10:07:00+00:00"
+    assert usd["futures_source_ts_oldest"] == "2026-10-15T10:05:00+00:00"
+    assert usd["dropped"]["UMZ6"] == "same delivery date as SiZ6 (larger open interest)"
+    assert usd["dropped"]["SiU6"] == "trade date 2026-10-14, before the business date"
+    assert outright(ctx, fx, "USD", Z6) == pytest.approx(85.45, abs=1e-9)
+    from desk.api import provenance as pv
+    assert pv._curve_state({"fx": {"curves": lin}}, "USD FX") == (
+        "ok", "по внутридневным котировкам фьючерсов, на 15.10 13:07 МСК")
+
+
+def test_preliminary_close_takes_the_evening_session_too(ctx):
+    rows = [intraday("SiZ6", Z6, last_rub_per_unit="85.5", trade_date="2026-10-16"),
+            intraday("SiH7", H7, last_rub_per_unit="86.5", trade_date="2026-10-14")]
+    market = market_with(ctx, lambda d: d.update(futures_prices=[], futures_prices_intraday=rows), "eod_preliminary")
+    quotes = market.fx_future_quotes("USD")
+    assert [r["secid"] for r in quotes.rows] == ["SiZ6"]
+    assert quotes.dropped == {"SiH7": "trade date 2026-10-14, before the business date"}
+
+
+def test_preliminary_close_prefers_the_results_of_trading(ctx):
+    """Results of the currency in the cut: the intraday quotes are not looked at."""
+    market = market_with(ctx, lambda d: d.update(futures_prices_intraday=[
+        intraday("SiZ6", Z6, last_rub_per_unit="1.0", last="1000")]), "eod_preliminary")
+    quotes = market.fx_future_quotes("USD")
+    assert quotes.source == "eod" and [(r["secid"], r["price"]) for r in quotes.rows] == [("SiZ6", 85.219)]
+
+
+def test_preliminary_close_decides_by_currency(ctx):
+    """Results for USD, none for EUR: EUR takes the intraday quotes, USD keeps the results (never mixed)."""
+    market = market_with(ctx, lambda d: d.update(futures_prices_intraday=[
+        intraday("SiZ6", Z6, last_rub_per_unit="1.0"),
+        intraday("EuZ6", Z6, base_ccy="EUR", asset_code="Eu", last_rub_per_unit="97.0")]), "eod_preliminary")
+    assert market.fx_future_quotes("USD").source == "eod"
+    eur = market.fx_future_quotes("EUR")
+    assert eur.source == "intraday" and [(r["secid"], r["price"]) for r in eur.rows] == [("EuZ6", 97.0)]
+
+
+def test_a_ticker_taken_from_the_intraday_quotes_is_not_also_dropped(ctx):
+    """The results of a ticker left out (no settlement price) with its intraday quote taken: the ticker is in the rows
+    only, its results' reason is not in ``dropped`` (and the curve's lineage)."""
+    def mutate(d):
+        d["futures_prices"] = [usd_future(ctx, settle_rub_per_unit=None)]
+        d["fx_swaps"] = []
+        d["futures_prices_intraday"] = [intraday("SiZ6", Z6, last_rub_per_unit="85.5"),
+                                        intraday("SiH7", H7, last_rub_per_unit=None)]
+    market = market_with(ctx, mutate, "eod_preliminary")
+    assert market._eod_futures("USD")[1] == {"SiZ6": "no settlement price"}
+    quotes = market.fx_future_quotes("USD")
+    assert quotes.source == "intraday" and [r["secid"] for r in quotes.rows] == ["SiZ6"]
+    assert quotes.dropped == {"SiH7": "no bid/offer or last price"}
+    _, _, lin = curves_of(ctx, market)
+    assert lin["USD FX"]["futures"] == ["SiZ6"] and "SiZ6" not in lin["USD FX"]["dropped"]
+
+
+@pytest.mark.parametrize("field", ["absent", "empty"])
+def test_preliminary_close_without_the_hubs_field_is_as_before(ctx, field):
+    """A hub that does not put intraday quotes into the preliminary close (the field absent or empty): no futures, the curve is missing, the message names the sets."""
+    def mutate(d):
+        d["futures_prices"] = []
+        d["fx_swaps"] = []
+        if field == "absent":
+            d.pop("futures_prices_intraday", None)
+        else:
+            d["futures_prices_intraday"] = []
+    market = market_with(ctx, mutate, "eod_preliminary")
+    quotes = market.fx_future_quotes("USD")
+    assert quotes.rows == [] and quotes.source is None and quotes.dropped == {}
+    _, _, lin = curves_of(ctx, market)
+    assert lin["USD FX"]["status"] == "missing"
+    assert lin["USD FX"]["error"].endswith("no futures in futures_prices or futures_prices_intraday")
 
 
 # --- nothing to build from ----------------------------------------------------------------------------------------
