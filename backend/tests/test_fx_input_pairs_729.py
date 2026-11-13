@@ -16,6 +16,7 @@ from decimal import Decimal
 from pathlib import Path
 
 import pytest
+from rub_fixed_income import InvalidTerms
 
 from desk.curves import fx as fxcurves
 from desk.curves.rates import RUONIA_OIS_CURVE_ID
@@ -439,9 +440,65 @@ def test_points_that_core_cannot_build_leave_the_curve_as_before(ctx):
     usd = lin["USD FX"]
     assert usd["status"] == "ok" and usd["swaps"] == GOLDEN_SWAPS and usd["futures"] == ["SiZ6"]
     assert usd["dropped"] == {} and "points_source" not in usd
-    assert usd["fx_input_group"]["status"] == "not_used"
-    assert usd["fx_input_group"]["reason"].startswith("the curve with the group's points did not build: ")
+    info = usd["fx_input_group"]
+    assert info["status"] == "not_used"
+    assert info["reason"].startswith("the curve with the group's points did not build: ")
+    # what the lineage knew of the group stays; only the status and the reason changed
+    assert (info["run_id"], info["content_sha256"], info["known_at"], info["spot_source"]) == (
+        77, "b" * 64, "2026-10-15T16:10:00+00:00", "ntpro_public")
+    assert info["spot_mid"] == "500.1" and info["nodes_used"] == ["SiZ6", "SiH7", "SiM7", "SiU7"]
+    assert info["nodes_dropped"] == {}
     assert forward(ctx, fx, "USD", Z6) == pytest.approx(85.219, rel=1e-9)  # the settlement price, as before
+
+
+def refuse_build(monkeypatch, only_with_group_points):
+    """Core refuses to build the implied curve: always, or only when the request holds the group's points."""
+    request = fxcurves.FxImpliedCurveRequest
+    real = request.build
+
+    def build(self, rub, spot_rate, spot_value_date):
+        if not only_with_group_points or any(q.label.startswith("fx_input_pairs:") for q in self.quotes):
+            raise InvalidTerms("synthetic: the quotes do not build")
+        return real(self, rub, spot_rate, spot_value_date)
+    monkeypatch.setattr(request, "build", build)
+
+
+def test_a_curve_that_does_not_build_even_without_the_group_keeps_the_group_in_its_lineage(ctx, monkeypatch):
+    """The curve fails with the group's points and again without them: the status is ``error`` and its lineage still
+    has ``fx_input_group`` (what was known of the group, the reason the points were left out)."""
+    refuse_build(monkeypatch, only_with_group_points=False)
+    _, fx, lin = curves_of(ctx, view(ctx, [group()]))
+    usd = lin["USD FX"]
+    assert usd["status"] == "error" and usd["error"] == "synthetic: the quotes do not build"
+    assert "USD FX" not in fx.curves
+    info = usd["fx_input_group"]
+    assert info["status"] == "not_used"
+    assert info["reason"] == "the curve with the group's points did not build: synthetic: the quotes do not build"
+    assert (info["run_id"], info["content_sha256"]) == (77, "b" * 64)
+    assert info["nodes_used"] == ["SiZ6", "SiH7", "SiM7", "SiU7"] and info["nodes_dropped"] == {}
+
+
+def test_a_curve_that_does_not_build_with_a_group_that_was_not_used_says_why(ctx, monkeypatch):
+    refuse_build(monkeypatch, only_with_group_points=False)
+    _, _, lin = curves_of(ctx, view(ctx, [group(spot={"bid": None})]))
+    usd = lin["USD FX"]
+    assert usd["status"] == "error" and usd["fx_input_group"] == {
+        "status": "not_used", "reason": "no spot bid and offer (a positive bid, the offer not below it)"}
+
+
+def test_a_curve_that_does_not_build_on_a_snapshot_without_the_dataset_is_as_before(ctx, monkeypatch):
+    refuse_build(monkeypatch, only_with_group_points=False)
+    _, _, lin = curves_of(ctx, view(ctx))
+    assert lin["USD FX"] == {"status": "error", "error": "synthetic: the quotes do not build"}
+
+
+def test_a_curve_that_builds_without_the_group_points_is_ok_with_the_group_kept(ctx, monkeypatch):
+    refuse_build(monkeypatch, only_with_group_points=True)
+    _, fx, lin = curves_of(ctx, view(ctx, [group()]))
+    usd = lin["USD FX"]
+    assert usd["status"] == "ok" and "points_source" not in usd and usd["swaps"] == GOLDEN_SWAPS
+    assert usd["fx_input_group"]["status"] == "not_used" and usd["fx_input_group"]["run_id"] == 77
+    assert "USD FX" in fx.curves
 
 
 def test_the_card_of_a_position_reads_a_curve_with_the_group(ctx):

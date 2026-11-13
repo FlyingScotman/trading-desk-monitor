@@ -86,7 +86,7 @@ import calendar as _pycal
 from dataclasses import dataclass, field, replace
 from datetime import date, datetime, timedelta
 from decimal import Decimal
-from typing import Any
+from typing import Any, NoReturn
 
 from rub_fixed_income import (
     BusinessCalendar,
@@ -236,7 +236,8 @@ class FxOptions:
     """``fx_foreign_curve``: the curve of an FX forward's foreign leg, ``fx_implied`` (from swap points) or ``xccy``
     (CNY only); the other one is its fallback when absent."""
     implied_futures: bool = True
-    """``fx_implied_futures``: FORTS FX futures past the last swap point extend the implied curve."""
+    """``fx_implied_futures``: FORTS FX futures past the last swap point extend the implied curve; off also leaves out
+    the points of the hub's synchronous input groups (``_input_points``)."""
     spot_source: str = "market"
     """``fx_spot_source``: ``market`` (the FX_MARKET chain, as bonds and the OCP) or ``cets_tom`` (CETS TOM close)."""
     off_report: bool = False
@@ -388,6 +389,24 @@ class FxImpliedInputsMissing(rates.RatesInputError):
         self.group = group
 
 
+class FxImpliedBuildError(ValueError):
+    """``<ccy> FX`` did not build (core refused its quotes, a date outside a calendar, ...): the original error's text, and
+    ``group``: the lineage's ``fx_input_group`` (None: the snapshot has no such dataset), kept in the lineage of the
+    curve that is not built (``status`` ``error``)."""
+
+    def __init__(self, message: str, group: dict[str, Any] | None = None) -> None:
+        super().__init__(message)
+        self.group = group
+
+
+def _reraise_with_group(e: Exception, group: dict[str, Any] | None) -> NoReturn:
+    """Raise ``e`` as an error that carries the lineage's ``fx_input_group`` (``with_fx`` keeps it in the curve's lineage);
+    ``e`` itself when the snapshot has no such dataset."""
+    if group is None:
+        raise e
+    raise FxImpliedBuildError(str(e), group) from e
+
+
 def _input_spot_mid(g: FxInputGroup, bd: date) -> tuple[Decimal | None, str]:
     """The mid of the group's spot observation (module docstring) and "", or None and why the spot is not usable: its
     clock is not on the business date (Moscow date of ``quote_ts``); a bid and offer need a positive bid and an offer not
@@ -495,13 +514,22 @@ def _implied(market: Any, ccy: str, spot: FxSpot, cal: BusinessCalendar, rub: Di
     points, group = _input_points(market, ccy, spot, bd, options, exchange)
     try:
         return _implied_from(market, ccy, spot, rub, bd, options, exchange, swap_dropped, last, points, group)
+    except rates.RatesInputError:  # nothing to build from: ``FxImpliedInputsMissing`` carries the group itself
+        raise
     except (CoreRejection, ValueError) as e:
         if not points:
-            raise
+            _reraise_with_group(e, group)
         # The group's points are what failed (core refuses a date fixed twice, a non-positive outright): the curve as
-        # before them, with the reason, rather than none.
-        group = {"status": "not_used", "reason": f"the curve with the group's points did not build: {e}"}
-    return _implied_from(market, ccy, spot, rub, bd, options, exchange, swap_dropped, last, [], group)
+        # before them, with the reason, rather than none. What the lineage knew of the group stays; the status and the
+        # reason change.
+        group = {**(group or {}), "status": "not_used",
+                 "reason": f"the curve with the group's points did not build: {e}"}
+    try:
+        return _implied_from(market, ccy, spot, rub, bd, options, exchange, swap_dropped, last, [], group)
+    except rates.RatesInputError:
+        raise
+    except (CoreRejection, ValueError) as e:
+        _reraise_with_group(e, group)
 
 
 def _implied_from(market: Any, ccy: str, spot: FxSpot, rub: DiscountCurve, bd: date, options: FxOptions,
@@ -876,7 +904,8 @@ def with_fx(market: Any, static: Any, core: MarketSnapshot, fx_rates: dict[str, 
                     grp = e.group if isinstance(e, FxImpliedInputsMissing) else None
                     lin["curves"][cid] = {"status": "missing", "error": str(e), **({"fx_input_group": grp} if grp else {})}
             except (CoreRejection, ValueError, SnapshotError) as e:
-                lin["curves"][cid] = {"status": "error", "error": str(e)}
+                grp = e.group if isinstance(e, FxImpliedBuildError) else None
+                lin["curves"][cid] = {"status": "error", "error": str(e), **({"fx_input_group": grp} if grp else {})}
     if "CNY" in out.spots and rub_curve is not None:
         try:
             built, request, info = _xccy(market, static, out.spots["CNY"], rub_curve, bd)
