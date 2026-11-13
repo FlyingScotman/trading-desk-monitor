@@ -129,6 +129,18 @@ def test_the_contract_field_and_the_x_field_give_the_same_ocp_and_the_contract_f
     assert O._spot_future_of({"ccy": "EUR"}) is None
 
 
+def test_both_fields_with_the_same_lines_are_not_added_together() -> None:
+    """The transition: an adapter of 1.9 gives `spot_future` and `x_spot_future` alike, for a monitor before 1.9 (it drops
+    the first and reads the second). The monitor of 1.9 reads the contract field only: the line is taken out once."""
+    entry = line("2026-12-14", "800000")
+    std = _published(_report(spot_future=[entry]))
+    both = _published(_report(spot_future=[entry], x_spot_future=[entry]))
+    assert both["parts"] == std["parts"] and both["amount"] == std["amount"]
+    assert len(both["spot_future"]["out"]) == 1 and not both["spot_future"]["unmatched"]
+    row = ok(spot_future=[LINE])
+    assert unit_hash([{**row, "x_spot_future": [LINE]}]) == unit_hash([row])  # the x_ copy changes no revision
+
+
 def test_a_report_without_the_field_is_as_before() -> None:  # an adapter 1.8
     r = run([], [_report()], [], policy=POLICY_693)
     x = {(x["book_id"], x["ccy"]): x for x in r.published}[("D1", "EUR")]
@@ -372,7 +384,23 @@ def test_an_adapter_0_9_14_and_one_of_1_8_work_as_before(home: Path, store_url: 
         assert res.ok and res.revisions == 1
     _, out = _run(store_url, ctx)
     assert _d1(out)["parts"] == d1["parts"] and _d1(out)["amount"] == d1["amount"]  # the same OCP from the field
-    # a report without lines, read again by an adapter 1.8 or 1.9 alike: no new revision
-    _install(home, "none")
+
+
+def test_a_report_without_lines_is_read_again_into_no_new_revision(home: Path, store_url: str) -> None:
+    """The report of the date has no line of a spot type: read again by an adapter 1.8, or 1.9 giving the field (an empty
+    list) or not giving it, it is the same revision, so nothing is recomputed for it."""
+    st = load()
+    f = Path(st.inbox_dirs[0]) / "ocp_20261015.csv"
+    _csv(f, REPORT.replace("2026-12-17,USD/RUB,250000,R5", "[]"))
+    old = time.time() - 3600
+    os.utime(f, (old, old))
+    _install(home, "std")
     with store.connect(store_url) as con:
-        assert scan.replay(con, st, "cash_balances_csv", B, B).revisions == 0
+        assert scan.scan(con, st).files.get("accepted") == 4
+    assert len(_revisions(store_url)) == 1
+    for mode in ("std", "none", "x", "std"):
+        _install(home, mode)
+        with store.connect(store_url) as con:
+            res = scan.replay(con, st, "ocp_csv", B, B)
+        assert res.ok and res.files == {"accepted": 1} and res.revisions == 0, mode
+    assert len(_revisions(store_url)) == 1

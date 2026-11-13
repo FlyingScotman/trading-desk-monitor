@@ -104,4 +104,7 @@ the deal itself (TDM#693). Canonical, so in the unit's change hash: a report acc
 adapter of 1.9 is a new revision. An empty list is the field absent; the order of the entries does not matter. An adapter
 0.9.14 gave the lines in `x_spot_future`; the monitor reads it while a row has no `spot_future`. A 1.0–1.8 adapter stays
 valid. An adapter that emits `spot_future` needs a backend on 1.9 (an older one drops the field with
-`field_from_newer_contract`): update the monitor first, then the adapter.
+`field_from_newer_contract`): update the monitor first, then the adapter. During the transition the adapter may, and is
+advised to, give `spot_future` and `x_spot_future` with the same content: a backend of 1.9 reads `spot_future` and never
+adds the two, a backend before 1.9 reads `x_spot_future`, so a wrong order of installation does not bring the double
+count back.

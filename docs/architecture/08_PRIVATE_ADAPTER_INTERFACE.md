@@ -805,10 +805,13 @@ in the base. The field is canonical, so it is in the unit's change hash (§6.6):
 again with an adapter of 1.9 is a new revision of its unit**, and the OCP of its date is computed again (the owner reads
 the reports again with «Перечитать», the backfill recomputes the dates). The entries are a set: their order does not
 change the hash, and an empty list is the field absent (an adapter without such lines may omit the field or give `[]`,
-the revision is the same). An entry with a key outside the five above, without `value_date` or `amount_ccy`, or of a wrong
+the revision is the same). An entry with a key outside the four above, without `value_date` or `amount_ccy`, or of a wrong
 type is `bad_value` of `spot_future`, as an object of `derivatives_ccy` is. Transition: an adapter 0.9.14 gives the lines
 in `x_spot_future`, which is not in the hash; the backend reads `spot_future` when the row has it and `x_spot_future`
-otherwise, so an adapter of 1.9 should not give both.
+otherwise (never the two added together). During the transition an adapter of 1.9 **may, and is advised to, give both
+fields with the same content**: a backend of 1.9 reads `spot_future`, a backend before 1.9 drops it (with
+`field_from_newer_contract`) and reads `x_spot_future`, so installing the adapter before the monitor does not bring the
+double count back.
 
 | Field | Type | Meaning |
 |---|---|---|
