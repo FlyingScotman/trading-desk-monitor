@@ -245,7 +245,14 @@ def test_the_trades_api_and_the_c20_page(con, store_url, tmp_path: Path) -> None
     tr13 = next(r for r in v["rows"] if r["trade_id"] == "TR-13")
     assert tr13["late"] is True and tr13["quantity"] == 300.0 and tr13["price_pct"] == 98.3 and tr13["src"] == "L5"
     assert {f["file_name"] for f in v["files"]} == {"trades_20261020_1500.csv"}
-    assert [d["date"] for d in v["days"]] == ["2026-10-20"]
+    # TDM#710: the strip is the same whichever date is chosen (it was cut to the dates up to the chosen one)
+    assert [d["date"] for d in v["days"]] == ["2026-10-21", "2026-10-20"]
+    assert [d["date"] for d in c.get("/api/v1/trades", params={"date": "2026-10-21"}).json()["days"]] == \
+        ["2026-10-21", "2026-10-20"]
+    assert [d["date"] for d in c.get("/api/v1/trades", params={"date": "2026-10-01"}).json()["days"]] == \
+        ["2026-10-21", "2026-10-20"]
+    assert [d["date"] for d in c.get("/api/v1/trades", params={"date": "2026-10-20", "days": 1}).json()["days"]] == \
+        ["2026-10-21", "2026-10-20"]   # a chosen date older than the newest ``days`` stays in the strip
     t1 = c.get("/api/v1/trades", params={"date": "2026-10-20", "book_id": "T1"}).json()
     assert {r["book_id"] for r in t1["rows"]} == {"T1"} and t1["summary"]["trades"] == 3
     latest = c.get("/api/v1/trades").json()  # the latest date with trades
