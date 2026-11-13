@@ -1023,7 +1023,7 @@ def test_a_position_the_trades_open_carries_the_portfolio_of_its_book(monkeypatc
     new = tti._trade(position_id="T1|N", instrument_id="SEC2", quantity="10")
     monkeypatch.setattr(store, "dataset_rows", lambda con, ds, on: store.DatasetInputs(ds, on, [new], [{"set_id": 9}]))
     out, _ = trades.apply_intraday(None, DAY, inp)
-    assert out.extra["T1|N"]["x"] == {"intraday_trade": True, "x_portfolio": "A"}
+    assert out.extra["T1|N"]["x"] == {"intraday_trade": True, "intraday_trades": ["TR1"], "x_portfolio": "A"}
     mixed = _with_extra(inp, {**ext, "T1|L2": _pf("B")})
     out, _ = trades.apply_intraday(None, DAY, mixed)
     assert "x_portfolio" not in out.extra["T1|N"]["x"]

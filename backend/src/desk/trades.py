@@ -18,7 +18,9 @@ trade date D (a late booking or an amendment of an older trade is in the report 
 (``quantity`` in bonds, else ``face_amount_ccy``): it changes the row of its ``position_id`` in its book (else the row
 of its book with its ``instrument_id``): ``buy`` adds, ``sell`` subtracts; the row's own figures of the report (face
 amounts, market and book value, accrued, the report's risk) are scaled with the quantity. A trade of a bond the book
-does not hold opens a row of its own (``position_id`` of the trade; it needs an ``instrument_id``). Anything else is
+does not hold opens a row of its own (``position_id`` of the trade; it needs an ``instrument_id``). A row of a carried
+book says which trades it holds (``x.intraday_trades``: their ``trade_id``), so that the OCP counts the bond once, in
+the bonds' revaluation, and not again as a trade after its base (``rules.ocp.held_trades``, TDM#721). Anything else is
 left out and counted by reason (``SKIP_REASONS``). The private inputs hash covers the trades applied (of D and of the
 days before), so the run is made again when they change or the report of D comes: everything that compares the hash of
 a run (the autopilot's steps, ``recompute``, ``backfill``, ``acquisition``) takes it from ``intraday_inputs``; the
@@ -240,8 +242,11 @@ def _fold(rows: list, extra: dict[str, dict], books: set[str], d: date, trade_ro
     are first summed per position row, then the row's figures are scaled once by final / initial quantity (so the
     order of the trades, a sale to zero and a later purchase, does not matter). Only the books in ``books`` take
     trades (else ``other_book``). A row that changes carries ``x.intraday_start_qty`` (or ``_face``): the quantity
-    before the trades. Returns the rows, the extras and ``{"applied": [...], "skipped": Counter, "skip_ids": {...},
-    "changed": {pid: {"mode", "start", "final", "new"}}, "new_positions": n}``. A position the trades open
+    before the trades, and ``x.intraday_trades``: the ``trade_id`` of every trade it holds (those of the earlier days
+    of its book that an earlier call folded in too), so that the OCP knows the trade is in the row
+    (``rules.ocp.held_trades``) and does not count it again. Returns the rows, the extras and
+    ``{"applied": [...], "skipped": Counter, "skip_ids": {...}, "changed": {pid: {"mode", "start", "final", "new"}},
+    "new_positions": n}``. A position the trades open
     carries the portfolio of its book (the trade's own ``x_portfolio``, else the book's when all its rows share one).
     ``keep_flat``: a position new today whose trades add up to nothing stays as a row at zero (the day's own trades,
     which carry a PnL); else it is dropped (the trades of earlier days: only the start of the day)."""
@@ -265,6 +270,7 @@ def _fold(rows: list, extra: dict[str, dict], books: set[str], d: date, trade_ro
     skip_ids: dict[str, str] = {}
     applied: list[dict] = []
     groups: dict[int, dict[str, Any]] = {}   # row index -> {"mode": "qty"|"face", "d": float, "new": bool}
+    in_row: dict[int, list[str]] = {}   # row index -> the trade_id of the trades folded into it
 
     def skip(t: dict, why: str) -> None:
         skipped[why] += 1
@@ -332,6 +338,7 @@ def _fold(rows: list, extra: dict[str, dict], books: set[str], d: date, trade_ro
                 continue
             groups.setdefault(i, {"mode": mode, "d": 0.0, "new": False})
         groups[i]["d"] += sign * amount
+        in_row.setdefault(i, []).append(str(t.get("trade_id")))
         applied.append({**{k: t.get(k) for k in ("trade_id", "trade_version", "book_id", "position_id", "side",
                                                  "quantity", "face_amount_ccy", "instrument_id", "price_pct",
                                                  "accrued_ccy", "ccy", "settle_date")}, "row": rows[i][0]})
@@ -367,6 +374,9 @@ def _fold(rows: list, extra: dict[str, dict], books: set[str], d: date, trade_ro
         elif x is not None:
             x["x"] = {**(x.get("x") or {}), "intraday_trade": True,
                       "intraday_start_" + ("qty" if qty_mode else "face"): 0}
+        if x is not None:   # the trades the row holds: the OCP counts none of them a second time
+            earlier = (x.get("x") or {}).get("intraday_trades") or []
+            x["x"] = {**(x.get("x") or {}), "intraday_trades": list(dict.fromkeys([*earlier, *in_row[i]]))}
         if qty_mode:
             rows[i][3] = final
         else:

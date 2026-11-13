@@ -397,7 +397,7 @@ def test_a_trade_held_as_an_off_report_row_is_not_counted_twice_in_the_ocp():
     assert [(f.leg, f.pv_kind) for f in plain.flows] == [("fx", None)]
     rows = [{"position_id": "D1|F1", "book_id": "D1", "extra": {"off_report": True, "reported": {"deal_id": "F1"}}},
             {"position_id": "D1|Z", "book_id": "D1", "extra": {}}]
-    held = O.off_report_held(rows)
+    held = O.held_trades(rows)
     assert held == {("D1", "F1"): "D1|F1"}
     got = O.trade_flows([trade], OCP_BOOKS, {}, {"D1|F1": "fx_forward"}, OCP_POLICY, after=date(2026, 10, 15), held=held)
     assert [(f.leg, f.pv_kind, f.position_id) for f in got.flows] == [("fx", "fx_forward", "D1|F1")]
@@ -466,7 +466,7 @@ def test_the_ocp_counts_a_trade_held_as_an_off_report_row_once_whether_or_not_th
     # kind apart: the row's PV replaces the trade's nominal; the amount equals the row alone
     assert usd(REPORT, [*ROWS, row], [trade]) == usd(REPORT, [*ROWS, row], []) == 825_000
     assert usd(REPORT, ROWS, [trade]) == 830_000  # the trade alone: its nominal
-    monkeypatch.setattr(O, "off_report_held", lambda rows: {})
+    monkeypatch.setattr(O, "held_trades", lambda rows: {})
     assert usd(REPORT, [*ROWS, row], [trade]) == 1_025_000  # without the match: twice
     monkeypatch.undo()
     # kind not apart: the base holds the kinds' nominal; the trade is counted once, the row's PV is not added

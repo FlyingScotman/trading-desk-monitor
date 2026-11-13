@@ -43,7 +43,8 @@ def test_apply_intraday(monkeypatch):
     assert out.extra["T1|NEW"]["ccy"] == "USD"  # the bond's own currency, not the trade's
     assert out.extra["T1|SEC1"]["face_amount_ccy"] == pytest.approx(1_150_000.0)
     assert out.extra["T1|SEC1"]["mv_rub"] == pytest.approx(990_000.0 * 1.15)
-    assert out.extra["T1|NEW"]["x"] == {"intraday_trade": True}
+    assert out.extra["T1|NEW"]["x"] == {"intraday_trade": True, "intraday_trades": ["TR3"]}
+    assert out.extra["T1|SEC1"]["x"]["intraday_trades"] == ["TR1", "TR2"]   # the trades the rows hold (TDM#721)
     assert summary["applied"] == 3 and summary["new_positions"] == 1 and summary["set_ids"] == [9]
     assert summary["skipped"] == {"cancelled": 1, "no_instrument": 1, "no_quantity": 1, "not_bond": 1,
                                   "other_trade_date": 1}
@@ -52,6 +53,33 @@ def test_apply_intraday(monkeypatch):
     monkeypatch.setattr(store, "dataset_rows", lambda con, ds, on: store.DatasetInputs(ds, on, [], []))
     same, summary = trades.apply_intraday(None, day, _inputs())
     assert same.private_inputs_hash == "h0" and summary["applied"] == 0
+
+
+def test_a_row_carries_the_trades_it_holds():
+    """``x.intraday_trades``: the ``trade_id`` of every trade folded into the row, over the days of its book (the OCP
+    counts none of them a second time, ``rules.ocp.held_trades``, TDM#721); a trade the fold left out is on no row, and
+    the inputs' own extra is not touched."""
+    rows = [("T1|SEC1", "T1", "SEC1", 1000.0)]
+    kept = {"keep": 1}
+    extra = {"T1|SEC1": {"asset_class": "bond", "ccy": "USD", "mv_rub": 100.0, "x": kept}}
+    first = [_trade(trade_id="H2", trade_date="2026-11-02", side="sell", quantity="50"),
+             _trade(trade_id="H1", trade_date="2026-11-02")]
+    rows, extra, res = trades._fold(rows, extra, {"T1"}, date(2026, 11, 2), first)
+    assert extra["T1|SEC1"]["x"]["intraday_trades"] == ["H1", "H2"] and res["skipped"] == {}
+    rows, extra, res = trades._fold(rows, extra, {"T1"}, date(2026, 11, 3),
+                                    [_trade(), _trade(trade_id="TR9", position_id="T1|NOPE")], keep_flat=True)
+    assert extra["T1|SEC1"]["x"]["intraday_trades"] == ["H1", "H2", "TR1"] and extra["T1|SEC1"]["x"]["keep"] == 1
+    assert res["skipped"] == {"no_instrument": 1} and "T1|NOPE" not in extra
+    assert kept == {"keep": 1}
+    # a bond bought and sold within a day: a row at zero for the day's own trades (keep_flat), with its marks; the
+    # trades of earlier days drop such a row, and its marks with it
+    new = [_trade(trade_id="N1", position_id="T1|N", instrument_id="SEC2", quantity="10"),
+           _trade(trade_id="N2", position_id="T1|N", instrument_id="SEC2", quantity="10", side="sell")]
+    inp = _inputs()
+    _, kept_extra, _ = trades._fold(inp.rows, inp.extra, {"T1"}, date(2026, 11, 3), new, keep_flat=True)
+    assert kept_extra["T1|N"]["x"]["intraday_trades"] == ["N1", "N2"]
+    dropped_rows, dropped_extra, _ = trades._fold(inp.rows, inp.extra, {"T1"}, date(2026, 11, 3), new)
+    assert "T1|N" not in dropped_extra and all(r[0] != "T1|N" for r in dropped_rows)
 
 
 def test_effect_marks_the_screen():
