@@ -383,6 +383,63 @@ class OcpLineOut(BaseModel):
     pv: float | None = Field(None, description="basis nominal: the PV (core's FX delta) of the amount")
 
 
+class OcpOriginSet(BaseModel):
+    """The set a derived item was read from (TDM#713): a book's positions set or a cash balances set."""
+
+    set_id: int | None = None
+    valid_date: date | None = Field(None, description="The set's valid date")
+    carried: bool = Field(description="True: the set is older than the run's date, carried forward")
+    age_days: int | None = Field(None, description="Calendar days from the set's valid date to the run's date")
+    source: str | None = None
+    file_name: str | None = Field(None, description="The file the set was read from, as the store has it")
+    report_date: date | None = None
+
+
+class OcpOriginItem(BaseModel):
+    """One OCP line the figure sums: a position, a cash balance of a book and currency or a funding liability."""
+
+    kind: Literal["position", "cash", "liability"]
+    key: str
+    position_id: str | None = None
+    book_id: str
+    component: str
+    basis: str
+    amount: float = Field(description="Signed, units of the currency")
+    pv: float | None = None
+    note: str = ""
+    name: str | None = Field(None, description="position, liability: the run's name of the instrument")
+    instr_type: str | None = None
+    asset_class: str | None = None
+    maturity: str | None = None
+    secid: str | None = None
+    set: OcpOriginSet | None = Field(None, description="position: the set of the book the run took the position from")
+    restored: bool | None = Field(None, description="cash: the reading of the balances gives the stored amount back")
+    accounts: list[dict[str, Any]] = Field(default_factory=list, description="cash, restored: its accounts")
+    sets: list[OcpOriginSet] = Field(default_factory=list, description="cash, restored: the sets of its accounts")
+
+
+class OcpOriginBook(BaseModel):
+    book_id: str
+    set: OcpOriginSet | None = Field(description="The book's positions set the run took (null: the run has none)")
+
+
+class OcpOrigin(BaseModel):
+    """Where a published figure derived from positions comes from (TDM#713, ``api.ocp_origin``): the OCP lines of its
+    books in its currency, read for the run at request time; ``sum`` of all items is the figure's ``amount``."""
+
+    entity: str
+    book_id: str | None
+    books: list[str]
+    ccy: str
+    source: OcpSource
+    amount: float
+    sum: float = Field(description="The sum of every item, ``items`` and ``rest``")
+    matches: bool = Field(description="``sum`` equals ``amount``")
+    items: list[OcpOriginItem] = Field(description="The largest by size")
+    rest: dict[str, float] | None = Field(None, description="{count, amount} of the items not listed")
+    sets: list[OcpOriginBook] = Field(default_factory=list)
+
+
 class OcpComparison(BaseModel):
     """The reported OCP against the OCP derived from positions, at the level of the report (a book or an entity)."""
 
@@ -606,6 +663,11 @@ class RunOcp(BaseModel):
     books: dict[str, dict[str, Any]] = Field(default_factory=dict, description=(
         "TDM#556: name, desk, book_type and entity of the published OCP's books without positions in the run (a book "
         "only the OCP report knows); the run's reference books have the others"))
+    origins: list[OcpOrigin] = Field(default_factory=list, description=(
+        "TDM#713: per published line derived from positions (``derived``, ``derived_stale_report``) its items down to "
+        "the first source: each position, cash balance and funding liability with the valid date and file of the set "
+        "it was read from and whether the set is carried forward; read for the run at request time, so a run computed "
+        "before it has them too; empty for a block without such a line"))
     published_rows: list[dict[str, Any]] = Field(default_factory=list, description=(
         "TDM#567: ``published.by_book`` as the page data (``OCP.byBook``) and the history by day carry it: the same "
         "serializer, camelCase fields, ``baseKind`` under report_base_plus_day"))
