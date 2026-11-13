@@ -792,7 +792,11 @@ def create_app(store_url: str, static_dir: Path | None = None, app_dir: Path | N
                               (run_id,)).fetchone()
             out = ocp_out(run_id, row["data"] if row else None)
             block = row["data"] if row else None
-            out.origins = [OcpOrigin.model_validate(x) for x in ocp_origin.origins(con, run_id, block)]
+            try:
+                out.origins = [OcpOrigin.model_validate(x) for x in ocp_origin.origins(con, run_id, block)]
+            except Exception:  # the breakdown (TDM#713) only explains a figure: the answer goes without it
+                log.exception("run %s: the OCP breakdown (origins) failed, the answer goes without it", run_id)
+                out.origins = []
             return out
 
         return _run_cached(request, run, ("ocp",), build)

@@ -131,3 +131,28 @@ def test_a_block_without_derived_lines_or_without_the_runs_lines_has_no_breakdow
         report_only = {**block, "published": {"by_book": [x for x in block["published"]["by_book"]
                                                           if x["source"] == "report"]}}
         assert ocp_origin.origins(con, rid, report_only) == []
+
+
+@pytest.mark.parametrize("failure", ["raises", "not_a_model"])
+def test_the_route_answers_without_the_breakdown_when_it_fails(store_url, ctx, tmp_path, monkeypatch, caplog, failure):
+    """The breakdown only explains a figure: when reading it fails (or what it gives does not fit the model), the run's
+    OCP is still answered, ``origins`` is empty (the window keeps its one line) and the failure is in the log."""
+    from desk.api import ocp_origin
+    rid, _, _ = _stale_run(store_url, ctx, tmp_path)
+
+    def boom(con, run_id, block):
+        if failure == "raises":
+            raise RuntimeError("the sets could not be read")
+        return [{"entity": "ENT1"}]  # not an OcpOrigin: the model refuses it
+
+    monkeypatch.setattr(ocp_origin, "origins", boom)
+    with caplog.at_level("ERROR", logger="desk.api"):
+        resp = TestClient(create_app(store_url)).get(f"/api/v1/runs/{rid}/ocp")
+    assert resp.status_code == 200
+    o = resp.json()
+    assert o["origins"] == []
+    # the rest of the answer is the run's OCP as before: the stale-report line is there
+    line = {(x["book_id"], x["ccy"]): x for x in o["published"]["by_book"]}[("N1", "USD")]
+    assert line["source"] == "derived_stale_report" and line["amount"] == pytest.approx(4_000_000 + 7_000_000 - 500_000)
+    logged = [r for r in caplog.records if r.name == "desk.api" and r.exc_info]
+    assert logged and str(rid) in logged[0].getMessage()

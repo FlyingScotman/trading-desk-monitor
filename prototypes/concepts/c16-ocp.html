@@ -479,6 +479,10 @@
   let ORG = [], CURDAY = null;
   const originOf = line => ORG.find(o => o.ccy === line.ccy && (o.book_id || null) === (line.book_id || null) && o.entity === line.entity);
   const setText = (s, what) => !s ? 'нет набора ' + what : 'набор ' + what + ' от ' + f.date(s.valid_date) + (s.carried ? ' — перенесён с прошлой даты' + (s.age_days ? ' (' + s.age_days + ' дн.)' : '') : '') + (s.file_name ? ', файл ' + s.file_name : '');
+  // на чём стоит сумма позиции (basis строки ОВП, backend rules/ocp.py): номинал вместо PV — один из подозреваемых в завышении
+  // суммы, поэтому у номинала рядом PV (его даёт ядро); остальные основания названы словами, неизвестное — как пришло
+  const BASIS = { spot_equivalent: 'по спот-эквиваленту (PV)', notional: 'по номиналу, PV нет', amount: 'по сумме позиции', mv: 'по грязной MV', mv_net: 'по грязной MV за вычетом пассива' };
+  const basisText = i => i.basis === 'nominal' ? 'по номиналу; PV ' + (i.pv == null ? 'нет' : f.mns(i.pv, 2) + ' mm') : BASIS[i.basis] || (i.basis ? 'основание: ' + i.basis : '');
   function originItem(i, line, multi) {
     const bits = [];
     if (i.kind === 'cash') {
@@ -490,6 +494,7 @@
       bits.push(i.kind === 'liability' ? 'пассив фондирования: ' + posLink(i.position_id) : posLink(i.position_id));
       if (i.name) bits.push(esc(i.name));
       bits.push(esc('вид строки: ' + compName(i.component)));
+      if (i.kind === 'position' && basisText(i)) bits.push('<span class="mut3" data-c16-origin-basis>' + esc(basisText(i)) + '</span>');
       if (i.kind === 'position') bits.push('<span class="' + (i.set && i.set.carried ? 'warn' : 'mut3') + '" data-c16-origin-set>' + esc(setText(i.set, 'позиций')) + '</span>');
     }
     if (multi && i.book_id) bits.push(esc(bookName(i.book_id)));
@@ -506,12 +511,22 @@
       (o.rest ? '<tr class="it" data-c16-origin-rest><td class="mut3">ещё ' + o.rest.count + '</td><td class="n">' + mm2(o.rest.amount) + '</td></tr>' : '') + books +
       (o.matches ? '' : '<tr class="it" data-c16-origin-diff><td class="warn">разбивка не сходится с суммой строки: в ней ' + f.mns(o.sum, 2) + ' mm</td><td class="n"></td></tr>');
   }
-  // курс пересчёта валюты строки в рубли и откуда он (TDM#713): курс прогона дня и его источник, ЦБ рядом; нет — курс из отчёта ОВП
+  // курс пересчёта и откуда он (TDM#713): тот, по которому карточка пересчитывает сейчас, — выбранного в переключателе вида (S.rate,
+  // как rate()); нет его у прогона — курс из отчёта ОВП (как toUsd). «Курса прогона нет» — только когда нет курса выбранного вида.
+  // Рядом — второй вид. В режиме «в USD» карточка делит ещё на курс USD — он назван тоже. Курс — ₽ за единицу валюты: котировка
+  // за 10 или 100 единиц дала бы число в 10 или 100 раз больше
   function rateNote(line) {
-    const d = CURDAY, c = line.ccy, x = d && (d.fx || {})[c], rep = d && (d.reportFx || {})[c];
-    const t = x && x.market != null ? '1 ' + c + ' = ' + f.n(x.market, 4) + ' ₽, источник «' + (x.source || 'не указан') + '»' + (x.cbr != null ? '; курс ЦБ ' + f.n(x.cbr, 4) + ' ₽' : '')
-      : rep ? 'курса прогона нет; по курсу из отчёта ОВП: 1 ' + c + ' = ' + f.n(rep, 4) + ' ₽' : 'курса этой валюты у дня нет';
-    return '<div class="k-note" data-c16-ratenote>Курс пересчёта в рубли: ' + esc(t) + '</div>';
+    const d = CURDAY, k = S.rate, o = k === 'market' ? 'cbr' : 'market';
+    const nm = (t, x) => RATES[t].name + (t === 'market' && x.source ? ' (источник «' + x.source + '»)' : '');
+    const one = c => {
+      const x = (d && (d.fx || {})[c]) || {}, rep = (d && (d.reportFx || {})[c]) || null;
+      const second = x[o] != null ? '; второй курс — ' + nm(o, x) + ': ' + f.n(x[o], 4) + ' ₽' + (x[k] == null ? ' (не применяется)' : '') : '';
+      if (x[k] != null) return 'применён курс ' + nm(k, x) + ': 1 ' + c + ' = ' + f.n(x[k], 4) + ' ₽' + second;
+      if (rep) return 'курса прогона нет (' + RATES[k].name + '); применён курс из отчёта ОВП: 1 ' + c + ' = ' + f.n(rep, 4) + ' ₽' + second;
+      return 'курса ' + c + ' у дня нет' + second;
+    };
+    const usd = S.unit === 'usd' && line.ccy !== 'USD' ? '. В USD — делим на курс USD: ' + one('USD') : '';
+    return '<div class="k-note" data-c16-ratenote>Курс пересчёта в рубли: ' + esc(one(line.ccy) + usd) + '</div>';
   }
   function lineHtml(line, cellV) {
     const ccy = line.ccy, unit = 'mm ' + ccy;
