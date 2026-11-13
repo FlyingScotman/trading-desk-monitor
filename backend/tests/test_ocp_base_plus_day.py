@@ -20,13 +20,13 @@ from types import SimpleNamespace
 import pytest
 from fastapi.testclient import TestClient
 
-from desk import store
+from desk import store, trades
 from desk.api import create_app
 from desk.inbox import scan
 from desk.inbox.reference import _object
 from desk.inbox.schema import load_schema, validate_row
 from desk.inbox.validate import check_read, check_reference_tables, unit_hash
-from desk.publish import ocp_run
+from desk.publish import ocp_run, tdm_run
 from desk.rules import ocp as O
 from desk.rules.reference import apply_ocp_policy
 from desk.settings import Settings
@@ -596,6 +596,185 @@ def test_trade_legs():
     gaps = {g["code"]: g for g in run(on=D, days={B: O.BaseDay(B, run_id=1, trade_rows=trades)},
                                       valid_dates={"T1": B, "D1": D}).gaps}
     assert gaps["trades_unknown_book"]["items"] == ["U1 (NEW)"]
+
+
+# ---- a trade the run holds in a row of its own is not counted a second time (TDM#721) ----------------------------
+
+
+def bond_trade(tid, side, qty, cost, accrued, pid="T1|UST", sec="UST", **kw):
+    """A trade of D in the book T1: ``cost`` + ``accrued`` is what it pays (buy) or receives (sell), in USD."""
+    return {"trade_id": tid, "status": "live", "trade_date": D.isoformat(), "book_id": "T1", "position_id": pid,
+            "instrument_id": sec, "asset_class": "bond", "side": side, "quantity": str(qty), "amount_ccy": str(cost),
+            "accrued_ccy": str(accrued), "ccy": "USD", **kw}
+
+
+def bond_day(*day_trades):
+    """The run on D of a carried book: T1's positions are those of B (1,000 bonds of a USD bond at 1,000 each: MV
+    1,000,000; another book's lot gives the currency of a bond T1 buys new), the trades of D folded into its rows as an
+    INTRADAY run does it (``trades._fold``), the run's rows built as the run builds them (the row's own figures as
+    ``extra.reported``), the revaluation since B as ``ocp_run.bond_moves`` reads it. The report of B holds the bond
+    at its MV. Returns the published line of T1 in USD and the result."""
+    rows = [("T1|UST", "T1", "UST", 1000.0), ("T2|UST2", "T2", "UST2", 5.0)]
+    extra = {pid: {"asset_class": "bond", "ccy": "USD", "mv_rub": 1.0} for pid, *_ in rows}
+    folded, f_extra, _ = trades._fold(rows, extra, {"T1"}, D, list(day_trades), keep_flat=True)
+    content = [{"position_id": pid, "book_id": book, "instr_type": "BOND", "ccy": "USD", "mv": qty * 1000.0,
+                "fx_delta": {"USD": qty * 1000.0}, "extra": tdm_run.reported(f_extra[pid])}
+               for pid, book, _sec, qty in folded if book == "T1"]
+    before = {"T1|UST": {"position_id": "T1|UST", "book_id": "T1", "instr_type": "BOND", "ccy": "USD",
+                         "mv": 1_000_000.0, "extra": {"quantity_bonds": 1000.0}}}
+    moves = ocp_run.bond_moves(content, before, BOOKS, {}, B, D, O.current_trades(day_trades, B))
+    report = [{"entity": "ENT1", "book_id": "T1", "ccy": "USD", "ocp_ccy": "1000000",
+               "derivatives_ccy": {"fx_forward": "0", "fx_future": "0"}, "_set_id": 12, "_src": "L4"}]
+    days = {B: O.BaseDay(B, run_id=7, bonds=moves, trade_rows=list(day_trades), base_positions={"T1|UST"})}
+    r = run(on=D, rows=content, report=report, units=UNITS[1:], days=days, valid_dates={"T1": B})
+    assert_parts_sum(r)
+    return pub(r)[("T1", "USD")], r
+
+
+@pytest.mark.parametrize("trade, parts", [
+    # 500 bought into the held position: its MV +500,000 is the revaluation, the cash paid -500,000 the trade
+    (bond_trade("B1", "buy", 500, 495_000, 5_000), {"bonds": 500_000, "trades": -500_000}),
+    # 400 sold: the MV -400,000 is the revaluation, the proceeds +400,000 the trade
+    (bond_trade("S1", "sell", 400, 396_000, 4_000), {"bonds": -400_000, "trades": 400_000}),
+    # a bond the book did not hold on B, 300 bought: a new row, its whole MV is the revaluation
+    (bond_trade("N1", "buy", 300, 297_000, 3_000, pid="T1|UST2", sec="UST2"), {"bonds": 300_000, "trades": -300_000}),
+])
+def test_bond_traded_on_d_in_a_carried_book_is_counted_once(trade, parts):
+    """A book whose positions are carried from before D: the INTRADAY run puts the trade of D into the row, so the
+    row's MV is already in the bonds' revaluation. The bond itself (a leg ``security`` at the trade's price) was counted
+    again in «сделки после базы»: a purchase of 500,000 of a bond gave +500,000 of OCP, a sale -400,000. A purchase or
+    a sale for cash moves no currency risk: only the cash leg is a trade, the bond is the revaluation."""
+    t1, _ = bond_day(trade)
+    assert t1["parts"] == {"base": 1_000_000, "derivatives": 0, "outside": 0, **parts}
+    assert t1["amount"] == 1_000_000
+    assert [(i["trade_id"], i["leg"]) for i in t1["contributions"]["trades"]["items"]] == [(trade["trade_id"], "cash")]
+
+
+def test_a_bond_trade_the_book_did_not_take_in_is_still_counted_by_its_trade():
+    """No instrument and no position of the book to put it in (``no_instrument``): the run's row does not hold it, its
+    bond is counted here at the price of the trade, as before."""
+    t1, _ = bond_day(bond_trade("X1", "buy", 100, 99_000, 1_000, pid="T1|NOPE", sec=None))
+    assert t1["parts"] == {"base": 1_000_000, "derivatives": 0, "bonds": 0, "trades": 0, "outside": 0}
+    assert [(i["trade_id"], i["leg"]) for i in t1["contributions"]["trades"]["items"]] == [
+        ("X1", "cash"), ("X1", "security")]
+
+
+def held_by(row, *ids):
+    """The row as an INTRADAY run marks a row that holds the trades ``ids`` (``extra.reported.x.intraday_trades``;
+    the run's rows carry the row of the inputs as ``extra.reported``). FX trades are not put into the book yet
+    (TDM#716): the rows are marked by hand, as the book will mark them."""
+    rep = dict((row.get("extra") or {}).get("reported") or {})
+    rep["x"] = {**(rep.get("x") or {}), "intraday_trade": True, "intraday_trades": list(ids)}
+    return {**row, "extra": {**row["extra"], "reported": rep}}
+
+
+def fx_trade(tid, pid, amount="100000", settle="2026-12-16", trade_date=D, side="buy"):
+    return {"trade_id": tid, "status": "live", "trade_date": trade_date.isoformat(), "book_id": "D1",
+            "position_id": pid, "asset_class": "fx", "side": side, "amount_ccy": amount, "ccy": "USD",
+            "settle_date": settle}
+
+
+def test_held_trades_are_the_rows_marks_and_the_off_report_deals():
+    rows = [held_by({"position_id": "D1|A", "book_id": "D1", "extra": {}}, "F1", "F2"),
+            {"position_id": "D1|B", "book_id": "D1", "extra": {"off_report": True, "reported": {"deal_id": "F3"}}},
+            {"position_id": "D1|C", "book_id": "D1", "extra": {"off_report": True}},   # the deal id is the id's tail
+            {"position_id": "D1|Z", "book_id": "D1", "extra": {"reported": {"x": {"intraday_trade": True}}}},
+            {"position_id": "D1|Y", "book_id": "D1"}]
+    assert O.held_trades(rows) == {("D1", "F1"): "D1|A", ("D1", "F2"): "D1|A", ("D1", "F3"): "D1|B",
+                                   ("D1", "C"): "D1|C"}
+
+
+def test_forward_held_by_a_row_of_a_carried_book_is_counted_once():
+    """A forward D1 traded on D and held by a row of the run, in a book whose positions are those of B (the date of
+    the positions says nothing of it): as when the positions are dated D, where the report gives fx_forward apart its PV
+    is in the derivatives and its trade is left out (before: its nominal too, 100,000 twice); not apart, the position
+    new since B has its PV; not known to be new (no run of B, no terms) its trade counts at its nominal."""
+    new = held_by(core_row("D1|NEW", "D1", {"USD": 99_000.0}), "F9")
+    trade = [fx_trade("F9", "D1|NEW")]
+    base_run = {"D1|FWD", "D1|OPT", "T1|UST", "X1|FWD"}
+    days = {B: O.BaseDay(B, run_id=7, trade_rows=trade, base_positions=base_run)}
+    r = run(on=D, rows=[*ROWS, new], days=days, valid_dates={"D1": B})
+    d1 = pub(r)[("D1", "USD")]
+    assert d1["parts"]["derivatives"] == 490_000 + 99_000 and d1["parts"]["trades"] == 0
+    assert_parts_sum(r)
+    old = [{k: v for k, v in x.items() if k != "derivatives_ccy"} for x in REPORT]
+    r = run(on=D, rows=[*ROWS, new], report=old, days=days, valid_dates={"D1": B})
+    d1 = pub(r)[("D1", "USD")]
+    assert d1["parts"]["derivatives"] == 99_000 and d1["parts"]["trades"] == 0
+    assert d1["contributions"]["derivatives"]["items"][0]["note"] == "сделка после базы"
+    assert_parts_sum(r)
+    unknown = {B: O.BaseDay(B, trade_rows=trade)}
+    r = run(on=D, rows=[*ROWS, new], report=old, days=unknown, valid_dates={"D1": B})
+    d1 = pub(r)[("D1", "USD")]
+    assert d1["parts"]["derivatives"] == 0 and d1["parts"]["trades"] == 100_000
+    assert_parts_sum(r)
+    # the same rows and trade without the mark: the run does not know it holds the trade, the trade is its own leg
+    plain = {**new, "extra": {**new["extra"], "reported": {}}}
+    d1 = pub(run(on=D, rows=[*ROWS, plain], days=days, valid_dates={"D1": B}))[("D1", "USD")]
+    assert d1["parts"]["derivatives"] == 490_000 + 99_000 and d1["parts"]["trades"] == 100_000
+
+
+def test_spot_held_by_a_row_is_one_trade_leg_and_its_cash_is_not_added():
+    """A spot bought on D that a row of the run holds: the row is ``cash``, which the report holds (the report on B has
+    not the trade), so the trade is the leg that moves the OCP, once."""
+    spot = held_by({"position_id": "D1|USD|2026-10-20", "book_id": "D1", "instr_type": "FX",
+                    "fx_delta": {"USD": 200_000.0}, "extra": {"reported": {"asset_class": "fx",
+                                                                           "value_date": "2026-10-20"}}}, "TR-1")
+    trade = [fx_trade("TR-1", "D1|USD|2026-10-20", "200000", "2026-10-20")]
+    rep = [{"entity": "ENT1", "book_id": "D1", "ccy": "USD", "ocp_ccy": "100000",
+            "derivatives_ccy": {"fx_forward": "0", "fx_future": "0"}, "_set_id": 11, "_src": "L2"}]
+    r = run(on=D, rows=[spot], report=rep, units=UNITS[:1], days={B: O.BaseDay(B, run_id=7, trade_rows=trade)},
+            valid_dates={"D1": B})
+    d1 = pub(r)[("D1", "USD")]
+    assert r.per_position["D1|USD|2026-10-20"]["component"] == "cash"
+    assert d1["parts"] == {"base": 100_000, "derivatives": 0, "bonds": 0, "trades": 200_000, "outside": 0}
+    assert [(i["trade_id"], i["leg"]) for i in d1["contributions"]["trades"]["items"]] == [("TR-1", "fx")]
+    assert_parts_sum(r)
+
+
+E = date(2026, 10, 19)  # Monday: the run after D
+NO_CASH = replace(POLICY, report_max_age_bd=2, report_components=POLICY.report_components - {"cash"})
+
+
+def test_forward_traded_on_d_is_cash_by_the_run_date_on_the_next_day_and_counted_once():
+    """A forward bought on Friday 16th for the 21st: a forward by its trade date (settles later than two business
+    days), but on Monday 19th its row is ``cash`` (two business days from the run's date). Where the report does not
+    hold ``cash``, the row's 100,000 is in ``outside``, and the trade, a leg of ``fx_legs`` by its own date, was counted
+    again (200,000). A trade the run holds takes the component of its row: one count, wherever the report holds it."""
+    row = held_by({"position_id": "D1|F5", "book_id": "D1", "instr_type": "FX", "fx_delta": {"USD": 100_000.0},
+                   "extra": {"reported": {"asset_class": "fx", "value_date": "2026-10-21", "deal_id": "F5"}}}, "F5")
+    trade = [fx_trade("F5", "D1|F5", "100000", "2026-10-21")]
+    rep = [{"entity": "ENT1", "book_id": "D1", "ccy": "USD", "ocp_ccy": "0",
+            "derivatives_ccy": {"fx_forward": "0", "fx_future": "0"}, "_set_id": 11, "_src": "L2"}]
+    days = {B: O.BaseDay(B, run_id=7, trade_rows=trade)}
+
+    def day(policy, rows):
+        r = run(on=E, rows=rows, report=rep, units=UNITS[:1], policy=policy, days=days, valid_dates={"D1": B})
+        assert_parts_sum(r)
+        return r, pub(r)[("D1", "USD")]
+
+    r, d1 = day(NO_CASH, [row])
+    assert r.per_position["D1|F5"]["component"] == "cash"
+    assert d1["parts"] == {"base": 0, "derivatives": 0, "bonds": 0, "trades": 0, "outside": 100_000}
+    # the report holds cash: the row is in the report's base, the trade is the leg that moves it, once
+    d1 = day(replace(NO_CASH, report_components=NO_CASH.report_components | {"cash"}), [row])[1]
+    assert d1["parts"] == {"base": 0, "derivatives": 0, "bonds": 0, "trades": 100_000, "outside": 0}
+    # a trade no row holds (the run did not take it in): the trade's own date decides, as before
+    assert day(NO_CASH, [])[1]["parts"]["trades"] == 100_000
+
+
+def test_a_held_trade_takes_the_component_of_its_row_in_trade_flows():
+    trade = [fx_trade("F5", "D1|F5", "100000", "2026-10-21")]
+    held = {("D1", "F5"): "D1|F5"}
+    args = (trade, BOOKS, {"D1": B}, {}, NO_CASH)
+    assert [f.leg for f in O.trade_flows(*args, after=B).flows] == ["fx"]  # not held: by its own date, fx_legs
+    assert [f.leg for f in O.trade_flows(*args, after=B, held=held).flows] == ["fx"]  # held, row unknown: the same
+    assert O.trade_flows(*args, after=B, held=held, components={"D1|F5": "cash"}).flows == []  # the row's: cash
+    # the row's component only for a held trade
+    assert [f.leg for f in O.trade_flows(*args, after=B, components={"D1|F5": "cash"}).flows] == ["fx"]
+    # a row's component the report holds: the leg, the position the row's
+    got = O.trade_flows(*args[:4], POLICY, after=B, held=held, components={"D1|F5": "fx_legs"}).flows
+    assert [(f.leg, f.position_id) for f in got] == [("fx", "D1|F5")]
 
 
 def test_coupons_and_principal_on_the_quantity_held_each_payment_date():

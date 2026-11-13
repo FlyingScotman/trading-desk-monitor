@@ -1264,23 +1264,29 @@ def current_trades(trades: Iterable[Mapping[str, Any]], after: date | None = Non
 def trade_flows(trades: Iterable[Mapping[str, Any]], books: Mapping[str, Mapping[str, Any]],
                 book_dates: Mapping[str, Any], derivatives: Mapping[str, str],
                 policy: OcpPolicy = PROVISIONAL_POLICY, *, after: date | None = None,
-                held: Mapping[tuple[str, str], str] | None = None) -> TradeLegs:
+                held: Mapping[tuple[str, str], str] | None = None,
+                components: Mapping[str, str] | None = None) -> TradeLegs:
     """The currency legs of the trades after the base (08 §10 ``trades``: amounts unsigned, ``side`` the direction,
     ``ccy`` the currency of the amounts; ``current_trades``: one version per trade, trade date after ``after``). Only
     legs of the components the report holds: the others come from positions (``outside``). ``book_dates``: book -> the
     valid date of its positions set in the run (a trade on or before it is in the positions); ``derivatives``:
     position_id -> its derivative kind (``derivative_lines``) for the run's derivatives; ``held``: (book, trade_id) ->
-    position_id of a trade the run holds as a position of its own though the book's set does not (a derivative off the
-    positions report that the switch ``off_report_derivatives`` included, TDM#468): such a trade is in the positions,
-    as that position, so it is not counted a second time.
+    position_id of a trade the run holds in a row of its own though the book's set is dated before the trade
+    (``held_trades``: a derivative off the positions report that the switch ``off_report_derivatives`` included,
+    TDM#468; a trade the INTRADAY run folded into a row, TDM#557, TDM#721): such a trade is in the positions, as that
+    row, so it is not counted a second time, and its component is its row's (``components``: position_id -> its OCP
+    component, the run's ``per_position``; a row without one, the trade's own date decides).
 
     - ``fx``: the currency bought (+) or sold (−), ``amount_ccy``; a trade settling within ``settle_window_bd`` is
-      ``cash``, a later one ``fx_legs`` (its nominal: the PV of a deal at inception). When the run's positions already
-      hold it as a derivative (its book's set dated on or after the trade) the leg carries its kind (``pv_kind``):
-      ``published_day`` leaves it out only where that kind is in the derivatives' PV (the report gives it apart);
+      ``cash``, a later one ``fx_legs`` (its nominal: the PV of a deal at inception); a held trade is its row's
+      component (the run's date, not the trade's, decides whether the row is a spot). When the run's positions already
+      hold it as a derivative (its book's set dated on or after the trade, or a row holds it) the leg carries its kind
+      (``pv_kind``): ``published_day`` leaves it out only where that kind is in the derivatives' PV (the report gives
+      it apart);
     - ``bond``: the cash paid (−) or received (+), ``amount_ccy`` + ``accrued_ccy`` (``cash``), and the bond at that
-      value (``security``, ``bonds``) unless its book's positions are dated on or after the trade: then the bond, bought
-      or sold, is in the bonds' revaluation (a bond sold out: − its MV on B there, never again here);
+      value (``security``, ``bonds``) unless the run's positions already hold the trade (its book's positions are dated
+      on or after the trade, or a row holds it): then the bond, bought or sold, is in the bonds' revaluation (a bond
+      sold out: − its MV on B there, never again here);
     - ``otc``, ``other``, an FX trade in the reporting currency: not valued here (``not_valued``); a trade of a book the
       books reference lacks: ``unknown_book``.
 
@@ -1300,7 +1306,8 @@ def trade_flows(trades: Iterable[Mapping[str, Any]], books: Mapping[str, Mapping
         td, bd = _day(t.get("trade_date")), _day(book_dates.get(book))
         in_positions = bd is not None and td is not None and bd >= td
         pid = str(t.get("position_id"))
-        if (book, tid) in (held or {}):
+        is_held = (book, tid) in (held or {})
+        if is_held:
             in_positions, pid = True, held[(book, tid)]  # type: ignore[index]
         sd = _day(t.get("settle_date"))
         mk = partial(TradeFlow, trade_id=tid, book_id=book, entity=entity, ccy=ccy,
@@ -1335,7 +1342,9 @@ def trade_flows(trades: Iterable[Mapping[str, Any]], books: Mapping[str, Mapping
                 res.not_valued.append(f"{tid} ({kind})")
                 continue
             fwd = sd is not None and td is not None and sd > add_business_days(td, policy.settle_window_bd)
-            if ("fx_legs" if fwd else "cash") not in policy.report_components:
+            # a held trade is the component of its row: the row is classified by the run's date, the trade by its own
+            comp = (components or {}).get(pid) if is_held else None
+            if (comp or ("fx_legs" if fwd else "cash")) not in policy.report_components:
                 continue  # outside the report: from positions
             res.flows.append(mk(amount=sign * abs(amt), leg="fx",
                                 note="срочная сделка: номинал (PV при заключении)" if fwd else "",
@@ -2030,10 +2039,11 @@ def compute_ocp(rows: Sequence[Mapping[str, Any]], books: Mapping[str, Mapping[s
         derivs = derivative_lines(rows, books, tb, on, policy)
         if days:  # the trades after each base, now that the run's positions and derivatives are known
             kind_of = {d.position_id: d.kind for d in derivs}
-            held = off_report_held(rows)
+            held = held_trades(rows)
+            comp_of = {pid: x["component"] for pid, x in per_pos.items()}
             days = {b: d if d.trades is not None or d.trade_rows is None else
                     _with_trades(d, trade_flows(d.trade_rows, books, valid_dates or {}, kind_of, policy, after=b,
-                                                held=held))
+                                                held=held, components=comp_of))
                     for b, d in days.items()}
             days = {b: d if d.cash_rows is None or d.cash is not None else
                     replace(d, cash=cash_lines(d.cash_rows, policy)[0], cash_dates=cash_dates(d.cash_rows))
@@ -2073,16 +2083,25 @@ def cash_dates(rows: Iterable[Mapping[str, Any]]) -> dict[str, date]:
     return out
 
 
-def off_report_held(rows: Iterable[Mapping[str, Any]]) -> dict[tuple[str, str], str]:
-    """(book, trade_id) -> position_id of the run's rows that are derivatives off the positions report included by the
-    switch (``extra.off_report``, TDM#468): the trade of the ``trades`` dataset and the row are one deal."""
+def held_trades(rows: Iterable[Mapping[str, Any]]) -> dict[tuple[str, str], str]:
+    """(book, trade_id) -> position_id of the trades the run holds in rows of its own, not by the date of the book's
+    positions (``trade_flows``: a trade the run holds is in the positions, as that row, and not counted a second time):
+    the derivatives off the positions report included by the switch (``extra.off_report``, TDM#468: the trade of the
+    ``trades`` dataset and the row are one deal) and the rows an INTRADAY run folded its trades into
+    (``extra.reported.x.intraday_trades``, ``desk.trades``, TDM#557: the trade is in the row's quantity and MV, a bond
+    in the bonds' revaluation, TDM#721). Only a trade the run took in is listed there: one it left out is no one's."""
     out = {}
     for r in rows:
         ex = r.get("extra") or {}
+        book, pid = str(r["book_id"]), str(r["position_id"])
         if ex.get("off_report"):
-            tid = (ex.get("reported") or {}).get("deal_id") or str(r["position_id"]).partition("|")[2]
+            tid = (ex.get("reported") or {}).get("deal_id") or pid.partition("|")[2]
             if tid:
-                out[(str(r["book_id"]), str(tid))] = str(r["position_id"])
+                out[(book, str(tid))] = pid
+        x = (ex.get("reported") or {}).get("x")
+        marked = x.get("intraday_trades") if isinstance(x, Mapping) else None
+        for tid in marked if isinstance(marked, list | tuple) else ():
+            out[(book, str(tid))] = pid
     return out
 
 

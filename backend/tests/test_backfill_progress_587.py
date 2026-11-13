@@ -79,3 +79,16 @@ def test_the_stamp_covers_the_books_reference(tmp_path, cache, store_url):  # no
                                  "entity": "E1"}], "fp")
         after = backfill.inputs_stamp(con, s)
     assert before != after
+
+
+def test_the_stamp_carries_the_mark_of_the_hash_of_dates_with_trades(monkeypatch, tmp_path, cache, store_url):  # noqa: F811
+    """TDM#721: the hashes the memo keeps are made by the code of this process; a hash made with another
+    ``trades.HELD_MARK`` is another key, never a hit."""
+    from desk import trades
+
+    s = settings(tmp_path, cache, store_url)
+    with store.connect(store_url) as con:
+        before = backfill.inputs_stamp(con, s)
+        assert backfill.inputs_stamp(con, s) == before
+        monkeypatch.setattr(trades, "HELD_MARK", trades.HELD_MARK + 1)
+        assert backfill.inputs_stamp(con, s) != before
