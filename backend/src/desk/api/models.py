@@ -520,9 +520,10 @@ class OcpPublishedLine(BaseModel):
         "``x_derivative_types``: {type, kind, kept: false — its future lines taken out as the kind, true — a spot type "
         "left in the base at its nominal, lines, amount}"))
     spot_future: dict[str, Any] | None = Field(None, description=(
-        "report_base_plus_day, TDM#693: the report's lines of a spot type with a future value date (the adapter's "
-        "``x_spot_future``): out — taken out of the base and replaced by the deal {value_date, pair, amount, "
-        "position_id, trade_ids, days, others}, unmatched — left in the base {value_date, pair, amount, why}, df1 — "
+        "report_base_plus_day, TDM#693: the report's lines of a spot type with a future value date (the row's "
+        "``spot_future``, private/1.9, else the ``x_spot_future`` of an adapter 0.9.14): out — taken out of the base "
+        "and replaced by the deal {value_date, pair, amount, position_id, trade_ids, days, others}, unmatched — left "
+        "in the base {value_date, pair, amount, why}, df1 — "
         "deals taken at the legs' nominal, discount factor 1 {position_id, trade_ids, amount, note}"))
     derivative_share: list[dict[str, Any]] = Field(default_factory=list, description=(
         "report_base_plus_day, DEC18 (TDM#588): a derivative that is nearly the whole gross of a large line "

@@ -1,8 +1,8 @@
 """A standard-library validator for ``contract/private/v1/*.schema.json`` and the row normaliser.
 
 Only the JSON-Schema subset those files use: ``type``, ``enum``, ``required``, ``properties`` (of a row and, since
-private/1.7, of an ``object`` field: ``ocp.derivatives_ccy``),
-``patternProperties``, ``additionalProperties: false``, ``pattern``, ``minLength``, ``format: date``,
+private/1.7, of an ``object`` field: ``ocp.derivatives_ccy``), ``items`` and ``required`` of an ``array`` of such
+objects (since private/1.9: ``ocp.spot_future``), ``patternProperties``, ``additionalProperties: false``, ``pattern``, ``minLength``, ``format: date``,
 ``format: date-time`` (since private/1.6: ``trades.trade_ts``) and local ``$ref``. Error codes are the 08 §6.3 ones
 and messages carry field names only, never values, because issues are shown and shared (08 §6.3). A validated row
 is normalised so that equal data hashes equally: amounts become plain decimal strings (a float through its shortest
@@ -204,7 +204,10 @@ def _resolve(schema: dict, node: dict) -> dict:
 def _check_value(node: dict, value: Any, schema: dict | None = None) -> tuple[str | None, Any]:
     """(error code or None, normalised value) of one present, non-null value. An ``object`` with ``properties``
     (private/1.7: ``ocp.derivatives_ccy``) is checked key by key: a key it does not list is ``bad_value``, its values
-    are checked and normalised as fields are, a null one dropped."""
+    are checked and normalised as fields are, a null one dropped, and a key of its ``required`` that is missing is
+    ``bad_value``. An ``array`` with ``items`` (private/1.9: ``ocp.spot_future``) is a list of such values, each one
+    present (a null entry is ``bad_value``); the entries are put in a fixed order, so a list in another order hashes
+    alike."""
     types = node.get("type")
     types = [types] if isinstance(types, str) else (types or [])
     if "object" in types and "properties" in node:
@@ -220,7 +223,21 @@ def _check_value(node: dict, value: Any, schema: dict | None = None) -> tuple[st
             if code:
                 return code, None
             out[k] = norm
+        if any(k not in out for k in node.get("required", ())):
+            return "bad_value", None
         return None, out
+    if "array" in types and "items" in node:
+        if not isinstance(value, list):
+            return "bad_value", None
+        items = []
+        for v in value:
+            if v is None:
+                return "bad_value", None
+            code, norm = _check_value(_resolve(schema or {}, node["items"]), v, schema)
+            if code:
+                return code, None
+            items.append(norm)
+        return None, sorted(items, key=lambda i: json.dumps(i, sort_keys=True, ensure_ascii=False))
     if "number" in types:  # amounts: number or decimal string (pattern applies to the string form)
         d = amount(value)
         return ("bad_number", None) if d is None else (None, amount_str(d))
@@ -267,6 +284,8 @@ def validate_row(dataset: str, row: dict, *, allow_newer: bool = False) -> tuple
             code, norm = _check_value(_resolve(schema, props[key]), value, schema)
             if code:
                 errors.append(RowError(code, key))
+            elif isinstance(norm, list) and not norm:
+                continue  # an empty list is the field absent (private/1.9 ``spot_future``): both hash alike
             else:
                 is_ccy = key == "ccy" or props[key].get("$ref") == _CCY_REF
                 out[key] = code_ccy(norm) if is_ccy and isinstance(norm, str) else norm

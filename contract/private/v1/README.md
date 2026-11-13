@@ -1,4 +1,4 @@
-# Private input contract v1 (`private/1.8`)
+# Private input contract v1 (`private/1.9`)
 
 The rows a private adapter emits, one JSON Schema per dataset (`<dataset>.schema.json`) and per reference table of
 `reference()`, authoritative over the design tables of [08 §10](../../../docs/architecture/08_PRIVATE_ADAPTER_INTERFACE.md):
@@ -7,7 +7,7 @@ The rows a private adapter emits, one JSON Schema per dataset (`<dataset>.schema
 |---|---|---|
 | `positions` | positions (stock) | 1.0 (1.1: risk fields; 1.3: `purchase_accrued_ccy`) |
 | `books` | `reference()["books"]` | 1.0 (1.2: `book_type` `FUTURES`) |
-| `ocp` | the open currency position as the bank reports it (stock) | 1.2 (1.7: `derivatives_ccy`) |
+| `ocp` | the open currency position as the bank reports it (stock) | 1.2 (1.7: `derivatives_ccy`; 1.9: `spot_future`) |
 | `cash_balances` | cash balances per book, account and ledger (stock; a file may hold a history, 08 §6.1) | 1.2 |
 | `pnl_official` | the official daily PnL, one row per report line (flow) | 1.2 |
 | `trade_terms` | economic terms of OTC trades: FX forwards, NDFs, FX swap legs (stock) | 1.2 (1.4: IRS, OIS and CCS legs, REPO, HTM purchases) |
@@ -26,7 +26,8 @@ everywhere, currency codes are upper-cased (`RUR` is `RUB`), raw firm values go 
 location, no sheet names) is required. The backend validates with its own standard-library validator
 (`desk.inbox.schema`), so the schemas use only `type`, `enum`, `required`, `properties`, `patternProperties`,
 `additionalProperties`, `pattern`, `minLength`, `format: date`, `format: date-time` (1.6), `default`, local `$ref`
-and, since 1.7, an `object` field with its own `properties` (`ocp.derivatives_ccy`). A rule across fields (a
+and, since 1.7, an `object` field with its own `properties` (`ocp.derivatives_ccy`) and, since 1.9, an `array` field
+with `items` (`ocp.spot_future`: an object with `required` and `properties`). A rule across fields (a
 bond needs a size, an FX trade its legs, a funding rule of `index_spread` its index) is checked in
 `desk.inbox.validate` and listed in 08 §10.
 
@@ -94,3 +95,13 @@ has its key. `ocp_policy.published` takes the value `report_base_plus_day` (the 
 adapter stays valid: its `ocp` files hold every derivative at its nominal, the run adds no PV and says so in its gaps.
 An adapter that emits `derivatives_ccy` needs a backend on 1.7 (an older one drops the field with
 `field_from_newer_contract` and reads `ocp_ccy` as the whole report).
+
+Minor 1.9 (TDM#703) is additive: the optional `ocp` field `spot_future`, a list of the report's lines of a spot type
+with a future value date, `{value_date, amount_ccy, pair, src}` (`value_date` and `amount_ccy` required; the signed
+amount in the row's currency). Such a line is the nominal of a forward, an NDF or a future that the report wrote as a
+spot line: it stays in `ocp_ccy`, and the monitor takes a line that matches a deal of the book out of the base and counts
+the deal itself (TDM#693). Canonical, so in the unit's change hash: a report accepted before and read again with an
+adapter of 1.9 is a new revision. An empty list is the field absent; the order of the entries does not matter. An adapter
+0.9.14 gave the lines in `x_spot_future`; the monitor reads it while a row has no `spot_future`. A 1.0–1.8 adapter stays
+valid. An adapter that emits `spot_future` needs a backend on 1.9 (an older one drops the field with
+`field_from_newer_contract`): update the monitor first, then the adapter.

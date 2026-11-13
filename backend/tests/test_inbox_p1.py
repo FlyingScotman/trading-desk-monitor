@@ -1,4 +1,4 @@
-"""Private contract 1.2 (work package P1), 1.3 (B1: funding_policy), 1.4 (swap, REPO and HTM terms), 1.5 (ocp_policy) and 1.7 (ocp derivatives_ccy, TDM#531): FUTURES books, the ocp, cash_balances, pnl_official and trade_terms
+"""Private contract 1.2 (work package P1), 1.3 (B1: funding_policy), 1.4 (swap, REPO and HTM terms), 1.5 (ocp_policy) and 1.7 (ocp derivatives_ccy, TDM#531), 1.9 (ocp spot_future, TDM#703: tests/test_ocp_spot_future_703.py): FUTURES books, the ocp, cash_balances, pnl_official and trade_terms
 schemas, reference() entities and funding rules, describe() settings tabs, multi-date cash history, the generic
 dataset storage and the reference adapter over all of them. Synthetic data only."""
 
@@ -71,16 +71,16 @@ def test_new_schemas_equal_the_08_tables_and_their_templates(name: str) -> None:
     assert raw.startswith(b"\xef\xbb\xbf") and raw.endswith(b"\r\n") and raw.count(b"\n") == 1
     assert raw[3:].decode().strip().split(";") == schema_fields(name)[0]
     schema = json.loads((REPO / f"contract/private/v1/{name}.schema.json").read_text(encoding="utf-8"))
-    since = {"trade_terms": "1.4", "trades": "1.6", "trade_list": "1.8", "ocp": "1.7", "ocp_policy": "1.7"}.get(name, "1.3")  # the minor that last changed the schema
+    since = {"trade_terms": "1.4", "trades": "1.6", "trade_list": "1.8", "ocp": "1.9", "ocp_policy": "1.7"}.get(name, "1.3")  # the minor that last changed the schema
     assert schema["$id"] == f"private/{since}/{name}" and schema["additionalProperties"] is False
 
 
-def test_contract_is_1_8_and_keys_are_schema_fields() -> None:
-    assert CONTRACT == "private/1.8" and "cash_balances" in MULTI_DATE_DATASETS and "ocp" not in MULTI_DATE_DATASETS
+def test_contract_is_1_9_and_keys_are_schema_fields() -> None:
+    assert CONTRACT == "private/1.9" and "cash_balances" in MULTI_DATE_DATASETS and "ocp" not in MULTI_DATE_DATASETS
     for ds, keys in DATASET_KEYS.items():
         fields = schema_fields(ds)[0]
         assert fields and set(keys) <= set(fields), ds
-    assert "## 10 Private input contract v1 (`private/1.8`)" in DOC.read_text(encoding="utf-8")
+    assert "## 10 Private input contract v1 (`private/1.9`)" in DOC.read_text(encoding="utf-8")
     for phase in ("A7", "A8", "A9", "A10"):
         assert phase in DOC.read_text(encoding="utf-8").split("## 11 Integration points", 1)[1].split("## 12", 1)[0]
 
@@ -292,7 +292,7 @@ def test_settings_tabs_are_checked_and_never_fatal() -> None:
 
 def test_reference_adapter_declares_every_dataset_and_reads_the_reference_tables(tmp_path: Path) -> None:
     h = load_adapter(None, str(DS_CONFIG), None)
-    assert h.ok and h.describe["contract"] == "private/1.8" and h.describe["sources"][0]["source"] == "positions_csv"
+    assert h.ok and h.describe["contract"] == "private/1.9" and h.describe["sources"][0]["source"] == "positions_csv"
     assert {s["dataset"] for s in h.describe["sources"]} == {"positions", "ocp", "cash_balances", "pnl_official",
                                                             "trade_terms", "trade_list", "trades"}
     rep = conformance.check(None, [str(DS)], stub_ctx=True, config_dir=str(DS_CONFIG))

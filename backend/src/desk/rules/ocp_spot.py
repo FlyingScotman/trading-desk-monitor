@@ -7,9 +7,10 @@ undiscounted nominal. The owner's rule (12.11.2026): a line the monitor can matc
 **always** taken out of the base; in its place stands the deal's own exposure: the market-data valuation (discounted)
 when the deal is valued, else the legs of its terms at the discount factor 1 (``NO_CURVE``).
 
-The adapter lists such lines in the report row's ``x_spot_future`` (a spot type, a value date later than the settlement
-window after the report date): ``[{src, value_date, pair, amount_ccy}]``. This module reads them (``spot_lines``),
-describes the deals they can be matched with (``Deal``) and matches (``match``) by the rule of the owner:
+The adapter lists such lines in the report row's ``spot_future`` (private/1.9; a spot type, a value date later than the
+settlement window after the report date): ``[{src, value_date, pair, amount_ccy}]``; an adapter 0.9.14 gave them in
+``x_spot_future``, which is read while the row has no ``spot_future`` (``rules.ocp._spot_future_of``). This module
+reads them (``spot_lines``), describes the deals they can be matched with (``Deal``) and matches (``match``) by the rule of the owner:
 
 - the book of the line (a line of an entity-level unit: any book of the scope);
 - the currency of the line is the currency of one of the deal's legs;
@@ -46,7 +47,7 @@ DF1_TEXT = "{why}: дисконт-фактор 1"
 
 @dataclass(frozen=True)
 class SpotLine:
-    """One entry of a report row's ``x_spot_future``, with the row's book and currency."""
+    """One entry of a report row's ``spot_future``, with the row's book and currency."""
 
     ccy: str
     value_date: date
@@ -138,7 +139,7 @@ def _day(x: Any) -> date | None:
 
 
 def spot_lines(x: Any, *, ccy: str, book_id: str | None) -> list[SpotLine]:
-    """The lines of a report row's ``x_spot_future`` (the adapter's, stored as is); an entry that is not of the shape
+    """The lines of a report row's ``spot_future`` (or ``x_spot_future``: stored as is); an entry that is not of the shape
     ``{value_date, amount_ccy, ...}`` is left out. None, anything but a list: ``[]``."""
     out = []
     for e in x if isinstance(x, list) else []:

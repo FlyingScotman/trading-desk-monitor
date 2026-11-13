@@ -15,7 +15,9 @@ Files, all ``;``-separated UTF-8 with BOM, header = canonical field names (``x_*
   ``entity``, ``book_id``) and ``trade_terms_YYYYMMDD.csv`` (``trade_terms_csv``, ``book_id``; FX trades since
   private/1.2, swap legs, REPO and HTM purchases since 1.4) and ``trade_list_YYYYMMDD.csv`` (``trade_list_csv``,
   ``book_id``; private/1.8: the trades of the books, a stock). An ``ocp`` row's ``derivatives_ccy`` (private/1.7) is
-  written ``fx_forward=-1000000,ndf=0`` (``{}``: none). A
+  written ``fx_forward=-1000000,ndf=0`` (``{}``: none); its ``spot_future`` (private/1.9) is a list of lines
+  ``value_date,pair,amount_ccy,src`` separated by ``|`` (``2026-12-14,EUR/USD,800000,R5|2026-12-15,,-5000``: ``pair`` and
+  ``src`` may be empty; ``[]``: none). A
   ``cash_balances``, ``pnl_official`` or ``trades`` file may hold several dates (a history): a ``_report_date``
   column gives each row's date (08 §6.1); an empty cell is the date in the name.
 * ``trades`` (private/1.6), ``intraday``, scope ``book_id``: ``trades_YYYYMMDD_HHMM.csv`` is the day's cumulative
@@ -71,6 +73,10 @@ _BOOLEANS = {"active", "ndf", "include_ndf", "cash_from_balances", "in_positions
 _OBJECTS = {"derivatives_ccy"}
 """Cells that hold an object (private/1.7 ``ocp.derivatives_ccy``): ``key=amount`` pairs separated by ``,``
 (``fx_forward=-1000000,ndf=0``), or ``{}`` for an empty one."""
+_LISTS = {"spot_future"}
+"""Cells that hold a list of objects (private/1.9 ``ocp.spot_future``): the entries separated by ``|``, the fields of an
+entry by ``,`` in the order ``_SPOT_FIELDS`` (``pair`` and ``src`` may be empty), or ``[]`` for an empty list."""
+_SPOT_FIELDS = ("value_date", "pair", "amount_ccy", "src")
 _REFERENCE = (("books", "books.csv"), ("entities", "entities.csv"), ("funding_rules", "funding_rules.csv"),
               ("funding_policy", "funding_policy.csv"), ("ocp_policy", "ocp_policy.csv"))
 _TRUE, _FALSE = {"1", "true", "yes"}, {"0", "false", "no"}
@@ -78,7 +84,7 @@ _TRUE, _FALSE = {"1", "true", "yes"}, {"0", "false", "no"}
 
 def describe() -> dict:
     return {
-        "name": "desk_reference", "version": "1.5.0", "spi": 1, "contract": "private/1.8",
+        "name": "desk_reference", "version": "1.5.0", "spi": 1, "contract": "private/1.9",
         "sources": [{"source": src, "dataset": _DATASET_OF.get(prefix, prefix), "time_basis": tb, "scope": scope,
                      **({"completeness": "increment"} if prefix in _INCREMENT else
                         {"completeness": "full_snapshot", "covers": "listed"})}
@@ -128,8 +134,24 @@ def _records(path: str) -> tuple[list[tuple[int, dict]], list[dict]]:
                 if twice:
                     issues.append({"severity": "warning", "code": "duplicate_object_key", "src": f"L{reader.line_num}",
                                    "message": f"{k} names a key twice: the last value kept"})
+            for k in _LISTS & set(rec):
+                rec[k] = _spot_list(rec[k])
             out.append((reader.line_num, rec))
     return out, issues
+
+
+def _spot_list(cell: str) -> list | str:
+    """An ``_LISTS`` cell as a list of ``{value_date, pair, amount_ccy, src}`` (empty fields left out); a malformed one
+    stays text, so the backend says ``bad_value``."""
+    if cell == "[]":
+        return []
+    out = []
+    for part in cell.split("|"):
+        cells = [c.strip() for c in part.split(",")]
+        if not 3 <= len(cells) <= len(_SPOT_FIELDS):
+            return cell
+        out.append({k: v for k, v in zip(_SPOT_FIELDS, cells, strict=False) if v})
+    return out
 
 
 def _object(cell: str) -> tuple[dict | str, bool]:
