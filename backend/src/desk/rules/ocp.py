@@ -640,7 +640,7 @@ def reconcile(lines: Sequence[OcpLine], report_rows: Sequence[Mapping[str, Any]]
             x = reported.setdefault(key, {"ocp_ccy": 0.0, "ocp_rub": None, "rate": None, "src": [], "base": 0.0,
                                           "derivatives": defaultdict(float), "types": {}, "spot": []})
             _merge_types(x["types"], derivative_types(_trade_x(r, "x_derivative_types")))
-            x["spot"] += [ln.as_dict() for ln in S.spot_lines(_trade_x(r, "x_spot_future"), ccy=ccy,
+            x["spot"] += [ln.as_dict() for ln in S.spot_lines(_spot_future_of(r), ccy=ccy,
                                                               book_id=str(rb) if rb else None)]
             der = derivative_nominals(r.get("derivatives_ccy"))
             x["ocp_ccy"] += a + math.fsum(der.values())
@@ -1352,6 +1352,13 @@ def _trade_x(t: Mapping[str, Any], key: str) -> Any:
     return t["x"].get(key) if isinstance(t.get("x"), Mapping) else None
 
 
+def _spot_future_of(r: Mapping[str, Any]) -> Any:
+    """The lines of an ``ocp`` row of a spot type with a future value date (TDM#693): the contract's field
+    ``spot_future`` (private/1.9; it makes the row's revision, so a report read again with it is a new one), else the
+    ``x_spot_future`` an adapter 0.9.14 gives (a transition: the field of the contract wins when the row has it)."""
+    return r["spot_future"] if r.get("spot_future") is not None else _trade_x(r, "x_spot_future")
+
+
 def _trade_future(t: Mapping[str, Any]) -> str | None:
     """``group_future_class`` of a ``trades`` row (its ``x_product_group``); an option on a currency future is a trade
     as an FX option (None: the FX rule)."""
@@ -1441,7 +1448,8 @@ def published_day(comparisons: Sequence[Mapping[str, Any]], outside_report: Sequ
       nominal, marked (``fallback``; ``no_pv`` too in the second case; an NDF never when ``include_ndf`` is off). Some
       of them with a PV: the PV of those and the notional of the others, marked (``partial_pv``). A book absent from the report adds every kind. Rows that are not derivatives (``other`` equities, funds,
       deposits, spots) never enter it;
-    - ``spot`` (TDM#693): a report line of a spot type with a future value date (the adapter's ``x_spot_future``) that
+    - ``spot`` (TDM#693): a report line of a spot type with a future value date (the row's ``spot_future``, private/1.9, else
+      an adapter 0.9.14's ``x_spot_future``) that
       matches a forward, an NDF or a future of the same book (``ocp_spot.match``: currency and nominal of a leg, a date
       within five business days) is **always** taken out of the base (a negative item ``report_spot_future``), and the
       deal's own exposure stands in its place: its PV where the kind's rule gives it, else its derivative lines, else,

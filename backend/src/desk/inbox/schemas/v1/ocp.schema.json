@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "private/1.7/ocp",
+  "$id": "private/1.9/ocp",
   "title": "ocp row",
   "description": "Private input contract v1 (docs/architecture/08_PRIVATE_ADAPTER_INTERFACE.md §10). One row as the adapter emits it. An optional field may be absent or null (the same thing); the empty string is invalid everywhere. Raw firm values go in x_* keys; _src is the row's location in the report, without sheet names.",
   "type": "object",
@@ -64,6 +64,32 @@
         }
       },
       "additionalProperties": false
+    },
+    "spot_future": {
+      "type": "array",
+      "description": "private/1.9: the report's lines of a spot type with a value date later than the settlement window after the report's date (a deal's nominal written as a spot line, TDM#693); an empty list is the same as the field absent; the order of the entries does not matter",
+      "items": {
+        "type": "object",
+        "required": [
+          "value_date",
+          "amount_ccy"
+        ],
+        "properties": {
+          "src": {
+            "$ref": "#/$defs/str"
+          },
+          "value_date": {
+            "$ref": "#/$defs/date"
+          },
+          "pair": {
+            "$ref": "#/$defs/str"
+          },
+          "amount_ccy": {
+            "$ref": "#/$defs/amount"
+          }
+        },
+        "additionalProperties": false
+      }
     }
   },
   "patternProperties": {
