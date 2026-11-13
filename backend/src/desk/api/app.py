@@ -143,15 +143,18 @@ class BodyCache:
     ETag, valid while the fingerprint it was built under is the same (``concepts.run_fingerprint`` for the bodies of one
     run, TDM#727: a new run published after it, an intraday cut, does not change it; ``concepts.fingerprint`` for the
     rest). At most ``size`` keys and ``max_bytes`` (bodies and gzips together; ``DESK_BODY_CACHE_MB``, default
-    ``DEFAULT_MB``: the newest run's bodies and one more run's), the least recently used dropped; a body larger than
-    the whole cache is not kept. Before TDM#727 only the newest run's bodies were valid, so a few runs' bodies are
-    new memory. One build per key at a time: a request that finds the key being built waits for it instead of building
-    the same body again (a page open asks for several at once, and so does every other tab)."""
+    ``DEFAULT_MB``: the newest run's bodies and one more run's), the least recently used dropped, the side bodies
+    first (``side``: a position card's history, asked for beside the ones built ahead: opening cards must not push the
+    newest run's page bodies out, so the next page open is not cold); a body larger than the whole cache is not kept.
+    Before TDM#727 only the newest run's bodies were valid, so a few runs' bodies are new memory (six keys a run).
+    One build per key at a time: a request that finds the key being built waits for it instead of building the same
+    body again (a page open asks for several at once, and so does every other tab)."""
 
+    DEFAULT_SIZE = 128
     DEFAULT_MB = 384
     ENV_MB = "DESK_BODY_CACHE_MB"
 
-    def __init__(self, size: int = 24, max_bytes: int | None = None) -> None:
+    def __init__(self, size: int = DEFAULT_SIZE, max_bytes: int | None = None) -> None:
         import threading
 
         self.size, self._items, self._lock = size, {}, threading.Lock()
@@ -185,6 +188,12 @@ class BodyCache:
     def _size(val: tuple[bytes, bytes, str]) -> int:
         return len(val[0]) + len(val[1])
 
+    @staticmethod
+    def side(key: tuple) -> bool:
+        """A body asked for beside the ones ``warm_bodies`` builds: the history of chosen positions or from a date
+        (``("history", run_id, ids, from)``; the warmed one has no ids and no date)."""
+        return len(key) == 4 and key[0] == "history" and bool(key[2] or key[3] is not None)
+
     def put(self, key: tuple, fp: str, body: bytes) -> tuple[bytes, bytes, str]:
         import gzip
 
@@ -198,7 +207,10 @@ class BodyCache:
             self._items[key] = (fp, val)
             self.bytes += self._size(val)
             while self._items and (len(self._items) > self.size or self.bytes > self.max_bytes):
-                self.bytes -= self._size(self._items.pop(next(iter(self._items)))[1])
+                victim = next((k for k in self._items if k != key and self.side(k)), None)  # the oldest side body
+                if victim is None:
+                    victim = next(iter(self._items))
+                self.bytes -= self._size(self._items.pop(victim)[1])
         return val
 
     def get_or_build(self, key: tuple, fp: str, build: Callable[[], bytes]) -> tuple[tuple[bytes, bytes, str], bool]:

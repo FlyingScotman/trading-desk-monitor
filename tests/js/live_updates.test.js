@@ -341,13 +341,24 @@ test('реакция (#727): переключение — только когд�
   const real = { source: 'real', runId: '42', pinned: false };
   const e = { type: 'run.published', run_id: 43, text: 't' };
   assert.strictEqual(await L.react(e, real, deps('ready')), 'switch');
-  assert.deepStrictEqual(calls.splice(0), ['switched 43', 'prepare 43', 'reload'], 'прогон помечен до ожидания: петли нет');
+  assert.deepStrictEqual(calls.splice(0), ['prepare 43', 'switched 43', 'reload'], 'прогон помечен прямо перед перезагрузкой: петли нет');
   for (const res of ['timeout', 'error']) {
     assert.strictEqual(await L.react(e, real, deps(res)), 'banner', res);
-    assert.deepStrictEqual(calls.splice(0), ['switched 43', 'prepare 43', 'banner 43'], res + ': страница не перезагружается');
+    assert.deepStrictEqual(calls.splice(0), ['prepare 43', 'banner 43'], res + ': страница не перезагружается');
   }
   assert.strictEqual(await L.react(e, real, deps('cancelled')), 'none', 'пришёл прогон новее — реакция выходит молча');
-  assert.deepStrictEqual(calls.splice(0), ['switched 43', 'prepare 43']);
+  assert.deepStrictEqual(calls.splice(0), ['prepare 43'], 'отменённое ожидание прогон не помечает: следующая реакция на него переключит');
+  // отмена, пока статус всё ещё называет этот прогон: прогон не помечен, и следующая реакция переключает, а не даёт полосу
+  let marked = null, waits = 0;
+  const twice = Object.assign(deps('ready'), {
+    switched: id => { if (id === undefined) return marked; marked = String(id); },
+    prepare: () => Promise.resolve(waits++ ? 'ready' : 'cancelled')
+  });
+  assert.strictEqual(await L.react(e, real, twice), 'none');
+  assert.strictEqual(marked, null, 'после отмены вкладка не помечена');
+  assert.strictEqual(await L.react(e, real, twice), 'switch', 'повторная реакция на тот же прогон — переключение, не полоса');
+  assert.strictEqual(marked, '43');
+  calls.splice(0);
   // закреплённый прогон — как раньше: полоса, ожидания нет
   assert.strictEqual(await L.react(e, { ...real, pinned: true }, deps('ready')), 'banner');
   assert.deepStrictEqual(calls.splice(0), ['banner 43']);

@@ -169,6 +169,33 @@ def test_the_body_cache_is_bounded_by_bytes_least_recently_used_first(monkeypatc
     assert BodyCache().max_bytes == BodyCache.DEFAULT_MB << 20
 
 
+def test_opened_position_cards_do_not_push_the_newest_runs_page_bodies_out():
+    c = BodyCache(max_bytes=64 << 20)
+    assert c.size >= 96  # the page bodies of a dozen runs (six keys each) fit
+    page = [(name, 200) for name in ("run", "run-js", "extras", "calendar", "desk")] + [("history", 200, (), None)]
+    for rid in range(150, 200):  # fifty older runs' bodies stay valid: more than the cache holds
+        for name in ("run", "run-js", "extras", "calendar", "desk"):
+            c.get_or_build((name, rid), "fp", lambda: b"x" * 100)
+        c.get_or_build(("history", rid, (), None), "fp", lambda: b"x" * 100)
+    for key in page:
+        c.get_or_build(key, "fp", lambda: b"x" * 100)
+    for n in range(300):  # a day of position cards of the newest run, and one from a date
+        c.get_or_build(("history", 200, (f"p{n}",), None), "fp", lambda: b"x" * 100)
+        c.get_or_build(("history", 200, (), date(2026, 1, 1) + timedelta(days=n)), "fp", lambda: b"x" * 100)
+    assert len(c._items) <= c.size
+    for key in page:
+        assert c.get(key, "fp") is not None, f"{key} was evicted by position cards"
+    assert c.get(("history", 200, (), date(2026, 1, 1) + timedelta(days=299)), "fp") is not None  # the last asked is kept
+    assert c.get(("history", 200, ("p0",), None), "fp") is None  # the older cards went first
+    # without side bodies the oldest run's page bodies go as before (least recently used)
+    only = BodyCache(size=4, max_bytes=64 << 20)
+    for rid in range(6):
+        only.get_or_build(("run", rid), "fp", lambda: b"x")
+    assert [only.get(("run", rid), "fp") is not None for rid in range(6)] == [False, False, True, True, True, True]
+    assert BodyCache.side(("history", 1, ("a",), None)) and BodyCache.side(("history", 1, (), date(2026, 1, 1)))
+    assert not BodyCache.side(("history", 1, (), None)) and not BodyCache.side(("run", 1))
+
+
 def test_the_bodies_of_a_deleted_run_are_dropped():
     c = BodyCache()
     for rid in (1, 2, 3):
