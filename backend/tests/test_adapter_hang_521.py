@@ -507,6 +507,13 @@ def test_queued_files_count_as_the_inbox_waiting_and_the_date_says_its_report_wa
     ap = Autopilot(settings_loader=lambda: s, today=lambda: D("2026-10-20"), out=lambda _: None)
     step = ap._scan(s, con)
     assert step[0] == "ok" and ap._inbox_waiting == 3, (step, ap._inbox_waiting)  # three files wait in the queue
+    # ... which holds the eod of older dates as the files waiting for a calendar do, but not the prune: the queue of a
+    # paused source may last weeks, and no replaced run would ever be deleted (TDM#634)
+    assert ap._inbox_calendar == 0
+    assert ap._prune(s, con, []) == ("ok", "no replaced runs to delete")
+    ap._inbox_calendar = 2  # files waiting for a calendar: the backlog the prune waits for, as before
+    assert ap._prune(s, con, []) == ("skipped", "after the inbox backlog")
+    ap._inbox_calendar = 0
     waiting = scan.hang_report(s)["waiting"]
     assert sum(waiting.values()) == 3
     for d in waiting:
@@ -523,3 +530,16 @@ def test_queued_files_count_as_the_inbox_waiting_and_the_date_says_its_report_wa
     ap2._scan(s, con)
     assert ap2._inbox_waiting == 0 and scan.hang_report(s)["waiting"] == {}
     assert not any("ждёт в очереди" in w for d in waiting for w in daystatus.day(con, s, D(d))["summary"]["warnings"])
+
+
+def test_a_feed_file_is_left_in_the_queue_without_asking_a_paused_reference_again(con, tmp_path):
+    inbox = tmp_path / "in"
+    put(inbox, *FILES[:2])
+    ad = Hanging(tmp_path)
+    ad.hang("reference")
+    s = cfg(tmp_path, inbox, str(ad.dir))
+    h = scan.adapter(s)
+    r1 = scan.ingest_feed(con, s, inbox / FILES[0], source="positions_daily", handle=h)  # no books, no answer: queued
+    r2 = scan.ingest_feed(con, s, inbox / FILES[1], source="positions_daily", handle=h)  # the retry: not asked again
+    assert r1.queued == {"positions_daily": 1} and r2.queued == {"positions_daily": 1}
+    assert ad.count("reference") == 1 and statuses(con) == {} and sightings(con) == 0  # nothing written: it can come again

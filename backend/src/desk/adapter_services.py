@@ -1416,6 +1416,12 @@ class AdapterServices:
                     res = scan.ingest_feed(con, st, p, source=f["source"], handle=hp.handle)
                     if res.busy:
                         raise ServiceError("ingestion_busy", "error")
+                    if res.queued:
+                        # the scanner left the file in its queue (the adapter gave no books and the store has none): it
+                        # has no status and lives in the helper's output folder, which no scan lists, so it is kept as
+                        # ``pending`` like one the cycle lock refused. The retry does not spin: the feed's own failure
+                        # backoff applies, and the scan honours the pause of ``reference()`` (TDM#521)
+                        raise ServiceError("ingestion_queued", "error")
                     sha = scan._sha256(str(p))
                     shas.append(sha)
                     row = con.execute("SELECT status_id, status, source FROM inbox_file_status WHERE sha256 = %s"

@@ -379,6 +379,7 @@ class Autopilot:
         self._hub_first: str | None = None     # the hub's oldest date, when its whole list was read (#27)
         self._no_answer: dict[str, int] = {}   # hub date -> cycles in a row its bundle got no answer at all (#217)
         self._inbox_waiting = 0                # files the last scan left waiting: for a calendar (R22), or in the queue of an adapter that does not answer (TDM#521)
+        self._inbox_calendar = 0               # ... of them, those waiting for a calendar: the backlog the prune waits for (a paused source's queue may last weeks)
         self._vacuumed_at: datetime | None = None   # the last explicit VACUUM of the run tables (server without autovacuum)
         self._history_dates: tuple[float, int, list[tuple[str, str]]] | None = None
         self._static_polled = float("-inf")    # monotonic time the hub's newest static was last asked for (R25)
@@ -1114,7 +1115,7 @@ class Autopilot:
         cycle of daily calculations must not wait for one every time)."""
         if ran:
             return "skipped", "a cycle that made runs: the clean-up waits for a quiet one"
-        if self._inbox_waiting:
+        if self._inbox_calendar:  # not the queue of an adapter that does not answer: it may last weeks, and the prune must not (TDM#634)
             return "skipped", "after the inbox backlog"
         res = store.prune_superseded(con, int(settings.prune_superseded_days), limit=PRUNE_RUNS, budget_s=PRUNE_BUDGET_S)
         if res["busy"] and not res["runs"]:
@@ -1139,14 +1140,15 @@ class Autopilot:
     def _scan(self, settings: Settings, con: psycopg.Connection) -> tuple[str, str]:
         from .inbox import scan
 
-        self._inbox_waiting = 0
+        self._inbox_waiting = self._inbox_calendar = 0
         if not settings.scan_dirs:
             return "skipped", "no inbox folders (inbox_dirs)"
         res = scan.scan(con, settings, progress=lambda done, total, detail: self._progress("scan", done, total, detail),
                         history_from=self._hub_first)
         # files left in the queue (a source that did not answer, no books to judge them by) wait like those for a
         # calendar: the day's positions may be the earlier ones, and the day's status says so (TDM#521)
-        self._inbox_waiting = res.files.get("waiting_calendar", 0) + sum(res.queued.values())
+        self._inbox_calendar = res.files.get("waiting_calendar", 0)
+        self._inbox_waiting = self._inbox_calendar + sum(res.queued.values())
         detail = "; ".join(res.text().splitlines())
         if res.busy:
             return "skipped", detail
