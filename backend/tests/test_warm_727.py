@@ -297,6 +297,41 @@ def test_a_page_does_not_wait_for_the_history_of_all_positions(desk, store_url, 
     assert warm_bodies(app) == ["history"]  # and the warm thread builds just that
 
 
+def test_the_history_is_left_for_later_when_a_newer_run_or_a_page_waits(desk, store_url, monkeypatch):  # noqa: F811
+    """TDM#736: the history (12 s) is built last and must not hold up a newer run or a page's request: ``warm_bodies`` of the
+    newest run leaves it out when a run was published since the pass began (``Warmer.mark``) or a request waits; a later pass
+    builds it, and a run asked for by its id has it built whatever waits."""
+    app = desk.app
+    warmer = app.state.warmer = Warmer(store_url)
+    first = newest(store_url)["run_id"]
+    real = app_module.desk_body
+
+    def desk_and_a_new_run(con, run, cache=None):
+        body = real(con, run, cache)
+        clone_run(store_url, run["run_id"], intraday=True)  # published while the pass builds
+        return body
+
+    warmer.mark()
+    assert not warmer.newer_run() and not warmer.waiting()
+    monkeypatch.setattr(app_module, "desk_body", desk_and_a_new_run)
+    assert warm_bodies(app) == ["run", "run-js", "extras", "calendar", "desk"]  # no history: a newer run is waiting
+    monkeypatch.setattr(app_module, "desk_body", real)
+    second = newest(store_url)["run_id"]
+    assert second != first and warmer.newer_run()
+    assert warm_bodies(app, run_id=first) == ["history"]  # asked for by its id: built whatever is waiting
+    warmer.mark()  # the next pass starts for the new run
+    assert not warmer.newer_run()
+    assert warm_bodies(app) == ALL  # the new run: all of it, the history last
+
+    warmer.request(first)  # a page waits for a run
+    third = clone_run(store_url, second, intraday=True)
+    warmer.mark()
+    assert warmer.waiting() and warm_bodies(app) == ["run", "run-js", "extras", "calendar", "desk"]
+    assert warmer.take() == [first] and not warmer.waiting()
+    assert warm_bodies(app) == ["history"]  # the request taken: the history is built now
+    assert missing(app, store_url, third) == [] and missing(app, store_url, third, "desk") == []
+
+
 def test_an_older_run_a_page_asks_for_is_built_on_request(desk, store_url):  # noqa: F811
     app = desk.app
     app.state.warmer = Warmer(store_url)

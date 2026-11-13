@@ -475,7 +475,8 @@ READY_BODIES = {"concepts": ("run-js", "extras", "calendar"), "desk": ("desk",)}
 """What ``GET /api/v1/runs/{id}/ready`` waits for by the kind of page (``pages``): the concept pages' first requests,
 the older pages' ``/desk-data.js``. Not the history of all positions (``("history", run_id, (), None)``, a year): the
 pages ask for a window of it (the dynamics page, the position list) or for the positions they show, each its own body,
-built when asked (TDM#736, the owner's decision of 13.11); the warm thread builds the year's body after the others."""
+built when asked (TDM#736: of the pages only the dynamics page's «all» range asks for the year's body as it is built
+ahead); the warm thread builds it after the others, unless a newer run or a page's request is waiting (``warm_bodies``)."""
 
 
 def _warm_key(name: str, run_id: int) -> tuple:
@@ -505,8 +506,10 @@ def warm_bodies(app: FastAPI, summaries: bool = True, run_id: int | None = None)
     (``serve`` runs it when a run is published and every ``WARM_S``; it also drops the per-run API's bodies of runs
     that are gone, ``run_cache``). ``run_id``: that complete run instead of the newest shown (a page asked for it,
     ``GET /api/v1/runs/{id}/ready``). ``summaries=False``: the runs' summaries are still being rebuilt
-    (``prewarm_summaries``), the bodies that read them (``/concepts-data.js``, the history) wait for it.
-    Returns the bodies built."""
+    (``prewarm_summaries``), the bodies that read them (``/concepts-data.js``, the history) wait for it. The history, built
+    last, is left for a later pass (a page's request for it builds it too) when, for the newest run shown, a newer run was
+    published since the pass began (``Warmer.mark``) or a page's request for a run waits (``Warmer.request``): it takes 12 s
+    and must not hold those up (TDM#736); a build already started is not stopped. Returns the bodies built."""
     cache: BodyCache = app.state.body_cache
     built = []
     with psycopg.connect(app.state.store_url, row_factory=dict_row, autocommit=True, connect_timeout=5,
@@ -531,6 +534,10 @@ def warm_bodies(app: FastAPI, summaries: bool = True, run_id: int | None = None)
             for name, extra, reads in WARMED:
                 if reads and not summaries:
                     continue
+                if (name == "history" and run_id is None and warmer is not None
+                        and (warmer.waiting() or warmer.newer_run())):
+                    continue  # the slowest body (12 s) must not hold up a newer run or a page's request: a later pass
+                    # or a request for it builds it (TDM#736); one already started is not stopped
                 _, was = _body_get(cache, con, _warm_key(name, run["run_id"]), builders[name], extra, run)
                 if not was:
                     built.append(name)
@@ -581,6 +588,17 @@ class Warmer:
         with self._lock:
             out, self._wanted = self._wanted, []
         return out
+
+    def waiting(self) -> bool:
+        """Whether a page's request for a run is waiting for the thread (``request``, not yet ``take``n)."""
+        with self._lock:
+            return bool(self._wanted)
+
+    def newer_run(self) -> bool:
+        """Whether the store's newest run is not the one the pass in progress began with (``mark``): a run was published
+        while it builds. False without a ``mark`` or when the store cannot be read."""
+        cur = self.newest_run()
+        return self.newest is not None and cur is not None and cur != self.newest
 
     def newest_run(self) -> int | None:
         """The newest complete run of the store, None when it cannot be read (the connection is opened again)."""
