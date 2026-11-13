@@ -64,6 +64,12 @@ class Sum:
     def value(self) -> float | None:
         return self.s + self.c if self.n else None
 
+    def copy(self) -> Sum:
+        """The same running sum, to go on from apart (``pnl_mtd.PeriodCache``: the state after the rows already seen)."""
+        out = Sum()
+        out.s, out.c, out.n = self.s, self.c, self.n
+        return out
+
     def merge(self, other: Sum) -> None:
         if other.n:
             n = self.n + other.n
