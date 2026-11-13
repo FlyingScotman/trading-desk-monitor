@@ -13,6 +13,26 @@
   as outrights at their delivery date. Core builds the curve in ``value_portfolio`` (``FxImpliedCurveRequest`` on the
   RUONIA OIS curve); this module builds it once more for the lineage, the run's curve points and to leave out a
   currency whose quotes do not build (no TOD/TOM anchor, a gap): its lineage says why.
+  **Synchronous points** (hub contract 1.9, dataset ``fx_input_pairs``, TDM#729): the hub's group of a currency is one
+  spot observation and, in the same minute, the best bid and offer of the first four quarterly FORTS futures, each on its
+  own clock. Only the **points** are taken from it: ``mid(future) - mid(spot)`` of that minute, as
+  ``FxSwapPointsQuote(near = the run's spot date, far = the future's last delivery date)`` chained from the run's own
+  spot (``FxSpot`` and the run's rate are not changed; label ``fx_input_pairs:<ticker>``). The spot's mid is the half-sum
+  of its bid and offer (USD, EUR: NTPro indicative) or its last price (CNY: the exchange's ``CNYRUB_TOM``). Rules,
+  provisional constants above (``FX_INPUT_*``): the spot's clock is on the business date (Moscow) and its prices are
+  positive (offer not below bid); an ``intraday`` cut does not take a spot older than ``FX_INPUT_MAX_SPOT_AGE_SECONDS``
+  (an end-of-day cut is not checked); a future is taken with a positive bid below its offer, an update clock not after
+  the spot's and at most ``FX_INPUT_MAX_SKEW_SECONDS`` before it, a spread within ``FX_INPUT_MAX_SPREAD``, no reason from
+  the hub, a delivery date after the run's spot date and not already quoted by an exchange swap (the exchange's quote
+  stays). No usable future, or a group that is not usable: the curve as before, ``fx_input_group`` of its lineage says
+  why. CNY takes the group only when the cut has no exchange swap points (``FX_INPUT_ONLY_WITHOUT_SWAPS``). The
+  dates of the points count as swap dates: the futures of ``futures_prices`` / ``futures_prices_intraday`` enter only
+  after the last of them. The setting ``fx_implied_futures`` (off) leaves the group out too. Lineage of a curve:
+  ``points_source = fx_input_pairs`` and ``fx_input_group`` (``run_id``, ``content_sha256``, ``known_at``, the spot's
+  source, clock, mid and age, ``nodes_used``, ``nodes_dropped`` ticker -> reason) when taken; else ``fx_input_group``
+  ``status = not_used`` and ``reason`` (the hub's stale reasons of the dataset such as ``no_completed_capture``, an
+  unusable spot, CNY's exchange swaps, ...). A snapshot of a hub before 1.9 (no dataset) leaves the key out and the curve
+  exactly as it was. The date of a future is still its ``last_del_date`` (the day after the last trading day is TDM#730).
 - **CNY XCCY** (``CNY XCCY``, ``cny_ruonia_xccy_v1``): the hub's ``cny_ruonia_xccy`` par quotes (percent, divided by
   100) bootstrapped by core ``bootstrap_xccy_curve`` on RUONIA OIS (MOEX XCS CNYRUB terms; the joint SPFI, MOSCOW,
   BEIJING and RUONIA calendar; the notional rate is the spot, provisional). It discounts CNY bonds.
@@ -65,7 +85,8 @@ from __future__ import annotations
 import calendar as _pycal
 from dataclasses import dataclass, field, replace
 from datetime import date, datetime, timedelta
-from typing import Any
+from decimal import Decimal
+from typing import Any, NoReturn
 
 from rub_fixed_income import (
     BusinessCalendar,
@@ -103,7 +124,7 @@ from rub_fixed_income import (
 
 from ..marketdata import adapter_rates as ar
 from ..marketdata import fixing_history
-from ..marketdata.adapter import ts_range
+from ..marketdata.adapter import FX_INPUT_DATASET, MSK, FxInputGroup, FxInputNode, ts_range
 from ..marketdata.bundle import SnapshotError
 from . import proxy as proxies
 from . import rates
@@ -184,6 +205,19 @@ SPOT_SOURCES = ("market", "cets_tom")
 SWAP_LAG = {"TOD": 0, "TOM": 1, "SPT": 2}
 MAIN_CCYS = ("USD", "EUR", "CNY")
 """Currencies whose missing FX-implied curve the lineage reports (the others only when they have quotes)."""
+FX_INPUT_ONLY_WITHOUT_SWAPS = ("CNY",)
+"""Currencies whose exchange swap points (``fx_swaps``) keep the implied curve to themselves: their FX input group is
+taken only when the cut has none (owner's decision of 2026-11-13, TDM#729: CNY has the exchange's TOD/TOM and TOM/SPT
+swaps at the end of the day, an intraday cut has none). USD and EUR take the group whenever it is usable."""
+FX_INPUT_MAX_SPOT_AGE_SECONDS = Decimal(1800)
+"""**Provisional** (the orchestrator's, TDM#729; the hub sets no tolerance): an ``intraday`` cut does not take a group whose
+spot quote is older than this at the cut (``spot_age_seconds_at_cut``), or of an unknown age. An end-of-day cut
+(``eod_preliminary``, ``eod_final``) holds the day's last minute and is not checked."""
+FX_INPUT_MAX_SKEW_SECONDS = Decimal(300)
+"""**Provisional** (TDM#729): a future's update clock may be at most this many seconds before the spot's
+(``update_skew_seconds``, spot minus update; never after it)."""
+FX_INPUT_MAX_SPREAD = Decimal("0.005")
+"""**Provisional** (TDM#729): a future whose best offer minus bid is more than this share of its mid is not taken."""
 
 
 def implied_curve_id(ccy: str) -> str:
@@ -202,7 +236,8 @@ class FxOptions:
     """``fx_foreign_curve``: the curve of an FX forward's foreign leg, ``fx_implied`` (from swap points) or ``xccy``
     (CNY only); the other one is its fallback when absent."""
     implied_futures: bool = True
-    """``fx_implied_futures``: FORTS FX futures past the last swap point extend the implied curve."""
+    """``fx_implied_futures``: FORTS FX futures past the last swap point extend the implied curve; off also leaves out
+    the points of the hub's synchronous input groups (``_input_points``)."""
     spot_source: str = "market"
     """``fx_spot_source``: ``market`` (the FX_MARKET chain, as bonds and the OCP) or ``cets_tom`` (CETS TOM close)."""
     off_report: bool = False
@@ -345,9 +380,166 @@ def _futures_lineage(source: str | None, used: list[dict[str, Any]]) -> dict[str
     return out
 
 
+class FxImpliedInputsMissing(rates.RatesInputError):
+    """No swap point, group point or future to build ``<ccy> FX`` from. ``group``: what the lineage's ``fx_input_group``
+    says (None: the snapshot has no such dataset), kept in the lineage of the curve that is not built."""
+
+    def __init__(self, message: str, group: dict[str, Any] | None = None) -> None:
+        super().__init__(message)
+        self.group = group
+
+
+class FxImpliedBuildError(ValueError):
+    """``<ccy> FX`` did not build (core refused its quotes, a date outside a calendar, ...): the original error's text, and
+    ``group``: the lineage's ``fx_input_group`` (None: the snapshot has no such dataset), kept in the lineage of the
+    curve that is not built (``status`` ``error``)."""
+
+    def __init__(self, message: str, group: dict[str, Any] | None = None) -> None:
+        super().__init__(message)
+        self.group = group
+
+
+def _reraise_with_group(e: Exception, group: dict[str, Any] | None) -> NoReturn:
+    """Raise ``e`` as an error that carries the lineage's ``fx_input_group`` (``with_fx`` keeps it in the curve's lineage);
+    ``e`` itself when the snapshot has no such dataset."""
+    if group is None:
+        raise e
+    raise FxImpliedBuildError(str(e), group) from e
+
+
+def _input_spot_mid(g: FxInputGroup, bd: date) -> tuple[Decimal | None, str]:
+    """The mid of the group's spot observation (module docstring) and "", or None and why the spot is not usable: its
+    clock is not on the business date (Moscow date of ``quote_ts``); a bid and offer need a positive bid and an offer not
+    below it (mid = their half-sum), a last price needs to be positive (mid = last)."""
+    s = g.spot
+    if s.quote_ts is None:
+        return None, "no spot quote time"
+    day = s.quote_ts.astimezone(MSK).date()
+    if day != bd:
+        return None, f"spot quoted on {day}, not on the business date"
+    if s.quote_kind == "last":
+        return (s.last, "") if s.last is not None and s.last > 0 else (None, "no positive spot last price")
+    if s.quote_kind != "indicative_bid_offer":
+        return None, f"unknown spot quote kind {s.quote_kind}"
+    if s.bid is None or s.offer is None or s.bid <= 0 or s.offer < s.bid:
+        return None, "no spot bid and offer (a positive bid, the offer not below it)"
+    return (s.bid + s.offer) / 2, ""
+
+
+def _input_node_why(n: FxInputNode, g: FxInputGroup, spot_date: date, taken: dict[date, str]) -> str:
+    """Why a future of the group is not taken (module docstring), "" when it is: the hub's own reasons; no ticker or
+    delivery date, or not after the run's spot date; no positive bid below the offer; no update time, or after the spot's;
+    the update skew outside ``0..FX_INPUT_MAX_SKEW_SECONDS``; a spread above ``FX_INPUT_MAX_SPREAD`` of the mid; a date
+    another point already fixes (``taken``: date -> label)."""
+    if n.reasons:
+        return "hub: " + ", ".join(n.reasons)
+    if not n.secid or n.last_del_date is None:
+        return "no ticker or delivery date"
+    if n.last_del_date <= spot_date:
+        return f"delivery {n.last_del_date} not after the spot date {spot_date}"
+    if n.bid is None or n.offer is None or n.bid <= 0 or n.offer <= n.bid:
+        return "no positive bid below the offer"
+    if n.update_ts is None:
+        return "no update time"
+    if g.spot.quote_ts is not None and n.update_ts > g.spot.quote_ts:
+        return "updated after the spot quote"
+    skew = n.update_skew_seconds
+    if skew is None:
+        return "no update skew"
+    if not 0 <= skew <= FX_INPUT_MAX_SKEW_SECONDS:
+        return f"update skew {skew} s outside 0..{FX_INPUT_MAX_SKEW_SECONDS} s"
+    spread = (n.offer - n.bid) / ((n.bid + n.offer) / 2)
+    if spread > FX_INPUT_MAX_SPREAD:
+        return f"spread {float(spread):.2%} above {float(FX_INPUT_MAX_SPREAD):.2%}"
+    if n.last_del_date in taken:
+        return f"date {n.last_del_date} already quoted by {taken[n.last_del_date]}"
+    return ""
+
+
+def _input_points(market: Any, ccy: str, spot: FxSpot, bd: date, options: FxOptions, exchange: list[FxSwapPointsQuote]
+                  ) -> tuple[list[FxSwapPointsQuote], dict[str, Any] | None]:
+    """The forward points of the currency's FX input group (module docstring) as swap points from the
+    run's spot date, and the lineage's ``fx_input_group``: used (the group's identity, its spot and the futures taken or
+    left out) or ``not_used`` with the reason. A snapshot without the dataset (a hub before contract 1.9) gives no points
+    and no entry. ``exchange``: the CETS swap points of the currency (their dates are the exchange's and stay)."""
+    if not market.has_fx_input_pairs:
+        return [], None
+
+    def unused(why: str, **more: Any) -> tuple[list[FxSwapPointsQuote], dict[str, Any]]:
+        return [], {"status": "not_used", "reason": why, **more}
+
+    if not options.implied_futures:
+        return unused("setting fx_implied_futures is off")
+    pick = market.fx_input_group(ccy)
+    g = pick.group
+    if g is None:
+        return unused(pick.why_none)
+    if ccy in FX_INPUT_ONLY_WITHOUT_SWAPS and exchange:
+        return unused(f"{ccy} has exchange swap points in the cut: {', '.join(q.label for q in exchange)}")
+    if market.snapshot.cut_type == "intraday":
+        age = g.spot_age_seconds_at_cut
+        if age is None or age > FX_INPUT_MAX_SPOT_AGE_SECONDS:
+            return unused(f"intraday cut: the spot is {'of an unknown age' if age is None else f'{age} s old'} "
+                          f"(at most {FX_INPUT_MAX_SPOT_AGE_SECONDS} s)")
+    mid, why = _input_spot_mid(g, bd)
+    if mid is None:
+        return unused(why)
+    taken: dict[date, str] = {}
+    for q in exchange:
+        taken[q.far_date] = q.label
+        taken.setdefault(q.near_date, q.label)
+    quotes, used, dropped = [], [], {}
+    for n in sorted(g.nodes, key=lambda n: n.position):
+        name = n.secid or f"position {n.position}"
+        if reason := _input_node_why(n, g, spot.value_date, taken):
+            dropped[name] = reason
+            continue
+        assert n.secid and n.last_del_date and n.bid is not None and n.offer is not None  # _input_node_why checked
+        label = f"{FX_INPUT_DATASET}:{n.secid}"
+        quotes.append(FxSwapPointsQuote(label, spot.value_date, n.last_del_date, float((n.bid + n.offer) / 2 - mid)))
+        taken[n.last_del_date] = label
+        used.append(n.secid)
+    if not quotes:
+        return unused("no usable future in the group", nodes_dropped=dropped)
+    return quotes, {
+        "status": "used", "run_id": g.run_id, "content_sha256": g.content_sha256, "known_at": g.known_at.isoformat(),
+        "spot_source": g.spot.source, "spot_quote_ts": g.spot.quote_ts.isoformat() if g.spot.quote_ts else None,
+        "spot_mid": str(mid), "spot_age_seconds_at_cut": None if g.spot_age_seconds_at_cut is None
+        else str(g.spot_age_seconds_at_cut), "nodes_used": used, "nodes_dropped": dropped}
+
+
 def _implied(market: Any, ccy: str, spot: FxSpot, cal: BusinessCalendar, rub: DiscountCurve, bd: date,
              options: FxOptions) -> tuple[FxImpliedCurveRequest, DiscountCurve, dict[str, Any]]:
-    quotes, dropped, last = _swap_quotes(market, ccy, cal, bd)
+    exchange, swap_dropped, last = _swap_quotes(market, ccy, cal, bd)
+    points, group = _input_points(market, ccy, spot, bd, options, exchange)
+    try:
+        return _implied_from(market, ccy, spot, rub, bd, options, exchange, swap_dropped, last, points, group)
+    except rates.RatesInputError:  # nothing to build from: ``FxImpliedInputsMissing`` carries the group itself
+        raise
+    except (CoreRejection, ValueError) as e:
+        if not points:
+            _reraise_with_group(e, group)
+        # The group's points are what failed (core refuses a date fixed twice, a non-positive outright): the curve as
+        # before them, with the reason, rather than none. What the lineage knew of the group stays; the status and the
+        # reason change.
+        group = {**(group or {}), "status": "not_used",
+                 "reason": f"the curve with the group's points did not build: {e}"}
+    try:
+        return _implied_from(market, ccy, spot, rub, bd, options, exchange, swap_dropped, last, [], group)
+    except rates.RatesInputError:
+        raise
+    except (CoreRejection, ValueError) as e:
+        _reraise_with_group(e, group)
+
+
+def _implied_from(market: Any, ccy: str, spot: FxSpot, rub: DiscountCurve, bd: date, options: FxOptions,
+                  exchange: list[FxSwapPointsQuote], swap_dropped: dict[str, str], last: date | None,
+                  points: list[FxSwapPointsQuote], group: dict[str, Any] | None
+                  ) -> tuple[FxImpliedCurveRequest, DiscountCurve, dict[str, Any]]:
+    """The curve of ``_implied`` from the exchange's swap points ``exchange`` (last far date ``last``), the group's
+    ``points`` (none: the curve as before them) and the futures past the last of those dates."""
+    quotes, dropped = list(exchange), dict(swap_dropped)
+    last_points = max((q.far_date for q in points), default=None)
     futures, used, source, none = [], [], None, ""
     if options.implied_futures:
         found = market.fx_future_quotes(ccy)  # one contract per delivery date, the end of day's or the intraday cut's
@@ -355,17 +547,20 @@ def _implied(market: Any, ccy: str, spot: FxSpot, cal: BusinessCalendar, rub: Di
         dropped.update(found.dropped)
         for f in found.rows:
             d = date.fromisoformat(f["last_del_date"])
-            if d <= spot.value_date or (last is not None and d <= last):
-                dropped[f["secid"]] = "future before the last swap point" if last and d <= last else \
-                    "future on or before the spot date"
+            why = ("future before the last swap point" if last is not None and d <= last else
+                   "future on or before the spot date" if d <= spot.value_date else
+                   f"future not after the last {FX_INPUT_DATASET} point" if last_points is not None and d <= last_points
+                   else "")
+            if why:
+                dropped[f["secid"]] = why
                 continue
             futures.append(FxOutrightQuote(f["secid"], d, f["price"]))
             used.append(f)
-    if not quotes and not futures:
+    if not quotes and not points and not futures:
         why = "; ".join(f"{k}: {v}" for k, v in list(dropped.items())[:6])
         more = f" (+{len(dropped) - 6} more)" if len(dropped) > 6 else ""
-        raise rates.RatesInputError(f"{bd}: no {ccy} swap point or future in the snapshot"
-                                    + (f"; left out: {why}{more}" if dropped else f"; {none}" if none else ""))
+        raise FxImpliedInputsMissing(f"{bd}: no {ccy} swap point or future in the snapshot"
+                                     + (f"; left out: {why}{more}" if dropped else f"; {none}" if none else ""), group)
     anchor = None
     if spot.value_date > bd and not any(q.near_date == bd for q in quotes):
         # No TOD/TOM swap (USD, EUR: futures only): the foreign rate from the business date to the spot date is
@@ -373,12 +568,14 @@ def _implied(market: Any, ccy: str, spot: FxSpot, cal: BusinessCalendar, rub: Di
         pts = spot.rub_per_unit * (1.0 - rub.discount_factor(spot.value_date))
         quotes.insert(0, FxSwapPointsQuote("anchor:TOD/TOM", bd, spot.value_date, pts))
         anchor = "assumed: no TOD/TOM swap, foreign rate 0 from the business date to the spot date"
-    request = FxImpliedCurveRequest(ccy, bd, rates.RUONIA_OIS_CURVE_ID, tuple(quotes + futures))
+    request = FxImpliedCurveRequest(ccy, bd, rates.RUONIA_OIS_CURVE_ID, tuple(quotes + points + futures))
     curve = request.build(rub, spot.rub_per_unit, spot.value_date)
     return request, curve, {
-        "status": "ok", "spec_id": fx_implied_spec_id(ccy), "swaps": [q.label for q in quotes],
+        "status": "ok", "spec_id": fx_implied_spec_id(ccy), "swaps": [q.label for q in quotes + points],
         "futures": [q.label for q in futures], "dropped": dropped, "last_node": curve.nodes[-1][0].isoformat(),
         "rub_curve": rates.RUONIA_OIS_CURVE_ID, **({"anchor": anchor} if anchor else {}),
+        **({"points_source": FX_INPUT_DATASET} if points else {}),
+        **({"fx_input_group": group} if group is not None else {}),
         **_futures_lineage(source, used)}
 
 
@@ -704,9 +901,11 @@ def with_fx(market: Any, static: Any, core: MarketSnapshot, fx_rates: dict[str, 
                 lin["curves"][cid] = info
             except rates.RatesInputError as e:
                 if ccy in MAIN_CCYS:  # the other currencies without quotes are not worth a line
-                    lin["curves"][cid] = {"status": "missing", "error": str(e)}
+                    grp = e.group if isinstance(e, FxImpliedInputsMissing) else None
+                    lin["curves"][cid] = {"status": "missing", "error": str(e), **({"fx_input_group": grp} if grp else {})}
             except (CoreRejection, ValueError, SnapshotError) as e:
-                lin["curves"][cid] = {"status": "error", "error": str(e)}
+                grp = e.group if isinstance(e, FxImpliedBuildError) else None
+                lin["curves"][cid] = {"status": "error", "error": str(e), **({"fx_input_group": grp} if grp else {})}
     if "CNY" in out.spots and rub_curve is not None:
         try:
             built, request, info = _xccy(market, static, out.spots["CNY"], rub_curve, bd)

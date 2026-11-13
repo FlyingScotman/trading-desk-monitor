@@ -318,7 +318,9 @@ class Settings:
     quote_curve_risk: bool = False
     # provisional FX choices (curves.fx.FxOptions; docs/program/DECISIONS.md open questions)
     fx_foreign_curve: str = "fx_implied"  # an FX forward's foreign leg: fx_implied (swap points) or xccy (CNY)
-    fx_implied_futures: bool = True  # FORTS FX futures past the last swap point extend the FX-implied curves
+    # FORTS FX futures past the last swap point extend the FX-implied curves; off also leaves out the points of the hub's
+    # synchronous input groups (contract 1.9, TDM#729)
+    fx_implied_futures: bool = True
     fx_spot_source: str = "market"  # FX forwards' spot: market (MOEX 19:00 chain, as bonds) or cets_tom
     off_report_derivatives: str = "exclude"  # TDM#468: exclude | include the trade_terms derivatives no positions row names
     ndf_fixing_sources: str = "CBR=CBR,ЦБ=CBR,ЦБ РФ=CBR"  # the report's NDF fixing source -> the hub's

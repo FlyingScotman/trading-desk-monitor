@@ -422,6 +422,96 @@ def _main_per_delivery(rows: list[dict[str, Any]], volume: str) -> tuple[list[di
     return kept, dropped
 
 
+FX_INPUT_DATASET = "fx_input_pairs"
+NO_FX_INPUT_DATASET = "not in snapshot (contract < 1.9)"
+"""Why a snapshot has no FX input group when it does not carry the dataset at all (a hub before contract 1.9)."""
+
+
+def _instant(v: Any) -> datetime | None:
+    """A UTC instant of the hub (``2026-11-12T15:59:00Z``) as an aware datetime, None when null."""
+    if v is None:
+        return None
+    ts = datetime.fromisoformat(str(v))
+    if ts.tzinfo is None:
+        raise ValueError(f"instant without an offset: {v!r}")
+    return ts
+
+
+@dataclass(frozen=True)
+class FxInputSpot:
+    """The spot observation of an FX input group (contract 1.9 ``fx_input_spot``): an indicative bid and offer (NTPro,
+    USD and EUR) or the exchange's last price (CNY), one clock ``quote_ts``."""
+
+    source: str
+    instrument: str
+    quote_kind: str
+    """``indicative_bid_offer`` or ``last``."""
+    quote_ts: datetime | None
+    bid: Decimal | None
+    offer: Decimal | None
+    last: Decimal | None
+    settle_date: date | None
+    reasons: tuple[str, ...]
+
+
+@dataclass(frozen=True)
+class FxInputNode:
+    """One expected quarterly future of an FX input group (``fx_input_node``): its best bid and offer per one unit of the
+    currency, its own clocks and the hub's skews against the spot clock (seconds: spot minus the node's clock); a
+    non-empty ``reasons`` says the hub found it unavailable."""
+
+    position: int
+    secid: str | None
+    last_trade_date: date | None
+    last_del_date: date | None
+    bid: Decimal | None
+    offer: Decimal | None
+    update_ts: datetime | None
+    source_ts: datetime | None
+    update_skew_seconds: Decimal | None
+    source_skew_seconds: Decimal | None
+    reasons: tuple[str, ...]
+
+
+@dataclass(frozen=True)
+class FxInputGroup:
+    """One currency's timestamp-aligned input group (contract 1.9 ``fx_input_group``): the spot and, in the same minute,
+    the best bid and offer of the first four quarterly futures, each on its own clock. ``spot_age_seconds_at_cut``: the
+    cut's time minus the spot's, None without a spot clock."""
+
+    run_id: int
+    currency: str
+    known_at: datetime
+    content_sha256: str
+    spot: FxInputSpot
+    nodes: tuple[FxInputNode, ...]
+    spot_age_seconds_at_cut: Decimal | None
+
+
+@dataclass(frozen=True)
+class FxInputPick:
+    """``MarketView.fx_input_group``: the currency's group, or None with ``why_none`` (a sentence for the lineage)."""
+
+    group: FxInputGroup | None
+    why_none: str = ""
+
+
+def _fx_input_group(row: dict[str, Any]) -> FxInputGroup:
+    s = row["spot"]
+    spot = FxInputSpot(s["source"], s["instrument"], s["quote_kind"], _instant(s.get("quote_ts")), _d(s.get("bid")),
+                       _d(s.get("offer")), _d(s.get("last")), _date(s.get("settle_date")), tuple(s.get("reasons") or ()))
+    nodes = tuple(FxInputNode(
+        int(n["position"]), n.get("secid"), _date(n.get("last_trade_date")), _date(n.get("last_del_date")),
+        _d(n.get("bid_rub_per_unit")), _d(n.get("offer_rub_per_unit")), _instant(n.get("update_ts")),
+        _instant(n.get("source_ts")), _d(n.get("update_skew_seconds")), _d(n.get("source_skew_seconds")),
+        tuple(n.get("reasons") or ())) for n in row["nodes"])
+    known_at = _instant(row["known_at"])
+    if known_at is None:
+        raise ValueError("no known_at")
+    return FxInputGroup(int(row["run_id"]), row["currency"], known_at, str(row["content_sha256"]), spot, nodes,
+                        _d(row.get("spot_age_seconds_at_cut")))
+
+
 class MarketView:
     def __init__(self, snap: Snapshot) -> None:
         if snap.kind != "market":
@@ -457,6 +547,12 @@ class MarketView:
         """An intraday cut's FORTS quotes (latest of the day per contract), and those of an ``eod_preliminary`` cut at its
         time (hub contract 1.8, TDM#704); an ``eod_final`` cut leaves it empty, as an intraday cut leaves
         ``futures_prices`` empty."""
+        self.has_fx_input_pairs = FX_INPUT_DATASET in d or any(
+            ds.get("name") == FX_INPUT_DATASET for ds in snap.doc["datasets"])
+        """Contract 1.9: the snapshot carries the dataset ``fx_input_pairs`` (even empty); False before 1.9."""
+        self.fx_input_pairs: list[dict[str, Any]] = d.get(FX_INPUT_DATASET) or []
+        """Contract 1.9: the timestamp-aligned FX input groups, one per currency (USD, EUR, CNY) at most, from one completed
+        capture job of the business date (the raw rows; ``fx_input_group`` reads them)."""
         self.curve_quote_sets = d["curve_quote_sets"]
         self.stale = {ds["name"]: ds["stale_reasons"] for ds in snap.doc["datasets"] if ds["stale"]}
 
@@ -617,6 +713,24 @@ class MarketView:
                              "quote_ts": r.get("source_ts") or r.get("ts")})
         kept, same_date = _main_per_delivery(rows, "vol_today")
         return kept, {**dropped, **same_date}
+
+    def fx_input_group(self, ccy: str) -> FxInputPick:
+        """The FX input group of ``ccy`` (contract 1.9, TDM#729): the hub's spot observation and, in the same minute, the best
+        bid and offer of the first four quarterly futures. Nothing is judged here (the curve's rules are
+        ``curves.fx``). No group: ``why_none`` says whether the snapshot lacks the dataset (``NO_FX_INPUT_DATASET``), the
+        dataset has no group of the currency (with the dataset's stale reasons, the hub's ``no_completed_capture``,
+        ``group_missing`` and the like), or the group could not be read."""
+        if not self.has_fx_input_pairs:
+            return FxInputPick(None, NO_FX_INPUT_DATASET)
+        rows = [r for r in self.fx_input_pairs if r.get("currency") == ccy]
+        if len(rows) != 1:
+            stale = self.stale.get(FX_INPUT_DATASET)
+            what = f"no {ccy} group in {FX_INPUT_DATASET}" if not rows else f"{len(rows)} {ccy} groups in {FX_INPUT_DATASET}"
+            return FxInputPick(None, what + (f" ({', '.join(stale)})" if stale else ""))
+        try:
+            return FxInputPick(_fx_input_group(rows[0]))
+        except (KeyError, TypeError, ValueError, ArithmeticError) as e:  # a group that does not parse is not a crash
+            return FxInputPick(None, f"the {ccy} group of {FX_INPUT_DATASET} cannot be read ({type(e).__name__}: {e})")
 
     def future(self, secid: str) -> dict[str, Any] | None:
         """The business date's FORTS row of a contract by its ticker (``SiZ6``), None when the snapshot has none."""
