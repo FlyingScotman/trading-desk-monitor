@@ -579,8 +579,9 @@ class MarketView:
             return FxFutureQuotes([], dropped, None, "no futures in futures_prices "
                                   "(intraday quotes are not used in the final close)")
         rows, more = self._intraday_futures(ccy)
-        return FxFutureQuotes(rows, {**dropped, **more}, "intraday" if rows else None,
-                              "no futures in futures_prices or futures_prices_intraday")
+        if rows:  # the results' reasons are of rows that are not the curve's: a ticker is either in rows or dropped
+            return FxFutureQuotes(rows, more, "intraday")
+        return FxFutureQuotes([], {**dropped, **more}, None, "no futures in futures_prices or futures_prices_intraday")
 
     def _fx_future_rows(self, rows: list[dict[str, Any]], ccy: str) -> list[dict[str, Any]]:
         return [r for r in rows if r.get("is_fx") and r.get("base_ccy") == ccy and (r.get("quote_ccy") or "RUB") == "RUB"

@@ -269,10 +269,26 @@ def test_preliminary_close_decides_by_currency(ctx):
     assert eur.source == "intraday" and [(r["secid"], r["price"]) for r in eur.rows] == [("EuZ6", 97.0)]
 
 
+def test_a_ticker_taken_from_the_intraday_quotes_is_not_also_dropped(ctx):
+    """The results of a ticker left out (no settlement price) with its intraday quote taken: the ticker is in the rows
+    only, its results' reason is not in ``dropped`` (and the curve's lineage)."""
+    def mutate(d):
+        d["futures_prices"] = [usd_future(ctx, settle_rub_per_unit=None)]
+        d["fx_swaps"] = []
+        d["futures_prices_intraday"] = [intraday("SiZ6", Z6, last_rub_per_unit="85.5"),
+                                        intraday("SiH7", H7, last_rub_per_unit=None)]
+    market = market_with(ctx, mutate, "eod_preliminary")
+    assert market._eod_futures("USD")[1] == {"SiZ6": "no settlement price"}
+    quotes = market.fx_future_quotes("USD")
+    assert quotes.source == "intraday" and [r["secid"] for r in quotes.rows] == ["SiZ6"]
+    assert quotes.dropped == {"SiH7": "no bid/offer or last price"}
+    _, _, lin = curves_of(ctx, market)
+    assert lin["USD FX"]["futures"] == ["SiZ6"] and "SiZ6" not in lin["USD FX"]["dropped"]
+
+
 @pytest.mark.parametrize("field", ["absent", "empty"])
 def test_preliminary_close_without_the_hubs_field_is_as_before(ctx, field):
-    """A hub that does not put intraday quotes into the preliminary close (the field absent or empty, or ``not_in_cut``
-    in its coverage): no futures, the curve is missing, the message names the sets."""
+    """A hub that does not put intraday quotes into the preliminary close (the field absent or empty): no futures, the curve is missing, the message names the sets."""
     def mutate(d):
         d["futures_prices"] = []
         d["fx_swaps"] = []
