@@ -7,13 +7,18 @@ from __future__ import annotations
 
 import dataclasses
 import shutil
+import time
+from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 
 import pytest
 
 from desk import backfill, daystatus, store
-from desk.inbox import hang, scan
+from desk.autopilot import Autopilot
+from desk.inbox import hang, runner, scan
+from desk.inbox.loader import load_adapter
+from desk.inbox.spi import AdapterFailure
 from desk.settings import Settings
 
 FIX = Path(__file__).parent / "fixtures"
@@ -67,7 +72,11 @@ class Hanging:
                   f"    if os.path.exists(os.path.join({str(self.flags)!r}, what)):\n        time.sleep(60)\n")
         src = src.replace("import os\n", helper, 1)
         src = src.replace("def read(path, h, ctx):\n", "def read(path, h, ctx):\n    _call('read', os.path.basename(path))\n", 1)
-        src = src.replace("def reference(ctx):\n", "def reference(ctx):\n    _call('reference')\n", 1)
+        src = src.replace("def reference(ctx):\n", "def reference(ctx):\n    _call('reference')\n"
+                          f"    if os.path.exists(os.path.join({str(self.flags)!r}, 'reference_raises')):\n"
+                          "        raise ValueError('not for the screen')\n"
+                          f"    if os.path.exists(os.path.join({str(self.flags)!r}, 'reference_bad')):\n"
+                          "        return {'books': 'x'}\n", 1)
         (self.dir / "__init__.py").write_text(src.replace('"name": "good_adapter"', f'"name": "{name}"'),
                                               encoding="utf-8")
 
@@ -164,14 +173,16 @@ def test_a_reference_that_timed_out_is_not_asked_again_while_paused_and_the_file
     # without any book the book ids cannot be judged: the files are not rejected as unknown_book, they wait
     assert r.files == {} and r.skipped[scan.SKIP_NO_BOOKS] == 3, r.text()
     assert statuses(con) == {} and sightings(con) == 0
-    assert any("Справочник адаптера не отвечает" in line for line in r.pauses), r.pauses
+    # no book is saved, so the line must not say «берёт сохранённые книги» (there are none): it says what waits
+    assert len(r.pauses) == 1 and "а книг в базе ещё нет" in r.pauses[0] and "3 файла ждут в очереди" in r.pauses[0], r.pauses
+    assert "сохранённые книги" not in r.pauses[0]
     r = scan.scan(con, s, now=now + timedelta(minutes=10))  # paused: not asked, the files still wait
     assert r.notes == {"reference_paused": 1} and ad.count("reference") == 1 and r.files == {}, r.text()
     assert statuses(con) == {} and sightings(con) == 0
     ad.hang("reference", False)
     r = scan.scan(con, s, now=now + timedelta(minutes=61))  # the pause lapsed and it answers: the files come in
     assert ad.count("reference") == 2 and sum(r.files.values()) == 3 and "timed_out" not in r.files, r.text()
-    assert r.pauses == [] and not (tmp_path / "archive" / hang.HANG_FILE).exists()
+    assert r.pauses == [] and not (tmp_path / "archive" / hang.HANG_FILE).exists()  # books came: nothing waits any more
 
 
 def test_while_reference_is_paused_the_saved_books_are_used_and_a_later_pause_is_longer(con, tmp_path):
@@ -348,3 +359,167 @@ def test_a_marker_older_than_its_last_news_warns_that_the_adapter_may_not_answer
             "done": 0, "total": None, "detail": "сопоставление файлов"}
     text = hang.busy_text(info, t)
     assert "1 ч" in text and "Сведения обновлены" in text and "не отвечает" in text, text
+
+
+# ---- TDM#521 review: the feeds, the «no books» queue, the aborted reads, the date's warning ------------------------
+
+
+def seed_books(con, tmp_path: Path, inbox: Path) -> None:
+    """A working adapter saves the books (and one report) first."""
+    put(inbox, FILES[0])
+    assert scan.scan(con, cfg(tmp_path, inbox)).files == {"accepted": 1}
+
+
+def test_two_feed_files_while_reference_hangs_cost_one_timeout_and_the_other_entries_still_ask(con, tmp_path):
+    inbox = tmp_path / "in"
+    seed_books(con, tmp_path, inbox)
+    put(inbox, *FILES[1:3])
+    ad = Hanging(tmp_path)
+    ad.hang("reference")
+    s = cfg(tmp_path, inbox, str(ad.dir))
+    h = scan.adapter(s)
+    started = datetime.now(UTC)
+    r1 = scan.ingest_feed(con, s, inbox / FILES[1], source="positions_daily", handle=h)  # asks, times out: the pause
+    r2 = scan.ingest_feed(con, s, inbox / FILES[2], source="positions_daily", handle=h)  # paused: saved books, no wait
+    assert ad.count("reference") == 1, "the second feed file asked again: it would hold the cycle lock for a whole timeout"
+    assert r1.notes == {"reference_timed_out": 1} and r2.notes == {"reference_paused": 1}
+    assert sum(r1.files.values()) == 1 and sum(r2.files.values()) == 1 and "rejected" not in {*r1.files, *r2.files}
+    assert (datetime.now(UTC) - started).total_seconds() < 8
+    # the owner's explicit entries ask whatever the pause: a retry (and replay, and the owner's acquisition, which are
+    # not given the pause either)
+    scan.retry(con, s, ("accepted",))
+    assert ad.count("reference") == 2
+
+
+def test_without_any_book_the_files_wait_and_the_screens_say_so_with_the_dates_they_wait_for(con, tmp_path):
+    inbox = tmp_path / "in"
+    put(inbox, *FILES[:3])
+    ad = Hanging(tmp_path)
+    ad.hang("reference")
+    s, now = cfg(tmp_path, inbox, str(ad.dir)), datetime.now(UTC)
+    r = scan.scan(con, s, now=now)
+    assert r.skipped[scan.SKIP_NO_BOOKS] == 3 and statuses(con) == {}
+    led = hang.Ledger(tmp_path / "archive", hang.key(scan.adapter(s).fingerprint, 1))
+    assert led.no_books["queued"] == 3 and led.no_books["since"] and sum(led.no_books["dates"].values()) == 3
+    rep = scan.hang_report(s, now=now)
+    assert len(rep["lines"]) == 1 and "а книг в базе ещё нет" in rep["lines"][0] and "3 файла ждут" in rep["lines"][0]
+    assert sorted(rep["waiting"]) == sorted(led.no_books["dates"]) and rep["retry_at"] is not None
+    ad.hang("reference", False)
+    r = scan.scan(con, s, now=now + timedelta(minutes=61))
+    assert sum(r.files.values()) == 3 and scan.hang_report(s, now=now + timedelta(minutes=62))["lines"] == []
+    assert {d.isoformat() for (d,) in con.execute("SELECT DISTINCT valid_date FROM inbox_file_status").fetchall()} \
+        == set(rep["waiting"]), "the dates the screens warned of are the dates the files then came in for"
+
+
+def test_a_reference_that_fails_without_a_timeout_and_no_books_queue_the_files_and_say_why(con, tmp_path):
+    inbox = tmp_path / "in"
+    put(inbox, *FILES[:3])
+    ad = Hanging(tmp_path)
+    ad.hang("reference_raises")
+    s, now = cfg(tmp_path, inbox, str(ad.dir)), datetime.now(UTC)
+    r = scan.scan(con, s, now=now)
+    assert r.skipped[scan.SKIP_NO_BOOKS] == 3 and r.notes == {"reference_failed": 1} and statuses(con) == {}, r.text()
+    line = r.pauses[0]
+    assert "не удалось прочитать (код: ValueError)" in line and "а книг в базе ещё нет" in line, r.pauses
+    assert "not for the screen" not in line and "not for the screen" not in (tmp_path / "archive" / hang.HANG_FILE).read_text()
+    assert scan.hang_report(s, now=now)["lines"] == r.pauses  # the plate and C14 say the same
+    scan.scan(con, s, now=now + timedelta(minutes=1))
+    assert ad.count("reference") == 2, "no timeout, no pause: the next scan asks again"
+    ad.hang("reference_raises", False)
+    ad.hang("reference_bad")  # an answer that is no books: the codes of the check are the reason
+    scan.scan(con, s, now=now + timedelta(minutes=2))
+    assert "код: bad_reference" in scan.hang_report(s, now=now)["lines"][0]
+    ad.hang("reference_bad", False)
+    r = scan.scan(con, s, now=now + timedelta(minutes=3))
+    assert sum(r.files.values()) == 3 and scan.hang_report(s, now=now)["lines"] == []
+
+
+def test_the_backfill_scans_a_start_date_with_queued_files_once_not_every_cycle(con, tmp_path):
+    inbox = tmp_path / "in"
+    put(inbox, *FILES[:3])
+    ad = Hanging(tmp_path)
+    ad.hang("reference_raises")
+    s = cfg(tmp_path, inbox, str(ad.dir))
+    assert "inbox from 2026-10-01" in (backfill.inbox(con, s, D("2026-10-01")) or "")
+    asked = ad.count("reference")
+    for _ in range(3):  # the next cycles: not a scan each
+        assert backfill.inbox(con, s, D("2026-10-01")) is None
+    assert ad.count("reference") == asked
+    wait = backfill.state(s)["inbox_wait"]
+    assert wait["from"] == "2026-10-01" and "inbox" not in backfill.state(s)
+    # the wait ends: its time passes, the adapter or the read timeout changes, or the owner forces it
+    st = backfill.state(s)
+    st["inbox_wait"]["until"] = (datetime.now(UTC) - timedelta(minutes=1)).isoformat()
+    backfill.save_state(s, st)
+    assert backfill.inbox(con, s, D("2026-10-01")) is not None and ad.count("reference") == asked + 1
+    assert backfill.inbox(con, s, D("2026-10-01"), force=True) is not None and ad.count("reference") == asked + 2
+    assert backfill.inbox(con, dataclasses.replace(s, adapter_read_timeout_s=2), D("2026-10-01")) is not None
+    ad.hang("reference_raises", False)  # it answers: the files are read and the start date is done
+    assert backfill.inbox(con, s, D("2026-10-01"), force=True)
+    assert backfill.state(s)["inbox"]["from"] == "2026-10-01" and "inbox_wait" not in backfill.state(s)
+
+
+def test_a_stopped_source_gives_up_its_reads_started_ahead_and_frees_the_workers(con, tmp_path, monkeypatch):
+    monkeypatch.setenv(scan.READ_WORKERS_ENV, "4")
+    monkeypatch.setattr(hang, "SOURCE_STOP_AFTER", 2)
+    inbox = tmp_path / "in"
+    put(inbox, *FILES)
+    ad = Hanging(tmp_path)
+    ad.hang("read")
+    s = cfg(tmp_path, inbox, str(ad.dir), adapter_read_timeout_s=3)
+    aborted = []
+    real = runner.abort_reads
+    monkeypatch.setattr(runner, "abort_reads", lambda tag: (aborted.append(tag), real(tag))[1])
+    started = datetime.now(UTC)
+    r = scan.scan(con, s)
+    took = (datetime.now(UTC) - started).total_seconds()
+    assert r.files == {"timed_out": 2} and r.queued == {"positions_daily": 3}, r.text()
+    assert aborted == ["positions_daily"]  # once, when the source stopped
+    assert took < 3 * 2, f"the scan went on for the reads started ahead: {took:.1f} s"
+    assert statuses(con) == {"timed_out": 2}
+
+
+def test_an_aborted_read_ends_at_once_and_its_worker_serves_the_next_call(tmp_path):
+    h = load_adapter(str(ADAPTERS / "read_hangs"), None, None)
+    hit = {"source": "market", "report_date": "2026-10-15"}
+    with runner.pooled(1) as pool, ThreadPoolExecutor(2) as ex:
+        t0 = time.monotonic()
+        running = ex.submit(runner.call_read, h, str(tmp_path / "x"), hit, None, 30, tag="market")
+        waiting = ex.submit(runner.call_read, h, str(tmp_path / "y"), hit, None, 30, tag="market")  # no worker for it yet
+        deadline = time.monotonic() + 10
+        while time.monotonic() < deadline and not pool._tagged:
+            time.sleep(0.05)
+        time.sleep(1.0)  # the first call is inside the adapter
+        runner.abort_reads("market")
+        for fut in (running, waiting):
+            with pytest.raises(AdapterFailure) as e:
+                fut.result(timeout=10)
+            assert (e.value.kind, e.value.type) == ("failed", "aborted")
+        assert time.monotonic() - t0 < 10  # not the 30 s of the timeout
+        with pytest.raises(AdapterFailure):  # a call of that tag after the abort fails without a worker
+            runner.call_read(h, str(tmp_path / "z"), hit, None, 30, tag="market")
+        got = runner.call_match(h, [str(tmp_path / "m")], None, 20)  # the worker is free and restarts
+        assert got and not any("_error" in v for v in got.values() if isinstance(v, dict))
+
+
+def test_queued_files_count_as_the_inbox_waiting_and_the_date_says_its_report_waits(con, tmp_path, monkeypatch):
+    ad, s, _ = hanging_reads(tmp_path, monkeypatch)
+    ap = Autopilot(settings_loader=lambda: s, today=lambda: D("2026-10-20"), out=lambda _: None)
+    step = ap._scan(s, con)
+    assert step[0] == "ok" and ap._inbox_waiting == 3, (step, ap._inbox_waiting)  # three files wait in the queue
+    waiting = scan.hang_report(s)["waiting"]
+    assert sum(waiting.values()) == 3
+    for d in waiting:
+        warnings = daystatus.day(con, s, D(d))["summary"]["warnings"]
+        assert any(w.startswith("отчёт не прочитан, ждёт в очереди: адаптер не отвечает; расчёт может идти на прошлых данных")
+                   for w in warnings), (d, warnings)
+    shown = {x["date"] for x in daystatus.days(con, s, D("2026-10-20"), 30)["days"]}
+    assert set(waiting) <= shown, "the dates of waiting reports are on the strip"
+    other = (D(next(iter(waiting))) + timedelta(days=60)).isoformat()
+    assert not any("ждёт в очереди" in w for w in daystatus.day(con, s, D(other))["summary"]["warnings"])
+    ad.hang("read", False)
+    ad.change()  # a new fingerprint: the queue is read, and the warnings go
+    ap2 = Autopilot(settings_loader=lambda: s, today=lambda: D("2026-10-20"), out=lambda _: None)
+    ap2._scan(s, con)
+    assert ap2._inbox_waiting == 0 and scan.hang_report(s)["waiting"] == {}
+    assert not any("ждёт в очереди" in w for d in waiting for w in daystatus.day(con, s, D(d))["summary"]["warnings"])

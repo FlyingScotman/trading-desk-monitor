@@ -7,9 +7,15 @@ that did not answer: ``reference()``, and each source whose files kept timing ou
 one scan; a source that timed out before is stopped by its first timeout). The pause grows with the failures of
 one unbroken series, ``PAUSE_H`` hours (1 h, then 6 h and on), and ends at once when the adapter's fingerprint or the
 read timeout changes (``key``: the ledger of another key is not read), or when the thing answers. Only ``scan`` honours
-a pause (the autopilot, the backfill's reports); ``retry`` and ``replay`` are the owner's explicit requests and always
+a pause of a source (the autopilot, the backfill's reports), and ``scan`` and a feed's file (``ingest_feed``, under the
+cycle lock) that of ``reference()``; ``retry``, ``replay`` and the owner's acquisition are explicit requests and always
 ask, but record what they find. The files of a paused source are not touched: no status, no sighting, so the next scan
 that is not paused offers them again.
+
+Files also wait when ``reference()`` gave no books and the store has none (it timed out, raised, or answered with no
+valid books): judged by no book they would all be rejected as ``unknown_book``, so they stay in the queue too, and the
+ledger's ``no_books`` entry says since when, how many and why (the adapter's error class or the codes of its answer).
+The dates the queued files wait for (``waiting``) are shown on the day's status: its positions may be earlier ones.
 
 ``Running`` is the other half: the scan that holds the inbox lock (a Postgres advisory lock, held by another process
 for ``desk inbox retry`` or the page) writes ``scan.running`` (kind, start, the step it is in), so the one that finds
@@ -72,21 +78,26 @@ def _write(path: Path, text: str) -> None:
 
 
 class Ledger:
-    """The pauses of one adapter under one set of settings: ``reference`` (an entry or None) and ``sources``.
-    An entry: ``failures`` (of the unbroken series), ``since`` (its first), ``last``, ``until`` (UTC ISO) and, for a
-    source, ``queued`` (the files the last scan left unread)."""
+    """The pauses of one adapter under one set of settings: ``reference`` (an entry or None), ``sources`` and
+    ``no_books``. An entry: ``failures`` (of the unbroken series), ``since`` (its first), ``last``, ``until`` (UTC ISO)
+    and, for a source, ``queued`` (the files the scans left unread) and ``dates`` (their business dates, or report
+    dates where no calendar is cached: date -> files). ``no_books``: files wait in the queue because ``reference()``
+    gave no books and the store has none: ``since``, ``last``, ``queued``, ``dates`` and ``reason`` (the adapter's
+    error class or the codes of its invalid answer, never a message or a value)."""
 
     def __init__(self, folder: Path | str, ledger_key: str) -> None:
         self.path = Path(folder) / HANG_FILE
         self.key = ledger_key
         self.reference: dict[str, Any] | None = None
         self.sources: dict[str, dict[str, Any]] = {}
+        self.no_books: dict[str, Any] | None = None
         self._dirty = False
         doc = read_doc(self.path)
         if doc.get("key") == ledger_key:
-            ref, srcs = doc.get("reference"), doc.get("sources")
+            ref, srcs, nb = doc.get("reference"), doc.get("sources"), doc.get("no_books")
             self.reference = ref if isinstance(ref, dict) else None
             self.sources = {k: v for k, v in srcs.items() if isinstance(v, dict)} if isinstance(srcs, dict) else {}
+            self.no_books = nb if isinstance(nb, dict) else None
 
     # ---- the question
 
@@ -131,23 +142,44 @@ class Ledger:
         if self.sources.pop(source, None) is not None:
             self._dirty = True
 
-    def queued(self, source: str, files: int) -> None:
-        """The files of a stopped source this scan left unread (shown next to its pause)."""
-        if source in self.sources and self.sources[source].get("queued") != files:
-            self.sources[source]["queued"], self._dirty = files, True
+    @staticmethod
+    def _merged(entry: dict[str, Any], files: int, dates: dict[str, int]) -> bool:
+        """The queue as the scans saw it: the most of each, so a scan that looked at fewer files (the autopilot's
+        lookback against the backfill's start date) does not make the figures jump. True when ``entry`` changed."""
+        before = (entry.get("queued"), dict(entry.get("dates") or {}))
+        entry["queued"] = max(files, entry.get("queued") or 0)
+        entry["dates"] = {d: max(dates.get(d, 0), (entry.get("dates") or {}).get(d, 0)) for d in {*dates, *(entry.get("dates") or {})}}
+        return before != (entry["queued"], entry["dates"])
+
+    def queued(self, source: str, files: int, dates: dict[str, int] | None = None) -> None:
+        """The files of a stopped source this scan left unread, and their dates (shown next to its pause)."""
+        if source in self.sources and self._merged(self.sources[source], files, dates or {}):
+            self._dirty = True
+
+    def books_missing(self, now: datetime, files: int, dates: dict[str, int], reason: str | None) -> None:
+        """Files wait because there are no books at all (``reference()`` gave none, the store has none)."""
+        if self.no_books is None:
+            self.no_books = {"since": _iso(now)}
+        self.no_books["last"], self.no_books["reason"] = _iso(now), reason
+        self._merged(self.no_books, files, dates)
+        self._dirty = True
+
+    def books_present(self) -> None:
+        if self.no_books is not None:
+            self.no_books, self._dirty = None, True
 
     def save(self) -> None:
         if not self._dirty:
             return
         self._dirty = False
-        if self.reference is None and not self.sources:
+        if self.reference is None and not self.sources and self.no_books is None:
             try:
                 self.path.unlink(missing_ok=True)
             except OSError as e:
                 log.warning("inbox: %s not removed: %s", self.path.name, e)
             return
-        _write(self.path, json.dumps({"key": self.key, "reference": self.reference, "sources": self.sources},
-                                     indent=1, ensure_ascii=False))
+        _write(self.path, json.dumps({"key": self.key, "reference": self.reference, "sources": self.sources,
+                                      "no_books": self.no_books}, indent=1, ensure_ascii=False))
 
 
 def read_doc(path: Path) -> dict[str, Any]:
@@ -158,15 +190,43 @@ def read_doc(path: Path) -> dict[str, Any]:
     return doc if isinstance(doc, dict) else {}
 
 
+def _files(n: int) -> str:
+    """«1 файл ждёт», «3 файла ждут», «5 файлов ждут»."""
+    if n % 10 == 1 and n % 100 != 11:
+        return f"{n} файл ждёт"
+    return f"{n} файла ждут" if n % 10 in (2, 3, 4) and n % 100 not in (12, 13, 14) else f"{n} файлов ждут"
+
+
+def _add_dates(into: dict[str, int], entry: dict[str, Any]) -> None:
+    dates = entry.get("dates")
+    for d, n in (dates.items() if isinstance(dates, dict) else ()):
+        if isinstance(d, str) and isinstance(n, int):
+            into[d] = max(into.get(d, 0), n)
+
+
 def report(folder: Path | str, ledger_key: str, now: datetime | None = None) -> dict[str, Any]:
-    """What the screens show (the settings «Обзор» of the adapter, C14): ``reference`` and ``sources`` as saved, and
-    ``lines`` in Russian, one per thing that is paused now; empty ``lines``: nothing is. A pause that has ended is
-    not shown (the next scan asks again)."""
+    """What the screens show (the settings «Обзор» of the adapter, C14): ``reference``, ``sources`` and ``no_books`` as
+    saved, ``lines`` in Russian, one per thing that is paused or waiting now (empty: nothing is), ``waiting`` (the dates
+    of the files left in the queue -> how many, for the warning of those dates) and ``retry_at`` (the soonest end of a
+    pause, UTC ISO, else None). A pause that has ended is not shown (the next scan asks again). Without any book in the
+    store the line says so instead of «пока берёт сохранённые книги»."""
     now = now or datetime.now(UTC)
     led = Ledger(folder, ledger_key)
     lines: list[str] = []
-    ref = led.reference_paused(now)
-    if ref:
+    waiting: dict[str, int] = {}
+    ref, nb = led.reference_paused(now), led.no_books
+    if nb:
+        n, since = nb.get("queued") or 0, _when(nb.get("since"))
+        queue = _files(n) if n else "файлы ждут"
+        if ref:
+            lines.append(f"Справочник адаптера не отвечает с {_when(ref.get('since'))}, а книг в базе ещё нет: {queue} в очереди. "
+                         f"Следующая попытка после {_when(ref.get('until'))}.")
+        else:
+            why = f" (код: {nb['reason']})" if nb.get("reason") else ""
+            lines.append(f"Справочник адаптера не удалось прочитать{why}, а книг в базе ещё нет: {queue} в очереди с {since}. "
+                         "Монитор спрашивает адаптер при каждом скане.")
+        _add_dates(waiting, nb)
+    elif ref:
         lines.append(f"Справочник адаптера не отвечает с {_when(ref.get('since'))}. Монитор не спрашивает его до "
                      f"{_when(ref.get('until'))} и пока берёт сохранённые книги.")
     srcs = {s: e for s in sorted(led.sources) if (e := led.source_paused(s, now))}
@@ -174,7 +234,10 @@ def report(folder: Path | str, ledger_key: str, now: datetime | None = None) -> 
         n = e.get("queued")
         lines.append(f"Чтение источника «{s}» не укладывается в таймаут с {_when(e.get('since'))}: его файлы ждут в очереди"
                      + (f" ({n})" if n else "") + f", следующая попытка после {_when(e.get('until'))}.")
-    return {"reference": ref, "sources": [{"source": s, **e} for s, e in srcs.items()], "lines": lines}
+        _add_dates(waiting, e)
+    ends = sorted(e["until"] for e in [ref, *srcs.values()] if e and e.get("until"))
+    return {"reference": ref, "sources": [{"source": s, **e} for s, e in srcs.items()], "no_books": nb,
+            "lines": lines, "waiting": waiting, "retry_at": ends[0] if ends else None}
 
 
 # ---- the scan that holds the lock ------------------------------------------------------------------------------

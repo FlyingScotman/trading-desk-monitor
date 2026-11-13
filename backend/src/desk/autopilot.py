@@ -378,7 +378,7 @@ class Autopilot:
         self._sync_retry: dict[str, dict[str, Any]] = {}
         self._hub_first: str | None = None     # the hub's oldest date, when its whole list was read (#27)
         self._no_answer: dict[str, int] = {}   # hub date -> cycles in a row its bundle got no answer at all (#217)
-        self._inbox_waiting = 0                # files the last scan left waiting for a calendar (R22)
+        self._inbox_waiting = 0                # files the last scan left waiting: for a calendar (R22), or in the queue of an adapter that does not answer (TDM#521)
         self._vacuumed_at: datetime | None = None   # the last explicit VACUUM of the run tables (server without autovacuum)
         self._history_dates: tuple[float, int, list[tuple[str, str]]] | None = None
         self._static_polled = float("-inf")    # monotonic time the hub's newest static was last asked for (R25)
@@ -1144,7 +1144,9 @@ class Autopilot:
             return "skipped", "no inbox folders (inbox_dirs)"
         res = scan.scan(con, settings, progress=lambda done, total, detail: self._progress("scan", done, total, detail),
                         history_from=self._hub_first)
-        self._inbox_waiting = res.files.get("waiting_calendar", 0)
+        # files left in the queue (a source that did not answer, no books to judge them by) wait like those for a
+        # calendar: the day's positions may be the earlier ones, and the day's status says so (TDM#521)
+        self._inbox_waiting = res.files.get("waiting_calendar", 0) + sum(res.queued.values())
         detail = "; ".join(res.text().splitlines())
         if res.busy:
             return "skipped", detail
@@ -1214,7 +1216,7 @@ class Autopilot:
             if held:  # the backlog drains over the next cycles: these dates run once, after it (R22)
                 todo = [t for t in todo if t not in held]
                 notes.append(f"{len(held)} dates wait for the inbox backlog ({self._inbox_waiting} files wait for "
-                             f"a calendar, {self._sync_later} hub dates next cycle)")
+                             f"a calendar or the adapter, {self._sync_later} hub dates next cycle)")
         for i, (d, why, sig) in enumerate(todo):
             self._progress("eod", i + 1, len(todo), d)
             self._eod_tried.add(d)
@@ -1443,8 +1445,8 @@ class Autopilot:
         if why is None:
             return "ok", f"up to date: run {last[0]} on {label}", "up_to_date"
         if self._inbox_waiting and self._sync_later:  # as the eod step (R22): not once per revision of the backlog
-            return "skipped", (f"{label}: after the inbox backlog ({self._inbox_waiting} files wait for a calendar, "
-                               f"{self._sync_later} hub dates next cycle)"), "inbox_backlog"
+            return "skipped", (f"{label}: after the inbox backlog ({self._inbox_waiting} files wait for a calendar or "
+                               f"the adapter, {self._sync_later} hub dates next cycle)"), "inbox_backlog"
         sig = (snap, tuple(ids), logic, inputs_hash, store.dataset_set_ids(con, today))
         if self._failed_before(f"prev_close {today}", sig, label):
             return "skipped", f"{label} failed before on the same inputs, not retried", "failed_before"

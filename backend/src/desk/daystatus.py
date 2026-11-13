@@ -422,7 +422,7 @@ def _facts_empty() -> dict[str, Any]:
     return {"inputs": {}, "files_lost": 0, "stale_copies": 0, "runs": 0, "runs_failed": 0, "default_run_id": None,
             "current_run_id": None, "default_set_ids": None, "eod_final": False, "positions_in_force": False,
             "run_behind": False, "late_inputs": [], "books_no_positions": 0, "books_rows_differ": 0,
-            "unlinked_swaps": 0, "off_report": None}
+            "unlinked_swaps": 0, "off_report": None, "report_waits": 0}
 
 
 ROWS_DIFFER_SQL = (
@@ -488,6 +488,13 @@ def _facts(con: psycopg.Connection, settings: Settings, lo: date, hi: date, *,
     for d, k in con.execute(ROWS_DIFFER_SQL, (lo, hi)):
         if d in out:
             out[d]["books_rows_differ"] = k
+    for ds, n in _waiting(settings).items():  # TDM#521: files left in the queue of an adapter that does not answer
+        try:
+            d = date.fromisoformat(ds)
+        except ValueError:
+            continue
+        if lo <= d <= hi:
+            g(d)["report_waits"] = n
     first_set = dict(con.execute("SELECT book_id, min(valid_date) FROM position_set GROUP BY 1").fetchall())
     first = min(first_set.values(), default=None)
     for d, x in out.items():
@@ -527,6 +534,9 @@ def _rate(x: dict[str, Any]) -> dict[str, Any]:
         bad.append("нет позиций")
     if x["files_lost"]:
         bad.append(f"файлов с ошибкой: {x['files_lost']}")
+    if x.get("report_waits"):  # the position sets of the date may be the earlier ones carried forward: say so
+        warn.append(f"отчёт не прочитан, ждёт в очереди: адаптер не отвечает; расчёт может идти на прошлых данных "
+                    f"(файлов: {x['report_waits']})")
     if x["stale_copies"]:
         warn.append("старая копия отчёта под новым именем")
     if x["runs_failed"]:
@@ -584,6 +594,11 @@ def day(con: psycopg.Connection, settings: Settings, on: date | None = None) -> 
             "feeds": _feeds(settings), "adapter_hang": _hang(settings), "generated_at": datetime.now(UTC).isoformat()}
 
 
+def _waiting(settings: Settings) -> dict[str, int]:
+    """Date -> files left in the queue of an adapter that does not answer (``scan.hang_report``), for the date's warning."""
+    return _hang(settings).get("waiting") or {}
+
+
 def _hang(settings: Settings) -> dict[str, Any]:
     """What the scan remembers of an adapter that does not answer (``scan.hang_report``): ``lines`` in Russian, empty
     when nothing is paused. Never fails the day."""
@@ -592,7 +607,7 @@ def _hang(settings: Settings) -> dict[str, Any]:
     try:
         return scan.hang_report(settings)
     except Exception:  # noqa: BLE001 - a status block never fails the day
-        return {"reference": None, "sources": [], "lines": []}
+        return {"reference": None, "sources": [], "no_books": None, "lines": [], "waiting": {}, "retry_at": None}
 
 
 def _feeds(settings: Settings) -> list[dict[str, Any]]:
