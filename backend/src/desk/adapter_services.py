@@ -45,6 +45,20 @@ the ids ``LOGIN_ACTIONS``). The action ``CONNECT_ACTION`` (the whole connection 
 first load fell short) queues the feed ``CONNECT_FEED`` as «Запустить сейчас» does, after its describe: the adapter
 hands its first load over to that run (``job.feed_queued``).
 
+**Actions beside a feed** (TDM#731). A panel action the adapter declares ``"concurrent": true`` (read-only: the adapter
+checks it, 08 §2.2) does not wait for a feed: while a feed run or a history request is on (``_waiting_for``; the worker
+is busy and would hold the owner's button for the length of the run), ``submit`` runs it at once in a helper process of
+its own, in its own thread (``_run_concurrent``), without ``HELPER_LOCK``, and it never shows ``waiting_feed``. The
+request carries the field ``concurrent=1``: the helper then saves nothing typed in the panel and answers
+``settings_unsaved`` for values that differ from the saved ones, so the adapter's config folder does not change under a
+running feed (its fingerprint, compared before the feed's files are taken in). With the worker free (idle, or only a
+describe) there is no feed to protect: the action is queued as any other, saves what is typed, and a describe follows
+it, exactly as before the flag (a feed that starts in the moment between the two makes it wait as before). The owner still has one job at a time
+(``services_busy`` for the next one, whichever way the first runs); the job has its own cancel flag, so «Отменить» ends
+it and «Остановить загрузку» (``cancel("feed")``) ends the feed, each only its own helper. No describe follows such
+an action (it changed nothing): ``job.refreshed`` is true at once. An action the adapter did not flag, and any action of
+an adapter that declares no flag, runs as before.
+
 **Scheduling** (``next_due``). Local wall clock of the work machine. ``{"every_min": N, "from": "HH:MM", "to":
 "HH:MM", "weekdays_only": bool}``: inside the window, N minutes after the last start (at once when never run).
 ``{"daily_at": ["HH:MM", ...], "weekdays_only": bool}``: the first slot after the last start; a feed never run
@@ -245,7 +259,8 @@ def clean_panel(p: Any) -> dict:
                 raise Invalid
             actions.add(a["id"])
             act = {"id": a["id"], "label": _str(a.get("label", a["id"]), 200),
-                   "confirm": _opt(a, "confirm", 1000), "long": a.get("long") is True}
+                   "confirm": _opt(a, "confirm", 1000), "long": a.get("long") is True,
+                   "concurrent": a.get("concurrent") is True}   # default false: after the worker's current work (TDM#731)
             if isinstance(a.get("login"), bool):  # declared: a login window may open (else by the id, LOGIN_ACTIONS)
                 act["login"] = a["login"]
             acts.append(act)
@@ -601,6 +616,7 @@ class AdapterServices:
         self._describe_failed: tuple[str | None, str, float] | None = None  # (fingerprint, code, monotonic time)
         self._newest_failing = False  # the last read of the newest positions failed (one warning per streak)
         self._owner_runs = 0  # the owner's operations run inside background work (``_owner_first``; worker thread)
+        self._conc: dict | None = None  # the owner's action running beside the worker: {"id", "cancel", "thread"} (TDM#731)
 
     # ---- thread
 
@@ -621,6 +637,11 @@ class AdapterServices:
         self._stop.set()
         self._cancel.set()
         self._wake.set()
+        with self._lock:
+            conc = self._conc
+        if conc is not None:
+            conc["cancel"].set()
+            conc["thread"].join(timeout=6)
         t = self._thread
         if t is not None:
             t.join(timeout=6)
@@ -740,21 +761,53 @@ class AdapterServices:
             with self._lock:
                 doc = read_state(self._load())
                 params = self._params(op, fields, doc.get("panel"))
-                if self._pending is not None or (self._running or {}).get("kind") == "op":
+                if self._pending is not None or (self._running or {}).get("kind") == "op" or self._conc is not None:
                     params.clear()
                     raise ServiceError("services_busy")
-                wait = self._waiting_for(self._running, doc)
                 section, login = self._of_action(op, params, doc)
-                self._job = {"id": uuid.uuid4().hex, "op": op, "action": params.get("action"), "state": "queued",
-                             "code": "waiting_feed" if wait else "queued", "long": self._long(op, params, doc),
-                             "login": login, "section": section, "queued_at": _iso(self._now())}
-                self._pending = {"op": op, "params": params, "id": self._job["id"], "section": section}
-                job = {**self._job, **({"waiting_for": wait} if wait else {})}  # GET says it as it is then
+                now = _iso(self._now())
+                wait = self._waiting_for(self._running, doc)   # a feed run or a history request is on now
+                if wait and self._concurrent(op, params, doc):
+                    # beside the worker (module doc): started at once, nothing to wait for. With the worker free it is
+                    # queued like any action (the else branch): nothing then runs beside it, so it may save what is typed
+                    params["concurrent"] = "1"
+                    jid = uuid.uuid4().hex
+                    self._job = {"id": jid, "op": op, "action": params.get("action"), "state": "running",
+                                 "code": "running", "long": self._long(op, params, doc), "login": login,
+                                 "section": section, "queued_at": now, "started_at": now}
+                    cancel = threading.Event()   # its own: the feed's ``_cancel`` is never this job's
+                    thread = threading.Thread(target=self._run_concurrent, name="desk-adapter-services-owner", daemon=True,
+                                              args=({"op": op, "params": params, "id": jid, "section": section,
+                                                     "cancel": cancel},))
+                    self._conc = {"id": jid, "cancel": cancel, "thread": thread}
+                    job = dict(self._job)
+                else:
+                    thread = None
+                    self._job = {"id": uuid.uuid4().hex, "op": op, "action": params.get("action"), "state": "queued",
+                                 "code": "waiting_feed" if wait else "queued", "long": self._long(op, params, doc),
+                                 "login": login, "section": section, "queued_at": now}
+                    self._pending = {"op": op, "params": params, "id": self._job["id"], "section": section}
+                    job = {**self._job, **({"waiting_for": wait} if wait else {})}  # GET says it as it is then
         finally:
             fields.clear()
+        if thread is not None:
+            try:
+                thread.start()
+            except BaseException:
+                with self._lock:
+                    self._conc = None
+                    self._job.update(state="error", code="operation_failed", finished_at=_iso(self._now()))
+                raise
+            return job
         self._ensure_thread()
         self._wake.set()
         return job
+
+    @staticmethod
+    def _concurrent(op: str, params: dict, doc: dict) -> bool:
+        """The action is declared ``concurrent`` by the cached panel (an action offered by a pick list is not: it runs
+        as always). Whether it then runs beside the worker is ``submit``'s: only while a feed or a history request runs."""
+        return op == "action" and bool((panel_action(doc.get("panel"), params.get("action"))[1] or {}).get("concurrent"))
 
     @staticmethod
     def _waiting_for(running: dict | None, doc: dict) -> dict | None:
@@ -891,6 +944,9 @@ class AdapterServices:
                 self._pending = None
                 self._job.update(state="cancelled", code="cancelled", finished_at=_iso(self._now()))
                 return dict(self._job)
+            if target == "job" and self._conc is not None:
+                self._conc["cancel"].set()   # its own flag: the feed and the worker are not touched (TDM#731)
+                return dict(self._job)
             r = self._running or {}
             if (target == "job" and r.get("kind") == "op") or (target == "feed" and r.get("kind") in ("feed", "history")):
                 if r.get("phase") == "ingesting":
@@ -916,7 +972,7 @@ class AdapterServices:
                 return False
 
     def _call(self, st: Settings, hp: Helper, op: str, extra: dict[str, str | list[str]], *,
-              out: Path | None = None) -> dict:
+              out: Path | None = None, cancel: threading.Event | None = None) -> dict:
         fields: dict[str, str | list[str]] = {"op": op, **extra, "adapter_root": str(hp.root),
                                               "config_dir": hp.handle.config_dir or "",
                                               "inbox_dir": [str(d) for d in st.inbox_dirs],
@@ -927,7 +983,7 @@ class AdapterServices:
         state_dir(st).mkdir(parents=True, exist_ok=True)
         try:
             result, rc = helper_proc.run(st.acquisition_python, hp.entry, fields, timeout=self._timeouts[op],
-                                         cancel=self._cancel)
+                                         cancel=cancel or self._cancel)
         except helper_proc.HelperFailure as f:
             raise ServiceError({"cancelled": "cancelled", "timeout": "helper_timeout", "request_invalid":
                                 "invalid_request", "runtime_unavailable": "runtime_unavailable"}.get(
@@ -1099,6 +1155,39 @@ class AdapterServices:
                     self._job["finished_at"] = _iso(self._now())
             if not held:
                 helper_proc.HELPER_LOCK.release()
+
+    def _run_concurrent(self, job: dict) -> None:
+        """The owner's flagged action beside the worker (module doc): the helper process asked at once, with no
+        ``HELPER_LOCK`` and its own cancel flag; the answer published as ``_run_job`` does, but no describe follows. The
+        job's last update and the end of ``_conc`` are one step under the lock: when GET shows the job over, the owner's
+        next press is accepted."""
+        params, jid, cancel = job["params"], job["id"], job["cancel"]
+        upd: dict[str, Any]
+        try:
+            st = self._load()
+            hp = self._helper(st)
+            r = clean_action(self._call(st, hp, "action", params, cancel=cancel))
+            with self._lock:
+                self._choose = {r["choose_action"]} if r.get("choose_action") else set()
+                self._choose_section = job.get("section") if r.get("choose_action") else None
+                if r.get("panel") is not None:
+                    doc = read_state(st)
+                    doc["panel"] = r["panel"]
+                    write_state(st, doc)
+            upd = {**{k: v for k, v in r.items() if k != "panel"}, "refreshed": True}
+        except ServiceError as e:
+            upd = {"state": e.state, "code": e.code}
+        except Invalid:
+            upd = {"state": "error", "code": "helper_response_invalid"}
+        except Exception:
+            log.exception("adapter services: %s (beside the worker) failed", job["op"])
+            upd = {"state": "error", "code": "operation_failed"}
+        finally:
+            params.clear()
+        with self._lock:
+            if self._job.get("id") == jid:
+                self._job.update(upd, finished_at=_iso(self._now()))
+            self._conc = None
 
     # ---- feeds
 
