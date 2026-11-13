@@ -2061,6 +2061,156 @@ export interface components {
             pv?: number | null;
         };
         /**
+         * OcpOrigin
+         * @description Where a published figure derived from positions comes from (TDM#713, ``api.ocp_origin``): the OCP lines of its
+         *     books in its currency, read for the run at request time; ``sum`` of all items is the figure's ``amount``.
+         */
+        OcpOrigin: {
+            /** Entity */
+            entity: string;
+            /** Book Id */
+            book_id: string | null;
+            /** Books */
+            books: string[];
+            /** Ccy */
+            ccy: string;
+            /**
+             * Source
+             * @enum {string}
+             */
+            source: "report" | "derived" | "derived_stale_report";
+            /** Amount */
+            amount: number;
+            /**
+             * Sum
+             * @description The sum of every item, ``items`` and ``rest``
+             */
+            sum: number;
+            /**
+             * Matches
+             * @description ``sum`` equals ``amount``
+             */
+            matches: boolean;
+            /**
+             * Items
+             * @description The largest by size
+             */
+            items: components["schemas"]["OcpOriginItem"][];
+            /**
+             * Rest
+             * @description {count, amount} of the items not listed
+             */
+            rest?: {
+                [key: string]: number;
+            } | null;
+            /** Sets */
+            sets?: components["schemas"]["OcpOriginBook"][];
+        };
+        /** OcpOriginBook */
+        OcpOriginBook: {
+            /** Book Id */
+            book_id: string;
+            /** @description The book's positions set the run took (null: the run has none) */
+            set: components["schemas"]["OcpOriginSet"] | null;
+        };
+        /**
+         * OcpOriginItem
+         * @description One OCP line the figure sums: a position, a cash balance of a book and currency or a funding liability.
+         */
+        OcpOriginItem: {
+            /**
+             * Kind
+             * @enum {string}
+             */
+            kind: "position" | "cash" | "liability";
+            /** Key */
+            key: string;
+            /** Position Id */
+            position_id?: string | null;
+            /** Book Id */
+            book_id: string;
+            /** Component */
+            component: string;
+            /** Basis */
+            basis: string;
+            /**
+             * Amount
+             * @description Signed, units of the currency
+             */
+            amount: number;
+            /** Pv */
+            pv?: number | null;
+            /**
+             * Note
+             * @default
+             */
+            note?: string;
+            /**
+             * Name
+             * @description position, liability: the run's name of the instrument
+             */
+            name?: string | null;
+            /** Instr Type */
+            instr_type?: string | null;
+            /** Asset Class */
+            asset_class?: string | null;
+            /** Maturity */
+            maturity?: string | null;
+            /** Secid */
+            secid?: string | null;
+            /** @description position: the set of the book the run took the position from */
+            set?: components["schemas"]["OcpOriginSet"] | null;
+            /**
+             * Restored
+             * @description cash: the reading of the balances gives the stored amount back
+             */
+            restored?: boolean | null;
+            /**
+             * Accounts
+             * @description cash, restored: its accounts
+             */
+            accounts?: {
+                [key: string]: unknown;
+            }[];
+            /**
+             * Sets
+             * @description cash, restored: the sets of its accounts
+             */
+            sets?: components["schemas"]["OcpOriginSet"][];
+        };
+        /**
+         * OcpOriginSet
+         * @description The set a derived item was read from (TDM#713): a book's positions set or a cash balances set.
+         */
+        OcpOriginSet: {
+            /** Set Id */
+            set_id?: number | null;
+            /**
+             * Valid Date
+             * @description The set's valid date
+             */
+            valid_date?: string | null;
+            /**
+             * Carried
+             * @description True: the set is older than the run's date, carried forward
+             */
+            carried: boolean;
+            /**
+             * Age Days
+             * @description Calendar days from the set's valid date to the run's date
+             */
+            age_days?: number | null;
+            /** Source */
+            source?: string | null;
+            /**
+             * File Name
+             * @description The file the set was read from, as the store has it
+             */
+            file_name?: string | null;
+            /** Report Date */
+            report_date?: string | null;
+        };
+        /**
          * OcpPublished
          * @description The OCP the run publishes: ``report_base_plus_day`` (TDM#531, block v3: the report on its date B without the
          *     derivatives' future flows + their PV + the bonds' revaluation and the trades since B + the components outside the
@@ -3627,6 +3777,11 @@ export interface components {
                     [key: string]: unknown;
                 };
             };
+            /**
+             * Origins
+             * @description TDM#713: per published line derived from positions (``derived``, ``derived_stale_report``) its items down to the first source: each position, cash balance and funding liability with the valid date and file of the set it was read from and whether the set is carried forward; read for the run at request time, so a run computed before it has them too; empty for a block without such a line
+             */
+            origins?: components["schemas"]["OcpOrigin"][];
             /**
              * Published Rows
              * @description TDM#567: ``published.by_book`` as the page data (``OCP.byBook``) and the history by day carry it: the same serializer, camelCase fields, ``baseKind`` under report_base_plus_day

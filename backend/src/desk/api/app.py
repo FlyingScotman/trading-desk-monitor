@@ -46,7 +46,17 @@ from ..settings import REPO_ROOT
 from ..settings import load as load_settings
 from ..store import CURRENT_RUNS, slice_label
 from . import auth as authn
-from . import compat, concepts, concepts_run, ocp_history, pnl_checks, pnl_history, pnl_period, provenance
+from . import (
+    compat,
+    concepts,
+    concepts_run,
+    ocp_history,
+    ocp_origin,
+    pnl_checks,
+    pnl_history,
+    pnl_period,
+    provenance,
+)
 from .autopilot_routes import router as autopilot_router
 from .models import (
     COMPAT,
@@ -57,6 +67,7 @@ from .models import (
     CarryOut,
     ErrorOut,
     JobIn,
+    OcpOrigin,
     PnlSums,
     Position,
     PositionList,
@@ -502,7 +513,7 @@ def ocp_out(run_id: int, block: dict[str, Any] | None) -> RunOcp:
     accept is left out and named in ``left_out`` (``_valid_ocp``)."""
     b = block or ocp_run.empty_block(ocp_run.NOT_COMPUTED, ocp_run.STATUS_TEXT[ocp_run.NOT_COMPUTED])
     # v2 of the block (TDM#416) and v3 (TDM#531): an older block has none of them, the model's defaults
-    keep = ("sources", "published", "gaps", "derivatives_check", "parts", "derivatives_pv", "books")
+    keep = ("sources", "published", "gaps", "derivatives_check", "parts", "derivatives_pv", "books", "origins")
     data = {k: b.get(k) for k in RunOcp.model_fields
             if k not in ("run_id", "state", "published_rows", "method_note", "left_out") and (k in b or k not in keep)}
     out, data = _valid_ocp(run_id, {"run_id": run_id, "state": b["status"], **data})
@@ -779,7 +790,10 @@ def create_app(store_url: str, static_dir: Path | None = None, app_dir: Path | N
         def build() -> RunOcp:
             row = con.execute("SELECT data FROM run_reference WHERE run_id = %s AND kind = 'ocp'",
                               (run_id,)).fetchone()
-            return ocp_out(run_id, row["data"] if row else None)
+            out = ocp_out(run_id, row["data"] if row else None)
+            block = row["data"] if row else None
+            out.origins = [OcpOrigin.model_validate(x) for x in ocp_origin.origins(con, run_id, block)]
+            return out
 
         return _run_cached(request, run, ("ocp",), build)
 

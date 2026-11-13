@@ -473,6 +473,46 @@
       '<div class="k-note">Отчёт записывает номинал части валютных деривативов строкой спот-типа на дату расчётов. Такая строка, найденная среди сделок книги, всегда вынесена из базы; вместо неё в ОВП — экспозиция самой сделки.</div>' +
       '<table class="k-tbl" data-vk="c16-drill-spotfuture" data-title="ОВП: строки спот-типа с будущей датой"><thead><tr><th>Строка отчёта</th><th class="n">сумма<span class="k-thu">mm ' + esc(line.ccy) + '</span></th></tr></thead><tbody>' + rows.join('') + '</tbody></table>';
   }
+  // откуда сумма «из позиций» (TDM#713): каждая позиция, остаток на счёте и пассив фондирования, из которых она сложена, с датой и
+  // файлом набора, из которого они взяты, и пометкой «перенесён», если набор старше даты прогона. Источник — origins ответа /ocp
+  // (backend desk/api/ocp_origin.py; читается при запросе, у прогона, посчитанного раньше, он тоже есть); нет — одна строка выше.
+  let ORG = [], CURDAY = null;
+  const originOf = line => ORG.find(o => o.ccy === line.ccy && (o.book_id || null) === (line.book_id || null) && o.entity === line.entity);
+  const setText = (s, what) => !s ? 'нет набора ' + what : 'набор ' + what + ' от ' + f.date(s.valid_date) + (s.carried ? ' — перенесён с прошлой даты' + (s.age_days ? ' (' + s.age_days + ' дн.)' : '') : '') + (s.file_name ? ', файл ' + s.file_name : '');
+  function originItem(i, line, multi) {
+    const bits = [];
+    if (i.kind === 'cash') {
+      bits.push('остаток на счетах: ' + esc(i.accounts && i.accounts.length ? i.accounts.length + ' сч.' : 'счета не восстановлены'));
+      (i.sets || []).forEach(x => bits.push('<span class="' + (x.carried ? 'warn' : 'mut3') + '" data-c16-origin-set>' + esc(setText(x, 'остатков')) + '</span>'));
+      if (i.restored === false) bits.push('<span class="warn">состав остатка не восстановлен: данные прочитаны иначе, чем в прогоне</span>');
+      if (i.accounts && i.accounts.length) bits.push('<span class="mut3">' + esc(i.accounts.map(a => [a.account_id, a.ledger, f.n(a.balance_ccy, 0)].filter(x => x != null && x !== '').join(' ')).join('; ')) + '</span>');
+    } else {
+      bits.push(i.kind === 'liability' ? 'пассив фондирования: ' + posLink(i.position_id) : posLink(i.position_id));
+      if (i.name) bits.push(esc(i.name));
+      bits.push(esc('вид строки: ' + compName(i.component)));
+      if (i.kind === 'position') bits.push('<span class="' + (i.set && i.set.carried ? 'warn' : 'mut3') + '" data-c16-origin-set>' + esc(setText(i.set, 'позиций')) + '</span>');
+    }
+    if (multi && i.book_id) bits.push(esc(bookName(i.book_id)));
+    if (i.note) bits.push('<span class="mut3">' + esc(i.note) + '</span>');
+    return '<tr class="it" data-c16-origin="' + esc(i.kind) + '"><td>' + bits.join(' · ') + '</td><td class="n">' + mm2(i.amount) + '</td></tr>';
+  }
+  function originRows(line) {
+    const o = originOf(line);
+    if (!o) return '';
+    const multi = (o.books || []).length > 1;
+    const books = (o.sets || []).filter(x => !(o.items || []).some(i => i.kind === 'position' && i.book_id === x.book_id))
+      .map(x => '<tr class="it" data-c16-origin-book><td class="mut3">' + (multi ? esc(bookName(x.book_id)) + ': ' : '') + 'позиций в расчёте нет; ' + esc(setText(x.set, 'позиций')) + '</td><td class="n"></td></tr>').join('');
+    return (o.items || []).map(i => originItem(i, line, multi)).join('') +
+      (o.rest ? '<tr class="it" data-c16-origin-rest><td class="mut3">ещё ' + o.rest.count + '</td><td class="n">' + mm2(o.rest.amount) + '</td></tr>' : '') + books +
+      (o.matches ? '' : '<tr class="it" data-c16-origin-diff><td class="warn">разбивка не сходится с суммой строки: в ней ' + f.mns(o.sum, 2) + ' mm</td><td class="n"></td></tr>');
+  }
+  // курс пересчёта валюты строки в рубли и откуда он (TDM#713): курс прогона дня и его источник, ЦБ рядом; нет — курс из отчёта ОВП
+  function rateNote(line) {
+    const d = CURDAY, c = line.ccy, x = d && (d.fx || {})[c], rep = d && (d.reportFx || {})[c];
+    const t = x && x.market != null ? '1 ' + c + ' = ' + f.n(x.market, 4) + ' ₽, источник «' + (x.source || 'не указан') + '»' + (x.cbr != null ? '; курс ЦБ ' + f.n(x.cbr, 4) + ' ₽' : '')
+      : rep ? 'курса прогона нет; по курсу из отчёта ОВП: 1 ' + c + ' = ' + f.n(rep, 4) + ' ₽' : 'курса этой валюты у дня нет';
+    return '<div class="k-note" data-c16-ratenote>Курс пересчёта в рубли: ' + esc(t) + '</div>';
+  }
   function lineHtml(line, cellV) {
     const ccy = line.ccy, unit = 'mm ' + ccy;
     const same = cellV == null || Math.abs(cellV - line.amount) < 0.5;
@@ -490,13 +530,13 @@
       // прежняя методика (отчёт целиком + слагаемые вне отчёта): разбора по слагаемым у прогона нет
       body = '<tr class="pt"><td>отчёт ОВП' + (line.valid_date ? ' от ' + esc(f.date(line.valid_date)) : '') + ' <span class="mut3">целиком, с деривативами</span></td><td class="n">' + mm2(line.reported || 0) + '</td></tr>' +
         Object.entries(line.outside || {}).map(([c, v]) => '<tr class="it"><td>вне отчёта: ' + esc(compName(c)) + '</td><td class="n">' + mm2(v) + '</td></tr>').join('');
-    } else body = '<tr class="pt"><td>из позиций: ' + esc(line.source === 'derived' ? 'книги нет в отчёте ОВП' : 'отчёт устарел') + ' — ' + dl('c03-blotter.html?q=' + encodeURIComponent(line.book_id || ''), 'позиции книги на C03') + '</td><td class="n">' + mm2(line.amount) + '</td></tr>';
+    } else body = '<tr class="pt"><td>из позиций: ' + esc(line.source === 'derived' ? 'книги нет в отчёте ОВП' : 'отчёт устарел') + ' — ' + dl('c03-blotter.html?q=' + encodeURIComponent(line.book_id || ''), 'позиции книги на C03') + '</td><td class="n">' + mm2(line.amount) + '</td></tr>' + originRows(line);
     const marks = [(line.fallback || []).length && 'номинал отчёта вместо PV: ' + line.fallback.map(k => KIND[k] || k).join(', '), (line.no_pv || []).length && 'PV нет ни у одной позиции: ' + line.no_pv.map(k => KIND[k] || k).join(', '),
       (line.partial_pv || []).length && 'часть позиций без PV: ' + line.partial_pv.map(k => KIND[k] || k).join(', '), (line.derivative_share || []).length && 'один дериватив — почти вся сумма слагаемых строки'].filter(Boolean);
     return '<div class="k-sec" data-c16-drill-ccy="' + esc(ccy) + '">' + esc(ccy) + '<span class="sp"></span><span style="text-transform:none;letter-spacing:0">' + unit + '</span></div>' +
       (line.parts ? '<div class="k-note">База — отчёт ОВП от ' + esc(f.date(line.base_date)) + (line.base_kind === 'book_absent' ? ': книги в нём нет, база 0' : line.base_kind === 'with_derivatives' ? ': ещё с деривативами, их PV не добавлен' : '') + '</div>' : '') +
       '<table class="k-tbl" data-vk="c16-drill" data-title="ОВП: из чего складывается"><thead><tr><th>Слагаемое</th><th class="n">сумма<span class="k-thu">' + unit + '</span></th></tr></thead><tbody>' + body + '<tr class="sum" data-c16-sum><td>Итого ОВП ' + esc(ccy) + check + '</td><td class="n">' + mm2(line.amount) + '</td></tr></tbody></table>' +
-      (marks.length ? '<div class="k-note warn">' + esc(marks.join('; ')) + '</div>' : '') + spotFutureHtml(line) + excludedHtml(line);
+      (marks.length ? '<div class="k-note warn">' + esc(marks.join('; ')) + '</div>' : '') + spotFutureHtml(line) + excludedHtml(line) + rateNote(line);
   }
   let PARTN = {};
   function drill(r, ccy, date) {
@@ -524,6 +564,7 @@
       runOcp(day).then(J => {
         if (on !== day.date && days.find(x => x.date === on)) return;  // уже другой день
         COMP = Object.fromEntries((J.components || []).map(c => [c.key, c.name]));
+        ORG = J.origins || []; CURDAY = day;
         PARTN = Object.fromEntries((J.parts || []).map(c => [c.key, c.name]));
         const lines = (((J.published || {}).by_book) || []).filter(x => rowKey(x.book_id, x.entity, x.books) === key && x.ccy !== 'RUB' && (!cur || x.ccy === cur)).sort((a, z) => ccyOrder(a.ccy, z.ccy));
         // часть блока не прошла проверку сервера: показано остальное, пропущенное названо (без сумм)
@@ -609,7 +650,16 @@
         spot_future: spot ? { out: [{ value_date: '2026-12-22', pair: 'EUR/USD', src: 'R5', amount: 2e6, book_id: book, position_id: book + '|FWD-1', trade_ids: ['D-1001'], days: 2, others: [] }], unmatched: [{ value_date: '2027-01-15', pair: 'EUR/USD', src: 'R6', amount: 3e5, book_id: book, why: 'no_deal' }], df1: [{ position_id: book + '|FWD-1', trade_ids: ['D-1001'], amount: 2e6, note: 'нет кривой EUR: дисконт-фактор 1' }] } : undefined });
     });
     return { run_id: null, state: 'computed', as_of: day.date, components: Object.entries({ cash: 'кэш и к расчёту', fx_legs: 'PV валютных ног', options: 'опционы', bonds: 'облигации', other: 'прочее' }).map(([key, name]) => ({ key, name })),
-      parts: [], published: { basis: 'report_base_plus_day', base_date: B, by_book: by } };
+      parts: [], published: { basis: 'report_base_plus_day', base_date: B, by_book: by },
+      // разбивка «из позиций» (TDM#713): набор позиций перенесён с прошлой даты, остаток старше; вымышленные позиция и счёт
+      origins: by.filter(x => x.source !== 'report').map(x => {
+        const set = { set_id: 1, valid_date: B, carried: true, age_days: 1, source: 'demo', file_name: 'positions_demo.csv', report_date: null };
+        const pos = Math.round(x.amount * 0.6), cash = x.amount - pos;
+        const items = [{ kind: 'position', key: x.book_id + '|P-1', position_id: x.book_id + '|P-1', book_id: x.book_id, component: 'fx_legs', basis: 'spot_equivalent', amount: pos, pv: null, note: '', name: 'Демо-позиция', set },
+          { kind: 'cash', key: 'CASH|' + x.book_id + '|' + x.ccy, position_id: null, book_id: x.book_id, component: 'cash', basis: 'balance', amount: cash, pv: null, note: '', restored: true,
+            accounts: [{ account_id: 'ACC-DEMO', account_kind: null, ledger: null, balance_ccy: cash }], sets: [{ set_id: 2, valid_date: '2026-10-01', carried: true, age_days: 20, source: 'demo', file_name: 'cash_demo.csv', report_date: null }] }];
+        return { entity: x.entity, book_id: x.book_id, books: x.books, ccy: x.ccy, source: x.source, amount: x.amount, sum: x.amount, matches: true, items, rest: null, sets: [{ book_id: x.book_id, set }] };
+      }) };
   }
   // демо «почему отчёта нет» (форма ответа /api/v1/inbox/datasets/ocp): вымышленные файл и коды
   const DEMO_WHY = on => ({ dataset: 'ocp', name: 'ОВП', on, adapter: 'ok demo 1.0 000000000000', sources: ['ocp_demo'], in_force: null,

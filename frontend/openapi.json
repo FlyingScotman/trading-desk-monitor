@@ -6062,6 +6062,382 @@
         ],
         "title": "OcpLineOut"
       },
+      "OcpOrigin": {
+        "properties": {
+          "entity": {
+            "type": "string",
+            "title": "Entity"
+          },
+          "book_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Book Id"
+          },
+          "books": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Books"
+          },
+          "ccy": {
+            "type": "string",
+            "title": "Ccy"
+          },
+          "source": {
+            "type": "string",
+            "enum": [
+              "report",
+              "derived",
+              "derived_stale_report"
+            ],
+            "title": "Source"
+          },
+          "amount": {
+            "type": "number",
+            "title": "Amount"
+          },
+          "sum": {
+            "type": "number",
+            "title": "Sum",
+            "description": "The sum of every item, ``items`` and ``rest``"
+          },
+          "matches": {
+            "type": "boolean",
+            "title": "Matches",
+            "description": "``sum`` equals ``amount``"
+          },
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/OcpOriginItem"
+            },
+            "type": "array",
+            "title": "Items",
+            "description": "The largest by size"
+          },
+          "rest": {
+            "anyOf": [
+              {
+                "additionalProperties": {
+                  "type": "number"
+                },
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Rest",
+            "description": "{count, amount} of the items not listed"
+          },
+          "sets": {
+            "items": {
+              "$ref": "#/components/schemas/OcpOriginBook"
+            },
+            "type": "array",
+            "title": "Sets"
+          }
+        },
+        "type": "object",
+        "required": [
+          "entity",
+          "book_id",
+          "books",
+          "ccy",
+          "source",
+          "amount",
+          "sum",
+          "matches",
+          "items"
+        ],
+        "title": "OcpOrigin",
+        "description": "Where a published figure derived from positions comes from (TDM#713, ``api.ocp_origin``): the OCP lines of its\nbooks in its currency, read for the run at request time; ``sum`` of all items is the figure's ``amount``."
+      },
+      "OcpOriginBook": {
+        "properties": {
+          "book_id": {
+            "type": "string",
+            "title": "Book Id"
+          },
+          "set": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/OcpOriginSet"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The book's positions set the run took (null: the run has none)"
+          }
+        },
+        "type": "object",
+        "required": [
+          "book_id",
+          "set"
+        ],
+        "title": "OcpOriginBook"
+      },
+      "OcpOriginItem": {
+        "properties": {
+          "kind": {
+            "type": "string",
+            "enum": [
+              "position",
+              "cash",
+              "liability"
+            ],
+            "title": "Kind"
+          },
+          "key": {
+            "type": "string",
+            "title": "Key"
+          },
+          "position_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Position Id"
+          },
+          "book_id": {
+            "type": "string",
+            "title": "Book Id"
+          },
+          "component": {
+            "type": "string",
+            "title": "Component"
+          },
+          "basis": {
+            "type": "string",
+            "title": "Basis"
+          },
+          "amount": {
+            "type": "number",
+            "title": "Amount",
+            "description": "Signed, units of the currency"
+          },
+          "pv": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Pv"
+          },
+          "note": {
+            "type": "string",
+            "title": "Note",
+            "default": ""
+          },
+          "name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Name",
+            "description": "position, liability: the run's name of the instrument"
+          },
+          "instr_type": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Instr Type"
+          },
+          "asset_class": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Asset Class"
+          },
+          "maturity": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Maturity"
+          },
+          "secid": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Secid"
+          },
+          "set": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/OcpOriginSet"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "position: the set of the book the run took the position from"
+          },
+          "restored": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Restored",
+            "description": "cash: the reading of the balances gives the stored amount back"
+          },
+          "accounts": {
+            "items": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "type": "array",
+            "title": "Accounts",
+            "description": "cash, restored: its accounts"
+          },
+          "sets": {
+            "items": {
+              "$ref": "#/components/schemas/OcpOriginSet"
+            },
+            "type": "array",
+            "title": "Sets",
+            "description": "cash, restored: the sets of its accounts"
+          }
+        },
+        "type": "object",
+        "required": [
+          "kind",
+          "key",
+          "book_id",
+          "component",
+          "basis",
+          "amount"
+        ],
+        "title": "OcpOriginItem",
+        "description": "One OCP line the figure sums: a position, a cash balance of a book and currency or a funding liability."
+      },
+      "OcpOriginSet": {
+        "properties": {
+          "set_id": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Set Id"
+          },
+          "valid_date": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Valid Date",
+            "description": "The set's valid date"
+          },
+          "carried": {
+            "type": "boolean",
+            "title": "Carried",
+            "description": "True: the set is older than the run's date, carried forward"
+          },
+          "age_days": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Age Days",
+            "description": "Calendar days from the set's valid date to the run's date"
+          },
+          "source": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source"
+          },
+          "file_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "File Name",
+            "description": "The file the set was read from, as the store has it"
+          },
+          "report_date": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Report Date"
+          }
+        },
+        "type": "object",
+        "required": [
+          "carried"
+        ],
+        "title": "OcpOriginSet",
+        "description": "The set a derived item was read from (TDM#713): a book's positions set or a cash balances set."
+      },
       "OcpPublished": {
         "properties": {
           "basis": {
@@ -9688,6 +10064,14 @@
             "type": "object",
             "title": "Books",
             "description": "TDM#556: name, desk, book_type and entity of the published OCP's books without positions in the run (a book only the OCP report knows); the run's reference books have the others"
+          },
+          "origins": {
+            "items": {
+              "$ref": "#/components/schemas/OcpOrigin"
+            },
+            "type": "array",
+            "title": "Origins",
+            "description": "TDM#713: per published line derived from positions (``derived``, ``derived_stale_report``) its items down to the first source: each position, cash balance and funding liability with the valid date and file of the set it was read from and whether the set is carried forward; read for the run at request time, so a run computed before it has them too; empty for a block without such a line"
           },
           "published_rows": {
             "items": {
