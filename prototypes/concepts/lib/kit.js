@@ -3288,6 +3288,7 @@
       K.curveProxyNote(p) + '<div class="prov"></div>' +
       '<div class="k-sec">Параметры</div>' + K.fieldsHtml(fields) +
       (p.legs && p.legs.length ? '<div class="k-sec">Ноги сделки <span class="sp"></span><span class="mut3" style="text-transform:none;letter-spacing:0">' + p.legs.length + '</span></div>' + K.legsHtml(p) : '') +
+      K.dayTradesBlock(p) +  // «Сделки за день» (TDM#726): куплено, продано, средние цены, нетто; нет сделок — блока нет
       '<div class="k-sec">PnL <span class="sp"></span><span class="mut3" style="text-transform:none;letter-spacing:0">тыс ₽</span></div>' +
       K.pnlWhyNote(p) + K.pnlAssumeNote(p) + '<div class="k-fields">' + [['Итого день', pn.total], ['Кэрри', pn.carry, K.tips.carry], ['Фондирование', pn.funding, K.tips.funding], ['Ставки', pn.rates], ['Спред', pn.spread], ['FX', pn.fx, K.tips.fx], ['Сделки', pn.trading], ['Прочее', pn.other], ['MTD', p.pnlMtd], ['YTD', p.pnlYtd]].map(([l, v, tip]) => '<div><div class="l">' + K.hint(l, tip) + '</div><div class="v ' + f.cls(v) + '">' + (v == null ? '<span class="mut3">—</span>' : Math.abs(v) >= 1e7 ? f.mns(v, 1) + ' <small>mm ₽</small>' : f.ks(v) + ' <small>тыс ₽</small>') + '</div></div>').join('') + '</div>' + K.fundingLine(p) +
       '<div class="k-sec">История <span class="sp"></span><span class="hunit" style="margin-right:6px"></span><span class="hseg"></span></div><div class="hchart" style="height:230px"></div><div class="hnote mut3" style="font-size:11.5px;line-height:1.45;margin:4px 0 0"></div>' +
@@ -4008,9 +4009,37 @@
   // пометка «сд N» у позиции со сделками дня: щелчок — сделки этой позиции на C20 (TDM#585). Прогон может положить
   // сделку в другую строку той же бумаги книги, чем её номер позиции: C20 отбирает по позиции, куда сделку положил
   // прогон (run_position_id сервера), поэтому ссылка несёт и прогон этой страницы
+  K.tradesHref = id => K.c20Href({ date: M.asOf }, '&pos=' + encodeURIComponent(id) + (K.source === 'real' && M.run && M.run.id != null ? '&run_id=' + encodeURIComponent(M.run.id) : ''));
   K.tradesTag = r => {
-    const n = r.tradeToday && r.tradeToday.n, run = K.source === 'real' && M.run && M.run.id != null ? '&run_id=' + encodeURIComponent(M.run.id) : '';
-    return '<a class="k-tag sd-n" href="' + K.c20Href({ date: M.asOf }, '&pos=' + encodeURIComponent(r.id) + run) + '" title="сделки сегодня' + (n ? ': ' + n : '') + ' — открыть на C20" onclick="event.stopPropagation()">сд' + (n ? ' ' + n : '') + '</a>';
+    const n = r.tradeToday && r.tradeToday.n;
+    return '<a class="k-tag sd-n" href="' + K.tradesHref(r.id) + '" title="сделки сегодня' + (n ? ': ' + n : '') + ' — открыть на C20" onclick="event.stopPropagation()">сд' + (n ? ' ' + n : '') + '</a>';
+  };
+  // блок «Сделки за день» в карточке позиции (TDM#726): сколько куплено и продано — количество, номинал, средняя цена
+  // (% номинала, взвешенная по количеству) и число сделок, нетто и ссылка на сделки этой позиции на C20. Данные —
+  // сделки, которые прогон положил в позицию (p.tradeToday.buy / .sell / .net, сервер: api/concepts.py trade_of),
+  // нового запроса нет. Нет разбивки по сторонам (прогон до неё, строка по отчёту, позиция не облигация) — блока нет.
+  // Цену нетто не считаем: она зависит от того, как продажи зачитываются против покупок
+  K.dayTradesBlock = p => {
+    const t = p && p.tradeToday;
+    if (!t || (!t.buy && !t.sell)) return '';
+    const ccy = esc(p.ccy || ''), none = '<span class="mut3">—</span>';
+    // номинал — второй строкой под количеством: карточка справа узкая, пять столбцов в неё не входят
+    const qty = (v, fc, b) => (b ? '<b>' + f.n(v, 0) + '</b>' : f.n(v, 0)) + ' <span class="mut3">шт.</span><div class="mut3" style="font-size:11px">' + (fc == null ? '—' : f.money(fc) + ' ' + ccy) + '</div>';
+    const side = (label, x) => '<tr><td>' + label + '</td>' + (x ? '<td class="n">' + (x.counted ? qty(x.bonds, x.face) : none) + '</td><td class="n">' +
+      (x.avg == null ? none : f.n(x.avg, 4) + ' <span class="mut3">%</span>') + '</td><td class="n">' + f.n(x.n, 0) + '</td></tr>'
+      : '<td class="n mut3" colspan="3">нет</td></tr>');
+    const nb0 = t.net ? t.net.bonds : (t.buy ? t.buy.bonds : 0) - (t.sell ? t.sell.bonds : 0), nb = Math.abs(nb0) < 1e-6 ? 0 : nb0, nf = t.net ? t.net.face : null;
+    const total = (t.buy ? t.buy.n : 0) + (t.sell ? t.sell.n : 0);
+    const known = [t.buy, t.sell].some(x => x && x.counted);  // ни у одной сделки нет количества — нетто неизвестно, а не ноль
+    const net = '<tr class="grp"><td>' + (known && nb > 0 ? 'Нетто: куплено' : known && nb < 0 ? 'Нетто: продано' : 'Нетто') + '</td><td class="n">' + (known ? qty(Math.abs(nb), nf == null ? null : Math.abs(nf), true) : none) + '</td>' +
+      '<td class="n" title="Цена нетто не считается: она зависит от того, как продажи зачитываются против покупок">' + none + '</td><td class="n">' + f.n(total, 0) + '</td></tr>';
+    // сделка без количества или без цены в сумму или среднюю цену не входит: об этом — строкой под таблицей
+    const noQty = [t.buy, t.sell].reduce((s, x) => s + (x ? x.n - x.counted : 0), 0), noPx = [t.buy, t.sell].reduce((s, x) => s + (x ? x.counted - x.priced : 0), 0);
+    const note = (noQty ? 'Сделок без количества: ' + noQty + ' — в суммах их нет. ' : '') + (noPx ? 'Сделок без цены: ' + noPx + ' — в средней цене их нет.' : '');
+    return '<div class="k-sec dtb-sec">Сделки за день <span class="sp"></span><a href="' + K.tradesHref(p.id) + '" title="Экран «Сделки дня» (C20), отобраны сделки этой позиции" style="text-transform:none;letter-spacing:0">сделки позиции на экране «Сделки дня» →</a></div>' +
+      '<div class="k-tbl-wrap k-fit dtb"><table class="k-tbl k-compact"><thead><tr><th></th><th class="n" title="Количество бумаг и их номинал">Количество</th>' +
+      '<th class="n" title="Средняя цена, % номинала, взвешена по количеству">Цена, % ном.</th><th class="n">Сделок</th></tr></thead><tbody>' +
+      side('Куплено', t.buy) + side('Продано', t.sell) + net + '</tbody></table></div>' + (note ? '<div class="k-note mut3" style="margin:4px 0 0">' + note + '</div>' : '');
   };
   // забыть сводки (C14 перечитывает дату по новым событиям ленты: сделки могли прийти)
   K.dayTradesForget = () => DT.clear();

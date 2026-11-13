@@ -407,7 +407,7 @@ body { display: flex; flex-direction: column; height: 100vh; overflow: hidden; }
       ['Фондирование / день', K.fundingDayHtml(p) + ' <small>тыс ₽</small>', false, K.tips.funding], ['Контрагент', esc(p.cpty || '—')],
     ]).concat(K.curveRiskFields(p));  // у облигаций тоже (R32)
     $('.cd-fields').innerHTML = K.curveProxyNote(p) + K.fieldsHtml(F) +
-      (p.legs && p.legs.length ? '<div class="k-sec">Ноги сделки</div>' + K.legsHtml(p) : '');
+      (p.legs && p.legs.length ? '<div class="k-sec">Ноги сделки</div>' + K.legsHtml(p) : '') + K.dayTradesBlock(p);  // «Сделки за день» (TDM#726)
     // PnL
     const pn = p.pnl, parts = K.PNL_FACTORS.map(([k, l]) => [l + (k === 'fx' && pn.fxPartial ? ' · неполный' : ''), pn[k], k === 'fx' && pn.fxPartial ? K.tips[k] + ' Здесь посчитана одна из двух частей (FX бумаги или её валютного фондирования).' : K.tips[k]]);
     const mx = Math.max(1, ...parts.map(x => Math.abs(x[1] || 0)));

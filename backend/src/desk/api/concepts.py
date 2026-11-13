@@ -190,17 +190,41 @@ def _trades(con, run_id: int) -> tuple[dict[str, dict[str, Any]], bool]:
     return out, known
 
 
+def _side_of(rows: list[dict[str, Any]], face: float | None) -> dict[str, Any] | None:
+    """One side of a position's recorded trades (``trade_of``): ``n`` trades, ``bonds`` their quantity (the trades that
+    have one, ``counted``), ``face`` the same in the position's face units (``face`` of one bond today; null when not
+    known) and ``avg`` the average price, % of the face, weighted by the quantity (the trades with a quantity and a price,
+    ``priced``; null when there are none). None when the side has no trade."""
+    if not rows:
+        return None
+    qs = [(float(x["quantity"]), x.get("price_pct")) for x in rows if isinstance(x.get("quantity"), int | float)]
+    ps = [(q, float(p)) for q, p in qs if isinstance(p, int | float)]
+    bonds, weight = math.fsum(q for q, _ in qs), math.fsum(q for q, _ in ps)
+    return {"n": len(rows), "counted": len(qs), "priced": len(ps), "bonds": bonds,
+            "face": bonds * face if face is not None else None,
+            "avg": math.fsum(q * p for q, p in ps) / weight if weight else None}
+
+
 def trade_of(t: dict[str, Any], pos: list) -> dict[str, Any]:
     """A position's ``trade`` for the pages from its recorded trades: ``n`` trades, ``qty`` the
     face traded (signed, in the position's face units; null when the position was sold to zero: the face of a bond is
-    then not known), ``new`` opened today."""
+    then not known), ``new`` opened today. The card's block «Сделки за день» (TDM#726) reads ``buy`` and ``sell``
+    (``_side_of``; absent when there is no trade of the side) and ``net`` (``bonds`` and ``face`` bought less sold, over the
+    trades that have a quantity): the same trades the C20 screen lists for the position, no other source. The average
+    price of a net position is not given: it depends on how a sale is counted against a purchase."""
     rows = [x for x in t["trades"] if isinstance(x, dict)]
     bonds = [(1.0 if x.get("side") == "buy" else -1.0) * x["quantity"] for x in rows
              if isinstance(x.get("quantity"), int | float)]
     n1 = t["quantity"]
     face = (pos[0] or 0.0) / n1 if n1 else None
+    one = pos[0] / n1 if n1 and pos[0] else None   # the face of one bond today, for the sides' ``face``
+    sides = {"buy": _side_of([x for x in rows if x.get("side") == "buy"], one),
+             "sell": _side_of([x for x in rows if x.get("side") != "buy"], one)}   # as qty: not a purchase is a sale
+    net = sides["buy"]["bonds"] if sides["buy"] else 0.0
+    net -= sides["sell"]["bonds"] if sides["sell"] else 0.0
     return {"qty": math.fsum(bonds) * face if face is not None and len(bonds) == len(rows) else None, "price": pos[6],
-            "n": len(rows), **({"new": True} if t["start"] == 0 else {})}
+            "n": len(rows), **({"new": True} if t["start"] == 0 else {}),
+            **{k: v for k, v in sides.items() if v}, "net": {"bonds": net, "face": net * one if one is not None else None}}
 
 
 def extras(con, run: dict[str, Any], writer: Writer = None) -> dict[str, Any]:
