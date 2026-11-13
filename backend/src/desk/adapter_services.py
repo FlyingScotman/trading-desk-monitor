@@ -1523,7 +1523,7 @@ class AdapterServices:
             raise ServiceError("calculation_busy", "error")
         try:
             with self._lock:
-                if self._running:
+                if self._running and not locked:   # (locked: ``_running`` is the worker's, whatever it shows is not this)
                     self._running["phase"] = "ingesting"
             if fingerprint(str(hp.root), hp.handle.config_dir) != hp.handle.fingerprint:
                 # the owner's operation in the wait changed the config (a connect, a save): expected, run again

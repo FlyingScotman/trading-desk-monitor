@@ -13,6 +13,7 @@ from datetime import date, timedelta
 
 import pytest
 from psycopg.types.json import Jsonb
+from test_adapter_services import _release, _until, requests, submit, wait_job
 from test_r23_backfill import cache, load, settings  # noqa: F401 - the synthetic market fixture
 from test_trades_history import (  # noqa: F401 - the fixture of the worker with the synthetic adapter
     D12,
@@ -155,7 +156,7 @@ def test_between_leaves_what_the_worker_shows_alone(env, monkeypatch):
     lock = hold_the_cycle_lock(env)
     try:
         env.s._history_step()
-        feed = {"kind": "feed", "feed": "tradeshist", "since": "x", "phase": "ingesting"}
+        feed = {"kind": "feed", "feed": "tradeshist", "since": "x", "phase": "fetching"}
         owner = {"kind": "op", "op": "action", "since": "y", "phase": "running"}
         env.s._running = feed
         seen = []
@@ -169,6 +170,8 @@ def test_between_leaves_what_the_worker_shows_alone(env, monkeypatch):
         monkeypatch.setattr(env.s, "_ingest", ingest)
         assert env.s.take_in_history() == 1
         assert seen == [feed] and env.s._running is owner      # not shown over the feed, not put back over the owner's
+        assert feed["phase"] == "fetching"                      # and the feed's phase is not turned into «ingesting»
+                                                                # (it would refuse «Остановить загрузку»)
     finally:
         env.s._running = None
         lock.release()
@@ -264,6 +267,56 @@ def test_a_feed_waiting_for_the_cycle_lock_gives_the_helper_lock_up_and_takes_it
     got["lock"].release()
     assert helper_proc.HELPER_LOCK.locked()                   # the feed's end releases it, as before
     helper_proc.HELPER_LOCK.release()
+
+
+def test_a_flagged_owner_action_runs_beside_a_waiting_feed_while_the_autopilot_takes_history_files_in(env):
+    """TDM#731 and TDM#732 together: today's feed waits for the cycle lock (no helper lock), the owner's read-only action
+    runs beside it in its own helper, and the autopilot's thread takes a history file in meanwhile. Nothing waits for
+    anything else, ``_running``, ``cancel("feed")``, ``run_feed``'s «feed_busy» and ``holder()`` stay those of the feed,
+    and the two stops are separate."""
+    s, st = env.s, env.st
+    (svcs.state_dir(st) / "concurrent").write_text("1", encoding="utf-8")
+    submit(s, "describe")                                   # the panel with the actions the adapter flags
+    s.history_set(None, D14, None)
+    lock = hold_the_cycle_lock(env)                         # the autopilot's cycle
+    try:
+        env.step()                                          # the date asked, its files wait for the lock
+        assert [p["date"] for p in env.doc["pending"]] == [D14]
+        s.run_feed("tradeshist")                            # today's feed: fetched, now it waits for the lock
+        _until(lambda: any(r["op"] == "feed" and r["date"] is None for r in requests(st))
+               and not helper_proc.HELPER_LOCK.locked() and (s._running or {}).get("kind") == "feed",
+               "the feed does not wait for the cycle lock")
+        time.sleep(0.5)                                     # (well into the wait)
+        assert not helper_proc.HELPER_LOCK.locked()         # the wait holds no helper lock
+        feed = s._running
+        job = s.submit("action", {"action": ["peek_slow"]})  # a long read-only action: beside the waiting feed
+        assert (job["state"], job["code"]) == ("running", "running") and "waiting_for" not in job
+        _until(lambda: any(r["action"] == "peek_slow" for r in requests(st)), "the action did not start")
+        got: list[int] = []
+        t = threading.Thread(target=lambda: got.append(s.take_in_history()), name="autopilot")
+        t.start()
+        t.join(30)
+        assert not t.is_alive() and got == [1]              # the file is taken in, with the action still running
+        assert env.doc["pending"] == [] and env.marks() == {D14: "fetched"}
+        assert s.overview()["job"]["state"] == "running"
+        assert s._running is feed and s.overview()["running"]["kind"] == "feed"       # the feed's, untouched
+        held = s.holder()
+        assert held and held["kind"] == "feed" and held["feed"] == "tradeshist"
+        with pytest.raises(svcs.ServiceError) as e:
+            s.run_feed("tradeshist")
+        assert e.value.code == "feed_busy"
+        assert not helper_proc.HELPER_LOCK.locked()
+        s.cancel("feed")                                    # «Остановить загрузку» ends the wait, not the action
+        _until(lambda: svcs.read_state(st)["runs"]["tradeshist"].get("state") == "cancelled", "the wait was not stopped")
+        _until(lambda: s._running is None, "the feed run did not end")
+        assert s.overview()["job"]["state"] == "running"
+        _release(st)
+        done = wait_job(s)
+        assert (done["id"], done["code"]) == (job["id"], "peeked_slow")
+    finally:
+        _release(st)
+        lock.release()
+    assert not helper_proc.HELPER_LOCK.locked()
 
 
 def test_a_feed_that_gave_the_wait_up_still_holds_the_helper_lock(env, monkeypatch):
