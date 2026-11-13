@@ -38,13 +38,14 @@ const BF = {enabled:true, from:'2026-01-05', to:'2026-10-15', dates:10, done:8, 
   next:[], problem_dates:[], hub_problem_dates:[], stalled:null, oldest_run:'2026-01-05', first_positions:'2026-01-05', inbox_scanned_from:null};
 
 async function setup(browser, {width = 1440, available = true, code = 'available', hash = '#adapter/services', http = 200, noLogin = false,
-  history = HIST, bf = null, waitsHistory = false, waitFeed = false, cancelRefused = false, connectOk = false, concurrent = false} = {}) {
+  history = HIST, bf = null, waitsHistory = false, waitFeed = false, cancelRefused = false, connectOk = false, concurrent = false, tradeCheck = false} = {}) {
   const ctx = await browser.newContext({viewport:{width, height:1000}}), pg = await ctx.newPage(), errors = [], posts = [], dialogs = [], summaries = [];
   const hist = history ? JSON.parse(JSON.stringify(history)) : null;
   let job = {state:'idle', code:'idle'}, polls = 0, feedRun = -1;
   const feeds = JSON.parse(JSON.stringify(FEEDS)), panel = JSON.parse(JSON.stringify(PANEL));
   // #731: the adapter flags a read-only action; a feed is fetching meanwhile (the worker is busy)
   const running = concurrent ? {kind:'feed', feed:'terms', since:new Date(Date.now() - 20000).toISOString(), phase:'fetching'} : null;
+  if (tradeCheck) panel.sections[0].actions.push({id:'trade_check', label:'Проверить сделку', confirm:'', long:true});  // the adapter's «Проверить сделку»
   if (concurrent) { panel.sections[0].actions.push({id:'peek', label:'Посмотреть', confirm:'', long:false, concurrent:true}); feeds[0].running = true; }
   if (waitsHistory) feeds[0].waits_history = true;
   if (noLogin) { feeds[1].last = {last_started:'2026-10-16T08:30:00+03:00', state:'complete', code:'fetched', needs_login:false, failures:0}; }
@@ -95,6 +96,8 @@ async function setup(browser, {width = 1440, available = true, code = 'available
         else if (waitFeed && a === 'check') { polls = 0; job = {...base, id:'jw', state:'queued', code:'waiting_feed',
           waiting_for:{kind:'feed', feed:'terms', title:'Сделки дня', since:new Date(Date.now() - 190000).toISOString(), phase:'fetching'},
           next:{...base, id:'jw', state:'complete', code:'checked', lines:['Все сервисы отвечают']}}; }
+        else if (a === 'trade_check') job = {...base, id:'jt', state:p.get('arg') === 'partial' ? 'partial' : 'complete', code:'trade_checked',
+          lines:['Итог: получена (кэш фона от 2026-10-22), в условия войдёт.', 'Дата сделок: 2026-10-22']};
         else if (a === 'pick') job = {...base, id:'j3', state:'complete', code:'found', lines:['Найдено 2'], choose_action:'choose',
           choices:[{id:'x1', label:'Первый'}, {id:'x2', label:EVIL}]};
         else if (a === 'choose') job = {...base, id:'j4', state:'complete', code:'chosen', lines:['Выбрано: ' + p.get('arg')]};
@@ -319,6 +322,21 @@ test('services block in Settings', {skip: pw ? false : 'нет Playwright'}, asy
         await conn.getByText('Данные уже загружаются в базу: отмена на этой фазе недоступна.', {exact:true}).waitFor();
         assert.deepStrictEqual(o.errors, []);
       } finally { await o.ctx.close(); }
+    });
+
+    await t.test('«Проверить сделку»: a heading for its code, the verdict of the adapter is the first line below it', async () => {
+      const {ctx, pg, errors} = await setup(browser, {tradeCheck:true});
+      try {
+        await pg.waitForFunction(() => !document.getElementById('svc-save').disabled);
+        await pg.locator('button[data-action=trade_check]').click();
+        const conn = pg.locator('.svc-sres[data-for=conn]');
+        await conn.getByText('Проверка сделки завершена.', {exact:true}).waitFor({timeout:10000});
+        assert.strictEqual(await conn.locator('.svc-st').textContent(), 'Проверка сделки завершена.');
+        const lines = await conn.locator('li, p').allInnerTexts();
+        assert.ok(lines.some(x => x === 'Итог: получена (кэш фона от 2026-10-22), в условия войдёт.'), 'the verdict is a line, not the heading: ' + lines.join(' | '));
+        assert.strictEqual(await conn.locator('.svc-st').getAttribute('title'), 'код: trade_checked');
+        assert.deepStrictEqual(errors, []);
+      } finally { await ctx.close(); }
     });
 
     await t.test('an action the adapter flagged as concurrent runs beside a fetching feed: no waiting, its own result (#731)', async () => {

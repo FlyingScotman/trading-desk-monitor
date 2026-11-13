@@ -45,7 +45,7 @@
     redirect_taken: 'Адрес возврата после входа подставлен.', redirect_missing: 'Не задан адрес возврата после входа.',
     redirect_not_found: 'Адрес возврата после входа не найден.',
     apikey_saved: 'Ключ API принят.', apikey_missing: 'Нет ключа API.',
-    product_checked: 'Проверка продукта завершена.', reports_listed: 'Список отчётов получен.',
+    product_checked: 'Проверка продукта завершена.', trade_checked: 'Проверка сделки завершена.', reports_listed: 'Список отчётов получен.',
     names_listed: 'Список названий получен.', listed: 'Список получен.',
     history_probed: 'Проверка прошлых дат завершена.', history_applied: 'Глубина истории применена.',
     portfolios_chosen: 'Портфели книг подобраны.', portfolios_not_matched: 'Портфели для книг не подобрались.',
