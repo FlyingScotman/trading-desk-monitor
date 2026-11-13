@@ -581,7 +581,18 @@ def day(con: psycopg.Connection, settings: Settings, on: date | None = None) -> 
             "inputs": inputs, "market": market, "runs": runs, "files": files, "copies": copies,
             "positions": {k: rec[k] for k in ("run_id", "since", "books", "totals", "losses")},
             "events": feed["events"], "events_more": feed["has_more"], "last_event_id": feed["last_id"],
-            "feeds": _feeds(settings), "generated_at": datetime.now(UTC).isoformat()}
+            "feeds": _feeds(settings), "adapter_hang": _hang(settings), "generated_at": datetime.now(UTC).isoformat()}
+
+
+def _hang(settings: Settings) -> dict[str, Any]:
+    """What the scan remembers of an adapter that does not answer (``scan.hang_report``): ``lines`` in Russian, empty
+    when nothing is paused. Never fails the day."""
+    from .inbox import scan
+
+    try:
+        return scan.hang_report(settings)
+    except Exception:  # noqa: BLE001 - a status block never fails the day
+        return {"reference": None, "sources": [], "lines": []}
 
 
 def _feeds(settings: Settings) -> list[dict[str, Any]]:

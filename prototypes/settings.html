@@ -507,6 +507,8 @@ details.at-last .at-open::before{content:"показать"} details.at-last[ope
 
       <!-- Обзор: какой адаптер, его состояние (status); обновление адаптера — в разделе «Обновления» (#up), здесь ссылка и строка состояния -->
       <div class="sub" data-sub="overview">
+      <!-- адаптер не отвечает (TDM#521): справочник на паузе, чтение источника остановлено — строки приходят с сервера (GET /api/v1/adapter, hang.lines) -->
+      <div class="note warn" id="ad-hang" hidden style="margin-bottom:12px"></div>
       <div class="card" id="ad-card">
         <div class="hd"><h2>Адаптер</h2><span class="mut3">какой адаптер читает отчёты</span><span class="sp"></span><a class="lnk" href="#adapter/expert">заменить или настроить →</a> <a class="lnk" href="#ad-upd-card">обновление адаптера →</a></div>
         <div class="bd"><div id="ad-res"></div><p class="hint" id="ad-upd-line"></p><p class="hint" id="svc-line"></p></div>
@@ -1596,7 +1598,10 @@ function renderSummary(){
   it(d.hub_token_set ? 'ok' : 'bad', '#token', 'Токен', d.hub_token_set ? 'задан' : 'не задан');
   const a = S.adapter;
   if (S.adapterError) it('bad', '#adapter/overview', 'Адаптер', 'ошибка', S.adapterError);
-  else if (a) it(a.loaded ? 'ok' : 'bad', '#adapter/overview', 'Адаптер', a.loaded ? (a.reference ? 'эталонный (CSV)' : 'загружен') : 'не загружен', a.error || [a.name, a.version].filter(Boolean).join(' '));
+  else if (a) {
+    const hl = (a.hang && a.hang.lines) || [];  // справочник на паузе, источник остановлен (TDM#521)
+    it(a.loaded ? (hl.length ? 'warn' : 'ok') : 'bad', '#adapter/overview', 'Адаптер', a.loaded ? (hl.length ? 'не отвечает' : a.reference ? 'эталонный (CSV)' : 'загружен') : 'не загружен', a.error || (hl.length ? hl.join(' ') : [a.name, a.version].filter(Boolean).join(' ')));
+  }
   const nd = env.includes('inbox_dirs') ? (eff.inbox_dirs || []).length : S.dirs.filter(x => x.path.trim()).length, sg = dirSuggestions();
   const fs = window.DeskInboxFolders && DeskInboxFolders.summary(S.dirs.map(x => x.path));  // что найдено в папках (#445)
   const fwarn = fs && (fs.missing ? plural(fs.missing, 'папку', 'папки', 'папок') + ' сервер не видит' : fs.scanned && !fs.read ? 'ничего не прочитано' : '');
@@ -1806,14 +1811,20 @@ async function loadAdapter(reloadForms){
   let a;
   try { a = await api('GET', '/api/v1/adapter'); }
   catch(e) {
+    $('ad-hang').hidden = true;
     st.className = 'badge st bad'; st.textContent = 'ошибка'; navDot('adapter', 'bad', e.message); subDot('adapter', 'overview', 'bad', e.message); S.adapterError = e.message; renderSummary();
     box.textContent = ''; box.append(h('div', {class:'note err'}, e.message)); renderConfigFiles(null); mountTabs(null); return;
   }
   S.adapter = a; S.adapterError = null;
   st.className = 'badge st ' + (a.loaded ? 'ok' : 'bad');
   st.textContent = a.loaded ? 'загружен' : 'ошибка загрузки';
-  navDot('adapter', a.loaded ? 'ok' : 'bad', a.loaded ? 'адаптер загружен' : a.error);
-  subDot('adapter', 'overview', a.loaded ? (a.error || (a.warnings || []).length ? 'warn' : '') : 'bad', a.loaded ? '' : a.error);
+  const hangLines = (a.hang && a.hang.lines) || [];  // справочник на паузе, источник остановлен (TDM#521)
+  navDot('adapter', a.loaded ? (hangLines.length ? 'warn' : 'ok') : 'bad', a.loaded ? (hangLines.length ? hangLines.join(' ') : 'адаптер загружен') : a.error);
+  subDot('adapter', 'overview', a.loaded ? (a.error || (a.warnings || []).length || hangLines.length ? 'warn' : '') : 'bad', a.loaded ? hangLines.join(' ') : a.error);
+  const hangBox = $('ad-hang');
+  hangBox.textContent = ''; hangBox.hidden = !hangLines.length;
+  hangLines.forEach(t => hangBox.append(h('p', {style:'margin:0 0 6px'}, t)));
+  if (hangLines.length) hangBox.append(h('p', {class:'hint', style:'margin:0'}, 'Сколько ждать ответа — поле «Чтение одного отчёта» (подраздел «Для опытных» → «Дополнительно»). После его изменения, обновления адаптера или правки его настроек монитор спрашивает адаптер сразу, не дожидаясь конца паузы.'));
   box.textContent = '';
   const kind = a.reference ? 'Эталонный адаптер (CSV)' : a.default ? 'Из комплекта программы' : 'Приватный адаптер';
   const srcs = (a.describe && Array.isArray(a.describe.sources)) ? a.describe.sources : [];

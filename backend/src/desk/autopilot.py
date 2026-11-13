@@ -26,7 +26,9 @@ every ``inbox_poll_seconds`` and on ``POST /api/v1/autopilot/run``):
    every cycle (#146); the step lists it in ``problem_dates`` with its error, attempts and next attempt (a date of
    ``desk cycle --date`` is asked anyway). Then the bundles of the cache not loaded yet go into the store's market history (``desk.marketdata.history``:
    the bond charts; one query when there is nothing new).
-2. **scan**: ``desk inbox scan`` (when inbox folders are set). Sync comes first: a ``start_of_day`` report needs a
+2. **scan**: ``desk inbox scan`` (when inbox folders are set). An adapter that does not answer does not eat the cycle
+   (TDM#521): ``reference()`` that timed out and a source whose reads timed out are paused for 1 h, then 6 h (``desk.inbox.hang``;
+   the stored books are used, the files wait in the queue), and the step's detail and the screens say so. Sync comes first: a ``start_of_day`` report needs a
    cached calendar covering its date and the day before, otherwise it waits (``waiting_calendar``); a report
    before the hub's oldest date (known once the sync read the hub's whole date list) that still has no calendar
    once the hub's oldest static snapshot is cached stops waiting: ``ignored_too_old``, ``before_hub_history`` (#27).

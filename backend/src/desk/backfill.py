@@ -453,7 +453,7 @@ def inbox(con: psycopg.Connection, settings: Settings, date_from: date, *, force
     res = scan.scan(con, settings, since=date_from, progress=progress)
     if res.busy:
         return "inbox: another scan is running; next time"
-    if res.ok:
+    if res.ok and not res.queued:  # files left in the queue (a source that did not answer): read again next time (TDM#521)
         st = state(settings)
         st["inbox"] = mark
         save_state(settings, st)

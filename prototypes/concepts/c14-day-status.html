@@ -131,6 +131,14 @@
       (s.default_run_id && server ? '<br><a href="c01-cockpit.html?run_id=' + s.default_run_id + '">открыть в кокпите ▸</a>' : '') + '</div></div>';
     wrap.appendChild(hd);
 
+    // адаптер не отвечает (TDM#521): справочник на паузе, чтение источника остановлено, файлы ждут в очереди (строки — с сервера)
+    const hang = (d.adapter_hang && d.adapter_hang.lines) || [];
+    if (hang.length) {
+      const hp = panel('Адаптер не отвечает', '<span class="k-note">что с этим делать — <a href="../settings.html#adapter/overview">Настройки → Адаптер и источники → Обзор</a></span>');
+      hp.querySelector('.bd').innerHTML = '<ul class="c14-list">' + hang.map(t => '<li class="warn">' + esc(t) + '</li>').join('') + '</ul>';
+      wrap.appendChild(hp);
+    }
+
     // что пришло: наборы данных и закрытие хаба
     const inp = panel('Что пришло', '<span class="k-note">наборы данных за дату · закрытие хаба в кэше</span>');
     const m = d.market || {};
