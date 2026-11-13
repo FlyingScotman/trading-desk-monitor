@@ -148,6 +148,56 @@ def test_between_does_nothing_without_files_or_while_the_helper_is_busy(env):
     assert env.doc["pending"] == [] and env.marks() == {D15: "fetched"} and not helper_proc.HELPER_LOCK.locked()
 
 
+def test_between_leaves_what_the_worker_shows_alone(env, monkeypatch):
+    """``_running`` is the worker's: a feed that waits for the cycle lock, the owner's operation run in that wait
+    (``_owner_first`` replaces it and puts the feed's back). The autopilot's thread neither writes it nor restores a copy."""
+    env.s.history_set(None, D15, None)
+    lock = hold_the_cycle_lock(env)
+    try:
+        env.s._history_step()
+        feed = {"kind": "feed", "feed": "tradeshist", "since": "x", "phase": "ingesting"}
+        owner = {"kind": "op", "op": "action", "since": "y", "phase": "running"}
+        env.s._running = feed
+        seen = []
+        real = env.s._ingest
+
+        def ingest(*a, **kw):
+            seen.append(env.s._running)
+            env.s._running = owner          # the worker thread changed it while the ingestion ran
+            return real(*a, **kw)
+
+        monkeypatch.setattr(env.s, "_ingest", ingest)
+        assert env.s.take_in_history() == 1
+        assert seen == [feed] and env.s._running is owner      # not shown over the feed, not put back over the owner's
+    finally:
+        env.s._running = None
+        lock.release()
+    assert env.doc["pending"] == [] and not helper_proc.HELPER_LOCK.locked()
+
+
+def test_a_file_the_autopilot_took_in_is_not_taken_in_again_by_the_worker(env, monkeypatch):
+    """The worker's step read the list, then waited for the helper lock; the autopilot took the file in meanwhile. The
+    worker reads the list again once the helper lock is its own."""
+    env.s.history_set(None, D15, None)
+    lock = hold_the_cycle_lock(env)
+    try:
+        env.s._history_step()
+        stale = env.doc
+        assert [p["date"] for p in stale["pending"]] == [D15]
+        assert env.s.take_in_history() == 1
+    finally:
+        lock.release()
+    calls = []
+    real = env.s._ingest
+    monkeypatch.setattr(env.s, "_ingest", lambda *a, **kw: calls.append(1) or real(*a, **kw))
+    f = env.s._history_feed(svcs.read_state(env.st))
+    assert env.s._history_drain(env.st, f, stale) is None and calls == []      # nothing left to take in: not again
+    assert not helper_proc.HELPER_LOCK.locked() and env.marks() == {D15: "fetched"}
+    with store.connect(env.url) as con:
+        assert con.execute("SELECT count(*) FROM dataset_set WHERE dataset = 'trades' AND valid_date = %s",
+                           (D15,)).fetchone()[0] == 1
+
+
 def test_between_runs_before_each_date_and_its_errors_do_not_stop_the_run(tmp_path, cache, store_url):
     load(store_url, tmp_path, "2026-10-12", 10)
     s = settings(tmp_path, cache, store_url)

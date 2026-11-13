@@ -1847,6 +1847,12 @@ class AdapterServices:
         if helper_proc.owner_waiting() or not helper_proc.HELPER_LOCK.acquire(timeout=0.25):
             return False   # as every operation; busy (or the owner's acquisition waits): the next step
         try:
+            # what is still listed now: the autopilot may have taken a file in between ``h`` and the helper lock
+            # (``take_in_history``); the lock is ours, so the list cannot change under us any more
+            listed = {x.get("dir") for x in trades_history.pending_of(trades_history.read(st))}
+            entries = [p for p in entries if p["dir"] in listed]
+            if not entries:
+                return None
             took, busy = self._take_in(st, f, hp, entries)
         finally:
             helper_proc.HELPER_LOCK.release()
@@ -1860,9 +1866,10 @@ class AdapterServices:
         for p in entries:
             day, started = p["date"], self._now()
             folder = state_dir(st) / "out" / p["dir"]
-            with self._lock:
-                self._running = {"kind": "history", "history_feed": f["id"], "date": day, "since": _iso(started),
-                                 "phase": "ingesting"}
+            if not locked:   # the autopilot's thread shows nothing: ``_running`` is the worker's (a feed that waits, a job)
+                with self._lock:
+                    self._running = {"kind": "history", "history_feed": f["id"], "date": day, "since": _iso(started),
+                                     "phase": "ingesting"}
             r = {"state": p.get("state"), "code": p.get("code"), "files": p["files"], "dates": [day],
                  "filtered": p.get("filtered") is True}
             books = [b for b in p.get("books") or [] if isinstance(b, str)]   # none known (an older pending): nothing emptied
@@ -1878,8 +1885,9 @@ class AdapterServices:
                 log.exception("adapter services: pending history files of %s not taken in", day)
                 return took, False
             finally:
-                with self._lock:
-                    self._running = None
+                if not locked:
+                    with self._lock:
+                        self._running = None
             self._history_finish(st, day, r, ing, read_state(st).get("fingerprint"), started, drained=p["dir"],
                                  adapter=self._adapter_id(hp), hold=self._retire_held(st, hp, f, r, day, books))
             took += 1
@@ -1888,8 +1896,9 @@ class AdapterServices:
     def take_in_history(self) -> int:
         """Called by the autopilot's backfill between two of its dates, in its thread, which holds the cycle lock: the
         files of past dates that wait for it are taken in now, under that lock (module doc). Nothing is waited for: the
-        helper lock busy (a feed run, an acquisition job, the owner's operation waiting), a cancel, no adapter: 0. What
-        the worker showed (``_running``) is put back. Returns the dates taken in; never raises."""
+        helper lock busy (a feed run, an acquisition job, the owner's operation waiting), a cancel, no adapter: 0.
+        ``_running`` is the worker's (a feed that waits for the lock, the owner's operation run in that wait): not
+        touched here. Returns the dates taken in; never raises."""
         try:
             st = self._load()
             if not trades_history.pending_of(trades_history.read(st)):
@@ -1900,8 +1909,6 @@ class AdapterServices:
                 return 0
         except Exception:  # noqa: BLE001 - the backfill goes on
             return 0
-        with self._lock:
-            saved = self._running
         try:
             entries = [p for p in trades_history.read(st)["pending"] if _RID.fullmatch(str(p.get("dir")))
                        and isinstance(p.get("files"), list) and isinstance(p.get("date"), str)
@@ -1911,8 +1918,6 @@ class AdapterServices:
             log.exception("adapter services: history files not taken in between the dates of the backfill")
             return 0
         finally:
-            with self._lock:
-                self._running = saved
             helper_proc.HELPER_LOCK.release()
 
     @staticmethod

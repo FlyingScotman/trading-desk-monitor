@@ -761,7 +761,7 @@ details.at-last .at-open::before{content:"показать"} details.at-last[ope
               <p class="hint">Выключено — только расчёт по закрытию.</p>
               <details class="more"><summary>Как это работает</summary><p>В рабочие дни с 10:00 МСК портфель дня пересчитывается на свежем внутридневном срезе (не чаще раза в 30 минут), после 19:45 — на предварительном закрытии; PnL — к закрытию предыдущего рабочего дня. Утром его заменяет расчёт на окончательном закрытии. Хранится только последний внутридневной расчёт дня.</p></details></div>
           </div>
-          <details class="adv" id="adv-cycle" data-fold><summary>Дополнительно <span class="mut3">— как часто и за сколько дней</span></summary>
+          <details class="adv" id="adv-cycle" data-fold><summary>Дополнительно <span class="mut3">— как часто, за сколько дней и пауза расчёта дня</span></summary>
           <div class="form">
             <label for="inbox_poll_seconds">Период опроса</label>
             <div><input class="inp mono num" id="inbox_poll_seconds" data-key="inbox_poll_seconds" inputmode="decimal" placeholder="60"> <span class="unit">секунд</span>
@@ -769,6 +769,10 @@ details.at-last .at-open::before{content:"показать"} details.at-last[ope
             <label for="autopilot_sync_last">Загружать последних дат</label>
             <div><input class="inp mono num" id="autopilot_sync_last" data-key="autopilot_sync_last" inputmode="numeric" placeholder="5"> <span class="unit">рабочих дат</span>
               <p class="hint">Пусто — 5.</p></div>
+            <label for="intraday_rerun_min_s">Пауза между пересчётами дня из-за новых сделок</label>
+            <div><input class="inp mono num" id="intraday_rerun_min_s" data-key="intraday_rerun_min_s" inputmode="numeric" placeholder="300"> <span class="unit">секунд · 0 — без паузы</span>
+              <p class="hint">Расчёт внутри дня пересчитывается из-за новых сделок или условий сделок не чаще, чем раз в это время после прошлого расчёта. Пусто — 300, 0 — без паузы.</p>
+              <details class="more"><summary>Подробнее</summary><p>Сделки дня приходят каждые несколько минут, а один пересчёт занимает время. Пауза считается от последнего расчёта внутри дня, кто бы его ни сделал, в том числе от расчёта, который монитор делает сразу после приёма сделок. Новый срез хаба, другие позиции и поздний отчёт пересчитываются сразу, без паузы; первый расчёт дня тоже. Новое число подхватится со следующего цикла, перезапускать монитор не нужно.</p></details></div>
             <label for="inbox_lookback_days">Отчёты не старше</label>
             <div><input class="inp mono num" id="inbox_lookback_days" data-key="inbox_lookback_days" inputmode="numeric" placeholder="35"> <span class="unit">дней</span>
               <p class="hint">По дате отчёта. Пусто — 35, 0 — без ограничения.</p>
@@ -1351,12 +1355,12 @@ show(location.hash);
 /* ---------- settings.json ---------- */
 const S = {data:null, dirs:[], dirty:false, adapter:null};
 // поля settings.json со страницы ([data-key]); вид значения — для проверки до отправки (сервер проверяет ещё раз)
-const KIND = {inbox_poll_seconds:'pos', autopilot_sync_last:'posint', inbox_lookback_days:'int0', backfill_budget_s:'pos', backfill_workers:'int0',
+const KIND = {inbox_poll_seconds:'pos', autopilot_sync_last:'posint', inbox_lookback_days:'int0', intraday_rerun_min_s:'int0', backfill_budget_s:'pos', backfill_workers:'int0',
   adapter_check_timeout_s:'pos', backfill_from:'date', history_days:'int0', history_bonds_from:'date', history_rates_from:'date',
   hub_timeout_s:'pos', adapter_match_timeout_s:'pos', adapter_read_timeout_s:'pos', inbox_max_file_mb:'pos',
   adapter_kit_timeout_s:'pos', adapter_status_timeout_s:'pos', adapter_action_timeout_s:'pos', session_idle_minutes:'posint',
   session_max_hours:'posint', login_max_failures:'posint', login_lockout_minutes:'posint'};
-const ZERO = {backfill_workers:'программа выберет сама'};  // что значит 0 в поле, где это не «без ограничения»
+const ZERO = {backfill_workers:'программа выберет сама', intraday_rerun_min_s:'без паузы'};  // что значит 0 в поле, где это не «без ограничения»
 const MAXV = {backfill_workers:8};  // верхняя граница поля (сервер проверяет её же)
 const LEGACY_FLAGS = ['autopilot', 'intraday', 'backfill'];  // пишутся всегда (true / false), как раньше
 function keyLabel(k){ const l = document.querySelector('label[for="' + k + '"]'); return l ? (l.firstChild ? l.firstChild.textContent : l.textContent).trim() : k; }
@@ -1460,7 +1464,7 @@ const EFF = [
   ['private_adapter','Адаптер'], ['private_adapter_default','Адаптер из комплекта'], ['private_adapter_source','Откуда адаптер'], ['adapter_update_repo','Репозиторий выпусков адаптера'], ['github_token_source','Токен GitHub'], ['private_adapter_config','Папка настроек адаптера'], ['private_adapter_sha256','Закреплённый отпечаток адаптера'],
   ['acquisition_python','Python для получения данных'],
   ['inbox_dirs','Папки с отчётами'], ['inbox_archive','Архив принятых файлов'], ['inbox_poll_seconds','Период опроса, сек'], ['adapter_check_timeout_s','Проверка формы адаптером, сек'],
-  ['autopilot','Автообновление'], ['intraday','Расчёт внутри дня'], ['autopilot_sync_last','Загружать последних дат'],
+  ['autopilot','Автообновление'], ['intraday','Расчёт внутри дня'], ['intraday_rerun_min_s','Пауза между пересчётами дня из-за новых сделок, сек'], ['autopilot_sync_last','Загружать последних дат'],
   ['inbox_lookback_days','Брать отчёты не старше, дней'], ['history_days','История котировок, рабочих дней'],
   ['history_bonds_from','История облигаций с'], ['history_rates_from','История ставок и курсов с'],
   ['backfill','История прогонов'], ['backfill_from','История прогонов с даты'], ['backfill_budget_s','История прогонов: секунд за цикл'], ['backfill_workers','История прогонов: процессов пересчёта'], ['logs_dir','Журналы']];
