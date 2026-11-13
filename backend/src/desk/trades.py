@@ -69,6 +69,20 @@ def trade_dates(con: psycopg.Connection, on: date, n: int) -> list[date]:
         " ORDER BY valid_date DESC LIMIT %s", (on, n))]
 
 
+def strip_dates(con: psycopg.Connection, on: date, n: int) -> list[date]:
+    """The dates of the screen's strip, newest first: the latest ``n`` business dates with a stored ``trades`` set,
+    counted back from the newest one stored, not from the date chosen, so that choosing an old date keeps the strip (TDM#710:
+    it used to hold only the dates up to the chosen one). The chosen date stays in the strip when it has trades, also
+    when it is older than the ``n`` dates."""
+    row = con.execute("SELECT max(valid_date) FROM dataset_set WHERE dataset = 'trades'").fetchone()
+    newest = row[0] if row and row[0] else on
+    dates = trade_dates(con, max(newest, on), n)
+    if on not in dates and on in {d for (d,) in con.execute(
+            "SELECT DISTINCT valid_date FROM dataset_set WHERE dataset = 'trades' AND valid_date = %s", (on,))}:
+        dates = sorted({*dates, on}, reverse=True)
+    return dates
+
+
 def _moscow_today() -> date:
     return datetime.now(UTC).astimezone(store.MSK).date()
 
@@ -751,7 +765,7 @@ def view(con: psycopg.Connection, on: date | None = None, book_id: str | None = 
         c[r["status"]] += 1
         c["applied"] += r["intraday"] == "applied"
     strip = []
-    for d in trade_dates(con, on, days):  # a small screen's strip: the current trades per date
+    for d in strip_dates(con, on, days):  # a small screen's strip: the current trades per date
         day = store.dataset_rows(con, "trades", d)
         strip.append({"date": d.isoformat(), "trades": len(day.rows),
                       "cancelled": sum(1 for r in day.rows if r.get("status") == "cancelled")})
