@@ -33,7 +33,6 @@ the bond's whole PnL is on one of them and the others have none (``mixed_valuati
 from __future__ import annotations
 
 import math
-import re
 from dataclasses import replace
 from typing import Any
 
@@ -43,7 +42,7 @@ from ..store import PositionInputs
 from ..valuation import positions as pv1
 from ..valuation.bonds import BondValuation
 from ..valuation.fallback import METHOD as SIMPLE_METHOD
-from ..valuation.fallback import SimplePnl, fx_rate
+from ..valuation.fallback import STALE_NOTE_DATE, SimplePnl, fx_rate
 from .direct import REPORTED_METHOD, DirectPnl
 from .flash import NoPnl
 from .reasons import NO_PNL_TEXT, assumption
@@ -72,8 +71,6 @@ close, so it is the close's stand-in; at an intraday cut it is the average of th
 report, ``par`` the par proxy. A valuation of quality ``stale_price`` is ``stale`` whatever its basis: the price is
 an earlier day's (``mark_date``). A basis not listed (a new one) is None, not a guess."""
 
-STALE_DATE = re.compile(r"last price (\d{4}-\d{2}-\d{2})")
-"""The date of a stale price in the valuation's assumptions (``fallback``: «last price 2026-11-10, 3 days old (close)»)."""
 
 
 def mark_of(ref: Any) -> tuple[float | None, str | None, str | None]:
@@ -91,8 +88,8 @@ def mark_of(ref: Any) -> tuple[float | None, str | None, str | None]:
     if clean is None or not math.isfinite(clean):
         return None, None, None
     if getattr(ref, "quality", None) == "stale_price":
-        m = next((STALE_DATE.search(a) for a in getattr(ref, "assumptions", None) or () if isinstance(a, str)
-                  and STALE_DATE.search(a)), None)
+        m = next((STALE_NOTE_DATE.search(a) for a in getattr(ref, "assumptions", None) or () if isinstance(a, str)
+                  and STALE_NOTE_DATE.search(a)), None)
         return clean, "stale", m.group(1) if m else None
     basis = getattr(ref, "price_basis", None)
     return clean, MARK_ORIGINS.get(basis) if isinstance(basis, str) else None, None

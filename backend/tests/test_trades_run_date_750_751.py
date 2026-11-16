@@ -6,7 +6,7 @@ TDM#751: each trade's PnL names the valuation price it is measured against (``ma
 from __future__ import annotations
 
 import shutil
-from datetime import date
+from datetime import date, timedelta
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -80,6 +80,37 @@ def test_the_api_without_a_date_and_with_one(store_url, tmp_path):
     assert kept["date"] == "2026-10-20" and kept["summary"]["trades"] == 5 and kept["earlier"] is None
 
 
+def test_the_pointer_skips_a_day_closed_by_a_later_empty_full_snapshot(store_url, tmp_path):
+    """The 20th had trades, then a later full snapshot of it came with none (all closed): its older sets have rows, its
+    current set has not. The pointer of the 21st is the 19th, whose trades stand."""
+    inbox = tmp_path / "in"
+    inbox.mkdir()
+    for n in ("trades_20261020_1100.csv", "trades_20261020_1500.csv"):
+        shutil.copy(DS / n, inbox / n)
+    head, *lines = (DS / "trades_20261020_1500.csv").read_text(encoding="utf-8-sig").splitlines()
+    (inbox / "trades_20261019_1500.csv").write_text(
+        "\n".join([head, *(ln.replace("2026-10-20", "2026-10-19").replace("2026-10-21", "2026-10-20") for ln in lines[:2])]) + "\n",
+        encoding="utf-8")
+    with store.connect(store_url) as con:
+        assert scan.scan(con, _settings(tmp_path, inbox)).ok
+        assert len(store.dataset_rows(con, "trades", D("2026-10-20")).rows) == 5
+        # a later full snapshot of every unit of the 20th with no trade in it (the units' current sets have no rows)
+        for scope, src, prio, rd, ts, sha in con.execute(
+                "SELECT DISTINCT ON (scope_key) scope, source, priority, report_date, report_ts, inbox_file_sha256 FROM dataset_set"
+                " WHERE dataset = 'trades' AND valid_date = '2026-10-20' ORDER BY scope_key, report_ts DESC").fetchall():
+            store.store_dataset_set(con, dataset="trades", scope=scope, valid_date=D("2026-10-20"), rows=[], source=src,
+                                    priority=prio, report_date=rd, report_ts=ts + timedelta(hours=2), seq=None,
+                                    generated_at=None, file_mtime=ts, file_name="empty.csv", sha256=sha,
+                                    adapter_fingerprint="t", unit_hash="empty-" + str(scope), completeness="full_snapshot")
+        con.commit()
+        assert store.dataset_rows(con, "trades", D("2026-10-20")).rows == []   # closed
+        assert con.execute("SELECT count(*) FROM dataset_set WHERE dataset = 'trades' AND valid_date = '2026-10-20'"
+                           " AND row_count > 0").fetchone()[0] > 0               # but its older sets have rows
+        found = trades.earlier_trades(con, D("2026-10-21"))
+        assert found is not None and found["date"] == "2026-10-19" and found["trades"] > 0
+        assert trades.earlier_trades(con, D("2026-10-19")) is None
+
+
 def test_a_day_with_trades_is_opened_as_it_is_and_without_a_run_the_latest_trade_date_stays(store_url, tmp_path):
     with store.connect(store_url) as con:
         _trades_of_the_20th(con, tmp_path)
@@ -142,6 +173,20 @@ def test_a_stale_price_is_its_own_origin_with_its_date_when_the_valuation_says_i
     fresh = SimpleNamespace(dirty_rub=650.0, accrued_rub=10.0, face_rub=1000.0, clean_pct=64.0, price_basis="close",
                             quality="market_value", assumptions=())
     assert nt.trade_pnl(_ctx(), "S", TERMS, fresh, _t())["mark_origin"] == "close"
+
+
+def test_the_date_of_a_stale_price_is_read_from_the_text_the_ladder_writes(stub_face):
+    """The assumption is the one ``valuation.fallback`` writes (``stale_note``, the function both of its rungs use), not a
+    copy of its words: ``mark_of`` reads the date back out of it."""
+    from desk.valuation import fallback
+
+    price_day, bd = D("2026-10-13"), D("2026-10-16")
+    note = fallback.stale_note(price_day, bd, "close")
+    assert "2026-10-13" in note and "3 days" in note
+    ref = SimpleNamespace(dirty_rub=650.0, accrued_rub=10.0, face_rub=1000.0, clean_pct=64.0, price_basis="close",
+                          quality="stale_price", assumptions=("something else", note))
+    got = nt.trade_pnl(_ctx(), "S", TERMS, ref, _t())
+    assert (got["mark_origin"], got["mark_date"]) == ("stale", "2026-10-13")
 
 
 def test_a_trade_without_a_valuation_or_a_price_of_its_own(stub_face):

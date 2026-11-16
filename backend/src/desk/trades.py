@@ -741,7 +741,7 @@ def _row(r: dict[str, Any], on: date, run: dict[str, Any] | None = None, enabled
     out["pnl_rub"] = p["pnl_rub"] if p else None   # the trade's PnL from its price to the run's valuation (TDM#557)
     out["pnl_flag"] = p.get("flag") if p else None   # why it is 0 or assumed (pnl.new_trades.FLAGS)
     # the valuation price (clean, % of the face, as ``price_pct``) the PnL is measured against and where it comes from
-    # (``pnl.new_trades.mark_of``: model, market, report, par): None in a run before TDM#751 or without a valuation
+    # (``pnl.new_trades.mark_of``: model, intraday, close, report, par, stale; ``mark_date`` of a stale one): None in a run before TDM#751 or without a valuation
     out["mark_pct"] = p.get("mark_pct") if p else None
     out["mark_origin"] = p.get("mark_origin") if p else None
     out["mark_date"] = p.get("mark_date") if p else None   # of a stale price: the day it is from

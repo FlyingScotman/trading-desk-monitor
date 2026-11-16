@@ -205,7 +205,7 @@
       t('TR-13', 1, 'live', 'B1', 'SEC-1', 'sell', 300, 98.3, '18:30', { trade_date: '2026-10-19', trade_ts: '2026-10-19T18:30:00', late: true, intraday: 'other_trade_date', origin: 'file', received_at: rec(19) }),
       t('TR-12', 1, 'live', 'B2', 'USDRUB', 'buy', null, null, '10:20', { asset_class: 'fx', amount_ccy: 1e6, fx_rate: 83.5, ccy: 'USD', intraday: 'not_bond' }),
       t('TR-14', 1, 'live', 'B2', 'SEC-9', 'buy', 50, 99.1, '15:05', { intraday: 'no_instrument' }),
-    ] : [t('TR-01', 1, 'live', 'B1', 'SEC-1', 'buy', 400, 98.1, '11:05', { intraday: 'applied', pnl_rub: 310, pnl_flag: 'accrued_assumed', mark_pct: 98.4, mark_origin: 'market', origin: 'history', received_at: '2026-10-20T07:10:00Z' })];
+    ] : [t('TR-01', 1, 'live', 'B1', 'SEC-1', 'buy', 400, 98.1, '11:05', { intraday: 'applied', pnl_rub: 310, pnl_flag: 'accrued_assumed', mark_pct: 98.4, mark_origin: 'close', origin: 'history', received_at: '2026-10-20T07:10:00Z' })];
     const books = [...new Set(rows.map(r => r.book_id))].sort().map(b => { const L = rows.filter(r => r.book_id === b); return { book_id: b, trades: L.length, live: L.filter(r => r.status === 'live').length, cancelled: L.filter(r => r.status === 'cancelled').length }; });
     return {
       date: D, book_id: null, rows, books, state_text: K.TRADE_STATE, origin_text: K.TRADE_ORIGIN,

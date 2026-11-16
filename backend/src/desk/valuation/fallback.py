@@ -58,6 +58,7 @@ priced on both dates gets its carry at its own yield (``yield_pnl``, batch 1 ite
 from __future__ import annotations
 
 import math
+import re
 import statistics
 from bisect import bisect_left
 from collections import defaultdict
@@ -132,6 +133,17 @@ QUALITIES = ("exact", "assumed", "market_value", "stale_price", "model_price", "
 RUNGS = QUALITIES[2:]
 """The fallback rungs: flash PnL by ``simple_pnl`` (``reported_value`` has none) unless valued by core on both dates
 (``by_core``: at a price rung's or the model's price, ``at_last_price``, ``at_model_price``)."""
+STALE_NOTE = "last price {date}, {days} days old ({basis})"
+"""The assumption of a valuation at an earlier day's price (quality ``stale_price``); ``stale_note`` writes it and
+``STALE_NOTE_DATE`` reads the date back (``pnl.new_trades.mark_of``: the date of a trade's valuation price)."""
+STALE_NOTE_DATE = re.compile(re.escape(STALE_NOTE).replace(r"\{date\}", r"(\d{4}-\d{2}-\d{2})").split(r"\{days\}")[0])
+
+
+def stale_note(price_date: date, bd: date, basis: str) -> str:
+    """``STALE_NOTE`` of the price of ``price_date`` used on ``bd``."""
+    return STALE_NOTE.format(date=price_date, days=(bd - price_date).days, basis=basis)
+
+
 MODEL_BASIS = "model"
 """The price basis of a model price (``BondValuation.price_basis``; core's price observation at it)."""
 MODEL_Z_TOLERANCE_BP = 1e-3
@@ -312,7 +324,7 @@ def at_last_price(ctx: EodContext, position_id: str, outcome: Outcome, quantity:
                           source_analytics={}, volume_bonds=None, value=None))
     quality = "market_value" if cand.trade_date == bd else "stale_price"
     notes = [f"not exact: {outcome.reason}{': ' + outcome.detail if outcome.detail else ''}",
-             f"last price {cand.trade_date}, {(bd - cand.trade_date).days} days old ({basis})"
+             stale_note(cand.trade_date, bd, basis)
              if quality == "stale_price" else f"price basis {basis}",
              "valued by core at this price"]
     try:
@@ -547,7 +559,7 @@ def approximate(ctx: EodContext, outcome: Outcome, quantity: float,
         quote, basis, clean = found
         quality = "market_value" if quote.trade_date == bd else "stale_price"
         if quality == "stale_price":
-            why.append(f"last price {quote.trade_date}, {(bd - quote.trade_date).days} days old ({basis})")
+            why.append(stale_note(quote.trade_date, bd, basis))
         elif basis not in PRICE_BASIS_ORDER:
             why.append(f"price basis {basis}")
         acc = accrued_rub(quote)
