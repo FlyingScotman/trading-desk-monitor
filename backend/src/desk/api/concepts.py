@@ -227,18 +227,22 @@ def _trades(con, run_id: int) -> tuple[dict[str, dict[str, Any]], bool]:
     return out, known
 
 
-def _mark_of(rows: list[dict[str, Any]]) -> tuple[float | None, str | None]:
+def _mark_of(rows: list[dict[str, Any]]) -> tuple[float | None, str | None, str | None]:
     """The valuation price the recorded trades are measured against (TDM#751, ``pnl.new_trades.mark_of``: clean, % of the
     face): the average of their ``mark_pct`` weighted by the quantity (a trade without one counts once; the trades of a
     position share the valuation, so the average is that price), and its origin: the one the trades have, ``mixed`` when
-    they differ. None for both when no trade records it (a run before TDM#751, a trade without a valuation)."""
+    they differ, and the date of a stale price (``mark_date``) when the trades agree on one. None for all when no trade
+    records it (a run before TDM#751, a trade without a valuation)."""
     ms = [(x["quantity"] if isinstance(x.get("quantity"), int | float) and x["quantity"] > 0 else 1.0, float(x["mark_pct"]))
           for x in rows if isinstance(x.get("mark_pct"), int | float) and math.isfinite(x["mark_pct"])]
     if not ms:
-        return None, None
-    origins = {x.get("mark_origin") for x in rows if isinstance(x.get("mark_pct"), int | float)} - {None}
+        return None, None, None
+    marked = [x for x in rows if isinstance(x.get("mark_pct"), int | float)]
+    origins = {x.get("mark_origin") for x in marked} - {None}
+    dates = {x.get("mark_date") for x in marked if x.get("mark_origin") == "stale"} - {None}
     return (math.fsum(w * m for w, m in ms) / math.fsum(w for w, _ in ms),
-            next(iter(origins)) if len(origins) == 1 else ("mixed" if origins else None))
+            next(iter(origins)) if len(origins) == 1 else ("mixed" if origins else None),
+            next(iter(dates)) if len(dates) == 1 and origins == {"stale"} else None)
 
 
 def _side_of(rows: list[dict[str, Any]], face: float | None) -> dict[str, Any] | None:
@@ -252,10 +256,11 @@ def _side_of(rows: list[dict[str, Any]], face: float | None) -> dict[str, Any] |
     qs = [(float(x["quantity"]), x.get("price_pct")) for x in rows if isinstance(x.get("quantity"), int | float)]
     ps = [(q, float(p)) for q, p in qs if isinstance(p, int | float)]
     bonds, weight = math.fsum(q for q, _ in qs), math.fsum(q for q, _ in ps)
-    mark, origin = _mark_of(rows)
+    mark, origin, mdate = _mark_of(rows)
     return {"n": len(rows), "counted": len(qs), "priced": len(ps), "bonds": bonds,
             "face": bonds * face if face is not None else None,
-            "avg": math.fsum(q * p for q, p in ps) / weight if weight else None, "mark": mark, "mark_origin": origin}
+            "avg": math.fsum(q * p for q, p in ps) / weight if weight else None, "mark": mark, "mark_origin": origin,
+            "mark_date": mdate}
 
 
 def trade_of(t: dict[str, Any], pos: list, on: date | None = None) -> dict[str, Any]:
@@ -277,9 +282,10 @@ def trade_of(t: dict[str, Any], pos: list, on: date | None = None) -> dict[str, 
              "sell": _side_of([x for x in rows if x.get("side") != "buy"], one)}   # as qty: not a purchase is a sale
     net = sides["buy"]["bonds"] if sides["buy"] else 0.0
     net -= sides["sell"]["bonds"] if sides["sell"] else 0.0
-    mark, origin = _mark_of(rows)
+    mark, origin, mdate = _mark_of(rows)
     return {"qty": math.fsum(bonds) * face if face is not None and len(bonds) == len(rows) else None, "price": pos[6],
-            "n": len(rows), "mark": mark, "mark_origin": origin, **({"date": on.isoformat()} if on else {}),
+            "n": len(rows), "mark": mark, "mark_origin": origin, "mark_date": mdate,
+            **({"date": on.isoformat()} if on else {}),
             **({"new": True} if t["start"] == 0 else {}),
             **{k: v for k, v in sides.items() if v}, "net": {"bonds": net, "face": net * one if one is not None else None}}
 

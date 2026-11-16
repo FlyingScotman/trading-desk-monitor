@@ -73,12 +73,26 @@ t('прогон без разбивки по сторонам: изменени�
   assert.ok(/—/.test(strip(col.fmt(null, noQty))), 'нетто неизвестно, а не ноль');
 });
 
-t('CSV: число в mm валюты бумаги; без сделок — пустая ячейка', () => {
+t('CSV: число в mm валюты бумаги; без сделок и без номинала (продано в ноль) — пустая ячейка', () => {
   const { K } = load('real');
   const col = K.posCols.tradeDay;
   assert.strictEqual(col.unit, 'mm в вал.');
   assert.strictEqual(col.csvFmt(2e6, { id: 'X', ccy: 'RUB', tradeToday: SYN }), '2.00');
   assert.strictEqual(col.csvFmt(null, { id: 'X', ccy: 'RUB' }), '');
+  const zero = { id: 'X', ccy: 'RUB', tradeToday: { sell: { n: 1, counted: 1, priced: 1, bonds: 9, face: null, avg: 98 }, net: { bonds: -9, face: null }, n: 1 } };
+  assert.strictEqual(col.csvFmt(null, zero), '', 'числовой столбец: штуки в него не пишем');
+  assert.ok(/9/.test(strip(col.fmt(null, zero))) && /шт\./.test(strip(col.fmt(null, zero))), 'на экране штуки остались');
+  assert.ok(/9 шт\./.test(K.tradeNet(zero).tip), 'и в подсказке');
+});
+
+t('строка «Сделки дня» (C03, C05, C14): день без сделок — «Сделок за ДД.ММ пока нет; последние — за ДД.ММ →» со ссылкой на тот день', () => {
+  const { K } = load('real');
+  const h = K.dayTradesLine({ date: '2026-11-16', trades: 0, applied: 0, cancelled: 0, earlier: { date: '2026-11-13', trades: 7 } });
+  assert.ok(/^Сделок за 16\.11 пока нет; последние — за 13\.11 →$/.test(strip(h)), strip(h));
+  assert.ok(/href="c20-trades\.html\?date=2026-11-13"/.test(h), h);
+  // сделки есть — прежняя строка; сделок нет и прошлых нет — тоже прежняя («Сделки дня: 0»)
+  assert.ok(/Сделки дня: 3 ?, в позициях 2/.test(strip(K.dayTradesLine({ date: '2026-11-16', trades: 3, applied: 2, cancelled: 0, earlier: null }))));
+  assert.ok(/Сделки дня: 0/.test(strip(K.dayTradesLine({ date: '2026-11-16', trades: 0, applied: 0, cancelled: 0, earlier: null }))));
 });
 
 t('столбец в C03 (наборы «Кэрри и PnL» и «Всё») и в таблицах позиций C01, C06, C07, C12, C13', () => {
@@ -95,9 +109,12 @@ t('столбец в C03 (наборы «Кэрри и PnL» и «Всё») и �
 t('«Цена оценки»: подсказка называет цену и откуда она; источники — слова сервера (модель, рынок, отчёт, номинал)', () => {
   const { K } = load('real');
   assert.ok(/чистая цена/.test(K.tradeMarkTitle()) && !/Откуда/.test(K.tradeMarkTitle()));
-  assert.ok(/Откуда: модель/.test(K.tradeMarkTitle('model')) && /Откуда: рынок/.test(K.tradeMarkTitle('market')) && /Откуда: отчёт/.test(K.tradeMarkTitle('report')));
+  for (const [o, w] of [['model', 'модель'], ['intraday', 'внутридневной срез'], ['close', 'закрытие'], ['report', 'отчёт'], ['par', 'номинал']])
+    assert.ok(new RegExp('Откуда: ' + w).test(K.tradeMarkTitle(o)), o);
+  assert.ok(/Откуда: последняя цена от 10\.11/.test(K.tradeMarkTitle('stale', '2026-11-10')));
+  assert.ok(/Откуда: устаревшая цена$/.test(K.tradeMarkTitle('stale')), 'даты нет — без неё');
   const PY = fs.readFileSync(path.join(ROOT, 'backend', 'src', 'desk', 'pnl', 'new_trades.py'), 'utf8');
-  const origins = new Set([...(/MARK_ORIGINS = \{([^}]*)\}/.exec(PY)[1]).matchAll(/: "([a-z]+)"/g)].map(x => x[1]).concat('market'));
+  const origins = new Set([...(/MARK_ORIGINS = \{([^}]*)\}/.exec(PY)[1]).matchAll(/: "([a-z]+)"/g)].map(x => x[1]).concat('stale'));
   for (const o of origins) assert.ok(K.TRADE_MARK_ORIGIN[o], o);
 });
 

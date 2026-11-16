@@ -123,11 +123,25 @@ def test_the_mark_is_the_clean_price_of_the_valuation_whatever_it_is_called(stub
     ref = SimpleNamespace(dirty_rub=650.0, accrued_rub=10.0, face_rub=1000.0)   # no clean price, no basis: derived
     r = nt.trade_pnl(_ctx(), "S", TERMS, ref, _t())
     assert r["mark_pct"] == pytest.approx(64.0) and r["mark_origin"] is None
-    for basis, origin in (("close", "market"), ("legal_close", "market"), ("model", "model"), ("par", "par"),
-                          ("reported", "report")):
+    # the owner's words: model / intraday cut / close / report (the day's average stands in for a missing close)
+    for basis, origin in (("close", "close"), ("legal_close", "close"), ("waprice", "close"), ("last", "intraday"),
+                          ("model", "model"), ("par", "par"), ("reported", "report"), ("new_basis", None)):
         got = nt.trade_pnl(_ctx(), "S", TERMS, SimpleNamespace(dirty_rub=650.0, accrued_rub=10.0, face_rub=1000.0,
                                                                clean_pct=64.0, price_basis=basis), _t())
-        assert got["mark_origin"] == origin
+        assert got["mark_origin"] == origin and got["mark_pct"] == pytest.approx(64.0) and got["mark_date"] is None
+
+
+def test_a_stale_price_is_its_own_origin_with_its_date_when_the_valuation_says_it(stub_face):
+    def ref(*notes):
+        return SimpleNamespace(dirty_rub=650.0, accrued_rub=10.0, face_rub=1000.0, clean_pct=64.0, price_basis="close",
+                               quality="stale_price", assumptions=notes)
+    dated = nt.trade_pnl(_ctx(), "S", TERMS, ref("last price 2026-10-13, 3 days old (close)"), _t())
+    assert (dated["mark_origin"], dated["mark_date"]) == ("stale", "2026-10-13")
+    undated = nt.trade_pnl(_ctx(), "S", TERMS, ref("something else"), _t())
+    assert (undated["mark_origin"], undated["mark_date"]) == ("stale", None)
+    fresh = SimpleNamespace(dirty_rub=650.0, accrued_rub=10.0, face_rub=1000.0, clean_pct=64.0, price_basis="close",
+                            quality="market_value", assumptions=())
+    assert nt.trade_pnl(_ctx(), "S", TERMS, fresh, _t())["mark_origin"] == "close"
 
 
 def test_a_trade_without_a_valuation_or_a_price_of_its_own(stub_face):
@@ -144,7 +158,7 @@ def test_a_trade_without_a_valuation_or_a_price_of_its_own(stub_face):
 
 def test_the_mark_is_in_the_api_rows_and_an_older_run_has_none(store_url, tmp_path):
     new = {"trade_id": "TR-10", "side": "buy", "quantity": 1200, "price_pct": 99.5, "pnl_rub": 6000.0, "flag": None,
-           "mark_pct": 100.0, "mark_origin": "model"}
+           "mark_pct": 100.0, "mark_origin": "stale", "mark_date": "2026-10-13"}
     old = {"trade_id": "TR-10", "side": "buy", "quantity": 1200, "price_pct": 99.5, "pnl_rub": 6000.0, "flag": None}
     lineage = {"intraday_trades": {"applied": 1, "versions": {"TR-10": 2}, "skipped_ids": {}}}
     with store.connect(store_url) as con:
@@ -155,10 +169,11 @@ def test_the_mark_is_in_the_api_rows_and_an_older_run_has_none(store_url, tmp_pa
         v_new = trades.view(con, D("2026-10-20"), run_id=r_new)
         v_old = trades.view(con, D("2026-10-20"), run_id=r_old)
     row = next(r for r in v_new["rows"] if r["trade_id"] == "TR-10")
-    assert (row["mark_pct"], row["mark_origin"], row["pnl_rub"]) == (100.0, "model", 6000.0)
+    assert (row["mark_pct"], row["mark_origin"], row["mark_date"], row["pnl_rub"]) == (100.0, "stale", "2026-10-13", 6000.0)
     assert all(r["mark_pct"] is None and r["mark_origin"] is None for r in v_new["rows"] if r["trade_id"] != "TR-10")
     old_row = next(r for r in v_old["rows"] if r["trade_id"] == "TR-10")
     assert old_row["pnl_rub"] == 6000.0 and old_row["mark_pct"] is None and old_row["mark_origin"] is None
+    assert old_row["mark_date"] is None
 
 
 def test_the_cards_trade_data_has_the_mark_of_each_side_and_the_position():
@@ -169,6 +184,10 @@ def test_the_cards_trade_data_has_the_mark_of_each_side_and_the_position():
     assert t["buy"]["mark"] == pytest.approx(100.0) and t["buy"]["mark_origin"] == "model"
     assert t["sell"]["mark"] == pytest.approx(100.0) and t["mark"] == pytest.approx(100.0) and t["mark_origin"] == "model"
     assert t["date"] == "2026-10-16"   # TDM#750: the card names the day of the run whose trades they are
+    stale = concepts.trade_of({"trades": [{"side": "buy", "quantity": 1.0, "mark_pct": 99.0, "mark_origin": "stale",
+                                           "mark_date": "2026-10-13"}], "quantity": 5.0, "start": 4.0}, [5000.0, 0, 0, 0, 0, 0, 99.0])
+    assert stale["mark_origin"] == "stale" and stale["mark_date"] == "2026-10-13" and stale["buy"]["mark_date"] == "2026-10-13"
+    assert t["mark_date"] is None
     # a run before TDM#751 has no mark: none, not zero
     old = concepts.trade_of({"trades": [{"side": "buy", "quantity": 1.0, "price_pct": 99.0}], "quantity": 5.0,
                              "start": 4.0}, [5000.0, 0, 0, 0, 0, 0, 99.0])

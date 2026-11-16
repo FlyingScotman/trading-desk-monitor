@@ -2968,7 +2968,7 @@
       : 'Изменение позиции за день' + (total ? '; сделок: ' + total : '');
     return { face, bonds, total, tip };
   };
-  K.tradeDayCol = () => ({ label: 'Сделки за день', num: true, title: 'Изменение номинала позиции за день по сделкам: куплено минус продано, mm в валюте бумаги. Подробности — в подсказке ячейки и в блоке «Сделки за день» карточки',
+  K.tradeDayCol = () => ({ label: 'Сделки за день', num: true, title: 'Изменение номинала позиции за день по сделкам: куплено минус продано, mm в валюте бумаги. Подробности — в подсказке ячейки и в блоке сделок карточки («Сделки за <дата>»)',
     val: r => { const n = K.tradeNet(r); return n ? n.face : null; },
     fmt: (v, r) => {
       const n = K.tradeNet(r);
@@ -2976,7 +2976,7 @@
       const body = v != null ? f.mns(v, 2) + '<span class="mut3">mm ' + esc(r.ccy || '') + '</span>' : n.bonds != null ? '<span class="mut3">' + f.s(n.bonds, 0) + ' шт.</span>' : '<span class="mut3">—</span>';
       return '<span title="' + esc(n.tip) + '">' + body + '</span>';
     },
-    csvFmt: (v, r) => { const n = K.tradeNet(r); return !n ? '' : v != null ? f.mn(v, 2) : n.bonds != null ? f.n(n.bonds, 0) + ' шт.' : ''; } });
+    csvFmt: (v, r) => v != null && K.tradeNet(r) ? f.mn(v, 2) : '' });   // числовой столбец: нет номинала (продано в ноль) — пусто, штуки только на экране и в подсказке
   K.posCols = {
     // валюта и эмитент — обычные столбцы (R37): сортировка и фильтр по значениям, как у остальных
     issuer: { key: 'issuerName', label: 'Эмитент', filter: true, title: 'эмитент (у деривативов — контрагент)', fmt: (v, r) => '<b style="color:' + K.issuerColor(r.issuer) + '">●</b> ' + esc(v) },
@@ -3969,10 +3969,14 @@
     pending: 'ждёт прогона', unknown: 'нет сведений о прогоне', off: 'расчёт по сделкам дня выключен' };
   K.TRADE_ORIGIN = { file: 'из папки с отчётами', feed: 'фид сервисов адаптера', history: 'догрузка прошлых дат', request: 'загрузка по запросу' };
   // «Цена оценки» сделки (TDM#751): чистая цена оценки прогона, % номинала, от которой считается PnL сделки; откуда она
-  // (сервер: pnl/new_trades.py mark_of): модель, рынок (закрытие, последняя, средневзвешенная), отчёт, номинал (допущение)
-  K.TRADE_MARK_ORIGIN = { model: 'модель', market: 'рынок', report: 'отчёт', par: 'номинал (допущение)', mixed: 'разные у сделок' };
-  K.tradeMarkTitle = origin => 'Цена оценки: чистая цена, по которой прогон оценил бумагу, % номинала (как цена сделки); PnL сделки считается от неё' +
-    (origin ? '. Откуда: ' + (K.TRADE_MARK_ORIGIN[origin] || origin) : '');
+  // (сервер: pnl/new_trades.py MARK_ORIGINS): модель, внутридневной срез (последняя цена среза), закрытие (цена закрытия и
+  // средневзвешенная, когда закрытия нет), отчёт, номинал (допущение), устаревшая цена (последняя цена более раннего дня;
+  // mark_date — её дата)
+  K.TRADE_MARK_ORIGIN = { model: 'модель', intraday: 'внутридневной срез', close: 'закрытие', report: 'отчёт', par: 'номинал (допущение)',
+    stale: 'устаревшая цена', mixed: 'разные у сделок' };
+  K.tradeMarkOrigin = (origin, date) => origin === 'stale' && date ? 'последняя цена от ' + date.slice(8, 10) + '.' + date.slice(5, 7) : K.TRADE_MARK_ORIGIN[origin] || origin;
+  K.tradeMarkTitle = (origin, date) => 'Цена оценки: чистая цена, по которой прогон оценил бумагу, % номинала (как цена сделки); PnL сделки считается от неё' +
+    (origin ? '. Откуда: ' + K.tradeMarkOrigin(origin, date) : '');
   // живая сделка по облигации, которая должна была войти в позиции дня и не вошла (trades.PROBLEMS сервера)
   K.TRADE_PROBLEMS = ['no_quantity', 'no_instrument', 'units_mismatch', 'other_book', 'position_id_taken', 'no_currency', 'mixed_units'];
   // книги фильтра шапки: юрлицо, деск и выбор книг (то же правило, K.scope.bookIn); фильтр книг не задан — null (все)
@@ -4058,7 +4062,7 @@
     // номинал — второй строкой под количеством: карточка справа узкая, пять столбцов в неё не входят
     const qty = (v, fc, b) => (b ? '<b>' + f.n(v, 0) + '</b>' : f.n(v, 0)) + ' <span class="mut3">шт.</span><div class="mut3" style="font-size:11px">' + (fc == null ? '—' : f.money(fc) + ' ' + ccy) + '</div>';
     // цена оценки (TDM#751) — второй строкой под ценой: колонок и так четыре; нет её в прогоне (до TDM#751) — «—»
-    const mark = x => '<div class="mut3" style="font-size:11px" title="' + esc(K.tradeMarkTitle(x && x.mark != null ? x.mark_origin : null)) + '">оценка ' + (x && x.mark != null ? f.n(x.mark, 4) + ' %' : '—') + '</div>';
+    const mark = x => '<div class="mut3" style="font-size:11px" title="' + esc(K.tradeMarkTitle(x && x.mark != null ? x.mark_origin : null, x && x.mark_date)) + '">оценка ' + (x && x.mark != null ? f.n(x.mark, 4) + ' %' : '—') + '</div>';
     const side = (label, x) => '<tr><td>' + label + '</td>' + (x ? '<td class="n">' + (x.counted ? qty(x.bonds, x.face) : none) + '</td><td class="n">' +
       (x.avg == null ? none : f.n(x.avg, 4) + ' <span class="mut3">%</span>') + mark(x) + '</td><td class="n">' + f.n(x.n, 0) + '</td></tr>'
       : '<td class="n mut3" colspan="3">нет</td></tr>');
@@ -4085,6 +4089,10 @@
     opt = opt || {};
     if (!d) return '<span class="mut3">сделки дня: загрузка…</span>';
     if (d.error) return '<span class="mut3" title="' + esc(String(d.error)) + '">сделки дня не загрузились</span>';
+    // день без сделок (TDM#750: сервер открывает дату прогона, а не последнюю дату со сделками): так и сказать и дать ссылку на последний день со сделками
+    const dm = x => x.slice(8, 10) + '.' + x.slice(5, 7);
+    if (d.trades === 0 && d.earlier && d.earlier.date)
+      return '<span class="k-dtl">Сделок за ' + esc(dm(d.date)) + ' пока нет; последние — за <a href="' + K.c20Href({ date: d.earlier.date }) + '" title="Экран C20 «Сделки дня» за ' + esc(f.date(d.earlier.date)) + ': ' + f.n(d.earlier.trades, 0) + ' сд.">' + esc(dm(d.earlier.date)) + ' →</a></span>';
     const scope = opt.all ? 'по всем книгам' : d.filter ? 'под фильтром шапки (как на C20)' : 'по всем книгам';
     const out = d.trades - d.applied - (d.cancelled || 0);
     return '<span class="k-dtl" title="Сделки за ' + esc(f.date(d.date)) + ' ' + scope + (d.demo ? ' (демо)' : '') + '. «В позициях» — сделки по облигациям, вошедшие в позиции дня прогона">' +

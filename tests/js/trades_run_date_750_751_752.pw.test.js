@@ -44,7 +44,7 @@ test('#750/#751: C20 без даты — день прогона пустым с
   const browser = await pw.chromium.launch();
   try {
     const answer = p => p.get('date') === '2026-11-13'
-      ? doc('2026-11-13', [row('TR-1'), row('TR-2', { side: 'sell', mark_pct: null, mark_origin: null, pnl_rub: null, intraday: 'pending' })])
+      ? doc('2026-11-13', [row('TR-1', { mark_origin: 'stale', mark_date: '2026-11-10' }), row('TR-2', { side: 'sell', mark_pct: null, mark_origin: null, pnl_rub: null, intraday: 'pending' })])
       : doc('2026-11-16', [], { earlier: { date: '2026-11-13', trades: 2 }, days: [{ date: '2026-11-13', trades: 2, cancelled: 0 }] });
     const { pg, ctx, errors, asked } = await open(browser, 'c20-trades.html', { answer });
     try {
@@ -67,7 +67,7 @@ test('#750/#751: C20 без даты — день прогона пустым с
       assert.ok(i > 0 && /^Цена/.test(heads[i - 1]) && !/оценки/.test(heads[i - 1]), heads.join('|'));
       const cells = await pg.locator('table.k-tbl tbody tr').evaluateAll((trs, k) => trs.map(tr => tr.children[k].textContent.replace(/\s+/g, ' ').trim()), i);
       assert.deepStrictEqual(cells, ['100.0000 %', '—']);
-      assert.ok((await pg.locator('table.k-tbl tbody tr').first().locator('td').nth(i).locator('span[title]').getAttribute('title')).includes('Откуда: модель'));
+      assert.ok((await pg.locator('table.k-tbl tbody tr').first().locator('td').nth(i).locator('span[title]').getAttribute('title')).includes('Откуда: последняя цена от 10.11'));
       assert.deepStrictEqual(errors, []);
     } finally { await ctx.close(); }
   } finally { await browser.close(); }

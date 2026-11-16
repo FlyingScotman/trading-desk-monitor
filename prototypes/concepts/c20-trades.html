@@ -126,7 +126,7 @@
       : r.amount_ccy != null ? num(r.amount_ccy, 2) + ' <span class="mut3">' + esc(r.ccy || '') + '</span>' : '<span class="mut3">—</span>';
   const dm = s => s ? s.slice(8, 10) + '.' + s.slice(5, 7) : '';
   // цена оценки прогона, от которой считается PnL сделки; прогон до неё или сделка не в позициях — «—»
-  const mark = r => r.mark_pct != null ? '<span title="' + esc(K.tradeMarkTitle(r.mark_origin)) + '">' + num(r.mark_pct, 4) + ' <span class="mut3">%</span></span>' : '<span class="mut3">—</span>';
+  const mark = r => r.mark_pct != null ? '<span title="' + esc(K.tradeMarkTitle(r.mark_origin, r.mark_date)) + '">' + num(r.mark_pct, 4) + ' <span class="mut3">%</span></span>' : '<span class="mut3">—</span>';
   const price = r => r.price_pct != null ? num(r.price_pct, 4) + ' <span class="mut3">%</span>' : r.fx_rate != null ? num(r.fx_rate, 4) : '<span class="mut3">—</span>';
   // под фильтром шапки: книга (юрлицо и деск — с сервера), валюта сделки, портфель (книга HTM — HTM, иначе колонка
   // Portfolio сделки); прогона нет (источник 'empty') — чипов шапки нет, фильтр не действует

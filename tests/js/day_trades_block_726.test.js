@@ -94,6 +94,8 @@ t('цена оценки: у куплено, продано и нетто; от�
   assert.ok(/Куплено 4 шт\. 4k RUB 99\.5000 % оценка 100\.0000 % 1/.test(text), text);
   assert.ok(/Нетто: куплено 4 шт\. 4k RUB — оценка 100\.0000 % 1/.test(text), text);
   assert.ok(/title="[^"]*Откуда: модель[^"]*">оценка 100\.0000 %/.test(h), 'источник цены оценки в подсказке');
+  const stale = K.dayTradesBlock({ id: 'X', ccy: 'RUB', tradeToday: { buy: { n: 1, counted: 1, priced: 1, bonds: 4, face: 4000, avg: 99.5, mark: 99, mark_origin: 'stale', mark_date: '2026-11-10' }, net: { bonds: 4, face: 4000 }, n: 1 } });
+  assert.ok(/Откуда: последняя цена от 10\.11/.test(stale), 'устаревшая цена — с датой');
   assert.ok(/<th class="n" title="[^"]*цена оценки[^"]*">Цена, % ном\./.test(h), 'заголовок объясняет вторую строку');
   const old = strip(K.dayTradesBlock({ id: 'X', ccy: 'RUB', tradeToday: SYN }));
   assert.ok(/99\.2500 % оценка — 2/.test(old), 'прогон до цены оценки — прочерк, не ноль');

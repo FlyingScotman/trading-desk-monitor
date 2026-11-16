@@ -108,8 +108,12 @@ def default_date(con: psycopg.Connection, run_id: int | None = None) -> date:
 
 def earlier_trades(con: psycopg.Connection, on: date, tries: int = 10) -> dict[str, Any] | None:
     """The latest date before ``on`` that has trades and how many (``{"date", "trades"}``), else None: what an empty
-    day points at (TDM#750). A stored set without trades (an empty file) is not such a date."""
-    for d in trade_dates(con, on - timedelta(days=1), tries):
+    day points at (TDM#750). One query finds the candidate dates (a stored set with rows, newest first, no rows read);
+    only the newest is counted by its current rows (``store.dataset_rows``), the next one only when a later set of that
+    date closed it (a full snapshot with no trades): at most ``tries`` dates."""
+    for (d,) in con.execute(
+            "SELECT DISTINCT valid_date FROM dataset_set WHERE dataset = 'trades' AND valid_date < %s AND row_count > 0"
+            " ORDER BY valid_date DESC LIMIT %s", (on, tries)).fetchall():
         n = len(store.dataset_rows(con, "trades", d).rows)
         if n:
             return {"date": d.isoformat(), "trades": n}
@@ -740,6 +744,7 @@ def _row(r: dict[str, Any], on: date, run: dict[str, Any] | None = None, enabled
     # (``pnl.new_trades.mark_of``: model, market, report, par): None in a run before TDM#751 or without a valuation
     out["mark_pct"] = p.get("mark_pct") if p else None
     out["mark_origin"] = p.get("mark_origin") if p else None
+    out["mark_date"] = p.get("mark_date") if p else None   # of a stale price: the day it is from
     # the run's position the trade went into: its own position_id, or another row of its bond in the book (``_fold``
     # takes it by the bond when the ids differ); C03's «сд N» opens C20 on the trades of this position (TDM#585)
     out["run_position_id"] = p.get("run_position_id") if p else None
