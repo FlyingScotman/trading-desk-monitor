@@ -41,10 +41,10 @@ t('блок: куплено и продано — количество, номи
   const calls = [], { K } = load('real', calls);
   const h = K.dayTradesBlock({ id: 'B1|SEC 1', ccy: 'RUB', tradeToday: SYN });
   const text = strip(h);
-  assert.ok(text.includes('Сделки за день'), text);
-  assert.ok(/Куплено 4 шт\. 4\.0 mm RUB 99\.2500 % 2/.test(text), text);
-  assert.ok(/Продано 2 шт\. 2\.0 mm RUB 101\.5000 % 1/.test(text), text);
-  assert.ok(/Нетто: куплено 2 шт\. 2\.0 mm RUB — 3/.test(text), text);
+  assert.ok(text.startsWith('Сделки за 20.10'), text);   // дата страницы: сервер её не прислал (TDM#750)
+  assert.ok(/Куплено 4 шт\. 4\.0 mm RUB 99\.2500 % оценка — 2/.test(text), text);
+  assert.ok(/Продано 2 шт\. 2\.0 mm RUB 101\.5000 % оценка — 1/.test(text), text);
+  assert.ok(/Нетто: куплено 2 шт\. 2\.0 mm RUB — оценка — 3/.test(text), text);
   assert.ok(/>Количество<\/th>/.test(h) && /Цена, % ном\./.test(h) && /<th class="n">Сделок<\/th>/.test(h), 'столбцы');
   // ссылка — на «Сделки дня» с датой страницы, позицией и прогоном страницы (как у пометки «сд N»)
   assert.ok(/href="c20-trades\.html\?date=2026-10-20&pos=B1%7CSEC%201&run_id=42"/.test(h) && /сделки позиции на экране «Сделки дня» →/.test(h), h);
@@ -54,7 +54,7 @@ t('блок: куплено и продано — количество, номи
 t('нетто: продано — со словом и числом без знака; ноль — без направления; без одной из сторон — «нет»', () => {
   const { K } = load('real');
   const sold = strip(K.dayTradesBlock({ id: 'X', ccy: 'USD', tradeToday: { sell: { n: 2, counted: 2, priced: 2, bonds: 9, face: 9e6, avg: 98 }, net: { bonds: -9, face: -9e6 } } }));
-  assert.ok(/Куплено нет/.test(sold) && /Продано 9 шт\. 9\.0 mm USD 98\.0000 % 2/.test(sold) && /Нетто: продано 9 шт\. 9\.0 mm USD — 2/.test(sold), sold);
+  assert.ok(/Куплено нет/.test(sold) && /Продано 9 шт\. 9\.0 mm USD 98\.0000 % оценка — 2/.test(sold) && /Нетто: продано 9 шт\. 9\.0 mm USD — оценка — 2/.test(sold), sold);
   const flat = strip(K.dayTradesBlock({ id: 'X', ccy: 'RUB', tradeToday: { buy: { n: 1, counted: 1, priced: 1, bonds: 3, face: 3000, avg: 99 }, sell: { n: 1, counted: 1, priced: 1, bonds: 3, face: 3000, avg: 101 }, net: { bonds: 0, face: 0 } } }));
   assert.ok(/Нетто 0 шт\./.test(flat) && !/Нетто: (куплено|продано)/.test(flat), flat);
   assert.ok(/Куплено 3 шт\. 3k RUB 99\.0000 %/.test(flat), flat);
@@ -64,7 +64,7 @@ t('номинал неизвестен (продано в ноль) и цены 
   const { K } = load('real');
   const h = K.dayTradesBlock({ id: 'X', ccy: 'RUB', tradeToday: { sell: { n: 3, counted: 2, priced: 1, bonds: 8, face: null, avg: 98 }, net: { bonds: -8, face: null } } });
   const text = strip(h);
-  assert.ok(/Продано 8 шт\. — 98\.0000 % 3/.test(text), text);
+  assert.ok(/Продано 8 шт\. — 98\.0000 % оценка — 3/.test(text), text);
   assert.ok(/Сделок без количества: 1 — в суммах их нет\./.test(text) && /Сделок без цены: 1 — в средней цене их нет\./.test(text), text);
   assert.ok(!/без цены|без количества/.test(strip(K.dayTradesBlock({ id: 'X', ccy: 'RUB', tradeToday: SYN }))), 'всё есть — замечания нет');
 });
@@ -72,7 +72,31 @@ t('номинал неизвестен (продано в ноль) и цены 
 t('ни у одной сделки нет количества — прочерки, нетто не «0 шт.»', () => {
   const { K } = load('real');
   const text = strip(K.dayTradesBlock({ id: 'X', ccy: 'RUB', tradeToday: { buy: { n: 2, counted: 0, priced: 0, bonds: 0, face: 0, avg: null }, net: { bonds: 0, face: 0 } } }));
-  assert.ok(/Куплено — — 2/.test(text) && /Нетто — — 2/.test(text) && !/0 шт\./.test(text) && /Сделок без количества: 2/.test(text), text);
+  assert.ok(/Куплено — — оценка — 2/.test(text) && /Нетто — — оценка — 2/.test(text) && !/0 шт\./.test(text) && /Сделок без количества: 2/.test(text), text);
+});
+
+// TDM#750: блок называет день, чьи сделки в нём (прогон кладёт дату в trade.date), а не просто «за день»
+t('заголовок блока — дата прогона, чьи это сделки (trade.date), иначе дата страницы', () => {
+  const { K } = load('real');
+  assert.ok(strip(K.dayTradesBlock({ id: 'X', ccy: 'RUB', tradeToday: Object.assign({ date: '2026-11-13' }, SYN) })).startsWith('Сделки за 13.11'));
+  assert.ok(strip(K.dayTradesBlock({ id: 'X', ccy: 'RUB', tradeToday: SYN })).startsWith('Сделки за 20.10'));
+  const { K: K2, M } = load('real'); M.asOf = null;
+  assert.ok(strip(K2.dayTradesBlock({ id: 'X', ccy: 'RUB', tradeToday: SYN })).startsWith('Сделки за день'), 'ни даты сервера, ни страницы');
+});
+
+// TDM#751: цена оценки — вторая строка ячейки цены (чистая цена прогона, % номинала; от неё считается PnL сделки)
+t('цена оценки: у куплено, продано и нетто; откуда она — в подсказке; старый прогон — «—»', () => {
+  const { K } = load('real');
+  const MK = { mark: 100, mark_origin: 'model' };
+  const h = K.dayTradesBlock({ id: 'X', ccy: 'RUB', tradeToday: { buy: Object.assign({ n: 1, counted: 1, priced: 1, bonds: 4, face: 4000, avg: 99.5 }, MK),
+    net: { bonds: 4, face: 4000 }, n: 1, mark: 100, mark_origin: 'model' } });
+  const text = strip(h);
+  assert.ok(/Куплено 4 шт\. 4k RUB 99\.5000 % оценка 100\.0000 % 1/.test(text), text);
+  assert.ok(/Нетто: куплено 4 шт\. 4k RUB — оценка 100\.0000 % 1/.test(text), text);
+  assert.ok(/title="[^"]*Откуда: модель[^"]*">оценка 100\.0000 %/.test(h), 'источник цены оценки в подсказке');
+  assert.ok(/<th class="n" title="[^"]*цена оценки[^"]*">Цена, % ном\./.test(h), 'заголовок объясняет вторую строку');
+  const old = strip(K.dayTradesBlock({ id: 'X', ccy: 'RUB', tradeToday: SYN }));
+  assert.ok(/99\.2500 % оценка — 2/.test(old), 'прогон до цены оценки — прочерк, не ноль');
 });
 
 t('нет сделок, старый прогон (только qty), позиция не облигация — блока нет', () => {

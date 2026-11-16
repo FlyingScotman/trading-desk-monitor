@@ -54,6 +54,9 @@
   // (K.rowIn: юрлицо и деск книги — с сервера). PnL сделки — от её цены до оценки прогона (pnl.extra.trades прогона из
   // навигации, по умолчанию основного прогона даты; TDM#557, #568). ?pos= — сделки одной позиции (ссылка с C03): позиции,
   // в которую сделку положил прогон (run_position_id: он мог взять другую строку той же бумаги книги), иначе её position_id.
+  // Без даты сервер берёт дату прогона страницы, а не последнюю дату со сделками (TDM#750): день без сделок показан пустым, а
+  // последний день со сделками (ответ: earlier) — ссылкой; подменять дату молча нельзя. ?date работает как раньше.
+  // «Цена оценки» (TDM#751) — чистая цена, по которой прогон оценил бумагу (% номинала, как цена сделки): от неё считается PnL.
   // Данные: GET ../api/v1/trades?date=&run_id= (backend desk/trades.py).
   const K = KIT, f = K.f, esc = K.esc;
   K.top({ title: 'C20 · Сделки дня', tag: 'сделки из выгрузки адаптера: источник, учёт в позициях, версии, отмены' });
@@ -104,6 +107,8 @@
 
   // ---------- полоса дат: сколько сделок и отмен ----------
   function renderDays(list) {
+    // день без сделок (дата прогона, сделок нет: TDM#750) в полосе тоже есть — с нулём, чтобы было видно, какая дата открыта
+    if (on && !list.some(x => x.date === on)) list = list.concat([{ date: on, trades: 0, cancelled: 0 }]).sort((a, b) => a.date < b.date ? 1 : -1);
     daysEl.innerHTML = list.map(x => '<button class="c20-day' + (x.date === on ? ' on' : '') + '" data-d="' + x.date + '"><div class="d">' + f.dshort(x.date) + '</div><div class="s">' + x.trades + ' сд.' + (x.cancelled ? ' · отм. ' + x.cancelled : '') + '</div></button>').join('') +
       '<input class="k-input" type="date" id="pick" style="min-width:140px" title="Другая дата" value="' + esc(on || '') + '">';
     daysEl.querySelectorAll('[data-d]').forEach(b => b.onclick = () => pick(b.dataset.d));
@@ -119,6 +124,9 @@
   const size = r => r.quantity != null ? num(r.quantity, 0) + ' <span class="mut3">шт.</span>'
     : r.face_amount_ccy != null ? num(r.face_amount_ccy, 0) + ' <span class="mut3">' + esc(r.ccy || '') + ' ном.</span>'
       : r.amount_ccy != null ? num(r.amount_ccy, 2) + ' <span class="mut3">' + esc(r.ccy || '') + '</span>' : '<span class="mut3">—</span>';
+  const dm = s => s ? s.slice(8, 10) + '.' + s.slice(5, 7) : '';
+  // цена оценки прогона, от которой считается PnL сделки; прогон до неё или сделка не в позициях — «—»
+  const mark = r => r.mark_pct != null ? '<span title="' + esc(K.tradeMarkTitle(r.mark_origin)) + '">' + num(r.mark_pct, 4) + ' <span class="mut3">%</span></span>' : '<span class="mut3">—</span>';
   const price = r => r.price_pct != null ? num(r.price_pct, 4) + ' <span class="mut3">%</span>' : r.fx_rate != null ? num(r.fx_rate, 4) : '<span class="mut3">—</span>';
   // под фильтром шапки: книга (юрлицо и деск — с сервера), валюта сделки, портфель (книга HTM — HTM, иначе колонка
   // Portfolio сделки); прогона нет (источник 'empty') — чипов шапки нет, фильтр не действует
@@ -162,19 +170,22 @@
     const s = d.summary;
     const sum = '<div class="c20-sum" style="padding:6px 12px">показано <b>' + rows.length + '</b><span>поздние проводки <b>' + rows.filter(r => r.late).length + '</b></span><span>с поправками <b>' + rows.filter(r => (r.trade_version || 0) > 1).length + '</b></span><span>книг <b>' + new Set(rows.map(r => r.book_id)).size + '</b></span>' +
       (s && s.trades !== rows.length ? '<span class="mut3">всего за дату: ' + s.trades + '</span>' : '') + '</div>';
-    const body = rows.length ? '<table class="k-tbl" data-vk="c20-trades" data-title="Сделки дня"><thead><tr><th>Время</th><th>Книга</th><th>Сделка</th><th>Инструмент</th><th>Сторона</th><th class="n">Количество</th><th class="n">Цена</th><th>Статус</th><th class="n">Версия</th><th>Позиции дня</th><th class="n" title="От цены сделки до оценки последнего прогона: покупка — выше цены, продажа — ниже оценки">PnL сделки</th><th title="Откуда пришёл файл со сделкой и когда монитор её получил (по Москве)">Источник · получена</th></tr></thead><tbody>' +
+    const body = rows.length ? '<table class="k-tbl" data-vk="c20-trades" data-title="Сделки дня"><thead><tr><th>Время</th><th>Книга</th><th>Сделка</th><th>Инструмент</th><th>Сторона</th><th class="n">Количество</th><th class="n">Цена</th><th class="n" title="' + esc(K.tradeMarkTitle()) + '">Цена оценки</th><th>Статус</th><th class="n">Версия</th><th>Позиции дня</th><th class="n" title="От цены сделки до оценки последнего прогона: покупка — выше цены, продажа — ниже оценки">PnL сделки</th><th title="Откуда пришёл файл со сделкой и когда монитор её получил (по Москве)">Источник · получена</th></tr></thead><tbody>' +
       rows.map(r => '<tr class="' + (r.status === 'cancelled' ? 'cx' : '') + '"' + (r.src ? ' title="Строка отчёта ' + esc(r.src) + '"' : '') + '><td>' + time(r) + '</td><td>' + esc(r.book_id) + '</td><td class="mono">' + esc(r.trade_id) + '</td>' +
         '<td>' + esc(r.source_instrument_name || r.source_instrument_id) + (r.source_instrument_name ? ' <span class="mut3 mono">' + esc(r.source_instrument_id) + '</span>' : '') + (r.asset_class && r.asset_class !== 'bond' ? ' <span class="mut3">' + esc(r.asset_class) + '</span>' : '') + '</td>' +
-        '<td>' + esc(SIDE[r.side] || r.side) + '</td><td class="n">' + size(r) + '</td><td class="n">' + price(r) + '</td>' +
+        '<td>' + esc(SIDE[r.side] || r.side) + '</td><td class="n">' + size(r) + '</td><td class="n">' + price(r) + '</td><td class="n">' + mark(r) + '</td>' +
         '<td class="st">' + esc(STATUS[r.status] || r.status) + '</td><td class="n">' + (r.trade_version == null ? '<span class="mut3">—</span>' : esc(String(r.trade_version))) + '</td><td>' + inBook(r) + '</td><td class="n">' + tradePnl(r) + '</td>' +
         '<td class="mut">' + origin(r) + ' <span class="mut3">· ' + received(r) + '</span></td></tr>').join('') + '</tbody></table>'
-      : '<div class="k-empty">' + (d.rows.length ? 'Под фильтр ничего не попало' + (scoped.length < d.rows.length ? ': сделки других книг скрыты фильтром шапки' : '') : 'Сделок на эту дату нет: выгрузка сделок не загружена') + '</div>';
+      : '<div class="k-empty">' + (d.rows.length ? 'Под фильтр ничего не попало' + (scoped.length < d.rows.length ? ': сделки других книг скрыты фильтром шапки' : '')
+        : d.earlier ? 'Сделок за ' + esc(dm(d.date)) + ' пока нет; последние — за <a href="' + K.c20Href({ date: d.earlier.date }) + '" id="earlier" data-d="' + esc(d.earlier.date) + '">' + esc(dm(d.earlier.date)) + '</a> <span class="mut3">(' + d.earlier.trades + ' сд.)</span>'
+          : 'Сделок на эту дату нет: выгрузка сделок не загружена') + '</div>';
     const files = (d.files || []).length ? '<div class="c20-files" style="padding:6px 12px">файлы: ' + d.files.map(x => esc(x.file_name) + (x.completeness === 'increment' ? ' (дельта)' : '') + (x.origin ? ' — ' + esc(ORIGIN[x.origin] || x.origin) : '') + (x.received_at ? ', ' + esc(K.mskTime(x.received_at, true)) : '')).join('; ') + '</div>' : '';
     tp.querySelector('.bd').classList.add('flush', 'scroll');
     tp.querySelector('.bd').innerHTML = sum + body + files;
     K.tableToolsAll(tp.querySelector('.bd'));
     wrap.appendChild(tp);
     view.appendChild(wrap);
+    const ea = document.getElementById('earlier'); if (ea) ea.onclick = e => { e.preventDefault(); pick(ea.dataset.d); };
     const bs = document.getElementById('book'); bs.onchange = () => { book = bs.value; setParam('book_id', book); render(); };
     const pc = document.getElementById('pos'); if (pc) pc.onclick = () => { pos = ''; setParam('pos', ''); render(); };
     const qi = document.getElementById('q');
@@ -189,12 +200,12 @@
       asset_class: 'bond', source_instrument_id: instr, source_instrument_name: null, side, quantity: qty, price_pct: px, ccy: 'RUB', late: false, position_id: book + '|' + instr,
       origin: 'feed', received_at: rec(+ts.slice(0, 2) + 1), entity: null, desk: null, portfolio: null }, extra || {});
     const rows = D === '2026-10-20' ? [
-      t('TR-10', 2, 'live', 'B1', 'SEC-1', 'buy', 1200, 98.5, '10:15', { source_instrument_name: 'Демо-облигация 1', intraday: 'applied', pnl_rub: 4200, pnl_flag: null }),
+      t('TR-10', 2, 'live', 'B1', 'SEC-1', 'buy', 1200, 98.5, '10:15', { source_instrument_name: 'Демо-облигация 1', intraday: 'applied', pnl_rub: 4200, pnl_flag: null, mark_pct: 98.85, mark_origin: 'model' }),
       t('TR-11', 2, 'cancelled', 'B1', 'SEC-2', 'sell', 500, 101.2, '10:40', { intraday: 'cancelled' }),
       t('TR-13', 1, 'live', 'B1', 'SEC-1', 'sell', 300, 98.3, '18:30', { trade_date: '2026-10-19', trade_ts: '2026-10-19T18:30:00', late: true, intraday: 'other_trade_date', origin: 'file', received_at: rec(19) }),
       t('TR-12', 1, 'live', 'B2', 'USDRUB', 'buy', null, null, '10:20', { asset_class: 'fx', amount_ccy: 1e6, fx_rate: 83.5, ccy: 'USD', intraday: 'not_bond' }),
       t('TR-14', 1, 'live', 'B2', 'SEC-9', 'buy', 50, 99.1, '15:05', { intraday: 'no_instrument' }),
-    ] : [t('TR-01', 1, 'live', 'B1', 'SEC-1', 'buy', 400, 98.1, '11:05', { intraday: 'applied', pnl_rub: 310, pnl_flag: 'accrued_assumed', origin: 'history', received_at: '2026-10-20T07:10:00Z' })];
+    ] : [t('TR-01', 1, 'live', 'B1', 'SEC-1', 'buy', 400, 98.1, '11:05', { intraday: 'applied', pnl_rub: 310, pnl_flag: 'accrued_assumed', mark_pct: 98.4, mark_origin: 'market', origin: 'history', received_at: '2026-10-20T07:10:00Z' })];
     const books = [...new Set(rows.map(r => r.book_id))].sort().map(b => { const L = rows.filter(r => r.book_id === b); return { book_id: b, trades: L.length, live: L.filter(r => r.status === 'live').length, cancelled: L.filter(r => r.status === 'cancelled').length }; });
     return {
       date: D, book_id: null, rows, books, state_text: K.TRADE_STATE, origin_text: K.TRADE_ORIGIN,

@@ -227,28 +227,46 @@ def _trades(con, run_id: int) -> tuple[dict[str, dict[str, Any]], bool]:
     return out, known
 
 
+def _mark_of(rows: list[dict[str, Any]]) -> tuple[float | None, str | None]:
+    """The valuation price the recorded trades are measured against (TDM#751, ``pnl.new_trades.mark_of``: clean, % of the
+    face): the average of their ``mark_pct`` weighted by the quantity (a trade without one counts once; the trades of a
+    position share the valuation, so the average is that price), and its origin: the one the trades have, ``mixed`` when
+    they differ. None for both when no trade records it (a run before TDM#751, a trade without a valuation)."""
+    ms = [(x["quantity"] if isinstance(x.get("quantity"), int | float) and x["quantity"] > 0 else 1.0, float(x["mark_pct"]))
+          for x in rows if isinstance(x.get("mark_pct"), int | float) and math.isfinite(x["mark_pct"])]
+    if not ms:
+        return None, None
+    origins = {x.get("mark_origin") for x in rows if isinstance(x.get("mark_pct"), int | float)} - {None}
+    return (math.fsum(w * m for w, m in ms) / math.fsum(w for w, _ in ms),
+            next(iter(origins)) if len(origins) == 1 else ("mixed" if origins else None))
+
+
 def _side_of(rows: list[dict[str, Any]], face: float | None) -> dict[str, Any] | None:
     """One side of a position's recorded trades (``trade_of``): ``n`` trades, ``bonds`` their quantity (the trades that
     have one, ``counted``), ``face`` the same in the position's face units (``face`` of one bond today; null when not
     known) and ``avg`` the average price, % of the face, weighted by the quantity (the trades with a quantity and a price,
-    ``priced``; null when there are none). None when the side has no trade."""
+    ``priced``; null when there are none), ``mark`` and ``mark_origin`` the valuation price of its trades
+    (``_mark_of``, TDM#751; null when not recorded). None when the side has no trade."""
     if not rows:
         return None
     qs = [(float(x["quantity"]), x.get("price_pct")) for x in rows if isinstance(x.get("quantity"), int | float)]
     ps = [(q, float(p)) for q, p in qs if isinstance(p, int | float)]
     bonds, weight = math.fsum(q for q, _ in qs), math.fsum(q for q, _ in ps)
+    mark, origin = _mark_of(rows)
     return {"n": len(rows), "counted": len(qs), "priced": len(ps), "bonds": bonds,
             "face": bonds * face if face is not None else None,
-            "avg": math.fsum(q * p for q, p in ps) / weight if weight else None}
+            "avg": math.fsum(q * p for q, p in ps) / weight if weight else None, "mark": mark, "mark_origin": origin}
 
 
-def trade_of(t: dict[str, Any], pos: list) -> dict[str, Any]:
+def trade_of(t: dict[str, Any], pos: list, on: date | None = None) -> dict[str, Any]:
     """A position's ``trade`` for the pages from its recorded trades: ``n`` trades, ``qty`` the
     face traded (signed, in the position's face units; null when the position was sold to zero: the face of a bond is
     then not known), ``new`` opened today. The card's block «Сделки за день» (TDM#726) reads ``buy`` and ``sell``
     (``_side_of``; absent when there is no trade of the side) and ``net`` (``bonds`` and ``face`` bought less sold, over the
     trades that have a quantity): the same trades the C20 screen lists for the position, no other source. The average
-    price of a net position is not given: it depends on how a sale is counted against a purchase."""
+    price of a net position is not given: it depends on how a sale is counted against a purchase. ``mark`` and
+    ``mark_origin`` (TDM#751): the valuation price of all the trades the PnL is measured against (``_mark_of``).
+    ``date`` (TDM#750; with ``on``): the business date of the run whose trades they are, which the card names."""
     rows = [x for x in t["trades"] if isinstance(x, dict)]
     bonds = [(1.0 if x.get("side") == "buy" else -1.0) * x["quantity"] for x in rows
              if isinstance(x.get("quantity"), int | float)]
@@ -259,8 +277,10 @@ def trade_of(t: dict[str, Any], pos: list) -> dict[str, Any]:
              "sell": _side_of([x for x in rows if x.get("side") != "buy"], one)}   # as qty: not a purchase is a sale
     net = sides["buy"]["bonds"] if sides["buy"] else 0.0
     net -= sides["sell"]["bonds"] if sides["sell"] else 0.0
+    mark, origin = _mark_of(rows)
     return {"qty": math.fsum(bonds) * face if face is not None and len(bonds) == len(rows) else None, "price": pos[6],
-            "n": len(rows), **({"new": True} if t["start"] == 0 else {}),
+            "n": len(rows), "mark": mark, "mark_origin": origin, **({"date": on.isoformat()} if on else {}),
+            **({"new": True} if t["start"] == 0 else {}),
             **{k: v for k, v in sides.items() if v}, "net": {"bonds": net, "face": net * one if one is not None else None}}
 
 
@@ -308,7 +328,7 @@ def extras(con, run: dict[str, Any], writer: Writer = None, cache: SeriesCache |
         # position sold to zero, bought and sold in a day, a day without the previous close); a run before it has none,
         # then the change of the quantity against the previous close as before
         if pid in trades:
-            out["trade"] = trade_of(trades[pid], p)
+            out["trade"] = trade_of(trades[pid], p, as_of)
         elif not trades_known and p0 is not None:
             dq = (p[0] or 0.0) - (p0[0] or 0.0)
             n1, n0 = qty.get((run["run_id"], pid)), qty.get((runs[-2]["run_id"], pid))

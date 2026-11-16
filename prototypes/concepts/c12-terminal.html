@@ -257,7 +257,7 @@ body { font-family: var(--mono); font-size: 12.5px; }
         if (!L.length) { bd.innerHTML += '<span class="err">ничего не найдено</span>'; return '0 позиций'; }
         const e = K.h('div'); bd.appendChild(e);
         K.table(e, { viewKey: 'c12-positions', rows: L, search: false, groupable: K.defaultGroups, stripe: r => K.issuerColor(r.issuer), maxHeight: '58vh',
-          columns: K.cols(['name', ccyCol, 'issuer', 'kind', 'book', 'coupon', 'event', 'tenor', 'notional', 'price', 'ytm', 'spread', 'dv01', 'cs01', 'pnl']) });
+          columns: K.cols(['name', ccyCol, 'issuer', 'kind', 'book', 'coupon', 'event', 'tenor', 'notional', 'tradeDay', 'price', 'ytm', 'spread', 'dv01', 'cs01', 'pnl']) });
         return L.length + ' позиций' + (o.words.length ? ' · «' + o.words.join(' ') + '»' : '') + (o.ccy ? ' · ' + o.ccy : '');
       }
       case 'pnl': {

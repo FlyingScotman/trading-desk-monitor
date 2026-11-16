@@ -30,9 +30,10 @@ public = APIRouter()
 @public.get("/api/v1/trades")
 def get_trades(request: Request, date: str | None = None, book_id: str | None = None,
                days: Annotated[int, Query(ge=1, le=120)] = 20, run_id: int | None = None) -> JSONResponse:
-    """The trades of ``date`` (default: the latest date with trades, else today, Moscow). ``run_id``: the run of the
-    pages' navigation, whose PnL of the trades is shown (TDM#568); without a date, its date; a run of another date than
-    ``date`` is ignored: the date's default run."""
+    """The trades of ``date`` (default: the date of the run the pages show, not the latest date with trades: TDM#750;
+    a date without trades has ``earlier``, the last date that had some). ``run_id``: the run of the pages' navigation,
+    whose PnL of the trades is shown (TDM#568); without a date, its date; a run of another date than ``date`` is
+    ignored: the date's default run."""
     try:
         day = Date.fromisoformat(date) if date else None
     except ValueError:
@@ -64,7 +65,7 @@ def get_trades_summary(request: Request, date: str | None = None, run_id: int | 
                        ports_off: Annotated[list[str] | None, Query()] = None) -> JSONResponse:
     """The day's trades counted for the general screens (TDM#585, ``trades.brief``) under the header's filter
     (``entity``, ``desk``, ``books`` repeated, ``ccy``, ``ports_off`` repeated; none: every trade), without the rows.
-    ``date``: default the date of ``run_id``, else the latest date with trades."""
+    ``date``: default the date of ``run_id``, else of the run the pages show (TDM#750; ``earlier`` as above)."""
     try:
         day = Date.fromisoformat(date) if date else None
     except ValueError:

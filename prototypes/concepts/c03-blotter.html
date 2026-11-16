@@ -133,6 +133,8 @@ body { display: flex; flex-direction: column; height: 100vh; overflow: hidden; }
     tenor: { label: 'Срок', num: true, val: r => r.tenor, fmt: v => f.yrs(v), title: 'до оферты, если есть, иначе до погашения' },
     // в CSV — число в mm валюты бумаги (заголовок «Номинал, mm в вал.»), валюта — в колонке «Вал» (#258)
     notional: { label: 'Номинал', num: true, val: r => r.notional, fmt: (v, r) => f.mn(v, 2) + '<span class="mut3">mm ' + r.ccy + '</span>', csvHead: 'Номинал, mm в вал.', csvFmt: v => f.mn(v, 2), title: 'в валюте бумаги' },
+    // изменение номинала за день по сделкам (TDM#752): то же нетто и та же ячейка, что на других экранах (K.tradeDayCol), в блоке карточки
+    tradeDay: Object.assign(K.tradeDayCol(), { csvHead: 'Сделки за день, mm в вал.' }),
     mv: { label: 'MV, mm ₽', neutral: true, num: true, val: r => r.mv, fmt: v => f.mn(v, 0), sum: r => r.mv, unit: 'mm ₽', sfmt: v => f.mn(v, 0) },
     price: { label: 'Цена', num: true, val: r => r.price, fmt: v => f.px(v) },
     chg: { label: 'Δ цены', num: true, val: r => r.price == null ? null : r.price - r.prevPrice, csvHead: 'Δ цены, % ном.', fmt: v => v == null ? '<span class="mut3">—</span>' : '<span class="' + f.cls(v) + '">' + f.s(v, 2) + '</span>' },
@@ -168,9 +170,9 @@ body { display: flex; flex-direction: column; height: 100vh; overflow: hidden; }
     ['base', 'Базовый', ['name', 'ccy', 'issuer', 'kind', 'book', 'coupon', 'offer', 'offerKind', 'maturity', 'event', 'notional', 'price', 'ytm', 'spread', 'dv01', 'cs01', 'spark', 'isin']],
     ['risk', 'Риск', ['name', 'ccy', 'issuer', 'kind', 'book', 'event', 'tenor', 'notional', 'mv', 'dur', 'dv01', 'cs01', 'basis01', 'ofzSpr01', 'carry', 'funding']],
     ['px', 'Цены и спреды', ['name', 'ccy', 'issuer', 'kind', 'coupon', 'event', 'price', 'chg', 'bidask', 'spark', 'ytm', 'spread', 'zdisc', 'gspread', 'dur']],
-    ['pnl', 'Кэрри и PnL', ['name', 'ccy', 'issuer', 'book', 'coupon', 'curCpn', 'fund', 'carry', 'funding', 'pc', 'pfu', 'pr', 'ps', 'pf', 'pt', 'po', 'pnl', 'pnlMtd', 'pnlYtd']],
+    ['pnl', 'Кэрри и PnL', ['name', 'ccy', 'issuer', 'book', 'tradeDay', 'coupon', 'curCpn', 'fund', 'carry', 'funding', 'pc', 'pfu', 'pr', 'ps', 'pf', 'pt', 'po', 'pnl', 'pnlMtd', 'pnlYtd']],
     ['stat', 'Статика', ['name', 'isin', 'issuer', 'issuerFull', 'ccy', 'kind', 'rating', 'sector', 'coupon', 'offer', 'offerKind', 'maturity', 'tenor', 'book', 'entity', 'desk']],
-    ['all', 'Всё', ['name', 'isin', 'ccy', 'issuer', 'kind', 'book', 'rating', 'coupon', 'curCpn', 'offer', 'offerKind', 'maturity', 'event', 'tenor', 'notional', 'mv', 'price', 'chg', 'spark', 'ytm', 'spread', 'zdisc', 'gspread', 'dur', 'dv01', 'cs01', 'basis01', 'ofzSpr01', 'carry', 'funding', 'pnl', 'pnlMtd', 'pnlYtd']],
+    ['all', 'Всё', ['name', 'isin', 'ccy', 'issuer', 'kind', 'book', 'rating', 'coupon', 'curCpn', 'offer', 'offerKind', 'maturity', 'event', 'tenor', 'notional', 'tradeDay', 'mv', 'price', 'chg', 'spark', 'ytm', 'spread', 'zdisc', 'gspread', 'dur', 'dv01', 'cs01', 'basis01', 'ofzSpr01', 'carry', 'funding', 'pnl', 'pnlMtd', 'pnlYtd']],
   ];
   // валюта и эмитент — в каждом наборе колонок, и при группировке тоже (R37)
   const cols = () => (PRESETS.find(p => p[0] === st.preset) || PRESETS[0])[2].map(k => Object.assign({ key: k }, C[k]));

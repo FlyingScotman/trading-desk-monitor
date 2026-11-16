@@ -2951,6 +2951,32 @@
 
   // стандартные колонки позиций (концепты берут нужные по ключу)
   K.offerKindText = k => ({ put: 'пут', call: 'колл' })[k] || k || '';
+  // «Сделки за день» позиции (TDM#752): чистое изменение номинала за день по сделкам прогона, со знаком (куплено минус
+  // продано), в валюте бумаги; те же сделки и то же нетто, что в блоке карточки (p.tradeToday.net, K.dayTradesBlock). Нет
+  // сделок — null и пустая ячейка. Номинал не известен (позиция продана в ноль: у бумаги нет номинала) — нетто в штуках.
+  // Подсказка: сколько куплено, продано и сколько сделок. Прогон без разбивки по сторонам (до TDM#726) — только p.tradeToday.qty
+  K.tradeNet = p => {
+    const t = p && p.tradeToday;
+    if (!t) return null;
+    const sides = !!(t.buy || t.sell), known = [t.buy, t.sell].some(x => x && x.counted);
+    const nb0 = t.net ? t.net.bonds : sides ? (t.buy ? t.buy.bonds : 0) - (t.sell ? t.sell.bonds : 0) : null;
+    const bonds = nb0 == null || (sides && !known) ? null : Math.abs(nb0) < 1e-6 ? 0 : nb0;
+    const face = sides ? (known && t.net ? t.net.face : null) : t.qty == null ? null : t.qty;
+    const total = sides ? (t.buy ? t.buy.n : 0) + (t.sell ? t.sell.n : 0) : t.n || 0, ccy = p.ccy || '';
+    const part = x => !x ? 'нет' : (x.counted ? f.n(x.bonds, 0) + ' шт.' + (x.face == null ? '' : ' (' + f.money(x.face) + ' ' + ccy + ')') : 'без количества');
+    const tip = sides ? 'Куплено: ' + part(t.buy) + '; продано: ' + part(t.sell) + '. Сделок: ' + total + '. Нетто за день: номинал, куплено минус продано'
+      : 'Изменение позиции за день' + (total ? '; сделок: ' + total : '');
+    return { face, bonds, total, tip };
+  };
+  K.tradeDayCol = () => ({ label: 'Сделки за день', num: true, title: 'Изменение номинала позиции за день по сделкам: куплено минус продано, mm в валюте бумаги. Подробности — в подсказке ячейки и в блоке «Сделки за день» карточки',
+    val: r => { const n = K.tradeNet(r); return n ? n.face : null; },
+    fmt: (v, r) => {
+      const n = K.tradeNet(r);
+      if (!n) return '';
+      const body = v != null ? f.mns(v, 2) + '<span class="mut3">mm ' + esc(r.ccy || '') + '</span>' : n.bonds != null ? '<span class="mut3">' + f.s(n.bonds, 0) + ' шт.</span>' : '<span class="mut3">—</span>';
+      return '<span title="' + esc(n.tip) + '">' + body + '</span>';
+    },
+    csvFmt: (v, r) => { const n = K.tradeNet(r); return !n ? '' : v != null ? f.mn(v, 2) : n.bonds != null ? f.n(n.bonds, 0) + ' шт.' : ''; } });
   K.posCols = {
     // валюта и эмитент — обычные столбцы (R37): сортировка и фильтр по значениям, как у остальных
     issuer: { key: 'issuerName', label: 'Эмитент', filter: true, title: 'эмитент (у деривативов — контрагент)', fmt: (v, r) => '<b style="color:' + K.issuerColor(r.issuer) + '">●</b> ' + esc(v) },
@@ -2970,6 +2996,7 @@
     // в CSV — число в mm валюты бумаги («Номинал, mm в вал.», как в легенде единиц и на C11), валюта — в колонке «Вал» (#258)
     notional: { key: 'notional', label: 'Номинал', num: true, unit: 'mm в вал.', fmt: (v, r) => f.mn(v, 2) + '<span class="mut3">mm ' + r.ccy + '</span>', csvFmt: v => f.mn(v, 2), title: 'в валюте бумаги' },
     mv: { key: 'mv', label: 'MV, mm ₽', num: true, fmt: v => f.mn(v, 0), sum: true, unit: 'mm ₽', sumFmt: v => f.mn(v, 0) },
+    tradeDay: Object.assign({ key: 'tradeDay', unit: 'mm в вал.' }, K.tradeDayCol()),
     price: { key: 'price', label: 'Цена', num: true, unit: '% ном.', fmt: v => f.px(v) },
     ytm: { key: 'ytm', label: 'Дох.', num: true, fmt: v => f.pct(v) },
     // в CSV — число, вид спреда (Z / DM) — своей колонкой «Вид спреда» за ним (#276)
@@ -3941,6 +3968,11 @@
     no_currency: 'валюта бумаги неизвестна', mixed_units: 'лоты бумаги в разных единицах (штуки и номинал) — сделка не в PnL',
     pending: 'ждёт прогона', unknown: 'нет сведений о прогоне', off: 'расчёт по сделкам дня выключен' };
   K.TRADE_ORIGIN = { file: 'из папки с отчётами', feed: 'фид сервисов адаптера', history: 'догрузка прошлых дат', request: 'загрузка по запросу' };
+  // «Цена оценки» сделки (TDM#751): чистая цена оценки прогона, % номинала, от которой считается PnL сделки; откуда она
+  // (сервер: pnl/new_trades.py mark_of): модель, рынок (закрытие, последняя, средневзвешенная), отчёт, номинал (допущение)
+  K.TRADE_MARK_ORIGIN = { model: 'модель', market: 'рынок', report: 'отчёт', par: 'номинал (допущение)', mixed: 'разные у сделок' };
+  K.tradeMarkTitle = origin => 'Цена оценки: чистая цена, по которой прогон оценил бумагу, % номинала (как цена сделки); PnL сделки считается от неё' +
+    (origin ? '. Откуда: ' + (K.TRADE_MARK_ORIGIN[origin] || origin) : '');
   // живая сделка по облигации, которая должна была войти в позиции дня и не вошла (trades.PROBLEMS сервера)
   K.TRADE_PROBLEMS = ['no_quantity', 'no_instrument', 'units_mismatch', 'other_book', 'position_id_taken', 'no_currency', 'mixed_units'];
   // книги фильтра шапки: юрлицо, деск и выбор книг (то же правило, K.scope.bookIn); фильтр книг не задан — null (все)
@@ -4025,20 +4057,24 @@
     const ccy = esc(p.ccy || ''), none = '<span class="mut3">—</span>';
     // номинал — второй строкой под количеством: карточка справа узкая, пять столбцов в неё не входят
     const qty = (v, fc, b) => (b ? '<b>' + f.n(v, 0) + '</b>' : f.n(v, 0)) + ' <span class="mut3">шт.</span><div class="mut3" style="font-size:11px">' + (fc == null ? '—' : f.money(fc) + ' ' + ccy) + '</div>';
+    // цена оценки (TDM#751) — второй строкой под ценой: колонок и так четыре; нет её в прогоне (до TDM#751) — «—»
+    const mark = x => '<div class="mut3" style="font-size:11px" title="' + esc(K.tradeMarkTitle(x && x.mark != null ? x.mark_origin : null)) + '">оценка ' + (x && x.mark != null ? f.n(x.mark, 4) + ' %' : '—') + '</div>';
     const side = (label, x) => '<tr><td>' + label + '</td>' + (x ? '<td class="n">' + (x.counted ? qty(x.bonds, x.face) : none) + '</td><td class="n">' +
-      (x.avg == null ? none : f.n(x.avg, 4) + ' <span class="mut3">%</span>') + '</td><td class="n">' + f.n(x.n, 0) + '</td></tr>'
+      (x.avg == null ? none : f.n(x.avg, 4) + ' <span class="mut3">%</span>') + mark(x) + '</td><td class="n">' + f.n(x.n, 0) + '</td></tr>'
       : '<td class="n mut3" colspan="3">нет</td></tr>');
     const nb0 = t.net ? t.net.bonds : (t.buy ? t.buy.bonds : 0) - (t.sell ? t.sell.bonds : 0), nb = Math.abs(nb0) < 1e-6 ? 0 : nb0, nf = t.net ? t.net.face : null;
     const total = (t.buy ? t.buy.n : 0) + (t.sell ? t.sell.n : 0);
     const known = [t.buy, t.sell].some(x => x && x.counted);  // ни у одной сделки нет количества — нетто неизвестно, а не ноль
     const net = '<tr class="grp"><td>' + (known && nb > 0 ? 'Нетто: куплено' : known && nb < 0 ? 'Нетто: продано' : 'Нетто') + '</td><td class="n">' + (known ? qty(Math.abs(nb), nf == null ? null : Math.abs(nf), true) : none) + '</td>' +
-      '<td class="n" title="Цена нетто не считается: она зависит от того, как продажи зачитываются против покупок">' + none + '</td><td class="n">' + f.n(total, 0) + '</td></tr>';
+      '<td class="n"><span title="Цена нетто не считается: она зависит от того, как продажи зачитываются против покупок">' + none + '</span>' + mark(t) + '</td><td class="n">' + f.n(total, 0) + '</td></tr>';
     // сделка без количества или без цены в сумму или среднюю цену не входит: об этом — строкой под таблицей
     const noQty = [t.buy, t.sell].reduce((s, x) => s + (x ? x.n - x.counted : 0), 0), noPx = [t.buy, t.sell].reduce((s, x) => s + (x ? x.counted - x.priced : 0), 0);
     const note = (noQty ? 'Сделок без количества: ' + noQty + ' — в суммах их нет. ' : '') + (noPx ? 'Сделок без цены: ' + noPx + ' — в средней цене их нет.' : '');
-    return '<div class="k-sec dtb-sec">Сделки за день <span class="sp"></span><a href="' + K.tradesHref(p.id) + '" title="Экран «Сделки дня» (C20), отобраны сделки этой позиции" style="text-transform:none;letter-spacing:0">сделки позиции на экране «Сделки дня» →</a></div>' +
+    // дата — прогона, чьи это сделки (сервер кладёт её в trade.date), иначе дата страницы: без неё не видно, за какой день сделки (TDM#750)
+    const day = t.date || M.asOf, title = day ? 'Сделки за ' + day.slice(8, 10) + '.' + day.slice(5, 7) : 'Сделки за день';
+    return '<div class="k-sec dtb-sec">' + esc(title) + ' <span class="sp"></span><a href="' + K.tradesHref(p.id) + '" title="Экран «Сделки дня» (C20), отобраны сделки этой позиции" style="text-transform:none;letter-spacing:0">сделки позиции на экране «Сделки дня» →</a></div>' +
       '<div class="k-tbl-wrap k-fit dtb"><table class="k-tbl k-compact"><thead><tr><th></th><th class="n" title="Количество бумаг и их номинал">Количество</th>' +
-      '<th class="n" title="Средняя цена, % номинала, взвешена по количеству">Цена, % ном.</th><th class="n">Сделок</th></tr></thead><tbody>' +
+      '<th class="n" title="Средняя цена, % номинала, взвешена по количеству. Под ней — цена оценки: по какой цене прогон оценил бумагу, от неё считается PnL сделок">Цена, % ном.</th><th class="n">Сделок</th></tr></thead><tbody>' +
       side('Куплено', t.buy) + side('Продано', t.sell) + net + '</tbody></table></div>' + (note ? '<div class="k-note mut3" style="margin:4px 0 0">' + note + '</div>' : '');
   };
   // забыть сводки (C14 перечитывает дату по новым событиям ленты: сделки могли прийти)

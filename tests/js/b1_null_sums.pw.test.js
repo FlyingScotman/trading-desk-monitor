@@ -64,7 +64,7 @@ const ZERO_ANY = /^[+(−-]?0(\.0+)?%?\)?$/;
 // ячейки столбцов PnL / кэрри / фондирования во всех таблицах страницы: [таблица, столбец, вид строки, текст]; номер
 // столбца — по последней строке заголовка, с учётом colspan. fac — ещё и столбцы факторов PnL, MTD и YTD (таблицы
 // PnL по позициям: C01 вкладка «PnL», C03 набор «Кэрри и PnL»)
-const FAC_HDR = '^(PnL|Кэрри|Фондир|Ставки|Спред|FX|Сделки|Прочее|MTD|YTD)';
+const FAC_HDR = '^(PnL|Кэрри|Фондир|Ставки|Спред|FX|Сделки(?! за день)|Прочее|MTD|YTD)';   // «Сделки за день» (TDM#752) — номинал, не PnL
 const pnlCells = (pg, fac) => pg.evaluate(fac => [...document.querySelectorAll('table')].flatMap((tb, ti) => {
   const hr = tb.tHead && tb.tHead.rows[tb.tHead.rows.length - 1]; if (!hr) return [];
   const hs = []; [...hr.cells].forEach(c => { for (let i = 0; i < (c.colSpan || 1); i++) hs.push(c.innerText.replace(/\s+/g, ' ').trim()); });

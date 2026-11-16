@@ -117,7 +117,7 @@ body { display: flex; flex-direction: column; overflow: hidden; }
       render(bd, mode) {
         const list = () => K.list().filter(p => p.ccy !== 'RUB' && !M.deal(p));
         if (mode === 'table') {
-          K.table(bd, { viewKey: 'c06-fx-bonds', rows: list(), search: false, footer: true, stripe: r => K.ccyColor(r.ccy), sort: [['dv01', 1]], columns: K.cols(['name', ccyCol, 'issuer', 'tenor', 'ytm', 'dv01', 'cs01']) });
+          K.table(bd, { viewKey: 'c06-fx-bonds', rows: list(), search: false, footer: true, stripe: r => K.ccyColor(r.ccy), sort: [['dv01', 1]], columns: K.cols(['name', ccyCol, 'issuer', 'tenor', 'tradeDay', 'ytm', 'dv01', 'cs01']) });
           return;
         }
         const el = K.h('div', 'fill'); bd.appendChild(el); stack(el, { curves: ['USD SOFR', 'EUR ESTR', 'CNY XCCY'], list });
