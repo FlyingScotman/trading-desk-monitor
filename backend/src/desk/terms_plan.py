@@ -7,7 +7,14 @@ terms. ``plan`` compares them, per trade id:
 * **changed**: live in the list, terms held, and both versions known and different (the version of the terms is the
   highest over the trade's legs); an unknown version on either side is not a change;
 * **have**: the other live trades of the list;
-* **closed**: trades with terms in a listed book that are not in the list as live (gone, or ``cancelled``).
+* **closed**: trade ids with terms in a listed book that are not in the list as live (gone, or ``cancelled``).
+
+A trade is planned once per ``trade_id`` (the adapter refuses a request that names one twice): the entry with the highest
+version, else of the first book. Its terms are «held» only in that entry's own book, by the key the run links them by
+(``derivatives.trade_key``: book and ``trade_id``; ``link`` never takes the terms of another book): terms stored in
+another book are no terms of the trade, it stays ``need`` and the adapter is asked for it again (TDM#753); the run
+would never see them and nothing would bring them. Terms of the right book that came after a run are held: the
+adapter need not deliver them again, the run is made again by the autopilot (private inputs changed).
 
 The monitor hands the live trades of the list, each marked with whether its terms are needed, to the adapter as a
 file (08 §2.2 ``trades_file``). A source of ``trade_terms`` replaces a book's terms whole, so the adapter needs the
@@ -19,6 +26,7 @@ from datetime import date
 from typing import Any
 
 from . import store
+from .valuation.derivatives import trade_key
 
 
 def _version(v: Any) -> int | None:
@@ -55,17 +63,17 @@ def plan(con: Any, day: date, books: list[str]) -> dict | None:
         old = live.get(tid)
         if old is None or (ver is not None and (old["trade_version"] is None or ver > old["trade_version"])):
             live[tid] = {"trade_id": tid, "book_id": r["book_id"], "trade_version": ver}
-    held: dict[str, dict] = {}
+    held: dict[tuple[str, str], dict] = {}
     for r in store.dataset_rows(con, "trade_terms", day).rows:
         if r.get("book_id") not in listed_books:
             continue
-        h = held.setdefault(str(r["trade_id"]), {"version": None})
+        h = held.setdefault(trade_key(r), {"version": None})
         v = _version(r.get("trade_version"))
         if v is not None and (h["version"] is None or v > h["version"]):
             h["version"] = v
     new, changed, have, trades = [], [], [], []
     for tid, t in sorted(live.items(), key=lambda kv: (kv[1]["book_id"], kv[0])):
-        h = held.get(tid)
+        h = held.get(trade_key(t))   # the terms of the entry's own book
         need = True
         if h is None:
             new.append(tid)
@@ -75,7 +83,7 @@ def plan(con: Any, day: date, books: list[str]) -> dict | None:
             have.append(tid)
             need = False
         trades.append({**t, "need": need})
-    closed = sorted(set(held) - set(live))
+    closed = sorted({tid for _, tid in held} - set(live))
     return {"date": day.isoformat(), "books": sorted(listed_books), "live": len(live), "new": new,
             "changed": changed, "have": have, "closed": closed, "trades": trades,
             "counts": {"live": len(live), "books": len(listed_books), "requested": len(new) + len(changed),

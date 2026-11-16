@@ -957,6 +957,7 @@
     const p = M.pos[id];
     if (!p) return Promise.resolve({ error: 'нет такой позиции в демо' });
     const der = M.deal(p), noTerms = der && hash(String(id)) % 3 === 0, at = AS_OF + 'T15:05:00+03:00';
+    const DEMO_GAP = 'условий, у которых trade_id совпадает с номером позиции «' + id + '», в хранилище нет ни в одной книге, в наборах этой книги за последние 31 дн. тоже: адаптер их не передавал';
     const NAMES = { positions: 'Позиции', trade_terms: 'Условия сделок', trades: 'Сделки дня', ocp: 'ОВП', cash_balances: 'Остатки на счетах' };
     const item = (ds, extra) => Object.assign({ dataset: ds, dataset_name: NAMES[ds], source: 'demo_' + ds, file_name: 'demo_' + ds + '_' + AS_OF.replace(/-/g, '') + '.csv', report_date: AS_OF, valid_date: AS_OF, loaded_at: at }, extra || {});
     const src = (key, level, state, text, items) => ({ key, name: NAMES[key], level, level_text: level === 'deal' ? 'по сделке' : 'по книге и валюте', state,
@@ -979,7 +980,8 @@
         src('ocp', 'book_ccy', ccys.length ? 'present' : 'not_needed', ccys.length ? 'строки по книге и валюте, у сделки своего ключа нет' : 'не нужны: ОВП по рублям не ведётся', ccys.map(c => item('ocp', { ccy: c, has_row: true, level: 'by_book', level_text: 'по книге' }))),
         src('cash_balances', 'book_ccy', 'absent', 'по книге и валюте сделки строк нет'),
       ],
-      mismatches: noTerms ? [{ code: 'report_no_terms', text: 'есть в отчёте позиций, но условия сделки не загружены' }] : [],
+      mismatches: noTerms ? [{ code: 'report_no_terms', detail: 'no_terms', detail_text: DEMO_GAP,
+        text: 'есть в отчёте позиций, но условия сделки не загружены: ' + DEMO_GAP }] : [],
       market,
     } });
   };

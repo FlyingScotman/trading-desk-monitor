@@ -275,7 +275,8 @@ def test_a_report_row_without_terms(seeded):
     j, src, mism = _get(c, rid, "FX2")
     assert src["positions"]["state"] == "present" and src["trade_terms"]["state"] == "absent"
     assert mism == ["report_no_terms"]
-    assert j["mismatches"][0]["text"] == "есть в отчёте позиций, но условия сделки не загружены"
+    assert j["mismatches"][0]["text"].startswith("есть в отчёте позиций, но условия сделки не загружены: ")  # TDM#753
+    assert j["mismatches"][0]["detail"] == "no_terms"
 
 
 def test_terms_without_a_report_row_off_the_report(seeded):

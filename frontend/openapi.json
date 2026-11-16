@@ -7809,7 +7809,39 @@
           },
           "text": {
             "type": "string",
-            "title": "Text"
+            "title": "Text",
+            "description": "The mismatch in words, with its explanation (``detail_text``) after a colon"
+          },
+          "detail": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "no_terms",
+                  "superseded",
+                  "other_book",
+                  "set_not_read",
+                  "not_linked"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Detail",
+            "description": "report_no_terms only (TDM#753): why there are no terms. no_terms: none for this trade in the store; superseded: only in an older set the current one dropped; other_book: only in another book; set_not_read: in this book, in a set the run did not read (recompute the date); not_linked: in a set the run read, the link rule did not take them"
+          },
+          "detail_text": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Detail Text",
+            "description": "The explanation of ``detail`` in words"
           }
         },
         "type": "object",

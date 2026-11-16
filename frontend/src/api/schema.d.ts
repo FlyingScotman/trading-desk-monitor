@@ -2748,8 +2748,21 @@ export interface components {
              * @enum {string}
              */
             code: "report_no_terms" | "trades_no_report" | "terms_no_report" | "deal_on_rows" | "report_trades_gap";
-            /** Text */
+            /**
+             * Text
+             * @description The mismatch in words, with its explanation (``detail_text``) after a colon
+             */
             text: string;
+            /**
+             * Detail
+             * @description report_no_terms only (TDM#753): why there are no terms. no_terms: none for this trade in the store; superseded: only in an older set the current one dropped; other_book: only in another book; set_not_read: in this book, in a set the run did not read (recompute the date); not_linked: in a set the run read, the link rule did not take them
+             */
+            detail?: ("no_terms" | "superseded" | "other_book" | "set_not_read" | "not_linked") | null;
+            /**
+             * Detail Text
+             * @description The explanation of ``detail`` in words
+             */
+            detail_text?: string | null;
         };
         /** ProvenanceSource */
         ProvenanceSource: {
