@@ -181,7 +181,10 @@ jobs:
           fi
 
   js:
-    runs-on: ubuntu-latest
+    # Pinned, not ubuntu-latest: Playwright 1.56.1 has no Chromium build for Ubuntu 26.04, and ubuntu-latest moved
+    # to 26.04 in Nov 2026. Keep PLAYWRIGHT_VERSION below in step with the dev machine; move to a newer image
+    # only together with a Playwright version that supports it.
+    runs-on: ubuntu-24.04
     timeout-minutes: 15
     env:
       PLAYWRIGHT_VERSION: 1.56.1  # the version of the dev machine
