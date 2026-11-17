@@ -376,6 +376,8 @@ class Autopilot:
         self._thread: threading.Thread | None = None
         self._failed: dict[str, tuple] = {}
         self._fail_errors: dict[str, str] = {}  # the keys of ``_failed`` -> the error of their failed run (#156)
+        # the keys of runs that failed on the store's own error -> (stops in a row, the next attempt, the error): TDM#749
+        self._store_pause: dict[str, tuple[int, datetime, str]] = {}
         self._failing: list[tuple[str, str | None]] = []  # this cycle's runs skipped as failed before: (slice, error)
         self._no_run_today: str | None = None  # this cycle: a business day after WARN_AFTER without a run of it
         self._checked: dict[str, float] = {}   # hub date -> monotonic time it was last asked of the hub
@@ -558,16 +560,47 @@ class Autopilot:
         return f"{today:%d.%m}"
 
     def _fail(self, key: str, sig: tuple, e: Exception) -> None:
-        """A run failed on ``sig``: not retried until its inputs change; its error kept for the status (#156)."""
+        """A run failed on ``sig``: not retried until its inputs change; its error kept for the status (#156). Not for
+        an error of the store's own (``backfill.store_fault``, TDM#749: an internal error of the database, its disk or
+        the host's full): that is not what the inputs did. The run waits for a pause (``backfill.STALL_BACKOFF_S`` by
+        the stops in a row, the first one as short) and is tried again then, so a broken store is not asked for the same
+        run every cycle; one line in the log for each attempt."""
+        if backfill.store_fault(e):
+            self._failed.pop(key, None)
+            self._fail_errors.pop(key, None)
+            stops = self._store_pause.get(key, (0, None, ""))[0] + 1
+            until = self._now() + timedelta(seconds=backfill.STALL_BACKOFF_S[min(stops, len(backfill.STALL_BACKOFF_S)) - 1])
+            self._store_pause[key] = (stops, until, f"{type(e).__name__}: {e}")
+            log.warning("autopilot: %s failed on the store's own error (%s, %d in a row): not the inputs' fault, next "
+                        "attempt %s", key, type(e).__name__, stops, until.isoformat(timespec="seconds"))
+            return
+        self._store_pause.pop(key, None)
         self._failed[key] = sig
         self._fail_errors[key] = f"{type(e).__name__}: {e}"
 
+    def _ok(self, key: str) -> None:
+        """The run of ``key`` went through: nothing of its failures is remembered."""
+        self._failed.pop(key, None)
+        self._store_pause.pop(key, None)
+
     def _failed_before(self, key: str, sig: tuple, label: str) -> bool:
-        """The run failed before on the same inputs: not retried, and the cycle's status says so (#156)."""
+        """The run failed before on the same inputs: not retried, and the cycle's status says so (#156); or it failed on
+        the store's own error and its pause is not over (``_fail``, ``_skip_why``)."""
+        pause = self._store_pause.get(key)
+        if pause is not None and self._now() < pause[1]:
+            self._failing.append((label, pause[2]))
+            return True
         if self._failed.get(key) != sig:
             return False
         self._failing.append((label, self._fail_errors.get(key)))
         return True
+
+    def _skip_why(self, key: str) -> str:
+        """Why ``_failed_before`` skipped the run of ``key``, for the step's detail."""
+        pause = self._store_pause.get(key)
+        if pause is not None and self._now() < pause[1]:
+            return f"failed on an error of the store ({_short(pause[2], 80)}), next attempt {pause[1]:%H:%M}"
+        return "failed before on the same inputs, not retried"
 
     def _latest(self, settings: Settings) -> dict[str, str] | None:
         """The latest run shown read on a connection of its own (a skipped cycle has none); the last known one
@@ -1059,6 +1092,7 @@ class Autopilot:
             self._contexts = ContextCache()
         budget = float(settings.backfill_budget_s)
         res = None
+        asked = self._stall_now  # the owner's cycle (the second pass reads it too; the first pass below takes it)
         if todo:
             # stalled on the store or the network (#447): its dates not tried again before its wait, unless the process
             # started or the cycle was asked for, the store is the cause (the plan above just read it), or the downloads
@@ -1091,14 +1125,27 @@ class Autopilot:
             if res["left"]:
                 parts.append(f"{res['left']} dates in the next cycles")
         failed2: list[tuple[str, str]] = []
+        stalled2 = False  # the second pass stopped on the store or the network (TDM#749): an error of the step, as the first's
         # TDM#627: the second pass once the first has gone through every date, in what is left of the cycle's budget
         if res is None or (res["complete"] and res["seconds"] < budget):
             p2 = p if res is None else backfill.plan(con, settings, d_from, today, rows)
             if [d for d in p2.second_todo if d.date not in exclude]:
+                self._stall_now = False
+                # stalled on the store or the network (TDM#749): the pass is not run before the stall's wait, as the
+                # first pass's; the store unreachable is not waited for (the plan above just read it). The whole pass
+                # waits, whichever dates of it this cycle leaves out (``exclude``): the stall's date is looked up in
+                # the plan's dates, not in those the cycle may run
+                stall2 = (backfill.state(settings).get("second") or {}).get("stall")
+                if (stall2 and stall2.get("date") in {d.date for d in p2.second_todo} and stall2.get("next_attempt")
+                        and not asked and not backfill.no_wait(stall2)
+                        and self._now() < datetime.fromisoformat(stall2["next_attempt"])):
+                    parts.append(_stall_text(stall2))
+                    parts.append(span)
+                    return "error", "; ".join(parts)
                 res2 = backfill.run_second(settings, p2, store_url=url, budget_s=budget - (res["seconds"] if res else 0.0),
                                            out=self._eod_line, contexts=self._contexts, exclude=exclude,
                                            workers=pool.workers if pool is not None else 1, pool=pool,
-                                           between=self._between_dates,
+                                           between=self._between_dates, now=self._now(),
                                            progress=lambda i, n, d: self._progress("backfill", i, n, d))
                 if res2["done"]:
                     ran.append(f"гамма {len(res2['done'])} дат")
@@ -1110,11 +1157,14 @@ class Autopilot:
                 if res2["moved"]:
                     parts.append(f"{len(res2['moved'])} dates changed their inputs meanwhile: the first pass runs them again")
                 if res2["stopped"]:
-                    parts.append(f"second derivatives stopped, tried again next cycle: {res2['stopped']}")
+                    stall2 = (backfill.state(settings).get("second") or {}).get("stall")
+                    parts.append(_stall_text(stall2) if stall2 else
+                                 f"second derivatives stopped, tried again next cycle: {res2['stopped']}")
+                    stalled2 = bool(stall2)
                 if res2["left"]:
                     parts.append(f"{res2['left']} dates of the second derivatives in the next cycles")
         parts.append(span)
-        return ("error" if (res and res["failed"]) or failed2 else "ok"), "; ".join(parts)
+        return ("error" if (res and res["failed"]) or failed2 or stalled2 else "ok"), "; ".join(parts)
 
     def _prune_intraday_stale(self, con: psycopg.Connection) -> None:
         """Each cycle: the INTRADAY runs a newer one of their date replaced at least ``INTRADAY_GRACE`` ago
@@ -1231,7 +1281,7 @@ class Autopilot:
                    store.reference_rev_ids(con))
             if self._failed_before(d, sig, store.slice_label(d, "eod_final")):
                 self._eod_tried.add(d)  # not the backfill's either this cycle (#23)
-                notes.append(f"{d} failed before on the same inputs, not retried")
+                notes.append(f"{d} {self._skip_why(d)}")
                 continue
             todo.append((d, why, sig))
         if deferred:
@@ -1256,7 +1306,7 @@ class Autopilot:
                 self._fail(d, sig, e)
                 failed.append(f"{d} failed ({type(e).__name__}: {e})")
                 continue
-            self._failed.pop(d, None)
+            self._ok(d)
             if rid is not None:
                 done.append(f"{d} run {rid} ({why})")
                 ran.append(d)
@@ -1394,7 +1444,7 @@ class Autopilot:
         sig = (cut, sid, tuple(ids), prev_id, logic_version(), inputs_hash, store.dataset_set_ids(con, today))
         label = store.slice_label(today, cut, row.get("cut_ts") if row and sid == row["snapshot_id"] else last[2])
         if self._failed_before(f"{cut} {today}", sig, label):
-            return "skipped", f"{cut} {sid[:12]} failed before on the same inputs, not retried", "failed_before"
+            return "skipped", f"{cut} {sid[:12]} {self._skip_why(f'{cut} {today}')}", "failed_before"
         cache_dir = Path(settings.snapshot_cache)
         if row is not None and sid == row["snapshot_id"]:
             if self._hub_down and not _cached(cache_dir, row):  # a cached cut needs no hub: it runs (#147)
@@ -1416,7 +1466,7 @@ class Autopilot:
             log.exception("autopilot: intraday %s failed", label)
             self._fail(f"{cut} {today}", sig, e)
             return "error", f"{label} failed ({type(e).__name__}: {e})", "run_failed"
-        self._failed.pop(f"{cut} {today}", None)
+        self._ok(f"{cut} {today}")
         if rid is None:
             return "skipped", f"{label}: no positions for {today}", "no_positions"
         ran.append(label)
@@ -1491,7 +1541,7 @@ class Autopilot:
                                f"the adapter, {self._sync_later} hub dates next cycle)"), "inbox_backlog"
         sig = (snap, tuple(ids), logic, inputs_hash, store.dataset_set_ids(con, today))
         if self._failed_before(f"prev_close {today}", sig, label):
-            return "skipped", f"{label} failed before on the same inputs, not retried", "failed_before"
+            return "skipped", f"{label} {self._skip_why(f'prev_close {today}')}", "failed_before"
         self._progress("morning", 0, 1, label)
         self._emit(f"morning {label}: {why}")
         log.info("autopilot: morning %s (%s)", label, why)
@@ -1503,7 +1553,7 @@ class Autopilot:
             log.exception("autopilot: morning %s failed", label)
             self._fail(f"prev_close {today}", sig, e)
             return "error", f"{label} failed ({type(e).__name__}: {e})", "run_failed"
-        self._failed.pop(f"prev_close {today}", None)
+        self._ok(f"prev_close {today}")
         if rid is None:
             return "skipped", f"{label}: no positions for {today}", "no_positions"
         ran.append(label)

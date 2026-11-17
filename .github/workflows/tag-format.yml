@@ -16,7 +16,8 @@ permissions: {}
 jobs:
   tag-format:
     if: github.event_name == 'push' || !startsWith(github.event.release.tag_name, 'v')
-    runs-on: ubuntu-latest
+    # Pinned, not ubuntu-latest: see the comment at the top of «jobs» in ci.yml (an image move must be deliberate).
+    runs-on: ubuntu-24.04
     timeout-minutes: 5
     env:
       TAG: ${{ github.event.release.tag_name || github.ref_name }}

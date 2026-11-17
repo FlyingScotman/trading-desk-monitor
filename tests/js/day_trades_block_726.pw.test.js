@@ -12,8 +12,10 @@ const ORIGIN = 'http://desk.test';
 const TYPES = { '.html': 'text/html', '.js': 'application/javascript', '.css': 'text/css', '.json': 'application/json', '.svg': 'image/svg+xml', '.png': 'image/png' };
 
 // две покупки по разным ценам (3 бумаги по 99 и 1 по 100) и продажа 2 бумаг по 101,5; номинал бумаги 1000
-const TRADE = { qty: 2000, price: 99, n: 3, buy: { n: 2, counted: 2, priced: 2, bonds: 4, face: 4000, avg: 99.25 },
-  sell: { n: 1, counted: 1, priced: 1, bonds: 2, face: 2000, avg: 101.5 }, net: { bonds: 2, face: 2000 } };
+// TDM#750: trade.date — день прогона, чьи это сделки (в заголовке блока); TDM#751: mark — цена оценки, от которой считается PnL
+const TRADE = { qty: 2000, price: 99, n: 3, date: '2026-11-13', mark: 100, mark_origin: 'model',
+  buy: { n: 2, counted: 2, priced: 2, bonds: 4, face: 4000, avg: 99.25, mark: 100, mark_origin: 'model' },
+  sell: { n: 1, counted: 1, priced: 1, bonds: 2, face: 2000, avg: 101.5, mark: 100, mark_origin: 'model' }, net: { bonds: 2, face: 2000 } };
 
 async function open(browser, ids) {
   const ctx = await browser.newContext({ viewport: { width: 1440, height: 1000 } });
@@ -41,7 +43,7 @@ async function check(root, id, asOf) {
   const sec = root.locator('.dtb');
   assert.strictEqual(await sec.count(), 1, 'один блок');
   const text = (await sec.innerText()).replace(/\s+/g, ' ');
-  for (const s of ['Куплено', 'Продано', 'Нетто: куплено', 'Количество', 'Цена, % ном.', 'Сделок', '99.2500', '101.5000', '4k RUB', '2k RUB'])
+  for (const s of ['Куплено', 'Продано', 'Нетто: куплено', 'Количество', 'Цена, % ном.', 'Сделок', '99.2500', '101.5000', '4k RUB', '2k RUB', 'оценка 100.0000 %'])
     assert.ok(text.includes(s), 'в блоке «' + s + '»: ' + text);
   assert.ok(/Куплено 4 шт\./.test(text) && /Продано 2 шт\./.test(text) && /Нетто: куплено 2 шт\./.test(text), text);
   const link = root.locator('a:has-text("сделки позиции на экране «Сделки дня»")');
@@ -50,7 +52,7 @@ async function check(root, id, asOf) {
   assert.strictEqual(href.pathname, '/concepts/c20-trades.html');
   assert.strictEqual(href.searchParams.get('pos'), id);
   assert.strictEqual(href.searchParams.get('date'), asOf);
-  assert.ok(/Сделки за день/.test(await root.textContent()), 'заголовок раздела (на экране он прописными)');
+  assert.ok(/Сделки за 13\.11/.test(await root.textContent()), 'заголовок раздела: день прогона, чьи сделки (на экране он прописными)');
 }
 
 test('#726: блок «Сделки за день» в карточке позиции', { skip: pw ? false : 'нет Playwright' }, async t => {
@@ -69,7 +71,7 @@ test('#726: блок «Сделки за день» в карточке пози
         await check(pg.locator('.k-drawer').last(), bonds[0], asOf);
         await pg.evaluate(id => KIT.card(id), bonds[1]);
         assert.strictEqual(await pg.locator('.k-drawer').last().locator('.dtb').count(), 0, 'без сделок блока нет');
-        assert.ok(!(await pg.locator('.k-drawer').last().textContent()).includes('Сделки за день'));
+        assert.ok(!/Сделки за \d\d\.\d\d/.test(await pg.locator('.k-drawer').last().textContent()));
         assert.deepStrictEqual(api.slice(before).filter(x => /trade/.test(x)), [], 'о сделках карточка сервер не спрашивает (история и потоки — её прежние запросы)');
         assert.deepStrictEqual(errors, []);
       } finally { await ctx.close(); }

@@ -89,6 +89,37 @@ def _moscow_today() -> date:
     return datetime.now(UTC).astimezone(store.MSK).date()
 
 
+def default_date(con: psycopg.Connection, run_id: int | None = None) -> date:
+    """The date the trades screens open on without one (TDM#750): the date of the run the pages show, not the latest
+    date that has trades (on Monday that is Friday's, shown as the day's): the date of ``run_id`` when it is a complete
+    run, else the newest date with a run shown (``store.CURRENT_RUNS``); with no run at all (nothing valued yet) the
+    latest date with trades, else today (Moscow). A day without trades is then an empty day with ``earlier_trades``
+    pointing at the last one that had them, never another date shown in its place."""
+    if run_id is not None:
+        r = con.execute("SELECT business_date FROM run WHERE run_id = %s AND status = 'complete'", (run_id,)).fetchone()
+        if r:
+            return r[0]
+    r = con.execute(f"SELECT max(business_date) FROM run WHERE run_id IN ({store.CURRENT_RUNS})").fetchone()
+    if r and r[0]:
+        return r[0]
+    latest = trade_dates(con, _moscow_today(), 1)
+    return latest[0] if latest else _moscow_today()
+
+
+def earlier_trades(con: psycopg.Connection, on: date, tries: int = 10) -> dict[str, Any] | None:
+    """The latest date before ``on`` that has trades and how many (``{"date", "trades"}``), else None: what an empty
+    day points at (TDM#750). One query finds the candidate dates (a stored set with rows, newest first, no rows read);
+    only the newest is counted by its current rows (``store.dataset_rows``), the next one only when a later set of that
+    date closed it (a full snapshot with no trades): at most ``tries`` dates."""
+    for (d,) in con.execute(
+            "SELECT DISTINCT valid_date FROM dataset_set WHERE dataset = 'trades' AND valid_date < %s AND row_count > 0"
+            " ORDER BY valid_date DESC LIMIT %s", (on, tries)).fetchall():
+        n = len(store.dataset_rows(con, "trades", d).rows)
+        if n:
+            return {"date": d.isoformat(), "trades": n}
+    return None
+
+
 SKIP_REASONS = ("cancelled", "not_bond", "other_trade_date", "no_quantity", "no_instrument", "units_mismatch",
                 "other_book", "position_id_taken", "no_currency", "mixed_units")
 """Why a trade of the day is not in the day's book (``effect``; the screen shows them, the run counts them)."""
@@ -709,6 +740,11 @@ def _row(r: dict[str, Any], on: date, run: dict[str, Any] | None = None, enabled
     p = (pnl or {}).get(str(r.get("trade_id"))) if out["intraday"] == "applied" else None
     out["pnl_rub"] = p["pnl_rub"] if p else None   # the trade's PnL from its price to the run's valuation (TDM#557)
     out["pnl_flag"] = p.get("flag") if p else None   # why it is 0 or assumed (pnl.new_trades.FLAGS)
+    # the valuation price (clean, % of the face, as ``price_pct``) the PnL is measured against and where it comes from
+    # (``pnl.new_trades.mark_of``: model, intraday, close, report, par, stale; ``mark_date`` of a stale one): None in a run before TDM#751 or without a valuation
+    out["mark_pct"] = p.get("mark_pct") if p else None
+    out["mark_origin"] = p.get("mark_origin") if p else None
+    out["mark_date"] = p.get("mark_date") if p else None   # of a stale price: the day it is from
     # the run's position the trade went into: its own position_id, or another row of its bond in the book (``_fold``
     # takes it by the bond when the ids differ); C03's «сд N» opens C20 on the trades of this position (TDM#585)
     out["run_position_id"] = p.get("run_position_id") if p else None
@@ -768,12 +804,12 @@ def _counts(rows: list[dict[str, Any]]) -> dict[str, Any]:
 def view(con: psycopg.Connection, on: date | None = None, book_id: str | None = None,
          days: int = 20, intraday_trades: bool = True, run_id: int | None = None,
          history: dict[str, set[str]] | None = None) -> dict[str, Any]:
-    """The trades screen of ``on`` (default: the latest date with trades, else today, Moscow), of ``book_id`` only when
-    given: see the module docstring. Amounts as the contract has them (unsigned; ``side`` gives the direction).
-    ``history``: the files of the fetch of past dates (``history_files``, for ``origin_of``)."""
+    """The trades screen of ``on`` (default: the date of the run the pages show, ``default_date``; TDM#750), of ``book_id``
+    only when given: see the module docstring. A date with no trades at all has no rows and ``earlier``: the latest
+    earlier date that had some (``earlier_trades``). Amounts as the contract has them (unsigned; ``side`` gives the
+    direction). ``history``: the files of the fetch of past dates (``history_files``, for ``origin_of``)."""
     if on is None:
-        latest = trade_dates(con, _moscow_today(), 1)
-        on = latest[0] if latest else _moscow_today()
+        on = default_date(con, run_id)
     t, run, rows, origins, books = _day(con, on, intraday_trades, run_id, book_id, history)
     per_book: dict[str, Counter] = {}
     for r in rows:
@@ -799,6 +835,7 @@ def view(con: psycopg.Connection, on: date | None = None, book_id: str | None = 
                    "desk": (books.get(b) or {}).get("desk"), "trades": c["trades"], "live": c["live"],
                    "cancelled": c["cancelled"], "applied": c["applied"]} for b, c in sorted(per_book.items())],
         "rows": rows,
+        "earlier": earlier_trades(con, on) if not t.rows and not book_id else None,   # TDM#750: an empty day's pointer
         "files": [{"scope": u["scope"], "source": u["source"], "report_date": u["report_date"].isoformat(),
                    "report_ts": u["report_ts"].isoformat() if u["report_ts"] else None,
                    "completeness": u["completeness"], "rows": u["row_count"], "file_name": u["file_name"],
@@ -857,13 +894,10 @@ def brief(con: psycopg.Connection, on: date | None = None, books: list[str] | No
     (``scope``: ``header_filter``; ``books`` alone: those books), without the rows: the counts (``_counts``), per
     origin the trades and the last delivery, per book its counts and last trade, and the ``TOP`` live trades of the
     largest PnL (by its size; then the latest without a PnL). The same filter gives the same trades as C20 shows.
-    ``on``: default the date of ``run_id``, else the latest date with trades, else today (Moscow)."""
-    if on is None and run_id is not None:
-        r = con.execute("SELECT business_date FROM run WHERE run_id = %s AND status = 'complete'", (run_id,)).fetchone()
-        on = r[0] if r else None
+    ``on``: default the date of ``run_id``, else of the run the pages show (``default_date``, TDM#750). ``earlier``: as
+    in ``view``, for a date with no trades."""
     if on is None:
-        latest = trade_dates(con, _moscow_today(), 1)
-        on = latest[0] if latest else _moscow_today()
+        on = default_date(con, run_id)
     f = scope if scope is not None else header_filter(books=books)
     t, run, rows, origins, in_force = _day(con, on, intraday_trades, run_id, history=history)
     rows = [r for r in rows if _in_filter(f, r)]
@@ -881,6 +915,7 @@ def brief(con: psycopg.Connection, on: date | None = None, books: list[str] | No
                   reverse=True)[:TOP - len(top)]
     return {"date": on.isoformat(), "books": (f or {}).get("books"), "filter": f,
             "run_id": run["run_id"] if run else None, **_counts(rows),
+            "earlier": earlier_trades(con, on) if not t.rows else None,
             "sources": _sources(rows, units, origins), "state_text": STATE_TEXT,
             "by_book": dict(sorted(per_book.items())),
             "top": [{k: r.get(k) for k in BRIEF_FIELDS} for r in top],

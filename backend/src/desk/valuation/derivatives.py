@@ -727,6 +727,12 @@ def request_of(position_id: str, book_id: str, row: dict[str, Any], terms: list[
     return Request(position_id, book_id, row, trades=trades, partial=bool(left_out), left_out=left_out)
 
 
+def trade_key(t: dict[str, Any]) -> tuple[str, str]:
+    """(book, ``trade_id``) of a ``trade_terms`` row: the key the legs of one trade are grouped by (``link``). One
+    book's trade is not another book's with the same id; ``terms_plan`` decides «have» by it."""
+    return str(t.get("book_id")), str(t.get("trade_id"))
+
+
 def _link(rows: list[tuple[str, str, dict[str, Any]]], terms: list[dict[str, Any]]
           ) -> tuple[dict[str, list[dict[str, Any]]], list[dict[str, Any]], dict[str, list[str]]]:
     """position_id -> its trade_terms rows, the rows of ``LINKED_KINDS`` no positions row names, and position_id ->
@@ -741,7 +747,7 @@ def _link(rows: list[tuple[str, str, dict[str, Any]]], terms: list[dict[str, Any
     for t in terms:
         if t.get("product_kind") not in LINKED_KINDS:
             continue
-        k = (str(t.get("book_id")), str(t.get("trade_id")))
+        k = trade_key(t)
         legs[k].append(t)
         if t.get("position_id"):
             named[(k[0], str(t["position_id"]))][k] = None

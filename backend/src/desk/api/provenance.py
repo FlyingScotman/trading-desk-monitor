@@ -36,7 +36,7 @@ never a zero. Nothing here reads a report's values beyond keys and dates."""
 from __future__ import annotations
 
 import re
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from typing import Any
 
 from .. import store, trades
@@ -122,24 +122,36 @@ def _terms_sets(con, run: dict[str, Any], book: str) -> list[int] | None:
         (run["business_date"], run["positions_known_at"])).fetchall()]
 
 
-def _terms(con, run: dict[str, Any], pid: str, book: str, x: dict[str, Any], fact: dict[str, Any] | None,
-           off_trade: str | None) -> tuple[list[dict[str, Any]], dict[int, dict[str, Any]], bool]:
-    """(the deal's terms rows with ``_set_id``, their sets by id, whether the run's lineage says what it read)."""
-    ids = _terms_sets(con, run, book)
-    if ids is None:
-        return [], {}, False
+def _terms_names(pid: str, x: dict[str, Any], fact: dict[str, Any] | None, off_trade: str | None
+                 ) -> tuple[set[str], list[str]]:
+    """(the trades core valued for the position, the ``trade_id`` s the link rule (``derivatives._link``) compares): the
+    trade of its ``deal_id`` or of its ``position_id``, and the trades core took."""
     core = ((fact or {}).get("extra") or {}).get("core") or {}
     wanted = {str(t) for t in core.get("trades") or ()}
     if off_trade:
         wanted.add(off_trade)
-    # the candidate trades of the link rule (``derivatives._link``): the legs naming the position, the trade of its
-    # deal_id or of its position_id; then every leg of those trades of the book
-    names = sorted(wanted | {str(v) for v in (x.get("deal_id"), pid) if v})
-    rows = [{**r["data"], "_set_id": r["set_id"]} for r in con.execute(
+    return wanted, sorted(wanted | {str(v) for v in (x.get("deal_id"), pid) if v})
+
+
+def _terms_candidates(con, ids: list[int], book: str, pid: str, names: list[str]) -> list[dict[str, Any]]:
+    """The candidate trades of the link rule: the legs of ``ids``' sets naming the position, the trade of its deal_id or
+    of its position_id; then every leg of those trades of the book (rows with ``_set_id``)."""
+    return [{**r["data"], "_set_id": r["set_id"]} for r in con.execute(
         "SELECT set_id, data FROM dataset_row WHERE set_id = ANY(%(ids)s) AND data->>'book_id' = %(b)s"
         " AND data->>'trade_id' IN (SELECT data->>'trade_id' FROM dataset_row WHERE set_id = ANY(%(ids)s)"
         "  AND data->>'book_id' = %(b)s AND (data->>'position_id' = %(p)s OR data->>'trade_id' = ANY(%(n)s)))"
         " ORDER BY set_id, row_no", {"ids": ids, "b": book, "p": pid, "n": names}).fetchall()]
+
+
+def _terms(con, run: dict[str, Any], pid: str, book: str, x: dict[str, Any], fact: dict[str, Any] | None,
+           off_trade: str | None) -> tuple[list[dict[str, Any]], dict[int, dict[str, Any]], bool, list[dict[str, Any]]]:
+    """(the deal's terms rows with ``_set_id``, their sets by id, whether the run's lineage says what it read, the
+    candidate rows of the sets the run read: what ``terms_gap`` explains a missing link by)."""
+    ids = _terms_sets(con, run, book)
+    if ids is None:
+        return [], {}, False, []
+    wanted, names = _terms_names(pid, x, fact, off_trade)
+    rows = _terms_candidates(con, ids, book, pid, names)
     if wanted:   # as ``derivatives._link``: a leg naming another position is that position's
         got = [r for r in rows if str(r.get("trade_id")) in wanted
                and (not r.get("position_id") or str(r["position_id"]) == pid)]
@@ -149,7 +161,110 @@ def _terms(con, run: dict[str, Any], pid: str, book: str, x: dict[str, Any], fac
     sets = {s["set_id"]: s for s in con.execute(
         "SELECT set_id, source, source_name, report_date, recorded_at, valid_date FROM dataset_set WHERE set_id = ANY(%s)",
         (sorted({r["_set_id"] for r in got}),)).fetchall()} if got else {}
-    return got, sets, True
+    return got, sets, True, rows
+
+
+GAP_CODES = ("no_terms", "superseded", "other_book", "set_not_read", "not_linked")
+"""Why a report row has no terms (``terms_gap``, the sub-code of ``report_no_terms``): none for this trade in the store;
+only in an older set the current one dropped; only in another book; in this book, but in a set the run did not read; in
+a set the run read, but the link rule did not take them."""
+SUPERSEDED_DAYS = 31
+"""How far back (valid dates) ``terms_gap`` looks in the older terms sets of the book for a trade the current set dropped."""
+_RECALC_LATER = ("монитор пересчитает дату сам при ближайшем цикле автопилота (Настройки → «Автообновление»); запустить "
+                 "цикл сразу — кнопка «Обновить» в строке «Автопилот» вверху главной страницы и страницы «Настройки» (у "
+                 "роли «просмотр» её нет)")
+"""The set came after the run: ``recompute`` / the autopilot's EOD step make the run again when the inputs hash changes."""
+_RECALC_OTHER = ("отдельной кнопки пересчёта одной даты в мониторе нет: дату пересчитывает автопилот, когда видит, что "
+                 "входные данные дня изменились (Настройки → «Автообновление»)")
+"""The set was there before the run, the run read others: no button of its own."""
+
+
+def _day(v: Any) -> str:
+    return v.strftime("%d.%m.%Y") if isinstance(v, date | datetime) else str(v)
+
+
+def _keys_text(pid: str, deal: Any, joint: str) -> str:
+    """The keys of the link rule a row is compared by: its deal_id and its position id (as a trade_id)."""
+    parts = ([f"deal_id «{deal}»"] if deal and str(deal) != pid else []) + [f"номером позиции «{pid}»"]
+    return "с " + f" {joint} с ".join(parts)
+
+
+def terms_gap(con, run: dict[str, Any], pid: str, book: str, x: dict[str, Any], fact: dict[str, Any] | None,
+              off_trade: str | None, reason: str | None, read: list[dict[str, Any]]) -> tuple[str, str]:
+    """(sub-code of ``GAP_CODES``, the explanation in words) of a ``report_no_terms``: a derivative row of a run that
+    recorded its terms lineage and has no terms linked. ``read``: the candidate rows of the sets the run read
+    (``_terms``). The cases, in this order: the run read terms of the book that name this trade but the link rule did
+    not take them (``not_linked``: which key was compared and what the rows say); else the terms in the store now (the
+    sets ``store.dataset_rows`` reads, as the plan does): in this book, in a set the run did not read
+    (``set_not_read``, with the set's valid date and load time against the run's ``positions_known_at``, and what
+    brings the date up to date); only in another book, named (``other_book``); only in an older set of this book that
+    the current one dropped, looked for in the last ``SUPERSEDED_DAYS`` days (``superseded``); nowhere
+    (``no_terms``). ``not_linked`` goes first: when the run read the trade's terms and the store now also holds a
+    newer set of the book, the explanation is the link (the newer set is not what the run missed). Book and trade ids
+    are for the card only: nothing here is logged."""
+    bd = run["business_date"]
+    _, names = _terms_names(pid, x, fact, off_trade)
+    deal = x.get("deal_id")
+    if read:
+        sets = {r["set_id"]: r for r in con.execute(
+            "SELECT set_id, valid_date FROM dataset_set WHERE set_id = ANY(%s)",
+            (sorted({r["_set_id"] for r in read}),)).fetchall()}
+        facts, ambiguous = [], str(reason or "").startswith("terms_ambiguous")
+        for t in sorted({(str(r.get("trade_id")), str(r.get("product_kind")), str(r.get("position_id") or ""))
+                         for r in read}):
+            f = f"trade_id «{t[0]}», вид продукта «{t[1]}»"
+            if t[1] not in dv.LINKED_KINDS:
+                f += " (такой вид к строкам отчёта не привязывается)"
+            if t[2] and t[2] != pid:
+                f += f", строка условий названа другой позицией «{t[2]}»"
+            facts.append(f)
+        when = ", ".join(sorted({_day(s["valid_date"]) for s in sets.values()}))
+        text = (f"условия книги «{book}» в прогон прочитаны (набор от {when}) и строки по сделке в них есть, но к "
+                f"позиции не привязались: trade_id условий сравнивался {_keys_text(pid, deal, 'и')}; в условиях: "
+                + "; ".join(facts))
+        if ambiguous:
+            text += "; эти условия приняла и другая строка отчёта (одна сделка на нескольких строках)"
+        return "not_linked", text
+
+    # the terms in force now: ``store.dataset_rows("trade_terms", bd)`` (what the plan and the next run read), on the
+    # API's connection (dict rows)
+    cur = [s["set_id"] for s in con.execute(
+        "SELECT DISTINCT ON (scope_key) set_id FROM dataset_set WHERE dataset = 'trade_terms' AND valid_date <= %s"
+        f" AND recorded_at <= now() ORDER BY scope_key, {store.CURRENT_SET}", (bd,)).fetchall()]
+    now = [{**r["data"], "_set_id": r["set_id"]} for r in con.execute(
+        "SELECT set_id, data FROM dataset_row WHERE set_id = ANY(%s) AND (data->>'trade_id' = ANY(%s)"
+        " OR data->>'position_id' = %s)", (cur, names, pid)).fetchall()] if cur else []
+    mine = [r for r in now if str(r.get("book_id")) == book]
+    if mine:
+        sets = con.execute("SELECT set_id, valid_date, recorded_at FROM dataset_set WHERE set_id = ANY(%s)"
+                           " ORDER BY recorded_at DESC", (sorted({r["_set_id"] for r in mine}),)).fetchall()
+        s0 = sets[0]
+        known = run.get("positions_known_at") or run.get("started_at")
+        text = (f"условия этой сделки в книге «{book}» в хранилище есть (набор от {_day(s0['valid_date'])}, загружен "
+                f"{_msk(str(s0['recorded_at']))}), но прогон этот набор не читал")
+        later = known is None or s0["recorded_at"] > known
+        if known is not None:
+            text += f": он взял данные на {_msk(str(known))}"
+            text += ", набор пришёл позже" if later else ", набор был, но прогон читал другие наборы книги"
+        return "set_not_read", f"{text}; {_RECALC_LATER if later else _RECALC_OTHER}"
+    if now:
+        other = sorted({str(r.get("book_id")) for r in now})
+        return "other_book", (f"условия этой сделки загружены в другой книге: {', '.join(f'«{b}»' for b in other)}, "
+                              f"а позиция в книге «{book}»: условия берутся только своей книги")
+    # the older sets of this book only, the last ``SUPERSEDED_DAYS`` days: the rows of a bounded few sets, not of every set
+    old = con.execute(
+        "SELECT s.valid_date, s.recorded_at FROM dataset_set s WHERE s.dataset = 'trade_terms'"
+        " AND s.scope->>'book_id' = %(b)s AND s.valid_date BETWEEN %(lo)s AND %(hi)s AND EXISTS (SELECT 1 FROM"
+        " dataset_row r WHERE r.set_id = s.set_id AND (r.data->>'trade_id' = ANY(%(n)s) OR r.data->>'position_id' = %(p)s))"
+        " ORDER BY s.recorded_at DESC LIMIT 1",
+        {"b": book, "lo": bd - timedelta(days=SUPERSEDED_DAYS), "hi": bd, "n": names, "p": pid}).fetchone()
+    if old is not None:
+        return "superseded", (f"условия этой сделки были в наборе книги «{book}» от {_day(old['valid_date'])} "
+                              f"(загружен {_msk(str(old['recorded_at']))}), но действующий набор её не содержит: "
+                              "его заменил более новый")
+    return "no_terms", (f"условий, у которых trade_id совпадает {_keys_text(pid, deal, 'или')}, в хранилище нет "
+                        f"ни в одной книге, в наборах этой книги за последние {SUPERSEDED_DAYS} дн. тоже: адаптер их не "
+                        "передавал")
 
 
 def _terms_source(kind: str, got: list[dict[str, Any]], sets: dict[int, dict[str, Any]], known: bool,
@@ -727,6 +842,14 @@ def _mismatch_text(code: str, rows: int, reason: str | None) -> str:
     return text
 
 
+def _mismatch(code: str, rows: int, reason: str | None, why: tuple[str, str] | None) -> dict[str, Any]:
+    """A mismatch of the card: the code, its text (with the explanation after a colon, when there is one: TDM#753) and
+    the explanation's sub-code and text apart."""
+    text = _mismatch_text(code, rows, reason)
+    return {"code": code, "text": text + (f": {why[1]}" if why else ""), "detail": why[0] if why else None,
+            "detail_text": why[1] if why else None}
+
+
 def provenance(con, run: dict[str, Any], pid: str, feeds: list[dict[str, Any]] | None = None,
                history: dict[str, set[str]] | None = None) -> dict[str, Any] | None:
     """The module doc's answer for position ``pid`` of ``run``; None: no such position in the run. ``feeds``: the
@@ -747,7 +870,7 @@ def provenance(con, run: dict[str, Any], pid: str, feeds: list[dict[str, Any]] |
     rep_src, row, same = _report(con, run, pid, book)
     x = {**(ex.get("reported") or {}), **(row or {})}
     kind = _kind(x, fact, bd, off_trade is not None)
-    got, sets, known = _terms(con, run, pid, book, x, fact, off_trade) if kind != "bond" else ([], {}, True)
+    got, sets, known, read = _terms(con, run, pid, book, x, fact, off_trade) if kind != "bond" else ([], {}, True, [])
     if kind == "linked":
         kind = "derivative" if got else "bond"
     elif kind == "other" and got:   # any non-bond row with terms is valued from them (``valuation.positions``)
@@ -771,9 +894,10 @@ def provenance(con, run: dict[str, Any], pid: str, feeds: list[dict[str, Any]] |
     ccys = sorted({c for c in (_ccy(x.get("ccy")), _ccy((fact or {}).get("ccy")),
                                *(_ccy(k) for k in ((fact or {}).get("fx_delta") or {})),
                                *(_ccy(t.get(k)) for t in got for k in ("base_ccy", "quote_ccy", "ccy"))) if c})
-    mism = []
+    mism, detail = [], {}
     if row is not None and kind == "derivative" and not got and known and not by_ticker:
         mism.append("report_no_terms")
+        detail["report_no_terms"] = terms_gap(con, run, pid, book, x, fact, off_trade, reason, read)
     if row is None and n_trades and not got:
         mism.append("trades_no_report")
     if row is None and got:
@@ -790,7 +914,7 @@ def provenance(con, run: dict[str, Any], pid: str, feeds: list[dict[str, Any]] |
         "run_id": run["run_id"], "business_date": bd.isoformat(), "position_id": pid, "book_id": book, "kind": kind,
         "valued": by_core, "off_report": off_trade is not None,
         "sources": [rep_src, terms_src, trades_src, *_book_ccy(con, run, book, ccys)],
-        "mismatches": [{"code": m, "text": _mismatch_text(m, same, reason)} for m in mism],
+        "mismatches": [_mismatch(m, same, reason, detail.get(m)) for m in mism],
         "market": _market(con, run, kind, fact if by_core else None, got, x, reason,
                           None if by_core or fact is None else (ex.get("quality") or p.get("quality")), ex),
     }

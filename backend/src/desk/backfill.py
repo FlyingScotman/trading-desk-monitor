@@ -85,6 +85,11 @@ problem dates with their kind (``failed``, ``unconverged``: do not converge; ``u
 error and attempts (``problem_dates``); the stall (``stalled``: the store's or the network's error the backfill
 stopped on, what is down (``cause``, ``stall_cause``), since when, the next attempt of the autopilot; None when it goes
 on) and the estimated time left (``eta_s``).
+
+An internal error of the database (``store_broken``, TDM#749: class XX, e.g. «unexpected data beyond EOF in block N»)
+is the store's, not the date's: both passes stop on it as on a store that does not answer and mark no date failed. A
+state written before that, with dates frozen as failed on such an error, is let go when it is read
+(``release_store_faults``, in ``state``), so the plan makes those dates again.
 """
 
 from __future__ import annotations
@@ -130,7 +135,8 @@ STALL_BACKOFF_S = (600, 1800, 3600)
 the last one onwards: 10 min, 30 min, then hourly (``desk backfill`` does not wait). The store unreachable
 (``cause`` ``store``) is not waited for: the plan of the next cycle reads the store first, so a run gets as far only
 once it answers. A slow store (``store_slow``, a query cancelled by the statement timeout) is waited for: the same
-heavy query again at once would time out again."""
+heavy query again at once would time out again, and so is one that reports an internal error of its own
+(``store_broken``, PostgreSQL class XX, TDM#749: it needs a restart, not a retry at once)."""
 STALL_STALE = timedelta(days=1)
 """A stall whose last error is older than this is forgotten: the next error starts a new one (its since, its waits)."""
 
@@ -238,12 +244,62 @@ def reason_key(why: str | None) -> str:
             else "late" if w.endswith("changed after the run") else "other")
 
 
-def state(settings: Settings) -> dict[str, Any]:
+STORE_FAULT_ERROR = re.compile(r"^(?:InternalError_|DataCorrupted|IndexCorrupted|DiskFull)(?::|$)")
+"""The recorded error (``f"{type(e).__name__}: {e}"``) of a date that failed on the store's own error (TDM#749,
+``store_fault``): a state written before such an error was a stall. Stored as it is (the class name, a colon, the
+message); the «вторые производные: » the settings page puts before a second pass's error is the screen's, not stored.
+The class name must be whole (``InternalErrorX`` is not it), and plain ``InternalError`` is not a class XX one."""
+_HEAL_LOCK = threading.Lock()
+
+
+def _read_state(settings: Settings) -> dict[str, Any]:
     path = Path(settings.home) / STATE_FILE
     try:  # on Windows the file may be held for a moment by the writer's replace or a reader: tried again
         return json.loads(fsretry.retry(lambda: path.read_text(encoding="utf-8"), fsretry.REPLACE_WAIT_S))
     except (OSError, ValueError):
         return {}
+
+
+def _frozen_by_store(st: dict[str, Any]) -> tuple[list[str], list[str]]:
+    """The dates a store's own error froze (``release_store_faults``): (first pass, second pass)."""
+    problems = st.get("problems")
+    first = [d for d, pr in problems.items() if isinstance(pr, dict) and pr.get("kind") == "failed"
+             and STORE_FAULT_ERROR.match(str(pr.get("error") or ""))] if isinstance(problems, dict) else []
+    sec = st.get("second")
+    gave_up = sec.get("failed") if isinstance(sec, dict) else None
+    second = [d for d, g in gave_up.items() if isinstance(g, dict) and STORE_FAULT_ERROR.match(str(g.get("error") or ""))
+              ] if isinstance(gave_up, dict) else []
+    return first, second
+
+
+def release_store_faults(st: dict[str, Any]) -> tuple[int, int]:
+    """TDM#749: the dates a store's own error froze as failed (a state of before ``transient`` took such an error for a
+    stall: the date's ``failed`` mark and its ``problems`` entry of kind ``failed``, the second pass's give-up in
+    ``second.failed``) are let go, so the plan makes them again; the dates that failed on their own error, one that does
+    not converge and the stalls stay. Matched by the class name at the start of the recorded error
+    (``STORE_FAULT_ERROR``). Returns (first pass dates, second pass dates); ``st`` is changed in place."""
+    first, second = _frozen_by_store(st)
+    for d in first:
+        del st["problems"][d]
+        (st.get("failed") or {}).pop(d, None)
+    for d in second:
+        del st["second"]["failed"][d]
+    return len(first), len(second)
+
+
+def state(settings: Settings) -> dict[str, Any]:
+    """The backfill's state file. A date a store's own error froze (``release_store_faults``, TDM#749) is let go as the
+    file is read: written back at once, said in the log with the counts, so the next read finds nothing to do."""
+    st = _read_state(settings)
+    if any(_frozen_by_store(st)):
+        with _HEAL_LOCK:
+            st = _read_state(settings)  # (again under the lock: not the copy of a reader that was held up)
+            first, second = release_store_faults(st)
+            if first or second:
+                save_state(settings, st)
+                log.warning("backfill: %d dates of the first pass and %d of the second were failed on the store's own "
+                            "error (not the dates' data): planned again", first, second)
+    return st
 
 
 def save_state(settings: Settings, st: dict[str, Any]) -> None:
@@ -533,29 +589,52 @@ def _disk_full(e: BaseException) -> bool:
     return isinstance(e, OSError) and e.errno in {getattr(errno, n) for n in ("ENOSPC", "EDQUOT") if hasattr(errno, n)}
 
 
+def store_broken(e: BaseException) -> bool:
+    """An error of the store's own, not of what was asked of it (TDM#749): PostgreSQL's class XX «internal error»
+    (``InternalError_`` XX000, ``DataCorrupted`` XX001, ``IndexCorrupted`` XX002; not the other ``psycopg.InternalError``
+    classes, 24, 25, 2B, 2D: those say what our own statements did, a failed transaction and the like), such as
+    «unexpected data beyond EOF in block N» when the host reports a table file shorter than the database has written.
+    The date's data is fine: the same error comes on every date that writes there until the server is restarted or the
+    file is mended. A stall (``transient``), not the date's failure; the autopilot does not remember the run as failed
+    either (``Autopilot._fail``)."""
+    return isinstance(e, psycopg.Error) and (getattr(e, "sqlstate", None) or "").startswith("XX")
+
+
+def store_fault(e: BaseException) -> bool:
+    """``store_broken``, the database's disk full (``DiskFull``, SQLSTATE 53100, an ``OperationalError``) or the host's
+    (``ENOSPC``, ``EDQUOT``): the store's trouble, which a failed mark on a date must never remember."""
+    return store_broken(e) or isinstance(e, psycopg.errors.DiskFull) or _disk_full(e)
+
+
 def transient(e: BaseException) -> bool:
     """An error of the store connection, the network or the hub as a whole (unreachable, 429, 5xx, token or proxy
     refused), not of the date's data: such a date is not marked failed (a failed date is not tried again on the
     same inputs), and the run stops there, since the next dates would hit it too (``run``: the stall, #447).
     Network: ``TransportError`` (the hub client's, urllib or curl), ``TimeoutError``, ``ConnectionError``, DNS, TLS
-    (``ssl.SSLError``) and urllib/http.client errors. Store: ``psycopg.OperationalError``.
+    (``ssl.SSLError``) and urllib/http.client errors. Store: ``psycopg.OperationalError`` (also ``DiskFull``) and the
+    store's internal errors (``store_broken``, class XX, TDM#749).
     A full disk or an exceeded quota (``ENOSPC``, ``EDQUOT``) is a stall too (``disk``). Any other ``OSError`` (a missing or locked cache file,
     permission) is the date's own error, not a stall."""
     if isinstance(e, HubError):
         return e.status is None or e.status >= 500 or e.status in (401, 403, 407, 429)
-    return _disk_full(e) or isinstance(e, (
-        psycopg.OperationalError, TransportError, TimeoutError, ConnectionError, socket.gaierror, ssl.SSLError,
-        urllib.error.URLError, http.client.HTTPException))
+    return _disk_full(e) or store_broken(e) or isinstance(e, (
+        psycopg.OperationalError, TransportError, TimeoutError, ConnectionError, socket.gaierror,
+        ssl.SSLError, urllib.error.URLError, http.client.HTTPException))
 
 
 def stall_cause(e: BaseException) -> str:
     """What a ``transient`` error says is down: ``store`` (no connection), ``store_slow`` (a query cancelled by the
-    statement timeout), ``proxy`` (a 407 or a refused tunnel), ``access`` (the hub refused the token: 401, 403, or no
+    statement timeout), ``store_broken`` (the store's internal error, class XX: it does not break the date, TDM#749),
+    ``proxy`` (a 407 or a refused tunnel), ``access`` (the hub refused the token: 401, 403, or no
     token), ``setup`` (no hub address, no curl), ``hub`` (no answer or a 5xx, ``HubUnavailable``; another hub error
     without a status), ``network`` (no connection, timeout, TLS, a cut-off body),
-    ``disk`` (no space or quota: ``ENOSPC``, ``EDQUOT``)."""
+    ``disk`` (no space or quota: ``ENOSPC``, ``EDQUOT``, the database's ``DiskFull``)."""
     if isinstance(e, psycopg.errors.QueryCanceled):
         return "store_slow"
+    if isinstance(e, psycopg.errors.DiskFull):
+        return "disk"
+    if store_broken(e):
+        return "store_broken"
     if isinstance(e, psycopg.OperationalError):
         return "store"
     if isinstance(e, TransportError):
@@ -952,8 +1031,9 @@ def run(settings: Settings, p: Plan, *, store_url: str | None = None, client: An
                     old = problems.get(day.date) or {}
                     same = old.get("kind") == "transient" and old.get("sig") == day.sig
                     n = _attempt(problems, day, "transient", err)
-                    problems[day.date].update(source="store" if isinstance(e, psycopg.OperationalError) else "network",
-                                              cause=stall_cause(e), status=_code(e), phase=phase)
+                    problems[day.date].update(
+                        source="store" if isinstance(e, psycopg.OperationalError) or store_broken(e) else "network",
+                        cause=stall_cause(e), status=_code(e), phase=phase)
                     # its own error before, or it waited while the stall ended and fails again on its own (#447)
                     alone = same and (old.get("alone") or (old.get("recheck") and n >= MAX_ATTEMPTS))
                     if alone:
@@ -1060,7 +1140,7 @@ def run_second(settings: Settings, p: Plan, *, store_url: str | None = None, bud
                out: Callable[[str], None] = print, progress: Callable[[int, int, str], None] | None = None,
                contexts: Any = None, exclude: set[str] | frozenset[str] = frozenset(),
                workers: int = 1, pool_init: Any = None, pool: Any = None,
-               between: Callable[[], Any] | None = None) -> dict[str, Any]:
+               between: Callable[[], Any] | None = None, now: datetime | None = None) -> dict[str, Any]:
     """The second pass of the history (TDM#627, module doc): the dates of ``p`` whose default run was made without
     the second derivatives (``Day.second`` ``todo``), the newest first, until ``budget_s`` seconds have passed (None:
     all), but ``exclude``. A date's run is made again in full from the cache (``eod_run``; no download: a date whose
@@ -1077,8 +1157,11 @@ def run_second(settings: Settings, p: Plan, *, store_url: str | None = None, bud
     every pass makes a new one), so the cycles do not run the date through both passes for ever: after ``MAX_ATTEMPTS``
     on the same inputs it is left (``Day.second`` ``failed``).
     ``progress(x, m, date)`` as ``run``'s: ``x`` the dates with the second derivatives, ``m`` all that have a run.
-    An error of the store or the network stops the pass (tried again next cycle); another error is the date's, counted
-    the same way. ``workers`` > 1: the dates in that many processes at once, published newest first as one after the
+    An error of the store or the network stops the pass and is remembered as its stall (``state["second"]["stall"]``,
+    TDM#749: the date, the error, ``cause``, since when, the stops and the wait to the next attempt, ``STALL_BACKOFF_S``
+    as the first pass's; ``status`` shows it as ``stalled`` with ``phase`` ``second``, the autopilot does not run the
+    pass before it, except at the owner's request or for a store that does not answer); a date made, or moved, ends it.
+    ``now``: the run's start, for the stall's times. Another error is the date's, counted the same way. ``workers`` > 1: the dates in that many processes at once, published newest first as one after the
     other (``run``, ``desk.parallel``; ``pool``: the same). Returns {done: [dates], failed: [(date, error)], moved: [dates], skipped: [dates
     not cached], mismatch: [(date, what differs)], left: n, stopped: the transient error or None, seconds}."""
     from . import parallel
@@ -1102,6 +1185,12 @@ def run_second(settings: Settings, p: Plan, *, store_url: str | None = None, bud
     st2 = st.setdefault("second", {})
     fails = st2.setdefault("failed", {})
     odd = st2.setdefault("mismatched", {})
+    now = now or datetime.now(UTC)
+    live = st2.get("stall")  # the stall standing (TDM#749); one of a day ago is forgotten, a new error starts a new one
+    if live and now - _when(live.get("at"), now) > STALL_STALE:
+        st2.pop("stall")
+        live = None
+    stall: dict[str, Any] | None = None
     total = p.count_second("done") + p.count_second("todo") + p.count_second("failed")
     con: psycopg.Connection | None = None
     tried = 0
@@ -1184,6 +1273,9 @@ def run_second(settings: Settings, p: Plan, *, store_url: str | None = None, bud
                 if transient(e):
                     stopped = f"{type(e).__name__}: {e}"
                     log.exception("backfill second pass %s interrupted", day.date)
+                    stall = {**_stall({"source": "store" if isinstance(e, psycopg.OperationalError) or store_broken(e)
+                                       else "network", "cause": stall_cause(e), "status": _code(e), "phase": "second"},
+                                      stopped, day.date, [day.date]), "probe": day.date}
                     break
                 err = f"{type(e).__name__}: {e}"
                 old = fails.get(day.date) or {}
@@ -1216,6 +1308,17 @@ def run_second(settings: Settings, p: Plan, *, store_url: str | None = None, bud
             fails.pop(x)  # the date has its second derivatives (or no run): nothing to remember
         for x in [x for x in odd if x in {d.date for d in p.days if d.status != "done"}]:
             odd.pop(x)  # the date has no run in force
+        if stall is not None:  # as the first pass's: since its first stop, the next attempt later after each stop
+            old = live or {}
+            at = now + timedelta(seconds=time.monotonic() - t0)
+            stops = old.get("stops", 0) + 1
+            wait = 0 if no_wait(stall) else STALL_BACKOFF_S[min(stops, len(STALL_BACKOFF_S)) - 1]
+            dates = list(dict.fromkeys([*(old.get("dates") or []), *stall["dates"]]))
+            st2["stall"] = {**stall, "dates": dates, "since": old.get("since") or at.isoformat(timespec="seconds"),
+                            "at": at.isoformat(timespec="seconds"), "stops": stops,
+                            "next_attempt": (at + timedelta(seconds=wait)).isoformat(timespec="seconds")}
+        elif done or moved:
+            st2.pop("stall", None)  # a date got through the store: it works
         save_state(settings, st)
     return {"done": done, "failed": failed, "moved": moved, "skipped": skipped, "mismatch": mismatch,
             "left": len(todo) - len(done) - len(failed) - len(skipped) - len(moved),
@@ -1232,7 +1335,9 @@ def _stall(problem: dict[str, Any], error: str, first: str, dates: list[str]) ->
 
 def status(con: psycopg.Connection, settings: Settings, today: date | None = None) -> dict[str, Any]:
     """The backfill's state on the cache and the store (no hub call): ``Plan.summary`` plus the oldest default run
-    and the first positions date; ``enabled`` (setting ``backfill``)."""
+    and the first positions date; ``enabled`` (setting ``backfill``). ``stalled``: the first pass's stall while it has
+    dates to run, else the second pass's (``phase`` ``second``). Reading the state may write it once: ``state`` lets
+    go the dates a store's own error froze (TDM#749)."""
     today = today or date.today()
     p = plan(con, settings, start_date(settings), today)
     oldest = con.execute(f"SELECT min(business_date) FROM run WHERE run_id IN ({store.DEFAULT_RUNS})").fetchone()[0]
@@ -1256,6 +1361,9 @@ def status(con: psycopg.Connection, settings: Settings, today: date | None = Non
     if stall and stall.get("phase") != "bundle" and not set(stall.get("dates") or [stall.get("date")]) & {
             d.date for d in p.todo}:
         stall = None
+    live2 = (st.get("second") or {}).get("stall")  # the second pass's (TDM#749), when the first has nothing left to run
+    if not stall and not s["todo"] and live2 and live2.get("date") in {d.date for d in p.second_todo}:
+        stall = live2
     if stall:
         stall = {**stall, "next_attempt": next_attempt(stall, settings)}
     from .marketdata import fixing_history

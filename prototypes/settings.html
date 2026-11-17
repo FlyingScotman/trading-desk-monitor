@@ -2461,7 +2461,7 @@ function mountTabs(a, reload){
         + (fh.jobs && fh.jobs.pending ? 'Ещё загружается: ' + fh.jobs.pending + ' частей. ' : '') + (fh.jobs && fh.jobs.errors ? 'С ошибкой: ' + fh.jobs.errors + ' частей. ' : '')
         + 'Прогоны берут фиксинги из среза хаба и дополняют их отсюда до начала окна среза.']);
       if (st) rows.splice(4, 0, ['Догрузка стоит', 'с ' + at(st.since) + ': ' + T.cause(st) + T.stall(s).retry,
-        st.error ? 'Ошибка' + (st.date ? ' на ' + dd(st.date) : '') + ': ' + st.error : '']);
+        (st.error ? 'Ошибка' + (st.date ? ' на ' + dd(st.date) : '') + ': ' + st.error : '') + (T.stall(s).hint ? (st.error ? '\n' : '') + T.stall(s).hint : '')]);
       try {   // сделки прошлых дат (TDM#569): сколько дат уже с PnL сделок; нет данных или нет доступа — строки нет
         const hr = await fetch('/api/v1/adapter-services/history', {headers:{'Accept':'application/json'}, cache:'no-store'});
         const hj = hr.ok ? T.history(await hr.json()) : null;

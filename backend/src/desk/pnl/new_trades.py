@@ -42,7 +42,7 @@ from ..store import PositionInputs
 from ..valuation import positions as pv1
 from ..valuation.bonds import BondValuation
 from ..valuation.fallback import METHOD as SIMPLE_METHOD
-from ..valuation.fallback import SimplePnl, fx_rate
+from ..valuation.fallback import STALE_NOTE_DATE, SimplePnl, fx_rate
 from .direct import REPORTED_METHOD, DirectPnl
 from .flash import NoPnl
 from .reasons import NO_PNL_TEXT, assumption
@@ -62,9 +62,44 @@ def _finite(*vs: float | None) -> bool:
     return all(v is not None and math.isfinite(v) for v in vs)
 
 
+MARK_ORIGINS = {"model": "model", "par": "par", "reported": "report", "last": "intraday", "legal_close": "close",
+                "close": "close", "waprice": "close"}
+"""``trades[].mark_origin`` by the valuation's ``price_basis`` (TDM#751, the owner's words «модель / внутридневной срез /
+закрытие / отчёт»): ``model`` a model price, ``intraday`` the last price of an intraday cut (``last``), ``close`` the
+exchange's closing price (``legal_close``, ``close``) and the day's weighted average (``waprice``: taken when the day has no
+close, so it is the close's stand-in; at an intraday cut it is the average of the day so far), ``report`` a figure of the
+report, ``par`` the par proxy. A valuation of quality ``stale_price`` is ``stale`` whatever its basis: the price is
+an earlier day's (``mark_date``). A basis not listed (a new one) is None, not a guess."""
+
+
+
+def mark_of(ref: Any) -> tuple[float | None, str | None, str | None]:
+    """The valuation price a trade's PnL is measured against (TDM#751): the clean price of ``ref`` in % of the face (the
+    unit of the trade's ``price_pct``), where it comes from (``MARK_ORIGINS``) and, of a stale price, its date
+    (``mark_date``, ISO; None when the valuation does not say). ``dirty_rub`` is the clean price on the face plus the
+    accrued, so the price is the valuation's own ``clean_pct``, else what ``dirty_rub`` less the accrued over the face
+    gives. All None without a valuation."""
+    if ref is None:
+        return None, None, None
+    clean = _num(getattr(ref, "clean_pct", None))
+    if clean is None or not math.isfinite(clean):
+        dirty, acc, face = (_num(getattr(ref, k, None)) for k in ("dirty_rub", "accrued_rub", "face_rub"))
+        clean = (dirty - (acc if _finite(acc) else 0.0)) / face * 100.0 if _finite(dirty, face) and face else None  # type: ignore[operator]
+    if clean is None or not math.isfinite(clean):
+        return None, None, None
+    if getattr(ref, "quality", None) == "stale_price":
+        m = next((STALE_NOTE_DATE.search(a) for a in getattr(ref, "assumptions", None) or () if isinstance(a, str)
+                  and STALE_NOTE_DATE.search(a)), None)
+        return clean, "stale", m.group(1) if m else None
+    basis = getattr(ref, "price_basis", None)
+    return clean, MARK_ORIGINS.get(basis) if isinstance(basis, str) else None, None
+
+
 def trade_pnl(ctx: EodContext, secid: str, terms: Any, ref: BondValuation | None, t: dict[str, Any]) -> dict[str, Any]:
     """One trade ``t`` (an ``applied`` entry of ``trades.apply_intraday``) of the bond ``secid`` against today's valuation
-    ``ref`` (per-bond figures: ``dirty_rub``, ``accrued_rub``, ``face_rub``): its entry of ``extra.trades``."""
+    ``ref`` (per-bond figures: ``dirty_rub``, ``accrued_rub``, ``face_rub``): its entry of ``extra.trades``, with the
+    valuation price it is measured against (``mark_pct``, clean, % of the face, ``mark_origin`` and, of a stale price,
+    ``mark_date``: ``mark_of``; None without a valuation, and in a run before TDM#751)."""
     sign = 1.0 if t.get("side") == "buy" else -1.0
     qty, face = _num(t.get("quantity")), _num(t.get("face_amount_ccy"))
     out: dict[str, Any] = {k: t.get(k) for k in ("trade_id", "trade_version", "side", "price_pct", "accrued_ccy", "ccy")}
@@ -77,6 +112,7 @@ def trade_pnl(ctx: EodContext, secid: str, terms: Any, ref: BondValuation | None
     if ccy_ok:
         n, _ = pv1._bonds(ctx, secid, qty, {} if qty is not None else {"ccy": t.get("ccy"), "face_amount_ccy": face})
     out.update(quantity=n, pnl_rub=0.0, flag=None)
+    out["mark_pct"], out["mark_origin"], out["mark_date"] = None, None, None
     if not ccy_ok:
         out["flag"] = "units_mismatch"
     elif n is None or not math.isfinite(n):
@@ -99,6 +135,8 @@ def trade_pnl(ctx: EodContext, secid: str, terms: Any, ref: BondValuation | None
             cost = n * out["price_pct"] / 100.0 * ref.face_rub + acc
             now = n * ref.dirty_rub
             out.update(pnl_rub=sign * (now - cost), cost_rub=cost, value_rub=now, flag=flag)
+    if ccy_ok and n is not None and math.isfinite(n) and ref is not None and _finite(ref.dirty_rub, ref.face_rub):
+        out["mark_pct"], out["mark_origin"], out["mark_date"] = mark_of(ref)   # the price of the valuation, also where the trade has none
     return out
 
 
