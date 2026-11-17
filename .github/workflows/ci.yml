@@ -6,8 +6,11 @@ on:
   pull_request:
 
 jobs:
+  # All Linux jobs are pinned to ubuntu-24.04, not ubuntu-latest (which moved to 26.04 in Nov 2026): the image move
+  # changed the Python/pip that the venv gets, and the tests of backend/windows/mirror_install.py pin pip 24 behaviour.
+  # Move the image deliberately, together with checking mirror_install against the newer pip (separate issue).
   test:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4
@@ -43,7 +46,7 @@ jobs:
   # their own: the other half of «test» above (together they are what the whole backend suite was before the split). A branch
   # protection that requires «test» must require «test-serial» as well, or these tests are not a condition of a merge.
   test-serial:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
@@ -60,7 +63,7 @@ jobs:
   # The rest of the seeds of the pool's failure property (backend/tests/test_parallel_backfill_628.py, marker
   # full_property): the default run («test-serial» now) takes six, this job the other 18, beside it, so the push still has all 24.
   parallel-property:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
@@ -83,7 +86,7 @@ jobs:
   # exists at all (the only one left is «windows-bundle»), so none of them can be required. Require the one check
   # «windows-gate» (the last job of the three): it always runs and is green when the Windows jobs passed or were not needed.
   windows-paths:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 5
     outputs:
       run: ${{ steps.f.outputs.run }}
@@ -163,7 +166,7 @@ jobs:
   windows-gate:
     if: always()
     needs: [windows-paths, windows-bundle, backend-windows]
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 5
     steps:
       - env:
