@@ -89,9 +89,12 @@ def _cash_item(item: dict[str, Any], rows: list[dict[str, Any]], units: dict[Any
     item["sets"] = sorted(sets.values(), key=lambda s: (str(s["valid_date"]), s["set_id"] or 0))
 
 
-def origins(con, run_id: int, block: dict[str, Any] | None) -> list[dict[str, Any]]:
+def origins(con, run_id: int, block: dict[str, Any] | None, *, with_cash: bool = True) -> list[dict[str, Any]]:
     """The breakdown of every published line of the run's block that is derived from positions (the module
-    docstring); ``[]`` for a block without such a line or without the run's lines."""
+    docstring); ``[]`` for a block without such a line or without the run's lines. Each has ``kinds``: per item kind
+    (position, cash, liability) the count and amount of **all** its items, counted before the cut to ``MAX_ITEMS``.
+    ``with_cash`` False: the cash balances are not read from the store (no accounts or sets on a cash item, the amounts
+    stay), for a caller that needs the amounts only (``ocp_day``)."""
     pub = ((block or {}).get("published") or {}).get("by_book") or []
     todo = [x for x in pub if x.get("source") in (O.DERIVED, O.DERIVED_STALE)]
     stored = (block or {}).get("lines") or []
@@ -113,7 +116,8 @@ def origins(con, run_id: int, block: dict[str, Any] | None) -> list[dict[str, An
         con, "SELECT position_id, secid, fact->>'name' AS name, fact->>'instr_type' AS instr_type,"
         " fact->>'asset_class' AS asset_class, fact->>'maturity' AS maturity FROM run_position"
         " WHERE run_id = %s AND position_id = ANY(%s)", (run_id, pids))} if pids else {}
-    cash_rows, cash_units = _cash(con, on, known_at) if any(_kind(x) == "cash" for x in stored) else ({}, {})
+    cash_rows, cash_units = _cash(con, on, known_at) if with_cash and any(_kind(x) == "cash" for x in stored) \
+        else ({}, {})
     by_line: dict[tuple[str, str], list[dict[str, Any]]] = defaultdict(list)
     for x in stored:
         by_line[(str(x.get("book_id")), str(x.get("ccy")))].append(x)
@@ -133,16 +137,21 @@ def origins(con, run_id: int, block: dict[str, Any] | None) -> list[dict[str, An
                                 maturity=f["maturity"], secid=f["secid"] or None)
                 if kind == "position":
                     item["set"] = sets.get(b)
-                elif kind == "cash":
+                elif kind == "cash" and with_cash:
                     _cash_item(item, cash_rows.get((b, line["ccy"]), []), cash_units, on)
                 items.append(item)
         items.sort(key=lambda i: (-abs(i["amount"]), i["key"]))
         head, rest = items[:MAX_ITEMS], items[MAX_ITEMS:]
         total = math.fsum(i["amount"] for i in items)
+        kinds = {}
+        for k in ("position", *KINDS.values()):
+            mine = [i["amount"] for i in items if i["kind"] == k]
+            if mine:
+                kinds[k] = {"count": len(mine), "amount": math.fsum(mine)}
         out.append({"entity": line["entity"], "book_id": line.get("book_id"), "books": held, "ccy": line["ccy"],
                     "source": line["source"], "amount": line["amount"], "sum": total,
                     "matches": abs(total - line["amount"]) <= max(0.01, 1e-9 * abs(line["amount"])),
-                    "items": head,
+                    "items": head, "kinds": kinds,
                     "rest": {"count": len(rest), "amount": math.fsum(i["amount"] for i in rest)} if rest else None,
                     "sets": [{"book_id": b, "set": sets.get(b)} for b in held]})
     return out

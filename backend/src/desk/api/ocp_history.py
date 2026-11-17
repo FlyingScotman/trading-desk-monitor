@@ -1,7 +1,8 @@
 """The published OCP by day (TDM#446): what the saved runs published, no new OCP computation.
 
 One day per date of the period: its default EOD run, then the anchor run on its date (``pnl_history.period_runs``,
-as the PnL period routes). Per day the published OCP of the run's ``ocp`` block (``publish.ocp_run`` v2, TDM#416:
+as the PnL period routes). A day's ``cutType`` is its run's cut
+(``eod_final``, ``eod_preliminary``, ``intraday``): the pages say which kind of run a figure is from. Per day the published OCP of the run's ``ocp`` block (``publish.ocp_run`` v2, TDM#416:
 the bank's OCP report + the components outside it, derived from positions where no report unit covers) as its lines
 per book or report part, and the run's rates of the currencies (``fx``: the market rate the run used, MOEX 19:00
 with its fallbacks, and the CBR rate). A line's ``book`` is null for an entity-level report unit: its figure is the
@@ -237,7 +238,7 @@ def history(con, anchor: dict[str, Any], start: date, end: date) -> dict[str, An
         fx = _fx(x.get("fx"))
         for c, v in hub.get(r["business_date"], {}).items():
             fx.setdefault(c, {"market": v, "cbr": v, "source": HUB_CBR_SOURCE})
-        days.append({"date": r["business_date"], "runId": r["run_id"], "runType": r["run_type"],
+        days.append({"date": r["business_date"], "runId": r["run_id"], "runType": r["run_type"], "cutType": r["cut_type"],
                      "state": block.get("status") or ocp_run.NOT_COMPUTED, "basis": block.get("basis"),
                      "methodNote": method_note(block.get("basis"), lines), "books": diff,
                      "fx": fx, "reportFx": _report_fx(block, r["business_date"]), "lines": lines,
