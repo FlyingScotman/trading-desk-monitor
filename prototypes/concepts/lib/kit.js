@@ -290,10 +290,27 @@
   K.PNL_FACTORS = [['carry', 'Кэрри'], ['funding', 'Фондирование'], ['rates', 'Ставки'], ['spread', 'Спред'], ['fx', 'FX (нетто ОВП)'], ['trading', 'Сделки'], ['other', 'Прочее']];
   K.PNL_COLORS = { carry: '#3fb67a', funding: '#d9667a', rates: '#4c9dff', spread: '#e3b341', fx: '#b48cff', trading: '#22c3d6', other: '#a0b4c8' };
   K.tips.dv01 = 'DV01 ставок, тыс ₽/бп: сумма бакетов по кривым ставок (RUONIA, КС, валютные), без базиса ОФЗ и CS01.\n' + K.tips.ruonia;
-  K.tips.zdisc = 'Z-спред к кривой дисконтирования (RUONIA OIS; в день без неё — к КБД), б.п., годовой, ACT/365F (R32): у фикс-бумаги — ' +
-    'обычный Z-спред, у флоатера — купоны по прогнозу своей кривой проекции (КС или RUONIA), дисконт по RUONIA + Z. Сравним у фиксов ' +
-    'и флоатеров. Дисконт-маржа (DM) флоатера — спред к его кривой проекции; у флоатера на RUONIA (ОФЗ-ПК) Z и DM равны.';
+  // Спреды рублёвых бумаг (TDM#762): у ОФЗ-ПД/АД/ИН кривая дисконтирования — КБД (с 0.2.6), у остальных — RUONIA OIS; спред
+  // колонки «Спред» — к ней, и ячейка говорит, к какой. Z к КБД и Z к RUONIA каждой фикс-бумаги — свои колонки.
+  K.tips.zspread = 'Спред бумаги к кривой, на которой она дисконтируется, б.п., годовой, ACT/365F (R32). Кривая подписана в ячейке: ' +
+    'у ОФЗ-ПД, ОФЗ-АД и ОФЗ-ИН это КБД («к КБД»; такой спред близок к нулю по построению), у остальных рублёвых бумаг — ' +
+    'RUONIA OIS («к RUONIA»; в день, за который кривой RUONIA OIS нет, они тоже на КБД, и подпись «к КБД»); у флоатера — ' +
+    'дисконт-маржа к кривой проекции его купонов («DM»); у бумаги не в рублях — Z к кривой её валюты (подпись «Z»). Сравнивайте спреды с одной подписью. Z к КБД и Z к RUONIA каждой ' +
+    'фикс-бумаги — в колонках «Z к КБД» и «Z к RUONIA».';
+  K.tips.zkbd = 'Z-спред к КБД, б.п., годовой, ACT/365F (R32): потоки фикс-бумаги, дисконтированные по КБД плюс Z, дают её грязную ' +
+    'цену. У ОФЗ-ПД, ОФЗ-АД и ОФЗ-ИН это спред их кривой дисконтирования (колонка «Спред» с подписью «к КБД»), у остальных рублёвых ' +
+    'фикс-бумаг — отдельный расчёт на КБД за ту же дату. У флоатера колонка пуста. У бумаги на запасной оценке (без потоков) ' +
+    'есть только спред к её собственной кривой, второй пуст. В прогоне, где этого поля ещё нет, показан только спред бумаги ' +
+    'к её кривой дисконтирования, если она КБД; пока дата не пересчитана, иначе — прочерк.';
+  K.tips.zdisc = 'Z-спред к кривой RUONIA OIS, б.п., годовой, ACT/365F (R32). У фикс-бумаги, в том числе ОФЗ-ПД, ОФЗ-АД и ОФЗ-ИН, — ' +
+    'обычный Z-спред: потоки бумаги, дисконтированные по RUONIA OIS плюс Z, дают её грязную цену (у корпоративной он равен ' +
+    'колонке «Спред» с подписью «к RUONIA»). У флоатера — купоны по прогнозу своей кривой проекции (КС или RUONIA), дисконт ' +
+    'по RUONIA OIS + Z; дисконт-маржа (DM) флоатера — спред к его кривой проекции, у флоатера на RUONIA (ОФЗ-ПК) Z и DM равны. ' +
+    'У бумаги на запасной оценке (без потоков) есть только спред к её собственной кривой, второй пуст. Нет кривой RUONIA OIS за ' +
+    'дату — прочерк: к другой кривой Z не считается. В прогоне, где этого поля ещё нет, показан только спред бумаги к её кривой, ' +
+    'если она RUONIA OIS; пока дата не пересчитана, иначе — прочерк.';
   K.zdiscTip = K.tips.zdisc;
+  K.zkbdTip = K.tips.zkbd;
   // каким должен быть DV01 флоатера во времени (R44): подпись под графиком истории карточки
   K.tips.floaterDv01 = 'Флоатер: ставочный DV01 мал — купон пересматривается, и ставка двигает цену только до ближайшей фиксации купона: ' +
     'DV01 ≈ −(время до фиксации) × MV × 1 б.п. (у флоатера на КС — сумма дисконтирования по RUONIA и проекции по КС). Он пилообразный: ' +
@@ -2999,11 +3016,13 @@
     tradeDay: Object.assign({ key: 'tradeDay', unit: 'mm в вал.' }, K.tradeDayCol()),
     price: { key: 'price', label: 'Цена', num: true, unit: '% ном.', fmt: v => f.px(v) },
     ytm: { key: 'ytm', label: 'Дох.', num: true, fmt: v => f.pct(v) },
-    // в CSV — число, вид спреда (Z / DM) — своей колонкой «Вид спреда» за ним (#276)
-    spread: { key: 'zspread', label: 'Спред', num: true, unit: 'б.п.', fmt: (v, r) => v == null ? '<span class="mut3">—</span>' : f.bp(v) + ' <span class="mut3">' + (r.spreadLabel || '') + '</span>', title: 'Z-спред к RUONIA (фикс) / дисконт-маржа (флоатер)',
+    // в CSV — число, кривая спреда (к КБД / к RUONIA) или DM — своей колонкой «Вид спреда» за ним (#276, TDM#762)
+    spread: { key: 'zspread', label: 'Спред', num: true, unit: 'б.п.', fmt: (v, r) => v == null ? '<span class="mut3">—</span>' : f.bp(v) + ' <span class="mut3">' + (r.spreadLabel || '') + '</span>', title: K.tips.zspread, tip: true,
       csvExtra: ['Вид спреда'], csvFmt: (v, r) => v == null ? ['', ''] : [f.bp(v), r.spreadLabel || ''] },
-    // Z-спред к кривой дисконтирования (RUONIA) у фикс-бумаг и флоатеров (у флоатера — купоны по прогнозу): сравнимы между собой (R32)
-    zdisc: { key: 'zdisc', label: 'Z к RUONIA', num: true, unit: 'б.п.', val: r => r.zSpreadZ, fmt: v => v == null ? '<span class="mut3">—</span>' : f.bp(v), title: K.zdiscTip, tip: true },
+    // Z-спреды фикс-бумаг к КБД и к RUONIA OIS (TDM#762): у каждой по своей колонке, к какой бы кривой она ни дисконтировалась;
+    // «Z к RUONIA» у флоатера — прежний Z (купоны по прогнозу, R32): сравнимы между собой
+    zkbd: { key: 'zkbd', label: 'Z к КБД', num: true, unit: 'б.п.', val: r => r.zKbd, fmt: v => v == null ? '<span class="mut3">—</span>' : f.bp(v), title: K.zkbdTip, tip: true },
+    zdisc: { key: 'zdisc', label: 'Z к RUONIA', num: true, unit: 'б.п.', val: r => r.zRuonia, fmt: v => v == null ? '<span class="mut3">—</span>' : f.bp(v), title: K.zdiscTip, tip: true },
     gspread: { key: 'gspread', label: 'G-спред', num: true, unit: 'б.п.', fmt: v => f.bp(v) },
     dur: { key: 'mdur', label: 'Дюр.', num: true, unit: 'лет', fmt: v => v == null ? '—' : f.n(v, 2) },
     dv01: { key: 'dv01', label: 'DV01', num: true, fmt: v => f.dv(v), cls: v => f.cls(v), sum: true, unit: 'тыс ₽/бп', title: K.tips.dv01, tip: true },
@@ -3063,13 +3082,19 @@
       rows.map(r => '<tr' + (r.tot ? ' class="grp"' : '') + '><td>' + (r.tot ? '' : '<b style="color:' + K.curveColors[r.id] + '">■</b> ') + K.hint(esc(r.label), r.tot ? K.tips.dv01 : K.curveTip(r.id)) + '</td><td class="n"><b>' + f.dv(r.vals.reduce((a, b) => a + b, 0)) + '</b></td>' + ks.map(k => cell(r.vals[k])).join('') + '</tr>').join('') +
       '</tbody></table></div>';
   };
-  // спред бумаги в карточке (R32): фикс — Z-спред к кривой дисконтирования; флоатер — дисконт-маржа к кривой проекции и
-  // Z-спред к RUONIA (данные прогона: spreadBp — Z ядра к кривой дисконтирования, extra.dm_bp — DM); поля [подпись, значение, -, подсказка]
+  // спред бумаги в карточке (R32, TDM#762): рублёвая фикс-бумага — два Z-спреда, к КБД и к RUONIA (у ОФЗ-ПД/АД/ИН своя кривая
+  // дисконтирования — КБД, и её спред — один из двух, второй считается отдельно); бумага не в рублях — Z к своей кривой;
+  // флоатер — дисконт-маржа к кривой проекции и Z-спред к кривой дисконтирования (данные прогона: spreadBp — Z ядра к ней,
+  // extra.dm_bp — DM); поля [подпись, значение, -, подсказка]
   K.spreadFields = p => {
+    const dash = '<span class="mut3">—</span>', bp = v => v == null ? dash : f.bp(v) + ' <small>б.п.</small>';
     const to = p.spreadCurve === 'RUB OFZ' ? 'КБД' : p.spreadCurve === 'RUB RUONIA' || p.ccy === 'RUB' ? 'RUONIA' : 'кривой ' + p.ccy;
-    if (!p.cpn || p.cpn.type !== 'float') return [['Z-спред к ' + to, f.bp(p.zSpreadZ != null ? p.zSpreadZ : p.zspread) + ' <small>б.п.</small>', false, K.tips.zdisc]];
+    if (!p.cpn || p.cpn.type !== 'float') {
+      if (p.ccy === 'RUB') return [['Z-спред к КБД', bp(p.zKbd), false, K.tips.zkbd], ['Z-спред к RUONIA', bp(p.zRuonia), false, K.tips.zdisc]];
+      return [['Z-спред к ' + to, bp(p.zSpreadZ != null ? p.zSpreadZ : p.zspread), false, K.tips.zspread]];
+    }
     const out = [['Дисконт-маржа', f.bp(p.dm) + ' <small>б.п.' + (p.dmSource === 'z' ? ' · = Z: DM ядра нет' : ' · к кривой проекции') + '</small>', false, 'Дисконт-маржа (DM) — спред к кривой проекции купонов флоатера (КС или RUONIA), годовой, ACT/365F']];
-    if (p.zSpreadZ != null && p.dmSource !== 'z') out.push(['Z-спред к ' + to, f.bp(p.zSpreadZ) + ' <small>б.п. · как у фиксов</small>', false, K.tips.zdisc]);
+    if (p.zSpreadZ != null && p.dmSource !== 'z') out.push(['Z-спред к ' + to, f.bp(p.zSpreadZ) + ' <small>б.п. · как у фиксов</small>', false, to === 'RUONIA' ? K.tips.zdisc : K.tips.zspread]);
     return out;
   };
   // DM флоатера в истории (R35): DM ядра — только в дни прогонов (с появления позиции), оценка по цене MOEX (dmPx,
@@ -3267,7 +3292,7 @@
       ['Номинал', f.mn(p.notional, 0) + ' <small>mm ' + p.ccy + '</small>'], ['MV', f.mn(p.mv, 1) + ' <small>mm ₽</small>'],
       ['Цена (bid/ask)', f.px(p.price) + ' <small>' + f.px(p.bid) + ' / ' + f.px(p.ask) + '</small>'], ['Изм. цены', p.prevPrice == null || p.price == null ? '<span class="mut3">—</span>' : '<span class="' + f.cls(p.price - p.prevPrice) + '">' + f.s(p.price - p.prevPrice, 3) + '</span>'],
       p.cpn.type === 'float' ? ['Доходность', '<span class="mut3">—</span> <small>флоатер: смотрим DM</small>'] : ['Доходность', f.pct(p.ytm) + ' <small>к ' + (p.event.kind === 'put' || p.event.kind === 'call' ? 'оферте' : 'погаш.') + '</small>'], ...K.spreadFields(p),
-      ['G-спред к ОФЗ', f.bp(p.gspread) + ' <small>б.п.</small>'], ['Мод. дюрация', p.mdur == null ? '—' : f.n(p.mdur, 2)],
+      ['Мод. дюрация', p.mdur == null ? '—' : f.n(p.mdur, 2)],
       ['Купон', '<span class="mono">' + esc(p.couponFmt) + '</span>'], ['Текущий купон', f.pct(p.curCpn) + (p.cpn.type === 'float' ? ' <small>прогноз</small>' : '')],
       ['Ближайшее событие', p.event.date ? f.date(p.event.date) + ' <small>' + ev + ', ' + f.yrs(p.tenor) + '</small>' : '<span class="mut3">—</span> <small>' + ev + '</small>'], ['Погашение', f.date(p.maturity) + ' <small>' + f.yrs(p.yearsToMat) + '</small>'],
       ['DV01 ставки', K.d({ title: 'DV01 ' + p.name, unit: 'тыс ₽/бп', rows: [{ p, v: p.dv01 }] }, f.dv(p.dv01), '') + ' <small>тыс ₽/бп</small>', false, K.tips.dv01], ['CS01', f.dv(p.cs01) + ' <small>тыс ₽/бп</small>', false, K.tips.cs01],

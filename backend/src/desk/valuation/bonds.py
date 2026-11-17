@@ -67,7 +67,7 @@ valuation for information only.
 from __future__ import annotations
 
 import math
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field, replace
 from datetime import date
 from decimal import ROUND_HALF_UP, Decimal
@@ -84,6 +84,7 @@ from rub_fixed_income import (
     CouponRateBounds,
     CurveBootstrapRequest,
     DayCount,
+    DiscountCurve,
     ExerciseAssumption,
     FixedCouponLeg,
     FixingDateRule,
@@ -111,6 +112,7 @@ from rub_fixed_income import (
     floating_perpetual_tail,
     horizon_portfolio,
     perpetual_tail,
+    solve_z_spread,
     value_portfolio,
 )
 from rub_fixed_income import __version__ as CORE_VERSION
@@ -752,6 +754,39 @@ class BondValuation:
     def risk(self) -> dict[str, dict[str, float]]:
         """Bucket DV01 by published curve: ``curve_buckets``, else ``buckets`` on the discount curve (RUONIA)."""
         return self.curve_buckets or {self.spread_curve or RUONIA_CURVE: self.buckets}
+
+
+def z_spread_to(v: BondValuation, curve_id: str, curves: Mapping[str, DiscountCurve]) -> float | None:
+    """``v``'s Z-spread to the curve ``curve_id`` (``KBD_CURVE_ID`` or ``RUONIA_OIS_CURVE_ID``), bp (TDM#762): the same
+    ``solve_z_spread`` of core and the same convention (``SPREAD_CONVENTION``) as the valuation's own spread, on the
+    valuation's own cashflows (and a perpetual's tail) and its dirty price, at its settlement date, on ``curves[curve_id]``
+    (the run's built curve). The valuation's own spread is taken as it is when it is to that curve (core's, or a rung's
+    carried one), not solved again. None: no such curve in ``curves`` (a date without RUONIA OIS: no other curve is
+    put in its place), no cashflows to solve on (a rung of the fallback ladder keeps none), no finite spread, or no spread
+    reproduces the price."""
+    if not math.isfinite(v.z_spread_bp):
+        return None
+    if v.discount_curve_id == curve_id:
+        return v.z_spread_bp
+    curve = curves.get(curve_id)
+    if curve is None or v.discount_curve_id is None or v.foreign or not v.cashflows or not v.dirty_rub > 0:
+        return None
+    try:
+        z = solve_z_spread([(c.payment_date, c.amount) for c in v.cashflows], v.dirty_rub, curve,
+                           settlement_date=v.valuation_date, convention=SPREAD_CONVENTION,
+                           perpetual_tail=v.perpetual_tail)
+    except (CoreRejection, ValueError, ArithmeticError):
+        return None
+    return z * 1e4 if math.isfinite(z) else None
+
+
+def z_spreads(v: BondValuation, curves: Mapping[str, DiscountCurve]) -> tuple[float | None, float | None]:
+    """``(z_kbd_bp, z_ruonia_bp)`` of a fixed-coupon RUB bond (``z_spread_to`` on the KBD and on RUONIA OIS): what
+    the pages show as its Z-spread to the KBD and to RUONIA. ``(None, None)`` for a floater (its Z-spread to RUONIA
+    with the coupons projected is its ``z_spread_bp``, the pages' ``Z к RUONIA``) and for a bond off RUB."""
+    if v.floater is not None or v.discount_margin_bp is not None or v.foreign or v.fx_rate is not None:
+        return None, None
+    return z_spread_to(v, KBD_CURVE_ID, curves), z_spread_to(v, RUONIA_OIS_CURVE_ID, curves)
 
 
 @dataclass(frozen=True)

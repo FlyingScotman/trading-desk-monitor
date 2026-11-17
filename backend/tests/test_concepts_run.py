@@ -43,7 +43,7 @@ POSITION = {"id", "book", "assetClass", "segment", "instrType", "name", "isin", 
             "fxDelta", "counterparty", "newToday", "entity", "portfolio", "pnl", "accrualOnly", "ocpTransfer", "extra",
             "notValued",
             # a bond's
-            "instrumentId", "accrued", "couponFreq", "yieldDate", "spreadCurve"}
+            "instrumentId", "accrued", "couponFreq", "yieldDate", "spreadCurve", "zKbdBp", "zRuoniaBp"}
 PNL = {"available", "reasonText", "carry", "rolldown", "rates", "convexity", "spread", "fx", "fxPartial", "funding", "newTrades",
        "other", "reported", "explained", "method", "methodText", "assumption"}
 
@@ -116,6 +116,15 @@ def test_parity_on_the_golden_runs(store_url, book, client):  # noqa: F811
     rid = run(store_url, book, cut_type="eod_preliminary")
     got = assert_parity(client, rid)
     assert got["pnlAvailable"] and any(p["pnl"]["available"] for p in got["positions"])
+    # TDM#762: a valued bond's Z-spreads to the KBD and to RUONIA OIS; an OFZ-PD's own spread is the one to the KBD
+    valued = [p for p in got["positions"] if p["instrType"] == "BOND" and not p.get("notValued")]
+    assert all("zKbdBp" in p and "zRuoniaBp" in p for p in valued)
+    ofz = [p for p in valued if p["assetClass"] == "ОФЗ-ПД" and p["spreadBp"] is not None]
+    assert ofz and all(p["spreadCurve"] == "RUB OFZ" and p["zKbdBp"] == p["spreadBp"] and p["zRuoniaBp"] is not None
+                       and p["zRuoniaBp"] != p["spreadBp"] for p in ofz)
+    corp = [p for p in valued if p["assetClass"] == "Корпоративные" and p["couponType"] == "fix"
+            and p["spreadBp"] is not None]
+    assert corp and all(p["zRuoniaBp"] == p["spreadBp"] and p["zKbdBp"] is not None for p in corp)
     nv = [p for p in got["positions"] if p.get("notValued")]
     assert len(nv) == 1 and nv[0]["mvRub"] is None and nv[0]["pnl"]["available"] is False
     assert_parity(client, early)

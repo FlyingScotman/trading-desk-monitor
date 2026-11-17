@@ -259,6 +259,12 @@ whose market has no RUONIA OIS curve falls back to the KBD: every bond valuation
 | OFZ-IN (fallback) | `RUB RUONIA`, nominal DV01 from the duration, flagged as a proxy (no real curve or inflation factor yet) |
 | Report's own risk (`risk_dv01_rub`: unmapped bond, OTC) | the curve of the row's currency (`RUB RUONIA` for RUB) |
 
+Since 0.2.6 an OFZ-PD / AD / IN is discounted on the KBD plus its own Z-spread to it (`spread_curve` `RUB OFZ`, `OFZ_KBD_CLASSES`), the
+rest of the RUB bonds on RUONIA OIS, so `spread_bp` is a spread to the bond's own discount curve. Every fixed-coupon RUB bond row also
+carries both Z-spreads, `z_kbd_bp` and `z_ruonia_bp` (TDM#762; `valuation.bonds.z_spreads`): the same core `solve_z_spread`, convention,
+flows and dirty price as `spread_bp`, on the run's built KBD and RUONIA OIS curves; the one that is to the bond's discount curve is
+`spread_bp` itself, a date without RUONIA OIS has no `z_ruonia_bp` (null, no other curve in its place), a floater has neither.
+
 The run publishes `RUB OFZ`, `RUB RUONIA` and `RUB KEY` with their points (KBD effective yields; zero rates of the RUONIA OIS and key-rate projection curves, annual compounding) and the day's move, and a curve without points for a currency's curve. A scenario shifts each curve by its own vector (`desk.scenario.exact.core_scenario`); the preset moves of all rates shift the three RUB curves alike (store migration 0008), so their total is what it was on the KBD; a shock of `RUB OFZ` alone moves no bond. The flash PnL (`desk-flash-exact-v2`) reprices each bond on the curves it depends on (a floater's coupons reprojected), so `rates` matches the linear explain, DV01 per curve x that curve's move.
 
 Exact and assumed bonds get the flash PnL by exact repricing. Market value and stale or model price get PnL = q·(dirty_D − dirty_D−1) + received, all in `other`; across a model price it carries a flag ("price discovery: model -> market"). A position at par on either date gets no PnL (reason `par_proxy`). A foreign-face bond's FX revaluation (its FX delta of D−1 × the rate move) is taken out of `other` into `fx_gross`. Rows valued without core (`pnl/direct.py`): an FX row gets amount × (rate D − rate D−1), method `desk-fx-spot-v1` (a forward only its spot delta, flagged); a row at the report's value (OTC, unmapped bonds) gets today's reported PV − yesterday's for the same position, method `desk-reported-v1`, flag «по отчёту», shown as its own explain step; none when yesterday had no reported value or the book's report was not renewed.

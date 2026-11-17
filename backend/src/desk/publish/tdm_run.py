@@ -26,7 +26,8 @@ move; a foreign curve with its own ``ccy``) and a curve without points for every
 stays the sum over the curves. An FX derivative valued by core from its terms (``valuation.derivatives``) is a row
 ``instr_type`` FX with its ``fx_delta`` per currency (core's spot equivalent), its Hessian over the rate and FX factors
 and ``extra`` legs, ``ocp_amount``, ``basis01``, ``fixings``, ``core``; ``fx_log`` says what of the FX book was valued how.
-``spread_curve`` is the curve ``spread_bp`` is to (the discount curve).
+``spread_curve`` is the curve ``spread_bp`` is to (the discount curve). ``z_kbd_bp`` and ``z_ruonia_bp`` (TDM#762) are a
+fixed-coupon RUB bond's Z-spreads to the KBD and to RUONIA OIS, whichever its discount curve is (``z_spread_fields``).
 
 Display fields (R9 static audit, D1-D8): a bond is named by MOEX's full ``name`` (the short name in
 ``extra.short_name``, the SECID in ``instrument_id``); its coupon is ``bonds.coupon_view`` for every rung (a floater:
@@ -98,6 +99,7 @@ from ..valuation.bonds import (
     discount_curve,
     implied_frequency,
     is_kbd_floater,
+    z_spreads,
 )
 from ..valuation.fallback import METHOD as SIMPLE_METHOD
 from ..valuation.fallback import QUALITIES, SimplePnl, fx_rate, market_fx
@@ -660,6 +662,19 @@ def _f(x: Any) -> float | None:
         return None
 
 
+def z_spread_fields(ctx: EodContext, t: Any, v: BondValuation) -> dict[str, Any]:
+    """``z_kbd_bp`` and ``z_ruonia_bp`` (TDM#762): a fixed-coupon RUB bond's Z-spread to the KBD and to RUONIA OIS, by
+    the same solve and on the same flows and dirty price as ``spread_bp`` (``bonds.z_spreads``); ``spread_bp`` is the
+    spread to its own discount curve (``spread_curve``): the KBD for an OFZ-PD / AD / IN, RUONIA OIS for the rest, so
+    one of the two equals it. A field is None where the curve is not in the run (a date without RUONIA OIS) and for a
+    floater, whose Z-spread to RUONIA (the coupons projected) stays ``spread_bp``; a row of a run made before
+    these fields has neither (the pages show a dash until the date is recomputed)."""
+    if t.coupon_type == "floating" or bond_currency(t) != "RUB":
+        return {"z_kbd_bp": None, "z_ruonia_bp": None}
+    z_kbd, z_ruonia = z_spreads(v, ctx.z_curves)
+    return {"z_kbd_bp": _num(z_kbd), "z_ruonia_bp": _num(z_ruonia)}
+
+
 def position_row(ctx: EodContext, book: str, pid: str, o: Outcome, issuer: str,
                  x: dict[str, Any] | None = None) -> dict[str, Any]:
     t, q, v = o.terms, o.quote, o.valuation
@@ -688,7 +703,9 @@ def position_row(ctx: EodContext, book: str, pid: str, o: Outcome, issuer: str,
         "side": "long" if v.quantity >= 0 else "short",
         "notional": v.quantity * v.face_rub / (fx[0] if fx else 1.0), "notional_rub": v.quantity * v.face_rub,
         "price": v.clean_pct, "mv": v.pv_rub / (fx[0] if fx else 1.0), "mv_rub": v.pv_rub,
-        "ytm": _num(v.ytm_pct), "spread_bp": _num(v.z_spread_bp), "mdur": _num(v.modified_duration), "spr_dur": spread_dur,
+        "ytm": _num(v.ytm_pct), "spread_bp": _num(v.z_spread_bp),
+        **z_spread_fields(ctx, t, v),
+        "mdur": _num(v.modified_duration), "spr_dur": spread_dur,
         "convexity": v.curve_convexity, "dv01": v.dv01_rub,
         "cs01": v.spread01_rub if v.spread_kind == "credit" else 0.0,
         "ofz_spr01": v.spread01_rub if v.spread_kind == "ofz" else 0.0,

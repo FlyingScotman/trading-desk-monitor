@@ -1004,7 +1004,7 @@ export interface components {
             ytm?: number | null;
             /**
              * Z Spread Bp
-             * @description the desk run's Z-spread to its discount curve (RUONIA OIS since the owner's decision of 20.10)
+             * @description the desk run's Z-spread to its discount curve (RUONIA OIS since the owner's decision of 20.10; the KBD for an OFZ-PD / AD / IN since 0.2.6 and on a date without RUONIA OIS)
              */
             z_spread_bp?: number | null;
             /**

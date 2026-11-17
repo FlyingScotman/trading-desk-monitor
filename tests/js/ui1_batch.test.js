@@ -146,11 +146,13 @@ t('прогон: спред в карточке — Z к RUONIA у фикса; �
   assert.strictEqual(F1.dm, 878.0); assert.strictEqual(F1.zSpreadZ, 899.1); assert.strictEqual(F1.dmSource, 'core');
   const s1 = K.spreadFields(F1).map(x => x[0]);
   assert.strictEqual(s1.join(' | '), 'Дисконт-маржа | Z-спред к RUONIA');
+  assert.strictEqual(F1.zRuonia, 899.1); assert.strictEqual(F1.zKbd, null, 'у флоатера Z к КБД нет');
   // без DM ядра единственный спред показан один раз и помечен
   const s2 = K.spreadFields(F2);
   assert.strictEqual(s2.length, 1); assert.ok(/DM ядра нет/.test(s2[0][1]));
+  // рублёвая фикс-бумага (TDM#762): две строки, к КБД и к RUONIA, а не одна «к RUONIA»
   const fix = M.positions.find(p => p.cpn && p.cpn.type === 'fix' && p.ccy === 'RUB' && p.zSpreadZ != null);
-  assert.strictEqual(K.spreadFields(fix)[0][0], 'Z-спред к RUONIA');
+  assert.strictEqual(K.spreadFields(fix).map(x => x[0]).join(' | '), 'Z-спред к КБД | Z-спред к RUONIA');
   // риск по кривым — у флоатера на КС обе кривые
   assert.ok(/КС/.test(K.curveRiskFields(F1)[0][1]) && /RUONIA/.test(K.curveRiskFields(F1)[0][1]));
 });

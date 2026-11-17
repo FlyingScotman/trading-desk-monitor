@@ -1077,7 +1077,7 @@ class BondHistoryPoint(BaseModel):
     date: date
     clean_price: float | None = Field(None, description="% of face; basis in price_basis")
     ytm: float | None = Field(None, description="%, effective annual: MOEX's to yield_date, else the run's")
-    z_spread_bp: float | None = Field(None, description="the desk run's Z-spread to its discount curve (RUONIA OIS since the owner's decision of 20.10)")
+    z_spread_bp: float | None = Field(None, description="the desk run's Z-spread to its discount curve (RUONIA OIS since the owner's decision of 20.10; the KBD for an OFZ-PD / AD / IN since 0.2.6 and on a date without RUONIA OIS)")
     g_spread_bp: float | None = Field(None, description="MOEX's")
     accrued: float | None = None
     volume_rub: float | None = None

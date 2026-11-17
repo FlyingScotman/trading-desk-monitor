@@ -371,12 +371,19 @@
       p.gspread = p.ccy === 'RUB' && plain ? Math.round((p.ytm - curveAt('OFZ', p.tenor)) * 100) : null;
       p.zspread = p.cpn.type === 'linker' ? null : p.cpn.type === 'float' ? Math.round(p.spreadBp + (r() - 0.5) * 16)
         : Math.round(p.ccy === 'RUB' ? (p.ytm - curveAt('RUB RUONIA', p.tenor)) * 100 : p.spreadBp + (r() - 0.5) * 20);
-      p.spreadLabel = p.cpn.type === 'float' ? 'DM' : 'Z';
+      // у ОФЗ-ПД/АД кривая дисконтирования — КБД (0.2.6): их «Спред» — к КБД, а Z к RUONIA считается отдельно (TDM#762)
+      const fixRub = p.ccy === 'RUB' && p.cpn.type === 'fix', onKbd = fixRub && p.group === 'GOV';
+      if (onKbd) p.zspread = Math.round((p.ytm - curveAt('OFZ', p.tenor)) * 100);
+      p.spreadLabel = p.cpn.type === 'float' ? 'DM' : onKbd ? 'к КБД' : fixRub ? 'к RUONIA' : 'Z';
+      p.spreadName = p.spreadLabel === 'DM' || p.spreadLabel === 'Z' ? p.spreadLabel : 'Z ' + p.spreadLabel;
+      p.zKbd = fixRub ? (onKbd ? p.zspread : Math.round((p.ytm - curveAt('OFZ', p.tenor)) * 100)) : null;
+      p.zRuonia = fixRub ? (onKbd ? Math.round((p.ytm - curveAt('RUB RUONIA', p.tenor)) * 100) : p.zspread) : null;
       // Z-спред к кривой дисконтирования (R32): у фикса — тот же Z, у флоатера на КС — DM + базис КС − RUONIA на сроке
       // (купоны по прогнозу КС, дисконт по RUONIA), у флоатера на RUONIA — равен DM; как spreadBp ядра в прогоне
       p.zSpreadZ = p.cpn.type === 'linker' ? null : p.cpn.type === 'float' && p.ccy === 'RUB' && p.cpn.index === 'КС'
         ? Math.round(p.zspread + (curveAt('RUB KEY', Math.min(p.tenor, 3)) - curveAt('RUB RUONIA', Math.min(p.tenor, 3))) * 100) : p.zspread;
-      p.spreadCurve = p.ccy === 'RUB' && p.zSpreadZ != null ? 'RUB RUONIA' : null;
+      p.spreadCurve = p.ccy === 'RUB' && p.zSpreadZ != null ? (onKbd ? 'RUB OFZ' : 'RUB RUONIA') : null;
+      if (p.cpn.type === 'float' && p.ccy === 'RUB') p.zRuonia = p.zSpreadZ;  // у флоатера — прежний Z (купоны по прогнозу)
       p.dmSource = p.cpn.type === 'float' ? 'core' : null;
       p.accruedPct = round(p.curCpn / f * r(), 3);
       const dirty = (p.price + p.accruedPct) / 100 * (p.indexation || 1);
@@ -448,7 +455,7 @@
       p.carryDay = p.kind === 'IRS' || p.kind === 'KSW' ? sgn * nrub * (p.rate - (p.kind === 'KSW' ? M.indices['КС'] : M.indices['RUONIA'])) / 100 / 365
         : p.kind === 'BAS' ? nrub * p.rate / 100 / 365 * 0.6 : -sgn * nrub * (M.indices['RUONIA'] - 5) / 100 / 365 * 0.15;
       p.rollDay = 0; p.fundingDay = 0; p.cs01b.fill(0);
-      p.zspread = null; p.zSpreadZ = null; p.gspread = null;
+      p.zspread = null; p.zSpreadZ = null; p.zKbd = null; p.zRuonia = null; p.gspread = null;
     }
     p.fxDelta = p.fxDeltaBy[p.ccy] || 0;            // в валюте позиции; все валюты — p.fxDeltaBy
     p.dv01ByCurve = {}; let tot = 0;
