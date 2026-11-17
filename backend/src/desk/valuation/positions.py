@@ -57,7 +57,7 @@ from ..store import PositionInputs
 from . import derivatives as dv
 from . import offreport
 from .bonds import BondValuation, ccy_curve, face_on
-from .fallback import fx_rate, fx_rate_cbr
+from .fallback import BROKEN_SCHEDULE_TEXT, fx_rate, fx_rate_cbr
 from .offreport import OffReportTrade, off_report_trades
 
 MISMATCH_BONDS = 0.5
@@ -351,12 +351,16 @@ RISK_MISSING = {
                      "дата фиксинга)"),
     "ndf_unsupported": ("NDF: такой вид ядро пока не оценивает — валюта расчёта не из пары сделки; процентный риск не "
                         "считается"),
+    **BROKEN_SCHEDULE_TEXT,
 }
 """TDM#616: why a derivative row valued without core has no rates risk, when it is not «the report gave none»: a
 currency of its trade without a curve or a spot in the run (``no_curve``, ``no_spot``, ``no_curve_spot``: «нет
 данных», the owner's
 default, never a zero), an NDF without its trade's terms (``ndf_no_terms``), an NDF core does not value
-(``ndf_unsupported``). Only on a row without risk of its own (the report's DV01 is kept and not contradicted). Published as ``extra.risk_missing``
+(``ndf_unsupported``), and a bond valued at its price with no yield, duration or risk (``fallback.BROKEN_SCHEDULE_TEXT``,
+TDM#764): its redemption schedule does not add up to its face (``bond_redemptions_label``, ``bond_redemptions_rounded``,
+``bond_redemptions_incomplete``) or the hub says its source's yield and duration are computed on a wrong schedule
+(``bond_source_analytics_unreliable``). Only on a row without risk of its own (the report's DV01 is kept and not contradicted). Published as ``extra.risk_missing``
 ``{reason, ccy, text}`` (``risk_missing``); the risk table (``api.concepts.risk_table``) and the pages
 (``lib/instr.js``) show it in place of «оценена по отчёту, риска в отчёте нет»."""
 MISSING_CODES = {"curve": "no_curve", "spot": "no_spot", "curve_spot": "no_curve_spot"}

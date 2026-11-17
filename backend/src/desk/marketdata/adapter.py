@@ -160,6 +160,17 @@ class BondQuote:
     value: Decimal | None = None
     """Turnover in ``currency_id``, the settlement currency (``SUR``: RUB)."""
     currency_id: str | None = None
+    source_analytics_unreliable: dict[str, Any] | None = None
+    """Contract 1.10 (FlyingScotman/market-data-hub#165): ``{"fields": [...], "reasons": [...]}`` when MOEX computed these
+    ``source_analytics`` fields (yield_close_pct, effective_yield_pct, duration_days, ...) on a wrong redemption schedule;
+    None: the hub says nothing (a hub before 1.10, or the fields are fine). The fallback ladder does not use them."""
+
+
+def unreliable_analytics(raw: Any) -> dict[str, Any] | None:
+    """``BondQuote.source_analytics_unreliable`` of a quote row's field: None for a missing, null or empty one."""
+    if not isinstance(raw, dict) or not raw.get("fields"):
+        return None
+    return {"fields": [str(f) for f in raw["fields"]], "reasons": [str(r) for r in raw.get("reasons") or ()]}
 
 
 OFZ_CLASSES = ("ofz_pd", "ofz_ad", "ofz_pk", "ofz_in")
@@ -525,7 +536,8 @@ class MarketView:
             self.quotes[(q["secid"], q["board"])] = BondQuote(
                 q["secid"], q["board"], date.fromisoformat(q["trade_date"]), _d(q.get("face_value")),
                 _d(q.get("accrued_per_bond")), prices, q.get("num_trades"), q.get("source_analytics") or {},
-                _d(q.get("volume_bonds")), _d(q.get("value_ccy")), q.get("currency_id"))
+                _d(q.get("volume_bonds")), _d(q.get("value_ccy")), q.get("currency_id"),
+                unreliable_analytics(q.get("source_analytics_unreliable")))
         for q in d.get("bond_quotes_intraday") or ():  # an intraday cut (R11); EOD cuts leave it empty
             if (q["secid"], q["board"]) in self.quotes:
                 continue
@@ -533,7 +545,8 @@ class MarketView:
             ts = datetime.fromisoformat(q["ts"])
             self.quotes[(q["secid"], q["board"])] = BondQuote(
                 q["secid"], q["board"], ts.astimezone(MSK).date(), None, None, prices, q.get("num_trades"),
-                q.get("source_analytics") or {}, _d(q.get("vol_today")), _d(q.get("val_today")), None)
+                q.get("source_analytics") or {}, _d(q.get("vol_today")), _d(q.get("val_today")), None,
+                unreliable_analytics(q.get("source_analytics_unreliable")))
         if len(d["zcyc_params"]) != 1:
             raise SnapshotError(f"{snap.id}: expected one zcyc_params row, got {len(d['zcyc_params'])}")
         self.zcyc = d["zcyc_params"][0]

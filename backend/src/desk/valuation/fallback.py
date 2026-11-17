@@ -97,7 +97,9 @@ from ..pnl.reasons import YIELD_NO_CURVE, other_reason
 from .bonds import (
     OFZ_KBD_CLASSES,
     PRICE_BASIS_ORDER,
+    REDEMPTIONS_LABEL,
     RISK_CURVES,
+    ROUNDED_LABEL,
     SPREAD_CONVENTION,
     BondRequest,
     BondValuation,
@@ -468,6 +470,47 @@ def _f(v: Any) -> float | None:
     return None if v in (None, "") else float(v)
 
 
+SCHEDULE_REJECTIONS = ("redemption_incomplete",)
+"""Reasons of the exact path (``Outcome.reason``) that say the same without the label: the schedule does not add up (or the
+hub says so: ``bonds.fixed_schedule`` refuses a bond with its label as this)."""
+BROKEN_SCHEDULE_TEXT = {
+    "bond_redemptions_label": ("график погашений в данных источника не сходится с номиналом (метка хаба "
+                               + REDEMPTIONS_LABEL + "): доходность, дюрация и DV01 не считаются"),
+    "bond_redemptions_rounded": ("погашения в данных источника округлены, график не сходится с номиналом (метка хаба "
+                                 + ROUNDED_LABEL + "): доходность, дюрация и DV01 не считаются"),
+    "bond_redemptions_incomplete": ("график погашений не сходится с номиналом (расчёт нашёл погашения неполными, "
+                                    "redemption_incomplete): доходность, дюрация и DV01 не считаются"),
+    "bond_source_analytics_unreliable": ("доходность и дюрация источника посчитаны по искажённому графику погашений: "
+                                         "не используются, DV01 не считается"),
+}
+"""Why a bond with a broken redemption schedule has no yield, duration or risk (TDM#764, the owner's rule: no
+substitutes, a data problem is shown). MOEX's own effective yield and duration are computed on the same wrong schedule
+(RUS-30: 53.8 % at a close yield of 6.8 %, 505 days against about 635), and neither the close yield nor the time to the
+horizon stands in for them. Published as ``extra.risk_missing`` (``valuation.positions.RISK_MISSING`` takes these codes:
+the risk table and the pages' «риска нет» say it), and in the assumptions. The value at the price stays.
+``bond_source_analytics_unreliable``: the hub says (``BondQuote.source_analytics_unreliable``, contract 1.10) that the
+yield and duration fields the ladder reads were computed on a wrong schedule, whatever the schedule now is."""
+ANALYTICS_READ = ("effective_yield_pct", "yield_close_pct", "duration_days")
+"""The ``source_analytics`` fields of MOEX the ladder reads (``_yield``, the duration estimate)."""
+SCHEDULE_LABEL_CODES = {ROUNDED_LABEL: "bond_redemptions_rounded", REDEMPTIONS_LABEL: "bond_redemptions_label"}
+"""The more specific label first: the hub's contract 1.10 puts ``ROUNDED_LABEL`` on a bond together with ``REDEMPTIONS_LABEL``."""
+
+
+def broken_schedule(t: BondTerms, reason: str | None) -> str | None:
+    """The ``BROKEN_SCHEDULE_TEXT`` code of a bond whose redemption schedule does not add up to its face: the hub's
+    label (``BROKEN_REDEMPTION_LABELS``), else the exact path's rejection; None for any other bond. A manual override of
+    the hub (``MANUAL_OVERRIDE_LABEL``) is not one."""
+    code = next((c for lab, c in SCHEDULE_LABEL_CODES.items() if lab in t.labels), None)
+    return code or ("bond_redemptions_incomplete" if reason in SCHEDULE_REJECTIONS else None)
+
+
+def unreliable_source(quote: BondQuote | None) -> str | None:
+    """``bond_source_analytics_unreliable`` when the hub lists a field of ``ANALYTICS_READ`` among the quote's
+    ``source_analytics_unreliable``; None otherwise (also for a hub that does not say)."""
+    u = quote.source_analytics_unreliable if quote else None
+    return "bond_source_analytics_unreliable" if u and any(f in u["fields"] for f in ANALYTICS_READ) else None
+
+
 def _yield(sa: dict[str, Any]) -> float | None:
     """MOEX effective yield, else the close yield, in %; a print at or below -100 % is no yield."""
     return next((y for k in ("effective_yield_pct", "yield_close_pct") if (y := _f(sa.get(k))) is not None
@@ -538,7 +581,9 @@ def approximate(ctx: EodContext, outcome: Outcome, quantity: float,
     coupon, _ = current_period(t, bd)
     coupon_pct = coupon_view(t, bd).pct  # every rung shows the static coupon (D4): rate, amount, last known rate
     sa = ref.source_analytics if ref else {}
-    y = _yield(sa)
+    broken = broken_schedule(t, outcome.reason)  # TDM#764: no yield, duration or risk from a schedule that is wrong
+    no_source = broken or unreliable_source(ref)  # TDM#764: the source's yield and duration are not used
+    y = None if no_source else _yield(sa)
     ytm = y if y is not None else math.nan
     zero = dict.fromkeys(RISK_BUCKETS, 0.0)
 
@@ -549,6 +594,9 @@ def approximate(ctx: EodContext, outcome: Outcome, quantity: float,
             kw.update(clean_pct=0.0, accrued_rub=0.0, face_rub=0.0, dirty_rub=0.0, pv_rub=0.0, ytm_pct=math.nan,
                       macaulay_years=0.0, modified_duration=0.0, z_spread_bp=math.nan, dv01_rub=0.0, buckets=zero,
                       curve_buckets={}, spread01_rub=0.0)
+        if (code := kw.pop("missing", broken)) and not matured:
+            why.append(BROKEN_SCHEDULE_TEXT[code])
+            kw["extra"] = {**kw.get("extra", {}), "risk_missing": {"reason": code, "text": BROKEN_SCHEDULE_TEXT[code]}}
         return BondValuation(secid=t.secid, quantity=q, valuation_date=bd, settlement=bd,
                              horizon_date=horizon, horizon_kind=hkind, current_coupon_pct=coupon_pct,
                              spread_kind=kind, calculation_id=f"desk-fallback:{quality}:{t.secid}:{bd}",
@@ -565,6 +613,11 @@ def approximate(ctx: EodContext, outcome: Outcome, quantity: float,
         acc = accrued_rub(quote)
         dirty = clean / 100 * face * fx_face[0] + acc
         pv = q * dirty
+        if no_source:  # the value is the price's; no yield, duration or risk from a schedule that does not add up
+            return make(quality, missing=no_source, price_basis=basis, clean_pct=clean, accrued_rub=acc, face_rub=face * fx_face[0],
+                        dirty_rub=dirty, pv_rub=pv, ytm_pct=math.nan, macaulay_years=math.nan,
+                        modified_duration=math.nan, z_spread_bp=math.nan, dv01_rub=0.0, buckets=zero,
+                        spread01_rub=0.0)
         if sched is not None:
             try:
                 _, r = _engine(ctx, disc_curve, sched[1], kind, q, dirty=dirty, tail=sched[3])
@@ -720,8 +773,10 @@ def yield_pnl(prev: BondValuation, cur: BondValuation, terms: BondTerms, prev_ct
               ctx: EodContext) -> SimplePnl:
     """``simple_pnl``, with the carry of a foreign-face bond priced on both dates without a curve in its currency
     (USD / EUR without ``proxy_curves_for_risk``, CNY on a date without the XCCY curve; batch 1, item 5): the D-1 PV in
-    its currency x ((1 + y)^(days / 365) - 1) at its D-1 yield (MOEX's effective yield: the coupon income and the pull
-    to the price at an unchanged yield), at today's market rate, goes from ``other`` to ``carry``. Without a curve
+    its currency x ((1 + y)^(days / 365) - 1) at its D-1 yield (``ytm_pct``: MOEX's effective yield, the coupon income and
+    the pull to the price at an unchanged yield), at today's market rate, goes from ``other`` to ``carry``. A bond
+    without a yield (a broken redemption schedule, TDM#764: ``ytm_pct`` is NaN) has no carry: ``simple_pnl`` as is, all
+    in ``other``. Without a curve
     the yield move is not split between rates and spread: it stays in ``other`` with the prints, and
     ``pnl.direct.split_fx`` then takes the FX revaluation out of ``other``. A RUB bond, a model price or a par proxy:
     ``simple_pnl`` as is."""

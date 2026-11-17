@@ -561,6 +561,21 @@ def face_on(terms: BondTerms, d: date) -> Decimal | None:
     return terms.face_value + (1 if d < s else -1) * sum(reds, Decimal(0))
 
 
+REDEMPTIONS_LABEL = "future_redemptions_differ_from_face"
+"""The hub's label (``BondTerms.labels``, static HS13) of a bond whose redemptions still to be paid do not add up to its
+face: its schedule is wrong in the data (RUS-30, TDM#764)."""
+ROUNDED_LABEL = "redemptions_rounded_by_source"
+"""The hub's label (contract 1.10, FlyingScotman/market-data-hub#165) of a bond whose redemptions MOEX publishes rounded
+to a whole percent of the initial face: the schedule is as wrong as with ``REDEMPTIONS_LABEL``'s."""
+BROKEN_REDEMPTION_LABELS = (ROUNDED_LABEL, REDEMPTIONS_LABEL)
+"""The labels of a broken redemption schedule, the more specific first (the hub's contract 1.10 sets ``ROUNDED_LABEL``
+together with ``REDEMPTIONS_LABEL``): ``fixed_schedule`` refuses it as ``redemption_incomplete`` and the fallback
+ladder gives such a bond no yield, duration or risk (``fallback.BROKEN_SCHEDULE_TEXT``)."""
+MANUAL_OVERRIDE_LABEL = "redemptions_manual_override"
+"""The hub's label (contract 1.10) of a bond whose schedule the hub's owner corrected by hand (its redemption rows
+``source: "manual_override"``) and which then has neither label above: NOT a broken schedule, the exact path is valid."""
+
+
 def fixed_schedule(terms: BondTerms, settlement: date) -> FixedSchedule:
     """The horizon, the coupons up to it and the checks core does not make (redemptions complete)."""
     eligibility(terms)
@@ -583,6 +598,10 @@ def fixed_schedule(terms: BondTerms, settlement: date) -> FixedSchedule:
         if any(r.value_per_bond is None for r in future_reds):
             raise Rejected("redemption_amount_missing")
         total = sum((r.value_per_bond for r in future_reds), Decimal(0))  # type: ignore[misc]
+        # TDM#764: the hub's own check (its tolerance is 0.005, ours 0.01) says the schedule does not add up: it is not
+        # valued from it (a manual override of the hub, ``MANUAL_OVERRIDE_LABEL``, takes the label off)
+        if (label := next((x for x in BROKEN_REDEMPTION_LABELS if x in terms.labels), None)) is not None:
+            raise Rejected("redemption_incomplete", f"hub label {label}")
         if abs(total - (face := face_on(terms, settlement))) > Decimal("0.01"):  # type: ignore[operator]
             raise Rejected("redemption_incomplete", f"future redemptions {total} vs face {face} on {settlement}")
     floater, resets = None, ()

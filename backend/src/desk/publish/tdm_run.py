@@ -731,6 +731,7 @@ def position_row(ctx: EodContext, book: str, pid: str, o: Outcome, issuer: str,
             **_quote_extra(q, sa), **core_analytics(v),
             **ofz_basis(t, v),
             **curve_proxy(discount_curve(ctx.core_market)[0] != DISCOUNT_CURVE_ID, t, v),
+            **({"risk_missing": v.extra["risk_missing"]} if v.extra.get("risk_missing") else {}),  # TDM#764
             **({"coupon_freq_source": "schedule"} if freq and not t.coupon_frequency else {}),
             **({"not_exact_reason": o.reason} if o.reason else {}),
             **({"fx_rate": fx[0], "fx_source": fx[1]} if fx else {}),
