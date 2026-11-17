@@ -263,6 +263,8 @@ def list_audit(con: psycopg.Connection, limit: int = 200, action: str | None = N
 def add_user(con: psycopg.Connection, username: str, role: str, password: str, *, actor: str,
              display_name: str | None = None, must_change: bool = False, ip: str | None = None) -> dict[str, Any]:
     name = normalize_username(username)
+    if name == LOCAL:
+        raise AuthError(f"имя {LOCAL} занято: так записан этот компьютер, пока вход по паролю выключен")
     _role(role)
     check_password(name, password)
     display = (display_name or "").strip() or None
@@ -336,6 +338,7 @@ def delete_user(con: psycopg.Connection, username: str, *, actor: str, ip: str |
             raise AuthError("это последний активный администратор: сначала назначьте другого", 409)
         revoke_user_sessions(con, row["user_id"])
         con.execute("DELETE FROM app_user WHERE user_id = %s", (row["user_id"],))
+        con.execute("DELETE FROM user_table_columns WHERE username = %s", (name,))  # no foreign key: ``local`` has no row
         audit(con, actor, "user_delete", name, ip=ip, detail={"role": row["role"]})
 
 
@@ -620,6 +623,17 @@ def trader_guard(request: Request) -> User | None:
     if not request.app.state.auth.enabled:
         return current_user(request)
     return _signed_in(request, "trader")
+
+
+def me_guard(request: Request) -> User:
+    """A user's own display preferences (TDM#763, ``prefs_routes``): any signed-in user, of any role; the answer is
+    always about the caller (``User.username``). Auth off: this computer only (``check_local``), as ``local``."""
+    if not request.app.state.auth.enabled:
+        check_local(request)
+        return LOCAL_ADMIN
+    user = _signed_in(request, "viewer")
+    _check_write_type(request, ("application/json",))
+    return user
 
 
 def alias_guard(request: Request) -> User:

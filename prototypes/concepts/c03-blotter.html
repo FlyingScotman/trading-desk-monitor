@@ -57,7 +57,7 @@ body { display: flex; flex-direction: column; height: 100vh; overflow: hidden; }
 </head>
 <body>
 <div class="c3-bar">
-  <span class="grp"><span class="lb">Колонки</span><span id="sCols"></span></span>
+  <span class="grp"><span class="lb">Колонки</span><span id="sCols"></span><span id="sColsPick"></span></span>
   <span class="grp"><span class="lb">Группы</span><span id="sGrp"></span></span>
   <span class="grp"><span class="lb">Цвет</span><span id="sColor"></span></span>
   <span class="sp"></span>
@@ -176,7 +176,19 @@ body { display: flex; flex-direction: column; height: 100vh; overflow: hidden; }
     ['all', 'Всё', ['name', 'isin', 'ccy', 'issuer', 'kind', 'book', 'rating', 'coupon', 'curCpn', 'offer', 'offerKind', 'maturity', 'event', 'tenor', 'notional', 'tradeDay', 'mv', 'price', 'chg', 'spark', 'ytm', 'spread', 'zkbd', 'zdisc', 'gspread', 'dur', 'dv01', 'cs01', 'basis01', 'ofzSpr01', 'carry', 'funding', 'pnl', 'pnlMtd', 'pnlYtd']],
   ];
   // валюта и эмитент — в каждом наборе колонок, и при группировке тоже (R37)
-  const cols = () => (PRESETS.find(p => p[0] === st.preset) || PRESETS[0])[2].map(k => Object.assign({ key: k }, C[k]));
+  // Набор — состав колонок по умолчанию; поверх него пользователь скрывает и возвращает отдельные колонки («Показать и скрыть»,
+  // TDM#763). Хранится скрытое, а не показанное, отдельно для каждого набора и у каждого пользователя на сервере
+  // (K.colPrefs, ключ c03-blotter:<набор>): колонка, добавленная в набор позже, видна; ключ, которого в наборе нет, пропускается.
+  // «Бумага» — идентификатор строки, не скрывается.
+  if (!PRESETS.some(p => p[0] === st.preset)) st.preset = 'base';  // набора нет (чужое значение в хранилище) — базовый
+  const presetCols = () => (PRESETS.find(p => p[0] === st.preset) || PRESETS[0])[2];
+  const FIXED = ['name'];
+  const colKey = () => K.colKey('c03-blotter:' + st.preset);
+  const readHid = () => { const ok = new Set(presetCols().filter(k => !FIXED.includes(k))); return new Set(K.colPrefs.get(colKey()).filter(k => ok.has(k))); };
+  let hid = readHid();
+  const cols = () => presetCols().filter(k => !hid.has(k)).map(k => Object.assign({ key: k }, C[k]));
+  // скрытая колонка уносит с собой свой фильтр и свою сортировку: их больше не снять щелчком по заголовку
+  const dropHidden = keys => keys.forEach(k => { delete st.filters[k]; st.sort = st.sort.filter(s => s[0] !== k); });
 
   // ---------- группировки ----------
   const TBO = ['< 6м', '6м–1г', '1–2г', '2–3г', '3–5г', '5–7г', '7–10г', '10г+'];
@@ -436,7 +448,14 @@ body { display: flex; flex-direction: column; height: 100vh; overflow: hidden; }
   }
 
   // ---------- панель управления ----------
-  K.seg(document.getElementById('sCols'), PRESETS.map(p => [p[0], p[1]]), st.preset, v => { st.preset = v; st.sort = st.sort.filter(s => cols().some(c => c.key === s[0])); save(); render(); });
+  K.seg(document.getElementById('sCols'), PRESETS.map(p => [p[0], p[1]]), st.preset, v => { st.preset = v; hid = readHid(); st.sort = st.sort.filter(s => cols().some(c => c.key === s[0])); save(); render(); colBtn.paint(); });
+  const colBtn = K.colMenu({ hidden: () => hid, title: 'показать и скрыть колонки этого набора; выбор запоминается для вашего пользователя',
+    cols: () => presetCols().map(k => ({ key: k, label: C[k].label, unit: C[k].unit, fixed: FIXED.includes(k) })),
+    toggle: (k, hide) => { if (hide) { dropHidden([k]); hid.add(k); } else hid.delete(k); const saved = K.colPrefs.set(colKey(), [...hid]); render(); return saved; },
+    reset: () => { hid = new Set(); const saved = K.colPrefs.reset(colKey()); render(); return saved; } });
+  document.getElementById('sColsPick').appendChild(colBtn);
+  // выбор с сервера пришёл позже, чем страница нарисовалась (TDM#763)
+  K.on('colprefs', () => { const n = readHid(); if (n.size === hid.size && [...n].every(k => hid.has(k))) return; dropHidden([...n].filter(k => !hid.has(k))); hid = n; render(); colBtn.paint(); });
   K.seg(document.getElementById('sGrp'), [['none', 'без групп'], ['ccy', 'валюта → эмитент'], ['book', 'книга → валюта'], ['type', 'тип → срок']], st.grouping, v => { st.grouping = v; st.collapsed = {}; save(); render(); });
   K.seg(document.getElementById('sColor'), [['issuer', 'эмитент'], ['ccy', 'валюта'], ['type', 'тип'], ['pnl', 'PnL дня']], st.color, v => { st.color = v; save(); render(); });
   const q = document.getElementById('q');

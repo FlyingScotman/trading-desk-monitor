@@ -273,12 +273,12 @@ tr.row.sel td { background: var(--accent-bg); }
     const P = document.getElementById('pTop');
     K.seg(P.querySelector('.m'), [['dv01', 'по ΔDV01'], ['trades', 'только со сделками'], ['market', 'по Δ доходности']], st.top, v => { st.top = v; save(); topTbl.setSort(sortFor()); topTbl.redraw(); });
     const sortFor = () => st.top === 'market' ? [['dY', -1]] : [['adv', -1]];
-    topTbl = K.table(P.querySelector('.bd'), { viewKey: 'c11-top-changes',
+    topTbl = K.table(P.querySelector('.bd'), { viewKey: 'c11-top-changes', colPick: true,  // «Колонки ▾» (TDM#763): таблица позиций на K.posCols
       rowsFn: topRows, maxHeight: '460px', sort: sortFor(), stripe: r => K.issuerColor(r.issuer), autoFilter: false,
       rowCls: r => r.id === st.pos ? 'sel' : '',
       onRow: r => { st.pos = r.id; save(); drawPos(); topTbl.redraw(); },
       columns: [
-        { key: 'name', label: 'Позиция', fmt: (v, r) => K.nameCell(r, v) + ' <span class="mut3">' + esc(r.book) + '</span>' },
+        { key: 'name', label: 'Позиция', noHide: true, fmt: (v, r) => K.nameCell(r, v) + ' <span class="mut3">' + esc(r.book) + '</span>' },
         K.posCols.ccy, K.posCols.issuer,
         { key: 'kind', label: 'Тип', filter: r => M.kindLabel[r.kind] || r.kind, fmt: (v, r) => '<span class="tagc">' + esc(M.kindShort[r.kind]) + '</span>' },
         { key: 'not0', label: 'Номинал было', num: true, unit: 'mm в вал.', fmt: v => f.mn(v, 2), title: 'mm в валюте бумаги на дату сравнения' },
