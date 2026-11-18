@@ -80,8 +80,9 @@ def _not_computed(v, code):
     assert math.isnan(v.ytm_pct) and math.isnan(v.macaulay_years) and math.isnan(v.modified_duration)
     assert v.dv01_rub == 0.0 and v.spread01_rub == 0.0 and not any(v.buckets.values()) and not any(
         x for bs in v.curve_buckets.values() for x in bs.values()) and math.isnan(v.z_spread_bp)
-    assert BROKEN_SCHEDULE_TEXT[code] in v.assumptions
-    assert v.extra["risk_missing"] == {"reason": code, "text": BROKEN_SCHEDULE_TEXT[code]}
+    text = v.extra["risk_missing"]["text"]  # TDM#768: the reason of the monitor's own calculation may follow the text
+    assert text.startswith(BROKEN_SCHEDULE_TEXT[code]) and text in v.assumptions
+    assert v.extra["risk_missing"] == {"reason": code, "text": text}
 
 
 def test_a_bond_with_the_label_has_no_yield_duration_or_risk_and_says_why(ctx, exact):
@@ -275,8 +276,10 @@ def _unreliable(o, fields, reasons=("moex_schedule_rounded",)):
     return replace(o.quote, source_analytics_unreliable={"fields": list(fields), "reasons": list(reasons)})
 
 
-def test_the_unreliable_fields_the_hub_names_are_not_used_and_the_bond_has_no_risk(ctx, exact):
-    o = exact[AMORT]
+def test_the_unreliable_fields_the_hub_names_are_not_used_and_a_bond_without_a_schedule_to_compute_from_has_no_risk(ctx, exact):
+    """A floater has no fixed schedule to compute a yield from (TDM#768 computes it for a complete fixed one): MOEX's
+    fields the hub lists are not used, and it has none."""
+    o = exact[FRN]
     code = "bond_source_analytics_unreliable"
     for fields in (["yield_close_pct", "effective_yield_pct", "duration_days", "zspread_bp"], ["duration_days"],
                    ["effective_yield_pct"]):
@@ -286,6 +289,17 @@ def test_the_unreliable_fields_the_hub_names_are_not_used_and_the_bond_has_no_ri
         assert "посчитаны по искажённому графику погашений: не используются" in v.extra["risk_missing"]["text"]
     plain = approximate(ctx, _case(o, labelled=False), Q, _fb(ctx))
     assert (v.pv_rub, v.dirty_rub) == (plain.pv_rub, plain.dirty_rub) and plain.dv01_rub != 0.0
+
+
+def test_the_unreliable_fields_of_a_bond_with_a_complete_schedule_are_not_used_and_its_own_yield_is(ctx, exact):
+    """TDM#768: the amortizer's schedule is complete: the yield and duration are the monitor's (tests/test_fallback_own_yield_768.py)."""
+    o = exact[AMORT]
+    terms = replace(o.terms, day_count="ACT/365F", day_count_source="cbonds")  # the fixtures state none (TDM#768: needed)
+    out = Outcome(o.secid, terms, _unreliable(_case(o, labelled=False), ["effective_yield_pct", "duration_days"]),
+                  reason="no_price")
+    v = approximate(ctx, out, Q, _fb(ctx))
+    assert "risk_missing" not in v.extra and math.isfinite(v.ytm_pct) and v.dv01_rub != 0.0
+    assert v.ytm_pct != pytest.approx(53.83) and v.ytm_pct == pytest.approx(9.89, abs=0.05)
 
 
 @pytest.mark.parametrize("unreliable", [None, {"fields": [], "reasons": []}, {"fields": ["zspread_bp", "gspread_bp"]}])
