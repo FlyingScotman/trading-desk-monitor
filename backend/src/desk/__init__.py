@@ -4,13 +4,13 @@ from __future__ import annotations
 
 import os
 
-__version__ = "0.2.32"
+__version__ = "0.2.33"
 
 # Bumped by hand when a change makes a run compute something else from the same inputs (valuation, PnL, risk
 # buckets, coverage). A run records ``logic_version()`` in its lineage; the autopilot recomputes the latest positions
 # date once when its default run was made by another logic version; the backfill (desk.backfill, R23) recomputes the
 # older dates in the background.
-VALUATION_VERSION = 35  # 2: risk per curve (R8); 3: static display fields (R9 D1-D6, D8: names, coupons, issuers);
+VALUATION_VERSION = 36  # 2: risk per curve (R8); 3: static display fields (R9 D1-D6, D8: names, coupons, issuers);
 # 4: RUB bonds discounted on RUONIA OIS + Z-spread, flash PnL on the bond's own curves;
 # 5: a key-rate floater on a fallback rung books its projection on RUB KEY, the run log names missing rates inputs
 # 6: a bond's offer, its next 18 months of flows and the day's quote (G-spread, volume) in extra (concept pages)
@@ -90,6 +90,9 @@ VALUATION_VERSION = 35  # 2: risk per curve (R8); 3: static display fields (R9 D
 # 35: the published OCP takes out of the base a report line of a spot type with a future value date (the adapter's
 # x_spot_future) that matches a forward, NDF or future of its book, and counts the deal itself in its place: its PV, else
 # the legs of its terms at the discount factor 1 with the reason (TDM#693)
+# 36: the Z-spreads of a fixed-coupon RUB bond to the KBD and to RUONIA OIS (TDM#762); a bond whose source schedule does not
+# add up to its face has no yield, duration or risk (TDM#764); coupons by a rate on the period's face, no rounding, and the
+# own yield from the full schedule (TDM#768, TDM#770)
 
 
 def logic_version() -> str:
