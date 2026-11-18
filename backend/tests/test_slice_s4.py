@@ -69,13 +69,14 @@ def test_coupon_gaps_are_assumed_and_flagged(ctx):
     t = ctx.static.bonds[CORP]
     cps = [c for c in t.coupons if c.pay_date > ctx.business_date]
     nxt, later = cps[0], cps[1:]
-    no_amount = dataclasses.replace(t, coupons=tuple(dataclasses.replace(c, amount_per_bond=None) if c == nxt else c
-                                                     for c in t.coupons))
+    no_amount = dataclasses.replace(t, day_count="ACT/365F",  # a coupon of a rate is computed in the static's day count (TDM#770)
+                                    coupons=tuple(dataclasses.replace(c, amount_per_bond=None) if c == nxt else c
+                                                  for c in t.coupons))
     s = fixed_schedule(no_amount, ctx.business_date)
     filled = next(c for c in s.coupons if c.no == nxt.no)
     days = (filled.pay_date - filled.start).days
     assert float(filled.amount_per_bond) == pytest.approx(round(float(nxt.rate_pct) * 10 * days / 365, 2), abs=0.005)
-    assert s.assumptions == ("coupon amount from rate x face x days/365: 1 coupon(s)",)
+    assert s.assumptions == ("coupon amount from rate x face of the period's start x days/basis (ACT/365F): 1 coupon(s)",)
     unknown = dataclasses.replace(t, coupons=tuple(dataclasses.replace(c, status="unknown", rate_pct=None,
                                                                        amount_per_bond=None) if c in later else c
                                                    for c in t.coupons))

@@ -172,8 +172,8 @@ t('#288: потоки карточки — графика выпуска нет:
   const real = P('concepts/lib/real.js');
   assert.ok(real.includes("{ flows: null, reason: 'сервер не нашёл позицию или её график выпуска' }") && real.includes("if (r.status === 404) return notFoundBody(r)"));  // TDM#675: прогона нет — отдельно
   assert.ok(real.includes(".then(x => { if (!x.flows) delete flowCache[id]; return x; });"), 'сбой и ответ без графика не запоминаются (#166)');
-  // вид спреда флоатера без DM ядра — Z (в значении Z), с DM ядра — DM
-  assert.ok(real.includes("p.spreadLabel = p.zspread == null ? '' : flt && p.dmSource === 'core' ? 'DM' : 'Z';"));
+  // вид спреда: DM ядра у флоатера, иначе Z и кривая, к которой он (TDM#762: «к КБД» / «к RUONIA»); без названной кривой — Z
+  assert.ok(real.includes("p.spreadLabel = p.zspread == null ? '' : flt && p.dmSource === 'core' ? 'DM' : p.spreadCurve === 'RUB OFZ' ? 'к КБД' : p.spreadCurve === 'RUB RUONIA' ? 'к RUONIA' : 'Z';"));
   assert.ok(/no_static: 'нет статики хаба за дату прогона'/.test(real) && real.includes('FLOW_REASON[j && j.reason]'));
 });
 

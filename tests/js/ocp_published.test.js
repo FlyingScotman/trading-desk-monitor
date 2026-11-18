@@ -127,7 +127,7 @@ function page16(opt) {
   const x = load(null, opt.filter, opt.store);
   const K = x.ctx.KIT;
   K.top = () => null; K.tableToolsAll = () => {};
-  let chart = null; K.chart = (el, fn) => { chart = fn(); return { dispose() {} }; };
+  let chart = null; K.chart = (el, fn) => { chart = fn(); return { dispose() {}, ready() {} }; };  // ready: щелчок по дню (TDM#767)
   const segs = {}; const seg0 = K.seg; K.seg = (el, items, cur, fn) => { segs[items[0][0]] = fn; return seg0(el, items, cur, fn); };
   if (opt.hash) x.ctx.location.hash = opt.hash;
   const asked = [];

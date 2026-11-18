@@ -128,6 +128,19 @@ class BondTerms:
     """MOEX LATNAME (static 1.1, HS12)."""
     issue_size: Decimal | None = None
     """Number of bonds of the issue as MOEX lists it (``issue_size``; for OFZ the declared volume)."""
+    day_count: str | None = None
+    """The coupon day count of the issue as the hub's static states it (``Instrument.day_count``, from Cbonds: ``30E/360``,
+    ``ACT/365F``, ``30/360``, ``ACT/360``, ``ACT/ACT ...``; raw Cbonds titles such as ``ACTUAL/365 (ACTUAL/365F)`` also
+    occur in a hub that does not normalise them); None when the hub does not publish it (label ``day_count_not_published``)
+    and for a hub before the field. The monitor infers none (``fallback.own_schedule``)."""
+    day_count_source: str | None = None
+    """Where ``day_count`` comes from (``Instrument.day_count_source``: ``cbonds``)."""
+    source_analytics_unreliable_reasons: tuple[str, ...] = ()
+    """Contract 1.10 (FlyingScotman/market-data-hub#165): why MOEX's own yields and durations of the bond (the
+    ``source_analytics`` fields that come from its cash flows) cannot be trusted: the reasons ``future_redemptions_differ_from_face``
+    and / or ``redemptions_rounded_by_source``, judged on the MOEX rows as published, so they stay when the hub corrected
+    the schedule by hand. Empty: none known, or a hub before 1.10. A quote of an earlier snapshot carries no such flag
+    (``BondQuote.source_analytics_unreliable``); this one is the bond's."""
 
 
 @dataclass(frozen=True)
@@ -160,6 +173,18 @@ class BondQuote:
     value: Decimal | None = None
     """Turnover in ``currency_id``, the settlement currency (``SUR``: RUB)."""
     currency_id: str | None = None
+    source_analytics_unreliable: dict[str, Any] | None = None
+    """Contract 1.10 (FlyingScotman/market-data-hub#165): ``{"fields": [...], "reasons": [...]}`` when MOEX computed these
+    ``source_analytics`` fields (yield_close_pct, effective_yield_pct, duration_days, ...) on a wrong redemption schedule;
+    None: the hub says nothing (a hub before 1.10, or the fields are fine). The fallback ladder does not use them: it
+    computes its own yield and duration from the bond's flows when it can (``fallback.own_analytics``, TDM#768)."""
+
+
+def unreliable_analytics(raw: Any) -> dict[str, Any] | None:
+    """``BondQuote.source_analytics_unreliable`` of a quote row's field: None for a missing, null or empty one."""
+    if not isinstance(raw, dict) or not raw.get("fields"):
+        return None
+    return {"fields": [str(f) for f in raw["fields"]], "reasons": [str(r) for r in raw.get("reasons") or ()]}
 
 
 OFZ_CLASSES = ("ofz_pd", "ofz_ad", "ofz_pk", "ofz_in")
@@ -337,6 +362,8 @@ class StaticView:
                 floater_formula=formulas.get(sid), face_date=as_of,
                 initial_face_value=_d(i.get("initial_face_value")),
                 lat_name=i.get("lat_name"), issue_size=_d(i.get("issue_size")),
+                day_count=i.get("day_count") or None, day_count_source=i.get("day_count_source") or None,
+                source_analytics_unreliable_reasons=tuple(str(r) for r in i.get("source_analytics_unreliable_reasons") or ()),
             )
 
     def business_calendar(self, name: str) -> tuple[BusinessCalendar, date, date]:
@@ -525,7 +552,8 @@ class MarketView:
             self.quotes[(q["secid"], q["board"])] = BondQuote(
                 q["secid"], q["board"], date.fromisoformat(q["trade_date"]), _d(q.get("face_value")),
                 _d(q.get("accrued_per_bond")), prices, q.get("num_trades"), q.get("source_analytics") or {},
-                _d(q.get("volume_bonds")), _d(q.get("value_ccy")), q.get("currency_id"))
+                _d(q.get("volume_bonds")), _d(q.get("value_ccy")), q.get("currency_id"),
+                unreliable_analytics(q.get("source_analytics_unreliable")))
         for q in d.get("bond_quotes_intraday") or ():  # an intraday cut (R11); EOD cuts leave it empty
             if (q["secid"], q["board"]) in self.quotes:
                 continue
@@ -533,7 +561,8 @@ class MarketView:
             ts = datetime.fromisoformat(q["ts"])
             self.quotes[(q["secid"], q["board"])] = BondQuote(
                 q["secid"], q["board"], ts.astimezone(MSK).date(), None, None, prices, q.get("num_trades"),
-                q.get("source_analytics") or {}, _d(q.get("vol_today")), _d(q.get("val_today")), None)
+                q.get("source_analytics") or {}, _d(q.get("vol_today")), _d(q.get("val_today")), None,
+                unreliable_analytics(q.get("source_analytics_unreliable")))
         if len(d["zcyc_params"]) != 1:
             raise SnapshotError(f"{snap.id}: expected one zcyc_params row, got {len(d['zcyc_params'])}")
         self.zcyc = d["zcyc_params"][0]

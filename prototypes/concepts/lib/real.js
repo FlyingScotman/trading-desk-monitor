@@ -22,6 +22,9 @@
  *  - срок — до оферты или колла, по которым считается доходность, иначе до погашения;
  *  - у флоатера доходности нет (ytm = null), спред — дисконт-маржа ядра (extra.dm_bp: спред к кривой проекции; в
  *    прогоне до ядра 0.33 — Z-спред); G-спред — ядра (extra.g_spread_bp, определение MOEX), иначе MOEX;
+ *  - у рублёвой фикс-бумаги два Z-спреда: p.zKbd (zKbdBp) и p.zRuonia (zRuoniaBp), к какой бы кривой она ни дисконтировалась
+ *    (TDM#762); «Спред» (p.zspread) — к кривой дисконтирования (p.spreadCurve: КБД у ОФЗ-ПД/АД/ИН, RUONIA OIS у остальных), p.spreadLabel
+ *    подписывает её («к КБД» / «к RUONIA» / «DM»); у флоатера p.zRuonia — прежний Z (spreadBp), p.zKbd нет;
  *  - CS01 и базис по бакетам срока — ядра (extra.spread_buckets: CS по бакетам пропорционально ставочному риску
  *    дисконтирования); в прогоне до ядра 0.33 — по двум соседним бакетам срока;
  *  - PnL: кэрри = carry + rolldown (купонный доход и roll-down, без фондирования: #168), фондирование = funding (свой
@@ -464,11 +467,22 @@
     p.dm = flt ? (num(ex.dm_bp) != null ? num(ex.dm_bp) : p.zSpreadZ) : null;
     p.dmSource = flt ? (num(ex.dm_bp) != null ? 'core' : 'z') : null;  // 'z': DM ядра нет (прогон до ядра 0.33) — показан Z
     p.zspread = flt ? p.dm : p.zSpreadZ;
-    // вид спреда (колонка «Спред» и «Вид спреда» в CSV, #276): у флоатера без DM ядра в значении Z — и метка Z
-    p.spreadLabel = p.zspread == null ? '' : flt && p.dmSource === 'core' ? 'DM' : 'Z';
-    // кривая, к которой Z-спред (spreadBp ядра — к кривой дисконтирования: RUONIA, в день без неё — КБД); у флоатера это
-    // Z-спред к RUONIA с купонами по прогнозу (R32), сравнимый с Z фикс-бумаг; DM — к кривой проекции
+    // кривая, к которой spreadBp (Z ядра — к кривой дисконтирования бумаги: КБД у ОФЗ-ПД/АД/ИН и в день без RUONIA OIS,
+    // RUONIA OIS у остальных); у флоатера это Z-спред с купонами по прогнозу (R32), сравнимый с Z фикс-бумаг; DM — к кривой проекции
     p.spreadCurve = d.spreadCurve || null;
+    // вид спреда (колонка «Спред» и «Вид спреда» в CSV, #276, TDM#762): DM ядра у флоатера, иначе Z и кривая, к которой он:
+    // «к КБД» / «к RUONIA»; кривая другая или не названа (валюта, прогон без неё) — просто Z
+    p.spreadLabel = p.zspread == null ? '' : flt && p.dmSource === 'core' ? 'DM' : p.spreadCurve === 'RUB OFZ' ? 'к КБД' : p.spreadCurve === 'RUB RUONIA' ? 'к RUONIA' : 'Z';
+    // как назвать спред в тексте: «DM», «Z к КБД», «Z к RUONIA», «Z»
+    p.spreadName = p.spreadLabel === 'DM' || p.spreadLabel === 'Z' || !p.spreadLabel ? p.spreadLabel : 'Z ' + p.spreadLabel;
+    // Z-спреды фикс-бумаг к КБД и к RUONIA OIS (zKbdBp, zRuoniaBp прогона, TDM#762): у прогона до них — только основной спред к своей кривой, второй «—».
+    // У флоатера «Z к RUONIA» — прежний Z (spreadBp), но не в день, когда его кривая дисконтирования — КБД (он не к RUONIA);
+    // «Z к КБД» у него нет
+    // Прогон, где полей ещё нет (ключа нет, не null): основной спред с известной кривой — это и есть Z к ней; явный null
+    // нового прогона (нет кривой, бумага не в рублях) остаётся пустым
+    p.zKbd = flt ? null : d.zKbdBp === undefined ? (p.spreadCurve === 'RUB OFZ' ? p.zSpreadZ : null) : num(d.zKbdBp);
+    p.zRuonia = flt ? (p.spreadCurve === 'RUB OFZ' ? null : p.zSpreadZ)
+      : d.zRuoniaBp === undefined ? (p.spreadCurve === 'RUB RUONIA' ? p.zSpreadZ : null) : num(d.zRuoniaBp);
     // прокси-кривая (#31, extra.curve_proxy прогона): в день без кривой RUONIA бумага на КБД (RUB OFZ) — пометка в
     // таблицах и карточке (K.curveProxyTag, K.curveProxyNote); прогон без поля — пометки нет
     const cp = ex.curve_proxy;

@@ -39,10 +39,13 @@ its spread to RUONIA (``OFZ_SCHEME``).
 **A bond is valued somehow rather than not at all** (the owner's rule). Below an exact valuation
 ``BondValuation.quality`` is ``assumed`` and ``assumptions`` says why, one short reason each:
 
-- a coupon MOEX lists as known without an amount: rate x face x days / 365 (RATE_ACT_365); with
-  an amount but no rate (a corporate): the rate from the amount;
+- a coupon MOEX lists as known without an amount (a rate for the period, no sum): rate x the face outstanding at the
+  period's start by the redemption schedule x days / basis of the static's day count (``COUPON_DAY_COUNTS``), unrounded
+  (TDM#770); with no (supported) day count or no start it is ``assumed`` at its own rate, days / 365; with an amount
+  but no rate (a corporate): the rate from the amount;
 - a coupon not known yet (``unknown``, or ``projected_by_moex`` on a fixed bond): at the last
-  known rate, or MOEX's projection when no rate is known;
+  known rate (on the face of the period's start, in the static's day count when stated), or MOEX's projection when no
+  rate is known;
 - a perpetual: never called (TDM#35, the owner's rule ORG_CONVENTIONS §4.1 «не отзовут», core BACKLOG #125-#128):
   its listed coupons and then the last one for ever (core ``ExerciseAssumption.never_called``, ``PerpetualTail``),
   ``perpetual: no call assumed``; a listed coupon not known yet at the last known rate;
@@ -67,7 +70,7 @@ valuation for information only.
 from __future__ import annotations
 
 import math
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field, replace
 from datetime import date
 from decimal import ROUND_HALF_UP, Decimal
@@ -84,6 +87,7 @@ from rub_fixed_income import (
     CouponRateBounds,
     CurveBootstrapRequest,
     DayCount,
+    DiscountCurve,
     ExerciseAssumption,
     FixedCouponLeg,
     FixingDateRule,
@@ -111,6 +115,7 @@ from rub_fixed_income import (
     floating_perpetual_tail,
     horizon_portfolio,
     perpetual_tail,
+    solve_z_spread,
     value_portfolio,
 )
 from rub_fixed_income import __version__ as CORE_VERSION
@@ -488,8 +493,44 @@ def perpetual_coupons(terms: BondTerms, after: date) -> tuple[Coupon, ...]:
     return tuple(out)
 
 
-def _amount(rate_pct: Decimal, face: Decimal, days: int) -> Decimal:
-    return (rate_pct / 100 * face * days / 365).quantize(Decimal("0.01"), ROUND_HALF_UP)
+def _amount(rate_pct: Decimal, face: Decimal, days: int, basis: int = 365) -> Decimal:
+    """A coupon as the rate x the face x days / basis, unrounded (a face of 0.035 makes every coupon 0.00 at 0.01, TDM#770)."""
+    return rate_pct / 100 * face * days / basis
+
+
+def _days_30e_360(a: date, b: date) -> tuple[int, int]:
+    return (b.year - a.year) * 360 + (b.month - a.month) * 30 + (min(b.day, 30) - min(a.day, 30)), 360
+
+
+def _days_30_360(a: date, b: date) -> tuple[int, int]:
+    """30/360 (US bond basis): a start on the 31st is the 30th; an end on the 31st is the 30th only when the start is on
+    the 30th or 31st."""
+    d1 = min(a.day, 30)
+    d2 = 30 if b.day == 31 and d1 == 30 else b.day
+    return (b.year - a.year) * 360 + (b.month - a.month) * 30 + (d2 - d1), 360
+
+
+COUPON_DAY_COUNTS: dict[str, Callable[[date, date], tuple[int, int]]] = {
+    "30E/360": _days_30e_360,
+    "30/360": _days_30_360,
+    "ACT/365F": lambda a, b: ((b - a).days, 365),
+    "ACT/360": lambda a, b: ((b - a).days, 360),
+}
+"""The coupon day counts a coupon's amount can be computed in: name -> (days, basis) of a period. ``30E/360`` (Eurobond:
+both ends on the 31st are the 30th) and ``30/360`` (US bond basis) differ and are kept apart."""
+COUPON_DAY_COUNT_NAMES = {
+    "30E/360": "30E/360", "30/360": "30/360", "ACT/365F": "ACT/365F", "ACT/365": "ACT/365F",
+    "ACTUAL/365": "ACT/365F", "ACTUAL/365 (ACTUAL/365F)": "ACT/365F", "ACT/360": "ACT/360", "ACTUAL/360": "ACT/360",
+}
+"""The static's ``BondTerms.day_count`` (the hub's normalised name, or a raw Cbonds title: the hub in production does not
+normalise them) -> a key of ``COUPON_DAY_COUNTS``. Anything else (``ACT/ACT``, ``30/360 ISDA``, ``30/360 GERMAN``) is not
+supported. The day count is a term of the issue taken from the static, never inferred from the coupons paid."""
+
+
+def coupon_day_count(terms: BondTerms) -> str | None:
+    """The supported day count of the bond's coupons (a key of ``COUPON_DAY_COUNTS``) from its static, else None (not
+    stated, or not one of them)."""
+    return COUPON_DAY_COUNT_NAMES.get(" ".join((terms.day_count or "").upper().split()))
 
 
 def _fill_coupons(terms: BondTerms, coupons: tuple[Coupon, ...], after: date, horizon: date,
@@ -499,7 +540,7 @@ def _fill_coupons(terms: BondTerms, coupons: tuple[Coupon, ...], after: date, ho
     ofz, floating = terms.bond_class in OFZ_CLASSES, terms.coupon_type == "floating"
     out: list[Coupon] = []
     last_rate, prev_pay = None, None
-    computed, derived, moex, assumed = 0, 0, 0, set()
+    computed, derived, moex, no_rate_amount, assumed = 0, 0, 0, 0, set()
     for c in coupons:
         start, prev_pay = c.start or prev_pay, c.pay_date
         known = c.status in ("known", "current_published")
@@ -514,14 +555,24 @@ def _fill_coupons(terms: BondTerms, coupons: tuple[Coupon, ...], after: date, ho
             break
         face = c.face or terms.face_value
         days = (c.pay_date - start).days if start else 0
+        # TDM#770: a coupon computed from a rate is on the face outstanding at the period's START by the redemption schedule
+        # (the source's face of a period can be the current face on all of them: RUS-30), unrounded, in the bond's day
+        # count of the static; no start or no (supported) day count: it is not computed from its rate
+        period_face = face_on(terms, start) if start else None
+        day_count = coupon_day_count(terms)
         if known and c.amount_per_bond is not None:
             pass
-        elif known and c.rate_pct is not None and face:
-            c = replace(c, amount_per_bond=_amount(c.rate_pct, face, days))
+        elif known and c.rate_pct is not None and period_face and day_count and start and c.pay_date > start:
+            d, basis = COUPON_DAY_COUNTS[day_count](start, c.pay_date)
+            c = replace(c, amount_per_bond=_amount(c.rate_pct, period_face, d, basis))
             computed += 1
-        elif last_rate is not None and face:
-            c = replace(c, status="assumed", rate_pct=last_rate, amount_per_bond=_amount(last_rate, face, days))
-            assumed.add(last_rate)
+        elif (rate := c.rate_pct if known and c.rate_pct is not None else last_rate) is not None and face:
+            # its own known rate (a step-up) is kept; a coupon with none takes the last known one. In the static's day count
+            # when it is stated and supported, else days / 365
+            no_rate_amount += known and c.rate_pct is not None
+            d, basis = COUPON_DAY_COUNTS[day_count](start, c.pay_date) if day_count and start else (days, 365)
+            c = replace(c, status="assumed", rate_pct=rate, amount_per_bond=_amount(rate, period_face or face, d, basis))
+            assumed.add(rate)
         elif c.status == "projected_by_moex" and c.amount_per_bond is not None:
             moex += 1
         else:
@@ -533,7 +584,11 @@ def _fill_coupons(terms: BondTerms, coupons: tuple[Coupon, ...], after: date, ho
             last_rate = c.rate_pct
         out.append(replace(c, start=start))
     if computed:
-        notes.append(f"coupon amount from rate x face x days/365: {computed} coupon(s)")
+        notes.append(f"coupon amount from rate x face of the period's start x days/basis ({coupon_day_count(terms)}): "
+                     f"{computed} coupon(s)")
+    if no_rate_amount:
+        notes.append(f"{no_rate_amount} coupon(s) with a rate but no amount not computed from it (no start, no face by the "
+                     f"schedule, or the day count is not stated or not supported: {terms.day_count}): assumed at their rate")
     if derived:
         notes.append(f"coupon rate from amount: {derived} coupon(s)")
     if assumed:
@@ -559,6 +614,21 @@ def face_on(terms: BondTerms, d: date) -> Decimal | None:
     return terms.face_value + (1 if d < s else -1) * sum(reds, Decimal(0))
 
 
+REDEMPTIONS_LABEL = "future_redemptions_differ_from_face"
+"""The hub's label (``BondTerms.labels``, static HS13) of a bond whose redemptions still to be paid do not add up to its
+face: its schedule is wrong in the data (RUS-30, TDM#764)."""
+ROUNDED_LABEL = "redemptions_rounded_by_source"
+"""The hub's label (contract 1.10, FlyingScotman/market-data-hub#165) of a bond whose redemptions MOEX publishes rounded
+to a whole percent of the initial face: the schedule is as wrong as with ``REDEMPTIONS_LABEL``'s."""
+BROKEN_REDEMPTION_LABELS = (ROUNDED_LABEL, REDEMPTIONS_LABEL)
+"""The labels of a broken redemption schedule, the more specific first (the hub's contract 1.10 sets ``ROUNDED_LABEL``
+together with ``REDEMPTIONS_LABEL``): ``fixed_schedule`` refuses it as ``redemption_incomplete`` and the fallback
+ladder gives such a bond no yield, duration or risk (``fallback.BROKEN_SCHEDULE_TEXT``)."""
+MANUAL_OVERRIDE_LABEL = "redemptions_manual_override"
+"""The hub's label (contract 1.10) of a bond whose schedule the hub's owner corrected by hand (its redemption rows
+``source: "manual_override"``) and which then has neither label above: NOT a broken schedule, the exact path is valid."""
+
+
 def fixed_schedule(terms: BondTerms, settlement: date) -> FixedSchedule:
     """The horizon, the coupons up to it and the checks core does not make (redemptions complete)."""
     eligibility(terms)
@@ -581,6 +651,10 @@ def fixed_schedule(terms: BondTerms, settlement: date) -> FixedSchedule:
         if any(r.value_per_bond is None for r in future_reds):
             raise Rejected("redemption_amount_missing")
         total = sum((r.value_per_bond for r in future_reds), Decimal(0))  # type: ignore[misc]
+        # TDM#764: the hub's own check (its tolerance is 0.005, ours 0.01) says the schedule does not add up: it is not
+        # valued from it (a manual override of the hub, ``MANUAL_OVERRIDE_LABEL``, takes the label off)
+        if (label := next((x for x in BROKEN_REDEMPTION_LABELS if x in terms.labels), None)) is not None:
+            raise Rejected("redemption_incomplete", f"hub label {label}")
         if abs(total - (face := face_on(terms, settlement))) > Decimal("0.01"):  # type: ignore[operator]
             raise Rejected("redemption_incomplete", f"future redemptions {total} vs face {face} on {settlement}")
     floater, resets = None, ()
@@ -752,6 +826,39 @@ class BondValuation:
     def risk(self) -> dict[str, dict[str, float]]:
         """Bucket DV01 by published curve: ``curve_buckets``, else ``buckets`` on the discount curve (RUONIA)."""
         return self.curve_buckets or {self.spread_curve or RUONIA_CURVE: self.buckets}
+
+
+def z_spread_to(v: BondValuation, curve_id: str, curves: Mapping[str, DiscountCurve]) -> float | None:
+    """``v``'s Z-spread to the curve ``curve_id`` (``KBD_CURVE_ID`` or ``RUONIA_OIS_CURVE_ID``), bp (TDM#762): the same
+    ``solve_z_spread`` of core and the same convention (``SPREAD_CONVENTION``) as the valuation's own spread, on the
+    valuation's own cashflows (and a perpetual's tail) and its dirty price, at its settlement date, on ``curves[curve_id]``
+    (the run's built curve). The valuation's own spread is taken as it is when it is to that curve (core's, or a rung's
+    carried one), not solved again. None: no such curve in ``curves`` (a date without RUONIA OIS: no other curve is
+    put in its place), no cashflows to solve on (a rung of the fallback ladder keeps none), no finite spread, or no spread
+    reproduces the price."""
+    if not math.isfinite(v.z_spread_bp):
+        return None
+    if v.discount_curve_id == curve_id:
+        return v.z_spread_bp
+    curve = curves.get(curve_id)
+    if curve is None or v.discount_curve_id is None or v.foreign or not v.cashflows or not v.dirty_rub > 0:
+        return None
+    try:
+        z = solve_z_spread([(c.payment_date, c.amount) for c in v.cashflows], v.dirty_rub, curve,
+                           settlement_date=v.valuation_date, convention=SPREAD_CONVENTION,
+                           perpetual_tail=v.perpetual_tail)
+    except (CoreRejection, ValueError, ArithmeticError):
+        return None
+    return z * 1e4 if math.isfinite(z) else None
+
+
+def z_spreads(v: BondValuation, curves: Mapping[str, DiscountCurve]) -> tuple[float | None, float | None]:
+    """``(z_kbd_bp, z_ruonia_bp)`` of a fixed-coupon RUB bond (``z_spread_to`` on the KBD and on RUONIA OIS): what
+    the pages show as its Z-spread to the KBD and to RUONIA. ``(None, None)`` for a floater (its Z-spread to RUONIA
+    with the coupons projected is its ``z_spread_bp``, the pages' ``Z к RUONIA``) and for a bond off RUB."""
+    if v.floater is not None or v.discount_margin_bp is not None or v.foreign or v.fx_rate is not None:
+        return None, None
+    return z_spread_to(v, KBD_CURVE_ID, curves), z_spread_to(v, RUONIA_OIS_CURVE_ID, curves)
 
 
 @dataclass(frozen=True)

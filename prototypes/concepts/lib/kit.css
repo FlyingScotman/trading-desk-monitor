@@ -184,6 +184,21 @@ table.mini + .k-tbl-ctlbar-m { position: static; background: transparent; }
 .k-panel > .bd.scroll > table.mini + .k-tbl-ctlbar-m, .k-drawer > .bd > table.mini + .k-tbl-ctlbar-m { position: sticky; background: var(--panel); }
 .k-tbtn { padding: 1px 7px; border: 1px solid var(--line); border-radius: 5px; background: transparent; color: var(--fg-3); cursor: pointer; font-size: 11px; line-height: 16px; }
 .k-tbtn:hover { color: var(--fg); border-color: var(--accent); }
+.k-tbtn.on { color: var(--fg); border-color: var(--accent); }
+/* меню колонок таблицы (TDM#763, KIT.colMenu): панель под кнопкой «Колонки ▾», на телефоне — по ширине экрана с полями */
+.k-colmenu { position: fixed; z-index: 140; box-sizing: border-box; padding: 0; box-shadow: var(--shadow); display: flex; flex-direction: column; overflow: hidden; }
+.k-colmenu-hd { padding: 8px 12px 6px; border-bottom: 1px solid var(--line); font-size: 12px; }
+.k-colmenu-t { font-weight: 600; }
+.k-colmenu-list { overflow: auto; padding: 4px 0; flex: 1 1 auto; min-height: 0; }
+.k-colmenu-row { display: flex; gap: 8px; align-items: center; padding: 5px 12px; cursor: pointer; font-size: 12.5px; }
+.k-colmenu-row:hover { background: var(--panel-2); }
+.k-colmenu-row input { margin: 0; flex: none; width: 16px; height: 16px; }
+.k-colmenu-row.fixed { color: var(--fg-3); cursor: default; }
+.k-colmenu-row .u { color: var(--fg-3); font-size: 11px; margin-left: auto; white-space: nowrap; }
+.k-colmenu-note { padding: 6px 12px 0; font-size: 11px; }
+.k-colmenu-ft { display: flex; gap: 8px; justify-content: space-between; padding: 8px 12px; border-top: 1px solid var(--line); }
+.k-colmenu-ft .k-btn:disabled { opacity: .5; cursor: default; }
+@media (max-width: 600px) { .k-colmenu-row { padding: 9px 12px; } }
 .k-input { background: var(--bg); border: 1px solid var(--line-2); border-radius: 6px; padding: 4px 8px; color: var(--fg); font: inherit; min-width: 160px; }
 .k-input:focus { outline: none; border-color: var(--accent); }
 .k-ccy { display: inline-block; font: 600 10.5px var(--mono); padding: 0 5px; border-radius: 3px; color: #fff; }

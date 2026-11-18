@@ -53,7 +53,7 @@ POSITION_KEYS = (
     "newToday", "entity", "portfolio", "pnl", "accrualOnly", "ocpTransfer", "offReport", "extra", "notValued")
 """A position's fields ``lib/real.js`` reads (``ratingInfo``, ``accrualOnly``, ``ocpTransfer``, ``extra`` and
 ``notValued`` only when there is one), plus a bond's ``BOND_KEYS``."""
-BOND_KEYS = ("instrumentId", "accrued", "couponFreq", "yieldDate", "spreadCurve")
+BOND_KEYS = ("instrumentId", "accrued", "couponFreq", "yieldDate", "spreadCurve", "zKbdBp", "zRuoniaBp")
 PNL_AMOUNTS = ("carry", "rolldown", "rates", "spread", "fx", "funding", "convexity", "newTrades", "other", "reported",
                "explained")
 PNL_KEYS_READ = (*PNL_AMOUNTS, "fxPartial", "available", "reasonText", "method", "methodText", "assumption")
@@ -339,6 +339,8 @@ def assemble(con, run: dict[str, Any]) -> dict[str, Any]:
             pos.update({"instrumentId": p.get("instrument_id") or p.get("isin"), "accrued": p.get("accrued"),
                         "couponFreq": p.get("coupon_freq"), "yieldDate": p.get("yield_date"),
                         "spreadCurve": p.get("spread_curve")})
+            # TDM#762: a row of a run made before the fields has no key (the page then shows the own-curve spread only)
+            pos.update({k: p[f] for k, f in (("zKbdBp", "z_kbd_bp"), ("zRuoniaBp", "z_ruonia_bp")) if f in p})
         if p.get("extra") is not None:
             pos["extra"] = p["extra"]
         positions.append(pos)

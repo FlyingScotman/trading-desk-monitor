@@ -245,6 +245,17 @@ class EodContext:
         return cid, built, note
 
     @property
+    def z_curves(self) -> dict[str, DiscountCurve]:
+        """The built curves a fixed-coupon RUB bond's Z-spreads are to (``valuation.bonds.z_spreads``, TDM#762): the KBD
+        and, when the run has it, the RUONIA OIS curve (continued past its last quote, as ``risk_curve`` has it). A
+        date without RUONIA OIS has the KBD alone: no Z-spread to RUONIA is made up from another curve."""
+        out = {KBD_CURVE_ID: self.curve}
+        built = next((c.curve for c in self.core_market.curves if c.curve_id == rates.RUONIA_OIS_CURVE_ID), None)
+        if isinstance(built, DiscountCurve):
+            out[rates.RUONIA_OIS_CURVE_ID] = built
+        return out
+
+    @property
     def point_in_time_warning(self) -> str | None:
         """Set when the static snapshot is dated after the market: its statuses and faces are later than the market."""
         s = self.static.snapshot.business_date

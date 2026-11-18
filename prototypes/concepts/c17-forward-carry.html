@@ -283,11 +283,11 @@
       const G = st.dim === 'none' ? null : [{ key: r => r[st.dim] || '—', label: k => esc(st.dim === 'book' ? k + (M.book[k] && M.book[k].name !== k ? ' · ' + M.book[k].name : '') : st.dim === 'entity' ? entName(k) : st.dim === 'kind' ? KIND(k) : k) }];
       const money = (key, label, val, extra) => Object.assign({ key, label, num: true, val, nullable: true, drill: false, unit: 'mm ₽', fmt: v => mn(v), cls: v => v == null ? '' : f.cls(v), sum: r => val(r) || 0, sumFmt: v => mn(v) }, extra || {});
       K.table(tp.querySelector('.bd'), {
-        viewKey: 'c17-positions', title: 'Прогнозное кэрри до ' + resp.horizonDate + ', mm ₽', rowsFn, maxHeight: '620px',
+        viewKey: 'c17-positions', colPick: true, title: 'Прогнозное кэрри до ' + resp.horizonDate + ', mm ₽', rowsFn, maxHeight: '620px',
         groupBy: G, stripe: r => r.isCash ? 'transparent' : K.issuerColor(r.issuer), rowCls: r => r.covered ? '' : 'c17-nc', sort: [['net', -1]],
         footCount: rows => rows.filter(r => !r.isCash).length + ' поз.',
         columns: [
-          { key: 'name', label: 'Позиция', val: r => r.name, fmt: (v, r) => esc(v) + (r.ccy && r.ccy !== '—' ? ' ' + K.ccyTag(r.ccy) : ''), csvFmt: v => v, w: '220px' },
+          { key: 'name', label: 'Позиция', noHide: true, val: r => r.name, fmt: (v, r) => esc(v) + (r.ccy && r.ccy !== '—' ? ' ' + K.ccyTag(r.ccy) : ''), csvFmt: v => v, w: '220px' },
           { key: 'book', label: 'Книга', val: r => r.book, filter: true, fmt: v => '<span class="mut">' + esc(v) + '</span>' },
           { key: 'entity', label: 'Юрлицо', val: r => r.entity, filter: true, fmt: v => '<span class="mut">' + esc(entName(v)) + '</span>' },
           { key: 'kind', label: 'Тип', val: r => r.kindLabel, filter: true, fmt: v => '<span class="mut">' + esc(v) + '</span>' },

@@ -14,7 +14,8 @@
  *  KIT.drill(spec)        — открыть разбор вклада (позиции, группировка по эмитенту/книге/валюте/типу/бакету)
  *  KIT.card(id)           — карточка позиции: параметры, графики истории, риск по бакетам, потоки, PnL
  *  KIT.table(el, opts)    — таблица: группы, мультисортировка (Shift+щелчок; группы сортируются тем же столбцом), поиск, итоги с разбором;
- *                           ширина и порядок колонок мышкой с запоминанием (KIT.viewStore), «⤓ CSV» — выгрузка
+ *                           ширина и порядок колонок мышкой с запоминанием (KIT.viewStore), «⤓ CSV» — выгрузка; у таблиц позиций
+ *                           (KIT.cols) «Колонки ▾» — скрыть и вернуть колонки, выбор по пользователю на сервере (KIT.colPrefs, TDM#763)
  *  KIT.tableTools(el, opts) — то же для таблиц, свёрстанных вручную: «⤓ CSV» и ширина колонок с запоминанием (#131)
  *  KIT.tips, KIT.hint     — подсказки к мерам риска (конвенция DV01 RUONIA, Базис01, CS01, Z к RUONIA) и подпись с подсказкой
  *  KIT.chart(el, option)  — echarts с цветами темы; KIT.riskStack(el, opts) — риск по бакетам: стек кривых + итог + кумулятив
@@ -290,10 +291,27 @@
   K.PNL_FACTORS = [['carry', 'Кэрри'], ['funding', 'Фондирование'], ['rates', 'Ставки'], ['spread', 'Спред'], ['fx', 'FX (нетто ОВП)'], ['trading', 'Сделки'], ['other', 'Прочее']];
   K.PNL_COLORS = { carry: '#3fb67a', funding: '#d9667a', rates: '#4c9dff', spread: '#e3b341', fx: '#b48cff', trading: '#22c3d6', other: '#a0b4c8' };
   K.tips.dv01 = 'DV01 ставок, тыс ₽/бп: сумма бакетов по кривым ставок (RUONIA, КС, валютные), без базиса ОФЗ и CS01.\n' + K.tips.ruonia;
-  K.tips.zdisc = 'Z-спред к кривой дисконтирования (RUONIA OIS; в день без неё — к КБД), б.п., годовой, ACT/365F (R32): у фикс-бумаги — ' +
-    'обычный Z-спред, у флоатера — купоны по прогнозу своей кривой проекции (КС или RUONIA), дисконт по RUONIA + Z. Сравним у фиксов ' +
-    'и флоатеров. Дисконт-маржа (DM) флоатера — спред к его кривой проекции; у флоатера на RUONIA (ОФЗ-ПК) Z и DM равны.';
+  // Спреды рублёвых бумаг (TDM#762): у ОФЗ-ПД/АД/ИН кривая дисконтирования — КБД (с 0.2.6), у остальных — RUONIA OIS; спред
+  // колонки «Спред» — к ней, и ячейка говорит, к какой. Z к КБД и Z к RUONIA каждой фикс-бумаги — свои колонки.
+  K.tips.zspread = 'Спред бумаги к кривой, на которой она дисконтируется, б.п., годовой, ACT/365F (R32). Кривая подписана в ячейке: ' +
+    'у ОФЗ-ПД, ОФЗ-АД и ОФЗ-ИН это КБД («к КБД»; такой спред близок к нулю по построению), у остальных рублёвых бумаг — ' +
+    'RUONIA OIS («к RUONIA»; в день, за который кривой RUONIA OIS нет, они тоже на КБД, и подпись «к КБД»); у флоатера — ' +
+    'дисконт-маржа к кривой проекции его купонов («DM»); у бумаги не в рублях — Z к кривой её валюты (подпись «Z»). Сравнивайте спреды с одной подписью. Z к КБД и Z к RUONIA каждой ' +
+    'фикс-бумаги — в колонках «Z к КБД» и «Z к RUONIA».';
+  K.tips.zkbd = 'Z-спред к КБД, б.п., годовой, ACT/365F (R32): потоки фикс-бумаги, дисконтированные по КБД плюс Z, дают её грязную ' +
+    'цену. У ОФЗ-ПД, ОФЗ-АД и ОФЗ-ИН это спред их кривой дисконтирования (колонка «Спред» с подписью «к КБД»), у остальных рублёвых ' +
+    'фикс-бумаг — отдельный расчёт на КБД за ту же дату. У флоатера колонка пуста. У бумаги на запасной оценке (без потоков) ' +
+    'есть только спред к её собственной кривой, второй пуст. В прогоне, где этого поля ещё нет, показан только спред бумаги ' +
+    'к её кривой дисконтирования, если она КБД; пока дата не пересчитана, иначе — прочерк.';
+  K.tips.zdisc = 'Z-спред к кривой RUONIA OIS, б.п., годовой, ACT/365F (R32). У фикс-бумаги, в том числе ОФЗ-ПД, ОФЗ-АД и ОФЗ-ИН, — ' +
+    'обычный Z-спред: потоки бумаги, дисконтированные по RUONIA OIS плюс Z, дают её грязную цену (у корпоративной он равен ' +
+    'колонке «Спред» с подписью «к RUONIA»). У флоатера — купоны по прогнозу своей кривой проекции (КС или RUONIA), дисконт ' +
+    'по RUONIA OIS + Z; дисконт-маржа (DM) флоатера — спред к его кривой проекции, у флоатера на RUONIA (ОФЗ-ПК) Z и DM равны. ' +
+    'У бумаги на запасной оценке (без потоков) есть только спред к её собственной кривой, второй пуст. Нет кривой RUONIA OIS за ' +
+    'дату — прочерк: к другой кривой Z не считается. В прогоне, где этого поля ещё нет, показан только спред бумаги к её кривой, ' +
+    'если она RUONIA OIS; пока дата не пересчитана, иначе — прочерк.';
   K.zdiscTip = K.tips.zdisc;
+  K.zkbdTip = K.tips.zkbd;
   // каким должен быть DV01 флоатера во времени (R44): подпись под графиком истории карточки
   K.tips.floaterDv01 = 'Флоатер: ставочный DV01 мал — купон пересматривается, и ставка двигает цену только до ближайшей фиксации купона: ' +
     'DV01 ≈ −(время до фиксации) × MV × 1 б.п. (у флоатера на КС — сумма дисконтирования по RUONIA и проекции по КС). Он пилообразный: ' +
@@ -1863,7 +1881,7 @@
   K.closeColFilter = () => { if (fltPop) { fltPop.remove(); fltPop = null; } };
   // items: [{v, t, n}]; sel — выбранные значения или null (все); onChange(массив | null)
   K.colFilter = function (anchor, items, sel, onChange) {
-    K.closeColFilter();
+    K.closeColFilter(); if (K.closeColMenu) K.closeColMenu();
     const m = h('div', 'k-panel k-flt-pop'); m.style.cssText = 'position:fixed;z-index:140;min-width:200px;max-width:340px;max-height:60vh;overflow:auto;box-shadow:var(--shadow);padding:4px 0';
     const r = anchor.getBoundingClientRect(); m.style.left = Math.max(4, Math.min(r.left, innerWidth - 350)) + 'px'; m.style.top = (r.bottom + 4) + 'px';
     let cur = sel ? new Set(sel) : null, q = '';
@@ -2011,6 +2029,146 @@
       if (Object.keys(w).length) out.w = w;
     }
     return out;
+  };
+
+  // ---------- какие колонки таблицы скрыты (TDM#763) ----------
+  // Хранится то, что пользователь СКРЫЛ, а не то, что показано: колонка, которой не было при сохранении (новая версия
+  // монитора), по умолчанию видна, а ключ, которого в таблице нет, молча пропускается. Ключ — экран + таблица (+ набор
+  // колонок экрана, как у C03): K.colKey. Выбор — на сервере, отдельно у каждого пользователя монитора: GET / PUT / DELETE
+  // ../api/v1/me/table-columns (backend/src/desk/api/prefs_routes.py, таблица user_table_columns), так что он переживает
+  // перезагрузку, перезапуск сервера и обновление программы и идёт за пользователем на другой компьютер.
+  // Копия — в K.viewStore браузера (ключ 'cols:<ключ>'): страница рисуется сразу, до ответа сервера, и работает, когда
+  // сервера нет (демо, файл, сбой запроса: чтение и запись в try/catch). Ответил сервер — его слово главное, пришёл ответ —
+  // таблицы перерисовываются (событие 'colprefs'); нет — живёт копия браузера, и меню колонок говорит об этом словами.
+  K.colKey = s => String(s == null ? '' : s).replace(/^table:/, '').toLowerCase().replace(/[^a-z0-9._:-]+/g, '_').replace(/^[^a-z0-9]+/, '').slice(0, 128);
+  K.colPrefs = (() => {
+    const API = '../api/v1/me/table-columns', LK = k => 'cols:' + k, DIRTY = 'cols-dirty';
+    const srv = {}, touched = new Set(), chain = {}, ver = {};  // srv — скрытые колонки по ключам (ответ сервера и свои правки); touched — ключи, правленные здесь
+    let loaded = false, loadFailed = false, saveFailed = false, asked = false;
+    const clean = a => Array.isArray(a) ? [...new Set(a.filter(x => typeof x === 'string' && x))] : [];
+    const served = () => M.source === 'real' && typeof fetch === 'function';
+    // «не отправлено»: правка, которую сервер не принял (нет связи, сбой), помнится в браузере, и при следующей загрузке страницы
+    // уходит на сервер раньше, чем приходит его ответ; пока она не принята, в копии выбор лежит и для «как было» (пустой список)
+    const dirtyKeys = () => { const d = K.viewStore.get(DIRTY); return clean(d && d.keys); };
+    const markDirty = (key, on) => { const s = new Set(dirtyKeys()); if (on) s.add(key); else s.delete(key); if (s.size) K.viewStore.set(DIRTY, { keys: [...s] }); else K.viewStore.reset(DIRTY); };
+    const send = (key, method, hidden) => {
+      // запросы одной таблицы — по очереди: быстрые щелчки не меняются местами по дороге; результат — принял ли сервер
+      const run = () => Promise.resolve().then(() => fetch(API + '/' + encodeURIComponent(key), { method, cache: 'no-store', headers: { 'Content-Type': 'application/json' }, body: method === 'PUT' ? JSON.stringify({ hidden }) : undefined }))
+        .then(r => { if (!r.ok) throw new Error(String(r.status)); saveFailed = false; return true; }).catch(() => { saveFailed = true; return false; });
+      return (chain[key] = (chain[key] || Promise.resolve()).then(run));
+    };
+    // отправить выбор таблицы; принял сервер и после этого выбор не менялся — «не отправлено» снимается
+    const push = (key, hidden) => {
+      const v = ver[key] = (ver[key] || 0) + 1;
+      markDirty(key, true);
+      return send(key, hidden.length ? 'PUT' : 'DELETE', hidden).then(ok => {
+        if (ok && ver[key] === v) { markDirty(key, false); if (!hidden.length) K.viewStore.reset(LK(key)); }
+        return ok;
+      });
+    };
+    const P = {
+      // скрытые колонки таблицы: массив ключей, непроверенный (таблица сводит его со своими колонками)
+      get(key) {
+        if (!asked && served()) { asked = true; P.load(); }  // первая таблица с выбором колонок просит выбор с сервера; странице без таких таблиц запрос не нужен
+        if (loaded || touched.has(key)) return clean(srv[key]);
+        const l = K.viewStore.get(LK(key));
+        return clean(l && l.hidden);
+      },
+      set(key, hidden) {
+        hidden = clean(hidden);
+        touched.add(key);
+        if (hidden.length) { srv[key] = hidden; K.viewStore.set(LK(key), { hidden }); } else { delete srv[key]; if (served()) K.viewStore.set(LK(key), { hidden: [] }); else K.viewStore.reset(LK(key)); }
+        return served() ? push(key, hidden) : Promise.resolve();
+      },
+      reset(key) { return P.set(key, []); },  // «как было»: у пользователя нет своего выбора, таблица — по умолчанию
+      load() {
+        asked = true;
+        if (!served()) return Promise.resolve(false);
+        // правки, не дошедшие до сервера раньше, — первыми: ответ сервера их не перекроет
+        const flush = Promise.all(dirtyKeys().map(k => {
+          const l = K.viewStore.get(LK(k)), hidden = clean(l && l.hidden);
+          touched.add(k); if (hidden.length) srv[k] = hidden; else delete srv[k];
+          return push(k, hidden);
+        }));
+        return flush.then(() => fetch(API, { cache: 'no-store', headers: { Accept: 'application/json' } }))
+          .then(r => { if (!r.ok) throw new Error(String(r.status)); return r.json(); })
+          .then(j => {
+            const t = j && typeof j === 'object' && j.tables && typeof j.tables === 'object' && !Array.isArray(j.tables) ? j.tables : {};
+            Object.keys(t).forEach(k => { if (touched.has(k)) return; srv[k] = clean(t[k] && t[k].hidden); K.viewStore.set(LK(k), { hidden: srv[k] }); });
+            Object.keys(srv).forEach(k => { if (!(k in t) && !touched.has(k)) delete srv[k]; });  // у пользователя нет выбора — по умолчанию, сколько бы ни лежало в браузере
+            loaded = true; loadFailed = false;
+            fire('colprefs');
+            return true;
+          }).catch(() => { loadFailed = true; return false; });
+      },
+      // где живёт выбор сейчас: 'server' — сохраняется на сервере; 'browser' — только в этом браузере (демо, файл);
+      // 'offline' — сервер не ответил или не принял запись: выбор остался в этом браузере и уйдёт на сервер при следующей загрузке страницы
+      where() { return !served() ? 'browser' : loadFailed || saveFailed ? 'offline' : 'server'; },
+    };
+    return P;
+  })();
+  // Меню колонок: кнопка «Колонки ▾» и выпадающая панель со списком колонок и галочками, «Как было» и «Готово». Меню — на
+  // экране один раз, закрывается Esc, щелчком снаружи и сменой размера окна; на телефоне — по ширине экрана (kit.css, .k-colmenu).
+  // o: { cols: () => [{key, label (HTML), unit, fixed}] — колонки таблицы; fixed — колонка-идентификатор, не скрывается;
+  //      hidden: () => Set ключей скрытых; toggle(key, hide); reset(); title }
+  // Кнопка получает btn.paint() — подпись («Колонки · скрыто 3 ▾») после смены состава не из меню.
+  let colPop = null, colPopOff = [];
+  K.closeColMenu = () => { if (colPop) { colPop.remove(); colPop = null; } colPopOff.forEach(f => f()); colPopOff = []; };
+  K.colMenu = o => {
+    const btn = h('button', 'k-tbtn k-colbtn'); btn.type = 'button';
+    btn.setAttribute('aria-haspopup', 'true'); btn.setAttribute('aria-expanded', 'false');
+    btn.title = o.title || 'показать и скрыть колонки таблицы; выбор запоминается для вашего пользователя';
+    const paint = btn.paint = () => { const n = o.hidden().size; btn.textContent = 'Колонки' + (n ? ' · скрыто ' + n : '') + ' ▾'; btn.classList.toggle('on', n > 0); };
+    const where = { server: '', browser: 'Выбор хранится только в этом браузере (нет сервера).', offline: 'Сервер не ответил или не принял выбор: он сохранён в этом браузере и уйдёт на сервер при следующей загрузке страницы.' };
+    function open() {
+      K.closeColFilter(); K.closeColMenu();
+      const m = h('div', 'k-panel k-colmenu'); m.setAttribute('role', 'dialog'); m.setAttribute('aria-label', 'Колонки таблицы');
+      const hd = h('div', 'k-colmenu-hd'), ttl = h('span', 'k-colmenu-t'), list = h('div', 'k-colmenu-list'), ft = h('div', 'k-colmenu-ft'), note = h('div', 'k-colmenu-note k-note');
+      const reset = h('button', 'k-btn', 'Как было'), done = h('button', 'k-btn', 'Готово');
+      reset.type = done.type = 'button'; reset.title = 'вернуть состав колонок по умолчанию: показать все скрытые';
+      const cs = o.cols();
+      const head = () => {
+        const hid = o.hidden(), shown = cs.filter(c => c.fixed || !hid.has(c.key)).length;
+        ttl.textContent = 'Показано ' + shown + ' из ' + cs.length; reset.disabled = !hid.size; btn.paint();
+        const w = where[K.colPrefs.where()]; note.textContent = w; note.style.display = w ? '' : 'none';
+      };
+      const hid0 = o.hidden();
+      cs.forEach(c => {
+        const row = h('label', 'k-colmenu-row' + (c.fixed ? ' fixed' : '')), cb = document.createElement('input');
+        cb.type = 'checkbox'; cb.checked = c.fixed || !hid0.has(c.key); cb.disabled = !!c.fixed; cb.dataset.col = c.key;
+        if (c.fixed) row.title = 'колонка-идентификатор: всегда на экране';
+        cb.onchange = () => {
+          if (!btn.isConnected) { K.closeColMenu(); return; }  // страница перерисовала таблицу, пока меню было открыто: меню — от старой таблицы
+          const done = o.toggle(c.key, !cb.checked); head(); Promise.resolve(done).then(() => { if (colPop === m) head(); });  // повторно — когда ответил сервер
+        };
+        const t = h('span', 'k-colmenu-l'); t.textContent = K.u(K.htmlText(c.label)) + (c.fixed ? ' (всегда)' : '');
+        row.append(cb, t);
+        if (c.unit) { const u = h('span', 'u'); u.textContent = K.u(c.unit); row.appendChild(u); }
+        list.appendChild(row);
+      });
+      reset.onclick = () => { if (!btn.isConnected) { K.closeColMenu(); return; } const done = o.reset(); list.querySelectorAll('input').forEach(cb => { cb.checked = true; }); head(); Promise.resolve(done).then(() => { if (colPop === m) head(); }); };
+      done.onclick = () => K.closeColMenu();
+      hd.appendChild(ttl); ft.append(reset, done); m.append(hd, list, note, ft);
+      document.body.appendChild(m); colPop = m;
+      // место: под кнопкой, если там хватает высоты, иначе над ней; по ширине — в экран с полями (телефон, 390 px)
+      const r = btn.getBoundingClientRect(), vw = document.documentElement.clientWidth || innerWidth, w = Math.min(340, vw - 16);
+      const below = innerHeight - r.bottom - 12, above = r.top - 12, down = below >= 260 || below >= above;
+      m.style.width = w + 'px'; m.style.left = Math.max(8, Math.min(r.left, vw - w - 8)) + 'px';
+      m.style.maxHeight = Math.max(180, Math.min(down ? below : above, innerHeight - 24)) + 'px';
+      if (down) m.style.top = (r.bottom + 4) + 'px'; else m.style.bottom = (innerHeight - r.top + 4) + 'px';
+      btn.setAttribute('aria-expanded', 'true');
+      head();
+      const first = list.querySelector('input:not(:disabled)'); if (first && first.focus) first.focus();
+      const onKey = e => { if (e.key === 'Escape') { K.closeColMenu(); e.stopImmediatePropagation(); e.preventDefault(); if (btn.focus) btn.focus(); } };
+      const onDoc = e => { if (!m.contains(e.target) && e.target !== btn) K.closeColMenu(); };
+      const onSize = () => K.closeColMenu();
+      document.addEventListener('keydown', onKey, true); window.addEventListener('resize', onSize);
+      const t0 = setTimeout(() => document.addEventListener('click', onDoc), 0);
+      colPopOff = [() => { document.removeEventListener('keydown', onKey, true); window.removeEventListener('resize', onSize); clearTimeout(t0); document.removeEventListener('click', onDoc); btn.setAttribute('aria-expanded', 'false'); }];
+    }
+    btn.onclick = e => { e.stopPropagation(); if (colPop && btn.getAttribute('aria-expanded') === 'true') K.closeColMenu(); else open(); };
+    paint();
+    return btn;
   };
 
   // ---------- выгрузка таблиц в CSV (#110, #144) ----------
@@ -2304,7 +2462,10 @@
   //        csvFmt тогда отдаёт массив [значение колонки, значения дополнительных] («-27 Z» → -27 и Z),
   //        sumNeutral — итог без цвета знака (расхождение, а не прибыль/убыток), footCount(rows) — подпись числа строк «Итого»
   //        (например «7 из 9», когда итоги считаются не по всем строкам),
-  //        viewKey — стабильный ключ раскладки латиницей, он же основа имени CSV (без него — страница + id, K.tableKey), title — название в CSV, fileName — основа имени файла CSV (латиницей)}
+  //        viewKey — стабильный ключ раскладки латиницей, он же основа имени CSV (без него — страница + id, K.tableKey), title — название в CSV, fileName — основа имени файла CSV (латиницей),
+  //        colPick — кнопка «Колонки ▾» в шапке таблицы: скрыть и вернуть колонки, выбор запоминается на сервере по пользователю (K.colPrefs, TDM#763);
+  //        по умолчанию — у таблиц, чьи колонки собраны K.cols (таблицы позиций на K.posCols), false — без неё; колонка с noHide: true и первая
+  //        колонка таблицы не скрываются (идентификатор строки), колонка без подписи (полоска доли) не предлагается и остаётся на экране}
   K.table = function (el, opts) {
     const st = { sort: opts.sort ? opts.sort.slice() : [], q: '', collapsed: {}, groupSort: false, filters: {}, grouped: false };
     // таблицу рисуют заново в том же месте (страница перерисовала блок): записи реестра K.d прошлой — освободить; у прошлой
@@ -2332,14 +2493,33 @@
     const vkey = K.tableKey(el, opts);
     const colKeys = () => opts.columns.map(c => c.key);
     let lay = K.viewLayout(K.viewStore.get(vkey), colKeys());  // {order: [key], w: {key: px}} — проверенная форма
+    // скрытые колонки (TDM#763): хранится скрытое, а не показанное — новая колонка по умолчанию видна, лишний ключ пропускается
+    const pick = opts.colPick !== undefined ? !!opts.colPick : !!(opts.columns && opts.columns.posTable);
+    const ckey = K.colKey(vkey), firstKey = (opts.columns.find(c => !c.hidden) || {}).key;
+    const fixedCol = c => !!c.noHide || c.key === firstKey;
+    const pickCols = () => pick ? opts.columns.filter(c => !c.hidden && K.htmlText(c.label)) : [];
+    const readHid = () => { const ok = new Set(pickCols().filter(c => !fixedCol(c)).map(c => c.key)); return new Set(K.colPrefs.get(ckey).filter(k => ok.has(k))); };
+    let hid = pick ? readHid() : new Set();
+    // новая скрытая колонка не должна оставить невидимых фильтра и сортировки: щелчок по заголовку их больше не снимет
+    const dropHidden = n => n.forEach(k => { if (!hid.has(k)) { delete st.filters[k]; st.sort = st.sort.filter(x => x[0] !== k); } });
+    const setHidden = (k, hide) => {
+      if (hide) { dropHidden([k]); hid.add(k); } else hid.delete(k);
+      const saved = K.colPrefs.set(ckey, [...hid]);
+      draw(true);
+      return saved;
+    };
     const fixedW = () => !!lay.w && cols().some(c => lay.w[c.key]);
     const resetBtn = h('button', 'k-tbtn', '⟲ вид'); resetBtn.title = 'сбросить ширину и порядок колонок этой таблицы';
     resetBtn.onclick = () => { lay = {}; K.viewStore.reset(vkey); draw(true); };
     const csvBtn = h('button', 'k-tbtn', '⤓ CSV');
-    csvBtn.title = 'выгрузить в CSV (Excel): колонки — в текущем порядке, строки — после поиска, фильтров и сортировки; номер прогона и дата среза — в первой строке и в имени файла';
+    csvBtn.title = 'выгрузить в CSV (Excel): колонки — те, что на экране (скрытые не выгружаются), в текущем порядке, строки — после поиска, фильтров и сортировки; номер прогона и дата среза — в первой строке и в имени файла';
     csvBtn.onclick = () => K.download(csvName(), '\uFEFF' + csv(), 'text/csv;charset=utf-8');
-    ctl.append(csvBtn, resetBtn);
-    const paintCtl = () => { resetBtn.style.display = fixedW() || (lay.order && lay.order.length) ? '' : 'none'; };
+    // «Колонки ▾»: список колонок с галочками, «Как было» — состав по умолчанию (все колонки таблицы)
+    const resetCols = () => { hid = new Set(); const saved = K.colPrefs.reset(ckey); draw(true); return saved; };
+    const colBtn = pick ? K.colMenu({ hidden: () => hid, toggle: setHidden, reset: resetCols,
+      cols: () => pickCols().map(c => ({ key: c.key, label: c.label, unit: K.colUnit(c), fixed: fixedCol(c) })) }) : null;
+    colBtn ? ctl.append(colBtn, csvBtn, resetBtn) : ctl.append(csvBtn, resetBtn);
+    const paintCtl = () => { resetBtn.style.display = fixedW() || (lay.order && lay.order.length) ? '' : 'none'; if (colBtn) colBtn.paint(); };
     const saveLay = () => { K.viewStore.set(vkey, lay); paintCtl(); };
     let noClickTill = 0;  // после перетаскивания щелчок по заголовку — не сортировка
     let shown = [];       // строки на экране: после поиска, фильтров и сортировки (их и выгружает CSV)
@@ -2350,12 +2530,21 @@
     el.__kd = { cells: sCells, draw: sDraw };
     const resetMemo = () => { memo = new WeakMap(); memoGen = K.dataGen(); K.dFree(sCells); };
     // видимые колонки в сохранённом порядке; новых в сохранённом порядке нет — они в конце, в исходном порядке
-    const cols = () => {
-      const C = opts.columns.filter(c => !c.hidden), o = lay.order;
+    const ordered = C => {
+      const o = lay.order;
       if (!o || !o.length) return C;
       const ix = c => { const i = o.indexOf(c.key); return i < 0 ? 1e6 : i; };
       return C.map((c, i) => [c, i]).sort((a, b) => (ix(a[0]) - ix(b[0])) || (a[1] - b[1])).map(x => x[0]);
     };
+    const cols = () => ordered(opts.columns.filter(c => !c.hidden && !hid.has(c.key)));
+    // порядок всех колонок, и скрытых пользователем тоже: при переносе мышкой скрытые остаются на своих местах, вернувшаяся колонка встаёт туда же
+    const fullOrder = () => ordered(opts.columns.filter(c => !c.hidden)).map(c => c.key);
+    function setVisibleOrder(keys) {
+      const vis = new Set(keys), nv = keys.slice();
+      let i = 0;
+      lay.order = fullOrder().map(x => vis.has(x) ? nv[i++] : x);
+      saveLay(); draw(true);
+    }
     const val = (c, r) => c.val ? c.val(r) : r[c.key];
     // колонка для сортировки строк и групп: значение и, если у колонки есть итог, слагаемое суммы группы
     const colOf = k => { const c = opts.columns.find(x => x.key === k); return c ? { val: r => val(c, r), sum: c.sum ? (typeof c.sum === 'function' ? c.sum : r => val(c, r)) : null, nullable: !!c.nullable, filter: c.filter, key: c.key } : null; };
@@ -2530,7 +2719,7 @@
           let at = to > from ? to - 1 : to;
           if (to == null || at === from) return;
           keys.splice(from, 1); keys.splice(at, 0, k);
-          lay.order = keys; saveLay(); draw(true);
+          setVisibleOrder(keys);
         });
       });
     }
@@ -2553,9 +2742,17 @@
     draw();
     if (restoreOuter) { restoreOuter(); if (win) win.paint(false); }
     const api = { redraw: draw, state: st, csv, csvName, setSort: s => { st.sort = s; draw(true); }, setFilter: (k, v) => { st.filters[k] = v; draw(true); }, setGrouped: g => { st.grouped = !!g; draw(true); }, el,
-      viewKey: vkey, layout: () => JSON.parse(JSON.stringify(lay)), setLayout: v => { lay = K.viewLayout(v, colKeys()); saveLay(); draw(true); }, resetView: () => resetBtn.onclick() };
+      viewKey: vkey, layout: () => JSON.parse(JSON.stringify(lay)), setLayout: v => { lay = K.viewLayout(v, colKeys()); saveLay(); draw(true); }, resetView: () => resetBtn.onclick(),
+      colKey: ckey, hiddenCols: () => [...hid], setHidden, resetCols, setVisibleOrder, colMenu: colBtn };
     if (opts.autoFilter !== false && !opts.rows) K.live(el, 'filter', draw);
     else K.live(el, 'numfmt', draw);  // формат отрицательных чисел (#153): таблица без перерисовки по фильтру
+    // ответ сервера с выбором колонок пришёл позже, чем страница нарисовала таблицу (TDM#763): таблицы рисуются заново, если он другой
+    if (el.__kcpOff) el.__kcpOff();
+    el.__kcpOff = pick ? K.live(el, 'colprefs', () => {
+      const n = readHid();
+      if (n.size === hid.size && [...n].every(k => hid.has(k))) return;
+      dropHidden(n); hid = n; draw(true);
+    }) : null;
     return api;
   };
 
@@ -2980,7 +3177,7 @@
   K.posCols = {
     // валюта и эмитент — обычные столбцы (R37): сортировка и фильтр по значениям, как у остальных
     issuer: { key: 'issuerName', label: 'Эмитент', filter: true, title: 'эмитент (у деривативов — контрагент)', fmt: (v, r) => '<b style="color:' + K.issuerColor(r.issuer) + '">●</b> ' + esc(v) },
-    name: { key: 'name', label: 'Бумага', fmt: (v, r) => K.nameCell(r, v) + (r.tradedToday ? ' ' + K.tradesTag(r) : '') + K.offReportTag(r) + K.curveProxyTag(r) },
+    name: { key: 'name', label: 'Бумага', noHide: true, fmt: (v, r) => K.nameCell(r, v) + (r.tradedToday ? ' ' + K.tradesTag(r) : '') + K.offReportTag(r) + K.curveProxyTag(r) },
     isin: { key: 'isin', label: 'ISIN', fmt: v => '<span class="mono mut">' + esc(v || '—') + '</span>' },
     ccy: { key: 'ccy', label: 'Вал', fmt: (v, r) => K.ccyTag(r.ccy, r.ccyReported), val: r => M.ccyOrder[r.ccy] ?? 99, filter: r => r.ccy, fltOrder: (a, b) => ((M.ccyOrder[a] ?? 99) - (M.ccyOrder[b] ?? 99)) || a.localeCompare(b) },
     kind: { key: 'kind', label: 'Тип', filter: r => M.kindLabel[r.kind] || r.kind, fmt: (v, r) => '<span class="tagc" style="border-color:' + K.kindColor[v] + '55">' + esc(M.kindShort[v]) + '</span>' },
@@ -2999,11 +3196,13 @@
     tradeDay: Object.assign({ key: 'tradeDay', unit: 'mm в вал.' }, K.tradeDayCol()),
     price: { key: 'price', label: 'Цена', num: true, unit: '% ном.', fmt: v => f.px(v) },
     ytm: { key: 'ytm', label: 'Дох.', num: true, fmt: v => f.pct(v) },
-    // в CSV — число, вид спреда (Z / DM) — своей колонкой «Вид спреда» за ним (#276)
-    spread: { key: 'zspread', label: 'Спред', num: true, unit: 'б.п.', fmt: (v, r) => v == null ? '<span class="mut3">—</span>' : f.bp(v) + ' <span class="mut3">' + (r.spreadLabel || '') + '</span>', title: 'Z-спред к RUONIA (фикс) / дисконт-маржа (флоатер)',
+    // в CSV — число, кривая спреда (к КБД / к RUONIA) или DM — своей колонкой «Вид спреда» за ним (#276, TDM#762)
+    spread: { key: 'zspread', label: 'Спред', num: true, unit: 'б.п.', fmt: (v, r) => v == null ? '<span class="mut3">—</span>' : f.bp(v) + ' <span class="mut3">' + (r.spreadLabel || '') + '</span>', title: K.tips.zspread, tip: true,
       csvExtra: ['Вид спреда'], csvFmt: (v, r) => v == null ? ['', ''] : [f.bp(v), r.spreadLabel || ''] },
-    // Z-спред к кривой дисконтирования (RUONIA) у фикс-бумаг и флоатеров (у флоатера — купоны по прогнозу): сравнимы между собой (R32)
-    zdisc: { key: 'zdisc', label: 'Z к RUONIA', num: true, unit: 'б.п.', val: r => r.zSpreadZ, fmt: v => v == null ? '<span class="mut3">—</span>' : f.bp(v), title: K.zdiscTip, tip: true },
+    // Z-спреды фикс-бумаг к КБД и к RUONIA OIS (TDM#762): у каждой по своей колонке, к какой бы кривой она ни дисконтировалась;
+    // «Z к RUONIA» у флоатера — прежний Z (купоны по прогнозу, R32): сравнимы между собой
+    zkbd: { key: 'zkbd', label: 'Z к КБД', num: true, unit: 'б.п.', val: r => r.zKbd, fmt: v => v == null ? '<span class="mut3">—</span>' : f.bp(v), title: K.zkbdTip, tip: true },
+    zdisc: { key: 'zdisc', label: 'Z к RUONIA', num: true, unit: 'б.п.', val: r => r.zRuonia, fmt: v => v == null ? '<span class="mut3">—</span>' : f.bp(v), title: K.zdiscTip, tip: true },
     gspread: { key: 'gspread', label: 'G-спред', num: true, unit: 'б.п.', fmt: v => f.bp(v) },
     dur: { key: 'mdur', label: 'Дюр.', num: true, unit: 'лет', fmt: v => v == null ? '—' : f.n(v, 2) },
     dv01: { key: 'dv01', label: 'DV01', num: true, fmt: v => f.dv(v), cls: v => f.cls(v), sum: true, unit: 'тыс ₽/бп', title: K.tips.dv01, tip: true },
@@ -3017,7 +3216,8 @@
     rating: { key: 'rating', label: 'Рейтинг', filter: true, fmt: v => '<span class="mut">' + esc(v) + '</span>' },
     sector: { key: 'sector', label: 'Сектор', filter: true, fmt: v => '<span class="mut">' + esc(v) + '</span>' },
   };
-  K.cols = keys => keys.map(k => typeof k === 'string' ? Object.assign({}, K.posCols[k]) : k);
+  // posTable: таблица на K.cols — таблица позиций, у неё по умолчанию кнопка «Колонки ▾» (скрыть и вернуть колонки, TDM#763)
+  K.cols = keys => { const a = keys.map(k => typeof k === 'string' ? Object.assign({}, K.posCols[k]) : k); a.posTable = true; return a; };
   // порядок эмитентов в группах: Минфин первым, деривативы последними, остальные по алфавиту
   K.issuerOrder = (a, b) => { const r = x => x === 'Минфин' ? 0 : x === 'Деривативы' || x === 'Денежный рынок и фондирование' ? 2 : 1; return (r(a) - r(b)) || a.localeCompare(b, 'ru'); };
   // группировка «валюта → эмитент» — по желанию (opts.groupable таблиц, R37): по умолчанию таблицы позиций плоские,
@@ -3063,13 +3263,19 @@
       rows.map(r => '<tr' + (r.tot ? ' class="grp"' : '') + '><td>' + (r.tot ? '' : '<b style="color:' + K.curveColors[r.id] + '">■</b> ') + K.hint(esc(r.label), r.tot ? K.tips.dv01 : K.curveTip(r.id)) + '</td><td class="n"><b>' + f.dv(r.vals.reduce((a, b) => a + b, 0)) + '</b></td>' + ks.map(k => cell(r.vals[k])).join('') + '</tr>').join('') +
       '</tbody></table></div>';
   };
-  // спред бумаги в карточке (R32): фикс — Z-спред к кривой дисконтирования; флоатер — дисконт-маржа к кривой проекции и
-  // Z-спред к RUONIA (данные прогона: spreadBp — Z ядра к кривой дисконтирования, extra.dm_bp — DM); поля [подпись, значение, -, подсказка]
+  // спред бумаги в карточке (R32, TDM#762): рублёвая фикс-бумага — два Z-спреда, к КБД и к RUONIA (у ОФЗ-ПД/АД/ИН своя кривая
+  // дисконтирования — КБД, и её спред — один из двух, второй считается отдельно); бумага не в рублях — Z к своей кривой;
+  // флоатер — дисконт-маржа к кривой проекции и Z-спред к кривой дисконтирования (данные прогона: spreadBp — Z ядра к ней,
+  // extra.dm_bp — DM); поля [подпись, значение, -, подсказка]
   K.spreadFields = p => {
+    const dash = '<span class="mut3">—</span>', bp = v => v == null ? dash : f.bp(v) + ' <small>б.п.</small>';
     const to = p.spreadCurve === 'RUB OFZ' ? 'КБД' : p.spreadCurve === 'RUB RUONIA' || p.ccy === 'RUB' ? 'RUONIA' : 'кривой ' + p.ccy;
-    if (!p.cpn || p.cpn.type !== 'float') return [['Z-спред к ' + to, f.bp(p.zSpreadZ != null ? p.zSpreadZ : p.zspread) + ' <small>б.п.</small>', false, K.tips.zdisc]];
+    if (!p.cpn || p.cpn.type !== 'float') {
+      if (p.ccy === 'RUB') return [['Z-спред к КБД', bp(p.zKbd), false, K.tips.zkbd], ['Z-спред к RUONIA', bp(p.zRuonia), false, K.tips.zdisc]];
+      return [['Z-спред к ' + to, bp(p.zSpreadZ != null ? p.zSpreadZ : p.zspread), false, K.tips.zspread]];
+    }
     const out = [['Дисконт-маржа', f.bp(p.dm) + ' <small>б.п.' + (p.dmSource === 'z' ? ' · = Z: DM ядра нет' : ' · к кривой проекции') + '</small>', false, 'Дисконт-маржа (DM) — спред к кривой проекции купонов флоатера (КС или RUONIA), годовой, ACT/365F']];
-    if (p.zSpreadZ != null && p.dmSource !== 'z') out.push(['Z-спред к ' + to, f.bp(p.zSpreadZ) + ' <small>б.п. · как у фиксов</small>', false, K.tips.zdisc]);
+    if (p.zSpreadZ != null && p.dmSource !== 'z') out.push(['Z-спред к ' + to, f.bp(p.zSpreadZ) + ' <small>б.п. · как у фиксов</small>', false, to === 'RUONIA' ? K.tips.zdisc : K.tips.zspread]);
     return out;
   };
   // DM флоатера в истории (R35): DM ядра — только в дни прогонов (с появления позиции), оценка по цене MOEX (dmPx,
@@ -3267,7 +3473,7 @@
       ['Номинал', f.mn(p.notional, 0) + ' <small>mm ' + p.ccy + '</small>'], ['MV', f.mn(p.mv, 1) + ' <small>mm ₽</small>'],
       ['Цена (bid/ask)', f.px(p.price) + ' <small>' + f.px(p.bid) + ' / ' + f.px(p.ask) + '</small>'], ['Изм. цены', p.prevPrice == null || p.price == null ? '<span class="mut3">—</span>' : '<span class="' + f.cls(p.price - p.prevPrice) + '">' + f.s(p.price - p.prevPrice, 3) + '</span>'],
       p.cpn.type === 'float' ? ['Доходность', '<span class="mut3">—</span> <small>флоатер: смотрим DM</small>'] : ['Доходность', f.pct(p.ytm) + ' <small>к ' + (p.event.kind === 'put' || p.event.kind === 'call' ? 'оферте' : 'погаш.') + '</small>'], ...K.spreadFields(p),
-      ['G-спред к ОФЗ', f.bp(p.gspread) + ' <small>б.п.</small>'], ['Мод. дюрация', p.mdur == null ? '—' : f.n(p.mdur, 2)],
+      ['Мод. дюрация', p.mdur == null ? '—' : f.n(p.mdur, 2)],
       ['Купон', '<span class="mono">' + esc(p.couponFmt) + '</span>'], ['Текущий купон', f.pct(p.curCpn) + (p.cpn.type === 'float' ? ' <small>прогноз</small>' : '')],
       ['Ближайшее событие', p.event.date ? f.date(p.event.date) + ' <small>' + ev + ', ' + f.yrs(p.tenor) + '</small>' : '<span class="mut3">—</span> <small>' + ev + '</small>'], ['Погашение', f.date(p.maturity) + ' <small>' + f.yrs(p.yearsToMat) + '</small>'],
       ['DV01 ставки', K.d({ title: 'DV01 ' + p.name, unit: 'тыс ₽/бп', rows: [{ p, v: p.dv01 }] }, f.dv(p.dv01), '') + ' <small>тыс ₽/бп</small>', false, K.tips.dv01], ['CS01', f.dv(p.cs01) + ' <small>тыс ₽/бп</small>', false, K.tips.cs01],

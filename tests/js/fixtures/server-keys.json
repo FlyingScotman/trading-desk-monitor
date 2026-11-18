@@ -83,7 +83,9 @@
   "spreadCurve",
   "tenorY",
   "yieldDate",
-  "ytm"
+  "ytm",
+  "zKbdBp",
+  "zRuoniaBp"
  ],
  "pnl": [
   "assumption",

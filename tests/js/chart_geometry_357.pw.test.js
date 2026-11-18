@@ -63,6 +63,7 @@ async function serveFixture(page) {
       '/api/v1/instruments/aliases': { aliases: [] }, '/api/v1/auth/state': { enabled: false, user: null },
       '/api/v1/autopilot/status': { latest_run: null }, '/api/v1/backfill/status': null,
       '/api/v1/views': { views: [] }, '/api/v1/events': { events: [], last_id: 0 },
+      '/api/v1/me/table-columns': { user: 'local', tables: {} },  // the tables' hidden columns (TDM#763): C06 and C09 have such tables
       '/api/v1/history/market': null, '/api/v1/calendar/market': null,
     };
     if (Object.hasOwn(api, u.pathname)) return route.fulfill({ contentType: 'application/json', body: JSON.stringify(api[u.pathname]) });

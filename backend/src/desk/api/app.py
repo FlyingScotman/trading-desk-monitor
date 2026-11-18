@@ -51,6 +51,7 @@ from . import (
     compat,
     concepts,
     concepts_run,
+    ocp_day,
     ocp_history,
     ocp_origin,
     pnl_checks,
@@ -1453,6 +1454,26 @@ def create_app(store_url: str, static_dir: Path | None = None, app_dir: Path | N
             raise ApiError(422, "invalid_parameter", str(e)) from None
         return JSONResponse(jsonable_encoder(ocp_history.history(con, run, start, end)), headers=NO_STORE)
 
+    @app.get("/api/v1/history/ocp/day", include_in_schema=False)
+    def ocp_day_route(con: Con, on: Annotated[date, Query(alias="date")], run_id: int | None = None,
+                      as_of: date | None = None):
+        """The OCP of one saved date with what each figure consists of (TDM#767, ``ocp_day``): the history's day
+        (the date's default run, the anchor on its date) and per line its ``breakdown``: the terms the run saved, they
+        sum to the figure, and where the run did not save a term, the named absence (no guess, no recomputation by
+        today's rules). 404 ``no_run_on_date``: the date has no saved run to show."""
+        run = resolve_run(con, as_of, run_id)
+        if run is None:
+            raise run_missing(run_id, "No complete run for the selected history")
+        try:
+            ocp_history.period(run, on, on)
+        except ValueError as e:
+            raise ApiError(422, "invalid_parameter", str(e)) from None
+        out = ocp_day.day(con, run, on)
+        if out is None:
+            raise ApiError(404, "not_found", f"no saved run of {on.isoformat()} to show its OCP",
+                           {"reason": "no_run_on_date", "date": on.isoformat()})
+        return JSONResponse(jsonable_encoder(out), headers=NO_STORE)
+
     @app.get("/api/v1/history/positions", include_in_schema=False)
     def positions_history(con: Con, request: Request, run_id: int | None = None, as_of: date | None = None,
                           ids: str | None = Query(None, description="comma-separated position ids; all when unset"),
@@ -1533,6 +1554,7 @@ def create_app(store_url: str, static_dir: Path | None = None, app_dir: Path | N
     from .daystatus_routes import public as daystatus_router  # /api/v1/inbox, /inbox/days, /events (S7b, #25)
     from .diagnostics_routes import router as diagnostics_router
     from .market_history import router as market_history_router  # /api/v1/history/market, /status (R24)
+    from .prefs_routes import router as prefs_router  # /api/v1/me/table-columns (TDM#763)
     from .replay_routes import router as replay_router  # /api/v1/inbox/replay: read a source again (TDM#553)
     from .server_routes import router as server_router  # /api/v1/server: restart, network (settings page)
     from .settings_routes import router as settings_router  # here: it imports ApiError from this module
@@ -1557,6 +1579,7 @@ def create_app(store_url: str, static_dir: Path | None = None, app_dir: Path | N
     app.include_router(market_history_router, include_in_schema=False)
     app.include_router(autopilot_router)
     app.include_router(alias_router)
+    app.include_router(prefs_router)  # include_in_schema=False in the router
     app.include_router(backup_router, include_in_schema=False)  # local admin routes (settings «Резервные копии»)
 
     built = Path(app_dir) if app_dir else static_root() / "frontend" / "dist"
