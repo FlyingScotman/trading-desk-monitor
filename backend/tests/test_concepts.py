@@ -153,7 +153,17 @@ def test_previous_notional_new_and_closed_775(desk, store_url):
     assert [c["positionId"] for c in gone["prevRun"]["closed"]] == ["P2"]
     c = gone["prevRun"]["closed"][0]
     assert c["notional"] == pytest.approx(p["P2"]["prevNotional"]) and c["book"] == was["book_id"] and c["ccy"] == was["ccy"]
-    assert c["name"] and "portfolio" in c  # the name falls back to the instrument id, the portfolio is the report's rule
+    assert c["name"]  # the name falls back to the instrument id
+    assert c["portfolio"] is None  # the report's rule: a book that is not held to maturity has no portfolio of its own
+    with store.connect(store_url) as con:
+        con.row_factory = dict_row
+        con.execute("SET session_replication_role = replica")
+        # the previous run's book reference says the book is held to maturity (written with stray spaces and in lower case)
+        con.execute("UPDATE run_reference SET data = (SELECT jsonb_agg(CASE WHEN b->>'book_id' = %s"
+                    " THEN b || '{\"book_type\": \" htm \"}' ELSE b END) FROM jsonb_array_elements(data) b)"
+                    " WHERE run_id = %s AND kind = 'books'", (c["book"], prev_id))
+        htm = concepts.extras(con, run)["prevRun"]["closed"][0]
+    assert htm["positionId"] == "P2" and htm["portfolio"] == "HTM"
 
 
 def test_concepts_data_js_etag_and_empty(desk, store_url):
