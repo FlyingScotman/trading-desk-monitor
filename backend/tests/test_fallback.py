@@ -105,10 +105,13 @@ def test_fx_bond_in_rub_at_the_market_rate(ctx, exact):
     dirty = clean_rub + float(o.quote.accrued_per_bond)
     assert v.quality == "market_value" and v.pv_rub == pytest.approx(Q * dirty)
     assert any("FX bond (USD)" in a and "MOEX 19:00" in a and "duration proxy on curve USD" in a for a in v.assumptions)
-    # R8: rate risk from the MOEX duration, as a RUB bond's fallback, in RUB per bp, on the USD curve
+    # R8: rate risk as a RUB bond's fallback, in RUB per bp, on the USD curve; TDM#619: the duration and the yield are the
+    # monitor's own from the flows and the price (MOEX's figures are for a comparison: a few bp and days from them)
     mac = float(o.quote.source_analytics["duration_days"]) / 365
     y = fallback._yield(o.quote.source_analytics) / 100  # the modified duration (#36): -Macaulay / (1 + y)
-    assert v.macaulay_years == pytest.approx(mac) and v.dv01_rub == pytest.approx(-mac / (1 + y) * v.pv_rub * 1e-4)
+    assert v.ytm_pct != fallback._yield(o.quote.source_analytics)
+    assert v.ytm_pct / 100 == pytest.approx(y, abs=3e-4) and v.macaulay_years == pytest.approx(mac, abs=0.02)
+    assert v.dv01_rub == pytest.approx(-v.macaulay_years / (1 + v.ytm_pct / 100) * v.pv_rub * 1e-4)
     assert set(v.risk()) == {"USD"} and sum(v.risk()["USD"].values()) == pytest.approx(v.dv01_rub)
     assert sum(1 for x in v.buckets.values() if x) <= 2 and v.spread01_rub == pytest.approx(v.dv01_rub)  # credit
     row = tdm_run.run_content(ctx, [("P1", "MIXED", replace(o, valuation=v))], None, {})
