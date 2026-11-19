@@ -344,7 +344,9 @@ def test_the_valuation_version_says_the_numbers_changed():
     import desk
     from desk import VALUATION_VERSION
 
-    assert VALUATION_VERSION == 37
+    assert VALUATION_VERSION >= 37  # 38 came with TDM#509 on top of it: the entry of 37 stays in the list
     text = Path(desk.__file__).read_text(encoding="utf-8")
-    entry = text[text.index("# 37:"):text.index("def logic_version")]
+    start = text.index("# 37:")
+    end = text.find("\n# 38:", start)
+    entry = text[start:end if end != -1 else text.index("def logic_version")]
     assert "TDM#619" in entry and "yield_missing" in entry and "spread_missing" in entry
