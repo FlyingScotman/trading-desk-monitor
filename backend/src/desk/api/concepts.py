@@ -727,8 +727,10 @@ def _thin(s: list) -> list | None:
 def positions_history(con, run: dict[str, Any], ids: list[str] | None = None, from_: date | None = None,
                       writer: Writer = None) -> dict[str, Any]:
     from_ = from_ or run["business_date"] - timedelta(days=HISTORY_DAYS)
+    # ORDER BY ord: the series' key order is the body's byte order, and without it the rows come in the order of the plan
+    # (the heap's for a bitmap scan, the key's for an index scan, which the planner switches to after an autoanalyze)
     cur = con.execute("SELECT position_id, secid, fact FROM run_position WHERE run_id = %s AND fact IS NOT NULL"
-                      + (" AND position_id = ANY(%s)" if ids else ""),
+                      + (" AND position_id = ANY(%s)" if ids else "") + " ORDER BY ord, position_id",
                       (run["run_id"], ids) if ids else (run["run_id"],)).fetchall()
     pos = {r["position_id"]: r for r in cur}
     if not pos:
