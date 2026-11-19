@@ -532,8 +532,10 @@
     // второе поле пусто (бэкенд даёт z_kbd_bp и z_ruonia_bp флоатера None, TDM#786)
     // Прогон, где полей ещё нет (ключа нет, не null): основной спред с известной кривой — это и есть Z к ней; явный null
     // нового прогона (нет кривой, бумага не в рублях) остаётся пустым
-    p.zKbd = flt ? (p.spreadCurve === 'RUB OFZ' ? p.zSpreadZ : null) : d.zKbdBp === undefined ? (p.spreadCurve === 'RUB OFZ' ? p.zSpreadZ : null) : num(d.zKbdBp);
-    p.zRuonia = flt ? (p.spreadCurve === 'RUB OFZ' ? null : p.zSpreadZ)
+    // Бумага не в рублях: рублёвых Z нет (её Z — к кривой её валюты, в «Спред» и в карточке), оба поля пусты — и у фикса, и у флоатера
+    const rubZ = p.ccy === 'RUB';
+    p.zKbd = !rubZ ? null : flt ? (p.spreadCurve === 'RUB OFZ' ? p.zSpreadZ : null) : d.zKbdBp === undefined ? (p.spreadCurve === 'RUB OFZ' ? p.zSpreadZ : null) : num(d.zKbdBp);
+    p.zRuonia = !rubZ ? null : flt ? (p.spreadCurve === 'RUB OFZ' ? null : p.zSpreadZ)
       : d.zRuoniaBp === undefined ? (p.spreadCurve === 'RUB RUONIA' ? p.zSpreadZ : null) : num(d.zRuoniaBp);
     // прокси-кривая (#31, extra.curve_proxy прогона): в день без кривой RUONIA бумага на КБД (RUB OFZ) — пометка в
     // таблицах и карточке (K.curveProxyTag, K.curveProxyNote); прогон без поля — пометки нет

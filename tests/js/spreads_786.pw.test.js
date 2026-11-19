@@ -53,6 +53,10 @@ test('экраны с позициями и спредом: «Спред», «Z 
         assert.strictEqual(h[i + 1], 'Z к RUONIA', name);
         assert.ok(h.includes('Спред') && h.indexOf('Спред') < i, name + ': «Спред» перед «Z к КБД»');
         assert.ok(await noHScroll(pg), name + ': горизонтальная прокрутка страницы');
+        // кнопка «Колонки ▾» (скрыть колонку галочкой) есть у таблиц K.table; таблица «Оферты и коллы» на C08 ручная — кнопки нет
+        const colBtns = await pg.locator('.k-colbtn').count();
+        if (page === 'c08-calendar') assert.strictEqual(await pg.locator('.bd:has(table[data-vk="c08-offers-calls"]) .k-colbtn').count(), 0, name);
+        else assert.ok(colBtns > 0, name + ': нет кнопки «Колонки ▾»');
         assert.deepStrictEqual(errors, []);
       } finally { await ctx.close(); }
     });

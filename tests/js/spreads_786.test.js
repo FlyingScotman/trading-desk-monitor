@@ -40,6 +40,11 @@ function run(D) {
   const FLT = { couponType: 'float', index: 'RUONIA', margin: 0.5, zKbdBp: null, zRuoniaBp: null };
   add('FL1', 'Флоатер RUONIA', Object.assign({ spreadBp: 205, spreadCurve: 'RUB RUONIA' }, FLT), { dm_bp: 190 });
   add('FL2', 'Флоатер на КБД', Object.assign({ spreadBp: 215, spreadCurve: 'RUB OFZ' }, FLT), { dm_bp: 190 });
+  // валютные: рублёвых Z нет ни у флоатера, ни у фикса — даже если прогон прислал числа в zKbdBp / zRuoniaBp
+  add('FXF', 'Валютный флоатер', Object.assign({ ccy: 'USD', spreadBp: 310, spreadCurve: 'USD SOFR' }, FLT), { dm_bp: 300 });
+  add('FXF2', 'Валютный флоатер без DM ядра', Object.assign({ ccy: 'USD', spreadBp: 310, spreadCurve: 'USD SOFR' }, FLT), { dm_bp: undefined });
+  add('FXN', 'Валютная фикс-бумага, числа в Z', { ccy: 'USD', spreadBp: 310, spreadCurve: 'USD SOFR', zKbdBp: 5, zRuoniaBp: 6 });
+  add('FXO', 'Валютная фикс-бумага прогона до полей', { ccy: 'USD', spreadBp: 310, spreadCurve: 'USD SOFR', zKbdBp: undefined, zRuoniaBp: undefined });
   add('FL3', 'Флоатер без DM ядра', Object.assign({ spreadBp: 120, spreadCurve: 'RUB RUONIA' }, FLT), { dm_bp: undefined });
   add('FX1', 'Валютная', { ccy: 'USD', spreadBp: 310, spreadCurve: 'USD SOFR', zKbdBp: null, zRuoniaBp: null });
 }
@@ -96,6 +101,19 @@ t('карточка = колонки: у каждой рублёвой бума�
   // флоатер: один Z (spreadBp) — в колонке своей кривой дисконтирования, второй «—»; на КБД — «Z к КБД»
   const z = id => { const p = M.pos[id]; return [p.zKbd, p.zRuonia]; };
   assert.deepStrictEqual(z('FL1'), [null, 205]); assert.deepStrictEqual(z('FL2'), [215, null]); assert.deepStrictEqual(z('FL3'), [null, 120]);
+  // валютная бумага (флоатер и фикс): колонки «Z к КБД» и «Z к RUONIA» пусты, карточка — «Z-спред к кривой USD» с её Z, а не рублёвые строки
+  for (const id of ['FXF', 'FXF2', 'FXN', 'FXO']) {
+    const p = M.pos[id], names = Array.from(K.spreadFields(p), x => x[0]);
+    assert.deepStrictEqual([p.zKbd, p.zRuonia], [null, null], id);
+    assert.deepStrictEqual([K.posCols.zkbd.val(p), K.posCols.zdisc.val(p)], [null, null], id);
+    assert.ok(/—/.test(K.posCols.zkbd.fmt(null, p)) && /—/.test(K.posCols.zdisc.fmt(null, p)), id);
+    assert.deepStrictEqual(names.filter(x => /^Z-спред/.test(x)), ['Z-спред к кривой USD'], id);
+    assert.ok(!names.includes('Z-спред к КБД') && !names.includes('Z-спред к RUONIA'), id);
+  }
+  assert.deepStrictEqual(Array.from(K.spreadFields(M.pos.FXF), x => x[0]), ['Дисконт-маржа', 'Z-спред к кривой USD']);
+  assert.ok(num(K.spreadFields(M.pos.FXF).find(x => x[0] === 'Z-спред к кривой USD')[1]).startsWith('310'));
+  assert.strictEqual(txt(K.spreadFields(M.pos.FXF2)[0][1]), '— (DM ядра нет)');
+  assert.ok(num(K.spreadFields(M.pos.FXF2)[1][1]).startsWith('310'), 'число Z один раз, в своей строке');
   // без DM ядра в строке DM числа нет — оно один раз, под своей строкой Z
   const fl3 = K.spreadFields(M.pos.FL3);
   assert.strictEqual(txt(fl3[0][1]), '— (DM ядра нет)');
