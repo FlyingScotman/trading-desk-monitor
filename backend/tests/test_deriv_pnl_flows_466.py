@@ -15,7 +15,7 @@ from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 
 import pytest
-from rub_fixed_income import FixingEntry
+from rub_fixed_income import CalendarRangeError, FixingEntry
 from test_slice_s2 import shifted_prev
 
 from desk.marketdata.bundle import SnapshotDir
@@ -302,7 +302,7 @@ def test_a_schedule_outside_the_calendar_of_a_swap_that_ended_is_settled(ctx, mo
     """A swap that ended just before the business date whose dates the calendar does not cover (the first days of
     January after a December end): settled, so that its last coupon is in the PnL; not a terms error."""
     def out_of_range(*a, **k):
-        raise ValueError("date outside the calendar")
+        raise CalendarRangeError("date outside the calendar")
 
     monkeypatch.setattr(dv, "swap_schedule", out_of_range)
     (rows,) = [swap("S1", (BD - timedelta(days=10)).isoformat(), start_date="2026-08-14")]
@@ -310,10 +310,10 @@ def test_a_schedule_outside_the_calendar_of_a_swap_that_ended_is_settled(ctx, mo
     assert o.core_not_valued is None or o.core_not_valued[0] != "terms_invalid"
     assert o.valuation is not None and o.valuation.extra["core"]["model_flags"] == ["settled"]
     assert o.valuation.extra["settled"][0]["date"] == (BD - timedelta(days=10)).isoformat()
-    # still ahead of the business date: the error is the terms', not a settled swap's
+    # still ahead of the business date: not a settled swap's (TDM#509: a calendar refusal, not the terms')
     live = pv1.plan(ctx, inputs(BD, swap("S2", (BD + timedelta(days=10)).isoformat(), start_date="2026-08-14"),
                                 "S2")).direct["S2"]
-    assert live.core_not_valued[0] == "terms_invalid"
+    assert live.core_not_valued[0] == "core_calendar_out_of_range"
 
 
 def test_the_settled_cash_row_moves_with_the_rate():

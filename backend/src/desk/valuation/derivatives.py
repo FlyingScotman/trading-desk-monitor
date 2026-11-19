@@ -893,16 +893,26 @@ def _swap_instrument(ctx: Any, s: SwapTerms, iid: str, calendars: dict[str, Cale
         raise NotValued("settled", f"swap {s.label} matured on {s.end}", s.end)
     swap, notes = s.core_swap()
     cid = SWAP_CALENDAR[s.index]
-    if cid not in calendars:
-        build = rates.ois_calendar(ctx.static.snapshot, bd) if s.index == "ruonia" else \
-            rates.krs_calendar(ctx.static.snapshot)
+    # core rolls both legs' schedules from the swap's start and adjusts every period end on the calendar, a past one
+    # too: the calendar must reach the start of the earliest leg (TDM#509). The hub's own calendars reach back years
+    # (the live hub: 2010); where one starts later (a window of a year, a young hub) the days before it are the fixed
+    # rules' (``adapter.core_calendar``), said in the notes, and a later swap of the run finds the calendar built
+    reach = min(s.start, s.float_dates[0])
+    if cid not in calendars or calendars[cid].calendar.valid_from > reach:
+        build = rates.ois_calendar(ctx.static.snapshot, bd, reach) if s.index == "ruonia" else \
+            rates.krs_calendar(ctx.static.snapshot, reach)
         calendars[cid] = CalendarEntry(cid, build[0])
+    if "+rules_from_" in calendars[cid].calendar.version:
+        hub_from = max(date.fromisoformat(ctx.static.calendars[n]["valid_from"]) for n in ("MOEX_FORTS", "RU_PRODUCTION"))
+        if reach < hub_from:
+            notes.append(f"{s.label}: the hub's calendars start on {hub_from}; the schedule's days before it follow the "
+                         "fixed holiday rules (weekends and the fixed public holidays; past periods)")
     try:
         sched = swap_schedule(swap, calendars[cid].calendar)
-    except (ValueError, CoreRejection):
+    except CalendarRangeError as e:  # only this: another refusal of the schedule is the terms' (the caller's rule)
         if s.end < bd:  # its dates are outside the calendar of the run: it ended before it
             raise NotValued("settled", f"swap {s.label} matured on {s.end}", s.end) from None
-        raise
+        raise NotValued(f"core_{e.code.lower()}", f"swap {s.label}: {e}") from None
     last = max(p.payment_date for p in (*sched.fixed, *sched.floating))
     if last <= bd:  # core: no flow after the valuation date. By the schedule, not the maturity: the last payment
         # follows the adjusted end by the payment lag, over a weekend it is days after the maturity

@@ -286,7 +286,7 @@ def _rule_holidays(name: str, year: int) -> set[date]:
     return set()
 
 
-def core_calendar(c: dict[str, Any]) -> tuple[BusinessCalendar, date | None]:
+def core_calendar(c: dict[str, Any], since: date | None = None) -> tuple[BusinessCalendar, date | None]:
     """Core calendar of one hub calendar row and the date its days stop being official (``provisional_from``).
 
     Past the hub's ``valid_to`` the calendar is extended to ``CALENDAR_HORIZON`` by its own fixed rules
@@ -294,9 +294,18 @@ def core_calendar(c: dict[str, Any]) -> tuple[BusinessCalendar, date | None]:
     CN_INTERBANK's fixed days; weekends only for a calendar without rules, never Russian holidays). Holiday transfers
     to weekdays are decreed yearly and unknown, so they are not modelled. ``provisional_from`` is the hub's own or
     ``valid_to + 1``, whichever is earlier.
+
+    ``since`` before the hub's ``valid_from`` (TDM#509: a swap that began before the hub's calendar, whose schedule
+    core rolls from its start): the calendar reaches back to it by the same fixed rules, its version says so
+    (``+rules_from_<since>``). Those days are past: an estimate nothing but a long-seasoned swap's past periods rests
+    on. Without ``since``, or ``since`` inside the hub's range, the calendar is as the hub gives it.
     """
     vf, vt = date.fromisoformat(c["valid_from"]), date.fromisoformat(c["valid_to"])
     holidays = {date.fromisoformat(x) for x in c["holidays"]}
+    start = min(vf, since) if since is not None else vf
+    if start < vf:
+        holidays |= {d for y in range(start.year, vf.year + 1) for d in _rule_holidays(c["calendar"], y)
+                     if start <= d < vf and d.weekday() < 5}
     prov = _date(c.get("provisional_from"))
     end = max(vt, CALENDAR_HORIZON)
     if end > vt:
@@ -305,8 +314,9 @@ def core_calendar(c: dict[str, Any]) -> tuple[BusinessCalendar, date | None]:
         prov = min(prov or end, vt + timedelta(days=1))
     cal = BusinessCalendar(
         holidays=frozenset(holidays), working_days=frozenset(date.fromisoformat(x) for x in c["working_weekends"]),
-        version=f"{c['calendar']}@{c['fingerprint'][:12]}" + (f"+rules{end.year}" if end > vt else ""),
-        valid_from=vf, valid_to=end)
+        version=f"{c['calendar']}@{c['fingerprint'][:12]}" + (f"+rules{end.year}" if end > vt else "")
+        + (f"+rules_from_{start.isoformat()}" if start < vf else ""),
+        valid_from=start, valid_to=end)
     return cal, prov
 
 
