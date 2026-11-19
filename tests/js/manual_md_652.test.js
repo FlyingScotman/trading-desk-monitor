@@ -20,6 +20,7 @@ test('сроки, доля возмещения, валюта и верхняя 
   assert.equal(MD.DEFAULTS.maxSpread, Number(/^MAX_SPREAD_BP = ([0-9.]+)/m.exec(PY)[1]));
   assert.equal(MD.DEFAULTS.maxName, Number(/^MAX_NAME = ([0-9]+)/m.exec(PY)[1]));
   assert.ok(/par/.test(MD.CONVENTION) && /25 %/.test(MD.CONVENTION) && /USD/.test(MD.CONVENTION) && /19\.11\.2026/.test(MD.CONVENTION));
+  assert.ok(/допущение разработки/.test(MD.CONVENTION) && /решение владельца/.test(MD.CONVENTION), 'USD — допущение разработки, не решение владельца');
 });
 
 test('par-спред: число с точкой или запятой, пусто — срок не задан, отрицательное и выше границы — отказ', () => {
@@ -43,7 +44,8 @@ test('доля возмещения вводится в процентах и х
   assert.equal(MD.parseRecovery('40 %').value, 0.4);
   assert.equal(MD.parseRecovery('33,33').value, 0.3333);
   assert.equal(MD.parseRecovery('0').value, 0);
-  assert.equal(MD.parseRecovery('100').value, 1);
+  assert.equal(MD.parseRecovery('99,99').value, 0.9999);
+  for (const bad of ['100', '99,999', '100 %']) assert.equal(MD.parseRecovery(bad).ok, false, bad + ': 100 % — не доля возмещения');
   for (const bad of ['101', '-5', 'много', '0,25 %%']) assert.equal(MD.parseRecovery(bad).ok, false, bad);
   assert.equal(MD.fmtPct(0.25), '25');
   assert.equal(MD.fmtPct(0.3333), '33,33');
@@ -60,6 +62,7 @@ test('валюта и имя: три латинские буквы; имя бе�
   assert.deepEqual([n.ok, n.name, n.key], [true, 'Эмитент А', 'эмитент а']);
   assert.equal(MD.parseName('   ').ok, false);
   assert.equal(MD.parseName('a\u0000b').ok, false);
+  for (const bad of ['A\u200bB', 'A\u200eB', 'A\u202eB', '\ufeffA', 'A\u00adB']) assert.equal(MD.parseName(bad).ok, false, 'невидимый символ: ' + JSON.stringify(bad));
   assert.equal(MD.parseName('x'.repeat(121)).ok, false);
   assert.equal(MD.parseName('x'.repeat(120)).ok, true);
   assert.equal(MD.nameKey('ЭМИТЕНТ  А'), MD.nameKey(' эмитент а '));
@@ -103,6 +106,7 @@ test('строки: кривые даты, CDS-позиции без криво�
   assert.deepEqual(MD.copyEligible(rows, '2026-11-18'), ['Эмитент А']);
   assert.deepEqual(MD.copyEligible(rows, '2026-11-19'), ['Эмитент А', 'Эмитент Б']);
   assert.deepEqual(MD.copyEligible(rows, '2026-11-16'), []);
+  assert.deepEqual(MD.mergeRows({ curves: [], positions: [{ name: 'Эмитент Я', name_key: 'эмитент я', positions: 1, deals: ['CDS Я 5Y'] }] }, [])[0].deals, ['CDS Я 5Y']);
 });
 
 test('права: роль из /api/v1/auth/state; вход выключен — только компьютер сервера; без ответа — по адресу', () => {
@@ -150,7 +154,8 @@ test('демо: вымышленные имена, кривая действуе
   assert.deepEqual(l0.curves.map(c => c.name), ['Эмитент А', 'Эмитент Б', 'Эмитент В']);
   assert.deepEqual(l0.curves.map(c => c.entered_on_date), [false, false, false]);
   assert.equal(l0.curves[1].valid_from, '2026-10-20', 'Б: правка на день раньше перекрывает ввод за три дня');
-  assert.deepEqual(l0.positions.map(p => [p.name, p.has_curve]), [['CDS Эмитент Г 5Y', false], ['Эмитент А', true]]);
+  assert.deepEqual(l0.positions.map(p => [p.name, p.has_curve]), [['Эмитент Г', false], ['Эмитент А', true]]);
+  assert.deepEqual(l0.positions[0].deals, ['CDS Эмитент Г 3Y', 'CDS Эмитент Г 5Y'], 'название сделки — подсказка, имя — x_issuer');
   assert.deepEqual((await api.list('2026-10-01')).body.curves, [], 'до первого ввода кривых нет');
   // ввод: меняет, повтор — нет; ошибки — 422 с текстом
   const put = (b) => api.put(Object.assign({ name: 'Эмитент Д', date: D, spreads_bp: { '5Y': 400 } }, b));
@@ -183,6 +188,18 @@ test('демо: вымышленные имена, кривая действуе
   const c2 = (await api.copy({ to_date: '2026-10-23' })).body;
   assert.deepEqual(c2.copied.map(x => x.name).sort(), ['Эмитент А', 'Эмитент В']);
   assert.deepEqual(c2.skipped.map(s => [s.name, s.why]), [['Эмитент Б', 'на эту дату кривая уже введена']]);
+  // копирование всех не возвращает снятое на дату имя, названное — возвращает
+  await api.put({ name: 'Эмитент В', date: '2026-10-24', clear: true });
+  const c2b = (await api.copy({ to_date: '2026-10-24' })).body;
+  assert.deepEqual(c2b.skipped.map(s => [s.name, s.why]).filter(x => x[0] === 'Эмитент В'), [['Эмитент В', 'на эту дату имя снято']]);
+  assert.equal(c2b.copied.some(x => x.name === 'Эмитент В'), false);
+  assert.deepEqual((await api.copy({ to_date: '2026-10-24', names: ['Эмитент В'] })).body.copied.map(x => x.name), ['Эмитент В']);
+  // границы: доля возмещения строго меньше 1, дата 2000..2100
+  assert.equal((await api.put({ name: 'Эмитент Е', date: D, spreads_bp: { '5Y': 1 }, recovery: 1 })).status, 422);
+  assert.equal((await api.put({ name: 'Эмитент Е', date: D, spreads_bp: { '5Y': 1 }, recovery: 0.9999 })).status, 200);
+  assert.equal((await api.put({ name: 'Эмитент Е', date: '1999-12-31', spreads_bp: { '5Y': 1 } })).status, 422);
+  assert.equal((await api.put({ name: 'Эмитент Ж\u200b', date: D, spreads_bp: { '5Y': 1 } })).status, 422);
+  assert.equal((await api.copy({ to_date: '2101-01-01' })).status, 422);
   const c3 = (await api.copy({ to_date: '2026-10-23', names: ['Эмитент Я'] })).body;
   assert.deepEqual([c3.copied, c3.skipped.map(s => s.why)], [[], ['нет кривой на дату, с которой копируем']]);
   assert.equal((await api.copy({ to_date: '2026-10-23', from_date: '2026-10-23' })).status, 422);

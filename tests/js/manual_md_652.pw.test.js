@@ -132,7 +132,7 @@ test('C22: копирование с прошлой даты (выбранные
     assert.match(await pg.locator('[data-a=copy]').innerText(), /Скопировать с прошлой даты \(2\)/);
     await pg.locator('[data-a=copy]').click();
     await pg.waitForFunction(() => /: 2/.test(document.getElementById('msg').textContent));
-    assert.deepEqual(post()[1].body, { to_date: AS_OF, names: null });
+    assert.deepEqual(post()[1].body, { to_date: AS_OF, names: ['Эмитент А', 'Эмитент В'] }, 'всегда явный список — число на кнопке');
     assert.equal(await pg.locator('[data-a=copy]').isDisabled(), true, 'копировать больше нечего');
     // добавить имя: строка без кривой, ввод спредов, сохранение
     await pg.fill('#addname', '  Эмитент   Д ');

@@ -131,7 +131,7 @@ table.c22-tbl { border-collapse: separate; border-spacing: 0; font-size: 12.5px;
     return '<tr class="c22-row' + (dirty ? ' dirty' : '') + '" data-k="' + esc(r.key) + '">' +
       (ed ? '<td><input type="checkbox" data-sel aria-label="Выбрать ' + nm + '"' + (picked.has(r.key) ? ' checked' : '') + '></td>' : '') +
       '<td class="c22-name" data-csv="' + nm + '"><b>' + nm + '</b><div class="c22-sub">' + (hasCurve ? '<span class="c22-man" title="Кривая введена вручную (других источников пока нет)">введено вручную</span>' : '<span class="c22-none">нет кривой на эту дату</span>') +
-      (r.positions ? '<span>CDS-позиций в прогоне: ' + r.positions + '</span>' : '') + '</div>' + (errTxt ? '<div class="c22-err" role="alert">' + esc(errTxt) + '</div>' : '') + '</td>' +
+      (r.positions ? '<span' + (r.deals && r.deals.length ? ' title="' + esc('Сделки: ' + r.deals.join(', ')) + '"' : '') + '>CDS-позиций в прогоне: ' + r.positions + '</span>' : '') + '</div>' + (errTxt ? '<div class="c22-err" role="alert">' + esc(errTxt) + '</div>' : '') + '</td>' +
       T.map(t => '<td class="n' + (ed ? '' : ' c22-ro-v') + '" data-csv="' + (c && c.spreads_bp[t] != null ? c.spreads_bp[t] : '') + '">' + (ed ? cell(t, 'срок ' + t + ', б.п.', '') : val(r, t)) + '</td>').join('') +
       '<td class="n' + (ed ? '' : ' c22-ro-v') + '" data-csv="' + (c ? +(c.recovery * 100).toFixed(2) : '') + '">' + (ed ? cell('recovery', 'доля возмещения, %', '25') : (c ? MD.fmtPct(c.recovery) + ' %' : '—')) + '</td>' +
       '<td class="' + (ed ? '' : 'c22-ro-v') + '" data-csv="' + (c ? esc(c.ccy) : '') + '">' + (ed ? cell('ccy', 'валюта', 'USD', 'ccy') : (c ? esc(c.ccy) : '—')) + '</td>' +
@@ -236,6 +236,8 @@ table.c22-tbl { border-collapse: separate; border-spacing: 0; font-size: 12.5px;
       if (noRights(x)) return;
       if (x.status === 200) {
         drafts.delete(key); errs.delete(key); hist.delete(key);
+        const sk = x.body.curve && x.body.curve.name_key;  // ключ — как у сервера: имя больше не «добавленное»
+        added = added.filter(n => MD.nameKey(n) !== key && !(sk && MD.nameKey(n) === sk) && n !== r.name);
         return load().then(() => say(x.body.changed ? 'Сохранено: «' + r.name + '» на ' + long(on) + '.' : 'Без изменений: на эту дату уже действует такая кривая.', x.body.changed ? 'ok' : 'info'));
       }
       errs.set(key, { server: x.status === 422 ? 'Сервер не принял: ' + ((x.body && x.body.message) || '') : 'Не сохранено: ' + ((x.body && x.body.message) || 'ответ ' + x.status) });
@@ -266,7 +268,8 @@ table.c22-tbl { border-collapse: separate; border-spacing: 0; font-size: 12.5px;
   function copyPrev() {
     if (busy) return;
     const R = rows(), eligible = MD.copyEligible(R, on);
-    const names = picked.size ? R.filter(r => picked.has(r.key) && eligible.indexOf(r.name) >= 0).map(r => r.name) : null;
+    // всегда явный список: то, что показано на кнопке; снятое на эту дату имя копирование «всех» не возвращает
+    const names = picked.size ? R.filter(r => picked.has(r.key) && eligible.indexOf(r.name) >= 0).map(r => r.name) : eligible;
     busy = true;
     api.copy({ to_date: on, names }).then(x => {
       busy = false;

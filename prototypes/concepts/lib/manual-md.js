@@ -3,9 +3,14 @@
  * два источника кривых CDS с одним набором вызовов: сервер (api/v1/market-data/manual/cds, backend
  * desk/api/manual_md_routes.py, desk/marketdata/manual_cds.py) и демо в памяти страницы (файл или ?demo=1).
  *
- * Конвенция котировки (допущение владельца от 19.11.2026, правится в одном месте — здесь и в backend manual_cds.py):
- * par-спред CDS (par coupon spread), б.п. в год; сроки 3M 6M 1Y 2Y 3Y 5Y 7Y 10Y; доля возмещения хранится с кривой
- * (по умолчанию 25 %); валюта котировки — USD, если не задана другая.
+ * Конвенция котировки (решение владельца от 19.11.2026, допущение, которое можно сменить; правится здесь и в backend
+ * manual_cds.py): par-спред CDS (par coupon spread), б.п. в год; сроки 3M 6M 1Y 2Y 3Y 5Y 7Y 10Y; доля возмещения хранится
+ * с кривой (по умолчанию 25 %, строго меньше 100 %). Валюта котировки — USD, если не задана другая: это допущение
+ * разработки, не решение владельца.
+ *
+ * Имена: строки таблицы склеиваются по name_key, который отдаёт сервер (кривые и CDS-позиции). Свой nameKey нужен только
+ * для имени, только что набранного на странице; на редких символах (например «ß», «ς») он может разойтись с casefold
+ * сервера — тогда такое имя после сохранения (ответ сервера с его name_key) убирается из «добавленных», дубля нет.
  *
  * Вызовы api (оба источника) возвращают Promise<{ status, body }>, как M.aliasApi: 200 — ответ, 403 — нет прав
  * (страница переходит в «только чтение»), 422 — ввод не принят (body.message), 0 — нет связи.
@@ -14,11 +19,13 @@
 (function (root) {
   'use strict';
   const TENORS = ['3M', '6M', '1Y', '2Y', '3Y', '5Y', '7Y', '10Y'];
-  const DEFAULTS = { recovery: 0.25, ccy: 'USD', maxSpread: 10000, maxName: 120 };
+  const DEFAULTS = { recovery: 0.25, ccy: 'USD', maxSpread: 10000, maxName: 120, minDate: '2000-01-01', maxDate: '2100-12-31' };
   const CONVENTION = 'Котировка — par-спред CDS (par coupon spread) в базисных пунктах в год; сроки 3M, 6M, 1Y, 2Y, 3Y, 5Y, 7Y, 10Y ' +
     '(срок можно оставить пустым). Доля возмещения хранится вместе с кривой, по умолчанию 25 %, меняется по каждому имени. ' +
-    'Валюта котировки — USD, если не указана другая. Это допущение владельца от 19.11.2026: если договорённость о котировке ' +
-    'изменится (например, upfront и фиксированный купон), хранилище и подпись обновятся.';
+    'Это решение владельца от 19.11.2026; если договорённость о котировке изменится (например, upfront и фиксированный купон), ' +
+    'хранилище и подпись обновятся. Валюта котировки — USD, если не указана другая: это допущение разработки, не решение владельца. ' +
+    'Имя референса — как его пишет отчёт; имена, записанные по-разному (сокращение, форма собственности, кириллица и латиница, дефис), ' +
+    'система считает разными.';
 
   const clean = s => String(s == null ? '' : s).split(/\s+/).filter(Boolean).join(' ');
   // идентификатор имени, как на сервере (backend manual_cds.name_key): NFKC, строчные, пробелы в один
@@ -41,8 +48,9 @@
     if (!t) return { ok: true, value: null };
     if (!/^\d+([.,]\d+)?$/.test(t)) return { ok: false, value: null, error: 'доля возмещения — число от 0 до 100 %' };
     const v = num(t);
-    if (v > 100) return { ok: false, value: null, error: 'доля возмещения — от 0 до 100 %' };
-    return { ok: true, value: Math.round(v * 100) / 10000 };
+    const frac = Math.round(v * 100) / 10000;
+    if (frac >= 1) return { ok: false, value: null, error: 'доля возмещения — от 0 до 100 %, не включая 100' };
+    return { ok: true, value: frac };
   }
   function parseCcy(text) {
     const t = String(text == null ? '' : text).trim().toUpperCase();
@@ -52,7 +60,7 @@
   function parseName(text) {
     const n = clean(text);
     if (!n) return { ok: false, error: 'введите имя референса' };
-    if (/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f-\u009f]/.test(String(text))) return { ok: false, error: 'в имени служебные символы' };
+    if (/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f-\u009f]/.test(String(text)) || /\p{Cf}/u.test(String(text))) return { ok: false, error: 'в имени служебные или невидимые символы' };
     if (n.length > DEFAULTS.maxName) return { ok: false, error: 'имя длиннее ' + DEFAULTS.maxName + ' знаков' };
     return { ok: true, name: n, key: nameKey(n) };
   }
@@ -93,8 +101,8 @@
     const by = new Map();
     ((list && list.curves) || []).forEach(c => by.set(c.name_key, { key: c.name_key, name: c.name, curve: c, positions: 0 }));
     ((list && list.positions) || []).forEach(p => {
-      const r = by.get(p.name_key) || { key: p.name_key, name: p.name, curve: null, positions: 0 };
-      r.positions = p.positions; by.set(p.name_key, r);
+      const r = by.get(p.name_key) || { key: p.name_key, name: p.name, curve: null, positions: 0, deals: [] };
+      r.positions = p.positions; r.deals = p.deals || []; by.set(p.name_key, r);
     });
     (added || []).forEach(n => { const k = nameKey(n); if (!by.has(k)) by.set(k, { key: k, name: clean(n), curve: null, positions: 0 }); });
     return [...by.values()].sort((a, b) => a.name.localeCompare(b.name, 'ru'));
@@ -161,7 +169,8 @@
     add('Эмитент Б', addDays(asOf, -3), { '1Y': 260, '3Y': 410, '5Y': 520 }, 0.4, 'USD', 'demo');
     add('Эмитент Б', addDays(asOf, -1), { '1Y': 270, '3Y': 425, '5Y': 540 }, 0.4, 'USD', 'demo');
     add('Эмитент В', addDays(asOf, -10), { '5Y': 150, '10Y': 210 }, 0.25, 'EUR', 'demo');
-    const POSITIONS = [{ name: 'CDS Эмитент Г 5Y', positions: 2 }, { name: 'Эмитент А', positions: 1 }];
+    // CDS-позиции прогона: имя референса — x_issuer отчёта, названия сделок — подсказка
+    const POSITIONS = [{ name: 'Эмитент Г', positions: 2, deals: ['CDS Эмитент Г 3Y', 'CDS Эмитент Г 5Y'] }, { name: 'Эмитент А', positions: 1, deals: ['CDS Эмитент А 5Y'] }];
     return {
       demo: true,
       list(date) {
@@ -169,11 +178,12 @@
         const have = new Set(curves.map(c => c.name_key));
         return Promise.resolve(ok({ date, run_id: null, tenors: TENORS.slice(), default_recovery: DEFAULTS.recovery, default_ccy: DEFAULTS.ccy,
           max_spread_bp: DEFAULTS.maxSpread, curves: curves.map(c => view(c, date)),
-          positions: POSITIONS.map(p => ({ name: p.name, name_key: nameKey(p.name), positions: p.positions, has_curve: have.has(nameKey(p.name)) })) }));
+          positions: POSITIONS.map(p => ({ name: p.name, name_key: nameKey(p.name), positions: p.positions, deals: p.deals, has_curve: have.has(nameKey(p.name)) })) }));
       },
       put(b) {
         const n = parseName(b.name);
         if (!n.ok) return Promise.resolve(bad(n.error));
+        if (!(b.date >= DEFAULTS.minDate && b.date <= DEFAULTS.maxDate)) return Promise.resolve(bad('the date is outside ' + DEFAULTS.minDate + '..' + DEFAULTS.maxDate));
         if (b.clear) {
           if (!inForce(n.key, b.date)) return Promise.resolve(ok({ changed: false, curve: null }));
           add(n.name, b.date, {}, null, null, 'demo', true);
@@ -188,7 +198,7 @@
         }
         if (TENORS.every(t => sp[t] == null)) return Promise.resolve(bad('a curve needs at least one spread'));
         const rec = b.recovery == null ? DEFAULTS.recovery : +b.recovery;
-        if (!(rec >= 0 && rec <= 1)) return Promise.resolve(bad('the recovery rate is outside 0..1'));
+        if (!(rec >= 0 && Math.round(rec * 1e4) / 1e4 < 1)) return Promise.resolve(bad('the recovery rate must be from 0 up to (not including) 1'));
         const ccy = parseCcy(b.ccy || '');
         if (!ccy.ok) return Promise.resolve(bad(ccy.error));
         const now = inForce(n.key, b.date), c = ccy.value || DEFAULTS.ccy;
@@ -197,13 +207,15 @@
         return Promise.resolve(ok({ changed: true, curve: view(add(n.name, b.date, sp, rec, c, 'demo'), b.date) }));
       },
       copy(b) {
+        for (const d of [b.to_date, b.from_date]) if (d && !(d >= DEFAULTS.minDate && d <= DEFAULTS.maxDate)) return Promise.resolve(bad('the date is outside ' + DEFAULTS.minDate + '..' + DEFAULTS.maxDate));
         if (b.from_date && b.from_date >= b.to_date) return Promise.resolve(bad('the date to copy from must be earlier than the date to copy to'));
         const want = b.names ? [...new Set(b.names.map(nameKey))] : null, copied = [], skipped = [];
         for (const k of want || keys().filter(k => inForce(k, b.from_date || b.to_date, !b.from_date))) {
           const src = b.from_date ? inForce(k, b.from_date) : inForce(k, b.to_date, true);
           if (!src) { skipped.push({ name_key: k, name: (revs.find(r => r.name_key === k) || { name: k }).name, why: 'нет кривой на дату, с которой копируем' }); continue; }
           const own = revs.filter(r => r.name_key === k && r.valid_from === b.to_date).pop();
-          if (own && !own.cleared) { skipped.push({ name_key: k, name: src.name, why: 'на эту дату кривая уже введена' }); continue; }
+          // копирование «всех» (без списка имён) снятие на эту дату не отменяет; названное имя — возвращает
+          if (own && (!want || !own.cleared)) { skipped.push({ name_key: k, name: src.name, why: own.cleared ? 'на эту дату имя снято' : 'на эту дату кривая уже введена' }); continue; }
           copied.push(view(add(src.name, b.to_date, src.spreads_bp, src.recovery, src.ccy, 'demo'), b.to_date));
         }
         return Promise.resolve(ok({ to_date: b.to_date, copied, skipped }));
