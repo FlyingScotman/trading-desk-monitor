@@ -3184,16 +3184,20 @@
     if (!run || !p) return null;
     const d = run.date ? f.date(run.date) : 'прошлой даты';
     if (p.newToPrev) return { face: p.notional, isNew: true, tip: 'Новая позиция: в прогоне за ' + d + ' её не было, изменение — весь номинал' };
-    if (p.prevNotional == null) return { face: null, isNew: false, tip: 'Изменение не известно: ' + (p.prevNoFact ? 'в прогоне за ' + d + ' позиция была, но не оценена — номинала нет' : 'позиция не оценена в одном из двух прогонов') };
+    if (p.prevNotional == null) return { face: null, isNew: false, tip: p.notValued ? 'Сегодня позиция не оценена: номинала нет, изменение не известно'
+      : p.prevNoFact ? 'В прогоне за ' + d + ' позиция была, но не оценена: номинала нет, изменение не известно' : 'В прогоне за ' + d + ' у позиции нет номинала: изменение не известно' };
     const face = Math.abs(p.notional - p.prevNotional) < 0.01 ? 0 : p.notional - p.prevNotional, ccy = p.ccy || '';
     return { face, isNew: false, tip: 'В прогоне за ' + d + ' номинал был ' + f.mn(p.prevNotional, 2) + ' mm ' + ccy + ', сейчас ' + f.mn(p.notional, 2) +
       '. Изменение — и сделки, и то, что меняет номинал само (амортизация, индексация линкера)' };
   };
-  K.prevDeltaCol = () => ({ label: 'Изм. к вчера', num: true, title: 'Номинал позиции в текущем прогоне минус её номинал в прогоне предыдущей даты, mm в валюте бумаги: сделки, амортизация, индексация. Новая позиция — весь номинал (пометка «новая»). Закрытые с прошлой даты позиции в таблице не видны (на C03 они — в строке над таблицей). Нет прогона прошлой даты — прочерк',
+  // нет прогона прошлой даты: с датой закрытия, которого нет (prev_date прогона, M.prevDate), если она известна странице; досчёт —
+  // на странице настроек, карточка «История прогонов» (prototypes/settings.html)
+  K.noPrevRunTip = () => 'нет прогона ' + (M.prevDate && /^\d{4}-\d{2}-\d{2}/.test(M.prevDate) ? 'за ' + f.date(M.prevDate) : 'прошлой даты') + ' (досчитать: Настройки → «История прогонов»)';
+  K.prevDeltaCol = () => ({ label: 'Изм. к вчера', num: true, title: 'Номинал позиции в текущем прогоне минус её номинал в прогоне предыдущей даты, mm в валюте бумаги: сделки, амортизация, индексация. Новая позиция — весь номинал (пометка «новая»). Закрытые с прошлой даты позиции в таблице не видны (на C03 они — в строке над таблицей). Нет прогона прошлой даты — прочерк с подсказкой',
     val: r => { const n = K.prevDelta(r); return n ? n.face : null; },
     fmt: (v, r) => {
       const n = K.prevDelta(r);
-      if (!n) return '<span class="mut3" title="нет прогона прошлой даты">—</span>';
+      if (!n) return '<span class="mut3" title="' + esc(K.noPrevRunTip()) + '">—</span>';
       if (n.face == null) return '<span class="mut3" title="' + esc(n.tip) + '">—</span>';
       if (!n.face && !n.isNew) return '<span class="mut3" title="' + esc(n.tip) + '">·</span>';
       return '<span class="' + f.cls(n.face) + '" title="' + esc(n.tip) + '">' + f.mns(n.face, 2) + '<span class="mut3">mm ' + esc(r.ccy || '') + '</span>' +
@@ -3204,7 +3208,8 @@
   // номиналами по валютам, подсказка — список. Пусто, когда таких нет или прогона прошлой даты нет
   K.prevClosedLine = () => {
     const run = M.prevRun;
-    const L = run ? run.closed.filter(c => K.rowIn({ book: c.book, ccy: c.ccy })) : [];
+    if (!run || typeof run.date !== 'string' || run.date.length < 10) return '';
+    const L = (run.closed || []).filter(c => K.rowIn({ book: c.book, ccy: c.ccy, portfolio: c.portfolio || '—' }));
     if (!L.length) return '';
     const by = {}; L.forEach(c => { by[c.ccy || '—'] = (by[c.ccy || '—'] || 0) + (c.notional || 0); });
     const d = f.date(run.date), dm = run.date.slice(8, 10) + '.' + run.date.slice(5, 7), cc = Object.keys(by).sort((a, b) => ((M.ccyOrder[a] ?? 99) - (M.ccyOrder[b] ?? 99)) || a.localeCompare(b));

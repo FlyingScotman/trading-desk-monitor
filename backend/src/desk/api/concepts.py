@@ -62,6 +62,7 @@ from ..scenario.carry import meetings
 from ..store import DEFAULT_RUNS
 from ..valuation.positions import RISK_MISSING
 from . import pnl_mtd
+from .scope_rule import EFFECTIVE_PORTFOLIO_SQL, INPUT_ROW_ORDER_SQL, PORTFOLIO_ROW_SQL
 
 if TYPE_CHECKING:
     from .series_cache import SeriesCache
@@ -296,19 +297,29 @@ def trade_of(t: dict[str, Any], pos: list, on: date | None = None) -> dict[str, 
 def _closed_to_prev(con, run_id: int, prev_id: int, prev: dict[str, list],
                     cur: dict[str, list]) -> list[dict[str, Any]]:
     """The positions the previous close had with a face and the run does not have at all (closed since: sold, redeemed,
-    dropped from the book), for the line beside the column «Изм. к вчера»: ``positionId``, ``book``, ``ccy``, ``name`` and
-    ``notional`` (the face of the previous close, in the face currency), the largest first. A position the run keeps
+    dropped from the book), for the line beside the column «Изм. к вчера»: ``positionId``, ``book``, ``ccy``, ``name``,
+    ``portfolio`` and ``notional`` (the face of the previous close, in the face currency), the largest first. A position the run keeps
     (with a zero face, or without a fact: not valued) is not here: its row shows the change."""
     gone = [pid for pid, p in prev.items() if pid not in cur and p[0]]
     if not gone:
         return []
+    # the name, currency and portfolio as the PnL report's rows have them (``pnl_history.DIMENSIONS``, ``pnlClosed``)
     facts = {r["position_id"]: r for r in con.execute(
-        "SELECT p.position_id, p.book_id, p.fact->>'ccy' AS ccy, p.fact->>'name' AS name FROM run_position p"
+        "WITH books AS MATERIALIZED (SELECT run_id, jsonb_array_elements(data) AS data FROM run_reference"
+        " WHERE run_id = %s AND kind = 'books')"
+        " SELECT p.position_id, p.book_id AS book, COALESCE(p.fact->>'ccy', i.ccy) AS ccy,"
+        " COALESCE(p.fact->>'name', i.source_instrument_name, p.secid, p.position_id) AS name,"
+        f" {EFFECTIVE_PORTFOLIO_SQL} AS portfolio FROM run_position p JOIN run r USING (run_id)"
+        " LEFT JOIN books b ON b.run_id = p.run_id AND b.data->>'book_id' = p.book_id"
+        " LEFT JOIN LATERAL (SELECT x, ccy, source_instrument_name FROM position_input i"
+        " JOIN position_set s USING (set_id) WHERE i.set_id = ANY(r.position_set_ids)"
+        f" AND i.position_id = p.position_id AND s.book_id = p.book_id ORDER BY {INPUT_ROW_ORDER_SQL} LIMIT 1) i ON true"
+        f" LEFT JOIN LATERAL ({PORTFOLIO_ROW_SQL}) ip ON true"
         " WHERE p.run_id = %s AND p.position_id = ANY(%s) AND NOT EXISTS ("
-        "SELECT 1 FROM run_position c WHERE c.run_id = %s AND c.position_id = p.position_id)", (prev_id, gone, run_id))}
+        "SELECT 1 FROM run_position c WHERE c.run_id = %s AND c.position_id = p.position_id)", (prev_id, prev_id, gone, run_id))}
     gone = [pid for pid in gone if pid in facts]
-    out = [{"positionId": pid, "book": facts[pid]["book_id"], "ccy": facts[pid]["ccy"], "name": facts[pid]["name"] or pid,
-            "notional": prev[pid][0]} for pid in gone]
+    out = [{"positionId": pid, "book": facts[pid]["book"], "ccy": facts[pid]["ccy"], "name": facts[pid]["name"],
+            "portfolio": facts[pid]["portfolio"], "notional": prev[pid][0]} for pid in gone]
     return sorted(out, key=lambda c: -abs(c["notional"]))
 
 

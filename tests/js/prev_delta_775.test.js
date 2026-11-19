@@ -102,7 +102,11 @@ t('«Изм. к вчера»: нет прогона прошлой даты — 
   const col = K.posCols.posDelta;
   M.prevRun = null;
   assert.strictEqual(col.val(pos({})), null);
-  assert.ok(/title="нет прогона прошлой даты"/.test(col.fmt(null, pos({}))));
+  // подсказка с датой закрытия, которого нет (M.prevDate, prev_date прогона), и путём досчёта; даты нет — без неё
+  M.prevDate = '2026-10-20';
+  assert.ok(/title="нет прогона за 20\.10\.26 \(досчитать: Настройки → «История прогонов»\)"/.test(col.fmt(null, pos({}))), col.fmt(null, pos({})));
+  M.prevDate = null;
+  assert.ok(/title="нет прогона прошлой даты \(досчитать/.test(col.fmt(null, pos({}))), col.fmt(null, pos({})));
   assert.strictEqual(col.csvFmt(null, pos({})), '');
   M.prevRun = RUN;
   const unvalued = pos({ prevNotional: null, prevNoFact: true });
@@ -110,7 +114,11 @@ t('«Изм. к вчера»: нет прогона прошлой даты — 
   const h = col.fmt(null, unvalued);
   assert.ok(!/новая/.test(h) && /позиция была, но не оценена/.test(h), h);
   assert.strictEqual(col.csvFmt(null, unvalued), '');
-  assert.ok(/не оценена в одном из двух прогонов/.test(col.fmt(null, pos({ prevNotional: null }))), 'сегодня не оценена');
+  // три разных причины пустого изменения при прогоне прошлой даты
+  const today = col.fmt(null, pos({ prevNotional: null, notValued: true })), noFace = col.fmt(null, pos({ prevNotional: null }));
+  assert.ok(/Сегодня позиция не оценена/.test(today) && !/в прогоне за/i.test(today), today);
+  assert.ok(/В прогоне за 20\.10\.26 позиция была, но не оценена/.test(h), h);
+  assert.ok(/В прогоне за 20\.10\.26 у позиции нет номинала/.test(noFace) && !/не оценена/.test(noFace), noFace);
 });
 
 t('«Изм. к вчера»: CSV — число в mm валюты бумаги, у «новой» тоже; ноль — 0.00', () => {
@@ -136,6 +144,17 @@ t('закрытые с прошлой даты: строка с числом и 
     { positionId: 'A', book, ccy: 'RUB', name: 'Бумага А', notional: 150e6 }, { positionId: 'B', book, ccy: 'RUB', name: 'Бумага Б', notional: 50e6 },
     { positionId: 'C', book, ccy: 'USD', name: 'Бумага В', notional: 5e6 }] };
   const h = K.prevClosedLine();
+  // фильтр шапки получает и портфель закрытой позиции (нет портфеля — «—», как у K.closedList)
+  const seen = [], rowIn = K.rowIn;
+  K.rowIn = x => (seen.push(x), true);
+  M.prevRun.closed[0].portfolio = 'HTM';
+  K.prevClosedLine();
+  K.rowIn = rowIn;
+  assert.deepStrictEqual(seen.map(x => x.portfolio), ['HTM', '—', '—']);
+  // дата прогона не строка — строки закрытых нет, а не падение
+  M.prevRun.date = null;
+  assert.strictEqual(K.prevClosedLine(), '');
+  M.prevRun.date = '2026-10-20';
   // отрицательное — в формате пользователя (по умолчанию скобки): «(200.0) mm RUB»; закрытие — уменьшение номинала
   K.withNegFmt('minus', () => assert.ok(/^Закрыто с 20\.10: 3 поз\. · −200\.0 mm RUB · −5\.0 mm USD$/.test(strip(K.prevClosedLine())), strip(K.prevClosedLine())));
   assert.ok(/^Закрыто с 20\.10: 3 поз\. · \(200\.0\) mm RUB · \(5\.0\) mm USD$/.test(strip(h)), strip(h));
@@ -149,14 +168,17 @@ t('lib/real.js: prevNotional, newToPrev, prevNoFact позиции и M.prevRun 
   ids = probe.D.positions.slice(0, 4).map(p => p.id);
   assert.strictEqual(probe.M.prevRun, null, 'сервер prevRun не прислал (нет прогона прошлой даты)');
   assert.ok(probe.M.positions.every(p => p.prevNotional == null && !p.newToPrev && !p.prevNoFact));
+  // дата прогона не строка — prevRun не принимается (строка закрытых и подсказки на неё опираются)
+  assert.strictEqual(loadReal({ positions: {}, prevRun: { runId: 1, date: null, closed: [] } }).M.prevRun, null);
+  assert.strictEqual(loadReal({ positions: {}, prevRun: { runId: 1, closed: [] } }).M.prevRun, null);
   const xs = { positions: { [ids[0]]: { prevNotional: 5e6 }, [ids[1]]: { newToPrev: true }, [ids[2]]: { prevNoFact: true } },
-    prevRun: { runId: 3, date: '2026-10-20', closed: [{ positionId: 'Z', book: 'B1', ccy: 'EUR', name: 'Закрытая', notional: 2e6 }] } };
+    prevRun: { runId: 3, date: '2026-10-20', closed: [{ positionId: 'Z', book: 'B1', ccy: 'EUR', name: 'Закрытая', portfolio: 'HTM', notional: 2e6 }] } };
   const { M, K } = loadReal(xs);
   assert.strictEqual(M.pos[ids[0]].prevNotional, 5e6);
   assert.strictEqual(M.pos[ids[1]].newToPrev, true);
   assert.strictEqual(M.pos[ids[2]].prevNoFact, true);
   assert.strictEqual(M.pos[ids[3]].prevNotional, null);
-  assert.deepStrictEqual(JSON.parse(JSON.stringify(M.prevRun)), { runId: 3, date: '2026-10-20', closed: [{ positionId: 'Z', book: 'B1', ccy: 'EUR', name: 'Закрытая', notional: 2e6 }] });
+  assert.deepStrictEqual(JSON.parse(JSON.stringify(M.prevRun)), { runId: 3, date: '2026-10-20', closed: [{ positionId: 'Z', book: 'B1', ccy: 'EUR', portfolio: 'HTM', name: 'Закрытая', notional: 2e6 }] });
   const p = M.pos[ids[0]], d = K.prevDelta(p);
   assert.strictEqual(d.face, p.notional - 5e6);
 });

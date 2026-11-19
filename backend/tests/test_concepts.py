@@ -153,7 +153,7 @@ def test_previous_notional_new_and_closed_775(desk, store_url):
     assert [c["positionId"] for c in gone["prevRun"]["closed"]] == ["P2"]
     c = gone["prevRun"]["closed"][0]
     assert c["notional"] == pytest.approx(p["P2"]["prevNotional"]) and c["book"] == was["book_id"] and c["ccy"] == was["ccy"]
-    assert c["name"]
+    assert c["name"] and "portfolio" in c  # the name falls back to the instrument id, the portfolio is the report's rule
 
 
 def test_concepts_data_js_etag_and_empty(desk, store_url):

@@ -650,8 +650,8 @@
   M.pnlClosed = X.pnlClosed || [];  // позиции, закрытые раньше в периоде: их PnL MTD/YTD не входит в строки позиций (#568)
   // прогон предыдущего закрытия (TDM#775): { runId, date, closed: [{ positionId, book, ccy, name, notional }] } — позиции, которые
   // были в нём и которых нет в прогоне; null — прогона предыдущей даты нет (колонка «Изм. к вчера» пуста)
-  M.prevRun = X.prevRun && typeof X.prevRun === 'object' ? { runId: X.prevRun.runId, date: X.prevRun.date,
-    closed: (Array.isArray(X.prevRun.closed) ? X.prevRun.closed : []).filter(isObj).map(c => ({ positionId: String(c.positionId), book: c.book || null, ccy: c.ccy || null, name: c.name || String(c.positionId), notional: num(c.notional) })) } : null;
+  M.prevRun = X.prevRun && typeof X.prevRun === 'object' && typeof X.prevRun.date === 'string' && X.prevRun.date.length >= 10 ? { runId: X.prevRun.runId, date: X.prevRun.date,
+    closed: (Array.isArray(X.prevRun.closed) ? X.prevRun.closed : []).filter(isObj).map(c => ({ positionId: String(c.positionId), book: c.book || null, ccy: c.ccy || null, portfolio: c.portfolio || null, name: c.name || String(c.positionId), notional: num(c.notional) })) } : null;
   const n = M.histDates.length;
   const series = (src, keys, today) => { const o = {}; keys.forEach(k => { o[k] = (src && src[k]) ? src[k].map(v => v == null ? null : +v) : new Array(n).fill(0); if (!src && today) o[k][n - 1] = today(k); }); return o; };
   const sumBy = (f) => positions.reduce((s, p) => s + (f(p) || 0), 0);
