@@ -119,7 +119,7 @@ def test_the_contract_field_and_the_x_field_give_the_same_ocp_and_the_contract_f
     old = _published(_report(x_spot_future=[entry]))
     none = _published(_report())
     assert std["amount"] == old["amount"] and std["parts"] == old["parts"] and std["amount"] != none["amount"]
-    assert std["spot_future"]["out"] and old["spot_future"]["out"] and "spot_future" not in none  # the line is taken out
+    assert std["spot_future"]["out"] and old["spot_future"]["out"] and not none["spot_future"]["out"]  # the line is taken out
     # both on a row: the field of the contract decides (a line nobody matches in x_ is not read)
     far = line("2027-03-01", "123")
     both = _published(_report(spot_future=[entry], x_spot_future=[far]))
@@ -328,7 +328,8 @@ def test_a_report_accepted_without_the_field_is_recomputed_after_it_is_read_agai
     # before: an adapter 1.8 (no field): the base holds the forward's nominal, and the position's PV is added on top
     _, before = _run(store_url, ctx)
     d1 = _d1(before)
-    assert d1["parts"]["base"] == 400_000 and not d1.get("spot_future")
+    assert d1["parts"]["base"] == 400_000 and not (d1.get("spot_future") or {}).get("out")
+    assert d1["spot_future"]["none"]["deals"] == 1  # TDM#807: no line in the report: said, not silent
     with store.connect(store_url) as con:
         run_row = store.default_runs(con, B, B)[B]
         assert store.late_inputs(con, B, run_row["positions_known_at"]) == []
