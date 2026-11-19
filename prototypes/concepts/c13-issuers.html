@@ -174,7 +174,8 @@ table.mini tr.put td:first-child { box-shadow: inset 3px 0 0 var(--warn); }
   let listApi = null;
   function renderList() {
     const max = Math.max(1, ...ISS.map(x => Math.abs(x.mv)));
-    const drillCell = (key, fmt, unit, title) => (v, r) => K.d({ title: r.name + ' · ' + title, unit, fmt, list: r.list, val: key }, fmt(v), key === 'mv' ? '' : null);
+    // число и единица ячейки — в формате чисел колонки пользователя (TDM#789, K.nfNum): раскрытие по позициям показывает те же числа
+    const drillCell = (key, title, val) => (v, r) => K.d({ title: r.name + ' · ' + title, unit: K.nfEff(key).unit, fmt: K.nfFn(key), list: r.list, val: val || key }, K.nfNum(key, v), key === 'mv' ? '' : null);
     listApi = K.table(document.getElementById('list'), { viewKey: 'c13-issuers',
       rows: ISS, maxHeight: 'calc(100vh - 140px)', sort: [['mv', -1]], onRow: r => select(r.id, false),
       rowCls: r => r.id === st.sel ? 'sel' : '',
@@ -184,11 +185,11 @@ table.mini tr.put td:first-child { box-shadow: inset 3px 0 0 var(--warn); }
         { key: 'rating', label: 'Рейт.', val: r => K.ratingRank(r.rating), fmt: (v, r) => '<span class="mut" title="' + esc(K.ratingTip(r.rating, r.ratingInfo)) + '">' + esc(K.ratingText(r.rating, r.ratingInfo)) + '</span>' },
         { key: 'n', label: 'Бум.', num: true, title: 'облигаций эмитента; CDS на эмитента — отдельно', fmt: (v, r) => '<span class="mut">' + v + '</span>' + (r.nCds ? ' <span class="mtag" data-cds="' + r.nCds + '">+' + r.nCds + ' CDS</span>' : ''),
           csvExtra: ['CDS'], csvFmt: (v, r) => [v, r.nCds || 0] },  // в CSV «Бум.» — число, CDS — своей колонкой
-        { key: 'mv', label: 'MV, mm ₽', num: true, fmt: drillCell('mv', v => f.mn(v, 0), 'mm ₽', 'MV'), sum: true, drill: false, sumFmt: v => f.mn(v, 0) },
+        { key: 'mv', label: 'MV, mm ₽', num: true, nf: K.NF.mv, fmt: drillCell('mv', 'MV'), sum: true, drill: false, sumFmt: K.nfFn('mv'), unit: 'mm ₽' },
         { key: 'share', label: '', val: r => r.mv, fmt: (v) => K.bar(v, max, true), w: '70px' },
-        { key: 'cs01', label: 'CS01', num: true, unit: 'тыс ₽/бп', fmt: drillCell('cs01', f.dv, 'тыс ₽/бп', 'CS01'), sum: true, drill: false, sumFmt: f.dv },
-        { key: 'dv01', label: 'DV01', num: true, unit: 'тыс ₽/бп', fmt: drillCell('dv01', f.dv, 'тыс ₽/бп', 'DV01'), sum: true, drill: false, sumFmt: f.dv },
-        { key: 'pnl', label: 'PnL', num: true, fmt: (v, r) => K.d({ title: r.name + ' · PnL дня', unit: 'тыс ₽', fmt: f.k, list: r.list, val: p => p.pnl.total }), sum: true, drill: false, sumFmt: f.k },
+        { key: 'cs01', label: 'CS01', num: true, unit: 'тыс ₽/бп', nf: K.NF.cs01, fmt: drillCell('cs01', 'CS01'), sum: true, drill: false, sumFmt: K.nfFn('cs01') },
+        { key: 'dv01', label: 'DV01', num: true, unit: 'тыс ₽/бп', nf: K.NF.dv01, fmt: drillCell('dv01', 'DV01'), sum: true, drill: false, sumFmt: K.nfFn('dv01') },
+        { key: 'pnl', label: 'PnL', num: true, unit: 'тыс ₽', nf: K.NF.pnl, fmt: (v, r) => K.d({ title: r.name + ' · PnL дня', unit: K.nfEff('pnl').unit, fmt: K.nfFn('pnl'), list: r.list, val: p => p.pnl.total }), sum: true, drill: false, sumFmt: K.nfFn('pnl') },
       ],
     });
   }

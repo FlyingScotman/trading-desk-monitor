@@ -289,10 +289,10 @@ table.sp td:first-child, table.sp th:first-child { text-align: left; }
   // ---------- наши против рынка ----------
   const rvCols = [
     'name', 'ccy', 'issuer', 'rating', 'tenor', 'ytm',
-    { key: 'gspread', label: 'G-спред', num: true, unit: 'б.п.', fmt: v => f.bp(v) },
-    { key: 'mkt', label: 'рынок', num: true, unit: 'б.п.', val: r => medOf(r.rating, r.tenor), fmt: v => v == null ? '—' : f.bp(v), title: 'медиана G-спреда рейтинга и срока' },
+    'gspread',  // G-спред позиции — колонка каталога: формат чисел (TDM#789) общий со всеми таблицами позиций
+    { key: 'mkt', label: 'рынок', num: true, unit: 'б.п.', nf: K.NF.mktSpread, val: r => medOf(r.rating, r.tenor), fmt: v => v == null ? '—' : K.nfNum('mktSpread', v), title: 'медиана G-спреда рейтинга и срока' },
     // своя дефолтная или дистрессная бумага (#111): разница с медианой рынка не сравнение — пометка вместо числа
-    { key: 'rv', label: 'разница', num: true, unit: 'б.п.', val: r => { const m = medOf(r.rating, r.tenor); return m == null || r.gspread == null || K.distress(r) ? null : r.gspread - m; }, fmt: (v, r) => K.distress(r) ? K.distressTag(K.distress(r)) : v == null ? '—' : f.bps(v), style: v => v == null ? '' : K.heat(v, 120), title: '> 0 — бумага дешевле рынка (шире спред)' },
+    { key: 'rv', label: 'разница', num: true, unit: 'б.п.', nf: K.NF.rvDiff, val: r => { const m = medOf(r.rating, r.tenor); return m == null || r.gspread == null || K.distress(r) ? null : r.gspread - m; }, fmt: (v, r) => K.distress(r) ? K.distressTag(K.distress(r)) : v == null ? '—' : K.nfNum('rvDiff', v), style: v => v == null ? '' : K.heat(v, 120), title: '> 0 — бумага дешевле рынка (шире спред)' },
     'mv',
   ];
   K.table(document.getElementById('rv'), { viewKey: 'c09-rv',

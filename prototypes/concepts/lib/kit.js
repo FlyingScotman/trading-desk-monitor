@@ -2206,7 +2206,7 @@
   //   suf — суффикс внутри скобок отрицательного ('%'), per — единица без масштаба ('₽/бп', '₽', 'в вал.'): она есть только
   //   у сумм, и только у них можно менять единицы (подпись — слово масштаба + per: «тыс ₽/бп», «mm в вал.»), base — подпись
   //   колонки, к которой единица приписывается через запятую («MV» → «MV, mm ₽», если единица в подписи, а не под ней).
-  // Колонка объявляет его в поле nf (K.posCols, блоттер C03); без nf у колонки нет настройки. Число строит K.nfNum: ячейки,
+  // Колонка объявляет его в поле nf (K.posCols, блоттер C03, свои колонки C09, C10, C13, C17: nf: K.NF.<ключ>); без nf у колонки нет настройки. Число строит K.nfNum: ячейки,
   // итоги и CSV берут его оттуда, поэтому они совпадают с экраном, а подсветка и сортировка остаются по исходному числу.
   const NF_SCALE = { '1': 1, k: 1e3, mm: 1e6, bn: 1e9 }, NF_WORD = { 1: '', 1e3: 'тыс', 1e6: 'mm', 1e9: 'bn' };
   K.NF = {};
@@ -2227,15 +2227,16 @@
     return (nfMemo.m[id] = { id, scale, d: sel.decimals != null ? sel.decimals : defD, defD, sign: !!nf.sign, suf: nf.suf || '', word, defWord, units: !!nf.per,
       unit: nf.per ? unitOf(word) : '', defUnit: nf.per ? unitOf(defWord) : '', custom: !!(sel.decimals != null || (nf.per && sel.scale)) });
   };
-  // Число колонки в её формате: null / не число — «—»; plain — без «+» (CSV)
-  K.nfNum = (id, v, plain) => {
+  // Число колонки в её формате: null / не число — «—»; plain — без «+» (CSV); sign — «+» у положительных вопреки описанию колонки
+  // (true / false): колонка экрана, у которой «+» не такой, как у одноимённой колонки позиций (PnL в C10 — всегда со знаком)
+  K.nfNum = (id, v, plain, sign) => {
     const e = K.nfEff(id);
     if (v == null) return '—';
     if (!e) return grp(v, 0);
     const x = v / e.scale;
-    return (e.sign && !plain && x > 0 ? '+' : '') + grp(x, e.d, e.suf);
+    return ((sign == null ? e.sign : sign) && !plain && x > 0 ? '+' : '') + grp(x, e.d, e.suf);
   };
-  K.nfFn = id => v => K.nfNum(id, v);
+  K.nfFn = (id, sign) => v => K.nfNum(id, v, false, sign);
   // Слово масштаба в пометке рядом с числом («mm USD» у номинала): как есть — пусто
   K.nfWord = id => { const e = K.nfEff(id); return e ? e.word : ''; };
   // Колонка в действующем формате: единица, подпись с единицей (base), подсказка (titleFn(единица)) и подпись CSV (csvHead) —
@@ -2485,7 +2486,7 @@
   K.csvDateCell = (iso, t, num) => K.csvDate(iso) || K.csvCell(t, num, iso);
   // текст CSV: первая строка — номер прогона, дата среза, название таблицы и число строк, пустая строка, заголовок
   // (у таблицы без заголовка — нет), строки; BOM добавляется при скачивании
-  K.csvTitle = opts => K.htmlText(opts.title || (typeof document.title === 'string' ? document.title : '') || 'таблица');
+  K.csvTitle = opts => K.htmlText((typeof opts.title === 'function' ? opts.title() : opts.title) || (typeof document.title === 'string' ? document.title : '') || 'таблица');
   K.csvBuild = (title, head, lines) => {
     const R = K.csvRun(), q = K.csvLabel;
     return ['run_id,' + (/^\d+$/.test(R.run_id) ? R.run_id : q(R.run_id)) + ',as_of,' + (K.csvDate(R.as_of) || q(R.as_of)) + ',таблица,' + q(title) + ',строк,' + lines.length, '']
@@ -2702,7 +2703,7 @@
   //        csvFmt тогда отдаёт массив [значение колонки, значения дополнительных] («-27 Z» → -27 и Z),
   //        sumNeutral — итог без цвета знака (расхождение, а не прибыль/убыток), footCount(rows) — подпись числа строк «Итого»
   //        (например «7 из 9», когда итоги считаются не по всем строкам),
-  //        viewKey — стабильный ключ раскладки латиницей, он же основа имени CSV (без него — страница + id, K.tableKey), title — название в CSV, fileName — основа имени файла CSV (латиницей),
+  //        viewKey — стабильный ключ раскладки латиницей, он же основа имени CSV (без него — страница + id, K.tableKey), title — название в CSV (строка или функция: её зовут при выгрузке, когда в названии единицы колонок, TDM#789), fileName — основа имени файла CSV (латиницей),
   //        colPick — кнопка «Колонки ▾» в шапке таблицы: скрыть и вернуть колонки, выбор запоминается на сервере по пользователю (K.colPrefs, TDM#763);
   //        по умолчанию — у таблиц, чьи колонки собраны K.cols (таблицы позиций на K.posCols), false — без неё; колонка с noHide: true и первая
   //        колонка таблицы не скрываются (идентификатор строки), колонка без подписи (полоска доли) не предлагается и остаётся на экране;
@@ -3438,7 +3439,7 @@
   // Число каждой настраиваемой колонки (TDM#789, K.nfNum): делитель, знаков по умолчанию и то, что идёт к единице. Ключ — ключ колонки
   // в K.posCols: по нему формат хранится у пользователя. Цены, доходности, спреды и сроки — только знаки (нет per); суммы — ещё и
   // единицы (per). Колонки без описания (даты, текст, оформление) настройки не имеют
-  const NFD = K.NF;
+  const NFD = K.NF, KDF = K.repr === 'RUB' ? 2 : 3;  // знаков у прогнозного кэрри (C17): в валюте отчёта, отличной от рубля, на один больше
   Object.assign(NFD, {
     notional: { scale: 1e6, d: 2, per: 'в вал.' },
     mv: { scale: 1e6, d: 0, per: '₽', base: 'MV' },
@@ -3451,6 +3452,14 @@
     dv01: { scale: 1e3, d: KD, per: '₽/бп' }, cs01: { scale: 1e3, d: KD, per: '₽/бп' }, basis01: { scale: 1e3, d: KD, per: '₽/бп' }, ofzSpr01: { scale: 1e3, d: KD, per: '₽/бп' },
     carry: { scale: 1e3, d: KD, per: '₽' }, funding: { scale: 1e3, d: KD, per: '₽' }, pnl: { scale: 1e3, d: KD, per: '₽' },
     pnlMtd: { scale: 1e6, d: 1, per: '₽' },
+    // колонки своих экранов, которых нет в K.posCols (TDM#789): у каждой свой формат, у совпадающих по смыслу — ключ каталога выше
+    //   fwdCarry / fwdFunding / fwdNet — прогнозное кэрри, фондирование и нетто до горизонта (C17), mm ₽;
+    //   carryDv — «Кэрри/DV01», б.п. (C17); mktSpread — медиана G-спреда рынка и rvDiff — «разница» с ней, со знаком (C09);
+    //   unexplShare — доля необъяснённого «прочего» в итоге позиции, % (C10): число — доля, на экране — в процентах (делитель 0.01)
+    fwdCarry: { scale: 1e6, d: KDF, per: '₽' }, fwdFunding: { scale: 1e6, d: KDF, per: '₽' }, fwdNet: { scale: 1e6, d: KDF, per: '₽' },
+    carryDv: { scale: 1, d: 0 },
+    mktSpread: { scale: 1, d: 0 }, rvDiff: { scale: 1, d: 0, sign: true },
+    unexplShare: { scale: 0.01, d: 0, suf: '%' },
   });
   Object.keys(NFD).forEach(id => { NFD[id].id = id; });
   K.offerKindText = k => ({ put: 'пут', call: 'колл' })[k] || k || '';

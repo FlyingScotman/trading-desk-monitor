@@ -77,7 +77,9 @@
   const RK = () => (M.toRepr && M.toRepr.RUB) || 1;          // рубли ответа → валюта показа
   const DIG = K.repr === 'RUB' ? 2 : 3, DIGB = K.repr === 'RUB' ? 1 : 2;
   const mn = v => v == null || !isFinite(v) ? '<span class="mut3">—</span>' : f.mn(v, DIG);
-  const bp = v => v == null || !isFinite(v) ? '<span class="mut3">—</span>' : f.n(v, 0);
+  // формат чисел колонок (TDM#789, K.nfNum): знаки и единицы таблицы позиций и «Кэрри / DV01» выбирает пользователь в «Колонки ▾»; по умолчанию — как было
+  const nfm = id => v => v == null || !isFinite(v) ? '<span class="mut3">—</span>' : K.nfNum(id, v);
+  const bp = nfm('carryDv');
   const KIND = k => k === 'CASH' ? 'остатки ДС' : (window.INSTR && INSTR.SHORT[k]) || k || '—';
   // бумага без своей цены сегодня (#383) и модельная цена (#441): керри ядра по прошлой, рыночной или модельной цене
   const PRICED = { stale_price: 'по прошлой цене', market_value: 'по рыночной цене', model_price: 'по модельной цене' };
@@ -271,7 +273,7 @@
     wrap.appendChild(sp);
 
     // таблица позиций
-    const tp = panel('Позиции', '<span class="k-note">mm ₽ · щелчок по строке — карточка</span>');
+    const tp = panel('Позиции', '<span class="k-note">суммы — единицы в шапке колонок · щелчок по строке — карточка</span>');
     tp.querySelector('.bd').classList.add('flush');
     tp.querySelector('.hd').insertAdjacentHTML('beforeend', '<span class="shw"></span><span class="dim"></span>');
     wrap.appendChild(tp);
@@ -281,9 +283,9 @@
       K.seg(tp.querySelector('.shw'), [['all', 'все'], ['cov', 'с прогнозом'], ['nc', 'без прогноза']], st.show, v => { st.show = v; save(); drawTable(); });
       const rowsFn = () => R.filter(r => st.show === 'all' || (st.show === 'cov' ? r.covered : !r.covered));
       const G = st.dim === 'none' ? null : [{ key: r => r[st.dim] || '—', label: k => esc(st.dim === 'book' ? k + (M.book[k] && M.book[k].name !== k ? ' · ' + M.book[k].name : '') : st.dim === 'entity' ? entName(k) : st.dim === 'kind' ? KIND(k) : k) }];
-      const money = (key, label, val, extra) => Object.assign({ key, label, num: true, val, nullable: true, drill: false, unit: 'mm ₽', fmt: v => mn(v), cls: v => v == null ? '' : f.cls(v), sum: r => val(r) || 0, sumFmt: v => mn(v) }, extra || {});
+      const money = (key, nk, label, val, extra) => Object.assign({ key, label, num: true, nf: K.NF[nk], val, nullable: true, drill: false, unit: 'mm ₽', fmt: nfm(nk), cls: v => v == null ? '' : f.cls(v), sum: r => val(r) || 0, sumFmt: nfm(nk) }, extra || {});
       K.table(tp.querySelector('.bd'), {
-        viewKey: 'c17-positions', colPick: true, title: 'Прогнозное кэрри до ' + resp.horizonDate + ', mm ₽', rowsFn, maxHeight: '620px',
+        viewKey: 'c17-positions', colPick: true, title: () => 'Прогнозное кэрри до ' + resp.horizonDate + (K.nfEff('fwdCarry').unit === K.nfEff('fwdNet').unit && K.nfEff('fwdFunding').unit === K.nfEff('fwdNet').unit ? ', ' + K.nfEff('fwdNet').unit : ''), rowsFn, maxHeight: '620px',
         groupBy: G, stripe: r => r.isCash ? 'transparent' : K.issuerColor(r.issuer), rowCls: r => r.covered ? '' : 'c17-nc', sort: [['net', -1]],
         footCount: rows => rows.filter(r => !r.isCash).length + ' поз.',
         columns: [
@@ -291,18 +293,18 @@
           { key: 'book', label: 'Книга', val: r => r.book, filter: true, fmt: v => '<span class="mut">' + esc(v) + '</span>' },
           { key: 'entity', label: 'Юрлицо', val: r => r.entity, filter: true, fmt: v => '<span class="mut">' + esc(entName(v)) + '</span>' },
           { key: 'kind', label: 'Тип', val: r => r.kindLabel, filter: true, fmt: v => '<span class="mut">' + esc(v) + '</span>' },
-          money('carry', 'Кэрри', r => r.carry, { title: TIP.carry, tip: true }),
-          money('funding', 'Фондирование', r => r.funding, { title: TIP.funding, tip: true, sum: C.colSum.funding,
-            fmt: (v, r) => v != null ? '<span title="' + esc([r.fundingRate, C.FUNDING_SOURCE[r.fundingSource], r.fundingNote].filter(Boolean).join(' · ')) + '">' + f.mn(v, DIG) + '</span>'
+          money('carry', 'fwdCarry', 'Кэрри', r => r.carry, { title: TIP.carry, tip: true }),
+          money('funding', 'fwdFunding', 'Фондирование', r => r.funding, { title: TIP.funding, tip: true, sum: C.colSum.funding,
+            fmt: (v, r) => v != null ? '<span title="' + esc([r.fundingRate, C.FUNDING_SOURCE[r.fundingSource], r.fundingNote].filter(Boolean).join(' · ')) + '">' + K.nfNum('fwdFunding', v) + '</span>'
               : '<span class="mut3" title="' + esc(r.fundingNote || '') + '">' + (r.fundingState === 'not_configured' ? 'не настроено' : r.fundingState === 'problem' ? '— ⚠' : '—') + '</span>' }),
           // нетто группы: «—», если у позиции с прогнозом нет фондирования (NaN → «—»); иначе кэрри + всё фондирование
-          money('net', 'Нетто', r => r.net, { title: TIP.net, tip: true, sum: C.colSum.net }),
-          { key: 'cdv', label: 'Кэрри/DV01', num: true, val: r => r.carryDv01, csvFmt: v => bp(v),
+          money('net', 'fwdNet', 'Нетто', r => r.net, { title: TIP.net, tip: true, sum: C.colSum.net }),
+          { key: 'cdv', label: 'Кэрри/DV01', num: true, nf: K.NF.carryDv, val: r => r.carryDv01, csvFmt: v => bp(v),
             fmt: (v, r) => bp(v) + (r.floater && r.covered ? ' <span class="k-tag" title="флоатер: кэрри / |CS01|">CS</span>' : ''), cls: v => v == null ? '' : f.cls(v), unit: 'б.п.', title: TIP.dv01, tip: true },
           { key: 'den', label: 'Знаменатель', val: r => r.covered ? r.denom : null, filter: true, fmt: v => v ? '<span class="mut">' + v + '</span>' : '<span class="mut3">—</span>', title: 'Знаменатель «Кэрри/DV01»: DV01 ставок, у флоатеров — CS01' },
           { key: 'why', label: 'Оценка', val: QUAL, filter: true,
             cls: 'c17-why', fmt: (v, r) => '<span title="' + esc([r.detail, r.spreadCurve ? 'спред: ' + C.spreadText(r.spreadCurve) + (r.spreadRollBp != null ? ' (' + f.s(r.spreadRollBp, 1) + ' б.п.)' : '') : ''].filter(Boolean).join('\n')) + '"' + (r.covered ? ' class="mut"' : '') + '>' + esc(v) + '</span>' +
-              (r.spreadRoll != null ? ' <span class="mut3" title="roll по спреду, входит в кэрри">roll ' + f.mn(r.spreadRoll, DIG) + '</span>' : '') },
+              (r.spreadRoll != null ? ' <span class="mut3" title="roll по спреду, входит в кэрри">roll ' + K.nfNum('fwdCarry', r.spreadRoll) + '</span>' : '') },
         ],
       });
     }

@@ -158,6 +158,9 @@ test('K.nfNum: формат по умолчанию совпадает с пре
     notional: x => f.mn(x, 2), mv: x => f.mn(x, 0), tradeDay: x => f.mns(x, 2), posDelta: x => f.mns(x, 2), price: f.px, ytm: x => f.pct(x),
     spread: f.bp, zkbd: f.bp, zdisc: f.bp, gspread: f.bp, dur: x => f.n(x, 2),
     dv01: f.dv, cs01: f.dv, basis01: f.dv, ofzSpr01: f.dv, carry: f.k, funding: f.k, pnl: f.k, pnlMtd: x => f.mn(x, 1),
+    // колонки своих экранов (TDM#789, C09, C10, C17): прежний вид — как строили их страницы
+    fwdCarry: x => f.mn(x, 2), fwdFunding: x => f.mn(x, 2), fwdNet: x => f.mn(x, 2), carryDv: f.bp, mktSpread: f.bp, rvDiff: f.bps,
+    unexplShare: x => f.pct(x == null ? x : x * 100, 0),
   };
   assert.deepStrictEqual(Object.keys(K.NF).sort(), Object.keys(was).sort(), 'у каждой настраиваемой колонки известен прежний вид');
   for (const [id, fn] of Object.entries(was)) {
@@ -167,9 +170,31 @@ test('K.nfNum: формат по умолчанию совпадает с пре
   for (const [id, c] of Object.entries(K.posCols)) if (c.nf) assert.strictEqual(c.nf, K.NF[id], id);
   assert.strictEqual(K.NF.mv.id, 'mv');
   // единицы по умолчанию — те, что были в заголовках
-  const unit = { notional: 'mm в вал.', mv: 'mm ₽', tradeDay: 'mm в вал.', posDelta: 'mm в вал.', dv01: 'тыс ₽/бп', cs01: 'тыс ₽/бп', basis01: 'тыс ₽/бп', ofzSpr01: 'тыс ₽/бп', carry: 'тыс ₽', funding: 'тыс ₽', pnl: 'тыс ₽', pnlMtd: 'mm ₽' };
+  const unit = { notional: 'mm в вал.', mv: 'mm ₽', tradeDay: 'mm в вал.', posDelta: 'mm в вал.', dv01: 'тыс ₽/бп', cs01: 'тыс ₽/бп', basis01: 'тыс ₽/бп', ofzSpr01: 'тыс ₽/бп', carry: 'тыс ₽', funding: 'тыс ₽', pnl: 'тыс ₽', pnlMtd: 'mm ₽', fwdCarry: 'mm ₽', fwdFunding: 'mm ₽', fwdNet: 'mm ₽' };
   for (const [id, u] of Object.entries(unit)) assert.strictEqual(K.nfEff(id).unit, u, id);
-  for (const id of ['price', 'ytm', 'spread', 'zkbd', 'zdisc', 'gspread', 'dur']) assert.strictEqual(K.nfEff(id).units, false, id + ': только знаки');
+  for (const id of ['price', 'ytm', 'spread', 'zkbd', 'zdisc', 'gspread', 'dur', 'carryDv', 'mktSpread', 'rvDiff', 'unexplShare']) assert.strictEqual(K.nfEff(id).units, false, id + ': только знаки');
+});
+
+test('K.nfNum: колонки экранов C09, C10, C17 — свой ключ формата; «+» вопреки описанию колонки (PnL в C10); доля — проценты', async () => {
+  const { K } = load(new Map());
+  // sign: PnL в C10 — всегда со знаком, а у «PnL дня» таблиц позиций «+» нет; формат (знаки, единицы) у них один
+  assert.strictEqual(K.nfNum('pnl', 2500), '3'); assert.strictEqual(K.nfNum('pnl', 2500, false, true), '+3');
+  assert.strictEqual(K.nfNum('pnl', 2500, true, true), '3', 'CSV — без «+»');
+  assert.strictEqual(K.nfFn('pnl', true)(-2500), '(3)'); assert.strictEqual(K.nfFn('pnlMtd', true)(2500000), '+2.5');
+  assert.strictEqual(K.nfNum('rvDiff', 366), '+366', '«разница» C09 — со знаком по описанию'); assert.strictEqual(K.nfNum('rvDiff', 366, true), '366');
+  await K.colFmt.set('pnl', { scale: 'mm' });
+  assert.strictEqual(K.nfNum('pnl', 2500000, false, true), '+2.500', 'единицы PnL — те же в C10: тыс → mm, точность та же (на три знака больше)');
+  await K.colFmt.reset('pnl');
+  // доля — число 0…1, на экране проценты; формат только знаки
+  assert.strictEqual(K.nfNum('unexplShare', 0.456), '46%'); assert.strictEqual(K.nfNum('unexplShare', null), '—');
+  await K.colFmt.set('unexplShare', { decimals: 1 }); assert.strictEqual(K.nfNum('unexplShare', 0.456), '45.6%');
+  // прогнозное кэрри C17: знаки по умолчанию 2, в тыс ₽ — на три знака меньше; три колонки — три формата
+  await K.colFmt.set('fwdCarry', { scale: 'k' });
+  assert.strictEqual(K.nfNum('fwdCarry', 1234567), '1,235'); assert.strictEqual(K.nfNum('fwdNet', 1234567), '1.23');
+  assert.strictEqual(K.nfEff('fwdCarry').unit, 'тыс ₽'); assert.strictEqual(K.nfEff('fwdNet').unit, 'mm ₽');
+  assert.strictEqual(K.nfEff('carryDv').units, false);
+  // название CSV — строка или функция (единицы колонок в названии)
+  assert.strictEqual(K.csvTitle({ title: 'Таблица' }), 'Таблица'); assert.strictEqual(K.csvTitle({ title: () => 'Из функции, ' + K.nfEff('fwdCarry').unit }), 'Из функции, тыс ₽');
 });
 
 test('K.nfNum: знаки и единицы пользователя; null — «—»; отрицательные в обоих форматах; сменили единицу — точность та же', async () => {
