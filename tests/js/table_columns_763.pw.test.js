@@ -501,3 +501,30 @@ test('C03: ключи constructor / toString / valueOf в сохранённом
     assert.deepStrictEqual(errors, []);
   } finally { await browser.close(); }
 });
+
+// ---- сборка TDM#775 + TDM#776 + TDM#778: «Изм. к вчера» и «Кор. имя» в каталоге «Добавить» ----
+test('C03 «Цены и спреды»: «Кор. имя» и «Изм. к вчера» — в «Добавить», добавляются как обычные колонки и уходят в CSV', { skip }, async () => {
+  const { browser, pg, errors } = await launch(1500);
+  try {
+    const url = PAGE('c03-blotter.html'), ready = () => window.KIT && document.querySelector('#tbl table') && document.querySelector('#tbl table').__kt;
+    await openWith(pg, url, ready, { 'c03-state': JSON.stringify({ v: 2, preset: 'px', grouping: 'none', color: 'issuer' }) });
+    const ths = () => pg.evaluate(() => [...document.querySelectorAll('#tbl table th[data-k]')].map(th => th.dataset.k));
+    const base = await ths();
+    assert.ok(!base.includes('short') && !base.includes('posDelta'), 'в наборе «Цены и спреды» их нет: ' + base);
+    await openMenu(pg);
+    const avail = (await addRows(pg)).map(a => a.key);
+    assert.ok(avail.includes('short') && avail.includes('posDelta'), 'обе колонки предложены в «Добавить»: ' + avail);
+    await addIn(pg, 'short'); await addIn(pg, 'posDelta');
+    assert.deepStrictEqual(await ths(), base.concat('short', 'posDelta'), 'в конец набора, в порядке добавления');
+    await pg.keyboard.press('Escape');
+    const filled = await pg.evaluate(() => { const hs = [...document.querySelectorAll('#tbl table th[data-k]')], is = hs.findIndex(h => h.dataset.k === 'short'), id = hs.findIndex(h => h.dataset.k === 'posDelta');
+      return [...document.querySelectorAll('#tbl tbody tr')].filter(tr => tr.cells.length > Math.max(is, id) && tr.cells[is].textContent.trim() && tr.cells[id].textContent.trim()).length; });
+    assert.ok(filled > 0, 'ячейки обеих колонок нарисованы');
+    const head = csvHead(await csvOf(pg, '.k-tbl-ctlbar .k-tbtn:has-text("CSV")'));
+    assert.ok(head.includes('Кор. имя') && head.includes('Изм. к вчера'), 'CSV: ' + head);
+    const saved = await reopen(pg, url, ready);
+    assert.deepStrictEqual(JSON.parse(saved['tdm.view.v1:cols:c03-blotter:px']).added, ['short', 'posDelta']);
+    assert.deepStrictEqual(await ths(), base.concat('short', 'posDelta'), 'после перезагрузки — те же колонки');
+    assert.deepStrictEqual(errors, []);
+  } finally { await browser.close(); }
+});
