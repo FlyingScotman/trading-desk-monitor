@@ -93,7 +93,10 @@ t('прогон: правка — PUT /api/v1/instruments/alias с JSON; с чу
   assert.strictEqual(ro.M.aliasApi.editable, false);
   const p = ro.M.positions.find(x => x.isin);
   const html = ro.K.aliasName(p);
-  assert.ok(/data-al="edit" disabled title="только чтение: [^"]*127\.0\.0\.1/.test(html), html);
+  // ответа входа ещё нет: причина нейтральная, не «вход выключен» (TDM#777)
+  assert.ok(/data-al="edit" disabled title="только чтение: права на правку уточняются — обновите страницу, если не исчезнет"/.test(html), html);
+  ro.M.nameRights.setAuth({ enabled: false, user: { username: 'local', role: 'admin' }, loopback: false });
+  assert.ok(/data-al="edit" disabled title="только чтение: вход выключен[^"]*127\.0\.0\.1/.test(ro.K.aliasName(p)), ro.K.aliasName(p));
   assert.ok(html.includes('data-al="hist"'), 'история — и в режиме только чтения');
   // сеть недоступна — ответ, а не исключение
   const off = load({ real: true, fetch: () => Promise.reject(new Error('down')) });
