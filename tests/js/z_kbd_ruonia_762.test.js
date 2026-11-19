@@ -47,7 +47,9 @@ function run(D) {
 t('прогон: спреды позиции — свои поля, подпись кривой в «Спред», пустые поля — null (прогон до них, нет кривой, флоатер)', () => {
   const { M } = load(run);
   const o = M.pos.OFZ1, c = M.pos.CORP1, no = M.pos.NOOIS, old = M.pos.OLD, fx = M.pos.FX1, f1 = M.pos.FL1, f2 = M.pos.FL2;
-  assert.strictEqual(o.spreadLabel, 'к КБД'); assert.strictEqual(o.zspread, 7); assert.strictEqual(o.zKbd, 7); assert.strictEqual(o.zRuonia, 52);
+  // TDM#801: «Спред» ОФЗ — Z к RUONIA (52), не к КБД (7); Z к КБД остаётся в своём поле и колонке, кривая дисконтирования (spreadCurve) — КБД
+  assert.strictEqual(o.spreadLabel, 'к RUONIA'); assert.strictEqual(o.spreadName, 'Z к RUONIA'); assert.strictEqual(o.zspread, 52); assert.strictEqual(o.zKbd, 7); assert.strictEqual(o.zRuonia, 52);
+  assert.strictEqual(o.spreadCurve, 'RUB OFZ'); assert.strictEqual(o.zSpreadZ, 7);
   assert.strictEqual(c.spreadLabel, 'к RUONIA'); assert.strictEqual(c.zspread, 121); assert.strictEqual(c.zKbd, 131); assert.strictEqual(c.zRuonia, 121);
   // день без RUONIA OIS: корпоративная на КБД — «Спред» к КБД, Z к RUONIA нет (к другой кривой не считается), а не её Z к КБД
   assert.strictEqual(no.spreadLabel, 'к КБД'); assert.strictEqual(no.zKbd, 133); assert.strictEqual(no.zRuonia, null);
@@ -69,9 +71,9 @@ t('таблицы: «Спред» подписан кривой, колонки 
   const sp = K.posCols.spread, kb = K.posCols.zkbd, rn = K.posCols.zdisc;
   assert.deepStrictEqual([sp.label, kb.label, rn.label], ['Спред', 'Z к КБД', 'Z к RUONIA']);
   const o = M.pos.OFZ1, c = M.pos.CORP1, no = M.pos.NOOIS;
-  assert.ok(/^7 <span class="mut3">к КБД<\/span>$/.test(sp.fmt(o.zspread, o)));
+  assert.ok(/^52 <span class="mut3">к RUONIA<\/span>$/.test(sp.fmt(o.zspread, o)) && !/КБД/.test(sp.fmt(o.zspread, o)));
   assert.ok(/<span class="mut3">к RUONIA<\/span>/.test(sp.fmt(c.zspread, c)) && !/КБД/.test(sp.fmt(c.zspread, c)));
-  assert.deepStrictEqual(Array.from(sp.csvFmt(o.zspread, o)), ['7', 'к КБД']); assert.strictEqual(sp.csvExtra[0], 'Вид спреда');
+  assert.deepStrictEqual(Array.from(sp.csvFmt(o.zspread, o)), ['52', 'к RUONIA']); assert.strictEqual(sp.csvExtra[0], 'Вид спреда');
   assert.deepStrictEqual(Array.from(sp.csvFmt(M.pos.FL1.zspread, M.pos.FL1)), ['190', 'DM']);
   assert.strictEqual(kb.val(o), 7); assert.strictEqual(rn.val(o), 52);
   assert.strictEqual(kb.val(c), 131); assert.strictEqual(rn.val(c), 121);
@@ -128,8 +130,10 @@ t('подсказки и заголовки: нигде спред к КБД н�
   const { K } = load();
   const texts = { spread: K.posCols.spread.title, zkbd: K.posCols.zkbd.title, zdisc: K.posCols.zdisc.title };
   assert.strictEqual(texts.spread, K.tips.zspread); assert.strictEqual(texts.zkbd, K.tips.zkbd); assert.strictEqual(texts.zdisc, K.tips.zdisc);
-  // «Спред»: у ОФЗ-ПД/АД/ИН кривая — КБД, у остальных — RUONIA OIS; подпись ячейки названа
+  // «Спред» (TDM#801): у рублёвой фикс-бумаги, ОФЗ-ПД/АД/ИН тоже, — Z к RUONIA OIS; к КБД — только в день без RUONIA OIS; подпись ячейки названа
   for (const w of ['ОФЗ-ПД', 'ОФЗ-АД', 'ОФЗ-ИН', 'КБД', 'RUONIA OIS', '«к КБД»', '«к RUONIA»', 'DM']) assert.ok(texts.spread.includes(w), 'Спред: ' + w);
+  assert.ok(!/ОФЗ-ИН это КБД/.test(texts.spread) && !/у ОФЗ-ПД, ОФЗ-АД и ОФЗ-ИН это КБД/.test(texts.spread));
+  assert.ok(/оценка и риск ОФЗ от этого не меняются/.test(texts.spread) && /колонка «Спред» у них с подписью «к RUONIA»/i.test(texts.zkbd));
   // «Z к RUONIA» — к RUONIA OIS, у ОФЗ-ПД/АД/ИН тоже, не к кривой дисконтирования вообще; без кривой — прочерк
   assert.ok(texts.zdisc.includes('RUONIA OIS') && texts.zdisc.includes('ОФЗ-ПД') && /прочерк/.test(texts.zdisc));
   assert.ok(!/в день без неё/.test(texts.zdisc) && !/RUONIA OIS; в день/.test(texts.zdisc) && !/к кривой дисконтирования/.test(texts.zdisc));
@@ -142,19 +146,30 @@ t('подсказки и заголовки: нигде спред к КБД н�
   for (const f of walk(ROOT)) { const s = fs.readFileSync(f, 'utf8'); for (const re of old) assert.ok(!re.test(s), path.relative(ROOT, f) + ' ' + re); }
 });
 
-t('демо: ОФЗ-ПД — «Спред» к КБД, Z к КБД и Z к RUONIA — разные числа; корпоративная — «Спред» к RUONIA и равен Z к RUONIA', () => {
+t('демо: ОФЗ-ПД — «Спред» к RUONIA и равен Z к RUONIA (TDM#801), Z к КБД — другое число, кривая дисконтирования КБД; корпоративная — то же', () => {
   const { M, K } = load();
   const ofz = M.positions.filter(p => p.group === 'GOV' && p.ccy === 'RUB' && p.cpn && p.cpn.type === 'fix');
   assert.ok(ofz.length >= 3);
   for (const p of ofz) {
-    assert.strictEqual(p.spreadCurve, 'RUB OFZ', p.name); assert.strictEqual(p.spreadLabel, 'к КБД', p.name);
-    assert.strictEqual(p.zKbd, p.zspread, p.name); assert.notStrictEqual(p.zRuonia, p.zKbd, p.name);
+    assert.strictEqual(p.spreadCurve, 'RUB OFZ', p.name); assert.strictEqual(p.spreadLabel, 'к RUONIA', p.name);
+    assert.strictEqual(p.zRuonia, p.zspread, p.name); assert.strictEqual(p.zKbd, p.zSpreadZ, p.name); assert.notStrictEqual(p.zRuonia, p.zKbd, p.name);
     assert.strictEqual(K.spreadFields(p).map(x => x[0]).join('|'), 'Z-спред к КБД|Z-спред к RUONIA');
   }
   const corp = M.positions.filter(p => p.group === 'CORP' && p.ccy === 'RUB' && p.cpn && p.cpn.type === 'fix');
   assert.ok(corp.length >= 3);
   for (const p of corp) { assert.strictEqual(p.spreadLabel, 'к RUONIA', p.name); assert.strictEqual(p.zRuonia, p.zspread, p.name); assert.strictEqual(p.spreadName, 'Z к RUONIA'); }
   for (const p of M.positions.filter(p => p.cpn && p.cpn.type === 'float' && p.ccy === 'RUB')) assert.ok(p.zKbd == null && p.zRuonia === p.zSpreadZ, p.name);
+});
+
+t('TDM#801: сдвиг спреда у ОФЗ — по Z к КБД, и это подписано (C05, PnL за период), C08 подписывает «Спред», история без истории — G-спред', () => {
+  const c05 = P('concepts/c05-morning-brief.html'), pp = P('concepts/lib/pnl-period-position.js'), c08 = P('concepts/c08-calendar.html');
+  assert.ok(/K\.hint\('Спред сдвинулся на 5\+ б\.п\.', 'сдвиг спреда к кривой дисконтирования \(у ОФЗ — к КБД\), по нему считается PnL «Спред»'\)/.test(c05));
+  assert.ok(/p\.spreadCurve === 'RUB OFZ' \? ' <span class="mut3">к КБД<\/span>' : ''/.test(c05), 'пометка «к КБД» у ОФЗ в списке');
+  assert.ok(/kpi\('Спред', c\('spread'\)[^\n]*у ОФЗ — к КБД/.test(pp) && /title="Δ сдвиг спреда к кривой дисконтирования \(у ОФЗ — к КБД\)[^"]*">Спред Δ, bp/.test(pp));
+  assert.ok(/data-csv="Спред, б\.п\.\|Вид спреда" title="'\+esc\(K\.tips\.zspread\)\+'">Спред<\/th>/.test(c08) && /K\.csvv\(\(\) => \[f\.bp\(p\.zspread\), p\.spreadLabel \|\| ''\]\)/.test(c08) && c08.includes("esc(p.spreadLabel)"));
+  const { M } = load(run);
+  const h = M.posHistory('OFZ1');
+  assert.strictEqual(h.spr[0], M.pos.OFZ1.gspread); assert.ok(!(M.pos.OFZ1.gspread !== M.pos.OFZ1.zspread) || h.spr[0] !== M.pos.OFZ1.zspread, 'не основной спред');
 });
 
 console.log(n + ' tests passed');

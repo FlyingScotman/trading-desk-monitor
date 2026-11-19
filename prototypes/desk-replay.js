@@ -48,10 +48,12 @@
     if (j.state !== 'done') return { cls: 'bad', text: 'Не перечитано (' + what + '): ' + (j.error_code === 'busy' ? 'сервер долго был занят чтением папок, попробуйте позже' : j.error || j.error_code || 'ошибка') + '.' };
     var r = j.result || {}, files = r.files || {}, n = Object.keys(files).reduce(function (a, k) { return a + files[k]; }, 0);
     var bad = (files.rejected || 0) + (files.failed || 0) + (files.timed_out || 0);
+    var gone = (r.skipped || {}).gone || 0;  // TDM#806: файл принят, но его нет ни в папке, ни в архиве — перечитать нечем
     var text = 'Перечитано ' + what + ': ' + R.files(n) + ', новых ревизий — ' + (r.revisions || 0) + '.' +
       (r.revisions ? ' Затронутые расчёты пересчитает автообновление.' : ' Строки не изменились — расчёты прежние.') +
-      (bad ? ' Не принято файлов: ' + bad + ' (подробнее — C14 «Статус дня»).' : '');
-    return { cls: bad ? 'warn' : 'ok', text: text };
+      (bad ? ' Не принято файлов: ' + bad + ' (подробнее — C14 «Статус дня»).' : '') +
+      (gone ? ' Не перечитано файлов: ' + gone + ' — их нет ни в папке, ни в архиве монитора, перечитать нечем: эти даты остаются как приняты.' : '');
+    return { cls: bad || gone ? 'warn' : 'ok', text: text };
   };
 
   /* ---------- DOM ---------- */

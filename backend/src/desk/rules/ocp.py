@@ -602,6 +602,18 @@ def split_kinds(report_rows: Sequence[Mapping[str, Any]], report_units: Sequence
     return {sid: frozenset(by_file.get(f, ())) for sid, f in file_of.items()}
 
 
+def spot_field_files(report_rows: Sequence[Mapping[str, Any]], report_units: Sequence[Mapping[str, Any]]
+                     ) -> dict[Any, bool]:
+    """set_id -> whether any row of its report file has the field of the spot-type lines of a future date
+    (``spot_future``, else ``x_spot_future``; TDM#807). The adapter writes it only on a row that has such lines: a file
+    with the field in some row was read by an adapter that gives it (the others have none), a file with it in no row
+    either has no such line or was read by an adapter that did not give them."""
+    file_of = {u.get("set_id"): u.get("inbox_file_sha256") or ("set", u.get("set_id")) for u in report_units}
+    seen = {file_of.get(r.get("_set_id"), ("set", r.get("_set_id"))) for r in report_rows
+            if _spot_future_of(r) is not None}
+    return {sid: f in seen for sid, f in file_of.items()}
+
+
 def reconcile(lines: Sequence[OcpLine], report_rows: Sequence[Mapping[str, Any]],
               report_units: Sequence[Mapping[str, Any]], books: Mapping[str, Mapping[str, Any]],
               policy: OcpPolicy = PROVISIONAL_POLICY) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
@@ -614,6 +626,7 @@ def reconcile(lines: Sequence[OcpLine], report_rows: Sequence[Mapping[str, Any]]
     for r in report_rows:
         rows_by_set[r.get("_set_id")].append(r)
     apart = split_kinds(report_rows, report_units)
+    spot_field = spot_field_files(report_rows, report_units)
     out: list[dict[str, Any]] = []
     covered: set[str] = set()
     for u in report_units:
@@ -686,7 +699,7 @@ def reconcile(lines: Sequence[OcpLine], report_rows: Sequence[Mapping[str, Any]]
                 "book_id": b, "ccy": ccy, "reported": rep["ocp_ccy"], "reported_base": rep["base"],
                 "reported_derivatives": dict(rep["derivatives"]), "split": bool(kinds),
                 "derivative_types": _types_out(rep["types"]),
-                "spot_future": rep["spot"],
+                "spot_future": rep["spot"], "spot_field": spot_field.get(u.get("set_id"), False),
                 "split_kinds": sorted(kinds),
                 "reported_rub": rep["ocp_rub"],
                 "reported_rate": rep["rate"], "in_report_file": key in reported, "src": rep["src"][:20],
@@ -1137,7 +1150,10 @@ def spot_deals(rows: Sequence[Mapping[str, Any]], books: Mapping[str, Mapping[st
             if d := _day(x.get("fixing_date")):
                 dates.append(d)
             ids.append(str(x.get("trade_id")))
+        trade_dates = [d for x in t if (d := _day(x.get("trade_date")))]
+        legs_from = "terms"
         if not parsed:
+            legs_from = "ocp_amount" if ex.get("ocp_amount") else "fx_delta"
             amounts = _amounts(ex.get("ocp_amount") or r.get("fx_delta"), policy)
             legs, open_legs = defaultdict(float, amounts), defaultdict(float, amounts)
             deal_id = (ex.get("reported") or {}).get("deal_id")
@@ -1151,7 +1167,8 @@ def spot_deals(rows: Sequence[Mapping[str, Any]], books: Mapping[str, Mapping[st
         own = bool(parsed) and not valued
         out.append(S.Deal(pid, str(r["book_id"]), kind, comp, dict(legs), dict(open_legs),
                           tuple(sorted(set(dates))), tuple(dict.fromkeys(ids)), frozenset(by_rate), own,
-                          S.DF1_TEXT.format(why=_df1_why(ex, bool(parsed))) if own else ""))
+                          S.DF1_TEXT.format(why=_df1_why(ex, bool(parsed))) if own else "",
+                          legs_from, min(trade_dates) if trade_dates else None))
     return out
 
 
@@ -1605,7 +1622,7 @@ def published_day(comparisons: Sequence[Mapping[str, Any]], outside_report: Sequ
         kinds = set(sc["kinds"])
         split = bool(sc["kinds"])
         if not split:
-            issues["report_without_derivatives_split"].append(where)
+            issues["report_without_derivatives_split"].append(f"{where} (отчёт от {b0:%d.%m.%Y})" if b0 else where)
         if b0 is not None and b0 < on:
             if business_days_between(b0, on, is_business_day) > 1:
                 issues["base_older"].append(f"{where} от {b0:%d.%m.%Y}")
@@ -1803,8 +1820,25 @@ def published_day(comparisons: Sequence[Mapping[str, Any]], outside_report: Sequ
                        "trade_ids": list(m.deal.trade_ids), "days": m.days, "others": list(m.others)}
                       for m in sm.matched if m.line.ccy == ccy]
             sf_un = [{"value_date": _iso(u.line.value_date), "pair": u.line.pair, "src": u.line.src,
-                      "amount": u.line.amount, "book_id": u.line.book_id, "why": u.why}
+                      "amount": u.line.amount, "book_id": u.line.book_id, "why": u.why,
+                      **({"near": {"position_id": u.near[0], "nominal": u.near[1], "source": u.near[2]}} if u.near else {}),
+                      **({"other": {"position_id": u.other[0], "ccy": u.other[1], "nominal": u.other[2],
+                                    "source": u.other[3]}} if u.other else {})}
                      for u in sm.unmatched if u.line.ccy == ccy]
+            # TDM#807: the book has deals of the kinds a line can be matched with, traded on or before the report's date
+            # (or with no date), and the report has no such line for the book: said. ``field``: the file has the field
+            # in some row (the adapter gives such lines: this book has none) or in no row (none in the report, or the
+            # file was read before the adapter gave them: re-reading may help)
+            sf_none = None
+            if not spot_in and not sc["absent"]:
+                mine_ccy = [d for d in allowed if ccy in d.legs]
+                before = sum(1 for d in mine_ccy if b0 is not None and d.trade_date is not None
+                             and d.trade_date <= b0)
+                after = sum(1 for d in mine_ccy if b0 is not None and d.trade_date is not None and d.trade_date > b0)
+                unknown = len(mine_ccy) - before - after
+                if before or unknown:  # only deals the report can hold are worth a word
+                    sf_none = {"deals": len(mine_ccy), "before": before, "after": after, "unknown": unknown,
+                               "field": any(c_.get("spot_field") for c_ in sc["by_ccy"].values())}
             for o in sf_out:
                 if o["others"]:
                     issues["spot_future_ambiguous"].append(
@@ -1824,8 +1858,9 @@ def published_day(comparisons: Sequence[Mapping[str, Any]], outside_report: Sequ
                  split_kinds=sorted(sc["kinds"]) if not sc["absent"] else [], partial_pv=partial, no_pv=no_pv,
                  base_older=b0 is not None and business_days_between(b0, on, is_business_day) > 1,
                  excluded=excluded, derivative_types=[] if sc["absent"] else _types_out(types),
-                 **({"spot_future": {"out": sf_out, "unmatched": sf_un, "df1": at_df1}}
-                    if sf_out or sf_un or at_df1 else {}),
+                 **({"spot_future": {"out": sf_out, "unmatched": sf_un, "df1": at_df1,
+                                     **({"none": sf_none} if sf_none else {})}}
+                    if sf_out or sf_un or at_df1 or sf_none else {}),
                  **({"derivative_share": sorted(big, key=lambda x: -abs(x["amount"]))[:CONTRIBUTIONS_MAX]}
                     if big else {}))
     covered = {b for sc in scopes.values() for b in sc["books"]}
@@ -1845,8 +1880,14 @@ def published_day(comparisons: Sequence[Mapping[str, Any]], outside_report: Sequ
 DAY_GAP_TEXT = {
     "carried_forward_unit": "строки отчёта ОВП, перенесённые с даты раньше базы (книги нет в отчёте на дату базы): "
                             "отчёт — полный срез юрлица, их база 0",
-    "report_without_derivatives_split": "отчёт ОВП без разметки деривативов (адаптер до private/1.7): база держит "
-                                        "будущие потоки деривативов по номиналу, их PV не добавлен",
+    "report_without_derivatives_split": "отчёт ОВП без разбивки деривативов (ни в одной строке файла нет поля "
+                                        "derivatives_ccy: файл прочитан адаптером до private/1.7 или до того, как в "
+                                        "адаптере заданы виды строк деривативов, и после этого не перечитан): база "
+                                        "держит будущие потоки деривативов по номиналу, их PV не добавлен. Чтобы дата "
+                                        "перешла на текущую методику, перечитайте отчёты с даты отчёта («Настройки» → "
+                                        "«Адаптер и источники» → «Папки» → карточка «Перечитать отчёты за период» → "
+                                        "кнопка «Перечитать»; карточка видна только с этого компьютера или "
+                                        "администратору)",
     "derivatives_partial_pv": "позиции вида без PV (нет условий сделки или ядро не оценило): если PV нет ни у одной, "
                               "взят номинал вида из отчёта ОВП; если только у части — номинал отчёта по позициям не "
                               "делится, у позиций без PV взят их номинал из отчёта позиций — проверьте сверку номинала",
@@ -2052,8 +2093,7 @@ def compute_ocp(rows: Sequence[Mapping[str, Any]], books: Mapping[str, Mapping[s
                                                            units=report_units, days=days,
                                                            is_business_day=is_business_day, derivs=derivs,
                                                            rates=rates, cash_dates=cash_dates(cash),
-                                                           spot=spot_deals(rows, books, tb, on, policy)
-                                                           if any(c.get("spot_future") for c in comps) else ())
+                                                           spot=spot_deals(rows, books, tb, on, policy))
         old = {u.get("set_id") for u in carried_units(report_units, {str(b): str(m.get("entity") or "—")
                                                                      for b, m in books.items()}, on, policy,
                                                        is_business_day)[1]}

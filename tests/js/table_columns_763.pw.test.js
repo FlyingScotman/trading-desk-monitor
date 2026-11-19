@@ -19,7 +19,7 @@ const pw = (() => { try { return require('playwright'); } catch (e) { return nul
 const ROOT = path.join(__dirname, '..', '..', 'prototypes');
 const PAGE = f => pathToFileURL(path.join(ROOT, 'concepts', f)).href;
 const skip = !pw && 'нет Playwright';
-const POS = ['name', 'shortName', 'ccy', 'issuerName', 'kind', 'book', 'couponFmt', 'event', 'maturity', 'tenor', 'notional', 'tradeDay', 'posDelta', 'price', 'ytm', 'zspread', 'zkbd', 'zdisc', 'mdur', 'dv01', 'cs01', 'carryDay', 'fundingDay', 'pnl', 'mv'];  // C01 «Позиции»: key колонок
+const POS = ['name', 'nameShort', 'ccy', 'issuerName', 'kind', 'book', 'couponFmt', 'event', 'maturity', 'tenor', 'notional', 'tradeDay', 'posDelta', 'price', 'ytm', 'zspread', 'zkbd', 'zdisc', 'mdur', 'dv01', 'cs01', 'carryDay', 'fundingDay', 'pnl', 'mv'];  // C01 «Позиции»: key колонок
 
 async function launch(width) {
   const browser = await pw.chromium.launch();
@@ -503,28 +503,28 @@ test('C03: ключи constructor / toString / valueOf в сохранённом
 });
 
 // ---- сборка TDM#775 + TDM#776 + TDM#778: «Изм. к вчера» и «Кор. имя» в каталоге «Добавить» ----
-test('C03 «Цены и спреды»: «Кор. имя» и «Изм. к вчера» — в «Добавить», добавляются как обычные колонки и уходят в CSV', { skip }, async () => {
+test('C03 «Цены и спреды»: «Кор. имя», «Имя» (TDM#802) и «Изм. к вчера» — в «Добавить», добавляются как обычные колонки и уходят в CSV', { skip }, async () => {
   const { browser, pg, errors } = await launch(1500);
   try {
     const url = PAGE('c03-blotter.html'), ready = () => window.KIT && document.querySelector('#tbl table') && document.querySelector('#tbl table').__kt;
     await openWith(pg, url, ready, { 'c03-state': JSON.stringify({ v: 2, preset: 'px', grouping: 'none', color: 'issuer' }) });
     const ths = () => pg.evaluate(() => [...document.querySelectorAll('#tbl table th[data-k]')].map(th => th.dataset.k));
     const base = await ths();
-    assert.ok(!base.includes('short') && !base.includes('posDelta'), 'в наборе «Цены и спреды» их нет: ' + base);
+    assert.ok(!base.includes('short') && !base.includes('posDelta') && !base.includes('nameShort'), 'в наборе «Цены и спреды» их нет: ' + base);
     await openMenu(pg);
     const avail = (await addRows(pg)).map(a => a.key);
-    assert.ok(avail.includes('short') && avail.includes('posDelta'), 'обе колонки предложены в «Добавить»: ' + avail);
-    await addIn(pg, 'short'); await addIn(pg, 'posDelta');
-    assert.deepStrictEqual(await ths(), base.concat('short', 'posDelta'), 'в конец набора, в порядке добавления');
+    assert.ok(avail.includes('short') && avail.includes('posDelta') && avail.includes('nameShort'), 'колонки предложены в «Добавить»: ' + avail);
+    await addIn(pg, 'short'); await addIn(pg, 'posDelta'); await addIn(pg, 'nameShort');
+    assert.deepStrictEqual(await ths(), base.concat('short', 'posDelta', 'nameShort'), 'в конец набора, в порядке добавления');
     await pg.keyboard.press('Escape');
     const filled = await pg.evaluate(() => { const hs = [...document.querySelectorAll('#tbl table th[data-k]')], is = hs.findIndex(h => h.dataset.k === 'short'), id = hs.findIndex(h => h.dataset.k === 'posDelta');
       return [...document.querySelectorAll('#tbl tbody tr')].filter(tr => tr.cells.length > Math.max(is, id) && tr.cells[is].textContent.trim() && tr.cells[id].textContent.trim()).length; });
     assert.ok(filled > 0, 'ячейки обеих колонок нарисованы');
     const head = csvHead(await csvOf(pg, '.k-tbl-ctlbar .k-tbtn:has-text("CSV")'));
-    assert.ok(head.includes('Кор. имя') && head.includes('Изм. к вчера'), 'CSV: ' + head);
+    assert.ok(head.includes('Кор. имя') && head.includes('Изм. к вчера') && head.includes('Имя'), 'CSV: ' + head);
     const saved = await reopen(pg, url, ready);
-    assert.deepStrictEqual(JSON.parse(saved['tdm.view.v1:cols:c03-blotter:px']).added, ['short', 'posDelta']);
-    assert.deepStrictEqual(await ths(), base.concat('short', 'posDelta'), 'после перезагрузки — те же колонки');
+    assert.deepStrictEqual(JSON.parse(saved['tdm.view.v1:cols:c03-blotter:px']).added, ['short', 'posDelta', 'nameShort']);
+    assert.deepStrictEqual(await ths(), base.concat('short', 'posDelta', 'nameShort'), 'после перезагрузки — те же колонки');
     assert.deepStrictEqual(errors, []);
   } finally { await browser.close(); }
 });

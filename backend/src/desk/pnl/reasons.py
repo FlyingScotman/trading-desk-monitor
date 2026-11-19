@@ -49,9 +49,11 @@ METHOD_TEXT = {
     "desk-fx-spot-v1": "по курсу: сумма × изменение курса",
     "desk-reported-v1": "по отчёту: разница отчётных стоимостей",
     "desk-fx-core-v1": "FX-сделка: изменение PV ядра, курсовая часть по FX-дельте",
+    "desk-rates-core-v1": "своп или РЕПО ядром: кэрри и сдвиг кривой по ядру, ставки линейно по риску D-1, остаток отдельно",
     "desk-core-new-trade-v1": "новая сделка: PnL от условий сделки (PV при заключении принят за 0)",
 }
 CORE_FX_METHOD = "desk-fx-core-v1"
+RATES_CORE_METHOD = "desk-rates-core-v1"
 NEW_TRADE_METHOD = "desk-core-new-trade-v1"
 REPORTED_METHOD = "desk-reported-v1"
 FX_METHOD = "desk-fx-spot-v1"
@@ -67,6 +69,7 @@ PRICE_SOURCE_SWITCH = "price_source_switch"
 YIELD_NO_CURVE = "yield_no_curve"
 REPORTED_VALUE = "reported_value"
 FX_CORE_REST = "fx_core_rest"
+RATES_CORE_REST = "rates_core_rest"
 FLASH_RESIDUAL = "flash_residual"
 OTHER_REASON_TEXT = {
     NO_CURVE_ON_DATE: "нет кривой на дату",
@@ -78,6 +81,7 @@ OTHER_REASON_TEXT = {
     YIELD_NO_CURVE: "валютная бумага без кривой: изменение доходности",
     REPORTED_VALUE: "оценка по отчёту",
     FX_CORE_REST: "FX-сделка: прочие эффекты",
+    RATES_CORE_REST: "своп или РЕПО: остаток после ставок",
     FLASH_RESIDUAL: "остаток точного flash",
 }
 """``pnl.extra.other_reason.code`` (TDM#442) -> the label of the period's split of the unexplained, in this order. Why
@@ -97,6 +101,9 @@ the PnL of a row is (wholly or partly) in ``other`` or ``reported``; nothing is 
   ``other`` (``desk-flash-yield-v1``);
 - ``reported_value``: the difference of the reported values (``desk-reported-v1``, trades of the day inside);
 - ``fx_core_rest``: an FX deal valued by core: what is not its FX delta (rates, points, time; ``desk-fx-core-v1``);
+- ``rates_core_rest``: a swap or REPO valued by core on both dates, whose PnL is split into carry, rolldown and rates
+  (``desk-rates-core-v1``): what these do not explain (the second order of the move, the day's fixing against the
+  forward, a curve whose risk is not linear here; ``detail`` says which);
 - ``flash_residual``: the rest of the exact flash (``detail``: the D-1 schedule changed, else the D price and accrued
   against the D-1 position on the D market)."""
 REASONS_SINCE = 23
