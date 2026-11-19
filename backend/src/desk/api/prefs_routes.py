@@ -16,6 +16,10 @@ user hide the columns they do not need, bring them back, and add a standard posi
 the changes to the default are stored: a column added to the table by a later version shows by default, and a key the
 page does not know (in either list) is ignored by it. The server does not know the columns, only the shape of the keys.
 
+One window at an update: a page of the version before TDM#778 that is still open sends ``DELETE`` when the user brings
+back the last hidden column, and that also removes the columns added in the new version (no ``added`` is left to keep);
+the page of the new version sends ``added`` explicitly and is not affected.
+
 Whose: always the caller's own (``auth.me_guard``): the signed-in user of any role, or ``local`` while sign-in is off
 (this computer only, as the settings). There is no way to name another user. Not in the OpenAPI schema: the pages'
 own request, like ``/api/v1/history/ocp``.

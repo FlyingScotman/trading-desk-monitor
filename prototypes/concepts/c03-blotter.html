@@ -188,7 +188,9 @@ body { display: flex; flex-direction: column; height: 100vh; overflow: hidden; }
   let hid = readHid();
   // добавленные колонки (TDM#778): любая колонка каталога C, которой нет в наборе; стоят после колонок набора, в порядке добавления;
   // хранятся рядом со скрытыми (K.colPrefs, тот же ключ набора); ключ, которого нет в каталоге, и колонка, ставшая колонкой набора, пропускаются
-  const readAdd = () => K.colPrefs.sel(colKey()).added.filter(k => C[k] && !presetCols().includes(k));
+  // «в каталоге» — свой ключ C, а не унаследованный (constructor, toString: серверу такие ключи подходят)
+  const inC = k => Object.hasOwn(C, k);
+  const readAdd = () => K.colPrefs.sel(colKey()).added.filter(k => inC(k) && !presetCols().includes(k));
   let add = readAdd();
   const cols = () => presetCols().filter(k => !hid.has(k)).concat(add).map(k => Object.assign({ key: k }, C[k]));
   // скрытая колонка уносит с собой свой фильтр и свою сортировку: их больше не снять щелчком по заголовку
@@ -213,7 +215,7 @@ body { display: flex; flex-direction: column; height: 100vh; overflow: hidden; }
 
   // ---------- данные ----------
   // колонка для сортировки строк и групп (KIT.rowCmp, KIT.groupKeys): значение и слагаемое итога группы
-  const colOf = k => C[k] ? { val: C[k].val, sum: C[k].sum || null, nullable: !!C[k].nullable, filter: C[k].filter, fltOrder: C[k].fltOrder, key: k } : null;
+  const colOf = k => inC(k) ? { val: C[k].val, sum: C[k].sum || null, nullable: !!C[k].nullable, filter: C[k].filter, fltOrder: C[k].fltOrder, key: k } : null;
   let base = [];  // строки под поиском — для списка значений фильтра столбца
   function rows() {
     let L = K.list();
@@ -460,7 +462,7 @@ body { display: flex; flex-direction: column; height: 100vh; overflow: hidden; }
     // добавить: колонка каталога встаёт в конец; убрать — уносит свои фильтр и сортировку
     added: () => new Set(add),
     avail: () => Object.keys(C).filter(k => !presetCols().includes(k) && !add.includes(k)).map(k => ({ key: k, label: C[k].label, unit: C[k].unit })),
-    add: k => { if (!C[k] || presetCols().includes(k) || add.includes(k)) return; add = add.concat(k); const saved = savePick(); render(); return saved; },
+    add: k => { if (!inC(k) || presetCols().includes(k) || add.includes(k)) return; add = add.concat(k); const saved = savePick(); render(); return saved; },
     remove: k => { if (!add.includes(k)) return; dropHidden([k]); add = add.filter(x => x !== k); const saved = savePick(); render(); return saved; },
     reset: () => { dropHidden(add); hid = new Set(); add = []; const saved = K.colPrefs.reset(colKey()); render(); return saved; } });
   document.getElementById('sColsPick').appendChild(colBtn);

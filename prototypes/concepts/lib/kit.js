@@ -2553,7 +2553,10 @@
     let add = readAdd();
     const allCols = () => add.length ? opts.columns.concat(add.map(k => catalog().get(k))) : opts.columns;
     const colKeys = () => allCols().map(c => c.key);
-    let lay = K.viewLayout(K.viewStore.get(vkey), colKeys());  // {order: [key], w: {key: px}} — проверенная форма
+    // rawLay — раскладка как лежит в хранилище (до первой правки здесь): добавленные колонки, пришедшие с сервера позже, берут из неё
+    // своё место и ширину; после правки — то, что записано
+    let rawLay = K.viewStore.get(vkey);
+    let lay = K.viewLayout(rawLay, colKeys());  // {order: [key], w: {key: px}} — проверенная форма
     const pickCols = () => pick ? opts.columns.filter(c => !c.hidden && K.htmlText(c.label)) : [];
     const readHid = () => { const ok = new Set(pickCols().filter(c => !fixedCol(c)).map(c => c.key)); return new Set(K.colPrefs.sel(ckey).hidden.filter(k => ok.has(k))); };
     let hid = pick ? readHid() : new Set();
@@ -2585,7 +2588,7 @@
     };
     const fixedW = () => !!lay.w && cols().some(c => lay.w[c.key]);
     const resetBtn = h('button', 'k-tbtn', '⟲ вид'); resetBtn.title = 'сбросить ширину и порядок колонок этой таблицы';
-    resetBtn.onclick = () => { lay = {}; K.viewStore.reset(vkey); draw(true); };
+    resetBtn.onclick = () => { lay = {}; rawLay = undefined; K.viewStore.reset(vkey); draw(true); };
     const csvBtn = h('button', 'k-tbtn', '⤓ CSV');
     csvBtn.title = 'выгрузить в CSV (Excel): колонки — те, что на экране (скрытые не выгружаются), в текущем порядке, строки — после поиска, фильтров и сортировки; номер прогона и дата среза — в первой строке и в имени файла';
     csvBtn.onclick = () => K.download(csvName(), '\uFEFF' + csv(), 'text/csv;charset=utf-8');
@@ -2598,7 +2601,7 @@
       avail: () => [...catalog().values()].filter(c => !add.includes(c.key)).map(c => ({ key: c.key, label: c.label, unit: K.colUnit(c) })) }) : null;
     colBtn ? ctl.append(colBtn, csvBtn, resetBtn) : ctl.append(csvBtn, resetBtn);
     const paintCtl = () => { resetBtn.style.display = fixedW() || (lay.order && lay.order.length) ? '' : 'none'; if (colBtn) colBtn.paint(); };
-    const saveLay = () => { K.viewStore.set(vkey, lay); paintCtl(); };
+    const saveLay = () => { K.viewStore.set(vkey, lay); rawLay = lay; paintCtl(); };
     let noClickTill = 0;  // после перетаскивания щелчок по заголовку — не сортировка
     let shown = [];       // строки на экране: после поиска, фильтров и сортировки (их и выгружает CSV)
     let memo = new WeakMap(), win = null, curGroups = [];  // ячейки строк (HTML) — одни и те же при сортировке и фильтре; окно строк длинной таблицы
@@ -2830,6 +2833,7 @@
       const n = readHid(), na = readAdd();
       if (n.size === hid.size && [...n].every(k => hid.has(k)) && na.length === add.length && na.every((k, i) => k === add[i])) return;
       dropHidden(n); dropKeys(add.filter(k => !na.includes(k))); hid = n; add = na;
+      lay = K.viewLayout(rawLay, colKeys());  // набор колонок стал другим: место и ширина новых — из хранилища, а не отброшены
       draw(true);
     }) : null;
     return api;

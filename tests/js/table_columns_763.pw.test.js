@@ -486,3 +486,18 @@ test('с сервером: добавленные колонки уходят н
     await s.ctx.close();
   } finally { await browser.close(); }
 });
+
+test('C03: ключи constructor / toString / valueOf в сохранённом выборе не роняют страницу и не становятся колонками', { skip }, async () => {
+  const { browser, pg, errors } = await launch(1500);
+  try {
+    const bad = ['constructor', 'toString', 'valueOf', 'hasOwnProperty'];
+    await openWith(pg, PAGE('c03-blotter.html'), () => window.KIT && document.querySelector('#tbl table') && document.querySelector('#tbl table').__kt,
+      { 'c03-state': JSON.stringify({ v: 2, preset: 'base', grouping: 'none', color: 'issuer' }), 'tdm.view.v1:cols:c03-blotter:base': JSON.stringify({ hidden: bad, added: bad }) });
+    const ths = await pg.evaluate(() => [...document.querySelectorAll('#tbl table th[data-k]')].map(th => th.dataset.k));
+    assert.ok(ths.length > 5 && ths[0] === 'name' && !ths.some(k => bad.includes(k)), 'набор как был: ' + ths);
+    assert.strictEqual(await btnText(pg), 'Колонки ▾');
+    await openMenu(pg);
+    assert.ok(!(await addRows(pg)).some(a => bad.includes(a.key)), 'в «Добавить» их нет');
+    assert.deepStrictEqual(errors, []);
+  } finally { await browser.close(); }
+});

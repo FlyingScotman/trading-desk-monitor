@@ -515,3 +515,34 @@ test('мониторы: C03 — добавленные колонки повер
   assert.strictEqual(api.addedCols().length, keys.length - 1);
   assert.ok(api.csv().split('\r\n').length >= K.list().length);
 });
+
+test('K.table: ключи constructor / toString / valueOf в сохранённом выборе — не колонки: пропускаются, страница не падает', () => {
+  const bad = ['constructor', 'toString', 'valueOf', '__proto__', 'hasOwnProperty'];
+  const store = new Map([[KEY, JSON.stringify({ hidden: bad, added: bad.concat('isin') })]]), { K } = load(store);
+  const p = posTable(K);
+  same(headKeys(p.html()), ['name', 'ccy', 'ytm', 'isin']);
+  same(p.api.addedCols(), ['isin']); same(p.api.hiddenCols(), []);
+  p.api.addCol('constructor'); p.api.addCol('toString'); same(p.api.addedCols(), ['isin']);
+  const c03 = P('concepts/c03-blotter.html');
+  assert.ok(/Object\.hasOwn\(C, k\)/.test(c03) && !/\.filter\(k => C\[k\] &&/.test(c03) && /const colOf = k => inC\(k\)/.test(c03) && /add: k => \{ if \(!inC\(k\)/.test(c03), 'C03: «ключ в каталоге» — свой ключ C');
+});
+
+test('K.table: добавленные колонки, пришедшие с сервера позже страницы, берут своё место и ширину из сохранённой раскладки', async () => {
+  const lay = { order: ['name', 'isin', 'ccy', 'ytm', 'zkbd'], w: { name: 150, isin: 120, zkbd: 90 } };
+  const store = new Map([['tdm.view.v1:table:c99-pos', JSON.stringify(lay)]]);
+  const srv = { 'c99-pos': { hidden: [], added: ['zkbd', 'isin'] } };
+  const { K } = load(store, { real: true, fetch: (url, init) => init.method ? { status: 200, body: {} } : { status: 200, body: { user: 'bob', tables: srv } } });
+  const a = posTable(K);
+  same(headKeys(a.html()), ['name', 'ccy', 'ytm'], 'до ответа сервера добавленных нет');
+  await tick(); await tick();
+  same(headKeys(a.html()), ['name', 'isin', 'ccy', 'ytm', 'zkbd'], 'место из раскладки в хранилище, не в конец');
+  same(a.api.layout().w, { name: 150, isin: 120, zkbd: 90 }, 'ширина тоже');
+  // следующая запись раскладки не теряет их
+  a.api.setHidden('ccy', true);
+  a.api.setLayout(a.api.layout());
+  same(JSON.parse(store.get('tdm.view.v1:table:c99-pos')).w, { name: 150, isin: 120, zkbd: 90 });
+  same(JSON.parse(store.get('tdm.view.v1:table:c99-pos')).order, ['name', 'isin', 'ccy', 'ytm', 'zkbd']);
+  // «⟲ вид» после этого — раскладка по умолчанию, и позднее событие её не возвращает
+  a.api.resetView();
+  same(a.api.layout(), {});
+});
