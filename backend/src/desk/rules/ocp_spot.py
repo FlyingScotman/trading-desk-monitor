@@ -89,6 +89,9 @@ class Deal:
     positions give for it, whatever the kind's rule says. False: the deal's own lines (PV, or the row's notional)."""
     note: str = ""
     """Why ``open_legs`` are at the discount factor 1 (``DF1_TEXT``); "" for a valued deal."""
+    legs_from: str = "terms"
+    """Where ``legs`` come from (TDM#807): ``terms`` (the nominal of the deal's trade terms), ``ocp_amount`` (the nominal
+    of the position's row) or ``fx_delta`` (the row's FX delta: a spot equivalent, not a nominal)."""
     trade_date: date | None = None
     """The earliest trade date of the deal's terms; None: no terms or no date (TDM#807: a deal traded after the
     report's date cannot be in the report)."""
@@ -110,12 +113,13 @@ class Unmatched:
     why: str
     """``no_deal`` (no deal of the book with a leg of this currency), ``amount``, ``date``, ``sign``, ``taken`` (every
     candidate matched another line)."""
-    near: tuple[str, float] | None = None
+    near: tuple[str, float, str] | None = None
     """``amount`` (TDM#807): the deal of the book whose leg in the line's currency is the closest to the line's amount
-    (position id, that leg's signed nominal): what the line is compared with."""
-    other: tuple[str, str, float] | None = None
-    """``amount``: a deal's leg in ANOTHER currency has the line's amount (position id, currency, nominal): the line
-    states the amount of that leg, not of the leg of its own currency. Shown, never matched on."""
+    (position id, that leg's signed amount, ``Deal.legs_from``): what the line is compared with."""
+    other: tuple[str, str, float, str] | None = None
+    """``amount``: a deal's leg in ANOTHER currency has the line's amount (position id, currency, amount,
+    ``Deal.legs_from``): the line states the amount of that leg, not of the leg of its own currency. Shown, never
+    matched on."""
 
 
 @dataclass
@@ -185,25 +189,25 @@ def match(lines: Sequence[SpotLine], deals: Sequence[Deal],
     res = Result()
     cands: list[tuple[int, str, int, Deal]] = []  # (days, position id, line index, deal)
     reason: dict[int, str] = {}
-    hint: dict[int, tuple[tuple[str, float] | None, tuple[str, str, float] | None]] = {}  # TDM#807: what the line was compared with
+    hint: dict[int, tuple[tuple[str, float, str] | None, tuple[str, str, float, str] | None]] = {}  # TDM#807: what the line was compared with
     steps = ["no_deal", "amount", "sign", "date"]  # how far a line got: the furthest step is its reason
     for i, ln in enumerate(lines):
         far = 0
-        near: tuple[float, str, float] | None = None
-        other: tuple[str, str, float] | None = None
+        near: tuple[float, str, float, str] | None = None
+        other: tuple[str, str, float, str] | None = None
         for d in deals:
             if ln.book_id is not None and d.book_id != ln.book_id:
                 continue
             for c, v in sorted(d.legs.items()):
                 if c != ln.ccy and other is None and _same(abs(ln.amount), abs(v), REL_TOL_RATE if c in d.rate_legs else REL_TOL):
-                    other = (d.position_id, c, v)
+                    other = (d.position_id, c, v, d.legs_from)
             nominal = d.legs.get(ln.ccy)
             if nominal is None:
                 continue
             far = max(far, 1)
             gap_amount = abs(abs(ln.amount) - abs(nominal))
             if near is None or (gap_amount, d.position_id) < (near[0], near[1]):
-                near = (gap_amount, d.position_id, nominal)
+                near = (gap_amount, d.position_id, nominal, d.legs_from)
             if not _same(abs(ln.amount), abs(nominal), REL_TOL_RATE if ln.ccy in d.rate_legs else REL_TOL):
                 continue
             if (ln.amount < 0) != (nominal < 0) and nominal != 0:
@@ -215,7 +219,7 @@ def match(lines: Sequence[SpotLine], deals: Sequence[Deal],
                 continue
             cands.append((gap, d.position_id, i, d))
         reason[i] = steps[far]
-        hint[i] = ((near[1], near[2]) if near else None, other)
+        hint[i] = ((near[1], near[2], near[3]) if near else None, other)
     cands.sort(key=lambda c: (c[0], c[1], c[2]))
     # per line its candidate legs, nearest date first (then position id): the order of the greedy pass and of the
     # search below; a leg is (position id, currency)

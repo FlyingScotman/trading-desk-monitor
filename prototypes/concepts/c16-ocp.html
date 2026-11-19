@@ -567,19 +567,28 @@
   }
   // строки отчёта спот-типа с будущей датой (TDM#693): вынесены из базы и заменены сделкой / не сопоставлены / взяты без дисконтирования
   const WHY = { no_deal: 'в книге нет сделки с ногой в этой валюте', amount: 'сумма не совпала с номиналом ноги ни одной сделки', sign: 'знак суммы противоположен номиналу ноги', date: 'дата дальше пяти рабочих дней от дат сделки', taken: 'подходящую сделку занимает другая строка' };
-  // TDM#807: с чем сравнивалась несопоставленная по сумме строка: ближайшая нога в валюте строки; нога другой валюты с такой же суммой
+  // TDM#807: с чем сравнивалась несопоставленная по сумме строка: ближайшая нога в валюте строки; нога другой валюты с такой же суммой.
+  // Сумма ноги — из условий сделки (номинал), из строки позиции (номинал) или из FX-дельты позиции (спот-эквивалент, не номинал)
+  const SFSRC = { terms: ['номинал по условиям сделки', 'номинал'], ocp_amount: ['номинал из строки позиции', 'номинал'], fx_delta: ['FX-дельта позиции, не номинал', 'FX-дельта'] };
+  const sfSrc = x => (SFSRC[x.source] || ['источник суммы не указан', 'сумма'])[0];
   function sfCompared(x, line) {
     const pos = id => dl('c03-blotter.html?pos=' + encodeURIComponent(id || ''), id || '—');
-    return (x.near ? ' <span class="mut3" data-c16-sf-near>· ближайшая нога в ' + esc(line.ccy) + ': сделка ' + pos(x.near.position_id) + ', номинал ' + mm2(x.near.nominal) + ' mm, в строке ' + mm2(x.amount) + ' mm</span>' : '') +
-      (x.other ? ' <span class="warn" data-c16-sf-other>· сумма строки равна номиналу ноги в ' + esc(x.other.ccy) + ' (сделка ' + pos(x.other.position_id) + ', ' + mm2(x.other.nominal) + ' mm), а строка стоит в ' + esc(line.ccy) + '</span>' : '');
+    const what = o => (SFSRC[o.source] || SFSRC.terms)[1];
+    return (x.near ? ' <span class="mut3" data-c16-sf-near>· ближайшая нога в ' + esc(line.ccy) + ': сделка ' + pos(x.near.position_id) + ', ' + what(x.near) + ' ' + mm2(x.near.nominal) + ' mm (' + esc(sfSrc(x.near)) + '), в строке ' + mm2(x.amount) + ' mm</span>' : '') +
+      (x.other ? ' <span class="warn" data-c16-sf-other>· сумма строки равна ноге в ' + esc(x.other.ccy) + ' (сделка ' + pos(x.other.position_id) + ', ' + mm2(x.other.nominal) + ' mm: ' + esc(sfSrc(x.other)) + '), а строка стоит в ' + esc(line.ccy) + '</span>' : '');
   }
-  // в отчёте строк спот-типа с будущей датой нет, а у книги есть сделки, с которыми такая строка могла бы сопоставиться
+  // у книги есть сделки, которые отчёт на дату базы мог бы держать строкой спот-типа, а строк спот-типа с будущей датой по книге нет:
+  // поле в файле есть (адаптер такие строки передаёт, у этой книги их нет) или нет ни в одной строке файла (строк нет вообще
+  // либо файл прочитан адаптером до того, как он стал их передавать — тогда поможет перечитывание)
   function sfNone(n, line) {
     const d = line.base_date ? ' от ' + f.date(line.base_date) : '';
+    const dmy = line.base_date ? line.base_date.slice(8, 10) + '.' + line.base_date.slice(5, 7) + '.' + line.base_date.slice(0, 4) : '';
     const parts = [n.before ? 'заключены до даты отчёта: ' + n.before : '', n.after ? 'после неё: ' + n.after : '', n.unknown ? 'без даты заключения: ' + n.unknown : ''].filter(Boolean).join(', ');
-    return '<div class="k-note" data-c16-sf-none>В отчёте' + esc(d) + ' нет строк спот-типа с будущей датой. Сделок книги по форвардам, NDF и фьючерсам с ногой в ' + esc(line.ccy) + ': ' + n.deals + ' (' + esc(parts) + '). ' +
-      'Сделка, заключённая после даты отчёта, в нём быть не может: она считается отдельно (слагаемые «сделки» и «вне отчёта»), двойного счёта нет. ' +
-      (n.before || n.unknown ? 'Если сделка заключена до даты отчёта, а её номинал в базе стоит строкой спот-типа, эту строку монитор не видит: возможно, отчёт прочитан адаптером до того, как он стал её передавать. Перечитайте отчёт этой даты: «Настройки» → «Адаптер и источники» → «Папки» → карточка «Перечитать отчёты за период» → «Источник» (источник отчёта ОВП), «С даты» и «По дату» (эта дата) → кнопка «Перечитать». Карточка видна только с этого компьютера или администратору.' : '') + '</div>';
+    const head = 'Сделок книги по форвардам, NDF и фьючерсам с ногой в ' + esc(line.ccy) + ': ' + n.deals + ' (' + esc(parts) + '). ';
+    return n.field
+      ? '<div class="k-note mut" data-c16-sf-none>В отчёте' + esc(d) + ' у этой книги нет строк спот-типа с будущей датой (у других книг файла они есть: адаптер их передаёт). ' + head + 'Номинал таких сделок в базе отдельной строкой спот-типа не стоит.</div>'
+      : '<div class="k-note" data-c16-sf-none>В файле отчёта' + esc(d) + ' нет строк спот-типа с будущей датой ни у одной книги: либо в отчёте таких строк нет, либо файл прочитан адаптером до того, как он стал их передавать. ' + head +
+        'Если номинал сделки, заключённой до даты отчёта, стоит в базе строкой спот-типа, монитор её не видит, и сделка считается дважды. Тогда перечитайте отчёт: «Настройки» → «Адаптер и источники» → «Папки» → карточка «Перечитать отчёты за период» → «Источник» (источник отчёта ОВП), «С даты» и «По дату» (' + esc(dmy || 'дата отчёта') + ': дата отчёта, от которого взята база, не дата разбора) → кнопка «Перечитать». Карточка видна только с этого компьютера или администратору.</div>';
   }
   function spotFutureHtml(line) {
     const sf = line.spot_future;
@@ -798,8 +807,8 @@
       return Object.assign(L, { reported: base, base_date: B, set_id: 900 + k, base_kind: 'without_derivatives', components: out ? ['options'] : [], outside: out ? { options: out } : {},
         parts: { base, derivatives: der, bonds: 0, trades: trd, outside: out }, contributions: C, split_kinds: kinds, fallback: [], partial_pv: [], no_pv: [], excluded, derivative_types: types,
         spot_future: spot ? { out: [{ value_date: '2026-12-22', pair: 'EUR/USD', src: 'R5', amount: 2e6, book_id: book, position_id: book + '|FWD-1', trade_ids: ['D-1001'], days: 2, others: [] }], unmatched: [{ value_date: '2027-01-15', pair: 'EUR/USD', src: 'R6', amount: 3e5, book_id: book, why: 'no_deal' },
-          { value_date: '2026-12-22', pair: 'EUR/USD', src: 'R7', amount: 2.2e6, book_id: book, why: 'amount', near: { position_id: book + '|FWD-1', nominal: 2e6 }, other: { position_id: book + '|FWD-1', ccy: 'EUR', nominal: -2.2e6 } }], df1: [{ position_id: book + '|FWD-1', trade_ids: ['D-1001'], amount: 2e6, note: 'нет кривой EUR: дисконт-фактор 1' }] }
-          : many ? { out: [], unmatched: [], df1: [], none: { deals: 3, before: 2, after: 1, unknown: 0 } } : undefined });
+          { value_date: '2026-12-22', pair: 'EUR/USD', src: 'R7', amount: 2.2e6, book_id: book, why: 'amount', near: { position_id: book + '|FWD-1', nominal: 2e6, source: 'fx_delta' }, other: { position_id: book + '|FWD-1', ccy: 'EUR', nominal: -2.2e6, source: 'terms' } }], df1: [{ position_id: book + '|FWD-1', trade_ids: ['D-1001'], amount: 2e6, note: 'нет кривой EUR: дисконт-фактор 1' }] }
+          : many ? { out: [], unmatched: [], df1: [], none: { deals: 3, before: 2, after: 1, unknown: 0, field: false } } : undefined });
     });
     return { run_id: null, state: 'computed', as_of: day.date, components: Object.entries({ cash: 'кэш и к расчёту', fx_legs: 'PV валютных ног', options: 'опционы', bonds: 'облигации', other: 'прочее' }).map(([key, name]) => ({ key, name })),
       parts: [], published: { basis: day.basis || 'report_base_plus_day', base_date: B, by_book: by },

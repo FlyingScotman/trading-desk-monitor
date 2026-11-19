@@ -602,6 +602,18 @@ def split_kinds(report_rows: Sequence[Mapping[str, Any]], report_units: Sequence
     return {sid: frozenset(by_file.get(f, ())) for sid, f in file_of.items()}
 
 
+def spot_field_files(report_rows: Sequence[Mapping[str, Any]], report_units: Sequence[Mapping[str, Any]]
+                     ) -> dict[Any, bool]:
+    """set_id -> whether any row of its report file has the field of the spot-type lines of a future date
+    (``spot_future``, else ``x_spot_future``; TDM#807). The adapter writes it only on a row that has such lines: a file
+    with the field in some row was read by an adapter that gives it (the others have none), a file with it in no row
+    either has no such line or was read by an adapter that did not give them."""
+    file_of = {u.get("set_id"): u.get("inbox_file_sha256") or ("set", u.get("set_id")) for u in report_units}
+    seen = {file_of.get(r.get("_set_id"), ("set", r.get("_set_id"))) for r in report_rows
+            if _spot_future_of(r) is not None}
+    return {sid: f in seen for sid, f in file_of.items()}
+
+
 def reconcile(lines: Sequence[OcpLine], report_rows: Sequence[Mapping[str, Any]],
               report_units: Sequence[Mapping[str, Any]], books: Mapping[str, Mapping[str, Any]],
               policy: OcpPolicy = PROVISIONAL_POLICY) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
@@ -614,6 +626,7 @@ def reconcile(lines: Sequence[OcpLine], report_rows: Sequence[Mapping[str, Any]]
     for r in report_rows:
         rows_by_set[r.get("_set_id")].append(r)
     apart = split_kinds(report_rows, report_units)
+    spot_field = spot_field_files(report_rows, report_units)
     out: list[dict[str, Any]] = []
     covered: set[str] = set()
     for u in report_units:
@@ -686,7 +699,7 @@ def reconcile(lines: Sequence[OcpLine], report_rows: Sequence[Mapping[str, Any]]
                 "book_id": b, "ccy": ccy, "reported": rep["ocp_ccy"], "reported_base": rep["base"],
                 "reported_derivatives": dict(rep["derivatives"]), "split": bool(kinds),
                 "derivative_types": _types_out(rep["types"]),
-                "spot_future": rep["spot"],
+                "spot_future": rep["spot"], "spot_field": spot_field.get(u.get("set_id"), False),
                 "split_kinds": sorted(kinds),
                 "reported_rub": rep["ocp_rub"],
                 "reported_rate": rep["rate"], "in_report_file": key in reported, "src": rep["src"][:20],
@@ -1138,7 +1151,9 @@ def spot_deals(rows: Sequence[Mapping[str, Any]], books: Mapping[str, Mapping[st
                 dates.append(d)
             ids.append(str(x.get("trade_id")))
         trade_dates = [d for x in t if (d := _day(x.get("trade_date")))]
+        legs_from = "terms"
         if not parsed:
+            legs_from = "ocp_amount" if ex.get("ocp_amount") else "fx_delta"
             amounts = _amounts(ex.get("ocp_amount") or r.get("fx_delta"), policy)
             legs, open_legs = defaultdict(float, amounts), defaultdict(float, amounts)
             deal_id = (ex.get("reported") or {}).get("deal_id")
@@ -1153,7 +1168,7 @@ def spot_deals(rows: Sequence[Mapping[str, Any]], books: Mapping[str, Mapping[st
         out.append(S.Deal(pid, str(r["book_id"]), kind, comp, dict(legs), dict(open_legs),
                           tuple(sorted(set(dates))), tuple(dict.fromkeys(ids)), frozenset(by_rate), own,
                           S.DF1_TEXT.format(why=_df1_why(ex, bool(parsed))) if own else "",
-                          min(trade_dates) if trade_dates else None))
+                          legs_from, min(trade_dates) if trade_dates else None))
     return out
 
 
@@ -1806,23 +1821,24 @@ def published_day(comparisons: Sequence[Mapping[str, Any]], outside_report: Sequ
                       for m in sm.matched if m.line.ccy == ccy]
             sf_un = [{"value_date": _iso(u.line.value_date), "pair": u.line.pair, "src": u.line.src,
                       "amount": u.line.amount, "book_id": u.line.book_id, "why": u.why,
-                      **({"near": {"position_id": u.near[0], "nominal": u.near[1]}} if u.near else {}),
-                      **({"other": {"position_id": u.other[0], "ccy": u.other[1], "nominal": u.other[2]}}
-                         if u.other else {})}
+                      **({"near": {"position_id": u.near[0], "nominal": u.near[1], "source": u.near[2]}} if u.near else {}),
+                      **({"other": {"position_id": u.other[0], "ccy": u.other[1], "nominal": u.other[2],
+                                    "source": u.other[3]}} if u.other else {})}
                      for u in sm.unmatched if u.line.ccy == ccy]
-            # TDM#807: the report has no such line at all (the adapter gave none, or the file was read before it did)
-            # while the book has deals of the kinds a line can be matched with: said, with how many were traded
-            # before the report's date (the report can hold them) and after it (it cannot)
+            # TDM#807: the book has deals of the kinds a line can be matched with, traded on or before the report's date
+            # (or with no date), and the report has no such line for the book: said. ``field``: the file has the field
+            # in some row (the adapter gives such lines: this book has none) or in no row (none in the report, or the
+            # file was read before the adapter gave them: re-reading may help)
             sf_none = None
-            if not spot_in:
+            if not spot_in and not sc["absent"]:
                 mine_ccy = [d for d in allowed if ccy in d.legs]
-                if mine_ccy:
-                    before = sum(1 for d in mine_ccy if b0 is not None and d.trade_date is not None
-                                 and d.trade_date <= b0)
-                    after = sum(1 for d in mine_ccy if b0 is not None and d.trade_date is not None
-                                and d.trade_date > b0)
-                    sf_none = {"deals": len(mine_ccy), "before": before, "after": after,
-                               "unknown": len(mine_ccy) - before - after}
+                before = sum(1 for d in mine_ccy if b0 is not None and d.trade_date is not None
+                             and d.trade_date <= b0)
+                after = sum(1 for d in mine_ccy if b0 is not None and d.trade_date is not None and d.trade_date > b0)
+                unknown = len(mine_ccy) - before - after
+                if before or unknown:  # only deals the report can hold are worth a word
+                    sf_none = {"deals": len(mine_ccy), "before": before, "after": after, "unknown": unknown,
+                               "field": any(c_.get("spot_field") for c_ in sc["by_ccy"].values())}
             for o in sf_out:
                 if o["others"]:
                     issues["spot_future_ambiguous"].append(

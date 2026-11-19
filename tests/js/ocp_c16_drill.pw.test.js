@@ -136,8 +136,9 @@ test('C16 demo: a book row opens what its OCP consists of; the total equals the 
       assert.match(await sf.locator('[data-c16-sf-un]').first().innerText(), /не сопоставлено: строка отчёта USD.*осталась в базе/);
       // TDM#807: несопоставленная по сумме строка — с чем сравнивалась и что сумма равна ноге другой валюты
       const un = sf.locator('[data-c16-sf-un]').nth(1);
-      assert.match(await un.locator('[data-c16-sf-near]').innerText(), /ближайшая нога в USD: сделка FXB-FWD\|FWD-1, номинал .*, в строке /);
-      assert.match(await un.locator('[data-c16-sf-other]').innerText(), /равна номиналу ноги в EUR \(сделка FXB-FWD\|FWD-1.*\), а строка стоит в USD/);
+      assert.match(await un.locator('[data-c16-sf-near]').innerText(), /ближайшая нога в USD: сделка FXB-FWD\|FWD-1, FX-дельта .* mm \(FX-дельта позиции, не номинал\), в строке /);
+      assert.ok(!/номинал .* mm \(FX-дельта/.test(await un.locator('[data-c16-sf-near]').innerText()), 'спот-эквивалент не назван номиналом');
+      assert.match(await un.locator('[data-c16-sf-other]').innerText(), /равна ноге в EUR \(сделка FXB-FWD\|FWD-1.*: номинал по условиям сделки\), а строка стоит в USD/);
       assert.ok(!BAD.test(await dr.innerText()));
       if (width === 390) assert.ok(await pg.evaluate(() => document.documentElement.scrollWidth <= innerWidth), 'нет прокрутки вбок');
       if (SHOTS) { fs.mkdirSync(SHOTS, { recursive: true }); await pg.screenshot({ path: path.join(SHOTS, 'c16-603-' + width + '.png') }); }
@@ -147,9 +148,10 @@ test('C16 demo: a book row opens what its OCP consists of; the total equals the 
       await pg.locator('.k-drawer [data-c16-drill-ccy]').first().waitFor();
       assert.deepEqual(await pg.locator('.k-drawer [data-c16-drill-ccy]').evaluateAll(a => a.map(e => e.dataset.c16DrillCcy)), ['CNY']);
       assert.equal(await pg.locator('.k-drawer [data-c16-trunc]').innerText(), 'показаны 10 из 14');
-      // TDM#807: в отчёте нет строк спот-типа с будущей датой, а у книги есть сделки: сказано, сколько до даты отчёта и после неё
+      // TDM#807: в файле отчёта нет поля строк спот-типа, а у книги есть сделки до даты отчёта: сказано, сколько их, и совет перечитать
       const none = await pg.locator('.k-drawer [data-c16-sf-none]').innerText();
-      assert.ok(/нет строк спот-типа с будущей датой/.test(none) && /ногой в CNY: 3 \(заключены до даты отчёта: 2, после неё: 1\)/.test(none) && /быть не может/.test(none), none);
+      assert.ok(/нет строк спот-типа с будущей датой ни у одной книги/.test(none) && /ногой в CNY: 3 \(заключены до даты отчёта: 2, после неё: 1\)/.test(none) && /перечитайте отчёт/.test(none), none);
+      assert.ok(/«С даты» и «По дату» \(\d\d\.\d\d\.\d{4}: дата отчёта, от которого взята база/.test(none), none);
       for (const w of ['«Настройки»', '«Адаптер и источники»', '«Папки»', '«Перечитать отчёты за период»', '«Перечитать»']) assert.ok(none.includes(w), w);
       // другой день — свой разбор, итог = ячейке того дня
       const sel = pg.locator('.k-drawer [data-c16-day]');
