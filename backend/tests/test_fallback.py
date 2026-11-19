@@ -106,7 +106,7 @@ def test_fx_bond_in_rub_at_the_market_rate(ctx, exact):
     assert v.quality == "market_value" and v.pv_rub == pytest.approx(Q * dirty)
     assert any("FX bond (USD)" in a and "MOEX 19:00" in a and "duration proxy on curve USD" in a for a in v.assumptions)
     # R8: rate risk as a RUB bond's fallback, in RUB per bp, on the USD curve; TDM#619: the duration and the yield are the
-    # monitor's own from the flows and the price (MOEX's figures are for a comparison: a few bp and days from them)
+    # monitor's own from the flows and the price (MOEX's figures are for a comparison: here 1.1 bp and 1.5 days from them)
     mac = float(o.quote.source_analytics["duration_days"]) / 365
     y = fallback._yield(o.quote.source_analytics) / 100  # the modified duration (#36): -Macaulay / (1 + y)
     assert v.ytm_pct != fallback._yield(o.quote.source_analytics)

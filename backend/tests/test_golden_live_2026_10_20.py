@@ -117,7 +117,7 @@ def test_fx_bonds_pnl_at_the_19_00_rate(run):
     assert p.fx_gross == pytest.approx(3618.34, abs=0.01) and p.fx_gross_cbr == pytest.approx(-74036.01, abs=0.01)
     # batch 1, item 5: a day of carry at the bond's yield out of other; without a USD curve the yield move stays in other.
     # TDM#619: the D-1 yield is the bond's own from its price and flows (about 10.66 %), not MOEX's 10.6878 % (the carry
-    # was 2225.30): a few bp, a few rubles of carry out of other, the total as it was
+    # was 2225.30): about 2.4 bp of yield, 5 rubles of carry out of other, the total as it was
     assert o.valuation.quality == "market_value" and math.isfinite(o.valuation.ytm_pct)
     assert p.carry == pytest.approx(2220.32, abs=0.01) and p.extra()["method"] == "desk-flash-yield-v1"
     assert p.other == pytest.approx(41468.06 - 2220.32, abs=0.01) and p.total == pytest.approx(45086.40, abs=0.01)

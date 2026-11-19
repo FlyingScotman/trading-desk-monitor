@@ -427,10 +427,11 @@ def value(ctx: EodContext, requests: list[tuple[str, float]], *, second_order: b
     core cannot value gets a ``valuation.fallback`` rung (market value, stale or model price, par proxy)
     with its quality flag; ``reason``/``detail`` keep why it is not exact. Only a bond with no data at
     all stays without a valuation. ``carried_spreads`` (from the desk store) are the model spreads of
-    the latest earlier run: a model price reuses its bond's spread instead of the day's median. A RUB bond without a
-    price of its own is valued by core at the ladder's price (``fallback.at_last_price``, TDM#383) or at its model price
-    (``fallback.at_model_price``, TDM#441), its rung's quality kept; the ladder's own estimate stays for the bonds core
-    refuses there. ``scenarios`` (core ``PortfolioScenario``) are repriced by core: ``core_result.scenarios``."""
+    the latest earlier run: a model price reuses its bond's spread instead of the day's median. A bond without a
+    price of its own (a foreign-face bond with a quote of an earlier day too, TDM#619) is valued by core at the ladder's
+    price (``fallback.at_last_price``, TDM#383) and a RUB one also at its model price (``fallback.at_model_price``,
+    TDM#441), its rung's quality kept; the ladder's own estimate stays for the bonds core refuses there (a foreign bond
+    without a curve of its currency: its own yield, no spread, and why: ``fallback.fx_spread_missing``). ``scenarios`` (core ``PortfolioScenario``) are repriced by core: ``core_result.scenarios``."""
     pids = _pids(requests, position_ids)
     index = {p: i for i, p in enumerate(pids)}
     out, todo = bond_requests(ctx, requests, pids)
@@ -546,9 +547,10 @@ def horizon(ctx: EodContext, requests: list[tuple[str, float]], horizon_date: da
             ) -> tuple[list[CarryOutcome], PortfolioHorizonResult | None]:
     """Carry and roll-down of (secid, quantity) ``requests`` from the context's date to ``horizon_date`` through core
     ``horizon_portfolio`` (``valuation.bonds.horizon_bonds``) on the inputs ``value`` values them on: the same
-    backend checks, instruments, quotes, curves (``risk_market``) and policy. A RUB bond without a price of its own
+    backend checks, instruments, quotes, curves (``risk_market``) and policy. A bond without a price of its own
     today is carried at the ladder's price (``fallback.at_last_price``, TDM#383: an intraday cut before its first
-    trade, a day it did not trade; ``detail`` says which), else, without a price in the ladder's window, at the clean
+    trade, a day it did not trade, for a foreign face a quote of an earlier day too, TDM#619; ``detail`` says which), else
+    (a RUB bond), without a price in the ladder's window, at the clean
     price of ``model_prices`` (position ID -> clean %: its run's model price, ``fallback.at_model_price``, TDM#441);
     otherwise no fallback ladder: a bond core cannot value has no carry, with its reason. ``position_ids`` as in
     ``value``. Returns one ``CarryOutcome`` per request and the core result."""
@@ -558,6 +560,10 @@ def horizon(ctx: EodContext, requests: list[tuple[str, float]], horizon_date: da
     fb, at_price, models = FallbackContext.build(ctx), {}, model_prices or {}
     for pid, o, (_, qty) in zip(pids, pre, requests):  # without a price today: at the ladder's price (TDM#383)
         if (r := at_last_price(ctx, pid, o, qty, fb)) is not None:
+            # one request per position ID: a request of the backend's own (a foreign bond's quote of an earlier day passes
+            # ``bond_requests`` and core refuses it as ``stale_quote``) stays beside this one, and core's refusal of the
+            # first would take the second out with it (``core_call`` drops every request whose ID it refused, TDM#619)
+            todo[:] = [x for x in todo if x.position_id != pid]
             todo.append(r[0])
             at_price[pid] = r
         elif pid in models and (m := at_model_price(ctx, pid, o, qty, models[pid])) is not None:  # TDM#441

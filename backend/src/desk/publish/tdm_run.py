@@ -733,7 +733,7 @@ def position_row(ctx: EodContext, book: str, pid: str, o: Outcome, issuer: str,
             **curve_proxy(discount_curve(ctx.core_market)[0] != DISCOUNT_CURVE_ID, t, v),
             **({"risk_missing": v.extra["risk_missing"]} if v.extra.get("risk_missing") else {}),  # TDM#764
             # TDM#619: why a bond's own yield or spread is empty (fallback.YIELD_MISSING / SPREAD_MISSING): {reason, [ccy,] text}
-            **{k: v.extra[k] for k in ("yield_missing", "spread_missing") if v.extra.get(k)},
+            **{k: v.extra[k] for k in ("yield_missing", "spread_missing", "risk_assumption") if v.extra.get(k)},
             **({"coupon_freq_source": "schedule"} if freq and not t.coupon_frequency else {}),
             **({"not_exact_reason": o.reason} if o.reason else {}),
             **({"fx_rate": fx[0], "fx_source": fx[1]} if fx else {}),

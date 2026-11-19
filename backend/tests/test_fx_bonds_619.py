@@ -22,17 +22,19 @@ import pytest
 from fx_bonds_619 import BD, DATE, GROUPS, STALE_DATE, secid, synthetic_dir, without_curve
 from rub_fixed_income import solve_z_spread
 
-from desk.orchestrator import Outcome, foreign_bond_curves, prepare, value
+from desk.orchestrator import Outcome, foreign_bond_curves, horizon, prepare, value
 from desk.publish import tdm_run
 from desk.valuation.bonds import SPREAD_CONVENTION
 from desk.valuation.fallback import (
     FOREIGN_PRICE_MISSING,
     OWN_ANALYTICS_TEXT_FX,
+    REDEMPTIONS_LABEL,
     SPREAD_MISSING,
     YIELD_MISSING,
     FallbackContext,
     approximate,
     at_last_price,
+    foreign_curve_rate,
     price_missing,
 )
 
@@ -184,7 +186,8 @@ def test_without_a_price_there_is_no_yield_and_no_spread_and_both_say_why(ctx, f
 
 def test_a_yield_that_cannot_be_computed_is_empty_not_the_sources(ctx):
     """A quote of a face the schedule does not have: core refuses it (``face_mismatch``) and the monitor's yield needs the
-    price on the schedule's face: no yield, though the source gives one, and the DV01 without a rate is said so."""
+    price on the schedule's face: no yield, though the source gives one; the DV01 is modified by the rate of the currency's
+    curve at the duration (the run has one), and says so."""
     o = _value(ctx, [("CNY", "today", "src")])[("CNY", "today", "src")]
     q = replace(o.quote, face_value=Decimal(500))
     out = Outcome(o.secid, o.terms, q, reason="face_mismatch", detail="quote face 500.0 vs static 1000.0")
@@ -195,7 +198,24 @@ def test_a_yield_that_cannot_be_computed_is_empty_not_the_sources(ctx):
     # the curve is in the run: the spread is empty because core refused, with its words
     sm = v.extra["spread_missing"]
     assert sm["reason"] == "core_refused" and "face_mismatch; quote face 500.0 vs static 1000.0" in sm["text"]
-    assert any("DV01 at a zero rate" in a for a in v.assumptions) and v.dv01_rub != 0.0
+    # the duration is the source's (the bond has no flows' own: said), the rate the XCCY curve's at that duration
+    rate, cid = foreign_curve_rate(ctx, "CNY", v.macaulay_years)
+    assert cid == "CNY XCCY" and 0 < rate < 0.5
+    assert any(f"DV01 modified by the CNY XCCY rate at the duration, {rate * 100:.2f} %" in a
+               and "цифра источника, не проверена по потокам" in a for a in v.assumptions)
+    assert v.dv01_rub == pytest.approx(-v.macaulay_years / (1 + rate) * v.pv_rub * 1e-4) and "risk_assumption" not in v.extra
+
+
+def test_without_a_yield_and_without_a_curve_the_dv01_is_at_a_zero_rate_and_says_so_by_a_code(ctx):
+    o = _value(ctx, [("CNY", "today", "src")])[("CNY", "today", "src")]
+    out = Outcome(o.secid, o.terms, replace(o.quote, face_value=Decimal(500)), reason="face_mismatch", detail="x")
+    bare = without_curve(ctx, "CNY")
+    v = approximate(bare, out, Q, FallbackContext(bare, history=[]))
+    ra = v.extra["risk_assumption"]
+    assert (ra["reason"], ra["ccy"]) == ("zero_rate", "CNY") and ra["text"] in v.assumptions
+    assert "нет кривой CNY" in ra["text"] and "цифра источника, не проверена по потокам" in ra["text"]
+    assert v.dv01_rub == pytest.approx(-v.macaulay_years * v.pv_rub * 1e-4)  # Macaulay x PV: no rate to modify by
+    assert v.extra["spread_missing"]["reason"] == "no_foreign_curve"
 
 
 def test_a_floater_has_no_yield_of_its_own_and_none_of_the_sources(ctx):
@@ -203,7 +223,29 @@ def test_a_floater_has_no_yield_of_its_own_and_none_of_the_sources(ctx):
     t = replace(o.terms, coupon_type="floating")
     v = approximate(ctx, Outcome(o.secid, t, o.quote, reason="no_foreign_curve"), Q, FallbackContext(ctx, history=[]))
     assert math.isnan(v.ytm_pct) and v.extra["yield_missing"]["reason"] in ("floater", "schedule_rejected")
-    assert "spread_missing" in v.extra
+    assert "spread_missing" in v.extra and "risk_assumption" not in v.extra  # the EUR curve's rate modifies the DV01
+    bare = without_curve(ctx, "EUR")
+    v = approximate(bare, Outcome(o.secid, t, o.quote, reason="no_foreign_curve"), Q, FallbackContext(bare, history=[]))
+    ra = v.extra["risk_assumption"]
+    assert ra["reason"] == "zero_rate_floater" and "до ближайшего пересмотра купона" in ra["text"] and ra["text"] in v.assumptions
+
+
+def _broken(ctx):
+    """A EUR bond of the run whose hub label says its redemptions do not add up to the face (TDM#764), valued by the ladder."""
+    o = _value(ctx, [("EUR", "today", "src")])[("EUR", "today", "src")]
+    t = replace(o.terms, labels=(*o.terms.labels, REDEMPTIONS_LABEL))
+    return approximate(ctx, Outcome(o.secid, t, o.quote, reason="redemption_incomplete"), Q, FallbackContext(ctx, history=[]))
+
+
+def test_a_foreign_bond_with_a_broken_schedule_says_so_for_its_yield_and_its_spread(ctx):
+    """TDM#764: the hub says its redemptions do not add up to the face: no yield, spread or risk of its own; each empty
+    figure has the code (``schedule_broken``), beside the risk's (``risk_missing``)."""
+    v = _broken(ctx)
+    assert math.isnan(v.ytm_pct) and math.isnan(v.z_spread_bp) and v.dv01_rub == 0.0
+    assert v.extra["risk_missing"]["reason"] == "bond_redemptions_label"
+    assert v.extra["yield_missing"]["reason"] == "schedule_broken" and v.extra["spread_missing"]["reason"] == "schedule_broken"
+    assert v.extra["spread_missing"]["ccy"] == "EUR" and v.extra["spread_missing"]["text"] in v.assumptions
+    assert v.extra["spread_missing"]["text"] == SPREAD_MISSING["schedule_broken"].format(ccy="EUR")
 
 
 # --- the rule, over every group and curve state -----------------------------------------------------------------
@@ -229,6 +271,13 @@ def test_no_bond_has_a_yield_and_no_spread_while_its_currency_has_a_curve(ctx, w
                 assert v.extra[key]["reason"] and v.extra[key]["text"], (g, key)
 
 
+def test_a_broken_schedule_is_in_the_rule_too(ctx):
+    """The rule of the sweep above for the case it does not build: nothing is computed, and each figure says why."""
+    v = _broken(ctx)
+    for figure, key in ((v.ytm_pct, "yield_missing"), (v.z_spread_bp, "spread_missing")):
+        assert not math.isfinite(figure) and v.extra[key]["reason"] == "schedule_broken" and v.extra[key]["text"]
+
+
 def test_the_reasons_are_in_the_published_fact_of_the_position(ctx):
     bare = without_curve(ctx, "EUR")
     (priced,) = value(bare, [(secid("EUR", "stale", "nosrc"), Q)])
@@ -244,6 +293,28 @@ def test_the_reasons_are_in_the_published_fact_of_the_position(ctx):
     assert rows[unpriced.secid]["ytm"] is None and rows[unpriced.secid]["spread_bp"] is None
     ex = rows[full_.secid]["extra"]  # a bond with both: no reason of either kind
     assert "yield_missing" not in ex and "spread_missing" not in ex and rows[full_.secid]["spread_bp"] is not None
+
+
+
+def test_horizon_has_one_request_per_position_when_the_last_price_replaces_the_stale_quote(ctx, monkeypatch):
+    """``horizon_bonds`` takes the requests of ``bond_requests`` (a foreign bond's quote of an earlier day passes its checks,
+    core refuses it as ``stale_quote``) and those at the ladder's last price: two of one position ID, and core's refusal of
+    the first would take the second out with it. The request at the last price replaces the first.
+
+    Core 0.45 carries no foreign-face bond (``core_unsupported_product``, today's quote too): a foreign bond has no carry,
+    with that reason, not the stale quote's."""
+    import desk.orchestrator as orch
+
+    h = BD + timedelta(days=30)
+    (fresh,), _ = horizon(ctx, [(secid("CNY", "today", "src"), Q)], h)
+    assert fresh.carry is None and fresh.reason == "core_unsupported_product"
+    (own,), _ = horizon(ctx, [(secid("CNY", "stale", "src"), Q)], h)
+    assert own.reason == "stale_quote"  # as it was: the ladder takes a bond with a reason given by core only
+
+    taken = orch.at_last_price
+    monkeypatch.setattr(orch, "at_last_price", lambda c, pid, o, qty, fb: taken(c, pid, replace(o, reason="stale_quote"), qty, fb))
+    (both,), _ = horizon(ctx, [(secid("CNY", "stale", "src"), Q)], h)
+    assert both.reason == "core_unsupported_product"  # core was asked about the one at the last price, not the stale one
 
 
 # --- the gate: what core takes at the last price -----------------------------------------------------------------
@@ -266,6 +337,14 @@ def test_a_foreign_bond_takes_an_earlier_days_quote_to_core_and_a_rouble_one_doe
 
 
 def test_the_valuation_version_says_the_numbers_changed():
+    """The numbers of the foreign bonds changed (TDM#619): the version is 37 and its entry says why; the next change of the
+    numbers takes the next one and this test with it."""
+    from pathlib import Path
+
+    import desk
     from desk import VALUATION_VERSION
 
-    assert VALUATION_VERSION >= 37
+    assert VALUATION_VERSION == 37
+    text = Path(desk.__file__).read_text(encoding="utf-8")
+    entry = text[text.index("# 37:"):text.index("def logic_version")]
+    assert "TDM#619" in entry and "yield_missing" in entry and "spread_missing" in entry

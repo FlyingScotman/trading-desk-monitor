@@ -127,7 +127,7 @@ def test_a_normal_amortizing_bond_is_not_touched(ctx, exact):
     sa = {**o.quote.source_analytics, "effective_yield_pct": "9.8989"}
     v = approximate(ctx, Outcome(o.secid, o.terms, replace(o.quote, source_analytics=sa), reason="no_price"), Q, _fb(ctx))
     assert v.ytm_pct == pytest.approx(9.8989, abs=0.03) and "risk_missing" not in v.extra and v.dv01_rub != 0.0
-    assert math.isfinite(v.macaulay_years)  # TDM#619: the monitor's own, a few bp from MOEX's right figure
+    assert math.isfinite(v.macaulay_years)  # TDM#619: the monitor's own, 1.1 bp from MOEX's right figure
 
 
 def test_the_value_at_the_price_does_not_change(ctx, exact):

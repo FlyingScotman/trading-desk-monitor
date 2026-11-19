@@ -38,6 +38,14 @@ source's (MOEX's stays in the quote for a comparison), the spread is empty with 
 (``extra.spread_missing``: ``no_foreign_curve``, ``core_refused``), and a bond with no price in ``LOOKBACK_DAYS`` has
 neither, each with its reason (``extra.yield_missing``, ``extra.spread_missing``: ``no_price``). The ladder's own
 engine is for a RUB bond (its flows, its curve, its RUB price); a foreign bond's flows have no curve in it.
+The date rule of the Z-spread at an old price (TDM#619): the clean price is the last one, the curve and the accrued
+interest are those of the settlement date (the business date). A foreign bond the ladder values has no yield of its own to
+modify its duration by only when it has no schedule to compute one from: then the rate of its currency's curve at the
+duration, else zero, said (``extra.risk_assumption``, ``RISK_ASSUMPTION``).
+The reasons of an empty yield or spread (``extra.yield_missing``, ``extra.spread_missing``) are written for a foreign bond
+at every rung and for a rouble bond on ``model_price``, ``par_proxy`` and a ladder failure; a rouble bond on
+``market_value`` / ``stale_price`` without a Z (a floater or a refused schedule) has none yet: the coverage of the reasons
+is partial for rouble bonds.
 
 A model price is a question of the price's source, not of its attribution (the owner's decision of 29.10, TDM#441): a
 RUB bond on ``model_price`` for the same want of a price of its own is valued by core at the model's price in the same
@@ -345,7 +353,7 @@ def at_last_price(ctx: EodContext, position_id: str, outcome: Outcome, quantity:
     values exactly at the ladder's price
     (``last_price``): today's quote (its face and accrued) with that price, else the last close's quote as of today
     (face and accrued from the static). Returns the request, its rung (``market_value``: a price of today,
-    ``stale_price``: an earlier close) and the notes, or None (another refusal, no price, a foreign face).
+    ``stale_price``: an earlier close) and the notes, or None (another refusal, no price).
 
     Why (TDM#383): a floater has no fixed schedule, so the ladder's own risk is a duration estimate, rates only to its
     next coupon on the discount curve: a KBD floater lost its KBD risk and the OFZ basis, a perpetual its tail, and
@@ -655,6 +663,7 @@ YIELD_MISSING = {
     "coupons_unknown": "доходности нет: купоны будущих периодов не известны",
     "face_mismatch": "доходности нет: цена дана к номиналу, которого нет в графике потоков",
     "no_solution": "доходности нет: никакая доходность не воспроизводит цену на потоках бумаги",
+    "schedule_broken": "доходности нет: график погашений бумаги не сходится с номиналом (см. причину отсутствия риска)",
     "ladder_failed": "доходности нет: оценка бумаги не вышла, бумага взята по номиналу",
 }
 """TDM#619: why a bond the ladder values has no yield of its own (``BondValuation.extra['yield_missing']``, published in the
@@ -666,6 +675,7 @@ SPREAD_MISSING = {
                         "государственных облигаций, он включается настройкой или в данных нет его котировок)",
     "core_refused": "спреда нет: расчёт по кривой {ccy} отказал ({why})",
     "no_price": "спреда нет: у бумаги нет цены за последние " + str(LOOKBACK_DAYS) + " дней",
+    "schedule_broken": "спреда нет: график погашений бумаги не сходится с номиналом (см. причину отсутствия риска)",
     "ladder_failed": "спреда нет: оценка бумаги не вышла, бумага взята по номиналу",
 }
 """TDM#619: the same for the spread to the curve of the bond's currency (``extra.spread_missing``
@@ -677,6 +687,38 @@ def missing_reason(table: dict[str, str], code: str, ccy: str | None = None, why
     """``{reason, ccy, text}`` of ``code`` in ``table`` (``YIELD_MISSING``, ``SPREAD_MISSING``): the shape of
     ``valuation.positions.risk_missing``."""
     return {"reason": code, **({"ccy": ccy} if ccy else {}), "text": table[code].format(ccy=ccy or "", why=why)}
+
+
+RISK_ASSUMPTION = {
+    "zero_rate": ("DV01 при нулевой ставке: у бумаги нет доходности и в прогоне нет кривой {ccy}, чтобы пересчитать "
+                  "дюрацию Маколея в модифицированную (DV01 = дюрация Маколея × PV; дюрация — {duration})"),
+    "zero_rate_floater": ("DV01 при нулевой ставке: у флоатера нет доходности и в прогоне нет кривой {ccy}; процентная часть "
+                          "риска — до ближайшего пересмотра купона, дюрация Маколея × PV без поправки на ставку "
+                          "(дюрация — {duration})"),
+}
+"""TDM#619: the one assumption of a foreign bond's DV01 the ladder cannot take from a rate: it has no yield of its own
+and the run has no curve of its currency to take a rate from (``foreign_curve_rate``). Published as
+``extra.risk_assumption`` ``{reason, ccy, text}``; ``{duration}`` says whose the duration is, honestly (MOEX's figure
+not checked against the flows, or the time to the horizon)."""
+
+
+def foreign_curve_rate(ctx: EodContext, ccy: str, years: float) -> tuple[float, str] | None:
+    """The annual effective zero rate of the run's curve of ``ccy`` (``orchestrator.foreign_bond_curves``: the first of its
+    curves the run holds) at ``years`` ahead of the business date (ACT/365F, the curve's own convention), and the curve's
+    ID; None without one. What a foreign bond with no yield of its own modifies its duration by (the ladder's
+    counterpart of ``kbd_effective_yield`` for a rouble bond)."""
+    from ..orchestrator import foreign_bond_curves  # not at the top: the orchestrator imports this module
+
+    cid = next((i for i in foreign_bond_curves(ctx).get(ccy, ()) if i in ctx.fx.curves), None)
+    if cid is None:
+        return None
+    curve, bd, t = ctx.fx.curves[cid].curve, ctx.business_date, max(years, 1 / 365)
+    d = bd + timedelta(days=max(round(t * 365), 1))
+    try:
+        rate = (curve.discount_factor(bd) / curve.discount_factor(d)) ** (365 / (d - bd).days) - 1
+    except (ValueError, ArithmeticError, CoreRejection):
+        return None
+    return (rate, cid) if math.isfinite(rate) else None
 
 
 def fx_spread_missing(ctx: EodContext, outcome: Outcome, ccy: str) -> dict[str, Any]:
@@ -722,8 +764,12 @@ def approximate(ctx: EodContext, outcome: Outcome, quantity: float,
     disc = RISK_CURVES[disc_id]
     curve = disc if face_ccy == "RUB" else ccy_curve(face_ccy)
     if is_fx:
-        why.append(f"FX bond ({face_ccy}): market value at {fx_face[1]} {fx_face[0]:g} RUB, no core curve in "
-                   f"{face_ccy}: rate risk a duration proxy on curve {curve}")
+        from ..orchestrator import foreign_bond_curves  # not at the top: the orchestrator imports this module
+
+        core_why = (f"no {face_ccy} curve in the run" if not foreign_bond_curves(ctx).get(face_ccy)
+                    else "core refused it: " + "; ".join(x for x in (outcome.reason, outcome.detail) if x))
+        why.append(f"FX bond ({face_ccy}): market value at {fx_face[1]} {fx_face[0]:g} RUB, not valued by core "
+                   f"({core_why}): rate risk a duration proxy on curve {curve}")
 
     found = last_price(outcome, fb)
     ref = found[0] if found else outcome.quote
@@ -823,9 +869,12 @@ def approximate(ctx: EodContext, outcome: Outcome, quantity: float,
                 if not no_source:  # a foreign bond with no yield of its own: its reason, the source's figure not in its place
                     missing["yield_missing"] = missing_reason(YIELD_MISSING, got.code)
                     why.append(f"{missing['yield_missing']['text']} ({got})")
-        if is_fx and not matured and not broken:  # TDM#619: core would have valued it with a curve of its currency
-            missing["spread_missing"] = fx_spread_missing(ctx, outcome, face_ccy)
+        if is_fx and not matured:  # TDM#619: core would have valued it with a curve of its currency
+            missing["spread_missing"] = (missing_reason(SPREAD_MISSING, "schedule_broken", face_ccy) if broken
+                                         else fx_spread_missing(ctx, outcome, face_ccy))
             why.append(missing["spread_missing"]["text"])
+            if broken:  # no yield of its own from a schedule that does not add up (TDM#764): the code, not only the risk's
+                missing["yield_missing"] = missing_reason(YIELD_MISSING, "schedule_broken")
         if no_source and own is None:  # the value is the price's; no yield, duration or risk from a schedule that does not add up
             return make(quality, missing=no_source, missing_detail=detail, price_basis=basis, clean_pct=clean, accrued_rub=acc, face_rub=face * fx_face[0],
                         dirty_rub=dirty, pv_rub=pv, ytm_pct=math.nan, macaulay_years=math.nan,
@@ -858,15 +907,31 @@ def approximate(ctx: EodContext, outcome: Outcome, quantity: float,
             mac, note = max((horizon - bd).days, 0) / 365, f"duration ~ time to {hkind} {horizon}"
         else:
             mac, note = 0.0, "no duration"
+        if is_fx and own is None:  # TDM#619: said what it is: the source's figure, not checked against the flows
+            whose = ("цифра источника, не проверена по потокам: своей дюрации нет" if days
+                     else "срок до даты погашения или оферты, а не дюрация: своей дюрации нет" if hkind != "unknown"
+                     else "нет")
         rate_t = mac
         if t.coupon_type == "floating" and coupon is not None:  # the coupon resets: rates risk only to then
             rate_t = (coupon.pay_date - bd).days / 365
             note += f"; rates duration ~ time to next reset {coupon.pay_date}"
         if t.is_face_indexed:  # OFZ-IN (R8 phase 1): no real curve or inflation factor yet, see ORG_CONVENTIONS §4.1
             note += "; indexed face: a nominal-rate proxy, no real-rate and inflation split"
-        yy = y / 100 if y is not None else 0.0 if is_fx else kbd_effective_yield(ctx.kbd, max(mac, 1 / 365))
-        if is_fx and y is None:  # TDM#619: said, not silent: no yield of the bond, no rate to modify its duration by
-            why.append("DV01 at a zero rate (no yield of the bond to modify the duration by): Macaulay duration x PV")
+        if y is not None:
+            yy = y / 100
+        elif is_fx:  # TDM#619: no yield of its own: the rate of its currency's curve at the duration, else zero, and said
+            cr = foreign_curve_rate(ctx, face_ccy, mac)
+            yy = cr[0] if cr else 0.0
+            if cr:
+                why.append(f"DV01 modified by the {cr[1]} rate at the duration, {cr[0] * 100:.2f} % (no yield of the bond); "
+                           f"the duration is {whose}")
+            else:
+                code = "zero_rate_floater" if t.coupon_type == "floating" else "zero_rate"
+                text = RISK_ASSUMPTION[code].format(ccy=face_ccy, duration=whose)
+                missing["risk_assumption"] = {"reason": code, "ccy": face_ccy, "text": text}
+                why.append(text)
+        else:
+            yy = kbd_effective_yield(ctx.kbd, max(mac, 1 / 365))
         # core's buckets bump par (RUONIA OIS, the KBD) and the Z-spread is annual: dPV ~ -Macaulay / (1 + y) * PV,
         # the modified duration (-Macaulay * PV, a continuous-zero DV01, was about 15 % larger: #36)
         dv01, s01 = -rate_t / (1 + yy) * pv * 1e-4 + 0.0, -mac / (1 + yy) * pv * 1e-4 + 0.0
@@ -999,8 +1064,10 @@ def yield_pnl(prev: BondValuation, cur: BondValuation, terms: BondTerms, prev_ct
               ctx: EodContext) -> SimplePnl:
     """``simple_pnl``, with the carry of a foreign-face bond priced on both dates without a curve in its currency
     (USD / EUR without ``proxy_curves_for_risk``, CNY on a date without the XCCY curve; batch 1, item 5): the D-1 PV in
-    its currency x ((1 + y)^(days / 365) - 1) at its D-1 yield (``ytm_pct``: MOEX's effective yield, or the monitor's own
-    when MOEX's is unreliable, ``own_analytics``; the coupon income and the pull to the price at an unchanged yield), at today's market rate, goes from ``other`` to ``carry``. A bond
+    its currency x ((1 + y)^(days / 365) - 1) at its D-1 yield (``ytm_pct``: the monitor's own from the price and the
+    flows, ``own_analytics``, TDM#619, never MOEX's; the coupon income and the pull to the price at an unchanged yield), at
+    today's market rate, goes from ``other`` to ``carry``. A bond core valued at its last price (``at_last_price``) has the
+    exact steps, not this. A bond
     without a yield (a broken redemption schedule, TDM#764: ``ytm_pct`` is NaN) has no carry: ``simple_pnl`` as is, all
     in ``other``. Without a curve
     the yield move is not split between rates and spread: it stays in ``other`` with the prints, and
