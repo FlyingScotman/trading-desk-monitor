@@ -327,6 +327,7 @@ table.k-tbl.k-compact { width: auto; font-size: 12px; }
 .k-nm { display: inline-flex; align-items: baseline; gap: 6px; flex-wrap: wrap; min-width: 0; }
 .k-exch { color: var(--fg-3); font-weight: 400; font-size: .82em; }
 .k-alias-tools { display: inline-flex; gap: 2px; }
+.k-shortrow { margin-top: 3px; font-size: 12px; }
 .k-ico { border: 0; background: none; color: var(--fg-3); cursor: pointer; font-size: 13px; line-height: 1; padding: 1px 4px; border-radius: 4px; }
 .k-ico:hover:not(:disabled) { color: var(--accent); background: var(--hover); }
 .k-ico:disabled { cursor: not-allowed; opacity: .45; }

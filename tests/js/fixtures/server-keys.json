@@ -191,6 +191,7 @@
   "repos",
   "risk_missing",
   "risk_problem",
+  "short_name",
   "spread_buckets",
   "swaps",
   "why"

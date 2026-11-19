@@ -12,10 +12,10 @@
   'use strict';
   if (window.DeskUsers) return;
   var ROLE = { viewer: 'просмотр', trader: 'трейдер', admin: 'администратор' };
-  var ROLE_HINT = { viewer: 'видит все страницы', trader: '+ точные сценарии, «Обновить» автопилота, алиасы', admin: '+ настройки, адаптер, обновления, пользователи' };
+  var ROLE_HINT = { viewer: 'видит все страницы', trader: '+ точные сценарии, «Обновить» автопилота, алиасы и короткие имена', admin: '+ настройки, адаптер, обновления, пользователи' };
   var ACT = { login: 'вход', login_failed: 'неудачный вход', logout: 'выход', user_add: 'новый пользователь', user_change: 'изменён пользователь',
     password_reset: 'сброс пароля', password_change: 'смена пароля', settings: 'настройки', adapter: 'адаптер', update: 'обновление',
-    alias: 'алиас', scenario_job: 'точный сценарий', autopilot_run: 'цикл автопилота', user_delete: 'удалён пользователь',
+    alias: 'алиас', short_name: 'короткое имя', scenario_job: 'точный сценарий', autopilot_run: 'цикл автопилота', user_delete: 'удалён пользователь',
     server_restart: 'перезапуск сервера', network_change: 'доступ из сети' };
 
   var css = '.du{font:13px/1.4 var(--font-ui,var(--font-sans,system-ui,-apple-system,"Segoe UI",sans-serif));color:var(--fg,var(--text,#1b2129))}' +

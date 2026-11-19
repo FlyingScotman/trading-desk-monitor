@@ -81,7 +81,7 @@
       p.querySelector('.bd').classList.add('flush'); view.appendChild(p);
       K.table(p.querySelector('.bd'), { viewKey: 'c01-positions',
         rowsFn: () => K.list(), groupable: K.defaultGroups, stripe: r => K.issuerColor(r.issuer), maxHeight: 'calc(100vh - 290px)',
-        columns: K.cols(['name', 'ccy', 'issuer', 'kind', 'book', 'coupon', 'event', 'maturity', 'tenor', 'notional', 'tradeDay', 'price', 'ytm', 'spread', 'dur', 'dv01', 'cs01', 'carry', 'funding', 'pnl', 'mv']),
+        columns: K.cols(['name', 'short', 'ccy', 'issuer', 'kind', 'book', 'coupon', 'event', 'maturity', 'tenor', 'notional', 'tradeDay', 'price', 'ytm', 'spread', 'dur', 'dv01', 'cs01', 'carry', 'funding', 'pnl', 'mv']),
       });
     }
     if (tab === 'pnl') {

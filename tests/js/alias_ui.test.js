@@ -29,6 +29,10 @@ function load(opts) {
       if (opts.aliases) return Promise.resolve({ status: 200, json: () => Promise.resolve(opts.aliases) });
       if (!opts.fetch) return Promise.resolve({ status: 404 });
     }
+    if (/instruments\/short-names$/.test(u) && !(o && o.method)) {  // свои короткие имена (TDM#776), приходят тоже позже страницы
+      if (opts.shortNames) return Promise.resolve({ status: 200, json: () => Promise.resolve(opts.shortNames) });
+      if (!opts.fetch) return Promise.resolve({ status: 404 });
+    }
     return opts.fetch ? opts.fetch(u, o) : Promise.reject(new Error('нет сети'));
   };
   const ctx = { window: {}, document, URLSearchParams, console, location: { href: 'http://x/', search: '', hostname: opts.host || '127.0.0.1' }, setTimeout,
@@ -40,7 +44,7 @@ function load(opts) {
   else vm.runInContext(P('concepts/lib/mock.js'), ctx);
   vm.runInContext(P('concepts/lib/kit.js'), ctx);
   vm.runInContext(P('concepts/lib/instr.js'), ctx);
-  return { M: ctx.window.MOCK, K: ctx.window.KIT, D: ctx.window.CONCEPTS_RUN, urls, ready: ctx.window.MOCK.aliasesReady };
+  return { M: ctx.window.MOCK, K: ctx.window.KIT, D: ctx.window.CONCEPTS_RUN, urls, ready: ctx.window.MOCK.aliasesReady, shortReady: ctx.window.MOCK.shortNamesReady };
 }
 
 t('прогон: алиас по ISIN — вместо биржевого имени, поиск по обоим, бумаги без алиаса как были', async () => {
@@ -74,7 +78,7 @@ t('прогон: сервер без алиасов (или без ответа)
 
 t('прогон: правка — PUT /api/v1/instruments/alias с JSON; с чужого адреса — только чтение без запроса', async () => {
   const calls = [];
-  const fetch = (u, o) => { if (!/instruments\/aliases$/.test(u)) calls.push([u, o]); return Promise.resolve({ status: 200, json: () => Promise.resolve({ isin: 'SU26242RMFS0', alias: 'X', changed_by: 'local', changed_at: 'z', changed: true }) }); };
+  const fetch = (u, o) => { if (!/instruments\/(aliases|short-names)$/.test(u)) calls.push([u, o]); return Promise.resolve({ status: 200, json: () => Promise.resolve({ isin: 'SU26242RMFS0', alias: 'X', changed_by: 'local', changed_at: 'z', changed: true }) }); };
   const { M } = load({ real: true, fetch });
   assert.strictEqual(M.aliasApi.editable, true);
   const r = await M.aliasApi.put('SU26242RMFS0', 'X');

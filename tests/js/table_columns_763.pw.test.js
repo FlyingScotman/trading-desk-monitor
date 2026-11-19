@@ -18,7 +18,7 @@ const pw = (() => { try { return require('playwright'); } catch (e) { return nul
 const ROOT = path.join(__dirname, '..', '..', 'prototypes');
 const PAGE = f => pathToFileURL(path.join(ROOT, 'concepts', f)).href;
 const skip = !pw && 'нет Playwright';
-const POS = ['name', 'ccy', 'issuerName', 'kind', 'book', 'couponFmt', 'event', 'maturity', 'tenor', 'notional', 'tradeDay', 'price', 'ytm', 'zspread', 'mdur', 'dv01', 'cs01', 'carryDay', 'fundingDay', 'pnl', 'mv'];  // C01 «Позиции»: key колонок
+const POS = ['name', 'shortName', 'ccy', 'issuerName', 'kind', 'book', 'couponFmt', 'event', 'maturity', 'tenor', 'notional', 'tradeDay', 'price', 'ytm', 'zspread', 'mdur', 'dv01', 'cs01', 'carryDay', 'fundingDay', 'pnl', 'mv'];  // C01 «Позиции»: key колонок
 
 async function launch(width) {
   const browser = await pw.chromium.launch();
@@ -62,12 +62,12 @@ test('C01 «Позиции»: скрыть и вернуть колонки, «�
     assert.deepStrictEqual(rows.filter(r => r.fixed).map(r => r.key), ['name'], 'идентификатор — не скрывается');
     assert.ok(/Бумага \(всегда\)/.test(rows[0].text) && /Дюр\./.test(rows.find(r => r.key === 'mdur').text));
     assert.ok(/DV01\s*тыс ₽\/бп/.test(rows.find(r => r.key === 'dv01').text), 'единица рядом с подписью: ' + rows.find(r => r.key === 'dv01').text);
-    assert.ok(/Показано 21 из 21/.test(await pg.textContent('.k-colmenu-t')));
+    assert.ok(/Показано 22 из 22/.test(await pg.textContent('.k-colmenu-t')));
     assert.strictEqual(await pg.isDisabled('.k-colmenu-ft .k-btn:first-child'), true, '«Как было» не нужна, пока ничего не скрыто');
     // скрыть две колонки
     await toggle(pg, 'zspread'); await toggle(pg, 'mdur');
     assert.deepStrictEqual(await heads(pg), POS.filter(k => k !== 'zspread' && k !== 'mdur'));
-    assert.ok(/Показано 19 из 21/.test(await pg.textContent('.k-colmenu-t')));
+    assert.ok(/Показано 20 из 22/.test(await pg.textContent('.k-colmenu-t')));
     assert.strictEqual(await btnText(pg), 'Колонки · скрыто 2 ▾');
     // CSV — без скрытых колонок
     await pg.keyboard.press('Escape');
@@ -190,7 +190,7 @@ async function serve(ctx, users) {
       if (req.method() === 'PUT') mine[key] = JSON.parse(req.postData()).hidden; else delete mine[key];
       return route.fulfill(req.method() === 'PUT' ? { contentType: 'application/json', body: JSON.stringify({ hidden: mine[key], updated_at: '2026-11-17T10:01:00Z' }) } : { status: 204, body: '' });
     }
-    const api = { '/api/v1/instruments/aliases': { aliases: [] }, '/api/v1/auth/state': { enabled: false, user: null }, '/api/v1/autopilot/status': { latest_run: null },
+    const api = { '/api/v1/instruments/aliases': { aliases: [] }, '/api/v1/instruments/short-names': { short_names: [] }, '/api/v1/auth/state': { enabled: false, user: null }, '/api/v1/autopilot/status': { latest_run: null },
       '/api/v1/backfill/status': null, '/api/v1/views': { views: [] }, '/api/v1/events': { events: [], last_id: 0 }, '/api/v1/history/market': null, '/api/v1/calendar/market': null };
     if (Object.hasOwn(api, u.pathname)) return route.fulfill({ contentType: 'application/json', body: JSON.stringify(api[u.pathname]) });
     if (u.pathname === '/api/v1/events/stream') return route.fulfill({ contentType: 'text/event-stream', body: 'event: hello\ndata: {"last_id":0}\n\n' });

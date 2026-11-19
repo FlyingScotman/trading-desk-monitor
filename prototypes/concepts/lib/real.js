@@ -52,6 +52,9 @@
  * (M.histSource = 'runs': история риска — настоящая, не «номинал × сегодняшние чувствительности»); M.loadHistory(ids, from)
  * просит только нужные бумаги и период (ids — список, null — все; from — дата, null — год до даты прогона, как
  * у сервера по умолчанию; граница, с которой ряд загружен, запоминается датой).
+ * Короткое имя бумаги (TDM#776): p.shortName = своё по ISIN (p.shortOwn, GET /api/v1/instruments/short-names, M.shortNameApi.put /
+ * .history) ?? биржевое (p.exchShort, extra.short_name прогона); отдельно от алиаса; колонка «Кор. имя» (K.posCols.short), строка
+ * «Короткое имя» в карточке (kit.js, K.shortRow), поиск находит и по нему.
  * Имена бумаг (батч 1, п. 3, R33): алиас по ISIN — GET /api/v1/instruments/aliases (запрос уходит в начале real.js, ответ
  * подставляется по приходу: p.name = алиас ?? биржевое имя (p.exchName), p.alias — алиас или null, поиск — по обоим (p.searchBase
  * + алиас); таблицы меняет на месте K.patchNames, страницы подписываются на 'alias' через K.onAlias; событие 'filter' по приходу
@@ -370,6 +373,20 @@
     editable: { get: () => rights.editable, set: v => { rights.editable = !!v; }, enumerable: true },
     readOnlyReason: { get: () => rights.reason, enumerable: true },
   });
+  // Короткое имя бумаги (TDM#776): своё по ISIN (GET /api/v1/instruments/short-names, PUT .../short-name, история) — отдельно от
+  // алиаса (полного имени); без своего — биржевое (extra.short_name прогона, MOEX SHORTNAME). Права правки — те же (M.nameRights)
+  M.shortNames = {};
+  const shortReq = getJson('../api/v1/instruments/short-names');
+  M.shortNameApi = Object.defineProperties({
+    put: (isin, name) => aliasCall('PUT', '../api/v1/instruments/short-name', { isin, short_name: name }),
+    history: isin => aliasCall('GET', '../api/v1/instruments/short-names/' + encodeURIComponent(isin) + '/history')
+      .then(r => r.status === 200 && r.body ? r.body.revisions : null),
+  }, {
+    editable: { get: () => rights.editable, set: v => { rights.editable = !!v; }, enumerable: true },
+    readOnlyReason: { get: () => rights.reason, enumerable: true },
+  });
+  // перед searchBase в поиске — свои имена бумаги (алиас и короткое), в нижнем регистре; как K.setAlias и K.setShort (kit.js)
+  M.searchPrefix = p => (p.alias ? p.alias.toLowerCase() + ' ' : '') + (p.shortOwn ? p.shortOwn.toLowerCase() + ' ' : '');
 
   // ---------- позиции ----------
   const FREQ = { 12: 'M', 4: 'Q', 2: 'S', 1: 'A' };
@@ -426,6 +443,10 @@
     // имя — алиас бумаги (R33) или биржевое; d.alias — если сервер когда-нибудь пришлёт его в данных прогона
     p.alias = (p.isin && M.aliases[p.isin] && M.aliases[p.isin].alias) || d.alias || null;
     p.name = p.alias || p.exchName;
+    // короткое имя (TDM#776): своё по ISIN ?? биржевое (extra.short_name прогона); у бумаги без ISIN и деривативов обычно нет
+    p.exchShort = typeof ex.short_name === 'string' && ex.short_name.trim() ? ex.short_name.trim() : null;
+    p.shortOwn = (p.isin && M.shortNames[p.isin] && M.shortNames[p.isin].shortName) || null;
+    p.shortName = p.shortOwn || p.exchShort;
     // для типа инструмента таблицы «валюта × тип» (lib/instr.js, api/concepts.instr_kind): поля факта и группа продукта отчёта
     p.instrType = d.instrType || null; p.assetClass = d.assetClass || null; p.segment = d.segment || null;
     p.productGroup = M.productGroup(ex.reported);
@@ -581,8 +602,8 @@
     p.pnlMtd = num(xp.pnlMtd); p.pnlYtd = num(xp.pnlYtd); p.pnlMtdParts = xp.pnlMtdParts || null;  // MTD по факторам (отчёт PnL за период, #568)
     p.spreadChgBp = num(xp.spreadChgBp);
     p.tradedToday = !!(xp.trade || d.newToday); p.tradeToday = xp.trade || null;
-    p.searchBase = [p.exchName, p.isin, p.issuerName, p.issuerFull, p.issuerGroup, p.latName, p.book, p.bookName, p.ccy, p.kindLabel, p.groupLabel, p.sector, p.couponFmt, p.portfolio, p.rating, p.ratingAgency].join(' ').toLowerCase();
-    p.searchText = (p.alias ? p.alias.toLowerCase() + ' ' : '') + p.searchBase;  // как K.setAlias
+    p.searchBase = [p.exchName, p.exchShort, p.isin, p.issuerName, p.issuerFull, p.issuerGroup, p.latName, p.book, p.bookName, p.ccy, p.kindLabel, p.groupLabel, p.sector, p.couponFmt, p.portfolio, p.rating, p.ratingAgency].join(' ').toLowerCase();
+    p.searchText = M.searchPrefix(p) + p.searchBase;  // как K.setAlias
     return p;
   });
   M.positions = positions;
@@ -599,12 +620,24 @@
     if (!n) return false;
     positions.forEach(p => {
       const a = p.isin && M.aliases[p.isin];
-      if (a) { p.alias = a.alias; p.name = a.alias; p.searchText = a.alias.toLowerCase() + ' ' + p.searchBase; }
+      if (a) { p.alias = a.alias; p.name = a.alias; p.searchText = M.searchPrefix(p) + p.searchBase; }
     });
     if (calCache && calCache.renameCal) calCache.renameCal();
     return true;
   };
   M.aliasesReady = aliasReq.then(r => { failed('алиасы бумаг', r); if (r.body && M.applyAliases(r.body.aliases)) emit({ name: 'aliases' }); return r; });
+  // свои короткие имена по приходу ответа: поле, поиск; таблицы меняет K.patchNames (событие 'shortNames' → kit.js)
+  M.applyShortNames = list => {
+    let n = 0;
+    (list || []).forEach(a => { if (a && a.isin && a.short_name) { M.shortNames[a.isin] = { shortName: a.short_name, changedBy: a.changed_by, changedAt: a.changed_at }; n++; } });
+    if (!n) return false;
+    positions.forEach(p => {
+      const a = p.isin && M.shortNames[p.isin];
+      if (a) { p.shortOwn = a.shortName; p.shortName = a.shortName; p.searchText = M.searchPrefix(p) + p.searchBase; }
+    });
+    return true;
+  };
+  M.shortNamesReady = shortReq.then(r => { failed('короткие имена бумаг', r); if (r.body && M.applyShortNames(r.body.short_names)) emit({ name: 'shortNames' }); return r; });
   // фиксинги индексов, прочитанные свопами и РЕПО прогона (#201): одна история на прогон, у позиций — та же; пропуски и
   // объявленные неопубликованные дни — объединение по позициям. Пропуск внутри истории — заметка в шапке: позицию,
   // которая его читает, ядро не оценивает, она остаётся по отчёту
