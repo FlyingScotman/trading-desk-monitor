@@ -996,8 +996,9 @@ def create_app(store_url: str, static_dir: Path | None = None, app_dir: Path | N
         run = _run_or_404(con, run_id)
 
         def build() -> PositionList:
-            sql = ("SELECT p.*, a.alias FROM run_position p"  # the alias in force now (alias_routes), not frozen
-                   " LEFT JOIN instrument_alias a ON a.isin = p.fact->>'isin' WHERE p.run_id = %s")
+            sql = ("SELECT p.*, a.alias, s.short_name FROM run_position p"  # the names in force now (alias_routes,
+                   " LEFT JOIN instrument_alias a ON a.isin = p.fact->>'isin'"  # short_name_routes), not frozen
+                   " LEFT JOIN instrument_short_name s ON s.isin = p.fact->>'isin' WHERE p.run_id = %s")
             args: list[Any] = [run_id]
             for col, v in (("book_id", book), ("quality", quality)):
                 if v is not None:
@@ -1006,10 +1007,13 @@ def create_app(store_url: str, static_dir: Path | None = None, app_dir: Path | N
             rows = con.execute(sql + " ORDER BY ord", args).fetchall()  # whole: a book is <= 2k positions
             return PositionList(run_id=run_id, positions=[Position(**r) for r in rows])
 
-        # the aliases are joined at read time: the revision of the newest one is part of what the body depends on
-        alias_rev = con.execute("SELECT coalesce(max(rev_id), 0) AS r FROM instrument_alias_rev").fetchone()["r"] \
+        # the aliases and short names are joined at read time: the newest revision of each is part of what the body
+        # depends on
+        names_rev = con.execute("SELECT (SELECT coalesce(max(rev_id), 0) FROM instrument_alias_rev) AS a,"
+                                " (SELECT coalesce(max(rev_id), 0) FROM instrument_short_name_rev) AS s").fetchone() \
             if run["status"] == "complete" else None
-        return _run_cached(request, run, ("positions", book, quality), build, alias_rev)
+        return _run_cached(request, run, ("positions", book, quality), build,
+                           names_rev and (names_rev["a"], names_rev["s"]))
 
     @app.get("/api/v1/runs/{run_id}/pnl", response_model=RunPnl)
     def pnl(con: Con, run_id: int, request: Request):
@@ -1553,11 +1557,13 @@ def create_app(store_url: str, static_dir: Path | None = None, app_dir: Path | N
     from .dataflow_routes import public as dataflow_router  # /api/v1/dataflow: C21 «Схема данных» (TDM#586)
     from .daystatus_routes import public as daystatus_router  # /api/v1/inbox, /inbox/days, /events (S7b, #25)
     from .diagnostics_routes import router as diagnostics_router
+    from .manual_md_routes import router as manual_md_router  # /api/v1/market-data/manual/cds (TDM#652)
     from .market_history import router as market_history_router  # /api/v1/history/market, /status (R24)
     from .prefs_routes import router as prefs_router  # /api/v1/me/table-columns (TDM#763)
     from .replay_routes import router as replay_router  # /api/v1/inbox/replay: read a source again (TDM#553)
     from .server_routes import router as server_router  # /api/v1/server: restart, network (settings page)
     from .settings_routes import router as settings_router  # here: it imports ApiError from this module
+    from .short_name_routes import router as short_name_router  # /api/v1/instruments/short-name(s) (TDM#776)
     from .trades_routes import public as trades_router  # /api/v1/trades: the day's trades (S13a, TDM#525)
     from .update_routes import router as update_router
     from .updater_routes import router as updater_router  # GitHub Releases (desk.updater)
@@ -1579,6 +1585,8 @@ def create_app(store_url: str, static_dir: Path | None = None, app_dir: Path | N
     app.include_router(market_history_router, include_in_schema=False)
     app.include_router(autopilot_router)
     app.include_router(alias_router)
+    app.include_router(manual_md_router)
+    app.include_router(short_name_router)
     app.include_router(prefs_router)  # include_in_schema=False in the router
     app.include_router(backup_router, include_in_schema=False)  # local admin routes (settings «Резервные копии»)
 

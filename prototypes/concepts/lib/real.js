@@ -52,11 +52,15 @@
  * (M.histSource = 'runs': история риска — настоящая, не «номинал × сегодняшние чувствительности»); M.loadHistory(ids, from)
  * просит только нужные бумаги и период (ids — список, null — все; from — дата, null — год до даты прогона, как
  * у сервера по умолчанию; граница, с которой ряд загружен, запоминается датой).
+ * Короткое имя бумаги (TDM#776): p.shortName = своё по ISIN (p.shortOwn, GET /api/v1/instruments/short-names, M.shortNameApi.put /
+ * .history) ?? биржевое (p.exchShort, extra.short_name прогона); отдельно от алиаса; колонка «Кор. имя» (K.posCols.short), строка
+ * «Короткое имя» в карточке (kit.js, K.shortRow), поиск находит и по нему.
  * Имена бумаг (батч 1, п. 3, R33): алиас по ISIN — GET /api/v1/instruments/aliases (запрос уходит в начале real.js, ответ
  * подставляется по приходу: p.name = алиас ?? биржевое имя (p.exchName), p.alias — алиас или null, поиск — по обоим (p.searchBase
  * + алиас); таблицы меняет на месте K.patchNames, страницы подписываются на 'alias' через K.onAlias; событие 'filter' по приходу
  * алиасов не рассылается). Алиас не входит в строки прогона: тот же алиас — и у
- * старых прогонов. Изменение — M.aliasApi.put (PUT /api/v1/instruments/alias, только с компьютера сервера: иначе 403 и
+ * старых прогонов. Изменение — M.aliasApi.put (PUT /api/v1/instruments/alias: вход включён — трейдер и администратор с любого
+ * компьютера, «просмотр» — только чтение; вход выключен — только компьютер сервера (M.nameRights, TDM#777); иначе 403 и
  * карточка — только чтение), история — M.aliasApi.history; карточка (kit.js, K.aliasEdit) подставляет новое имя во все
  * позиции бумаги.
  * Календарь рынка (M.marketCal) — тоже по запросу, /api/v1/calendar/market: агрегаты по дням, типам и валютам из
@@ -329,6 +333,35 @@
 
   // ---------- имена бумаг: алиасы по ISIN (R33) ----------
   const LOOPBACK = /^(127\.\d+\.\d+\.\d+|localhost|\[?::1\]?)$/i;
+  // Кто может менять имена бумаг (TDM#777; сервер — backend/src/desk/api/auth.py, alias_guard): вход включён — трейдер и
+  // администратор с любого компьютера, роль «просмотр» — только чтение; вход выключен — только компьютер сервера. Режим и роль
+  // приходят из GET /api/v1/auth/state: его уже спрашивает desk-auth.js (K.top, kit.js), и kit.js отдаёт ответ сюда
+  // (M.nameRights.setAuth) — второго запроса нет. Ответа ещё нет или он не пришёл — по адресу страницы, как раньше.
+  // Ответ 403 сервера всё равно переводит в только чтение (kit.js). Права общие для алиаса и короткого имени.
+  const REASON_LOCAL = 'вход выключен — переименовать можно только на компьютере, где работает сервер деска (адрес 127.0.0.1)';
+  const REASON_VIEWER = 'роль «просмотр» не меняет имена бумаг: нужна роль «трейдер» или «администратор»';
+  const REASON_DENIED = 'сервер отказал в правке: роль или режим входа изменились — обновите страницу';
+  // Пока ответ входа не пришёл (или не пришёл вовсе), на не-loopback адресе нельзя утверждать, что вход выключен: причина нейтральная
+  const REASON_PENDING = 'права на правку уточняются — обновите страницу, если не исчезнет';
+  const rights = { editable: LOOPBACK.test(location.hostname || ''), reason: LOOPBACK.test(location.hostname || '') ? REASON_DENIED : REASON_PENDING, known: false };
+  // отказ сервера (403) до ответа входа: причина — сам отказ, а не «уточняются»; после ответа входа причина уже своя
+  // и пока ответа входа нет, последующий setAuth не поднимает право обратно: отказ сервера весомее адреса страницы
+  let denied = false;
+  const deny = () => { rights.editable = false; if (!rights.known) { denied = true; rights.reason = REASON_DENIED; } };
+  M.nameRights = {
+    get editable() { return rights.editable; }, set editable(v) { if (v) rights.editable = true; else deny(); },
+    get readOnlyReason() { return rights.reason; }, get authKnown() { return rights.known; },  // known: ответ входа применён
+    setAuth(st) {
+      if (!st || typeof st.enabled !== 'boolean') return rights.editable;  // нет ответа: остаётся по адресу страницы
+      if (!st.enabled) { rights.editable = typeof st.loopback === 'boolean' ? st.loopback : LOOPBACK.test(location.hostname || ''); rights.reason = REASON_LOCAL; }
+      else if (!st.user) return rights.editable;  // вход включён, пользователя нет: страницу уведёт на вход desk-auth.js
+      else if (st.user.role === 'viewer') { rights.editable = false; rights.reason = REASON_VIEWER; }
+      else { rights.editable = true; rights.reason = REASON_DENIED; }
+      rights.known = true;
+      if (denied) rights.editable = false;  // 403 пришёл раньше ответа входа: роль и режим уточнены, но право не возвращается
+      return rights.editable;
+    },
+  };
   // запрос уходит сразу, пока сервер ждёт нас, а подставляются алиасы по приходу (после сборки позиций ниже)
   M.aliases = {};
   const aliasReq = getJson('../api/v1/instruments/aliases');
@@ -339,14 +372,28 @@
       return { status: r.status, body: j };
     } catch (e) { return { status: 0, body: { message: 'нет связи с сервером' } }; }
   }
-  M.aliasApi = {
-    // менять можно только с компьютера сервера (local_only): с другого адреса — сразу только чтение, без запроса
-    editable: LOOPBACK.test(location.hostname || ''),
-    readOnlyReason: 'алиас меняется только на компьютере, где работает сервер деска (адрес 127.0.0.1)',
+  M.aliasApi = Object.defineProperties({
     put: (isin, alias) => aliasCall('PUT', '../api/v1/instruments/alias', { isin, alias }),
     history: isin => aliasCall('GET', '../api/v1/instruments/aliases/' + encodeURIComponent(isin) + '/history')
       .then(r => r.status === 200 && r.body ? r.body.revisions : null),
-  };
+  }, {
+    editable: { get: () => rights.editable, set: v => { if (v) rights.editable = true; else deny(); }, enumerable: true },
+    readOnlyReason: { get: () => rights.reason, enumerable: true },
+  });
+  // Короткое имя бумаги (TDM#776): своё по ISIN (GET /api/v1/instruments/short-names, PUT .../short-name, история) — отдельно от
+  // алиаса (полного имени); без своего — биржевое (extra.short_name прогона, MOEX SHORTNAME). Права правки — те же (M.nameRights)
+  M.shortNames = {};
+  const shortReq = getJson('../api/v1/instruments/short-names');
+  M.shortNameApi = Object.defineProperties({
+    put: (isin, name) => aliasCall('PUT', '../api/v1/instruments/short-name', { isin, short_name: name }),
+    history: isin => aliasCall('GET', '../api/v1/instruments/short-names/' + encodeURIComponent(isin) + '/history')
+      .then(r => r.status === 200 && r.body ? r.body.revisions : null),
+  }, {
+    editable: { get: () => rights.editable, set: v => { if (v) rights.editable = true; else deny(); }, enumerable: true },
+    readOnlyReason: { get: () => rights.reason, enumerable: true },
+  });
+  // перед searchBase в поиске — свои имена бумаги (алиас и короткое), в нижнем регистре; как K.setAlias и K.setShort (kit.js)
+  M.searchPrefix = p => (p.alias ? p.alias.toLowerCase() + ' ' : '') + (p.shortOwn ? p.shortOwn.toLowerCase() + ' ' : '');
 
   // ---------- позиции ----------
   const FREQ = { 12: 'M', 4: 'Q', 2: 'S', 1: 'A' };
@@ -403,6 +450,10 @@
     // имя — алиас бумаги (R33) или биржевое; d.alias — если сервер когда-нибудь пришлёт его в данных прогона
     p.alias = (p.isin && M.aliases[p.isin] && M.aliases[p.isin].alias) || d.alias || null;
     p.name = p.alias || p.exchName;
+    // короткое имя (TDM#776): своё по ISIN ?? биржевое (extra.short_name прогона); у бумаги без ISIN и деривативов обычно нет
+    p.exchShort = typeof ex.short_name === 'string' && ex.short_name.trim() ? ex.short_name.trim() : null;
+    p.shortOwn = (p.isin && M.shortNames[p.isin] && M.shortNames[p.isin].shortName) || null;
+    p.shortName = p.shortOwn || p.exchShort;
     // для типа инструмента таблицы «валюта × тип» (lib/instr.js, api/concepts.instr_kind): поля факта и группа продукта отчёта
     p.instrType = d.instrType || null; p.assetClass = d.assetClass || null; p.segment = d.segment || null;
     p.productGroup = M.productGroup(ex.reported);
@@ -558,8 +609,11 @@
     p.pnlMtd = num(xp.pnlMtd); p.pnlYtd = num(xp.pnlYtd); p.pnlMtdParts = xp.pnlMtdParts || null;  // MTD по факторам (отчёт PnL за период, #568)
     p.spreadChgBp = num(xp.spreadChgBp);
     p.tradedToday = !!(xp.trade || d.newToday); p.tradeToday = xp.trade || null;
-    p.searchBase = [p.exchName, p.isin, p.issuerName, p.issuerFull, p.issuerGroup, p.latName, p.book, p.bookName, p.ccy, p.kindLabel, p.groupLabel, p.sector, p.couponFmt, p.portfolio, p.rating, p.ratingAgency].join(' ').toLowerCase();
-    p.searchText = (p.alias ? p.alias.toLowerCase() + ' ' : '') + p.searchBase;  // как K.setAlias
+    // номинал позиции в прогоне предыдущего закрытия (TDM#775, колонка «Изм. к вчера»): prevNotional — был, newToPrev — не было, prevNoFact — была, но не оценена (номинала нет);
+    // ничего из этого — прогона предыдущей даты нет или позиция не оценена сегодня
+    p.prevNotional = num(xp.prevNotional); p.newToPrev = !!xp.newToPrev; p.prevNoFact = !!xp.prevNoFact;
+    p.searchBase = [p.exchName, p.exchShort, p.isin, p.issuerName, p.issuerFull, p.issuerGroup, p.latName, p.book, p.bookName, p.ccy, p.kindLabel, p.groupLabel, p.sector, p.couponFmt, p.portfolio, p.rating, p.ratingAgency].join(' ').toLowerCase();
+    p.searchText = M.searchPrefix(p) + p.searchBase;  // как K.setAlias
     return p;
   });
   M.positions = positions;
@@ -576,12 +630,24 @@
     if (!n) return false;
     positions.forEach(p => {
       const a = p.isin && M.aliases[p.isin];
-      if (a) { p.alias = a.alias; p.name = a.alias; p.searchText = a.alias.toLowerCase() + ' ' + p.searchBase; }
+      if (a) { p.alias = a.alias; p.name = a.alias; p.searchText = M.searchPrefix(p) + p.searchBase; }
     });
     if (calCache && calCache.renameCal) calCache.renameCal();
     return true;
   };
   M.aliasesReady = aliasReq.then(r => { failed('алиасы бумаг', r); if (r.body && M.applyAliases(r.body.aliases)) emit({ name: 'aliases' }); return r; });
+  // свои короткие имена по приходу ответа: поле, поиск; таблицы меняет K.patchNames (событие 'shortNames' → kit.js)
+  M.applyShortNames = list => {
+    let n = 0;
+    (list || []).forEach(a => { if (a && a.isin && a.short_name) { M.shortNames[a.isin] = { shortName: a.short_name, changedBy: a.changed_by, changedAt: a.changed_at }; n++; } });
+    if (!n) return false;
+    positions.forEach(p => {
+      const a = p.isin && M.shortNames[p.isin];
+      if (a) { p.shortOwn = a.shortName; p.shortName = a.shortName; p.searchText = M.searchPrefix(p) + p.searchBase; }
+    });
+    return true;
+  };
+  M.shortNamesReady = shortReq.then(r => { failed('короткие имена бумаг', r); if (r.body && M.applyShortNames(r.body.short_names)) emit({ name: 'shortNames' }); return r; });
   // фиксинги индексов, прочитанные свопами и РЕПО прогона (#201): одна история на прогон, у позиций — та же; пропуски и
   // объявленные неопубликованные дни — объединение по позициям. Пропуск внутри истории — заметка в шапке: позицию,
   // которая его читает, ядро не оценивает, она остаётся по отчёту
@@ -645,6 +711,10 @@
   M.histSource = X.histSource || 'positions';  // 'runs': суммы прогонов по датам
   M.pnlPeriods = X.pnlPeriods || null;
   M.pnlClosed = X.pnlClosed || [];  // позиции, закрытые раньше в периоде: их PnL MTD/YTD не входит в строки позиций (#568)
+  // прогон предыдущего закрытия (TDM#775): { runId, date, closed: [{ positionId, book, ccy, name, notional }] } — позиции, которые
+  // были в нём и которых нет в прогоне; null — прогона предыдущей даты нет (колонка «Изм. к вчера» пуста)
+  M.prevRun = X.prevRun && typeof X.prevRun === 'object' && typeof X.prevRun.date === 'string' && X.prevRun.date.length >= 10 ? { runId: X.prevRun.runId, date: X.prevRun.date,
+    closed: (Array.isArray(X.prevRun.closed) ? X.prevRun.closed : []).filter(isObj).map(c => ({ positionId: String(c.positionId), book: c.book || null, ccy: c.ccy || null, portfolio: c.portfolio || null, name: c.name || String(c.positionId), notional: num(c.notional) })) } : null;
   const n = M.histDates.length;
   const series = (src, keys, today) => { const o = {}; keys.forEach(k => { o[k] = (src && src[k]) ? src[k].map(v => v == null ? null : +v) : new Array(n).fill(0); if (!src && today) o[k][n - 1] = today(k); }); return o; };
   const sumBy = (f) => positions.reduce((s, p) => s + (f(p) || 0), 0);

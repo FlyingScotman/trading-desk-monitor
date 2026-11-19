@@ -441,3 +441,32 @@ def test_desk_db_migrate_after_a_killed_server_needs_no_manual_step(tmp_path: Pa
         if info is not None:
             _kill_tree(info.pid)
         new_process(pg)
+
+
+def test_start_gets_its_own_process_group_and_no_window_on_windows_only(monkeypatch) -> None:
+    """On Windows ``pg_ctl start`` gets ``CREATE_NEW_PROCESS_GROUP | CREATE_NO_WINDOW`` (Ctrl+C and the closed window of
+    ``start.bat`` do not reach the database); other pg_ctl commands, and every other system, get no flags. Only the
+    flags and the branch are checked here: that the database really outlives the console is NOT verified on Windows."""
+    seen: list[tuple[list[str], dict]] = []
+
+    def fake(args, pgdata=None, **kw):
+        seen.append((list(args), kw))
+        return ""
+
+    monkeypatch.setattr(ps, "pg_ctl", fake)
+    for platform in ("win32", "linux"):
+        seen.clear()
+        monkeypatch.setattr(embedded.sys, "platform", platform)
+        with embedded._start_options():
+            assert ps.pg_ctl is not fake  # wrapped while pgserver starts the server
+            ps.pg_ctl(["-w", "start"], pgdata=Path("x"))
+            ps.pg_ctl(["status"], pgdata=Path("x"))
+        assert ps.pg_ctl is fake  # the wrapper put the original back
+        start, other = seen[0][1], seen[1][1]
+        assert start["timeout"] == embedded.START_TIMEOUT_S and "timeout" not in other
+        assert "creationflags" not in other
+        if platform == "win32":
+            assert start["creationflags"] == embedded.CREATE_NEW_PROCESS_GROUP | embedded.CREATE_NO_WINDOW
+            assert (embedded.CREATE_NEW_PROCESS_GROUP, embedded.CREATE_NO_WINDOW) == (0x200, 0x08000000)
+        else:
+            assert "creationflags" not in start

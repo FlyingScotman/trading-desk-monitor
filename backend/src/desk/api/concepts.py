@@ -9,7 +9,10 @@ of the run its PnL month and year to date and the month's factors (``pnlMtd``, `
 report's sums over the period's runs, ``api.pnl_mtd``; ``pnlClosed``: the positions of the period that the run no
 longer has, which no position row carries; ``pnlPeriods`` says from which date and whether a business day of the period
 has no run: then the sum is partial), the previous run's price and spread and the day's trades (``pnl.extra.trades``,
-TDM#557; a run before it: the change of the holding), its flows of the next 18 months up to the offer it is priced to
+TDM#557; a run before it: the change of the holding), the previous close's face (TDM#775, the column «Изм. к вчера»:
+``prevNotional``, or ``newToPrev`` when the previous run does not have the position, ``prevNoFact`` when it has it
+not valued; ``prevRun``: that run and, in ``closed``, the positions it had that the run does not; none of them when the
+previous close has no run), its flows of the next 18 months up to the offer it is priced to
 (``extra.cashflows`` cut by ``calendar_flows``: they go to maturity, TDM#166), the market of the latest
 cached close not after the run (every quoted bond, ``universeRub`` and ``universeFx``, with the static snapshot's
 issuer, group, sector, outstanding face, coupon and frequency: ``marketdata.static_facts``; the day's movers) and the
@@ -59,6 +62,7 @@ from ..scenario.carry import meetings
 from ..store import DEFAULT_RUNS
 from ..valuation.positions import RISK_MISSING
 from . import pnl_mtd
+from .scope_rule import EFFECTIVE_PORTFOLIO_SQL, INPUT_ROW_ORDER_SQL, PORTFOLIO_ROW_SQL
 
 if TYPE_CHECKING:
     from .series_cache import SeriesCache
@@ -290,6 +294,35 @@ def trade_of(t: dict[str, Any], pos: list, on: date | None = None) -> dict[str, 
             **{k: v for k, v in sides.items() if v}, "net": {"bonds": net, "face": net * one if one is not None else None}}
 
 
+def _closed_to_prev(con, run_id: int, prev_id: int, prev: dict[str, list],
+                    cur: dict[str, list]) -> list[dict[str, Any]]:
+    """The positions the previous close had with a face and the run does not have at all (closed since: sold, redeemed,
+    dropped from the book), for the line beside the column «Изм. к вчера»: ``positionId``, ``book``, ``ccy``, ``name``,
+    ``portfolio`` and ``notional`` (the face of the previous close, in the face currency), the largest first. A position the run keeps
+    (with a zero face, or without a fact: not valued) is not here: its row shows the change."""
+    gone = [pid for pid, p in prev.items() if pid not in cur and p[0]]
+    if not gone:
+        return []
+    # the name, currency and portfolio as the PnL report's rows have them (``pnl_history.DIMENSIONS``, ``pnlClosed``)
+    facts = {r["position_id"]: r for r in con.execute(
+        "WITH books AS MATERIALIZED (SELECT run_id, jsonb_array_elements(data) AS data FROM run_reference"
+        " WHERE run_id = %s AND kind = 'books')"
+        " SELECT p.position_id, p.book_id AS book, COALESCE(p.fact->>'ccy', i.ccy) AS ccy,"
+        " COALESCE(p.fact->>'name', i.source_instrument_name, p.secid, p.position_id) AS name,"
+        f" {EFFECTIVE_PORTFOLIO_SQL} AS portfolio FROM run_position p JOIN run r USING (run_id)"
+        " LEFT JOIN books b ON b.run_id = p.run_id AND b.data->>'book_id' = p.book_id"
+        " LEFT JOIN LATERAL (SELECT x, ccy, source_instrument_name FROM position_input i"
+        " JOIN position_set s USING (set_id) WHERE i.set_id = ANY(r.position_set_ids)"
+        f" AND i.position_id = p.position_id AND s.book_id = p.book_id ORDER BY {INPUT_ROW_ORDER_SQL} LIMIT 1) i ON true"
+        f" LEFT JOIN LATERAL ({PORTFOLIO_ROW_SQL}) ip ON true"
+        " WHERE p.run_id = %s AND p.position_id = ANY(%s) AND NOT EXISTS ("
+        "SELECT 1 FROM run_position c WHERE c.run_id = %s AND c.position_id = p.position_id)", (prev_id, prev_id, gone, run_id))}
+    gone = [pid for pid in gone if pid in facts]
+    out = [{"positionId": pid, "book": facts[pid]["book"], "ccy": facts[pid]["ccy"], "name": facts[pid]["name"],
+            "portfolio": facts[pid]["portfolio"], "notional": prev[pid][0]} for pid in gone]
+    return sorted(out, key=lambda c: -abs(c["notional"]))
+
+
 def extras(con, run: dict[str, Any], writer: Writer = None, cache: SeriesCache | None = None) -> dict[str, Any]:
     """``window.DESK_EXTRAS`` of the run. ``cache``: the sums of the runs before it kept between builds
     (``series_cache.SeriesCache``, TDM#736); the same numbers without it."""
@@ -321,11 +354,19 @@ def extras(con, run: dict[str, Any], writer: Writer = None, cache: SeriesCache |
         "SELECT run_id, position_id, quantity FROM run_position WHERE run_id = ANY(%s) AND quantity IS NOT NULL",
         ([run["run_id"], runs[-2]["run_id"]],))} if prev is not None else {}
     positions: dict[str, dict[str, Any]] = {}
+    unseen: list[str] = []
     for pid, p in cur.items():
         out: dict[str, Any] = {}
         if (t := sums_by_pos.get(pid)) is not None and (t["mtd"] is not None or t["ytd"] is not None):
             out["pnlMtd"], out["pnlYtd"], out["pnlMtdParts"] = t["mtd"], t["ytd"], t["mtdParts"]
         p0 = prev.get(pid) if prev is not None else None
+        if prev is not None:
+            # the face against the previous close (the column «Изм. к вчера»): the position's ``prevNotional``; a position
+            # the previous run does not have is new (``newToPrev``), its whole face is the change (settled below)
+            if p0 is not None:
+                out["prevNotional"] = p0[0]
+            else:
+                unseen.append(pid)
         if p0 is not None:
             out["prevPrice"] = p0[6]
             if p[7] is not None and p0[7] is not None:
@@ -345,7 +386,19 @@ def extras(con, run: dict[str, Any], writer: Writer = None, cache: SeriesCache |
         elif not trades_known and prev is not None:
             out["trade"] = {"qty": p[0], "price": p[6], "new": True}
         positions[pid] = out
+    if unseen:
+        # not in the previous summary: new when the previous run has no row of it, else it was there without a fact (not
+        # valued: no face known), then the change is not known (``prevNoFact``), not the whole face
+        had = {r["position_id"] for r in con.execute(
+            "SELECT position_id FROM run_position WHERE run_id = %s AND position_id = ANY(%s)",
+            (runs[-2]["run_id"], unseen))}
+        for pid in unseen:
+            positions[pid]["prevNoFact" if pid in had else "newToPrev"] = True
     periods, notes = _periods(con, as_of, dates)
+    prev_run = None
+    if prev is not None:
+        prev_run = {"runId": runs[-2]["run_id"], "date": runs[-2]["business_date"].isoformat(),
+                    "closed": _closed_to_prev(con, run["run_id"], runs[-2]["run_id"], prev, cur)}
     for k in ("mtd", "ytd"):
         periods[k]["intradayApart"] = period["separate"][k]
     first = runs[0]["business_date"]
@@ -393,7 +446,7 @@ def extras(con, run: dict[str, Any], writer: Writer = None, cache: SeriesCache |
                      "riskBad": [sorted(s.get("riskBad") or ()) for s in sums],
                      "dv01Book": series("dv01Book"), "mvType": series("mvType"), "mvCcy": series("mvCcy"), "pnl": pnl},
             "histSource": "runs", "pnlPeriods": periods, "pnlClosed": pnl_mtd.closed(period["positions"]),
-            "positions": positions, "cashflows": flows, **market,
+            "positions": positions, "prevRun": prev_run, "cashflows": flows, **market,
             "cbr": cb, "curveMap": CURVE_MAP, "notes": notes,
             "unvalued": coverage.unvalued(con, run), "approx": coverage.approx(con, run),
             "offReport": coverage.off_report(con, run)}
