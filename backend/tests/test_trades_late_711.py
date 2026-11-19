@@ -22,6 +22,13 @@ server, stub = test_slice_s3.server, test_slice_s3.stub
 TUE = date(2026, 10, 20)
 
 
+@pytest.fixture(autouse=True)
+def _no_memo():
+    trades._AHEAD_MEMO.clear()
+    yield
+    trades._AHEAD_MEMO.clear()
+
+
 @pytest.fixture
 def day(stub, tmp_path, store_url):
     return Day(stub, tmp_path, store_url)
@@ -61,7 +68,10 @@ def test_a_trade_in_the_store_before_the_run_gives_the_pnl_of_its_date(day):
 
 
 def test_a_trade_after_the_final_close_makes_the_date_again_and_gives_the_pnl(day):
-    """(b): the date is done (final close), the trade comes later: the plan names the date, the next cycle makes it."""
+    """(b): the date is done (final close), the trade comes later: the plan names the date, the next cycle makes it.
+    FRI is the latest date with positions, so ``_eod`` of the autopilot makes it; a date older than the autopilot's window
+    is made by the backfill on the same hash (``backfill.plan`` says the same ``INPUTS_WHY``), see
+    test_trades_history.py::test_trades_are_taken_in_without_a_run_and_the_backfill_makes_the_dates_again."""
     final = close_final(day)
     assert day.row(rid=final)["pnl"]["new_trades"] == 0.0
     late_file(day, trade_line("S1", "sell", 1000, 62.0, 5_000.0))
@@ -132,3 +142,92 @@ def test_without_a_run_the_trade_waits_and_the_setting_off_says_off(day):
     ahead = {"skipped_ids": {"Z": "no_instrument"}}
     assert trades._intraday_state(row, FRI, run, True, ahead) == "no_instrument"
     assert trades._intraday_state(row, FRI, None, True, ahead) == "pending"
+
+
+def after_run_x1(day_):
+    """A trade of a book without positions that came after the run (``other_book`` when asked, else ``pending``)."""
+    late_file(day_, trade_line("X1", "sell", 1000, 62.0, 5_000.0).replace(";B1;", ";B9;"),
+              name="trades_20261016_1100.csv")
+    with store.connect(day_.url) as con:
+        scan.scan(con, day_.s)
+
+
+def test_a_failing_question_does_not_take_the_screens_down(day, monkeypatch):
+    """The reason is a hint: when ``apply_intraday`` fails the trades screen and the summary answer, the trade waits."""
+    from fastapi.testclient import TestClient
+
+    from desk.api import create_app
+
+    after_run_x1(day)
+
+    def boom(*a, **k):
+        raise RuntimeError("synthetic failure")
+
+    monkeypatch.setattr(trades, "apply_intraday", boom)
+    c = TestClient(create_app(day.url))
+    r = c.get("/api/v1/trades", params={"date": "2026-10-16"})
+    assert r.status_code == 200, r.text
+    assert {x["trade_id"]: x["intraday"] for x in r.json()["rows"]} == {"X1": "pending"}
+    r = c.get("/api/v1/trades/summary", params={"date": "2026-10-16"})
+    assert r.status_code == 200, r.text
+    assert [s["state"] for s in r.json()["states"]] == ["pending"]
+
+
+def test_the_reason_is_asked_once_for_the_same_inputs(day, monkeypatch):
+    """A screen asked again (view, summary, a position's panel) does not read the positions and fold the trades again, until
+    the inputs of the date change."""
+    after_run_x1(day)
+    calls = []
+    real = trades.apply_intraday
+
+    def counted(*a, **k):
+        calls.append(1)
+        return real(*a, **k)
+
+    monkeypatch.setattr(trades, "apply_intraday", counted)
+    for _ in range(3):
+        assert states(day) == {"X1": "other_book"}
+    with store.connect(day.url) as con:
+        assert trades.brief(con, FRI)["problems"] == 1
+    assert len(calls) == 1
+    late_file(day, trade_line("X1", "sell", 1000, 62.0, 5_000.0).replace(";B1;", ";B9;"),
+              trade_line("X2", "sell", 10, 62.0, 5_000.0).replace(";B1;", ";B9;"), name="trades_20261016_1105.csv")
+    with store.connect(day.url) as con:
+        scan.scan(con, day.s)
+    assert states(day) == {"X1": "other_book", "X2": "other_book"}
+    assert len(calls) == 2   # a new trades set: new inputs, asked again
+
+
+def test_a_trades_screen_of_a_settled_date_asks_nothing(day, monkeypatch):
+    """Every trade settled by the run's lineage (applied): no question at all."""
+    late_file(day, trade_line("S1", "sell", 1000, 62.0, 5_000.0), name="trades_20261016_1100.csv")
+    day.cycle(10, 20)
+    monkeypatch.setattr(trades, "apply_intraday", lambda *a, **k: pytest.fail("asked"))
+    assert states(day) == {"S1": "applied"}
+
+
+def test_the_positions_panel_says_the_reason_too(day):
+    """The panel of a position (``/api/v1/positions/provenance``) takes a trade of the run's sets that the lineage does not
+    explain (a run whose lineage lacks the reasons) as the trades screen does: its reason, not a wait."""
+    # a trade given by its face for a position held in bonds: units_mismatch
+    late_file(day, trade_line("F1", "sell", "", 62.0, 5_000.0, face="1000000"),
+              trade_line("S1", "sell", 1000, 62.0, 5_000.0, hhmm="10:40"), name="trades_20261016_1100.csv")
+    day.cycle(10, 20)   # S1 is taken in (the run reads the set), F1 is left out
+    rid = day.latest_id()
+    assert lineage(day.url, rid)["skipped_ids"] == {"F1": "units_mismatch"}
+    import copy
+
+    import psycopg
+    from psycopg.rows import dict_row
+
+    from desk.api import provenance
+
+    with psycopg.connect(day.url, row_factory=dict_row, autocommit=True) as con:   # the API's connection: dict rows
+        run = con.execute("SELECT * FROM run WHERE run_id = %s", (rid,)).fetchone()
+        run = {**run, "lineage": copy.deepcopy(run["lineage"])}
+        run["lineage"]["intraday_trades"]["skipped_ids"] = {}   # a run is never changed: the lineage as an older one has it
+        out = provenance.provenance(con, run, "B1|SEC-26238")
+        items = {i["trade_id"]: i for i in next(s for s in out["sources"] if s["key"] == "trades")["items"]}
+        assert (items["F1"]["state"], items["S1"]["state"]) == ("units_mismatch", "applied")
+        assert items["F1"]["state_text"] == trades.STATE_TEXT["units_mismatch"]
+        assert con.row_factory is dict_row   # the connection is given back as it was

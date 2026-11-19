@@ -47,18 +47,25 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 import math
 import re
-from collections import Counter
+import threading
+from collections import Counter, OrderedDict
+from collections.abc import Iterator
+from contextlib import contextmanager
 from dataclasses import replace
 from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
 from typing import Any
 
 import psycopg
+from psycopg.rows import tuple_row
 
 from . import store
 from .valuation import offreport
+
+log = logging.getLogger(__name__)
 
 FIELDS = ("trade_id", "trade_version", "status", "trade_date", "trade_ts", "book_id", "position_id", "asset_class",
           "source_instrument_id", "source_instrument_name", "isin", "regnum", "moex_secid", "instrument_id", "side",
@@ -727,19 +734,64 @@ def _next(tid: str, ahead: dict[str, Any] | None, default: str = "pending") -> s
     return ((ahead or {}).get("skipped_ids") or {}).get(tid) or default
 
 
+@contextmanager
+def _plain_rows(con: psycopg.Connection) -> Iterator[None]:
+    """The connection with tuple rows for the length of the block: the store's readers unpack tuples, and the API's
+    provenance connection returns dicts."""
+    old = con.row_factory
+    con.row_factory = tuple_row
+    try:
+        yield
+    finally:
+        con.row_factory = old
+
+
+_AHEAD_MEMO: OrderedDict[tuple, dict[str, Any] | None] = OrderedDict()
+AHEAD_MEMO_SIZE = 128
+_AHEAD_LOCK = threading.Lock()   # the API's threads share the memo
+
+
+def _ahead_key(con: psycopg.Connection, on: date, enabled: bool) -> tuple:
+    """What decides ``_ahead``: the database, the position sets (all of them: a new one moves what every later date
+    carries), the books and reference revisions, the date's own trades sets of the ``MAX_CUT_DAYS`` days up to it (as
+    ``backfill.inputs_stamp(...).of(on)``, without the settings that the stamp reads), the date and the switch. A set is
+    never changed, a new revision is a new row: a changed id or count is new inputs."""
+    oid = con.execute("SELECT oid FROM pg_database WHERE datname = current_database()").fetchone()[0]
+    pos = con.execute("SELECT max(set_id), count(*) FROM position_set").fetchone()
+    refs = con.execute("SELECT (SELECT max(rev_id) FROM book_rev), (SELECT count(*) FROM book_rev),"
+                       " (SELECT max(rev_id) FROM reference_rev), (SELECT count(*) FROM reference_rev)").fetchone()
+    tr = con.execute("SELECT max(set_id), count(*) FROM dataset_set WHERE dataset = 'trades' AND valid_date >= %s"
+                     " AND valid_date <= %s", (on - timedelta(days=MAX_CUT_DAYS), on)).fetchone()
+    return (oid, tuple(pos), tuple(refs), tuple(tr), on.isoformat(), enabled, HELD_MARK)
+
+
 def _ahead(con: psycopg.Connection, on: date, rows: list[dict[str, Any]], run: dict[str, Any] | None,
            enabled: bool) -> dict[str, Any] | None:
     """What ``apply_intraday`` decides on the trades of ``on`` and the positions stored now, asked only when a live
     trade of the date is still ``pending`` after the run's lineage (it arrived after the run): the reasons the next run
-    would leave trades out for (``skipped_ids``). None when every trade is settled by the lineage, or the date has no
-    positions (nothing to decide on)."""
-    if run is None or not enabled or not any(
-            _intraday_state(r, on, run, enabled) in ("pending", "unknown") for r in rows):
+    would leave trades out for (``{"skipped_ids": {trade_id: reason}}``). None when every trade is settled by the
+    lineage, the date has no positions (nothing to decide on), or the question failed (said in the log; the trade then
+    waits for a run as it did before). Remembered under the inputs of the date, so that a screen asked again does not read
+    the positions and fold the trades again. ``rows``: the date's stored trades (``effect`` and ``trade_id``)."""
+    if run is None or not enabled or not any(_intraday_state(r, on, run, enabled) == "pending" for r in rows):
         return None
-    inputs = store.positions_for(con, on)
-    if not inputs.rows:
+    try:
+        with _plain_rows(con):
+            key = _ahead_key(con, on, enabled)
+            with _AHEAD_LOCK:
+                if key in _AHEAD_MEMO:
+                    _AHEAD_MEMO.move_to_end(key)
+                    return _AHEAD_MEMO[key]
+            inputs = store.positions_for(con, on)
+            out = {"skipped_ids": apply_intraday(con, on, inputs)[1]["skipped_ids"]} if inputs.rows else None
+    except Exception:   # a reason is a hint on a screen: its failure must not take the screen down
+        log.warning("trades: the reasons of the trades after the run of %s are not known", on, exc_info=True)
         return None
-    return apply_intraday(con, on, inputs)[1]
+    with _AHEAD_LOCK:
+        _AHEAD_MEMO[key] = out
+        while len(_AHEAD_MEMO) > AHEAD_MEMO_SIZE:
+            _AHEAD_MEMO.popitem(last=False)
+    return out
 
 
 def _trade_pnl(con: psycopg.Connection, run: dict[str, Any] | None) -> dict[str, dict[str, Any]]:
