@@ -139,12 +139,13 @@ def known_at(snap: Snapshot) -> datetime:
     return _ts(snap.doc["known_at"])
 
 
-def calendar(static: Snapshot, name: str) -> tuple[BusinessCalendar, date | None]:
-    """Bounded core calendar (``adapter.core_calendar``: the hub's days, extended by fixed rules to 10Y) and its
-    ``provisional_from`` (days from it on are an estimate, not an official list)."""
+def calendar(static: Snapshot, name: str, since: date | None = None) -> tuple[BusinessCalendar, date | None]:
+    """Bounded core calendar (``adapter.core_calendar``: the hub's days, extended by fixed rules to 10Y, and back to
+    ``since`` when it lies before the hub's first day) and its ``provisional_from`` (days from it on are an estimate,
+    not an official list)."""
     if static.kind != "static":
         raise SnapshotError(f"{static.id}: not a static snapshot")
     c = next((c for c in static.data["calendars"] if c["calendar"] == name), None)
     if c is None:
         raise SnapshotError(f"{static.id}: no calendar {name}")
-    return core_calendar(c)
+    return core_calendar(c, since)

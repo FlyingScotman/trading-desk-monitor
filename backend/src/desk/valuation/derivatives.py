@@ -192,6 +192,7 @@ from ..curves.fx import (
     FxOptions,
 )
 from ..curves.rates import KEY_RATE_CURVE_ID, KEY_RATE_SWAP_CURVE_ID, RUONIA_OIS_CURVE_ID
+from ..marketdata.adapter import extend_calendar_back
 from .bonds import OIS_TAIL, RISK_CURVES, BondValuation
 
 PUBLISHED_FACTORS = ("IR|", "FX|")
@@ -885,6 +886,23 @@ def _fixing_ids(ctx: Any) -> set[str]:
     return {f.fixing_id for f in ctx.core_market.fixings}
 
 
+def _fixings_reaching(entries: tuple[Any, ...], reach: dict[str, date]) -> tuple[Any, ...]:
+    """``entries`` (``FixingEntry``) with the RUONIA history's calendar reaching back to ``reach[fixing_id]`` (TDM#509):
+    core reads the known part of the period a swap is in on it from the period's accrual start, which may lie before
+    the hub's first calendar day. Only the hub's own calendar is extended, by the fixed rules; one cut at the stored
+    history (``+published_from_``: the days with a fixing, ``curves.rates.published_before``) stays, its range is
+    where the fixings are. A day without a fixing is then core's «no RUONIA fixing on or before …», not a calendar's.
+    The key rate's calendar is not read for its known part."""
+    out = []
+    for e in entries:
+        h, r = e.history, reach.get(e.fixing_id)
+        if h.index == "ruonia" and r is not None and h.calendar.valid_from is not None and r < h.calendar.valid_from \
+                and "+published_from_" not in h.calendar.version:
+            e = replace(e, history=replace(h, calendar=extend_calendar_back(h.calendar, "RU_PRODUCTION", r)))
+        out.append(e)
+    return tuple(out)
+
+
 def _swap_instrument(ctx: Any, s: SwapTerms, iid: str, calendars: dict[str, CalendarEntry]
                      ) -> tuple[SwapInstrument, list[str]]:
     """Core's swap position of one ``SwapTerms`` (the module docstring); adds its calendar to ``calendars``."""
@@ -893,16 +911,33 @@ def _swap_instrument(ctx: Any, s: SwapTerms, iid: str, calendars: dict[str, Cale
         raise NotValued("settled", f"swap {s.label} matured on {s.end}", s.end)
     swap, notes = s.core_swap()
     cid = SWAP_CALENDAR[s.index]
-    if cid not in calendars:
-        build = rates.ois_calendar(ctx.static.snapshot, bd) if s.index == "ruonia" else \
-            rates.krs_calendar(ctx.static.snapshot)
+    # core rolls both legs' schedules from the swap's start and adjusts every period end on the calendar, a past one
+    # too, and reads the fixings of the period it is in on the fixing history's calendar (``_fixings_reaching``): both
+    # must reach the start of the earliest leg (TDM#509). The hub's observed calendars start in 2019
+    # (market-data-hub ``OBSERVED_START``; a snapshot's own window may start later, a year or a young hub): the days of a
+    # swap's schedule before the calendar's first day are the fixed rules' (``adapter.extend_calendar_back``), said in
+    # the notes. One calendar per index serves every swap of the call: a
+    # later swap that starts earlier replaces it by a longer one, which changes the calendar (its version and
+    # fingerprint, so core's base_id) of the swaps built before it in the same ``value()`` call. The days they use are
+    # the same; no cache between runs is keyed by it
+    reach = min(s.start, s.float_dates[0])
+    if cid not in calendars or calendars[cid].calendar.valid_from > reach:
+        build = rates.ois_calendar(ctx.static.snapshot, bd, reach) if s.index == "ruonia" else \
+            rates.krs_calendar(ctx.static.snapshot, reach)
         calendars[cid] = CalendarEntry(cid, build[0])
+    if "+rules_from_" in calendars[cid].calendar.version:
+        hub_from = max(date.fromisoformat(ctx.static.calendars[n]["valid_from"]) for n in ("MOEX_FORTS", "RU_PRODUCTION"))
+        if reach < hub_from:
+            notes.append(f"{s.label}: the hub's calendars start on {hub_from}; the schedule's days before it (the adjusted "
+                         "ends of the past periods, the accrual start of the current one, the days of its fixings) follow "
+                         "the fixed holiday rules: weekends and the fixed public holidays, without holiday transfers, "
+                         "working Saturdays or the RUONIA-free year-end")
     try:
         sched = swap_schedule(swap, calendars[cid].calendar)
-    except (ValueError, CoreRejection):
+    except CalendarRangeError as e:  # only this: another refusal of the schedule is the terms' (the caller's rule)
         if s.end < bd:  # its dates are outside the calendar of the run: it ended before it
             raise NotValued("settled", f"swap {s.label} matured on {s.end}", s.end) from None
-        raise
+        raise NotValued(f"core_{e.code.lower()}", f"swap {s.label}: {e}") from None
     last = max(p.payment_date for p in (*sched.fixed, *sched.floating))
     if last <= bd:  # core: no flow after the valuation date. By the schedule, not the maturity: the last payment
         # follows the adjusted end by the payment lag, over a weekend it is days after the maturity
@@ -1648,8 +1683,14 @@ def value(ctx: Any, requests: list[Request], *, options: FxOptions, second_order
     # the CNY XCCY curve as its par quotes too (EodContext.fx_risk_market), rebuilt by core on every shock. The fixings
     # only a swap or a REPO reads (point-in-time, with RUONIA's declared unpublished day), so an FX book's inputs stay
     # as they were; the key-rate forward curve of a key-rate swap from EodContext.swap_curves
+    fix_reach: dict[str, date] = {}
+    for i in instruments:
+        if isinstance(i, SwapInstrument) and i.fixing_id is not None:
+            t = terms_of[i.instrument_id]
+            fix_reach[i.fixing_id] = min(fix_reach.get(i.fixing_id, t.start), t.start, t.float_dates[0])
     snap = replace(market, quotes=(),
-                   fixings=tuple(f for f in ctx.core_market.fixings if f.fixing_id in fixing_ids),
+                   fixings=_fixings_reaching(tuple(f for f in ctx.core_market.fixings if f.fixing_id in fixing_ids),
+                                             fix_reach),
                    index_fixings=tuple(e for e in ctx.fx.index_fixings if e.fixing_id in index_ids),
                    curves=(*(c for c in market.curves if c.curve_id in used),
                            *(c for c in ctx.swap_curves if c.curve_id in used)),

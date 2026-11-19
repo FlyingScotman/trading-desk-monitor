@@ -97,6 +97,7 @@ def test_a_period_over_a_hole_of_the_stored_history_in_words():
     assert w["detail"] == "в хранимой истории RUONIA пропуск с 10.11.2025 по 28.11.2025: период сделки его пересекает"
     assert w["fix"]["label"] == "История прогонов" and w["short"] == "пропуск фиксингов"
     assert "хранимой истории фиксингов" in w["why"] and "календар" not in w["why"] + w["todo"]   # not the hub's
+    assert "Настройки → «Диагностика» → карточка «История прогонов» → строка «История фиксингов»" in w["todo"]
     w = coverage.explain(reason, "IRS", None, None)  # no hole in the run's lineage: up to the day before
     assert w["detail"] == "в хранимой истории RUONIA пропуск по 28.11.2025: период сделки его пересекает"
     lin = {"rates": {"fixings": {"RUONIA": {"calendar_from_fixings": {"hole": {"from": "2025-11-10",
