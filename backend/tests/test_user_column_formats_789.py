@@ -92,7 +92,7 @@ def test_save_read_replace_and_reset(local):
     # each part alone: null (or left out) is the column's own default for that part
     r = local.put(URL + "/mv", json={"decimals": 0, "scale": None})
     assert (r.json()["decimals"], r.json()["scale"]) == (0, None)
-    r = local.put(URL + "/mv", json={"scale": "k"})
+    r = local.put(URL + "/mv", json={"decimals": None, "scale": "k"})
     assert (r.json()["decimals"], r.json()["scale"]) == (None, "k"), "replaced, not merged: decimals left out is the default"
     for scale in ("1", "k", "mm", "bn"):
         assert local.put(URL + "/dv01", json={"decimals": 6, "scale": scale}).json()["scale"] == scale
@@ -101,7 +101,7 @@ def test_save_read_replace_and_reset(local):
     r = local.put(URL + "/mv", json={"decimals": None, "scale": None})
     assert r.status_code == 200 and r.json()["decimals"] is None and r.json()["scale"] is None
     assert list(local.get(URL).json()["formats"]) == ["dv01"]
-    assert local.put(URL + "/never-set", json={}).status_code == 200
+    assert local.put(URL + "/never-set", json={"decimals": None, "scale": None}).status_code == 200
     assert sql(local.app.state.store_url, "SELECT col_key FROM user_column_formats") == [("dv01",)]
     # DELETE: back to the default, no error when there is nothing to remove
     hdr = {"Content-Type": "application/json"}
@@ -112,46 +112,59 @@ def test_save_read_replace_and_reset(local):
 
 
 def test_the_digits_are_zero_to_six_integers_and_the_units_a_known_word(local):
-    for body in ({"decimals": 7}, {"decimals": -1}, {"decimals": 1.5}, {"decimals": "2"}, {"decimals": True},
-                 {"decimals": [2]}, {"scale": "tys"}, {"scale": "MM"}, {"scale": ""}, {"scale": 6}, {"scale": ["mm"]},
-                 {"scale": True}, {"decimals": 2, "scale": "million"}):
+    for body in ({"decimals": 7, "scale": None}, {"decimals": -1, "scale": None}, {"decimals": 1.5, "scale": None}, {"decimals": "2", "scale": None}, {"decimals": True, "scale": None},
+                 {"decimals": [2], "scale": None}, {"decimals": None, "scale": "tys"}, {"decimals": None, "scale": "MM"}, {"decimals": None, "scale": ""}, {"decimals": None, "scale": 6}, {"decimals": None, "scale": ["mm"]},
+                 {"decimals": None, "scale": True}, {"decimals": 2, "scale": "million"}):
         r = local.put(URL + "/mv", json=body)
         assert r.status_code == 422, (body, r.status_code)
     for d in range(7):
-        assert local.put(URL + "/mv", json={"decimals": d}).json()["decimals"] == d
+        assert local.put(URL + "/mv", json={"decimals": d, "scale": None}).json()["decimals"] == d
     # a rejected body changes nothing
-    assert local.put(URL + "/mv", json={"decimals": 9}).status_code == 422
+    assert local.put(URL + "/mv", json={"decimals": 9, "scale": None}).status_code == 422
     assert local.get(URL).json()["formats"]["mv"]["decimals"] == 6
     # not a JSON object
     assert local.put(URL + "/mv", json=[1]).status_code == 422
     assert local.put(URL + "/mv", content=b"not json", headers={"Content-Type": "application/json"}).status_code == 422
 
 
+def test_a_misspelt_or_empty_body_is_a_422_not_a_reset(local):
+    # the reset is explicit: both keys null, or DELETE; anything else that does not name both parts is refused and changes nothing
+    assert local.put(URL + "/mv", json={"decimals": 3, "scale": "bn"}).status_code == 200
+    for body in ({}, {"digits": 3}, {"digits": 3, "scale": None}, {"decimals": 3, "units": "bn"}, {"decimals": 2}, {"scale": "k"},
+                 {"decimals": 2, "scale": "k", "extra": 1}, {"decimals": None}, {"scale": None}):
+        r = local.put(URL + "/mv", json=body)
+        assert r.status_code == 422, (body, r.status_code)
+    got = local.get(URL).json()["formats"]["mv"]
+    assert (got["decimals"], got["scale"]) == (3, "bn"), "the refused bodies did not reset or change the format"
+    r = local.put(URL + "/mv", json={"decimals": None, "scale": None})
+    assert r.status_code == 200 and local.get(URL).json()["formats"] == {}
+
+
 def test_bad_column_key(local):
     for col in ("-x", "_x", ".x", "a b", "a%20b", "a<script>", "x" * 65, "я"):
-        assert local.put(URL + "/" + col, json={"decimals": 1}).status_code in (404, 422), col
-        assert local.put(URL + "/" + col, json={"decimals": 1}).status_code != 200, col
+        assert local.put(URL + "/" + col, json={"decimals": 1, "scale": None}).status_code in (404, 422), col
+        assert local.put(URL + "/" + col, json={"decimals": 1, "scale": None}).status_code != 200, col
         assert local.delete(URL + "/" + col, headers={"Content-Type": "application/json"}).status_code in (404, 422), col
     # the 422 is the monitor's own error with its code
-    r = local.put(URL + "/x" + "y" * 64, json={"decimals": 1})
+    r = local.put(URL + "/x" + "y" * 64, json={"decimals": 1, "scale": None})
     assert r.status_code == 422 and r.json()["code"] == "invalid_parameter"
     # keys of the catalog: letters of both cases, digits, . _ : - inside, up to 64
     for col in ("mv", "dv01", "Z.kbd", "a_b-c:d", "A" * 64, "7"):
-        assert local.put(URL + "/" + col, json={"decimals": 1}).status_code == 200, col
+        assert local.put(URL + "/" + col, json={"decimals": 1, "scale": None}).status_code == 200, col
     assert local.get(URL).json()["formats"].keys() == {"mv", "dv01", "Z.kbd", "a_b-c:d", "A" * 64, "7"}
 
 
 def test_the_limit_of_columns_of_one_user(local):
     for i in range(MAX_FORMATS):
-        assert local.put(URL + f"/c{i}", json={"decimals": 1}).status_code == 200
-    over = local.put(URL + "/c-over", json={"scale": "mm"})
+        assert local.put(URL + f"/c{i}", json={"decimals": 1, "scale": None}).status_code == 200
+    over = local.put(URL + "/c-over", json={"decimals": None, "scale": "mm"})
     assert over.status_code == 409 and over.json()["code"] == "invalid_parameter"
     assert "c-over" not in local.get(URL).json()["formats"]
     # a column that has a format is replaced at the limit; one reset makes room; the default format needs no room
     assert local.put(URL + "/c5", json={"decimals": 2, "scale": "k"}).status_code == 200
     assert local.put(URL + "/c-over", json={"decimals": None, "scale": None}).status_code == 200
     assert local.delete(URL + "/c7", headers={"Content-Type": "application/json"}).status_code == 204
-    assert local.put(URL + "/c-over", json={"scale": "mm"}).status_code == 200
+    assert local.put(URL + "/c-over", json={"decimals": None, "scale": "mm"}).status_code == 200
     assert len(local.get(URL).json()["formats"]) == MAX_FORMATS
 
 
@@ -160,8 +173,8 @@ def test_formats_are_per_user_and_survive_a_new_app(store_url, home):
     for c in (ann, bob):
         assert c.get(URL).json()["formats"] == {}
     assert ann.put(URL + "/mv", json={"decimals": 3, "scale": "bn"}, headers=csrf(ann)).status_code == 200
-    assert bob.put(URL + "/mv", json={"decimals": 0}, headers=csrf(bob)).status_code == 200
-    assert bob.put(URL + "/dv01", json={"scale": "mm"}, headers=csrf(bob)).status_code == 200
+    assert bob.put(URL + "/mv", json={"decimals": 0, "scale": None}, headers=csrf(bob)).status_code == 200
+    assert bob.put(URL + "/dv01", json={"decimals": None, "scale": "mm"}, headers=csrf(bob)).status_code == 200
     a, b = ann.get(URL).json(), bob.get(URL).json()
     assert a["user"] == "ann" and b["user"] == "bob"
     assert {k: (v["decimals"], v["scale"]) for k, v in a["formats"].items()} == {"mv": (3, "bn")}
@@ -184,12 +197,15 @@ def test_formats_are_per_user_and_survive_a_new_app(store_url, home):
 
 def test_there_is_no_way_to_name_another_user(store_url, home):
     ann, bob = user_client(store_url, "ann"), user_client(store_url, "bob")
-    bob.put(URL + "/mv", json={"decimals": 5}, headers=csrf(bob))
+    bob.put(URL + "/mv", json={"decimals": 5, "scale": None}, headers=csrf(bob))
     for q in ("?user=bob", "?username=bob", "?as=bob"):
         assert ann.get(URL + q).json()["formats"] == {}, q
     # a username in the body or the query is not read: the row is the caller's, bob's stays
-    r = ann.put(URL + "/mv?username=bob", json={"decimals": 1, "user": "bob", "username": "bob"}, headers=csrf(ann))
+    r = ann.put(URL + "/mv?username=bob", json={"decimals": 1, "scale": None}, headers=csrf(ann))
     assert r.status_code == 200
+    # a username in the body is not read either: another key is a 422, bob's row is untouched
+    r = ann.put(URL + "/mv", json={"decimals": 1, "scale": None, "user": "bob", "username": "bob"}, headers=csrf(ann))
+    assert r.status_code == 422
     assert bob.get(URL).json()["formats"]["mv"]["decimals"] == 5
     assert sql(store_url, "SELECT username, decimals FROM user_column_formats ORDER BY username") == [("ann", 1), ("bob", 5)]
 
@@ -197,11 +213,11 @@ def test_there_is_no_way_to_name_another_user(store_url, home):
 def test_sign_in_on_needs_a_session_and_the_csrf_token(store_url, home):
     anon = TestClient(create_app(store_url, auth=ON), **LAN)
     assert anon.get(URL).status_code == 401
-    assert anon.put(URL + "/mv", json={"decimals": 1}).status_code == 401
+    assert anon.put(URL + "/mv", json={"decimals": 1, "scale": None}).status_code == 401
     assert anon.delete(URL + "/mv", headers={"Content-Type": "application/json"}).status_code == 401
     ann = user_client(store_url, "ann")
     for headers in (None, {"X-CSRF-Token": "forged"}, {**csrf(ann), "Origin": "https://evil.example"}):
-        r = ann.put(URL + "/mv", json={"decimals": 1}, headers=headers)
+        r = ann.put(URL + "/mv", json={"decimals": 1, "scale": None}, headers=headers)
         assert r.status_code == 403 and r.json()["code"] == "forbidden", headers
     assert ann.delete(URL + "/mv", headers={"Content-Type": "application/json"}).status_code == 403
     assert ann.get(URL).json()["formats"] == {}
@@ -213,9 +229,9 @@ def test_sign_in_on_needs_a_session_and_the_csrf_token(store_url, home):
 
 def test_deleting_a_user_deletes_their_formats(store_url, home):
     ann, bob = user_client(store_url, "ann"), user_client(store_url, "bob")
-    ann.put(URL + "/mv", json={"decimals": 2}, headers=csrf(ann))
-    ann.put(URL + "/dv01", json={"scale": "mm"}, headers=csrf(ann))
-    bob.put(URL + "/mv", json={"decimals": 4}, headers=csrf(bob))
+    ann.put(URL + "/mv", json={"decimals": 2, "scale": None}, headers=csrf(ann))
+    ann.put(URL + "/dv01", json={"decimals": None, "scale": "mm"}, headers=csrf(ann))
+    bob.put(URL + "/mv", json={"decimals": 4, "scale": None}, headers=csrf(bob))
     boss = user_client(store_url, "cat")
     assert boss.delete("/api/v1/users/ann", headers={**csrf(boss), "Content-Type": "application/json"}).status_code == 204
     assert sql(store_url, "SELECT username FROM user_column_formats") == [("bob",)]

@@ -160,9 +160,14 @@ test('K.nfNum: формат по умолчанию совпадает с пре
     dv01: f.dv, cs01: f.dv, basis01: f.dv, ofzSpr01: f.dv, carry: f.k, funding: f.k, pnl: f.k, pnlMtd: x => f.mn(x, 1),
     // колонки своих экранов (TDM#789, C09, C10, C17): прежний вид — как строили их страницы
     fwdCarry: x => f.mn(x, 2), fwdFunding: x => f.mn(x, 2), fwdNet: x => f.mn(x, 2), carryDv: f.bp, mktSpread: f.bp, rvDiff: f.bps,
-    unexplShare: x => f.pct(x == null ? x : x * 100, 0),
   };
-  assert.deepStrictEqual(Object.keys(K.NF).sort(), Object.keys(was).sort(), 'у каждой настраиваемой колонки известен прежний вид');
+  // «Доля |итога|» C10 (unexplShare): прежний вид — Math.round(v * 100) + '%' без разделителя тысяч; новый — целые проценты с разделителем
+  // (от 1000%: «1,500%», а не «1500%»), всё остальное прежнее. Новый вид закреплён здесь как ожидаемый
+  const share = { 0: '0%', 0.004: '0%', 0.005: '1%', 0.4: '40%', 0.456: '46%', 1: '100%', 9.994: '999%', 15: '1,500%', 216.2: '21,620%' };
+  for (const [x, t] of Object.entries(share)) assert.strictEqual(K.nfNum('unexplShare', +x), t, 'доля ' + x);
+  assert.strictEqual(K.nfNum('unexplShare', null), '—');
+  for (const x of [0, 0.004, 0.4, 0.456, 1, 9.994]) assert.strictEqual(K.nfNum('unexplShare', x), Math.round(x * 100) + '%', 'до 1000% — как было: ' + x);
+  assert.deepStrictEqual(Object.keys(K.NF).filter(k => k !== 'unexplShare').sort(), Object.keys(was).sort(), 'у каждой настраиваемой колонки известен прежний вид');
   for (const [id, fn] of Object.entries(was)) {
     for (const x of [v, n, 0.4, 0, 12.5, null, NaN]) assert.strictEqual(K.nfNum(id, x), fn(x), id + ' ' + x);
   }
@@ -193,6 +198,12 @@ test('K.nfNum: колонки экранов C09, C10, C17 — свой ключ
   assert.strictEqual(K.nfNum('fwdCarry', 1234567), '1,235'); assert.strictEqual(K.nfNum('fwdNet', 1234567), '1.23');
   assert.strictEqual(K.nfEff('fwdCarry').unit, 'тыс ₽'); assert.strictEqual(K.nfEff('fwdNet').unit, 'mm ₽');
   assert.strictEqual(K.nfEff('carryDv').units, false);
+  // подсказки риск-колонок называют выбранную единицу (в первой фразе), остальной текст не тронут
+  for (const id of ['dv01', 'cs01', 'basis01', 'ofzSpr01']) {
+    const c = K.posCols[id];
+    assert.ok(c.title.includes('тыс ₽/бп') && c.titleFn('тыс ₽/бп') === c.title, id + ': по умолчанию как было');
+    assert.ok(c.titleFn('mm ₽/бп').includes(', mm ₽/бп:') && !c.titleFn('mm ₽/бп').includes('тыс ₽/бп'), id + ': ' + c.titleFn('mm ₽/бп').slice(0, 60));
+  }
   // название CSV — строка или функция (единицы колонок в названии)
   assert.strictEqual(K.csvTitle({ title: 'Таблица' }), 'Таблица'); assert.strictEqual(K.csvTitle({ title: () => 'Из функции, ' + K.nfEff('fwdCarry').unit }), 'Из функции, тыс ₽');
 });
@@ -369,6 +380,20 @@ test('K.table: смена формата перерисовывает табли
   await a.api.setHidden('mv', true); await a.api.resetCols();
   same(K.colFmt.get('dv01'), { decimals: 1, scale: null });
   assert.strictEqual(cells(a.html(), 'dv01').rows[0].text, '12.3');
+});
+
+test('K.table: таблицу рисуют заново на том же месте — подписки на смену формата не копятся (прошлая таблица не перерисовывается)', async () => {
+  const { K } = load(new Map());
+  const box = el(); box.id = 'tb-again';
+  let calls = 0;
+  const make = () => K.table(box, { rowsFn: () => { calls++; return rows(); }, search: false, viewKey: 'c99-fmt-again', columns: K.cols(KEYS) });
+  make(); make(); make();
+  const before = calls;
+  await K.colFmt.set('dv01', { decimals: 2 });
+  assert.strictEqual(calls - before, 1, 'смена формата — одна перерисовка, а не по числу вызовов K.table: ' + (calls - before));
+  K.setNegFmt('minus');
+  const b2 = calls; make(); K.setNegFmt('acc');
+  assert.ok(calls - b2 <= 2, 'формат отрицательных — то же: ' + (calls - b2));
 });
 
 test('K.table: подсветка и сортировка — по исходному числу, не по округлённому', async () => {

@@ -284,3 +284,48 @@ test('с сервером: формат берётся с сервера, пра
     await s.ctx.close();
   } finally { await browser.close(); }
 });
+
+test('меню «Колонки ▾»: щелчок по заголовку таблицы закрывает его (таблица перерисовалась под щелчком), «Формат по умолчанию» — нет', { skip }, async () => {
+  const { browser, pg, errors } = await launch(1400);
+  try {
+    await openC01(pg);
+    await openMenu(pg);
+    await fmtBtn(pg, 'dv01'); await selD(pg, 'dv01').selectOption('2');
+    assert.strictEqual(await pg.locator('.k-colmenu').count(), 1);
+    // кнопка, которую меню перестроило на месте, — своя: меню остаётся
+    await resetFmt(pg, 'dv01');
+    assert.strictEqual(await pg.locator('.k-colmenu').count(), 1, '«Формат по умолчанию» меню не закрыл');
+    await selD(pg, 'dv01').selectOption('1');  // панель колонки осталась раскрытой
+    assert.strictEqual(await pg.locator('.k-colmenu').count(), 1);
+    // щелчок по заголовку: сортировка перерисовывает таблицу синхронно, цель уходит из документа — меню всё равно закрывается
+    await pg.click('table.k-tbl th[data-k="mv"]');
+    await pg.waitForFunction(() => !document.querySelector('.k-colmenu'));
+    assert.strictEqual(await pg.getAttribute('.k-colbtn', 'aria-expanded'), 'false');
+    // и в блоттере C03
+    await openC03(pg);
+    await openMenu(pg);
+    await fmtBtn(pg, 'dv01'); await selD(pg, 'dv01').selectOption('3');
+    await resetFmt(pg, 'dv01');
+    assert.strictEqual(await pg.locator('.k-colmenu').count(), 1, 'C03: «Формат по умолчанию» меню не закрыл');
+    await pg.click('#tbl table th[data-k="mv"], #tbl table th[data-k="dv01"]');
+    await pg.waitForFunction(() => !document.querySelector('.k-colmenu'));
+    assert.deepStrictEqual(errors, []);
+  } finally { await browser.close(); }
+});
+
+test('подсказка к заголовку CS01, DV01, «Базис01», «Спред к КБД01» называет выбранную единицу, а не «тыс ₽/бп»', { skip }, async () => {
+  const { browser, pg, errors } = await launch(1500);
+  try {
+    await openC01(pg);
+    const tip = k => pg.evaluate(k => { const th = document.querySelector('table.k-tbl th[data-k="' + k + '"]'); return th ? [th.getAttribute('title') || '', ...[...th.querySelectorAll('[title]')].map(x => x.getAttribute('title'))].join(' ') : null; }, k);
+    const was = await tip('dv01');
+    assert.ok(/DV01 ставок, тыс ₽\/бп:/.test(was) && /CS01, тыс ₽\/бп:/.test(await tip('cs01')), 'по умолчанию — как было: ' + was.slice(0, 60));
+    await openMenu(pg);
+    await fmtBtn(pg, 'dv01'); await selU(pg, 'dv01').selectOption('mm');
+    await fmtBtn(pg, 'cs01'); await selU(pg, 'cs01').selectOption('1');
+    const dv = await tip('dv01'), cs = await tip('cs01');
+    assert.ok(/DV01 ставок, mm ₽\/бп:/.test(dv) && !/DV01 ставок, тыс/.test(dv), dv.slice(0, 70));
+    assert.ok(/CS01, ₽\/бп:/.test(cs) && !/CS01, тыс/.test(cs), cs.slice(0, 70));
+    assert.deepStrictEqual(errors, []);
+  } finally { await browser.close(); }
+});

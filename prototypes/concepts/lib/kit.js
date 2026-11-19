@@ -2400,8 +2400,13 @@
       head();
       const first = list.querySelector('input:not(:disabled)'); if (first && first.focus) first.focus();
       const onKey = e => { if (e.key === 'Escape') { K.closeColMenu(); e.stopImmediatePropagation(); e.preventDefault(); if (btn.focus) btn.focus(); } };
-      // щелчок по кнопке меню, которую список перестроил на месте (формат колонки, TDM#789), — не «снаружи»: цель уже не в документе
-      const onDoc = e => { if (e.target.isConnected !== false && !m.contains(e.target) && e.target !== btn) K.closeColMenu(); };
+      // «снаружи» — по пути события: он фиксируется при отправке. Кнопка меню, которую список перестроил на месте (формат колонки,
+      // TDM#789), к приходу щелчка на документ уже не в нём, но её путь вёл через меню; заголовок таблицы, который щелчок
+      // перерисовал, — путь снаружи, и меню закрывается
+      const onDoc = e => {
+        const p = e.composedPath ? e.composedPath() : [];
+        if (p.length ? !p.includes(m) && !p.includes(btn) : !m.contains(e.target) && e.target !== btn) K.closeColMenu();
+      };
       const onSize = () => K.closeColMenu();
       document.addEventListener('keydown', onKey, true); window.addEventListener('resize', onSize);
       const t0 = setTimeout(() => document.addEventListener('click', onDoc), 0);
@@ -3030,9 +3035,12 @@
     const api = { redraw: draw, state: st, csv, csvName, setSort: s => { st.sort = s; draw(true); }, setFilter: (k, v) => { st.filters[k] = v; draw(true); }, setGrouped: g => { st.grouped = !!g; draw(true); }, el,
       viewKey: vkey, layout: () => JSON.parse(JSON.stringify(lay)), setLayout: v => { lay = K.viewLayout(v, colKeys()); saveLay(); draw(true); }, resetView: () => resetBtn.onclick(),
       colKey: ckey, hiddenCols: () => [...hid], addedCols: () => [...add], setHidden, addCol, removeCol, resetCols, setVisibleOrder, colMenu: colBtn };
-    if (opts.autoFilter !== false && !opts.rows) K.live(el, 'filter', draw);
-    else K.live(el, 'numfmt', draw);  // формат отрицательных чисел (#153): таблица без перерисовки по фильтру
-    K.live(el, 'colfmt', draw);  // формат чисел колонки (TDM#789): знаки и единицы — во всех таблицах позиций сразу
+    // таблицу рисуют заново на том же el: подписки прошлой — снять, иначе они копятся и перерисовывают устаревшую таблицу
+    if (el.__kevOff) el.__kevOff();
+    const evOff = [opts.autoFilter !== false && !opts.rows ? K.live(el, 'filter', draw)
+      : K.live(el, 'numfmt', draw),  // формат отрицательных чисел (#153): таблица без перерисовки по фильтру
+      K.live(el, 'colfmt', draw)];  // формат чисел колонки (TDM#789): знаки и единицы — во всех таблицах позиций сразу
+    el.__kevOff = () => evOff.forEach(off => off());
     // ответ сервера с выбором колонок пришёл позже, чем страница нарисовала таблицу (TDM#763): таблицы рисуются заново, если он другой
     if (el.__kcpOff) el.__kcpOff();
     el.__kcpOff = pick ? K.live(el, 'colprefs', () => {
@@ -3439,6 +3447,8 @@
   // Число каждой настраиваемой колонки (TDM#789, K.nfNum): делитель, знаков по умолчанию и то, что идёт к единице. Ключ — ключ колонки
   // в K.posCols: по нему формат хранится у пользователя. Цены, доходности, спреды и сроки — только знаки (нет per); суммы — ещё и
   // единицы (per). Колонки без описания (даты, текст, оформление) настройки не имеют
+  // подсказка риск-колонки с единицей в первой фразе («…, тыс ₽/бп: …»): единица — та, что выбрал пользователь (K.nfCol: titleFn)
+  K.tipUnit = (tip, u) => tip.replace('тыс ₽/бп', u);
   const NFD = K.NF, KDF = K.repr === 'RUB' ? 2 : 3;  // знаков у прогнозного кэрри (C17): в валюте отчёта, отличной от рубля, на один больше
   Object.assign(NFD, {
     notional: { scale: 1e6, d: 2, per: 'в вал.' },
@@ -3569,10 +3579,10 @@
     zdisc: { key: 'zdisc', label: 'Z к RUONIA', num: true, unit: 'б.п.', nf: NFD.zdisc, val: r => r.zRuonia, fmt: v => v == null ? '<span class="mut3">—</span>' : K.nfNum('zdisc', v), title: K.zdiscTip, tip: true },
     gspread: { key: 'gspread', label: 'G-спред', num: true, unit: 'б.п.', nf: NFD.gspread, fmt: K.nfFn('gspread') },
     dur: { key: 'mdur', label: 'Дюр.', num: true, unit: 'лет', nf: NFD.dur, fmt: K.nfFn('dur') },
-    dv01: { key: 'dv01', label: 'DV01', num: true, nf: NFD.dv01, fmt: K.nfFn('dv01'), cls: v => f.cls(v), sum: true, unit: 'тыс ₽/бп', title: K.tips.dv01, tip: true },
-    cs01: { key: 'cs01', label: 'CS01', num: true, nf: NFD.cs01, fmt: K.nfFn('cs01'), cls: v => f.cls(v), sum: true, unit: 'тыс ₽/бп', title: K.tips.cs01, tip: true },
-    basis01: { key: 'basis01', label: 'Базис01', num: true, nf: NFD.basis01, fmt: v => v ? K.nfNum('basis01', v) : '<span class="mut3">·</span>', sum: true, unit: 'тыс ₽/бп', title: K.tips.basis01, tip: true },
-    ofzSpr01: { key: 'ofzSpr01', label: 'Спред к КБД01', num: true, nf: NFD.ofzSpr01, fmt: v => v ? K.nfNum('ofzSpr01', v) : '<span class="mut3">·</span>', sum: true, unit: 'тыс ₽/бп', title: K.tips.ofzSpr01, tip: true },
+    dv01: { key: 'dv01', label: 'DV01', num: true, nf: NFD.dv01, fmt: K.nfFn('dv01'), cls: v => f.cls(v), sum: true, unit: 'тыс ₽/бп', title: K.tips.dv01, titleFn: u => K.tipUnit(K.tips.dv01, u), tip: true },
+    cs01: { key: 'cs01', label: 'CS01', num: true, nf: NFD.cs01, fmt: K.nfFn('cs01'), cls: v => f.cls(v), sum: true, unit: 'тыс ₽/бп', title: K.tips.cs01, titleFn: u => K.tipUnit(K.tips.cs01, u), tip: true },
+    basis01: { key: 'basis01', label: 'Базис01', num: true, nf: NFD.basis01, fmt: v => v ? K.nfNum('basis01', v) : '<span class="mut3">·</span>', sum: true, unit: 'тыс ₽/бп', title: K.tips.basis01, titleFn: u => K.tipUnit(K.tips.basis01, u), tip: true },
+    ofzSpr01: { key: 'ofzSpr01', label: 'Спред к КБД01', num: true, nf: NFD.ofzSpr01, fmt: v => v ? K.nfNum('ofzSpr01', v) : '<span class="mut3">·</span>', sum: true, unit: 'тыс ₽/бп', title: K.tips.ofzSpr01, titleFn: u => K.tipUnit(K.tips.ofzSpr01, u), tip: true },
     carry: { key: 'carryDay', label: 'Кэрри/д', num: true, nf: NFD.carry, fmt: K.nfFn('carry'), cls: v => f.cls(v), sum: true, unit: 'тыс ₽', title: 'тыс ₽ в день. ' + K.tips.carry, titleFn: u => u + ' в день. ' + K.tips.carry, tip: true },
     funding: { key: 'fundingDay', label: 'Фондир./д', num: true, nullable: true, nf: NFD.funding, fmt: v => v == null ? '<span class="mut3">—</span>' : K.nfNum('funding', v), cls: v => f.cls(v), sum: true, unit: 'тыс ₽', title: 'Фондирование, тыс ₽ в день. ' + K.tips.funding, titleFn: u => 'Фондирование, ' + u + ' в день. ' + K.tips.funding, tip: true },
     pnl: { key: 'pnl', label: 'PnL дня', num: true, nf: NFD.pnl, val: r => r.pnl.total, fmt: K.nfFn('pnl'), cls: v => f.cls(v), sum: r => r.pnl.total, unit: 'тыс ₽' },

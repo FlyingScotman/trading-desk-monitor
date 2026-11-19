@@ -149,6 +149,7 @@ test('C13: список эмитентов (кнопки «Колонки ▾» 
     // раскрытие ячейки по позициям — в тех же единицах, что в списке
     await pg.keyboard.press('Escape');
     const csv = await csvOf(pg);
+    assert.ok(/PnL, тыс ₽/.test(csv), 'у «PnL» списка в CSV появилась единица: ' + csv.split(/\r?\n/).slice(0, 4).join(' | '));
     assert.ok(/MV, bn ₽/.test(csv), 'CSV списка: ' + csv.split(/\r?\n/).slice(0, 4).join(' | '));
     // перезагрузка — формат на месте (запись в браузере); сброс — вид прежний
     const saved = await pg.evaluate(k => localStorage.getItem(k), KEY);

@@ -29,7 +29,8 @@ it. The server keeps it as the user chose and does not know the columns, only th
 
 * ``GET /api/v1/me/column-formats``: every format of the signed-in user, ``{column: {decimals, scale, updated_at}}``;
 * ``PUT /api/v1/me/column-formats/{col}`` ``{"decimals": 0..6 | null, "scale": "1" | "k" | "mm" | "bn" | null}``: the
-  whole format of one column, replaced; ``null`` (or left out) is the column's own default for that part: ``decimals``
+  whole format of one column, replaced; both keys are required and no other key is accepted (a body with a misspelt key
+  or an empty one is a 422, never a reset). ``null`` is the column's own default for that part: ``decimals``
   the page's digits for the units shown, ``scale`` the column's own units. Both ``null`` is the default format and removes
   the row. ``"1"`` is the number as it is (no units), ``"k"`` thousands (тыс), ``"mm"`` millions, ``"bn"`` billions;
 * ``DELETE /api/v1/me/column-formats/{col}``: back to the default, also when there is nothing to remove.
@@ -50,7 +51,7 @@ from datetime import datetime
 from typing import Annotated, Literal
 
 from fastapi import APIRouter, Depends, Path, Response
-from pydantic import BaseModel, Field, StrictInt
+from pydantic import BaseModel, ConfigDict, Field, StrictInt
 
 from . import auth
 from .app import ApiError, Con, ConRW
@@ -86,11 +87,14 @@ class TableColumns(BaseModel):
 
 
 class FormatIn(BaseModel):
-    decimals: StrictInt | None = Field(default=None, ge=0, le=6,
-                                       description="Digits after the point, 0..6; null / left out: the column's default")
-    scale: Literal["1", "k", "mm", "bn"] | None = Field(default=None,
+    """Both keys are required and no other is accepted: a misspelt key (``{"digits": 3}``) or an empty body is a 422, not
+    a silent reset of the format. The reset is an explicit ``{"decimals": null, "scale": null}`` or ``DELETE``."""
+
+    model_config = ConfigDict(extra="forbid")
+    decimals: StrictInt | None = Field(..., ge=0, le=6, description="Digits after the point, 0..6; null: the column's default")
+    scale: Literal["1", "k", "mm", "bn"] | None = Field(...,
                                                         description="Units: 1 as is, k thousands, mm millions, bn billions;"
-                                                                    " null / left out: the column's own units")
+                                                                    " null: the column's own units")
 
 
 class ColumnFormat(BaseModel):
