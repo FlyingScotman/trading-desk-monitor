@@ -63,10 +63,10 @@ EXTRA_KEYS_READ = ("assumptions", "core", "curve_proxy", "dm_bp", "funding", "g_
                    "index_fixings", "issue_size", "lat_name", "legs", "not_exact_reason", "ocp_unconfirmed", "offer_date",
                    "offer_kind",
                    "ofz_basis01", "ofz_ruonia01", "pv_diff_rub", "quality", "quote", "reason", "reported",
-                   "reported_ccy", "reported_pv_rub", "repos", "risk_missing", "risk_problem", "spread_buckets", "swaps",
-                   "why")
+                   "reported_ccy", "reported_pv_rub", "repos", "risk_missing", "risk_problem", "short_name", "spread_buckets",
+                   "swaps", "why")
 """The keys of a position's ``extra`` (the row's own, passed through) that ``lib/real.js`` reads, some only on rows
-a plain bond book does not have: an FX deal's ``legs``, a rates-core trade's ``swaps`` / ``repos`` / ``core``, a
+a plain bond book does not have: the exchange's ``short_name`` of a bond (TDM#776), an FX deal's ``legs``, a rates-core trade's ``swaps`` / ``repos`` / ``core``, a
 not-valued row's ``reported``, an impossible risk's ``risk_problem`` (TDM#170, TDM#460), why a derivative valued without core
 has no rates risk (``risk_missing``, TDM#616), why a forward on a cross without terms is not in the OCP
 (``ocp_unconfirmed``, TDM#672), a bond on the proxy curve's

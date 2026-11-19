@@ -13,7 +13,8 @@
  *    она в обеих валютах; у FX-форварда риск на двух кривых (иностранной и RUONIA), у FX-свопа — на implied-кривой
  *    юаня (CNY FWD); ноги FX-сделки — p.legs (как extra.legs прогона в lib/real.js); CHF-форвард — на своей кривой;
  *  - имя бумаги (R33): p.name = алиас ?? биржевое (p.exchName), поиск — по обоим; алиасы демо — в памяти страницы
- *    (M.aliasApi как в lib/real.js, но без сервера: после перезагрузки — снова только примерный алиас ниже).
+ *    (M.aliasApi как в lib/real.js, но без сервера: после перезагрузки — снова только примерный алиас ниже);
+ *  - короткое имя (TDM#776): p.shortName = своё (p.shortOwn) ?? биржевое (p.exchShort); M.shortNameApi — как M.aliasApi.
  */
 (function () {
   'use strict';
@@ -486,6 +487,8 @@
       p.tradeToday.sell = { n: 1, counted: 1, priced: 1, bonds: s, face: s * 1000, avg: p.price + 0.1 };
       p.tradeToday.net = { bonds: nb, face: nb * 1000 };
     }
+    // номинал в прогоне прошлой даты (TDM#775; на сервере — xp.prevNotional): вчера было на нетто сделок дня меньше, чем сегодня
+    p.prevNotional = p.notional - ((p.tradeToday && (p.tradeToday.net ? p.tradeToday.net.face : p.tradeToday.qty)) || 0); p.newToPrev = false;
     p.pnl = { carry, funding, rates, spread, fx: fxp, trading, other, total: carry + funding + rates + spread + fxp + trading + other };
     p.funding = M.deal(p) || p.book === 'HTM' ? 0 : funding;  // за период (день), как p.funding прогона
     const scale = Math.abs(p.mv || p.notionalRub * 0.02);
@@ -496,12 +499,26 @@
     const bt = (M.books.find(b => b.id === p.book) || {}).type;
     p.portfolio = bt === 'HTM' ? 'HTM' : bt === 'TRADING' && /[05]$/.test(p.id) ? 'AFS' : 'Торговый';
     p.exchName = p.name; p.alias = null;
-    p.searchBase = [p.name, p.isin, p.issuerName, p.issuerFull, p.book, p.bookName, p.ccy, p.kindLabel, p.groupLabel, p.sector, p.couponFmt, p.portfolio].join(' ').toLowerCase();
+    // короткое имя (TDM#776): биржевое — у бумаги с ISIN (в демо — начало имени, как SHORTNAME до 10 знаков), своё — в памяти страницы
+    p.exchShort = p.isin ? p.name.slice(0, 10).trim() : null; p.shortOwn = null; p.shortName = p.exchShort;
+    p.searchBase = [p.name, p.exchShort, p.isin, p.issuerName, p.issuerFull, p.book, p.bookName, p.ccy, p.kindLabel, p.groupLabel, p.sector, p.couponFmt, p.portfolio].join(' ').toLowerCase();
     p.searchText = p.searchBase;
     return p;
   });
+  // новая позиция в демо (TDM#775): последняя облигация со сделкой дня целиком куплена сегодня — вчера её не было (колонки «Сделки за
+  // день» и «Изм. к вчера»: +весь номинал, в подсказке «новая»); последняя, чтобы первые со сделками остались с куплено и продано
+  // (тесты блока сделок карточки берут первую); новых r() нет
+  (function () {
+    const p = positions.filter(x => x.cpn && x.tradeToday && x.tradeToday.net && x.price != null && x.notional > 0).pop();
+    if (!p) return;
+    const nb = Math.round(p.notional / 1000);
+    p.tradeToday = { qty: p.notional, price: p.price, n: 1, new: true, buy: { n: 1, counted: 1, priced: 1, bonds: nb, face: p.notional, avg: p.price - 0.1 }, net: { bonds: nb, face: p.notional } };
+    p.prevNotional = null; p.newToPrev = true;
+  })();
   M.positions = positions;
   M.pos = Object.fromEntries(positions.map(p => [p.id, p]));
+  // прогон предыдущей даты и закрытые с него позиции (TDM#775; на сервере — extras.prevRun): вымышленная позиция, проданная целиком
+  M.prevRun = { runId: 0, date: M.prevDate, closed: [{ positionId: 'P-CLOSED', book: 'OFZ', ccy: 'RUB', name: 'Демо-облигация (закрыта)', notional: 150e6 }] };
   // ---------- прогнозное кэрри (C17, #66): ответ GET /api/v1/concepts/carry той же формы (api/models.py CarryOut,
   // формат #297: dv01, cs01, fxRate, inCcy у позиции; funding группы — позиций с прогнозом, fundingTotal, netKnown, B1 строгое;
   // заседания на год с inHorizon),
@@ -701,8 +718,10 @@
   const applyAlias = (isin, alias) => {
     const last = (aliasRevs[isin] || [])[0];
     if (alias) M.aliases[isin] = { alias, changedBy: last.changed_by, changedAt: last.changed_at }; else delete M.aliases[isin];
-    positions.forEach(p => { if (p.isin === isin) { p.alias = alias || null; p.name = p.alias || p.exchName; p.searchText = (p.alias ? p.alias.toLowerCase() + ' ' : '') + p.searchBase; } });
+    positions.forEach(p => { if (p.isin === isin) { p.alias = alias || null; p.name = p.alias || p.exchName; p.searchText = M.searchPrefix(p) + p.searchBase; } });
   };
+  // перед searchBase в поиске — свои имена бумаги (алиас и короткое), в нижнем регистре; как в lib/real.js
+  M.searchPrefix = p => (p.alias ? p.alias.toLowerCase() + ' ' : '') + (p.shortOwn ? p.shortOwn.toLowerCase() + ' ' : '');
   Object.keys(aliasRevs).forEach(isin => applyAlias(isin, aliasRevs[isin][0].alias));
   let revId = 1;
   M.aliasApi = {
@@ -719,6 +738,30 @@
       return Promise.resolve({ status: 200, body: { isin, alias, changed_by: 'demo', changed_at: revs[0].changed_at, changed: true } });
     },
     history: isin => Promise.resolve((aliasRevs[isin] || []).slice()),
+  };
+  // короткие имена (TDM#776): как алиасы, в памяти страницы; PUT /api/v1/instruments/short-name — не длиннее 40 знаков
+  const shortRevs = { 'RU000A105RL4': [{ rev_id: 1, short_name: 'Россия-43', changed_by: 'demo', changed_at: AS_OF + 'T09:00:00Z' }] };
+  M.shortNames = {};
+  const applyShort = (isin, name) => {
+    const last = (shortRevs[isin] || [])[0];
+    if (name) M.shortNames[isin] = { shortName: name, changedBy: last.changed_by, changedAt: last.changed_at }; else delete M.shortNames[isin];
+    positions.forEach(p => { if (p.isin === isin) { p.shortOwn = name || null; p.shortName = p.shortOwn || p.exchShort; p.searchText = M.searchPrefix(p) + p.searchBase; } });
+  };
+  Object.keys(shortRevs).forEach(isin => applyShort(isin, shortRevs[isin][0].short_name));
+  let shortRevId = 1;
+  M.shortNameApi = {
+    editable: true, demo: true,
+    readOnlyReason: '',
+    put(isin, raw) {
+      if (raw != null && /[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f-\u009f]/.test(String(raw))) return Promise.resolve({ status: 422, body: { code: 'invalid_parameter', message: 'the short name has control characters' } });
+      const name = raw == null ? null : String(raw).split(/\s+/).filter(Boolean).join(' ') || null;
+      if (name && name.length > 40) return Promise.resolve({ status: 422, body: { code: 'invalid_parameter', message: 'the short name is longer than 40 characters' } });
+      const revs = shortRevs[isin] = shortRevs[isin] || [], last = revs[0];
+      if ((last ? last.short_name : null) === name) return Promise.resolve({ status: 200, body: { isin, short_name: name, changed_by: last && last.changed_by, changed_at: last && last.changed_at, changed: false } });
+      revs.unshift({ rev_id: ++shortRevId, short_name: name, changed_by: 'demo', changed_at: now() });
+      return Promise.resolve({ status: 200, body: { isin, short_name: name, changed_by: 'demo', changed_at: revs[0].changed_at, changed: true } });
+    },
+    history: isin => Promise.resolve((shortRevs[isin] || []).slice()),
   };
 
   // сортировка по умолчанию: валюта → группа → эмитент → флоатер/фикс → срок до события
