@@ -19,7 +19,7 @@ from test_r23_concepts import DATE, PREV, desk  # noqa: F401 - the fixture
 
 from desk import store
 from desk.api import app as appmod
-from desk.api import pnl_mtd
+from desk.api import concepts, pnl_mtd
 from desk.api.app import warm_bodies
 from desk.api.pnl_history import Sum, amounts, period_runs, rows_query
 from desk.api.runs import resolve_run
@@ -336,3 +336,23 @@ def test_the_memo_is_bounded_and_counts():
     m.put("c", 3)
     assert m.get("b") is None and m.get("a") == 1 and m.get("c") == 3 and len(m) == 2
     assert m.stats() == {"items": 2, "hits": 3, "misses": 2}
+
+
+def test_the_history_series_come_in_the_order_of_the_runs_positions_not_of_the_plan(desk, store_url):  # noqa: F811
+    """The series' key order is the body's byte order. ``run_position`` is read by ``run_id``: with no ORDER BY the rows
+    come in the heap's order from a bitmap scan (the planner's choice before the table is analysed) and in the key's order
+    from an index scan (after the autoanalyze, which comes at a time no test controls). A run's rows are not in the heap
+    in the order of its positions (they are inserted and updated one by one), so the same history was once built in two
+    orders and a CI run of the caches' equality test failed. The order is the run's (``ord``), whatever the plan."""
+    base = newest(store_url)["run_id"]
+    runs = [base, *history(store_url, EARLIER, base).values()]
+    out_of_order = 0
+    with psycopg.connect(store_url, row_factory=dict_row, autocommit=True) as con:
+        for rid in runs:
+            heap = [x["position_id"] for x in con.execute("SELECT position_id FROM run_position WHERE run_id = %s"
+                                                          " AND fact IS NOT NULL ORDER BY ctid", (rid,))]
+            run_order = [x["position_id"] for x in con.execute("SELECT position_id FROM run_position WHERE run_id = %s"
+                                                               " AND fact IS NOT NULL ORDER BY ord, position_id", (rid,))]
+            out_of_order += heap != run_order
+            assert list(concepts.positions_history(con, newest(store_url, rid))["series"]) == run_order, rid
+    assert out_of_order, "no run has its rows in the heap out of its order: the test checks nothing"
