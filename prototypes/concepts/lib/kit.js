@@ -1474,7 +1474,10 @@
       '<button class="k-btn" data-a="view" title="Вид: формат отрицательных чисел, когда прогон считается устаревшим" aria-haspopup="dialog">⚙</button>' +
       '<button class="k-btn" data-a="theme" title="Светлая / тёмная тема">◐</button>';
     document.body.prepend(bar);
-    if (/^https?:$/.test(location.protocol) && !window.DESK_AUTH) document.head.appendChild(Object.assign(document.createElement('script'), { src: '../desk-auth.js' }));  // вход: пользователь, «Выйти», CSRF
+    // вход: пользователь, «Выйти», CSRF; режим входа и роль того же ответа — права на правку имён бумаг (M.nameRights, TDM#777)
+    const hearAuth = () => { const a = window.DESK_AUTH; if (a && a.ready && M.nameRights) a.ready.then(st => { M.nameRights.setAuth(st); K.refreshNameTools(); }); };
+    if (/^https?:$/.test(location.protocol) && !window.DESK_AUTH) document.head.appendChild(Object.assign(document.createElement('script'), { src: '../desk-auth.js', onload: hearAuth }));
+    else hearAuth();
     chipsBox = bar.querySelector('.filters'); renderFilterChips();
     // экран не читает фильтр шапки (TDM#566, K.top({ filter: false, filterNote })): чипов нет — только подпись, цифры экрана не зависят от выбора
     if (opt.filter === false) { chipsBox.innerHTML = '<span class="k-note" data-nofilter title="Юрлица, дески, книги и портфели шапки на этом экране не применяются">Фильтр шапки здесь не действует' + (opt.filterNote ? ': ' + esc(opt.filterNote) : '') + '</span>'; chipsBox = null; }
@@ -3629,14 +3632,19 @@
   };
   const canAlias = p => !!(p && p.isin && M.aliasApi);
   const aliasView = p => {
-    const ro = M.aliasApi && M.aliasApi.editable === false;
+    const ro = M.aliasApi && M.aliasApi.editable === false, ti = 'переименовать бумагу (алиас по ISIN — на всех экранах)';
     return '<span class="k-nm-v">' + esc(p.name) + '</span>' +
       (p.alias && p.exchName && p.exchName !== p.alias ? ' <span class="k-exch" title="биржевое имя">' + esc(p.exchName) + '</span>' : '') +
       (canAlias(p) ? '<span class="k-alias-tools">' +
-        '<button class="k-ico" data-al="edit"' + (ro ? ' disabled title="' + esc('только чтение: ' + M.aliasApi.readOnlyReason) + '"' : ' title="переименовать бумагу (алиас по ISIN — на всех экранах)"') + '>✎</button>' +
+        '<button class="k-ico" data-al="edit"' + (ro ? ' disabled title="' + esc('только чтение: ' + M.aliasApi.readOnlyReason) + '"' : ' title="' + esc(ti) + '"') + ' data-ti="' + esc(ti) + '">✎</button>' +
         '<button class="k-ico" data-al="hist" title="история имени">⟲</button></span>' : '');
   };
   K.aliasName = p => '<span class="k-nm">' + aliasView(p) + '</span>';
+  // права на правку уточнились (ответ входа пришёл позже, чем нарисовали карточку, TDM#777): ✎ в уже открытых карточках — на месте
+  K.refreshNameTools = () => document.querySelectorAll('[data-al=edit]').forEach(b => {
+    const ro = M.aliasApi && M.aliasApi.editable === false;
+    b.disabled = !!ro; b.title = ro ? 'только чтение: ' + M.aliasApi.readOnlyReason : (b.dataset.ti || b.title);
+  });
   const WHO = { local: 'этот компьютер', demo: 'демо' };
   const stamp = s => { if (!s) return '—'; const d = new Date(s); if (isNaN(d)) return esc(s); const z = n => String(n).padStart(2, '0'); return z(d.getDate()) + '.' + z(d.getMonth() + 1) + '.' + d.getFullYear() + ' ' + z(d.getHours()) + ':' + z(d.getMinutes()); };
   // ответы сервера (английские) — по-русски; незнакомое — как есть

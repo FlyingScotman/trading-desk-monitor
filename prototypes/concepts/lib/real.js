@@ -56,7 +56,8 @@
  * подставляется по приходу: p.name = алиас ?? биржевое имя (p.exchName), p.alias — алиас или null, поиск — по обоим (p.searchBase
  * + алиас); таблицы меняет на месте K.patchNames, страницы подписываются на 'alias' через K.onAlias; событие 'filter' по приходу
  * алиасов не рассылается). Алиас не входит в строки прогона: тот же алиас — и у
- * старых прогонов. Изменение — M.aliasApi.put (PUT /api/v1/instruments/alias, только с компьютера сервера: иначе 403 и
+ * старых прогонов. Изменение — M.aliasApi.put (PUT /api/v1/instruments/alias: вход включён — трейдер и администратор с любого
+ * компьютера, «просмотр» — только чтение; вход выключен — только компьютер сервера (M.nameRights, TDM#777); иначе 403 и
  * карточка — только чтение), история — M.aliasApi.history; карточка (kit.js, K.aliasEdit) подставляет новое имя во все
  * позиции бумаги.
  * Календарь рынка (M.marketCal) — тоже по запросу, /api/v1/calendar/market: агрегаты по дням, типам и валютам из
@@ -329,6 +330,28 @@
 
   // ---------- имена бумаг: алиасы по ISIN (R33) ----------
   const LOOPBACK = /^(127\.\d+\.\d+\.\d+|localhost|\[?::1\]?)$/i;
+  // Кто может менять имена бумаг (TDM#777; сервер — backend/src/desk/api/auth.py, alias_guard): вход включён — трейдер и
+  // администратор с любого компьютера, роль «просмотр» — только чтение; вход выключен — только компьютер сервера. Режим и роль
+  // приходят из GET /api/v1/auth/state: его уже спрашивает desk-auth.js (K.top, kit.js), и kit.js отдаёт ответ сюда
+  // (M.nameRights.setAuth) — второго запроса нет. Ответа ещё нет или он не пришёл — по адресу страницы, как раньше.
+  // Ответ 403 сервера всё равно переводит в только чтение (kit.js). Права общие для алиаса и короткого имени.
+  const REASON_LOCAL = 'вход выключен — переименовать можно только на компьютере, где работает сервер деска (адрес 127.0.0.1)';
+  const REASON_VIEWER = 'роль «просмотр» не меняет имена бумаг: нужна роль «трейдер» или «администратор»';
+  const REASON_DENIED = 'сервер отказал в правке: роль или режим входа изменились — обновите страницу';
+  const rights = { editable: LOOPBACK.test(location.hostname || ''), reason: LOOPBACK.test(location.hostname || '') ? REASON_DENIED : REASON_LOCAL, known: false };
+  M.nameRights = {
+    get editable() { return rights.editable; }, set editable(v) { rights.editable = !!v; },
+    get readOnlyReason() { return rights.reason; }, get authKnown() { return rights.known; },  // known: ответ входа применён
+    setAuth(st) {
+      if (!st || typeof st.enabled !== 'boolean') return rights.editable;  // нет ответа: остаётся по адресу страницы
+      if (!st.enabled) { rights.editable = typeof st.loopback === 'boolean' ? st.loopback : LOOPBACK.test(location.hostname || ''); rights.reason = REASON_LOCAL; }
+      else if (!st.user) return rights.editable;  // вход включён, пользователя нет: страницу уведёт на вход desk-auth.js
+      else if (st.user.role === 'viewer') { rights.editable = false; rights.reason = REASON_VIEWER; }
+      else { rights.editable = true; rights.reason = REASON_DENIED; }
+      rights.known = true;
+      return rights.editable;
+    },
+  };
   // запрос уходит сразу, пока сервер ждёт нас, а подставляются алиасы по приходу (после сборки позиций ниже)
   M.aliases = {};
   const aliasReq = getJson('../api/v1/instruments/aliases');
@@ -339,14 +362,14 @@
       return { status: r.status, body: j };
     } catch (e) { return { status: 0, body: { message: 'нет связи с сервером' } }; }
   }
-  M.aliasApi = {
-    // менять можно только с компьютера сервера (local_only): с другого адреса — сразу только чтение, без запроса
-    editable: LOOPBACK.test(location.hostname || ''),
-    readOnlyReason: 'алиас меняется только на компьютере, где работает сервер деска (адрес 127.0.0.1)',
+  M.aliasApi = Object.defineProperties({
     put: (isin, alias) => aliasCall('PUT', '../api/v1/instruments/alias', { isin, alias }),
     history: isin => aliasCall('GET', '../api/v1/instruments/aliases/' + encodeURIComponent(isin) + '/history')
       .then(r => r.status === 200 && r.body ? r.body.revisions : null),
-  };
+  }, {
+    editable: { get: () => rights.editable, set: v => { rights.editable = !!v; }, enumerable: true },
+    readOnlyReason: { get: () => rights.reason, enumerable: true },
+  });
 
   // ---------- позиции ----------
   const FREQ = { 12: 'M', 4: 'Q', 2: 'S', 1: 'A' };

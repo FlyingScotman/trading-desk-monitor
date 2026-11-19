@@ -96,6 +96,43 @@ t('прогон: правка — PUT /api/v1/instruments/alias с JSON; с чу
   assert.strictEqual((await off.M.aliasApi.put('SU26242RMFS0', 'X')).status, 0);
 });
 
+t('права на правку (TDM#777): вход включён — трейдер и администратор с любого компьютера, «просмотр» — только чтение, вход выключен — компьютер сервера', () => {
+  const st = (enabled, role, loopback) => ({ enabled, user: enabled ? (role ? { username: 'u', role } : null) : { username: 'local', role: 'admin' }, loopback });
+  const net = () => load({ real: true, host: '192.168.1.20' });
+  const btn = ({ M, K }) => K.aliasName(M.positions.find(x => x.isin)).match(/<button class="k-ico" data-al="edit"[^>]*>/)[0];
+  for (const role of ['trader', 'admin']) {  // с другого компьютера по сети
+    const x = net();
+    assert.strictEqual(x.M.aliasApi.editable, false, 'до ответа входа — по адресу страницы, как раньше');
+    x.M.nameRights.setAuth(st(true, role, false));
+    assert.strictEqual(x.M.aliasApi.editable, true, role);
+    assert.ok(!/disabled/.test(btn(x)), role + ': ✎ доступна');
+  }
+  const viewer = net();
+  viewer.M.nameRights.setAuth(st(true, 'viewer', false));
+  assert.strictEqual(viewer.M.aliasApi.editable, false);
+  assert.ok(/disabled title="только чтение: роль «просмотр»[^"]*«трейдер»/.test(btn(viewer)), btn(viewer));
+  // даже со своего компьютера: роль решает, а не адрес
+  const viewerHere = load({ real: true, host: '127.0.0.1' });
+  viewerHere.M.nameRights.setAuth(st(true, 'viewer', true));
+  assert.strictEqual(viewerHere.M.aliasApi.editable, false);
+  // вход выключен: только компьютер сервера (loopback от сервера, иначе — по адресу)
+  const offNet = net();
+  offNet.M.nameRights.setAuth(st(false, null, false));
+  assert.strictEqual(offNet.M.aliasApi.editable, false);
+  assert.ok(/disabled title="только чтение: вход выключен — переименовать можно только на компьютере[^"]*127\.0\.0\.1/.test(btn(offNet)), btn(offNet));
+  const offHere = load({ real: true, host: 'localhost' });
+  offHere.M.nameRights.setAuth(st(false, null, true));
+  assert.strictEqual(offHere.M.aliasApi.editable, true);
+  // ответа нет или он непонятный, вход включён без пользователя — права не меняются
+  const keep = net();
+  for (const bad of [null, undefined, {}, st(true, null, false)]) keep.M.nameRights.setAuth(bad);
+  assert.strictEqual(keep.M.aliasApi.editable, false);
+  // 403 сервера переводит в только чтение и у трейдера (роль сменили, пока страница была открыта)
+  const late = net(); late.M.nameRights.setAuth(st(true, 'trader', false));
+  late.M.aliasApi.editable = false;
+  assert.ok(/disabled title="только чтение: сервер отказал/.test(btn(late)), btn(late));
+});
+
 t('демо: примерный алиас, биржевое имя серым в карточке и в подсказке ячейки', () => {
   const { M, K } = load();
   const p = M.positions.find(x => x.isin === 'RU000A105RL4');
