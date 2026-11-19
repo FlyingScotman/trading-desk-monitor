@@ -524,7 +524,7 @@ test('K.table: ключи constructor / toString / valueOf в сохранённ
   same(p.api.addedCols(), ['isin']); same(p.api.hiddenCols(), []);
   p.api.addCol('constructor'); p.api.addCol('toString'); same(p.api.addedCols(), ['isin']);
   const c03 = P('concepts/c03-blotter.html');
-  assert.ok(/Object\.hasOwn\(C, k\)/.test(c03) && !/\.filter\(k => C\[k\] &&/.test(c03) && /const colOf = k => inC\(k\)/.test(c03) && /add: k => \{ if \(!inC\(k\)/.test(c03), 'C03: «ключ в каталоге» — свой ключ C');
+  assert.ok(/Object\.prototype\.hasOwnProperty\.call\(C, k\)/.test(c03) && !/\.filter\(k => C\[k\] &&/.test(c03) && /const colOf = k => inC\(k\)/.test(c03) && /add: k => \{ if \(!inC\(k\)/.test(c03), 'C03: «ключ в каталоге» — свой ключ C');
 });
 
 test('K.table: добавленные колонки, пришедшие с сервера позже страницы, берут своё место и ширину из сохранённой раскладки', async () => {

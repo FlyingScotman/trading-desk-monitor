@@ -192,7 +192,7 @@ body { display: flex; flex-direction: column; height: 100vh; overflow: hidden; }
   // добавленные колонки (TDM#778): любая колонка каталога C, которой нет в наборе; стоят после колонок набора, в порядке добавления;
   // хранятся рядом со скрытыми (K.colPrefs, тот же ключ набора); ключ, которого нет в каталоге, и колонка, ставшая колонкой набора, пропускаются
   // «в каталоге» — свой ключ C, а не унаследованный (constructor, toString: серверу такие ключи подходят)
-  const inC = k => Object.hasOwn(C, k);
+  const inC = k => Object.prototype.hasOwnProperty.call(C, k);
   const readAdd = () => K.colPrefs.sel(colKey()).added.filter(k => inC(k) && !presetCols().includes(k));
   let add = readAdd();
   const cols = () => presetCols().filter(k => !hid.has(k)).concat(add).map(k => Object.assign({ key: k }, C[k]));
