@@ -424,12 +424,17 @@ def _core_fx(prev: EodContext, ctx: EodContext, o: Outcome, p: Outcome | None, p
             + (f" + received {received:,.2f} RUB ({'; '.join(flows)})" if flows else "")
             + "; fx_gross = FX delta D-1 " + ("; ".join(parts) or "0"))
     fx_assumed = assumption("fx_rate_carried", ", ".join(missing)) if missing else None
+    memo = memo if memo is not None else {}
+    failed = None
     try:
-        split = _rates_split(prev, ctx, pv, total, fx, received, memo if memo is not None else {},
+        split = _rates_split(prev, ctx, pv, total, fx, received, memo,
                              live=pv_now is None and bool(getattr(v, "curve_buckets", None)))
     except Exception as e:  # noqa: BLE001 - nice to have: the PnL itself as before (everything in other), never a failed run
-        log.debug("rates split of the PnL left out: %s: %s", type(e).__name__, e)
-        split = None
+        split, failed = None, type(e).__name__
+        if not memo.get("warned"):  # once a run, the type only (the text of an error may carry what is not for the log)
+            memo["warned"] = True
+            log.warning("the split of a swap's or REPO's PnL into carry and rates failed (%s): such rows keep it all in "
+                        "other, reason fx_core_rest", failed)
     if split is not None:
         left = ("; the risk on " + ", ".join(split["left_out"]) + " has no move read here: in other") \
             if split["left_out"] else ""
@@ -444,7 +449,8 @@ def _core_fx(prev: EodContext, ctx: EodContext, o: Outcome, p: Outcome | None, p
                               f"(the cash of the window is in the carry); rates = D-1 bucket DV01 x the curve's move{left}")
     return DirectPnl(CORE_FX_METHOD, prev.business_date, ctx.business_date, total, fx_gross=fx, other=total - fx,
                      fx_gross_cbr=cbr if delta else None, received_rub=received,
-                     other_reason=other_reason(FX_CORE_REST, "rates, points and time: not the FX delta"),
+                     other_reason=other_reason(FX_CORE_REST, "rates, points and time: not the FX delta"
+                                               + (f"; the split into carry and rates failed ({failed})" if failed else "")),
                      assumption=fx_assumed, note=note)
 
 

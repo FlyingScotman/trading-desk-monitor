@@ -195,12 +195,18 @@ def test_a_day_without_the_key_rate_curve_keeps_its_risk_in_other_and_the_run_go
     assert pnl.explained == pytest.approx(pnl.total)
 
 
-def test_an_error_in_the_split_falls_back_to_the_old_split_and_the_run_goes_on(ctx, flat, monkeypatch):
+def test_an_error_in_the_split_falls_back_to_the_old_split_says_so_and_the_run_goes_on(ctx, flat, monkeypatch, caplog):
+    """The reason names the type of the error (not its text); the warning is one per run."""
     def boom(*a, **k):
-        raise RuntimeError("unreadable")
+        raise RuntimeError("secret detail of the error")
     monkeypatch.setattr(direct, "_rates_split", boom)
-    o, _ = day(flat, ctx, swap("S1"), "S1")
-    assert o.no_pnl is None and o.pnl.method != RATES_CORE_METHOD and o.pnl.extra()["other_reason"]["code"] == "fx_core_rest"
+    with caplog.at_level("WARNING", logger="desk.pnl.direct"):
+        o, _ = day(flat, ctx, swap("S1"), "S1")
+    reason = o.pnl.extra()["other_reason"]
+    assert o.no_pnl is None and o.pnl.method != RATES_CORE_METHOD and reason["code"] == "fx_core_rest"
+    assert "the split into carry and rates failed (RuntimeError)" in reason["detail"] and "secret" not in reason["detail"]
+    warned = [r for r in caplog.records if r.levelname == "WARNING" and "failed (RuntimeError)" in r.getMessage()]
+    assert len(warned) == 1 and "secret" not in warned[0].getMessage()
 
 
 def test_a_repo_on_the_key_rate_uses_the_built_projection_curve(ctx, moved):
