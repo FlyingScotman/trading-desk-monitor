@@ -161,4 +161,15 @@ t('демо: ОФЗ-ПД — «Спред» к RUONIA и равен Z к RUONIA 
   for (const p of M.positions.filter(p => p.cpn && p.cpn.type === 'float' && p.ccy === 'RUB')) assert.ok(p.zKbd == null && p.zRuonia === p.zSpreadZ, p.name);
 });
 
+t('TDM#801: сдвиг спреда у ОФЗ — по Z к КБД, и это подписано (C05, PnL за период), C08 подписывает «Спред», история без истории — G-спред', () => {
+  const c05 = P('concepts/c05-morning-brief.html'), pp = P('concepts/lib/pnl-period-position.js'), c08 = P('concepts/c08-calendar.html');
+  assert.ok(/K\.hint\('Спред сдвинулся на 5\+ б\.п\.', 'сдвиг спреда к кривой дисконтирования \(у ОФЗ — к КБД\), по нему считается PnL «Спред»'\)/.test(c05));
+  assert.ok(/p\.spreadCurve === 'RUB OFZ' \? ' <span class="mut3">к КБД<\/span>' : ''/.test(c05), 'пометка «к КБД» у ОФЗ в списке');
+  assert.ok(/kpi\('Спред', c\('spread'\)[^\n]*у ОФЗ — к КБД/.test(pp) && /title="Δ сдвиг спреда к кривой дисконтирования \(у ОФЗ — к КБД\)[^"]*">Спред Δ, bp/.test(pp));
+  assert.ok(/data-csv="Спред, б\.п\.\|Вид спреда" title="'\+esc\(K\.tips\.zspread\)\+'">Спред<\/th>/.test(c08) && /K\.csvv\(\(\) => \[f\.bp\(p\.zspread\), p\.spreadLabel \|\| ''\]\)/.test(c08) && c08.includes("esc(p.spreadLabel)"));
+  const { M } = load(run);
+  const h = M.posHistory('OFZ1');
+  assert.strictEqual(h.spr[0], M.pos.OFZ1.gspread); assert.ok(!(M.pos.OFZ1.gspread !== M.pos.OFZ1.zspread) || h.spr[0] !== M.pos.OFZ1.zspread, 'не основной спред');
+});
+
 console.log(n + ' tests passed');

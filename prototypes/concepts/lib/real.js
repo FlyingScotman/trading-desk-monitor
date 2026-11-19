@@ -800,7 +800,7 @@
     const p = M.pos[id], s = histCache[id];
     if (!s || !s.dates.length) {
       const c = {}; Object.keys(p.dv01ByCurve).forEach(id => { if (p.dv01ByCurve[id] && (id !== 'RUB OFZ' || M.ofzView === 'kbd')) c[id] = [p.dv01ByCurve[id]]; });  // ОФЗ-ИН: basis01 = 0
-      return { dates: [M.asOf], price: [p.price], ytm: [p.ytm], spr: [p.zspread], notional: [p.notional], dv01: [p.dv01], cs01: [p.cs01], basis: [p.basis01], mv: [M.deal(p) ? Math.abs(p.notionalRub) : p.mv], curves: c, bench: [p.ccy === 'RUB' ? curveAt('OFZ', p.tenor) : null], fromRuns: true };
+      return { dates: [M.asOf], price: [p.price], ytm: [p.ytm], spr: [p.gspread], notional: [p.notional], dv01: [p.dv01], cs01: [p.cs01], basis: [p.basis01], mv: [M.deal(p) ? Math.abs(p.notionalRub) : p.mv], curves: c, bench: [p.ccy === 'RUB' ? curveAt('OFZ', p.tenor) : null], fromRuns: true };
     }
     return conv(s, null, id);
   };

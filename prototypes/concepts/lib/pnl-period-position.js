@@ -110,7 +110,7 @@
       kpi('Итог за период', agg.total, days.length + ' прогонов' + (noPnl ? ' · без PnL ' + noPnl : ''), 'main') +
       kpi('Кэрри нетто', P.sumAvail([c('carry'), c('rolldown'), c('funding')]), 'брутто ' + mn(P.sumAvail([c('carry'), c('rolldown')])) + ' · фонд. ' + mn(c('funding')) + cov(P.coverText(agg, ['carry', 'rolldown', 'funding']))) +
       kpi('Ставки', c('rates'), lin == null ? 'линейно — нет данных' : 'линейно ' + f.mn(lin, 1)) +
-      kpi('Спред', c('spread'), dz == null ? 'Δ спреда — нет данных' : 'Δ спреда ' + P.signedBp(dz) + ' bp') +
+      kpi('Спред', c('spread'), dz == null ? 'Δ спреда — нет данных' : 'Δ спреда ' + P.signedBp(dz) + ' bp', '', 'Δ спреда — сдвиг спреда к кривой дисконтирования (у ОФЗ — к КБД), по нему считается PnL «Спред»') +
       kpi('FX (нетто ОВП)', P.srcVal(agg, 'fx'), (ccy === 'RUB' ? 'рублёвая позиция' : 'нетто открытой валютной позиции') + cov(P.coverText(agg, ['fx_gross', 'fx_funding'])), '', P.BY_KEY.fx.d) +
       kpi('Необъяснённое', c('other'), !cur.ck ? (cur.ckError ? 'проверки не загрузились' : 'проверки загружаются…') : own.length ? 'находок проверок: ' + own.length : 'находок нет', own.length ? 'flag' : '') + '</div>' +
       '<div class="k-panel"><div class="hd"><h3>Атрибуция: цена или купон</h3><span class="sp"></span><span class="hint">тот же итог, разложенный по источнику денег</span></div><div class="bd" id="pAttr"></div></div>' +
@@ -191,7 +191,7 @@
     const { K, P, state } = cur.ctx, f = K.f, esc = K.esc, ui = state.ui;
     const cols = P.dayColumns(rows.map(r => r.day)), labels = new Map(((cur.ck && cur.ck.checks) || []).map(c => [c.key, c.label]));
     const v = (r, k) => P.srcVal(r.day, k);
-    const head = '<tr><th class="stick">Дата</th><th class="n" title="Календарных дней от предыдущего прогона">Дн.</th><th class="n">Цена D−1</th><th class="n">Цена D</th><th>Вход D−1</th><th class="n">Дох. Δ, bp</th><th class="n">Спред Δ, bp</th><th class="n">DV01, тыс/bp</th><th class="n">Итог</th>' +
+    const head = '<tr><th class="stick">Дата</th><th class="n" title="Календарных дней от предыдущего прогона">Дн.</th><th class="n">Цена D−1</th><th class="n">Цена D</th><th>Вход D−1</th><th class="n">Дох. Δ, bp</th><th class="n" title="Δ сдвиг спреда к кривой дисконтирования (у ОФЗ — к КБД), по нему считается PnL «Спред»">Спред Δ, bp</th><th class="n">DV01, тыс/bp</th><th class="n">Итог</th>' +
       cols.map(k => '<th class="n" title="' + esc((P.BY_KEY[k] || {}).label || k) + '">' + esc(COL_LABEL[k] || k) + '</th>').join('') +
       '<th class="n" title="Линейная оценка ставок (pnl.extra.rates_linear)">Ставки лин.</th><th class="n" title="Итог метода минус сумма gross-компонент (grossCheck); должно быть 0">Переоц. − Σ</th><th>События / находки</th></tr>';
     const since = r => {
@@ -220,7 +220,7 @@
       cols.map(k => '<td class="n">' + mn2(P.sumAvail(rows.map(r => v(r, k)))) + '</td>').join('') + '<td class="n">' + mn2(S('ratesLinear')) + '</td><td class="n">' + mn2(S('gap')) + '</td><td></td></tr>';
     const life = I.of(cur.ref, ccy).filter(x => x.check === 'life');
     el.innerHTML = '<table class="k-tbl" data-vk="c19-period-position-days" data-title="Переоценка позиции по дням, ' + UNIT + '"><thead>' + head + '</thead><tbody>' + rows.slice().reverse().map(line).join('') + '</tbody><tfoot>' + foot + '</tfoot></table>' +
-      '<p class="hint" style="padding:0 12px">Δ доходности и спреда — D минус D−1, bp. «Вход D−1»: «из расчёта» — входы, сохранённые расчётом; «по прогону D−1» — строка той же позиции в предыдущем прогоне. «Переоц. − Σ» — итог метода минус сумма компонент.' +
+      '<p class="hint" style="padding:0 12px">Δ доходности и спреда — D минус D−1, bp; спред — к кривой дисконтирования (у ОФЗ — к КБД), по нему считается PnL «Спред». «Вход D−1»: «из расчёта» — входы, сохранённые расчётом; «по прогону D−1» — строка той же позиции в предыдущем прогоне. «Переоц. − Σ» — итог метода минус сумма компонент.' +
       (life.length ? ' Жизнь позиции — в событиях строк.' : '') + (!cur.ck ? (cur.ckError ? ' Проверки не загрузились: находок в строках нет.' : ' Проверки загружаются…') : '') + '</p>';
     el.querySelectorAll('tr[data-d]').forEach(tr => tr.onclick = () => {
       ui.pday = ui.pday === tr.dataset.d ? null : tr.dataset.d;
