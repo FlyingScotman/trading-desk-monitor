@@ -1,0 +1,294 @@
+<!doctype html>
+<html lang="ru" data-run="optional">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="icon" href="data:,">
+<title>C22 · Ручные рыночные данные</title>
+<link rel="stylesheet" href="lib/kit.css">
+<style>
+.c22-bar { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.c22-bar .big { font-size: 18px; font-weight: 650; font-variant-numeric: tabular-nums; }
+.c22-bar .k-input[type=date] { min-width: 140px; }
+.c22-conv { font-size: 12px; color: var(--fg-2); line-height: 1.5; }
+.c22-conv b { color: var(--fg); }
+.c22-tools { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.c22-tools .k-input { min-width: 0; width: 220px; max-width: 100%; }
+.c22-ro { border: 1px solid var(--warn); border-radius: 6px; padding: 6px 10px; font-size: 12px; background: color-mix(in srgb, var(--warn) 10%, transparent); }
+.c22-msg { font-size: 12px; min-height: 18px; }
+.c22-msg.ok { color: var(--pos); } .c22-msg.bad { color: var(--neg); } .c22-msg.info { color: var(--fg-2); }
+.c22-tbl-wrap { overflow-x: auto; max-width: 100%; }
+table.c22-tbl { border-collapse: separate; border-spacing: 0; font-size: 12.5px; min-width: 980px; width: 100%; }
+.c22-tbl th { background: var(--panel-2); color: var(--fg-2); font-weight: 500; text-align: left; padding: 6px 8px; border-bottom: 1px solid var(--line-2); white-space: nowrap; }
+.c22-tbl th.n, .c22-tbl td.n { text-align: right; }
+.c22-tbl td { padding: 4px 8px; border-bottom: 1px solid var(--line); vertical-align: top; }
+.c22-tbl td.c22-name { min-width: 170px; max-width: 260px; white-space: normal; }
+.c22-tbl .c22-in { width: 58px; min-width: 0; text-align: right; padding: 3px 5px; font-variant-numeric: tabular-nums; }
+.c22-tbl .c22-in.ccy { width: 52px; text-align: center; text-transform: uppercase; }
+.c22-tbl .c22-in.bad { border-color: var(--neg); }
+.c22-tbl td.c22-ro-v { font-variant-numeric: tabular-nums; padding-top: 8px; }
+.c22-sub { font-size: 11px; color: var(--fg-3); margin-top: 2px; display: flex; gap: 4px 8px; flex-wrap: wrap; }
+.c22-man { border: 1px solid var(--accent); color: var(--accent); border-radius: 999px; padding: 0 7px; font-size: 10.5px; white-space: nowrap; }
+.c22-none { color: var(--warn); }
+.c22-err { color: var(--neg); font-size: 11.5px; margin-top: 3px; }
+.c22-who { font-size: 11.5px; color: var(--fg-2); min-width: 130px; }
+.c22-who .at { color: var(--fg-3); }
+.c22-act { min-width: 118px; max-width: 150px; }
+.c22-act .k-btn { margin: 0 4px 4px 0; }
+.c22-act .k-btn { padding: 2px 8px; }
+.c22-row:not(.dirty) .c22-save, .c22-row:not(.dirty) .c22-cancel { display: none; }
+.c22-row.dirty { background: color-mix(in srgb, var(--accent) 7%, transparent); }
+.c22-row.flash { outline: 2px solid var(--accent); outline-offset: -2px; }
+.c22-hist td { background: var(--bg-2); padding: 6px 10px 10px; }
+.c22-hist table { border-collapse: collapse; font-size: 12px; min-width: 0; width: auto; }
+.c22-hist th, .c22-hist td { background: transparent; padding: 2px 8px; border-bottom: 1px solid var(--line); }
+.c22-hist .gone { color: var(--neg); }
+.c22-empty { padding: 20px; text-align: center; color: var(--fg-3); }
+@media (max-width: 720px) { .c22-tools .k-input { width: 100%; } }
+</style>
+</head>
+<body>
+<div class="k-page">
+  <div class="c22-bar" id="bar" aria-label="Дата"></div>
+  <div id="view"><div class="c22-empty">загрузка…</div></div>
+</div>
+<script src="lib/boot.js"></script>
+<script src="lib/kit.js"></script>
+<script src="lib/instr.js"></script>
+<script src="lib/manual-md.js"></script>
+<script>
+(function () {
+  'use strict';
+  // «Ручные рыночные данные» (TDM#652): CDS-кривые, которые владелец вводит сам — котировок CDS в хабе нет. Кривая имени
+  // референса действует с даты, на которую введена, до следующей введённой; правка прошлой даты и копирование с прошлой
+  // даты — на этом экране. Логика без DOM — lib/manual-md.js (разбор ввода, права, демо в памяти страницы); сервер —
+  // api/v1/market-data/manual/cds (backend desk/api/manual_md_routes.py). Вкладка волатильности — отдельная задача.
+  const K = KIT, f = K.f, esc = K.esc, MD = window.MANUAL_MD, T = MD.TENORS;
+  K.top({ title: 'C22 · Ручные рыночные данные', tag: 'CDS-кривые, введённые вручную', filter: false, filterNote: 'кривые не зависят от книг и фильтров' });
+  const server = K.source === 'real' || K.source === 'empty';
+  const view = document.getElementById('view'), bar = document.getElementById('bar');
+  const u = new URL(location.href), sel = window.CONCEPTS_SEL || {};
+  const today = (d => d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0'))(new Date());
+  const asOf = (window.MOCK && MOCK.asOf) || today;
+  let on = /^\d{4}-\d\d-\d\d$/.test(u.searchParams.get('on') || '') ? u.searchParams.get('on') : (sel.as_of || asOf);
+  const api = server ? MD.serverApi((url, o) => fetch(url, o)) : MD.demoApi(on);
+  let list = null, added = [], drafts = new Map(), errs = new Map(), picked = new Set(), open = new Set(), hist = new Map(), msg = null,
+    sureClear = null, rt = { editable: true, reason: '' }, busy = false;
+
+  const date = d => f.date(d), long = d => d.slice(8, 10) + '.' + d.slice(5, 7) + '.' + d.slice(0, 4);
+  const rows = () => MD.mergeRows(list, added);
+  const rowOf = key => rows().find(r => r.key === key);
+  const draftFor = r => drafts.get(r.key) || MD.draftOf(r.curve);
+  const panel = (title, extra) => { const p = K.h('div', 'k-panel'); p.innerHTML = '<div class="hd"><h3>' + title + '</h3><span class="sp"></span>' + (extra || '') + '</div><div class="bd"></div>'; return p; };
+  const say = (text, tone) => { msg = text ? { text, tone: tone || 'info' } : null; const el = document.getElementById('msg'); if (el) { el.textContent = text || ''; el.className = 'c22-msg ' + (tone || 'info'); } };
+
+  // ---------- шапка: дата ----------
+  function renderBar() {
+    bar.innerHTML = '<button class="k-btn" data-d="-1" title="Предыдущий день" aria-label="Предыдущий день">◂</button>' +
+      '<input class="k-input" type="date" id="pick" aria-label="Дата" value="' + esc(on) + '">' +
+      '<button class="k-btn" data-d="1" title="Следующий день" aria-label="Следующий день">▸</button>' +
+      '<span class="big">' + esc(long(on)) + '</span>' +
+      (sel.as_of && sel.as_of !== on ? '<button class="k-btn" data-d="run" title="Дата выбранного прогона">дата прогона ' + esc(date(sel.as_of)) + '</button>' : '') +
+      '<span class="k-note">кривая действует с даты ввода до следующей введённой</span>';
+    bar.querySelectorAll('[data-d]').forEach(b => b.onclick = () => go(b.dataset.d === 'run' ? sel.as_of : MD.addDays(on, +b.dataset.d)));
+    document.getElementById('pick').onchange = e => e.target.value && go(e.target.value);
+  }
+  function go(d) {
+    on = d; drafts.clear(); errs.clear(); picked.clear(); open.clear(); hist.clear(); sureClear = null; say('');
+    const x = new URL(location.href); x.searchParams.set('on', d); history.replaceState(null, '', x.toString());
+    load();
+  }
+
+  // ---------- загрузка ----------
+  function load() {
+    renderBar();
+    return api.list(on).then(r => {
+      if (r.status === 200) {
+        list = r.body;
+        added = added.filter(n => !list.curves.some(c => c.name_key === MD.nameKey(n)) && !list.positions.some(p => p.name_key === MD.nameKey(n)));
+        render();
+      } else if (r.status === 401 || r.status === 403) view.innerHTML = '<div class="k-panel"><div class="c22-empty">Нужно войти в монитор: экран открыт всем пользователям.</div></div>';
+      else view.innerHTML = '<div class="k-panel"><div class="c22-empty">Не удалось загрузить кривые за ' + esc(long(on)) + ': ' + esc((r.body && r.body.message) || 'ответ ' + r.status) + '.</div></div>';
+    });
+  }
+
+  // ---------- строки ----------
+  const val = (r, t) => { const c = r.curve; return c && c.spreads_bp[t] != null ? MD.fmtSpread(c.spreads_bp[t]) : '—'; };
+  function whoCell(r) {
+    const c = r.curve;
+    if (!c) return '<span class="mut3">—</span>';
+    const t = K.mskTime(c.changed_at, true);
+    return (c.entered_on_date ? 'введена на эту дату' : 'действует с ' + esc(date(c.valid_from)) + ' <span class="at">(с прошлой даты)</span>') +
+      '<br><span class="at">' + esc(c.changed_by) + (t ? ', ' + esc(t) : '') + '</span>';
+  }
+  function rowHtml(r) {
+    const ed = rt.editable, d = draftFor(r), er = errs.get(r.key) || {}, c = r.curve;
+    const dirty = ed && MD.isDirty(d, c), nm = esc(r.name);
+    const cell = (field, label, ph, cls) => ed
+      ? '<input class="k-input c22-in ' + (cls || '') + (er[field] ? ' bad' : '') + '" data-f="' + field + '" inputmode="decimal" autocomplete="off" placeholder="' + ph + '" value="' + esc(field === 'recovery' ? d.recovery : field === 'ccy' ? d.ccy : d.spreads[field]) + '" aria-label="' + nm + ', ' + label + '"' + (er[field] ? ' title="' + esc(er[field]) + '"' : '') + '>'
+      : '';
+    const errTxt = Object.keys(er).map(k => er[k]).filter((x, i, a) => a.indexOf(x) === i).join('; ');
+    const hasCurve = !!c;
+    return '<tr class="c22-row' + (dirty ? ' dirty' : '') + '" data-k="' + esc(r.key) + '">' +
+      (ed ? '<td><input type="checkbox" data-sel aria-label="Выбрать ' + nm + '"' + (picked.has(r.key) ? ' checked' : '') + '></td>' : '') +
+      '<td class="c22-name" data-csv="' + nm + '"><b>' + nm + '</b><div class="c22-sub">' + (hasCurve ? '<span class="c22-man" title="Кривая введена вручную (других источников пока нет)">введено вручную</span>' : '<span class="c22-none">нет кривой на эту дату</span>') +
+      (r.positions ? '<span' + (r.deals && r.deals.length ? ' title="' + esc('Сделки: ' + r.deals.join(', ')) + '"' : '') + '>CDS-позиций в прогоне: ' + r.positions + '</span>' : '') + '</div>' + (errTxt ? '<div class="c22-err" role="alert">' + esc(errTxt) + '</div>' : '') + '</td>' +
+      T.map(t => '<td class="n' + (ed ? '' : ' c22-ro-v') + '" data-csv="' + (c && c.spreads_bp[t] != null ? c.spreads_bp[t] : '') + '">' + (ed ? cell(t, 'срок ' + t + ', б.п.', '') : val(r, t)) + '</td>').join('') +
+      '<td class="n' + (ed ? '' : ' c22-ro-v') + '" data-csv="' + (c ? +(c.recovery * 100).toFixed(2) : '') + '">' + (ed ? cell('recovery', 'доля возмещения, %', '25') : (c ? MD.fmtPct(c.recovery) + ' %' : '—')) + '</td>' +
+      '<td class="' + (ed ? '' : 'c22-ro-v') + '" data-csv="' + (c ? esc(c.ccy) : '') + '">' + (ed ? cell('ccy', 'валюта', 'USD', 'ccy') : (c ? esc(c.ccy) : '—')) + '</td>' +
+      '<td class="c22-who" data-csv="' + (c ? esc((c.entered_on_date ? 'введена на эту дату' : 'действует с ' + date(c.valid_from)) + ', ' + c.changed_by + ', ' + K.mskTime(c.changed_at, true)) : '') + '">' + whoCell(r) + '</td>' +
+      '<td class="c22-act" data-csv="">' + (ed ? '<button class="k-btn pri c22-save" data-a="save">Сохранить</button> <button class="k-btn c22-cancel" data-a="cancel">Отмена</button> ' : '') +
+      (hasCurve ? '<button class="k-btn" data-a="hist" aria-expanded="' + open.has(r.key) + '" title="Все правки этого имени: кто и когда">История</button> ' : '') +
+      (ed && hasCurve ? '<button class="k-btn" data-a="clear" title="Снять имя с этой даты: дальше кривой нет, пока не введёте новую">' + (sureClear === r.key ? 'Подтвердить снятие' : 'Снять с даты') + '</button>' : '') + '</td></tr>' +
+      (open.has(r.key) ? histRow(r) : '');
+  }
+  function histRow(r) {
+    const h = hist.get(r.key), cols = T.length + (rt.editable ? 5 : 4);
+    if (!h) return '<tr class="c22-hist" data-csv-skip="1" data-h="' + esc(r.key) + '"><td colspan="' + cols + '"><span class="mut3">загрузка истории…</span></td></tr>';
+    if (h.error) return '<tr class="c22-hist" data-csv-skip="1" data-h="' + esc(r.key) + '"><td colspan="' + cols + '"><span style="color:var(--neg)">' + esc(h.error) + '</span></td></tr>';
+    return '<tr class="c22-hist" data-csv-skip="1" data-h="' + esc(r.key) + '"><td colspan="' + cols + '"><b>История имени «' + esc(r.name) + '»</b> — правки, новые сверху' +
+      '<div class="c22-tbl-wrap"><table data-vk="c22-cds-history" data-title="История имени ' + esc(r.name) + '"><thead><tr><th>Действует с</th><th>Кто, когда</th>' + T.map(t => '<th class="n">' + t + '</th>').join('') + '<th class="n">Возмещение</th><th>Валюта</th></tr></thead><tbody>' +
+      h.revisions.map(v => '<tr><td>' + esc(long(v.valid_from)) + '</td><td>' + esc(v.changed_by) + ', ' + esc(K.mskTime(v.changed_at, true)) + '</td>' +
+        (v.cleared ? '<td class="gone" colspan="' + (T.length + 2) + '">имя снято с этой даты</td>' :
+          T.map(t => '<td class="n">' + (v.spreads_bp[t] == null ? '—' : MD.fmtSpread(v.spreads_bp[t])) + '</td>').join('') + '<td class="n">' + MD.fmtPct(v.recovery) + ' %</td><td>' + esc(v.ccy) + '</td>') + '</tr>').join('') +
+      '</tbody></table></div></td></tr>';
+  }
+
+  // ---------- экран ----------
+  function render() {
+    const R = rows(), eligible = MD.copyEligible(R, on), ed = rt.editable;
+    const chosen = R.filter(r => picked.has(r.key) && eligible.indexOf(r.name) >= 0).map(r => r.name);
+    const nCopy = picked.size ? chosen.length : eligible.length;
+    view.innerHTML = '';
+    const wrap = K.h('div', 'k-grid');
+
+    const cv = panel('Как заданы котировки', '<span class="k-note">допущение, которое можно сменить</span>');
+    cv.querySelector('.bd').innerHTML = '<div class="c22-conv">' + esc(MD.CONVENTION).replace('par-спред CDS (par coupon spread)', '<b>par-спред CDS (par coupon spread)</b>') + '</div>';
+    wrap.appendChild(cv);
+
+    const pn = panel('CDS-кривые на ' + esc(long(on)), '<span class="k-note">' + (server ? '' : 'демо: вымышленные имена, до перезагрузки страницы · ') + 'имена из CDS-позиций прогона и уже введённые</span>');
+    const bd = pn.querySelector('.bd');
+    bd.style.display = 'flex'; bd.style.flexDirection = 'column'; bd.style.gap = '8px';
+    bd.innerHTML = (ed ? '' : '<div class="c22-ro" id="ro" role="status"><b>Только чтение:</b> ' + esc(rt.reason) + '.</div>') +
+      (ed ? '<div class="c22-tools"><input class="k-input" id="addname" maxlength="140" placeholder="Имя референса, например «Эмитент А»" aria-label="Имя референса">' +
+        '<button class="k-btn" data-a="add">Добавить имя</button><span class="sp" style="flex:1"></span>' +
+        '<button class="k-btn" data-a="copy"' + (nCopy ? '' : ' disabled') + ' title="' + esc(nCopy ? 'Ввести на ' + long(on) + ' кривые, которые действовали до этой даты (у выбранных имён — только у них); кривую, уже введённую на эту дату, не трогаем' : 'Нечего копировать: до этой даты кривых нет или на эту дату они уже введены') + '">' +
+        (picked.size ? 'Скопировать выбранные с прошлой даты' : 'Скопировать с прошлой даты') + (nCopy ? ' (' + nCopy + ')' : '') + '</button></div>' : '') +
+      '<div class="c22-msg ' + (msg ? msg.tone : 'info') + '" id="msg" aria-live="polite">' + (msg ? esc(msg.text) : '') + '</div>' +
+      (R.length ? '<div class="c22-tbl-wrap"><table class="c22-tbl" data-vk="c22-cds" data-title="CDS-кривые на ' + esc(on) + '"><thead><tr>' + (ed ? '<th><input type="checkbox" data-selall aria-label="Выбрать все имена"' + (R.length && R.every(r => picked.has(r.key)) ? ' checked' : '') + '></th>' : '') +
+        '<th>Имя референса</th>' + T.map(t => '<th class="n" title="par-спред, б.п.">' + t + '</th>').join('') + '<th class="n" title="Доля возмещения, %; пусто — 25 %">Возмещение, %</th><th title="Валюта котировки; пусто — USD">Валюта</th><th>Действует с / кем</th><th>Действия</th></tr></thead><tbody>' +
+        R.map(rowHtml).join('') + '</tbody></table></div>' : '<div class="c22-empty">Кривых CDS на эту дату нет. ' + (ed ? 'Введите имя референса и «Добавить имя» — затем спреды по срокам.' : '') + '</div>');
+    wrap.appendChild(pn);
+    view.appendChild(wrap);
+    K.tableToolsAll(view);
+    wire();
+  }
+
+  // ---------- действия ----------
+  function wire() {
+    view.querySelectorAll('[data-a=add]').forEach(b => b.onclick = addName);
+    const an = document.getElementById('addname'); if (an) an.onkeydown = e => { if (e.key === 'Enter') { e.preventDefault(); addName(); } };
+    view.querySelectorAll('[data-a=copy]').forEach(b => b.onclick = copyPrev);
+    const all = view.querySelector('[data-selall]');
+    if (all) all.onchange = () => { rows().forEach(r => all.checked ? picked.add(r.key) : picked.delete(r.key)); render(); };
+    view.querySelectorAll('tr.c22-row').forEach(tr => {
+      const key = tr.dataset.k;
+      const cb = tr.querySelector('[data-sel]'); if (cb) cb.onchange = () => { cb.checked ? picked.add(key) : picked.delete(key); render(); };
+      tr.querySelectorAll('input[data-f]').forEach(inp => {
+        inp.oninput = () => {
+          const r = rowOf(key), d = drafts.get(key) || MD.draftOf(r.curve); drafts.set(key, d);
+          if (inp.dataset.f === 'recovery') d.recovery = inp.value; else if (inp.dataset.f === 'ccy') d.ccy = inp.value; else d.spreads[inp.dataset.f] = inp.value;
+          if (errs.has(key)) { errs.delete(key); tr.querySelectorAll('.c22-in.bad').forEach(x => x.classList.remove('bad')); const e = tr.querySelector('.c22-err'); if (e) e.remove(); }
+          tr.classList.toggle('dirty', MD.isDirty(d, r.curve));
+        };
+        inp.onkeydown = e => {
+          if (e.key === 'Enter') { e.preventDefault(); save(key); }
+          else if (e.key === 'Escape') { drafts.delete(key); errs.delete(key); render(); }
+        };
+      });
+      const act = (a, fn) => { const b = tr.querySelector('[data-a=' + a + ']'); if (b) b.onclick = fn; };
+      act('save', () => save(key));
+      act('cancel', () => { drafts.delete(key); errs.delete(key); render(); });
+      act('hist', () => toggleHist(key));
+      act('clear', () => clearName(key));
+    });
+  }
+  function noRights(r) {
+    if (r.status === 403) { rt = { editable: false, reason: MD.WHY.forbidden }; render(); return true; }
+    return false;
+  }
+  function addName() {
+    const inp = document.getElementById('addname'), n = MD.parseName(inp.value);
+    if (!n.ok) { say(n.error, 'bad'); inp.focus(); return; }
+    const had = rowOf(n.key);
+    if (!had) added.push(n.name);
+    say(had ? 'Имя «' + had.name + '» уже в таблице.' : 'Имя добавлено: введите спреды по срокам и нажмите «Сохранить».', had ? 'info' : 'ok');
+    render();
+    const tr = view.querySelector('tr[data-k="' + CSS.escape(n.key) + '"]');
+    if (tr) { tr.classList.add('flash'); setTimeout(() => tr.classList.remove('flash'), 1500); const first = tr.querySelector('input[data-f="5Y"]') || tr.querySelector('input[data-f]'); if (first) first.focus(); tr.scrollIntoView({ block: 'nearest' }); }
+  }
+  function save(key) {
+    if (busy) return;
+    const r = rowOf(key), d = draftFor(r), res = MD.readDraft(r.name, on, d);
+    if (!res.ok) { errs.set(key, res.errors); say('Не сохранено: ' + Object.values(res.errors)[0], 'bad'); render(); return; }
+    busy = true;
+    api.put(res.body).then(x => {
+      busy = false;
+      if (noRights(x)) return;
+      if (x.status === 200) {
+        drafts.delete(key); errs.delete(key); hist.delete(key);
+        const sk = x.body.curve && x.body.curve.name_key;  // ключ — как у сервера: имя больше не «добавленное»
+        added = added.filter(n => MD.nameKey(n) !== key && !(sk && MD.nameKey(n) === sk) && n !== r.name);
+        return load().then(() => say(x.body.changed ? 'Сохранено: «' + r.name + '» на ' + long(on) + '.' : 'Без изменений: на эту дату уже действует такая кривая.', x.body.changed ? 'ok' : 'info'));
+      }
+      errs.set(key, { server: x.status === 422 ? 'Сервер не принял: ' + ((x.body && x.body.message) || '') : 'Не сохранено: ' + ((x.body && x.body.message) || 'ответ ' + x.status) });
+      say(errs.get(key).server, 'bad'); render();
+    });
+  }
+  function clearName(key) {
+    const r = rowOf(key);
+    if (sureClear !== key) { sureClear = key; render(); return; }
+    sureClear = null;
+    if (busy) return; busy = true;
+    api.put({ name: r.name, date: on, clear: true }).then(x => {
+      busy = false;
+      if (noRights(x)) return;
+      if (x.status === 200) { drafts.delete(key); hist.delete(key); return load().then(() => say('«' + r.name + '» снято с ' + long(on) + ': кривой на эту дату нет.', 'ok')); }
+      say('Не снято: ' + ((x.body && x.body.message) || 'ответ ' + x.status), 'bad'); render();
+    });
+  }
+  function toggleHist(key) {
+    if (open.has(key)) { open.delete(key); render(); return; }
+    open.add(key); hist.delete(key); render();
+    const r = rowOf(key);
+    api.history(r.name).then(x => {
+      hist.set(key, x.status === 200 ? x.body : { error: 'История не загрузилась: ' + ((x.body && x.body.message) || 'ответ ' + x.status) });
+      if (open.has(key)) render();
+    });
+  }
+  function copyPrev() {
+    if (busy) return;
+    const R = rows(), eligible = MD.copyEligible(R, on);
+    // всегда явный список: то, что показано на кнопке; снятое на эту дату имя копирование «всех» не возвращает
+    const names = picked.size ? R.filter(r => picked.has(r.key) && eligible.indexOf(r.name) >= 0).map(r => r.name) : eligible;
+    busy = true;
+    api.copy({ to_date: on, names }).then(x => {
+      busy = false;
+      if (noRights(x)) return;
+      if (x.status !== 200) { say('Не скопировано: ' + ((x.body && x.body.message) || 'ответ ' + x.status), 'bad'); render(); return; }
+      const c = x.body.copied.length, s = x.body.skipped;
+      picked.clear(); x.body.copied.forEach(k => hist.delete(k.name_key));
+      load().then(() => say('Скопировано кривых на ' + long(on) + ': ' + c + (s.length ? '. Не скопировано: ' + s.map(k => k.name + ' — ' + k.why).join('; ') : '') + '.', c ? 'ok' : 'info'));
+    });
+  }
+  K.on('numfmt', () => { if (list) render(); });
+  K.commands && K.commands([{ label: 'Ручные рыночные данные: обновить', run: load }]);
+
+  // ---------- права: роль из /api/v1/auth/state, без него — по адресу страницы; 403 сервера переводит в «только чтение» ----------
+  const rightsReq = !server ? Promise.resolve({ editable: true, reason: '' })
+    : fetch('../api/v1/auth/state', { cache: 'no-store', headers: { Accept: 'application/json' } }).then(r => r.ok ? r.json() : null).catch(() => null).then(s => MD.rights(s, location.hostname));
+  rightsReq.then(r => { rt = r; return load(); });
+})();
+</script>
+</body>
+</html>

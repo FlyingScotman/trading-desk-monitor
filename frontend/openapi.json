@@ -2673,6 +2673,333 @@
         }
       }
     },
+    "/api/v1/market-data/manual/cds/curves": {
+      "get": {
+        "tags": [
+          "manual market data"
+        ],
+        "summary": "List Curves",
+        "operationId": "list_curves_api_v1_market_data_manual_cds_curves_get",
+        "parameters": [
+          {
+            "name": "date",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "date",
+              "description": "The date",
+              "title": "Date"
+            },
+            "description": "The date"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CdsCurveList"
+                }
+              }
+            }
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "Not Found"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "Unprocessable Entity"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "Service Unavailable"
+          }
+        }
+      }
+    },
+    "/api/v1/market-data/manual/cds/curve": {
+      "get": {
+        "tags": [
+          "manual market data"
+        ],
+        "summary": "Get Curve",
+        "operationId": "get_curve_api_v1_market_data_manual_cds_curve_get",
+        "parameters": [
+          {
+            "name": "name",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "description": "The reference name (any spelling)",
+              "title": "Name"
+            },
+            "description": "The reference name (any spelling)"
+          },
+          {
+            "name": "date",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "date",
+              "description": "The date",
+              "title": "Date"
+            },
+            "description": "The date"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CdsCurve"
+                }
+              }
+            }
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "Not Found"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "Unprocessable Entity"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "Service Unavailable"
+          }
+        }
+      },
+      "put": {
+        "tags": [
+          "manual market data"
+        ],
+        "summary": "Put Curve",
+        "description": "Set a reference name's CDS curve from a date (the whole curve), or withdraw the name from the date with clear. A trader or admin (sign-in off: this computer only); a change is recorded with who and when, a request that changes nothing is not.",
+        "operationId": "put_curve_api_v1_market_data_manual_cds_curve_put",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CdsCurveIn"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CdsPutOut"
+                }
+              }
+            }
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "Not Found"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "Unprocessable Entity"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "Service Unavailable"
+          }
+        }
+      }
+    },
+    "/api/v1/market-data/manual/cds/history": {
+      "get": {
+        "tags": [
+          "manual market data"
+        ],
+        "summary": "Curve History",
+        "operationId": "curve_history_api_v1_market_data_manual_cds_history_get",
+        "parameters": [
+          {
+            "name": "name",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "description": "The reference name (any spelling)",
+              "title": "Name"
+            },
+            "description": "The reference name (any spelling)"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CdsHistory"
+                }
+              }
+            }
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "Not Found"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "Unprocessable Entity"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "Service Unavailable"
+          }
+        }
+      }
+    },
+    "/api/v1/market-data/manual/cds/copy": {
+      "post": {
+        "tags": [
+          "manual market data"
+        ],
+        "summary": "Copy Curves",
+        "description": "Enter on a date the curves in force before it (or on from_date), for every name or the ones named, in one step. A name that already has its own curve on the date is left as it is.",
+        "operationId": "copy_curves_api_v1_market_data_manual_cds_copy_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CdsCopyIn"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CdsCopyOut"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not Found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Unprocessable Entity",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Service Unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/instruments/short-names": {
       "get": {
         "tags": [
@@ -4913,6 +5240,421 @@
         ],
         "title": "CarrySums",
         "description": "A group's sums, RUB. ``net = carry + funding + fundingNoCarry + fundingBookLevel`` (= ``carry +\nfundingTotal``; a null part counts 0) whenever ``net`` is not null."
+      },
+      "CdsCopyIn": {
+        "properties": {
+          "to_date": {
+            "type": "string",
+            "format": "date",
+            "title": "To Date",
+            "description": "Enter the curves on this date"
+          },
+          "from_date": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "From Date",
+            "description": "Copy what was in force on this date; null: what was in force before to_date"
+          },
+          "names": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Names",
+            "description": "Only these names; null: every name that has a curve"
+          }
+        },
+        "type": "object",
+        "required": [
+          "to_date"
+        ],
+        "title": "CdsCopyIn"
+      },
+      "CdsCopyOut": {
+        "properties": {
+          "to_date": {
+            "type": "string",
+            "format": "date",
+            "title": "To Date"
+          },
+          "copied": {
+            "items": {
+              "$ref": "#/components/schemas/CdsCurve"
+            },
+            "type": "array",
+            "title": "Copied",
+            "description": "The new entries of to_date"
+          },
+          "skipped": {
+            "items": {
+              "$ref": "#/components/schemas/CdsSkipped"
+            },
+            "type": "array",
+            "title": "Skipped"
+          }
+        },
+        "type": "object",
+        "required": [
+          "to_date",
+          "copied",
+          "skipped"
+        ],
+        "title": "CdsCopyOut"
+      },
+      "CdsCurve": {
+        "properties": {
+          "rev_id": {
+            "type": "integer",
+            "title": "Rev Id"
+          },
+          "name_key": {
+            "type": "string",
+            "title": "Name Key",
+            "description": "The identity of the reference name (normalised: case, spaces)"
+          },
+          "name": {
+            "type": "string",
+            "title": "Name",
+            "description": "The reference name as written"
+          },
+          "valid_from": {
+            "type": "string",
+            "format": "date",
+            "title": "Valid From",
+            "description": "The curve holds from this date until a later one is entered"
+          },
+          "entered_on_date": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Entered On Date",
+            "description": "The curve's valid_from is the date asked for (else it is carried from an earlier date); null: no date asked"
+          },
+          "cleared": {
+            "type": "boolean",
+            "title": "Cleared",
+            "description": "History only: the name was withdrawn from valid_from on",
+            "default": false
+          },
+          "spreads_bp": {
+            "additionalProperties": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "type": "object",
+            "title": "Spreads Bp",
+            "description": "Par coupon spread in basis points by tenor (3M 6M 1Y 2Y 3Y 5Y 7Y 10Y); null: not given"
+          },
+          "recovery": {
+            "type": "number",
+            "title": "Recovery",
+            "description": "Recovery rate, a fraction (0.25 is 25 %)"
+          },
+          "ccy": {
+            "type": "string",
+            "title": "Ccy",
+            "description": "Currency of the quotes"
+          },
+          "changed_by": {
+            "type": "string",
+            "title": "Changed By",
+            "description": "Who entered it: the user, or 'local' (this computer, sign-in off)"
+          },
+          "changed_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Changed At"
+          },
+          "manual": {
+            "type": "boolean",
+            "title": "Manual",
+            "description": "Entered by hand (the only source until internal systems give some)",
+            "default": true
+          }
+        },
+        "type": "object",
+        "required": [
+          "rev_id",
+          "name_key",
+          "name",
+          "valid_from",
+          "spreads_bp",
+          "recovery",
+          "ccy",
+          "changed_by",
+          "changed_at"
+        ],
+        "title": "CdsCurve"
+      },
+      "CdsCurveIn": {
+        "properties": {
+          "name": {
+            "type": "string",
+            "title": "Name",
+            "description": "The reference name, at most 120 characters"
+          },
+          "date": {
+            "type": "string",
+            "format": "date",
+            "title": "Date",
+            "description": "The curve holds from this date (2000-01-01..2100-12-31)"
+          },
+          "spreads_bp": {
+            "additionalProperties": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "type": "object",
+            "title": "Spreads Bp",
+            "description": "Par spread in bp by tenor; a tenor left out or null is empty; at least one is needed unless clear"
+          },
+          "recovery": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Recovery",
+            "description": "Fraction from 0 up to (not including) 1; null: 0.25"
+          },
+          "ccy": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Ccy",
+            "description": "Currency code; null: USD"
+          },
+          "clear": {
+            "type": "boolean",
+            "title": "Clear",
+            "description": "Withdraw the name from this date on instead of setting a curve",
+            "default": false
+          }
+        },
+        "type": "object",
+        "required": [
+          "name",
+          "date"
+        ],
+        "title": "CdsCurveIn"
+      },
+      "CdsCurveList": {
+        "properties": {
+          "date": {
+            "type": "string",
+            "format": "date",
+            "title": "Date"
+          },
+          "run_id": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Run Id",
+            "description": "The run of the date whose CDS rows are listed (null: none)"
+          },
+          "tenors": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Tenors"
+          },
+          "default_recovery": {
+            "type": "number",
+            "title": "Default Recovery"
+          },
+          "default_ccy": {
+            "type": "string",
+            "title": "Default Ccy"
+          },
+          "max_spread_bp": {
+            "type": "number",
+            "title": "Max Spread Bp"
+          },
+          "curves": {
+            "items": {
+              "$ref": "#/components/schemas/CdsCurve"
+            },
+            "type": "array",
+            "title": "Curves",
+            "description": "By name"
+          },
+          "positions": {
+            "items": {
+              "$ref": "#/components/schemas/CdsPositionName"
+            },
+            "type": "array",
+            "title": "Positions",
+            "description": "CDS names of the date's run, by name"
+          }
+        },
+        "type": "object",
+        "required": [
+          "date",
+          "run_id",
+          "tenors",
+          "default_recovery",
+          "default_ccy",
+          "max_spread_bp",
+          "curves",
+          "positions"
+        ],
+        "title": "CdsCurveList"
+      },
+      "CdsHistory": {
+        "properties": {
+          "name_key": {
+            "type": "string",
+            "title": "Name Key"
+          },
+          "revisions": {
+            "items": {
+              "$ref": "#/components/schemas/CdsCurve"
+            },
+            "type": "array",
+            "title": "Revisions",
+            "description": "Newest first"
+          }
+        },
+        "type": "object",
+        "required": [
+          "name_key",
+          "revisions"
+        ],
+        "title": "CdsHistory"
+      },
+      "CdsPositionName": {
+        "properties": {
+          "name": {
+            "type": "string",
+            "title": "Name",
+            "description": "The reference name of the CDS rows: the report's x_issuer, else the deal's name"
+          },
+          "name_key": {
+            "type": "string",
+            "title": "Name Key"
+          },
+          "deals": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Deals",
+            "description": "The names of the deals (source_instrument_name) of these rows, up to 5"
+          },
+          "positions": {
+            "type": "integer",
+            "title": "Positions",
+            "description": "CDS rows of the run with this name"
+          },
+          "has_curve": {
+            "type": "boolean",
+            "title": "Has Curve",
+            "description": "A curve is in force on the date for this name"
+          }
+        },
+        "type": "object",
+        "required": [
+          "name",
+          "name_key",
+          "deals",
+          "positions",
+          "has_curve"
+        ],
+        "title": "CdsPositionName"
+      },
+      "CdsPutOut": {
+        "properties": {
+          "changed": {
+            "type": "boolean",
+            "title": "Changed",
+            "description": "False when the request set what was already in force (no revision)"
+          },
+          "curve": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/CdsCurve"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "In force on the date afterwards; null: none (withdrawn)"
+          }
+        },
+        "type": "object",
+        "required": [
+          "changed",
+          "curve"
+        ],
+        "title": "CdsPutOut"
+      },
+      "CdsSkipped": {
+        "properties": {
+          "name_key": {
+            "type": "string",
+            "title": "Name Key"
+          },
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "why": {
+            "type": "string",
+            "title": "Why"
+          }
+        },
+        "type": "object",
+        "required": [
+          "name_key",
+          "name",
+          "why"
+        ],
+        "title": "CdsSkipped"
       },
       "ErrorOut": {
         "properties": {
