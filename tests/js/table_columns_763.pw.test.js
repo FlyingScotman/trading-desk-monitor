@@ -18,7 +18,7 @@ const pw = (() => { try { return require('playwright'); } catch (e) { return nul
 const ROOT = path.join(__dirname, '..', '..', 'prototypes');
 const PAGE = f => pathToFileURL(path.join(ROOT, 'concepts', f)).href;
 const skip = !pw && 'нет Playwright';
-const POS = ['name', 'ccy', 'issuerName', 'kind', 'book', 'couponFmt', 'event', 'maturity', 'tenor', 'notional', 'tradeDay', 'price', 'ytm', 'zspread', 'mdur', 'dv01', 'cs01', 'carryDay', 'fundingDay', 'pnl', 'mv'];  // C01 «Позиции»: key колонок
+const POS = ['name', 'ccy', 'issuerName', 'kind', 'book', 'couponFmt', 'event', 'maturity', 'tenor', 'notional', 'tradeDay', 'posDelta', 'price', 'ytm', 'zspread', 'mdur', 'dv01', 'cs01', 'carryDay', 'fundingDay', 'pnl', 'mv'];  // C01 «Позиции»: key колонок
 
 async function launch(width) {
   const browser = await pw.chromium.launch();
@@ -62,12 +62,12 @@ test('C01 «Позиции»: скрыть и вернуть колонки, «�
     assert.deepStrictEqual(rows.filter(r => r.fixed).map(r => r.key), ['name'], 'идентификатор — не скрывается');
     assert.ok(/Бумага \(всегда\)/.test(rows[0].text) && /Дюр\./.test(rows.find(r => r.key === 'mdur').text));
     assert.ok(/DV01\s*тыс ₽\/бп/.test(rows.find(r => r.key === 'dv01').text), 'единица рядом с подписью: ' + rows.find(r => r.key === 'dv01').text);
-    assert.ok(/Показано 21 из 21/.test(await pg.textContent('.k-colmenu-t')));
+    assert.ok(new RegExp('Показано ' + POS.length + ' из ' + POS.length).test(await pg.textContent('.k-colmenu-t')));
     assert.strictEqual(await pg.isDisabled('.k-colmenu-ft .k-btn:first-child'), true, '«Как было» не нужна, пока ничего не скрыто');
     // скрыть две колонки
     await toggle(pg, 'zspread'); await toggle(pg, 'mdur');
     assert.deepStrictEqual(await heads(pg), POS.filter(k => k !== 'zspread' && k !== 'mdur'));
-    assert.ok(/Показано 19 из 21/.test(await pg.textContent('.k-colmenu-t')));
+    assert.ok(new RegExp('Показано ' + (POS.length - 2) + ' из ' + POS.length).test(await pg.textContent('.k-colmenu-t')));
     assert.strictEqual(await btnText(pg), 'Колонки · скрыто 2 ▾');
     // CSV — без скрытых колонок
     await pg.keyboard.press('Escape');
@@ -149,7 +149,7 @@ test('390 px: меню колонок целиком на экране, спис
     let g = await geo();
     assert.ok(g.left >= 0 && g.right <= g.vw, 'по ширине экрана: ' + JSON.stringify(g));
     assert.ok(g.top >= 0 && g.bottom <= g.vh, 'по высоте экрана: ' + JSON.stringify(g));
-    assert.ok(g.listScroll, '21 колонка на узком экране — список листается внутри меню');
+    assert.ok(g.listScroll, POS.length + ' колонок на узком экране — список листается внутри меню');
     assert.ok(g.btns.every(b => b.top >= g.top && b.bottom <= g.bottom && b.left >= 0 && b.right <= g.vw), 'кнопки меню видны: ' + JSON.stringify(g.btns));
     assert.ok(g.listH >= 100, 'список не схлопнулся: ' + g.listH);
     // последняя колонка списка достижима прокруткой и скрывается тапом

@@ -558,6 +558,9 @@
     p.pnlMtd = num(xp.pnlMtd); p.pnlYtd = num(xp.pnlYtd); p.pnlMtdParts = xp.pnlMtdParts || null;  // MTD по факторам (отчёт PnL за период, #568)
     p.spreadChgBp = num(xp.spreadChgBp);
     p.tradedToday = !!(xp.trade || d.newToday); p.tradeToday = xp.trade || null;
+    // номинал позиции в прогоне предыдущего закрытия (TDM#775, колонка «Изм. к вчера»): prevNotional — был, newToPrev — не было, prevNoFact — была, но не оценена (номинала нет);
+    // ничего из этого — прогона предыдущей даты нет или позиция не оценена сегодня
+    p.prevNotional = num(xp.prevNotional); p.newToPrev = !!xp.newToPrev; p.prevNoFact = !!xp.prevNoFact;
     p.searchBase = [p.exchName, p.isin, p.issuerName, p.issuerFull, p.issuerGroup, p.latName, p.book, p.bookName, p.ccy, p.kindLabel, p.groupLabel, p.sector, p.couponFmt, p.portfolio, p.rating, p.ratingAgency].join(' ').toLowerCase();
     p.searchText = (p.alias ? p.alias.toLowerCase() + ' ' : '') + p.searchBase;  // как K.setAlias
     return p;
@@ -645,6 +648,10 @@
   M.histSource = X.histSource || 'positions';  // 'runs': суммы прогонов по датам
   M.pnlPeriods = X.pnlPeriods || null;
   M.pnlClosed = X.pnlClosed || [];  // позиции, закрытые раньше в периоде: их PnL MTD/YTD не входит в строки позиций (#568)
+  // прогон предыдущего закрытия (TDM#775): { runId, date, closed: [{ positionId, book, ccy, name, notional }] } — позиции, которые
+  // были в нём и которых нет в прогоне; null — прогона предыдущей даты нет (колонка «Изм. к вчера» пуста)
+  M.prevRun = X.prevRun && typeof X.prevRun === 'object' && typeof X.prevRun.date === 'string' && X.prevRun.date.length >= 10 ? { runId: X.prevRun.runId, date: X.prevRun.date,
+    closed: (Array.isArray(X.prevRun.closed) ? X.prevRun.closed : []).filter(isObj).map(c => ({ positionId: String(c.positionId), book: c.book || null, ccy: c.ccy || null, portfolio: c.portfolio || null, name: c.name || String(c.positionId), notional: num(c.notional) })) } : null;
   const n = M.histDates.length;
   const series = (src, keys, today) => { const o = {}; keys.forEach(k => { o[k] = (src && src[k]) ? src[k].map(v => v == null ? null : +v) : new Array(n).fill(0); if (!src && today) o[k][n - 1] = today(k); }); return o; };
   const sumBy = (f) => positions.reduce((s, p) => s + (f(p) || 0), 0);
