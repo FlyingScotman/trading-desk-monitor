@@ -1,7 +1,8 @@
 -- Manually entered CDS curves (TDM#652): the owner types the par spreads of a reference name by tenor, the hub has no
 -- CDS quotes and no paid source is connected. A curve is quoted as the par coupon spread, in basis points, at the
 -- tenors 3M 6M 1Y 2Y 3Y 5Y 7Y 10Y (the owner's decision of 19.11.2026; an assumption that can be changed, see
--- desk.marketdata.manual_cds), with a recovery rate (default 25 %) and the quote currency (default USD).
+-- desk.marketdata.manual_cds), with a recovery rate (default 25 %, below 100 %) and the quote currency (default USD,
+-- the developer's assumption). changed_at is the time of the INSERT, not of the commit.
 --
 -- Append-only, like instrument_alias_rev (0014): each change is a revision with who and when. A revision holds the
 -- whole curve of one reference name from valid_from on; the curve in force on a date is the name's latest revision of
@@ -23,7 +24,7 @@ CREATE TABLE manual_cds_rev (
     spread_5y  numeric(10,4) CHECK (spread_5y  BETWEEN 0 AND 10000),
     spread_7y  numeric(10,4) CHECK (spread_7y  BETWEEN 0 AND 10000),
     spread_10y numeric(10,4) CHECK (spread_10y BETWEEN 0 AND 10000),
-    recovery   numeric(5,4) CHECK (recovery BETWEEN 0 AND 1),
+    recovery   numeric(5,4) CHECK (recovery >= 0 AND recovery < 1),
     ccy        text CHECK (ccy ~ '^[A-Z]{3}$'),
     changed_by text NOT NULL DEFAULT 'local',
     changed_at timestamptz NOT NULL DEFAULT clock_timestamp(),

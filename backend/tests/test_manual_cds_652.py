@@ -72,7 +72,7 @@ def test_the_store_refuses_what_is_no_curve(con):
         con.execute(ok.format(", ".join(d), ", ".join(["%s"] * len(d))), list(d.values()))
 
     ins()
-    for bad in ({"spread_5y": -0.0001}, {"spread_5y": 10000.01}, {"spread_3m": -1}, {"recovery": 1.01},
+    for bad in ({"spread_5y": -0.0001}, {"spread_5y": 10000.01}, {"spread_3m": -1}, {"recovery": 1.01}, {"recovery": 1},
                 {"recovery": -0.1}, {"ccy": "usd"}, {"ccy": "US"}, {"ccy": None}, {"recovery": None},
                 {"spread_5y": None},  # no point at all
                 {"name": " A"}, {"name": ""}, {"name": "x" * 121}, {"name_key": ""}, {"name_key": "x" * 121},
@@ -82,7 +82,7 @@ def test_the_store_refuses_what_is_no_curve(con):
         with pytest.raises(psycopg.errors.CheckViolation):
             ins(**bad)
     ins(spread_5y=0, recovery=0, ccy="EUR")
-    ins(spread_5y=10000, recovery=1)
+    ins(spread_5y=10000, recovery=0.9999)
     ins(cleared=True, spread_5y=None, recovery=None, ccy=None)
 
 
@@ -153,12 +153,26 @@ def test_input_that_is_no_curve_is_refused(con):
                {"ccy": "US"}, {"ccy": "U$D"}):
         with pytest.raises(M.CurveError):
             M.put_curve(con, D0, "A", {"5Y": 1}, **kw)
-    for name in ("", "   ", "a\x00b", "x" * 121):
+    for kw in ({"recovery": 1}, {"recovery": 1.0}, {"recovery": 0.99996}):  # 100 % is no recovery rate (nor its rounding)
+        with pytest.raises(M.CurveError):
+            M.put_curve(con, D0, "A", {"5Y": 1}, **kw)
+    assert M.put_curve(con, D0, "Z", {"5Y": 1}, recovery=0.9999)[0].recovery == 0.9999
+    for d in (date(1999, 12, 31), date(2101, 1, 1)):  # the table's dates: a refusal, not a database error
+        with pytest.raises(M.CurveError):
+            M.put_curve(con, d, "A", {"5Y": 1})
+        with pytest.raises(M.CurveError):
+            M.put_curve(con, d, "A", None)
+        with pytest.raises(M.CurveError):
+            M.copy_curves(con, d)
+    with pytest.raises(M.CurveError):
+        M.copy_curves(con, D1, from_date=date(1999, 1, 1))
+    assert M.put_curve(con, date(2000, 1, 1), "Z", {"5Y": 1})[1] and M.put_curve(con, date(2100, 12, 31), "Z", {"5Y": 2})[1]
+    for name in ("", "   ", "a\x00b", "x" * 121, "A\u200bB", "A\u200eB", "A\u202eB", "\ufeffA", "A\u00adB"):
         with pytest.raises(M.CurveError):
             M.put_curve(con, D0, name, {"5Y": 1})
     assert M.put_curve(con, D0, "A", {"5Y": "12,5", "3Y": ""})[0].spreads_bp["5Y"] == 12.5
     assert M.put_curve(con, D0, "B", {"5Y": 0, "10Y": 10000}, recovery=0, ccy=None)[0].recovery == 0
-    assert con.execute("SELECT count(*) FROM manual_cds_rev").fetchone()[0] == 2  # the refused ones left nothing
+    assert con.execute("SELECT count(*) FROM manual_cds_rev").fetchone()[0] == 2 + 3  # the refused ones left nothing
 
 
 def test_copying_enters_the_curves_in_force_before_the_date(con):
@@ -190,6 +204,43 @@ def test_copying_enters_the_curves_in_force_before_the_date(con):
     with pytest.raises(M.CurveError):
         M.copy_curves(con, date(2026, 11, 20), names=["Эмитент А", "x" * 121])
     assert con.execute("SELECT count(*) FROM manual_cds_rev").fetchone()[0] == n
+
+
+def test_copying_everything_never_undoes_a_withdrawal(con):
+    M.put_curve(con, D0, "Эмитент А", {"5Y": 300})
+    M.put_curve(con, D0, "Эмитент Б", {"5Y": 400})
+    M.put_curve(con, D1, "Эмитент А", None)  # the owner withdrew the name on D1
+    r = M.copy_curves(con, D1)  # a copy of everything: Б has none of its own on D1, А was withdrawn there
+    assert [c.name for c in r.copied] == ["Эмитент Б"]
+    assert r.skipped == [("эмитент а", "Эмитент А", "на эту дату имя снято")]
+    assert M.curve_on(con, D1, "Эмитент А") is None
+    # only a name asked for is brought back
+    r = M.copy_curves(con, D1, names=["Эмитент А"])
+    assert [c.name for c in r.copied] == ["Эмитент А"] and M.curve_on(con, D1, "Эмитент А").spreads_bp["5Y"] == 300.0
+
+
+def test_copy_reads_the_source_after_the_locks_of_the_names(store_url):
+    """A change of a name that holds its lock (a put in another transaction) is seen by a copy that waited for it: the
+    source is read after the lock, not before."""
+    import threading
+    with psycopg.connect(store_url, autocommit=True) as a, psycopg.connect(store_url, autocommit=True) as b:
+        key = M.name_key("Эмитент А")
+        out: dict = {}
+
+        def copy():
+            out["r"] = M.copy_curves(b, D1, names=["Эмитент А"])
+
+        with a.transaction():
+            a.execute("SELECT pg_advisory_xact_lock(hashtext('manual_cds:' || %s))", (key,))
+            a.execute("INSERT INTO manual_cds_rev (name_key, name, valid_from, spread_5y, recovery, ccy)"
+                      " VALUES (%s, 'Эмитент А', %s, 300, 0.25, 'USD')", (key, D0))
+            t = threading.Thread(target=copy)
+            t.start()
+            t.join(0.7)
+            assert t.is_alive(), "the copy has to wait for the lock of the name"
+        t.join(10)
+        assert not t.is_alive()
+        assert [c.name for c in out["r"].copied] == ["Эмитент А"] and not out["r"].skipped
 
 
 # ---- the routes --------------------------------------------------------------------------------------------------
@@ -242,6 +293,10 @@ def test_bad_input_through_the_api(local, store_url):
                  {"name": "A", "date": "2026-11-16", "spreads_bp": {"5Y": 1e9}},
                  {"name": "A", "date": "2026-11-16", "spreads_bp": {}},
                  {"name": "A", "date": "2026-11-16", "spreads_bp": {"5Y": 1}, "recovery": 1.2},
+                 {"name": "A", "date": "2026-11-16", "spreads_bp": {"5Y": 1}, "recovery": 1},
+                 {"name": "A", "date": "1999-12-31", "spreads_bp": {"5Y": 1}},
+                 {"name": "A", "date": "2101-01-01", "clear": True},
+                 {"name": "A\u200bB", "date": "2026-11-16", "spreads_bp": {"5Y": 1}},
                  {"name": "A", "date": "2026-11-16", "spreads_bp": {"5Y": 1}, "ccy": "RUBL"},
                  {"name": "  ", "date": "2026-11-16", "spreads_bp": {"5Y": 1}},
                  {"name": "x" * 121, "date": "2026-11-16", "spreads_bp": {"5Y": 1}}):
@@ -252,6 +307,7 @@ def test_bad_input_through_the_api(local, store_url):
         assert local.put(BASE + "/curve", json=body).status_code == 422, body
     assert local.get(BASE + "/curves").status_code == 422 and local.get(BASE + "/curves?date=x").status_code == 422
     assert local.post(BASE + "/copy", json={"to_date": "2026-11-16", "from_date": "2026-11-16"}).status_code == 422
+    assert local.post(BASE + "/copy", json={"to_date": "1999-12-31"}).status_code == 422
     assert rows(store_url, "SELECT count(*) FROM manual_cds_rev") == [(0,)]
     assert rows(store_url, "SELECT count(*) FROM audit_log WHERE action = 'manual_cds'") == [(0,)]
 
@@ -312,18 +368,22 @@ def _run_with_cds(url: str, on: date, rows_: list[dict]) -> int:
 def test_the_list_names_the_cds_rows_of_the_dates_run(local, store_url):
     cds = {"asset_class": "otc", "ccy": "USD", "amount_ccy": "1000000", "x_product_group": "cds"}
     rid = _run_with_cds(store_url, D1, [
-        {"position_id": "P1", "source_instrument_name": "CDS  Эмитент А 5Y", **cds},
-        {"position_id": "P2", "source_instrument_name": "cds эмитент а 5y", **cds},
-        {"position_id": "P3", "source_instrument_id": "CDS-Б", **cds},
-        {"position_id": "P4", "source_instrument_name": "Своп", "asset_class": "otc", "ccy": "RUB",
-         "x_product_group": "irs"},
-        {"position_id": "P5", "source_instrument_name": "Облигация", "asset_class": "bond", "ccy": "RUB"}])
-    put(local, "CDS Эмитент А 5Y", D0)
+        {"position_id": "P1", "source_instrument_name": "CDS Эмитент А 5Y", "x_issuer": " Эмитент  А ", **cds},
+        {"position_id": "P2", "source_instrument_name": "CDS Эмитент А 3Y", "x_issuer": "эмитент а", **cds},
+        {"position_id": "P3", "source_instrument_name": "CDS-Б", **cds},  # no issuer: the deal's name
+        {"position_id": "P4", "source_instrument_id": "CDS-В", **cds},  # no name either: the id
+        {"position_id": "P5", "source_instrument_name": "Своп", "asset_class": "otc", "ccy": "RUB",
+         "x_product_group": "irs", "x_issuer": "Эмитент Г"},
+        {"position_id": "P6", "source_instrument_name": "Облигация", "asset_class": "bond", "ccy": "RUB",
+         "x_issuer": "Эмитент Д"}])
+    put(local, "Эмитент А", D0)
     lst = local.get(BASE + f"/curves?date={D1}").json()
     assert lst["run_id"] == rid
-    assert lst["positions"] == [{"name": "CDS Эмитент А 5Y", "name_key": "cds эмитент а 5y", "positions": 2,
-                                 "has_curve": True},
-                                {"name": "CDS-Б", "name_key": "cds-б", "positions": 1, "has_curve": False}]
+    assert lst["positions"] == [
+        {"name": "CDS-Б", "name_key": "cds-б", "positions": 1, "deals": ["CDS-Б"], "has_curve": False},
+        {"name": "CDS-В", "name_key": "cds-в", "positions": 1, "deals": [], "has_curve": False},
+        {"name": "Эмитент А", "name_key": "эмитент а", "positions": 2, "deals": ["CDS Эмитент А 3Y",
+                                                                                 "CDS Эмитент А 5Y"], "has_curve": True}]
     other = local.get(BASE + f"/curves?date={D2}").json()  # a date without a run: no names, the curves as usual
     assert other["run_id"] is None and other["positions"] == [] and len(other["curves"]) == 1
 

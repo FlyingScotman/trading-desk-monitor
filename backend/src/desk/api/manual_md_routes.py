@@ -4,7 +4,7 @@ Storage, the quotation convention and the curve in force on a date are in ``desk
 0028, append-only revisions with who and when). Routes, all under ``/api/v1/market-data/manual/cds``:
 
 * ``GET /curves?date=``: the curves in force on a date (a name's own entry of that date or one carried from an earlier
-  date), with the CDS names of the date's run (``positions``) that have none;
+  date), with the reference names of the date's run's CDS rows (``positions``, the report's ``x_issuer``);
 * ``GET /curve?name=&date=``: one name's curve in force on a date (404 without one);
 * ``GET /history?name=``: every revision of a name, newest first;
 * ``PUT /curve``: set (or, with ``clear``, withdraw) a name's curve from a date: the whole curve, tenors left empty are
@@ -52,8 +52,9 @@ class CdsCurve(BaseModel):
 
 
 class CdsPositionName(BaseModel):
-    name: str = Field(description="The CDS row's name in the positions report (source_instrument_name)")
+    name: str = Field(description="The reference name of the CDS rows: the report's x_issuer, else the deal's name")
     name_key: str
+    deals: list[str] = Field(description="The names of the deals (source_instrument_name) of these rows, up to 5")
     positions: int = Field(description="CDS rows of the run with this name")
     has_curve: bool = Field(description="A curve is in force on the date for this name")
 
@@ -76,10 +77,10 @@ class CdsHistory(BaseModel):
 
 class CdsCurveIn(BaseModel):
     name: str = Field(description=f"The reference name, at most {M.MAX_NAME} characters")
-    date: Date = Field(description="The curve holds from this date")
+    date: Date = Field(description="The curve holds from this date (2000-01-01..2100-12-31)")
     spreads_bp: dict[str, float | None] = Field(default_factory=dict, description="Par spread in bp by tenor; a tenor "
                                                 "left out or null is empty; at least one is needed unless clear")
-    recovery: float | None = Field(None, description="Fraction 0..1; null: 0.25")
+    recovery: float | None = Field(None, description="Fraction from 0 up to (not including) 1; null: 0.25")
     ccy: str | None = Field(None, description="Currency code; null: USD")
     clear: bool = Field(False, description="Withdraw the name from this date on instead of setting a curve")
 
@@ -121,7 +122,8 @@ def _refuse(e: M.CurveError) -> ApiError:
 
 def _cds_names_of(con, on: Date) -> tuple[int | None, list[dict]]:
     """The run shown for ``on`` (as ``store.CURRENT_RUNS``: the default EOD run, else the latest intraday one) and the
-    names of its CDS rows (the adapter's product group ``cds``): (run_id, [{name, positions}])."""
+    reference names of its CDS rows (the adapter's product group ``cds``): (run_id, [{name, positions, deals}]). The name
+    is the report's ``x_issuer`` (in ``position_input.x``, as for an unmapped bond), else the row's own name."""
     run = con.execute(
         "SELECT run_id, position_set_ids FROM run WHERE business_date = %s AND status = 'complete'"
         " AND (run_type = 'EOD' AND cut_type IN ('eod_final', 'eod_preliminary') OR run_type = 'INTRADAY')"
@@ -130,11 +132,13 @@ def _cds_names_of(con, on: Date) -> tuple[int | None, list[dict]]:
     if run is None:
         return None, []
     rows = con.execute(
-        "SELECT COALESCE(NULLIF(btrim(source_instrument_name), ''), source_instrument_id) AS name, count(*) AS n"
+        "SELECT COALESCE(NULLIF(btrim(x->>'x_issuer'), ''), NULLIF(btrim(source_instrument_name), ''),"
+        " source_instrument_id) AS name, count(*) AS n,"
+        " array_remove(array_agg(DISTINCT NULLIF(btrim(source_instrument_name), '')), NULL) AS deals"
         " FROM position_input WHERE set_id = ANY(%s) AND lower(x->>'x_product_group') = 'cds'"
-        " AND COALESCE(NULLIF(btrim(source_instrument_name), ''), source_instrument_id) IS NOT NULL"
-        " GROUP BY 1 ORDER BY 1", (list(run["position_set_ids"]),)).fetchall()
-    return run["run_id"], [{"name": r["name"], "positions": r["n"]} for r in rows]
+        " AND COALESCE(NULLIF(btrim(x->>'x_issuer'), ''), NULLIF(btrim(source_instrument_name), ''),"
+        " source_instrument_id) IS NOT NULL GROUP BY 1 ORDER BY 1", (list(run["position_set_ids"]),)).fetchall()
+    return run["run_id"], [{"name": r["name"], "positions": r["n"], "deals": r["deals"]} for r in rows]
 
 
 @router.get(BASE + "/curves", response_model=CdsCurveList)
@@ -149,8 +153,9 @@ def list_curves(con: Con, on: Annotated[Date, Query(alias="date", description="T
         except M.CurveError:
             continue
         k = M.name_key(name)
-        e = by_key.setdefault(k, {"name": name, "name_key": k, "positions": 0, "has_curve": k in have})
+        e = by_key.setdefault(k, {"name": name, "name_key": k, "positions": 0, "deals": [], "has_curve": k in have})
         e["positions"] += n["positions"]
+        e["deals"] = sorted({*e["deals"], *n["deals"]})[:5]
     return {"date": on, "run_id": run_id, "tenors": list(M.TENORS), "default_recovery": M.DEFAULT_RECOVERY,
             "default_ccy": M.DEFAULT_CCY, "max_spread_bp": M.MAX_SPREAD_BP, "curves": [_out(c, on) for c in curves],
             "positions": sorted(by_key.values(), key=lambda e: e["name_key"])}

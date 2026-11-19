@@ -4,24 +4,30 @@
 The hub has no CDS quotes and no paid source is connected, so the owner types the curves on the monitor «Ручные
 рыночные данные» (C22). Later part of them may come from internal systems; they would be stored the same way.
 
-Quotation convention (the owner's decision of 19.11.2026; an ASSUMPTION that can be changed, so it is named here, on
-the screen and in ``docs/architecture/05_FRONTEND_INTEGRATION.md``):
+Quotation convention. The owner's decision of 19.11.2026 (an assumption that can be changed, so it is named here, on
+the screen and in ``docs/architecture/05_FRONTEND_INTEGRATION.md``) is:
 
 * the quote is the **par coupon spread**, in basis points per year (the coupon that makes the CDS worth zero at
   inception), not an upfront with a fixed coupon;
 * tenors ``TENORS``: 3M, 6M, 1Y, 2Y, 3Y, 5Y, 7Y, 10Y (a tenor may be empty: not every name has all of them);
-* the recovery rate is stored with the curve, a fraction (0.25 = 25 %), 25 % unless the owner sets another per name;
-* the quote currency is stored with the curve, USD unless the owner sets another per name.
+* the recovery rate is stored with the curve, a fraction (0.25 = 25 %, strictly below 1), 25 % unless the owner sets
+  another per name.
 
-Identity of a reference name: ``name_key(name)``. A CDS row of the positions report has no reference-name field today
-(``positions`` has the report's own ``source_instrument_id`` / ``source_instrument_name`` and the ``deal_id``, the trade
-terms of the contract have no CDS at all), so there is no issuer id to join on: the key is the name itself, normalised
-(NFKC, case folded, whitespace collapsed). The CDS valuation (TDM#614) maps the reference entity of a CDS trade (the
-field the terms will give) to the curve with the same ``name_key``, so a name typed on the screen matches however it
-is capitalised or spaced.
+Not the owner's decision, the developer's assumption: the quote currency is stored with the curve, USD unless the
+owner sets another per name.
 
-A revision holds the whole curve of a name from ``valid_from`` on and only ever adds (append-only, who and when). The
-curve in force on a date is the name's latest revision of the latest ``valid_from`` on or before it; a withdrawal
+Identity of a reference name: ``name_key(name)``. A CDS row of the positions report has no issuer id to join on (the
+trade terms of the contract have no CDS at all); the adapter gives the reference name as the report's ``x_issuer``
+(``position_input.x``, as for an unmapped bond), the row's ``source_instrument_name`` being the name of the deal. The
+key is the text of the reference name, normalised (NFKC, case folded, whitespace collapsed). The CDS valuation
+(TDM#614) maps the reference name of a CDS row (``x_issuer``, later the terms' field) to the curve with the same
+``name_key``. Known limitation: names that differ in spelling (an abbreviation, a legal form, Cyrillic and Latin
+look-alike letters, a hyphen for a space) are different names, there is no alias table; the screen lists the names of
+the date's CDS rows beside the entered ones so that the owner types the spelling the report has.
+
+A revision holds the whole curve of a name from ``valid_from`` on and only ever adds (append-only, who and when;
+``changed_at`` is the time of the INSERT, not of the commit, so a calculation should compare the ``rev_id`` it used, not
+timestamps). The curve in force on a date is the name's latest revision of the latest ``valid_from`` on or before it; a withdrawal
 (``cleared``) ends it until a later curve is entered. ``curve_on(con, date, name)`` is what the calculation calls.
 """
 
@@ -47,6 +53,8 @@ DEFAULT_CCY = "USD"
 MAX_SPREAD_BP = 10000.0
 """A par spread of 100 % a year is the upper bound of what is stored (a typing slip, not a market)."""
 MAX_NAME = 120
+MIN_DATE, MAX_DATE = date(2000, 1, 1), date(2100, 12, 31)
+"""The dates a curve may start on (the table's check)."""
 _FIELDS = ("rev_id", "name_key", "name", "valid_from", "cleared", *COLUMN.values(), "recovery", "ccy", "changed_by",
            "changed_at")
 _SELECT = ", ".join(_FIELDS)
@@ -65,6 +73,8 @@ def clean_name(raw: str) -> str:
     """The name as shown: whitespace runs one space; control characters and an empty or over-long name are refused."""
     if any(unicodedata.category(c) == "Cc" and c not in "\t\n\r" for c in raw):
         raise CurveError("the name has control characters")
+    if any(unicodedata.category(c) == "Cf" for c in raw):
+        raise CurveError("the name has invisible formatting characters (zero-width, text direction)")
     name = " ".join(raw.split())
     if not name:
         raise CurveError("the name is empty")
@@ -129,7 +139,10 @@ def curves_on(con: psycopg.Connection, on: date, *, known_at: datetime | None = 
 def curves_changed_since(con: psycopg.Connection, on: date, known_at: datetime | None) -> bool:
     """True when the curves in force on ``on`` now differ from those a run that read its inputs at ``known_at`` saw
     (a curve entered, corrected, withdrawn or carried to ``on`` after it). The calculation of a CDS (TDM#614) asks
-    this for the dates whose run holds CDS positions, as ``store.late_inputs`` does for the OCP report and balances."""
+    this for the dates whose run holds CDS positions, as ``store.late_inputs`` does for the OCP report and balances.
+    ``changed_at`` is the time of the INSERT (``clock_timestamp()``), not of the commit: a revision committed after
+    ``known_at`` may carry an earlier time. A run that records the ``rev_id`` of every curve it used (TDM#614) compares
+    those with ``curves_on(con, on)`` and needs no timestamps; this function is the approximation until then."""
     if known_at is None:
         return False
     return ({(c.name_key, c.rev_id) for c in curves_on(con, on)}
@@ -190,9 +203,15 @@ def check_recovery(v: Any) -> float:
         x = float(v)
     except (TypeError, ValueError):
         raise CurveError("the recovery rate is no number") from None
-    if not math.isfinite(x) or not 0 <= x <= 1:
-        raise CurveError("the recovery rate is outside 0..1 (a fraction: 0.25 is 25 %)")
+    if not math.isfinite(x) or not 0 <= round(x, 4) < 1:
+        raise CurveError("the recovery rate must be from 0 up to (not including) 1 (a fraction: 0.25 is 25 %)")
     return round(x, 4)
+
+
+def check_date(d: date) -> date:
+    if not MIN_DATE <= d <= MAX_DATE:
+        raise CurveError(f"the date is outside {MIN_DATE.isoformat()}..{MAX_DATE.isoformat()}")
+    return d
 
 
 def check_ccy(v: str | None) -> str:
@@ -230,6 +249,7 @@ def put_curve(con: psycopg.Connection, on: date, name: str, spreads_bp: dict[str
     """Set the curve of ``name`` from ``on`` (``spreads_bp`` None: withdraw the name from ``on``). Returns (the curve in
     force on ``on`` afterwards, changed). A request that sets what is already in force on ``on`` adds no revision.
     The caller opens the transaction (and audits the change)."""
+    check_date(on)
     name = clean_name(name)
     key = name_key(name)
     if spreads_bp is None:
@@ -263,29 +283,34 @@ class CopyResult:
 def copy_curves(con: psycopg.Connection, to_date: date, *, from_date: date | None = None,
                 names: list[str] | None = None, who: str = "local") -> CopyResult:
     """Enter on ``to_date`` the curves in force before it (``from_date`` None) or on ``from_date``: for ``names``, else for
-    every name that has one. A name that already has its own curve on ``to_date`` is left as it is. All or none."""
-    if from_date is not None and from_date >= to_date:
-        raise CurveError("the date to copy from must be earlier than the date to copy to")
+    every name that has one. A name that already has an entry of its own on ``to_date`` is left as it is; a withdrawal
+    on ``to_date`` is undone only for a name asked for (``names``), never by a copy of everything. All or none."""
+    check_date(to_date)
+    if from_date is not None:
+        check_date(from_date)
+        if from_date >= to_date:
+            raise CurveError("the date to copy from must be earlier than the date to copy to")
     keys = None if names is None else list(dict.fromkeys(name_key(clean_name(n)) for n in names))
     copied: list[Curve] = []
     skipped: list[tuple[str, str, str]] = []
     with con.transaction():
-        con.execute("SELECT pg_advisory_xact_lock(hashtext('manual_cds:copy'))")
+        # the names' locks first (sorted: put_curve takes one, so no cycle), then read what they guard
+        for key in sorted({k for k, _ in all_names(con)} if keys is None else set(keys)):
+            _lock(con, key)
+        known = dict(all_names(con))
         src = {r["name_key"]: _curve(r) for r in _rows(
             con, f"SELECT {_SELECT} FROM (SELECT DISTINCT ON (name_key) * FROM manual_cds_rev WHERE "
                  + ("valid_from <= %(f)s" if from_date else "valid_from < %(t)s")
                  + " ORDER BY name_key, valid_from DESC, rev_id DESC) c WHERE NOT cleared ORDER BY name_key",
             {"f": from_date, "t": to_date})}
-        known = dict(all_names(con))
         for key in (keys if keys is not None else list(src)):
             c = src.get(key)
             if c is None:
                 skipped.append((key, known.get(key, key), "нет кривой на дату, с которой копируем"))
                 continue
-            _lock(con, key)
             own = entry_on(con, to_date, key)
-            if own is not None and not own.cleared:
-                skipped.append((key, c.name, "на эту дату кривая уже введена"))
+            if own is not None and (keys is None or not own.cleared):
+                skipped.append((key, c.name, "на эту дату имя снято" if own.cleared else "на эту дату кривая уже введена"))
                 continue
             copied.append(_insert(con, key, c.name, to_date, c.spreads_bp, c.recovery, c.ccy, who))
     return CopyResult(to_date, copied, skipped)

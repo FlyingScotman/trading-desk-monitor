@@ -1642,7 +1642,7 @@ export interface components {
             /**
              * Date
              * Format: date
-             * @description The curve holds from this date
+             * @description The curve holds from this date (2000-01-01..2100-12-31)
              */
             date: string;
             /**
@@ -1654,7 +1654,7 @@ export interface components {
             };
             /**
              * Recovery
-             * @description Fraction 0..1; null: 0.25
+             * @description Fraction from 0 up to (not including) 1; null: 0.25
              */
             recovery?: number | null;
             /**
@@ -1714,11 +1714,16 @@ export interface components {
         CdsPositionName: {
             /**
              * Name
-             * @description The CDS row's name in the positions report (source_instrument_name)
+             * @description The reference name of the CDS rows: the report's x_issuer, else the deal's name
              */
             name: string;
             /** Name Key */
             name_key: string;
+            /**
+             * Deals
+             * @description The names of the deals (source_instrument_name) of these rows, up to 5
+             */
+            deals: string[];
             /**
              * Positions
              * @description CDS rows of the run with this name
