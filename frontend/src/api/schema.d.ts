@@ -683,6 +683,60 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/instruments/short-names": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List Short Names */
+        get: operations["list_short_names_api_v1_instruments_short_names_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/instruments/short-names/{isin}/history": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Short Name History */
+        get: operations["short_name_history_api_v1_instruments_short_names__isin__history_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/instruments/short-name": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /**
+         * Put Short Name
+         * @description Set or clear (blank or null) the short name of an ISIN. A trader or admin (sign-in off: this computer only); a change is recorded with who and when, a request that changes nothing is not.
+         */
+        put: operations["put_short_name_api_v1_instruments_short_name_put"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
 }
 export type webhooks = Record<string, never>;
 export interface components {
@@ -1741,6 +1795,26 @@ export interface components {
              */
             changed_at: string;
         };
+        /** InstrumentShortName */
+        InstrumentShortName: {
+            /** Isin */
+            isin: string;
+            /**
+             * Short Name
+             * @description The short name to show instead of the exchange's
+             */
+            short_name: string;
+            /**
+             * Changed By
+             * @description Who set it: the user, or 'local' (this computer, sign-in off)
+             */
+            changed_by: string;
+            /**
+             * Changed At
+             * Format: date-time
+             */
+            changed_at: string;
+        };
         /** JobIn */
         JobIn: {
             /** Base Run Id */
@@ -2614,6 +2688,11 @@ export interface components {
              * @description The display name a user gave fact.isin (PUT /api/v1/instruments/alias), in force now, old runs too; null: none, show fact.name
              */
             alias?: string | null;
+            /**
+             * Short Name
+             * @description The short name a user gave fact.isin (PUT /api/v1/instruments/short-name), in force now, old runs too; null: none, show fact.extra.short_name (the exchange's)
+             */
+            short_name?: string | null;
         };
         /** PositionList */
         PositionList: {
@@ -4022,6 +4101,76 @@ export interface components {
             password: string;
             /** Display Name */
             display_name?: string | null;
+        };
+        /** ShortNameHistory */
+        ShortNameHistory: {
+            /** Isin */
+            isin: string;
+            /**
+             * Revisions
+             * @description Newest first
+             */
+            revisions: components["schemas"]["ShortNameRevision"][];
+        };
+        /** ShortNameIn */
+        ShortNameIn: {
+            /**
+             * Isin
+             * @description The security's ISIN (case and surrounding spaces ignored)
+             */
+            isin: string;
+            /**
+             * Short Name
+             * @description The short name, at most 40 characters; null or blank clears it (the exchange's short name again)
+             */
+            short_name?: string | null;
+        };
+        /** ShortNameList */
+        ShortNameList: {
+            /**
+             * Short Names
+             * @description The short names in force, by ISIN
+             */
+            short_names: components["schemas"]["InstrumentShortName"][];
+        };
+        /** ShortNameRevision */
+        ShortNameRevision: {
+            /** Rev Id */
+            rev_id: number;
+            /**
+             * Short Name
+             * @description null: the short name was cleared
+             */
+            short_name: string | null;
+            /** Changed By */
+            changed_by: string;
+            /**
+             * Changed At
+             * Format: date-time
+             */
+            changed_at: string;
+        };
+        /** ShortNameState */
+        ShortNameState: {
+            /** Isin */
+            isin: string;
+            /**
+             * Short Name
+             * @description In force after the request; null: none (the exchange's is shown)
+             */
+            short_name: string | null;
+            /**
+             * Changed By
+             * @description Of the latest revision; null: the ISIN never had one
+             */
+            changed_by: string | null;
+            /** Changed At */
+            changed_at: string | null;
+            /**
+             * Changed
+             * @description False when the request set what was already in force (no revision)
+             */
+            changed: boolean;
         };
         /**
          * SpreadRules
@@ -6058,6 +6207,154 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["AliasState"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorOut"];
+                };
+            };
+            /** @description Unprocessable Entity */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorOut"];
+                };
+            };
+            /** @description Service Unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorOut"];
+                };
+            };
+        };
+    };
+    list_short_names_api_v1_instruments_short_names_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ShortNameList"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorOut"];
+                };
+            };
+            /** @description Unprocessable Entity */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorOut"];
+                };
+            };
+            /** @description Service Unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorOut"];
+                };
+            };
+        };
+    };
+    short_name_history_api_v1_instruments_short_names__isin__history_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The ISIN */
+                isin: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ShortNameHistory"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorOut"];
+                };
+            };
+            /** @description Unprocessable Entity */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorOut"];
+                };
+            };
+            /** @description Service Unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorOut"];
+                };
+            };
+        };
+    };
+    put_short_name_api_v1_instruments_short_name_put: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ShortNameIn"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ShortNameState"];
                 };
             };
             /** @description Not Found */

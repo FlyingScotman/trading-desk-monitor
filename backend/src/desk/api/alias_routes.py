@@ -7,8 +7,9 @@ name. An empty alias clears it; every change is an append-only revision with who
 (``GET /api/v1/instruments/aliases/{isin}/history``).
 
 Who may change it (``desk.api.auth.alias_guard``): with sign-in off, loopback clients only, recorded as
-``changed_by = 'local'``; with it on, the trader or admin role, recorded with the user's name. Every change is also
-in the audit log (``alias``).
+``changed_by = 'local'``; with it on, the trader or admin role from any computer (the viewer role reads only),
+recorded with the user's name. Every change is also in the audit log (``alias``). The short name, a second name of
+the security, has the same rules and its own routes (``short_name_routes``).
 """
 
 from __future__ import annotations
@@ -77,16 +78,21 @@ def normalize_isin(raw: str) -> str:
     return isin
 
 
-def normalize_alias(raw: str | None) -> str | None:
-    """Blank: None (clear). Inner whitespace runs become one space; control characters are refused."""
+def normalize_name(raw: str | None, limit: int, what: str = "the alias") -> str | None:
+    """Blank: None (clear). Inner whitespace runs become one space; control characters are refused; at most ``limit``
+    characters. ``what`` names the field in the 422 message (the pages show those)."""
     if raw is None:
         return None
     if any(unicodedata.category(c) == "Cc" and c not in "\t\n\r" for c in raw):
-        raise ApiError(422, "invalid_parameter", "the alias has control characters")
-    alias = " ".join(raw.split())
-    if len(alias) > MAX_ALIAS:
-        raise ApiError(422, "invalid_parameter", f"the alias is longer than {MAX_ALIAS} characters")
-    return alias or None
+        raise ApiError(422, "invalid_parameter", f"{what} has control characters")
+    name = " ".join(raw.split())
+    if len(name) > limit:
+        raise ApiError(422, "invalid_parameter", f"{what} is longer than {limit} characters")
+    return name or None
+
+
+def normalize_alias(raw: str | None) -> str | None:
+    return normalize_name(raw, MAX_ALIAS, "the alias")
 
 
 def aliases_by_isin(con, isins: Iterable[str | None] | None = None) -> dict[str, str]:

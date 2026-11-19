@@ -222,10 +222,12 @@ def test_access_by_role(store_url, home: Path):
     expect = {  # path -> the roles that pass
         ("GET", "/api/v1/settings"): {"boss"}, ("GET", "/api/v1/users"): {"boss"}, ("GET", "/api/v1/audit"): {"boss"},
         ("GET", "/api/v1/update"): {"boss"}, ("GET", "/api/v1/backfill/status"): {"boss"},
-        ("PUT", "/api/v1/instruments/alias"): {"boss", "tom"}, ("POST", "/api/v1/scenario-jobs"): {"boss", "tom"},
+        ("PUT", "/api/v1/instruments/alias"): {"boss", "tom"}, ("PUT", "/api/v1/instruments/short-name"): {"boss", "tom"},
+        ("POST", "/api/v1/scenario-jobs"): {"boss", "tom"},
         ("POST", "/api/v1/autopilot/run"): {"boss", "tom"},
     }
-    body = {("PUT", "/api/v1/instruments/alias"): {"isin": ISIN, "alias": "A"}}
+    body = {("PUT", "/api/v1/instruments/alias"): {"isin": ISIN, "alias": "A"},
+            ("PUT", "/api/v1/instruments/short-name"): {"isin": ISIN, "short_name": "A"}}
     for (method, path), allowed in expect.items():
         for n, c in who.items():
             r = c.request(method, path, json=body.get((method, path), {}), headers=csrf(c))
@@ -234,6 +236,7 @@ def test_access_by_role(store_url, home: Path):
             else:
                 assert r.status_code == 403 and r.json()["code"] == "forbidden", (n, path, r.text)
     assert sql(store_url, "SELECT changed_by FROM instrument_alias_rev ORDER BY rev_id") == [("boss",)]  # then same
+    assert sql(store_url, "SELECT changed_by FROM instrument_short_name_rev ORDER BY rev_id") == [("boss",)]
 
 
 def test_admin_pages_from_the_network_can_be_turned_off(store_url, home: Path):

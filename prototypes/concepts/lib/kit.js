@@ -769,7 +769,7 @@
   document.addEventListener('concepts-data', e => {
     const d = (e && e.detail) || {};
     if (d.error) return K.dataError(d.error, d.gone);
-    if (d.name === 'aliases') { K.patchNames(); fire('alias'); }
+    if (d.name === 'aliases' || d.name === 'shortNames') { K.patchNames(); fire('alias'); }
     fire('data');
   });
   K.onAlias = fn => K.on('alias', fn);
@@ -1474,7 +1474,10 @@
       '<button class="k-btn" data-a="view" title="Вид: формат отрицательных чисел, когда прогон считается устаревшим" aria-haspopup="dialog">⚙</button>' +
       '<button class="k-btn" data-a="theme" title="Светлая / тёмная тема">◐</button>';
     document.body.prepend(bar);
-    if (/^https?:$/.test(location.protocol) && !window.DESK_AUTH) document.head.appendChild(Object.assign(document.createElement('script'), { src: '../desk-auth.js' }));  // вход: пользователь, «Выйти», CSRF
+    // вход: пользователь, «Выйти», CSRF; режим входа и роль того же ответа — права на правку имён бумаг (M.nameRights, TDM#777)
+    const hearAuth = () => { const a = window.DESK_AUTH; if (a && a.ready && M.nameRights) a.ready.then(st => { M.nameRights.setAuth(st); K.refreshNameTools(); }); };
+    if (/^https?:$/.test(location.protocol) && !window.DESK_AUTH) document.head.appendChild(Object.assign(document.createElement('script'), { src: '../desk-auth.js', onload: hearAuth }));
+    else hearAuth();
     chipsBox = bar.querySelector('.filters'); renderFilterChips();
     // экран не читает фильтр шапки (TDM#566, K.top({ filter: false, filterNote })): чипов нет — только подпись, цифры экрана не зависят от выбора
     if (opt.filter === false) { chipsBox.innerHTML = '<span class="k-note" data-nofilter title="Юрлица, дески, книги и портфели шапки на этом экране не применяются">Фильтр шапки здесь не действует' + (opt.filterNote ? ': ' + esc(opt.filterNote) : '') + '</span>'; chipsBox = null; }
@@ -2031,70 +2034,78 @@
     return out;
   };
 
-  // ---------- какие колонки таблицы скрыты (TDM#763) ----------
-  // Хранится то, что пользователь СКРЫЛ, а не то, что показано: колонка, которой не было при сохранении (новая версия
-  // монитора), по умолчанию видна, а ключ, которого в таблице нет, молча пропускается. Ключ — экран + таблица (+ набор
-  // колонок экрана, как у C03): K.colKey. Выбор — на сервере, отдельно у каждого пользователя монитора: GET / PUT / DELETE
-  // ../api/v1/me/table-columns (backend/src/desk/api/prefs_routes.py, таблица user_table_columns), так что он переживает
-  // перезагрузку, перезапуск сервера и обновление программы и идёт за пользователем на другой компьютер.
-  // Копия — в K.viewStore браузера (ключ 'cols:<ключ>'): страница рисуется сразу, до ответа сервера, и работает, когда
-  // сервера нет (демо, файл, сбой запроса: чтение и запись в try/catch). Ответил сервер — его слово главное, пришёл ответ —
-  // таблицы перерисовываются (событие 'colprefs'); нет — живёт копия браузера, и меню колонок говорит об этом словами.
+  // ---------- какие колонки таблицы скрыты и какие добавлены (TDM#763, TDM#778) ----------
+  // Хранится то, что пользователь СКРЫЛ из состава таблицы, и то, что он ДОБАВИЛ к нему из каталога колонок позиций, а не
+  // показанное целиком: колонка, которой не было при сохранении (новая версия монитора), по умолчанию видна, а ключ, которого
+  // нет ни в таблице, ни в каталоге, молча пропускается. Ключ — экран + таблица (+ набор колонок экрана, как у C03): K.colKey.
+  // Выбор — на сервере, отдельно у каждого пользователя монитора: GET / PUT / DELETE ../api/v1/me/table-columns
+  // (backend/src/desk/api/prefs_routes.py, таблица user_table_columns), так что он переживает перезагрузку, перезапуск сервера
+  // и обновление программы и идёт за пользователем на другой компьютер. Выбор таблицы — {hidden: [ключи], added: [ключи в порядке
+  // добавления]}; added не обязателен (выбор из версии до TDM#778 — только hidden).
+  // Копия — в K.viewStore браузера (ключ 'cols:<ключ>', {hidden, added}; added — только если не пуст): страница рисуется сразу,
+  // до ответа сервера, и работает, когда сервера нет (демо, файл, сбой запроса: чтение и запись в try/catch). Ответил сервер —
+  // его слово главное, пришёл ответ — таблицы перерисовываются (событие 'colprefs'); нет — живёт копия браузера, и меню колонок
+  // говорит об этом словами.
   K.colKey = s => String(s == null ? '' : s).replace(/^table:/, '').toLowerCase().replace(/[^a-z0-9._:-]+/g, '_').replace(/^[^a-z0-9]+/, '').slice(0, 128);
   K.colPrefs = (() => {
     const API = '../api/v1/me/table-columns', LK = k => 'cols:' + k, DIRTY = 'cols-dirty';
-    const srv = {}, touched = new Set(), chain = {}, ver = {};  // srv — скрытые колонки по ключам (ответ сервера и свои правки); touched — ключи, правленные здесь
+    const srv = {}, touched = new Set(), chain = {}, ver = {};  // srv — выбор по ключам {hidden, added} (ответ сервера и свои правки); touched — ключи, правленные здесь
     let loaded = false, loadFailed = false, saveFailed = false, asked = false;
     const clean = a => Array.isArray(a) ? [...new Set(a.filter(x => typeof x === 'string' && x))] : [];
+    const pick = o => ({ hidden: clean(o && o.hidden), added: clean(o && o.added) });  // чужие данные (сервер, браузер) — в проверенную форму
+    const none = s => !s.hidden.length && !s.added.length;  // нет своего выбора: таблица по умолчанию
+    const keep = (key, s) => { const o = { hidden: s.hidden }; if (s.added.length) o.added = s.added; K.viewStore.set(LK(key), o); };
     const served = () => M.source === 'real' && typeof fetch === 'function';
     // «не отправлено»: правка, которую сервер не принял (нет связи, сбой), помнится в браузере, и при следующей загрузке страницы
     // уходит на сервер раньше, чем приходит его ответ; пока она не принята, в копии выбор лежит и для «как было» (пустой список)
     const dirtyKeys = () => { const d = K.viewStore.get(DIRTY); return clean(d && d.keys); };
     const markDirty = (key, on) => { const s = new Set(dirtyKeys()); if (on) s.add(key); else s.delete(key); if (s.size) K.viewStore.set(DIRTY, { keys: [...s] }); else K.viewStore.reset(DIRTY); };
-    const send = (key, method, hidden) => {
+    const send = (key, method, s) => {
       // запросы одной таблицы — по очереди: быстрые щелчки не меняются местами по дороге; результат — принял ли сервер
-      const run = () => Promise.resolve().then(() => fetch(API + '/' + encodeURIComponent(key), { method, cache: 'no-store', headers: { 'Content-Type': 'application/json' }, body: method === 'PUT' ? JSON.stringify({ hidden }) : undefined }))
+      const run = () => Promise.resolve().then(() => fetch(API + '/' + encodeURIComponent(key), { method, cache: 'no-store', headers: { 'Content-Type': 'application/json' }, body: method === 'PUT' ? JSON.stringify({ hidden: s.hidden, added: s.added }) : undefined }))
         .then(r => { if (!r.ok) throw new Error(String(r.status)); saveFailed = false; return true; }).catch(() => { saveFailed = true; return false; });
       return (chain[key] = (chain[key] || Promise.resolve()).then(run));
     };
     // отправить выбор таблицы; принял сервер и после этого выбор не менялся — «не отправлено» снимается
-    const push = (key, hidden) => {
+    const push = (key, s) => {
       const v = ver[key] = (ver[key] || 0) + 1;
       markDirty(key, true);
-      return send(key, hidden.length ? 'PUT' : 'DELETE', hidden).then(ok => {
-        if (ok && ver[key] === v) { markDirty(key, false); if (!hidden.length) K.viewStore.reset(LK(key)); }
+      return send(key, none(s) ? 'DELETE' : 'PUT', s).then(ok => {
+        if (ok && ver[key] === v) { markDirty(key, false); if (none(s)) K.viewStore.reset(LK(key)); }
         return ok;
       });
     };
     const P = {
-      // скрытые колонки таблицы: массив ключей, непроверенный (таблица сводит его со своими колонками)
-      get(key) {
+      // выбор таблицы {hidden, added}: массивы ключей, непроверенные (таблица сводит их со своими колонками и каталогом)
+      sel(key) {
         if (!asked && served()) { asked = true; P.load(); }  // первая таблица с выбором колонок просит выбор с сервера; странице без таких таблиц запрос не нужен
-        if (loaded || touched.has(key)) return clean(srv[key]);
-        const l = K.viewStore.get(LK(key));
-        return clean(l && l.hidden);
+        if (loaded || touched.has(key)) return pick(srv[key]);
+        return pick(K.viewStore.get(LK(key)));
       },
-      set(key, hidden) {
-        hidden = clean(hidden);
+      get(key) { return P.sel(key).hidden; },    // скрытые колонки таблицы
+      added(key) { return P.sel(key).added; },   // добавленные колонки таблицы, в порядке добавления
+      // added не передан — добавленные остаются как были (правка только скрытых)
+      set(key, hidden, added) {
+        const s = { hidden: clean(hidden), added: added === undefined ? P.sel(key).added : clean(added) };
         touched.add(key);
-        if (hidden.length) { srv[key] = hidden; K.viewStore.set(LK(key), { hidden }); } else { delete srv[key]; if (served()) K.viewStore.set(LK(key), { hidden: [] }); else K.viewStore.reset(LK(key)); }
-        return served() ? push(key, hidden) : Promise.resolve();
+        if (!none(s)) { srv[key] = s; keep(key, s); } else { delete srv[key]; if (served()) K.viewStore.set(LK(key), { hidden: [] }); else K.viewStore.reset(LK(key)); }
+        return served() ? push(key, s) : Promise.resolve();
       },
-      reset(key) { return P.set(key, []); },  // «как было»: у пользователя нет своего выбора, таблица — по умолчанию
+      reset(key) { return P.set(key, [], []); },  // «как было»: у пользователя нет своего выбора, таблица — по умолчанию
       load() {
         asked = true;
         if (!served()) return Promise.resolve(false);
         // правки, не дошедшие до сервера раньше, — первыми: ответ сервера их не перекроет
         const flush = Promise.all(dirtyKeys().map(k => {
-          const l = K.viewStore.get(LK(k)), hidden = clean(l && l.hidden);
-          touched.add(k); if (hidden.length) srv[k] = hidden; else delete srv[k];
-          return push(k, hidden);
+          const s = pick(K.viewStore.get(LK(k)));
+          touched.add(k); if (!none(s)) srv[k] = s; else delete srv[k];
+          return push(k, s);
         }));
         return flush.then(() => fetch(API, { cache: 'no-store', headers: { Accept: 'application/json' } }))
           .then(r => { if (!r.ok) throw new Error(String(r.status)); return r.json(); })
           .then(j => {
             const t = j && typeof j === 'object' && j.tables && typeof j.tables === 'object' && !Array.isArray(j.tables) ? j.tables : {};
-            Object.keys(t).forEach(k => { if (touched.has(k)) return; srv[k] = clean(t[k] && t[k].hidden); K.viewStore.set(LK(k), { hidden: srv[k] }); });
+            Object.keys(t).forEach(k => { if (touched.has(k)) return; srv[k] = pick(t[k]); keep(k, srv[k]); });
             Object.keys(srv).forEach(k => { if (!(k in t) && !touched.has(k)) delete srv[k]; });  // у пользователя нет выбора — по умолчанию, сколько бы ни лежало в браузере
             loaded = true; loadFailed = false;
             fire('colprefs');
@@ -2109,45 +2120,77 @@
   })();
   // Меню колонок: кнопка «Колонки ▾» и выпадающая панель со списком колонок и галочками, «Как было» и «Готово». Меню — на
   // экране один раз, закрывается Esc, щелчком снаружи и сменой размера окна; на телефоне — по ширине экрана (kit.css, .k-colmenu).
-  // o: { cols: () => [{key, label (HTML), unit, fixed}] — колонки таблицы; fixed — колонка-идентификатор, не скрывается;
-  //      hidden: () => Set ключей скрытых; toggle(key, hide); reset(); title }
-  // Кнопка получает btn.paint() — подпись («Колонки · скрыто 3 ▾») после смены состава не из меню.
+  // Под списком — раздел «Добавить» (TDM#778): стандартные колонки, которых в таблице нет; поставили галочку — колонка встаёт в конец
+  // таблицы и переходит в основной список с пометкой «добавлена», сняли — возвращается в «Добавить».
+  // o: { cols: () => [{key, label (HTML), unit, fixed, added}] — колонки таблицы, и добавленные тоже; fixed — колонка-идентификатор,
+  //      не скрывается; hidden: () => Set ключей скрытых; toggle(key, hide); reset(); title;
+  //      added: () => Set ключей добавленных; avail: () => [{key, label, unit}] — что можно добавить; add(key); remove(key) }
+  // Без avail раздела «Добавить» нет, без added подпись кнопки — как до TDM#778.
+  // Кнопка получает btn.paint() — подпись («Колонки · скрыто 3, добавлено 2 ▾») после смены состава не из меню.
   let colPop = null, colPopOff = [];
   K.closeColMenu = () => { if (colPop) { colPop.remove(); colPop = null; } colPopOff.forEach(f => f()); colPopOff = []; };
   K.colMenu = o => {
     const btn = h('button', 'k-tbtn k-colbtn'); btn.type = 'button';
     btn.setAttribute('aria-haspopup', 'true'); btn.setAttribute('aria-expanded', 'false');
-    btn.title = o.title || 'показать и скрыть колонки таблицы; выбор запоминается для вашего пользователя';
-    const paint = btn.paint = () => { const n = o.hidden().size; btn.textContent = 'Колонки' + (n ? ' · скрыто ' + n : '') + ' ▾'; btn.classList.toggle('on', n > 0); };
+    const nAdded = () => o.added ? o.added().size : 0;
+    const paint = btn.paint = () => {
+      const n = o.hidden().size, a = nAdded(), part = [n ? 'скрыто ' + n : '', a ? 'добавлено ' + a : ''].filter(Boolean).join(', ');
+      btn.textContent = 'Колонки' + (part ? ' · ' + part : '') + ' ▾'; btn.classList.toggle('on', n > 0 || a > 0);
+      btn.title = (o.title || 'показать и скрыть колонки таблицы' + (o.avail ? ', добавить стандартные колонки' : '') + '; выбор запоминается для вашего пользователя')
+        + (part ? '. Сейчас: ' + part + ' («Как было» в меню вернёт состав по умолчанию)' : '');
+    };
     const where = { server: '', browser: 'Выбор хранится только в этом браузере (нет сервера).', offline: 'Сервер не ответил или не принял выбор: он сохранён в этом браузере и уйдёт на сервер при следующей загрузке страницы.' };
     function open() {
       K.closeColFilter(); K.closeColMenu();
       const m = h('div', 'k-panel k-colmenu'); m.setAttribute('role', 'dialog'); m.setAttribute('aria-label', 'Колонки таблицы');
       const hd = h('div', 'k-colmenu-hd'), ttl = h('span', 'k-colmenu-t'), list = h('div', 'k-colmenu-list'), ft = h('div', 'k-colmenu-ft'), note = h('div', 'k-colmenu-note k-note');
       const reset = h('button', 'k-btn', 'Как было'), done = h('button', 'k-btn', 'Готово');
-      reset.type = done.type = 'button'; reset.title = 'вернуть состав колонок по умолчанию: показать все скрытые';
-      const cs = o.cols();
+      reset.type = done.type = 'button'; reset.title = 'вернуть состав колонок по умолчанию: показать все скрытые' + (o.avail ? ' и убрать добавленные' : '');
+      let cs = o.cols();
       const head = () => {
-        const hid = o.hidden(), shown = cs.filter(c => c.fixed || !hid.has(c.key)).length;
-        ttl.textContent = 'Показано ' + shown + ' из ' + cs.length; reset.disabled = !hid.size; btn.paint();
+        const hid = o.hidden(), na = nAdded(), shown = cs.filter(c => c.fixed || !hid.has(c.key)).length;
+        ttl.textContent = 'Показано ' + shown + ' из ' + cs.length + (na ? ' · добавлено ' + na : ''); reset.disabled = !hid.size && !na; btn.paint();
         const w = where[K.colPrefs.where()]; note.textContent = w; note.style.display = w ? '' : 'none';
       };
-      const hid0 = o.hidden();
-      cs.forEach(c => {
-        const row = h('label', 'k-colmenu-row' + (c.fixed ? ' fixed' : '')), cb = document.createElement('input');
-        cb.type = 'checkbox'; cb.checked = c.fixed || !hid0.has(c.key); cb.disabled = !!c.fixed; cb.dataset.col = c.key;
-        if (c.fixed) row.title = 'колонка-идентификатор: всегда на экране';
-        cb.onchange = () => {
-          if (!btn.isConnected) { K.closeColMenu(); return; }  // страница перерисовала таблицу, пока меню было открыто: меню — от старой таблицы
-          const done = o.toggle(c.key, !cb.checked); head(); Promise.resolve(done).then(() => { if (colPop === m) head(); });  // повторно — когда ответил сервер
-        };
-        const t = h('span', 'k-colmenu-l'); t.textContent = K.u(K.htmlText(c.label)) + (c.fixed ? ' (всегда)' : '');
-        row.append(cb, t);
-        if (c.unit) { const u = h('span', 'u'); u.textContent = K.u(c.unit); row.appendChild(u); }
-        list.appendChild(row);
-      });
-      reset.onclick = () => { if (!btn.isConnected) { K.closeColMenu(); return; } const done = o.reset(); list.querySelectorAll('input').forEach(cb => { cb.checked = true; }); head(); Promise.resolve(done).then(() => { if (colPop === m) head(); }); };
+      const stale = () => { if (btn.isConnected) return false; K.closeColMenu(); return true; };  // страница перерисовала таблицу, пока меню было открыто: меню — от старой таблицы
+      const label = (c, tail) => { const t = h('span', 'k-colmenu-l'); t.textContent = K.u(K.htmlText(c.label)) + (tail || ''); return t; };
+      const unit = (row, c) => { if (c.unit) { const u = h('span', 'u'); u.textContent = K.u(c.unit); row.appendChild(u); } };
+      const focusOn = (attr, key) => { const i = [...list.querySelectorAll('input')].find(x => x.dataset[attr] === key); if (i && i.focus) i.focus(); };
+      // список строится заново, когда меняется состав таблицы (добавили, убрали); скрыть и вернуть колонку — галочкой на месте
+      function build() {
+        const top = list.scrollTop;
+        list.textContent = ''; cs = o.cols();
+        const hid = o.hidden();
+        cs.forEach(c => {
+          const row = h('label', 'k-colmenu-row' + (c.fixed ? ' fixed' : '') + (c.added ? ' added' : '')), cb = document.createElement('input');
+          cb.type = 'checkbox'; cb.checked = c.fixed || c.added || !hid.has(c.key); cb.disabled = !!c.fixed; cb.dataset.col = c.key;
+          if (c.fixed) row.title = 'колонка-идентификатор: всегда на экране';
+          if (c.added) row.title = 'добавленная колонка: снимите галочку, и она уйдёт из таблицы в раздел «Добавить»';
+          cb.onchange = () => {
+            if (stale()) return;
+            if (c.added) { const done = o.remove(c.key); build(); head(); focusOn('add', c.key); Promise.resolve(done).then(() => { if (colPop === m) head(); }); return; }
+            const done = o.toggle(c.key, !cb.checked); head(); Promise.resolve(done).then(() => { if (colPop === m) head(); });  // повторно — когда ответил сервер
+          };
+          row.append(cb, label(c, c.fixed ? ' (всегда)' : ''));
+          if (c.added) { const tg = h('span', 'k-colmenu-tag', 'добавлена'); row.appendChild(tg); }
+          unit(row, c); list.appendChild(row);
+        });
+        const av = o.avail ? o.avail() : [];
+        if (av.length) {
+          const sub = h('div', 'k-colmenu-sub', 'Добавить'); sub.title = 'стандартные колонки позиций, которых в этой таблице нет';
+          list.appendChild(sub);
+          av.forEach(c => {
+            const row = h('label', 'k-colmenu-addrow'), cb = document.createElement('input');
+            cb.type = 'checkbox'; cb.checked = false; cb.dataset.add = c.key;
+            cb.onchange = () => { if (stale()) return; const done = o.add(c.key); build(); head(); focusOn('col', c.key); Promise.resolve(done).then(() => { if (colPop === m) head(); }); };
+            row.append(cb, label(c)); unit(row, c); list.appendChild(row);
+          });
+        }
+        list.scrollTop = top;
+      }
+      reset.onclick = () => { if (stale()) return; const done = o.reset(); build(); head(); Promise.resolve(done).then(() => { if (colPop === m) head(); }); };
       done.onclick = () => K.closeColMenu();
+      build();
       hd.appendChild(ttl); ft.append(reset, done); m.append(hd, list, note, ft);
       document.body.appendChild(m); colPop = m;
       // место: под кнопкой, если там хватает высоты, иначе над ней; по ширине — в экран с полями (телефон, 390 px)
@@ -2465,7 +2508,10 @@
   //        viewKey — стабильный ключ раскладки латиницей, он же основа имени CSV (без него — страница + id, K.tableKey), title — название в CSV, fileName — основа имени файла CSV (латиницей),
   //        colPick — кнопка «Колонки ▾» в шапке таблицы: скрыть и вернуть колонки, выбор запоминается на сервере по пользователю (K.colPrefs, TDM#763);
   //        по умолчанию — у таблиц, чьи колонки собраны K.cols (таблицы позиций на K.posCols), false — без неё; колонка с noHide: true и первая
-  //        колонка таблицы не скрываются (идентификатор строки), колонка без подписи (полоска доли) не предлагается и остаётся на экране}
+  //        колонка таблицы не скрываются (идентификатор строки), колонка без подписи (полоска доли) не предлагается и остаётся на экране;
+  //        в том же меню — раздел «Добавить» (TDM#778): стандартные колонки каталога, которых в таблице нет. Каталог — колонки K.posCols у
+  //        таблиц на K.cols; colCatalog: [колонки] | () => [колонки] — свой каталог (колонки с ключами таблицы в него не попадают), [] — без раздела.
+  //        Добавленная колонка — обычная колонка таблицы (сортировка, фильтр, итог, CSV, перенос мышкой), в конце; выбор — вместе со скрытыми}
   K.table = function (el, opts) {
     const st = { sort: opts.sort ? opts.sort.slice() : [], q: '', collapsed: {}, groupSort: false, filters: {}, grouped: false };
     // таблицу рисуют заново в том же месте (страница перерисовала блок): записи реестра K.d прошлой — освободить; у прошлой
@@ -2491,36 +2537,74 @@
     if (tools) { if (!opts.tools) { const sp = h('span'); sp.style.flex = '1'; tools.appendChild(sp); } tools.appendChild(ctl); }
     else { const bar = h('div', 'k-tbl-ctlbar'); bar.appendChild(ctl); el.appendChild(bar); }
     const vkey = K.tableKey(el, opts);
-    const colKeys = () => opts.columns.map(c => c.key);
-    let lay = K.viewLayout(K.viewStore.get(vkey), colKeys());  // {order: [key], w: {key: px}} — проверенная форма
     // скрытые колонки (TDM#763): хранится скрытое, а не показанное — новая колонка по умолчанию видна, лишний ключ пропускается
     const pick = opts.colPick !== undefined ? !!opts.colPick : !!(opts.columns && opts.columns.posTable);
     const ckey = K.colKey(vkey), firstKey = (opts.columns.find(c => !c.hidden) || {}).key;
     const fixedCol = c => !!c.noHide || c.key === firstKey;
+    // добавленные колонки (TDM#778): из каталога, по ключу колонки; в таблице — после её собственных, в порядке добавления.
+    // Каталог считается один раз; колонки с ключами таблицы, без подписи и скрытые (hidden) в него не попадают — им в «Добавить» делать нечего
+    let catMap = null;
+    const catalog = () => {
+      if (catMap) return catMap;
+      catMap = new Map();
+      const src = !pick ? [] : opts.colCatalog !== undefined ? (typeof opts.colCatalog === 'function' ? opts.colCatalog() : opts.colCatalog) : opts.columns && opts.columns.posTable ? Object.values(K.posCols) : [];
+      const have = new Set(opts.columns.map(c => c.key));
+      (src || []).forEach(c => { if (c && c.key && !c.hidden && K.htmlText(c.label) && !have.has(c.key) && !catMap.has(c.key)) catMap.set(c.key, Object.assign({}, c)); });
+      return catMap;
+    };
+    const readAdd = () => pick ? K.colPrefs.sel(ckey).added.filter(k => catalog().has(k)) : [];
+    let add = readAdd();
+    const allCols = () => add.length ? opts.columns.concat(add.map(k => catalog().get(k))) : opts.columns;
+    const colKeys = () => allCols().map(c => c.key);
+    // rawLay — раскладка как лежит в хранилище (до первой правки здесь): добавленные колонки, пришедшие с сервера позже, берут из неё
+    // своё место и ширину; после правки — то, что записано
+    let rawLay = K.viewStore.get(vkey);
+    let lay = K.viewLayout(rawLay, colKeys());  // {order: [key], w: {key: px}} — проверенная форма
     const pickCols = () => pick ? opts.columns.filter(c => !c.hidden && K.htmlText(c.label)) : [];
-    const readHid = () => { const ok = new Set(pickCols().filter(c => !fixedCol(c)).map(c => c.key)); return new Set(K.colPrefs.get(ckey).filter(k => ok.has(k))); };
+    const readHid = () => { const ok = new Set(pickCols().filter(c => !fixedCol(c)).map(c => c.key)); return new Set(K.colPrefs.sel(ckey).hidden.filter(k => ok.has(k))); };
     let hid = pick ? readHid() : new Set();
     // новая скрытая колонка не должна оставить невидимых фильтра и сортировки: щелчок по заголовку их больше не снимет
-    const dropHidden = n => n.forEach(k => { if (!hid.has(k)) { delete st.filters[k]; st.sort = st.sort.filter(x => x[0] !== k); } });
+    const dropKeys = n => n.forEach(k => { delete st.filters[k]; st.sort = st.sort.filter(x => x[0] !== k); });
+    const dropHidden = n => dropKeys([...n].filter(k => !hid.has(k)));
+    const savePick = () => K.colPrefs.set(ckey, [...hid], add);
     const setHidden = (k, hide) => {
       if (hide) { dropHidden([k]); hid.add(k); } else hid.delete(k);
-      const saved = K.colPrefs.set(ckey, [...hid]);
+      const saved = savePick();
+      draw(true);
+      return saved;
+    };
+    // добавить колонку из каталога: в конец видимых (место в сохранённом порядке прошлого раза забыто); убрать — вместе с её фильтром и сортировкой
+    const addCol = k => {
+      if (!pick || !catalog().has(k) || add.includes(k)) return Promise.resolve();
+      add = add.concat(k);
+      if (lay.order && lay.order.includes(k)) { lay.order = lay.order.filter(x => x !== k); if (!lay.order.length) delete lay.order; saveLay(); }
+      const saved = savePick();
+      draw(true);
+      return saved;
+    };
+    const removeCol = k => {
+      if (!add.includes(k)) return Promise.resolve();
+      dropKeys([k]); add = add.filter(x => x !== k);
+      const saved = savePick();
       draw(true);
       return saved;
     };
     const fixedW = () => !!lay.w && cols().some(c => lay.w[c.key]);
     const resetBtn = h('button', 'k-tbtn', '⟲ вид'); resetBtn.title = 'сбросить ширину и порядок колонок этой таблицы';
-    resetBtn.onclick = () => { lay = {}; K.viewStore.reset(vkey); draw(true); };
+    resetBtn.onclick = () => { lay = {}; rawLay = undefined; K.viewStore.reset(vkey); draw(true); };
     const csvBtn = h('button', 'k-tbtn', '⤓ CSV');
     csvBtn.title = 'выгрузить в CSV (Excel): колонки — те, что на экране (скрытые не выгружаются), в текущем порядке, строки — после поиска, фильтров и сортировки; номер прогона и дата среза — в первой строке и в имени файла';
     csvBtn.onclick = () => K.download(csvName(), '\uFEFF' + csv(), 'text/csv;charset=utf-8');
     // «Колонки ▾»: список колонок с галочками, «Как было» — состав по умолчанию (все колонки таблицы)
-    const resetCols = () => { hid = new Set(); const saved = K.colPrefs.reset(ckey); draw(true); return saved; };
+    const resetCols = () => { hid = new Set(); dropKeys(add); add = []; const saved = K.colPrefs.reset(ckey); draw(true); return saved; };
     const colBtn = pick ? K.colMenu({ hidden: () => hid, toggle: setHidden, reset: resetCols,
-      cols: () => pickCols().map(c => ({ key: c.key, label: c.label, unit: K.colUnit(c), fixed: fixedCol(c) })) }) : null;
+      cols: () => pickCols().map(c => ({ key: c.key, label: c.label, unit: K.colUnit(c), fixed: fixedCol(c) }))
+        .concat(add.map(k => catalog().get(k)).map(c => ({ key: c.key, label: c.label, unit: K.colUnit(c), added: true }))),
+      added: () => new Set(add), add: addCol, remove: removeCol,
+      avail: () => [...catalog().values()].filter(c => !add.includes(c.key)).map(c => ({ key: c.key, label: c.label, unit: K.colUnit(c) })) }) : null;
     colBtn ? ctl.append(colBtn, csvBtn, resetBtn) : ctl.append(csvBtn, resetBtn);
     const paintCtl = () => { resetBtn.style.display = fixedW() || (lay.order && lay.order.length) ? '' : 'none'; if (colBtn) colBtn.paint(); };
-    const saveLay = () => { K.viewStore.set(vkey, lay); paintCtl(); };
+    const saveLay = () => { K.viewStore.set(vkey, lay); rawLay = lay; paintCtl(); };
     let noClickTill = 0;  // после перетаскивания щелчок по заголовку — не сортировка
     let shown = [];       // строки на экране: после поиска, фильтров и сортировки (их и выгружает CSV)
     let memo = new WeakMap(), win = null, curGroups = [];  // ячейки строк (HTML) — одни и те же при сортировке и фильтре; окно строк длинной таблицы
@@ -2536,9 +2620,9 @@
       const ix = c => { const i = o.indexOf(c.key); return i < 0 ? 1e6 : i; };
       return C.map((c, i) => [c, i]).sort((a, b) => (ix(a[0]) - ix(b[0])) || (a[1] - b[1])).map(x => x[0]);
     };
-    const cols = () => ordered(opts.columns.filter(c => !c.hidden && !hid.has(c.key)));
+    const cols = () => ordered(allCols().filter(c => !c.hidden && !hid.has(c.key)));
     // порядок всех колонок, и скрытых пользователем тоже: при переносе мышкой скрытые остаются на своих местах, вернувшаяся колонка встаёт туда же
-    const fullOrder = () => ordered(opts.columns.filter(c => !c.hidden)).map(c => c.key);
+    const fullOrder = () => ordered(allCols().filter(c => !c.hidden)).map(c => c.key);
     function setVisibleOrder(keys) {
       const vis = new Set(keys), nv = keys.slice();
       let i = 0;
@@ -2547,7 +2631,7 @@
     }
     const val = (c, r) => c.val ? c.val(r) : r[c.key];
     // колонка для сортировки строк и групп: значение и, если у колонки есть итог, слагаемое суммы группы
-    const colOf = k => { const c = opts.columns.find(x => x.key === k); return c ? { val: r => val(c, r), sum: c.sum ? (typeof c.sum === 'function' ? c.sum : r => val(c, r)) : null, nullable: !!c.nullable, filter: c.filter, key: c.key } : null; };
+    const colOf = k => { const c = allCols().find(x => x.key === k); return c ? { val: r => val(c, r), sum: c.sum ? (typeof c.sum === 'function' ? c.sum : r => val(c, r)) : null, nullable: !!c.nullable, filter: c.filter, key: c.key } : null; };
     function sorted(rows) {
       if (!st.sort.length) return rows;
       return rows.slice().sort(K.rowCmp(st.sort, colOf));
@@ -2632,7 +2716,7 @@
       if (win) win.attach(wrap.querySelector('table'));
       wrap.querySelectorAll('th .k-flt').forEach(ic => ic.onclick = e => {
         e.stopPropagation();
-        const c = opts.columns.find(x => x.key === ic.dataset.flt);
+        const c = allCols().find(x => x.key === ic.dataset.flt);
         K.colFilter(ic, K.fltItems(K.applyFilters(base, st.filters, colOf, c.key), c), st.filters[c.key] || null, v => { st.filters[c.key] = v; draw(true); });
       });
       wrap.querySelectorAll('th.sortable').forEach(th => th.onclick = e => {
@@ -2743,15 +2827,17 @@
     if (restoreOuter) { restoreOuter(); if (win) win.paint(false); }
     const api = { redraw: draw, state: st, csv, csvName, setSort: s => { st.sort = s; draw(true); }, setFilter: (k, v) => { st.filters[k] = v; draw(true); }, setGrouped: g => { st.grouped = !!g; draw(true); }, el,
       viewKey: vkey, layout: () => JSON.parse(JSON.stringify(lay)), setLayout: v => { lay = K.viewLayout(v, colKeys()); saveLay(); draw(true); }, resetView: () => resetBtn.onclick(),
-      colKey: ckey, hiddenCols: () => [...hid], setHidden, resetCols, setVisibleOrder, colMenu: colBtn };
+      colKey: ckey, hiddenCols: () => [...hid], addedCols: () => [...add], setHidden, addCol, removeCol, resetCols, setVisibleOrder, colMenu: colBtn };
     if (opts.autoFilter !== false && !opts.rows) K.live(el, 'filter', draw);
     else K.live(el, 'numfmt', draw);  // формат отрицательных чисел (#153): таблица без перерисовки по фильтру
     // ответ сервера с выбором колонок пришёл позже, чем страница нарисовала таблицу (TDM#763): таблицы рисуются заново, если он другой
     if (el.__kcpOff) el.__kcpOff();
     el.__kcpOff = pick ? K.live(el, 'colprefs', () => {
-      const n = readHid();
-      if (n.size === hid.size && [...n].every(k => hid.has(k))) return;
-      dropHidden(n); hid = n; draw(true);
+      const n = readHid(), na = readAdd();
+      if (n.size === hid.size && [...n].every(k => hid.has(k)) && na.length === add.length && na.every((k, i) => k === add[i])) return;
+      dropHidden(n); dropKeys(add.filter(k => !na.includes(k))); hid = n; add = na;
+      lay = K.viewLayout(rawLay, colKeys());  // набор колонок стал другим: место и ширина новых — из хранилища, а не отброшены
+      draw(true);
     }) : null;
     return api;
   };
@@ -3167,18 +3253,62 @@
   };
   K.tradeDayCol = () => ({ label: 'Сделки за день', num: true, title: 'Изменение номинала позиции за день по сделкам: куплено минус продано, mm в валюте бумаги. Подробности — в подсказке ячейки и в блоке сделок карточки («Сделки за <дата>»)',
     val: r => { const n = K.tradeNet(r); return n ? n.face : null; },
+    // куплено (нетто > 0) — зелёным, продано (< 0) — красным, как DV01 и PnL (f.cls); нет номинала (продано в ноль) — цвет по штукам
     fmt: (v, r) => {
       const n = K.tradeNet(r);
       if (!n) return '';
       const body = v != null ? f.mns(v, 2) + '<span class="mut3">mm ' + esc(r.ccy || '') + '</span>' : n.bonds != null ? '<span class="mut3">' + f.s(n.bonds, 0) + ' шт.</span>' : '<span class="mut3">—</span>';
-      return '<span title="' + esc(n.tip) + '">' + body + '</span>';
+      return '<span class="' + f.cls(v != null ? v : n.bonds) + '" title="' + esc(n.tip) + '">' + body + '</span>';
     },
     csvFmt: (v, r) => v != null && K.tradeNet(r) ? f.mn(v, 2) : '' });   // числовой столбец: нет номинала (продано в ноль) — пусто, штуки только на экране и в подсказке
+  // «Изм. к вчера» (TDM#775): номинал позиции в текущем прогоне минус номинал той же позиции в прогоне предыдущей даты (ключ —
+  // номер позиции, как у остальных сумм прогонов: сервер, api/concepts.extras: prevNotional, newToPrev), mm в валюте бумаги. В
+  // отличие от «Сделок за день» это итог всего, что изменило номинал (сделки, амортизация, индексация линкера, погашение).
+  // Позиции нет в прошлом прогоне — новая: весь номинал. Прошлого прогона нет (M.prevRun пуст) — null; номинала нет в одном из прогонов (не оценена) — face null с подсказкой
+  K.prevDelta = p => {
+    const run = M.prevRun;
+    if (!run || !p) return null;
+    const d = run.date ? f.date(run.date) : 'прошлой даты';
+    if (p.newToPrev) return { face: p.notional, isNew: true, tip: 'Новая позиция: в прогоне за ' + d + ' её не было, изменение — весь номинал' };
+    if (p.prevNotional == null) return { face: null, isNew: false, tip: p.notValued ? 'Сегодня позиция не оценена: номинала нет, изменение не известно'
+      : p.prevNoFact ? 'В прогоне за ' + d + ' позиция была, но не оценена: номинала нет, изменение не известно' : 'В прогоне за ' + d + ' у позиции нет номинала: изменение не известно' };
+    const face = Math.abs(p.notional - p.prevNotional) < 0.01 ? 0 : p.notional - p.prevNotional, ccy = p.ccy || '';
+    return { face, isNew: false, tip: 'В прогоне за ' + d + ' номинал был ' + f.mn(p.prevNotional, 2) + ' mm ' + ccy + ', сейчас ' + f.mn(p.notional, 2) +
+      '. Изменение — и сделки, и то, что меняет номинал само (амортизация, индексация линкера)' };
+  };
+  // нет прогона прошлой даты: с датой закрытия, которого нет (prev_date прогона, M.prevDate), если она известна странице; досчёт —
+  // на странице настроек, карточка «История прогонов» (prototypes/settings.html)
+  K.noPrevRunTip = () => 'нет прогона ' + (M.prevDate && /^\d{4}-\d{2}-\d{2}/.test(M.prevDate) ? 'за ' + f.date(M.prevDate) : 'прошлой даты') + ' (досчитать: Настройки → «Автообновление» → карточка «История прогонов» → «Считать прошлые даты»)';
+  K.prevDeltaCol = () => ({ label: 'Изм. к вчера', num: true, title: 'Номинал позиции в текущем прогоне минус её номинал в прогоне предыдущей даты, mm в валюте бумаги: сделки, амортизация, индексация. Новая позиция — весь номинал (пометка «новая»). Закрытые с прошлой даты позиции в таблице не видны (на C03 они — в строке над таблицей). Нет прогона прошлой даты — прочерк с подсказкой',
+    val: r => { const n = K.prevDelta(r); return n ? n.face : null; },
+    fmt: (v, r) => {
+      const n = K.prevDelta(r);
+      if (!n) return '<span class="mut3" title="' + esc(K.noPrevRunTip()) + '">—</span>';
+      if (n.face == null) return '<span class="mut3" title="' + esc(n.tip) + '">—</span>';
+      if (!n.face && !n.isNew) return '<span class="mut3" title="' + esc(n.tip) + '">·</span>';
+      return '<span class="' + f.cls(n.face) + '" title="' + esc(n.tip) + '">' + f.mns(n.face, 2) + '<span class="mut3">mm ' + esc(r.ccy || '') + '</span>' +
+        (n.isNew ? ' <span class="k-tag" title="' + esc(n.tip) + '">новая</span>' : '') + '</span>';
+    },
+    csvFmt: v => v != null ? f.mn(v, 2) : '' });   // числовой столбец: «новая» и единицы — только на экране
+  // закрытые с прошлой даты позиции (M.prevRun.closed: были в том прогоне, в этом их нет) под фильтром шапки: строка с числом и
+  // номиналами по валютам, подсказка — список. Пусто, когда таких нет или прогона прошлой даты нет
+  K.prevClosedLine = () => {
+    const run = M.prevRun;
+    if (!run || typeof run.date !== 'string' || run.date.length < 10) return '';
+    const L = (run.closed || []).filter(c => K.rowIn({ book: c.book, ccy: c.ccy, portfolio: c.portfolio || '—' }));
+    if (!L.length) return '';
+    const by = {}; L.forEach(c => { by[c.ccy || '—'] = (by[c.ccy || '—'] || 0) + (c.notional || 0); });
+    const d = f.date(run.date), dm = run.date.slice(8, 10) + '.' + run.date.slice(5, 7), cc = Object.keys(by).sort((a, b) => ((M.ccyOrder[a] ?? 99) - (M.ccyOrder[b] ?? 99)) || a.localeCompare(b));
+    const tip = 'Были в прогоне за ' + d + ', в этом прогоне их нет (закрыты, погашены, убраны из книги): ' + L.slice(0, 12).map(c => c.name + ' — ' + f.mn(c.notional, 2) + ' mm ' + (c.ccy || '') + (c.book ? ' (' + c.book + ')' : '')).join('; ') +
+      (L.length > 12 ? '; ещё ' + (L.length - 12) : '') + '. Под фильтром шапки';
+    return '<span class="k-dtl" title="' + esc(tip) + '">Закрыто с ' + esc(dm) + ': <b>' + f.n(L.length, 0) + '</b> поз. <span class="mut3">· ' + cc.map(c => f.mns(-by[c], 1) + ' mm ' + esc(c)).join(' · ') + '</span></span>';
+  };
   K.posCols = {
     // валюта и эмитент — обычные столбцы (R37): сортировка и фильтр по значениям, как у остальных
     issuer: { key: 'issuerName', label: 'Эмитент', filter: true, title: 'эмитент (у деривативов — контрагент)', fmt: (v, r) => '<b style="color:' + K.issuerColor(r.issuer) + '">●</b> ' + esc(v) },
     name: { key: 'name', label: 'Бумага', noHide: true, fmt: (v, r) => K.nameCell(r, v) + (r.tradedToday ? ' ' + K.tradesTag(r) : '') + K.offReportTag(r) + K.curveProxyTag(r) },
     isin: { key: 'isin', label: 'ISIN', fmt: v => '<span class="mono mut">' + esc(v || '—') + '</span>' },
+    short: { key: 'shortName', label: 'Кор. имя', title: 'короткое имя бумаги: своё (карточка, ✎) или биржевое (MOEX SHORTNAME); если своё — биржевое в подсказке', fmt: (v, r) => K.shortCell(r, v) },
     ccy: { key: 'ccy', label: 'Вал', fmt: (v, r) => K.ccyTag(r.ccy, r.ccyReported), val: r => M.ccyOrder[r.ccy] ?? 99, filter: r => r.ccy, fltOrder: (a, b) => ((M.ccyOrder[a] ?? 99) - (M.ccyOrder[b] ?? 99)) || a.localeCompare(b) },
     kind: { key: 'kind', label: 'Тип', filter: r => M.kindLabel[r.kind] || r.kind, fmt: (v, r) => '<span class="tagc" style="border-color:' + K.kindColor[v] + '55">' + esc(M.kindShort[v]) + '</span>' },
     book: { key: 'book', label: 'Книга', filter: true, fmt: v => '<span class="mut">' + esc(v) + '</span>' },
@@ -3194,6 +3324,7 @@
     notional: { key: 'notional', label: 'Номинал', num: true, unit: 'mm в вал.', fmt: (v, r) => f.mn(v, 2) + '<span class="mut3">mm ' + r.ccy + '</span>', csvFmt: v => f.mn(v, 2), title: 'в валюте бумаги' },
     mv: { key: 'mv', label: 'MV, mm ₽', num: true, fmt: v => f.mn(v, 0), sum: true, unit: 'mm ₽', sumFmt: v => f.mn(v, 0) },
     tradeDay: Object.assign({ key: 'tradeDay', unit: 'mm в вал.' }, K.tradeDayCol()),
+    posDelta: Object.assign({ key: 'posDelta', unit: 'mm в вал.' }, K.prevDeltaCol()),
     price: { key: 'price', label: 'Цена', num: true, unit: '% ном.', fmt: v => f.px(v) },
     ytm: { key: 'ytm', label: 'Дох.', num: true, fmt: v => f.pct(v) },
     // в CSV — число, кривая спреда (к КБД / к RUONIA) или DM — своей колонкой «Вид спреда» за ним (#276, TDM#762)
@@ -3466,7 +3597,8 @@
     const te = o.el.querySelector('.t');
     te.innerHTML = '<span style="color:' + K.issuerColor(p.issuer) + '">●</span> ' + K.aliasName(p) + ' ' + K.ccyTag(p.ccy);
     K.aliasBind(te, p, () => { o.title = p.name; });
-    o.el.querySelector('.st').innerHTML = esc(p.issuerFull) + (p.isin ? ' · <span class="mono">' + esc(p.isin) + '</span>' : '') + ' · ' + esc(p.book) + ' — ' + esc(p.bookName) + ' · ' + esc(p.groupLabel) + ' / ' + esc(p.kindLabel);
+    o.el.querySelector('.st').innerHTML = esc(p.issuerFull) + (p.isin ? ' · <span class="mono">' + esc(p.isin) + '</span>' : '') + ' · ' + esc(p.book) + ' — ' + esc(p.bookName) + ' · ' + esc(p.groupLabel) + ' / ' + esc(p.kindLabel) + K.shortRow(p);
+    K.shortBind(o.el.querySelector('.st .k-shortrow'), p);  // «Короткое имя»: ✎ — своё по ISIN, имя меняется на всех экранах (TDM#776)
     const isBond = !!p.cpn;
     const ev = { put: 'пут-оферта', call: 'колл-опцион', mat: 'погашение' }[p.event.kind] || 'даты нет';  // #342: без даты — не «погашение»
     const fields = (isBond ? [
@@ -3589,7 +3721,18 @@
     M.positions.forEach(p => {
       if (p.isin !== isin) return;
       p.alias = alias; p.name = alias || p.exchName;
-      p.searchText = (alias ? alias.toLowerCase() + ' ' : '') + (p.searchBase != null ? p.searchBase : p.searchText);
+      p.searchText = (M.searchPrefix ? M.searchPrefix(p) : alias ? alias.toLowerCase() + ' ' : '') + (p.searchBase != null ? p.searchBase : p.searchText);
+    });
+    fire('alias'); fire('filter');
+  };
+  // короткое имя (TDM#776): своё по ISIN ?? биржевое (p.exchShort); то же, что K.setAlias, для p.shortOwn / p.shortName
+  K.setShort = (isin, name, meta) => {
+    name = name || null;
+    if (M.shortNames) { if (name) M.shortNames[isin] = Object.assign({ shortName: name }, meta || {}); else delete M.shortNames[isin]; }
+    M.positions.forEach(p => {
+      if (p.isin !== isin) return;
+      p.shortOwn = name; p.shortName = name || p.exchShort || null;
+      p.searchText = (M.searchPrefix ? M.searchPrefix(p) : name ? name.toLowerCase() + ' ' : '') + (p.searchBase != null ? p.searchBase : p.searchText);
     });
     fire('alias'); fire('filter');
   };
@@ -3614,9 +3757,22 @@
   };
   // Имена в уже нарисованном: ячейки K.nameCell (data-pn) и элементы с data-card (строка таблицы, ссылка, подпись), чей текст —
   // биржевое имя бумаги: заменяются на месте, страница целиком не перерисовывается (она тяжёлая: C03 — секунда)
+  // ячейка «Кор. имя» (TDM#776): своё короткое имя или биржевое; своё — с биржевым в подсказке; нет имени — «—»; data-ps — как data-pn
+  K.shortCell = (r, v) => {
+    const pos = r && M.pos[r.id], val = v === undefined ? (r && r.shortName) : v;
+    const mark = r && r.isin && (pos === r || (pos && Object.getPrototypeOf(r) === pos)) && val === r.shortName ? ' data-ps="' + esc(String(r.id)) + '"' : '';
+    const tip = r && r.shortOwn && r.exchShort && r.exchShort !== r.shortOwn ? ' title="' + esc('биржевое короткое имя: ' + r.exchShort) + '"' : '';
+    const t = val ? esc(val) : '<span class="mut3">—</span>';
+    return mark || tip ? '<span' + mark + tip + '>' + t + '</span>' : t;
+  };
   K.patchNames = () => {
     K._gen++;  // память ячеек таблиц — заново; длинные таблицы (K.vwin): строки окна — сразу, остальные при показе
     VW.forEach(w => w.repaint());
+    document.querySelectorAll('[data-ps]').forEach(el => {
+      const p = M.pos[el.dataset.ps]; if (!p) return;
+      el.innerHTML = p.shortName ? esc(p.shortName) : '<span class="mut3">—</span>';
+      if (p.shortOwn && p.exchShort && p.exchShort !== p.shortOwn) el.title = 'биржевое короткое имя: ' + p.exchShort; else el.removeAttribute('title');
+    });
     document.querySelectorAll('[data-pn]').forEach(el => {
       const p = M.pos[el.dataset.pn]; if (!p) return;
       if (el.textContent !== p.name) el.textContent = p.name;
@@ -3627,16 +3783,38 @@
       Array.from(el.tagName === 'TR' ? el.children : [el]).forEach(c => { if (!c.children.length && c.textContent === p.exchName) c.textContent = p.name; });
     });
   };
-  const canAlias = p => !!(p && p.isin && M.aliasApi);
-  const aliasView = p => {
-    const ro = M.aliasApi && M.aliasApi.editable === false;
-    return '<span class="k-nm-v">' + esc(p.name) + '</span>' +
-      (p.alias && p.exchName && p.exchName !== p.alias ? ' <span class="k-exch" title="биржевое имя">' + esc(p.exchName) + '</span>' : '') +
-      (canAlias(p) ? '<span class="k-alias-tools">' +
-        '<button class="k-ico" data-al="edit"' + (ro ? ' disabled title="' + esc('только чтение: ' + M.aliasApi.readOnlyReason) + '"' : ' title="переименовать бумагу (алиас по ISIN — на всех экранах)"') + '>✎</button>' +
-        '<button class="k-ico" data-al="hist" title="история имени">⟲</button></span>' : '');
+  // Два имени бумаги, одна машинерия правки (✎, ⟲, «Биржевое»): алиас (полное имя, R33) и короткое имя (TDM#776). Описание вида:
+  // api — M.aliasApi / M.shortNameApi; shown, own, exch — что показано, своё и биржевое; field — поле истории ответа сервера; set —
+  // подстановка во все позиции бумаги
+  const NAME_ALIAS = {
+    api: () => M.aliasApi, shown: p => p.name, own: p => p.alias, exch: p => p.exchName, exchTip: 'биржевое имя', field: 'alias', max: 120,
+    editTip: 'переименовать бумагу (алиас по ISIN — на всех экранах)', histTip: 'история имени', histTitle: 'История имени', clearTxt: 'Биржевое имя',
+    clearTip: 'убрать алиас: снова биржевое имя', hint: 'пусто — биржевое имя', set: (isin, v, meta) => K.setAlias(isin, v, meta), empty: '',
   };
+  const NAME_SHORT = {
+    api: () => M.shortNameApi, shown: p => p.shortName, own: p => p.shortOwn, exch: p => p.exchShort, exchTip: 'биржевое короткое имя', field: 'short_name', max: 40,
+    editTip: 'изменить короткое имя бумаги (по ISIN — на всех экранах)', histTip: 'история короткого имени', histTitle: 'История короткого имени',
+    clearTxt: 'Биржевое', clearTip: 'убрать своё короткое имя: снова биржевое', hint: 'пусто — биржевое короткое имя', set: (isin, v, meta) => K.setShort(isin, v, meta),
+    empty: '<span class="mut3">—</span>',
+  };
+  const canAlias = (p, nk) => !!(p && p.isin && (nk || NAME_ALIAS).api());
+  const nameView = (p, nk) => {
+    const api = nk.api(), ro = api && api.editable === false, own = nk.own(p), exch = nk.exch(p), shown = nk.shown(p);
+    return '<span class="k-nm-v">' + (shown ? esc(shown) : nk.empty) + '</span>' +
+      (own && exch && exch !== own ? ' <span class="k-exch" title="' + esc(nk.exchTip) + '">' + esc(exch) + '</span>' : '') +
+      (canAlias(p, nk) ? '<span class="k-alias-tools">' +
+        '<button class="k-ico" data-al="edit"' + (ro ? ' disabled title="' + esc('только чтение: ' + api.readOnlyReason) + '"' : ' title="' + esc(nk.editTip) + '"') + ' data-ti="' + esc(nk.editTip) + '">✎</button>' +
+        '<button class="k-ico" data-al="hist" title="' + esc(nk.histTip) + '">⟲</button></span>' : '');
+  };
+  const aliasView = p => nameView(p, NAME_ALIAS);
   K.aliasName = p => '<span class="k-nm">' + aliasView(p) + '</span>';
+  // строка карточки «Короткое имя» (TDM#776): значение, ✎, ⟲; у позиции без ISIN (деривативы) строки нет. K.shortBind — правка на месте
+  K.shortRow = p => canAlias(p, NAME_SHORT) ? '<div class="k-shortrow"><span class="mut3">Короткое имя</span> <span class="k-nm">' + nameView(p, NAME_SHORT) + '</span></div>' : '';
+  // права на правку уточнились (ответ входа пришёл позже, чем нарисовали карточку, TDM#777): ✎ в уже открытых карточках — на месте
+  K.refreshNameTools = () => document.querySelectorAll('[data-al=edit]').forEach(b => {
+    const api = M.nameRights || M.aliasApi, ro = api && api.editable === false;
+    b.disabled = !!ro; b.title = ro ? 'только чтение: ' + api.readOnlyReason : (b.dataset.ti || b.title);
+  });
   const WHO = { local: 'этот компьютер', demo: 'демо' };
   const stamp = s => { if (!s) return '—'; const d = new Date(s); if (isNaN(d)) return esc(s); const z = n => String(n).padStart(2, '0'); return z(d.getDate()) + '.' + z(d.getMonth() + 1) + '.' + d.getFullYear() + ' ' + z(d.getHours()) + ':' + z(d.getMinutes()); };
   // ответы сервера (английские) — по-русски; незнакомое — как есть
@@ -3647,54 +3825,58 @@
   document.addEventListener('keydown', e => { if (e.key === 'Escape' && aliasPop) { closeAliasPop(); e.stopImmediatePropagation(); e.preventDefault(); } }, true);
   document.addEventListener('mousedown', e => { if (aliasPop && !aliasPop.contains(e.target) && !(e.target.closest && e.target.closest('[data-al=hist]'))) closeAliasPop(); }, true);
   // история имени: всплывающий список ревизий (новые сверху)
-  K.aliasHistory = function (p, anchor) {
+  K.aliasHistory = function (p, anchor, nk) {
+    nk = nk || NAME_ALIAS;
     closeAliasPop();
     const pop = aliasPop = h('div', 'k-alias-pop');
-    pop.innerHTML = '<div class="hd">История имени <span class="mono mut3">' + esc(p.isin) + '</span></div><div class="bd"><div class="mut3">загрузка…</div></div>';
+    pop.innerHTML = '<div class="hd">' + nk.histTitle + ' <span class="mono mut3">' + esc(p.isin) + '</span></div><div class="bd"><div class="mut3">загрузка…</div></div>';
     document.body.appendChild(pop);
     if (anchor && anchor.getBoundingClientRect) {
       const r = anchor.getBoundingClientRect();
       pop.style.top = Math.round(r.bottom + 4) + 'px';
       pop.style.left = Math.round(Math.max(8, Math.min(r.left, (window.innerWidth || 1200) - 380))) + 'px';
     }
-    return M.aliasApi.history(p.isin).then(revs => {
+    return nk.api().history(p.isin).then(revs => {
       if (aliasPop !== pop) return;
       const bd = pop.querySelector('.bd');
       if (revs == null) { bd.innerHTML = '<div class="neg">история недоступна</div>'; return; }
       bd.innerHTML = (revs.length ? '<table class="k-tbl k-compact"><tbody>' + revs.map(r => '<tr><td class="mut">' + stamp(r.changed_at) + '</td><td class="mut3">' + esc(WHO[r.changed_by] || r.changed_by || '—') + '</td><td>' +
-        (r.alias ? esc(r.alias) : '<span class="mut3">сброшено — биржевое имя</span>') + '</td></tr>').join('') + '</tbody></table>' : '<div class="mut3">имя не менялось</div>') +
-        '<div class="mut3 ft">биржевое имя: ' + esc(p.exchName || '—') + '</div>';
+        (r[nk.field] ? esc(r[nk.field]) : '<span class="mut3">сброшено — ' + nk.exchTip + '</span>') + '</td></tr>').join('') + '</tbody></table>' : '<div class="mut3">имя не менялось</div>') +
+        '<div class="mut3 ft">' + nk.exchTip + ': ' + esc(nk.exch(p) || '—') + '</div>';
     });
   };
-  // правка на месте: el — заголовок с K.aliasName(p); onSaved — после сохранения (заголовок уже перерисован)
-  K.aliasBind = function (el, p, onSaved) {
+  // правка на месте: el — заголовок с K.aliasName(p) (для короткого имени — строка K.shortRow(p), K.shortBind); onSaved — после
+  // сохранения (заголовок уже перерисован); nk — какое имя правим (по умолчанию алиас)
+  K.aliasBind = function (el, p, onSaved, nk) {
+    nk = nk || NAME_ALIAS;
     const wrap = el && el.querySelector && el.querySelector('.k-nm');
-    if (!wrap || !canAlias(p)) return;
-    const view = () => { wrap.innerHTML = aliasView(p); wire(); };
+    if (!wrap || !canAlias(p, nk)) return;
+    const view = () => { wrap.innerHTML = nameView(p, nk); wire(); };
     function wire() {
       const ed = wrap.querySelector('[data-al=edit]'), hs = wrap.querySelector('[data-al=hist]');
       if (ed) ed.onclick = e => { e.stopPropagation(); edit(); };
-      if (hs) hs.onclick = e => { e.stopPropagation(); if (aliasPop) closeAliasPop(); else K.aliasHistory(p, hs); };
+      if (hs) hs.onclick = e => { e.stopPropagation(); if (aliasPop) closeAliasPop(); else K.aliasHistory(p, hs, nk); };
     }
     function edit() {
       closeAliasPop();
-      wrap.innerHTML = '<span class="k-alias-ed"><input class="k-input" maxlength="120" placeholder="' + esc(p.exchName) + '" value="' + esc(p.alias || '') + '">' +
-        '<button class="k-btn pri" data-al="save">Сохранить</button>' + (p.alias ? '<button class="k-btn" data-al="clear" title="убрать алиас: снова биржевое имя">Биржевое имя</button>' : '') +
-        '<button class="k-btn" data-al="cancel">Отмена</button><span class="k-alias-msg mut3">пусто — биржевое имя · Enter — сохранить · Esc — отмена' + (M.aliasApi.demo ? ' · демо: до перезагрузки' : '') + '</span></span>';
+      const api = nk.api();
+      wrap.innerHTML = '<span class="k-alias-ed"><input class="k-input" maxlength="' + nk.max + '" placeholder="' + esc(nk.exch(p) || '') + '" value="' + esc(nk.own(p) || '') + '">' +
+        '<button class="k-btn pri" data-al="save">Сохранить</button>' + (nk.own(p) ? '<button class="k-btn" data-al="clear" title="' + esc(nk.clearTip) + '">' + nk.clearTxt + '</button>' : '') +
+        '<button class="k-btn" data-al="cancel">Отмена</button><span class="k-alias-msg mut3">' + nk.hint + ' · Enter — сохранить · Esc — отмена' + (api.demo ? ' · демо: до перезагрузки' : '') + '</span></span>';
       const inp = wrap.querySelector('input'), msg = wrap.querySelector('.k-alias-msg');
       const busy = b => wrap.querySelectorAll('button[data-al=save],button[data-al=clear],input').forEach(x => x.disabled = b);
       const save = raw => {
         busy(true); msg.className = 'k-alias-msg mut3'; msg.textContent = 'сохранение…';
-        return M.aliasApi.put(p.isin, raw).then(r => {
+        return api.put(p.isin, raw).then(r => {
           if (r.status === 200 && r.body) {
-            K.setAlias(p.isin, r.body.alias, { changedBy: r.body.changed_by, changedAt: r.body.changed_at });
+            nk.set(p.isin, r.body[nk.field], { changedBy: r.body.changed_by, changedAt: r.body.changed_at });
             view(); if (onSaved) onSaved(r.body);
             return;
           }
           const why = aliasWhy((r.body && r.body.message) || ('ошибка ' + r.status));
-          if (r.status === 403) {  // не компьютер сервера: дальше только чтение, имя — как есть
-            M.aliasApi.editable = false;
-            msg.className = 'k-alias-msg warn'; msg.textContent = 'только чтение: ' + M.aliasApi.readOnlyReason;
+          if (r.status === 403) {  // нет права (роль, не компьютер сервера): дальше только чтение, имя — как есть
+            api.editable = false; K.refreshNameTools();  // ✎ всех открытых карточек (алиас и короткое имя) гаснут сразу
+            msg.className = 'k-alias-msg warn'; msg.textContent = 'только чтение: ' + api.readOnlyReason;
             wrap.querySelectorAll('button[data-al=save],button[data-al=clear],input').forEach(x => x.disabled = true);
             return;
           }
@@ -3716,6 +3898,7 @@
     wire();
     return { edit, view };
   };
+  K.shortBind = (el, p, onSaved) => K.aliasBind(el, p, onSaved, NAME_SHORT);
 
   // все потоки позиции до погашения: на прогоне — график выпуска с сервера (M.posFlows), иначе потоки набора данных;
   // потоки после оферты, к которой оценена бумага, приглушены: они будут, если бумагу не предъявят
