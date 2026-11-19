@@ -89,6 +89,9 @@ class Position(BaseModel):
     no_pnl: dict[str, Any] | None = Field(description="{reason, detail} when priced but without PnL")
     alias: str | None = Field(None, description="The display name a user gave fact.isin (PUT /api/v1/instruments/"
                                                 "alias), in force now, old runs too; null: none, show fact.name")
+    short_name: str | None = Field(None, description="The short name a user gave fact.isin (PUT /api/v1/instruments/"
+                                                     "short-name), in force now, old runs too; null: none, show "
+                                                     "fact.extra.short_name (the exchange's)")
 
 
 class PositionList(BaseModel):
