@@ -3875,7 +3875,7 @@
           }
           const why = aliasWhy((r.body && r.body.message) || ('ошибка ' + r.status));
           if (r.status === 403) {  // нет права (роль, не компьютер сервера): дальше только чтение, имя — как есть
-            api.editable = false;
+            api.editable = false; K.refreshNameTools();  // ✎ всех открытых карточек (алиас и короткое имя) гаснут сразу
             msg.className = 'k-alias-msg warn'; msg.textContent = 'только чтение: ' + api.readOnlyReason;
             wrap.querySelectorAll('button[data-al=save],button[data-al=clear],input').forEach(x => x.disabled = true);
             return;

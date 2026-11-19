@@ -15,8 +15,9 @@ const ORIGIN = 'http://desk.test';
 const TYPES = { '.html': 'text/html', '.js': 'application/javascript', '.css': 'text/css', '.json': 'application/json', '.svg': 'image/svg+xml', '.png': 'image/png' };
 const json = (route, body, status) => route.fulfill({ status: status || 200, contentType: 'application/json', body: JSON.stringify(body) });
 
-// state — ответ /api/v1/auth/state; put — ответ на PUT /api/v1/instruments/alias
-async function open(browser, state, put) {
+// state — ответ /api/v1/auth/state; put — ответ на PUT /api/v1/instruments/alias; gate — Promise: пока не выполнен, ответ входа не уходит
+// (гонка: карточку открывают раньше ответа), state === null — ответа не будет вовсе (запрос обрывается)
+async function open(browser, state, put, gate) {
   const D = JSON.parse(RUN);
   const ctx = await browser.newContext({ viewport: { width: 1440, height: 1000 } });
   const pg = await ctx.newPage(), errors = [], calls = { state: 0, put: 0 };
@@ -26,7 +27,7 @@ async function open(browser, state, put) {
     if (u.origin !== ORIGIN) return route.abort();
     if (u.pathname === '/concepts-run.js') return route.fulfill({ status: 200, contentType: 'application/javascript', body: 'window.CONCEPTS_RUN = ' + JSON.stringify(D) + ';' });
     if (u.pathname === '/concepts-data.js') return route.fulfill({ status: 200, contentType: 'application/javascript', body: 'window.DESK_EXTRAS = ' + JSON.stringify({ notes: [] }) + ';' });
-    if (u.pathname === '/api/v1/auth/state') { calls.state++; return json(route, state); }
+    if (u.pathname === '/api/v1/auth/state') { calls.state++; if (state === null) return route.abort(); return Promise.resolve(gate).then(() => json(route, state)); }
     if (u.pathname === '/api/v1/instruments/alias') { calls.put++; return json(route, put || {}, put ? 200 : 403); }
     if (u.pathname.startsWith('/api/')) return json(route, u.pathname.endsWith('/aliases') ? { aliases: [] } : {}, u.pathname.endsWith('/aliases') ? 200 : 404);
     const f = path.join(ROOT, decodeURIComponent(u.pathname));
@@ -34,7 +35,8 @@ async function open(browser, state, put) {
     return route.fulfill({ status: 200, contentType: TYPES[path.extname(f)] || 'application/octet-stream', body: fs.readFileSync(f) });
   });
   await pg.goto(ORIGIN + '/concepts/c03-blotter.html');
-  await pg.waitForFunction(() => window.MOCK && window.KIT && window.MOCK.nameRights && window.MOCK.nameRights.authKnown);  // ответ входа применён
+  if (gate || state === null) await pg.waitForFunction(() => window.MOCK && window.KIT && window.MOCK.nameRights);
+  else await pg.waitForFunction(() => window.MOCK && window.KIT && window.MOCK.nameRights && window.MOCK.nameRights.authKnown);  // ответ входа применён
   return { pg, ctx, errors, calls };
 }
 const me = role => ({ enabled: true, user: { username: 'u', role, display_name: null, must_change_password: false }, setup_needed: false, setup_allowed: false, loopback: false,
@@ -94,6 +96,54 @@ test('who may rename a security (TDM#777)', { skip: pw ? false : 'нет Playwri
         assert.ok(/сервер отказал/.test(msg), msg);
         assert.strictEqual(calls.put, 1);
         assert.strictEqual(await pg.evaluate(() => MOCK.aliasApi.editable), false);
+        assert.deepStrictEqual(errors, []);
+      } finally { await ctx.close(); }
+    });
+    // гонка: карточку открыли раньше, чем пришёл ответ входа; потом ответ пришёл — ✎ в уже нарисованной карточке обновляется
+    for (const [role, canEdit] of [['trader', true], ['viewer', false]]) {
+      await t.test('race: the card is opened before the sign-in answer (' + role + ')', async () => {
+        let release; const gate = new Promise(r => { release = r; });
+        const { pg, ctx, errors } = await open(browser, me(role), null, gate);
+        try {
+          const before = await edit(pg);
+          assert.strictEqual(before.disabled, true, 'пока ответа нет, ✎ выключена');
+          assert.ok(/^только чтение: права на правку уточняются/.test(before.title) && !/вход выключен/.test(before.title) && !/127\.0\.0\.1/.test(before.title), before.title);
+          release();
+          await pg.waitForFunction(() => window.MOCK.nameRights.authKnown);
+          await pg.waitForFunction(ok => !document.querySelector('.k-nm [data-al=edit]').disabled === ok, canEdit);  // ✎ в той же карточке, без её перерисовки
+          const after = await pg.evaluate(() => { const b = document.querySelector('.k-nm [data-al=edit]'); return { disabled: b.disabled, title: b.title }; });
+          assert.strictEqual(after.disabled, !canEdit);
+          if (canEdit) assert.ok(!/только чтение/.test(after.title), after.title);
+          else assert.ok(/^только чтение: роль «просмотр»/.test(after.title), after.title);
+          assert.deepStrictEqual(errors, []);
+        } finally { await ctx.close(); }
+      });
+    }
+    await t.test('no sign-in answer at all (another computer): the hint stays neutral and does not claim that sign-in is off', async () => {
+      const { pg, ctx, errors } = await open(browser, null);
+      try {
+        await pg.evaluate(() => window.DESK_AUTH.ready);
+        await pg.waitForTimeout(100);
+        const b = await edit(pg);
+        assert.strictEqual(b.disabled, true);
+        assert.ok(/^только чтение: права на правку уточняются — обновите страницу, если не исчезнет$/.test(b.title) && !/вход выключен/.test(b.title), b.title);
+        assert.deepStrictEqual(errors, []);
+      } finally { await ctx.close(); }
+    });
+    await t.test('403 on save: every pencil goes out at once (alias and short name, all open cards)', async () => {
+      const { pg, ctx, errors } = await open(browser, me('trader'));  // PUT отвечает 403
+      try {
+        await edit(pg);
+        const before = await pg.evaluate(() => [...document.querySelectorAll('[data-al=edit]')].map(b => b.disabled));
+        assert.ok(before.length >= 2 && before.every(d => d === false), 'в карточке ✎ алиаса и короткого имени, обе включены: ' + before);
+        await pg.evaluate(() => {
+          document.querySelector('.k-nm [data-al=edit]').click();
+          document.querySelector('.k-alias-ed input').value = 'Новое имя';
+          document.querySelector('.k-alias-ed [data-al=save]').click();
+        });
+        await pg.waitForFunction(() => /только чтение/.test((document.querySelector('.k-alias-msg') || {}).textContent || ''));
+        const after = await pg.evaluate(() => [...document.querySelectorAll('[data-al=edit]')].map(b => ({ d: b.disabled, t: b.title })));
+        assert.ok(after.length >= 2 && after.every(x => x.d && /^только чтение: сервер отказал/.test(x.t)), JSON.stringify(after));
         assert.deepStrictEqual(errors, []);
       } finally { await ctx.close(); }
     });

@@ -341,9 +341,13 @@
   const REASON_LOCAL = 'вход выключен — переименовать можно только на компьютере, где работает сервер деска (адрес 127.0.0.1)';
   const REASON_VIEWER = 'роль «просмотр» не меняет имена бумаг: нужна роль «трейдер» или «администратор»';
   const REASON_DENIED = 'сервер отказал в правке: роль или режим входа изменились — обновите страницу';
-  const rights = { editable: LOOPBACK.test(location.hostname || ''), reason: LOOPBACK.test(location.hostname || '') ? REASON_DENIED : REASON_LOCAL, known: false };
+  // Пока ответ входа не пришёл (или не пришёл вовсе), на не-loopback адресе нельзя утверждать, что вход выключен: причина нейтральная
+  const REASON_PENDING = 'права на правку уточняются — обновите страницу, если не исчезнет';
+  const rights = { editable: LOOPBACK.test(location.hostname || ''), reason: LOOPBACK.test(location.hostname || '') ? REASON_DENIED : REASON_PENDING, known: false };
+  // отказ сервера (403) до ответа входа: причина — сам отказ, а не «уточняются»; после ответа входа причина уже своя
+  const deny = () => { rights.editable = false; if (!rights.known) rights.reason = REASON_DENIED; };
   M.nameRights = {
-    get editable() { return rights.editable; }, set editable(v) { rights.editable = !!v; },
+    get editable() { return rights.editable; }, set editable(v) { if (v) rights.editable = true; else deny(); },
     get readOnlyReason() { return rights.reason; }, get authKnown() { return rights.known; },  // known: ответ входа применён
     setAuth(st) {
       if (!st || typeof st.enabled !== 'boolean') return rights.editable;  // нет ответа: остаётся по адресу страницы
@@ -370,7 +374,7 @@
     history: isin => aliasCall('GET', '../api/v1/instruments/aliases/' + encodeURIComponent(isin) + '/history')
       .then(r => r.status === 200 && r.body ? r.body.revisions : null),
   }, {
-    editable: { get: () => rights.editable, set: v => { rights.editable = !!v; }, enumerable: true },
+    editable: { get: () => rights.editable, set: v => { if (v) rights.editable = true; else deny(); }, enumerable: true },
     readOnlyReason: { get: () => rights.reason, enumerable: true },
   });
   // Короткое имя бумаги (TDM#776): своё по ISIN (GET /api/v1/instruments/short-names, PUT .../short-name, история) — отдельно от
@@ -382,7 +386,7 @@
     history: isin => aliasCall('GET', '../api/v1/instruments/short-names/' + encodeURIComponent(isin) + '/history')
       .then(r => r.status === 200 && r.body ? r.body.revisions : null),
   }, {
-    editable: { get: () => rights.editable, set: v => { rights.editable = !!v; }, enumerable: true },
+    editable: { get: () => rights.editable, set: v => { if (v) rights.editable = true; else deny(); }, enumerable: true },
     readOnlyReason: { get: () => rights.reason, enumerable: true },
   });
   // перед searchBase в поиске — свои имена бумаги (алиас и короткое), в нижнем регистре; как K.setAlias и K.setShort (kit.js)
