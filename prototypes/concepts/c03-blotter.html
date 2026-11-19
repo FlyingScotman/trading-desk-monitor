@@ -171,7 +171,7 @@ body { display: flex; flex-direction: column; height: 100vh; overflow: hidden; }
     desk: { label: 'Деск', filter: true, val: r => r.desk, fmt: v => '<span class="mut">' + esc(v) + '</span>' },
   };
   const PRESETS = [
-    ['base', 'Базовый', ['name', 'short', 'ccy', 'issuer', 'kind', 'book', 'coupon', 'offer', 'offerKind', 'maturity', 'event', 'notional', 'tradeDay', 'posDelta', 'price', 'ytm', 'spread', 'dv01', 'cs01', 'spark', 'isin']],
+    ['base', 'Базовый', ['name', 'short', 'ccy', 'issuer', 'kind', 'book', 'coupon', 'offer', 'offerKind', 'maturity', 'event', 'notional', 'tradeDay', 'posDelta', 'price', 'ytm', 'spread', 'zkbd', 'zdisc', 'dv01', 'cs01', 'spark', 'isin']],
     ['risk', 'Риск', ['name', 'ccy', 'issuer', 'kind', 'book', 'event', 'tenor', 'notional', 'tradeDay', 'posDelta', 'mv', 'dur', 'dv01', 'cs01', 'basis01', 'ofzSpr01', 'carry', 'funding']],
     ['px', 'Цены и спреды', ['name', 'ccy', 'issuer', 'kind', 'coupon', 'event', 'price', 'chg', 'bidask', 'spark', 'ytm', 'spread', 'zkbd', 'zdisc', 'gspread', 'dur']],
     ['pnl', 'Кэрри и PnL', ['name', 'ccy', 'issuer', 'book', 'tradeDay', 'coupon', 'curCpn', 'fund', 'carry', 'funding', 'pc', 'pfu', 'pr', 'ps', 'pf', 'pt', 'po', 'pnl', 'pnlMtd', 'pnlYtd']],

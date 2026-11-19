@@ -3405,8 +3405,12 @@
       if (p.ccy === 'RUB') return [['Z-спред к КБД', bp(p.zKbd), false, K.tips.zkbd], ['Z-спред к RUONIA', bp(p.zRuonia), false, K.tips.zdisc]];
       return [['Z-спред к ' + to, bp(p.zSpreadZ != null ? p.zSpreadZ : p.zspread), false, K.tips.zspread]];
     }
+    // у рублёвого флоатера обе строки есть всегда (TDM#786): Z к кривой дисконтирования — под её именем, второй — «—»
     const out = [['Дисконт-маржа', f.bp(p.dm) + ' <small>б.п.' + (p.dmSource === 'z' ? ' · = Z: DM ядра нет' : ' · к кривой проекции') + '</small>', false, 'Дисконт-маржа (DM) — спред к кривой проекции купонов флоатера (КС или RUONIA), годовой, ACT/365F']];
-    if (p.zSpreadZ != null && p.dmSource !== 'z') out.push(['Z-спред к ' + to, f.bp(p.zSpreadZ) + ' <small>б.п. · как у фиксов</small>', false, to === 'RUONIA' ? K.tips.zdisc : K.tips.zspread]);
+    if (p.ccy === 'RUB') {
+      const z = v => v == null ? dash : f.bp(v) + ' <small>б.п. · как у фиксов</small>';
+      out.push(['Z-спред к КБД', z(to === 'КБД' ? p.zSpreadZ : null), false, K.tips.zkbd], ['Z-спред к RUONIA', z(to === 'RUONIA' ? p.zSpreadZ : p.zRuonia), false, K.tips.zdisc]);
+    } else if (p.zSpreadZ != null && p.dmSource !== 'z') out.push(['Z-спред к ' + to, f.bp(p.zSpreadZ) + ' <small>б.п. · как у фиксов</small>', false, K.tips.zspread]);
     return out;
   };
   // DM флоатера в истории (R35): DM ядра — только в дни прогонов (с появления позиции), оценка по цене MOEX (dmPx,

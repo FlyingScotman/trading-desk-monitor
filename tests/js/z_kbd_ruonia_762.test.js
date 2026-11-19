@@ -110,10 +110,14 @@ t('карточка: рублёвая фикс-бумага — «Z-спред �
   // у каждой из двух строк — своя подсказка, и ни одна не называет КБД «RUONIA»
   const tips = K.spreadFields(M.pos.OFZ1).map(x => x[3]);
   assert.strictEqual(tips[0], K.tips.zkbd); assert.strictEqual(tips[1], K.tips.zdisc);
-  // валютная бумага — одна строка, к своей кривой; флоатер — DM и Z (к RUONIA; на КБД — «к КБД», не «к RUONIA»)
+  // валютная бумага — одна строка, к своей кривой; рублёвый флоатер — DM и оба Z (TDM#786), число — под кривой дисконтирования,
+  // на КБД — «к КБД», не «к RUONIA», а второй — прочерк
   assert.strictEqual(Object.keys(rows(M.pos.FX1)).join('|'), 'Z-спред к кривой USD');
-  assert.strictEqual(Object.keys(rows(M.pos.FL1)).join('|'), 'Дисконт-маржа|Z-спред к RUONIA');
-  assert.strictEqual(Object.keys(rows(M.pos.FL2)).join('|'), 'Дисконт-маржа|Z-спред к КБД');
+  const f1 = rows(M.pos.FL1), f2 = rows(M.pos.FL2);
+  assert.strictEqual(Object.keys(f1).join('|'), 'Дисконт-маржа|Z-спред к КБД|Z-спред к RUONIA');
+  assert.strictEqual(Object.keys(f2).join('|'), 'Дисконт-маржа|Z-спред к КБД|Z-спред к RUONIA');
+  assert.ok(/—/.test(f1['Z-спред к КБД']) && f1['Z-спред к RUONIA'].startsWith('205 '));
+  assert.ok(f2['Z-спред к КБД'].startsWith('215 ') && /—/.test(f2['Z-спред к RUONIA']));
   // строка G-спреда — из обеих карточек (kit.js и C03); колонка G-спред в таблицах осталась
   for (const src of [P('concepts/lib/kit.js'), P('concepts/c03-blotter.html')]) assert.ok(!/\['G-спред к ОФЗ'/.test(src) && !/G-спред к КБД/.test(src));
   assert.ok(/gspread: \{ (key: 'gspread', )?label: 'G-спред'/.test(P('concepts/lib/kit.js')) && /gspread: \{ label: 'G-спред'/.test(P('concepts/c03-blotter.html')));
