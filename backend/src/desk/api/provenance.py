@@ -359,13 +359,16 @@ def _trades(con, run: dict[str, Any], pid: str, book: str, ids: set[str], feeds:
     run_t = {"versions": (t or {}).get("versions") or {}, "skipped_ids": (t or {}).get("skipped_ids") or {},
              "truncated": bool((t or {}).get("truncated"))}
     bd = run["business_date"]
+    # a trade that came after the run and that the book cannot take has its reason, not a wait (TDM#711)
+    ahead = trades._ahead(con, bd, [r["data"] for (vd, _), r in found.items() if vd is None or vd >= bd], run_t,
+                          why != "off")
     items = []
     for (vd, tid), r in sorted(found.items(), key=lambda kv: (kv[0][0] or bd, kv[0][1])):
         d = r["data"]
         if vd is not None and vd < bd:   # a trade of an earlier date: in the start of the day of a carried book
             state, text = "earlier_date", cv.PROVENANCE_TEXT["trade_earlier"].format(day=vd.isoformat())
         else:   # as the trades screen says it (``trades._intraday_state``: applied only at the version the run took)
-            state = trades._intraday_state(d, bd, run_t, why != "off")
+            state = trades._intraday_state(d, bd, run_t, why != "off", ahead)
             text = trades.STATE_TEXT.get(state, state)
         origin = origins.get(r["set_id"])
         items.append(_set_item("trades", r, trade_id=tid, trade_version=d.get("trade_version"), status=d.get("status"),

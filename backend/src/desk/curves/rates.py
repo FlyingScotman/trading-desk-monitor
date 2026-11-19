@@ -102,11 +102,14 @@ class RatesCurve:
     """``key_rate_projection`` only: the rebased key-rate forward curve as a ``rub_key_rate_swap_v1`` entry."""
 
 
-def ruonia_calendar(static: Snapshot, since: date) -> tuple[BusinessCalendar, date | None]:
+def ruonia_calendar(static: Snapshot, since: date, reach: date | None = None
+                    ) -> tuple[BusinessCalendar, date | None]:
     """RUONIA publication calendar: ``RU_PRODUCTION`` plus, from ``since`` on, the last business day of
     each year as a holiday (CBR does not compute RUONIA that day). Before ``since`` the hub's
-    ``RU_PRODUCTION`` already follows the observed RUONIA days (2024-12-28, 2025-12-30 are holidays there)."""
-    base, prov = ar.calendar(static, "RU_PRODUCTION")
+    ``RU_PRODUCTION`` already follows the observed RUONIA days (2024-12-28, 2025-12-30 are holidays there).
+    ``reach``: see ``ois_calendar``; the days it adds before the hub's first day have no holiday transfers or working
+    Saturdays and no RUONIA-free year-end (the observed ones are the hub's own, from its first day)."""
+    base, prov = ar.calendar(static, "RU_PRODUCTION", reach)
     year_ends = set()
     for year in range(since.year, base.valid_to.year + 1):
         if base.covers(d := date(year, 12, 31)):
@@ -125,15 +128,19 @@ def _joint(parts: list[tuple[BusinessCalendar, date | None]]) -> tuple[BusinessC
                  "provisional_from": provisional and provisional.isoformat()}
 
 
-def ois_calendar(static: Snapshot, business_date: date) -> tuple[BusinessCalendar, dict[str, Any]]:
-    """Joint SPFI (MOEX_FORTS) + MOSCOW (RU_PRODUCTION) + RUONIA publication calendar."""
-    return _joint([ar.calendar(static, "MOEX_FORTS"), ar.calendar(static, "RU_PRODUCTION"),
-                   ruonia_calendar(static, business_date)])
+def ois_calendar(static: Snapshot, business_date: date, reach: date | None = None
+                 ) -> tuple[BusinessCalendar, dict[str, Any]]:
+    """Joint SPFI (MOEX_FORTS) + MOSCOW (RU_PRODUCTION) + RUONIA publication calendar. ``reach``: a date before the
+    hub's first day the calendar must cover (a swap rolled from its start, TDM#509): the days before it by fixed rules
+    (``adapter.extend_calendar_back``: weekends and the fixed public holidays, no transfers or working Saturdays, no
+    RUONIA-free year-end)."""
+    return _joint([ar.calendar(static, "MOEX_FORTS", reach), ar.calendar(static, "RU_PRODUCTION", reach),
+                   ruonia_calendar(static, business_date, reach)])
 
 
-def krs_calendar(static: Snapshot) -> tuple[BusinessCalendar, dict[str, Any]]:
-    """Joint SPFI (MOEX_FORTS) + MOSCOW (RU_PRODUCTION): MOEX IRS KEYRATE."""
-    return _joint([ar.calendar(static, "MOEX_FORTS"), ar.calendar(static, "RU_PRODUCTION")])
+def krs_calendar(static: Snapshot, reach: date | None = None) -> tuple[BusinessCalendar, dict[str, Any]]:
+    """Joint SPFI (MOEX_FORTS) + MOSCOW (RU_PRODUCTION): MOEX IRS KEYRATE. ``reach``: as ``ois_calendar``."""
+    return _joint([ar.calendar(static, "MOEX_FORTS", reach), ar.calendar(static, "RU_PRODUCTION", reach)])
 
 
 def select_quote_set(market: Snapshot, dataset: str) -> tuple[ar.QuoteSet, dict[str, Any]]:

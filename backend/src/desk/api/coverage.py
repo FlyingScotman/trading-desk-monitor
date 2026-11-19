@@ -24,6 +24,13 @@ from typing import Any
 from ..inbox.schema import alias_position
 from . import concepts
 
+BACKFILL_PATH = "Настройки → «Диагностика» → карточка «История прогонов»"
+"""Where the owner sees the monitor's history of runs (``prototypes/settings.html``, card ``bf``): the dates it recomputes
+in the background, with the rows «Включено» (switched on in «Автообновление»), «Осталось» and «История фиксингов»."""
+FIXINGS_HISTORY_PATH = BACKFILL_PATH + " → строка «История фиксингов»"
+RECOMPUTE = ("дата пересчитается сама, когда история прогонов дойдёт до неё (ход: " + BACKFILL_PATH + " → строка «Осталось»; "
+             "если в строке «Включено» стоит «нет» — включите её в разделе «Автообновление»)")
+"""What to do with a run made by an older version of the program: nothing by hand, the history recomputes it."""
 AMOUNTS = ("amount_ccy", "face_amount_ccy", "face_outstanding_ccy")
 SWAPS = ("IRS", "CCS", "CDS", "TRS")
 TERMS_SWAPS = ("IRS", "CCS")
@@ -40,7 +47,7 @@ NO_TERMS_CAUSES: dict[str, tuple[str, str]] = {
                          ("проверьте «Оценка и риск из отчёта о позициях» (Настройки → Адаптер → Источники); если "
                           "включена — стоимости нет в самом отчёте")),
     "run_before_report_value": (("прогон сделан программой до версии 0.2.19: стоимость в отчёте позиций есть, но та "
-                                 "версия её не брала"), "пересчитайте дату: Настройки → История прогонов"),
+                                 "версия её не брала"), RECOMPUTE),
 }
 """TDM#607: why a swap without trade terms (CDS, TRS) is not valued, by what its report row and the run say."""
 REPORT_MV = ("стоимость и риск из отчёта о позициях: Настройки → Адаптер → Источники, «Оценка и риск из отчёта о "
@@ -124,7 +131,7 @@ CAUSES: dict[str, tuple[str, str]] = {
                                    "проверьте частоту выплат в условиях сделки — или " + REPORT_MV),
     "swap_dates_mismatch": (("у ног процентного свопа (IRS) разные даты начала или окончания: прогон сделан до версии "
                              "0.2.21, которая оценивает каждую ногу по её датам; MV в отчёте нет"),
-                            "пересчитайте дату: Настройки → История прогонов"),
+                            RECOMPUTE),
     "swap_notional_mismatch": ("у ног свопа разные номиналы: ядро так не оценивает; MV в отчёте нет",
                                "проверьте номиналы ног в условиях сделки — или " + REPORT_MV),
     "swap_ccy_unsupported": ("процентный своп не в рублях: ядро в мониторе такие не оценивает; MV в отчёте нет",
@@ -172,7 +179,7 @@ CORE_CAUSES: dict[str, tuple[str, str]] = {
     "missing_market_data": (("ядру не хватило рыночных данных за дату (кривой, курса или фиксинга индекса за начало "
                              "периода сделки); MV в отчёте нет"),
                             ("фиксинги, кривые и курсы приходят со срезом хаба, старые фиксинги — из хранимой истории "
-                             "фиксингов (Настройки → История прогонов); обновите данные за дату — или " + REPORT_MV)),
+                             "фиксингов (" + FIXINGS_HISTORY_PATH + "); обновите данные за дату — или " + REPORT_MV)),
     "unsupported_product": ("ядро не поддерживает такой вид сделки; MV в отчёте нет", "до оценки ядром — " + REPORT_MV),
     "invalid_terms": ("ядро не приняло условия сделки (противоречивы или неполны); MV в отчёте нет",
                       "проверьте условия сделки в источнике (Настройки → Адаптер → Условия сделок) — или " + REPORT_MV),
@@ -184,8 +191,8 @@ CORE_CAUSES: dict[str, tuple[str, str]] = {
     "settled_leg": ("нога сделки уже исполнена до даты прогона", "не пропуск: исполненная нога"),
     "undeclared_fixing_gap": (("в истории фиксингов индекса пропуск внутри периода сделки (день без фиксинга); MV в "
                                "отчёте нет"),
-                              ("фиксинги приходят со срезом хаба и из хранимой истории фиксингов (Настройки → История "
-                               "прогонов) — или " + REPORT_MV)),
+                              ("фиксинги приходят со срезом хаба и из хранимой истории фиксингов (" + FIXINGS_HISTORY_PATH
+                               + ") — или " + REPORT_MV)),
     "missing_basket_price": ("нет цены бумаги из корзины фьючерса", "котировки приходят со срезом хаба"),
     "missing_assumption": ("ядру не хватило допущения для оценки (например даты исполнения)",
                            "журнал прогона: Настройки → Диагностика — или " + REPORT_MV),
@@ -373,8 +380,8 @@ def explain(reason: str | None, kind: str, product: str | None, futures_by_ticke
     if is_history_hole(detail):  # not the hub's calendar: a hole of the monitor's stored fixings (TDM#590)
         why = ("период начисления сделки пересекает пропуск в хранимой истории фиксингов: дни без фиксинга подряд "
                "дольше праздников, это недостающие данные, а не выходные")
-        todo = ("история фиксингов догружается в фоне: проверьте строку «История фиксингов» в «Истории прогонов»; "
-                "после догрузки дата пересчитается")
+        todo = ("история фиксингов догружается в фоне: проверьте её здесь: " + FIXINGS_HISTORY_PATH
+                + "; после догрузки дата пересчитается")
     fk = "history" if is_history_hole(detail) else CAUSE_FIX.get(key) or ("report_risk" if REPORT_MV in todo else None)
     return {"key": key, "why": why, "todo": todo, "short": "пропуск фиксингов" if is_history_hole(detail) else short(key),
             "detail": detail_text(detail, hole) or detail or None,
