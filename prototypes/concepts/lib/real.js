@@ -23,8 +23,8 @@
  *  - у флоатера доходности нет (ytm = null), спред — дисконт-маржа ядра (extra.dm_bp: спред к кривой проекции; в
  *    прогоне до ядра 0.33 — Z-спред); G-спред — ядра (extra.g_spread_bp, определение MOEX), иначе MOEX;
  *  - у рублёвой фикс-бумаги два Z-спреда: p.zKbd (zKbdBp) и p.zRuonia (zRuoniaBp), к какой бы кривой она ни дисконтировалась
- *    (TDM#762); «Спред» (p.zspread) — к кривой дисконтирования (p.spreadCurve: КБД у ОФЗ-ПД/АД/ИН, RUONIA OIS у остальных), p.spreadLabel
- *    подписывает её («к КБД» / «к RUONIA» / «DM»); у флоатера Z — прежний Z (spreadBp), он к кривой дисконтирования: в день на КБД это
+ *    (TDM#762); «Спред» (p.zspread) рублёвой фикс-бумаги — Z к RUONIA OIS (TDM#801; нет его — спред к кривой дисконтирования,
+ *    p.spreadCurve: КБД у ОФЗ-ПД/АД/ИН и в день без RUONIA OIS), p.spreadLabel подписывает кривую («к RUONIA» / «к КБД» / «DM»); у флоатера Z — прежний Z (spreadBp), он к кривой дисконтирования: в день на КБД это
  *    p.zKbd, иначе p.zRuonia (второе поле пусто, TDM#786);
  *  - CS01 и базис по бакетам срока — ядра (extra.spread_buckets: CS по бакетам пропорционально ставочному риску
  *    дисконтирования); в прогоне до ядра 0.33 — по двум соседним бакетам срока;
@@ -537,6 +537,11 @@
     p.zKbd = !rubZ ? null : flt ? (p.spreadCurve === 'RUB OFZ' ? p.zSpreadZ : null) : d.zKbdBp === undefined ? (p.spreadCurve === 'RUB OFZ' ? p.zSpreadZ : null) : num(d.zKbdBp);
     p.zRuonia = !rubZ ? null : flt ? (p.spreadCurve === 'RUB OFZ' ? null : p.zSpreadZ)
       : d.zRuoniaBp === undefined ? (p.spreadCurve === 'RUB RUONIA' ? p.zSpreadZ : null) : num(d.zRuoniaBp);
+    // Основной «Спред» рублёвой фикс-бумаги, ОФЗ в том числе, — Z к RUONIA OIS (TDM#801): колонка «Спред», её подпись «к RUONIA», графики и
+    // сводки, где берётся p.zspread. Оценка и риск не меняются: ОФЗ-ПД/АД/ИН по-прежнему дисконтируются на КБД, p.spreadCurve — их кривая
+    // дисконтирования (карточка, desk-util), а Z к КБД остаётся в своей колонке. Нет Z к RUONIA (день без кривой RUONIA OIS, прогон до
+    // поля) — «Спред» прежний, к кривой дисконтирования, с её подписью. Флоатер и бумага не в рублях — как были (DM и Z своей кривой)
+    if (rubZ && !flt && p.zRuonia != null) { p.zspread = p.zRuonia; p.spreadLabel = 'к RUONIA'; p.spreadName = 'Z к RUONIA'; }
     // прокси-кривая (#31, extra.curve_proxy прогона): в день без кривой RUONIA бумага на КБД (RUB OFZ) — пометка в
     // таблицах и карточке (K.curveProxyTag, K.curveProxyNote); прогон без поля — пометки нет
     const cp = ex.curve_proxy;
@@ -795,7 +800,7 @@
     const p = M.pos[id], s = histCache[id];
     if (!s || !s.dates.length) {
       const c = {}; Object.keys(p.dv01ByCurve).forEach(id => { if (p.dv01ByCurve[id] && (id !== 'RUB OFZ' || M.ofzView === 'kbd')) c[id] = [p.dv01ByCurve[id]]; });  // ОФЗ-ИН: basis01 = 0
-      return { dates: [M.asOf], price: [p.price], ytm: [p.ytm], spr: [p.zspread], notional: [p.notional], dv01: [p.dv01], cs01: [p.cs01], basis: [p.basis01], mv: [M.deal(p) ? Math.abs(p.notionalRub) : p.mv], curves: c, bench: [p.ccy === 'RUB' ? curveAt('OFZ', p.tenor) : null], fromRuns: true };
+      return { dates: [M.asOf], price: [p.price], ytm: [p.ytm], spr: [p.gspread], notional: [p.notional], dv01: [p.dv01], cs01: [p.cs01], basis: [p.basis01], mv: [M.deal(p) ? Math.abs(p.notionalRub) : p.mv], curves: c, bench: [p.ccy === 'RUB' ? curveAt('OFZ', p.tenor) : null], fromRuns: true };
     }
     return conv(s, null, id);
   };

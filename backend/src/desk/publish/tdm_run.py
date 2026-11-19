@@ -82,6 +82,7 @@ from ..pnl.reasons import (
     PROXIED_CURVE,
     PROXY_CURVE,
     PROXY_CURVE_TEXT,
+    RATES_CORE_METHOD,
     REPORTED_METHOD,
     RUN_NO_PREV_MARKET,
     assumption_text,
@@ -842,7 +843,8 @@ def run_content(ctx: EodContext, positions: list[tuple[str, str, Outcome]], prev
             log.append(("WARN", (f"{r['position_id']} {r.get('instrument_id') or r.get('name') or '—'}: {why}; "
                                  "риск позиции не в суммах DV01 (сводка прогона, таблица риска)")))
     direct = [o.pnl for _, _, o in positions if isinstance(o.pnl, DirectPnl)]
-    for method, flag in ((FX_METHOD, "по курсу"), (REPORTED_METHOD, "по отчёту"), (CORE_FX_METHOD, "ядром")):
+    for method, flag in ((FX_METHOD, "по курсу"), (REPORTED_METHOD, "по отчёту"), (CORE_FX_METHOD, "ядром"),
+                         (RATES_CORE_METHOD, "ядром: своп/РЕПО")):
         if xs := [x for x in direct if x.method == method]:
             log.append(("INFO", f"PnL {flag} ({method}) у {len(xs)} поз.: {sum(x.total for x in xs):,.0f} ₽"))
     with_pnl = [o.pnl for _, _, o in positions if o.pnl and not isinstance(o.pnl, DirectPnl)]

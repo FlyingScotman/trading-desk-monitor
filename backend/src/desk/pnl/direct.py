@@ -30,6 +30,17 @@ positions valued at the report's figure. Each is flagged with its method (``reas
   the legs settled, x the rate move: the cash of a settled leg is taken at the D-1 rate and its later moves are the
   cash row's. A cash-settled NDF's amount is not recorded: ``received_unknown``.
 
+- A swap or REPO valued by core on both dates, in RUB, whose D-1 row carries core's horizon to D (``extra.horizon``,
+  ``valuation.derivatives._rates_horizon``; ``dayrun`` asks for it) is split (``_rates_split``, method
+  ``desk-rates-core-v1``, FlyingScotman/trading-desk-monitor#804): ``carry`` and ``rolldown`` are core's carry and rolldown of its
+  trades to D (the carry holds the cash the trades paid in (D-1, D], at core's own projection, as ``received_rub``),
+  ``rates`` is the D-1 bucket DV01 per curve x that curve's move in the unit of its buckets (``FlashCurves
+  .zero_move_bp``, as a bond's ``rates_linear``; a swap's risk on the key rate: the move of the key-rate forward curve
+  per bucket, ``_key_rate_moves``), ``other`` the rest, with the reason ``rates_core_rest``: the second
+  order of the move, the day's fixing against the forward, the risk on a curve whose move is not read here (said in
+  the reason). Without that horizon (it could not be read, the cash of the flows differs from core's) the row is
+  as before: the whole change in ``other``, ``fx_core_rest``.
+
 - A derivative off the positions report (TDM#468) is the same row with the position id ``book|trade_id``. D-1 is found by
   that id, else by (book, the trades core valued in the row), so a trade that moved into the report or out of it keeps
   its PnL. A derivative made after D-1 (every trade date later) has no PV of D-1: its PnL is its PV on D, in
@@ -46,22 +57,30 @@ else ``reported_value``), an FX deal by core ``fx_core_rest``. Anything else val
 
 from __future__ import annotations
 
+import logging
+import math
 from dataclasses import dataclass, field, replace
-from datetime import date
+from datetime import date, timedelta
 from typing import TYPE_CHECKING, Any
 
+from rub_fixed_income import RISK_BUCKETS, RISK_PILLARS, roll_key_rate_curve
+
+from ..curves.rates import KEY_RATE_CURVE_ID, KEY_RATE_SWAP_CURVE_ID
 from ..inbox.schema import norm_ccy
 from ..marketdata.adapter import bond_currency
+from ..valuation.bonds import OFZ_CURVE, RUONIA_CURVE
 from ..valuation.derivatives import FLOW_DAYS
 from ..valuation.fallback import SimplePnl, fx_rate, fx_rate_cbr
 from ..valuation.fx_cross import UNCONFIRMED, CrossRow, cross_row
-from .flash import NoPnl
+from .flash import PUBLISHED_TO_CORE, FlashCurves, NoPnl
 from .reasons import (
     CORE_FX_METHOD,
     FX_CORE_REST,
     FX_METHOD,
     NEW_TRADE_METHOD,
     NO_TERMS,
+    RATES_CORE_METHOD,
+    RATES_CORE_REST,
     REPORTED_METHOD,
     REPORTED_VALUE,
     assumption,
@@ -118,13 +137,18 @@ class DirectPnl:
     as a bond's); None for a row without core."""
     assumption: dict[str, Any] | None = field(default=None, compare=False)
     """A PnL on an assumption instead of a missing one (``pnl.reasons.assumption``, TDM#576): ``extra.assumption``."""
+    rates_linear_curves: dict[str, dict[str, float]] | None = field(default=None, compare=False)
+    """A swap or REPO split by ``_rates_split``: the terms of ``rates`` by published curve and bucket (D-1 DV01 x the move);
+    ``extra.rates_linear_curves``, with ``extra.curve_moves_bp`` (``curve_moves_bp``) and ``extra.rates_linear``."""
+    curve_moves_bp: dict[str, dict[str, float]] | None = field(default=None, compare=False)
 
     @property
     def explained(self) -> float:
-        return self.fx_gross + self.other
+        return self.carry + self.rolldown + self.rates + self.spread + self.fx_gross + self.other
 
     def as_tdm(self) -> dict[str, float]:
-        return {"carry": 0.0, "rolldown": 0.0, "rates": 0.0, "spread": 0.0, "convexity": 0.0, "other": self.other,
+        return {"carry": self.carry, "rolldown": self.rolldown, "rates": self.rates, "spread": self.spread,
+                "convexity": 0.0, "other": self.other,
                 "fx_gross": self.fx_gross, "fx_funding": self.fx_funding, "new_trades": self.new_trades,
                 **({"fx_gross_cbr": self.fx_gross_cbr} if self.fx_gross_cbr is not None else {}),
                 **({"fx_funding_cbr": self.fx_funding_cbr} if self.fx_funding_cbr is not None else {})}
@@ -135,7 +159,9 @@ class DirectPnl:
                 **({"other_reason": self.other_reason} if self.other_reason else {}),
                 **({"assumption": self.assumption} if self.assumption else {}),
                 **({"report_from": self.report_from.isoformat()} if self.report_from else {}),
-                **({"received_rub": self.received_rub} if self.received_rub is not None else {})}
+                **({"received_rub": self.received_rub} if self.received_rub is not None else {}),
+                **({"rates_linear": self.rates, "rates_linear_curves": self.rates_linear_curves,
+                    "curve_moves_bp": self.curve_moves_bp} if self.rates_linear_curves else {})}
 
 
 def split_fx(pnl: SimplePnl, prev: EodContext, ctx: EodContext, terms: BondTerms) -> SimplePnl:
@@ -278,8 +304,98 @@ def _received(prev: EodContext, ctx: EodContext, pv: Any, missing: list[str] | N
     return rub, foreign, parts
 
 
-def _core_fx(prev: EodContext, ctx: EodContext, o: Outcome, p: Outcome | None, pv_now: float | None = None
-             ) -> DirectPnl:
+log = logging.getLogger(__name__)
+
+RATES_CURVES = (RUONIA_CURVE, OFZ_CURVE)
+"""The published curves whose risk ``_rates_split`` multiplies by a move read from the built curves: the RUONIA OIS curve
+(a swap's discount and projection) and the KBD. ``RUB KEY`` (``KEY_RATE``) is the key-rate forward curve of a swap
+(``_key_rate_moves``) or the projection curve of a REPO (its built curve, ``zero_move_bp``), by what the row's trades
+project on (``extra.horizon.projections``); a row with both has its key-rate risk in ``other``, said."""
+KEY_CURVE = "RUB KEY"
+
+
+def _key_rate_moves(prev: EodContext, ctx: EodContext, memo: dict[str, Any]) -> dict[str, float] | None:
+    """The move of the key-rate forward curve (``EodContext.swap_curves``) per risk bucket, bp, from D-1 rolled to D to
+    the curve of D (None: a curve missing or not rollable). Core shifts a bucket's weight over the days after the key rate
+    in force (``current_rate_end``), at the curve time of each day (ACT/365F), so a bucket is read at the date its pillar
+    falls on from D: the forward rate of D's curve there less that of D-1's curve rolled to D (``roll_key_rate_curve``:
+    the pillar segments held in tenor, as core's horizon rolls them, so the carry and rolldown of the horizon are
+    that part of the move). A bucket whose date falls before the next decision is read at the decision (core's weight of
+    a bucket lies on the days after ``current_rate_end``, the rate in force does not move with the curve); one past the
+    end of a curve has none read (left out, said)."""
+    if "key" not in memo:
+        memo["key"] = None
+        try:
+            kp, kc = (next((e.curve for e in m.swap_curves if e.curve_id == KEY_RATE_SWAP_CURVE_ID), None)
+                      for m in (prev, ctx))
+            if kp is not None and kc is not None:
+                day = ctx.business_date
+                rolled = roll_key_rate_curve(kp, day)
+                out: dict[str, float] = {}
+                for b, t in zip(RISK_BUCKETS, RISK_PILLARS):
+                    d = max(day + timedelta(days=round(t * 365)), kc.current_rate_end)
+                    if d < kc.horizon_date and d < rolled.horizon_date:
+                        out[b] = (kc.rate_at(d) - rolled.rate_at(d)) * 1e4
+                memo["key"] = out
+        except (AttributeError, ValueError):  # (core's refusals are ValueErrors)
+            memo["key"] = None
+    return memo["key"]
+
+
+def _move_of(curve: str, h: dict[str, Any], prev: EodContext, ctx: EodContext, curves: FlashCurves,
+             memo: dict[str, Any]) -> dict[str, float]:
+    """The move per bucket of the published ``curve`` of a row whose horizon is ``h``; empty when it is not read."""
+    if curve in RATES_CURVES:
+        return curves.zero_move_bp(PUBLISHED_TO_CORE.get(curve, curve))
+    if curve == KEY_CURVE:
+        proj = set(h.get("projections") or ())
+        if proj == {KEY_RATE_SWAP_CURVE_ID}:
+            return _key_rate_moves(prev, ctx, memo) or {}
+        if proj == {KEY_RATE_CURVE_ID}:
+            return curves.zero_move_bp(KEY_RATE_CURVE_ID)
+    return {}
+RECEIVED_TOL_RUB = 1.0
+"""``_rates_split`` is taken only when core's cash to the horizon is the cash ``_received`` found in the flows, to this."""
+
+
+def _rates_split(prev: EodContext, ctx: EodContext, pv: Any, total: float, fx: float, received: float,
+                 memo: dict[str, Any], live: bool = True) -> dict[str, Any] | None:
+    """The carry, rolldown and rates of a swap or REPO valued by core in RUB (see the module docstring), the rest in
+    ``other``: ``{"carry", "rolldown", "rates", "other", "terms", "moves", "left_out"}``; None when the row has no
+    horizon of D (not asked, refused, a CCS or an FX row), its cash differs from the flows', or the curves of the two
+    dates cannot be read. ``memo`` keeps the curves of the two dates (built once for all the rows). ``live``: the row
+    has risk on D; a row whose trades all ended has no rates part (the market's move did not touch what was gone)."""
+    h = pv.extra.get("horizon")
+    if not h or h.get("date") != ctx.business_date.isoformat() or pv.fx_delta:
+        return None
+    if abs(h["received_rub"] - received) > RECEIVED_TOL_RUB:
+        return None
+    if "curves" not in memo:
+        try:
+            memo["curves"] = FlashCurves.build(prev.kbd, ctx.kbd, prev.curve, ctx.curve, prev_market=prev.core_market,
+                                               cur_market=ctx.core_market)
+        except (ValueError, AttributeError):
+            memo["curves"] = None
+    curves = memo["curves"]
+    if curves is None:
+        return None
+    terms: dict[str, dict[str, float]] = {}
+    moves: dict[str, dict[str, float]] = {}
+    left_out: list[str] = []
+    for c, bs in sorted((pv.curve_buckets or {}).items() if live else ()):
+        move = _move_of(c, h, prev, ctx, curves, memo)
+        if keep := {b: x * move[b] for b, x in bs.items() if b in move}:
+            terms[c], moves[c] = keep, {b: move[b] for b in keep}
+        if any(x and b not in move for b, x in bs.items()):
+            left_out.append(c)
+    rates = math.fsum(x for t in terms.values() for x in t.values())
+    carry, roll = float(h["carry_rub"]), float(h["rolldown_rub"])
+    return {"carry": carry, "rolldown": roll, "rates": rates, "other": total - fx - carry - roll - rates,
+            "terms": terms, "moves": moves, "left_out": left_out}
+
+
+def _core_fx(prev: EodContext, ctx: EodContext, o: Outcome, p: Outcome | None, pv_now: float | None = None,
+             memo: dict[str, Any] | None = None) -> DirectPnl:
     """A derivative valued by core on both dates: PV D minus PV D-1 plus the cash paid or settled in (D-1, D]
     (``_received``), of which the FX delta of D-1 (less the legs settled) per currency x the market rate move is
     ``fx_gross`` (x the CBR move: ``fx_gross_cbr``), the rest (rates, points, time, the coupons) ``other``.
@@ -304,13 +420,38 @@ def _core_fx(prev: EodContext, ctx: EodContext, o: Outcome, p: Outcome | None, p
         c0, c1 = fx_rate_cbr(prev, ccy), fx_rate_cbr(ctx, ccy)
         cbr = cbr + d * (c1[0] - c0[0]) if c0 and c1 and cbr is not None else None  # type: ignore[operator]
         parts.append(f"{d:,.2f} {ccy} x ({r1[0]:g} - {r0[0]:g})")
+    note = (f"PV {now:,.2f} - {pv.pv_rub:,.2f} RUB"
+            + (f" + received {received:,.2f} RUB ({'; '.join(flows)})" if flows else "")
+            + "; fx_gross = FX delta D-1 " + ("; ".join(parts) or "0"))
+    fx_assumed = assumption("fx_rate_carried", ", ".join(missing)) if missing else None
+    memo = memo if memo is not None else {}
+    failed = None
+    try:
+        split = _rates_split(prev, ctx, pv, total, fx, received, memo,
+                             live=pv_now is None and bool(getattr(v, "curve_buckets", None)))
+    except Exception as e:  # noqa: BLE001 - nice to have: the PnL itself as before (everything in other), never a failed run
+        split, failed = None, type(e).__name__
+        if not memo.get("warned"):  # once a run, the type only (the text of an error may carry what is not for the log)
+            memo["warned"] = True
+            log.warning("the split of a swap's or REPO's PnL into carry and rates failed (%s): such rows keep it all in "
+                        "other, reason fx_core_rest", failed)
+    if split is not None:
+        left = ("; the risk on " + ", ".join(split["left_out"]) + " has no move read here: in other") \
+            if split["left_out"] else ""
+        return DirectPnl(RATES_CORE_METHOD, prev.business_date, ctx.business_date, total, fx_gross=fx,
+                         carry=split["carry"], rolldown=split["rolldown"], rates=split["rates"], other=split["other"],
+                         fx_gross_cbr=cbr if delta else None, received_rub=received,
+                         other_reason=other_reason(RATES_CORE_REST, "the second order of the move and the day's fixing "
+                                                   "against the forward" + left),
+                         assumption=fx_assumed, rates_linear_curves=split["terms"] or None,
+                         curve_moves_bp=split["moves"] or None,
+                         note=f"{note}; carry and rolldown: core's horizon to {ctx.business_date} of the D-1 trades "
+                              f"(the cash of the window is in the carry); rates = D-1 bucket DV01 x the curve's move{left}")
     return DirectPnl(CORE_FX_METHOD, prev.business_date, ctx.business_date, total, fx_gross=fx, other=total - fx,
                      fx_gross_cbr=cbr if delta else None, received_rub=received,
-                     other_reason=other_reason(FX_CORE_REST, "rates, points and time: not the FX delta"),
-                     assumption=assumption("fx_rate_carried", ", ".join(missing)) if missing else None,
-                     note=f"PV {now:,.2f} - {pv.pv_rub:,.2f} RUB"
-                          + (f" + received {received:,.2f} RUB ({'; '.join(flows)})" if flows else "")
-                          + "; fx_gross = FX delta D-1 " + ("; ".join(parts) or "0"))
+                     other_reason=other_reason(FX_CORE_REST, "rates, points and time: not the FX delta"
+                                               + (f"; the split into carry and rates failed ({failed})" if failed else "")),
+                     assumption=fx_assumed, note=note)
 
 
 def _pv_carried(prev: EodContext, ctx: EodContext, code: str, detail: str) -> DirectPnl:
@@ -373,6 +514,7 @@ def attach(prev: EodContext, ctx: EodContext, direct: dict[str, Outcome], inputs
     ``prev_inputs``: those inputs, to find a derivative of D-1 by its trades when its position id changed (TDM#468).
     A derivative made after D-1 gets the PnL of a new trade (``_new_trade``)."""
     book = {pid: b for pid, b, _, _ in inputs.rows}
+    memo: dict[str, Any] = {}  # the curves of the two dates, built once for the rows that need them (``_rates_split``)
     prev_book = {pid: b for pid, b, _, _ in prev_inputs.rows} if prev_inputs is not None else {}
     by_trades: dict[tuple[str, frozenset[str]], list[Outcome]] = {}
     for ppid, po in prev_direct.items():
@@ -408,7 +550,7 @@ def attach(prev: EodContext, ctx: EodContext, direct: dict[str, Outcome], inputs
                         o.pnl = _pv_carried(prev, ctx, "no_prev_terms",  # type: ignore[assignment]
                                             f"no terms of the trade on {prev.business_date}")
                         continue
-                o.pnl = _core_fx(prev, ctx, o, pp)  # type: ignore[assignment]
+                o.pnl = _core_fx(prev, ctx, o, pp, memo=memo)  # type: ignore[assignment]
             elif (kind == "fx" and (o.core_not_valued or ("",))[0] == "settled"
                   and (pp := prev_direct.get(pid)) is not None and pp.valuation is not None
                   and pp.valuation.extra.get("core")):  # the legs settled, the row is cash (TDM#466)
