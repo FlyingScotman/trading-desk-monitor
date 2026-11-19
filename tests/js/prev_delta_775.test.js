@@ -104,7 +104,7 @@ t('«Изм. к вчера»: нет прогона прошлой даты — 
   assert.strictEqual(col.val(pos({})), null);
   // подсказка с датой закрытия, которого нет (M.prevDate, prev_date прогона), и путём досчёта; даты нет — без неё
   M.prevDate = '2026-10-20';
-  assert.ok(/title="нет прогона за 20\.10\.26 \(досчитать: Настройки → «История прогонов»\)"/.test(col.fmt(null, pos({}))), col.fmt(null, pos({})));
+  assert.ok(/title="нет прогона за 20\.10\.26 \(досчитать: Настройки → «Автообновление» → карточка «История прогонов» → «Считать прошлые даты»\)"/.test(col.fmt(null, pos({}))), col.fmt(null, pos({})));
   M.prevDate = null;
   assert.ok(/title="нет прогона прошлой даты \(досчитать/.test(col.fmt(null, pos({}))), col.fmt(null, pos({})));
   assert.strictEqual(col.csvFmt(null, pos({})), '');
