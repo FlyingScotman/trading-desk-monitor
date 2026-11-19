@@ -372,7 +372,8 @@
       p.gspread = p.ccy === 'RUB' && plain ? Math.round((p.ytm - curveAt('OFZ', p.tenor)) * 100) : null;
       p.zspread = p.cpn.type === 'linker' ? null : p.cpn.type === 'float' ? Math.round(p.spreadBp + (r() - 0.5) * 16)
         : Math.round(p.ccy === 'RUB' ? (p.ytm - curveAt('RUB RUONIA', p.tenor)) * 100 : p.spreadBp + (r() - 0.5) * 20);
-      // у ОФЗ-ПД/АД кривая дисконтирования — КБД (0.2.6): их «Спред» — к КБД, а Z к RUONIA считается отдельно (TDM#762)
+      // у ОФЗ-ПД/АД кривая дисконтирования — КБД (0.2.6): их Z к КБД и Z к RUONIA — отдельные колонки (TDM#762), а основной «Спред»
+      // рублёвой фикс-бумаги — Z к RUONIA (TDM#801, переключается ниже, после zSpreadZ — спреда к кривой дисконтирования)
       const fixRub = p.ccy === 'RUB' && p.cpn.type === 'fix', onKbd = fixRub && p.group === 'GOV';
       if (onKbd) p.zspread = Math.round((p.ytm - curveAt('OFZ', p.tenor)) * 100);
       p.spreadLabel = p.cpn.type === 'float' ? 'DM' : onKbd ? 'к КБД' : fixRub ? 'к RUONIA' : 'Z';
@@ -384,6 +385,7 @@
       p.zSpreadZ = p.cpn.type === 'linker' ? null : p.cpn.type === 'float' && p.ccy === 'RUB' && p.cpn.index === 'КС'
         ? Math.round(p.zspread + (curveAt('RUB KEY', Math.min(p.tenor, 3)) - curveAt('RUB RUONIA', Math.min(p.tenor, 3))) * 100) : p.zspread;
       p.spreadCurve = p.ccy === 'RUB' && p.zSpreadZ != null ? (onKbd ? 'RUB OFZ' : 'RUB RUONIA') : null;
+      if (fixRub) { p.zspread = p.zRuonia; p.spreadLabel = 'к RUONIA'; p.spreadName = 'Z к RUONIA'; }
       if (p.cpn.type === 'float' && p.ccy === 'RUB') p.zRuonia = p.zSpreadZ;  // у флоатера — прежний Z (купоны по прогнозу)
       p.dmSource = p.cpn.type === 'float' ? 'core' : null;
       p.accruedPct = round(p.curCpn / f * r(), 3);
