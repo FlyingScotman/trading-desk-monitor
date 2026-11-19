@@ -286,8 +286,8 @@ def eod_run(settings: Settings, d: str, *, snapshots: str | Path | None = None, 
             # fx rows, the report-valued rows (otc, unmapped bonds): by the rate move and by the reports of both
             # dates (pnl.direct); the reason in run_position.no_pnl when there is none, never a bare null
             prev_inputs = store.positions_for(con, prev_ctx.business_date, books=books)
-            direct_pnl.attach(prev_ctx, ctx, bp.direct, inputs, pv1.plan(prev_ctx, prev_inputs, second_order=False).direct,
-                              prev_inputs.valid_dates, prev_inputs)
+            prev_plan = pv1.plan(prev_ctx, prev_inputs, second_order=False, horizon=ctx.business_date)
+            direct_pnl.attach(prev_ctx, ctx, bp.direct, inputs, prev_plan.direct, prev_inputs.valid_dates, prev_inputs)
             if intraday_trades and intraday_trades["applied"] and start_inputs is not None:   # start of day + trades
                 split = new_trades_pnl.attach(prev_ctx, ctx, start_inputs, bp, outcomes, intraday_trades, carried)
                 texts = {"mixed_valuation": "lots valued in different ways (core and the report): the PnL of the bond "

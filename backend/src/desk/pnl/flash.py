@@ -60,6 +60,7 @@ is approximated in its place:
 ``reported_value``,       a report value (``pnl.direct``), for want of terms or not
 ``no_terms``
 ``fx_core_rest``          an FX deal by core: what its FX delta does not explain (``pnl.direct``)
+``rates_core_rest``       a RUB swap or REPO by core, after its carry, rolldown and rates (``pnl.direct``)
 ========================  =============================================================================================
 
 Breakdowns kept in ``extra`` (TDM#406, the PnL period screen: docs/architecture/briefs/PNL_PERIOD.md); they split
