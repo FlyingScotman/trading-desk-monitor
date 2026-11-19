@@ -1,5 +1,6 @@
 // Скрытые колонки таблиц позиций (TDM#763): K.colKey, K.colPrefs (сервер по пользователю + копия в браузере), K.table с
 // кнопкой «Колонки ▾» (hiddenCols, setHidden, CSV по видимым), K.cols — таблицы позиций, C03 — наборы колонок.
+// Добавленные колонки («Добавить» из каталога, TDM#778) — в конце файла.
 // Меню колонок в браузере (список с галочками, 390 px, сервер) — tests/js/table_columns_763.pw.test.js.
 //   node --test tests/js/table_columns_763.test.js
 'use strict';
@@ -328,4 +329,220 @@ test('мониторы: таблицы позиций на K.cols получаю
   const c03 = P('concepts/c03-blotter.html');
   assert.ok(/K\.colKey\('c03-blotter:' \+ st\.preset\)/.test(c03) && /K\.colMenu\(/.test(c03) && /K\.colPrefs\.set\(colKey\(\)/.test(c03), 'C03: ключ — экран + набор');
   assert.ok(/id="sColsPick"/.test(c03));
+});
+
+// ---------- добавленные колонки (TDM#778): «Добавить» из каталога колонок позиций ----------
+// стандартные колонки позиций (K.posCols), которых нет в таблице; хранятся рядом со скрытыми: {hidden, added}
+const csvHeads = api => api.csv().split('\r\n')[2];
+const posTable = (K, opts) => { const box = el(); box.id = 'tb'; const api = K.table(box, Object.assign({ rows: K.list(), search: false, viewKey: 'c99-pos', columns: K.cols(['name', 'ccy', 'ytm']) }, opts)); return { api, box, html: () => box.children[box.children.length - 2].innerHTML }; };
+
+test('K.colPrefs: добавленные колонки лежат рядом со скрытыми; без сервера — в браузере, «как было» сбрасывает оба списка', async () => {
+  const store = new Map(), { K, calls } = load(store, { fetch: () => { throw new Error('нет запроса без сервера'); } });
+  same(K.colPrefs.added('t1'), []);
+  await K.colPrefs.set('t1', ['a'], ['isin', 'zkbd', 'isin', '', 5]);
+  same(K.colPrefs.sel('t1'), { hidden: ['a'], added: ['isin', 'zkbd'] }, 'без повторов и мусора, порядок добавления');
+  same(JSON.parse(store.get('tdm.view.v1:cols:t1')), { hidden: ['a'], added: ['isin', 'zkbd'] });
+  // правка только скрытых не трогает добавленные
+  await K.colPrefs.set('t1', ['b']);
+  same(K.colPrefs.sel('t1'), { hidden: ['b'], added: ['isin', 'zkbd'] });
+  // только добавленные: выбор есть (скрытых нет)
+  await K.colPrefs.set('t2', [], ['isin']);
+  same(JSON.parse(store.get('tdm.view.v1:cols:t2')), { hidden: [], added: ['isin'] });
+  same(load(store).K.colPrefs.sel('t2'), { hidden: [], added: ['isin'] }, 'после перезагрузки страницы');
+  // выбор из версии до TDM#778 — только hidden; мусор в added не ломает
+  store.set('tdm.view.v1:cols:t3', '{"hidden":["q"]}');
+  same(load(store).K.colPrefs.sel('t3'), { hidden: ['q'], added: [] });
+  for (const raw of ['{"added":"abc"}', '{"added":[1,{}]}', '{"hidden":["q"],"added":5}']) {
+    store.set('tdm.view.v1:cols:t4', raw);
+    same(load(store).K.colPrefs.added('t4'), [], raw);
+  }
+  // «как было»: и скрытые, и добавленные
+  await K.colPrefs.reset('t1');
+  same(K.colPrefs.sel('t1'), { hidden: [], added: [] }); assert.ok(!store.has('tdm.view.v1:cols:t1'));
+  assert.strictEqual(calls.length, 0);
+});
+
+test('K.colPrefs с сервером: PUT несёт и скрытые, и добавленные; только добавленные — PUT, оба пусты — DELETE; старый ответ без added читается', async () => {
+  const store = new Map(), srv = { t1: { hidden: ['a'] }, t2: { hidden: [], added: ['isin'] } }, DIRTY = 'tdm.view.v1:cols-dirty';
+  let down = false;
+  const { K, calls } = load(store, { real: true, fetch: (url, init) => {
+    if (down) return { status: 503, body: {} };
+    if (!init.method) return { status: 200, body: { user: 'ann', tables: srv } };
+    const key = decodeURIComponent(url.split('/').pop());
+    if (init.method === 'PUT') srv[key] = JSON.parse(init.body); else delete srv[key];
+    return { status: init.method === 'PUT' ? 200 : 204, body: {} };
+  } });
+  K.colPrefs.get('t1'); await tick(); await tick();
+  same(K.colPrefs.sel('t1'), { hidden: ['a'], added: [] }, 'сервер версии до TDM#778 отдаёт только hidden');
+  same(K.colPrefs.sel('t2'), { hidden: [], added: ['isin'] });
+  same(JSON.parse(store.get('tdm.view.v1:cols:t2')), { hidden: [], added: ['isin'] }, 'копия в браузере обновлена ответом');
+  calls.length = 0;
+  await K.colPrefs.set('t1', ['a'], ['zkbd']);
+  await K.colPrefs.set('t2', [], ['isin', 'zdisc']);
+  await K.colPrefs.set('t1', ['b']);  // added не передан — как были
+  same(calls.map(c => [c.method, JSON.parse(c.body)]), [['PUT', { hidden: ['a'], added: ['zkbd'] }], ['PUT', { hidden: [], added: ['isin', 'zdisc'] }], ['PUT', { hidden: ['b'], added: ['zkbd'] }]]);
+  assert.strictEqual(calls[0].headers['Content-Type'], 'application/json');
+  await K.colPrefs.set('t2', [], ['isin']);
+  assert.strictEqual(calls[calls.length - 1].method, 'PUT', 'только добавленные — не «как было»');
+  await K.colPrefs.reset('t2');
+  assert.strictEqual(calls[calls.length - 1].method, 'DELETE'); assert.ok(!('t2' in srv));
+  // сервер недоступен: выбор с добавленными помнится как «не отправлено» и уходит при следующей загрузке страницы
+  down = true;
+  await K.colPrefs.set('t5', ['x'], ['isin']);
+  same(JSON.parse(store.get(DIRTY)).keys, ['t5']);
+  same(JSON.parse(store.get('tdm.view.v1:cols:t5')), { hidden: ['x'], added: ['isin'] });
+  down = false; calls.length = 0;
+  const { K: K2, calls: c2 } = load(store, { real: true, fetch: (url, init) => { if (!init.method) return { status: 200, body: { tables: {} } }; srv.t5 = JSON.parse(init.body); return { status: 200, body: {} }; } });
+  same(K2.colPrefs.sel('t5'), { hidden: ['x'], added: ['isin'] }, 'до ответа — копия браузера');
+  await tick(); await tick(); await tick(); await tick();
+  same(c2.filter(c => c.method === 'PUT').map(c => JSON.parse(c.body)), [{ hidden: ['x'], added: ['isin'] }]);
+  same(K2.colPrefs.sel('t5'), { hidden: ['x'], added: ['isin'] }, 'ответ сервера досланную правку не перекрыл');
+  assert.ok(!store.has(DIRTY));
+});
+
+test('K.table: «Добавить» — колонка каталога встаёт в конец, как родная: CSV, итог, сортировка, фильтр', () => {
+  const store = new Map(), { K } = load(store), { api, html } = posTable(K);
+  same(headKeys(html()), ['name', 'ccy', 'ytm']);
+  same(api.addedCols(), []);
+  api.addCol('isin'); api.addCol('dv01');
+  same(headKeys(html()), ['name', 'ccy', 'ytm', 'isin', 'dv01'], 'в конец, в порядке добавления');
+  same(api.addedCols(), ['isin', 'dv01']);
+  assert.strictEqual(api.colMenu.textContent, 'Колонки · добавлено 2 ▾');
+  same(JSON.parse(store.get(KEY)), { hidden: [], added: ['isin', 'dv01'] });
+  // CSV: заголовок с единицей, значения
+  assert.strictEqual(csvHeads(api), 'Бумага,Вал,Дох.,ISIN,"DV01, тыс ₽/бп"');
+  assert.ok(/RU000A\d+/.test(api.csv().split('\r\n')[3]), 'ISIN в строке CSV');
+  // итог: у DV01 в каталоге есть сумма — в подвале (число со скобками: отрицательное)
+  const foot = /<tfoot>[\s\S]*<\/tfoot>/.exec(html())[0];
+  assert.ok(/\(11,602\)/.test(foot) && (foot.match(/<td/g) || []).length === 5, 'итог добавленной колонки и ячейки подвала по числу колонок: ' + foot);
+  // сортировка и фильтр по добавленной колонке работают
+  api.setSort([['dv01', 1]]);
+  const dv = api.csv().split('\r\n').slice(3).map(l => +l.split(',')[l.split(',').length - 1]).filter(x => !isNaN(x) && x !== 0);
+  assert.ok(dv.length > 3 && dv.every((x, i) => i === 0 || dv[i - 1] <= x), 'по возрастанию DV01');
+  api.addCol('book');  // колонка со списком значений для фильтра
+  const book = K.list()[0].book, n = K.list().filter(p => p.book === book).length;
+  api.setFilter('book', [book]);
+  assert.strictEqual(api.csv().split('\r\n').length, 3 + n + 1, 'после фильтра по книге — только её строки (' + n + ')');
+  assert.ok(n < K.list().length);
+  // убрали — уходит из таблицы вместе с сортировкой и фильтром
+  api.removeCol('dv01'); api.removeCol('book'); api.removeCol('isin');
+  same(headKeys(html()), ['name', 'ccy', 'ytm']);
+  same(api.state.sort, []); assert.strictEqual(api.state.filters.book, undefined);
+  assert.strictEqual(api.csv().split('\r\n').length, 3 + K.list().length + 1, 'фильтр ушёл вместе с колонкой: строки вернулись');
+  assert.strictEqual(api.colMenu.textContent, 'Колонки ▾');
+  assert.ok(!store.has(KEY), 'ничего не скрыто и не добавлено — выбора нет');
+});
+
+test('K.table: добавить можно только из каталога, один раз и только то, чего в таблице нет', () => {
+  const { K } = load(new Map()), { api, html } = posTable(K);
+  api.addCol('nosuch'); api.addCol('name'); api.addCol('ccy'); api.addCol('ytm');  // нет в каталоге / уже в таблице
+  same(api.addedCols(), []);
+  api.addCol('isin'); api.addCol('isin');
+  same(api.addedCols(), ['isin']);
+  same(headKeys(html()), ['name', 'ccy', 'ytm', 'isin']);
+  // таблица не на K.cols — каталога нет, раздел «Добавить» не нужен
+  const plain = table(K, { colPick: true });
+  plain.api.addCol('isin'); same(plain.api.addedCols(), []);
+  same(headKeys(plain.html()), ['s', 'x', 'y', 'z']);
+  // свой каталог (colCatalog) у таблицы без K.cols; ключи таблицы и колонки без подписи в него не попадают
+  const own = table(K, { colCatalog: [{ key: 'q', label: 'Кью', val: r => r.x * 2, num: true, sum: true }, { key: 'z', label: 'Зет' }, { key: 'nolabel' }] });
+  own.api.addCol('nolabel'); own.api.addCol('z'); own.api.addCol('q');
+  same(own.api.addedCols(), ['q']);
+  same(headKeys(own.html()), ['s', 'x', 'y', 'z', 'q']);
+  // colPick: false — ни скрыть, ни добавить; выбор в хранилище таблицу не меняет
+  const store = new Map([[KEY, JSON.stringify({ added: ['isin'] })]]), { K: K2 } = load(store);
+  const off = posTable(K2, { colPick: false });
+  same(headKeys(off.html()), ['name', 'ccy', 'ytm']); assert.strictEqual(off.api.colMenu, null);
+  // сохранённое неизвестное и уже имеющееся в таблице пропускаются, известное показывается; скрытое и добавленное — независимо
+  const store2 = new Map([[KEY, JSON.stringify({ hidden: ['ytm'], added: ['removed-in-v9', 'ccy', 'zkbd', 'isin', 'zkbd'] })]]), { K: K3 } = load(store2);
+  const p3 = posTable(K3);
+  same(headKeys(p3.html()), ['name', 'ccy', 'zkbd', 'isin'], 'ytm скрыта, добавлены zkbd и isin (в порядке сохранения), чужое и повтор — нет');
+  same(p3.api.addedCols(), ['zkbd', 'isin']); same(p3.api.hiddenCols(), ['ytm']);
+  assert.strictEqual(p3.api.colMenu.textContent, 'Колонки · скрыто 1, добавлено 2 ▾');
+});
+
+test('K.table: порядок добавленных — как у всех колонок; убрали и добавили снова — в конец; «Как было» убирает и скрытое, и добавленное', () => {
+  const store = new Map(), { K } = load(store), { api, html } = posTable(K);
+  api.addCol('isin'); api.addCol('zkbd'); api.addCol('dv01');
+  api.setVisibleOrder(['zkbd', 'name', 'ccy', 'dv01', 'ytm', 'isin']);  // перетащили мышкой
+  same(headKeys(html()), ['zkbd', 'name', 'ccy', 'dv01', 'ytm', 'isin']);
+  same(api.layout().order, ['zkbd', 'name', 'ccy', 'dv01', 'ytm', 'isin'], 'добавленные участвуют в порядке');
+  // порядок переживает перезагрузку страницы: добавленные колонки знакомы раскладке
+  const { K: K2 } = load(store), p2 = posTable(K2);
+  same(headKeys(p2.html()), ['zkbd', 'name', 'ccy', 'dv01', 'ytm', 'isin'], 'после перезагрузки порядок с добавленными на месте');
+  // убрали zkbd и добавили снова — в конец, а не на старое место
+  p2.api.removeCol('zkbd'); same(headKeys(p2.html()), ['name', 'ccy', 'dv01', 'ytm', 'isin']);
+  p2.api.addCol('zkbd'); same(headKeys(p2.html()), ['name', 'ccy', 'dv01', 'ytm', 'isin', 'zkbd']);
+  // скрытая своя колонка и добавленная в одном выборе
+  p2.api.setHidden('ccy', true);
+  same(JSON.parse(store.get(KEY)), { hidden: ['ccy'], added: ['isin', 'dv01', 'zkbd'] });
+  assert.strictEqual(p2.api.colMenu.textContent, 'Колонки · скрыто 1, добавлено 3 ▾');
+  // «Как было»: исходный состав; ширина и порядок («⟲ вид») — отдельно
+  p2.api.setSort([['dv01', -1]]); p2.api.setFilter('zkbd', ['x']);
+  p2.api.resetCols();
+  same(headKeys(p2.html()), ['name', 'ccy', 'ytm']);
+  same(p2.api.addedCols(), []); same(p2.api.hiddenCols(), []);
+  same(p2.api.state.sort, []); assert.strictEqual(p2.api.state.filters.zkbd, undefined);
+  assert.ok(!store.has(KEY)); assert.strictEqual(p2.api.colMenu.textContent, 'Колонки ▾');
+});
+
+test('K.table: ответ сервера с добавленными колонками перерисовывает таблицу; на сервер уходят известные страницей ключи', async () => {
+  const srv = { 'c99-pos': { hidden: [], added: ['isin', 'nosuch'] } };
+  const { K, calls } = load(new Map(), { real: true, fetch: (url, init) => init.method ? { status: 200, body: {} } : { status: 200, body: { user: 'bob', tables: srv } } });
+  const a = posTable(K);
+  same(headKeys(a.html()), ['name', 'ccy', 'ytm']);
+  await tick(); await tick();
+  same(headKeys(a.html()), ['name', 'ccy', 'ytm', 'isin'], 'добавленная на другом компьютере колонка пришла с сервером');
+  assert.strictEqual(a.api.colMenu.textContent, 'Колонки · добавлено 1 ▾');
+  await a.api.addCol('zkbd');
+  const put = calls.filter(c => c.method === 'PUT').map(c => JSON.parse(c.body));
+  same(put, [{ hidden: [], added: ['isin', 'zkbd'] }], 'на сервер — добавленные известные страницей ключи (чужой «nosuch» не возвращается)');
+  await a.api.removeCol('isin'); await a.api.removeCol('zkbd');
+  assert.strictEqual(calls[calls.length - 1].method, 'DELETE', 'пусто и скрытого нет — «как было»');
+});
+
+test('мониторы: C03 — добавленные колонки поверх набора, таблицы на K.cols получают «Добавить» из K.posCols', () => {
+  const c03 = P('concepts/c03-blotter.html');
+  assert.ok(/added: \(\) => new Set\(add\)/.test(c03) && /avail: \(\) => Object\.keys\(C\)/.test(c03) && /K\.colPrefs\.sel\(colKey\(\)\)\.added/.test(c03), 'C03: каталог — колонки C, которых нет в наборе');
+  const { K } = load(new Map());
+  const cat = Object.values(K.posCols), keys = cat.map(c => c.key);
+  assert.strictEqual(new Set(keys).size, keys.length, 'ключи каталога не повторяются: по ключу колонка и хранится');
+  assert.ok(cat.every(c => /^[A-Za-z0-9][A-Za-z0-9_.:-]{0,63}$/.test(c.key)), 'ключи подходят серверу');
+  ['isin', 'zkbd', 'zspread', 'zdisc'].forEach(k => assert.ok(keys.includes(k), k + ' в каталоге'));
+  // каждая колонка каталога рисует все позиции демо без ошибок
+  const { api } = posTable(K, { columns: K.cols(['name']) });
+  cat.forEach(c => { if (c.key !== 'name') api.addCol(c.key); });
+  assert.strictEqual(api.addedCols().length, keys.length - 1);
+  assert.ok(api.csv().split('\r\n').length >= K.list().length);
+});
+
+test('K.table: ключи constructor / toString / valueOf в сохранённом выборе — не колонки: пропускаются, страница не падает', () => {
+  const bad = ['constructor', 'toString', 'valueOf', '__proto__', 'hasOwnProperty'];
+  const store = new Map([[KEY, JSON.stringify({ hidden: bad, added: bad.concat('isin') })]]), { K } = load(store);
+  const p = posTable(K);
+  same(headKeys(p.html()), ['name', 'ccy', 'ytm', 'isin']);
+  same(p.api.addedCols(), ['isin']); same(p.api.hiddenCols(), []);
+  p.api.addCol('constructor'); p.api.addCol('toString'); same(p.api.addedCols(), ['isin']);
+  const c03 = P('concepts/c03-blotter.html');
+  assert.ok(/Object\.prototype\.hasOwnProperty\.call\(C, k\)/.test(c03) && !/\.filter\(k => C\[k\] &&/.test(c03) && /const colOf = k => inC\(k\)/.test(c03) && /add: k => \{ if \(!inC\(k\)/.test(c03), 'C03: «ключ в каталоге» — свой ключ C');
+});
+
+test('K.table: добавленные колонки, пришедшие с сервера позже страницы, берут своё место и ширину из сохранённой раскладки', async () => {
+  const lay = { order: ['name', 'isin', 'ccy', 'ytm', 'zkbd'], w: { name: 150, isin: 120, zkbd: 90 } };
+  const store = new Map([['tdm.view.v1:table:c99-pos', JSON.stringify(lay)]]);
+  const srv = { 'c99-pos': { hidden: [], added: ['zkbd', 'isin'] } };
+  const { K } = load(store, { real: true, fetch: (url, init) => init.method ? { status: 200, body: {} } : { status: 200, body: { user: 'bob', tables: srv } } });
+  const a = posTable(K);
+  same(headKeys(a.html()), ['name', 'ccy', 'ytm'], 'до ответа сервера добавленных нет');
+  await tick(); await tick();
+  same(headKeys(a.html()), ['name', 'isin', 'ccy', 'ytm', 'zkbd'], 'место из раскладки в хранилище, не в конец');
+  same(a.api.layout().w, { name: 150, isin: 120, zkbd: 90 }, 'ширина тоже');
+  // следующая запись раскладки не теряет их
+  a.api.setHidden('ccy', true);
+  a.api.setLayout(a.api.layout());
+  same(JSON.parse(store.get('tdm.view.v1:table:c99-pos')).w, { name: 150, isin: 120, zkbd: 90 });
+  same(JSON.parse(store.get('tdm.view.v1:table:c99-pos')).order, ['name', 'isin', 'ccy', 'ytm', 'zkbd']);
+  // «⟲ вид» после этого — раскладка по умолчанию, и позднее событие её не возвращает
+  a.api.resetView();
+  same(a.api.layout(), {});
 });

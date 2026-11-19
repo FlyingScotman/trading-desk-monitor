@@ -1,18 +1,24 @@
-"""A user's own display preferences: the columns of the position tables they have hidden (TDM#763).
+"""A user's own display preferences: the columns of the position tables they have hidden and added (TDM#763, TDM#778).
 
 The monitors' position tables (C01, C03, C06, C07, C09-C13: ``KIT.table`` in ``prototypes/concepts/lib/kit.js``) let a
-user hide the columns they do not need and bring them back. The choice is kept here, per user of the monitor
-(``user_table_columns``, migration 0025), so it follows the user to another computer and survives a restart and an
-update of the program:
+user hide the columns they do not need, bring them back, and add a standard position column the table does not have
+(ISIN, Z-spread...). The choice is kept here, per user of the monitor (``user_table_columns``, migrations 0025 and
+0027), so it follows the user to another computer and survives a restart and an update of the program:
 
-* ``GET /api/v1/me/table-columns``: every table of the signed-in user, ``{key: {hidden, updated_at}}``;
-* ``PUT /api/v1/me/table-columns/{key}`` ``{"hidden": [column keys]}``: the hidden columns of one table; an empty list
-  is the table's default (every column shown) and removes the row;
+* ``GET /api/v1/me/table-columns``: every table of the signed-in user, ``{key: {hidden, added, updated_at}}``;
+* ``PUT /api/v1/me/table-columns/{key}`` ``{"hidden": [column keys], "added": [column keys]}``: the hidden and the
+  added columns of one table, ``added`` in the order they were added. ``added`` may be left out (a page of the version
+  before TDM#778 sends only ``hidden``): the added columns then stay as they are. Both lists empty is the table's
+  default (the columns the page gives it) and removes the row;
 * ``DELETE /api/v1/me/table-columns/{key}``: back to the default ("как было"), also when there is nothing to remove.
 
-``key`` is screen + table (+ the column set where a screen has sets): ``c01-positions``, ``c03-blotter:base``. Only the
-hidden columns are stored: a column added by a later version shows by default, and a key the page does not know is
-ignored by it. The server does not know the columns, only the shape of the keys.
+``key`` is screen + table (+ the column set where a screen has sets): ``c01-positions``, ``c03-blotter:base``. Only
+the changes to the default are stored: a column added to the table by a later version shows by default, and a key the
+page does not know (in either list) is ignored by it. The server does not know the columns, only the shape of the keys.
+
+One window at an update: a page of the version before TDM#778 that is still open sends ``DELETE`` when the user brings
+back the last hidden column, and that also removes the columns added in the new version (no ``added`` is left to keep);
+the page of the new version sends ``added`` explicitly and is not affected.
 
 Whose: always the caller's own (``auth.me_guard``): the signed-in user of any role, or ``local`` while sign-in is off
 (this computer only, as the settings). There is no way to name another user. Not in the OpenAPI schema: the pages'
@@ -37,7 +43,7 @@ router = APIRouter(tags=["me"], include_in_schema=False)
 KEY_RE = re.compile(r"[a-z0-9][a-z0-9._:-]{0,127}")
 COLUMN_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.:-]{0,63}")
 MAX_HIDDEN = 300
-"""Hidden columns of one table: far more than any table has."""
+"""Hidden columns of one table: far more than any table has. The same bound for the added columns."""
 MAX_TABLES = 300
 """Tables of one user: the monitors have a few dozen (with the column sets of C03)."""
 
@@ -46,11 +52,15 @@ Key = Annotated[str, Path(description="Screen + table (+ set), e.g. c03-blotter:
 
 class HiddenIn(BaseModel):
     hidden: list[str] = Field(max_length=4 * MAX_HIDDEN,
-                              description="The keys of the hidden columns; empty: the table's default")
+                              description="The keys of the hidden columns; empty (and no added): the table's default")
+    added: list[str] | None = Field(default=None, max_length=4 * MAX_HIDDEN,
+                                    description="The keys of the added columns, in the order added; left out: as they "
+                                                "are (a page of the version before TDM#778)")
 
 
 class TableColumns(BaseModel):
     hidden: list[str]
+    added: list[str]
     updated_at: datetime
 
 
@@ -66,7 +76,7 @@ def check_key(key: str) -> str:
     return key
 
 
-def check_hidden(raw: list[str]) -> list[str]:
+def check_columns(raw: list[str], what: str = "hidden") -> list[str]:
     """The column keys without repeats, in the order given. Linear: a set for the repeats, the limit checked as the
     keys come (a body is bounded by ``HiddenIn`` as well)."""
     out: list[str] = []
@@ -80,38 +90,44 @@ def check_hidden(raw: list[str]) -> list[str]:
         seen.add(c)
         out.append(c)
         if len(out) > MAX_HIDDEN:
-            raise ApiError(422, "invalid_parameter", f"at most {MAX_HIDDEN} hidden columns in a table")
+            raise ApiError(422, "invalid_parameter", f"at most {MAX_HIDDEN} {what} columns in a table")
     return out
 
 
 @router.get("/api/v1/me/table-columns", response_model=MyTables)
 def my_tables(con: Con, who: Annotated[auth.User, Depends(auth.me_guard)]):
-    rows = con.execute("SELECT table_key, hidden, updated_at FROM user_table_columns WHERE username = %s"
+    rows = con.execute("SELECT table_key, hidden, added, updated_at FROM user_table_columns WHERE username = %s"
                        " ORDER BY table_key", (who.username,)).fetchall()
     return {"user": who.username,
-            "tables": {r["table_key"]: {"hidden": r["hidden"], "updated_at": r["updated_at"]} for r in rows}}
+            "tables": {r["table_key"]: {"hidden": r["hidden"], "added": r["added"], "updated_at": r["updated_at"]}
+                       for r in rows}}
 
 
 @router.put("/api/v1/me/table-columns/{key}", response_model=TableColumns)
 def put_table_columns(con: ConRW, key: Key, body: HiddenIn, who: Annotated[auth.User, Depends(auth.me_guard)]):
-    key, hidden = check_key(key), check_hidden(body.hidden)
+    key, hidden = check_key(key), check_columns(body.hidden)
+    added = None if body.added is None else check_columns(body.added, "added")
     with con.transaction():
-        if not hidden:
-            con.execute("DELETE FROM user_table_columns WHERE username = %s AND table_key = %s", (who.username, key))
-            return {"hidden": [], "updated_at": con.execute("SELECT clock_timestamp() AS t").fetchone()["t"]}
-        # one user, one lock: the count of their tables cannot be passed by two requests at once
+        # one user, one lock: the count of their tables cannot be passed by two requests at once, and the added
+        # columns left out of the body are read and kept under the same lock
         con.execute("SELECT pg_advisory_xact_lock(hashtext('user_table_columns:' || %s))", (who.username,))
-        known = con.execute("SELECT 1 FROM user_table_columns WHERE username = %s AND table_key = %s",
+        known = con.execute("SELECT added FROM user_table_columns WHERE username = %s AND table_key = %s",
                             (who.username, key)).fetchone()
+        if added is None:
+            added = known["added"] if known else []
+        if not hidden and not added:
+            con.execute("DELETE FROM user_table_columns WHERE username = %s AND table_key = %s", (who.username, key))
+            return {"hidden": [], "added": [],
+                    "updated_at": con.execute("SELECT clock_timestamp() AS t").fetchone()["t"]}
         n = con.execute("SELECT count(*) AS n FROM user_table_columns WHERE username = %s",
                         (who.username,)).fetchone()["n"]
         if not known and n >= MAX_TABLES:
             raise ApiError(409, "invalid_parameter", f"at most {MAX_TABLES} tables per user: reset one first")
         return con.execute(
-            "INSERT INTO user_table_columns (username, table_key, hidden) VALUES (%s, %s, %s::jsonb)"
-            " ON CONFLICT (username, table_key) DO UPDATE SET hidden = EXCLUDED.hidden,"
-            " updated_at = clock_timestamp() RETURNING hidden, updated_at",
-            (who.username, key, json.dumps(hidden))).fetchone()
+            "INSERT INTO user_table_columns (username, table_key, hidden, added) VALUES (%s, %s, %s::jsonb, %s::jsonb)"
+            " ON CONFLICT (username, table_key) DO UPDATE SET hidden = EXCLUDED.hidden, added = EXCLUDED.added,"
+            " updated_at = clock_timestamp() RETURNING hidden, added, updated_at",
+            (who.username, key, json.dumps(hidden), json.dumps(added))).fetchone()
 
 
 @router.delete("/api/v1/me/table-columns/{key}", status_code=204)
