@@ -272,7 +272,7 @@ API (TDM#407: `backend/src/desk/api/pnl_period.py`, `pnl_checks.py`). Поля �
   метода `pnl.extra.method` (`METHOD_GROUP`): `exact` — «остаток точного flash» (`desk-flash-exact-*`), `simple` — «без
   разложения: нет потоков ядра» (`desk-flash-simple-v1`), `yield` — «по доходности»
   (`desk-flash-yield-v1`), `reported` — «по отчёту» (`desk-reported-v1`), `fx` — «FX-сделки: прочие эффекты»
-  (`desk-fx-spot-v1`, `desk-fx-core-v1`), `other` — другой код или нет метода; `groups` — в этом порядке, только
+  (`desk-fx-spot-v1`, `desk-fx-core-v1`), `rates` — «свопы и РЕПО: остаток после ставок» (`desk-rates-core-v1`), `other` — другой код или нет метода; `groups` — в этом порядке, только
   встретившиеся. Качество — `run_position.quality` даты D (`exact`, `assumed`, `market_value`, `stale_price`,
   `model_price`, `par_proxy`, `reported_value`; качество D−1 не хранится, оно только в тексте `note` простого PnL).
   `byDate[g][i]` — Σ группы на `dates[i]`, `null` без строк. `top` — не больше 30 позиций (`UNEXPL_TOP`) с наибольшим
@@ -423,6 +423,7 @@ PnL, который нельзя разложить, остаётся в `other`
 | `reported_value` | разница отчётных стоимостей (`desk-reported-v1`) | `why` |
 | `no_terms` | то же, но оценка по отчёту из-за отсутствия условий: бумаги нет в справочнике, у сделки нет `trade_terms` | — |
 | `fx_core_rest` | FX-сделка ядром: всё, что не FX-дельта (`desk-fx-core-v1`) | — |
+| `rates_core_rest` | рублёвый своп или РЕПО ядром после кэрри, roll-down и ставок (`desk-rates-core-v1`, FlyingScotman/trading-desk-monitor#804): вторые производные сдвига, фиксинг дня против форварда, риск на кривой без прочитанного сдвига (`detail` её называет) | — |
 
 Ступень, которую ядро оценило по её цене (`market_value`, `stale_price` — TDM#383, `model_price` — TDM#441), на обеих
 датах идёт точными шагами (`fallback.by_core`); модельная цена ядром даёт тот же Z, из которого построена

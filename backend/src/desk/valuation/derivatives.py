@@ -1417,6 +1417,8 @@ class _Acc:
     """``id`` of the ``TermsLeg`` whose OCP amount is in ``ocp_core``."""
     flows: list[dict[str, Any]] | None = field(default_factory=list)
     """``extra.flows`` of the row; None only in tests (flows not recorded: the PnL says so)."""
+    horizon: dict[str, Any] | None = None
+    """``extra.horizon`` of a swap or REPO row valued for a later date (``_rates_horizon``); None: not asked or not read."""
 
     def add_risk(self, row: Any) -> None:
         self.pv += row.pv_rub
@@ -1566,10 +1568,12 @@ def legs_from_fact(extra: dict[str, Any]) -> list[TermsLeg]:
 
 
 def value(ctx: Any, requests: list[Request], *, options: FxOptions, second_order: bool = True,
-          scenarios: tuple = ()) -> tuple[dict[str, BondValuation | NotValued], Any]:
+          scenarios: tuple = (), horizon: date | None = None) -> tuple[dict[str, BondValuation | NotValued], Any]:
     """Value ``requests`` in one core call. Returns per position ID a valuation or why not (``NotValued``: the row then
     keeps its earlier rule), and the core result (None without an instrument). ``scenarios`` (core
-    ``PortfolioScenario``) go to the core call; a position's core positions are ``<position_id>#<n>``."""
+    ``PortfolioScenario``) go to the core call; a position's core positions are ``<position_id>#<n>``.
+    ``horizon``: the next business date of the run the PnL goes to (``pnl.direct``): a row of swaps and REPOs also gets
+    ``extra.horizon``, core's carry and rolldown of its trades to that date (``_rates_horizon``)."""
     bd = ctx.business_date
     out: dict[str, BondValuation | NotValued] = {}
     if not requests:
@@ -1703,7 +1707,10 @@ def value(ctx: Any, requests: list[Request], *, options: FxOptions, second_order
                              quote_curve_risk=ctx.quote_curve_risk and quoted, ois_tail=OIS_TAIL if tail else None)
     result = value_portfolio(run_id=f"desk-eod-{bd}-derivatives", as_of=ctx.core_market.known_at, snapshot=snap,
                              instruments=instruments, positions=positions, policy=policy, scenarios=scenarios)
-    _rates_flows(snap, policy, instruments, positions, pay_dates, owner, terms_of, flows)
+    cache = ShockedCurveCache()  # the curves are built once for all the horizons (the flows' and the PnL's)
+    _rates_flows(snap, policy, instruments, positions, pay_dates, owner, terms_of, flows, cache)
+    horizons = _rates_horizon(snap, policy, instruments, positions, owner, horizon, cache) \
+        if horizon is not None and horizon > bd else {}
     acc: dict[str, _Acc] = defaultdict(_Acc)
     for rej in result.coverage.rejections:
         acc[owner[rej.position_id].position_id].rejected.append((rej.code, rej.message))
@@ -1783,6 +1790,7 @@ def value(ctx: Any, requests: list[Request], *, options: FxOptions, second_order
             out[r.position_id] = NotValued(f"core_{code.lower()}", msg)
         elif r.trades:
             a.flows = flows[r.position_id]
+            a.horizon = horizons.get(r.position_id)
             out[r.position_id] = _rates_valuation(ctx, live_of.get(r.position_id, r), a, notes[r.position_id], result,
                                                   snap)
         else:
@@ -1913,7 +1921,7 @@ def _foreign_flows(inst: XccyInstrument) -> dict[date, float]:
 
 def _rates_flows(snap: Any, policy: ValuationPolicy, instruments: list[Any], positions: list[Position],
                  pay_dates: dict[str, tuple[date, ...]], owner: dict[str, Request], terms_of: dict[str, Any],
-                 flows: dict[str, list[dict[str, Any]]]) -> None:
+                 flows: dict[str, list[dict[str, Any]]], cache: ShockedCurveCache) -> None:
     """Add to ``flows`` the cash the swaps and REPOs pay in the next ``FLOW_DAYS`` days, as core projects it: the
     ``received_rub`` of core's ``horizon_portfolio`` at each date a trade pays on is cumulative, so a payment is the
     difference between two horizons. A date core refuses (a rejection, an error) is recorded as a flow of unknown
@@ -1926,7 +1934,6 @@ def _rates_flows(snap: Any, policy: ValuationPolicy, instruments: list[Any], pos
     jobs = {iid: ds for iid, ds in pay_dates.items() if ds and iid in inst_of}
     seen: dict[str, float] = {}
     stale: set[str] = set()  # trades whose last horizon failed: their next difference holds an unread payment
-    cache = ShockedCurveCache()  # the curves are built once for all the horizons
 
     def add(iid: str, h: date, amount: float | None, ccy: str = "RUB") -> None:
         flows[owner[iid].position_id].append({
@@ -1967,6 +1974,53 @@ def _rates_flows(snap: Any, policy: ValuationPolicy, instruments: list[Any], pos
                     amount -= f * row.per_trade.spot_rate  # spot_held: core converts at today's spot
             if amount:
                 add(iid, h, amount)
+
+
+def _rates_horizon(snap: Any, policy: ValuationPolicy, instruments: list[Any], positions: list[Position],
+                   owner: dict[str, Request], horizon: date, cache: ShockedCurveCache
+                   ) -> dict[str, dict[str, Any]]:
+    """Per position ID of a row of swaps and REPOs (every trade a RUB swap or REPO: a CCS or an FX trade in the row
+    leaves it out), core's horizon to ``horizon`` summed over its trades: ``{"date", "carry_rub", "rolldown_rub",
+    "received_rub", "projections"}`` (``projections``: the core curve IDs the trades project their floating legs on, which
+    say what the risk on ``RUB KEY`` is the risk of: the key-rate forward curve or the projection curve). Core's ``carry_rub`` is the PV at the horizon on today's curves read forward, plus the cash paid
+    up to it, less today's PV (``received_rub`` is that cash); ``rolldown_rub`` the further change on the curves rolled to
+    the horizon. ``pnl.direct`` splits the day's PnL of the D-1 row with them. A date core refuses is one call lost: its
+    row is then tried alone, and one that fails again has no horizon (its PnL keeps everything in ``other``, said),
+    never a wrong one."""
+    kinds = (SwapInstrument, RepoInstrument)
+    by_row: dict[str, list[Any]] = defaultdict(list)
+    for i in instruments:
+        by_row[owner[i.instrument_id].position_id].append(i)
+    rows = {pid: ins for pid, ins in by_row.items() if all(isinstance(i, kinds) for i in ins)}
+    if not rows:
+        return {}
+    pos_of = {p.position_id: p for p in positions}
+
+    def horizons(ins: list[Any]) -> dict[str, Any]:
+        res = horizon_portfolio(snapshot=snap, instruments=ins, positions=[pos_of[i.instrument_id] for i in ins],
+                                policy=policy, horizon_date=horizon, curve_cache=cache)
+        return {row.position_id: row for row in (*res.swaps, *res.repos)}
+
+    caught = (CoreRejection, ValueError, LookupError, ArithmeticError)
+    try:
+        got = horizons([i for ins in rows.values() for i in ins])
+    except caught:
+        got = {}
+        for ins in rows.values():
+            try:
+                got.update(horizons(ins))
+            except caught:
+                continue
+    out: dict[str, dict[str, Any]] = {}
+    for pid, ins in rows.items():
+        parts = [got.get(i.instrument_id) for i in ins]
+        if any(x is None for x in parts):  # a trade without its figures would make a wrong total
+            continue
+        out[pid] = {"date": horizon.isoformat(), "carry_rub": math.fsum(x.carry_rub for x in parts),
+                    "rolldown_rub": math.fsum(x.rolldown_rub for x in parts),
+                    "received_rub": math.fsum(x.received_rub for x in parts),
+                    "projections": sorted({c for i in ins if (c := getattr(i, "projection_curve_id", None))})}
+    return out
 
 
 def _risk(a: _Acc) -> tuple[dict[str, dict[str, float]], dict[str, float], dict[str, float], dict[str, float]]:
@@ -2046,6 +2100,7 @@ def _rates_valuation(ctx: Any, r: Request, a: _Acc, notes: list[str], result: An
         **({"index_fixings": fixings} if fixings else {}),
         **({"reported_pv_rub": reported, "pv_diff_rub": a.pv - reported} if reported is not None else {}),
         "flows": a.flows,
+        **({"horizon": a.horizon} if a.horizon else {}),
     }
     fx_delta = {c: v for c, v in a.fx_delta.items() if v}
     if fx_delta:  # a CCS: the spots of its FX delta, its basis

@@ -26,6 +26,7 @@ from ..pnl.reasons import (
     FX_METHOD,
     NO_REASON_TEXT,
     OTHER_REASON_TEXT,
+    RATES_CORE_METHOD,
     REPORTED_METHOD,
     UNRECORDED,
     no_pnl_text,
@@ -56,14 +57,15 @@ LABELS = {"recon": "Сверка тождества", "unexpl": "Необъяс�
 SEV = {"crit": 0, "warn": 1, "info": 2}
 UNEXPL_GROUPS = {"exact": "остаток точного flash", "simple": "без разложения: нет потоков ядра",
                  "yield": "по доходности", "reported": "по отчёту", "fx": "FX-сделки: прочие эффекты",
-                 "other": "другой метод или не указан"}
+                 "rates": "свопы и РЕПО: остаток после ставок", "other": "другой метод или не указан"}
 """``unexplainedBy`` (TDM#436): what ``other`` (and ``reported``) is, by the calculation method's group, in this order."""
 METHOD_GROUP = {EXACT_V1_METHOD: "exact", EXACT_METHOD: "exact", EXACT_FX_METHOD: "exact", SIMPLE_METHOD: "simple",
-                YIELD_METHOD: "yield", REPORTED_METHOD: "reported", FX_METHOD: "fx", CORE_FX_METHOD: "fx"}
+                YIELD_METHOD: "yield", REPORTED_METHOD: "reported", FX_METHOD: "fx", CORE_FX_METHOD: "fx",
+                RATES_CORE_METHOD: "rates"}
 """``pnl.extra.method`` -> group, the codes from their modules (TDM#452): the exact flash's rest (a changed schedule, a
 price and accrued that disagree), the simple PnL of a bond not on core on both dates (all of q x Δdirty,
 ``valuation.fallback.simple_pnl``), the yield carry's yield change, the reports' PV difference, an FX deal's other
-effects; any other code (or none) — ``other``. The JS mirror (``pnl-period.js`` ``METHOD_GROUP``) is tested against it."""
+effects, a swap's or REPO's rest after its carry and rates (``desk-rates-core-v1``); any other code (or none) — ``other``. The JS mirror (``pnl-period.js`` ``METHOD_GROUP``) is tested against it."""
 REASON_LABELS = {**OTHER_REASON_TEXT, UNRECORDED: NO_REASON_TEXT}
 """``unexplainedBy.reasons`` (TDM#442): why ``other`` (and ``reported``) is unexplained, by ``other_reason.code``, in
 this order (an unknown code after them, by itself); the method groups are the second cut."""
