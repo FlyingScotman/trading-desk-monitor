@@ -456,7 +456,9 @@ def test_trades_of_the_book_their_version_and_earlier_dates(seeded):
     by = {i["trade_id"]: i for i in src["trades"]["items"]}
     assert set(by) == {"tr-0", "tr-1", "tr-2"}
     assert by["tr-1"]["state"] == "applied"
-    assert by["tr-2"]["state"] == "pending" and by["tr-2"]["state_text"] == "ждёт прогона"   # version 3, the run took 2
+    # version 3, the run took 2: the next run would leave it out (the synthetic book holds no N1 and the trade names no
+    # instrument), so the panel says that, not a wait for a run that changes nothing (TDM#711)
+    assert by["tr-2"]["state"] == "no_instrument" and by["tr-2"]["state_text"] == "бумага не найдена"
     assert by["tr-0"]["state"] == "earlier_date" and "2026-10-19" in by["tr-0"]["state_text"]
     assert all(i["feed_title"] is None for i in by.values())   # report folders, not a feed
     _, src, _ = _get(c, rid, "FX1")   # T1 of another book is not this deal

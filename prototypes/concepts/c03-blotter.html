@@ -151,8 +151,8 @@ body { display: flex; flex-direction: column; height: 100vh; overflow: hidden; }
     // в CSV — число, кривая спреда (к КБД / к RUONIA) или DM — своей колонкой «Вид спреда» за ним (#276, TDM#762)
     spread: { label: 'Спред', num: true, nf: K.NF.spread, val: r => r.zspread, fmt: (v, r) => v == null ? '<span class="mut3">—</span>' : K.nfNum('spread', v) + ' <span class="mut3">' + (r.spreadLabel || '') + '</span>', title: K.tips.zspread, tip: true,
       csvHead: 'Спред, б.п.|Вид спреда', csvFmt: (v, r) => v == null ? ['', ''] : [K.nfNum('spread', v), r.spreadLabel || ''] },
-    zkbd: { label: 'Z к КБД', num: true, nf: K.NF.zkbd, val: r => r.zKbd, fmt: v => v == null ? '<span class="mut3">—</span>' : K.nfNum('zkbd', v), title: K.tips.zkbd, tip: true },
-    zdisc: { label: 'Z к RUONIA', num: true, nf: K.NF.zdisc, val: r => r.zRuonia, fmt: v => v == null ? '<span class="mut3">—</span>' : K.nfNum('zdisc', v), title: K.tips.zdisc, tip: true },
+    zkbd: { label: 'Z к КБД', csvHead: 'Z к КБД, б.п.', num: true, nf: K.NF.zkbd, val: r => r.zKbd, fmt: v => v == null ? '<span class="mut3">—</span>' : K.nfNum('zkbd', v), title: K.tips.zkbd, tip: true },
+    zdisc: { label: 'Z к RUONIA', csvHead: 'Z к RUONIA, б.п.', num: true, nf: K.NF.zdisc, val: r => r.zRuonia, fmt: v => v == null ? '<span class="mut3">—</span>' : K.nfNum('zdisc', v), title: K.tips.zdisc, tip: true },
     gspread: { label: 'G-спред', num: true, nf: K.NF.gspread, val: r => r.gspread, fmt: v => v == null ? '<span class="mut3">—</span>' : K.nfNum('gspread', v), title: 'к кривой ОФЗ, б.п.' },
     dur: { label: 'Дюр.', num: true, nf: K.NF.dur, val: r => r.mdur, fmt: v => v == null ? '<span class="mut3">—</span>' : K.nfNum('dur', v) },
     dv01: { label: 'DV01', neutral: true, num: true, nf: K.NF.dv01, val: r => r.dv01, fmt: K.nfFn('dv01'), sum: r => r.dv01, unit: 'тыс ₽/бп', sfmt: K.nfFn('dv01'), title: K.tips.dv01, titleFn: u => K.tipUnit(K.tips.dv01, u), tip: true },
@@ -172,7 +172,7 @@ body { display: flex; flex-direction: column; height: 100vh; overflow: hidden; }
     desk: { label: 'Деск', filter: true, val: r => r.desk, fmt: v => '<span class="mut">' + esc(v) + '</span>' },
   };
   const PRESETS = [
-    ['base', 'Базовый', ['name', 'short', 'ccy', 'issuer', 'kind', 'book', 'coupon', 'offer', 'offerKind', 'maturity', 'event', 'notional', 'tradeDay', 'posDelta', 'price', 'ytm', 'spread', 'dv01', 'cs01', 'spark', 'isin']],
+    ['base', 'Базовый', ['name', 'short', 'ccy', 'issuer', 'kind', 'book', 'coupon', 'offer', 'offerKind', 'maturity', 'event', 'notional', 'tradeDay', 'posDelta', 'price', 'ytm', 'spread', 'zkbd', 'zdisc', 'dv01', 'cs01', 'spark', 'isin']],
     ['risk', 'Риск', ['name', 'ccy', 'issuer', 'kind', 'book', 'event', 'tenor', 'notional', 'tradeDay', 'posDelta', 'mv', 'dur', 'dv01', 'cs01', 'basis01', 'ofzSpr01', 'carry', 'funding']],
     ['px', 'Цены и спреды', ['name', 'ccy', 'issuer', 'kind', 'coupon', 'event', 'price', 'chg', 'bidask', 'spark', 'ytm', 'spread', 'zkbd', 'zdisc', 'gspread', 'dur']],
     ['pnl', 'Кэрри и PnL', ['name', 'ccy', 'issuer', 'book', 'tradeDay', 'coupon', 'curCpn', 'fund', 'carry', 'funding', 'pc', 'pfu', 'pr', 'ps', 'pf', 'pt', 'po', 'pnl', 'pnlMtd', 'pnlYtd']],

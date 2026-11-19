@@ -152,6 +152,7 @@
   "settlement",
   "short_name",
   "spread_buckets",
+  "spread_missing",
   "swaps",
   "valuation",
   "valuation_date",

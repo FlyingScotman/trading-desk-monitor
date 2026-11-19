@@ -113,9 +113,10 @@ def test_the_label_decides_whatever_the_reason_of_the_rejection(ctx, exact, reas
     _not_computed(approximate(ctx, _case(exact[AMORT], reason), Q, _fb(ctx)), LABEL)
 
 
-def test_a_bond_without_the_label_or_the_rejection_is_as_before(ctx, exact):
+def test_a_bond_without_the_label_or_the_rejection_has_its_own_yield(ctx, exact):
+    """TDM#619: not the source's (the 53.83 % of the case), the monitor's own from the schedule and the price."""
     v = approximate(ctx, _case(exact[AMORT], labelled=False), Q, _fb(ctx))
-    assert v.ytm_pct == pytest.approx(53.83) and "risk_missing" not in v.extra
+    assert v.ytm_pct == pytest.approx(9.89, abs=0.05) and "risk_missing" not in v.extra
     assert not any("redemption" in a and "не считаются" in a for a in v.assumptions)
     assert v.dv01_rub != 0.0 and math.isfinite(v.modified_duration) and v.buckets
 
@@ -125,8 +126,8 @@ def test_a_normal_amortizing_bond_is_not_touched(ctx, exact):
     assert REDEMPTIONS_LABEL not in o.terms.labels and o.reason != "redemption_incomplete"
     sa = {**o.quote.source_analytics, "effective_yield_pct": "9.8989"}
     v = approximate(ctx, Outcome(o.secid, o.terms, replace(o.quote, source_analytics=sa), reason="no_price"), Q, _fb(ctx))
-    assert v.ytm_pct == pytest.approx(9.8989) and "risk_missing" not in v.extra and v.dv01_rub != 0.0
-    assert math.isfinite(v.macaulay_years)
+    assert v.ytm_pct == pytest.approx(9.8989, abs=0.03) and "risk_missing" not in v.extra and v.dv01_rub != 0.0
+    assert math.isfinite(v.macaulay_years)  # TDM#619: the monitor's own, 1.1 bp from MOEX's right figure
 
 
 def test_the_value_at_the_price_does_not_change(ctx, exact):
@@ -258,7 +259,7 @@ def test_a_manual_override_of_the_hub_is_not_a_broken_schedule(ctx, exact):
     t = replace(o.terms, labels=(*o.terms.labels, MANUAL_OVERRIDE_LABEL))
     assert fixed_schedule(t, ctx.business_date).horizon_date
     v = approximate(ctx, _case(exact[AMORT], label=MANUAL_OVERRIDE_LABEL), Q, _fb(ctx))
-    assert v.ytm_pct == pytest.approx(53.83) and "risk_missing" not in v.extra and v.dv01_rub != 0.0
+    assert v.ytm_pct == pytest.approx(9.89, abs=0.05) and "risk_missing" not in v.extra and v.dv01_rub != 0.0
 
 
 def test_a_bond_with_the_label_and_no_price_has_no_model_price_or_risk(ctx, exact):
@@ -307,7 +308,7 @@ def test_nothing_unreliable_or_fields_the_ladder_does_not_read_change_nothing(ct
     c = _case(exact[AMORT], labelled=False)
     q = replace(c.quote, source_analytics_unreliable=unreliable)
     v = approximate(ctx, replace(c, quote=q), Q, _fb(ctx))
-    assert v.ytm_pct == pytest.approx(53.83) and "risk_missing" not in v.extra and v.dv01_rub != 0.0
+    assert v.ytm_pct == pytest.approx(9.89, abs=0.05) and "risk_missing" not in v.extra and v.dv01_rub != 0.0
 
 
 def test_the_market_view_reads_the_unreliable_fields_and_a_hub_without_them_as_before(ctx):

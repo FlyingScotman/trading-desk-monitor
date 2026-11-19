@@ -302,7 +302,7 @@
     'фикс-бумаги — в колонках «Z к КБД» и «Z к RUONIA».';
   K.tips.zkbd = 'Z-спред к КБД, б.п., годовой, ACT/365F (R32): потоки фикс-бумаги, дисконтированные по КБД плюс Z, дают её грязную ' +
     'цену. У ОФЗ-ПД, ОФЗ-АД и ОФЗ-ИН это спред их кривой дисконтирования (колонка «Спред» с подписью «к КБД»), у остальных рублёвых ' +
-    'фикс-бумаг — отдельный расчёт на КБД за ту же дату. У флоатера колонка пуста. У бумаги на запасной оценке (без потоков) ' +
+    'фикс-бумаг — отдельный расчёт на КБД за ту же дату. У флоатера один Z — прежний (купоны по прогнозу), к его кривой дисконтирования: в день, когда это КБД, он в этой колонке, иначе здесь пусто. У бумаги на запасной оценке (без потоков) ' +
     'есть только спред к её собственной кривой, второй пуст. В прогоне, где этого поля ещё нет, показан только спред бумаги ' +
     'к её кривой дисконтирования, если она КБД; пока дата не пересчитана, иначе — прочерк.';
   K.tips.zdisc = 'Z-спред к кривой RUONIA OIS, б.п., годовой, ACT/365F (R32). У фикс-бумаги, в том числе ОФЗ-ПД, ОФЗ-АД и ОФЗ-ИН, — ' +
@@ -3574,7 +3574,7 @@
     spread: { key: 'zspread', label: 'Спред', num: true, unit: 'б.п.', nf: NFD.spread, fmt: (v, r) => v == null ? '<span class="mut3">—</span>' : K.nfNum('spread', v) + ' <span class="mut3">' + (r.spreadLabel || '') + '</span>', title: K.tips.zspread, tip: true,
       csvExtra: ['Вид спреда'], csvFmt: (v, r) => v == null ? ['', ''] : [K.nfNum('spread', v), r.spreadLabel || ''] },
     // Z-спреды фикс-бумаг к КБД и к RUONIA OIS (TDM#762): у каждой по своей колонке, к какой бы кривой она ни дисконтировалась;
-    // «Z к RUONIA» у флоатера — прежний Z (купоны по прогнозу, R32): сравнимы между собой
+    // у флоатера один Z — прежний (купоны по прогнозу, R32), он к кривой дисконтирования: в день на КБД он в «Z к КБД», иначе в «Z к RUONIA»
     zkbd: { key: 'zkbd', label: 'Z к КБД', num: true, unit: 'б.п.', nf: NFD.zkbd, val: r => r.zKbd, fmt: v => v == null ? '<span class="mut3">—</span>' : K.nfNum('zkbd', v), title: K.zkbdTip, tip: true },
     zdisc: { key: 'zdisc', label: 'Z к RUONIA', num: true, unit: 'б.п.', nf: NFD.zdisc, val: r => r.zRuonia, fmt: v => v == null ? '<span class="mut3">—</span>' : K.nfNum('zdisc', v), title: K.zdiscTip, tip: true },
     gspread: { key: 'gspread', label: 'G-спред', num: true, unit: 'б.п.', nf: NFD.gspread, fmt: K.nfFn('gspread') },
@@ -3639,8 +3639,8 @@
   };
   // спред бумаги в карточке (R32, TDM#762): рублёвая фикс-бумага — два Z-спреда, к КБД и к RUONIA (у ОФЗ-ПД/АД/ИН своя кривая
   // дисконтирования — КБД, и её спред — один из двух, второй считается отдельно); бумага не в рублях — Z к своей кривой;
-  // флоатер — дисконт-маржа к кривой проекции и Z-спред к кривой дисконтирования (данные прогона: spreadBp — Z ядра к ней,
-  // extra.dm_bp — DM); поля [подпись, значение, -, подсказка]
+  // флоатер — дисконт-маржа к кривой проекции и два Z, те же поля, что в колонках: p.zKbd и p.zRuonia (его Z к кривой
+  // дисконтирования, spreadBp, стоит в одном из них, второй «—»; extra.dm_bp — DM); поля [подпись, значение, -, подсказка]
   K.spreadFields = p => {
     const dash = '<span class="mut3">—</span>', bp = v => v == null ? dash : f.bp(v) + ' <small>б.п.</small>';
     const to = p.spreadCurve === 'RUB OFZ' ? 'КБД' : p.spreadCurve === 'RUB RUONIA' || p.ccy === 'RUB' ? 'RUONIA' : 'кривой ' + p.ccy;
@@ -3648,8 +3648,13 @@
       if (p.ccy === 'RUB') return [['Z-спред к КБД', bp(p.zKbd), false, K.tips.zkbd], ['Z-спред к RUONIA', bp(p.zRuonia), false, K.tips.zdisc]];
       return [['Z-спред к ' + to, bp(p.zSpreadZ != null ? p.zSpreadZ : p.zspread), false, K.tips.zspread]];
     }
-    const out = [['Дисконт-маржа', f.bp(p.dm) + ' <small>б.п.' + (p.dmSource === 'z' ? ' · = Z: DM ядра нет' : ' · к кривой проекции') + '</small>', false, 'Дисконт-маржа (DM) — спред к кривой проекции купонов флоатера (КС или RUONIA), годовой, ACT/365F']];
-    if (p.zSpreadZ != null && p.dmSource !== 'z') out.push(['Z-спред к ' + to, f.bp(p.zSpreadZ) + ' <small>б.п. · как у фиксов</small>', false, to === 'RUONIA' ? K.tips.zdisc : K.tips.zspread]);
+    // у рублёвого флоатера обе строки есть всегда (TDM#786), значения — те же поля, что в колонках: Z к кривой дисконтирования —
+    // под её именем, второй — «—»; без DM ядра (dmSource 'z') DM не повторяет число Z
+    const out = [['Дисконт-маржа', p.dmSource === 'z' ? dash + ' <small>(DM ядра нет)</small>' : f.bp(p.dm) + ' <small>б.п. · к кривой проекции</small>', false, 'Дисконт-маржа (DM) — спред к кривой проекции купонов флоатера (КС или RUONIA), годовой, ACT/365F']];
+    if (p.ccy === 'RUB') {
+      const z = v => v == null ? dash : f.bp(v) + ' <small>б.п. · как у фиксов</small>';
+      out.push(['Z-спред к КБД', z(p.zKbd), false, K.tips.zkbd], ['Z-спред к RUONIA', z(p.zRuonia), false, K.tips.zdisc]);
+    } else if (p.zSpreadZ != null) out.push(['Z-спред к ' + to, f.bp(p.zSpreadZ) + ' <small>б.п. · как у фиксов</small>', false, K.tips.zspread]);
     return out;
   };
   // DM флоатера в истории (R35): DM ядра — только в дни прогонов (с появления позиции), оценка по цене MOEX (dmPx,
