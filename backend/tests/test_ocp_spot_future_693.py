@@ -243,7 +243,9 @@ def test_an_ordinary_spot_and_a_report_without_the_field_are_untouched():
     ts = [terms("D1|NDF", "T-1", quote="RUB", nq=80_000_000)]
     rep = [{k: v for k, v in report("EUR", "1000000", None).items() if k != "x_spot_future"}]
     x = pub(run(rows, rep, ts))[("D1", "EUR")]
-    assert x["parts"]["base"] == 1_000_000 and "spot_future" not in x
+    # nothing taken out or unmatched; TDM#807: the screen only says that the report has no such line
+    assert x["parts"]["base"] == 1_000_000 and set(x["spot_future"]) == {"out", "unmatched", "df1", "none"}
+    assert x["spot_future"]["out"] == [] and x["spot_future"]["unmatched"] == [] and x["spot_future"]["none"]["deals"] == 1
     assert [i["kind"] for i in x["contributions"]["base"]["items"]] == ["report"]
 
 
