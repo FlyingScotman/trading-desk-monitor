@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import copy
 import dataclasses
-from datetime import date
+from datetime import date, timedelta
 from types import SimpleNamespace
 
 import pytest
@@ -33,6 +33,10 @@ def ctx():
 def ois(start, end, freq="3M", index="RUONIA"):
     kw = {"start_date": start, "maturity_date": end, "payment_frequency": freq, "day_count": "ACT/365"}
     return [leg("Y1", "fix", "pay", fixed_rate_pct="15.5", **kw), leg("Y1", "flt", "receive", index_code=index, **kw)]
+
+
+def ctx0():
+    return prepare(SnapshotDir(FIX), BD.isoformat())
 
 
 def test_a_swap_with_periods_before_the_hubs_calendar_is_valued(ctx):
@@ -70,8 +74,8 @@ def test_the_calendar_reaches_the_earliest_swap_of_the_run(ctx):
     hub, _ = dv.rates.ois_calendar(ctx.static.snapshot, bd)
     ext = cals["OIS:RUONIA"].calendar
     assert hub.valid_from == date(2026, 1, 1) and ext.valid_to == hub.valid_to
-    assert all(ext.is_business_day(d) == hub.is_business_day(d) for d in (date(2026, 1, 1), date(2026, 5, 11),
-                                                                         date(2026, 12, 31), date(2027, 3, 8)))
+    days = [date(2026, 1, 1) + timedelta(days=n) for n in range(730)]  # 2026-2027: the whole overlap, every day
+    assert [d for d in days if not ext.is_business_day(d)] == [d for d in days if not hub.is_business_day(d)]
     assert not ext.is_business_day(date(2025, 5, 9)) and not ext.is_business_day(date(2025, 3, 8))  # fixed rules, weekend
     assert ext.is_business_day(date(2025, 3, 11))
 
@@ -132,3 +136,45 @@ def test_a_calendar_refusal_is_told_apart(ctx, monkeypatch):
     assert e.value.reason == "core_calendar_out_of_range" and "outside calendar" in e.value.detail
     o = value(ctx, ois("2025-03-10", "2030-03-10"))
     assert o.valuation is None and o.reason == "core_calendar_out_of_range"
+
+
+def annual(start="2024-12-10", end="2029-12-10", index="RUONIA"):
+    """Annual periods: the first one ended on 10.12.2025, before the hub's calendars (01.01.2026), and the current one
+    began then: core reads its known part on the fixing history's calendar from that day."""
+    return ois(start, end, "1Y", index)
+
+
+def test_the_period_in_progress_began_before_the_calendar_and_the_stored_history_covers_it():
+    """The schedule needs the calendar before 01.01.2026 (the first period's end) and the fixings need it too (the known
+    part of the second period from 10.12.2025). The stored RUONIA from 01.12.2025 (TDM#590: the days with a fixing are
+    the publication calendar before the hub's) holds them: the swap is valued, as core reads them."""
+    from desk.curves.rates import ruonia_calendar
+
+    cal, _ = ruonia_calendar(ctx0().static.snapshot, BD)
+    days = [date(2025, 12, 1) + timedelta(days=n) for n in range(304)]  # 01.12.2025 .. 30.09.2026
+    have = [d for d in days if (d.weekday() < 5 and d != date(2025, 12, 31)) if d < cal.valid_from] + \
+        [d for d in days if d >= cal.valid_from and cal.is_business_day(d)]
+    from test_fixings_history_590 import row
+
+    from desk.marketdata import fixing_history as fh
+    c = prepare(SnapshotDir(FIX), BD.isoformat(), fixings=fh.FixingStore(
+        {"RUONIA": tuple(row("RUONIA", d) for d in have)}, ("before-calendar",)))
+    o = value(c, annual())
+    assert o.core_not_valued is None and o.valuation is not None, (o.reason, o.detail, o.core_not_valued)
+    sw = o.valuation.extra["swaps"][0]
+    assert sw["fixing_id"] == "RUONIA" and sw["start_date"] == "2024-12-10"
+    assert any("accrual start of the current one" in a for a in o.valuation.assumptions)
+    # the fixings the current period reads start on 10.12.2025: the same swap begun then is the same value
+    same = value(c, annual("2025-12-10", "2029-12-10"))
+    assert same.valuation is not None and o.valuation.pv_rub == pytest.approx(same.valuation.pv_rub, rel=1e-9)
+
+
+def test_without_fixings_for_those_days_the_reason_is_the_fixings_not_the_calendar(ctx):
+    """The cut and the stored September have no RUONIA before 2026-09-01: the period in progress from 10.12.2025 lacks
+    its fixings. Core's reason is the missing fixing (``core_missing_market_data``, the text the coverage reads), not an
+    «outside calendar» of the fixing history (what it was: the calendar of the history started on 01.01.2026)."""
+    for index, label in (("RUONIA", "RUONIA"), ("KEY_RATE", "key rate")):
+        o = value(ctx, annual(index=index))
+        reason, text = o.core_not_valued
+        assert o.valuation is None and reason == "core_missing_market_data", (index, reason, text)
+        assert f"no {label} fixing on or before 2025-12-10" in text and "outside calendar" not in text

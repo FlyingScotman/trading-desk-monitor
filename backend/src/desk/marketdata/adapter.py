@@ -286,6 +286,24 @@ def _rule_holidays(name: str, year: int) -> set[date]:
     return set()
 
 
+def extend_calendar_back(cal: BusinessCalendar, name: str, since: date | None) -> BusinessCalendar:
+    """``cal`` reaching back to ``since`` when that is before its ``valid_from`` (TDM#509: a swap that began before the
+    calendar; core rolls its schedule from the start and reads the fixings of the period it is in), else ``cal`` itself.
+
+    The days before ``valid_from`` are the fixed rules' (``_rule_holidays`` of calendar ``name``: weekends and the
+    fixed public holidays), the version says so (``+rules_from_<since>``). It is an estimate: the holiday transfers
+    and working Saturdays that the hub keeps from its first day on are not modelled before it, and the last RUONIA-free
+    day of the year (``curves.rates.ruonia_calendar``) is not excluded in those years. Those days are past, but they
+    decide the accrual start of a period (its previous period's adjusted end) and the observation day of its first
+    fixing, so a swap that rests on them says so in its assumptions."""
+    if since is None or cal.valid_from is None or since >= cal.valid_from:
+        return cal
+    holidays = {d for y in range(since.year, cal.valid_from.year + 1) for d in _rule_holidays(name, y)
+                if since <= d < cal.valid_from and d.weekday() < 5}
+    return BusinessCalendar(cal.holidays | holidays, cal.working_days, f"{cal.version}+rules_from_{since.isoformat()}",
+                            since, cal.valid_to)
+
+
 def core_calendar(c: dict[str, Any], since: date | None = None) -> tuple[BusinessCalendar, date | None]:
     """Core calendar of one hub calendar row and the date its days stop being official (``provisional_from``).
 
@@ -295,17 +313,12 @@ def core_calendar(c: dict[str, Any], since: date | None = None) -> tuple[Busines
     to weekdays are decreed yearly and unknown, so they are not modelled. ``provisional_from`` is the hub's own or
     ``valid_to + 1``, whichever is earlier.
 
-    ``since`` before the hub's ``valid_from`` (TDM#509: a swap that began before the hub's calendar, whose schedule
-    core rolls from its start): the calendar reaches back to it by the same fixed rules, its version says so
-    (``+rules_from_<since>``). Those days are past: an estimate nothing but a long-seasoned swap's past periods rests
-    on. Without ``since``, or ``since`` inside the hub's range, the calendar is as the hub gives it.
+    ``since`` before the hub's ``valid_from`` (TDM#509): the calendar reaches back to it by the same rules,
+    ``extend_calendar_back`` (an estimate: no holiday transfers or working Saturdays before the hub's first day).
+    Without ``since``, or ``since`` inside the hub's range, the calendar is as the hub gives it.
     """
     vf, vt = date.fromisoformat(c["valid_from"]), date.fromisoformat(c["valid_to"])
     holidays = {date.fromisoformat(x) for x in c["holidays"]}
-    start = min(vf, since) if since is not None else vf
-    if start < vf:
-        holidays |= {d for y in range(start.year, vf.year + 1) for d in _rule_holidays(c["calendar"], y)
-                     if start <= d < vf and d.weekday() < 5}
     prov = _date(c.get("provisional_from"))
     end = max(vt, CALENDAR_HORIZON)
     if end > vt:
@@ -314,10 +327,9 @@ def core_calendar(c: dict[str, Any], since: date | None = None) -> tuple[Busines
         prov = min(prov or end, vt + timedelta(days=1))
     cal = BusinessCalendar(
         holidays=frozenset(holidays), working_days=frozenset(date.fromisoformat(x) for x in c["working_weekends"]),
-        version=f"{c['calendar']}@{c['fingerprint'][:12]}" + (f"+rules{end.year}" if end > vt else "")
-        + (f"+rules_from_{start.isoformat()}" if start < vf else ""),
-        valid_from=start, valid_to=end)
-    return cal, prov
+        version=f"{c['calendar']}@{c['fingerprint'][:12]}" + (f"+rules{end.year}" if end > vt else ""),
+        valid_from=vf, valid_to=end)
+    return extend_calendar_back(cal, c["calendar"], since), prov
 
 
 class StaticView:
