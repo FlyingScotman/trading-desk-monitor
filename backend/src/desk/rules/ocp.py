@@ -1605,7 +1605,7 @@ def published_day(comparisons: Sequence[Mapping[str, Any]], outside_report: Sequ
         kinds = set(sc["kinds"])
         split = bool(sc["kinds"])
         if not split:
-            issues["report_without_derivatives_split"].append(where)
+            issues["report_without_derivatives_split"].append(f"{where} (отчёт от {b0:%d.%m.%Y})" if b0 else where)
         if b0 is not None and b0 < on:
             if business_days_between(b0, on, is_business_day) > 1:
                 issues["base_older"].append(f"{where} от {b0:%d.%m.%Y}")
@@ -1845,8 +1845,14 @@ def published_day(comparisons: Sequence[Mapping[str, Any]], outside_report: Sequ
 DAY_GAP_TEXT = {
     "carried_forward_unit": "строки отчёта ОВП, перенесённые с даты раньше базы (книги нет в отчёте на дату базы): "
                             "отчёт — полный срез юрлица, их база 0",
-    "report_without_derivatives_split": "отчёт ОВП без разметки деривативов (адаптер до private/1.7): база держит "
-                                        "будущие потоки деривативов по номиналу, их PV не добавлен",
+    "report_without_derivatives_split": "отчёт ОВП без разбивки деривативов (ни в одной строке файла нет поля "
+                                        "derivatives_ccy: файл прочитан адаптером до private/1.7 или до того, как в "
+                                        "адаптере заданы виды строк деривативов, и после этого не перечитан): база "
+                                        "держит будущие потоки деривативов по номиналу, их PV не добавлен. Чтобы дата "
+                                        "перешла на текущую методику, перечитайте отчёты с даты отчёта («Настройки» → "
+                                        "«Адаптер и источники» → «Папки» → карточка «Перечитать отчёты за период» → "
+                                        "кнопка «Перечитать»; карточка видна только с этого компьютера или "
+                                        "администратору)",
     "derivatives_partial_pv": "позиции вида без PV (нет условий сделки или ядро не оценило): если PV нет ни у одной, "
                               "взят номинал вида из отчёта ОВП; если только у части — номинал отчёта по позициям не "
                               "делится, у позиций без PV взят их номинал из отчёта позиций — проверьте сверку номинала",
