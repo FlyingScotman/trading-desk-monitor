@@ -79,8 +79,8 @@ t('#276: ручная таблица C03 — «Спред» и «Вид спре
   }
   K.negFmt = 'acc';
   const c03 = P('concepts/c03-blotter.html');
-  assert.ok(/spread: \{ label: 'Спред'[^\n]*\n\s+csvHead: 'Спред, б\.п\.\|Вид спреда', csvFmt: \(v, r\) => v == null \? \['', ''\] : \[f\.bp\(v\), r\.spreadLabel \|\| ''\] \}/.test(c03), 'C03');
-  assert.ok(/csvExtra: \['Вид спреда'\], csvFmt: \(v, r\) => v == null \? \['', ''\] : \[f\.bp\(v\), r\.spreadLabel \|\| ''\]/.test(P('concepts/lib/kit.js')), 'K.posCols.spread');
+  assert.ok(/spread: \{ label: 'Спред'[^\n]*\n\s+csvHead: 'Спред, б\.п\.\|Вид спреда', csvFmt: \(v, r\) => v == null \? \['', ''\] : \[K\.nfNum\('spread', v\), r\.spreadLabel \|\| ''\] \}/.test(c03), 'C03');
+  assert.ok(/csvExtra: \['Вид спреда'\], csvFmt: \(v, r\) => v == null \? \['', ''\] : \[K\.nfNum\('spread', v\), r\.spreadLabel \|\| ''\]/.test(P('concepts/lib/kit.js')), 'K.posCols.spread');
 });
 
 t('#276: C14 и C15 перерисовываются при смене «(1) / −1», как C16 (#262); не поверх сообщения об ошибке', () => {

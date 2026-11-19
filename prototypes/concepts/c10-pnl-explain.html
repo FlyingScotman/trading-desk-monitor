@@ -217,8 +217,11 @@
     hc.ready(ch => ch.getZr().on('click', e => { const pt = [e.offsetX, e.offsetY]; if (!ch.containPixel('grid', pt)) return; const i = Math.round(ch.convertFromPixel({ xAxisIndex: 0 }, pt[0])); if (i >= 0 && i < n) { showDay(i); ch.setOption({ series: FAC.map(() => ({})).concat([{}, { symbolSize: (v, p) => p.dataIndex === selDay ? 10 : 4 }]) }); } }));
 
     // ---------- прочее ----------
-    const op = panel('«Прочее» — то, что не объяснено факторами', '<span class="k-note">' + u.unit + ' · топ-25 по модулю</span>');
+    // формат чисел колонок PnL (TDM#789): день — ключ «PnL дня» таблиц позиций (тыс ₽), MTD — «PnL MTD» (mm ₽); «+» у положительных — как было
+    const nk = mode === 'day' ? 'pnl' : 'pnlMtd', nfs = K.nfFn(nk, true);
+    const op = panel('«Прочее» — то, что не объяснено факторами', '<span class="k-note"><span class="unx">' + K.nfEff(nk).unit + '</span> · топ-25 по модулю</span>');
     page.appendChild(op);
+    K.live(op, 'colfmt', () => { const x = op.querySelector('.unx'); if (x) x.textContent = K.nfEff(nk).unit; });  // единицы сменили здесь или на другом экране
     const oth = M.sum(L, p => val(p, 'other')), absT = M.sum(L, p => Math.abs(val(p, 'total'))) || 1;
     const ranked = L.filter(p => Math.abs(val(p, 'other')) > 0).sort((a, b) => Math.abs(val(b, 'other')) - Math.abs(val(a, 'other')));
     const t5 = ranked.slice(0, 5), t5s = t5.reduce((s, p) => s + Math.abs(val(p, 'other')), 0) / (ranked.reduce((s, p) => s + Math.abs(val(p, 'other')), 0) || 1);
@@ -230,14 +233,14 @@
       'Пять позиций дают <b>' + Math.round(t5s * 100) + '%</b> модуля «прочего»: ' + t5.map(p => '<b data-card="' + p.id + '" style="cursor:pointer">' + esc(p.name) + '</b>').join(', ') + '. ' +
       'Частые причины: цена закрытия не совпала с моделью (неликвид, модельная цена), фиксинг флоатера, сделки внутри дня, нелинейность (выпуклость) при сдвиге &gt; 10 б.п.</p><div class="tb"></div>';
     ob.classList.add('flush'); ob.querySelector('.lead').style.padding = '10px 12px 0';
-    const C = (key, label, fn, extra) => Object.assign({ key, label, num: true, val: fn, fmt: v => u.fmts(v), cls: v => f.cls(v), sum: fn, unit: u.unit, sumFmt: v => u.fmts(v) }, extra || {});
+    const C = (key, label, fn, extra) => Object.assign({ key, label, num: true, nf: K.NF[nk], val: fn, fmt: nfs, cls: v => f.cls(v), sum: fn, unit: u.unit, sumFmt: nfs }, extra || {});
     K.table(ob.querySelector('.tb'), { viewKey: 'c10-unexplained',
       rowsFn: () => ranked.slice(0, 25), autoFilter: false, search: false, stripe: r => K.issuerColor(r.issuer), maxHeight: '420px',
       columns: K.cols(['name', 'ccy', 'issuer', 'book',
         C('ptot', 'PnL итог', p => val(p, 'total')),
         C('pexp', 'Объяснено', p => val(p, 'total') - val(p, 'other')),
         C('poth', 'Прочее', p => val(p, 'other')),
-        { key: 'share', label: 'Доля |итога|', num: true, val: p => Math.abs(val(p, 'other')) / (Math.abs(val(p, 'total')) || 1), fmt: v => Math.round(v * 100) + '%', style: v => K.heatMono(Math.min(v, 1), 1, '227,179,65'), title: '|прочее| / |итог позиции|' },
+        { key: 'share', label: 'Доля |итога|', num: true, nf: K.NF.unexplShare, val: p => Math.abs(val(p, 'other')) / (Math.abs(val(p, 'total')) || 1), fmt: v => K.nfNum('unexplShare', v), style: v => K.heatMono(Math.min(v, 1), 1, '227,179,65'), title: '|прочее| / |итог позиции|' },
         { key: 'bar', label: '', val: p => val(p, 'other'), fmt: v => K.bar(v, Math.abs(val(ranked[0], 'other'))), w: '110px' },
         { key: 'why', label: 'Вероятная причина', val: p => M.deal(p) ? 'фиксинг / MTM контрагента' : K.cpnType(p) === 'float' ? 'фиксинг индекса' : p.tradedToday ? 'сделки внутри дня' : (p.volumeDay || 0) < 3e8 ? 'неликвид: цена ≠ модель' : 'выпуклость / модель', fmt: v => '<span class="mut">' + esc(v) + '</span>' },
       ]),

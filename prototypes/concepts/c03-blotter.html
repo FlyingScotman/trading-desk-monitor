@@ -113,6 +113,7 @@ body { display: flex; flex-direction: column; height: 100vh; overflow: hidden; }
   // «—» без PnL: причина сервера в подсказке (#31: смена кривой дисконтирования — с кривыми вчера и сегодня)
   const pnlNa = r => '<span class="mut3"' + (K.pnlWhy(r) ? ' title="' + esc('нет PnL: ' + K.pnlWhy(r)) + '"' : '') + '>—</span>';
   const pnlCol = (key, label, k, tip) => ({ label, num: true, nullable: k === 'funding', val: r => r.pnl[k], fmt: (v, r) => v == null ? pnlNa(r) : '<span class="' + f.cls(v) + '">' + f.k(v) + '</span>', sum: r => r.pnl[k], unit: 'тыс ₽', sfmt: f.k, title: tip ? 'тыс ₽. ' + tip : 'тыс ₽', tip: !!tip });
+  const MTD_TIP = 'Только позиции текущего прогона. Позиции, закрытые раньше в периоде, есть в итоге MTD / YTD шапки и в «PnL за период» (C19), в таблицу не входят.';
   const C = {
     // сделки дня позиции (TDM#585): число сделок прогона, щелчок — эти сделки на C20
     name: { label: 'Бумага', val: r => r.name, fmt: (v, r) => K.nameCell(r, v) + (r.tradedToday ? K.tradesTag(r) : '') + K.offReportTag(r) + K.curveProxyTag(r) },
@@ -133,37 +134,37 @@ body { display: flex; flex-direction: column; height: 100vh; overflow: hidden; }
       fmt: (v, r) => '<span class="' + (!M.deal(r) && r.tenor < 0.25 ? 'ev-soon' : 'mut3') + '">' + (r.event.date ? evName[r.event.kind] + '</span> ' + f.date(r.event.date) + ' <span class="mut3">' + f.yrs(r.tenor) + '</span>' : '—</span>') },
     tenor: { label: 'Срок', num: true, val: r => r.tenor, fmt: v => f.yrs(v), title: 'до оферты, если есть, иначе до погашения' },
     // в CSV — число в mm валюты бумаги (заголовок «Номинал, mm в вал.»), валюта — в колонке «Вал» (#258)
-    notional: { label: 'Номинал', num: true, val: r => r.notional, fmt: (v, r) => f.mn(v, 2) + '<span class="mut3">mm ' + r.ccy + '</span>', csvHead: 'Номинал, mm в вал.', csvFmt: v => f.mn(v, 2), title: 'в валюте бумаги' },
+    notional: { label: 'Номинал', num: true, nf: K.NF.notional, val: r => r.notional, fmt: (v, r) => K.nfNum('notional', v) + '<span class="mut3">' + (K.nfWord('notional') ? K.nfWord('notional') + ' ' : '') + r.ccy + '</span>', csvHead: 'Номинал, mm в вал.', csvFmt: v => K.nfNum('notional', v, true), title: 'в валюте бумаги' },
     // изменение номинала за день по сделкам (TDM#752): то же нетто и та же ячейка, что на других экранах (K.tradeDayCol), в блоке карточки
     tradeDay: Object.assign(K.tradeDayCol(), { csvHead: 'Сделки за день, mm в вал.' }),
     // изменение номинала к прогону предыдущей даты (TDM#775): сделки, амортизация, индексация; новая позиция — весь номинал
     posDelta: Object.assign(K.prevDeltaCol(), { csvHead: 'Изм. к вчера, mm в вал.' }),
-    mv: { label: 'MV, mm ₽', neutral: true, num: true, val: r => r.mv, fmt: v => f.mn(v, 0), sum: r => r.mv, unit: 'mm ₽', sfmt: v => f.mn(v, 0) },
-    price: { label: 'Цена', num: true, val: r => r.price, fmt: v => f.px(v) },
+    mv: { label: 'MV, mm ₽', neutral: true, num: true, nf: K.NF.mv, val: r => r.mv, fmt: K.nfFn('mv'), sum: r => r.mv, unit: 'mm ₽', sfmt: K.nfFn('mv') },
+    price: { label: 'Цена', num: true, nf: K.NF.price, val: r => r.price, fmt: K.nfFn('price') },
     chg: { label: 'Δ цены', num: true, val: r => r.price == null ? null : r.price - r.prevPrice, csvHead: 'Δ цены, % ном.', fmt: v => v == null ? '<span class="mut3">—</span>' : '<span class="' + f.cls(v) + '">' + f.s(v, 2) + '</span>' },
     bidask: { label: 'Bid / Ask', num: true, val: r => r.bid, fmt: (v, r) => v == null ? '<span class="mut3">—</span>' : '<span class="mut">' + f.px(r.bid) + ' / ' + f.px(r.ask) + '</span>' },
     // в CSV — изменение цены за 30 дней числом (то же значение, что у сортировки, #277)
     spark: { label: 'Цена 30д', noMeas: true, val: r => r.price == null ? null : K.sparkChange(H(r.id).price, 30), title: 'сортировка — по изменению за 30 дней (окно спарклайна)',
       csvHead: 'Δ цены за 30д, % ном.', csvNum: true, csvFmt: v => v == null ? '' : f.n(v, 3),
       fmt: (v, r) => v == null ? (sparkWait ? '<span class="mut3" title="история цен загружается">…</span>' : '<span class="mut3">—</span>') : K.spark(H(r.id).price.slice(-30), 70, 16, v >= 0 ? K.css('--pos') : K.css('--neg')) },
-    ytm: { label: 'Дох.', num: true, val: r => r.ytm, fmt: v => f.pct(v) },
+    ytm: { label: 'Дох.', num: true, nf: K.NF.ytm, val: r => r.ytm, fmt: K.nfFn('ytm') },
     // в CSV — число, кривая спреда (к КБД / к RUONIA) или DM — своей колонкой «Вид спреда» за ним (#276, TDM#762)
-    spread: { label: 'Спред', num: true, val: r => r.zspread, fmt: (v, r) => v == null ? '<span class="mut3">—</span>' : f.bp(v) + ' <span class="mut3">' + (r.spreadLabel || '') + '</span>', title: K.tips.zspread, tip: true,
-      csvHead: 'Спред, б.п.|Вид спреда', csvFmt: (v, r) => v == null ? ['', ''] : [f.bp(v), r.spreadLabel || ''] },
-    zkbd: { label: 'Z к КБД', csvHead: 'Z к КБД, б.п.', num: true, val: r => r.zKbd, fmt: v => v == null ? '<span class="mut3">—</span>' : f.bp(v), title: K.tips.zkbd, tip: true },
-    zdisc: { label: 'Z к RUONIA', csvHead: 'Z к RUONIA, б.п.', num: true, val: r => r.zRuonia, fmt: v => v == null ? '<span class="mut3">—</span>' : f.bp(v), title: K.tips.zdisc, tip: true },
-    gspread: { label: 'G-спред', num: true, val: r => r.gspread, fmt: v => v == null ? '<span class="mut3">—</span>' : f.bp(v), title: 'к кривой ОФЗ, б.п.' },
-    dur: { label: 'Дюр.', num: true, val: r => r.mdur, fmt: v => v == null ? '<span class="mut3">—</span>' : f.n(v, 2) },
-    dv01: { label: 'DV01', neutral: true, num: true, val: r => r.dv01, fmt: v => f.dv(v), sum: r => r.dv01, unit: 'тыс ₽/бп', sfmt: f.dv, title: K.tips.dv01, tip: true },
-    cs01: { label: 'CS01', neutral: true, num: true, val: r => r.cs01, fmt: v => v ? f.dv(v) : '<span class="mut3">·</span>', sum: r => r.cs01, unit: 'тыс ₽/бп', sfmt: f.dv, title: K.tips.cs01, tip: true },
-    basis01: { label: 'Базис01', neutral: true, num: true, val: r => r.basis01, fmt: v => v ? f.dv(v) : '<span class="mut3">·</span>', sum: r => r.basis01, unit: 'тыс ₽/бп', sfmt: f.dv, title: K.tips.basis01, tip: true },
-    ofzSpr01: { label: 'Спред к КБД01', neutral: true, num: true, val: r => r.ofzSpr01, fmt: v => v ? f.dv(v) : '<span class="mut3">·</span>', sum: r => r.ofzSpr01, unit: 'тыс ₽/бп', sfmt: f.dv, title: K.tips.ofzSpr01, tip: true },
+    spread: { label: 'Спред', num: true, nf: K.NF.spread, val: r => r.zspread, fmt: (v, r) => v == null ? '<span class="mut3">—</span>' : K.nfNum('spread', v) + ' <span class="mut3">' + (r.spreadLabel || '') + '</span>', title: K.tips.zspread, tip: true,
+      csvHead: 'Спред, б.п.|Вид спреда', csvFmt: (v, r) => v == null ? ['', ''] : [K.nfNum('spread', v), r.spreadLabel || ''] },
+    zkbd: { label: 'Z к КБД', csvHead: 'Z к КБД, б.п.', num: true, nf: K.NF.zkbd, val: r => r.zKbd, fmt: v => v == null ? '<span class="mut3">—</span>' : K.nfNum('zkbd', v), title: K.tips.zkbd, tip: true },
+    zdisc: { label: 'Z к RUONIA', csvHead: 'Z к RUONIA, б.п.', num: true, nf: K.NF.zdisc, val: r => r.zRuonia, fmt: v => v == null ? '<span class="mut3">—</span>' : K.nfNum('zdisc', v), title: K.tips.zdisc, tip: true },
+    gspread: { label: 'G-спред', num: true, nf: K.NF.gspread, val: r => r.gspread, fmt: v => v == null ? '<span class="mut3">—</span>' : K.nfNum('gspread', v), title: 'к кривой ОФЗ, б.п.' },
+    dur: { label: 'Дюр.', num: true, nf: K.NF.dur, val: r => r.mdur, fmt: v => v == null ? '<span class="mut3">—</span>' : K.nfNum('dur', v) },
+    dv01: { label: 'DV01', neutral: true, num: true, nf: K.NF.dv01, val: r => r.dv01, fmt: K.nfFn('dv01'), sum: r => r.dv01, unit: 'тыс ₽/бп', sfmt: K.nfFn('dv01'), title: K.tips.dv01, titleFn: u => K.tipUnit(K.tips.dv01, u), tip: true },
+    cs01: { label: 'CS01', neutral: true, num: true, nf: K.NF.cs01, val: r => r.cs01, fmt: v => v ? K.nfNum('cs01', v) : '<span class="mut3">·</span>', sum: r => r.cs01, unit: 'тыс ₽/бп', sfmt: K.nfFn('cs01'), title: K.tips.cs01, titleFn: u => K.tipUnit(K.tips.cs01, u), tip: true },
+    basis01: { label: 'Базис01', neutral: true, num: true, nf: K.NF.basis01, val: r => r.basis01, fmt: v => v ? K.nfNum('basis01', v) : '<span class="mut3">·</span>', sum: r => r.basis01, unit: 'тыс ₽/бп', sfmt: K.nfFn('basis01'), title: K.tips.basis01, titleFn: u => K.tipUnit(K.tips.basis01, u), tip: true },
+    ofzSpr01: { label: 'Спред к КБД01', neutral: true, num: true, nf: K.NF.ofzSpr01, val: r => r.ofzSpr01, fmt: v => v ? K.nfNum('ofzSpr01', v) : '<span class="mut3">·</span>', sum: r => r.ofzSpr01, unit: 'тыс ₽/бп', sfmt: K.nfFn('ofzSpr01'), title: K.tips.ofzSpr01, titleFn: u => K.tipUnit(K.tips.ofzSpr01, u), tip: true },
     fund: { label: 'Фонд.', num: true, val: r => r.fundRate, fmt: v => v == null ? '<span class="mut3">—</span>' : f.pct(v), title: 'ставка фондирования, % годовых. ' + K.tips.fundRate.trim() },
-    carry: { label: 'Кэрри/д', num: true, val: r => r.carryDay, fmt: v => '<span class="' + f.cls(v) + '">' + f.k(v) + '</span>', sum: r => r.carryDay, unit: 'тыс ₽', sfmt: f.k, title: 'тыс ₽ в день. ' + K.tips.carry, tip: true },
-    funding: { label: 'Фондир./д', num: true, nullable: true, val: r => r.fundingDay, fmt: v => v == null ? '<span class="mut3">—</span>' : '<span class="' + f.cls(v) + '">' + f.k(v) + '</span>', sum: r => r.fundingDay, unit: 'тыс ₽', sfmt: f.k, title: 'Фондирование, тыс ₽ в день. ' + K.tips.funding, tip: true },
+    carry: { label: 'Кэрри/д', num: true, nf: K.NF.carry, val: r => r.carryDay, fmt: v => '<span class="' + f.cls(v) + '">' + K.nfNum('carry', v) + '</span>', sum: r => r.carryDay, unit: 'тыс ₽', sfmt: K.nfFn('carry'), title: 'тыс ₽ в день. ' + K.tips.carry, titleFn: u => u + ' в день. ' + K.tips.carry, tip: true },
+    funding: { label: 'Фондир./д', num: true, nullable: true, nf: K.NF.funding, val: r => r.fundingDay, fmt: v => v == null ? '<span class="mut3">—</span>' : '<span class="' + f.cls(v) + '">' + K.nfNum('funding', v) + '</span>', sum: r => r.fundingDay, unit: 'тыс ₽', sfmt: K.nfFn('funding'), title: 'Фондирование, тыс ₽ в день. ' + K.tips.funding, titleFn: u => 'Фондирование, ' + u + ' в день. ' + K.tips.funding, tip: true },
     pc: pnlCol('pc', 'Кэрри', 'carry', K.tips.carry), pfu: pnlCol('pfu', 'Фондирование', 'funding', K.tips.funding), pr: pnlCol('pr', 'Ставки', 'rates'), ps: pnlCol('ps', 'Спред', 'spread'), pf: pnlCol('pf', 'FX', 'fx'), pt: pnlCol('pt', 'Сделки', 'trading'), po: pnlCol('po', 'Прочее', 'other'),
-    pnl: { label: 'PnL дня', num: true, val: r => r.pnl.total, fmt: (v, r) => v == null ? pnlNa(r) : '<b class="' + f.cls(v) + '">' + f.k(v) + '</b>' + K.pnlAssumeMark(r), sum: r => r.pnl.total, unit: 'тыс ₽', sfmt: f.k, title: 'тыс ₽' },
-    pnlMtd: { label: 'MTD', num: true, val: r => r.pnlMtd, fmt: v => '<span class="' + f.cls(v) + '">' + f.mn(v, 1) + '</span>', sum: r => r.pnlMtd, unit: 'mm ₽', sfmt: v => f.mn(v, 1), title: 'mm ₽. Только позиции текущего прогона. Позиции, закрытые раньше в периоде, есть в итоге MTD / YTD шапки и в «PnL за период» (C19), в таблицу не входят.' },
+    pnl: { label: 'PnL дня', num: true, nf: K.NF.pnl, val: r => r.pnl.total, fmt: (v, r) => v == null ? pnlNa(r) : '<b class="' + f.cls(v) + '">' + K.nfNum('pnl', v) + '</b>' + K.pnlAssumeMark(r), sum: r => r.pnl.total, unit: 'тыс ₽', sfmt: K.nfFn('pnl'), title: 'тыс ₽', titleFn: u => u },
+    pnlMtd: { label: 'MTD', num: true, nf: K.NF.pnlMtd, val: r => r.pnlMtd, fmt: v => '<span class="' + f.cls(v) + '">' + K.nfNum('pnlMtd', v) + '</span>', sum: r => r.pnlMtd, unit: 'mm ₽', sfmt: K.nfFn('pnlMtd'), title: 'mm ₽. ' + MTD_TIP, titleFn: u => u + '. ' + MTD_TIP },
     pnlYtd: { label: 'YTD', num: true, val: r => r.pnlYtd, fmt: v => '<span class="' + f.cls(v) + '">' + f.mn(v, 1) + '</span>', sum: r => r.pnlYtd, unit: 'mm ₽', sfmt: v => f.mn(v, 1), title: 'mm ₽. Только позиции текущего прогона. Позиции, закрытые раньше в периоде, есть в итоге MTD / YTD шапки и в «PnL за период» (C19), в таблицу не входят.' },
     rating: { label: 'Рейтинг', filter: r => r.rating, val: r => K.ratingRank(r.rating), fmt: (v, r) => '<span class="mut" title="' + esc(K.ratingTip(r.rating, r.ratingInfo)) + '">' + esc(K.ratingText(r.rating, r.ratingInfo)) + '</span>' },
     sector: { label: 'Сектор', filter: true, val: r => r.sector, fmt: v => '<span class="mut">' + esc(v) + '</span>' },
@@ -195,7 +196,8 @@ body { display: flex; flex-direction: column; height: 100vh; overflow: hidden; }
   const inC = k => Object.prototype.hasOwnProperty.call(C, k);
   const readAdd = () => K.colPrefs.sel(colKey()).added.filter(k => inC(k) && !presetCols().includes(k));
   let add = readAdd();
-  const cols = () => presetCols().filter(k => !hid.has(k)).concat(add).map(k => Object.assign({ key: k }, C[k]));
+  // колонка — в формате чисел пользователя (TDM#789: K.colFmt): единица, подпись и подсказка — по его выбору, ячейки — через K.nfNum
+  const cols = () => presetCols().filter(k => !hid.has(k)).concat(add).map(k => Object.assign({ key: k }, K.nfCol(C[k])));
   // скрытая колонка уносит с собой свой фильтр и свою сортировку: их больше не снять щелчком по заголовку
   const dropHidden = keys => keys.forEach(k => { delete st.filters[k]; st.sort = st.sort.filter(s => s[0] !== k); });
   const savePick = () => K.colPrefs.set(colKey(), [...hid], add);
@@ -256,7 +258,7 @@ body { display: flex; flex-direction: column; height: 100vh; overflow: hidden; }
     const firstSum = CL.findIndex(c => c.sum), span = firstSum < 0 ? CL.length : Math.max(1, firstSum);
     const head = '<thead><tr><th class="stripe"></th>' + CL.map(c => {
       const si = st.sort.findIndex(s => s[0] === c.key);
-      return '<th class="sortable' + (c.num ? ' n' : '') + '" data-k="' + c.key + '"' + (c.csvHead ? ' data-csv="' + esc(c.csvHead) + '"' : '') + ' title="' + esc(c.title || 'щелчок — сортировка, Shift+щелчок — добавить колонку') + '">' + (c.tip ? '<span class="k-hint">' + c.label + '</span>' : c.label) + (si >= 0 ? '<span class="si">' + (st.sort[si][1] > 0 ? '▲' : '▼') + (st.sort.length > 1 ? si + 1 : '') + '</span>' : '') + K.fltIcon(c, st.filters) + '</th>';
+      return '<th class="sortable' + (c.num ? ' n' : '') + '" data-k="' + c.key + '"' + (c.csvHead ? ' data-csv="' + esc(c.csvHead) + '"' : '') + ' title="' + esc(c.title || 'щелчок — сортировка, Shift+щелчок — добавить колонку') + '">' + (c.tip ? '<span class="k-hint">' + c.label + '</span>' : c.label) + (c.nfChanged && K.colUnit(c) ? '<span class="k-thu">' + esc(K.colUnit(c)) + '</span>' : '') + (si >= 0 ? '<span class="si">' + (st.sort[si][1] > 0 ? '▲' : '▼') + (st.sort.length > 1 ? si + 1 : '') + '</span>' : '') + K.fltIcon(c, st.filters) + '</th>';
     }).join('') + '</tr></thead>';
     // строки таблицы по порядку (K.vwin): строка позиции, строка группы, спрятанная строка свёрнутой группы; HTML — по требованию
     const items = [];
@@ -463,11 +465,11 @@ body { display: flex; flex-direction: column; height: 100vh; overflow: hidden; }
   // ---------- панель управления ----------
   K.seg(document.getElementById('sCols'), PRESETS.map(p => [p[0], p[1]]), st.preset, v => { st.preset = v; hid = readHid(); add = readAdd(); st.sort = st.sort.filter(s => cols().some(c => c.key === s[0])); save(); render(); colBtn.paint(); });
   const colBtn = K.colMenu({ hidden: () => hid, title: 'показать и скрыть колонки этого набора, добавить колонки, которых в нём нет; выбор запоминается для вашего пользователя',
-    cols: () => presetCols().map(k => ({ key: k, label: C[k].label, unit: C[k].unit, fixed: FIXED.includes(k) })).concat(add.map(k => ({ key: k, label: C[k].label, unit: C[k].unit, added: true }))),
+    cols: () => presetCols().map(k => ({ key: k, label: K.nfCol(C[k]).label, unit: K.nfCol(C[k]).unit, fixed: FIXED.includes(k), nf: C[k].nf })).concat(add.map(k => ({ key: k, label: K.nfCol(C[k]).label, unit: K.nfCol(C[k]).unit, added: true, nf: C[k].nf }))),
     toggle: (k, hide) => { if (hide) { dropHidden([k]); hid.add(k); } else hid.delete(k); const saved = savePick(); render(); return saved; },
     // добавить: колонка каталога встаёт в конец; убрать — уносит свои фильтр и сортировку
     added: () => new Set(add),
-    avail: () => Object.keys(C).filter(k => !presetCols().includes(k) && !add.includes(k)).map(k => ({ key: k, label: C[k].label, unit: C[k].unit })),
+    avail: () => Object.keys(C).filter(k => !presetCols().includes(k) && !add.includes(k)).map(k => ({ key: k, label: K.nfCol(C[k]).label, unit: K.nfCol(C[k]).unit })),
     add: k => { if (!inC(k) || presetCols().includes(k) || add.includes(k)) return; add = add.concat(k); const saved = savePick(); render(); return saved; },
     remove: k => { if (!add.includes(k)) return; dropHidden([k]); add = add.filter(x => x !== k); const saved = savePick(); render(); return saved; },
     reset: () => { dropHidden(add); hid = new Set(); add = []; const saved = K.colPrefs.reset(colKey()); render(); return saved; } });
@@ -501,6 +503,7 @@ body { display: flex; flex-direction: column; height: 100vh; overflow: hidden; }
   K.onFilter(render);
   K.on('alias', () => { if (st.sel) showCard(st.sel); });  // новое имя бумаги — в карточке справа
   K.on('theme', render);
+  K.on('colfmt', render);  // формат чисел колонки (TDM#789) сменили здесь или на другом экране: знаки и единицы — сразу
   render();
   if (new URL(location.href).searchParams.get('pos') === st.sel && st.sel) select(st.sel, true);  // позиция по ссылке — в виду
   if (sparkWait) {

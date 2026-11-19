@@ -15,7 +15,9 @@
  *  KIT.card(id)           — карточка позиции: параметры, графики истории, риск по бакетам, потоки, PnL
  *  KIT.table(el, opts)    — таблица: группы, мультисортировка (Shift+щелчок; группы сортируются тем же столбцом), поиск, итоги с разбором;
  *                           ширина и порядок колонок мышкой с запоминанием (KIT.viewStore), «⤓ CSV» — выгрузка; у таблиц позиций
- *                           (KIT.cols) «Колонки ▾» — скрыть и вернуть колонки, выбор по пользователю на сервере (KIT.colPrefs, TDM#763)
+ *                           (KIT.cols) «Колонки ▾» — скрыть и вернуть колонки, выбор по пользователю на сервере (KIT.colPrefs, TDM#763);
+ *                           у числовых колонок там же кнопка «0.0» — формат чисел: знаков после точки и единицы (тыс / mm / bn), один
+ *                           на колонку и на все таблицы позиций (KIT.colFmt, KIT.NF, KIT.nfNum, TDM#789)
  *  KIT.tableTools(el, opts) — то же для таблиц, свёрстанных вручную: «⤓ CSV» и ширина колонок с запоминанием (#131)
  *  KIT.tips, KIT.hint     — подсказки к мерам риска (конвенция DV01 RUONIA, Базис01, CS01, Z к RUONIA) и подпись с подсказкой
  *  KIT.chart(el, option)  — echarts с цветами темы; KIT.riskStack(el, opts) — риск по бакетам: стек кривых + итог + кумулятив
@@ -2118,12 +2120,152 @@
     };
     return P;
   })();
+  // ---------- формат чисел колонки: знаков после точки и единицы (TDM#789) ----------
+  // Пользователь сам настраивает вид числовой колонки таблиц позиций: число знаков после точки (0–6) и, у сумм, единицы
+  // (как есть / тыс / mm / bn). Формат — у колонки, а не у таблицы: ключ — ключ колонки в каталоге K.posCols (K.NF), и один
+  // формат действует во всех таблицах позиций на любом экране, где есть эта колонка (K.table, блоттер C03). «Как было» в «Колонки ▾»
+  // (состав колонок таблицы, K.colPrefs) формат не трогает; у каждой колонки свой сброс. Выбор колонки — {decimals, scale}:
+  // decimals — 0…6 или null (по умолчанию колонки), scale — 'k' | 'mm' | 'bn' | '1' (как есть) или null (единицы колонки).
+  // Хранится на сервере, отдельно у каждого пользователя монитора: GET / PUT / DELETE ../api/v1/me/column-formats
+  // (backend/src/desk/api/prefs_routes.py, таблица user_column_formats), копия — в K.viewStore браузера (ключ 'colfmt': {колонка:
+  // {decimals, scale}}). Так же, как у K.colPrefs: страница рисуется сразу по копии, ответил сервер — его слово главное и таблицы
+  // перерисовываются (событие 'colfmt'); сервера нет (демо, файл) или он не принял запись — формат живёт в этом браузере, и
+  // меню колонок говорит об этом словами; не принятая правка уходит на сервер при следующей загрузке страницы.
+  K.COLFMT_SCALES = ['1', 'k', 'mm', 'bn'];
+  K.colFmt = (() => {
+    const API = '../api/v1/me/column-formats', LK = 'colfmt', DIRTY = 'colfmt-dirty', ID = /^[A-Za-z0-9][A-Za-z0-9_.:-]{0,63}$/;
+    const chain = {}, ver = {}, touched = new Set();  // chain — очередь запросов колонки; ver — номер правки колонки; touched — колонки, правленные здесь
+    let loaded = false, loadFailed = false, saveFailed = false, asked = false, gen = 0;
+    const has = (o, k) => Object.prototype.hasOwnProperty.call(o, k);
+    // чужие данные (сервер, браузер) — в проверенную форму; ничего не выбрано — null (по умолчанию)
+    const one = o => {
+      if (!o || typeof o !== 'object') return null;
+      const decimals = Number.isInteger(o.decimals) && o.decimals >= 0 && o.decimals <= 6 ? o.decimals : null;
+      const scale = K.COLFMT_SCALES.includes(o.scale) ? o.scale : null;
+      return decimals == null && scale == null ? null : { decimals, scale };
+    };
+    const readAll = o => { const out = {}; if (o && typeof o === 'object' && !Array.isArray(o)) Object.keys(o).forEach(k => { const s = ID.test(k) && one(o[k]); if (s) out[k] = s; }); return out; };
+    let cur = readAll(K.viewStore.get(LK));
+    const served = () => M.source === 'real' && typeof fetch === 'function';
+    const persist = () => { if (Object.keys(cur).length) K.viewStore.set(LK, cur); else K.viewStore.reset(LK); };
+    const dirtyIds = () => { const d = K.viewStore.get(DIRTY); return Array.isArray(d && d.ids) ? d.ids.filter(k => typeof k === 'string' && ID.test(k)) : []; };
+    const markDirty = (id, on) => { const s = new Set(dirtyIds()); if (on) s.add(id); else s.delete(id); if (s.size) K.viewStore.set(DIRTY, { ids: [...s] }); else K.viewStore.reset(DIRTY); };
+    const send = (id, method, s) => {
+      // запросы одной колонки — по очереди: быстрые правки не меняются местами по дороге; результат — принял ли сервер
+      const run = () => Promise.resolve().then(() => fetch(API + '/' + encodeURIComponent(id), { method, cache: 'no-store', headers: { 'Content-Type': 'application/json' }, body: method === 'PUT' ? JSON.stringify({ decimals: s.decimals, scale: s.scale }) : undefined }))
+        .then(r => { if (!r.ok) throw new Error(String(r.status)); saveFailed = false; return true; }).catch(() => { saveFailed = true; return false; });
+      return (chain[id] = (chain[id] || Promise.resolve()).then(run));
+    };
+    const push = (id, s) => {
+      const v = ver[id] = (ver[id] || 0) + 1;
+      markDirty(id, true);
+      return send(id, s ? 'PUT' : 'DELETE', s).then(ok => { if (ok && ver[id] === v) markDirty(id, false); return ok; });
+    };
+    const P = {
+      // выбор колонки {decimals, scale} или null; первая колонка с форматом просит выбор с сервера
+      get(id) {
+        if (!asked && served()) { asked = true; P.load(); }
+        return has(cur, id) ? cur[id] : null;
+      },
+      // число правок: по нему K.nfEff помнит посчитанное
+      get gen() { return gen; },
+      all() { return JSON.parse(JSON.stringify(cur)); },
+      // новый выбор колонки: виден сразу, таблицы перерисовываются; null / оба null — по умолчанию (запись удаляется)
+      set(id, o) {
+        if (!ID.test(String(id))) return Promise.resolve(false);
+        const s = one(o);
+        touched.add(id);
+        if (s) cur[id] = s; else delete cur[id];
+        persist(); gen++; fire('colfmt');
+        return served() ? push(id, s) : Promise.resolve(false);
+      },
+      reset(id) { return P.set(id, null); },
+      load() {
+        asked = true;
+        if (!served()) return Promise.resolve(false);
+        // правки, не дошедшие до сервера раньше, — первыми: ответ сервера их не перекроет
+        const flush = Promise.all(dirtyIds().map(id => { touched.add(id); return push(id, has(cur, id) ? cur[id] : null); }));
+        return flush.then(() => fetch(API, { cache: 'no-store', headers: { Accept: 'application/json' } }))
+          .then(r => { if (!r.ok) throw new Error(String(r.status)); return r.json(); })
+          .then(j => {
+            const srv = readAll(j && typeof j === 'object' ? j.formats : null), next = {};
+            Object.keys(srv).forEach(k => { if (!touched.has(k)) next[k] = srv[k]; });  // у пользователя нет формата — по умолчанию, сколько бы ни лежало в браузере
+            Object.keys(cur).forEach(k => { if (touched.has(k)) next[k] = cur[k]; });
+            cur = next; persist(); loaded = true; loadFailed = false; gen++;
+            fire('colfmt');
+            return true;
+          }).catch(() => { loadFailed = true; return false; });
+      },
+      // где живёт формат сейчас: 'server', 'browser' (демо, файл) или 'offline' (сервер не ответил или не принял запись)
+      where() { return !served() ? 'browser' : loadFailed || saveFailed ? 'offline' : 'server'; },
+    };
+    return P;
+  })();
+  // Описание числа у колонки (K.NF): как оно форматируется по умолчанию, а значит и что пользователь может в нём менять.
+  //   scale — делитель по умолчанию (1, 1e3, 1e6, 1e9), d — знаков после точки по умолчанию, sign — «+» у положительных,
+  //   suf — суффикс внутри скобок отрицательного ('%'), per — единица без масштаба ('₽/бп', '₽', 'в вал.'): она есть только
+  //   у сумм, и только у них можно менять единицы (подпись — слово масштаба + per: «тыс ₽/бп», «mm в вал.»), base — подпись
+  //   колонки, к которой единица приписывается через запятую («MV» → «MV, mm ₽», если единица в подписи, а не под ней).
+  // Колонка объявляет его в поле nf (K.posCols, блоттер C03, свои колонки C09, C10, C13, C17: nf: K.NF.<ключ>); без nf у колонки нет настройки. Число строит K.nfNum: ячейки,
+  // итоги и CSV берут его оттуда, поэтому они совпадают с экраном, а подсветка и сортировка остаются по исходному числу.
+  const NF_SCALE = { '1': 1, k: 1e3, mm: 1e6, bn: 1e9 }, NF_WORD = { 1: '', 1e3: 'тыс', 1e6: 'mm', 1e9: 'bn' };
+  K.NF = {};
+  // знаков по умолчанию для выбранных единиц: сменили единицу, не трогая знаки, — точность та же (в тысячу раз крупнее —
+  // на три знака больше, но не больше 6)
+  const nfDefD = (nf, scale) => scale === nf.scale ? nf.d : Math.max(0, Math.min(6, nf.d + Math.round(Math.log10(scale / nf.scale))));
+  let nfMemo = { gen: -1, m: {} };
+  // Действующий формат колонки: делитель, знаки, слово масштаба и подпись единицы с учётом выбора пользователя
+  K.nfEff = id => {
+    const nf = K.NF[id];
+    if (!nf) return null;
+    const sel = K.colFmt.get(id) || {};  // первым: ответ сервера может сменить поколение
+    if (nfMemo.gen !== K.colFmt.gen) nfMemo = { gen: K.colFmt.gen, m: {} };
+    if (nfMemo.m[id]) return nfMemo.m[id];
+    const scale = nf.per && sel.scale ? NF_SCALE[sel.scale] : nf.scale, defD = nfDefD(nf, scale);
+    const word = NF_WORD[scale], defWord = NF_WORD[nf.scale];
+    const unitOf = w => (w ? w + ' ' : '') + nf.per;
+    return (nfMemo.m[id] = { id, scale, d: sel.decimals != null ? sel.decimals : defD, defD, sign: !!nf.sign, suf: nf.suf || '', word, defWord, units: !!nf.per,
+      unit: nf.per ? unitOf(word) : '', defUnit: nf.per ? unitOf(defWord) : '', custom: !!(sel.decimals != null || (nf.per && sel.scale)) });
+  };
+  // Число колонки в её формате: null / не число — «—»; plain — без «+» (CSV); sign — «+» у положительных вопреки описанию колонки
+  // (true / false): колонка экрана, у которой «+» не такой, как у одноимённой колонки позиций (PnL в C10 — всегда со знаком)
+  K.nfNum = (id, v, plain, sign) => {
+    const e = K.nfEff(id);
+    if (v == null) return '—';
+    if (!e) return grp(v, 0);
+    const x = v / e.scale;
+    return ((sign == null ? e.sign : sign) && !plain && x > 0 ? '+' : '') + grp(x, e.d, e.suf);
+  };
+  K.nfFn = (id, sign) => v => K.nfNum(id, v, false, sign);
+  // Слово масштаба в пометке рядом с числом («mm USD» у номинала): как есть — пусто
+  K.nfWord = id => { const e = K.nfEff(id); return e ? e.word : ''; };
+  // Колонка в действующем формате: единица, подпись с единицей (base), подсказка (titleFn(единица)) и подпись CSV (csvHead) —
+  // по выбору пользователя; fmt колонки не меняется, он зовёт K.nfNum сам. nfChanged — единицы не те, что по умолчанию
+  const nfCols = new WeakMap();
+  K.nfCol = c => {
+    if (!c || !c.nf || !K.NF[c.nf.id]) return c;
+    const e = K.nfEff(c.nf.id), hit = nfCols.get(c);
+    if (hit && hit.gen === K.colFmt.gen) return hit.o;
+    const o = Object.assign({}, c);
+    if (e.units) {
+      o.unit = e.unit;
+      if (c.nf.base) o.label = c.nf.base + ', ' + e.unit;
+      if (c.csvHead) o.csvHead = K.htmlText(c.label.replace(/,.*$/, '')) + ', ' + e.unit;
+      if (c.titleFn) o.title = c.titleFn(e.unit, e.word);
+      o.nfChanged = e.word !== e.defWord;
+    }
+    nfCols.set(c, { gen: K.colFmt.gen, o });
+    return o;
+  };
   // Меню колонок: кнопка «Колонки ▾» и выпадающая панель со списком колонок и галочками, «Как было» и «Готово». Меню — на
   // экране один раз, закрывается Esc, щелчком снаружи и сменой размера окна; на телефоне — по ширине экрана (kit.css, .k-colmenu).
   // Под списком — раздел «Добавить» (TDM#778): стандартные колонки, которых в таблице нет; поставили галочку — колонка встаёт в конец
   // таблицы и переходит в основной список с пометкой «добавлена», сняли — возвращается в «Добавить».
-  // o: { cols: () => [{key, label (HTML), unit, fixed, added}] — колонки таблицы, и добавленные тоже; fixed — колонка-идентификатор,
-  //      не скрывается; hidden: () => Set ключей скрытых; toggle(key, hide); reset(); title;
+  // У числовой колонки с описанием числа (nf, K.NF) в строке — кнопка «0.0»: она раскрывает формат чисел колонки (TDM#789): «Знаки после
+  // точки» и, у сумм, «Единицы», «Формат по умолчанию». Формат — у колонки и действует во всех таблицах позиций (K.colFmt); «Как было»
+  // его не трогает.
+  // o: { cols: () => [{key, label (HTML), unit, fixed, added, nf}] — колонки таблицы, и добавленные тоже; fixed — колонка-идентификатор,
+  //      не скрывается; nf — описание числа колонки (есть настройка формата); hidden: () => Set ключей скрытых; toggle(key, hide); reset(); title;
   //      added: () => Set ключей добавленных; avail: () => [{key, label, unit}] — что можно добавить; add(key); remove(key) }
   // Без avail раздела «Добавить» нет, без added подпись кнопки — как до TDM#778.
   // Кнопка получает btn.paint() — подпись («Колонки · скрыто 3, добавлено 2 ▾») после смены состава не из меню.
@@ -2145,7 +2287,8 @@
       const m = h('div', 'k-panel k-colmenu'); m.setAttribute('role', 'dialog'); m.setAttribute('aria-label', 'Колонки таблицы');
       const hd = h('div', 'k-colmenu-hd'), ttl = h('span', 'k-colmenu-t'), list = h('div', 'k-colmenu-list'), ft = h('div', 'k-colmenu-ft'), note = h('div', 'k-colmenu-note k-note');
       const reset = h('button', 'k-btn', 'Как было'), done = h('button', 'k-btn', 'Готово');
-      reset.type = done.type = 'button'; reset.title = 'вернуть состав колонок по умолчанию: показать все скрытые' + (o.avail ? ' и убрать добавленные' : '');
+      reset.type = done.type = 'button'; reset.title = 'вернуть состав колонок по умолчанию: показать все скрытые' + (o.avail ? ' и убрать добавленные' : '') + '; формат чисел колонок не меняется';
+      const fmtOpen = new Set();  // колонки с раскрытым форматом: список строится заново, раскрытое остаётся
       let cs = o.cols();
       const head = () => {
         const hid = o.hidden(), na = nAdded(), shown = cs.filter(c => c.fixed || !hid.has(c.key)).length;
@@ -2156,6 +2299,57 @@
       const label = (c, tail) => { const t = h('span', 'k-colmenu-l'); t.textContent = K.u(K.htmlText(c.label)) + (tail || ''); return t; };
       const unit = (row, c) => { if (c.unit) { const u = h('span', 'u'); u.textContent = K.u(c.unit); row.appendChild(u); } };
       const focusOn = (attr, key) => { const i = [...list.querySelectorAll('input')].find(x => x.dataset[attr] === key); if (i && i.focus) i.focus(); };
+      // формат чисел колонки (TDM#789): кнопка в строке раскрывает под ней выбор знаков и единиц; выбор сразу меняет все таблицы
+      const fmtWhere = { server: '', browser: 'Формат хранится только в этом браузере (нет сервера).', offline: 'Сервер не принял формат: он сохранён в этом браузере и уйдёт на сервер при следующей загрузке страницы.' };
+      function fmtBtn(c) {
+        const b = h('button', 'k-colmenu-fmtbtn'), open = fmtOpen.has(c.key), on = !!K.colFmt.get(c.nf.id);
+        b.type = 'button'; b.textContent = '0.0'; b.dataset.fmt = c.key; b.classList.toggle('on', on);
+        b.setAttribute('aria-expanded', open ? 'true' : 'false');
+        b.setAttribute('aria-label', 'Формат чисел колонки ' + K.u(K.htmlText(c.label)) + (on ? ' (изменён)' : ''));
+        b.title = 'формат чисел колонки: знаки после точки' + (K.NF[c.nf.id] && K.NF[c.nf.id].per ? ' и единицы' : '') + '; действует во всех таблицах позиций';
+        b.onclick = e => {
+          e.preventDefault(); e.stopPropagation();
+          if (stale()) return;
+          if (fmtOpen.has(c.key)) fmtOpen.delete(c.key); else fmtOpen.add(c.key);
+          build(); focusFmt(c.key, fmtOpen.has(c.key) ? 'd' : 'btn');
+        };
+        return b;
+      }
+      function fmtPanel(c) {
+        const id = c.nf.id, e = K.nfEff(id), sel = K.colFmt.get(id) || {};
+        const p = h('div', 'k-colmenu-fmt'); p.dataset.fmtFor = c.key;
+        const row = (text, el) => { const r = h('label', 'k-colmenu-fmtrow'); r.append(h('span', null, text), el); return r; };
+        const opt = (sv, text, selected) => { const x = document.createElement('option'); x.value = sv; x.textContent = text; if (selected) x.selected = true; return x; };
+        const save = patch => {
+          if (stale()) return;
+          const cur = K.colFmt.get(id) || {}, next = Object.assign({ decimals: cur.decimals == null ? null : cur.decimals, scale: cur.scale == null ? null : cur.scale }, patch);
+          afterSave(K.colFmt.set(id, next), c.key, patch.scale === undefined ? 'd' : 'u');
+        };
+        const sd = h('select', 'k-input'); sd.dataset.fmtD = c.key; sd.setAttribute('aria-label', 'Знаков после точки: ' + K.u(K.htmlText(c.label)));
+        sd.appendChild(opt('', 'по умолчанию (' + e.defD + ')', sel.decimals == null));
+        for (let i = 0; i <= 6; i++) sd.appendChild(opt(String(i), String(i), sel.decimals === i));
+        sd.onchange = () => save({ decimals: sd.value === '' ? null : +sd.value });
+        p.appendChild(row('Знаков после точки', sd));
+        if (e.units) {
+          const su = h('select', 'k-input'); su.dataset.fmtU = c.key; su.setAttribute('aria-label', 'Единицы: ' + K.u(K.htmlText(c.label)));
+          su.appendChild(opt('', 'по умолчанию (' + (e.defWord || 'как есть') + ')', sel.scale == null));
+          [['1', 'как есть'], ['k', 'тыс'], ['mm', 'mm'], ['bn', 'bn']].forEach(x => su.appendChild(opt(x[0], x[1], sel.scale === x[0])));
+          su.onchange = () => save({ scale: su.value === '' ? null : su.value });
+          p.appendChild(row('Единицы', su));
+        }
+        const ft2 = h('div', 'k-colmenu-fmtft'), rs = h('button', 'k-btn', 'Формат по умолчанию'); rs.type = 'button'; rs.dataset.fmtReset = c.key;
+        rs.disabled = !e.custom; rs.title = 'вернуть знаки и единицы этой колонки, как задано по умолчанию';
+        rs.onclick = () => { if (stale()) return; afterSave(K.colFmt.reset(id), c.key, 'btn'); };
+        ft2.appendChild(rs); p.appendChild(ft2);
+        const nt = h('div', 'k-colmenu-fmtnote k-note', 'Действует во всех таблицах позиций. «Как было» формат не трогает.'); p.appendChild(nt);
+        const w = fmtWhere[fmtSeen = K.colFmt.where()];
+        if (w) { const wn = h('div', 'k-colmenu-fmtnote k-note'); wn.textContent = w; p.appendChild(wn); }
+        return p;
+      }
+      const focusFmt = (key, what) => { const a = { d: 'fmtD', u: 'fmtU', btn: 'fmt' }[what], i = [...list.querySelectorAll('select, .k-colmenu-fmtbtn')].find(x => x.dataset[a] === key); if (i && i.focus) i.focus(); };
+      // формат уже виден во всех таблицах; строка меню и пометка «хранится только в этом браузере» — сразу и ещё раз, когда ответил сервер
+      let fmtSeen = '';
+      const afterSave = (done, key, what) => { build(); head(); focusFmt(key, what); Promise.resolve(done).then(() => { if (colPop !== m) return; head(); if (K.colFmt.where() !== fmtSeen) { build(); focusFmt(key, what); } }); };
       // список строится заново, когда меняется состав таблицы (добавили, убрали); скрыть и вернуть колонку — галочкой на месте
       function build() {
         const top = list.scrollTop;
@@ -2173,7 +2367,10 @@
           };
           row.append(cb, label(c, c.fixed ? ' (всегда)' : ''));
           if (c.added) { const tg = h('span', 'k-colmenu-tag', 'добавлена'); row.appendChild(tg); }
-          unit(row, c); list.appendChild(row);
+          unit(row, c);
+          if (c.nf) row.appendChild(fmtBtn(c));
+          list.appendChild(row);
+          if (c.nf && fmtOpen.has(c.key)) list.appendChild(fmtPanel(c));
         });
         const av = o.avail ? o.avail() : [];
         if (av.length) {
@@ -2203,7 +2400,13 @@
       head();
       const first = list.querySelector('input:not(:disabled)'); if (first && first.focus) first.focus();
       const onKey = e => { if (e.key === 'Escape') { K.closeColMenu(); e.stopImmediatePropagation(); e.preventDefault(); if (btn.focus) btn.focus(); } };
-      const onDoc = e => { if (!m.contains(e.target) && e.target !== btn) K.closeColMenu(); };
+      // «снаружи» — по пути события: он фиксируется при отправке. Кнопка меню, которую список перестроил на месте (формат колонки,
+      // TDM#789), к приходу щелчка на документ уже не в нём, но её путь вёл через меню; заголовок таблицы, который щелчок
+      // перерисовал, — путь снаружи, и меню закрывается
+      const onDoc = e => {
+        const p = e.composedPath ? e.composedPath() : [];
+        if (p.length ? !p.includes(m) && !p.includes(btn) : !m.contains(e.target) && e.target !== btn) K.closeColMenu();
+      };
       const onSize = () => K.closeColMenu();
       document.addEventListener('keydown', onKey, true); window.addEventListener('resize', onSize);
       const t0 = setTimeout(() => document.addEventListener('click', onDoc), 0);
@@ -2288,7 +2491,7 @@
   K.csvDateCell = (iso, t, num) => K.csvDate(iso) || K.csvCell(t, num, iso);
   // текст CSV: первая строка — номер прогона, дата среза, название таблицы и число строк, пустая строка, заголовок
   // (у таблицы без заголовка — нет), строки; BOM добавляется при скачивании
-  K.csvTitle = opts => K.htmlText(opts.title || (typeof document.title === 'string' ? document.title : '') || 'таблица');
+  K.csvTitle = opts => K.htmlText((typeof opts.title === 'function' ? opts.title() : opts.title) || (typeof document.title === 'string' ? document.title : '') || 'таблица');
   K.csvBuild = (title, head, lines) => {
     const R = K.csvRun(), q = K.csvLabel;
     return ['run_id,' + (/^\d+$/.test(R.run_id) ? R.run_id : q(R.run_id)) + ',as_of,' + (K.csvDate(R.as_of) || q(R.as_of)) + ',таблица,' + q(title) + ',строк,' + lines.length, '']
@@ -2505,13 +2708,16 @@
   //        csvFmt тогда отдаёт массив [значение колонки, значения дополнительных] («-27 Z» → -27 и Z),
   //        sumNeutral — итог без цвета знака (расхождение, а не прибыль/убыток), footCount(rows) — подпись числа строк «Итого»
   //        (например «7 из 9», когда итоги считаются не по всем строкам),
-  //        viewKey — стабильный ключ раскладки латиницей, он же основа имени CSV (без него — страница + id, K.tableKey), title — название в CSV, fileName — основа имени файла CSV (латиницей),
+  //        viewKey — стабильный ключ раскладки латиницей, он же основа имени CSV (без него — страница + id, K.tableKey), title — название в CSV (строка или функция: её зовут при выгрузке, когда в названии единицы колонок, TDM#789), fileName — основа имени файла CSV (латиницей),
   //        colPick — кнопка «Колонки ▾» в шапке таблицы: скрыть и вернуть колонки, выбор запоминается на сервере по пользователю (K.colPrefs, TDM#763);
   //        по умолчанию — у таблиц, чьи колонки собраны K.cols (таблицы позиций на K.posCols), false — без неё; колонка с noHide: true и первая
   //        колонка таблицы не скрываются (идентификатор строки), колонка без подписи (полоска доли) не предлагается и остаётся на экране;
   //        в том же меню — раздел «Добавить» (TDM#778): стандартные колонки каталога, которых в таблице нет. Каталог — колонки K.posCols у
   //        таблиц на K.cols; colCatalog: [колонки] | () => [колонки] — свой каталог (колонки с ключами таблицы в него не попадают), [] — без раздела.
-  //        Добавленная колонка — обычная колонка таблицы (сортировка, фильтр, итог, CSV, перенос мышкой), в конце; выбор — вместе со скрытыми}
+  //        Добавленная колонка — обычная колонка таблицы (сортировка, фильтр, итог, CSV, перенос мышкой), в конце; выбор — вместе со скрытыми;
+  //        колонка с nf (описание числа, K.NF: ключ — ключ колонки в K.posCols) получает формат чисел пользователя (TDM#789, K.colFmt): её
+  //        fmt строит число через K.nfNum(nf.id, v), а единицы, подпись и подсказка (titleFn) берутся из K.nfCol; при смене формата таблица
+  //        перерисовывается сама (событие 'colfmt'), подсветка и сортировка — по исходному числу}
   K.table = function (el, opts) {
     const st = { sort: opts.sort ? opts.sort.slice() : [], q: '', collapsed: {}, groupSort: false, filters: {}, grouped: false };
     // таблицу рисуют заново в том же месте (страница перерисовала блок): записи реестра K.d прошлой — освободить; у прошлой
@@ -2554,7 +2760,8 @@
     };
     const readAdd = () => pick ? K.colPrefs.sel(ckey).added.filter(k => catalog().has(k)) : [];
     let add = readAdd();
-    const allCols = () => add.length ? opts.columns.concat(add.map(k => catalog().get(k))) : opts.columns;
+    // колонки в формате чисел пользователя (TDM#789): единица, подпись с единицей и подсказка — по его выбору (K.nfCol)
+    const allCols = () => (add.length ? opts.columns.concat(add.map(k => catalog().get(k))) : opts.columns).map(K.nfCol);
     const colKeys = () => allCols().map(c => c.key);
     // rawLay — раскладка как лежит в хранилище (до первой правки здесь): добавленные колонки, пришедшие с сервера позже, берут из неё
     // своё место и ширину; после правки — то, что записано
@@ -2598,10 +2805,10 @@
     // «Колонки ▾»: список колонок с галочками, «Как было» — состав по умолчанию (все колонки таблицы)
     const resetCols = () => { hid = new Set(); dropKeys(add); add = []; const saved = K.colPrefs.reset(ckey); draw(true); return saved; };
     const colBtn = pick ? K.colMenu({ hidden: () => hid, toggle: setHidden, reset: resetCols,
-      cols: () => pickCols().map(c => ({ key: c.key, label: c.label, unit: K.colUnit(c), fixed: fixedCol(c) }))
-        .concat(add.map(k => catalog().get(k)).map(c => ({ key: c.key, label: c.label, unit: K.colUnit(c), added: true }))),
+      cols: () => pickCols().map(K.nfCol).map(c => ({ key: c.key, label: c.label, unit: K.colUnit(c), fixed: fixedCol(c), nf: c.nf }))
+        .concat(add.map(k => K.nfCol(catalog().get(k))).map(c => ({ key: c.key, label: c.label, unit: K.colUnit(c), added: true, nf: c.nf }))),
       added: () => new Set(add), add: addCol, remove: removeCol,
-      avail: () => [...catalog().values()].filter(c => !add.includes(c.key)).map(c => ({ key: c.key, label: c.label, unit: K.colUnit(c) })) }) : null;
+      avail: () => [...catalog().values()].filter(c => !add.includes(c.key)).map(K.nfCol).map(c => ({ key: c.key, label: c.label, unit: K.colUnit(c) })) }) : null;
     colBtn ? ctl.append(colBtn, csvBtn, resetBtn) : ctl.append(csvBtn, resetBtn);
     const paintCtl = () => { resetBtn.style.display = fixedW() || (lay.order && lay.order.length) ? '' : 'none'; if (colBtn) colBtn.paint(); };
     const saveLay = () => { K.viewStore.set(vkey, lay); rawLay = lay; paintCtl(); };
@@ -2828,8 +3035,12 @@
     const api = { redraw: draw, state: st, csv, csvName, setSort: s => { st.sort = s; draw(true); }, setFilter: (k, v) => { st.filters[k] = v; draw(true); }, setGrouped: g => { st.grouped = !!g; draw(true); }, el,
       viewKey: vkey, layout: () => JSON.parse(JSON.stringify(lay)), setLayout: v => { lay = K.viewLayout(v, colKeys()); saveLay(); draw(true); }, resetView: () => resetBtn.onclick(),
       colKey: ckey, hiddenCols: () => [...hid], addedCols: () => [...add], setHidden, addCol, removeCol, resetCols, setVisibleOrder, colMenu: colBtn };
-    if (opts.autoFilter !== false && !opts.rows) K.live(el, 'filter', draw);
-    else K.live(el, 'numfmt', draw);  // формат отрицательных чисел (#153): таблица без перерисовки по фильтру
+    // таблицу рисуют заново на том же el: подписки прошлой — снять, иначе они копятся и перерисовывают устаревшую таблицу
+    if (el.__kevOff) el.__kevOff();
+    const evOff = [opts.autoFilter !== false && !opts.rows ? K.live(el, 'filter', draw)
+      : K.live(el, 'numfmt', draw),  // формат отрицательных чисел (#153): таблица без перерисовки по фильтру
+      K.live(el, 'colfmt', draw)];  // формат чисел колонки (TDM#789): знаки и единицы — во всех таблицах позиций сразу
+    el.__kevOff = () => evOff.forEach(off => off());
     // ответ сервера с выбором колонок пришёл позже, чем страница нарисовала таблицу (TDM#763): таблицы рисуются заново, если он другой
     if (el.__kcpOff) el.__kcpOff();
     el.__kcpOff = pick ? K.live(el, 'colprefs', () => {
@@ -3233,6 +3444,34 @@
   };
 
   // стандартные колонки позиций (концепты берут нужные по ключу)
+  // Число каждой настраиваемой колонки (TDM#789, K.nfNum): делитель, знаков по умолчанию и то, что идёт к единице. Ключ — ключ колонки
+  // в K.posCols: по нему формат хранится у пользователя. Цены, доходности, спреды и сроки — только знаки (нет per); суммы — ещё и
+  // единицы (per). Колонки без описания (даты, текст, оформление) настройки не имеют
+  // подсказка риск-колонки с единицей в первой фразе («…, тыс ₽/бп: …»): единица — та, что выбрал пользователь (K.nfCol: titleFn)
+  K.tipUnit = (tip, u) => tip.replace('тыс ₽/бп', u);
+  const NFD = K.NF, KDF = K.repr === 'RUB' ? 2 : 3;  // знаков у прогнозного кэрри (C17): в валюте отчёта, отличной от рубля, на один больше
+  Object.assign(NFD, {
+    notional: { scale: 1e6, d: 2, per: 'в вал.' },
+    mv: { scale: 1e6, d: 0, per: '₽', base: 'MV' },
+    tradeDay: { scale: 1e6, d: 2, sign: true, per: 'в вал.' },
+    posDelta: { scale: 1e6, d: 2, sign: true, per: 'в вал.' },
+    price: { scale: 1, d: 3 },
+    ytm: { scale: 1, d: 2, suf: '%' },
+    spread: { scale: 1, d: 0 }, zkbd: { scale: 1, d: 0 }, zdisc: { scale: 1, d: 0 }, gspread: { scale: 1, d: 0 },
+    dur: { scale: 1, d: 2 },
+    dv01: { scale: 1e3, d: KD, per: '₽/бп' }, cs01: { scale: 1e3, d: KD, per: '₽/бп' }, basis01: { scale: 1e3, d: KD, per: '₽/бп' }, ofzSpr01: { scale: 1e3, d: KD, per: '₽/бп' },
+    carry: { scale: 1e3, d: KD, per: '₽' }, funding: { scale: 1e3, d: KD, per: '₽' }, pnl: { scale: 1e3, d: KD, per: '₽' },
+    pnlMtd: { scale: 1e6, d: 1, per: '₽' },
+    // колонки своих экранов, которых нет в K.posCols (TDM#789): у каждой свой формат, у совпадающих по смыслу — ключ каталога выше
+    //   fwdCarry / fwdFunding / fwdNet — прогнозное кэрри, фондирование и нетто до горизонта (C17), mm ₽;
+    //   carryDv — «Кэрри/DV01», б.п. (C17); mktSpread — медиана G-спреда рынка и rvDiff — «разница» с ней, со знаком (C09);
+    //   unexplShare — доля необъяснённого «прочего» в итоге позиции, % (C10): число — доля, на экране — в процентах (делитель 0.01)
+    fwdCarry: { scale: 1e6, d: KDF, per: '₽' }, fwdFunding: { scale: 1e6, d: KDF, per: '₽' }, fwdNet: { scale: 1e6, d: KDF, per: '₽' },
+    carryDv: { scale: 1, d: 0 },
+    mktSpread: { scale: 1, d: 0 }, rvDiff: { scale: 1, d: 0, sign: true },
+    unexplShare: { scale: 0.01, d: 0, suf: '%' },
+  });
+  Object.keys(NFD).forEach(id => { NFD[id].id = id; });
   K.offerKindText = k => ({ put: 'пут', call: 'колл' })[k] || k || '';
   // «Сделки за день» позиции (TDM#752): чистое изменение номинала за день по сделкам прогона, со знаком (куплено минус
   // продано), в валюте бумаги; те же сделки и то же нетто, что в блоке карточки (p.tradeToday.net, K.dayTradesBlock). Нет
@@ -3251,16 +3490,19 @@
       : 'Изменение позиции за день' + (total ? '; сделок: ' + total : '');
     return { face, bonds, total, tip };
   };
-  K.tradeDayCol = () => ({ label: 'Сделки за день', num: true, title: 'Изменение номинала позиции за день по сделкам: куплено минус продано, mm в валюте бумаги. Подробности — в подсказке ячейки и в блоке сделок карточки («Сделки за <дата>»)',
+  const dayUnit = u => (u ? u.replace(/ в вал\.$/, '').replace(/^в вал\.$/, '') : '');  // «mm в вал.» → «mm» для подсказки
+  K.tradeDayCol = () => ({ label: 'Сделки за день', num: true, nf: NFD.tradeDay,
+    title: 'Изменение номинала позиции за день по сделкам: куплено минус продано, mm в валюте бумаги. Подробности — в подсказке ячейки и в блоке сделок карточки («Сделки за <дата>»)',
+    titleFn: u => 'Изменение номинала позиции за день по сделкам: куплено минус продано, ' + (dayUnit(u) ? dayUnit(u) + ' ' : '') + 'в валюте бумаги. Подробности — в подсказке ячейки и в блоке сделок карточки («Сделки за <дата>»)',
     val: r => { const n = K.tradeNet(r); return n ? n.face : null; },
     // куплено (нетто > 0) — зелёным, продано (< 0) — красным, как DV01 и PnL (f.cls); нет номинала (продано в ноль) — цвет по штукам
     fmt: (v, r) => {
       const n = K.tradeNet(r);
       if (!n) return '';
-      const body = v != null ? f.mns(v, 2) + '<span class="mut3">mm ' + esc(r.ccy || '') + '</span>' : n.bonds != null ? '<span class="mut3">' + f.s(n.bonds, 0) + ' шт.</span>' : '<span class="mut3">—</span>';
+      const body = v != null ? K.nfNum('tradeDay', v) + '<span class="mut3">' + (K.nfWord('tradeDay') ? K.nfWord('tradeDay') + ' ' : '') + esc(r.ccy || '') + '</span>' : n.bonds != null ? '<span class="mut3">' + f.s(n.bonds, 0) + ' шт.</span>' : '<span class="mut3">—</span>';
       return '<span class="' + f.cls(v != null ? v : n.bonds) + '" title="' + esc(n.tip) + '">' + body + '</span>';
     },
-    csvFmt: (v, r) => v != null && K.tradeNet(r) ? f.mn(v, 2) : '' });   // числовой столбец: нет номинала (продано в ноль) — пусто, штуки только на экране и в подсказке
+    csvFmt: (v, r) => v != null && K.tradeNet(r) ? K.nfNum('tradeDay', v, true) : '' });   // числовой столбец: нет номинала (продано в ноль) — пусто, штуки только на экране и в подсказке
   // «Изм. к вчера» (TDM#775): номинал позиции в текущем прогоне минус номинал той же позиции в прогоне предыдущей даты (ключ —
   // номер позиции, как у остальных сумм прогонов: сервер, api/concepts.extras: prevNotional, newToPrev), mm в валюте бумаги. В
   // отличие от «Сделок за день» это итог всего, что изменило номинал (сделки, амортизация, индексация линкера, погашение).
@@ -3279,17 +3521,18 @@
   // нет прогона прошлой даты: с датой закрытия, которого нет (prev_date прогона, M.prevDate), если она известна странице; досчёт —
   // на странице настроек, карточка «История прогонов» (prototypes/settings.html)
   K.noPrevRunTip = () => 'нет прогона ' + (M.prevDate && /^\d{4}-\d{2}-\d{2}/.test(M.prevDate) ? 'за ' + f.date(M.prevDate) : 'прошлой даты') + ' (досчитать: Настройки → «Автообновление» → карточка «История прогонов» → «Считать прошлые даты»)';
-  K.prevDeltaCol = () => ({ label: 'Изм. к вчера', num: true, title: 'Номинал позиции в текущем прогоне минус её номинал в прогоне предыдущей даты, mm в валюте бумаги: сделки, амортизация, индексация. Новая позиция — весь номинал (пометка «новая»). Закрытые с прошлой даты позиции в таблице не видны (на C03 они — в строке над таблицей). Нет прогона прошлой даты — прочерк с подсказкой',
+  const prevTip = w => 'Номинал позиции в текущем прогоне минус её номинал в прогоне предыдущей даты, ' + (w ? w + ' ' : '') + 'в валюте бумаги: сделки, амортизация, индексация. Новая позиция — весь номинал (пометка «новая»). Закрытые с прошлой даты позиции в таблице не видны (на C03 они — в строке над таблицей). Нет прогона прошлой даты — прочерк с подсказкой';
+  K.prevDeltaCol = () => ({ label: 'Изм. к вчера', num: true, nf: NFD.posDelta, title: prevTip('mm'), titleFn: u => prevTip(dayUnit(u)),
     val: r => { const n = K.prevDelta(r); return n ? n.face : null; },
     fmt: (v, r) => {
       const n = K.prevDelta(r);
       if (!n) return '<span class="mut3" title="' + esc(K.noPrevRunTip()) + '">—</span>';
       if (n.face == null) return '<span class="mut3" title="' + esc(n.tip) + '">—</span>';
       if (!n.face && !n.isNew) return '<span class="mut3" title="' + esc(n.tip) + '">·</span>';
-      return '<span class="' + f.cls(n.face) + '" title="' + esc(n.tip) + '">' + f.mns(n.face, 2) + '<span class="mut3">mm ' + esc(r.ccy || '') + '</span>' +
+      return '<span class="' + f.cls(n.face) + '" title="' + esc(n.tip) + '">' + K.nfNum('posDelta', n.face) + '<span class="mut3">' + (K.nfWord('posDelta') ? K.nfWord('posDelta') + ' ' : '') + esc(r.ccy || '') + '</span>' +
         (n.isNew ? ' <span class="k-tag" title="' + esc(n.tip) + '">новая</span>' : '') + '</span>';
     },
-    csvFmt: v => v != null ? f.mn(v, 2) : '' });   // числовой столбец: «новая» и единицы — только на экране
+    csvFmt: v => v != null ? K.nfNum('posDelta', v, true) : '' });   // числовой столбец: «новая» и единицы — только на экране
   // закрытые с прошлой даты позиции (M.prevRun.closed: были в том прогоне, в этом их нет) под фильтром шапки: строка с числом и
   // номиналами по валютам, подсказка — список. Пусто, когда таких нет или прогона прошлой даты нет
   K.prevClosedLine = () => {
@@ -3321,29 +3564,29 @@
     offerKind: { key: 'offerKind', label: 'Вид оферты', filter: r => K.offerKindText(r.offerKind) || '—', val: r => r.offer ? r.offerKind : null, fmt: v => v ? esc(K.offerKindText(v)) : '<span class="mut3">—</span>' },
     tenor: { key: 'tenor', label: 'Срок', num: true, fmt: v => f.yrs(v), title: 'до оферты, если есть, иначе до погашения' },
     // в CSV — число в mm валюты бумаги («Номинал, mm в вал.», как в легенде единиц и на C11), валюта — в колонке «Вал» (#258)
-    notional: { key: 'notional', label: 'Номинал', num: true, unit: 'mm в вал.', fmt: (v, r) => f.mn(v, 2) + '<span class="mut3">mm ' + r.ccy + '</span>', csvFmt: v => f.mn(v, 2), title: 'в валюте бумаги' },
-    mv: { key: 'mv', label: 'MV, mm ₽', num: true, fmt: v => f.mn(v, 0), sum: true, unit: 'mm ₽', sumFmt: v => f.mn(v, 0) },
+    notional: { key: 'notional', label: 'Номинал', num: true, unit: 'mm в вал.', nf: NFD.notional, fmt: (v, r) => K.nfNum('notional', v) + '<span class="mut3">' + (K.nfWord('notional') ? K.nfWord('notional') + ' ' : '') + r.ccy + '</span>', csvFmt: v => K.nfNum('notional', v, true), title: 'в валюте бумаги' },
+    mv: { key: 'mv', label: 'MV, mm ₽', num: true, nf: NFD.mv, fmt: K.nfFn('mv'), sum: true, unit: 'mm ₽' },
     tradeDay: Object.assign({ key: 'tradeDay', unit: 'mm в вал.' }, K.tradeDayCol()),
     posDelta: Object.assign({ key: 'posDelta', unit: 'mm в вал.' }, K.prevDeltaCol()),
-    price: { key: 'price', label: 'Цена', num: true, unit: '% ном.', fmt: v => f.px(v) },
-    ytm: { key: 'ytm', label: 'Дох.', num: true, fmt: v => f.pct(v) },
+    price: { key: 'price', label: 'Цена', num: true, unit: '% ном.', nf: NFD.price, fmt: K.nfFn('price') },
+    ytm: { key: 'ytm', label: 'Дох.', num: true, nf: NFD.ytm, fmt: K.nfFn('ytm') },
     // в CSV — число, кривая спреда (к КБД / к RUONIA) или DM — своей колонкой «Вид спреда» за ним (#276, TDM#762)
-    spread: { key: 'zspread', label: 'Спред', num: true, unit: 'б.п.', fmt: (v, r) => v == null ? '<span class="mut3">—</span>' : f.bp(v) + ' <span class="mut3">' + (r.spreadLabel || '') + '</span>', title: K.tips.zspread, tip: true,
-      csvExtra: ['Вид спреда'], csvFmt: (v, r) => v == null ? ['', ''] : [f.bp(v), r.spreadLabel || ''] },
+    spread: { key: 'zspread', label: 'Спред', num: true, unit: 'б.п.', nf: NFD.spread, fmt: (v, r) => v == null ? '<span class="mut3">—</span>' : K.nfNum('spread', v) + ' <span class="mut3">' + (r.spreadLabel || '') + '</span>', title: K.tips.zspread, tip: true,
+      csvExtra: ['Вид спреда'], csvFmt: (v, r) => v == null ? ['', ''] : [K.nfNum('spread', v), r.spreadLabel || ''] },
     // Z-спреды фикс-бумаг к КБД и к RUONIA OIS (TDM#762): у каждой по своей колонке, к какой бы кривой она ни дисконтировалась;
     // у флоатера один Z — прежний (купоны по прогнозу, R32), он к кривой дисконтирования: в день на КБД он в «Z к КБД», иначе в «Z к RUONIA»
-    zkbd: { key: 'zkbd', label: 'Z к КБД', num: true, unit: 'б.п.', val: r => r.zKbd, fmt: v => v == null ? '<span class="mut3">—</span>' : f.bp(v), title: K.zkbdTip, tip: true },
-    zdisc: { key: 'zdisc', label: 'Z к RUONIA', num: true, unit: 'б.п.', val: r => r.zRuonia, fmt: v => v == null ? '<span class="mut3">—</span>' : f.bp(v), title: K.zdiscTip, tip: true },
-    gspread: { key: 'gspread', label: 'G-спред', num: true, unit: 'б.п.', fmt: v => f.bp(v) },
-    dur: { key: 'mdur', label: 'Дюр.', num: true, unit: 'лет', fmt: v => v == null ? '—' : f.n(v, 2) },
-    dv01: { key: 'dv01', label: 'DV01', num: true, fmt: v => f.dv(v), cls: v => f.cls(v), sum: true, unit: 'тыс ₽/бп', title: K.tips.dv01, tip: true },
-    cs01: { key: 'cs01', label: 'CS01', num: true, fmt: v => f.dv(v), cls: v => f.cls(v), sum: true, unit: 'тыс ₽/бп', title: K.tips.cs01, tip: true },
-    basis01: { key: 'basis01', label: 'Базис01', num: true, fmt: v => v ? f.dv(v) : '<span class="mut3">·</span>', sum: true, unit: 'тыс ₽/бп', title: K.tips.basis01, tip: true },
-    ofzSpr01: { key: 'ofzSpr01', label: 'Спред к КБД01', num: true, fmt: v => v ? f.dv(v) : '<span class="mut3">·</span>', sum: true, unit: 'тыс ₽/бп', title: K.tips.ofzSpr01, tip: true },
-    carry: { key: 'carryDay', label: 'Кэрри/д', num: true, fmt: v => f.k(v), cls: v => f.cls(v), sum: true, unit: 'тыс ₽', title: 'тыс ₽ в день. ' + K.tips.carry, tip: true },
-    funding: { key: 'fundingDay', label: 'Фондир./д', num: true, nullable: true, fmt: v => v == null ? '<span class="mut3">—</span>' : f.k(v), cls: v => f.cls(v), sum: true, unit: 'тыс ₽', title: 'Фондирование, тыс ₽ в день. ' + K.tips.funding, tip: true },
-    pnl: { key: 'pnl', label: 'PnL дня', num: true, val: r => r.pnl.total, fmt: v => f.k(v), cls: v => f.cls(v), sum: r => r.pnl.total, unit: 'тыс ₽' },
-    pnlMtd: { key: 'pnlMtd', label: 'PnL MTD', title: 'Только позиции текущего прогона. Позиции, закрытые раньше в периоде, есть в итоге MTD / YTD шапки и в «PnL за период» (C19), в таблицу не входят.', num: true, fmt: v => f.mn(v, 1), cls: v => f.cls(v), sum: true, unit: 'mm ₽', sumFmt: v => f.mn(v, 1) },
+    zkbd: { key: 'zkbd', label: 'Z к КБД', num: true, unit: 'б.п.', nf: NFD.zkbd, val: r => r.zKbd, fmt: v => v == null ? '<span class="mut3">—</span>' : K.nfNum('zkbd', v), title: K.zkbdTip, tip: true },
+    zdisc: { key: 'zdisc', label: 'Z к RUONIA', num: true, unit: 'б.п.', nf: NFD.zdisc, val: r => r.zRuonia, fmt: v => v == null ? '<span class="mut3">—</span>' : K.nfNum('zdisc', v), title: K.zdiscTip, tip: true },
+    gspread: { key: 'gspread', label: 'G-спред', num: true, unit: 'б.п.', nf: NFD.gspread, fmt: K.nfFn('gspread') },
+    dur: { key: 'mdur', label: 'Дюр.', num: true, unit: 'лет', nf: NFD.dur, fmt: K.nfFn('dur') },
+    dv01: { key: 'dv01', label: 'DV01', num: true, nf: NFD.dv01, fmt: K.nfFn('dv01'), cls: v => f.cls(v), sum: true, unit: 'тыс ₽/бп', title: K.tips.dv01, titleFn: u => K.tipUnit(K.tips.dv01, u), tip: true },
+    cs01: { key: 'cs01', label: 'CS01', num: true, nf: NFD.cs01, fmt: K.nfFn('cs01'), cls: v => f.cls(v), sum: true, unit: 'тыс ₽/бп', title: K.tips.cs01, titleFn: u => K.tipUnit(K.tips.cs01, u), tip: true },
+    basis01: { key: 'basis01', label: 'Базис01', num: true, nf: NFD.basis01, fmt: v => v ? K.nfNum('basis01', v) : '<span class="mut3">·</span>', sum: true, unit: 'тыс ₽/бп', title: K.tips.basis01, titleFn: u => K.tipUnit(K.tips.basis01, u), tip: true },
+    ofzSpr01: { key: 'ofzSpr01', label: 'Спред к КБД01', num: true, nf: NFD.ofzSpr01, fmt: v => v ? K.nfNum('ofzSpr01', v) : '<span class="mut3">·</span>', sum: true, unit: 'тыс ₽/бп', title: K.tips.ofzSpr01, titleFn: u => K.tipUnit(K.tips.ofzSpr01, u), tip: true },
+    carry: { key: 'carryDay', label: 'Кэрри/д', num: true, nf: NFD.carry, fmt: K.nfFn('carry'), cls: v => f.cls(v), sum: true, unit: 'тыс ₽', title: 'тыс ₽ в день. ' + K.tips.carry, titleFn: u => u + ' в день. ' + K.tips.carry, tip: true },
+    funding: { key: 'fundingDay', label: 'Фондир./д', num: true, nullable: true, nf: NFD.funding, fmt: v => v == null ? '<span class="mut3">—</span>' : K.nfNum('funding', v), cls: v => f.cls(v), sum: true, unit: 'тыс ₽', title: 'Фондирование, тыс ₽ в день. ' + K.tips.funding, titleFn: u => 'Фондирование, ' + u + ' в день. ' + K.tips.funding, tip: true },
+    pnl: { key: 'pnl', label: 'PnL дня', num: true, nf: NFD.pnl, val: r => r.pnl.total, fmt: K.nfFn('pnl'), cls: v => f.cls(v), sum: r => r.pnl.total, unit: 'тыс ₽' },
+    pnlMtd: { key: 'pnlMtd', label: 'PnL MTD', title: 'Только позиции текущего прогона. Позиции, закрытые раньше в периоде, есть в итоге MTD / YTD шапки и в «PnL за период» (C19), в таблицу не входят.', num: true, nf: NFD.pnlMtd, fmt: K.nfFn('pnlMtd'), cls: v => f.cls(v), sum: true, unit: 'mm ₽' },
     rating: { key: 'rating', label: 'Рейтинг', filter: true, fmt: v => '<span class="mut">' + esc(v) + '</span>' },
     sector: { key: 'sector', label: 'Сектор', filter: true, fmt: v => '<span class="mut">' + esc(v) + '</span>' },
   };
