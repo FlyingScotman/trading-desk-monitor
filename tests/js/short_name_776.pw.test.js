@@ -1,4 +1,4 @@
-// TDM#776: колонка «Кор. имя» (C03 в наборах «Базовый», «Статика», «Всё»; кокпит C01 после «Бумага») и строка «Короткое имя» в
+// TDM#776: колонка «Кор. имя» (C03 в наборах «Статика», «Всё», с TDM#802 не в «Базовом»; в кокпите C01 её нет по умолчанию — там «Имя») и строка «Короткое имя» в
 // карточке позиции: ✎ — своё короткое имя по ISIN (PUT /api/v1/instruments/short-name), ⟲ — история; новое имя встаёт в уже
 // нарисованные таблицы без перезагрузки; поиск по таблице находит и по короткому имени. Страницы как файлы, API — заглушки.
 //   node --test tests/js/short_name_776.pw.test.js
@@ -23,9 +23,11 @@ function rundata() {
   return { D, none };
 }
 // две первые строки таблицы с ISIN (в порядке страницы, они в окне таблицы): { id, isin, exch }
-const firstTwo = pg => pg.evaluate(() => { const L = MOCK.positions.filter(p => p.isin && p.exchShort); return [L[0], L.find(p => p.isin !== L[0].isin)].map(p => ({ id: p.id, isin: p.isin, exch: p.exchShort })); });
+const firstTwo = pg => pg.evaluate(() => { const L = MOCK.positions.filter(p => p.isin && p.exchShort); return [L[0], L.find(p => p.isin !== L[0].isin)].map(p => ({ id: p.id, isin: p.isin, exch: p.exchShort, name: p.name })); });
 // short-names отвечает, когда тест отпустил (release({isin: имя})), с hold: false — сразу пустым
 async function open(browser, page, { D, hold = false, store = {} }) {
+  // C03 по умолчанию — «Статика»: в «Базовом» с TDM#802 вместо «Кор. имя» стоит «Имя»; «Кор. имя» есть в «Статике» и «Всё»
+  if (page === 'c03-blotter.html' && !('c03-state' in store)) store = Object.assign({ 'c03-state': JSON.stringify({ v: 2, preset: 'stat' }) }, store);
   const ctx = await browser.newContext({ viewport: { width: 1600, height: 1000 } });
   const pg = await ctx.newPage(), errors = [], puts = [], hist = [];
   let own = {}, gate;
@@ -61,42 +63,48 @@ async function open(browser, page, { D, hold = false, store = {} }) {
 const heads = pg => pg.evaluate(() => Array.from(document.querySelectorAll('table.k-tbl thead th')).map(th => th.innerText.replace(/[⏷▲▼↑↓\s]+$/g, '').trim()));
 const ROW = id => 'table.k-tbl tbody tr[data-id="' + id + '"], table.k-tbl tbody tr[data-card="' + id + '"]';
 const rowShown = (pg, id, re) => pg.waitForFunction(([sel, src]) => { const tr = document.querySelector(sel); return tr && new RegExp(src).test(tr.innerText); }, [ROW(id), re.source]);
-// ячейка колонки «Кор. имя» в строке позиции: текст и подсказка
-const cellOf = (pg, id) => pg.evaluate(sel => {
-  const th = Array.from(document.querySelectorAll('table.k-tbl thead th')), i = th.findIndex(x => /^Кор\. имя/.test(x.innerText));
+// ячейка колонки («Кор. имя» или «Имя», TDM#802) в строке позиции: текст и подсказка
+const cellOf = (pg, id, label) => pg.evaluate(([sel, label]) => {
+  const th = Array.from(document.querySelectorAll('table.k-tbl thead th')), i = th.findIndex(x => x.innerText.replace(/[⏷▲▼↑↓\s]+$/g, '').trim() === label);
   const tr = document.querySelector(sel);
   if (i < 0 || !tr) return null;
   const td = tr.children[i];
   return { text: td.innerText.trim(), title: (td.querySelector('[title]') || {}).title || null };
-}, ROW(id));
+}, [ROW(id), label || 'Кор. имя']);
 
 test('short names (TDM#776)', { skip: pw ? false : 'нет Playwright' }, async t => {
   const browser = await pw.chromium.launch();
   try {
-    await t.test('C03: the «Кор. имя» column is in «Базовый» right after «Бумага»; the exchange name, and our own over it with the exchange one in the hint', async () => {
+    await t.test('C03: «Базовый» has «Имя» right after «Бумага» instead of «Кор. имя» (TDM#802): the short name, else the full name; the full name in the hint of a short one', async () => {
       const { D } = rundata();
-      const { pg, ctx, errors, release } = await open(browser, 'c03-blotter.html', { D, hold: true });
+      const { pg, ctx, errors, release } = await open(browser, 'c03-blotter.html', { D, hold: true, store: { 'c03-state': JSON.stringify({ v: 2, preset: 'base' }) } });
       try {
         const h = await heads(pg);
-        assert.ok(h.indexOf('Кор. имя') === h.indexOf('Бумага') + 1 && h.indexOf('Бумага') >= 0, h.join(' | '));
+        assert.ok(h.indexOf('Имя') === h.indexOf('Бумага') + 1 && h.indexOf('Бумага') >= 0 && !h.includes('Кор. имя'), h.join(' | '));
         const [a, b] = await firstTwo(pg);
         await rowShown(pg, a.id, new RegExp(a.exch));
-        assert.deepStrictEqual(await cellOf(pg, a.id), { text: a.exch, title: null });
+        assert.deepStrictEqual(await cellOf(pg, a.id, 'Имя'), { text: a.exch, title: 'полное название: ' + a.name });
         release({ [b.isin]: 'МОЁ-Б' });  // свои имена приходят позже страницы: ячейка меняется на месте
         await rowShown(pg, b.id, /МОЁ-Б/);
-        assert.deepStrictEqual(await cellOf(pg, b.id), { text: 'МОЁ-Б', title: 'биржевое короткое имя: ' + b.exch });
-        assert.deepStrictEqual(await cellOf(pg, a.id), { text: a.exch, title: null });
+        assert.deepStrictEqual(await cellOf(pg, b.id, 'Имя'), { text: 'МОЁ-Б', title: 'полное название: ' + b.name + '\nбиржевое короткое имя: ' + b.exch });
+        assert.deepStrictEqual(await cellOf(pg, a.id, 'Имя'), { text: a.exch, title: 'полное название: ' + a.name });
+        // бумага без короткого имени: в «Имя» — название, подсказки нет
+        const none = await pg.evaluate(() => { const p = MOCK.positions.find(x => x.isin && !x.shortName); return p ? { id: p.id, name: p.name } : null; });
+        assert.ok(none, 'есть бумага без короткого имени');
+        await rowShown(pg, none.id, new RegExp(none.name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
+        assert.deepStrictEqual(await cellOf(pg, none.id, 'Имя'), { text: none.name, title: null });
         assert.deepStrictEqual(errors, []);
       } finally { await ctx.close(); }
     });
 
-    await t.test('C03: the column is also in «Статика» and «Всё», not in «Риск»', async () => {
+    await t.test('C03: «Кор. имя» is in «Статика» and «Всё», not in «Базовый» and «Риск»; «Имя» is in «Базовый», «Статика», «Всё»', async () => {
       const { D } = rundata();
-      for (const [preset, has] of [['stat', true], ['all', true], ['risk', false]]) {
+      for (const [preset, has] of [['stat', true], ['all', true], ['risk', false], ['base', false]]) {
         const { pg, ctx, errors } = await open(browser, 'c03-blotter.html', { D, store: { 'c03-state': JSON.stringify({ v: 2, preset }) } });
         try {
           const h = await heads(pg);
           assert.strictEqual(h.includes('Кор. имя'), has, preset + ': ' + h.join(' | '));
+          assert.strictEqual(h.includes('Имя'), has || preset === 'base', preset + ': ' + h.join(' | '));  // «Имя» — и в «Базовом» (TDM#802)
           assert.deepStrictEqual(errors, []);
         } finally { await ctx.close(); }
       }
@@ -146,10 +154,13 @@ test('short names (TDM#776)', { skip: pw ? false : 'нет Playwright' }, async 
         assert.ok(after.row.includes('Новое имя ' + a.exch), after.row);
         await rowShown(pg, a.id, /Новое имя/);
         assert.deepStrictEqual(await cellOf(pg, a.id), { text: 'Новое имя', title: 'биржевое короткое имя: ' + a.exch });
+        // «Имя» (TDM#802) — в той же таблице («Статика»), следует за тем же именем на месте
+        assert.deepStrictEqual(await cellOf(pg, a.id, 'Имя'), { text: 'Новое имя', title: 'полное название: ' + a.name + '\nбиржевое короткое имя: ' + a.exch });
         await pg.evaluate(() => { document.querySelector('.k-drawer .k-shortrow [data-al=edit]').click(); document.querySelector('.k-drawer .k-shortrow [data-al=clear]').click(); });
         await pg.waitForFunction(([id, ex]) => MOCK.pos[id].shortName === ex, [a.id, a.exch]);
         assert.deepStrictEqual(puts[1], { isin: a.isin, short_name: null });
         await rowShown(pg, a.id, new RegExp(a.exch));
+        assert.deepStrictEqual(await cellOf(pg, a.id, 'Имя'), { text: a.exch, title: 'полное название: ' + a.name }, 'сброшено: снова биржевое короткое, «Имя» тоже');
         assert.deepStrictEqual(errors, []);
       } finally { await ctx.close(); }
     });
@@ -196,15 +207,15 @@ test('short names (TDM#776)', { skip: pw ? false : 'нет Playwright' }, async 
       } finally { await ctx.close(); }
     });
 
-    await t.test('C01 cockpit: the «Позиции» table has «Кор. имя» right after «Бумага»', async () => {
+    await t.test('C01 cockpit: the «Позиции» table has «Имя» right after «Бумага» (TDM#802), «Кор. имя» only in the «Добавить» catalog', async () => {
       const { D } = rundata();
       const { pg, ctx, errors } = await open(browser, 'c01-cockpit.html', { D, store: { 'c01-tab': 'pos' } });
       try {
         const h = await heads(pg);
-        assert.ok(h.indexOf('Кор. имя') === h.indexOf('Бумага') + 1 && h.indexOf('Бумага') >= 0, h.join(' | '));
+        assert.ok(h.indexOf('Имя') === h.indexOf('Бумага') + 1 && h.indexOf('Бумага') >= 0 && !h.includes('Кор. имя'), h.join(' | '));
         const [a] = await firstTwo(pg);
         await rowShown(pg, a.id, new RegExp(a.exch));
-        assert.deepStrictEqual(await cellOf(pg, a.id), { text: a.exch, title: null });
+        assert.deepStrictEqual(await cellOf(pg, a.id, 'Имя'), { text: a.exch, title: 'полное название: ' + a.name });
         assert.deepStrictEqual(errors, []);
       } finally { await ctx.close(); }
     });

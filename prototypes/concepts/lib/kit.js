@@ -3552,6 +3552,9 @@
     issuer: { key: 'issuerName', label: 'Эмитент', filter: true, title: 'эмитент (у деривативов — контрагент)', fmt: (v, r) => '<b style="color:' + K.issuerColor(r.issuer) + '">●</b> ' + esc(v) },
     name: { key: 'name', label: 'Бумага', noHide: true, fmt: (v, r) => K.nameCell(r, v) + (r.tradedToday ? ' ' + K.tradesTag(r) : '') + K.offReportTag(r) + K.curveProxyTag(r) },
     isin: { key: 'isin', label: 'ISIN', fmt: v => '<span class="mono mut">' + esc(v || '—') + '</span>' },
+    // «Имя» (TDM#802): короткое имя бумаги (своё ?? биржевое), где его нет — обычное название (алиас ?? биржевое); сортировка, поиск и CSV — по
+    // показанному тексту (val), подсказка короткого имени — полное название
+    nameShort: { key: 'nameShort', label: 'Имя', val: r => K.shownName(r), title: 'короткое имя бумаги (своё или биржевое), а если его нет — её название; у короткого имени полное название — в подсказке ячейки', fmt: (v, r) => K.shownNameCell(r, v) },
     short: { key: 'shortName', label: 'Кор. имя', title: 'короткое имя бумаги: своё (карточка, ✎) или биржевое (MOEX SHORTNAME); если своё — биржевое в подсказке', fmt: (v, r) => K.shortCell(r, v) },
     ccy: { key: 'ccy', label: 'Вал', fmt: (v, r) => K.ccyTag(r.ccy, r.ccyReported), val: r => M.ccyOrder[r.ccy] ?? 99, filter: r => r.ccy, fltOrder: (a, b) => ((M.ccyOrder[a] ?? 99) - (M.ccyOrder[b] ?? 99)) || a.localeCompare(b) },
     kind: { key: 'kind', label: 'Тип', filter: r => M.kindLabel[r.kind] || r.kind, fmt: (v, r) => '<span class="tagc" style="border-color:' + K.kindColor[v] + '55">' + esc(M.kindShort[v]) + '</span>' },
@@ -4014,6 +4017,19 @@
     const t = val ? esc(val) : '<span class="mut3">—</span>';
     return mark || tip ? '<span' + mark + tip + '>' + t + '</span>' : t;
   };
+  // ячейка «Имя» (TDM#802): короткое имя, если оно есть, иначе обычное название (K.shownName); у короткого имени полное название — в подсказке
+  // (и биржевое короткое, если показано своё); data-pi — как data-ps: пришли или изменены имена — K.patchNames меняет ячейку на месте
+  K.shownName = r => (r && (r.shortName || r.name)) || '';
+  K.shownNameTip = r => {
+    if (!r || !r.shortName || !r.name || r.name === r.shortName) return '';
+    return 'полное название: ' + r.name + (r.shortOwn && r.exchShort && r.exchShort !== r.shortOwn ? '\nбиржевое короткое имя: ' + r.exchShort : '');
+  };
+  K.shownNameCell = (r, v) => {
+    const pos = r && M.pos[r.id], val = v === undefined ? K.shownName(r) : v;
+    const mark = r && r.isin && (pos === r || (pos && Object.getPrototypeOf(r) === pos)) && val === K.shownName(r) ? ' data-pi="' + esc(String(r.id)) + '"' : '';
+    const tip = K.shownNameTip(r), t = val ? esc(val) : '<span class="mut3">—</span>';
+    return mark || tip ? '<span' + mark + (tip ? ' title="' + esc(tip) + '"' : '') + '>' + t + '</span>' : t;
+  };
   K.patchNames = () => {
     K._gen++;  // память ячеек таблиц — заново; длинные таблицы (K.vwin): строки окна — сразу, остальные при показе
     VW.forEach(w => w.repaint());
@@ -4021,6 +4037,11 @@
       const p = M.pos[el.dataset.ps]; if (!p) return;
       el.innerHTML = p.shortName ? esc(p.shortName) : '<span class="mut3">—</span>';
       if (p.shortOwn && p.exchShort && p.exchShort !== p.shortOwn) el.title = 'биржевое короткое имя: ' + p.exchShort; else el.removeAttribute('title');
+    });
+    document.querySelectorAll('[data-pi]').forEach(el => {
+      const p = M.pos[el.dataset.pi]; if (!p) return;
+      el.innerHTML = K.shownName(p) ? esc(K.shownName(p)) : '<span class="mut3">—</span>';
+      const tip = K.shownNameTip(p); if (tip) el.title = tip; else el.removeAttribute('title');
     });
     document.querySelectorAll('[data-pn]').forEach(el => {
       const p = M.pos[el.dataset.pn]; if (!p) return;
