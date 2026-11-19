@@ -683,6 +683,81 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/market-data/manual/cds/curves": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List Curves */
+        get: operations["list_curves_api_v1_market_data_manual_cds_curves_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/market-data/manual/cds/curve": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Curve */
+        get: operations["get_curve_api_v1_market_data_manual_cds_curve_get"];
+        /**
+         * Put Curve
+         * @description Set a reference name's CDS curve from a date (the whole curve), or withdraw the name from the date with clear. A trader or admin (sign-in off: this computer only); a change is recorded with who and when, a request that changes nothing is not.
+         */
+        put: operations["put_curve_api_v1_market_data_manual_cds_curve_put"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/market-data/manual/cds/history": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Curve History */
+        get: operations["curve_history_api_v1_market_data_manual_cds_history_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/market-data/manual/cds/copy": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Copy Curves
+         * @description Enter on a date the curves in force before it (or on from_date), for every name or the ones named, in one step. A name that already has its own curve on the date is left as it is.
+         */
+        post: operations["copy_curves_api_v1_market_data_manual_cds_copy_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
 }
 export type webhooks = Record<string, never>;
 export interface components {
@@ -1457,6 +1532,222 @@ export interface components {
              * @default 0
              */
             nNoCarryNoFunding?: number;
+        };
+        /** CdsCopyIn */
+        CdsCopyIn: {
+            /**
+             * To Date
+             * Format: date
+             * @description Enter the curves on this date
+             */
+            to_date: string;
+            /**
+             * From Date
+             * @description Copy what was in force on this date; null: what was in force before to_date
+             */
+            from_date?: string | null;
+            /**
+             * Names
+             * @description Only these names; null: every name that has a curve
+             */
+            names?: string[] | null;
+        };
+        /** CdsCopyOut */
+        CdsCopyOut: {
+            /**
+             * To Date
+             * Format: date
+             */
+            to_date: string;
+            /**
+             * Copied
+             * @description The new entries of to_date
+             */
+            copied: components["schemas"]["CdsCurve"][];
+            /** Skipped */
+            skipped: components["schemas"]["CdsSkipped"][];
+        };
+        /** CdsCurve */
+        CdsCurve: {
+            /** Rev Id */
+            rev_id: number;
+            /**
+             * Name Key
+             * @description The identity of the reference name (normalised: case, spaces)
+             */
+            name_key: string;
+            /**
+             * Name
+             * @description The reference name as written
+             */
+            name: string;
+            /**
+             * Valid From
+             * Format: date
+             * @description The curve holds from this date until a later one is entered
+             */
+            valid_from: string;
+            /**
+             * Entered On Date
+             * @description The curve's valid_from is the date asked for (else it is carried from an earlier date); null: no date asked
+             */
+            entered_on_date?: boolean | null;
+            /**
+             * Cleared
+             * @description History only: the name was withdrawn from valid_from on
+             * @default false
+             */
+            cleared?: boolean;
+            /**
+             * Spreads Bp
+             * @description Par coupon spread in basis points by tenor (3M 6M 1Y 2Y 3Y 5Y 7Y 10Y); null: not given
+             */
+            spreads_bp: {
+                [key: string]: number | null;
+            };
+            /**
+             * Recovery
+             * @description Recovery rate, a fraction (0.25 is 25 %)
+             */
+            recovery: number;
+            /**
+             * Ccy
+             * @description Currency of the quotes
+             */
+            ccy: string;
+            /**
+             * Changed By
+             * @description Who entered it: the user, or 'local' (this computer, sign-in off)
+             */
+            changed_by: string;
+            /**
+             * Changed At
+             * Format: date-time
+             */
+            changed_at: string;
+            /**
+             * Manual
+             * @description Entered by hand (the only source until internal systems give some)
+             * @default true
+             */
+            manual?: boolean;
+        };
+        /** CdsCurveIn */
+        CdsCurveIn: {
+            /**
+             * Name
+             * @description The reference name, at most 120 characters
+             */
+            name: string;
+            /**
+             * Date
+             * Format: date
+             * @description The curve holds from this date
+             */
+            date: string;
+            /**
+             * Spreads Bp
+             * @description Par spread in bp by tenor; a tenor left out or null is empty; at least one is needed unless clear
+             */
+            spreads_bp?: {
+                [key: string]: number | null;
+            };
+            /**
+             * Recovery
+             * @description Fraction 0..1; null: 0.25
+             */
+            recovery?: number | null;
+            /**
+             * Ccy
+             * @description Currency code; null: USD
+             */
+            ccy?: string | null;
+            /**
+             * Clear
+             * @description Withdraw the name from this date on instead of setting a curve
+             * @default false
+             */
+            clear?: boolean;
+        };
+        /** CdsCurveList */
+        CdsCurveList: {
+            /**
+             * Date
+             * Format: date
+             */
+            date: string;
+            /**
+             * Run Id
+             * @description The run of the date whose CDS rows are listed (null: none)
+             */
+            run_id: number | null;
+            /** Tenors */
+            tenors: string[];
+            /** Default Recovery */
+            default_recovery: number;
+            /** Default Ccy */
+            default_ccy: string;
+            /** Max Spread Bp */
+            max_spread_bp: number;
+            /**
+             * Curves
+             * @description By name
+             */
+            curves: components["schemas"]["CdsCurve"][];
+            /**
+             * Positions
+             * @description CDS names of the date's run, by name
+             */
+            positions: components["schemas"]["CdsPositionName"][];
+        };
+        /** CdsHistory */
+        CdsHistory: {
+            /** Name Key */
+            name_key: string;
+            /**
+             * Revisions
+             * @description Newest first
+             */
+            revisions: components["schemas"]["CdsCurve"][];
+        };
+        /** CdsPositionName */
+        CdsPositionName: {
+            /**
+             * Name
+             * @description The CDS row's name in the positions report (source_instrument_name)
+             */
+            name: string;
+            /** Name Key */
+            name_key: string;
+            /**
+             * Positions
+             * @description CDS rows of the run with this name
+             */
+            positions: number;
+            /**
+             * Has Curve
+             * @description A curve is in force on the date for this name
+             */
+            has_curve: boolean;
+        };
+        /** CdsPutOut */
+        CdsPutOut: {
+            /**
+             * Changed
+             * @description False when the request set what was already in force (no revision)
+             */
+            changed: boolean;
+            /** @description In force on the date afterwards; null: none (withdrawn) */
+            curve: components["schemas"]["CdsCurve"] | null;
+        };
+        /** CdsSkipped */
+        CdsSkipped: {
+            /** Name Key */
+            name_key: string;
+            /** Name */
+            name: string;
+            /** Why */
+            why: string;
         };
         /** ErrorOut */
         ErrorOut: {
@@ -6058,6 +6349,260 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["AliasState"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorOut"];
+                };
+            };
+            /** @description Unprocessable Entity */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorOut"];
+                };
+            };
+            /** @description Service Unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorOut"];
+                };
+            };
+        };
+    };
+    list_curves_api_v1_market_data_manual_cds_curves_get: {
+        parameters: {
+            query: {
+                /** @description The date */
+                date: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CdsCurveList"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorOut"];
+                };
+            };
+            /** @description Unprocessable Entity */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorOut"];
+                };
+            };
+            /** @description Service Unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorOut"];
+                };
+            };
+        };
+    };
+    get_curve_api_v1_market_data_manual_cds_curve_get: {
+        parameters: {
+            query: {
+                /** @description The reference name (any spelling) */
+                name: string;
+                /** @description The date */
+                date: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CdsCurve"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorOut"];
+                };
+            };
+            /** @description Unprocessable Entity */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorOut"];
+                };
+            };
+            /** @description Service Unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorOut"];
+                };
+            };
+        };
+    };
+    put_curve_api_v1_market_data_manual_cds_curve_put: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CdsCurveIn"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CdsPutOut"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorOut"];
+                };
+            };
+            /** @description Unprocessable Entity */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorOut"];
+                };
+            };
+            /** @description Service Unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorOut"];
+                };
+            };
+        };
+    };
+    curve_history_api_v1_market_data_manual_cds_history_get: {
+        parameters: {
+            query: {
+                /** @description The reference name (any spelling) */
+                name: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CdsHistory"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorOut"];
+                };
+            };
+            /** @description Unprocessable Entity */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorOut"];
+                };
+            };
+            /** @description Service Unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorOut"];
+                };
+            };
+        };
+    };
+    copy_curves_api_v1_market_data_manual_cds_copy_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CdsCopyIn"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CdsCopyOut"];
                 };
             };
             /** @description Not Found */
