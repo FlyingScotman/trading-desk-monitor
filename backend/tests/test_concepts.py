@@ -109,6 +109,51 @@ def test_trades_only_against_the_previous_close(desk, store_url):
     assert not any("trade" in p or "prevPrice" in p for p in gap["positions"].values())
     assert any("нет прогона за 2026-10-13" in n for n in gap["notes"])
     assert gap["positions"]["P1"]["pnlMtd"] == pytest.approx(x["positions"]["P1"]["pnlMtd"])  # periods unchanged
+    # TDM#775: the previous close's face is only against the run of the previous close as well; no run, no field at all
+    assert gap["prevRun"] is None
+    assert not any("prevNotional" in p or "newToPrev" in p for p in gap["positions"].values())
+
+
+def test_previous_notional_new_and_closed_775(desk, store_url):
+    """TDM#775, the column «Изм. к вчера»: each position carries the face of the previous close's run
+    (``prevNotional``); a position that run does not have is ``newToPrev``, one it has without a fact (not valued) is
+    ``prevNoFact`` (the change is not known, not the whole face); ``prevRun.closed`` lists what that run had and this one
+    does not (a position kept with a zero face is a change, not a closed one)."""
+    from psycopg.rows import dict_row
+
+    from desk.api import compat
+    with store.connect(store_url) as con:
+        con.row_factory = dict_row
+        run = compat.resolve_run(con, date.fromisoformat(DATE))
+        face = {r["position_id"]: float(r["face"]) for r in con.execute(
+            "SELECT position_id, fact->>'notional' AS face FROM run_position WHERE run_id = %s", (run["run_id"],))}
+        x = concepts.extras(con, run)
+        prev_id = x["prevRun"]["runId"]
+        p = x["positions"]
+        assert x["prevRun"]["date"] == PREV and x["prevRun"]["closed"] == []
+        # the trade of the fixture (8 -> 10 bonds of the OFZ) is the whole change of its face; the floater did not move
+        assert face["P1"] - p["P1"]["prevNotional"] == pytest.approx(p["P1"]["trade"]["qty"], abs=0.01)
+        assert p["P2"]["prevNotional"] == pytest.approx(face["P2"], abs=0.01)
+        # the USD bond has a row in the previous run but was not valued there (no quote of that day): not new, not known
+        assert p["P3"]["prevNoFact"] is True and "prevNotional" not in p["P3"] and "newToPrev" not in p["P3"]
+        assert not any("newToPrev" in v for v in p.values())
+        con.execute("SET session_replication_role = replica")  # a complete run's rows are frozen: the trigger is off here
+        # no row at all in the previous run: new, its whole face is the change
+        con.execute("DELETE FROM run_position WHERE run_id = %s AND position_id = 'P3'", (prev_id,))
+        again = concepts.extras(con, run)["positions"]
+        assert again["P3"]["newToPrev"] is True and "prevNoFact" not in again["P3"] and "prevNotional" not in again["P3"]
+        assert again["P1"]["prevNotional"] == pytest.approx(p["P1"]["prevNotional"])
+        # P2 is not in this run any more: closed since the previous close, with what the previous run knew of it
+        was = con.execute("SELECT book_id, fact->>'ccy' AS ccy FROM run_position WHERE run_id = %s AND position_id = 'P2'",
+                          (prev_id,)).fetchone()
+        con.execute("DELETE FROM run_position WHERE run_id = %s AND position_id = 'P2'", (run["run_id"],))
+        con.execute("UPDATE run_summary SET data = data #- '{pos,P2}' WHERE run_id = %s", (run["run_id"],))
+        gone = concepts.extras(con, run)
+    assert "P2" not in gone["positions"]
+    assert [c["positionId"] for c in gone["prevRun"]["closed"]] == ["P2"]
+    c = gone["prevRun"]["closed"][0]
+    assert c["notional"] == pytest.approx(p["P2"]["prevNotional"]) and c["book"] == was["book_id"] and c["ccy"] == was["ccy"]
+    assert c["name"]
 
 
 def test_concepts_data_js_etag_and_empty(desk, store_url):

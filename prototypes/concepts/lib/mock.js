@@ -486,6 +486,8 @@
       p.tradeToday.sell = { n: 1, counted: 1, priced: 1, bonds: s, face: s * 1000, avg: p.price + 0.1 };
       p.tradeToday.net = { bonds: nb, face: nb * 1000 };
     }
+    // номинал в прогоне прошлой даты (TDM#775; на сервере — xp.prevNotional): вчера было на нетто сделок дня меньше, чем сегодня
+    p.prevNotional = p.notional - ((p.tradeToday && (p.tradeToday.net ? p.tradeToday.net.face : p.tradeToday.qty)) || 0); p.newToPrev = false;
     p.pnl = { carry, funding, rates, spread, fx: fxp, trading, other, total: carry + funding + rates + spread + fxp + trading + other };
     p.funding = M.deal(p) || p.book === 'HTM' ? 0 : funding;  // за период (день), как p.funding прогона
     const scale = Math.abs(p.mv || p.notionalRub * 0.02);
@@ -500,8 +502,20 @@
     p.searchText = p.searchBase;
     return p;
   });
+  // новая позиция в демо (TDM#775): последняя облигация со сделкой дня целиком куплена сегодня — вчера её не было (колонки «Сделки за
+  // день» и «Изм. к вчера»: +весь номинал, в подсказке «новая»); последняя, чтобы первые со сделками остались с куплено и продано
+  // (тесты блока сделок карточки берут первую); новых r() нет
+  (function () {
+    const p = positions.filter(x => x.cpn && x.tradeToday && x.tradeToday.net && x.price != null && x.notional > 0).pop();
+    if (!p) return;
+    const nb = Math.round(p.notional / 1000);
+    p.tradeToday = { qty: p.notional, price: p.price, n: 1, new: true, buy: { n: 1, counted: 1, priced: 1, bonds: nb, face: p.notional, avg: p.price - 0.1 }, net: { bonds: nb, face: p.notional } };
+    p.prevNotional = null; p.newToPrev = true;
+  })();
   M.positions = positions;
   M.pos = Object.fromEntries(positions.map(p => [p.id, p]));
+  // прогон предыдущей даты и закрытые с него позиции (TDM#775; на сервере — extras.prevRun): вымышленная позиция, проданная целиком
+  M.prevRun = { runId: 0, date: M.prevDate, closed: [{ positionId: 'P-CLOSED', book: 'OFZ', ccy: 'RUB', name: 'Демо-облигация (закрыта)', notional: 150e6 }] };
   // ---------- прогнозное кэрри (C17, #66): ответ GET /api/v1/concepts/carry той же формы (api/models.py CarryOut,
   // формат #297: dv01, cs01, fxRate, inCcy у позиции; funding группы — позиций с прогнозом, fundingTotal, netKnown, B1 строгое;
   // заседания на год с inHorizon),

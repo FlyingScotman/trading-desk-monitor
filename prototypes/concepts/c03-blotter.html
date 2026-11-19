@@ -135,6 +135,8 @@ body { display: flex; flex-direction: column; height: 100vh; overflow: hidden; }
     notional: { label: 'Номинал', num: true, val: r => r.notional, fmt: (v, r) => f.mn(v, 2) + '<span class="mut3">mm ' + r.ccy + '</span>', csvHead: 'Номинал, mm в вал.', csvFmt: v => f.mn(v, 2), title: 'в валюте бумаги' },
     // изменение номинала за день по сделкам (TDM#752): то же нетто и та же ячейка, что на других экранах (K.tradeDayCol), в блоке карточки
     tradeDay: Object.assign(K.tradeDayCol(), { csvHead: 'Сделки за день, mm в вал.' }),
+    // изменение номинала к прогону предыдущей даты (TDM#775): сделки, амортизация, индексация; новая позиция — весь номинал
+    posDelta: Object.assign(K.prevDeltaCol(), { csvHead: 'Изм. к вчера, mm в вал.' }),
     mv: { label: 'MV, mm ₽', neutral: true, num: true, val: r => r.mv, fmt: v => f.mn(v, 0), sum: r => r.mv, unit: 'mm ₽', sfmt: v => f.mn(v, 0) },
     price: { label: 'Цена', num: true, val: r => r.price, fmt: v => f.px(v) },
     chg: { label: 'Δ цены', num: true, val: r => r.price == null ? null : r.price - r.prevPrice, csvHead: 'Δ цены, % ном.', fmt: v => v == null ? '<span class="mut3">—</span>' : '<span class="' + f.cls(v) + '">' + f.s(v, 2) + '</span>' },
@@ -168,12 +170,12 @@ body { display: flex; flex-direction: column; height: 100vh; overflow: hidden; }
     desk: { label: 'Деск', filter: true, val: r => r.desk, fmt: v => '<span class="mut">' + esc(v) + '</span>' },
   };
   const PRESETS = [
-    ['base', 'Базовый', ['name', 'ccy', 'issuer', 'kind', 'book', 'coupon', 'offer', 'offerKind', 'maturity', 'event', 'notional', 'price', 'ytm', 'spread', 'dv01', 'cs01', 'spark', 'isin']],
-    ['risk', 'Риск', ['name', 'ccy', 'issuer', 'kind', 'book', 'event', 'tenor', 'notional', 'mv', 'dur', 'dv01', 'cs01', 'basis01', 'ofzSpr01', 'carry', 'funding']],
+    ['base', 'Базовый', ['name', 'ccy', 'issuer', 'kind', 'book', 'coupon', 'offer', 'offerKind', 'maturity', 'event', 'notional', 'tradeDay', 'posDelta', 'price', 'ytm', 'spread', 'dv01', 'cs01', 'spark', 'isin']],
+    ['risk', 'Риск', ['name', 'ccy', 'issuer', 'kind', 'book', 'event', 'tenor', 'notional', 'tradeDay', 'posDelta', 'mv', 'dur', 'dv01', 'cs01', 'basis01', 'ofzSpr01', 'carry', 'funding']],
     ['px', 'Цены и спреды', ['name', 'ccy', 'issuer', 'kind', 'coupon', 'event', 'price', 'chg', 'bidask', 'spark', 'ytm', 'spread', 'zkbd', 'zdisc', 'gspread', 'dur']],
     ['pnl', 'Кэрри и PnL', ['name', 'ccy', 'issuer', 'book', 'tradeDay', 'coupon', 'curCpn', 'fund', 'carry', 'funding', 'pc', 'pfu', 'pr', 'ps', 'pf', 'pt', 'po', 'pnl', 'pnlMtd', 'pnlYtd']],
     ['stat', 'Статика', ['name', 'isin', 'issuer', 'issuerFull', 'ccy', 'kind', 'rating', 'sector', 'coupon', 'offer', 'offerKind', 'maturity', 'tenor', 'book', 'entity', 'desk']],
-    ['all', 'Всё', ['name', 'isin', 'ccy', 'issuer', 'kind', 'book', 'rating', 'coupon', 'curCpn', 'offer', 'offerKind', 'maturity', 'event', 'tenor', 'notional', 'tradeDay', 'mv', 'price', 'chg', 'spark', 'ytm', 'spread', 'zkbd', 'zdisc', 'gspread', 'dur', 'dv01', 'cs01', 'basis01', 'ofzSpr01', 'carry', 'funding', 'pnl', 'pnlMtd', 'pnlYtd']],
+    ['all', 'Всё', ['name', 'isin', 'ccy', 'issuer', 'kind', 'book', 'rating', 'coupon', 'curCpn', 'offer', 'offerKind', 'maturity', 'event', 'tenor', 'notional', 'tradeDay', 'posDelta', 'mv', 'price', 'chg', 'spark', 'ytm', 'spread', 'zkbd', 'zdisc', 'gspread', 'dur', 'dv01', 'cs01', 'basis01', 'ofzSpr01', 'carry', 'funding', 'pnl', 'pnlMtd', 'pnlYtd']],
   ];
   // валюта и эмитент — в каждом наборе колонок, и при группировке тоже (R37)
   // Набор — состав колонок по умолчанию; поверх него пользователь скрывает и возвращает отдельные колонки («Показать и скрыть»,
@@ -342,7 +344,9 @@ body { display: flex; flex-direction: column; height: 100vh; overflow: hidden; }
     const flt = fk.length ? '<span>фильтр: ' + fk.map(k => esc(C[k].label) + ' — ' + esc(st.filters[k].length <= 3 ? st.filters[k].join(', ') : st.filters[k].length + ' знач.')).join('; ') + '</span><a data-a="unfilter">✕ фильтры</a>' : '';
     // сделки дня по книгам шапки (TDM#585) — со ссылкой на C20
     const dt = K.dayTrades(d => { const x = document.getElementById('c3-dt'); if (x) x.innerHTML = K.dayTradesLine(d); });
-    sub.innerHTML = '<span><b style="color:var(--fg)">' + L.length + '</b> позиций</span><span id="c3-dt">' + K.dayTradesLine(dt) + '</span>' + lg + flt + '<span class="sp" style="flex:1"></span>' +
+    // закрытые с прошлой даты позиции (TDM#775): в таблице их нет, строка рядом с колонкой «Изм. к вчера», пока она видна
+    const cp = cols().some(c => c.key === 'posDelta') ? K.prevClosedLine() : '', closedToPrev = cp ? '<span>' + cp + '</span>' : '';
+    sub.innerHTML = '<span><b style="color:var(--fg)">' + L.length + '</b> позиций</span><span id="c3-dt">' + K.dayTradesLine(dt) + '</span>' + closedToPrev + lg + flt + '<span class="sp" style="flex:1"></span>' +
       (st.sort.length ? '<span>сортировка: ' + st.sort.map(([k, d]) => esc(C[k].label) + (d > 0 ? ' ▲' : ' ▼')).join(', ') + ((GROUPS[st.grouping] || []).length ? ' — и группы' + (C[st.sort[0][0]].sum ? ' (по сумме)' : '') : '') + '</span><a data-a="unsort">✕ сортировка по умолчанию</a>'
         : '<span>сортировка по умолчанию: валюта → эмитент → срок до оферты; щелчок по столбцу — сортировка' + ((GROUPS[st.grouping] || []).length ? ' (и групп)' : '') + ', ⏷ — фильтр</span>') +
       ((GROUPS[st.grouping] || []).length ? '<a data-a="collapse">свернуть</a><a data-a="expand">развернуть</a>' : '') +

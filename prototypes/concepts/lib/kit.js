@@ -3167,13 +3167,51 @@
   };
   K.tradeDayCol = () => ({ label: 'Сделки за день', num: true, title: 'Изменение номинала позиции за день по сделкам: куплено минус продано, mm в валюте бумаги. Подробности — в подсказке ячейки и в блоке сделок карточки («Сделки за <дата>»)',
     val: r => { const n = K.tradeNet(r); return n ? n.face : null; },
+    // куплено (нетто > 0) — зелёным, продано (< 0) — красным, как DV01 и PnL (f.cls); нет номинала (продано в ноль) — цвет по штукам
     fmt: (v, r) => {
       const n = K.tradeNet(r);
       if (!n) return '';
       const body = v != null ? f.mns(v, 2) + '<span class="mut3">mm ' + esc(r.ccy || '') + '</span>' : n.bonds != null ? '<span class="mut3">' + f.s(n.bonds, 0) + ' шт.</span>' : '<span class="mut3">—</span>';
-      return '<span title="' + esc(n.tip) + '">' + body + '</span>';
+      return '<span class="' + f.cls(v != null ? v : n.bonds) + '" title="' + esc(n.tip) + '">' + body + '</span>';
     },
     csvFmt: (v, r) => v != null && K.tradeNet(r) ? f.mn(v, 2) : '' });   // числовой столбец: нет номинала (продано в ноль) — пусто, штуки только на экране и в подсказке
+  // «Изм. к вчера» (TDM#775): номинал позиции в текущем прогоне минус номинал той же позиции в прогоне предыдущей даты (ключ —
+  // номер позиции, как у остальных сумм прогонов: сервер, api/concepts.extras: prevNotional, newToPrev), mm в валюте бумаги. В
+  // отличие от «Сделок за день» это итог всего, что изменило номинал (сделки, амортизация, индексация линкера, погашение).
+  // Позиции нет в прошлом прогоне — новая: весь номинал. Прошлого прогона нет (M.prevRun пуст) — null; номинала нет в одном из прогонов (не оценена) — face null с подсказкой
+  K.prevDelta = p => {
+    const run = M.prevRun;
+    if (!run || !p) return null;
+    const d = run.date ? f.date(run.date) : 'прошлой даты';
+    if (p.newToPrev) return { face: p.notional, isNew: true, tip: 'Новая позиция: в прогоне за ' + d + ' её не было, изменение — весь номинал' };
+    if (p.prevNotional == null) return { face: null, isNew: false, tip: 'Изменение не известно: ' + (p.prevNoFact ? 'в прогоне за ' + d + ' позиция была, но не оценена — номинала нет' : 'позиция не оценена в одном из двух прогонов') };
+    const face = Math.abs(p.notional - p.prevNotional) < 0.01 ? 0 : p.notional - p.prevNotional, ccy = p.ccy || '';
+    return { face, isNew: false, tip: 'В прогоне за ' + d + ' номинал был ' + f.mn(p.prevNotional, 2) + ' mm ' + ccy + ', сейчас ' + f.mn(p.notional, 2) +
+      '. Изменение — и сделки, и то, что меняет номинал само (амортизация, индексация линкера)' };
+  };
+  K.prevDeltaCol = () => ({ label: 'Изм. к вчера', num: true, title: 'Номинал позиции в текущем прогоне минус её номинал в прогоне предыдущей даты, mm в валюте бумаги: сделки, амортизация, индексация. Новая позиция — весь номинал (пометка «новая»). Закрытые с прошлой даты позиции в таблице не видны (на C03 они — в строке над таблицей). Нет прогона прошлой даты — прочерк',
+    val: r => { const n = K.prevDelta(r); return n ? n.face : null; },
+    fmt: (v, r) => {
+      const n = K.prevDelta(r);
+      if (!n) return '<span class="mut3" title="нет прогона прошлой даты">—</span>';
+      if (n.face == null) return '<span class="mut3" title="' + esc(n.tip) + '">—</span>';
+      if (!n.face && !n.isNew) return '<span class="mut3" title="' + esc(n.tip) + '">·</span>';
+      return '<span class="' + f.cls(n.face) + '" title="' + esc(n.tip) + '">' + f.mns(n.face, 2) + '<span class="mut3">mm ' + esc(r.ccy || '') + '</span>' +
+        (n.isNew ? ' <span class="k-tag" title="' + esc(n.tip) + '">новая</span>' : '') + '</span>';
+    },
+    csvFmt: v => v != null ? f.mn(v, 2) : '' });   // числовой столбец: «новая» и единицы — только на экране
+  // закрытые с прошлой даты позиции (M.prevRun.closed: были в том прогоне, в этом их нет) под фильтром шапки: строка с числом и
+  // номиналами по валютам, подсказка — список. Пусто, когда таких нет или прогона прошлой даты нет
+  K.prevClosedLine = () => {
+    const run = M.prevRun;
+    const L = run ? run.closed.filter(c => K.rowIn({ book: c.book, ccy: c.ccy })) : [];
+    if (!L.length) return '';
+    const by = {}; L.forEach(c => { by[c.ccy || '—'] = (by[c.ccy || '—'] || 0) + (c.notional || 0); });
+    const d = f.date(run.date), dm = run.date.slice(8, 10) + '.' + run.date.slice(5, 7), cc = Object.keys(by).sort((a, b) => ((M.ccyOrder[a] ?? 99) - (M.ccyOrder[b] ?? 99)) || a.localeCompare(b));
+    const tip = 'Были в прогоне за ' + d + ', в этом прогоне их нет (закрыты, погашены, убраны из книги): ' + L.slice(0, 12).map(c => c.name + ' — ' + f.mn(c.notional, 2) + ' mm ' + (c.ccy || '') + (c.book ? ' (' + c.book + ')' : '')).join('; ') +
+      (L.length > 12 ? '; ещё ' + (L.length - 12) : '') + '. Под фильтром шапки';
+    return '<span class="k-dtl" title="' + esc(tip) + '">Закрыто с ' + esc(dm) + ': <b>' + f.n(L.length, 0) + '</b> поз. <span class="mut3">· ' + cc.map(c => f.mns(-by[c], 1) + ' mm ' + esc(c)).join(' · ') + '</span></span>';
+  };
   K.posCols = {
     // валюта и эмитент — обычные столбцы (R37): сортировка и фильтр по значениям, как у остальных
     issuer: { key: 'issuerName', label: 'Эмитент', filter: true, title: 'эмитент (у деривативов — контрагент)', fmt: (v, r) => '<b style="color:' + K.issuerColor(r.issuer) + '">●</b> ' + esc(v) },
@@ -3194,6 +3232,7 @@
     notional: { key: 'notional', label: 'Номинал', num: true, unit: 'mm в вал.', fmt: (v, r) => f.mn(v, 2) + '<span class="mut3">mm ' + r.ccy + '</span>', csvFmt: v => f.mn(v, 2), title: 'в валюте бумаги' },
     mv: { key: 'mv', label: 'MV, mm ₽', num: true, fmt: v => f.mn(v, 0), sum: true, unit: 'mm ₽', sumFmt: v => f.mn(v, 0) },
     tradeDay: Object.assign({ key: 'tradeDay', unit: 'mm в вал.' }, K.tradeDayCol()),
+    posDelta: Object.assign({ key: 'posDelta', unit: 'mm в вал.' }, K.prevDeltaCol()),
     price: { key: 'price', label: 'Цена', num: true, unit: '% ном.', fmt: v => f.px(v) },
     ytm: { key: 'ytm', label: 'Дох.', num: true, fmt: v => f.pct(v) },
     // в CSV — число, кривая спреда (к КБД / к RUONIA) или DM — своей колонкой «Вид спреда» за ним (#276, TDM#762)
