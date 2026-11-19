@@ -66,7 +66,7 @@ def method_note(basis: str | None, lines: list[dict[str, Any]]) -> str | None:
         old = sorted({x.get("book") or x.get("entity") or "—" for x in whole})
         if not old:
             return None
-        dates = sorted({d for x in whole if (d := _dmy(x.get("baseDate")))}, key=lambda d: d[::-1])
+        dates = [_dmy(d) for d in sorted({str(x["baseDate"])[:10] for x in whole if _dmy(x.get("baseDate"))})]
         return ("не по текущей методике: отчёт ещё с деривативами, их PV не добавлен (" + ", ".join(old[:5])
                 + (f" и ещё {len(old) - 5}" if len(old) > 5 else "")
                 + ("; отчёт от " + ", ".join(dates[:3]) + (f" и ещё {len(dates) - 3}" if len(dates) > 3 else "")

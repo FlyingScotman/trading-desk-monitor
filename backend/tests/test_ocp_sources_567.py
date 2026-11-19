@@ -66,6 +66,10 @@ def test_with_derivatives_line_is_named_and_the_current_one_is_not(three):
            {"book": "B1", "baseKind": "without_derivatives", "baseDate": "2026-11-03"}]
     assert method_note("report_base_plus_day", two) == (
         "не по текущей методике: отчёт ещё с деривативами, их PV не добавлен (B2, B3; отчёт от 30.10.2026, 02.11.2026)")
+    # the dates are sorted as dates (by year, then month, then day), not as the text of the day.month.year
+    many = [{"book": f"B{i}", "baseKind": "with_derivatives", "baseDate": d} for i, d in enumerate(
+        ["2026-01-15", "2025-12-31", "2026-02-03"])]
+    assert method_note("report_base_plus_day", many).endswith("; отчёт от 31.12.2025, 15.01.2026, 03.02.2026)")
     assert method_note("report_base_plus_day", two[:1] + [{"book": "B4", "baseKind": "with_derivatives"}]).endswith(
         "(B2, B4; отчёт от 02.11.2026)")
     assert method_note("report_base_plus_day", [{"book": "B4", "baseKind": "with_derivatives"}]).endswith("(B4)")

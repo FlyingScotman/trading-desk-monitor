@@ -216,6 +216,9 @@ test('C16 drill: a day whose report is still with derivatives says how the file 
     const t = await dr.locator('[data-c16-reread]').innerText();
     for (const w of ['«Настройки»', '«Адаптер и источники»', '«Папки»', '«Перечитать отчёты за период»', '«Источник»', '«С даты»', '«По дату»', '«Перечитать»', '«История прогонов»'])
       assert.ok(t.includes(w), w + ' — ' + t);
+    // в «С даты» и «По дату» — дата отчёта, от которого взята база, а не дата разбора
+    const bd = hist.days[hist.days.length - 1].lines[0].baseDate, dmy = bd.slice(8, 10) + '.' + bd.slice(5, 7) + '.' + bd.slice(0, 4);
+    assert.ok(t.includes('«С даты» и «По дату» (' + dmy), dmy + ' — ' + t);
     assert.ok(!BAD.test(await dr.innerText()));
     // день по текущей методике: ни пометки, ни пояснения
     await dr.locator('[data-c16-day]').selectOption(hist.days[hist.days.length - 5].date);

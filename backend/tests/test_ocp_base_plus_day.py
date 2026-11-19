@@ -366,7 +366,8 @@ def test_adapter_before_1_7_keeps_the_nominal_and_adds_no_pv():
     assert gap["items"] == ["книга D1 (отчёт от 15.10.2026)", "книга T1 (отчёт от 15.10.2026)"]
     # TDM#806: the gap says what is missing in the file and which button reads it again (labels as on the screen)
     assert "derivatives_ccy" in gap["text"] and "«Перечитать отчёты за период»" in gap["text"]
-    assert "«Адаптер и источники»" in gap["text"] and "«Папки»" in gap["text"]
+    for w in ("«Настройки»", "«Адаптер и источники»", "«Папки»", "«Перечитать отчёты за период»", "«Перечитать»", "администратору"):
+        assert w in gap["text"], w
     assert r.derivatives_check == []  # nothing apart to check
 
 
