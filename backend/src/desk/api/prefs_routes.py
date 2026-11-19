@@ -1,4 +1,5 @@
-"""A user's own display preferences: the columns of the position tables they have hidden and added (TDM#763, TDM#778).
+"""A user's own display preferences: the columns of the position tables they have hidden and added (TDM#763, TDM#778),
+and the format of the numbers of a column (TDM#789).
 
 The monitors' position tables (C01, C03, C06, C07, C09-C13: ``KIT.table`` in ``prototypes/concepts/lib/kit.js``) let a
 user hide the columns they do not need, bring them back, and add a standard position column the table does not have
@@ -20,6 +21,22 @@ One window at an update: a page of the version before TDM#778 that is still open
 back the last hidden column, and that also removes the columns added in the new version (no ``added`` is left to keep);
 the page of the new version sends ``added`` explicitly and is not affected.
 
+The format of a column's numbers (TDM#789, ``user_column_formats``, migration 0029): the digits after the point and the
+units, which the user sets in the "Колонки ▾" menu of a position table, for a column of the page's catalog of position
+columns (``KIT.posCols``: ``mv``, ``dv01``, ``carry``...). It belongs to the column, not to a table: one format holds in
+every position table of every screen that has the column, and the reset of a table's columns ("Как было") does not touch
+it. The server keeps it as the user chose and does not know the columns, only the shape of the keys:
+
+* ``GET /api/v1/me/column-formats``: every format of the signed-in user, ``{column: {decimals, scale, updated_at}}``;
+* ``PUT /api/v1/me/column-formats/{col}`` ``{"decimals": 0..6 | null, "scale": "1" | "k" | "mm" | "bn" | null}``: the
+  whole format of one column, replaced; ``null`` (or left out) is the column's own default for that part: ``decimals``
+  the page's digits for the units shown, ``scale`` the column's own units. Both ``null`` is the default format and removes
+  the row. ``"1"`` is the number as it is (no units), ``"k"`` thousands (тыс), ``"mm"`` millions, ``"bn"`` billions;
+* ``DELETE /api/v1/me/column-formats/{col}``: back to the default, also when there is nothing to remove.
+
+At most ``MAX_FORMATS`` columns with a format per user: a column that already has one is replaced; a new one over the
+limit is refused (409) until another is reset. A bad key or value is refused (422) and changes nothing.
+
 Whose: always the caller's own (``auth.me_guard``): the signed-in user of any role, or ``local`` while sign-in is off
 (this computer only, as the settings). There is no way to name another user. Not in the OpenAPI schema: the pages'
 own request, like ``/api/v1/history/ocp``.
@@ -30,10 +47,10 @@ from __future__ import annotations
 import json
 import re
 from datetime import datetime
-from typing import Annotated
+from typing import Annotated, Literal
 
 from fastapi import APIRouter, Depends, Path, Response
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, StrictInt
 
 from . import auth
 from .app import ApiError, Con, ConRW
@@ -48,6 +65,10 @@ MAX_TABLES = 300
 """Tables of one user: the monitors have a few dozen (with the column sets of C03)."""
 
 Key = Annotated[str, Path(description="Screen + table (+ set), e.g. c03-blotter:base: a-z 0-9 . _ : -, up to 128")]
+MAX_FORMATS = 200
+"""Columns with a format of one user: the catalog has a few dozen, far more than any user sets."""
+
+Col = Annotated[str, Path(description="Key of the column in the catalog of position columns, e.g. dv01: a-z A-Z 0-9 . _ : -, up to 64")]
 
 
 class HiddenIn(BaseModel):
@@ -64,6 +85,25 @@ class TableColumns(BaseModel):
     updated_at: datetime
 
 
+class FormatIn(BaseModel):
+    decimals: StrictInt | None = Field(default=None, ge=0, le=6,
+                                       description="Digits after the point, 0..6; null / left out: the column's default")
+    scale: Literal["1", "k", "mm", "bn"] | None = Field(default=None,
+                                                        description="Units: 1 as is, k thousands, mm millions, bn billions;"
+                                                                    " null / left out: the column's own units")
+
+
+class ColumnFormat(BaseModel):
+    decimals: int | None
+    scale: str | None
+    updated_at: datetime
+
+
+class MyFormats(BaseModel):
+    user: str = Field(description="Whose they are: the signed-in user; 'local' while sign-in is off")
+    formats: dict[str, ColumnFormat]
+
+
 class MyTables(BaseModel):
     user: str = Field(description="Whose they are: the signed-in user; 'local' while sign-in is off")
     tables: dict[str, TableColumns]
@@ -74,6 +114,13 @@ def check_key(key: str) -> str:
         raise ApiError(422, "invalid_parameter", "the table key is a-z 0-9 . _ : - (a letter or digit first), "
                                                  "up to 128 characters")
     return key
+
+
+def check_column(col: str) -> str:
+    if not COLUMN_RE.fullmatch(col):
+        raise ApiError(422, "invalid_parameter", "a column key is a-z A-Z 0-9 . _ : - (a letter or digit first), "
+                                                 "up to 64 characters")
+    return col
 
 
 def check_columns(raw: list[str], what: str = "hidden") -> list[str]:
@@ -134,4 +181,42 @@ def put_table_columns(con: ConRW, key: Key, body: HiddenIn, who: Annotated[auth.
 def reset_table_columns(con: ConRW, key: Key, who: Annotated[auth.User, Depends(auth.me_guard)]):
     con.execute("DELETE FROM user_table_columns WHERE username = %s AND table_key = %s",
                 (who.username, check_key(key)))
+    return Response(status_code=204)
+
+
+@router.get("/api/v1/me/column-formats", response_model=MyFormats)
+def my_formats(con: Con, who: Annotated[auth.User, Depends(auth.me_guard)]):
+    rows = con.execute("SELECT col_key, decimals, scale, updated_at FROM user_column_formats WHERE username = %s"
+                       " ORDER BY col_key", (who.username,)).fetchall()
+    return {"user": who.username,
+            "formats": {r["col_key"]: {"decimals": r["decimals"], "scale": r["scale"], "updated_at": r["updated_at"]}
+                        for r in rows}}
+
+
+@router.put("/api/v1/me/column-formats/{col}", response_model=ColumnFormat)
+def put_column_format(con: ConRW, col: Col, body: FormatIn, who: Annotated[auth.User, Depends(auth.me_guard)]):
+    col = check_column(col)
+    with con.transaction():
+        # one user, one lock: the count of their formats cannot be passed by two requests at once
+        con.execute("SELECT pg_advisory_xact_lock(hashtext('user_column_formats:' || %s))", (who.username,))
+        if body.decimals is None and body.scale is None:  # the default format: no row
+            con.execute("DELETE FROM user_column_formats WHERE username = %s AND col_key = %s", (who.username, col))
+            return {"decimals": None, "scale": None,
+                    "updated_at": con.execute("SELECT clock_timestamp() AS t").fetchone()["t"]}
+        known = con.execute("SELECT 1 FROM user_column_formats WHERE username = %s AND col_key = %s",
+                            (who.username, col)).fetchone()
+        n = con.execute("SELECT count(*) AS n FROM user_column_formats WHERE username = %s",
+                        (who.username,)).fetchone()["n"]
+        if not known and n >= MAX_FORMATS:
+            raise ApiError(409, "invalid_parameter", f"at most {MAX_FORMATS} columns with a format per user: reset one first")
+        return con.execute(
+            "INSERT INTO user_column_formats (username, col_key, decimals, scale) VALUES (%s, %s, %s, %s)"
+            " ON CONFLICT (username, col_key) DO UPDATE SET decimals = EXCLUDED.decimals, scale = EXCLUDED.scale,"
+            " updated_at = clock_timestamp() RETURNING decimals, scale, updated_at",
+            (who.username, col, body.decimals, body.scale)).fetchone()
+
+
+@router.delete("/api/v1/me/column-formats/{col}", status_code=204)
+def reset_column_format(con: ConRW, col: Col, who: Annotated[auth.User, Depends(auth.me_guard)]):
+    con.execute("DELETE FROM user_column_formats WHERE username = %s AND col_key = %s", (who.username, check_column(col)))
     return Response(status_code=204)

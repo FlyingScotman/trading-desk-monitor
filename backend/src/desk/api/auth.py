@@ -339,6 +339,7 @@ def delete_user(con: psycopg.Connection, username: str, *, actor: str, ip: str |
         revoke_user_sessions(con, row["user_id"])
         con.execute("DELETE FROM app_user WHERE user_id = %s", (row["user_id"],))
         con.execute("DELETE FROM user_table_columns WHERE username = %s", (name,))  # no foreign key: ``local`` has no row
+        con.execute("DELETE FROM user_column_formats WHERE username = %s", (name,))  # the same, TDM#789
         audit(con, actor, "user_delete", name, ip=ip, detail={"role": row["role"]})
 
 
