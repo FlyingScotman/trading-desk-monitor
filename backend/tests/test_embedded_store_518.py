@@ -24,11 +24,20 @@ pytestmark = pytest.mark.filterwarnings("ignore")
 
 
 def _kill_tree(pid: int) -> None:
+    """Kill the postmaster, its backends and, on Windows, the ``cmd.exe`` that ``pg_ctl start`` runs it through
+    (``cmd /C "postgres.exe ..." >> log``): that cmd.exe is the postmaster's PARENT, not a child, and keeps the log open
+    until it exits. A test that writes the log right after the kill would otherwise race it (PermissionError)."""
     try:
         parent = psutil.Process(pid)
     except psutil.NoSuchProcess:
         return
     procs = [*parent.children(recursive=True), parent]
+    try:
+        shell = parent.parent()
+        if shell is not None and shell.name().lower() == "cmd.exe":
+            procs.append(shell)
+    except psutil.Error:
+        pass
     for p in procs:
         try:
             p.kill()
