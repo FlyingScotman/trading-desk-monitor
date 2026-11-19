@@ -307,7 +307,7 @@ def test_an_fx_deal_by_core_says_its_rest():
 def test_every_code_has_a_label_and_an_unknown_one_is_refused():
     assert set(reasons.OTHER_REASON_TEXT) == {
         "no_curve_on_date", "discount_curve_switch", "core_refused", "no_terms", "fallback_price", "price_source_switch",
-        "yield_no_curve", "reported_value", "fx_core_rest", "flash_residual"}
+        "yield_no_curve", "reported_value", "fx_core_rest", "rates_core_rest", "flash_residual"}
     assert reasons.other_reason(reasons.CORE_REFUSED, "x", core_code="core_y", rung=None) == {
         "code": "core_refused", "detail": "x", "core_code": "core_y"}
     with pytest.raises(ValueError):

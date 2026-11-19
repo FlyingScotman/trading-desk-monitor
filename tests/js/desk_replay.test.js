@@ -34,6 +34,10 @@ t('итог задания', () => {
   assert.strictEqual(ok.text, 'Перечитано ocp_cash за 02.11.2026: 1 файл, новых ревизий — 1. Затронутые расчёты пересчитает автообновление.');
   const same = R.result({ state: 'done', request: { ...req, from: '2026-10-30' }, result: { files: { accepted: 2, rejected: 1 }, revisions: 0 } });
   assert.ok(same.cls === 'warn' && /30.10.2026–02.11.2026: 3 файла/.test(same.text) && /Не принято файлов: 1/.test(same.text));
+  // TDM#806: файлы, которых нет ни в папке, ни в архиве, пропущены — итог это называет, а не пишет «строки не изменились»
+  const gone = R.result({ state: 'done', request: req, result: { files: { accepted: 5 }, revisions: 0, skipped: { gone: 2 } } });
+  assert.ok(gone.cls === 'warn' && /Не перечитано файлов: 2/.test(gone.text) && /нет ни в папке, ни в архиве/.test(gone.text), gone.text);
+  assert.strictEqual(R.result({ state: 'done', request: req, result: { files: { accepted: 1 }, revisions: 1, skipped: { gone: 0 } } }).cls, 'ok');
   assert.ok(/долго был занят/.test(R.result({ state: 'failed', error_code: 'busy', request: req }).text));
   assert.strictEqual(R.result(null), null);
 });

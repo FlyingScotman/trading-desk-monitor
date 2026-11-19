@@ -380,8 +380,8 @@ def is_ndf_row(x: dict[str, Any], terms: list[dict[str, Any]] | None = None) -> 
     return is_ndf("", product_group(x), terms or ())
 
 
-def _derivatives(ctx: EodContext, inputs: PositionInputs, p: BookPlan, second_order: bool
-                 ) -> dict[str, BondValuation | dv.NotValued]:
+def _derivatives(ctx: EodContext, inputs: PositionInputs, p: BookPlan, second_order: bool,
+                 horizon: date | None = None) -> dict[str, BondValuation | dv.NotValued]:
     """The FX and OTC rows valued by core (``valuation.derivatives``): those with trade_terms, a FORTS FX future by
     ticker (setting ``futures_by_ticker``), and with ``off_report_derivatives`` = ``include`` the trades no row names (added to the
     plan as rows of their own, TDM#468). Returns per position ID the valuation or why core did not value it."""
@@ -441,7 +441,7 @@ def _derivatives(ctx: EodContext, inputs: PositionInputs, p: BookPlan, second_or
             for u in inputs.other_book_units:
                 if str((u.get("scope") or {}).get("book_id")) == t.book and u not in inputs.trade_terms_units:
                     inputs.trade_terms_units.append(u)
-    valued, result = dv.value(ctx, reqs, options=opts, second_order=second_order)
+    valued, result = dv.value(ctx, reqs, options=opts, second_order=second_order, horizon=horizon)
     p.core_result = result
     got = {**out, **valued}
     for pid, e in got.items():
@@ -485,13 +485,16 @@ def _not_by_core(o: Outcome, e: dv.NotValued) -> Outcome:
     return o
 
 
-def plan(ctx: EodContext, inputs: PositionInputs, *, second_order: bool = True) -> BookPlan:
+def plan(ctx: EodContext, inputs: PositionInputs, *, second_order: bool = True, horizon: date | None = None
+         ) -> BookPlan:
     """Requests for core and the outcomes of the rows valued here, in ``inputs.rows`` order (then the trades added
     with ``off_report_derivatives``). The FX and OTC rows with trade terms (or an FX future by ticker) are valued by core
-    (``valuation.derivatives``); the others, and those core rejects, keep the rule of the module docstring."""
+    (``valuation.derivatives``); the others, and those core rejects, keep the rule of the module docstring.
+    ``horizon``: the plan of D-1 asked for the date the PnL goes to (``dayrun``): its swaps and REPOs carry core's carry
+    and rolldown to it (``dv.value``)."""
     p = BookPlan([], [], {}, [(pid, book) for pid, book, _, _ in inputs.rows])
     index = None
-    by_core = _derivatives(ctx, inputs, p, second_order)
+    by_core = _derivatives(ctx, inputs, p, second_order, horizon)
     for pid in p.added:
         v = by_core.get(pid)
         if isinstance(v, BondValuation):
