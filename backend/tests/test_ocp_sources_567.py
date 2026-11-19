@@ -60,6 +60,15 @@ def test_with_derivatives_line_is_named_and_the_current_one_is_not(three):
     note = c.get("/api/v1/history/ocp", params={"run_id": cur, "from": "2026-11-04"}).json()["days"][0]["methodNote"]
     assert note.startswith("не по текущей методике: отчёт ещё с деривативами") and "B2" in note and "B1" not in note
     assert method_note("report_base_plus_day", [ocp_line(v3("B1", "USD", 1.0))]) is None
+    # TDM#806: the note names the date of the report the base is (the dates, when the books have different ones)
+    two = [{"book": "B2", "baseKind": "with_derivatives", "baseDate": "2026-11-02"},
+           {"book": "B3", "baseKind": "with_derivatives", "baseDate": "2026-10-30"},
+           {"book": "B1", "baseKind": "without_derivatives", "baseDate": "2026-11-03"}]
+    assert method_note("report_base_plus_day", two) == (
+        "не по текущей методике: отчёт ещё с деривативами, их PV не добавлен (B2, B3; отчёт от 30.10.2026, 02.11.2026)")
+    assert method_note("report_base_plus_day", two[:1] + [{"book": "B4", "baseKind": "with_derivatives"}]).endswith(
+        "(B2, B4; отчёт от 02.11.2026)")
+    assert method_note("report_base_plus_day", [{"book": "B4", "baseKind": "with_derivatives"}]).endswith("(B4)")
     assert method_note(None, []) is None
 
 

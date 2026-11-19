@@ -50,17 +50,27 @@ def book_meta(book_id: str, m: dict[str, Any], type_: str | None = None, *, ocp_
     return out
 
 
+def _dmy(iso: Any) -> str | None:
+    """``2026-11-02`` as ``02.11.2026``; None for anything else."""
+    p = str(iso or "")[:10].split("-")
+    return f"{p[2]}.{p[1]}.{p[0]}" if len(p) == 3 and all(x.isdigit() for x in p) else None
+
+
 def method_note(basis: str | None, lines: list[dict[str, Any]]) -> str | None:
     """Why a day's OCP is not on the current methodology (the report without the derivatives + their PV), else None.
     ``lines`` as :func:`ocp_line` gives them. No basis (no OCP at all): None, the day's state says why."""
     if not basis:
         return None
     if basis == O.PublishedBasis.REPORT_BASE_PLUS_DAY.value:
-        old = sorted({x.get("book") or x.get("entity") or "—" for x in lines if x.get("baseKind") == O.BASE_WHOLE})
+        whole = [x for x in lines if x.get("baseKind") == O.BASE_WHOLE]
+        old = sorted({x.get("book") or x.get("entity") or "—" for x in whole})
         if not old:
             return None
+        dates = sorted({d for x in whole if (d := _dmy(x.get("baseDate")))}, key=lambda d: d[::-1])
         return ("не по текущей методике: отчёт ещё с деривативами, их PV не добавлен (" + ", ".join(old[:5])
-                + (f" и ещё {len(old) - 5}" if len(old) > 5 else "") + ")")
+                + (f" и ещё {len(old) - 5}" if len(old) > 5 else "")
+                + ("; отчёт от " + ", ".join(dates[:3]) + (f" и ещё {len(dates) - 3}" if len(dates) > 3 else "")
+                   if dates else "") + ")")
     if basis == O.PublishedBasis.REPORT_PLUS_OUTSIDE.value:
         return "другая методика: отчёт целиком (с деривативами) и слагаемые вне отчёта"
     if basis == O.PublishedBasis.DERIVED.value:

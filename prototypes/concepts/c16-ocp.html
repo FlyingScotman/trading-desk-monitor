@@ -700,7 +700,11 @@
         const nocheck = X.doc ? '' : '<div class="k-note mut" data-c16-nocheck>Проверка полноты разбора по дню не загрузилась (' + esc(X.err || '—') + '): показано то, что отдал прогон.</div>';
         // день не по текущей методике: сервер называет причину; у дня «база + день» — только если в строках отчёт ещё с деривативами
         const oldM = day.methodNote && (day.basis !== 'report_base_plus_day' || lines.some(x => x.base_kind === 'with_derivatives'));
-        const meth = oldM ? '<div class="k-note warn" data-c16-method-drill>' + esc(day.methodNote) + '</div>' : '';
+        // TDM#806: у «отчёта ещё с деривативами» — что это значит и чем исправить (надписи — settings.html, desk-replay.js)
+        const rereadM = oldM && day.basis === 'report_base_plus_day' && lines.some(x => x.base_kind === 'with_derivatives')
+          ? '<div class="k-note mut" data-c16-reread>В файле отчёта на эту дату нет разбивки деривативов: файл прочитан адаптером до того, как в нём заданы виды строк деривативов («Настройки» → «ОВП: типы строк»), или до версии адаптера с такой разбивкой, и с тех пор не перечитан. Пометка говорит о том, как монитор принял файл, а не о том, что в отчёте источника. Чтобы дата перешла на текущую методику, перечитайте отчёты: «Настройки» → «Адаптер и источники» → «Папки» → карточка «Перечитать отчёты за период» → «Источник» (источник отчёта ОВП), «С даты» и «По дату» (период с этой даты) → кнопка «Перечитать». Карточка видна только с этого компьютера или администратору. Пересчёт даты идёт сам, ход — «Настройки» → «Диагностика» → карточка «История прогонов».</div>'
+          : '';
+        const meth = (oldM ? '<div class="k-note warn" data-c16-method-drill>' + esc(day.methodNote) + '</div>' : '') + rereadM;
         out.innerHTML = left + nocheck + meth + (lines.length ? lines.map(x => lineHtml(x, cellOf(x.ccy), bdOf(x))).join('') : '<div class="k-empty">В этот день у строки нет ОВП' + (cur ? ' в ' + esc(cur) : '') + '</div>');
         K.tableToolsAll(out);
       }, e => { out.innerHTML = '<div class="k-empty">Разбор не загрузился: ' + esc(e.message) + '</div>'; });

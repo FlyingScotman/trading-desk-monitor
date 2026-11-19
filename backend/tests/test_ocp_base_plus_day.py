@@ -362,7 +362,11 @@ def test_adapter_before_1_7_keeps_the_nominal_and_adds_no_pv():
     d1 = pub(r)[("D1", "USD")]
     assert d1["base_kind"] == "with_derivatives" and d1["parts"]["derivatives"] == 0
     assert d1["amount"] == 600_000 + 40_000 and d1["fallback"] == []
-    assert {g["code"]: g for g in r.gaps}["report_without_derivatives_split"]["items"] == ["книга D1", "книга T1"]
+    gap = {g["code"]: g for g in r.gaps}["report_without_derivatives_split"]
+    assert gap["items"] == ["книга D1 (отчёт от 15.10.2026)", "книга T1 (отчёт от 15.10.2026)"]
+    # TDM#806: the gap says what is missing in the file and which button reads it again (labels as on the screen)
+    assert "derivatives_ccy" in gap["text"] and "«Перечитать отчёты за период»" in gap["text"]
+    assert "«Адаптер и источники»" in gap["text"] and "«Папки»" in gap["text"]
     assert r.derivatives_check == []  # nothing apart to check
 
 
