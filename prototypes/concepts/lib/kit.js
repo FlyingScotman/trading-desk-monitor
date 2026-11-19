@@ -4452,8 +4452,9 @@
   // KPI-плитка; spec — для разбора по щелчку. sub — строка или разбивка-массив [[подпись, значение], …] (B2-3, #103):
   // строки в стиле плитки ОВП — подпись слева, цифра справа, табличные цифры.
   K.kpiRows = rows => '<table class="k-kb"><tbody>' + rows.map(r => '<tr' + (r[2] ? ' title="' + esc(r[2]) + '"' : '') + '><td class="c">' + r[0] + '</td><td>' + r[1] + '</td></tr>').join('') + '</tbody></table>';
-  K.kpi = (label, valueHtml, sub, spark, tip) => '<div class="k-kpi"><div class="l">' + K.hint(label, tip) + '</div><div class="v">' + valueHtml + '</div><div class="s">' +
-    (Array.isArray(sub) ? (sub.length ? K.kpiRows(sub) : '<span class="mut3">—</span>') : (sub || '&nbsp;')) + '</div>' + (spark || '') + '</div>';
+  K.kpiSub = sub => Array.isArray(sub) ? (sub.length ? K.kpiRows(sub) : '<span class="mut3">—</span>') : (sub || '&nbsp;');
+  K.kpi = (label, valueHtml, sub, spark, tip, attrs) => '<div class="k-kpi"' + (attrs || '') + '><div class="l">' + K.hint(label, tip) + '</div><div class="v">' + valueHtml + '</div><div class="s">' +
+    K.kpiSub(sub) + '</div>' + (spark || '') + '</div>';
   K.kpiUnit = u => ' <span class="u">' + u + '</span>';
   // разбивка по валютам: не больше n строк (по умолчанию 3, #103). Валюты по |rank| (по умолчанию — по самим значениям;
   // для сумм в родных валютах передают рублёвый эквивалент), показываются значения vals. Если валют больше n —
@@ -4585,17 +4586,59 @@
     t.firstChild.textContent = tb.classList.contains('open') ? 'свернуть ' + t.dataset.fxmore + ' прочих' : '+' + t.dataset.fxmore + ' прочих';
   });
 
-  // стандартная строка HUD: риск по валютам и кривым, PnL, кэрри, объём
-  K.hud = function (el) {
+  // стандартная строка HUD: риск по валютам и кривым, PnL, кэрри, объём.
+  // opt.fitCcy (C01, TDM#803): «DV01 ставки» и «Облигации MV» показывают валют строками столько, сколько помещается по высоте ряда карточек
+  // (её задаёт самая высокая из остальных карточек ряда — обычно ОВП), но не меньше трёх; высота ряда не растёт, прокрутки в карточке нет.
+  // Без opt — как раньше: три строки (C12, команда hud)
+  K.hud = function (el, opt) {
+    opt = opt || {};
+    const FIT_MIN = 3, FIT_MAX = 12;
+    let cur = null, scopes = {};  // cur — данные последней отрисовки; scopes — разбор по щелчку цифр в строках валют (K.dScope), освобождается при их перерисовке
+    // строки валют карточки id при n строках; цифры строк — в своей области записей разбора, прошлая освобождается
+    const ccyRows = (id, n) => {
+      const { L, k } = cur, sc = scopes[id] || (scopes[id] = K.dScope());
+      K.dFree(sc);
+      const prev = K.dScopeSet(sc);
+      try {
+        return id === 'dv01'
+          ? K.kpiCcyRows(M.ccys.reduce((o, c) => (o[c] = k.byCcy[c].dv01, o), {}), c => K.d({ title: 'DV01 ' + c + ' (кривые ' + c + ')', unit: 'тыс ₽/бп', list: L, val: p => INSTR.dv01In(p, c) }), n, f.dv)
+          : K.kpiCcyRows(M.ccys.reduce((o, c) => (o[c] = k.byCcy[c].mv, o), {}), (c, v) => f.bn(v, 1), n, v => f.bn(v, 1));
+      } finally { K.dScopeSet(prev); }
+    };
+    // сколько валют карточки id есть что показать (с ненулевым значением): дальше строк добавлять незачем
+    const ccyCount = id => M.ccys.filter(c => Math.abs((id === 'dv01' ? cur.k.byCcy[c].dv01 : cur.k.byCcy[c].mv) || 0) > 1e-9).length;
+    function fit() {
+      const grid = el.querySelector('.k-kpis');
+      if (!grid || !cur) return;
+      const cards = Array.from(grid.children), fits = cards.filter(c => c.dataset.fit);
+      if (!fits.length) return;
+      const setN = (c, n) => { c.querySelector('.s').innerHTML = K.kpiSub(ccyRows(c.dataset.fit, n)); };
+      fits.forEach(c => setN(c, FIT_MIN));
+      // естественная высота карточек (не растянутых по ряду): «align-self: start» на время замера; ряд — карточки с одним offsetTop
+      cards.forEach(c => { c.style.alignSelf = 'start'; });
+      try {
+        const hOf = c => c.getBoundingClientRect().height, topOf = c => Math.round(c.getBoundingClientRect().top);
+        fits.forEach(c => {
+          const others = cards.filter(x => !x.dataset.fit && topOf(x) === topOf(c));
+          const limit = others.length ? Math.max(...others.map(hOf)) : hOf(c);  // ряд без других карточек — как есть, три строки
+          const max = Math.min(FIT_MAX, ccyCount(c.dataset.fit));
+          for (let n = FIT_MIN + 1; n <= max; n++) {
+            setN(c, n);
+            if (hOf(c) > limit + 0.5) { setN(c, n - 1); break; }
+          }
+        });
+      } finally { cards.forEach(c => { c.style.alignSelf = ''; }); }
+    }
     function draw() {
       const L = K.list(), k = M.kpis(L);
+      cur = { L, k };
       const pnlH = M.hist.pnl.total.slice(-30);
       el.innerHTML = '<div class="k-kpis">' +
         K.kpi('PnL дня', K.d({ title: 'PnL дня', unit: 'mm ₽', fmt: v => f.mns(v, 2), list: L, val: p => p.pnl.total }, f.mns(k.pnl, 1)) + K.kpiUnit('mm ₽'),
           [['MTD', K.d({ title: 'PnL MTD', unit: 'mm ₽', fmt: v => f.mns(v, 1), list: K.pnlPeriodList(L), val: 'pnlMtd' }) + K.partial('mtd')],
            ['YTD', K.d({ title: 'PnL YTD', unit: 'mm ₽', fmt: v => f.mns(v, 0), list: K.pnlPeriodList(L), val: 'pnlYtd' }) + K.partial('ytd')]], K.spark(pnlH, 64, 20)) +
         K.kpi('DV01 ставки', K.d({ title: 'DV01 ставки (все кривые)', unit: 'тыс ₽/бп', list: L, val: 'dv01' }) + K.kpiUnit('тыс ₽/бп'),
-          K.kpiCcyRows(M.ccys.reduce((o, c) => (o[c] = k.byCcy[c].dv01, o), {}), c => K.d({ title: 'DV01 ' + c + ' (кривые ' + c + ')', unit: 'тыс ₽/бп', list: L, val: p => INSTR.dv01In(p, c) }), 3, f.dv), null, K.tips.dv01) +
+          ccyRows('dv01', FIT_MIN), null, K.tips.dv01, opt.fitCcy ? ' data-fit="dv01"' : '') +
         K.kpi('DV01 RUONIA', K.d({ title: 'DV01 RUONIA', unit: 'тыс ₽/бп', list: L, val: p => p.dv01ByCurve['RUB RUONIA'] }) + K.kpiUnit('тыс ₽/бп'),
           [['КС', K.d({ title: 'DV01 КС', unit: 'тыс ₽/бп', list: L, val: p => p.dv01ByCurve['RUB KEY'] })],
            M.ofzView === 'kbd' ? [K.hint('КБД', K.tips.kbd), K.d({ title: 'DV01 КБД (ОФЗ)', unit: 'тыс ₽/бп', list: L, val: p => p.dv01ByCurve['RUB OFZ'] })]
@@ -4609,12 +4652,23 @@
           [[K.hint('фондирование', K.tips.funding), K.d({ title: 'Фондирование за день', unit: 'тыс ₽', fmt: f.k, list: L, val: 'fundingDay', nullable: true })],
            ['в год ≈', '<span class="' + f.cls(k.carryDay) + '">' + f.mn(k.carryDay == null ? null : k.carryDay * 365, 0) + '</span> <span class="u">mm ₽</span>']], null, K.tips.carry) +
         K.kpi('Облигации MV', K.d({ title: 'MV облигаций', unit: 'bn ₽', fmt: v => f.bn(v, 1), list: L.filter(p => !M.deal(p)), val: 'mv', color: false }) + K.kpiUnit('bn ₽'),
-          K.kpiCcyRows(M.ccys.reduce((o, c) => (o[c] = k.byCcy[c].mv, o), {}), (c, v) => f.bn(v, 1), 3, v => f.bn(v, 1))) +
+          ccyRows('mv', FIT_MIN), null, null, opt.fitCcy ? ' data-fit="mv"' : '') +
         '<div class="k-kpi k-fxk"><div class="l">' + K.hint('ОВП', M.ocp ? K.tips.fxMiniPub : K.tips.fxMini) + '</div><div class="v">' + K.fxMini(L) + '</div><div class="s">' + K.ocpNote() + '<a class="go" href="c06-launchpad.html#fx" title="плитка «ОВП и курсы»: бонды и деривативы по валютам, курсы, PnL FX">подробно (C06) →</a></div></div>' +
         '</div>';
+      if (opt.fitCcy) fit();
     }
     draw(); K.live(el, 'filter', draw);
-    return { redraw: draw };
+    if (opt.fitCcy) {
+      // раскладка зависит от ширины окна (число колонок сетки, перенос карточек в другой ряд), шрифты и разворот «+N прочих» у ОВП меняют высоту
+      // карточек: подгонка заново; при смене только высоты — нет (подгонка сама высоту ряда не меняет)
+      let w = el.clientWidth, t = 0;
+      const refit = () => { clearTimeout(t); t = setTimeout(() => { if (el.isConnected) fit(); }, 30); };
+      if (typeof ResizeObserver === 'function') new ResizeObserver(() => { if (el.clientWidth !== w) { w = el.clientWidth; refit(); } }).observe(el);
+      else window.addEventListener('resize', refit);
+      el.addEventListener('click', e => { if (e.target.closest && e.target.closest('[data-fxmore]')) refit(); });
+      if (document.fonts && document.fonts.ready) document.fonts.ready.then(refit);
+    }
+    return { redraw: draw, fit };
   };
 
   // ---------- сделки дня на общих экранах (TDM#585) ----------

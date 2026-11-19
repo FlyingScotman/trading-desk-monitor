@@ -31,7 +31,7 @@
   K.top({ title: 'C01 · Кокпит', tag: 'HUD + вкладки: риски, позиции, PnL' });
   // вкладки под шапкой
   document.body.insertBefore(document.getElementById('tabs'), document.querySelector('.k-page'));
-  K.hud(document.getElementById('hud'));
+  K.hud(document.getElementById('hud'), { fitCcy: true });  // DV01 и MV по валютам — сколько помещается по высоте ряда (TDM#803)
   // сделки дня по книгам шапки (TDM#585): сколько, сколько в позициях, последняя — со ссылкой на C20
   K.dayTradesTile(document.getElementById('trades'));
   const TABS = [['risk', 'Риски'], ['ccy', 'Валюта × тип'], ['pos', 'Позиции'], ['pnl', 'PnL'], ['hist', 'История']];
