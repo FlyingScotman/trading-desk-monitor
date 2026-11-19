@@ -94,6 +94,34 @@ t('K.setShort: все позиции бумаги, поиск и события;
   L.forEach(p => assert.strictEqual(p.searchText, p.searchBase));
 });
 
+t('экранирование: разметка в коротком имени с сервера (биржевое и своё) не попадает в HTML ячейки, строки карточки и подсказок', async () => {
+  const EVIL = '<img src=x onerror=alert(1)>', OWN = '"><svg onload=alert(2)>';
+  const { M, K, ready } = load({ real: true, mutate: D => D.positions.forEach(d => { if (d.isin === ISIN) d.extra = Object.assign({}, d.extra, { short_name: EVIL }); }),
+    shortNames: { short_names: [{ isin: ISIN2, short_name: OWN, changed_by: 'boss', changed_at: '2026-11-10T09:00:00+00:00' }] } });
+  await ready;
+  // в разметке только свои теги страницы и ни у одного нет обработчика on…; чужие теги не появились
+  const safe = (html, what) => {
+    const tags = [...html.matchAll(/<\/?([a-z][a-z0-9]*)/gi)].map(m => m[1].toLowerCase());
+    assert.ok(tags.every(x => ['span', 'button', 'div', 'b'].includes(x)), what + ': чужой тег ' + tags + ' в ' + html);
+    assert.ok(![...html.matchAll(/<[a-z][^>]*>/gi)].some(m => /\son\w+\s*=/i.test(m[0].replace(/"[^"]*"/g, '""'))), what + ': обработчик в атрибуте: ' + html);
+  };
+  // биржевое из прогона: ячейка, строка карточки
+  const a = M.positions.find(x => x.isin === ISIN);
+  let cell = K.shortCell(a, a.shortName), row = K.shortRow(a);
+  assert.ok(cell.includes('&lt;img src=x onerror=alert(1)&gt;'), cell); safe(cell, 'ячейка, биржевое'); safe(row, 'строка, биржевое');
+  // своё с сервера, биржевое — тоже разметка: свое в тексте, биржевое — в подсказке (кавычки и скобки экранированы)
+  K.setShort(ISIN, OWN);
+  cell = K.shortCell(a, a.shortName); row = K.shortRow(a);
+  assert.ok(cell.includes('&quot;&gt;&lt;svg onload=alert(2)&gt;') && cell.includes('title="биржевое короткое имя: &lt;img src=x onerror=alert(1)&gt;"'), cell);
+  assert.ok(row.includes('&lt;svg onload=alert(2)&gt;') && row.includes('&lt;img src=x onerror=alert(1)&gt;'), row);
+  safe(cell, 'ячейка, своё'); safe(row, 'строка, своё');
+  // имя, пришедшее с сервера отдельным ответом (ISIN2), — то же
+  const b = M.positions.find(x => x.isin === ISIN2);
+  assert.strictEqual(b.shortOwn, OWN);
+  safe(K.shortCell(b, b.shortName), 'ячейка, своё с сервера'); safe(K.shortRow(b), 'строка, своё с сервера');
+  assert.strictEqual(K.posCols.short.key, 'shortName'); assert.strictEqual(a.shortName, OWN);
+});
+
 t('колонка «Кор. имя» и строка карточки: своё — с биржевым в подсказке, нет имени — «—», без ISIN строки нет', () => {
   const { M, K } = load({ real: true, mutate: withExch });
   const col = K.posCols.short;
@@ -130,7 +158,10 @@ t('прогон: правка — PUT /api/v1/instruments/short-name с JSON, и
   const net = load({ real: true, host: '192.168.1.20', mutate: withExch });
   assert.strictEqual(net.M.shortNameApi.editable, false);
   const p = net.M.positions.find(x => x.isin === ISIN);
-  assert.ok(/data-al="edit" disabled title="только чтение: [^"]*127\.0\.0\.1/.test(net.K.shortRow(p)), net.K.shortRow(p));
+  // ответа входа ещё нет: ✎ выключена, но причина нейтральная — не «вход выключен» (TDM#777)
+  assert.ok(/data-al="edit" disabled title="только чтение: права на правку уточняются — обновите страницу, если не исчезнет"/.test(net.K.shortRow(p)), net.K.shortRow(p));
+  net.M.nameRights.setAuth({ enabled: false, user: { username: 'local', role: 'admin' }, loopback: false });
+  assert.ok(/data-al="edit" disabled title="только чтение: вход выключен[^"]*127\.0\.0\.1/.test(net.K.shortRow(p)), net.K.shortRow(p));
   net.M.nameRights.setAuth({ enabled: true, user: { username: 'u', role: 'trader' }, loopback: false });
   assert.strictEqual(net.M.shortNameApi.editable, true); assert.strictEqual(net.M.aliasApi.editable, true);
   assert.ok(!/disabled/.test(net.K.shortRow(p).match(/<button class="k-ico" data-al="edit"[^>]*>/)[0]));

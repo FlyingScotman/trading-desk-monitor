@@ -154,6 +154,37 @@ test('short names (TDM#776)', { skip: pw ? false : 'нет Playwright' }, async 
       } finally { await ctx.close(); }
     });
 
+    await t.test('markup in short names (exchange, own, history) is shown as text in the cell, the card row and the history', async () => {
+      const { D } = rundata();
+      const EVIL = '<img src=x onerror="window.__xss=1">', OWN = '"><svg onload="window.__xss=2">';
+      const isin = D.positions.find(p => p.isin && p.instrType === 'BOND').isin;
+      D.positions.forEach(p => { if (p.isin === isin) p.extra = Object.assign({}, p.extra, { short_name: EVIL }); });
+      const { pg, ctx, errors, release } = await open(browser, 'c03-blotter.html', { D, hold: true });
+      try {
+        await pg.route('**/api/v1/instruments/short-names/*/history', route => json(route, { isin, revisions: [
+          { rev_id: 2, short_name: OWN, changed_by: '<b onmouseover="window.__xss=3">x</b>', changed_at: '2026-11-18T10:00:00+00:00' },
+          { rev_id: 1, short_name: EVIL, changed_by: 'boss', changed_at: '2026-11-10T09:00:00+00:00' }] }));
+        const id = await pg.evaluate(i => MOCK.positions.find(p => p.isin === i).id, isin);
+        // биржевое (EVIL) — до ответа сервера, свое (OWN) — после
+        await rowShown(pg, id, /<img src=x/);
+        assert.deepStrictEqual((await cellOf(pg, id)).text, EVIL, 'ячейка: биржевое как текст');
+        release({ [isin]: OWN });
+        await rowShown(pg, id, /<svg onload/);
+        assert.deepStrictEqual(await cellOf(pg, id), { text: OWN, title: 'биржевое короткое имя: ' + EVIL }, 'ячейка: своё как текст, биржевое в подсказке');
+        await pg.evaluate(i => KIT.card(i), id);
+        const row = await pg.evaluate(() => { const r = document.querySelector('.k-drawer .k-shortrow'); return { text: r.innerText.replace(/\s+/g, ' ').trim(), tags: [...r.querySelectorAll('*')].map(e => e.tagName.toLowerCase()) }; });
+        assert.ok(row.text.includes(OWN) && row.text.includes(EVIL), row.text);
+        assert.ok(row.tags.every(x => ['span', 'button'].includes(x)), 'в строке карточки только свои теги: ' + row.tags);
+        await pg.evaluate(() => { document.querySelector('.k-drawer .k-shortrow [data-al=hist]').click(); });
+        await pg.waitForSelector('.k-alias-pop .k-tbl');
+        const hist = await pg.evaluate(() => { const e = document.querySelector('.k-alias-pop'); return { text: e.innerText, tags: [...e.querySelectorAll('*')].map(x => x.tagName.toLowerCase()), on: [...e.querySelectorAll('*')].some(x => [...x.attributes].some(a => /^on/.test(a.name))) }; });
+        assert.ok(hist.text.includes(OWN) && hist.text.includes(EVIL) && hist.text.includes('<b onmouseover'), hist.text);
+        assert.ok(hist.tags.every(x => ['div', 'span', 'table', 'tbody', 'tr', 'td'].includes(x)) && !hist.on, 'в истории только свои теги, без on…: ' + hist.tags);
+        assert.strictEqual(await pg.evaluate(() => window.__xss), undefined, 'скрипты из имён не выполнились');
+        assert.deepStrictEqual(errors, []);
+      } finally { await ctx.close(); }
+    });
+
     await t.test('C03 detail panel: the same row with ✎ and ⟲ under the title; a bond without an exchange name shows «—»', async () => {
       const { D, none } = rundata();
       const { pg, ctx, errors } = await open(browser, 'c03-blotter.html', { D, store: { 'c03-state': JSON.stringify({ v: 2, preset: 'base', sel: String(none.id) }) } });  // выбранная позиция — в панели справа
