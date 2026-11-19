@@ -1,7 +1,8 @@
 // TDM#786: везде, где виден спред позиции, рядом оба Z-спреда — «Z к КБД» и «Z к RUONIA» (TDM#762):
 //   - в исходниках экранов: в каждом списке колонок, где есть 'spread', следом идут 'zkbd', 'zdisc' (C01, C03 «Базовый»/«Цены и
-//     спреды»/«Всё», C07, C12, C13), а в таблице оферт календаря (C08) — свои две колонки;
+//     спреды»/«Всё», C07, C12, C13); таблица оферт календаря (C08) — в браузере, spreads_786.pw.test.js;
 //   - карточка и правая панель C03 (K.spreadFields): у рублёвой бумаги обе строки всегда, «—» без значения, подсказки колонок;
+//     число в карточке то же, что в колонках «Z к КБД» и «Z к RUONIA» (в том числе у флоатера: в день на КБД Z — «к КБД»);
 //   - CSV таблицы: оба Z числом, пустое — пустой ячейкой;
 //   - подсказки у заголовков экранируются.
 //   node tests/js/spreads_786.test.js
@@ -34,8 +35,12 @@ const OFZ = { spreadBp: 7, zKbdBp: 7, zRuoniaBp: 52, spreadCurve: 'RUB OFZ' };
 const NO_OIS = { spreadBp: 133, zKbdBp: 133, zRuoniaBp: null, spreadCurve: 'RUB OFZ' };
 function run(D) {
   const fix = D.positions.find(p => p.instrType === 'BOND' && p.ccy === 'RUB' && p.couponType === 'fix');
-  const add = (id, name, over) => D.positions.push(Object.assign({}, fix, { id, name }, over));
+  const add = (id, name, over, extra) => D.positions.push(Object.assign({}, fix, { id, name }, over, extra ? { extra: Object.assign({}, fix.extra, extra) } : {}));
   add('OFZ1', 'ОФЗ-ПД тест', OFZ); add('NOOIS', 'Корп без OIS', NO_OIS);
+  const FLT = { couponType: 'float', index: 'RUONIA', margin: 0.5, zKbdBp: null, zRuoniaBp: null };
+  add('FL1', 'Флоатер RUONIA', Object.assign({ spreadBp: 205, spreadCurve: 'RUB RUONIA' }, FLT), { dm_bp: 190 });
+  add('FL2', 'Флоатер на КБД', Object.assign({ spreadBp: 215, spreadCurve: 'RUB OFZ' }, FLT), { dm_bp: 190 });
+  add('FL3', 'Флоатер без DM ядра', Object.assign({ spreadBp: 120, spreadCurve: 'RUB RUONIA' }, FLT), { dm_bp: undefined });
   add('FX1', 'Валютная', { ccy: 'USD', spreadBp: 310, spreadCurve: 'USD SOFR', zKbdBp: null, zRuoniaBp: null });
 }
 
@@ -65,12 +70,6 @@ t('C03: все наборы со «spread» — «Базовый», «Цены �
   for (const [, key, list] of sets) assert.ok(/'spread', 'zkbd', 'zdisc'/.test(list), key);
 });
 
-t('C08: таблица оферт — «Спред», «Z к КБД», «Z к RUONIA» рядом; значения читают zKbd и zRuonia; подсказки экранируются', () => {
-  const s = P('concepts/c08-calendar.html');
-  assert.ok(s.includes('<th class="n">Спред</th><th class="n" title="\'+esc(K.tips.zkbd)+\'">Z к КБД</th><th class="n" title="\'+esc(K.tips.zdisc)+\'">Z к RUONIA</th>'));
-  assert.ok(s.includes("f.bp(p.zspread) + '</td><td class=\"n\">' + f.bp(p.zKbd) + '</td><td class=\"n\">' + f.bp(p.zRuonia) + '</td></tr>'"));
-});
-
 t('карточка и панель C03: рублёвая фикс-бумага и флоатер — обе строки («—» без значения), у валютной — Z к своей кривой', () => {
   const { M, K } = load(run);
   const names = p => K.spreadFields(p).map(x => x[0]).join('|');
@@ -83,6 +82,24 @@ t('карточка и панель C03: рублёвая фикс-бумага 
   for (const p of [M.pos.OFZ1, M.pos.NOOIS]) { const tips = K.spreadFields(p).map(x => x[3]); assert.strictEqual(tips[0], K.posCols.zkbd.title); assert.strictEqual(tips[1], K.posCols.zdisc.title); }
   // карточка и панель C03 берут строки из одной функции
   assert.ok(P('concepts/lib/kit.js').includes('...K.spreadFields(p)') && P('concepts/c03-blotter.html').includes('...K.spreadFields(p)'));
+});
+
+t('карточка = колонки: у каждой рублёвой бумаги число в строках «Z-спред к КБД» и «Z-спред к RUONIA» то же, что в «Z к КБД» и «Z к RUONIA» (флоатеры — тоже)', () => {
+  const { M, K } = load(run);
+  const txt = h => String(h).replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
+  const num = h => { const m = /^(−|-)?[\d,.\s]*\d/.exec(txt(h)); return m ? m[0].replace(/\s/g, '') : txt(h); };   // число или «—»
+  for (const id of ['OFZ1', 'NOOIS', 'FL1', 'FL2', 'FL3']) {
+    const p = M.pos[id], rows = Object.fromEntries(K.spreadFields(p).map(x => [x[0], x[1]]));
+    for (const [label, col] of [['Z-спред к КБД', K.posCols.zkbd], ['Z-спред к RUONIA', K.posCols.zdisc]])
+      assert.strictEqual(num(rows[label]), num(col.fmt(col.val(p), p)), id + ': ' + label);
+  }
+  // флоатер: один Z (spreadBp) — в колонке своей кривой дисконтирования, второй «—»; на КБД — «Z к КБД»
+  const z = id => { const p = M.pos[id]; return [p.zKbd, p.zRuonia]; };
+  assert.deepStrictEqual(z('FL1'), [null, 205]); assert.deepStrictEqual(z('FL2'), [215, null]); assert.deepStrictEqual(z('FL3'), [null, 120]);
+  // без DM ядра в строке DM числа нет — оно один раз, под своей строкой Z
+  const fl3 = K.spreadFields(M.pos.FL3);
+  assert.strictEqual(txt(fl3[0][1]), '— (DM ядра нет)');
+  assert.strictEqual(fl3.slice(1).filter(x => /\d/.test(txt(x[1]))).length, 1);
 });
 
 t('демо: у каждой рублёвой бумаги (фикс и флоатер) в карточке обе строки Z, у прочих — нет', () => {

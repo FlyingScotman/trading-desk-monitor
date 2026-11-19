@@ -58,9 +58,10 @@ t('прогон: спреды позиции — свои поля, подпис
   assert.strictEqual(no.zRuonia, null, 'явный null нового прогона остаётся пустым');
   // валюта и кривая, у которой нет короткой подписи: просто Z; Z к КБД и к RUONIA у валютной бумаги нет
   assert.strictEqual(fx.spreadLabel, 'Z'); assert.strictEqual(fx.zKbd, null); assert.strictEqual(fx.zRuonia, null);
-  // флоатер: DM ядра в «Спред», Z к RUONIA — прежний Z (spreadBp), Z к КБД нет; на КБД (нет RUONIA OIS) Z к RUONIA нет
+  // флоатер: DM ядра в «Спред», его Z (spreadBp) — к кривой дисконтирования: на RUONIA это Z к RUONIA, Z к КБД нет;
+  // на КБД (нет RUONIA OIS) это Z к КБД (TDM#786), Z к RUONIA нет
   assert.strictEqual(f1.spreadLabel, 'DM'); assert.strictEqual(f1.zRuonia, 205); assert.strictEqual(f1.zKbd, null);
-  assert.strictEqual(f2.spreadLabel, 'DM'); assert.strictEqual(f2.zRuonia, null); assert.strictEqual(f2.zKbd, null);
+  assert.strictEqual(f2.spreadLabel, 'DM'); assert.strictEqual(f2.zRuonia, null); assert.strictEqual(f2.zKbd, 215);
 });
 
 t('таблицы: «Спред» подписан кривой, колонки «Z к КБД» и «Z к RUONIA» читают свои поля; CSV — число и кривая основной колонки', () => {
@@ -86,8 +87,8 @@ t('таблицы: «Спред» подписан кривой, колонки 
 
 t('C03: колонка «Z к КБД» — в C03 и в наборах «Цены и спреды» и «Всё», рядом с «Z к RUONIA»; «Спред» и «Z к RUONIA» — те же поля', () => {
   const c03 = P('concepts/c03-blotter.html');
-  assert.ok(/zkbd: \{ label: 'Z к КБД', num: true, val: r => r\.zKbd,/.test(c03));
-  assert.ok(/zdisc: \{ label: 'Z к RUONIA', num: true, val: r => r\.zRuonia,/.test(c03));
+  assert.ok(/zkbd: \{ label: 'Z к КБД', csvHead: 'Z к КБД, б\.п\.', num: true, val: r => r\.zKbd,/.test(c03));
+  assert.ok(/zdisc: \{ label: 'Z к RUONIA', csvHead: 'Z к RUONIA, б\.п\.', num: true, val: r => r\.zRuonia,/.test(c03));
   const presets = [...c03.matchAll(/\['(px|all)', '[^']+', \[([^\]]*)\]\]/g)];
   assert.strictEqual(presets.length, 2);
   for (const [, key, list] of presets) assert.ok(/'spread', 'zkbd', 'zdisc', 'gspread'/.test(list), key);

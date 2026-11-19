@@ -146,10 +146,11 @@ t('прогон: спред в карточке — Z к RUONIA у фикса; �
   assert.strictEqual(F1.dm, 878.0); assert.strictEqual(F1.zSpreadZ, 899.1); assert.strictEqual(F1.dmSource, 'core');
   const s1 = K.spreadFields(F1).map(x => x[0]);
   assert.strictEqual(s1.join(' | '), 'Дисконт-маржа | Z-спред к КБД | Z-спред к RUONIA');  // оба Z — TDM#786
-  assert.strictEqual(F1.zRuonia, 899.1); assert.strictEqual(F1.zKbd, null, 'у флоатера Z к КБД нет');
-  // без DM ядра DM = Z, помечен («= Z: DM ядра нет»); оба Z всё равно на месте (TDM#786): Z к КБД — прочерк, Z к RUONIA — то же число
+  assert.strictEqual(F1.zRuonia, 899.1); assert.strictEqual(F1.zKbd, null, 'флоатер на RUONIA: Z к КБД нет');
+  // без DM ядра в строке DM — «— (DM ядра нет)» без числа; оба Z на месте (TDM#786): Z к КБД — прочерк, Z к RUONIA — число, один раз
   const s2 = K.spreadFields(F2);
-  assert.strictEqual(s2.length, 3); assert.ok(/DM ядра нет/.test(s2[0][1]));
+  assert.strictEqual(s2.length, 3);
+  assert.strictEqual(s2[0][1].replace(/<[^>]+>/g, ''), '— (DM ядра нет)', 'DM без числа');
   assert.ok(/—/.test(s2[1][1]) && s2[2][1].startsWith('120 '), 'Z к КБД — прочерк, Z к RUONIA — 120');
   // рублёвая фикс-бумага (TDM#762): две строки, к КБД и к RUONIA, а не одна «к RUONIA»
   const fix = M.positions.find(p => p.cpn && p.cpn.type === 'fix' && p.ccy === 'RUB' && p.zSpreadZ != null);
