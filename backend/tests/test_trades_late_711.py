@@ -22,13 +22,6 @@ server, stub = test_slice_s3.server, test_slice_s3.stub
 TUE = date(2026, 10, 20)
 
 
-@pytest.fixture(autouse=True)
-def _no_memo():
-    trades._AHEAD_MEMO.clear()
-    yield
-    trades._AHEAD_MEMO.clear()
-
-
 @pytest.fixture
 def day(stub, tmp_path, store_url):
     return Day(stub, tmp_path, store_url)
