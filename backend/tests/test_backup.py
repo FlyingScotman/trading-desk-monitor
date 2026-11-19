@@ -613,13 +613,19 @@ def test_backup_routes_run_and_check(desk_env, store_url):
     st = local.get("/api/v1/backup/status").json()
     assert st["enabled"] and st["backups"] == [] and st["stale"] and st["tools"] and st["keep"] == 14
 
-    def wait() -> dict:
-        for _ in range(600):
+    def wait(limit_s: float = 300.0) -> dict:
+        """The job of the last request, once it is not running. A check is a drill (a scratch database made, the dump
+        restored into it, this program's migrations applied to the copy): 2 s on Linux, 6 s a Windows runner on a quiet
+        day and over 30 s on a busy one (CI, a slow run: the fixtures of the same job took 30 to 55 s to make a database
+        that takes 1 s elsewhere). The limit is not the test's claim: it is only where a job that hangs is told from one
+        that is slow, and the message says which step it stood at."""
+        end, j = time.monotonic() + limit_s, None
+        while time.monotonic() < end:
             j = local.get("/api/v1/backup/status").json()["job"]
             if j and j["state"] != "running":
                 return j
             time.sleep(0.05)
-        raise AssertionError("job did not finish")
+        raise AssertionError(f"job did not finish in {limit_s:.0f} s: {j}")
 
     r = local.post("/api/v1/backup/run", json={})
     assert r.status_code == 202, r.text
