@@ -25,6 +25,7 @@ from desk.valuation.fallback import (
     BROKEN_SCHEDULE_TEXT,
     OWN_ANALYTICS_TEXT,
     OWN_ANALYTICS_TEXT_CURVE,
+    OWN_ANALYTICS_TEXT_FX,
     REDEMPTIONS_LABEL,
     FallbackContext,
     approximate,
@@ -308,11 +309,14 @@ def test_the_flag_of_the_quote_alone_is_enough_a_hub_without_the_static_field_sa
 
 
 @pytest.mark.parametrize("reasons,fields", [((), ()), ((), ["zspread_bp", "gspread_bp"])])
-def test_an_old_hub_or_fields_the_ladder_does_not_read_keep_the_sources_yield_as_before(ctx, exact, reasons, fields):
-    """No flag: MOEX's yield and duration as before TDM#768 (the monitor cannot tell they are wrong)."""
+def test_an_old_hub_or_fields_the_ladder_does_not_read_have_the_monitors_own_yield_too(ctx, exact, reasons, fields):
+    """No flag (TDM#619): the same yield and duration of the monitor's own from the flows and the price. Before, MOEX's
+    (here the wrong 53.8 % and 505 days) stood where the monitor could not tell that they were wrong; a foreign bond's
+    yield is never the source's now, so there is nothing to tell."""
     v = approximate(ctx, _rus30(exact[AMORT], reasons=reasons, fields=fields), Q, _fb(ctx))
-    assert v.ytm_pct == pytest.approx(53.8) and "risk_missing" not in v.extra
-    assert OWN_ANALYTICS_TEXT not in v.assumptions and any("MOEX 505 days" in a for a in v.assumptions)
+    assert 6.7 < v.ytm_pct < 6.9 and "risk_missing" not in v.extra
+    assert OWN_ANALYTICS_TEXT_FX in v.assumptions and OWN_ANALYTICS_TEXT not in v.assumptions
+    assert not any("MOEX 505 days" in a for a in v.assumptions)
 
 
 def test_a_broken_schedule_is_still_not_computed(ctx, exact):
@@ -367,7 +371,9 @@ def test_where_moex_is_right_the_monitors_yield_is_close_to_moexs(ctx, exact):
     q = replace(o.quote, source_analytics_unreliable={"fields": FIELDS, "reasons": ["x"]})
     own = approximate(ctx, Outcome(AMORT, _dc(o.terms), q, reason="no_foreign_curve"), Q, _fb(ctx))
     moex = approximate(ctx, Outcome(AMORT, o.terms, o.quote, reason="no_foreign_curve"), Q, _fb(ctx))
-    assert moex.ytm_pct == pytest.approx(moex_y) and OWN_ANALYTICS_TEXT not in moex.assumptions
+    # TDM#619: the unflagged bond's yield is its own too, not MOEX's figure (which stays in the quote for a comparison)
+    assert moex.ytm_pct == pytest.approx(moex_y, abs=0.03) and moex.ytm_pct != moex_y
+    assert OWN_ANALYTICS_TEXT not in moex.assumptions and OWN_ANALYTICS_TEXT_FX in moex.assumptions
     assert own.ytm_pct == pytest.approx(moex_y, abs=0.03)  # 3 bp
     assert own.macaulay_years * 365 == pytest.approx(moex_dur, abs=3)
     assert own.dv01_rub == pytest.approx(moex.dv01_rub, rel=0.01) and own.pv_rub == moex.pv_rub

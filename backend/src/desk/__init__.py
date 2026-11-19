@@ -93,6 +93,11 @@ VALUATION_VERSION = 38  # 2: risk per curve (R8); 3: static display fields (R9 D
 # 36: the Z-spreads of a fixed-coupon RUB bond to the KBD and to RUONIA OIS (TDM#762); a bond whose source schedule does not
 # add up to its face has no yield, duration or risk (TDM#764); coupons by a rate on the period's face, no rounding, and the
 # own yield from the full schedule (TDM#768, TDM#770)
+# 37: a foreign-face bond (CNY, EUR, USD) whose quote is of an earlier day is valued by core at its last price on its
+# currency's curve (fallback.at_last_price, TDM#619): its yield and Z-spread to the curve, its risk on the curve, not the
+# source's yield or none, no spread and a duration at a zero rate; a foreign bond on the ladder (no curve of its currency)
+# has the yield of its own from the last price and the flows, never MOEX's; whatever of a bond's yield and spread is empty
+# says why in the fact of the position (extra.yield_missing, extra.spread_missing)
 # 38: a swap that began before the hub's first calendar day is valued: the calendars of its schedule and of its RUONIA fixings
 # reach back to its start by the fixed holiday rules; only a calendar refusal of the schedule is told apart (TDM#509)
 

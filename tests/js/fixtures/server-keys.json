@@ -152,6 +152,7 @@
   "settlement",
   "short_name",
   "spread_buckets",
+  "spread_missing",
   "swaps",
   "valuation",
   "valuation_date",
@@ -191,6 +192,7 @@
   "repos",
   "risk_missing",
   "risk_problem",
+  "short_name",
   "spread_buckets",
   "swaps",
   "why"

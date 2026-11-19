@@ -24,7 +24,7 @@ function load(answers) {
   class XHR { constructor() { throw new Error('синхронный запрос запрещён (TDM#629)'); } }
   const net = { calls: 0 };
   const fetch = u => {
-    if (/instruments\/aliases$/.test(u)) return Promise.resolve({ status: 404, ok: false, statusText: '', json: () => Promise.resolve(null) });  // алиасы — не график
+    if (/instruments\/(aliases|short-names)$/.test(u)) return Promise.resolve({ status: 404, ok: false, statusText: '', json: () => Promise.resolve(null) });  // алиасы — не график
     net.calls++;
     const a = answers.shift();
     if (a instanceof Error) return Promise.reject(a);

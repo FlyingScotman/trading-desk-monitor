@@ -538,7 +538,8 @@ def settle_env_old(env: dict[str, str]) -> None:
             _rmtree(ENV)
         except OSError as e:
             raise Fail(f"Не удалось удалить недостроенное окружение {ENV}: {e}\n"
-                       "Закройте окна Desk Monitor и программы, открывшие файлы в этой папке, и повторите.") from e
+                       "Запустите stop.bat (окно start.bat до этого не закрывайте: база остановится аварийно), закройте "
+                       "программы, открывшие файлы в этой папке, и повторите.") from e
     try:
         rename_retry(old, ENV)
     except OSError as e:
@@ -583,7 +584,8 @@ def install_mirror(env: dict[str, str], marker: dict) -> None:
             rename_retry(ENV, old)
         except OSError as e:
             raise Fail(f"Не удалось убрать прежнее окружение {ENV}: {e}\n"
-                       "Закройте окна Desk Monitor и программы, открывшие файлы в этой папке, и повторите.") from e
+                       "Запустите stop.bat (окно start.bat до этого не закрывайте: база остановится аварийно), закройте "
+                       "программы, открывшие файлы в этой папке, и повторите.") from e
     try:
         base = Path(sys.executable)
         r = subprocess.run([str(base), "-I", "-m", "venv", str(ENV)], env=env, check=False)
@@ -637,8 +639,8 @@ def _undo_mirror(env: dict[str, str], had: bool) -> bool:
         if had and old.exists():
             rename_retry(old, ENV)
     except OSError as e:
-        say(f"Не удалось вернуть прежнее окружение ({e}). Закройте окна Desk Monitor и запустите start.bat ещё раз: "
-            f"он вернёт {old} сам.")
+        say(f"Не удалось вернуть прежнее окружение ({e}). Запустите stop.bat (окно start.bat до этого "
+            f"не закрывайте: база остановится аварийно) и start.bat ещё раз: он вернёт {old} сам.")
         return False
     return True
 
@@ -686,7 +688,8 @@ def ensure_env(env: dict[str, str], *, force: bool = False) -> None:
             _rmtree(ENV)
         except OSError as e:
             raise Fail(f"Не удалось удалить старое окружение {ENV}: {e}\n"
-                       "Закройте окна Desk Monitor и программы, открывшие файлы в этой папке, и повторите.") from e
+                       "Запустите stop.bat (окно start.bat до этого не закрывайте: база остановится аварийно), закройте "
+                       "программы, открывшие файлы в этой папке, и повторите.") from e
     base = Path(sys.executable)
     r = subprocess.run([str(base), "-I", "-m", "venv", str(ENV)], env=env, check=False)
     py = SCRIPTS / f"python{EXE}"
