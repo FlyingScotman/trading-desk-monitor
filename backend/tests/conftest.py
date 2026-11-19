@@ -15,7 +15,7 @@ from collections.abc import Iterator
 import pytest
 
 import desk.orchestrator as orch
-from desk import parallel
+from desk import parallel, trades
 from desk.store import MIGRATIONS, migrate
 
 SHARED_CACHE = orch.ShockedCurveCache(max_entries=200_000)
@@ -56,6 +56,15 @@ def _shared_curve_cache() -> Iterator[None]:
     mp.setattr(orch, "new_cache", lambda: SHARED_CACHE)
     yield
     mp.undo()
+
+
+@pytest.fixture(autouse=True)
+def _no_ahead_memo() -> Iterator[None]:
+    """``trades._AHEAD_MEMO`` lives for the whole process and is keyed by the database oid and the inputs of a date; a test
+    database is fresh, but the memo of an earlier test must never answer a later one (TDM#711)."""
+    trades._AHEAD_MEMO.clear()
+    yield
+    trades._AHEAD_MEMO.clear()
 
 
 @pytest.fixture(scope="session")
