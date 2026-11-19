@@ -89,6 +89,13 @@ def test_the_store_refuses_what_is_no_curve(con):
 # ---- the curve in force on a date --------------------------------------------------------------------------------
 
 
+def test_name_key_ignores_invisible_formatting_characters():
+    assert M.name_key("Эмитент\u00ad А\u200b") == M.name_key("Эмитент А") == "эмитент а"
+    assert M.strip_format("A\u200eB\ufeff") == "AB"
+    with pytest.raises(M.CurveError):  # typed by hand: still refused
+        M.clean_name("Эмитент\u00ad А")
+
+
 def test_name_key_is_the_identity_of_a_name():
     assert M.name_key("  Эмитент   А ") == M.name_key("ЭМИТЕНТ А") == "эмитент а"
     assert M.name_key("Ｅｍｉｔｅｎｔ A") == "emitent a"  # width variants (NFKC)
@@ -217,6 +224,22 @@ def test_copying_everything_never_undoes_a_withdrawal(con):
     # only a name asked for is brought back
     r = M.copy_curves(con, D1, names=["Эмитент А"])
     assert [c.name for c in r.copied] == ["Эмитент А"] and M.curve_on(con, D1, "Эмитент А").spreads_bp["5Y"] == 300.0
+
+
+def test_copying_everything_locks_only_the_names_of_the_source(store_url):
+    import threading
+    with psycopg.connect(store_url, autocommit=True) as a, psycopg.connect(store_url, autocommit=True) as b:
+        M.put_curve(a, D0, "Эмитент А", {"5Y": 300})
+        M.put_curve(a, D0, "Старое имя", {"5Y": 100})
+        M.put_curve(a, D1, "Старое имя", None)  # withdrawn: not in the source of a copy to D2
+        out: dict = {}
+        with a.transaction():
+            a.execute("SELECT pg_advisory_xact_lock(hashtext('manual_cds:' || %s))", (M.name_key("Старое имя"),))
+            t = threading.Thread(target=lambda: out.update(r=M.copy_curves(b, D2)))
+            t.start()
+            t.join(10)
+            assert not t.is_alive(), "a name outside the source must not hold the copy"
+        assert [c.name for c in out["r"].copied] == ["Эмитент А"]
 
 
 def test_copy_reads_the_source_after_the_locks_of_the_names(store_url):
@@ -374,6 +397,8 @@ def test_the_list_names_the_cds_rows_of_the_dates_run(local, store_url):
         {"position_id": "P4", "source_instrument_id": "CDS-В", **cds},  # no name either: the id
         {"position_id": "P5", "source_instrument_name": "Своп", "asset_class": "otc", "ccy": "RUB",
          "x_product_group": "irs", "x_issuer": "Эмитент Г"},
+        {"position_id": "P7", "source_instrument_name": "CDS Ж", "x_issuer": "Эмитент\u00ad Ж\u200b", **cds},
+        {"position_id": "P8", "source_instrument_name": "CDS Ж 3Y", "x_issuer": "Эмитент Ж", **cds},
         {"position_id": "P6", "source_instrument_name": "Облигация", "asset_class": "bond", "ccy": "RUB",
          "x_issuer": "Эмитент Д"}])
     put(local, "Эмитент А", D0)
@@ -383,7 +408,10 @@ def test_the_list_names_the_cds_rows_of_the_dates_run(local, store_url):
         {"name": "CDS-Б", "name_key": "cds-б", "positions": 1, "deals": ["CDS-Б"], "has_curve": False},
         {"name": "CDS-В", "name_key": "cds-в", "positions": 1, "deals": [], "has_curve": False},
         {"name": "Эмитент А", "name_key": "эмитент а", "positions": 2, "deals": ["CDS Эмитент А 3Y",
-                                                                                 "CDS Эмитент А 5Y"], "has_curve": True}]
+                                                                                 "CDS Эмитент А 5Y"], "has_curve": True},
+        # a report's name with invisible characters is the name without them, not a row dropped
+        {"name": "Эмитент Ж", "name_key": "эмитент ж", "positions": 2, "deals": ["CDS Ж", "CDS Ж 3Y"],
+         "has_curve": False}]
     other = local.get(BASE + f"/curves?date={D2}").json()  # a date without a run: no names, the curves as usual
     assert other["run_id"] is None and other["positions"] == [] and len(other["curves"]) == 1
 

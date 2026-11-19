@@ -28,8 +28,8 @@
     'система считает разными.';
 
   const clean = s => String(s == null ? '' : s).split(/\s+/).filter(Boolean).join(' ');
-  // идентификатор имени, как на сервере (backend manual_cds.name_key): NFKC, строчные, пробелы в один
-  const nameKey = s => clean(String(s == null ? '' : s).normalize('NFKC').toLowerCase().replace(/ß/g, 'ss'));
+  // идентификатор имени, как на сервере (backend manual_cds.name_key): NFKC, без невидимых символов Cf, строчные, пробелы в один
+  const nameKey = s => clean(String(s == null ? '' : s).normalize('NFKC').replace(/\p{Cf}/gu, '').toLowerCase().replace(/ß/g, 'ss'));
   const num = t => Number(String(t).trim().replace(/\s/g, '').replace(',', '.'));
 
   // ---------- разбор введённого: { ok, value, error } ----------

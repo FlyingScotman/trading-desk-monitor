@@ -149,7 +149,7 @@ def list_curves(con: Con, on: Annotated[Date, Query(alias="date", description="T
     by_key: dict[str, dict] = {}
     for n in names:  # two spellings of one name are one name
         try:
-            name = M.clean_name(n["name"])
+            name = M.clean_name(M.strip_format(n["name"]))  # a report's name: invisible characters dropped, not the row
         except M.CurveError:
             continue
         k = M.name_key(name)

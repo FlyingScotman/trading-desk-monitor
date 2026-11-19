@@ -64,9 +64,15 @@ class CurveError(ValueError):
     """The input is not a curve (a tenor, a spread, a recovery rate, a name or a date the store refuses)."""
 
 
+def strip_format(name: str) -> str:
+    """``name`` without its invisible formatting characters (category Cf: soft hyphen, zero-width, text direction)."""
+    return "".join(c for c in name if unicodedata.category(c) != "Cf")
+
+
 def name_key(name: str) -> str:
-    """The identity of a reference name: NFKC, case folded, whitespace runs one space, stripped. Idempotent."""
-    return " ".join(unicodedata.normalize("NFKC", name).casefold().split())
+    """The identity of a reference name: NFKC, invisible formatting characters (Cf) dropped, case folded, whitespace
+    runs one space, stripped. Idempotent. A name from a report with a soft hyphen has the key of the same name without."""
+    return " ".join(strip_format(unicodedata.normalize("NFKC", name)).casefold().split())
 
 
 def clean_name(raw: str) -> str:
@@ -293,16 +299,21 @@ def copy_curves(con: psycopg.Connection, to_date: date, *, from_date: date | Non
     keys = None if names is None else list(dict.fromkeys(name_key(clean_name(n)) for n in names))
     copied: list[Curve] = []
     skipped: list[tuple[str, str, str]] = []
-    with con.transaction():
-        # the names' locks first (sorted: put_curve takes one, so no cycle), then read what they guard
-        for key in sorted({k for k, _ in all_names(con)} if keys is None else set(keys)):
-            _lock(con, key)
-        known = dict(all_names(con))
-        src = {r["name_key"]: _curve(r) for r in _rows(
+
+    def source() -> dict[str, Curve]:
+        return {r["name_key"]: _curve(r) for r in _rows(
             con, f"SELECT {_SELECT} FROM (SELECT DISTINCT ON (name_key) * FROM manual_cds_rev WHERE "
                  + ("valid_from <= %(f)s" if from_date else "valid_from < %(t)s")
                  + " ORDER BY name_key, valid_from DESC, rev_id DESC) c WHERE NOT cleared ORDER BY name_key",
             {"f": from_date, "t": to_date})}
+
+    with con.transaction():
+        # the locks of the names concerned first (sorted: put_curve takes one, so no cycle), then read what they guard:
+        # the names asked for, else those the source holds (a first read to know them, read again under the locks)
+        for key in sorted(set(keys) if keys is not None else source()):
+            _lock(con, key)
+        known = dict(all_names(con))
+        src = source()
         for key in (keys if keys is not None else list(src)):
             c = src.get(key)
             if c is None:

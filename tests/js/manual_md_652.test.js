@@ -67,6 +67,7 @@ test('валюта и имя: три латинские буквы; имя бе�
   assert.equal(MD.parseName('x'.repeat(120)).ok, true);
   assert.equal(MD.nameKey('ЭМИТЕНТ  А'), MD.nameKey(' эмитент а '));
   assert.equal(MD.nameKey('Ｅｍｉｔ A'), 'emit a');
+  assert.equal(MD.nameKey('Эмитент\u00ad А\u200b'), 'эмитент а', 'как name_key сервера: Cf отброшены');
 });
 
 const CURVE = { rev_id: 1, name_key: 'эмитент а', name: 'Эмитент А', valid_from: '2026-11-16', entered_on_date: false, cleared: false,
