@@ -86,8 +86,8 @@ t('таблицы: «Спред» подписан кривой, колонки 
 
 t('C03: колонка «Z к КБД» — в C03 и в наборах «Цены и спреды» и «Всё», рядом с «Z к RUONIA»; «Спред» и «Z к RUONIA» — те же поля', () => {
   const c03 = P('concepts/c03-blotter.html');
-  assert.ok(/zkbd: \{ label: 'Z к КБД', num: true, val: r => r\.zKbd,/.test(c03));
-  assert.ok(/zdisc: \{ label: 'Z к RUONIA', num: true, val: r => r\.zRuonia,/.test(c03));
+  assert.ok(/zkbd: \{ label: 'Z к КБД', num: true, nf: K\.NF\.zkbd, val: r => r\.zKbd,/.test(c03));
+  assert.ok(/zdisc: \{ label: 'Z к RUONIA', num: true, nf: K\.NF\.zdisc, val: r => r\.zRuonia,/.test(c03));
   const presets = [...c03.matchAll(/\['(px|all)', '[^']+', \[([^\]]*)\]\]/g)];
   assert.strictEqual(presets.length, 2);
   for (const [, key, list] of presets) assert.ok(/'spread', 'zkbd', 'zdisc', 'gspread'/.test(list), key);

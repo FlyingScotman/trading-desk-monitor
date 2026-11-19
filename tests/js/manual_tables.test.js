@@ -411,7 +411,7 @@ t('#258: число с единицей и валютой — в CSV число�
   const c08 = P('concepts/c08-calendar.html'), c13 = P('concepts/c13-issuers.html'), c03 = P('concepts/c03-blotter.html'), kit = P('concepts/lib/kit.js');
   assert.ok(c08.includes('<th class="n" data-csv="Номинал, mm в вал.|Вал">Номинал</th>') && c08.includes(`<td class="n"' + K.csvv(() => [f.mn(p.notional, 0), p.ccy]) + '>' + f.mn(p.notional, 0) + '<span class="mut3">mm '`));
   assert.ok(c13.includes('<th class="n" data-csv="Сумма, mm в вал.|Вал">Сумма</th>') && c13.includes(`<td class="n"' + K.csvv(() => [f.mn(c.amount, 1), c.ccy]) + '>'`));
-  assert.ok(/notional: \{[^\n]*csvHead: 'Номинал, mm в вал.', csvFmt: v => f\.mn\(v, 2\)/.test(c03) && c03.includes("(c.csvHead ? ' data-csv=\"' + esc(c.csvHead) + '\"' : '')") && c03.includes('(c.csvFmt ? K.csvv(() => c.csvFmt(v, r)) : \'\')'));
+  assert.ok(/notional: \{[^\n]*csvHead: 'Номинал, mm в вал.', csvFmt: v => K\.nfNum\('notional', v, true\)/.test(c03) && c03.includes("(c.csvHead ? ' data-csv=\"' + esc(c.csvHead) + '\"' : '')") && c03.includes('(c.csvFmt ? K.csvv(() => c.csvFmt(v, r)) : \'\')'));
   assert.ok(kit.includes('<th class="n" title="в валюте позиции" data-csv="Номинал, mm в вал.">Номинал</th>') && kit.includes(`<td class="n"' + K.csvv(() => f.mn(x.p.notional, 2)) + '>'`), 'разбор вклада');
 });
 

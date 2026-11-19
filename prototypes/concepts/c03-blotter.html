@@ -258,7 +258,7 @@ body { display: flex; flex-direction: column; height: 100vh; overflow: hidden; }
     const firstSum = CL.findIndex(c => c.sum), span = firstSum < 0 ? CL.length : Math.max(1, firstSum);
     const head = '<thead><tr><th class="stripe"></th>' + CL.map(c => {
       const si = st.sort.findIndex(s => s[0] === c.key);
-      return '<th class="sortable' + (c.num ? ' n' : '') + '" data-k="' + c.key + '"' + (c.csvHead ? ' data-csv="' + esc(c.csvHead) + '"' : '') + ' title="' + esc(c.title || 'щелчок — сортировка, Shift+щелчок — добавить колонку') + '">' + (c.tip ? '<span class="k-hint">' + c.label + '</span>' : c.label) + (si >= 0 ? '<span class="si">' + (st.sort[si][1] > 0 ? '▲' : '▼') + (st.sort.length > 1 ? si + 1 : '') + '</span>' : '') + K.fltIcon(c, st.filters) + (c.nfChanged && K.colUnit(c) ? '<span class="k-thu">' + esc(K.colUnit(c)) + '</span>' : '') + '</th>';
+      return '<th class="sortable' + (c.num ? ' n' : '') + '" data-k="' + c.key + '"' + (c.csvHead ? ' data-csv="' + esc(c.csvHead) + '"' : '') + ' title="' + esc(c.title || 'щелчок — сортировка, Shift+щелчок — добавить колонку') + '">' + (c.tip ? '<span class="k-hint">' + c.label + '</span>' : c.label) + (c.nfChanged && K.colUnit(c) ? '<span class="k-thu">' + esc(K.colUnit(c)) + '</span>' : '') + (si >= 0 ? '<span class="si">' + (st.sort[si][1] > 0 ? '▲' : '▼') + (st.sort.length > 1 ? si + 1 : '') + '</span>' : '') + K.fltIcon(c, st.filters) + '</th>';
     }).join('') + '</tr></thead>';
     // строки таблицы по порядку (K.vwin): строка позиции, строка группы, спрятанная строка свёрнутой группы; HTML — по требованию
     const items = [];
