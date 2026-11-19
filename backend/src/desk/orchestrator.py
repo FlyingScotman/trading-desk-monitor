@@ -549,10 +549,11 @@ def horizon(ctx: EodContext, requests: list[tuple[str, float]], horizon_date: da
     ``horizon_portfolio`` (``valuation.bonds.horizon_bonds``) on the inputs ``value`` values them on: the same
     backend checks, instruments, quotes, curves (``risk_market``) and policy. A bond without a price of its own
     today is carried at the ladder's price (``fallback.at_last_price``, TDM#383: an intraday cut before its first
-    trade, a day it did not trade, for a foreign face a quote of an earlier day too, TDM#619; ``detail`` says which), else
-    (a RUB bond), without a price in the ladder's window, at the clean
+    trade, a day it did not trade; ``detail`` says which), else (a RUB bond), without a price in the ladder's window, at the clean
     price of ``model_prices`` (position ID -> clean %: its run's model price, ``fallback.at_model_price``, TDM#441);
-    otherwise no fallback ladder: a bond core cannot value has no carry, with its reason. ``position_ids`` as in
+    otherwise no fallback ladder: a bond core cannot value has no carry, with its reason. A foreign-face bond with a quote
+    of an earlier day is not taken at its last price here (``value`` does, TDM#619): its refusal, ``stale_quote``, is known
+    only after core's call, so it has no carry with that reason (core 0.45 carries no foreign bond at all). ``position_ids`` as in
     ``value``. Returns one ``CarryOutcome`` per request and the core result."""
     pids = _pids(requests, position_ids)
     pre, todo = bond_requests(ctx, requests, pids)
