@@ -1137,6 +1137,7 @@ def spot_deals(rows: Sequence[Mapping[str, Any]], books: Mapping[str, Mapping[st
             if d := _day(x.get("fixing_date")):
                 dates.append(d)
             ids.append(str(x.get("trade_id")))
+        trade_dates = [d for x in t if (d := _day(x.get("trade_date")))]
         if not parsed:
             amounts = _amounts(ex.get("ocp_amount") or r.get("fx_delta"), policy)
             legs, open_legs = defaultdict(float, amounts), defaultdict(float, amounts)
@@ -1151,7 +1152,8 @@ def spot_deals(rows: Sequence[Mapping[str, Any]], books: Mapping[str, Mapping[st
         own = bool(parsed) and not valued
         out.append(S.Deal(pid, str(r["book_id"]), kind, comp, dict(legs), dict(open_legs),
                           tuple(sorted(set(dates))), tuple(dict.fromkeys(ids)), frozenset(by_rate), own,
-                          S.DF1_TEXT.format(why=_df1_why(ex, bool(parsed))) if own else ""))
+                          S.DF1_TEXT.format(why=_df1_why(ex, bool(parsed))) if own else "",
+                          min(trade_dates) if trade_dates else None))
     return out
 
 
@@ -1803,8 +1805,24 @@ def published_day(comparisons: Sequence[Mapping[str, Any]], outside_report: Sequ
                        "trade_ids": list(m.deal.trade_ids), "days": m.days, "others": list(m.others)}
                       for m in sm.matched if m.line.ccy == ccy]
             sf_un = [{"value_date": _iso(u.line.value_date), "pair": u.line.pair, "src": u.line.src,
-                      "amount": u.line.amount, "book_id": u.line.book_id, "why": u.why}
+                      "amount": u.line.amount, "book_id": u.line.book_id, "why": u.why,
+                      **({"near": {"position_id": u.near[0], "nominal": u.near[1]}} if u.near else {}),
+                      **({"other": {"position_id": u.other[0], "ccy": u.other[1], "nominal": u.other[2]}}
+                         if u.other else {})}
                      for u in sm.unmatched if u.line.ccy == ccy]
+            # TDM#807: the report has no such line at all (the adapter gave none, or the file was read before it did)
+            # while the book has deals of the kinds a line can be matched with: said, with how many were traded
+            # before the report's date (the report can hold them) and after it (it cannot)
+            sf_none = None
+            if not spot_in:
+                mine_ccy = [d for d in allowed if ccy in d.legs]
+                if mine_ccy:
+                    before = sum(1 for d in mine_ccy if b0 is not None and d.trade_date is not None
+                                 and d.trade_date <= b0)
+                    after = sum(1 for d in mine_ccy if b0 is not None and d.trade_date is not None
+                                and d.trade_date > b0)
+                    sf_none = {"deals": len(mine_ccy), "before": before, "after": after,
+                               "unknown": len(mine_ccy) - before - after}
             for o in sf_out:
                 if o["others"]:
                     issues["spot_future_ambiguous"].append(
@@ -1824,8 +1842,9 @@ def published_day(comparisons: Sequence[Mapping[str, Any]], outside_report: Sequ
                  split_kinds=sorted(sc["kinds"]) if not sc["absent"] else [], partial_pv=partial, no_pv=no_pv,
                  base_older=b0 is not None and business_days_between(b0, on, is_business_day) > 1,
                  excluded=excluded, derivative_types=[] if sc["absent"] else _types_out(types),
-                 **({"spot_future": {"out": sf_out, "unmatched": sf_un, "df1": at_df1}}
-                    if sf_out or sf_un or at_df1 else {}),
+                 **({"spot_future": {"out": sf_out, "unmatched": sf_un, "df1": at_df1,
+                                     **({"none": sf_none} if sf_none else {})}}
+                    if sf_out or sf_un or at_df1 or sf_none else {}),
                  **({"derivative_share": sorted(big, key=lambda x: -abs(x["amount"]))[:CONTRIBUTIONS_MAX]}
                     if big else {}))
     covered = {b for sc in scopes.values() for b in sc["books"]}
@@ -2052,8 +2071,7 @@ def compute_ocp(rows: Sequence[Mapping[str, Any]], books: Mapping[str, Mapping[s
                                                            units=report_units, days=days,
                                                            is_business_day=is_business_day, derivs=derivs,
                                                            rates=rates, cash_dates=cash_dates(cash),
-                                                           spot=spot_deals(rows, books, tb, on, policy)
-                                                           if any(c.get("spot_future") for c in comps) else ())
+                                                           spot=spot_deals(rows, books, tb, on, policy))
         old = {u.get("set_id") for u in carried_units(report_units, {str(b): str(m.get("entity") or "—")
                                                                      for b, m in books.items()}, on, policy,
                                                        is_business_day)[1]}
