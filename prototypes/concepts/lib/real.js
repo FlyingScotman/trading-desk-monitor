@@ -345,7 +345,9 @@
   const REASON_PENDING = 'права на правку уточняются — обновите страницу, если не исчезнет';
   const rights = { editable: LOOPBACK.test(location.hostname || ''), reason: LOOPBACK.test(location.hostname || '') ? REASON_DENIED : REASON_PENDING, known: false };
   // отказ сервера (403) до ответа входа: причина — сам отказ, а не «уточняются»; после ответа входа причина уже своя
-  const deny = () => { rights.editable = false; if (!rights.known) rights.reason = REASON_DENIED; };
+  // и пока ответа входа нет, последующий setAuth не поднимает право обратно: отказ сервера весомее адреса страницы
+  let denied = false;
+  const deny = () => { rights.editable = false; if (!rights.known) { denied = true; rights.reason = REASON_DENIED; } };
   M.nameRights = {
     get editable() { return rights.editable; }, set editable(v) { if (v) rights.editable = true; else deny(); },
     get readOnlyReason() { return rights.reason; }, get authKnown() { return rights.known; },  // known: ответ входа применён
@@ -356,6 +358,7 @@
       else if (st.user.role === 'viewer') { rights.editable = false; rights.reason = REASON_VIEWER; }
       else { rights.editable = true; rights.reason = REASON_DENIED; }
       rights.known = true;
+      if (denied) rights.editable = false;  // 403 пришёл раньше ответа входа: роль и режим уточнены, но право не возвращается
       return rights.editable;
     },
   };

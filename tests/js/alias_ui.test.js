@@ -103,6 +103,28 @@ t('прогон: правка — PUT /api/v1/instruments/alias с JSON; с чу
   assert.strictEqual((await off.M.aliasApi.put('SU26242RMFS0', 'X')).status, 0);
 });
 
+t('права на правку (TDM#777): отказ сервера (403) раньше ответа входа — ответ входа права обратно не поднимает', () => {
+  const trader = { enabled: true, user: { username: 'u', role: 'trader' }, loopback: false };
+  const x = load({ real: true, host: '127.0.0.1' });
+  assert.strictEqual(x.M.aliasApi.editable, true, 'до отказа — по адресу страницы');
+  x.M.aliasApi.editable = false;  // 403 на запись
+  assert.strictEqual(x.M.nameRights.authKnown, false);
+  assert.strictEqual(x.M.nameRights.setAuth(trader), false, 'трейдер по ответу входа, но сервер уже отказал');
+  assert.strictEqual(x.M.aliasApi.editable, false); assert.strictEqual(x.M.shortNameApi.editable, false);
+  assert.ok(x.M.nameRights.authKnown && /сервер отказал/.test(x.M.nameRights.readOnlyReason), x.M.nameRights.readOnlyReason);
+  // то же с чужого адреса; а viewer и «вход выключен» называют свою причину
+  const y = load({ real: true, host: '192.168.1.20' });
+  y.M.nameRights.editable = false;
+  assert.strictEqual(y.M.nameRights.setAuth({ enabled: true, user: { username: 'v', role: 'viewer' }, loopback: false }), false);
+  assert.ok(/роль «просмотр»/.test(y.M.nameRights.readOnlyReason), y.M.nameRights.readOnlyReason);
+  // без отказа ответ входа по-прежнему даёт право
+  const z = load({ real: true, host: '192.168.1.20' });
+  assert.strictEqual(z.M.nameRights.setAuth(trader), true);
+  // отказ после ответа входа — только текущее состояние, не «запомненный» отказ
+  z.M.aliasApi.editable = false;
+  assert.strictEqual(z.M.nameRights.editable, false);
+});
+
 t('права на правку (TDM#777): вход включён — трейдер и администратор с любого компьютера, «просмотр» — только чтение, вход выключен — компьютер сервера', () => {
   const st = (enabled, role, loopback) => ({ enabled, user: enabled ? (role ? { username: 'u', role } : null) : { username: 'local', role: 'admin' }, loopback });
   const net = () => load({ real: true, host: '192.168.1.20' });
