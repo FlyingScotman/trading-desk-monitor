@@ -2031,70 +2031,78 @@
     return out;
   };
 
-  // ---------- какие колонки таблицы скрыты (TDM#763) ----------
-  // Хранится то, что пользователь СКРЫЛ, а не то, что показано: колонка, которой не было при сохранении (новая версия
-  // монитора), по умолчанию видна, а ключ, которого в таблице нет, молча пропускается. Ключ — экран + таблица (+ набор
-  // колонок экрана, как у C03): K.colKey. Выбор — на сервере, отдельно у каждого пользователя монитора: GET / PUT / DELETE
-  // ../api/v1/me/table-columns (backend/src/desk/api/prefs_routes.py, таблица user_table_columns), так что он переживает
-  // перезагрузку, перезапуск сервера и обновление программы и идёт за пользователем на другой компьютер.
-  // Копия — в K.viewStore браузера (ключ 'cols:<ключ>'): страница рисуется сразу, до ответа сервера, и работает, когда
-  // сервера нет (демо, файл, сбой запроса: чтение и запись в try/catch). Ответил сервер — его слово главное, пришёл ответ —
-  // таблицы перерисовываются (событие 'colprefs'); нет — живёт копия браузера, и меню колонок говорит об этом словами.
+  // ---------- какие колонки таблицы скрыты и какие добавлены (TDM#763, TDM#778) ----------
+  // Хранится то, что пользователь СКРЫЛ из состава таблицы, и то, что он ДОБАВИЛ к нему из каталога колонок позиций, а не
+  // показанное целиком: колонка, которой не было при сохранении (новая версия монитора), по умолчанию видна, а ключ, которого
+  // нет ни в таблице, ни в каталоге, молча пропускается. Ключ — экран + таблица (+ набор колонок экрана, как у C03): K.colKey.
+  // Выбор — на сервере, отдельно у каждого пользователя монитора: GET / PUT / DELETE ../api/v1/me/table-columns
+  // (backend/src/desk/api/prefs_routes.py, таблица user_table_columns), так что он переживает перезагрузку, перезапуск сервера
+  // и обновление программы и идёт за пользователем на другой компьютер. Выбор таблицы — {hidden: [ключи], added: [ключи в порядке
+  // добавления]}; added не обязателен (выбор из версии до TDM#778 — только hidden).
+  // Копия — в K.viewStore браузера (ключ 'cols:<ключ>', {hidden, added}; added — только если не пуст): страница рисуется сразу,
+  // до ответа сервера, и работает, когда сервера нет (демо, файл, сбой запроса: чтение и запись в try/catch). Ответил сервер —
+  // его слово главное, пришёл ответ — таблицы перерисовываются (событие 'colprefs'); нет — живёт копия браузера, и меню колонок
+  // говорит об этом словами.
   K.colKey = s => String(s == null ? '' : s).replace(/^table:/, '').toLowerCase().replace(/[^a-z0-9._:-]+/g, '_').replace(/^[^a-z0-9]+/, '').slice(0, 128);
   K.colPrefs = (() => {
     const API = '../api/v1/me/table-columns', LK = k => 'cols:' + k, DIRTY = 'cols-dirty';
-    const srv = {}, touched = new Set(), chain = {}, ver = {};  // srv — скрытые колонки по ключам (ответ сервера и свои правки); touched — ключи, правленные здесь
+    const srv = {}, touched = new Set(), chain = {}, ver = {};  // srv — выбор по ключам {hidden, added} (ответ сервера и свои правки); touched — ключи, правленные здесь
     let loaded = false, loadFailed = false, saveFailed = false, asked = false;
     const clean = a => Array.isArray(a) ? [...new Set(a.filter(x => typeof x === 'string' && x))] : [];
+    const pick = o => ({ hidden: clean(o && o.hidden), added: clean(o && o.added) });  // чужие данные (сервер, браузер) — в проверенную форму
+    const none = s => !s.hidden.length && !s.added.length;  // нет своего выбора: таблица по умолчанию
+    const keep = (key, s) => { const o = { hidden: s.hidden }; if (s.added.length) o.added = s.added; K.viewStore.set(LK(key), o); };
     const served = () => M.source === 'real' && typeof fetch === 'function';
     // «не отправлено»: правка, которую сервер не принял (нет связи, сбой), помнится в браузере, и при следующей загрузке страницы
     // уходит на сервер раньше, чем приходит его ответ; пока она не принята, в копии выбор лежит и для «как было» (пустой список)
     const dirtyKeys = () => { const d = K.viewStore.get(DIRTY); return clean(d && d.keys); };
     const markDirty = (key, on) => { const s = new Set(dirtyKeys()); if (on) s.add(key); else s.delete(key); if (s.size) K.viewStore.set(DIRTY, { keys: [...s] }); else K.viewStore.reset(DIRTY); };
-    const send = (key, method, hidden) => {
+    const send = (key, method, s) => {
       // запросы одной таблицы — по очереди: быстрые щелчки не меняются местами по дороге; результат — принял ли сервер
-      const run = () => Promise.resolve().then(() => fetch(API + '/' + encodeURIComponent(key), { method, cache: 'no-store', headers: { 'Content-Type': 'application/json' }, body: method === 'PUT' ? JSON.stringify({ hidden }) : undefined }))
+      const run = () => Promise.resolve().then(() => fetch(API + '/' + encodeURIComponent(key), { method, cache: 'no-store', headers: { 'Content-Type': 'application/json' }, body: method === 'PUT' ? JSON.stringify({ hidden: s.hidden, added: s.added }) : undefined }))
         .then(r => { if (!r.ok) throw new Error(String(r.status)); saveFailed = false; return true; }).catch(() => { saveFailed = true; return false; });
       return (chain[key] = (chain[key] || Promise.resolve()).then(run));
     };
     // отправить выбор таблицы; принял сервер и после этого выбор не менялся — «не отправлено» снимается
-    const push = (key, hidden) => {
+    const push = (key, s) => {
       const v = ver[key] = (ver[key] || 0) + 1;
       markDirty(key, true);
-      return send(key, hidden.length ? 'PUT' : 'DELETE', hidden).then(ok => {
-        if (ok && ver[key] === v) { markDirty(key, false); if (!hidden.length) K.viewStore.reset(LK(key)); }
+      return send(key, none(s) ? 'DELETE' : 'PUT', s).then(ok => {
+        if (ok && ver[key] === v) { markDirty(key, false); if (none(s)) K.viewStore.reset(LK(key)); }
         return ok;
       });
     };
     const P = {
-      // скрытые колонки таблицы: массив ключей, непроверенный (таблица сводит его со своими колонками)
-      get(key) {
+      // выбор таблицы {hidden, added}: массивы ключей, непроверенные (таблица сводит их со своими колонками и каталогом)
+      sel(key) {
         if (!asked && served()) { asked = true; P.load(); }  // первая таблица с выбором колонок просит выбор с сервера; странице без таких таблиц запрос не нужен
-        if (loaded || touched.has(key)) return clean(srv[key]);
-        const l = K.viewStore.get(LK(key));
-        return clean(l && l.hidden);
+        if (loaded || touched.has(key)) return pick(srv[key]);
+        return pick(K.viewStore.get(LK(key)));
       },
-      set(key, hidden) {
-        hidden = clean(hidden);
+      get(key) { return P.sel(key).hidden; },    // скрытые колонки таблицы
+      added(key) { return P.sel(key).added; },   // добавленные колонки таблицы, в порядке добавления
+      // added не передан — добавленные остаются как были (правка только скрытых)
+      set(key, hidden, added) {
+        const s = { hidden: clean(hidden), added: added === undefined ? P.sel(key).added : clean(added) };
         touched.add(key);
-        if (hidden.length) { srv[key] = hidden; K.viewStore.set(LK(key), { hidden }); } else { delete srv[key]; if (served()) K.viewStore.set(LK(key), { hidden: [] }); else K.viewStore.reset(LK(key)); }
-        return served() ? push(key, hidden) : Promise.resolve();
+        if (!none(s)) { srv[key] = s; keep(key, s); } else { delete srv[key]; if (served()) K.viewStore.set(LK(key), { hidden: [] }); else K.viewStore.reset(LK(key)); }
+        return served() ? push(key, s) : Promise.resolve();
       },
-      reset(key) { return P.set(key, []); },  // «как было»: у пользователя нет своего выбора, таблица — по умолчанию
+      reset(key) { return P.set(key, [], []); },  // «как было»: у пользователя нет своего выбора, таблица — по умолчанию
       load() {
         asked = true;
         if (!served()) return Promise.resolve(false);
         // правки, не дошедшие до сервера раньше, — первыми: ответ сервера их не перекроет
         const flush = Promise.all(dirtyKeys().map(k => {
-          const l = K.viewStore.get(LK(k)), hidden = clean(l && l.hidden);
-          touched.add(k); if (hidden.length) srv[k] = hidden; else delete srv[k];
-          return push(k, hidden);
+          const s = pick(K.viewStore.get(LK(k)));
+          touched.add(k); if (!none(s)) srv[k] = s; else delete srv[k];
+          return push(k, s);
         }));
         return flush.then(() => fetch(API, { cache: 'no-store', headers: { Accept: 'application/json' } }))
           .then(r => { if (!r.ok) throw new Error(String(r.status)); return r.json(); })
           .then(j => {
             const t = j && typeof j === 'object' && j.tables && typeof j.tables === 'object' && !Array.isArray(j.tables) ? j.tables : {};
-            Object.keys(t).forEach(k => { if (touched.has(k)) return; srv[k] = clean(t[k] && t[k].hidden); K.viewStore.set(LK(k), { hidden: srv[k] }); });
+            Object.keys(t).forEach(k => { if (touched.has(k)) return; srv[k] = pick(t[k]); keep(k, srv[k]); });
             Object.keys(srv).forEach(k => { if (!(k in t) && !touched.has(k)) delete srv[k]; });  // у пользователя нет выбора — по умолчанию, сколько бы ни лежало в браузере
             loaded = true; loadFailed = false;
             fire('colprefs');
@@ -2109,45 +2117,77 @@
   })();
   // Меню колонок: кнопка «Колонки ▾» и выпадающая панель со списком колонок и галочками, «Как было» и «Готово». Меню — на
   // экране один раз, закрывается Esc, щелчком снаружи и сменой размера окна; на телефоне — по ширине экрана (kit.css, .k-colmenu).
-  // o: { cols: () => [{key, label (HTML), unit, fixed}] — колонки таблицы; fixed — колонка-идентификатор, не скрывается;
-  //      hidden: () => Set ключей скрытых; toggle(key, hide); reset(); title }
-  // Кнопка получает btn.paint() — подпись («Колонки · скрыто 3 ▾») после смены состава не из меню.
+  // Под списком — раздел «Добавить» (TDM#778): стандартные колонки, которых в таблице нет; поставили галочку — колонка встаёт в конец
+  // таблицы и переходит в основной список с пометкой «добавлена», сняли — возвращается в «Добавить».
+  // o: { cols: () => [{key, label (HTML), unit, fixed, added}] — колонки таблицы, и добавленные тоже; fixed — колонка-идентификатор,
+  //      не скрывается; hidden: () => Set ключей скрытых; toggle(key, hide); reset(); title;
+  //      added: () => Set ключей добавленных; avail: () => [{key, label, unit}] — что можно добавить; add(key); remove(key) }
+  // Без avail раздела «Добавить» нет, без added подпись кнопки — как до TDM#778.
+  // Кнопка получает btn.paint() — подпись («Колонки · скрыто 3, добавлено 2 ▾») после смены состава не из меню.
   let colPop = null, colPopOff = [];
   K.closeColMenu = () => { if (colPop) { colPop.remove(); colPop = null; } colPopOff.forEach(f => f()); colPopOff = []; };
   K.colMenu = o => {
     const btn = h('button', 'k-tbtn k-colbtn'); btn.type = 'button';
     btn.setAttribute('aria-haspopup', 'true'); btn.setAttribute('aria-expanded', 'false');
-    btn.title = o.title || 'показать и скрыть колонки таблицы; выбор запоминается для вашего пользователя';
-    const paint = btn.paint = () => { const n = o.hidden().size; btn.textContent = 'Колонки' + (n ? ' · скрыто ' + n : '') + ' ▾'; btn.classList.toggle('on', n > 0); };
+    const nAdded = () => o.added ? o.added().size : 0;
+    const paint = btn.paint = () => {
+      const n = o.hidden().size, a = nAdded(), part = [n ? 'скрыто ' + n : '', a ? 'добавлено ' + a : ''].filter(Boolean).join(', ');
+      btn.textContent = 'Колонки' + (part ? ' · ' + part : '') + ' ▾'; btn.classList.toggle('on', n > 0 || a > 0);
+      btn.title = (o.title || 'показать и скрыть колонки таблицы' + (o.avail ? ', добавить стандартные колонки' : '') + '; выбор запоминается для вашего пользователя')
+        + (part ? '. Сейчас: ' + part + ' («Как было» в меню вернёт состав по умолчанию)' : '');
+    };
     const where = { server: '', browser: 'Выбор хранится только в этом браузере (нет сервера).', offline: 'Сервер не ответил или не принял выбор: он сохранён в этом браузере и уйдёт на сервер при следующей загрузке страницы.' };
     function open() {
       K.closeColFilter(); K.closeColMenu();
       const m = h('div', 'k-panel k-colmenu'); m.setAttribute('role', 'dialog'); m.setAttribute('aria-label', 'Колонки таблицы');
       const hd = h('div', 'k-colmenu-hd'), ttl = h('span', 'k-colmenu-t'), list = h('div', 'k-colmenu-list'), ft = h('div', 'k-colmenu-ft'), note = h('div', 'k-colmenu-note k-note');
       const reset = h('button', 'k-btn', 'Как было'), done = h('button', 'k-btn', 'Готово');
-      reset.type = done.type = 'button'; reset.title = 'вернуть состав колонок по умолчанию: показать все скрытые';
-      const cs = o.cols();
+      reset.type = done.type = 'button'; reset.title = 'вернуть состав колонок по умолчанию: показать все скрытые' + (o.avail ? ' и убрать добавленные' : '');
+      let cs = o.cols();
       const head = () => {
-        const hid = o.hidden(), shown = cs.filter(c => c.fixed || !hid.has(c.key)).length;
-        ttl.textContent = 'Показано ' + shown + ' из ' + cs.length; reset.disabled = !hid.size; btn.paint();
+        const hid = o.hidden(), na = nAdded(), shown = cs.filter(c => c.fixed || !hid.has(c.key)).length;
+        ttl.textContent = 'Показано ' + shown + ' из ' + cs.length + (na ? ' · добавлено ' + na : ''); reset.disabled = !hid.size && !na; btn.paint();
         const w = where[K.colPrefs.where()]; note.textContent = w; note.style.display = w ? '' : 'none';
       };
-      const hid0 = o.hidden();
-      cs.forEach(c => {
-        const row = h('label', 'k-colmenu-row' + (c.fixed ? ' fixed' : '')), cb = document.createElement('input');
-        cb.type = 'checkbox'; cb.checked = c.fixed || !hid0.has(c.key); cb.disabled = !!c.fixed; cb.dataset.col = c.key;
-        if (c.fixed) row.title = 'колонка-идентификатор: всегда на экране';
-        cb.onchange = () => {
-          if (!btn.isConnected) { K.closeColMenu(); return; }  // страница перерисовала таблицу, пока меню было открыто: меню — от старой таблицы
-          const done = o.toggle(c.key, !cb.checked); head(); Promise.resolve(done).then(() => { if (colPop === m) head(); });  // повторно — когда ответил сервер
-        };
-        const t = h('span', 'k-colmenu-l'); t.textContent = K.u(K.htmlText(c.label)) + (c.fixed ? ' (всегда)' : '');
-        row.append(cb, t);
-        if (c.unit) { const u = h('span', 'u'); u.textContent = K.u(c.unit); row.appendChild(u); }
-        list.appendChild(row);
-      });
-      reset.onclick = () => { if (!btn.isConnected) { K.closeColMenu(); return; } const done = o.reset(); list.querySelectorAll('input').forEach(cb => { cb.checked = true; }); head(); Promise.resolve(done).then(() => { if (colPop === m) head(); }); };
+      const stale = () => { if (btn.isConnected) return false; K.closeColMenu(); return true; };  // страница перерисовала таблицу, пока меню было открыто: меню — от старой таблицы
+      const label = (c, tail) => { const t = h('span', 'k-colmenu-l'); t.textContent = K.u(K.htmlText(c.label)) + (tail || ''); return t; };
+      const unit = (row, c) => { if (c.unit) { const u = h('span', 'u'); u.textContent = K.u(c.unit); row.appendChild(u); } };
+      const focusOn = (attr, key) => { const i = [...list.querySelectorAll('input')].find(x => x.dataset[attr] === key); if (i && i.focus) i.focus(); };
+      // список строится заново, когда меняется состав таблицы (добавили, убрали); скрыть и вернуть колонку — галочкой на месте
+      function build() {
+        const top = list.scrollTop;
+        list.textContent = ''; cs = o.cols();
+        const hid = o.hidden();
+        cs.forEach(c => {
+          const row = h('label', 'k-colmenu-row' + (c.fixed ? ' fixed' : '') + (c.added ? ' added' : '')), cb = document.createElement('input');
+          cb.type = 'checkbox'; cb.checked = c.fixed || c.added || !hid.has(c.key); cb.disabled = !!c.fixed; cb.dataset.col = c.key;
+          if (c.fixed) row.title = 'колонка-идентификатор: всегда на экране';
+          if (c.added) row.title = 'добавленная колонка: снимите галочку, и она уйдёт из таблицы в раздел «Добавить»';
+          cb.onchange = () => {
+            if (stale()) return;
+            if (c.added) { const done = o.remove(c.key); build(); head(); focusOn('add', c.key); Promise.resolve(done).then(() => { if (colPop === m) head(); }); return; }
+            const done = o.toggle(c.key, !cb.checked); head(); Promise.resolve(done).then(() => { if (colPop === m) head(); });  // повторно — когда ответил сервер
+          };
+          row.append(cb, label(c, c.fixed ? ' (всегда)' : ''));
+          if (c.added) { const tg = h('span', 'k-colmenu-tag', 'добавлена'); row.appendChild(tg); }
+          unit(row, c); list.appendChild(row);
+        });
+        const av = o.avail ? o.avail() : [];
+        if (av.length) {
+          const sub = h('div', 'k-colmenu-sub', 'Добавить'); sub.title = 'стандартные колонки позиций, которых в этой таблице нет';
+          list.appendChild(sub);
+          av.forEach(c => {
+            const row = h('label', 'k-colmenu-addrow'), cb = document.createElement('input');
+            cb.type = 'checkbox'; cb.checked = false; cb.dataset.add = c.key;
+            cb.onchange = () => { if (stale()) return; const done = o.add(c.key); build(); head(); focusOn('col', c.key); Promise.resolve(done).then(() => { if (colPop === m) head(); }); };
+            row.append(cb, label(c)); unit(row, c); list.appendChild(row);
+          });
+        }
+        list.scrollTop = top;
+      }
+      reset.onclick = () => { if (stale()) return; const done = o.reset(); build(); head(); Promise.resolve(done).then(() => { if (colPop === m) head(); }); };
       done.onclick = () => K.closeColMenu();
+      build();
       hd.appendChild(ttl); ft.append(reset, done); m.append(hd, list, note, ft);
       document.body.appendChild(m); colPop = m;
       // место: под кнопкой, если там хватает высоты, иначе над ней; по ширине — в экран с полями (телефон, 390 px)
@@ -2465,7 +2505,10 @@
   //        viewKey — стабильный ключ раскладки латиницей, он же основа имени CSV (без него — страница + id, K.tableKey), title — название в CSV, fileName — основа имени файла CSV (латиницей),
   //        colPick — кнопка «Колонки ▾» в шапке таблицы: скрыть и вернуть колонки, выбор запоминается на сервере по пользователю (K.colPrefs, TDM#763);
   //        по умолчанию — у таблиц, чьи колонки собраны K.cols (таблицы позиций на K.posCols), false — без неё; колонка с noHide: true и первая
-  //        колонка таблицы не скрываются (идентификатор строки), колонка без подписи (полоска доли) не предлагается и остаётся на экране}
+  //        колонка таблицы не скрываются (идентификатор строки), колонка без подписи (полоска доли) не предлагается и остаётся на экране;
+  //        в том же меню — раздел «Добавить» (TDM#778): стандартные колонки каталога, которых в таблице нет. Каталог — колонки K.posCols у
+  //        таблиц на K.cols; colCatalog: [колонки] | () => [колонки] — свой каталог (колонки с ключами таблицы в него не попадают), [] — без раздела.
+  //        Добавленная колонка — обычная колонка таблицы (сортировка, фильтр, итог, CSV, перенос мышкой), в конце; выбор — вместе со скрытыми}
   K.table = function (el, opts) {
     const st = { sort: opts.sort ? opts.sort.slice() : [], q: '', collapsed: {}, groupSort: false, filters: {}, grouped: false };
     // таблицу рисуют заново в том же месте (страница перерисовала блок): записи реестра K.d прошлой — освободить; у прошлой
@@ -2491,36 +2534,74 @@
     if (tools) { if (!opts.tools) { const sp = h('span'); sp.style.flex = '1'; tools.appendChild(sp); } tools.appendChild(ctl); }
     else { const bar = h('div', 'k-tbl-ctlbar'); bar.appendChild(ctl); el.appendChild(bar); }
     const vkey = K.tableKey(el, opts);
-    const colKeys = () => opts.columns.map(c => c.key);
-    let lay = K.viewLayout(K.viewStore.get(vkey), colKeys());  // {order: [key], w: {key: px}} — проверенная форма
     // скрытые колонки (TDM#763): хранится скрытое, а не показанное — новая колонка по умолчанию видна, лишний ключ пропускается
     const pick = opts.colPick !== undefined ? !!opts.colPick : !!(opts.columns && opts.columns.posTable);
     const ckey = K.colKey(vkey), firstKey = (opts.columns.find(c => !c.hidden) || {}).key;
     const fixedCol = c => !!c.noHide || c.key === firstKey;
+    // добавленные колонки (TDM#778): из каталога, по ключу колонки; в таблице — после её собственных, в порядке добавления.
+    // Каталог считается один раз; колонки с ключами таблицы, без подписи и скрытые (hidden) в него не попадают — им в «Добавить» делать нечего
+    let catMap = null;
+    const catalog = () => {
+      if (catMap) return catMap;
+      catMap = new Map();
+      const src = !pick ? [] : opts.colCatalog !== undefined ? (typeof opts.colCatalog === 'function' ? opts.colCatalog() : opts.colCatalog) : opts.columns && opts.columns.posTable ? Object.values(K.posCols) : [];
+      const have = new Set(opts.columns.map(c => c.key));
+      (src || []).forEach(c => { if (c && c.key && !c.hidden && K.htmlText(c.label) && !have.has(c.key) && !catMap.has(c.key)) catMap.set(c.key, Object.assign({}, c)); });
+      return catMap;
+    };
+    const readAdd = () => pick ? K.colPrefs.sel(ckey).added.filter(k => catalog().has(k)) : [];
+    let add = readAdd();
+    const allCols = () => add.length ? opts.columns.concat(add.map(k => catalog().get(k))) : opts.columns;
+    const colKeys = () => allCols().map(c => c.key);
+    // rawLay — раскладка как лежит в хранилище (до первой правки здесь): добавленные колонки, пришедшие с сервера позже, берут из неё
+    // своё место и ширину; после правки — то, что записано
+    let rawLay = K.viewStore.get(vkey);
+    let lay = K.viewLayout(rawLay, colKeys());  // {order: [key], w: {key: px}} — проверенная форма
     const pickCols = () => pick ? opts.columns.filter(c => !c.hidden && K.htmlText(c.label)) : [];
-    const readHid = () => { const ok = new Set(pickCols().filter(c => !fixedCol(c)).map(c => c.key)); return new Set(K.colPrefs.get(ckey).filter(k => ok.has(k))); };
+    const readHid = () => { const ok = new Set(pickCols().filter(c => !fixedCol(c)).map(c => c.key)); return new Set(K.colPrefs.sel(ckey).hidden.filter(k => ok.has(k))); };
     let hid = pick ? readHid() : new Set();
     // новая скрытая колонка не должна оставить невидимых фильтра и сортировки: щелчок по заголовку их больше не снимет
-    const dropHidden = n => n.forEach(k => { if (!hid.has(k)) { delete st.filters[k]; st.sort = st.sort.filter(x => x[0] !== k); } });
+    const dropKeys = n => n.forEach(k => { delete st.filters[k]; st.sort = st.sort.filter(x => x[0] !== k); });
+    const dropHidden = n => dropKeys([...n].filter(k => !hid.has(k)));
+    const savePick = () => K.colPrefs.set(ckey, [...hid], add);
     const setHidden = (k, hide) => {
       if (hide) { dropHidden([k]); hid.add(k); } else hid.delete(k);
-      const saved = K.colPrefs.set(ckey, [...hid]);
+      const saved = savePick();
+      draw(true);
+      return saved;
+    };
+    // добавить колонку из каталога: в конец видимых (место в сохранённом порядке прошлого раза забыто); убрать — вместе с её фильтром и сортировкой
+    const addCol = k => {
+      if (!pick || !catalog().has(k) || add.includes(k)) return Promise.resolve();
+      add = add.concat(k);
+      if (lay.order && lay.order.includes(k)) { lay.order = lay.order.filter(x => x !== k); if (!lay.order.length) delete lay.order; saveLay(); }
+      const saved = savePick();
+      draw(true);
+      return saved;
+    };
+    const removeCol = k => {
+      if (!add.includes(k)) return Promise.resolve();
+      dropKeys([k]); add = add.filter(x => x !== k);
+      const saved = savePick();
       draw(true);
       return saved;
     };
     const fixedW = () => !!lay.w && cols().some(c => lay.w[c.key]);
     const resetBtn = h('button', 'k-tbtn', '⟲ вид'); resetBtn.title = 'сбросить ширину и порядок колонок этой таблицы';
-    resetBtn.onclick = () => { lay = {}; K.viewStore.reset(vkey); draw(true); };
+    resetBtn.onclick = () => { lay = {}; rawLay = undefined; K.viewStore.reset(vkey); draw(true); };
     const csvBtn = h('button', 'k-tbtn', '⤓ CSV');
     csvBtn.title = 'выгрузить в CSV (Excel): колонки — те, что на экране (скрытые не выгружаются), в текущем порядке, строки — после поиска, фильтров и сортировки; номер прогона и дата среза — в первой строке и в имени файла';
     csvBtn.onclick = () => K.download(csvName(), '\uFEFF' + csv(), 'text/csv;charset=utf-8');
     // «Колонки ▾»: список колонок с галочками, «Как было» — состав по умолчанию (все колонки таблицы)
-    const resetCols = () => { hid = new Set(); const saved = K.colPrefs.reset(ckey); draw(true); return saved; };
+    const resetCols = () => { hid = new Set(); dropKeys(add); add = []; const saved = K.colPrefs.reset(ckey); draw(true); return saved; };
     const colBtn = pick ? K.colMenu({ hidden: () => hid, toggle: setHidden, reset: resetCols,
-      cols: () => pickCols().map(c => ({ key: c.key, label: c.label, unit: K.colUnit(c), fixed: fixedCol(c) })) }) : null;
+      cols: () => pickCols().map(c => ({ key: c.key, label: c.label, unit: K.colUnit(c), fixed: fixedCol(c) }))
+        .concat(add.map(k => catalog().get(k)).map(c => ({ key: c.key, label: c.label, unit: K.colUnit(c), added: true }))),
+      added: () => new Set(add), add: addCol, remove: removeCol,
+      avail: () => [...catalog().values()].filter(c => !add.includes(c.key)).map(c => ({ key: c.key, label: c.label, unit: K.colUnit(c) })) }) : null;
     colBtn ? ctl.append(colBtn, csvBtn, resetBtn) : ctl.append(csvBtn, resetBtn);
     const paintCtl = () => { resetBtn.style.display = fixedW() || (lay.order && lay.order.length) ? '' : 'none'; if (colBtn) colBtn.paint(); };
-    const saveLay = () => { K.viewStore.set(vkey, lay); paintCtl(); };
+    const saveLay = () => { K.viewStore.set(vkey, lay); rawLay = lay; paintCtl(); };
     let noClickTill = 0;  // после перетаскивания щелчок по заголовку — не сортировка
     let shown = [];       // строки на экране: после поиска, фильтров и сортировки (их и выгружает CSV)
     let memo = new WeakMap(), win = null, curGroups = [];  // ячейки строк (HTML) — одни и те же при сортировке и фильтре; окно строк длинной таблицы
@@ -2536,9 +2617,9 @@
       const ix = c => { const i = o.indexOf(c.key); return i < 0 ? 1e6 : i; };
       return C.map((c, i) => [c, i]).sort((a, b) => (ix(a[0]) - ix(b[0])) || (a[1] - b[1])).map(x => x[0]);
     };
-    const cols = () => ordered(opts.columns.filter(c => !c.hidden && !hid.has(c.key)));
+    const cols = () => ordered(allCols().filter(c => !c.hidden && !hid.has(c.key)));
     // порядок всех колонок, и скрытых пользователем тоже: при переносе мышкой скрытые остаются на своих местах, вернувшаяся колонка встаёт туда же
-    const fullOrder = () => ordered(opts.columns.filter(c => !c.hidden)).map(c => c.key);
+    const fullOrder = () => ordered(allCols().filter(c => !c.hidden)).map(c => c.key);
     function setVisibleOrder(keys) {
       const vis = new Set(keys), nv = keys.slice();
       let i = 0;
@@ -2547,7 +2628,7 @@
     }
     const val = (c, r) => c.val ? c.val(r) : r[c.key];
     // колонка для сортировки строк и групп: значение и, если у колонки есть итог, слагаемое суммы группы
-    const colOf = k => { const c = opts.columns.find(x => x.key === k); return c ? { val: r => val(c, r), sum: c.sum ? (typeof c.sum === 'function' ? c.sum : r => val(c, r)) : null, nullable: !!c.nullable, filter: c.filter, key: c.key } : null; };
+    const colOf = k => { const c = allCols().find(x => x.key === k); return c ? { val: r => val(c, r), sum: c.sum ? (typeof c.sum === 'function' ? c.sum : r => val(c, r)) : null, nullable: !!c.nullable, filter: c.filter, key: c.key } : null; };
     function sorted(rows) {
       if (!st.sort.length) return rows;
       return rows.slice().sort(K.rowCmp(st.sort, colOf));
@@ -2632,7 +2713,7 @@
       if (win) win.attach(wrap.querySelector('table'));
       wrap.querySelectorAll('th .k-flt').forEach(ic => ic.onclick = e => {
         e.stopPropagation();
-        const c = opts.columns.find(x => x.key === ic.dataset.flt);
+        const c = allCols().find(x => x.key === ic.dataset.flt);
         K.colFilter(ic, K.fltItems(K.applyFilters(base, st.filters, colOf, c.key), c), st.filters[c.key] || null, v => { st.filters[c.key] = v; draw(true); });
       });
       wrap.querySelectorAll('th.sortable').forEach(th => th.onclick = e => {
@@ -2743,15 +2824,17 @@
     if (restoreOuter) { restoreOuter(); if (win) win.paint(false); }
     const api = { redraw: draw, state: st, csv, csvName, setSort: s => { st.sort = s; draw(true); }, setFilter: (k, v) => { st.filters[k] = v; draw(true); }, setGrouped: g => { st.grouped = !!g; draw(true); }, el,
       viewKey: vkey, layout: () => JSON.parse(JSON.stringify(lay)), setLayout: v => { lay = K.viewLayout(v, colKeys()); saveLay(); draw(true); }, resetView: () => resetBtn.onclick(),
-      colKey: ckey, hiddenCols: () => [...hid], setHidden, resetCols, setVisibleOrder, colMenu: colBtn };
+      colKey: ckey, hiddenCols: () => [...hid], addedCols: () => [...add], setHidden, addCol, removeCol, resetCols, setVisibleOrder, colMenu: colBtn };
     if (opts.autoFilter !== false && !opts.rows) K.live(el, 'filter', draw);
     else K.live(el, 'numfmt', draw);  // формат отрицательных чисел (#153): таблица без перерисовки по фильтру
     // ответ сервера с выбором колонок пришёл позже, чем страница нарисовала таблицу (TDM#763): таблицы рисуются заново, если он другой
     if (el.__kcpOff) el.__kcpOff();
     el.__kcpOff = pick ? K.live(el, 'colprefs', () => {
-      const n = readHid();
-      if (n.size === hid.size && [...n].every(k => hid.has(k))) return;
-      dropHidden(n); hid = n; draw(true);
+      const n = readHid(), na = readAdd();
+      if (n.size === hid.size && [...n].every(k => hid.has(k)) && na.length === add.length && na.every((k, i) => k === add[i])) return;
+      dropHidden(n); dropKeys(add.filter(k => !na.includes(k))); hid = n; add = na;
+      lay = K.viewLayout(rawLay, colKeys());  // набор колонок стал другим: место и ширина новых — из хранилища, а не отброшены
+      draw(true);
     }) : null;
     return api;
   };

@@ -186,11 +186,18 @@ body { display: flex; flex-direction: column; height: 100vh; overflow: hidden; }
   const presetCols = () => (PRESETS.find(p => p[0] === st.preset) || PRESETS[0])[2];
   const FIXED = ['name'];
   const colKey = () => K.colKey('c03-blotter:' + st.preset);
-  const readHid = () => { const ok = new Set(presetCols().filter(k => !FIXED.includes(k))); return new Set(K.colPrefs.get(colKey()).filter(k => ok.has(k))); };
+  const readHid = () => { const ok = new Set(presetCols().filter(k => !FIXED.includes(k))); return new Set(K.colPrefs.sel(colKey()).hidden.filter(k => ok.has(k))); };
   let hid = readHid();
-  const cols = () => presetCols().filter(k => !hid.has(k)).map(k => Object.assign({ key: k }, C[k]));
+  // добавленные колонки (TDM#778): любая колонка каталога C, которой нет в наборе; стоят после колонок набора, в порядке добавления;
+  // хранятся рядом со скрытыми (K.colPrefs, тот же ключ набора); ключ, которого нет в каталоге, и колонка, ставшая колонкой набора, пропускаются
+  // «в каталоге» — свой ключ C, а не унаследованный (constructor, toString: серверу такие ключи подходят)
+  const inC = k => Object.hasOwn(C, k);
+  const readAdd = () => K.colPrefs.sel(colKey()).added.filter(k => inC(k) && !presetCols().includes(k));
+  let add = readAdd();
+  const cols = () => presetCols().filter(k => !hid.has(k)).concat(add).map(k => Object.assign({ key: k }, C[k]));
   // скрытая колонка уносит с собой свой фильтр и свою сортировку: их больше не снять щелчком по заголовку
   const dropHidden = keys => keys.forEach(k => { delete st.filters[k]; st.sort = st.sort.filter(s => s[0] !== k); });
+  const savePick = () => K.colPrefs.set(colKey(), [...hid], add);
 
   // ---------- группировки ----------
   const TBO = ['< 6м', '6м–1г', '1–2г', '2–3г', '3–5г', '5–7г', '7–10г', '10г+'];
@@ -210,7 +217,7 @@ body { display: flex; flex-direction: column; height: 100vh; overflow: hidden; }
 
   // ---------- данные ----------
   // колонка для сортировки строк и групп (KIT.rowCmp, KIT.groupKeys): значение и слагаемое итога группы
-  const colOf = k => C[k] ? { val: C[k].val, sum: C[k].sum || null, nullable: !!C[k].nullable, filter: C[k].filter, fltOrder: C[k].fltOrder, key: k } : null;
+  const colOf = k => inC(k) ? { val: C[k].val, sum: C[k].sum || null, nullable: !!C[k].nullable, filter: C[k].filter, fltOrder: C[k].fltOrder, key: k } : null;
   let base = [];  // строки под поиском — для списка значений фильтра столбца
   function rows() {
     let L = K.list();
@@ -452,14 +459,23 @@ body { display: flex; flex-direction: column; height: 100vh; overflow: hidden; }
   }
 
   // ---------- панель управления ----------
-  K.seg(document.getElementById('sCols'), PRESETS.map(p => [p[0], p[1]]), st.preset, v => { st.preset = v; hid = readHid(); st.sort = st.sort.filter(s => cols().some(c => c.key === s[0])); save(); render(); colBtn.paint(); });
-  const colBtn = K.colMenu({ hidden: () => hid, title: 'показать и скрыть колонки этого набора; выбор запоминается для вашего пользователя',
-    cols: () => presetCols().map(k => ({ key: k, label: C[k].label, unit: C[k].unit, fixed: FIXED.includes(k) })),
-    toggle: (k, hide) => { if (hide) { dropHidden([k]); hid.add(k); } else hid.delete(k); const saved = K.colPrefs.set(colKey(), [...hid]); render(); return saved; },
-    reset: () => { hid = new Set(); const saved = K.colPrefs.reset(colKey()); render(); return saved; } });
+  K.seg(document.getElementById('sCols'), PRESETS.map(p => [p[0], p[1]]), st.preset, v => { st.preset = v; hid = readHid(); add = readAdd(); st.sort = st.sort.filter(s => cols().some(c => c.key === s[0])); save(); render(); colBtn.paint(); });
+  const colBtn = K.colMenu({ hidden: () => hid, title: 'показать и скрыть колонки этого набора, добавить колонки, которых в нём нет; выбор запоминается для вашего пользователя',
+    cols: () => presetCols().map(k => ({ key: k, label: C[k].label, unit: C[k].unit, fixed: FIXED.includes(k) })).concat(add.map(k => ({ key: k, label: C[k].label, unit: C[k].unit, added: true }))),
+    toggle: (k, hide) => { if (hide) { dropHidden([k]); hid.add(k); } else hid.delete(k); const saved = savePick(); render(); return saved; },
+    // добавить: колонка каталога встаёт в конец; убрать — уносит свои фильтр и сортировку
+    added: () => new Set(add),
+    avail: () => Object.keys(C).filter(k => !presetCols().includes(k) && !add.includes(k)).map(k => ({ key: k, label: C[k].label, unit: C[k].unit })),
+    add: k => { if (!inC(k) || presetCols().includes(k) || add.includes(k)) return; add = add.concat(k); const saved = savePick(); render(); return saved; },
+    remove: k => { if (!add.includes(k)) return; dropHidden([k]); add = add.filter(x => x !== k); const saved = savePick(); render(); return saved; },
+    reset: () => { dropHidden(add); hid = new Set(); add = []; const saved = K.colPrefs.reset(colKey()); render(); return saved; } });
   document.getElementById('sColsPick').appendChild(colBtn);
   // выбор с сервера пришёл позже, чем страница нарисовалась (TDM#763)
-  K.on('colprefs', () => { const n = readHid(); if (n.size === hid.size && [...n].every(k => hid.has(k))) return; dropHidden([...n].filter(k => !hid.has(k))); hid = n; render(); colBtn.paint(); });
+  K.on('colprefs', () => {
+    const n = readHid(), na = readAdd();
+    if (n.size === hid.size && [...n].every(k => hid.has(k)) && na.length === add.length && na.every((k, i) => k === add[i])) return;
+    dropHidden([...n].filter(k => !hid.has(k)).concat(add.filter(k => !na.includes(k)))); hid = n; add = na; render(); colBtn.paint();
+  });
   K.seg(document.getElementById('sGrp'), [['none', 'без групп'], ['ccy', 'валюта → эмитент'], ['book', 'книга → валюта'], ['type', 'тип → срок']], st.grouping, v => { st.grouping = v; st.collapsed = {}; save(); render(); });
   K.seg(document.getElementById('sColor'), [['issuer', 'эмитент'], ['ccy', 'валюта'], ['type', 'тип'], ['pnl', 'PnL дня']], st.color, v => { st.color = v; save(); render(); });
   const q = document.getElementById('q');
