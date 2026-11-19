@@ -199,9 +199,10 @@ def test_no_owner_text_advises_closing_the_start_bat_window_to_stop():
     files = ("backend/windows/deskctl.py", "backend/windows/start.bat", "backend/windows/INSTALL.txt",
              "backend/windows/START_HERE.txt", "backend/tools/build_windows_bundle.py", "docs/INSTALL_BACKEND_WINDOWS.md",
              "prototypes/desk-backup.js", "README.md")
-    advice = ("или закройте окно", "или закрыть окно", "Закройте его окно", "Close the window to stop")
+    advice = ("или закройте окно", "или закрыть окно", "закрыть окно", "закройте окно", "закройте окна", "закройте её окно",
+              "закройте его окно", "close the window to stop", "close this window to stop")  # lower case: compared so
     for name in files:
-        text = (REPO / name).read_text(encoding="utf-8")
+        text = (REPO / name).read_text(encoding="utf-8").lower()
         for phrase in advice:
             if phrase in text:
                 pytest.fail(f"{name} still says {phrase!r}")

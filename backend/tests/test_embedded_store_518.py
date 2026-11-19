@@ -458,10 +458,10 @@ def test_start_gets_its_own_process_group_and_no_window_on_windows_only(monkeypa
         seen.clear()
         monkeypatch.setattr(embedded.sys, "platform", platform)
         with embedded._start_options():
+            assert ps.pg_ctl is not fake  # wrapped while pgserver starts the server
             ps.pg_ctl(["-w", "start"], pgdata=Path("x"))
             ps.pg_ctl(["status"], pgdata=Path("x"))
-        monkeypatch.undo()  # puts sys.platform back; the fake is set again below
-        monkeypatch.setattr(ps, "pg_ctl", fake)
+        assert ps.pg_ctl is fake  # the wrapper put the original back
         start, other = seen[0][1], seen[1][1]
         assert start["timeout"] == embedded.START_TIMEOUT_S and "timeout" not in other
         assert "creationflags" not in other
@@ -470,4 +470,3 @@ def test_start_gets_its_own_process_group_and_no_window_on_windows_only(monkeypa
             assert (embedded.CREATE_NEW_PROCESS_GROUP, embedded.CREATE_NO_WINDOW) == (0x200, 0x08000000)
         else:
             assert "creationflags" not in start
-    assert ps.pg_ctl is fake  # the wrapper put the original back each time
