@@ -14,6 +14,7 @@ import copy
 import dataclasses
 
 import pytest
+from rub_fixed_income import KeyRateForwardCurve, KeyRateForwardSegment
 from test_deriv_pnl_flows_466 import (
     BD,
     FIX,
@@ -25,6 +26,7 @@ from test_deriv_pnl_flows_466 import (
 )
 from test_slice_s2 import shifted_prev
 
+from desk.curves.rates import KEY_RATE_SWAP_CURVE_ID
 from desk.marketdata.bundle import SnapshotDir
 from desk.orchestrator import prepare
 from desk.pnl import direct
@@ -78,9 +80,12 @@ def test_a_swap_on_an_unmoved_market_is_carry_and_a_small_rest(ctx, flat):
     assert h["date"] == BD.isoformat() and h["received_rub"] == pytest.approx(pnl.received_rub)
     assert pnl.carry == pytest.approx(h["carry_rub"]) and pnl.rolldown == pytest.approx(h["rolldown_rub"])
     assert pnl.fx_gross == 0.0
-    # the curves of the two dates are two builds, not one: their tenor pillars differ by hundredths of a bp, which the
-    # rolled curve (rolldown) and the move (rates) count with opposite signs; both are small beside a real move (below)
-    assert pnl.carry != 0.0 and abs(pnl.rates) < 5e4 and abs(pnl.rolldown) < 5e4 and abs(pnl.other) < 2e4
+    # the two dates' curves are bootstrapped from quotes dated differently (the OIS quotes' pillars fall on other days),
+    # so on a quiet day the same-tenor «move» is up to about 0.3 bp: rates and rolldown show small opposite sums.
+    # Methodology as is; both are small beside the DV01 (a real move of 25 bp is below)
+    dv01 = abs(p.valuation.dv01_rub)
+    assert pnl.carry != 0.0 and abs(pnl.rates + pnl.rolldown) < 0.1 * dv01 and abs(pnl.rates) < 0.5 * dv01
+    assert abs(pnl.other) < 2e4
     assert pnl.explained == pytest.approx(pnl.total) and pnl.as_tdm()["carry"] == pnl.carry
     assert pnl.extra()["other_reason"]["code"] == RATES_CORE_REST and RATES_CORE_REST in OTHER_REASON_TEXT
 
@@ -101,6 +106,66 @@ def test_a_move_of_the_curve_is_rates_by_the_d1_risk(ctx, moved):
     assert pnl.explained == pytest.approx(pnl.total) and abs(pnl.total) > 1e6
     ex = pnl.extra()
     assert ex["rates_linear"] == pnl.rates and ex["curve_moves_bp"] == pnl.curve_moves_bp
+
+
+KEY_SWAP = [dict(t, product_kind="irs", start_date="2026-10-16", maturity_date="2027-10-18") for t in (
+    swap("K1")[0] | {"side": "receive", "fixed_rate_pct": "14"}, swap("K1")[1] | {"side": "pay", "index_code": "KEY_RATE"})]
+"""A key-rate IRS (1 bn, to the end of 2027) starting after D: it projects on the key-rate forward curve."""
+
+
+def _key_curves_before(ctx, bp: float):
+    """``ctx.swap_curves`` as D-1 had them: the key-rate forward curve dated D-1, its forward rates ``bp`` lower, its
+    segments one day shorter (what ``roll_key_rate_curve`` to D gives back, shifted by ``bp``)."""
+    out = []
+    for e in ctx.swap_curves:
+        if e.curve_id == KEY_RATE_SWAP_CURVE_ID:
+            c, start, segs = e.curve, e.curve.current_rate_end, []
+            for sg in c.segments:
+                end = sg.end_date - (c.curve_date - PREV)
+                segs.append(KeyRateForwardSegment(start, end, sg.rate - bp * 1e-4, sg.pillar_tenor))
+                start = end
+            e = dataclasses.replace(e, curve=KeyRateForwardCurve(PREV, c.current_rate, c.current_rate_end, tuple(segs),
+                                                                 c.model_version))
+        out.append(e)
+    return tuple(out)
+
+
+def test_a_swap_on_the_key_rate_has_its_key_rate_risk_in_rates(ctx):
+    """The key-rate forward curve of D moves 25 bp: the swap's risk on it (``RUB KEY``, a forward curve of its own, not
+    core's built curve) is multiplied by that move, so the rest stays at the level of a day on an unmoved market."""
+    flat, moved = (dataclasses.replace(_prev(ctx, bp), swap_curves=_key_curves_before(ctx, bp)) for bp in (0.0, MOVE_BP))
+    (of, _), (om, pm) = day(flat, ctx, KEY_SWAP, "K1"), day(moved, ctx, KEY_SWAP, "K1")
+    a, b = of.pnl, om.pnl
+    assert pm.valuation.extra["horizon"]["projections"] == ["RUB_KEY_RATE_SWAP"]
+    assert a.method == b.method == RATES_CORE_METHOD
+    key = pm.valuation.curve_buckets["RUB KEY"]
+    moves = b.curve_moves_bp["RUB KEY"]
+    assert sum(key.values()) != 0 and moves and all(m == pytest.approx(MOVE_BP, abs=0.5) for m in moves.values() if m)
+    assert sum(b.rates_linear_curves["RUB KEY"].values()) == pytest.approx(sum(key[k] * moves[k] for k in moves))
+    assert abs(b.rates_linear_curves["RUB KEY"] and sum(b.rates_linear_curves["RUB KEY"].values())) > 1e6
+    # the rest does not grow with the move: it is the flat day's, a few thousand roubles, not the 2 mn of the risk
+    assert abs(b.other) < 0.02 * abs(b.rates) and abs(b.other - a.other) < 0.02 * abs(b.rates), (a.other, b.other, b.rates)
+    assert "RUB KEY" not in b.extra()["other_reason"]["detail"]
+    assert b.explained == pytest.approx(b.total)
+
+
+def test_a_repo_on_the_key_rate_uses_the_built_projection_curve(ctx, moved):
+    """A REPO on the key rate projects on the built key-rate projection curve (``zero_move_bp`` of it), not the swap's
+    forward curve: its ``RUB KEY`` risk is multiplied by that curve's move."""
+    terms = [repo("R2", "repo", "2026-10-09", "2026-12-21", index_code="KEY_RATE", spread_bp="-50")]
+    o, p = day(moved, ctx, terms, "R2")
+    assert p.valuation.extra["horizon"]["projections"] == ["RUB_KEY_RATE_PROJ"]
+    assert "RUB KEY" in o.pnl.rates_linear_curves and o.pnl.method == RATES_CORE_METHOD
+
+
+def test_the_run_asks_for_the_horizon(ctx, moved):
+    """``dayrun.attach_direct_pnl``, what every run does from D-1 to D, gives a swap its split."""
+    from desk import dayrun
+    terms = swap("S1")
+    inp, prev_inp = inputs(BD, terms, "S1"), inputs(PREV, terms, "S1")
+    bp = pv1.plan(ctx, inp)
+    dayrun.attach_direct_pnl(moved, ctx, bp, inp, prev_inp)
+    assert bp.direct["S1"].pnl.method == RATES_CORE_METHOD and bp.direct["S1"].pnl.rates != 0.0
 
 
 def test_without_the_horizon_the_row_keeps_everything_in_other(ctx, moved):

@@ -34,6 +34,7 @@ from .publish import desk_run
 from .publish import summary as run_summary
 from .report import validation
 from .settings import Settings
+from .store import PositionInputs
 from .valuation import offreport
 from .valuation import positions as pv1
 
@@ -105,6 +106,14 @@ def stored_fixings(url: str, d: date, out: Callable[[str], None] = print) -> fix
     except psycopg.Error as e:
         out(f"WARN stored fixings history not read: {type(e).__name__}: {e}")
         return None
+
+
+def attach_direct_pnl(prev_ctx: EodContext, ctx: EodContext, bp: pv1.BookPlan, inputs: PositionInputs,
+                      prev_inputs: PositionInputs) -> None:
+    """The PnL of the rows valued without a bond path (``pnl.direct``) from D-1 to D. D-1 is planned for D: its swaps and
+    REPOs carry core's horizon to D, so their PnL is split into carry, rolldown and rates (``pnl.direct._rates_split``)."""
+    prev_plan = pv1.plan(prev_ctx, prev_inputs, second_order=False, horizon=ctx.business_date)
+    direct_pnl.attach(prev_ctx, ctx, bp.direct, inputs, prev_plan.direct, prev_inputs.valid_dates, prev_inputs)
 
 
 def eod_run(settings: Settings, d: str, *, snapshots: str | Path | None = None, store_url: str | None = None,
@@ -286,8 +295,7 @@ def eod_run(settings: Settings, d: str, *, snapshots: str | Path | None = None, 
             # fx rows, the report-valued rows (otc, unmapped bonds): by the rate move and by the reports of both
             # dates (pnl.direct); the reason in run_position.no_pnl when there is none, never a bare null
             prev_inputs = store.positions_for(con, prev_ctx.business_date, books=books)
-            prev_plan = pv1.plan(prev_ctx, prev_inputs, second_order=False, horizon=ctx.business_date)
-            direct_pnl.attach(prev_ctx, ctx, bp.direct, inputs, prev_plan.direct, prev_inputs.valid_dates, prev_inputs)
+            attach_direct_pnl(prev_ctx, ctx, bp, inputs, prev_inputs)
             if intraday_trades and intraday_trades["applied"] and start_inputs is not None:   # start of day + trades
                 split = new_trades_pnl.attach(prev_ctx, ctx, start_inputs, bp, outcomes, intraday_trades, carried)
                 texts = {"mixed_valuation": "lots valued in different ways (core and the report): the PnL of the bond "

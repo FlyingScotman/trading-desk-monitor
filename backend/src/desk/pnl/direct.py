@@ -35,7 +35,8 @@ positions valued at the report's figure. Each is flagged with its method (``reas
   ``desk-rates-core-v1``, FlyingScotman/trading-desk-monitor#804): ``carry`` and ``rolldown`` are core's carry and rolldown of its
   trades to D (the carry holds the cash the trades paid in (D-1, D], at core's own projection, as ``received_rub``),
   ``rates`` is the D-1 bucket DV01 per curve x that curve's move in the unit of its buckets (``FlashCurves
-  .zero_move_bp``, as a bond's ``rates_linear``), ``other`` the rest, with the reason ``rates_core_rest``: the second
+  .zero_move_bp``, as a bond's ``rates_linear``; a swap's risk on the key rate: the move of the key-rate forward curve
+  per bucket, ``_key_rate_moves``), ``other`` the rest, with the reason ``rates_core_rest``: the second
   order of the move, the day's fixing against the forward, the risk on a curve whose move is not read here (said in
   the reason). Without that horizon (it could not be read, the cash of the flows differs from core's) the row is
   as before: the whole change in ``other``, ``fx_core_rest``.
@@ -58,9 +59,12 @@ from __future__ import annotations
 
 import math
 from dataclasses import dataclass, field, replace
-from datetime import date
+from datetime import date, timedelta
 from typing import TYPE_CHECKING, Any
 
+from rub_fixed_income import RISK_BUCKETS, RISK_PILLARS, roll_key_rate_curve
+
+from ..curves.rates import KEY_RATE_CURVE_ID, KEY_RATE_SWAP_CURVE_ID
 from ..inbox.schema import norm_ccy
 from ..marketdata.adapter import bond_currency
 from ..valuation.bonds import OFZ_CURVE, RUONIA_CURVE
@@ -300,9 +304,53 @@ def _received(prev: EodContext, ctx: EodContext, pv: Any, missing: list[str] | N
 
 
 RATES_CURVES = (RUONIA_CURVE, OFZ_CURVE)
-"""The published curves whose risk ``_rates_split`` multiplies by a move: the RUONIA OIS curve (a swap's discount and
-projection) and the KBD. The key-rate curve of a key-rate swap is not core's built curve of the same name
-(``EodContext.swap_curves``), so its move is not read; its risk stays in ``other``, said."""
+"""The published curves whose risk ``_rates_split`` multiplies by a move read from the built curves: the RUONIA OIS curve
+(a swap's discount and projection) and the KBD. ``RUB KEY`` (``KEY_RATE``) is the key-rate forward curve of a swap
+(``_key_rate_moves``) or the projection curve of a REPO (its built curve, ``zero_move_bp``), by what the row's trades
+project on (``extra.horizon.projections``); a row with both has its key-rate risk in ``other``, said."""
+KEY_CURVE = "RUB KEY"
+
+
+def _key_rate_moves(prev: EodContext, ctx: EodContext, memo: dict[str, Any]) -> dict[str, float] | None:
+    """The move of the key-rate forward curve (``EodContext.swap_curves``) per risk bucket, bp, from D-1 rolled to D to
+    the curve of D (None: a curve missing or not rollable). Core shifts a bucket's weight over the days after the key rate
+    in force (``current_rate_end``), at the curve time of each day (ACT/365F), so a bucket is read at the date its pillar
+    falls on from D: the forward rate of D's curve there less that of D-1's curve rolled to D (``roll_key_rate_curve``:
+    the pillar segments held in tenor, as core's horizon rolls them, so the carry and rolldown of the horizon are
+    that part of the move). A bucket before the next decision has no move (0: the rate in force does not move with
+    the curve); one past the end of a curve has none read (left out, said)."""
+    if "key" not in memo:
+        memo["key"] = None
+        try:
+            kp, kc = (next(e.curve for e in m.swap_curves if e.curve_id == KEY_RATE_SWAP_CURVE_ID)
+                      for m in (prev, ctx))
+            day = ctx.business_date
+            rolled = roll_key_rate_curve(kp, day)
+            out: dict[str, float] = {}
+            for b, t in zip(RISK_BUCKETS, RISK_PILLARS):
+                d = day + timedelta(days=round(t * 365))
+                if d < kc.current_rate_end:
+                    out[b] = 0.0
+                elif d < kc.horizon_date and d < rolled.horizon_date:
+                    out[b] = (kc.rate_at(d) - rolled.rate_at(d)) * 1e4
+            memo["key"] = out
+        except (StopIteration, AttributeError, ValueError):  # (core's refusals are ValueErrors)
+            memo["key"] = None
+    return memo["key"]
+
+
+def _move_of(curve: str, h: dict[str, Any], prev: EodContext, ctx: EodContext, curves: FlashCurves,
+             memo: dict[str, Any]) -> dict[str, float]:
+    """The move per bucket of the published ``curve`` of a row whose horizon is ``h``; empty when it is not read."""
+    if curve in RATES_CURVES:
+        return curves.zero_move_bp(PUBLISHED_TO_CORE.get(curve, curve))
+    if curve == KEY_CURVE:
+        proj = set(h.get("projections") or ())
+        if proj == {KEY_RATE_SWAP_CURVE_ID}:
+            return _key_rate_moves(prev, ctx, memo) or {}
+        if proj == {KEY_RATE_CURVE_ID}:
+            return curves.zero_move_bp(KEY_RATE_CURVE_ID)
+    return {}
 RECEIVED_TOL_RUB = 1.0
 """``_rates_split`` is taken only when core's cash to the horizon is the cash ``_received`` found in the flows, to this."""
 
@@ -332,7 +380,7 @@ def _rates_split(prev: EodContext, ctx: EodContext, pv: Any, total: float, fx: f
     moves: dict[str, dict[str, float]] = {}
     left_out: list[str] = []
     for c, bs in sorted((pv.curve_buckets or {}).items() if live else ()):
-        move = curves.zero_move_bp(PUBLISHED_TO_CORE.get(c, c)) if c in RATES_CURVES else {}
+        move = _move_of(c, h, prev, ctx, curves, memo)
         if keep := {b: x * move[b] for b, x in bs.items() if b in move}:
             terms[c], moves[c] = keep, {b: move[b] for b in keep}
         if any(x and b not in move for b, x in bs.items()):

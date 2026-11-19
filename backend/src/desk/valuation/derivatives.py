@@ -1707,8 +1707,9 @@ def value(ctx: Any, requests: list[Request], *, options: FxOptions, second_order
                              quote_curve_risk=ctx.quote_curve_risk and quoted, ois_tail=OIS_TAIL if tail else None)
     result = value_portfolio(run_id=f"desk-eod-{bd}-derivatives", as_of=ctx.core_market.known_at, snapshot=snap,
                              instruments=instruments, positions=positions, policy=policy, scenarios=scenarios)
-    _rates_flows(snap, policy, instruments, positions, pay_dates, owner, terms_of, flows)
-    horizons = _rates_horizon(snap, policy, instruments, positions, owner, horizon) \
+    cache = ShockedCurveCache()  # the curves are built once for all the horizons (the flows' and the PnL's)
+    _rates_flows(snap, policy, instruments, positions, pay_dates, owner, terms_of, flows, cache)
+    horizons = _rates_horizon(snap, policy, instruments, positions, owner, horizon, cache) \
         if horizon is not None and horizon > bd else {}
     acc: dict[str, _Acc] = defaultdict(_Acc)
     for rej in result.coverage.rejections:
@@ -1920,7 +1921,7 @@ def _foreign_flows(inst: XccyInstrument) -> dict[date, float]:
 
 def _rates_flows(snap: Any, policy: ValuationPolicy, instruments: list[Any], positions: list[Position],
                  pay_dates: dict[str, tuple[date, ...]], owner: dict[str, Request], terms_of: dict[str, Any],
-                 flows: dict[str, list[dict[str, Any]]]) -> None:
+                 flows: dict[str, list[dict[str, Any]]], cache: ShockedCurveCache) -> None:
     """Add to ``flows`` the cash the swaps and REPOs pay in the next ``FLOW_DAYS`` days, as core projects it: the
     ``received_rub`` of core's ``horizon_portfolio`` at each date a trade pays on is cumulative, so a payment is the
     difference between two horizons. A date core refuses (a rejection, an error) is recorded as a flow of unknown
@@ -1933,7 +1934,6 @@ def _rates_flows(snap: Any, policy: ValuationPolicy, instruments: list[Any], pos
     jobs = {iid: ds for iid, ds in pay_dates.items() if ds and iid in inst_of}
     seen: dict[str, float] = {}
     stale: set[str] = set()  # trades whose last horizon failed: their next difference holds an unread payment
-    cache = ShockedCurveCache()  # the curves are built once for all the horizons
 
     def add(iid: str, h: date, amount: float | None, ccy: str = "RUB") -> None:
         flows[owner[iid].position_id].append({
@@ -1977,10 +1977,12 @@ def _rates_flows(snap: Any, policy: ValuationPolicy, instruments: list[Any], pos
 
 
 def _rates_horizon(snap: Any, policy: ValuationPolicy, instruments: list[Any], positions: list[Position],
-                   owner: dict[str, Request], horizon: date) -> dict[str, dict[str, Any]]:
+                   owner: dict[str, Request], horizon: date, cache: ShockedCurveCache
+                   ) -> dict[str, dict[str, Any]]:
     """Per position ID of a row of swaps and REPOs (every trade a RUB swap or REPO: a CCS or an FX trade in the row
     leaves it out), core's horizon to ``horizon`` summed over its trades: ``{"date", "carry_rub", "rolldown_rub",
-    "received_rub"}``. Core's ``carry_rub`` is the PV at the horizon on today's curves read forward, plus the cash paid
+    "received_rub", "projections"}`` (``projections``: the core curve IDs the trades project their floating legs on, which
+    say what the risk on ``RUB KEY`` is the risk of: the key-rate forward curve or the projection curve). Core's ``carry_rub`` is the PV at the horizon on today's curves read forward, plus the cash paid
     up to it, less today's PV (``received_rub`` is that cash); ``rolldown_rub`` the further change on the curves rolled to
     the horizon. ``pnl.direct`` splits the day's PnL of the D-1 row with them. A date core refuses is one call lost: its
     row is then tried alone, and one that fails again has no horizon (its PnL keeps everything in ``other``, said),
@@ -1993,7 +1995,6 @@ def _rates_horizon(snap: Any, policy: ValuationPolicy, instruments: list[Any], p
     if not rows:
         return {}
     pos_of = {p.position_id: p for p in positions}
-    cache = ShockedCurveCache()
 
     def horizons(ins: list[Any]) -> dict[str, Any]:
         res = horizon_portfolio(snapshot=snap, instruments=ins, positions=[pos_of[i.instrument_id] for i in ins],
@@ -2017,7 +2018,8 @@ def _rates_horizon(snap: Any, policy: ValuationPolicy, instruments: list[Any], p
             continue
         out[pid] = {"date": horizon.isoformat(), "carry_rub": math.fsum(x.carry_rub for x in parts),
                     "rolldown_rub": math.fsum(x.rolldown_rub for x in parts),
-                    "received_rub": math.fsum(x.received_rub for x in parts)}
+                    "received_rub": math.fsum(x.received_rub for x in parts),
+                    "projections": sorted({c for i in ins if (c := getattr(i, "projection_curve_id", None))})}
     return out
 
 
