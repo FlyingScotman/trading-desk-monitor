@@ -913,9 +913,10 @@ def _swap_instrument(ctx: Any, s: SwapTerms, iid: str, calendars: dict[str, Cale
     cid = SWAP_CALENDAR[s.index]
     # core rolls both legs' schedules from the swap's start and adjusts every period end on the calendar, a past one
     # too, and reads the fixings of the period it is in on the fixing history's calendar (``_fixings_reaching``): both
-    # must reach the start of the earliest leg (TDM#509). The hub's own calendars reach back years (the live hub:
-    # 2010); where one starts later (a window of a year, a young hub) the days before it are the fixed rules'
-    # (``adapter.extend_calendar_back``), said in the notes. One calendar per index serves every swap of the call: a
+    # must reach the start of the earliest leg (TDM#509). The hub's observed calendars start in 2019
+    # (market-data-hub ``OBSERVED_START``; a snapshot's own window may start later, a year or a young hub): the days of a
+    # swap's schedule before the calendar's first day are the fixed rules' (``adapter.extend_calendar_back``), said in
+    # the notes. One calendar per index serves every swap of the call: a
     # later swap that starts earlier replaces it by a longer one, which changes the calendar (its version and
     # fingerprint, so core's base_id) of the swaps built before it in the same ``value()`` call. The days they use are
     # the same; no cache between runs is keyed by it
