@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import copy
 import dataclasses
+from datetime import timedelta
 
 import pytest
 from rub_fixed_income import KeyRateForwardCurve, KeyRateForwardSegment
@@ -147,6 +148,59 @@ def test_a_swap_on_the_key_rate_has_its_key_rate_risk_in_rates(ctx):
     assert abs(b.other) < 0.02 * abs(b.rates) and abs(b.other - a.other) < 0.02 * abs(b.rates), (a.other, b.other, b.rates)
     assert "RUB KEY" not in b.extra()["other_reason"]["detail"]
     assert b.explained == pytest.approx(b.total)
+
+
+def _later_decision(c, curve_date, gap_days: int, bp: float = 0.0):
+    """``c`` with the next decision ``gap_days`` after D (the forward segments that ended before it dropped, the first one
+    starting at it) and its forward rates ``bp`` higher."""
+    end, segs, start = BD + timedelta(days=gap_days), [], BD + timedelta(days=gap_days)
+    for sg in c.segments:
+        if sg.end_date > end:
+            segs.append(KeyRateForwardSegment(start, sg.end_date, sg.rate + bp * 1e-4, sg.pillar_tenor))
+            start = sg.end_date
+    return KeyRateForwardCurve(curve_date, c.current_rate, end, tuple(segs), c.model_version)
+
+
+def _swap_curves_of(entries, curve):
+    return tuple(dataclasses.replace(e, curve=curve) if e.curve_id == KEY_RATE_SWAP_CURVE_ID else e for e in entries)
+
+
+def test_a_decision_after_the_short_buckets_is_read_at_the_decision(ctx):
+    """The next decision of the Bank of Russia 45 days after D: core's weight of the 1M bucket lies after it, so its move is
+    read there, not taken as 0 (that left about 6 % of the rates in ``other``). 25 bp up: the rest stays small."""
+    before = next(e.curve for e in _key_curves_before(ctx, 0.0) if e.curve_id == KEY_RATE_SWAP_CURVE_ID)
+    now = next(e.curve for e in ctx.swap_curves if e.curve_id == KEY_RATE_SWAP_CURVE_ID)
+    prev = dataclasses.replace(_prev(ctx, MOVE_BP),
+                               swap_curves=_swap_curves_of(ctx.swap_curves, _later_decision(before, PREV, 45)))
+    cur = dataclasses.replace(ctx, swap_curves=_swap_curves_of(ctx.swap_curves, _later_decision(now, BD, 45, MOVE_BP)))
+    o, p = day(prev, cur, KEY_SWAP, "K1")
+    pnl, key = o.pnl, p.valuation.curve_buckets["RUB KEY"]
+    assert pnl.method == RATES_CORE_METHOD and key["1M"] != 0
+    assert pnl.curve_moves_bp["RUB KEY"]["1M"] == pytest.approx(MOVE_BP, abs=0.5)  # read at the decision, not 0
+    assert abs(pnl.other) < 0.02 * abs(pnl.rates), (pnl.other, pnl.rates)
+
+
+def test_a_day_without_the_key_rate_curve_keeps_its_risk_in_other_and_the_run_goes_on(ctx, flat):
+    """D has no key-rate forward curve (a row whose other swap lives on, say): the key-rate risk has no move to multiply, so
+    it stays in ``other``, said; nothing raises (an uncaught error would stop the day's run)."""
+    prev = dataclasses.replace(flat, swap_curves=_key_curves_before(ctx, 0.0))
+    inp, prev_inp = inputs(BD, KEY_SWAP, "K1"), inputs(PREV, KEY_SWAP, "K1")
+    bp, pbp = pv1.plan(ctx, inp), pv1.plan(prev, prev_inp, horizon=BD)
+    bare = dataclasses.replace(ctx, swap_curves=())  # the valuation of D is done; its context lacks the curve
+    assert direct._key_rate_moves(prev, bare, {}) is None
+    direct.attach(prev, bare, bp.direct, inp, pbp.direct, prev_inp.valid_dates)
+    pnl = bp.direct["K1"].pnl
+    assert bp.direct["K1"].no_pnl is None and pnl.method == RATES_CORE_METHOD
+    assert "RUB KEY" not in (pnl.rates_linear_curves or {}) and "RUB KEY" in pnl.extra()["other_reason"]["detail"]
+    assert pnl.explained == pytest.approx(pnl.total)
+
+
+def test_an_error_in_the_split_falls_back_to_the_old_split_and_the_run_goes_on(ctx, flat, monkeypatch):
+    def boom(*a, **k):
+        raise RuntimeError("unreadable")
+    monkeypatch.setattr(direct, "_rates_split", boom)
+    o, _ = day(flat, ctx, swap("S1"), "S1")
+    assert o.no_pnl is None and o.pnl.method != RATES_CORE_METHOD and o.pnl.extra()["other_reason"]["code"] == "fx_core_rest"
 
 
 def test_a_repo_on_the_key_rate_uses_the_built_projection_curve(ctx, moved):

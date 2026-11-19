@@ -57,6 +57,7 @@ else ``reported_value``), an FX deal by core ``fx_core_rest``. Anything else val
 
 from __future__ import annotations
 
+import logging
 import math
 from dataclasses import dataclass, field, replace
 from datetime import date, timedelta
@@ -303,6 +304,8 @@ def _received(prev: EodContext, ctx: EodContext, pv: Any, missing: list[str] | N
     return rub, foreign, parts
 
 
+log = logging.getLogger(__name__)
+
 RATES_CURVES = (RUONIA_CURVE, OFZ_CURVE)
 """The published curves whose risk ``_rates_split`` multiplies by a move read from the built curves: the RUONIA OIS curve
 (a swap's discount and projection) and the KBD. ``RUB KEY`` (``KEY_RATE``) is the key-rate forward curve of a swap
@@ -317,24 +320,24 @@ def _key_rate_moves(prev: EodContext, ctx: EodContext, memo: dict[str, Any]) -> 
     in force (``current_rate_end``), at the curve time of each day (ACT/365F), so a bucket is read at the date its pillar
     falls on from D: the forward rate of D's curve there less that of D-1's curve rolled to D (``roll_key_rate_curve``:
     the pillar segments held in tenor, as core's horizon rolls them, so the carry and rolldown of the horizon are
-    that part of the move). A bucket before the next decision has no move (0: the rate in force does not move with
-    the curve); one past the end of a curve has none read (left out, said)."""
+    that part of the move). A bucket whose date falls before the next decision is read at the decision (core's weight of
+    a bucket lies on the days after ``current_rate_end``, the rate in force does not move with the curve); one past the
+    end of a curve has none read (left out, said)."""
     if "key" not in memo:
         memo["key"] = None
         try:
-            kp, kc = (next(e.curve for e in m.swap_curves if e.curve_id == KEY_RATE_SWAP_CURVE_ID)
+            kp, kc = (next((e.curve for e in m.swap_curves if e.curve_id == KEY_RATE_SWAP_CURVE_ID), None)
                       for m in (prev, ctx))
-            day = ctx.business_date
-            rolled = roll_key_rate_curve(kp, day)
-            out: dict[str, float] = {}
-            for b, t in zip(RISK_BUCKETS, RISK_PILLARS):
-                d = day + timedelta(days=round(t * 365))
-                if d < kc.current_rate_end:
-                    out[b] = 0.0
-                elif d < kc.horizon_date and d < rolled.horizon_date:
-                    out[b] = (kc.rate_at(d) - rolled.rate_at(d)) * 1e4
-            memo["key"] = out
-        except (StopIteration, AttributeError, ValueError):  # (core's refusals are ValueErrors)
+            if kp is not None and kc is not None:
+                day = ctx.business_date
+                rolled = roll_key_rate_curve(kp, day)
+                out: dict[str, float] = {}
+                for b, t in zip(RISK_BUCKETS, RISK_PILLARS):
+                    d = max(day + timedelta(days=round(t * 365)), kc.current_rate_end)
+                    if d < kc.horizon_date and d < rolled.horizon_date:
+                        out[b] = (kc.rate_at(d) - rolled.rate_at(d)) * 1e4
+                memo["key"] = out
+        except (AttributeError, ValueError):  # (core's refusals are ValueErrors)
             memo["key"] = None
     return memo["key"]
 
@@ -421,8 +424,12 @@ def _core_fx(prev: EodContext, ctx: EodContext, o: Outcome, p: Outcome | None, p
             + (f" + received {received:,.2f} RUB ({'; '.join(flows)})" if flows else "")
             + "; fx_gross = FX delta D-1 " + ("; ".join(parts) or "0"))
     fx_assumed = assumption("fx_rate_carried", ", ".join(missing)) if missing else None
-    split = _rates_split(prev, ctx, pv, total, fx, received, memo if memo is not None else {},
-                         live=pv_now is None and bool(getattr(v, "curve_buckets", None)))
+    try:
+        split = _rates_split(prev, ctx, pv, total, fx, received, memo if memo is not None else {},
+                             live=pv_now is None and bool(getattr(v, "curve_buckets", None)))
+    except Exception as e:  # noqa: BLE001 - nice to have: the PnL itself as before (everything in other), never a failed run
+        log.debug("rates split of the PnL left out: %s: %s", type(e).__name__, e)
+        split = None
     if split is not None:
         left = ("; the risk on " + ", ".join(split["left_out"]) + " has no move read here: in other") \
             if split["left_out"] else ""
