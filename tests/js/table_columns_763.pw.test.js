@@ -19,7 +19,7 @@ const pw = (() => { try { return require('playwright'); } catch (e) { return nul
 const ROOT = path.join(__dirname, '..', '..', 'prototypes');
 const PAGE = f => pathToFileURL(path.join(ROOT, 'concepts', f)).href;
 const skip = !pw && 'нет Playwright';
-const POS = ['name', 'shortName', 'ccy', 'issuerName', 'kind', 'book', 'couponFmt', 'event', 'maturity', 'tenor', 'notional', 'tradeDay', 'posDelta', 'price', 'ytm', 'zspread', 'mdur', 'dv01', 'cs01', 'carryDay', 'fundingDay', 'pnl', 'mv'];  // C01 «Позиции»: key колонок
+const POS = ['name', 'shortName', 'ccy', 'issuerName', 'kind', 'book', 'couponFmt', 'event', 'maturity', 'tenor', 'notional', 'tradeDay', 'posDelta', 'price', 'ytm', 'zspread', 'zkbd', 'zdisc', 'mdur', 'dv01', 'cs01', 'carryDay', 'fundingDay', 'pnl', 'mv'];  // C01 «Позиции»: key колонок
 
 async function launch(width) {
   const browser = await pw.chromium.launch();
@@ -278,7 +278,7 @@ test('C01 «Позиции»: «Добавить» — колонка из ка�
     // подпись и единица, как в основном списке
     const dv = avail.find(a => a.key === 'basis01');
     assert.ok(!dv || /Базис01\s*тыс ₽\/бп/.test(dv.text), 'единица рядом с подписью: ' + (dv && dv.text));
-    const [k1, k2] = wanted(avail.map(a => a.key), ['isin', 'zkbd']);
+    const [k1, k2] = wanted(avail.map(a => a.key), ['isin', 'gspread']);
     const t1 = avail.find(a => a.key === k1).text, t2 = avail.find(a => a.key === k2).text;
     await addIn(pg, k1); await addIn(pg, k2);
     assert.deepStrictEqual(await heads(pg), own.concat(k1, k2), 'добавленные — в конец, в порядке добавления');
@@ -335,30 +335,30 @@ test('C01: добавленная колонка перетаскивается,
   try {
     await openC01(pg);
     await openMenu(pg);
-    await addIn(pg, 'basis01'); await addIn(pg, 'zkbd');
+    await addIn(pg, 'basis01'); await addIn(pg, 'gspread');
     await pg.keyboard.press('Escape');
     // сортировка по добавленной колонке
-    await pg.click('.k-tbl th[data-k="zkbd"]');
-    assert.ok(await pg.locator('.k-tbl th[data-k="zkbd"] .si').count(), 'значок сортировки на добавленной колонке');
+    await pg.click('.k-tbl th[data-k="gspread"]');
+    assert.ok(await pg.locator('.k-tbl th[data-k="gspread"] .si').count(), 'значок сортировки на добавленной колонке');
     // итог у суммируемой колонки каталога — в подвале, в столбце добавленной
     const foot = await pg.evaluate(() => { const t = document.querySelector('.k-colbtn').closest('.bd, .k-panel, body').querySelector('table.k-tbl'); const i = [...t.querySelectorAll('thead th')].findIndex(th => th.dataset.k === 'basis01'); return t.querySelector('tfoot tr').cells[i].textContent.trim(); });
     assert.ok(/\d/.test(foot) || foot === '—', 'итог в колонке «Базис01»: ' + foot);
     // порядок мышкой: добавленную переносим на второе место
-    const ths = await heads(pg), from = ths.indexOf('zkbd');
+    const ths = await heads(pg), from = ths.indexOf('gspread');
     const box = k => pg.locator('.k-tbl th[data-k="' + k + '"]').first().boundingBox();
-    const a = await box('zkbd'), b = await box(ths[1]);
+    const a = await box('gspread'), b = await box(ths[1]);
     await pg.mouse.move(a.x + a.width / 2, a.y + a.height / 2); await pg.mouse.down();
     await pg.mouse.move(b.x + 4, b.y + b.height / 2, { steps: 12 }); await pg.mouse.up();
     const moved = await heads(pg);
-    assert.strictEqual(moved[1], 'zkbd', 'колонка перенесена на второе место: ' + moved);
+    assert.strictEqual(moved[1], 'gspread', 'колонка перенесена на второе место: ' + moved);
     const store = await pg.evaluate(() => Object.fromEntries(Object.keys(localStorage).map(k => [k, localStorage.getItem(k)])));
-    assert.ok(JSON.parse(store['tdm.view.v1:table:c01-positions']).order.includes('zkbd'), 'порядок с добавленной колонкой сохранён');
+    assert.ok(JSON.parse(store['tdm.view.v1:table:c01-positions']).order.includes('gspread'), 'порядок с добавленной колонкой сохранён');
     await reopen(pg, C01, READY); await pg.waitForSelector('.k-colbtn');
     assert.deepStrictEqual(await heads(pg), moved, 'после перезагрузки колонка на новом месте');
     // убрать и добавить снова — в конец
-    await openMenu(pg); await toggle(pg, 'zkbd'); await addIn(pg, 'zkbd');
+    await openMenu(pg); await toggle(pg, 'gspread'); await addIn(pg, 'gspread');
     const again = await heads(pg);
-    assert.strictEqual(again[again.length - 1], 'zkbd', 'добавлена снова — в конце');
+    assert.strictEqual(again[again.length - 1], 'gspread', 'добавлена снова — в конце');
     assert.deepStrictEqual(errors, []);
   } finally { await browser.close(); }
 });
@@ -373,7 +373,7 @@ test('C03 «Базовый»: «Добавить» из каталога кол�
     await openMenu(pg);
     const avail = await addRows(pg);
     assert.ok(avail.length >= 5 && avail.every(a => !base.includes(a.key)), 'в «Добавить» — колонки каталога, которых нет в наборе: ' + avail.map(a => a.key));
-    const [k1, k2] = wanted(avail.map(a => a.key), ['zkbd', 'isin']);
+    const [k1, k2] = wanted(avail.map(a => a.key), ['gspread', 'isin']);
     await addIn(pg, k1); await addIn(pg, k2);
     assert.deepStrictEqual(await ths(), base.concat(k1, k2), 'в конец набора');
     const rows = await menuRows(pg);
@@ -436,7 +436,7 @@ test('390 px: раздел «Добавить» в меню достижим п�
 test('с сервером: добавленные колонки уходят на сервер вместе со скрытыми (PUT), приходят с него; «Как было» — DELETE; у другого пользователя — свои', { skip }, async () => {
   const browser = await pw.chromium.launch();
   try {
-    const users = { ann: { tables: {}, added: { 'c01-positions': ['zkbd'] } }, bob: { tables: {}, added: {} }, current: 'ann' };
+    const users = { ann: { tables: {}, added: { 'c01-positions': ['gspread'] } }, bob: { tables: {}, added: {} }, current: 'ann' };
     const open = async () => {
       const ctx = await browser.newContext({ viewport: { width: 1400, height: 900 } }), pg = await ctx.newPage(), errors = [];
       pg.on('pageerror', e => errors.push('pageerror: ' + e.message));
@@ -452,20 +452,20 @@ test('с сервером: добавленные колонки уходят н
     let s = await open();
     await s.pg.waitForFunction(() => document.querySelector('.k-colbtn').textContent.includes('добавлено 1'));
     const own = POS;
-    assert.deepStrictEqual(await heads(s.pg), own.concat('zkbd'), 'добавленная — с сервера, в конце');
+    assert.deepStrictEqual(await heads(s.pg), own.concat('gspread'), 'добавленная — с сервера, в конце');
     await openMenu(s.pg);
     assert.strictEqual(await s.pg.textContent('.k-colmenu-note'), '', 'сервер на связи — предупреждения нет');
     await addIn(s.pg, 'isin'); await toggle(s.pg, 'cs01');
     await s.pg.waitForTimeout(300);
     assert.deepStrictEqual(s.log.map(x => [x.method, x.key]), [['PUT', 'c01-positions'], ['PUT', 'c01-positions']]);
-    assert.deepStrictEqual(JSON.parse(s.log[0].body), { hidden: [], added: ['zkbd', 'isin'] });
-    assert.deepStrictEqual(JSON.parse(s.log[1].body), { hidden: ['cs01'], added: ['zkbd', 'isin'] }, 'на сервер — оба списка');
-    assert.deepStrictEqual(users.ann.added['c01-positions'], ['zkbd', 'isin']);
+    assert.deepStrictEqual(JSON.parse(s.log[0].body), { hidden: [], added: ['gspread', 'isin'] });
+    assert.deepStrictEqual(JSON.parse(s.log[1].body), { hidden: ['cs01'], added: ['gspread', 'isin'] }, 'на сервер — оба списка');
+    assert.deepStrictEqual(users.ann.added['c01-positions'], ['gspread', 'isin']);
     // перезагрузка в чистом браузере — то же
     await s.ctx.close();
     s = await open();
     await s.pg.waitForFunction(() => document.querySelector('.k-colbtn').textContent.includes('добавлено 2'));
-    assert.deepStrictEqual(await heads(s.pg), own.filter(k => k !== 'cs01').concat('zkbd', 'isin'));
+    assert.deepStrictEqual(await heads(s.pg), own.filter(k => k !== 'cs01').concat('gspread', 'isin'));
     // «Как было» — DELETE: и скрытое, и добавленное
     await openMenu(s.pg); await s.pg.click('.k-colmenu-ft .k-btn:first-child'); await s.pg.waitForTimeout(300);
     assert.deepStrictEqual(s.log.map(x => x.method), ['DELETE']);
@@ -479,8 +479,8 @@ test('с сервером: добавленные колонки уходят н
     assert.deepStrictEqual(users.bob.added, { 'c01-positions': ['isin'] });
     // сервер не принимает запись: добавленная остаётся на экране и в браузере, меню говорит об этом
     users.failWrites = true;
-    await addIn(s.pg, 'zkbd'); await s.pg.waitForTimeout(300);
-    assert.ok((await heads(s.pg)).includes('zkbd'));
+    await addIn(s.pg, 'gspread'); await s.pg.waitForTimeout(300);
+    assert.ok((await heads(s.pg)).includes('gspread'));
     assert.ok(/сохранён в этом браузере и уйдёт на сервер/.test(await s.pg.textContent('.k-colmenu-note')));
     assert.deepStrictEqual(s.errors, []);
     await s.ctx.close();
