@@ -769,7 +769,7 @@
   document.addEventListener('concepts-data', e => {
     const d = (e && e.detail) || {};
     if (d.error) return K.dataError(d.error, d.gone);
-    if (d.name === 'aliases') { K.patchNames(); fire('alias'); }
+    if (d.name === 'aliases' || d.name === 'shortNames') { K.patchNames(); fire('alias'); }
     fire('data');
   });
   K.onAlias = fn => K.on('alias', fn);
@@ -1474,7 +1474,10 @@
       '<button class="k-btn" data-a="view" title="Вид: формат отрицательных чисел, когда прогон считается устаревшим" aria-haspopup="dialog">⚙</button>' +
       '<button class="k-btn" data-a="theme" title="Светлая / тёмная тема">◐</button>';
     document.body.prepend(bar);
-    if (/^https?:$/.test(location.protocol) && !window.DESK_AUTH) document.head.appendChild(Object.assign(document.createElement('script'), { src: '../desk-auth.js' }));  // вход: пользователь, «Выйти», CSRF
+    // вход: пользователь, «Выйти», CSRF; режим входа и роль того же ответа — права на правку имён бумаг (M.nameRights, TDM#777)
+    const hearAuth = () => { const a = window.DESK_AUTH; if (a && a.ready && M.nameRights) a.ready.then(st => { M.nameRights.setAuth(st); K.refreshNameTools(); }); };
+    if (/^https?:$/.test(location.protocol) && !window.DESK_AUTH) document.head.appendChild(Object.assign(document.createElement('script'), { src: '../desk-auth.js', onload: hearAuth }));
+    else hearAuth();
     chipsBox = bar.querySelector('.filters'); renderFilterChips();
     // экран не читает фильтр шапки (TDM#566, K.top({ filter: false, filterNote })): чипов нет — только подпись, цифры экрана не зависят от выбора
     if (opt.filter === false) { chipsBox.innerHTML = '<span class="k-note" data-nofilter title="Юрлица, дески, книги и портфели шапки на этом экране не применяются">Фильтр шапки здесь не действует' + (opt.filterNote ? ': ' + esc(opt.filterNote) : '') + '</span>'; chipsBox = null; }
@@ -3305,6 +3308,7 @@
     issuer: { key: 'issuerName', label: 'Эмитент', filter: true, title: 'эмитент (у деривативов — контрагент)', fmt: (v, r) => '<b style="color:' + K.issuerColor(r.issuer) + '">●</b> ' + esc(v) },
     name: { key: 'name', label: 'Бумага', noHide: true, fmt: (v, r) => K.nameCell(r, v) + (r.tradedToday ? ' ' + K.tradesTag(r) : '') + K.offReportTag(r) + K.curveProxyTag(r) },
     isin: { key: 'isin', label: 'ISIN', fmt: v => '<span class="mono mut">' + esc(v || '—') + '</span>' },
+    short: { key: 'shortName', label: 'Кор. имя', title: 'короткое имя бумаги: своё (карточка, ✎) или биржевое (MOEX SHORTNAME); если своё — биржевое в подсказке', fmt: (v, r) => K.shortCell(r, v) },
     ccy: { key: 'ccy', label: 'Вал', fmt: (v, r) => K.ccyTag(r.ccy, r.ccyReported), val: r => M.ccyOrder[r.ccy] ?? 99, filter: r => r.ccy, fltOrder: (a, b) => ((M.ccyOrder[a] ?? 99) - (M.ccyOrder[b] ?? 99)) || a.localeCompare(b) },
     kind: { key: 'kind', label: 'Тип', filter: r => M.kindLabel[r.kind] || r.kind, fmt: (v, r) => '<span class="tagc" style="border-color:' + K.kindColor[v] + '55">' + esc(M.kindShort[v]) + '</span>' },
     book: { key: 'book', label: 'Книга', filter: true, fmt: v => '<span class="mut">' + esc(v) + '</span>' },
@@ -3593,7 +3597,8 @@
     const te = o.el.querySelector('.t');
     te.innerHTML = '<span style="color:' + K.issuerColor(p.issuer) + '">●</span> ' + K.aliasName(p) + ' ' + K.ccyTag(p.ccy);
     K.aliasBind(te, p, () => { o.title = p.name; });
-    o.el.querySelector('.st').innerHTML = esc(p.issuerFull) + (p.isin ? ' · <span class="mono">' + esc(p.isin) + '</span>' : '') + ' · ' + esc(p.book) + ' — ' + esc(p.bookName) + ' · ' + esc(p.groupLabel) + ' / ' + esc(p.kindLabel);
+    o.el.querySelector('.st').innerHTML = esc(p.issuerFull) + (p.isin ? ' · <span class="mono">' + esc(p.isin) + '</span>' : '') + ' · ' + esc(p.book) + ' — ' + esc(p.bookName) + ' · ' + esc(p.groupLabel) + ' / ' + esc(p.kindLabel) + K.shortRow(p);
+    K.shortBind(o.el.querySelector('.st .k-shortrow'), p);  // «Короткое имя»: ✎ — своё по ISIN, имя меняется на всех экранах (TDM#776)
     const isBond = !!p.cpn;
     const ev = { put: 'пут-оферта', call: 'колл-опцион', mat: 'погашение' }[p.event.kind] || 'даты нет';  // #342: без даты — не «погашение»
     const fields = (isBond ? [
@@ -3716,7 +3721,18 @@
     M.positions.forEach(p => {
       if (p.isin !== isin) return;
       p.alias = alias; p.name = alias || p.exchName;
-      p.searchText = (alias ? alias.toLowerCase() + ' ' : '') + (p.searchBase != null ? p.searchBase : p.searchText);
+      p.searchText = (M.searchPrefix ? M.searchPrefix(p) : alias ? alias.toLowerCase() + ' ' : '') + (p.searchBase != null ? p.searchBase : p.searchText);
+    });
+    fire('alias'); fire('filter');
+  };
+  // короткое имя (TDM#776): своё по ISIN ?? биржевое (p.exchShort); то же, что K.setAlias, для p.shortOwn / p.shortName
+  K.setShort = (isin, name, meta) => {
+    name = name || null;
+    if (M.shortNames) { if (name) M.shortNames[isin] = Object.assign({ shortName: name }, meta || {}); else delete M.shortNames[isin]; }
+    M.positions.forEach(p => {
+      if (p.isin !== isin) return;
+      p.shortOwn = name; p.shortName = name || p.exchShort || null;
+      p.searchText = (M.searchPrefix ? M.searchPrefix(p) : name ? name.toLowerCase() + ' ' : '') + (p.searchBase != null ? p.searchBase : p.searchText);
     });
     fire('alias'); fire('filter');
   };
@@ -3741,9 +3757,22 @@
   };
   // Имена в уже нарисованном: ячейки K.nameCell (data-pn) и элементы с data-card (строка таблицы, ссылка, подпись), чей текст —
   // биржевое имя бумаги: заменяются на месте, страница целиком не перерисовывается (она тяжёлая: C03 — секунда)
+  // ячейка «Кор. имя» (TDM#776): своё короткое имя или биржевое; своё — с биржевым в подсказке; нет имени — «—»; data-ps — как data-pn
+  K.shortCell = (r, v) => {
+    const pos = r && M.pos[r.id], val = v === undefined ? (r && r.shortName) : v;
+    const mark = r && r.isin && (pos === r || (pos && Object.getPrototypeOf(r) === pos)) && val === r.shortName ? ' data-ps="' + esc(String(r.id)) + '"' : '';
+    const tip = r && r.shortOwn && r.exchShort && r.exchShort !== r.shortOwn ? ' title="' + esc('биржевое короткое имя: ' + r.exchShort) + '"' : '';
+    const t = val ? esc(val) : '<span class="mut3">—</span>';
+    return mark || tip ? '<span' + mark + tip + '>' + t + '</span>' : t;
+  };
   K.patchNames = () => {
     K._gen++;  // память ячеек таблиц — заново; длинные таблицы (K.vwin): строки окна — сразу, остальные при показе
     VW.forEach(w => w.repaint());
+    document.querySelectorAll('[data-ps]').forEach(el => {
+      const p = M.pos[el.dataset.ps]; if (!p) return;
+      el.innerHTML = p.shortName ? esc(p.shortName) : '<span class="mut3">—</span>';
+      if (p.shortOwn && p.exchShort && p.exchShort !== p.shortOwn) el.title = 'биржевое короткое имя: ' + p.exchShort; else el.removeAttribute('title');
+    });
     document.querySelectorAll('[data-pn]').forEach(el => {
       const p = M.pos[el.dataset.pn]; if (!p) return;
       if (el.textContent !== p.name) el.textContent = p.name;
@@ -3754,16 +3783,38 @@
       Array.from(el.tagName === 'TR' ? el.children : [el]).forEach(c => { if (!c.children.length && c.textContent === p.exchName) c.textContent = p.name; });
     });
   };
-  const canAlias = p => !!(p && p.isin && M.aliasApi);
-  const aliasView = p => {
-    const ro = M.aliasApi && M.aliasApi.editable === false;
-    return '<span class="k-nm-v">' + esc(p.name) + '</span>' +
-      (p.alias && p.exchName && p.exchName !== p.alias ? ' <span class="k-exch" title="биржевое имя">' + esc(p.exchName) + '</span>' : '') +
-      (canAlias(p) ? '<span class="k-alias-tools">' +
-        '<button class="k-ico" data-al="edit"' + (ro ? ' disabled title="' + esc('только чтение: ' + M.aliasApi.readOnlyReason) + '"' : ' title="переименовать бумагу (алиас по ISIN — на всех экранах)"') + '>✎</button>' +
-        '<button class="k-ico" data-al="hist" title="история имени">⟲</button></span>' : '');
+  // Два имени бумаги, одна машинерия правки (✎, ⟲, «Биржевое»): алиас (полное имя, R33) и короткое имя (TDM#776). Описание вида:
+  // api — M.aliasApi / M.shortNameApi; shown, own, exch — что показано, своё и биржевое; field — поле истории ответа сервера; set —
+  // подстановка во все позиции бумаги
+  const NAME_ALIAS = {
+    api: () => M.aliasApi, shown: p => p.name, own: p => p.alias, exch: p => p.exchName, exchTip: 'биржевое имя', field: 'alias', max: 120,
+    editTip: 'переименовать бумагу (алиас по ISIN — на всех экранах)', histTip: 'история имени', histTitle: 'История имени', clearTxt: 'Биржевое имя',
+    clearTip: 'убрать алиас: снова биржевое имя', hint: 'пусто — биржевое имя', set: (isin, v, meta) => K.setAlias(isin, v, meta), empty: '',
   };
+  const NAME_SHORT = {
+    api: () => M.shortNameApi, shown: p => p.shortName, own: p => p.shortOwn, exch: p => p.exchShort, exchTip: 'биржевое короткое имя', field: 'short_name', max: 40,
+    editTip: 'изменить короткое имя бумаги (по ISIN — на всех экранах)', histTip: 'история короткого имени', histTitle: 'История короткого имени',
+    clearTxt: 'Биржевое', clearTip: 'убрать своё короткое имя: снова биржевое', hint: 'пусто — биржевое короткое имя', set: (isin, v, meta) => K.setShort(isin, v, meta),
+    empty: '<span class="mut3">—</span>',
+  };
+  const canAlias = (p, nk) => !!(p && p.isin && (nk || NAME_ALIAS).api());
+  const nameView = (p, nk) => {
+    const api = nk.api(), ro = api && api.editable === false, own = nk.own(p), exch = nk.exch(p), shown = nk.shown(p);
+    return '<span class="k-nm-v">' + (shown ? esc(shown) : nk.empty) + '</span>' +
+      (own && exch && exch !== own ? ' <span class="k-exch" title="' + esc(nk.exchTip) + '">' + esc(exch) + '</span>' : '') +
+      (canAlias(p, nk) ? '<span class="k-alias-tools">' +
+        '<button class="k-ico" data-al="edit"' + (ro ? ' disabled title="' + esc('только чтение: ' + api.readOnlyReason) + '"' : ' title="' + esc(nk.editTip) + '"') + ' data-ti="' + esc(nk.editTip) + '">✎</button>' +
+        '<button class="k-ico" data-al="hist" title="' + esc(nk.histTip) + '">⟲</button></span>' : '');
+  };
+  const aliasView = p => nameView(p, NAME_ALIAS);
   K.aliasName = p => '<span class="k-nm">' + aliasView(p) + '</span>';
+  // строка карточки «Короткое имя» (TDM#776): значение, ✎, ⟲; у позиции без ISIN (деривативы) строки нет. K.shortBind — правка на месте
+  K.shortRow = p => canAlias(p, NAME_SHORT) ? '<div class="k-shortrow"><span class="mut3">Короткое имя</span> <span class="k-nm">' + nameView(p, NAME_SHORT) + '</span></div>' : '';
+  // права на правку уточнились (ответ входа пришёл позже, чем нарисовали карточку, TDM#777): ✎ в уже открытых карточках — на месте
+  K.refreshNameTools = () => document.querySelectorAll('[data-al=edit]').forEach(b => {
+    const api = M.nameRights || M.aliasApi, ro = api && api.editable === false;
+    b.disabled = !!ro; b.title = ro ? 'только чтение: ' + api.readOnlyReason : (b.dataset.ti || b.title);
+  });
   const WHO = { local: 'этот компьютер', demo: 'демо' };
   const stamp = s => { if (!s) return '—'; const d = new Date(s); if (isNaN(d)) return esc(s); const z = n => String(n).padStart(2, '0'); return z(d.getDate()) + '.' + z(d.getMonth() + 1) + '.' + d.getFullYear() + ' ' + z(d.getHours()) + ':' + z(d.getMinutes()); };
   // ответы сервера (английские) — по-русски; незнакомое — как есть
@@ -3774,54 +3825,58 @@
   document.addEventListener('keydown', e => { if (e.key === 'Escape' && aliasPop) { closeAliasPop(); e.stopImmediatePropagation(); e.preventDefault(); } }, true);
   document.addEventListener('mousedown', e => { if (aliasPop && !aliasPop.contains(e.target) && !(e.target.closest && e.target.closest('[data-al=hist]'))) closeAliasPop(); }, true);
   // история имени: всплывающий список ревизий (новые сверху)
-  K.aliasHistory = function (p, anchor) {
+  K.aliasHistory = function (p, anchor, nk) {
+    nk = nk || NAME_ALIAS;
     closeAliasPop();
     const pop = aliasPop = h('div', 'k-alias-pop');
-    pop.innerHTML = '<div class="hd">История имени <span class="mono mut3">' + esc(p.isin) + '</span></div><div class="bd"><div class="mut3">загрузка…</div></div>';
+    pop.innerHTML = '<div class="hd">' + nk.histTitle + ' <span class="mono mut3">' + esc(p.isin) + '</span></div><div class="bd"><div class="mut3">загрузка…</div></div>';
     document.body.appendChild(pop);
     if (anchor && anchor.getBoundingClientRect) {
       const r = anchor.getBoundingClientRect();
       pop.style.top = Math.round(r.bottom + 4) + 'px';
       pop.style.left = Math.round(Math.max(8, Math.min(r.left, (window.innerWidth || 1200) - 380))) + 'px';
     }
-    return M.aliasApi.history(p.isin).then(revs => {
+    return nk.api().history(p.isin).then(revs => {
       if (aliasPop !== pop) return;
       const bd = pop.querySelector('.bd');
       if (revs == null) { bd.innerHTML = '<div class="neg">история недоступна</div>'; return; }
       bd.innerHTML = (revs.length ? '<table class="k-tbl k-compact"><tbody>' + revs.map(r => '<tr><td class="mut">' + stamp(r.changed_at) + '</td><td class="mut3">' + esc(WHO[r.changed_by] || r.changed_by || '—') + '</td><td>' +
-        (r.alias ? esc(r.alias) : '<span class="mut3">сброшено — биржевое имя</span>') + '</td></tr>').join('') + '</tbody></table>' : '<div class="mut3">имя не менялось</div>') +
-        '<div class="mut3 ft">биржевое имя: ' + esc(p.exchName || '—') + '</div>';
+        (r[nk.field] ? esc(r[nk.field]) : '<span class="mut3">сброшено — ' + nk.exchTip + '</span>') + '</td></tr>').join('') + '</tbody></table>' : '<div class="mut3">имя не менялось</div>') +
+        '<div class="mut3 ft">' + nk.exchTip + ': ' + esc(nk.exch(p) || '—') + '</div>';
     });
   };
-  // правка на месте: el — заголовок с K.aliasName(p); onSaved — после сохранения (заголовок уже перерисован)
-  K.aliasBind = function (el, p, onSaved) {
+  // правка на месте: el — заголовок с K.aliasName(p) (для короткого имени — строка K.shortRow(p), K.shortBind); onSaved — после
+  // сохранения (заголовок уже перерисован); nk — какое имя правим (по умолчанию алиас)
+  K.aliasBind = function (el, p, onSaved, nk) {
+    nk = nk || NAME_ALIAS;
     const wrap = el && el.querySelector && el.querySelector('.k-nm');
-    if (!wrap || !canAlias(p)) return;
-    const view = () => { wrap.innerHTML = aliasView(p); wire(); };
+    if (!wrap || !canAlias(p, nk)) return;
+    const view = () => { wrap.innerHTML = nameView(p, nk); wire(); };
     function wire() {
       const ed = wrap.querySelector('[data-al=edit]'), hs = wrap.querySelector('[data-al=hist]');
       if (ed) ed.onclick = e => { e.stopPropagation(); edit(); };
-      if (hs) hs.onclick = e => { e.stopPropagation(); if (aliasPop) closeAliasPop(); else K.aliasHistory(p, hs); };
+      if (hs) hs.onclick = e => { e.stopPropagation(); if (aliasPop) closeAliasPop(); else K.aliasHistory(p, hs, nk); };
     }
     function edit() {
       closeAliasPop();
-      wrap.innerHTML = '<span class="k-alias-ed"><input class="k-input" maxlength="120" placeholder="' + esc(p.exchName) + '" value="' + esc(p.alias || '') + '">' +
-        '<button class="k-btn pri" data-al="save">Сохранить</button>' + (p.alias ? '<button class="k-btn" data-al="clear" title="убрать алиас: снова биржевое имя">Биржевое имя</button>' : '') +
-        '<button class="k-btn" data-al="cancel">Отмена</button><span class="k-alias-msg mut3">пусто — биржевое имя · Enter — сохранить · Esc — отмена' + (M.aliasApi.demo ? ' · демо: до перезагрузки' : '') + '</span></span>';
+      const api = nk.api();
+      wrap.innerHTML = '<span class="k-alias-ed"><input class="k-input" maxlength="' + nk.max + '" placeholder="' + esc(nk.exch(p) || '') + '" value="' + esc(nk.own(p) || '') + '">' +
+        '<button class="k-btn pri" data-al="save">Сохранить</button>' + (nk.own(p) ? '<button class="k-btn" data-al="clear" title="' + esc(nk.clearTip) + '">' + nk.clearTxt + '</button>' : '') +
+        '<button class="k-btn" data-al="cancel">Отмена</button><span class="k-alias-msg mut3">' + nk.hint + ' · Enter — сохранить · Esc — отмена' + (api.demo ? ' · демо: до перезагрузки' : '') + '</span></span>';
       const inp = wrap.querySelector('input'), msg = wrap.querySelector('.k-alias-msg');
       const busy = b => wrap.querySelectorAll('button[data-al=save],button[data-al=clear],input').forEach(x => x.disabled = b);
       const save = raw => {
         busy(true); msg.className = 'k-alias-msg mut3'; msg.textContent = 'сохранение…';
-        return M.aliasApi.put(p.isin, raw).then(r => {
+        return api.put(p.isin, raw).then(r => {
           if (r.status === 200 && r.body) {
-            K.setAlias(p.isin, r.body.alias, { changedBy: r.body.changed_by, changedAt: r.body.changed_at });
+            nk.set(p.isin, r.body[nk.field], { changedBy: r.body.changed_by, changedAt: r.body.changed_at });
             view(); if (onSaved) onSaved(r.body);
             return;
           }
           const why = aliasWhy((r.body && r.body.message) || ('ошибка ' + r.status));
-          if (r.status === 403) {  // не компьютер сервера: дальше только чтение, имя — как есть
-            M.aliasApi.editable = false;
-            msg.className = 'k-alias-msg warn'; msg.textContent = 'только чтение: ' + M.aliasApi.readOnlyReason;
+          if (r.status === 403) {  // нет права (роль, не компьютер сервера): дальше только чтение, имя — как есть
+            api.editable = false;
+            msg.className = 'k-alias-msg warn'; msg.textContent = 'только чтение: ' + api.readOnlyReason;
             wrap.querySelectorAll('button[data-al=save],button[data-al=clear],input').forEach(x => x.disabled = true);
             return;
           }
@@ -3843,6 +3898,7 @@
     wire();
     return { edit, view };
   };
+  K.shortBind = (el, p, onSaved) => K.aliasBind(el, p, onSaved, NAME_SHORT);
 
   // все потоки позиции до погашения: на прогоне — график выпуска с сервера (M.posFlows), иначе потоки набора данных;
   // потоки после оферты, к которой оценена бумага, приглушены: они будут, если бумагу не предъявят

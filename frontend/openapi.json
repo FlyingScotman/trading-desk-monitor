@@ -2672,6 +2672,183 @@
           }
         }
       }
+    },
+    "/api/v1/instruments/short-names": {
+      "get": {
+        "tags": [
+          "instruments"
+        ],
+        "summary": "List Short Names",
+        "operationId": "list_short_names_api_v1_instruments_short_names_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ShortNameList"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not Found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Unprocessable Entity",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Service Unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/instruments/short-names/{isin}/history": {
+      "get": {
+        "tags": [
+          "instruments"
+        ],
+        "summary": "Short Name History",
+        "operationId": "short_name_history_api_v1_instruments_short_names__isin__history_get",
+        "parameters": [
+          {
+            "name": "isin",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "description": "The ISIN",
+              "title": "Isin"
+            },
+            "description": "The ISIN"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ShortNameHistory"
+                }
+              }
+            }
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "Not Found"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "Unprocessable Entity"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "Service Unavailable"
+          }
+        }
+      }
+    },
+    "/api/v1/instruments/short-name": {
+      "put": {
+        "tags": [
+          "instruments"
+        ],
+        "summary": "Put Short Name",
+        "description": "Set or clear (blank or null) the short name of an ISIN. A trader or admin (sign-in off: this computer only); a change is recorded with who and when, a request that changes nothing is not.",
+        "operationId": "put_short_name_api_v1_instruments_short_name_put",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ShortNameIn"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ShortNameState"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not Found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Unprocessable Entity",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Service Unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            }
+          }
+        }
+      }
     }
   },
   "components": {
@@ -5379,6 +5556,37 @@
         ],
         "title": "InstrumentAlias"
       },
+      "InstrumentShortName": {
+        "properties": {
+          "isin": {
+            "type": "string",
+            "title": "Isin"
+          },
+          "short_name": {
+            "type": "string",
+            "title": "Short Name",
+            "description": "The short name to show instead of the exchange's"
+          },
+          "changed_by": {
+            "type": "string",
+            "title": "Changed By",
+            "description": "Who set it: the user, or 'local' (this computer, sign-in off)"
+          },
+          "changed_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Changed At"
+          }
+        },
+        "type": "object",
+        "required": [
+          "isin",
+          "short_name",
+          "changed_by",
+          "changed_at"
+        ],
+        "title": "InstrumentShortName"
+      },
       "JobIn": {
         "properties": {
           "base_run_id": {
@@ -7450,6 +7658,18 @@
             ],
             "title": "Alias",
             "description": "The display name a user gave fact.isin (PUT /api/v1/instruments/alias), in force now, old runs too; null: none, show fact.name"
+          },
+          "short_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Short Name",
+            "description": "The short name a user gave fact.isin (PUT /api/v1/instruments/short-name), in force now, old runs too; null: none, show fact.extra.short_name (the exchange's)"
           }
         },
         "type": "object",
@@ -10674,6 +10894,166 @@
           "password"
         ],
         "title": "SetupIn"
+      },
+      "ShortNameHistory": {
+        "properties": {
+          "isin": {
+            "type": "string",
+            "title": "Isin"
+          },
+          "revisions": {
+            "items": {
+              "$ref": "#/components/schemas/ShortNameRevision"
+            },
+            "type": "array",
+            "title": "Revisions",
+            "description": "Newest first"
+          }
+        },
+        "type": "object",
+        "required": [
+          "isin",
+          "revisions"
+        ],
+        "title": "ShortNameHistory"
+      },
+      "ShortNameIn": {
+        "properties": {
+          "isin": {
+            "type": "string",
+            "title": "Isin",
+            "description": "The security's ISIN (case and surrounding spaces ignored)"
+          },
+          "short_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Short Name",
+            "description": "The short name, at most 40 characters; null or blank clears it (the exchange's short name again)"
+          }
+        },
+        "type": "object",
+        "required": [
+          "isin"
+        ],
+        "title": "ShortNameIn"
+      },
+      "ShortNameList": {
+        "properties": {
+          "short_names": {
+            "items": {
+              "$ref": "#/components/schemas/InstrumentShortName"
+            },
+            "type": "array",
+            "title": "Short Names",
+            "description": "The short names in force, by ISIN"
+          }
+        },
+        "type": "object",
+        "required": [
+          "short_names"
+        ],
+        "title": "ShortNameList"
+      },
+      "ShortNameRevision": {
+        "properties": {
+          "rev_id": {
+            "type": "integer",
+            "title": "Rev Id"
+          },
+          "short_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Short Name",
+            "description": "null: the short name was cleared"
+          },
+          "changed_by": {
+            "type": "string",
+            "title": "Changed By"
+          },
+          "changed_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Changed At"
+          }
+        },
+        "type": "object",
+        "required": [
+          "rev_id",
+          "short_name",
+          "changed_by",
+          "changed_at"
+        ],
+        "title": "ShortNameRevision"
+      },
+      "ShortNameState": {
+        "properties": {
+          "isin": {
+            "type": "string",
+            "title": "Isin"
+          },
+          "short_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Short Name",
+            "description": "In force after the request; null: none (the exchange's is shown)"
+          },
+          "changed_by": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Changed By",
+            "description": "Of the latest revision; null: the ISIN never had one"
+          },
+          "changed_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Changed At"
+          },
+          "changed": {
+            "type": "boolean",
+            "title": "Changed",
+            "description": "False when the request set what was already in force (no revision)"
+          }
+        },
+        "type": "object",
+        "required": [
+          "isin",
+          "short_name",
+          "changed_by",
+          "changed_at",
+          "changed"
+        ],
+        "title": "ShortNameState"
       },
       "SpreadRules": {
         "properties": {

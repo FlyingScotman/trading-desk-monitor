@@ -19,7 +19,7 @@ const pw = (() => { try { return require('playwright'); } catch (e) { return nul
 const ROOT = path.join(__dirname, '..', '..', 'prototypes');
 const PAGE = f => pathToFileURL(path.join(ROOT, 'concepts', f)).href;
 const skip = !pw && 'нет Playwright';
-const POS = ['name', 'ccy', 'issuerName', 'kind', 'book', 'couponFmt', 'event', 'maturity', 'tenor', 'notional', 'tradeDay', 'posDelta', 'price', 'ytm', 'zspread', 'mdur', 'dv01', 'cs01', 'carryDay', 'fundingDay', 'pnl', 'mv'];  // C01 «Позиции»: key колонок
+const POS = ['name', 'shortName', 'ccy', 'issuerName', 'kind', 'book', 'couponFmt', 'event', 'maturity', 'tenor', 'notional', 'tradeDay', 'posDelta', 'price', 'ytm', 'zspread', 'mdur', 'dv01', 'cs01', 'carryDay', 'fundingDay', 'pnl', 'mv'];  // C01 «Позиции»: key колонок
 
 async function launch(width) {
   const browser = await pw.chromium.launch();
@@ -191,7 +191,7 @@ async function serve(ctx, users) {
       if (req.method() === 'PUT') { const b = JSON.parse(req.postData()); if (b.hidden.length) mine[key] = b.hidden; else delete mine[key]; if ((b.added || []).length) added[key] = b.added; else delete added[key]; } else { delete mine[key]; delete added[key]; }
       return route.fulfill(req.method() === 'PUT' ? { contentType: 'application/json', body: JSON.stringify({ hidden: mine[key] || [], added: added[key] || [], updated_at: '2026-11-17T10:01:00Z' }) } : { status: 204, body: '' });
     }
-    const api = { '/api/v1/instruments/aliases': { aliases: [] }, '/api/v1/auth/state': { enabled: false, user: null }, '/api/v1/autopilot/status': { latest_run: null },
+    const api = { '/api/v1/instruments/aliases': { aliases: [] }, '/api/v1/instruments/short-names': { short_names: [] }, '/api/v1/auth/state': { enabled: false, user: null }, '/api/v1/autopilot/status': { latest_run: null },
       '/api/v1/backfill/status': null, '/api/v1/views': { views: [] }, '/api/v1/events': { events: [], last_id: 0 }, '/api/v1/history/market': null, '/api/v1/calendar/market': null };
     if (Object.hasOwn(api, u.pathname)) return route.fulfill({ contentType: 'application/json', body: JSON.stringify(api[u.pathname]) });
     if (u.pathname === '/api/v1/events/stream') return route.fulfill({ contentType: 'text/event-stream', body: 'event: hello\ndata: {"last_id":0}\n\n' });
