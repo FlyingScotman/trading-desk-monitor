@@ -67,6 +67,37 @@ t('#327: фондирование не посчитано ни у одной п�
   assert.strictEqual(x.v, -1000); assert.strictEqual(x.n, 1); assert.strictEqual(x.miss, M2.positions.length - 1);
 });
 
+t('HUD: нетто и кэрри без фондирования объясняют сумму компонентов (прогон и демо)', () => {
+  for (const real of [true, false]) {
+    const { M, K } = load({ real }), box = el();
+    const rows = [[100000, -30000], [10000, 0], [0, 5000], [50000, null], [null, null]];
+    const L = rows.map(([carryDay, fundingDay], i) => ({ ...M.positions[i], carryDay, fundingDay }));
+    K.list = () => L;
+    const hud = K.hud(box);
+    const k = M.kpis(L);
+    assert.strictEqual(k.carryDay, 160000);
+    assert.strictEqual(k.fundingDay, -25000);
+    const netId = () => K._reg.findLastIndex(x => x && x.title === 'Нетто-кэрри / день');
+    assert.ok(netId() >= 0, 'нетто открывает разбор по позициям');
+    const spec = K._reg[netId()];
+    assert.deepStrictEqual(L.map(spec.val), [70000, 10000, 5000, null, null]);
+    assert.strictEqual(spec.val({ carryDay: null, fundingDay: -20000 }), null);
+    const omitted = /^Не в нетто: кэрри (\d+) тыс ₽ у 1 поз\. без фондирования$/.exec(spec.note);
+    assert.ok(omitted, spec.note);
+    assert.strictEqual(M.sum(L, spec.val) + Number(omitted[1]) * 1000, k.carryDay + k.fundingDay);
+    assert.ok(box.innerHTML.includes('data-dr="' + netId() + '">85</span>'));
+    assert.match(box.innerHTML, /в год ≈<\/td><td><span class="pos">31<\/span>/);
+    K.list = () => L.filter((_, i) => i !== 3);
+    hud.redraw();
+    assert.strictEqual(K._reg[netId()].note, '');
+    assert.ok(box.innerHTML.includes('data-dr="' + netId() + '">85</span>'));
+    K.list = () => L.slice(3);
+    hud.redraw();
+    assert.ok(box.innerHTML.includes('data-dr="' + netId() + '"><span class="mut3" title="не посчитано">—</span>'));
+    assert.match(box.innerHTML, /в год ≈<\/td><td><span class="">—<\/span>/);
+  }
+});
+
 t('#333: K.d по строкам (rows) — все null: «—», а не «0»; часть посчитана — сумма посчитанных', () => {
   const { M, K } = load({ real: true });
   const p = M.positions[0];
