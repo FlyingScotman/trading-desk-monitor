@@ -10,7 +10,7 @@ __version__ = "0.2.35"
 # buckets, coverage). A run records ``logic_version()`` in its lineage; the autopilot recomputes the latest positions
 # date once when its default run was made by another logic version; the backfill (desk.backfill, R23) recomputes the
 # older dates in the background.
-VALUATION_VERSION = 39  # 2: risk per curve (R8); 3: static display fields (R9 D1-D6, D8: names, coupons, issuers);
+VALUATION_VERSION = 40  # 2: risk per curve (R8); 3: static display fields (R9 D1-D6, D8: names, coupons, issuers);
 # 4: RUB bonds discounted on RUONIA OIS + Z-spread, flash PnL on the bond's own curves;
 # 5: a key-rate floater on a fallback rung books its projection on RUB KEY, the run log names missing rates inputs
 # 6: a bond's offer, its next 18 months of flows and the day's quote (G-spread, volume) in extra (concept pages)
@@ -106,6 +106,7 @@ VALUATION_VERSION = 39  # 2: risk per curve (R8); 3: static display fields (R9 D
 # unmatched line was compared with (the nearest leg in its currency, a leg of another currency with its amount) and that
 # the report has no such line while the book has deals it could be matched with (none: how many before and after the
 # report's date); the OCP numbers are as in 38 (TDM#807)
+# 40: OCP links trade terms within the position's own book, including mirrored FX trades with the same deal id.
 
 
 def logic_version() -> str:

@@ -130,7 +130,7 @@
   // «нет данных» и не «нет позиции», а «страница устарела». Тот же 404 у старого сервера (без details) остаётся как был.
   const RUN_GONE = 'Расчёт, который показывает страница, заменён новым — обновите страницу';
   M.RUN_GONE = RUN_GONE;
-  const isRunGone = j => !!(j && j.details && j.details.reason === 'run_not_found');
+  const isRunGone = M.isRunGone = j => !!(j && j.details && j.details.reason === 'run_not_found');
   const notFoundBody = r => { try { return Promise.resolve(r.json()).then(j => j, () => null); } catch (e) { return Promise.resolve(null); } };
   function getJson(path) {
     if (NET[path]) return NET[path];

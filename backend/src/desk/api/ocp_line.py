@@ -27,6 +27,9 @@ def ocp_line(x: dict[str, Any]) -> dict[str, Any]:
     if x.get("parts") is not None:
         out.update(baseDate=x.get("base_date"), setId=x.get("set_id"), baseKind=x.get("base_kind"), parts=x["parts"],
                    baseOlder=bool(x.get("base_older")))
+    for raw, field in (("fallback", "fallback"), ("no_pv", "noPv"), ("partial_pv", "partialPv")):
+        if x.get(raw):
+            out[field] = x[raw]
     return out
 
 
@@ -62,17 +65,27 @@ def method_note(basis: str | None, lines: list[dict[str, Any]]) -> str | None:
     if not basis:
         return None
     if basis == O.PublishedBasis.REPORT_BASE_PLUS_DAY.value:
-        whole = [x for x in lines if x.get("baseKind") == O.BASE_WHOLE]
-        old = sorted({x.get("book") or x.get("entity") or "—" for x in whole})
-        if not old:
-            return None
-        dates = [_dmy(d) for d in sorted({str(x["baseDate"])[:10] for x in whole if _dmy(x.get("baseDate"))})]
-        return ("не по текущей методике: отчёт ещё с деривативами, их PV не добавлен (" + ", ".join(old[:5])
-                + (f" и ещё {len(old) - 5}" if len(old) > 5 else "")
-                + ("; отчёт от " + ", ".join(dates[:3]) + (f" и ещё {len(dates) - 3}" if len(dates) > 3 else "")
-                   if dates else "") + ")")
+        reasons = (
+            ("отчёт ещё с деривативами, их PV не добавлен", [x for x in lines if x.get("baseKind") == O.BASE_WHOLE]),
+            ("вместо PV взят номинал из отчёта", [x for x in lines if x.get("fallback")]),
+            ("вместо PV взят номинал позиций",
+             [x for x in lines if set(x.get("noPv") or ()) - set(x.get("fallback") or ())]),
+            ("часть позиций без PV", [x for x in lines if x.get("partialPv")]),
+        )
+        notes = [f"{reason} ({_method_scope(affected)})" for reason, affected in reasons if affected]
+        return "не по текущей методике: " + "; ".join(notes) if notes else None
     if basis == O.PublishedBasis.REPORT_PLUS_OUTSIDE.value:
         return "другая методика: отчёт целиком (с деривативами) и слагаемые вне отчёта"
     if basis == O.PublishedBasis.DERIVED.value:
         return "другая методика: ОВП из позиций, отчёт ОВП только сверен"
     return f"методика «{basis}» не распознана"
+
+
+def _method_scope(lines: list[dict[str, Any]]) -> str:
+    books = sorted({x.get("book") or x.get("entity") or "—" for x in lines})
+    dates = [_dmy(d) for d in sorted({str(x["baseDate"])[:10] for x in lines
+                                     if x.get("baseKind") != O.BASE_ABSENT and _dmy(x.get("baseDate"))})]
+    book_text = ", ".join(books[:5]) + (f" и ещё {len(books) - 5}" if len(books) > 5 else "")
+    if not dates:
+        return book_text
+    return book_text + "; отчёт от " + ", ".join(dates[:3]) + (f" и ещё {len(dates) - 3}" if len(dates) > 3 else "")

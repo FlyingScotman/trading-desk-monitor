@@ -12,6 +12,8 @@ const ROOT = path.join(__dirname, '..', '..', 'prototypes'), ORIGIN = 'http://de
 const TYPES = { '.html': 'text/html', '.js': 'application/javascript', '.css': 'text/css', '.json': 'application/json' };
 const BAD = /\bNaN\b|\bundefined\b/;
 const AS_OF = JSON.parse(RUN).asOf;
+const ANCHOR = 124;
+const RUN_GONE = 'Расчёт, который показывает страница, заменён новым — обновите страницу';
 
 const prevDay = s => { const t = new Date(s + 'T00:00:00Z'); do t.setUTCDate(t.getUTCDate() - 1); while (!(t.getUTCDay() % 6)); return t.toISOString().slice(0, 10); };
 const FX = { USD: { market: 81.45, cbr: 81.12 }, EUR: { market: 94.62, cbr: 94.38 } };
@@ -28,7 +30,7 @@ function mkDay(date, i, old) {
 function history() {
   const days = [];
   for (let d = AS_OF, i = 24; i >= 0; d = prevDay(d), i--) days.unshift(mkDay(d, i, i < 12));
-  return { runId: null, asOf: AS_OF, from: days[0].date, to: AS_OF, books: {}, days };
+  return { runId: ANCHOR, asOf: AS_OF, from: days[0].date, to: AS_OF, books: {}, days };
 }
 // the run's /ocp of a day: the line with its parts and contributions (the old methodology: the report whole and outside it)
 function runBlock(day) {
@@ -49,7 +51,7 @@ function dayDoc(day, { noContrib } = {}) {
       absent: [{ code: 'old_methodology', part: null, reason: 'прогон считан по прежней методике (отчёт целиком и слагаемые вне отчёта): базы отчёта без деривативов, PV деривативов, изменений дня и переноса в нём нет' }] } })) });
 }
 
-async function open(browser, url = '/concepts/c16-ocp.html', { width = 1366, theme = 'light', dayAnswer, mutate } = {}) {
+async function open(browser, url = '/concepts/c16-ocp.html', { width = 1366, theme = 'light', dayAnswer, mutate, goneAt } = {}) {
   const hist = history(); if (mutate) mutate(hist);
   const ctx = await browser.newContext({ viewport: { width, height: 900 } }), pg = await ctx.newPage(), errors = [], calls = [];
   await ctx.addInitScript(([t]) => { try { localStorage.clear(); localStorage.setItem('concepts-theme', t); } catch (e) { } }, [theme]);
@@ -58,10 +60,18 @@ async function open(browser, url = '/concepts/c16-ocp.html', { width = 1366, the
   await pg.route('**/*', async route => {
     const u = new URL(route.request().url()), json = (o, status = 200) => route.fulfill({ status, contentType: 'application/json', body: JSON.stringify(o) });
     if (u.origin !== ORIGIN) return route.abort();
-    if (u.pathname === '/concepts-run.js') return route.fulfill({ status: 200, contentType: 'application/javascript', body: 'window.CONCEPTS_RUN = ' + RUN + ';' });
+    if (u.pathname === '/concepts-run.js') {
+      const run = JSON.parse(RUN);
+      run.source.runId = ANCHOR;
+      return route.fulfill({ status: 200, contentType: 'application/javascript', body: 'window.CONCEPTS_RUN = ' + JSON.stringify(run) + ';' });
+    }
     if (u.pathname === '/concepts-data.js') return route.fulfill({ status: 200, contentType: 'application/javascript', body: 'window.DESK_EXTRAS = { notes: [] };' });
     if (u.pathname === '/api/v1/auth/state') return json({ enabled: false, user: null });
-    if (u.pathname.startsWith('/api/v1/history/ocp') || /^\/api\/v1\/runs\/\d+\/ocp$/.test(u.pathname)) calls.push(u.pathname + u.search);
+    const m = u.pathname.match(/^\/api\/v1\/runs\/(\d+)\/ocp$/);
+    if (u.pathname.startsWith('/api/v1/history/ocp') || m || u.pathname === '/api/v1/inbox/replay') calls.push(u.pathname + u.search);
+    if ((goneAt === 'history' && u.pathname === '/api/v1/history/ocp') ||
+        (goneAt === 'day' && u.pathname === '/api/v1/history/ocp/day') || (goneAt === 'run' && m))
+      return json({ code: 'not_found', message: 'No complete run for the selected history', details: { reason: 'run_not_found' } }, 404);
     if (u.pathname === '/api/v1/history/ocp') return json(hist);
     if (u.pathname === '/api/v1/history/ocp/day') {
       const on = u.searchParams.get('date'), day = hist.days.find(x => x.date === on);
@@ -69,8 +79,16 @@ async function open(browser, url = '/concepts/c16-ocp.html', { width = 1366, the
       if (day) return json(dayDoc(day));
       return json({ code: 'not_found', message: 'no saved run of ' + on + ' to show its OCP', details: { reason: 'no_run_on_date', date: on } }, 404);
     }
-    const m = u.pathname.match(/^\/api\/v1\/runs\/(\d+)\/ocp$/);
     if (m) { const day = hist.days.find(x => x.runId === +m[1]); return day ? json(runBlock(day)) : json({ message: 'no run' }, 404); }
+    if (u.pathname === '/api/v1/inbox/replay') return json({
+      sources: [
+        { source: 'positions', names: ['Позиции'], datasets: ['positions'], latest: AS_OF },
+        { source: 'other_ocp', names: ['Второй отчёт ОВП'], datasets: ['ocp'], latest: AS_OF },
+        { source: 'ocp_src', names: ['Отчёт ОВП'], datasets: ['ocp'], latest: AS_OF },
+      ],
+      default: { from: AS_OF, to: AS_OF }, max_days: hist.replayMaxDays || 400, running: false,
+      estimate: u.searchParams.has('source') ? { files: 3, dates: [] } : null,
+    });
     if (u.pathname === '/api/v1/inbox/datasets/ocp') return json({ dataset: 'ocp', name: 'ОВП', on: AS_OF, sources: [], in_force: null, files: { total: 0, by_status: {}, status_text: {}, later: { total: 0, by_status: {}, first_date: null } }, latest: null, unread: { ignored: 0, too_old: 0 }, lookback_days: 35, folders: { count: 1, scanned: 1, missing: 0 }, settings_link: false, last_scan: null });
     if (u.pathname.startsWith('/api/')) return route.fulfill({ status: 404, contentType: 'application/json', body: '{}' });
     const f = path.join(ROOT, decodeURIComponent(u.pathname));
@@ -78,7 +96,7 @@ async function open(browser, url = '/concepts/c16-ocp.html', { width = 1366, the
     return route.fulfill({ status: 200, contentType: TYPES[path.extname(f)] || 'application/octet-stream', body: fs.readFileSync(f) });
   });
   await pg.goto(ORIGIN + url);
-  await pg.waitForSelector('[data-c16-days]');
+  await pg.waitForSelector('[data-c16-days], .c16-msg');
   await pg.waitForTimeout(250);
   return { pg, ctx, errors, calls, hist };
 }
@@ -88,6 +106,135 @@ const chartLine = pg => pg.evaluate(() => { const o = echarts.getInstanceByDom(d
 const usdMm = day => day.lines.reduce((a, x) => a + x.amount * FX[x.ccy].market / FX.USD.market, 0) / 1e6;
 const totalText = pg => pg.locator('[data-ocp-total] .v').innerText();
 const num = t => parseFloat(t.replace(/\s/g, '').replace(/[()]/g, '-').replace('−', '-').replace(/[^0-9.\-]/g, ''));
+
+test('C16: a replaced run is explained on history, date selection and both drill requests', { skip: !pw }, async () => {
+  const browser = await pw.chromium.launch();
+  try {
+    const outside = '2026-04-14';
+    for (const [goneAt, view] of [['history', 'page'], ['day', 'date'], ['day', 'drill'], ['run', 'drill']]) {
+      const url = '/concepts/c16-ocp.html' + (view === 'date' ? '?date=' + outside : '');
+      const mutate = h => { h.days.at(-1).cutType = 'intraday'; };
+      const { pg, ctx, calls, hist, errors } = await open(browser, url, { goneAt, mutate });
+      const latest = hist.days.at(-1);
+      if (view === 'drill') await pg.locator('[data-ocp-row="FXB"] td').first().click();
+      const message = pg.getByText(RUN_GONE, { exact: true });
+      await message.waitFor();
+      assert.doesNotMatch(await pg.locator('body').innerText(), /404 Not Found|No complete run for the selected history/);
+      assert.equal(await pg.locator('[data-c16-sum]').count(), 0);
+      if (view !== 'drill') assert.equal(await pg.locator('[data-ocp-total]').count(), 0);
+      assert.deepEqual(calls.sort(), [
+        '/api/v1/history/ocp?run_id=' + ANCHOR,
+        ...(view === 'page' ? [] : ['/api/v1/history/ocp/day?date=' + (view === 'date' ? outside : AS_OF) + '&run_id=' + ANCHOR]),
+        ...(view === 'drill' ? ['/api/v1/runs/' + latest.runId + '/ocp'] : []),
+      ].sort());
+      assert.deepEqual(errors, []);
+      await ctx.close();
+    }
+  } finally { await browser.close(); }
+});
+
+test('C16: PV gaps are marked, while reread opens only the affected report source and base dates', { skip: !pw }, async () => {
+  const browser = await pw.chromium.launch();
+  try {
+    const cases = [
+      [{ fallback: ['ndf'] }, 'вместо PV взят номинал из отчёта'],
+      [{ noPv: ['ndf'] }, 'вместо PV взят номинал позиций'],
+      [{ partialPv: ['ndf'] }, 'часть позиций без PV'],
+    ];
+    const mutate = hist => {
+      hist.replayMaxDays = 400;
+      cases.forEach(([issue, reason], i) => {
+        const d = hist.days[18 + i], x = d.lines[0];
+        Object.assign(x, issue);
+        d.methodNote = 'не по текущей методике: ' + reason;
+        d.reportSources = { [x.setId]: 'ocp_src' };
+      });
+      const report = hist.days[13], x = report.lines[0];
+      x.baseKind = 'with_derivatives';
+      report.methodNote = 'не по текущей методике: отчёт ещё с деривативами';
+      report.reportSources = { [x.setId]: 'ocp_src' };
+      const today = hist.days.at(-1);
+      today.lines[0].spotFutureMissing = true;  // even a stale history response must not make the day pale
+      today.methodNote = 'не по текущей методике: в файле отчёта нет разметки строк спот-типа';
+    };
+    const { pg, ctx, calls, hist, errors } = await open(browser, '/concepts/c16-ocp.html', { mutate });
+    const marked = hist.days.slice(18, 21);
+    await pg.waitForFunction(() => !!window.echarts?.getInstanceByDom(document.querySelector('.c16-chart')));
+    const marks = await pg.evaluate(dates => {
+      const o = echarts.getInstanceByDom(document.querySelector('.c16-chart')).getOption();
+      const axis = o.xAxis[0], usd = o.series.find(x => x.name === 'USD').data;
+      return dates.map(d => {
+        const name = KIT.f.dshort(d), i = axis.data.indexOf(name);
+        return [axis.axisLabel.formatter(name, i), usd[i].itemStyle?.opacity ?? null,
+          o.tooltip[0].formatter([{ dataIndex: i, value: 1, marker: '', seriesName: 'USD' }])];
+      });
+    }, [...marked.map(x => x.date), AS_OF]);
+    for (const [i, [, reason]] of cases.entries()) {
+      assert.ok(marks[i][0].endsWith('*'));
+      assert.equal(marks[i][1], 0.45);
+      assert.ok(marks[i][2].includes(reason), marks[i][2]);
+    }
+    assert.equal(marks.at(-1)[1], null);
+    assert.ok(!marks.at(-1)[0].endsWith('*'));
+    assert.match(await pg.locator('[data-c16-method-legend]').innerText(), /не по текущей методике или без полного PV/);
+    const link = pg.getByRole('link', { name: 'Перечитать отчёты за эти дни', exact: true });
+    await pg.getByRole('button', { name: '2 нед', exact: true }).click();
+    assert.equal(await link.count(), 0, 'PV gaps alone do not offer rereading');
+    await pg.getByRole('button', { name: 'месяц', exact: true }).click();
+
+    const base = hist.days[13].lines[0].baseDate;
+    assert.match(await link.getAttribute('title'), /с этого компьютера или администратору/);
+    await link.click();
+    const form = pg.locator('section.on [data-sub="folders"].on [data-slot="reread"]');
+    await form.getByText('Будет перечитано: 3 файла.').waitFor();
+    const source = form.getByLabel('Источник');
+    assert.equal(await source.inputValue(), 'ocp_src');
+    assert.deepEqual(await source.locator('option').evaluateAll(xs => xs.map(x => x.value)), ['positions', 'other_ocp', 'ocp_src']);
+    assert.equal(await form.getByLabel('С даты').inputValue(), base);
+    assert.equal(await form.getByLabel('По дату').inputValue(), base);
+    assert.ok(calls.includes('/api/v1/inbox/replay?source=ocp_src&from=' + base + '&to=' + base));
+    assert.equal(new URL(pg.url()).search, '');
+    await pg.reload();
+    await source.waitFor();
+    assert.equal(await source.inputValue(), 'positions');
+    assert.equal(await form.getByLabel('С даты').inputValue(), AS_OF);
+    assert.deepEqual(errors, []);
+    await ctx.close();
+  } finally { await browser.close(); }
+});
+
+test('C16: reread links split affected base dates at the server limit', { skip: !pw }, async () => {
+  const browser = await pw.chromium.launch();
+  try {
+    const mutate = hist => {
+      hist.replayMaxDays = 2;
+      hist.days.slice(-4).forEach((d, i) => {
+        const x = d.lines[0];
+        const base = '2026-10-' + ('0' + (i + 1)).slice(-2);
+        if (i < 2) {
+          x.baseDate = base;
+          x.baseKind = 'with_derivatives';
+          d.methodNote = 'не по текущей методике: отчёт ещё с деривативами';
+        } else {
+          x.validDate = base;
+          d.basis = 'report_plus_outside';
+          d.methodNote = 'другая методика: отчёт целиком (с деривативами) и слагаемые вне отчёта';
+        }
+      });
+    };
+    const { pg, ctx, errors } = await open(browser, '/concepts/c16-ocp.html', { mutate, width: 390 });
+    const links = pg.getByRole('link', { name: /Перечитать отчёты за эти дни/ });
+    assert.equal(await links.count(), 2);
+    const ranges = await links.evaluateAll(xs => xs.map(a => {
+      const q = new URL(a.href).searchParams;
+      return [q.get('from'), q.get('to')];
+    }));
+    assert.deepEqual(ranges, [['2026-10-01', '2026-10-02'], ['2026-10-03', '2026-10-04']]);
+    assert.ok(await pg.evaluate(() => document.documentElement.scrollWidth <= innerWidth));
+    assert.deepEqual(errors, []);
+    await ctx.close();
+  } finally { await browser.close(); }
+});
 
 test('C16 date: a day chip opens the table of that date from its run; the figure is the chart\'s; ?date= follows (TDM#767)', { skip: pw ? false : 'нет Playwright', timeout: 120000 }, async () => {
   const browser = await pw.chromium.launch();

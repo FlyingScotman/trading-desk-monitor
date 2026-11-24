@@ -43,6 +43,7 @@ import math
 from datetime import date, timedelta
 from typing import Any
 
+from ..inbox_replay import MAX_DAYS as REPLAY_MAX_DAYS
 from ..publish import ocp_run
 from ..rules import ocp as O
 from .ocp_line import book_meta, book_type, method_note, ocp_line
@@ -61,7 +62,7 @@ HUB_CBR_SOURCE = "CBR (история хаба)"
 """``source`` of a day's rate taken from the stored hub history, not from the run."""
 
 LINE_KEYS = ("entity", "book_id", "books", "ccy", "amount", "source", "components", "reported", "valid_date",
-             "base_date", "set_id", "base_kind", "parts", "base_older")
+             "base_date", "set_id", "base_kind", "parts", "base_older", "fallback", "no_pv", "partial_pv")
 """The keys of a published line the history reads: never its ``contributions`` (block v3), which stay in the run's
 ``/ocp``; the SQL picks them, so a long period does not carry them out of the store."""
 
@@ -70,6 +71,9 @@ SQL = ("SELECT run_id, kind, CASE WHEN kind = 'ocp' THEN jsonb_build_object("
        " 'lines', (SELECT jsonb_agg(jsonb_build_object(" + ", ".join(f"'{k}', x->'{k}'" for k in LINE_KEYS) + "))"
        " FROM jsonb_array_elements(CASE WHEN jsonb_typeof(data->'published'->'by_book') = 'array'"
        " THEN data->'published'->'by_book' ELSE '[]' END) x),"
+       " 'report_sources', (SELECT jsonb_object_agg(u->>'set_id', u->>'source')"
+       " FROM jsonb_array_elements(CASE WHEN jsonb_typeof(data->'report'->'units') = 'array'"
+       " THEN data->'report'->'units' ELSE '[]' END) u WHERE u->>'set_id' IS NOT NULL AND u->>'source' IS NOT NULL),"
        " 'max_age', data->'policy'->'report_max_age_days', 'books', data->'books',"
        " 'rates', (SELECT jsonb_agg(jsonb_build_object('ccy', c->'ccy', 'rate', c->'reported_rate',"
        " 'rub', c->'reported_rub', 'amount', COALESCE(c->'reported_base', c->'reported'), 'valid', c->'valid_date',"
@@ -241,7 +245,8 @@ def history(con, anchor: dict[str, Any], start: date, end: date) -> dict[str, An
         days.append({"date": r["business_date"], "runId": r["run_id"], "runType": r["run_type"], "cutType": r["cut_type"],
                      "state": block.get("status") or ocp_run.NOT_COMPUTED, "basis": block.get("basis"),
                      "methodNote": method_note(block.get("basis"), lines), "books": diff,
+                     "reportSources": block.get("report_sources") or {},
                      "fx": fx, "reportFx": _report_fx(block, r["business_date"]), "lines": lines,
                      **_unconfirmed(block)})
     return {"runId": anchor["run_id"], "asOf": anchor["business_date"], "from": start, "to": end,
-            "days": days, "books": books}
+            "days": days, "books": books, "replayMaxDays": REPLAY_MAX_DAYS}

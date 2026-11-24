@@ -12,6 +12,7 @@ from __future__ import annotations
 
 from datetime import date
 
+import pytest
 from test_ocp_spot_future_693 import BOOKS, POLICY, UNITS, B, line, no_curve, pub, report, run, terms, valued
 
 from desk.rules import ocp as O
@@ -21,6 +22,39 @@ from desk.rules import ocp_spot as S
 def cross_terms(**kw):
     """A cross NDF EUR/USD, EUR bought: 800 000 EUR against 880 000 USD."""
     return terms("D1|NDF", "T-7", **kw)
+
+
+@pytest.mark.parametrize("in_report", [True, False])
+def test_mirrored_ndf_terms_and_spot_lines_stay_in_their_own_books(in_report):
+    rows, ts, rep, units = [], [], [], []
+    for n, (book, sign, side) in enumerate((("D1", 1, "buy"), ("D2", -1, "sell")), start=11):
+        pid = f"{book}|NDF"
+        row = valued(pid, {"EUR": sign * 790_000, "USD": -sign * 870_000}, {})
+        row["extra"]["core"]["trades"] = ["T-7"] if n == 11 else []
+        if n == 12:
+            row["extra"]["reported"] = {"deal_id": "T-7"}
+        rows.append({**row, "book_id": book})
+        ts.append({**terms(pid, "T-7", side=side), "book_id": book})
+        units.append({**UNITS[0], "scope": {"entity": "ENT1", "book_id": book}, "set_id": n})
+        for ccy, nominal in (("EUR", sign * 800_000), ("USD", -sign * 880_000)):
+            rep.append({**report(ccy, str(nominal + 200_000), [line("2026-12-18", str(nominal))], book=book),
+                        "_set_id": n})
+
+    policy = POLICY if in_report else O.OcpPolicy(report_components=POLICY.report_components - {"ndf"})
+    linked = O.terms_by_position(rows, ts)
+    deals = {d.book_id: d for d in O.spot_deals(rows, BOOKS, linked, B, policy)}
+    published = pub(O.compute_ocp(rows, BOOKS, B, terms=ts, report_rows=rep, report_units=units, policy=policy))
+    for book, sign in (("D1", 1), ("D2", -1)):
+        assert deals[book].legs == {"EUR": sign * 800_000, "USD": -sign * 880_000}
+        for ccy, pv in (("EUR", sign * 790_000), ("USD", -sign * 870_000)):
+            x = published[(book, ccy)]
+            assert x["spot_future"]["unmatched"] == []
+            assert [(o["position_id"], o["amount"]) for o in x["spot_future"]["out"]] == [
+                (f"{book}|NDF", deals[book].legs[ccy])]
+            assert x["parts"]["base"] == 200_000
+            assert x["parts"]["derivatives"] == (pv if in_report else 0)
+            assert x["parts"]["outside"] == (0 if in_report else pv)
+            assert x["amount"] == 200_000 + pv
 
 
 def test_a_line_in_eur_of_a_cross_ndf_is_matched_on_the_eur_leg_whatever_the_usd_leg_is():

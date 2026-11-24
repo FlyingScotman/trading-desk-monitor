@@ -17,6 +17,7 @@ function el() {
   return { style: {}, dataset: {}, children: [], innerHTML: '', isConnected: true, q,
     classList: { add() {}, remove() {}, toggle() {}, contains() { return false; } },
     appendChild(c) { this.children.push(c); return c; }, append(...c) { this.children.push(...c); },
+    prepend(...c) { this.children.unshift(...c); },
     querySelector(sel) { return q[sel] || (q[sel] = el()); }, querySelectorAll() { return []; }, addEventListener() {},
     setAttribute() {}, getAttribute() { return null; }, remove() {}, insertAdjacentHTML() {} };
 }
