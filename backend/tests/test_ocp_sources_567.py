@@ -91,6 +91,37 @@ def test_derived_basis_and_unknown_basis_are_named_honestly():
     assert "не распознана" in method_note("something_new", [])
 
 
+@pytest.mark.parametrize(("flags", "expected", "reason"), [
+    ({"fallback": ["ndf"], "no_pv": ["ndf"]}, {"fallback": ["ndf"], "noPv": ["ndf"]},
+     "вместо PV взят номинал из отчёта"),
+    ({"no_pv": ["ndf"]}, {"noPv": ["ndf"]}, "вместо PV взят номинал позиций"),
+    ({"partial_pv": ["ndf"]}, {"partialPv": ["ndf"]}, "часть позиций без PV"),
+    ({"spot_future": {"none": {"deals": 1, "unknown": 1, "field": False}}}, {}, None),
+    ({"spot_future": {"none": {"before": 1, "field": True}}}, {}, None),
+    ({"spot_future": {"none": {"before": 1}}}, {}, None),
+    ({}, {}, None),
+])
+def test_history_exposes_methodology_warnings_on_saved_lines(store_url, flags, expected, reason):
+    on = "2026-11-04"
+    raw = v3("B1", "USD", 1e6)
+    ocp = block("computed", [raw | flags], basis="report_base_plus_day", on=on)
+    ocp["report"]["units"] = [{"scope": {"book_id": "B1"}, "set_id": 7, "source": "ocp_src",
+                               "valid_date": raw["base_date"], "row_count": 1}]
+    with store.connect(store_url) as con:
+        rid = insert(con, on, ocp=ocp)
+    c = TestClient(create_app(store_url))
+    h = c.get("/api/v1/history/ocp", params={"run_id": rid, "from": on}).json()["days"][0]
+    d = c.get("/api/v1/history/ocp/day", params={"run_id": rid, "date": on}).json()
+    run = c.get(f"/api/v1/runs/{rid}/ocp").json()
+    assert h["reportSources"] == {"7": "ocp_src"}
+    assert h["lines"] == [ocp_line(raw) | expected] == run["published_rows"]
+    if "spot_future" in flags:
+        assert run["published"]["by_book"][0]["spot_future"] == flags["spot_future"]
+    assert {k: v for k, v in d["lines"][0].items() if k != "breakdown"} == h["lines"][0]
+    assert h["methodNote"] == d["methodNote"] == run["method_note"] == (
+        f"не по текущей методике: {reason} (B1; отчёт от 02.11.2026)" if reason else None)
+
+
 def test_book_type_is_derived_once_per_period_and_a_day_carries_only_differences(three, store_url):
     c, _old, cur = three
     d = c.get("/api/v1/history/ocp", params={"run_id": cur, "from": "2026-11-01"}).json()

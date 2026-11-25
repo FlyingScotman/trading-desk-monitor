@@ -256,23 +256,25 @@ def _truthy(x: Any) -> bool:
 
 def terms_by_position(rows: Sequence[Mapping[str, Any]], terms: Iterable[Mapping[str, Any]]
                       ) -> dict[str, list[Mapping[str, Any]]]:
-    """position_id -> its ``trade_terms`` rows: by the terms' ``position_id``, the row's ``deal_id`` or the trades
+    """position_id -> its book's ``trade_terms`` rows: by ``position_id``, ``deal_id`` or the trades
     core valued it from (``extra.core.trades``)."""
-    by_trade: dict[str, list[Mapping[str, Any]]] = defaultdict(list)
-    by_pos: dict[str, list[Mapping[str, Any]]] = defaultdict(list)
+    by_trade: dict[tuple[str, str], list[Mapping[str, Any]]] = defaultdict(list)
+    by_pos: dict[tuple[str, str], list[Mapping[str, Any]]] = defaultdict(list)
     for t in terms:
-        by_trade[str(t.get("trade_id"))].append(t)
+        book = str(t["book_id"])
+        by_trade[book, str(t.get("trade_id"))].append(t)
         if t.get("position_id"):
-            by_pos[str(t["position_id"])].append(t)
+            by_pos[book, str(t["position_id"])].append(t)
     out: dict[str, list[Mapping[str, Any]]] = {}
     for r in rows:
         pid = r["position_id"]
+        book = str(r["book_id"])
         ex = r.get("extra") or {}
         ids = [*((ex.get("core") or {}).get("trades") or []), (ex.get("reported") or {}).get("deal_id")]
-        found = list(by_pos.get(pid, []))
+        found = list(by_pos.get((book, pid), []))
         for i in ids:
             if i is not None:
-                found += [t for t in by_trade.get(str(i), []) if t not in found]
+                found += [t for t in by_trade.get((book, str(i)), []) if t not in found]
         if found:
             out[pid] = found
     return out
