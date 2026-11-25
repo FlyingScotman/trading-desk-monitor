@@ -503,7 +503,8 @@
     p.exchName = p.name; p.alias = null;
     // короткое имя (TDM#776): биржевое — у бумаги с ISIN (в демо — начало имени, как SHORTNAME до 10 знаков), своё — в памяти страницы
     p.exchShort = p.isin ? p.name.slice(0, 10).trim() : null; p.shortOwn = null; p.shortName = p.exchShort;
-    p.searchBase = [p.name, p.exchShort, p.isin, p.issuerName, p.issuerFull, p.book, p.bookName, p.ccy, p.kindLabel, p.groupLabel, p.sector, p.couponFmt, p.portfolio].join(' ').toLowerCase();
+    p.searchBase = [p.name, p.exchShort, p.isin, p.issuerName, p.issuerFull, p.book, p.bookName, p.ccy, p.kindLabel, p.groupLabel,
+      p.sector, p.couponFmt, p.portfolio, p.id].join(' ').toLowerCase();
     p.searchText = p.searchBase;
     return p;
   });
@@ -691,6 +692,8 @@
       if (fixings.RUONIA) assumptions.push('RUONIA not yet published for ' + bd1 + ': the latest fixing of ' + bd2 + ' carried (declared, at most 1 business day)');
       p.quality = assumptions.length ? 'assumed' : 'exact';
       p.ratesCore = { trades: [t], fixings, product: t.product, pv, reportedPv: rep, pvDiff: pv - rep, provisional: p.quality === 'assumed', assumptions };
+      p.searchBase += ' ' + t.tradeId.toLowerCase();
+      p.searchText = p.searchBase;
       const over = Math.abs(pv - rep) > Math.max(1e4, 0.01 * Math.abs(rep));
       M.derivParallelDemo.rows.push({ positionId: p.id, book: p.book, product: t.product, status: 'both', used: 'computed', computed: pv, imported: rep, diff: pv - rep, over, reason: null });
     });

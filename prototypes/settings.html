@@ -2609,7 +2609,17 @@ function mountTabs(a, reload){
     if (place) {
       const c = card('Перечитать отчёты за период', 'после изменения настроек адаптера, которое меняет уже принятые отчёты');
       place.replaceChildren(c);
-      window.DeskReplay.mount(c.querySelector('.bd'), {api, toast, box: place});
+      const url = new URL(location.href), q = url.searchParams;
+      const iso = s => /^\d{4}-\d{2}-\d{2}$/.test(s || '') && Number.isFinite(Date.parse(s)) &&
+        new Date(s).toISOString().slice(0, 10) === s;
+      const from = q.get('from'), to = q.get('to');
+      const replay = location.hash === '#adapter/folders' && q.get('replay') === 'ocp' && iso(from) && iso(to);
+      window.DeskReplay.mount(c.querySelector('.bd'), {api, toast, box: place,
+        ...(replay ? {dataset: 'ocp', source: q.get('source'), from, to} : {})});
+      if (replay) {
+        ['replay', 'source', 'from', 'to'].forEach(k => q.delete(k));
+        history.replaceState(history.state, '', url);
+      }
     }
   }
 })();

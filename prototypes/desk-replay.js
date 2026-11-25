@@ -6,7 +6,7 @@
  * Новые ревизии отчётов автообновление пересчитывает само (затронутые даты и сегодняшний расчёт).
  * Данные: GET/POST /api/v1/inbox/replay (api/replay_routes.py; только с этого компьютера или администратору — другим
  * пользователям блок не показывается).
- * Встраивание: DeskReplay.mount(элемент, {api?, base?, toast?, source?, box?}) — box: обёртка, которую блок прячет,
+ * Встраивание: DeskReplay.mount(элемент, {api?, base?, toast?, source?, dataset?, from?, to?, box?}) — box: обёртка, которую блок прячет,
  * когда перечитывание этому пользователю недоступно (по умолчанию сам элемент); api(method, url, body) -> Promise — как на
  * странице настроек; без него — свой fetch с префиксом base (на страницах concepts/ — '../'). Элементов с атрибутом
  * data-desk-replay может быть несколько. Стили — свои, с префиксом rp-.
@@ -96,6 +96,8 @@
   function Widget(el, opts) {
     this.el = el; this.api = opts.api || ownApi(opts.base != null ? opts.base : '/');
     this.toast = opts.toast || null; this.want = opts.source || el.getAttribute('data-source') || null;
+    this.dataset = opts.dataset;
+    this.from = opts.from; this.to = opts.to;
     this.box = opts.box || el;  // what to hide when the replay is not this user's (a panel around el)
     this.box.classList.add('rp-box');  // [hidden] wins over a panel's own display
     this.data = null; this.timer = null; this.estTimer = null;
@@ -111,12 +113,20 @@
     var w = this, r = w.data, el = w.el;
     el.textContent = ''; w.box.hidden = false;
     var srcs = r.sources || [];
-    if (!srcs.length) { el.append(h('p', { class: 'mut' }, 'Адаптер не загружен или не объявляет источников — перечитывать нечего.')); return; }
-    var pick = w.source && srcs.some(function (s) { return s.source === w.source; }) ? w.source
-      : (w.want && srcs.some(function (s) { return s.source === w.want; }) ? w.want : (srcs.filter(function (s) { return s.latest; })[0] || srcs[0]).source);
+    if (!srcs.length) {
+      el.append(h('p', { class: 'mut' }, 'Адаптер не загружен или не объявляет источников — перечитывать нечего.'));
+      return;
+    }
+    // A deep link narrows the initial choice only. The form always offers every source.
+    var candidates = w.dataset ? srcs.filter(function (s) { return (s.datasets || []).includes(w.dataset); }) : srcs;
+    var preferred = w.source || w.want;
+    var pick = candidates.some(function (s) { return s.source === preferred; }) ? preferred
+      : w.dataset ? (!preferred && candidates.length === 1 ? candidates[0].source : '')
+      : (srcs.filter(function (s) { return s.latest; })[0] || srcs[0]).source;
     w.source = pick;
     w.from = w.from || r.default.from; w.to = w.to || r.default.to;
     var sel = h('select', { class: 'inp k-input', 'aria-label': 'Источник', onchange: function () { w.source = this.value; w.estimate(); } },
+      !pick && h('option', { value: '', selected: true, disabled: true }, 'Выберите источник отчёта ОВП'),
       srcs.map(function (s) { return h('option', { value: s.source, selected: s.source === pick }, R.label(s)); }));
     var from = h('input', { class: 'inp k-input mono', type: 'date', value: w.from, 'aria-label': 'С даты', onchange: function () { w.from = this.value; w.estimate(); } });
     var to = h('input', { class: 'inp k-input mono', type: 'date', value: w.to, 'aria-label': 'По дату', onchange: function () { w.to = this.value; w.estimate(); } });
@@ -136,10 +146,10 @@
   };
   Widget.prototype.estimate = function () {
     var w = this;
-    var why = R.period(w.from, w.to, w.data.max_days);
+    clearTimeout(w.estTimer);
+    var why = !w.source ? 'Выберите источник отчёта ОВП.' : R.period(w.from, w.to, w.data.max_days);
     if (why) { w.estEl.textContent = why; w.btn.disabled = true; return; }
     w.btn.disabled = !!w.data.running;
-    clearTimeout(w.estTimer);
     w.estTimer = setTimeout(function () {
       w.api('GET', '/api/v1/inbox/replay?source=' + encodeURIComponent(w.source) + '&from=' + w.from + '&to=' + w.to).then(function (r) {
         w.estEl.textContent = r.store === false ? 'Хранилище недоступно: сколько файлов, не узнать.' : R.estimate(r.estimate);
@@ -151,7 +161,7 @@
     var w = this, j = w.data.job, x = R.result(j);
     w.resEl.textContent = '';
     if (x) w.resEl.append(h('div', { class: 'rp-res ' + x.cls }, x.text, j && j.finished_at ? h('span', { class: 'mut3' }, ' · ' + new Date(j.finished_at).toLocaleString('ru-RU', { dateStyle: 'short', timeStyle: 'short' })) : null));
-    if (w.btn) w.btn.disabled = !!w.data.running;
+    if (w.btn) w.btn.disabled = !!w.data.running || !w.source || !!R.period(w.from, w.to, w.data.max_days);
   };
   Widget.prototype.start = function () {
     var w = this;

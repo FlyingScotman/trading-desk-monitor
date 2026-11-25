@@ -192,9 +192,9 @@ def test_what_never_enters_the_pv_term():
     are in the report's ocp_ccy; adding them again doubled the figure."""
     spot = core_row("T1|SPOT", "T1", {"USD": 500.0}, value_date="2026-10-16")
     matured = core_row("T1|OLD", "T1", {"USD": 700.0}, value_date="2026-10-15")
-    terms = [{"trade_id": "S1", "position_id": "T1|SPOT", "product_kind": "fx_forward", "trade_date": "2026-10-14",
+    terms = [{"trade_id": "S1", "book_id": "T1", "position_id": "T1|SPOT", "product_kind": "fx_forward", "trade_date": "2026-10-14",
               "value_date": "2026-10-16"},
-             {"trade_id": "O1", "position_id": "T1|OLD", "product_kind": "fx_forward", "trade_date": "2026-09-01",
+             {"trade_id": "O1", "book_id": "T1", "position_id": "T1|OLD", "product_kind": "fx_forward", "trade_date": "2026-09-01",
               "value_date": "2026-10-15"}]
     rep = [{"entity": "ENT1", "book_id": "T1", "ccy": "USD", "ocp_ccy": "2200",
             "derivatives_ccy": {"fx_forward": "0"}, "_set_id": 12, "_src": "L2"}]
@@ -408,7 +408,7 @@ def test_trade_into_a_position_held_before_b_keeps_the_trade_nominal():
     assert d1["amount"] == 300 and d1["parts"] == {"base": 200, "derivatives": 0, "bonds": 0, "trades": 100,
                                                    "outside": 0}
     # its terms say every trade is after B: new, whatever B's run held
-    terms = [{"trade_id": "F2", "position_id": "D1|USD|2026-12-16", "product_kind": "fx_forward",
+    terms = [{"trade_id": "F2", "book_id": "D1", "position_id": "D1|USD|2026-12-16", "product_kind": "fx_forward",
               "trade_date": "2026-10-16", "value_date": "2026-12-16"}]
     d1 = pub(run(on=D, rows=[pos], report=rep, units=UNITS[:1], days=days, valid_dates={"D1": D},
                  terms=terms))[("D1", "USD")]
@@ -446,7 +446,7 @@ def test_a_swap_started_before_b_still_has_flows_after_it():
     row's maturity. A derivative with no flow date at all is counted and said."""
     ccs = {"position_id": "D1|CCS", "book_id": "D1", "instr_type": "FX", "fx_delta": {"USD": 4900.0},
            "extra": {"core": {"product": "ccs"}}}
-    terms = [{"trade_id": "C1", "position_id": "D1|CCS", "product_kind": "ccs", "trade_date": "2026-01-10",
+    terms = [{"trade_id": "C1", "book_id": "D1", "position_id": "D1|CCS", "product_kind": "ccs", "trade_date": "2026-01-10",
               "value_date": "2026-01-12", "maturity_date": "2029-01-12"}]
     rep = [{"entity": "ENT1", "book_id": "D1", "ccy": "USD", "ocp_ccy": "0", "derivatives_ccy": {"swap": "5000"},
             "_set_id": 11, "_src": "L2"}]
@@ -473,7 +473,7 @@ def test_derivative_held_after_its_trade_is_never_counted_twice():
     assert d1["amount"] == 99 and d1["parts"]["trades"] == 0 and d1["parts"]["outside"] == 99
     books = {**BOOKS, "D1": {**BOOKS["D1"], "ocp_to": "X1"}}
     xfer = core_row("D1|XFER", "D1", {"USD": -300.0})
-    terms = [{"trade_id": "XF", "position_id": "D1|XFER", "product_kind": "fx_forward", "trade_date": "2026-10-01",
+    terms = [{"trade_id": "XF", "book_id": "D1", "position_id": "D1|XFER", "product_kind": "fx_forward", "trade_date": "2026-10-01",
               "value_date": "2026-12-16", "counterparty_id": "X1"}]
     rep = [{**rep[0], "ocp_ccy": "-300"}]
     r = O.compute_ocp([xfer], books, B, terms=terms, report_rows=rep, report_units=UNITS[:1], policy=POLICY)
@@ -495,7 +495,7 @@ def test_a_derivative_outside_the_report_is_counted_once_and_has_no_fallback():
     assert d1["amount"] == 70 and d1["parts"]["outside"] == 70 and d1["parts"]["derivatives"] == 0
     books = {**BOOKS, "D1": {**BOOKS["D1"], "ocp_to": "X1"}}
     xfer = core_row("D1|XFER", "D1", {"USD": -300.0})
-    terms = [{"trade_id": "XF", "position_id": "D1|XFER", "product_kind": "fx_forward", "trade_date": "2026-10-01",
+    terms = [{"trade_id": "XF", "book_id": "D1", "position_id": "D1|XFER", "product_kind": "fx_forward", "trade_date": "2026-10-01",
               "value_date": "2026-12-16", "counterparty_id": "X1"}]
     rep = [{**rep[0], "derivatives_ccy": {"fx_forward": "-300"}}]
     no_xfer = replace(POLICY, report_components=POLICY.report_components - {"transfers"})

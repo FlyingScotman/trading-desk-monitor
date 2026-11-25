@@ -280,6 +280,9 @@
     // кэрри и фондирование — разные строки (#168): кэрри без фондирования, фондирование — рядом, своей строкой
     carry: 'Кэрри: купонный / процентный доход позиции и roll-down (скатывание по кривой) за период, без фондирования. ' +
       'Фондирование — отдельная строка «Фондирование»; кэрри за вычетом фондирования = кэрри + фондирование.',
+    netCarry: 'Нетто-кэрри за день = кэрри + фондирование со своим знаком. В нетто входят только позиции с обеими величинами. ' +
+      'В разбивке показаны суммы каждого компонента по всем позициям, где он посчитан. Годовая оценка — дневное нетто × 365. ' +
+      'Фондирование на уровне книг (остатки ДС и закрытые позиции) в карточку не входит.',
     funding: 'Фондирование: стоимость фондирования позиции за период (тело × ставка фондирования по правилам книги), ' +
       'обычно отрицательная. В кэрри не входит. «—» — не посчитано (не настроено или проблема), а не 0.',
     fundRate: '\nСтавка — на конец периода (последний день), средняя по строкам фондирования с весом тела в рублях; ' +
@@ -4278,7 +4281,7 @@
   function closePal() { if (palEl) { palEl.remove(); palEl = null; } }
   K.palette = function () {
     if (palEl) return;
-    palEl = h('div', 'k-pal'); palEl.innerHTML = '<input placeholder="бумага, ISIN, эмитент, книга, валюта, экран…"><div class="res"></div><div class="ft"><span>↑↓ выбор</span><span>Enter открыть</span><span>Esc закрыть</span></div>';
+    palEl = h('div', 'k-pal'); palEl.innerHTML = '<input placeholder="бумага, ISIN, номер сделки, эмитент, книга, валюта, экран…"><div class="res"></div><div class="ft"><span>↑↓ выбор</span><span>Enter открыть</span><span>Esc закрыть</span></div>';
     document.body.appendChild(palEl);
     const inp = palEl.querySelector('input'), res = palEl.querySelector('.res'); let items = [], sel = 0;
     function run(q) {
@@ -4289,7 +4292,7 @@
       if (K.source === 'empty') { items = items.slice(0, 60); sel = 0; return paint(); }  // прогона нет (#319): только экраны, не демо-набор
       M.issuers.forEach(i => { const L = M.positions.filter(p => p.issuer === i.id); if (L.length && q && m((i.name + ' ' + i.short + ' ' + i.sector).toLowerCase())) items.push({ k: 'эмитент', t: i.name, r: L.length + ' поз · DV01 ' + f.dv(M.sum(L, 'dv01')), run: () => K.drill({ title: 'Эмитент ' + i.short, unit: 'mm ₽ MV', fmt: v => f.mn(v, 1), list: L, val: p => M.deal(p) ? p.notionalRub : p.mv }) }); });
       M.books.forEach(b => { if (q && m((b.id + ' ' + b.name + ' ' + b.desk).toLowerCase())) items.push({ k: 'книга', t: b.name + ' · ' + b.id, r: 'фильтр шапки', run: () => K.setFilter({ books: [b.id] }) }); });
-      M.positions.forEach(p => { if (q && m(p.searchText)) items.push({ k: 'позиция', t: p.name, r: p.ccy + ' · ' + p.book + ' · DV01 ' + f.dv(p.dv01), run: () => K.card(p.id) }); });
+      M.positions.forEach(p => { if (q && m(p.searchText)) items.push({ k: 'позиция', t: p.name, r: p.ccy + ' · ' + p.book + ' · ' + p.id + ' · DV01 ' + f.dv(p.dv01), run: () => K.card(p.id) }); });
       items = items.slice(0, 60); sel = 0; paint();
     }
     function paint() { res.innerHTML = items.map((it, i) => '<div class="it' + (i === sel ? ' sel' : '') + '" data-i="' + i + '"><span class="k">' + it.k + '</span><span class="m">' + esc(it.t) + '</span><span class="r">' + esc(it.r) + '</span></div>').join('') || '<div class="k-empty">ничего</div>'; res.querySelectorAll('.it').forEach(e => e.onclick = () => go(+e.dataset.i)); const s = res.querySelector('.sel'); if (s) s.scrollIntoView({ block: 'nearest' }); }
@@ -4634,6 +4637,11 @@
       const L = K.list(), k = M.kpis(L);
       cur = { L, k };
       const pnlH = M.hist.pnl.total.slice(-30);
+      const netCarryOf = p => Number.isFinite(p.carryDay) && Number.isFinite(p.fundingDay) ? p.carryDay + p.fundingDay : null;
+      const net = M.sum(L, netCarryOf), netTitle = 'Нетто-кэрри / день';
+      const omitted = M.sumX(L, p => p.fundingDay == null ? p.carryDay : null);
+      const netNote = omitted.n ? K.u('Не в нетто: кэрри ' + f.k(omitted.v) + ' тыс ₽ у ' + omitted.n + ' поз. без фондирования') : '';
+      const netMark = netNote ? ' ' + K.hint('*', netNote) : '';
       el.innerHTML = '<div class="k-kpis">' +
         K.kpi('PnL дня', K.d({ title: 'PnL дня', unit: 'mm ₽', fmt: v => f.mns(v, 2), list: L, val: p => p.pnl.total }, f.mns(k.pnl, 1)) + K.kpiUnit('mm ₽'),
           [['MTD', K.d({ title: 'PnL MTD', unit: 'mm ₽', fmt: v => f.mns(v, 1), list: K.pnlPeriodList(L), val: 'pnlMtd' }) + K.partial('mtd')],
@@ -4649,9 +4657,10 @@
         K.kpi('CS01', K.d({ title: 'CS01', unit: 'тыс ₽/бп', list: L, val: 'cs01' }) + K.kpiUnit('тыс ₽/бп'),
           [['корп. RUB', K.d({ title: 'CS01 корп RUB', unit: 'тыс ₽/бп', list: L.filter(p => p.ccy === 'RUB'), val: 'cs01' })],
            ['вал.', K.d({ title: 'CS01 валютные', unit: 'тыс ₽/бп', list: L.filter(p => p.ccy !== 'RUB'), val: 'cs01' })]], null, K.tips.cs01) +
-        K.kpi('Кэрри / день', K.d({ title: 'Кэрри за день (без фондирования)', unit: 'тыс ₽', fmt: f.k, list: L, val: 'carryDay' }) + K.kpiUnit('тыс ₽'),
-          [[K.hint('фондирование', K.tips.funding), K.d({ title: 'Фондирование за день', unit: 'тыс ₽', fmt: f.k, list: L, val: 'fundingDay', nullable: true })],
-           ['в год ≈', '<span class="' + f.cls(k.carryDay) + '">' + f.mn(k.carryDay == null ? null : k.carryDay * 365, 0) + '</span> <span class="u">mm ₽</span>']], null, K.tips.carry) +
+        K.kpi(netTitle, K.d({ title: netTitle, unit: 'тыс ₽', fmt: f.k, list: L, val: netCarryOf, note: netNote }) + K.kpiUnit('тыс ₽' + netMark),
+          [['в год ≈', '<span class="' + f.cls(net) + '">' + f.mn(net == null ? null : net * 365, 0) + '</span>' + K.kpiUnit('mm ₽' + (net == null ? '' : netMark))],
+           [K.hint('кэрри', K.tips.carry), K.d({ title: 'Кэрри за день (без фондирования)', unit: 'тыс ₽', fmt: f.k, list: L, val: 'carryDay' })],
+           [K.hint('фондир.', K.tips.funding), K.d({ title: 'Фондирование за день', unit: 'тыс ₽', fmt: f.k, list: L, val: 'fundingDay', nullable: true })]], null, K.tips.netCarry, ' data-net-carry') +
         K.kpi('Облигации MV', K.d({ title: 'MV облигаций', unit: 'bn ₽', fmt: v => f.bn(v, 1), list: L.filter(p => !M.deal(p)), val: 'mv', color: false }) + K.kpiUnit('bn ₽'),
           ccyRows('mv', FIT_MIN), null, null, opt.fitCcy ? ' data-fit="mv"' : '') +
         '<div class="k-kpi k-fxk"><div class="l">' + K.hint('ОВП', M.ocp ? K.tips.fxMiniPub : K.tips.fxMini) + '</div><div class="v">' + K.fxMini(L) + '</div><div class="s">' + K.ocpNote() + '<a class="go" href="c06-launchpad.html#fx" title="плитка «ОВП и курсы»: бонды и деривативы по валютам, курсы, PnL FX">подробно (C06) →</a></div></div>' +
