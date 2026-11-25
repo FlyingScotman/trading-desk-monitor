@@ -620,7 +620,11 @@
     // номинал позиции в прогоне предыдущего закрытия (TDM#775, колонка «Изм. к вчера»): prevNotional — был, newToPrev — не было, prevNoFact — была, но не оценена (номинала нет);
     // ничего из этого — прогона предыдущей даты нет или позиция не оценена сегодня
     p.prevNotional = num(xp.prevNotional); p.newToPrev = !!xp.newToPrev; p.prevNoFact = !!xp.prevNoFact;
-    p.searchBase = [p.exchName, p.exchShort, p.isin, p.issuerName, p.issuerFull, p.issuerGroup, p.latName, p.book, p.bookName, p.ccy, p.kindLabel, p.groupLabel, p.sector, p.couponFmt, p.portfolio, p.rating, p.ratingAgency].join(' ').toLowerCase();
+    // Номер из отчёта и номера из условий могут отличаться от id позиции. В прогонах также есть номера отдельных ног.
+    const tradeIds = [ex.reported?.deal_id, ...strs(ex.core?.trades), ...(p.legs || []).map(l => l.tradeId),
+      ...(p.ratesCore?.trades || []).map(t => t.tradeId)];
+    p.searchBase = [p.exchName, p.exchShort, p.isin, p.issuerName, p.issuerFull, p.issuerGroup, p.latName, p.book, p.bookName,
+      p.ccy, p.kindLabel, p.groupLabel, p.sector, p.couponFmt, p.portfolio, p.rating, p.ratingAgency, p.id, ...tradeIds].join(' ').toLowerCase();
     p.searchText = M.searchPrefix(p) + p.searchBase;  // как K.setAlias
     return p;
   });
