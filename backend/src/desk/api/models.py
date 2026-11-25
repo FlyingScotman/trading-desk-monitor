@@ -1088,9 +1088,16 @@ class RunScenarioResults(BaseModel):
 class BondHistoryPoint(BaseModel):
     date: date
     clean_price: float | None = Field(None, description="% of face; basis in price_basis")
-    ytm: float | None = Field(None, description="%, effective annual: MOEX's to yield_date, else the run's")
-    z_spread_bp: float | None = Field(None, description="the desk run's Z-spread to its discount curve (RUONIA OIS since the owner's decision of 20.10; the KBD for an OFZ-PD / AD / IN since 0.2.6 and on a date without RUONIA OIS)")
-    g_spread_bp: float | None = Field(None, description="MOEX's")
+    ytm: float | None = Field(None, description="%, annual: MOEX effective yield to yield_date, else the run's; "
+                              "if flagged, recalculated by the core at T+1 or null")
+    yield_note: str | None = Field(None, description="Why the core recalculated the flagged quote or could not do so")
+    yield_source: Literal["core"] | None = Field(None, description="Core recalculation of flagged market analytics")
+    yield_manual_override: bool | None = Field(None, description="The hub's manual redemption correction is available")
+    duration_days: float | None = Field(None, description="Macaulay duration of the recalculated quote, in days")
+    z_spread_bp: float | None = Field(None, description="Z-spread to the desk run's discount curve, or to the day's KBD "
+                                      "for a flagged RUB quote recalculated by the core")
+    g_spread_bp: float | None = Field(None, description="MOEX's, or to the day's KBD for a flagged RUB quote "
+                                      "recalculated by the core")
     accrued: float | None = None
     volume_rub: float | None = None
     source: str | None = Field(None, description="market, market + desk run, desk run")
@@ -1101,7 +1108,7 @@ class BondHistoryPoint(BaseModel):
                                      "coupons)")
     spread_to_curve_bp: float | None = Field(None, description="ytm - curve_rate")
     price_basis: str | None = Field(None, description="legal_close, close or waprice (the runs' order)")
-    yield_date: date | None = Field(None, description="the date MOEX's yield runs to: the offer or maturity")
+    yield_date: date | None = Field(None, description="the date the selected yield runs to: the offer or maturity")
     moex_zspread_bp: float | None = Field(None, description="MOEX's Z-spread to the KBD")
     icpi: float | None = Field(None, description="MOEX yields ICPI (linkers), verbatim")
     ir: float | None = Field(None, description="MOEX yields IR (linkers), verbatim")

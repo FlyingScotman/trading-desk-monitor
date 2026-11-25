@@ -55,7 +55,14 @@ from psycopg.rows import tuple_row
 from ..inbox.schema import alias_position
 from ..marketdata import static_facts
 from ..marketdata.bundle import read_bundle
-from ..marketdata.history import RUB_SETTLEMENT, curve_rate, curve_rates_by_day, kbd, latest_market_day
+from ..marketdata.history import (
+    RUB_SETTLEMENT,
+    curve_rate,
+    curve_rates_by_day,
+    kbd,
+    latest_market_day,
+)
+from ..marketdata.market_analytics import recalculate
 from ..publish import summary
 from ..publish.summary import CURVE_MAP, GOV_CLASSES, PNL, is_minfin, kind_of, product_group  # noqa: F401 - the pages' names
 from ..scenario.carry import meetings
@@ -81,7 +88,7 @@ Writer = Callable[[list[int]], None] | None
 
 MARKET_FP_SQL = (
     " (SELECT max(loaded_at) FROM md_kbd) AS k,"
-    " (SELECT max(loaded_at) FROM md_static_summary) AS s,"
+    " (SELECT max(loaded_at) FROM md_static_summary) AS s, (SELECT sum(version) FROM md_static_summary) AS sv,"
     " (SELECT max(snapshot_id) FROM md_cbr_meeting) AS m,"
     " (SELECT max(fetch_id) FROM md_hub_job) AS h, (SELECT sum(rows) FROM md_hub_job) AS hr")
 """The part of the fingerprints that is the market's: the market history (the snapshots' and the hub history API's,
@@ -520,8 +527,11 @@ def universe(con, as_of: date, held: set[str | None]) -> dict[str, Any]:
     new = static_facts.newest(con)
     nid = new["snapshot_id"] if new else None
     prev = latest_market_day(con, d - timedelta(days=1))
-    old = {r["secid"]: r["yield_pct"] for r in con.execute(
-        "SELECT secid, yield_pct FROM md_bond_day WHERE business_date = %s", (prev,))} if prev else {}
+    old = {r["secid"]: r for r in con.execute(
+        "SELECT business_date, secid, clean_pct, yield_pct, effective_yield_unreliable, accrued_per_bond, face_value,"
+        " currency_id FROM md_bond_day WHERE business_date = %s", (prev,))} if prev else {}
+    today = con.execute(MARKET_SQL, (nid, sid, d)).fetchall()
+    recalculate(con, (*today, *old.values()))
     fx_coupons: dict[str, list[str]] = {}
     if sid:
         for r in con.execute("SELECT secid, array_agg(pay_date::text ORDER BY pay_date) AS d FROM md_market_flow"
@@ -530,20 +540,23 @@ def universe(con, as_of: date, held: set[str | None]) -> dict[str, Any]:
             fx_coupons[r["secid"]] = r["d"]
     rub, fx = [], []
     with_static = 0
-    for r in con.execute(MARKET_SQL, (nid, sid, d)).fetchall():
+    for r in today:
         mat, yd = r["maturity_date"], r["yield_date"]
-        ev = yd if yd and (mat is None or yd < mat) else mat
+        y, flagged = r["yield_pct"], r["effective_yield_unreliable"]
+        ev = yd if flagged or yd and (mat is None or yd < mat) else mat
         tenor = (ev - d).days / 365.25 if ev and ev > d else None
         flt = r["coupon_type"] == "floating"
-        y = r["yield_pct"]
-        chg = (y - old[r["secid"]]) * 100 if y is not None and old.get(r["secid"]) is not None else None
+        prior = old.get(r["secid"])
+        chg = ((y - prior["yield_pct"]) * 100 if y is not None and prior is not None
+               and prior["yield_pct"] is not None and flagged == prior["effective_yield_unreliable"] else None)
         f = r["st"] or {}
         with_static += bool(f)
         b = {"id": r["secid"], "isin": r["isin"], "name": r["short_name"] or r["name"] or r["secid"],
              "fullName": r["name"], "latName": f.get("lat_name"),
              "maturity": mat.isoformat() if mat else None,
              "put": yd.isoformat() if yd and mat and yd < mat else None, "tenor": tenor,
-             "ytm": None if flt else y, "ytmMoex": y, "dur": (r["duration_days"] or 0) / 365.25 or None,
+             "ytm": None if flt else y, "ytmMoex": None if flagged else y,
+             "dur": (r["duration_days"] or 0) / (365 if flagged else 365.25) or None,
              "spread": r["gspread_bp"], "zspread": r["zspread_bp"], "chgBp": chg, "value": r["value"],
              "flt": flt, "held": r["secid"] in held, "rating": f.get("rating"),
              "ratingAgency": (f.get("rating_info") or {}).get("agency"),
@@ -552,6 +565,9 @@ def universe(con, as_of: date, held: set[str | None]) -> dict[str, Any]:
              "type": f.get("type"), "cpn": f.get("cpn_pct"), "freq": f.get("freq_letter"),
              "issueSize": f.get("issue_size"),
              **{k: r[k] for k in ("icpi", "ir", "bei") if r[k] is not None}}
+        if flagged:
+            b.update(yieldNote=r["yield_note"], yieldSource=r.get("yield_source"),
+                     yieldManualOverride=r["yield_manual_override"])
         unit = r["face_unit"] or f.get("face_unit") or ("RUB" if r["currency_id"] in RUB_SETTLEMENT else None)
         if unit == "RUB" or unit is None:
             b["isOfz"] = (r["bond_class"] or "").startswith("ofz")
@@ -567,7 +583,8 @@ def universe(con, as_of: date, held: set[str | None]) -> dict[str, Any]:
             b.update({"ccy": unit, "origCcy": unit, "issuer": iss, "issuerName": iss,
                       "outstanding": f.get("outstanding"), "coupons": fx_coupons.get(r["secid"], [])})
             fx.append(b)
-    movers = sorted((b for b in rub if b["chgBp"] is not None and b["value"]), key=lambda b: -b["value"])[:60]
+    movers = sorted((b for b in rub if b["value"] and (b["chgBp"] is not None or b.get("yieldNote"))),
+                    key=lambda b: -b["value"])[:60]
     notes = []
     if st is None:
         notes.append(f"рынок на {d.isoformat()}: у выпусков нет эмитента, сектора, объёма и купона — снимок статики "
@@ -583,11 +600,16 @@ def universe(con, as_of: date, held: set[str | None]) -> dict[str, Any]:
                      f" у {cov.get('with_rating', 0)} из {cov.get('bonds', 0)} выпусков статики"
                      f" {new['business_date'].isoformat() if new else ''})")
     notes.append("объём выпуска — по MOEX (для ОФЗ — объявленный, а не размещённый)")
+    if any(b.get("yieldNote") and b["ytm"] is None for b in (*rub, *fx)):
+        notes.append("на карте пропущены выпуски, по которым аналитика MOEX недостоверна и доходность не рассчитана")
     return {"marketDate": d.isoformat(), "universeRub": rub, "universeFx": fx,
             "staticDate": st["business_date"].isoformat() if st else None,
             "referenceDate": new["business_date"].isoformat() if new else None,
-            "marketMovers": [{"name": b["name"], "rating": b["rating"], "sector": b["sector"], "ytm": b["ytmMoex"],
-                              "chgBp": b["chgBp"], "vol": b["value"]} for b in movers],
+            "marketMovers": [{"name": b["name"], "rating": b["rating"], "sector": b["sector"],
+                              "ytm": b["ytm"] if b.get("yieldSource") else b["ytmMoex"],
+                              "chgBp": b["chgBp"], "vol": b["value"],
+                              **{k: b[k] for k in ("yieldNote", "yieldSource", "yieldManualOverride") if k in b}}
+                             for b in movers],
             "notes": notes}
 
 
@@ -742,14 +764,27 @@ def positions_history(con, run: dict[str, Any], ids: list[str] | None = None, fr
     secid = {pid: (r["fact"].get("instrument_id") or r["secid"]) for pid, r in pos.items()
              if r["fact"].get("instr_type") == "BOND"}
     quotes: dict[str, dict[date, tuple]] = {}
+    flagged = []
     with con.cursor(row_factory=tuple_row) as cur:  # ~150k rows a year of 600 bonds: tuples, rounded by the store
-        for d, sid, *q in cur.execute(
+        for d, sid, clean, y, g, yd, z, icpi, ir, bei, raw in cur.execute(
                 "SELECT business_date, secid, round(clean_pct::numeric, 4)::float8, round(yield_pct::numeric, 4)::float8,"
-                " round(gspread_bp::numeric, 1)::float8, yield_date, round(zspread_bp::numeric, 1)::float8, icpi, ir, bei"
+                " round(gspread_bp::numeric, 1)::float8, yield_date, round(zspread_bp::numeric, 1)::float8, icpi, ir, bei,"
+                " CASE WHEN effective_yield_unreliable THEN jsonb_build_object("
+                " 'clean_pct', clean_pct, 'face_value', face_value, 'accrued_per_bond', accrued_per_bond,"
+                " 'currency_id', currency_id) END"
                 " FROM md_bond_day"
                 " WHERE secid = ANY(%s) AND business_date >= %s AND business_date <= %s",
                 (list(set(secid.values())), from_, run["business_date"])):
-            quotes.setdefault(sid, {})[d] = q
+            quotes.setdefault(sid, {})[d] = (clean, y, g, yd, z, icpi, ir, bei, None)
+            if raw is not None:
+                flagged.append(dict(raw, secid=sid, business_date=d, effective_yield_unreliable=True))
+    recalculate(con, flagged)
+    for r in flagged:
+        q = quotes[r["secid"]]
+        d = r["business_date"]
+        clean, _, _, _, _, icpi, ir, bei, _ = q[d]
+        q[d] = (clean, _rnd(r["yield_pct"], 4), _rnd(r["gspread_bp"], 1), r["yield_date"],
+                _rnd(r["zspread_bp"], 1), icpi, ir, bei, r["yield_note"])
     dates = sorted({d for s in quotes.values() for d in s} | {d for d, _ in by_run})
     curves = {r["business_date"]: kbd(r["trade_date"], r["params"]) for r in con.execute(
         "SELECT business_date, trade_date, params FROM md_kbd_day WHERE business_date = ANY(%s)", (dates,))}
@@ -843,6 +878,10 @@ def positions_history(con, run: dict[str, Any], ids: list[str] | None = None, fr
         out["curves"] = {c: v for c, v in cv.items() if any(v)}
         if dm_note:
             out["dmNote"] = dm_note
+        if not flt and (notes := list(dict.fromkeys(q[d][8] for d in reversed(dates) if d in q and q[d][8]))):
+            out["yieldNote"] = " ".join(notes[:3])
+            if len(notes) > 3:
+                out["yieldNote"] += " Другие пояснения доступны в истории выпуска."
         out["qty"], out["pt"] = qty, pts
         series[pid] = out
     at = [run_of.get(d) for d in dates]

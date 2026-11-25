@@ -765,6 +765,12 @@ class Autopilot:
         loaded = ""
         if con is not None:  # the new bundles of the cache into the market history (the bond charts)
             try:
+                if refreshed := static_facts.refresh_cached(con, Path(settings.snapshot_cache)):
+                    parts.append(f"static facts refreshed: {refreshed}")
+            except (psycopg.Error, SnapshotError, OSError, ValueError) as e:
+                status = "error"
+                parts.append(f"static facts not refreshed: {type(e).__name__}: {e}")
+            try:
                 loaded = history.load_cache(con, Path(settings.snapshot_cache),
                                             lambda i, n, sid: self._progress("sync", i, n, "history " + sid)).text()
             except psycopg.Error as e:
