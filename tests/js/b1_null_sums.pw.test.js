@@ -79,6 +79,72 @@ const pnlCells = (pg, fac) => pg.evaluate(fac => [...document.querySelectorAll('
 }), fac || null);
 const noFunding = () => { const D = JSON.parse(RUN); D.positions.forEach(p => { if (p.pnl) p.pnl.funding = null; }); return D; };
 
+test('HUD: дневное и годовое нетто, разбивка по позициям и валюта отчёта на C01 и C12', { skip: !pw }, async () => {
+  const browser = await pw.chromium.launch();
+  try {
+    const D = noFunding(), positions = D.positions.filter(p => p.pnl && p.pnl.available !== false);
+    const first = positions[0], second = positions.find(p => p.book !== first.book);
+    D.accrualDays = 1;
+    D.FX.USD = 100;
+    Object.assign(first.pnl, { carry: 1000000, rolldown: 0, funding: -1500000 });
+    Object.assign(second.pnl, { carry: 2000000, rolldown: 0 });
+    D.positions.filter(p => p !== first && p !== second).forEach(p => { p.pnl = { available: false }; });
+    for (const [file, repr, currency, daily, carry, funding, annual, omitted] of [
+      ['c01-cockpit.html', 'RUB', '₽', '(500)', '3,000', '(1,500)', '(183)', '2,000'],
+      ['c12-terminal.html', 'USD', '$', '(5.0)', '30.0', '(15.0)', '(2)', '20.0'],
+    ]) {
+      const { pg, ctx, errors } = await open(browser, file, { D, store: { 'concepts-repr': repr } });
+      try {
+        const tile = pg.locator('.k-kpis .k-kpi').filter({ has: pg.locator('.l', { hasText: 'Нетто-кэрри / день' }) });
+        await tile.waitFor();
+        const links = tile.locator('[data-dr]'), rows = tile.locator('.s tr');
+        assert.deepStrictEqual(await rows.locator('.c').allTextContents(), ['в год ≈', 'кэрри', 'фондир.']);
+        assert.deepStrictEqual(await links.allTextContents(), [daily, carry, funding]);
+        const note = 'Не в нетто: кэрри ' + omitted + ' тыс ' + currency + ' у 1 поз. без фондирования';
+        assert.strictEqual(await tile.locator('.v .k-hint').getAttribute('title'), note);
+        assert.strictEqual(await rows.first().locator('.neg').textContent(), annual);
+        assert.strictEqual(await rows.first().locator('.u').textContent(), 'mm ' + currency + ' *');
+        assert.strictEqual(await rows.first().locator('.k-hint').getAttribute('title'), note);
+        assert.strictEqual(await tile.locator('.v .u').textContent(), 'тыс ' + currency + ' *');
+        for (const [i, title, value, count] of [
+          [0, 'Нетто-кэрри / день', daily, 1], [1, 'Кэрри за день (без фондирования)', carry, 2], [2, 'Фондирование за день', funding, 1],
+        ]) {
+          await links.nth(i).click();
+          const drawer = pg.locator('.k-drawer');
+          assert.strictEqual(await drawer.locator('.t').textContent(), title + ' ' + value + ' тыс ' + currency);
+          if (i === 0) assert.ok((await drawer.locator('.st').textContent()).includes(note));
+          assert.strictEqual(await drawer.locator('tbody tr.row').count(), count);
+          await drawer.locator('.close').click();
+        }
+        if (repr === 'RUB') {
+          await pg.evaluate(book => KIT.setFilter({ books: [book] }), first.book);
+          assert.ok(await pg.evaluate(() => KIT.list().some(p => p.carryDay == null && p.fundingDay == null)));
+          assert.strictEqual(await tile.locator('.v [data-dr]').textContent(), daily);
+          assert.strictEqual(await tile.locator('.v .k-hint').count(), 0);
+          assert.strictEqual(await rows.first().locator('.k-hint').count(), 0);
+          await pg.evaluate(book => KIT.setFilter({ books: [book] }), second.book);
+          assert.strictEqual(await tile.locator('.v [data-dr]').textContent(), '—');
+          assert.strictEqual(await tile.locator('.v .k-hint').getAttribute('title'), note);
+          assert.strictEqual(await rows.first().locator('.k-hint').count(), 0);
+          assert.strictEqual(await rows.nth(1).locator('[data-dr]').textContent(), '2,000');
+        }
+        assert.deepStrictEqual(errors, []);
+      } finally { await ctx.close(); }
+    }
+    const { pg, ctx, errors } = await open(browser, 'c01-cockpit.html', { D: noFunding() });
+    try {
+      const tile = pg.locator('#hud .k-kpi').filter({ has: pg.locator('.l', { hasText: 'Нетто-кэрри / день' }) });
+      assert.strictEqual(await tile.locator('.v [data-dr]').textContent(), '—');
+      assert.strictEqual(await tile.locator('.s tr').nth(1).locator('[data-dr]').count(), 1);
+      const funding = tile.locator('.s tr').last().locator('td').last();
+      assert.strictEqual(await funding.textContent(), '—');
+      assert.strictEqual(await funding.locator('[data-dr]').count(), 0);
+      assert.strictEqual(await tile.locator('.s tr').first().locator('td').last().textContent(), '— mm ₽');
+      assert.deepStrictEqual(errors, []);
+    } finally { await ctx.close(); }
+  } finally { await browser.close(); }
+});
+
 test('B1 в браузере: #327, #322, #325', { skip: pw ? false : 'нет Playwright' }, async t => {
   const browser = await pw.chromium.launch();
   try {

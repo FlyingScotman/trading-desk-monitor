@@ -21,8 +21,10 @@ const probe = pg => pg.evaluate(() => {
   document.body.appendChild(box); KIT.hud(box);
   const base = box.querySelector('.k-kpis'), baseCards = [...base.children], baseH = base.getBoundingClientRect().height;
   const baseRows = baseCards.map(c => c.querySelectorAll('.k-kb tr').length);
+  const net = g.querySelector('[data-net-carry]'), overX = el => el.scrollWidth - el.clientWidth;
   const out = {
     grid: g.getBoundingClientRect().height, baseGrid: baseH,
+    netOver: Math.max(...Array.from(net.querySelectorAll('.l, .s, .s td.c'), overX)),
     fit: cards.map((c, i) => ({ id: c.dataset.fit || '', rows: c.querySelectorAll('.k-kb tr').length, baseRows: baseRows[i],
       count: c.dataset.fit ? count(c.dataset.fit === 'dv01' ? 'dv01' : 'mv') : null, over: c.scrollHeight - c.clientHeight, top: Math.round(c.getBoundingClientRect().top), h: c.getBoundingClientRect().height,
       more: (c.querySelector('.s') || {}).innerText && /\+\d/.test(c.querySelector('.s').innerText) })),
@@ -59,6 +61,7 @@ test('C01 HUD: DV01 and MV show more currencies on a wide window, the row does n
         for (const c of FIT(r)) assert.ok(c.rows >= c.baseRows && c.rows <= Math.max(c.count, 3), width + ': ' + c.id + ' строк ' + c.rows + ' из ' + c.count);
         assert.ok(Math.abs(r.grid - r.baseGrid) < 1, width + ': высота ряда не выросла: ' + r.grid + ' против ' + r.baseGrid);
         r.fit.forEach(c => assert.ok(c.over <= 1, width + ': карточка без прокрутки и обрезки: ' + JSON.stringify(c)));
+        assert.ok(r.netOver <= 1, width + ': заголовок и суммы нетто-кэрри помещаются');
         assert.deepStrictEqual(errors, []);
       } finally { await ctx.close(); }
     }
@@ -101,12 +104,13 @@ test('C01 HUD: one more currency would not fit (the fit is the maximum), where t
 test('C01 HUD: narrow windows keep the row height too (rows wrap), no overflow', { skip }, async () => {
   const browser = await pw.chromium.launch();
   try {
-    for (const width of [1000, 760, 420]) {
+    for (const width of [1000, 760, 420, 390]) {
       const { ctx, pg, errors } = await open(browser, width);
       try {
         const r = await probe(pg);
         assert.ok(Math.abs(r.grid - r.baseGrid) < 1, width + ': высота шапки не выросла: ' + r.grid + ' против ' + r.baseGrid);
         for (const c of r.fit) assert.ok(c.over <= 1, width + ': без обрезки: ' + JSON.stringify(c));
+        assert.ok(r.netOver <= 1, width + ': заголовок и суммы нетто-кэрри помещаются');
         for (const c of FIT(r)) assert.ok(c.rows >= 3 || c.count < 3, width + ': не меньше трёх строк: ' + JSON.stringify(c));
         assert.deepStrictEqual(errors, []);
       } finally { await ctx.close(); }
@@ -121,7 +125,7 @@ test('C01 HUD: the fit follows the window width, «+N прочих» of the OVP 
     try {
       const wide = await probe(pg);
       await pg.setViewportSize({ width: 1000, height: 900 });
-      await pg.waitForTimeout(400);
+      await pg.waitForFunction(() => document.querySelectorAll('#hud [data-fit="dv01"] .s tr').length === 3);
       const narrow = await probe(pg);
       assert.ok(narrow.grid > wide.grid, 'на узком окне карточки переносятся в два ряда');
       assert.strictEqual(FIT(narrow).find(c => c.id === 'dv01').rows, 3, 'ОВП в другом ряду — высота ряда другая, три строки');
