@@ -214,14 +214,16 @@ def _not_valued(r: dict[str, Any], books: dict[str, dict], x: dict[str, Any] | N
                 hole: dict[str, str] | None = None, report_value_on: bool | None = None) -> dict[str, Any]:
     """A run_position without fact: visible, PV empty, nothing in any total; ``x`` its report row. ``extra.why``: its
     reason in words (``coverage.explain``, TDM#589: the card's «Причина отсутствия оценки», the blotter's short words)."""
-    from .coverage import why_of
+    from .coverage import CDS_NO_DATA, why_of
 
     x = {k: _json(v) for k, v in (x or {}).items() if v is not None}
     why = why_of(r["reason"], x, futures_by_ticker, hole, report_value_on)
-    kind = (x.get("asset_class") or "").lower()
+    cds = why["key"] == CDS_NO_DATA
+    kind = "otc" if cds else (x.get("asset_class") or "").lower()
     aclass, segment = (None, None) if kind in ("", "bond") else NOT_VALUED_KIND.get(kind, NOT_VALUED_KIND["other"])
     return {
-        "id": r["position_id"], "book": r["book_id"], "assetClass": aclass, "segment": segment, "instrType": None,
+        "id": r["position_id"], "book": r["book_id"], "assetClass": aclass, "segment": segment,
+        "instrType": "CDS" if cds else None,
         "name": x.get("source_instrument_name") or x.get("source_instrument_id") or r["secid"] or r["position_id"],
         "isin": x.get("isin"), "issuer": None, "issuerGroup": None, "sector": None, "rating": None,
         "ccy": x.get("ccy"), "maturity": x.get("maturity_date") or x.get("value_date"), "tenorY": None,
@@ -341,6 +343,8 @@ def assemble(con, run: dict[str, Any]) -> dict[str, Any]:
                         "spreadCurve": p.get("spread_curve")})
             # TDM#762: a row of a run made before the fields has no key (the page then shows the own-curve spread only)
             pos.update({k: p[f] for k, f in (("zKbdBp", "z_kbd_bp"), ("zRuoniaBp", "z_ruonia_bp")) if f in p})
+        elif p.get("instr_type") == "CDS":
+            pos["accrued"] = p.get("accrued")
         if p.get("extra") is not None:
             pos["extra"] = p["extra"]
         positions.append(pos)

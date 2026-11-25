@@ -48,8 +48,10 @@ from datetime import date
 from typing import Any
 
 from rub_fixed_income import RISK_BUCKETS, RISK_PILLARS
+from rub_fixed_income.cds import CdsCurveCache
 
 from ..inbox.schema import load_schema, norm_ccy
+from ..marketdata import manual_cds
 from ..marketdata.adapter import bond_currency, ccy_code
 from ..orchestrator import EodContext, Outcome
 from ..rules.ocp import is_ndf, product_group
@@ -96,6 +98,8 @@ class BookPlan:
     """TDM#468: every trade off the positions report with its state (``valuation.offreport``), in either mode."""
     off_report_matured: int = 0
     """Trades off the report left out because they matured more than ``FLOW_DAYS`` ago."""
+    cds_curve_revs: dict[str, int | None] = field(default_factory=dict)
+    """By C22 name key. Also record absent curves so a new entry can make a position priceable."""
 
 
 def _index(ctx: EodContext) -> dict[str, dict[str, str | None]]:
@@ -381,17 +385,21 @@ def is_ndf_row(x: dict[str, Any], terms: list[dict[str, Any]] | None = None) -> 
 
 
 def _derivatives(ctx: EodContext, inputs: PositionInputs, p: BookPlan, second_order: bool,
-                 horizon: date | None = None) -> dict[str, BondValuation | dv.NotValued]:
+                 horizon: date | None, cds_curves: dict[str, manual_cds.Curve]) -> dict[str, BondValuation | dv.NotValued]:
     """The FX and OTC rows valued by core (``valuation.derivatives``): those with trade_terms, a FORTS FX future by
     ticker (setting ``futures_by_ticker``), and with ``off_report_derivatives`` = ``include`` the trades no row names (added to the
     plan as rows of their own, TDM#468). Returns per position ID the valuation or why core did not value it."""
     opts = ctx.fx_options
     rows, classless = [], set()
+    cds_trades = [t for t in inputs.trade_terms if t.get("product_kind") == "cds"]
+    cds_keys = {(str(t["book_id"]), str(k)) for t in cds_trades
+                for k in (t.get("position_id"), t.get("trade_id")) if k}
     for pid, book, _, _ in inputs.rows:
         x = inputs.extra.get(pid)
         if x is None:
             continue
-        if (x.get("asset_class") or "bond").lower() != "bond":
+        if ((x.get("asset_class") or "bond").lower() != "bond" or product_group(x) == "cds"
+                or (book, pid) in cds_keys or (book, str(x.get("deal_id"))) in cds_keys):
             rows.append((pid, book, normalised(x)))
         elif not x.get("asset_class") and x.get("deal_id"):
             # TDM#501: a row without asset_class but with a deal: its trade's terms link it, else it is a bond as before
@@ -402,9 +410,26 @@ def _derivatives(ctx: EodContext, inputs: PositionInputs, p: BookPlan, second_or
     p.unlinked_terms = sorted({f"{t.get('book_id')}|{t.get('trade_id')}" for t in unlinked})
     p.unlinked_rates = dv.unlinked_rates(rows, inputs.trade_terms, ctx.business_date)
     reqs, out = [], {}
+    credit_cache = CdsCurveCache()
     qty = {pid: q for pid, _, _, q in inputs.rows}
     for pid, book, x in rows:
-        if pid in ambiguous:
+        terms = linked.get(pid, [])
+        cds = [t for t in terms if t.get("product_kind") == "cds"]
+        ambiguous_cds = any((book, tid) in cds_keys for tid in ambiguous.get(pid, ()))
+        if cds or ambiguous_cds or product_group(x) == "cds":
+            names = [dv.cds_reference(x, t) for t in cds] if cds else [dv.cds_reference(x)]
+            for name in names:
+                if key := manual_cds.name_key(name):
+                    curve = cds_curves.get(key)
+                    p.cds_curve_revs[key] = curve.rev_id if curve else None
+            try:
+                if pid in ambiguous:
+                    raise dv.cds_gap("одни условия сделки (trade_terms) привязаны к нескольким позициям")
+                out[pid] = dv.value_cds_position(ctx, pid, x, terms, cds_curves, credit_cache,
+                                                 second_order=second_order, horizon=horizon)
+            except dv.NotValued as e:
+                out[pid] = e
+        elif pid in ambiguous:
             out[pid] = dv.NotValued("terms_ambiguous", f"trade {', '.join(ambiguous[pid])} is the terms of several "
                                                        "positions rows (one deal_id on several rows)")
         elif pid in linked:
@@ -485,8 +510,8 @@ def _not_by_core(o: Outcome, e: dv.NotValued) -> Outcome:
     return o
 
 
-def plan(ctx: EodContext, inputs: PositionInputs, *, second_order: bool = True, horizon: date | None = None
-         ) -> BookPlan:
+def plan(ctx: EodContext, inputs: PositionInputs, *, second_order: bool = True, horizon: date | None = None,
+         cds_curves: dict[str, manual_cds.Curve] | None = None) -> BookPlan:
     """Requests for core and the outcomes of the rows valued here, in ``inputs.rows`` order (then the trades added
     with ``off_report_derivatives``). The FX and OTC rows with trade terms (or an FX future by ticker) are valued by core
     (``valuation.derivatives``); the others, and those core rejects, keep the rule of the module docstring.
@@ -494,7 +519,7 @@ def plan(ctx: EodContext, inputs: PositionInputs, *, second_order: bool = True, 
     and rolldown to it (``dv.value``)."""
     p = BookPlan([], [], {}, [(pid, book) for pid, book, _, _ in inputs.rows])
     index = None
-    by_core = _derivatives(ctx, inputs, p, second_order, horizon)
+    by_core = _derivatives(ctx, inputs, p, second_order, horizon, cds_curves or {})
     for pid in p.added:
         v = by_core.get(pid)
         if isinstance(v, BondValuation):
@@ -515,7 +540,11 @@ def plan(ctx: EodContext, inputs: PositionInputs, *, second_order: bool = True, 
         # TDM#501: a row without asset_class that core did not value from its linked terms is a derivative, not a bond
         kind = (x.get("asset_class") or ("otc" if core is not None else "bond")).lower()
         if isinstance(core, BondValuation):
-            p.direct[pid] = _core_outcome(core, p.core_result)
+            p.direct[pid] = _core_outcome(core, None if core.extra.get("cds") else p.core_result)
+            continue
+        if core is not None and core.reason == dv.CDS_NO_DATA:
+            p.direct[pid] = Outcome("", None, None, reason=core.reason, detail=core.detail,
+                                    core_not_valued=(core.reason, core.detail))
             continue
         if kind == "fx":
             o = _fx(ctx, x)

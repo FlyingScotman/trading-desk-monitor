@@ -1233,7 +1233,9 @@ def risk_items(con, run: dict[str, Any], books: list[str] | None = None
     ``x_*``) and the run's RUB rates (the reference's; a currency it lacks at the rate its bonds were valued at,
     ``extra.fx_rate``, as ``compat.assemble``)."""
     rid = run["run_id"]
-    sql, args = "SELECT position_id, fact FROM run_position WHERE run_id = %s", [rid]
+    from ..valuation.derivatives import CDS_NO_DATA
+
+    sql, args = "SELECT position_id, fact, reason FROM run_position WHERE run_id = %s", [rid]
     if books:
         sql, args = sql + " AND book_id = ANY(%s)", [*args, books]
     rows = con.execute(sql + " ORDER BY ord", args).fetchall()
@@ -1251,6 +1253,7 @@ def risk_items(con, run: dict[str, Any], books: list[str] | None = None
         i = inputs.get(r["position_id"]) or {}
         items.append({"position_id": r["position_id"], "fact": None,
                       "input": {"ccy": i.get("ccy"), "asset_class": i.get("asset_class"),
+                                "instr_type": "CDS" if (r["reason"] or "").startswith(CDS_NO_DATA + ":") else None,
                                 "extra": {"reported": i.get("x") or {}}}})
     ref = con.execute("SELECT data FROM run_reference WHERE run_id = %s AND kind = 'fx'", (rid,)).fetchone()
     fx: dict[str, float | None] = {r["ccy"]: r.get("rate") for r in (ref["data"] if ref else []) or []}

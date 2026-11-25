@@ -22,6 +22,7 @@ from decimal import Decimal
 from typing import Any
 
 from ..inbox.schema import alias_position
+from ..valuation.derivatives import CDS_NO_DATA
 from . import concepts
 
 BACKFILL_PATH = "Настройки → «Диагностика» → карточка «История прогонов»"
@@ -34,8 +35,7 @@ RECOMPUTE = ("дата пересчитается сама, когда исто�
 AMOUNTS = ("amount_ccy", "face_amount_ccy", "face_outstanding_ccy")
 SWAPS = ("IRS", "CCS", "CDS", "TRS")
 TERMS_SWAPS = ("IRS", "CCS")
-"""The swaps core values from their trade terms: only they «wait for the terms»; a CDS or a TRS has terms in no source
-(TDM#607) and is valued at the report's value or not at all (``NO_TERMS_CAUSES``)."""
+"""The swaps with trade terms before CDS valuation (TDM#607). Older CDS runs use ``NO_TERMS_CAUSES``."""
 NO_TERMS_CAUSES: dict[str, tuple[str, str]] = {
     "report_no_value": (("в отчёте позиций нет стоимости (NPV) этой строки; условий таких сделок нет ни в одном "
                          "источнике, поэтому другой оценки нет"),
@@ -61,6 +61,7 @@ FIX = {"terms": ("Условия сделок", "../settings.html#adapter/acq"),
 """The settings screen that fixes a cause (``CAUSE_FIX``): (its name, the link from a concept page)."""
 
 CAUSES: dict[str, tuple[str, str]] = {
+    CDS_NO_DATA: ("нет данных для оценки CDS", "проверьте подробности в карточке позиции"),
     "unmapped_instrument": ("бумага не найдена в статике хаба (ISIN / рег. номер / тикер неизвестны)",
                             ("проверьте ISIN в отчёте; погашенная бумага в статике после погашения не появится — "
                              "тогда это закрытая позиция")),
@@ -356,6 +357,8 @@ def detail_text(detail: str | None, hole: dict[str, str] | None = None) -> str |
 
 def short(key: str) -> str:
     """The few words of a cause (``SHORT``), else by its kind of trouble."""
+    if key == CDS_NO_DATA:
+        return "нет данных"
     if key in SHORT:
         return SHORT[key]
     if key.endswith("_unsupported") or key in ("bond_derivative", "core_unsupported_product"):
@@ -431,7 +434,10 @@ def unvalued(con, run: dict[str, Any], futures_by_ticker: bool | None = None) ->
                                     "extra": {"reported": x}})
         code = (r["reason"] or "").split(":", 1)[0].strip()
         product = x.get("x_product") if isinstance(x.get("x_product"), str) else None
-        if closed(r["quantity"], i):
+        if code == CDS_NO_DATA:
+            kind, key = "CDS", CDS_NO_DATA
+            why, todo = CAUSES[key]
+        elif closed(r["quantity"], i):
             key, why, todo = "closed", "закрытая сделка или нулевой объём в отчёте", "не пропуск: в счёт не входит"
             n_closed += 1
         else:

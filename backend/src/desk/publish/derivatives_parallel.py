@@ -13,7 +13,8 @@ row per derivative position:
 - ``imported_only``: not valued by core (no trade terms, or core could not: ``reason``), the report states a PV;
 - ``neither``: not valued by core and no PV in the report.
 
-``used`` says which value the run publishes: today core's whenever it values the row, the report's otherwise
+``used`` says which value the run publishes. For an unvalued CDS it is ``none``; its imported PV is for comparison.
+For other products it is core's whenever it values the row, the report's otherwise
 (``valuation.positions``), for every product (TDM#45: interest rate swaps and REPO too; TDM#555: a CCS RUB against a
 foreign leg fixed or floating on RUSFARCNY in CNY, SOFR in USD, ESTR in EUR (TDM#565), product ``ccs``; one with a
 foreign leg on another index stays the report's, ``ccs_foreign_floating_unsupported``; a leg whose index the adapter
@@ -90,7 +91,8 @@ def compare(positions: list[tuple[str, str, Outcome]], extra: dict[str, dict[str
             if imported is None and any(_num(t.get("pv_rub")) is not None for t in ts):
                 imported = math.fsum(p for t in ts if (p := _num(t.get("pv_rub"))) is not None)
             computed, reason = None, o.core_not_valued[0]
-            product = "+".join(sorted({_terms_product(t) for t in ts})) if ts else _class_product(x)
+            product = "cds" if reason == dv.CDS_NO_DATA else (
+                "+".join(sorted({_terms_product(t) for t in ts})) if ts else _class_product(x))
         else:
             continue
         if core:
@@ -98,7 +100,7 @@ def compare(positions: list[tuple[str, str, Outcome]], extra: dict[str, dict[str
         else:
             status = "imported_only" if imported is not None else "neither"
         row: dict[str, Any] = {"position_id": pid, "book_id": book, "product": product, "status": status,
-                               "used": "computed" if core else "imported",
+                               "used": "computed" if core else "none" if reason == dv.CDS_NO_DATA else "imported",
                                "computed_pv_rub": computed, "imported_pv_rub": imported}
         if reason:
             row["reason"] = reason

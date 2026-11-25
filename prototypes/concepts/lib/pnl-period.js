@@ -723,7 +723,7 @@
     yield: 'desk-flash-yield-v1: кэрри по доходности бумаги; изменение доходности без кривой в валюте — в «Прочем».',
     reported: 'desk-reported-v1: разница отчётных стоимостей, сделки могут быть внутри.',
     fx: 'FX-сделки: прочие эффекты ставок, пунктов и времени.',
-    rates: 'desk-rates-core-v1: своп или РЕПО ядром — остаток после кэрри, сдвига кривой и ставок по риску D−1.',
+    rates: 'desk-rates-core-v1: своп, CDS или РЕПО ядром — остаток после кэрри, сдвига кривой и ставок по риску D−1.',
     other: 'Метод не из перечня или не сохранён в записи.',
   };
   // the reasons of the unexplained (pnl.reasons.OTHER_REASON_TEXT and pnl_checks.UNRECORDED, in their order; the
@@ -732,12 +732,14 @@
     no_curve_on_date: 'нет кривой на дату', discount_curve_switch: 'смена кривой дисконтирования', core_refused: 'ядро отказало',
     no_terms: 'нет условий бумаги или сделки', fallback_price: 'запасная оценка', price_source_switch: 'смена источника цены: модель ↔ рынок',
     yield_no_curve: 'валютная бумага без кривой: изменение доходности', reported_value: 'оценка по отчёту', fx_core_rest: 'FX-сделка: прочие эффекты',
-    rates_core_rest: 'своп или РЕПО: остаток после ставок', flash_residual: 'остаток точного flash', unrecorded: 'причина не записана (прогон до версии 23)', mixed: 'позиции с несколькими причинами',
+    rates_core_rest: 'своп или РЕПО: остаток после ставок', cds_core_rest: 'CDS: остаток после переоценки',
+    flash_residual: 'остаток точного flash', unrecorded: 'причина не записана (прогон до версии 23)', mixed: 'позиции с несколькими причинами',
   };
   const REASON_ORDER = ['no_curve_on_date', 'discount_curve_switch', 'core_refused', 'no_terms', 'fallback_price', 'price_source_switch',
-    'yield_no_curve', 'reported_value', 'fx_core_rest', 'rates_core_rest', 'flash_residual', 'unrecorded', 'mixed'];
+    'yield_no_curve', 'reported_value', 'fx_core_rest', 'rates_core_rest', 'cds_core_rest', 'flash_residual', 'unrecorded', 'mixed'];
   const REASON_COLOR = { no_curve_on_date: 'pal:3', discount_curve_switch: 'pal:2', core_refused: 'pal:12', no_terms: 'pal:4', fallback_price: 'pal:6',
-    price_source_switch: 'pal:1', yield_no_curve: 'pal:8', reported_value: 'pal:10', fx_core_rest: 'pnl:fx', rates_core_rest: 'pal:11', flash_residual: 'pnl:other', unrecorded: '--fg-3', mixed: '--fg-2' };
+    price_source_switch: 'pal:1', yield_no_curve: 'pal:8', reported_value: 'pal:10', fx_core_rest: 'pnl:fx', rates_core_rest: 'pal:11',
+    cds_core_rest: 'pal:7', flash_residual: 'pnl:other', unrecorded: '--fg-3', mixed: '--fg-2' };
   const REASON_TIP = {
     no_curve_on_date: 'Ядро не оценило бумагу: на дату нет нужной кривой (флоатер в день без RUONIA OIS). Бумага на запасной ступени, PnL без разложения.',
     discount_curve_switch: 'Бумага дисконтирована по разным кривым на D−1 и D (КБД в день без RUONIA): спреды к разным кривым, PnL без разложения.',
@@ -749,6 +751,7 @@
     reported_value: 'Разница отчётных стоимостей; сделки дня могут быть внутри.',
     fx_core_rest: 'FX-сделка ядром: всё, что не объясняет FX-дельта (ставки, пункты, время).',
     rates_core_rest: 'Своп или РЕПО ядром: что не объясняют кэрри, сдвиг кривой и ставки (вторые производные, фиксинг дня против форварда).',
+    cds_core_rest: 'CDS: остаток после кэрри, сдвига кривой, ставок, кредитных спредов и валютной переоценки.',
     flash_residual: 'Остаток точного flash: сменилось расписание или горизонт, цена и НКД расходятся с позицией D−1.',
     unrecorded: 'Запись прогона до версии расчёта 23: причина не сохранялась; после пересчёта истории появится.',
     mixed: 'У позиции за период разные причины: по записям её необъяснённое делит экран F.',
@@ -779,7 +782,7 @@
   const METHOD_GROUP = { 'desk-flash-exact-v1': 'exact', 'desk-flash-exact-v2': 'exact', 'desk-flash-exact-fx-v1': 'exact', 'desk-flash-simple-v1': 'simple',
     'desk-flash-yield-v1': 'yield', 'desk-reported-v1': 'reported', 'desk-fx-spot-v1': 'fx', 'desk-fx-core-v1': 'fx', 'desk-rates-core-v1': 'rates' };
   const UNEXPL_LABEL = { exact: 'остаток точного flash', simple: 'без разложения: нет потоков ядра', yield: 'по доходности', reported: 'по отчёту',
-    fx: 'FX-сделки: прочие эффекты', rates: 'свопы и РЕПО: остаток после ставок', other: 'другой метод или не указан', mixed: 'позиции с несколькими методами' };
+    fx: 'FX-сделки: прочие эффекты', rates: 'свопы, CDS и РЕПО: остаток после ставок', other: 'другой метод или не указан', mixed: 'позиции с несколькими методами' };
   const UNEXPL_ORDER = ['exact', 'simple', 'yield', 'reported', 'fx', 'rates', 'other', 'mixed'];
   const methodGroup = m => METHOD_GROUP[m] || 'other';
   // the split of «Необъяснённое / прочее» (key 'other') or «Разница PV по отчётам» ('reported'): by reason (reasons) and

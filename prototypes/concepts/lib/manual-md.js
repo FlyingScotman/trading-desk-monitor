@@ -102,7 +102,7 @@
     ((list && list.curves) || []).forEach(c => by.set(c.name_key, { key: c.name_key, name: c.name, curve: c, positions: 0 }));
     ((list && list.positions) || []).forEach(p => {
       const r = by.get(p.name_key) || { key: p.name_key, name: p.name, curve: null, positions: 0, deals: [] };
-      r.positions = p.positions; r.deals = p.deals || []; by.set(p.name_key, r);
+      r.positions = p.positions; r.deals = p.deals || []; r.currencies = p.currencies || []; by.set(p.name_key, r);
     });
     (added || []).forEach(n => { const k = nameKey(n); if (!by.has(k)) by.set(k, { key: k, name: clean(n), curve: null, positions: 0 }); });
     return [...by.values()].sort((a, b) => a.name.localeCompare(b.name, 'ru'));
@@ -170,7 +170,7 @@
     add('Эмитент Б', addDays(asOf, -1), { '1Y': 270, '3Y': 425, '5Y': 540 }, 0.4, 'USD', 'demo');
     add('Эмитент В', addDays(asOf, -10), { '5Y': 150, '10Y': 210 }, 0.25, 'EUR', 'demo');
     // CDS-позиции прогона: имя референса — x_issuer отчёта, названия сделок — подсказка
-    const POSITIONS = [{ name: 'Эмитент Г', positions: 2, deals: ['CDS Эмитент Г 3Y', 'CDS Эмитент Г 5Y'] }, { name: 'Эмитент А', positions: 1, deals: ['CDS Эмитент А 5Y'] }];
+    const POSITIONS = [{ name: 'Эмитент Г', positions: 2, deals: ['CDS Эмитент Г 3Y', 'CDS Эмитент Г 5Y'], currencies: ['RUB'] }, { name: 'Эмитент А', positions: 1, deals: ['CDS Эмитент А 5Y'], currencies: ['USD'] }];
     return {
       demo: true,
       list(date) {
@@ -178,7 +178,7 @@
         const have = new Set(curves.map(c => c.name_key));
         return Promise.resolve(ok({ date, run_id: null, tenors: TENORS.slice(), default_recovery: DEFAULTS.recovery, default_ccy: DEFAULTS.ccy,
           max_spread_bp: DEFAULTS.maxSpread, curves: curves.map(c => view(c, date)),
-          positions: POSITIONS.map(p => ({ name: p.name, name_key: nameKey(p.name), positions: p.positions, deals: p.deals, has_curve: have.has(nameKey(p.name)) })) }));
+          positions: POSITIONS.map(p => ({ ...p, name_key: nameKey(p.name), has_curve: have.has(nameKey(p.name)) })) }));
       },
       put(b) {
         const n = parseName(b.name);

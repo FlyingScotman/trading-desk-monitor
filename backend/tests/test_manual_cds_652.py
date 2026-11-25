@@ -405,13 +405,13 @@ def test_the_list_names_the_cds_rows_of_the_dates_run(local, store_url):
     lst = local.get(BASE + f"/curves?date={D1}").json()
     assert lst["run_id"] == rid
     assert lst["positions"] == [
-        {"name": "CDS-Б", "name_key": "cds-б", "positions": 1, "deals": ["CDS-Б"], "has_curve": False},
-        {"name": "CDS-В", "name_key": "cds-в", "positions": 1, "deals": [], "has_curve": False},
+        {"name": "CDS-Б", "name_key": "cds-б", "positions": 1, "deals": ["CDS-Б"], "currencies": ["USD"], "has_curve": False},
+        {"name": "CDS-В", "name_key": "cds-в", "positions": 1, "deals": [], "currencies": ["USD"], "has_curve": False},
         {"name": "Эмитент А", "name_key": "эмитент а", "positions": 2, "deals": ["CDS Эмитент А 3Y",
-                                                                                 "CDS Эмитент А 5Y"], "has_curve": True},
+                                                                                 "CDS Эмитент А 5Y"], "currencies": ["USD"], "has_curve": True},
         # a report's name with invisible characters is the name without them, not a row dropped
         {"name": "Эмитент Ж", "name_key": "эмитент ж", "positions": 2, "deals": ["CDS Ж", "CDS Ж 3Y"],
-         "has_curve": False}]
+         "currencies": ["USD"], "has_curve": False}]
     other = local.get(BASE + f"/curves?date={D2}").json()  # a date without a run: no names, the curves as usual
     assert other["run_id"] is None and other["positions"] == [] and len(other["curves"]) == 1
 

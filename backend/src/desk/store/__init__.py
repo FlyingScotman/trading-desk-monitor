@@ -34,6 +34,7 @@ from ..inbox.spi import (  # stdlib only, no cycle
     STOCK_DATASETS,
     VERSIONED_DATASETS,
 )
+from ..marketdata import manual_cds
 from ..run_cache import forget_runs  # the per-run API's finished bodies go with their runs (TDM#631)
 from ..settings import REPO_ROOT, Settings, SettingsError
 from ..valuation.fallback import CarriedSpread
@@ -310,14 +311,19 @@ def dataset_set_ids(con: psycopg.Connection, valid_date: date, datasets: Iterabl
 
 
 def late_inputs(con: psycopg.Connection, valid_date: date, known_at: datetime | None,
-                revs: ReferenceRevs | None = None) -> list[str]:
+                revs: ReferenceRevs | None = None, *,
+                cds_revs: dict[str, dict[str, int | None]] | None = None) -> list[str]:
     """The ``LATE_DATASETS`` whose sets in force on ``valid_date`` now differ from those a run that read its inputs at
     ``known_at`` (its ``positions_known_at``) saw: an OCP report or balances recorded (or corrected) after the run.
     The autopilot and the backfill run the date again, the day status names them (TDM#181)."""
-    if known_at is None:
-        return []
-    now, then = dataset_set_ids(con, valid_date), dataset_set_ids(con, valid_date, known_at=known_at)
-    return [ds for ds in LATE_DATASETS if now.get(ds, []) != then.get(ds, [])] + late_reference(con, known_at, revs)
+    late = []
+    if known_at is not None:
+        now, then = dataset_set_ids(con, valid_date), dataset_set_ids(con, valid_date, known_at=known_at)
+        late = [ds for ds in LATE_DATASETS if now.get(ds, []) != then.get(ds, [])] + late_reference(con, known_at, revs)
+    if any(manual_cds.curves_changed_since(con, date.fromisoformat(d), revisions=keys)
+           for d, keys in (cds_revs or {}).items()):
+        late.append("manual_cds")
+    return late
 
 
 def position_dates(con: psycopg.Connection, since: date) -> list[date]:
@@ -1005,12 +1011,13 @@ def default_runs(con: psycopg.Connection, since: date, until: date | None = None
     return {r[0]: {"run_id": r[1], "market_snapshot_id": r[2], "prev_market_snapshot_id": r[3],
                    "position_set_ids": sorted(r[4]), "completed_at": r[5], "logic_version": r[6],
                    "private_inputs_hash": r[7], "positions_known_at": r[8], "second_order": r[9] != "false",
-                   "spread_sources": r[10], "spreads_carried": int(r[11]) if r[11] is not None else None}
+                   "spread_sources": r[10], "spreads_carried": int(r[11]) if r[11] is not None else None,
+                   "manual_cds": r[12]}
             for r in con.execute(
                 "SELECT business_date, run_id, market_snapshot_id, prev_market_snapshot_id, position_set_ids,"
                 " completed_at, lineage->>'logic_version', private_inputs_hash, positions_known_at,"
                 " lineage->>'second_order', lineage->'carried_spread_sources',"
-                " lineage->'model_spreads'->>'carried' FROM run"
+                " lineage->'model_spreads'->>'carried', lineage->'manual_cds' FROM run"
                 f" WHERE run_id IN ({DEFAULT_RUNS}) AND business_date >= %s AND business_date <= %s",
                 (since, until or date.max))}
 

@@ -86,7 +86,8 @@ def publish(con: psycopg.Connection, ctx: EodContext, positions: list[tuple[str,
             pnl_basis: dict[str, Any] | None = None, core_results: list[Any] | None = None,
             business_date: date | None = None, cut_type: str | None = None,
             unlinked_rates: list[str] | None = None, off_report: dict[str, Any] | None = None,
-            intraday_trades: dict[str, Any] | None = None, second_order: bool = True) -> tuple[int, str, list[str]]:
+            intraday_trades: dict[str, Any] | None = None, second_order: bool = True,
+            manual_cds_revs: dict[str, dict[str, int | None]] | None = None) -> tuple[int, str, list[str]]:
     """positions: (position_id, book_id, outcome) of ``inputs`` (``store.positions_for``); ``carried_from``:
     the carried spreads the valuation got; ``pnl_basis``: what the flash PnL is measured against
     (``desk.dayrun.pnl_basis``, lineage ``pnl_basis``); ``core_results``: core results of the run besides those its
@@ -139,6 +140,8 @@ def publish(con: psycopg.Connection, ctx: EodContext, positions: list[tuple[str,
     }
     if intraday_trades is not None:
         lineage["intraday_trades"] = intraday_trades
+    if manual_cds_revs:
+        lineage["manual_cds"] = manual_cds_revs
     if bd != ctx.business_date:  # the morning run (#21): the close the book of ``bd`` is valued on
         lineage["market_close"] = {"date": ctx.business_date.isoformat(), "cut_type": ctx.market.snapshot.cut_type}
     content = run_content(ctx, positions, prev, lineage, inputs)

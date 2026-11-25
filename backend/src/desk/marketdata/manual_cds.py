@@ -16,11 +16,11 @@ the screen and in ``docs/architecture/05_FRONTEND_INTEGRATION.md``) is:
 Not the owner's decision, the developer's assumption: the quote currency is stored with the curve, USD unless the
 owner sets another per name.
 
-Identity of a reference name: ``name_key(name)``. A CDS row of the positions report has no issuer id to join on (the
-trade terms of the contract have no CDS at all); the adapter gives the reference name as the report's ``x_issuer``
+Identity of a reference name: ``name_key(name)``. A CDS row of the positions report has no issuer id to join on;
+the adapter gives the reference name as the report's ``x_issuer``
 (``position_input.x``, as for an unmapped bond), the row's ``source_instrument_name`` being the name of the deal. The
 key is the text of the reference name, normalised (NFKC, case folded, whitespace collapsed). The CDS valuation
-(TDM#614) maps the reference name of a CDS row (``x_issuer``, later the terms' field) to the curve with the same
+(TDM#614) maps ``trade_terms.reference_entity`` to the curve with the same
 ``name_key``. Known limitation: names that differ in spelling (an abbreviation, a legal form, Cyrillic and Latin
 look-alike letters, a hyphen for a space) are different names, there is no alias table; the screen lists the names of
 the date's CDS rows beside the entered ones so that the owner types the spelling the report has.
@@ -28,13 +28,15 @@ the date's CDS rows beside the entered ones so that the owner types the spelling
 A revision holds the whole curve of a name from ``valid_from`` on and only ever adds (append-only, who and when;
 ``changed_at`` is the time of the INSERT, not of the commit, so a calculation should compare the ``rev_id`` it used, not
 timestamps). The curve in force on a date is the name's latest revision of the latest ``valid_from`` on or before it; a withdrawal
-(``cleared``) ends it until a later curve is entered. ``curve_on(con, date, name)`` is what the calculation calls.
+(``cleared``) ends it until a later curve is entered. The calculation reads all curves on the date in one query
+and applies the same lookup by ``name_key`` as ``curve_on(con, date, name)``.
 """
 
 from __future__ import annotations
 
 import math
 import unicodedata
+from collections.abc import Iterable
 from dataclasses import dataclass, field
 from datetime import date, datetime
 from typing import Any
@@ -142,13 +144,23 @@ def curves_on(con: psycopg.Connection, on: date, *, known_at: datetime | None = 
     return [_curve(r) for r in rows]
 
 
-def curves_changed_since(con: psycopg.Connection, on: date, known_at: datetime | None) -> bool:
-    """True when the curves in force on ``on`` now differ from those a run that read its inputs at ``known_at`` saw
-    (a curve entered, corrected, withdrawn or carried to ``on`` after it). The calculation of a CDS (TDM#614) asks
-    this for the dates whose run holds CDS positions, as ``store.late_inputs`` does for the OCP report and balances.
-    ``changed_at`` is the time of the INSERT (``clock_timestamp()``), not of the commit: a revision committed after
-    ``known_at`` may carry an earlier time. A run that records the ``rev_id`` of every curve it used (TDM#614) compares
-    those with ``curves_on(con, on)`` and needs no timestamps; this function is the approximation until then."""
+def revisions_on(con: psycopg.Connection, on: date, keys: Iterable[str]) -> dict[str, int | None]:
+    """Current revisions of names tracked by a run, including absent curves."""
+    revs = {c.name_key: c.rev_id for c in curves_on(con, on)}
+    return {k: revs.get(k) for k in keys}
+
+
+def current_revisions(con: psycopg.Connection, tracked: dict[str, dict[str, int | None]] | None
+                      ) -> dict[str, dict[str, int | None]]:
+    """Input signature of the names and valuation dates tracked by the last completed run."""
+    return {d: revisions_on(con, date.fromisoformat(d), keys) for d, keys in (tracked or {}).items()}
+
+
+def curves_changed_since(con: psycopg.Connection, on: date, known_at: datetime | None = None, *,
+                         revisions: dict[str, int | None] | None = None) -> bool:
+    """Compare against the revisions a run saw. Timestamps alone approximate what was visible at commit."""
+    if revisions is not None:
+        return bool(revisions) and revisions != revisions_on(con, on, revisions)
     if known_at is None:
         return False
     return ({(c.name_key, c.rev_id) for c in curves_on(con, on)}

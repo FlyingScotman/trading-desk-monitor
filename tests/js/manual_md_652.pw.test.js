@@ -52,6 +52,24 @@ async function open(browser, { width = 1366, theme = 'dark', query = '', auth = 
 }
 const cell = (pg, name, field) => pg.locator('tr.c22-row', { hasText: name }).locator('input[data-f="' + field + '"]');
 const rowOf = (pg, name) => pg.locator('tr.c22-row', { hasText: name });
+
+test('C22 подсказывает валюту позиции и сохраняет новую кривую в этой валюте', { skip }, async () => {
+  const browser = await pw.chromium.launch({ headless: true });
+  try {
+    const { pg, calls } = await open(browser);
+    assert.match(await rowOf(pg, 'Эмитент Г').innerText(), /Валюта позиций: RUB/);
+    assert.equal(await cell(pg, 'Эмитент Г', 'ccy').getAttribute('placeholder'), 'RUB');
+    await cell(pg, 'Эмитент Г', '5Y').fill('135');
+    await cell(pg, 'Эмитент Г', '5Y').press('Enter');
+    await pg.waitForFunction(() => /Сохранено/.test(document.getElementById('msg').textContent));
+    assert.equal(calls.find(c => c.method === 'PUT').body.ccy, 'RUB');
+    await cell(pg, 'Эмитент Г', 'ccy').fill('USD');
+    await cell(pg, 'Эмитент Г', 'ccy').press('Enter');
+    await rowOf(pg, 'Эмитент Г').getByText('Валюта кривой подходит не всем позициям').waitFor();
+  } finally {
+    await browser.close();
+  }
+});
 const msg = pg => pg.locator('#msg').innerText();
 
 test('C22 с сервером: кривые на дату, правка ячейки, ошибка ввода без запроса, сохранение с историей, обе темы', { skip, timeout: 120000 }, async () => {

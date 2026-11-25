@@ -116,7 +116,7 @@ from typing import Any
 import psycopg
 
 from . import fsretry, logic_version, store, trades
-from .marketdata import cache
+from .marketdata import cache, manual_cds
 from .marketdata.bundle import SnapshotDir, previous_close
 from .marketdata.hub import HubError, TransportError
 from .settings import Settings
@@ -424,14 +424,15 @@ def same_logic(a: str | None, b: str | None) -> bool:
     return logic_key(a) == logic_key(b)
 
 
-LATE_WHY = {"ocp": "ocp report", "cash_balances": "cash balances", "ocp_policy": "ocp policy"}
+LATE_WHY = {"ocp": "ocp report", "cash_balances": "cash balances", "ocp_policy": "ocp policy",
+            "manual_cds": "manual CDS curves"}
 """``store.LATE_DATASETS`` and ``store.LATE_REFERENCE`` as a reason to run a date again (TDM#181, TDM#567)."""
 
 
 def late_why(con: psycopg.Connection, d: date, run: dict | None, revs: store.ReferenceRevs | None = None) -> str | None:
     """"ocp report changed after the run" (and / or the cash balances) when an ``ocp`` or ``cash_balances`` set in
     force on ``d`` was recorded after the default run ``run`` read its inputs (``store.late_inputs``); else None."""
-    late = store.late_inputs(con, d, run.get("positions_known_at"), revs) if run else []
+    late = store.late_inputs(con, d, run.get("positions_known_at"), revs, cds_revs=run.get("manual_cds")) if run else []
     return " and ".join(LATE_WHY[x] for x in late) + " changed after the run" if late else None
 
 
@@ -520,7 +521,8 @@ def plan(con: psycopg.Connection, settings: Settings, date_from: date, date_to: 
             elif any(date.fromisoformat(v["date"]) in todo_dates for v in srcs.values()):
                 why, chain = CARRY_WHY, True  # its source date is made again, so its spread may be another: ``run`` looks
         sig = [ids, snap, prev, logic, ih, store.dataset_set_ids(con, date.fromisoformat(d)),
-               store.reference_rev_ids(con, revs=revs)]
+               store.reference_rev_ids(con, revs=revs),
+               manual_cds.current_revisions(con, run.get("manual_cds") if run else None)]
         if why is None:
             giveup = second_failed.get(d) or {}  # the give-up is of the date's inputs, not of a run (TDM#627)
             second = ("done" if run["second_order"] else
@@ -718,6 +720,8 @@ def _differs(con: psycopg.Connection, day: Day) -> str:
                             late[0] if late else None)}
     if len(late) > 1:  # a signature from before the policy revisions counted (TDM#567) lacks it: stale once
         have["late_reference"] = (store.reference_rev_ids(con, run["positions_known_at"]), late[1])
+    if len(late) > 2:
+        have["manual_cds"] = (run.get("manual_cds") or {}, late[2])
     out = [f"{k}: run {a}, plan {b}" for k, (a, b) in have.items() if a != b]
     d = date.fromisoformat(day.date)
     out += [f"carried spread of {secid}: run {z:g} bp from {src}, {'none' if held is None else f'{held:g} bp'} there now"

@@ -71,16 +71,16 @@ def test_new_schemas_equal_the_08_tables_and_their_templates(name: str) -> None:
     assert raw.startswith(b"\xef\xbb\xbf") and raw.endswith(b"\r\n") and raw.count(b"\n") == 1
     assert raw[3:].decode().strip().split(";") == schema_fields(name)[0]
     schema = json.loads((REPO / f"contract/private/v1/{name}.schema.json").read_text(encoding="utf-8"))
-    since = {"trade_terms": "1.4", "trades": "1.6", "trade_list": "1.8", "ocp": "1.9", "ocp_policy": "1.7"}.get(name, "1.3")  # the minor that last changed the schema
+    since = {"trade_terms": "1.10", "trades": "1.6", "trade_list": "1.8", "ocp": "1.9", "ocp_policy": "1.7"}.get(name, "1.3")  # the minor that last changed the schema
     assert schema["$id"] == f"private/{since}/{name}" and schema["additionalProperties"] is False
 
 
-def test_contract_is_1_9_and_keys_are_schema_fields() -> None:
-    assert CONTRACT == "private/1.9" and "cash_balances" in MULTI_DATE_DATASETS and "ocp" not in MULTI_DATE_DATASETS
+def test_contract_is_1_10_and_keys_are_schema_fields() -> None:
+    assert CONTRACT == "private/1.10" and "cash_balances" in MULTI_DATE_DATASETS and "ocp" not in MULTI_DATE_DATASETS
     for ds, keys in DATASET_KEYS.items():
         fields = schema_fields(ds)[0]
         assert fields and set(keys) <= set(fields), ds
-    assert "## 10 Private input contract v1 (`private/1.9`)" in DOC.read_text(encoding="utf-8")
+    assert "## 10 Private input contract v1 (`private/1.10`)" in DOC.read_text(encoding="utf-8")
     for phase in ("A7", "A8", "A9", "A10"):
         assert phase in DOC.read_text(encoding="utf-8").split("## 11 Integration points", 1)[1].split("## 12", 1)[0]
 
@@ -159,7 +159,7 @@ def test_trade_terms_fx_rules() -> None:
     assert codes(near, {**near, "leg_id": "far", "side": "sell"}) == []
     assert codes(near, near) == [("error", "duplicate_key")]
     assert codes(fwd(product_kind="fx_swap")) == [("error", "missing_required")]
-    assert codes(fwd(product_kind="cds")) == [("error", "bad_value")]  # a later minor
+    assert codes(fwd(product_kind="unknown")) == [("error", "bad_value")]  # a product outside the contract
     assert codes(fwd(side="pay")) == [("error", "bad_value")]  # a swap leg's side, not an fx one
 
 
@@ -181,7 +181,7 @@ def test_trade_terms_swaps_repo_and_htm_purchases_1_4() -> None:
            if k != "fixed_rate_pct"}
     norm, errs, _ = validate_row("trade_terms", leg(payment_frequency="12M", day_count="ACT/ACT"))
     assert errs == [] and norm["ccy"] == "RUB" and norm["notional_ccy"] == "1000000000"
-    for bad in ({"payment_frequency": "quarterly"}, {"payment_frequency": "0M"}, {"day_count": "ACT/365F"},
+    for bad in ({"payment_frequency": "quarterly"}, {"payment_frequency": "0M"}, {"day_count": "ACT/364"},
                 {"notional_exchange": "both"}, {"side": "short"}):
         assert [e.code for e in validate_row("trade_terms", leg(**bad))[1]] == ["bad_value"], bad
     assert codes(leg(), flt) == []

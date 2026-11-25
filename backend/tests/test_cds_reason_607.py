@@ -1,8 +1,8 @@
-"""TDM#607: a swap core does not value from terms (a CDS, a TRS) that is not valued says why in words of its own, not
-«своп ждёт условий сделки»: no value in the positions report; the value there but no CBR rate of its currency; the
-report's value off in the adapter (no derivative row of the report has one); a run made before 0.2.19 (the value is in
-the row but was not taken). Only IRS and CCS «wait for the terms». A CDS in USD with its value in the row is valued at
-the CBR rate up to the C03 data. Synthetic rows on the golden market of test_positions_v1."""
+"""TDM#607 and #614: diagnostics for unvalued swaps and CDS.
+
+A current CDS without terms is shown in coverage and C03 with ``cds_no_data`` and an empty MV, even if the report
+gives NPV in the row's currency or in RUB. TRS and historic CDS runs retain the report-value diagnostics of #607.
+Synthetic rows on the golden market of test_positions_v1."""
 
 from __future__ import annotations
 
@@ -57,16 +57,16 @@ def published(ctx, store_url):  # noqa: F811 - the module fixture
         yield con, con.execute("SELECT * FROM run WHERE run_id = %s", (rid,)).fetchone()
 
 
-def test_each_reason_of_a_swap_without_terms():
+def test_report_value_reasons_for_trs():
     c = coverage.cause
-    assert c("no_reported_value", "CDS", None, None)[0] == "report_no_value"
+    assert c("no_reported_value", "TRS", None, None)[0] == "report_no_value"
     assert c("no_reported_value", "TRS", None, None, report_value_on=False)[0] == "report_value_off"
-    assert c("no_reported_value", "CDS", None, None, report_value=True)[0] == "run_before_report_value"
-    assert c("no_fx_rate", "CDS", None, None)[0] == "report_value_no_rate"
+    assert c("no_reported_value", "TRS", None, None, report_value=True)[0] == "run_before_report_value"
+    assert c("no_fx_rate", "TRS", None, None)[0] == "report_value_no_rate"
     for kind in ("IRS", "CCS"):  # core values them from their terms: they do wait for them
         assert c("no_reported_value", kind, None, None)[0] == "swap_terms"
     assert c("no_fx_rate", "OTC", None, None)[0] == "no_fx_rate"  # another kind: as before
-    why = {k: coverage.explain(f"{code}: x", "CDS", None, None, report_value=v, report_value_on=on)
+    why = {k: coverage.explain(f"{code}: x", "TRS", None, None, report_value=v, report_value_on=on)
            for k, code, v, on in (("none", "no_reported_value", False, True), ("off", "no_reported_value", False, False),
                                   ("old", "no_reported_value", True, True), ("rate", "no_fx_rate", True, True))}
     assert why["none"]["why"].startswith("в отчёте позиций нет стоимости (NPV)")
@@ -76,29 +76,26 @@ def test_each_reason_of_a_swap_without_terms():
     assert all("условий сделки (trade_terms)" not in w["why"] for w in why.values())
 
 
-def test_the_run_names_the_reason_and_values_the_usd_cds(published):
+def test_the_run_shows_cds_without_terms_with_empty_mv(published):
     con, r = published
     u = coverage.unvalued(con, r, futures_by_ticker=False)
     g = {x["key"]: x for x in u["groups"]}
-    assert g["report_no_value|CDS"]["ids"] == ["D|CDS-NONE"]
-    assert g["report_value_no_rate|CDS"]["ids"] == ["D|CDS-ZWG"]
+    cds_ids = {"D|CDS-USD", "D|CDS-RUB", "D|CDS-NONE", "D|CDS-ZWG", "E|CDS-OFF"}
+    assert {k for k, v in g.items() if v["kind"] == "CDS"} == {"cds_no_data|CDS"}
+    assert set(g["cds_no_data|CDS"]["ids"]) == cds_ids
     assert g["swap_terms|IRS"]["ids"] == ["D|IRS"]
-    assert not any(k.startswith("swap_terms|CDS") for k in g)
-    # the book whose report gives no derivative a value: the report value looks off in the adapter for it
-    assert g["report_value_off|CDS"]["ids"] == ["E|CDS-OFF"]
     assert coverage.report_value_by_book(con, r["position_set_ids"]) == {"D": True, "E": False}
     assert coverage.report_value_by_book(con, []) == {}
-    # the C03 data: the USD CDS at its value x the CBR rate, the RUB one at its mv_rub, the reason of the others
     data = concepts_run.assemble(con, r)
     pos = {p["id"]: p for p in data["positions"]}
-    usd = pos["D|CDS-USD"]
-    assert not usd.get("notValued") and usd["extra"]["reported_ccy"]["ccy"] == "USD"
-    assert usd["mvRub"] == pytest.approx(-125_000 * usd["extra"]["reported_ccy"]["rate"])
-    assert pos["D|CDS-RUB"]["mvRub"] == pytest.approx(2_000)
-    assert pos["D|CDS-NONE"]["extra"]["why"]["key"] == "report_no_value"
-    assert pos["D|CDS-ZWG"]["extra"]["why"]["key"] == "report_value_no_rate"
+    for pid in cds_ids:
+        p = pos[pid]
+        assert p["notValued"] and p["mvRub"] is None
+        why = p["extra"]["why"]
+        assert why["key"] == "cds_no_data" and why["short"] == "нет данных"
+        assert "нет условий сделки" in why["detail"]
+    assert "нет курса ZWG/RUB" in pos["D|CDS-ZWG"]["extra"]["why"]["detail"]
     assert pos["D|IRS"]["extra"]["why"]["key"] == "swap_terms"
-    assert pos["E|CDS-OFF"]["extra"]["why"]["key"] == "report_value_off"
 
 
 def test_a_run_before_0_2_19_says_so(published, ctx):  # noqa: F811

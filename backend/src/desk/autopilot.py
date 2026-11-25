@@ -163,7 +163,7 @@ import psycopg
 from . import backfill, logic_version, store, trades
 from .backfill import late_why, same_logic
 from .inbox.timesem import MSK
-from .marketdata import cache, history, hubhistory, static_facts
+from .marketdata import cache, history, hubhistory, manual_cds, static_facts
 from .marketdata.adapter import StaticView
 from .marketdata.bundle import SnapshotDir, SnapshotError, previous_close, previous_market
 from .marketdata.hub import HubClient, HubError, HubUnavailable
@@ -1284,7 +1284,7 @@ class Autopilot:
                 deferred.append(d)
                 continue
             sig = (tuple(ids), snap, prev, logic, inputs_hash, store.dataset_set_ids(con, date.fromisoformat(d)),
-                   store.reference_rev_ids(con))
+                   store.reference_rev_ids(con), manual_cds.current_revisions(con, run.get("manual_cds") if run else None))
             if self._failed_before(d, sig, store.slice_label(d, "eod_final")):
                 self._eod_tried.add(d)  # not the backfill's either this cycle (#23)
                 notes.append(f"{d} {self._skip_why(d)}")
@@ -1390,7 +1390,7 @@ class Autopilot:
         rtype = "INTRADAY" if cut == "intraday" else "EOD"
         last = con.execute(
             "SELECT run_id, market_snapshot_id, cut_ts, position_set_ids, prev_market_snapshot_id, private_inputs_hash,"
-            " positions_known_at, completed_at"
+            " positions_known_at, completed_at, lineage->'manual_cds'"
             " FROM run WHERE business_date = %s"
             " AND run_type = %s AND cut_type = %s AND status = 'complete' ORDER BY run_id DESC LIMIT 1",
             (today, rtype, cut)).fetchone()
@@ -1435,7 +1435,8 @@ class Autopilot:
             deferred = self._rerun_wait(settings, last[7])
             if not deferred:
                 target = (last[1], "private inputs changed")
-        if target is None and last is not None and (late := late_why(con, today, {"positions_known_at": last[6]})):
+        if target is None and last is not None and (late := late_why(
+                con, today, {"positions_known_at": last[6], "manual_cds": last[8]})):
             # an OCP report or balances in force today recorded after the run (a replay after the owner changed the
             # adapter's settings, a report that came late): the same cut again, so the OCP follows (TDM#554)
             target = (last[1], late)
@@ -1447,7 +1448,8 @@ class Autopilot:
                     "up_to_date"
             return "skipped", f"no {cut} cut of {today} on the hub yet ({when})", "no_cut_yet"
         sid, why = target
-        sig = (cut, sid, tuple(ids), prev_id, logic_version(), inputs_hash, store.dataset_set_ids(con, today))
+        sig = (cut, sid, tuple(ids), prev_id, logic_version(), inputs_hash, store.dataset_set_ids(con, today),
+               manual_cds.current_revisions(con, last[8] if last else None))
         label = store.slice_label(today, cut, row.get("cut_ts") if row and sid == row["snapshot_id"] else last[2])
         if self._failed_before(f"{cut} {today}", sig, label):
             return "skipped", f"{cut} {sid[:12]} {self._skip_why(f'{cut} {today}')}", "failed_before"
@@ -1529,7 +1531,7 @@ class Autopilot:
         snap = sd.market_id(*close)
         last = con.execute(
             "SELECT run_id, market_snapshot_id, position_set_ids, lineage->>'logic_version', private_inputs_hash,"
-            " positions_known_at"
+            " positions_known_at, lineage->'manual_cds'"
             " FROM run WHERE business_date = %s AND run_type = 'INTRADAY' AND cut_type = 'prev_close'"
             " AND status = 'complete' ORDER BY run_id DESC LIMIT 1", (today,)).fetchone()
         logic = logic_version()
@@ -1538,14 +1540,15 @@ class Autopilot:
                else "close changed" if last[1] != snap
                else "private inputs changed" if last[4] != inputs_hash  # trade terms in force today (#547)
                else "program updated" if not same_logic(last[3], logic)
-               else late_why(con, today, {"positions_known_at": last[5]}))
+               else late_why(con, today, {"positions_known_at": last[5], "manual_cds": last[6]}))
         label = store.slice_label(today, "prev_close", None, None, {"date": close[0], "cut_type": close[1]})
         if why is None:
             return "ok", f"up to date: run {last[0]} on {label}", "up_to_date"
         if self._inbox_waiting and self._sync_later:  # as the eod step (R22): not once per revision of the backlog
             return "skipped", (f"{label}: after the inbox backlog ({self._inbox_waiting} files wait for a calendar or "
                                f"the adapter, {self._sync_later} hub dates next cycle)"), "inbox_backlog"
-        sig = (snap, tuple(ids), logic, inputs_hash, store.dataset_set_ids(con, today))
+        sig = (snap, tuple(ids), logic, inputs_hash, store.dataset_set_ids(con, today),
+               manual_cds.current_revisions(con, last[6] if last else None))
         if self._failed_before(f"prev_close {today}", sig, label):
             return "skipped", f"{label} {self._skip_why(f'prev_close {today}')}", "failed_before"
         self._progress("morning", 0, 1, label)

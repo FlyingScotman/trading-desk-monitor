@@ -23,7 +23,7 @@ OLD, NEW = "0.2.25-20261111-abcdef0", "0.2.25-20261111-abcdef0-dirty202611111200
 
 
 def make_zip(path: Path, version: str, *, mirror: bool = True, wheels=("desk_backend-0.2.25-py3-none-any.whl",
-                                                                       "rub_fixed_income_core-0.45.0-py3-none-any.whl")) -> Path:
+                                                                       "rub_fixed_income_core-0.46.0-py3-none-any.whl")) -> Path:
     with zipfile.ZipFile(path, "w") as z:
         z.writestr("DeskMonitor/VERSION", version + "\n")
         z.writestr("DeskMonitor/app/deskctl.py", "")
