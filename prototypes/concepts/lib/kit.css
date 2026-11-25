@@ -108,6 +108,10 @@ td.n.k-accp::after { content: ')'; visibility: hidden; } .mut { color: var(--fg-
 .k-kb { border-collapse: collapse; font-variant-numeric: tabular-nums; font-size: 12px; font-weight: 500; line-height: 1.35; margin-top: 2px; }
 .k-kb td { padding: 0; white-space: nowrap; text-align: right; }
 .k-kb td.c { text-align: left; padding-right: 10px; font-weight: 600; color: var(--fg-2); }
+.k-kpi[data-net-carry] { padding-inline: 8px; }
+.k-kpi[data-net-carry] .k-kb, .k-kpi[data-net-carry] .k-kb tbody { display: block; }
+.k-kpi[data-net-carry] .k-kb tr { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 4px; }
+.k-kpi[data-net-carry] .k-kb td.c { padding-right: 0; overflow: hidden; text-overflow: ellipsis; }
 
 /* ---------- кликабельные цифры (разбор вклада) ---------- */
 .dr { cursor: pointer; border-bottom: 1px dotted var(--fg-3); }

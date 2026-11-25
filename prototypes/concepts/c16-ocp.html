@@ -11,6 +11,7 @@
 .c16-sum .k-kpi.tot { border-color: var(--accent); }
 .c16-sum .k-kpi .l .c { display: inline-block; width: 8px; height: 8px; border-radius: 2px; margin-right: 6px; vertical-align: 0; }
 .c16-chart { height: 300px; }
+.c16-chart-tools { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
 .c16-badge { display: inline-block; padding: 1px 9px; border-radius: 999px; font-size: 12px; font-weight: 600; border: 1px solid var(--warn); color: var(--warn); background: color-mix(in srgb, var(--warn) 12%, transparent); white-space: nowrap; margin-left: 8px; }
 .c16-msg { padding: 24px; text-align: center; color: var(--fg-2); }
 .c16-scope { display: flex; flex-wrap: wrap; gap: 6px 8px; align-items: center; margin-bottom: 10px; font-size: 12px; }
@@ -198,7 +199,6 @@
     (d.lines || []).forEach(x => own(x).forEach(b => { const m = K.ocpBook(b, meta); if ((!EN || m.entity === EN) && (!TY || m.type === TY)) day.add(b); }));
     const lost = [...new Set((d.lines || []).filter(x => !x.book && !(x.books || []).length && (!EN || x.entity === EN) && !sc.lines.includes(x)).map(x => x.entity))];
     const by = {}, rows = new Map();
-    let withDer = false;
     sc.lines.forEach(x => {
       if (x.ccy === 'RUB' || x.amount == null) return;
       by[x.ccy] = (by[x.ccy] || 0) + x.amount;
@@ -211,15 +211,53 @@
       if (d.basis === 'report_base_plus_day') {
         if (x.baseDate) { if (x.baseOlder) r.valid = x.baseDate; else r.base = x.baseDate; }
         if (x.baseKind === 'book_absent') r.absent = true;
-        if (x.baseKind === 'with_derivatives') { r.withDer = true; withDer = true; }  // TDM#567 (D24): отчёт ещё с деривативами, PV не добавлен
+        if (x.baseKind === 'with_derivatives') r.withDer = true;
       } else if (x.validDate && x.validDate < d.date) r.valid = x.validDate;
       rows.set(k, r);
     });
-    return { by, rows: [...rows.values()], withDer, notes: sc.notes, partial: !!sc.partial, ccys: Object.keys(by).sort(ccyOrder),
+    return { by, rows: [...rows.values()], lines: sc.lines, notes: sc.notes, partial: !!sc.partial, ccys: Object.keys(by).sort(ccyOrder),
       books: { day: day.size, in: [...day].filter(b => got.has(b)).length }, lost };
   }
-  // подпись методики дня: по basis report_base_plus_day — только если в срезе есть строка с отчётом ещё с деривативами
-  const methodOf = (d, T) => d && d.methodNote && (d.basis !== 'report_base_plus_day' || (T && T.withDer)) ? d.methodNote : null;
+  const methodIssue = x => x.baseKind === 'with_derivatives' ||
+    [x.fallback, x.noPv, x.partialPv].some(kinds => kinds && kinds.length);
+  const methodOf = (d, lines) => d.methodNote && (d.basis !== 'report_base_plus_day' || lines.some(methodIssue)) ? d.methodNote : null;
+  function replayLinks(days, slices) {
+    if (!server) return [];
+    const bySource = new Map();
+    days.forEach((d, i) => {
+      if (!slices[i]) return;
+      const current = d.basis === 'report_base_plus_day';
+      for (const x of slices[i].lines) {
+        if (x.source !== 'report' ||
+            (current ? x.baseKind !== 'with_derivatives' : d.basis !== 'report_plus_outside')) continue;
+        const date = current ? x.baseDate : x.validDate;
+        if (!ISO.test(date || '')) continue;
+        const source = (d.reportSources || {})[x.setId] || '';
+        if (!bySource.has(source)) bySource.set(source, new Set());
+        bySource.get(source).add(date);
+      }
+    });
+    const ranges = [];
+    for (const [source, dates] of bySource) {
+      let range;
+      for (const date of [...dates].sort()) {
+        if (!range || (Date.parse(date) - Date.parse(range.from)) / 86400000 >= H.replayMaxDays) {
+          range = { source, from: date, to: date };
+          ranges.push(range);
+        } else range.to = date;
+      }
+    }
+    return ranges.map(({ source, from, to }) => {
+      const q = new URLSearchParams({ replay: 'ocp', from, to });
+      if (source) q.set('source', source);
+      const a = h('a', 'k-btn');
+      a.href = '../settings.html?' + q + '#adapter/folders';
+      const label = [source, from === to ? f.date(from) : f.date(from) + ' — ' + f.date(to)].filter(Boolean).join(' · ');
+      a.title = label + '. Карточка доступна с этого компьютера или администратору.';
+      a.textContent = 'Перечитать отчёты за эти дни' + (ranges.length > 1 ? ' (' + label + ')' : '');
+      return a;
+    });
+  }
   const usable = d => !!(d && d.basis && !NO_OCP[d.state]);
   const noOcp = d => 'ОВП нет: ' + (NO_OCP[d.state] || 'прогон до публикуемой ОВП');
   const portName = v => v === '—' ? 'без портфеля' : v;
@@ -259,6 +297,8 @@
 
   function panel(title) { const p = h('div', 'k-panel'); p.innerHTML = '<div class="hd"><h3>' + title + '</h3><span class="sp"></span><span class="m"></span></div><div class="bd"></div>'; return p; }
   function msg(t) { H = null; if (chart) { chart.dispose(); chart = null; } view.innerHTML = '<div class="k-panel"><div class="c16-msg">' + t + '</div></div>'; }
+  const errorBody = r => r.json().catch(() => null);
+  const runGone = (r, j) => r.status === 404 && M.isRunGone(j);
 
   // нет отчёта ОВП (no_report): почему — по журналу входящих сейчас (TDM#445; lib/inbox-why.js над
   // ../api/v1/inbox/datasets/ocp?on=<дата прогона>); ответ помнится на дату: перерисовка его не спрашивает снова
@@ -286,11 +326,12 @@
     why = null;
     [DAYS, MISS].forEach(o => Object.keys(o).forEach(k => delete o[k]));
     if (!server) { H = DEMO(); render(); return; }
-    fetch('../api/v1/history/ocp' + (M.run.id != null ? '?run_id=' + encodeURIComponent(M.run.id) : ''), { cache: 'no-store' }).then(r => {
+    fetch('../api/v1/history/ocp' + (M.run.id != null ? '?run_id=' + encodeURIComponent(M.run.id) : ''), { cache: 'no-store' }).then(async r => {
       if (r.status === 401 || r.status === 403) throw Object.assign(new Error('forbidden'), { forbidden: true });
+      if (r.status === 404 && runGone(r, await errorBody(r))) throw Object.assign(new Error(M.RUN_GONE), { gone: true });
       if (!r.ok) throw new Error(r.status + ' ' + r.statusText);
       return r.json();
-    }).then(x => { H = x; render(); }).catch(e => e.forbidden ? msg('Нужно войти в монитор.') : msg('Не удалось загрузить ОВП прогона #' + esc(M.run.id) + ': ' + esc(e.message)));
+    }).then(x => { H = x; render(); }).catch(e => msg(e.gone ? esc(M.RUN_GONE) : e.forbidden ? 'Нужно войти в монитор.' : 'Не удалось загрузить ОВП прогона #' + esc(M.run.id) + ': ' + esc(e.message)));
   }
 
   // ---------- дата таблицы (TDM#767) ----------
@@ -314,14 +355,18 @@
     if (DAYS[date]) return DAYS[date];
     if (!server) { const x = (H.days || []).find(z => z.date === date); return (DAYS[date] = Promise.resolve(x ? { doc: DEMO_DAYDOC(x) } : { none: true, err: NO_RUN })); }
     const url = '../api/v1/history/ocp/day?date=' + encodeURIComponent(date) + (M.run.id != null ? '&run_id=' + encodeURIComponent(M.run.id) : '');
-    return (DAYS[date] = fetch(url, { cache: 'no-store' }).then(r => r.ok ? r.json().then(doc => ({ doc })) : r.text().then(t => {
-      let j = null; try { j = JSON.parse(t); } catch (_) { /* не JSON */ }
-      return { none: r.status === 404 && !!j && !!j.details && j.details.reason === 'no_run_on_date', err: 'сервер ответил ' + r.status + (r.statusText ? ' ' + r.statusText : '') + (j && j.message ? ': ' + j.message : '') + (j && j.request_id ? '; номер запроса ' + j.request_id : '') };
-    }), e => ({ err: 'запрос не дошёл до сервера: ' + e.message })).then(x => { if (x.err && !x.none) delete DAYS[date]; return x; }));
+    return (DAYS[date] = fetch(url, { cache: 'no-store' }).then(async r => {
+      if (r.ok) return { doc: await r.json() };
+      const j = await errorBody(r);
+      if (runGone(r, j)) return { gone: true, err: M.RUN_GONE };
+      return { none: r.status === 404 && j?.details?.reason === 'no_run_on_date', err: 'сервер ответил ' + r.status + (r.statusText ? ' ' + r.statusText : '') + (j && j.message ? ': ' + j.message : '') + (j && j.request_id ? '; номер запроса ' + j.request_id : '') };
+    }, e => ({ err: 'запрос не дошёл до сервера: ' + e.message })).then(x => { if (x.err && !x.none && !x.gone) delete DAYS[date]; return x; }));
   }
   // день вне периода ответа — в ответ (дни по порядку; книги, которых в ответе нет, — в справочник; свои книги дня — у дня)
   function loadTableDay(date) {
     return dayDoc(date).then(x => {
+      if (!H) return;
+      if (x.gone) { msg(esc(M.RUN_GONE)); return; }
       if (x.doc && !(H.days || []).some(z => z.date === date)) {
         const d = Object.assign({}, x.doc);
         H.days = (H.days || []).concat([d]).sort((a, z) => a.date < z.date ? -1 : a.date > z.date ? 1 : 0);
@@ -385,7 +430,7 @@
     const wrap = h('div', 'k-grid');
 
     // итог: дата, общая ОВП в USD, валюты
-    const sp = panel('ОВП на ' + f.dshort(d.date) + (ON && d.runId != null ? '<span class="c16-ph" data-c16-run title="прогон, из которого таблица и разбор этой даты">' + esc(runText(d)) + '</span>' : '') + (d.state === 'no_report' ? '<span class="c16-badge" title="ОВП из позиций">отчёта ОВП нет</span>' : '') + (ok && methodOf(d, T) ? '<span class="c16-badge" style="color:var(--warn)" data-c16-method-day title="' + esc(d.methodNote) + '">' + esc(d.methodNote.split(':')[0]) + '</span>' : ''));
+    const sp = panel('ОВП на ' + f.dshort(d.date) + (ON && d.runId != null ? '<span class="c16-ph" data-c16-run title="прогон, из которого таблица и разбор этой даты">' + esc(runText(d)) + '</span>' : '') + (d.state === 'no_report' ? '<span class="c16-badge" title="ОВП из позиций">отчёта ОВП нет</span>' : '') + (ok && methodOf(d, T.lines) ? '<span class="c16-badge" style="color:var(--warn)" data-c16-method-day title="' + esc(d.methodNote) + '">' + esc(d.methodNote.split(':')[0]) + '</span>' : ''));
     const m = sp.querySelector('.m'); m.style.cssText = 'display:inline-flex;gap:6px;flex-wrap:wrap;align-items:center';
     const nt = h('span'), u = h('span'), r = h('span'); m.append(nt, u, r);
     // часть отчёта по юрлицу не вошла из-за выбора книг — пометка
@@ -445,7 +490,9 @@
     // по дням: столбцы по валютам (USD-эквивалент), линия — общая ОВП по валютам с курсом (без курса — названы в
     // подсказке, как в итоге; TDM#534); день без публикуемой ОВП — пусто, причина — в подсказке
     const hp = panel('По дням');
-    K.seg(hp.querySelector('.m'), PERIODS, S.period, v => { S.period = v; render(); });
+    const chartTools = hp.querySelector('.m');
+    chartTools.classList.add('c16-chart-tools');
+    K.seg(chartTools, PERIODS, S.period, v => { S.period = v; render(); });
     hp.querySelector('.bd').innerHTML = '<div class="c16-chart"></div>';
     wrap.appendChild(hp);
     view.appendChild(wrap);
@@ -465,10 +512,15 @@
       const no = sl[i].ccys.filter((c, k) => usdDay[i][k] == null);
       return no.length ? 'Общая — без ' + no.join(', ') + ': курса нет' : '';
     });
-    // TDM#567 (D11, D24): день не по текущей методике (подпись сервера, ocp_line.method_note) — звёздочка на оси,
-    // бледные столбцы и строка в подсказке; пересчёта истории нет
-    const meth = D.map((x, i) => usable(x) ? methodOf(x, sl[i]) : null);
-    if (meth.some(Boolean)) hp.querySelector('.m').insertAdjacentHTML('afterbegin', '<span class="mut3" data-c16-method-legend title="' + esc([...new Set(meth.filter(Boolean))].join('; ')) + '">* бледные столбцы — день не по текущей методике</span> ');
+    // Причины даёт сервер. В перечитывание входят даты файлов с деривативами в базе.
+    const meth = D.map((x, i) => sl[i] ? methodOf(x, sl[i].lines) : null);
+    if (meth.some(Boolean)) {
+      const legend = h('span', 'mut3');
+      legend.setAttribute('data-c16-method-legend', '');
+      legend.title = [...new Set(meth.filter(Boolean))].join('; ');
+      legend.textContent = '* бледные столбцы — день не по текущей методике или без полного PV';
+      chartTools.prepend(legend, ...replayLinks(D, sl));
+    }
     const pale = (v, i, col) => meth[i] && v != null ? { value: v, itemStyle: { color: col, opacity: 0.45 } } : v;
     const css = K.css;
     const selI = ON ? D.findIndex(x => x.date === ON) : -1;  // выбранная дата на графике — пунктир (TDM#767)
@@ -515,15 +567,14 @@
     if (!server) return (RUNS[key] = Promise.resolve(DEMO_OCP(day)));
     if (id == null) return Promise.reject(new Error('у дня нет прогона'));
     const url = '../api/v1/runs/' + encodeURIComponent(id) + '/ocp';
-    return (RUNS[key] = fetch(url, { cache: 'no-store' }).then(r => {
+    return (RUNS[key] = fetch(url, { cache: 'no-store' }).then(async r => {
       if (r.ok) return r.json();
       // какой запрос, код ответа и что сказал сервер (номер запроса — тот же, что в журнале монитора)
-      return r.text().then(t => {
-        let j = null; try { j = JSON.parse(t); } catch (_) { /* не JSON */ }
-        throw new Error('сервер ответил ' + r.status + (r.statusText ? ' ' + r.statusText : '') + ' на запрос блока ОВП прогона #' + id +
-          ' (GET ' + url.replace('../', '/') + ')' + (j && j.message ? ': ' + j.message : '') +
-          (j && j.request_id ? '; номер запроса ' + j.request_id + ' — по нему ошибка найдётся в журнале монитора' : ''));
-      });
+      const j = await errorBody(r);
+      if (runGone(r, j)) throw Object.assign(new Error(M.RUN_GONE), { gone: true });
+      throw new Error('сервер ответил ' + r.status + (r.statusText ? ' ' + r.statusText : '') + ' на запрос блока ОВП прогона #' + id +
+        ' (GET ' + url.replace('../', '/') + ')' + (j && j.message ? ': ' + j.message : '') +
+        (j && j.request_id ? '; номер запроса ' + j.request_id + ' — по нему ошибка найдётся в журнале монитора' : ''));
     }, e => { throw new Error('запрос блока ОВП прогона #' + id + ' не дошёл до сервера: ' + e.message); })
       .catch(e => { delete RUNS[key]; throw e; }));
   }
@@ -713,6 +764,7 @@
       const out = o.bd.querySelector('[data-c16-dbody]');
       Promise.all([runOcp(day), dayDoc(day.date)]).then(([J, X]) => {
         if (on !== day.date && days.find(x => x.date === on)) return;  // уже другой день
+        if (X.gone) { out.innerHTML = '<div class="k-empty">' + esc(M.RUN_GONE) + '</div>'; return; }
         COMP = Object.fromEntries((J.components || []).map(c => [c.key, c.name]));
         ORG = J.origins || []; CURDAY = day;
         PARTN = Object.fromEntries((J.parts || []).map(c => [c.key, c.name]));
@@ -722,8 +774,7 @@
         // разбор строки из прогона даты (TDM#767): что сохранено, чего нет; день не ответил — так и сказано, разбор остаётся
         const bdOf = x => { const z = X.doc && (X.doc.lines || []).find(w => w.ccy === x.ccy && rowKey(w.book, w.entity, w.books) === rowKey(x.book_id, x.entity, x.books)); return z && z.breakdown || null; };
         const nocheck = X.doc ? '' : '<div class="k-note mut" data-c16-nocheck>Проверка полноты разбора по дню не загрузилась (' + esc(X.err || '—') + '): показано то, что отдал прогон.</div>';
-        // день не по текущей методике: сервер называет причину; у дня «база + день» — только если в строках отчёт ещё с деривативами
-        const oldM = day.methodNote && (day.basis !== 'report_base_plus_day' || lines.some(x => x.base_kind === 'with_derivatives'));
+        const oldM = methodOf(day, (day.lines || []).filter(x => rowKey(x.book, x.entity, x.books) === key && (!cur || x.ccy === cur)));
         // TDM#806: у «отчёта ещё с деривативами» — что это значит и чем исправить (надписи — settings.html, desk-replay.js)
         // дата отчёта, от которого взята база (она раньше даты разбора, если отчёт не за прошлый рабочий день)
         const wd = [...new Set(lines.filter(x => x.base_kind === 'with_derivatives' && x.base_date).map(x => x.base_date))].sort();
@@ -735,7 +786,7 @@
         const meth = (oldM ? '<div class="k-note warn" data-c16-method-drill>' + esc(day.methodNote) + '</div>' : '') + rereadM;
         out.innerHTML = left + nocheck + meth + (lines.length ? lines.map(x => lineHtml(x, cellOf(x.ccy), bdOf(x))).join('') : '<div class="k-empty">В этот день у строки нет ОВП' + (cur ? ' в ' + esc(cur) : '') + '</div>');
         K.tableToolsAll(out);
-      }, e => { out.innerHTML = '<div class="k-empty">Разбор не загрузился: ' + esc(e.message) + '</div>'; });
+      }).catch(e => { out.innerHTML = '<div class="k-empty">' + esc(e.gone ? M.RUN_GONE : 'Разбор не загрузился: ' + e.message) + '</div>'; });
     };
     draw();
     return o;
