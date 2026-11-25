@@ -1,8 +1,8 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "private/1.4/trade_terms",
+  "$id": "private/1.10/trade_terms",
   "title": "trade_terms row",
-  "description": "Private input contract v1 (docs/architecture/08_PRIVATE_ADAPTER_INTERFACE.md §10; FX since 1.2, swaps, REPO and HTM purchases since 1.4). One row as the adapter emits it. An optional field may be absent or null (the same thing); the empty string is invalid everywhere. Raw firm values go in x_* keys; _src is the row's location in the report, without sheet names.",
+  "description": "Private input contract v1 (docs/architecture/08_PRIVATE_ADAPTER_INTERFACE.md §10; FX since 1.2, swaps, REPO and HTM purchases since 1.4, CDS since 1.10). One row as the adapter emits it. An optional field may be absent or null (the same thing); the empty string is invalid everywhere. Raw firm values go in x_* keys; _src is the row's location in the report, without sheet names.",
   "type": "object",
   "required": [
     "_src",
@@ -46,7 +46,8 @@
         "ois",
         "ccs",
         "repo",
-        "bond_purchase"
+        "bond_purchase",
+        "cds"
       ]
     },
     "source_product": {
@@ -71,7 +72,9 @@
         "pay",
         "receive",
         "repo",
-        "reverse_repo"
+        "reverse_repo",
+        "buy_protection",
+        "sell_protection"
       ]
     },
     "notional_base": {
@@ -125,8 +128,10 @@
     "day_count": {
       "enum": [
         "ACT/365",
+        "ACT/365F",
         "ACT/360",
         "ACT/ACT",
+        "ACT/ACT-ISDA",
         "30/360"
       ]
     },
@@ -178,6 +183,18 @@
     },
     "pv_rub": {
       "$ref": "#/$defs/amount"
+    },
+    "reference_entity": {
+      "$ref": "#/$defs/str",
+      "description": "CDS reference name, as in positions and the manual CDS curve"
+    },
+    "coupon_bp": {
+      "$ref": "#/$defs/amount",
+      "description": "CDS running premium in basis points per year"
+    },
+    "pay_accrued_on_default": {
+      "type": "boolean",
+      "description": "Whether accrued CDS premium is paid on default"
     }
   },
   "patternProperties": {

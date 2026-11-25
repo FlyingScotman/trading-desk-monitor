@@ -24,7 +24,7 @@ import psycopg
 from . import bookfile, store
 from . import trades as trades_mod
 from .curves import fx as fxcurves
-from .marketdata import fixing_history, history, reference, static_facts
+from .marketdata import fixing_history, history, manual_cds, reference, static_facts
 from .marketdata.adapter import MarketView
 from .marketdata.bundle import SnapshotDir, previous_close
 from .orchestrator import EodContext, attach_pnl, prepare, value
@@ -109,11 +109,13 @@ def stored_fixings(url: str, d: date, out: Callable[[str], None] = print) -> fix
 
 
 def attach_direct_pnl(prev_ctx: EodContext, ctx: EodContext, bp: pv1.BookPlan, inputs: PositionInputs,
-                      prev_inputs: PositionInputs) -> None:
+                      prev_inputs: PositionInputs, cds_curves: dict[str, manual_cds.Curve] | None = None
+                      ) -> pv1.BookPlan:
     """The PnL of the rows valued without a bond path (``pnl.direct``) from D-1 to D. D-1 is planned for D: its swaps and
     REPOs carry core's horizon to D, so their PnL is split into carry, rolldown and rates (``pnl.direct._rates_split``)."""
-    prev_plan = pv1.plan(prev_ctx, prev_inputs, second_order=False, horizon=ctx.business_date)
+    prev_plan = pv1.plan(prev_ctx, prev_inputs, second_order=False, horizon=ctx.business_date, cds_curves=cds_curves)
     direct_pnl.attach(prev_ctx, ctx, bp.direct, inputs, prev_plan.direct, prev_inputs.valid_dates, prev_inputs)
+    return prev_plan
 
 
 def eod_run(settings: Settings, d: str, *, snapshots: str | Path | None = None, store_url: str | None = None,
@@ -266,7 +268,9 @@ def eod_run(settings: Settings, d: str, *, snapshots: str | Path | None = None, 
                 + (f", report {src['report_date']}" if src.get("report_date") else "")
                 + f", valid {vd}" + (f", carried {age} days" if age else ""))
         carried = gate.carried(con, run_date) if gate is not None else store.carried_spreads(con, before=run_date)
-        bp = pv1.plan(ctx, inputs, second_order=not no_gamma)
+        cds_curves = {c.name_key: c for c in manual_cds.curves_on(con, ctx.business_date)}
+        bp = pv1.plan(ctx, inputs, second_order=not no_gamma, cds_curves=cds_curves)
+        cds_revs = {ctx.business_date.isoformat(): bp.cds_curve_revs} if bp.cds_curve_revs else {}
         orp = offreport.summary(bp.off_report, bp.off_report_matured, "include" if fx_options.off_report else "exclude",
                                 sum(1 for pid in bp.added if bp.direct[pid].valuation is not None))
         if fx_options.off_report:
@@ -295,7 +299,10 @@ def eod_run(settings: Settings, d: str, *, snapshots: str | Path | None = None, 
             # fx rows, the report-valued rows (otc, unmapped bonds): by the rate move and by the reports of both
             # dates (pnl.direct); the reason in run_position.no_pnl when there is none, never a bare null
             prev_inputs = store.positions_for(con, prev_ctx.business_date, books=books)
-            attach_direct_pnl(prev_ctx, ctx, bp, inputs, prev_inputs)
+            prev_cds = {c.name_key: c for c in manual_cds.curves_on(con, prev_ctx.business_date)}
+            prev_bp = attach_direct_pnl(prev_ctx, ctx, bp, inputs, prev_inputs, cds_curves=prev_cds)
+            if bp.cds_curve_revs and prev_bp.cds_curve_revs:
+                cds_revs[prev_ctx.business_date.isoformat()] = prev_bp.cds_curve_revs
             if intraday_trades and intraday_trades["applied"] and start_inputs is not None:   # start of day + trades
                 split = new_trades_pnl.attach(prev_ctx, ctx, start_inputs, bp, outcomes, intraday_trades, carried)
                 texts = {"mixed_valuation": "lots valued in different ways (core and the report): the PnL of the bond "
@@ -347,6 +354,7 @@ def eod_run(settings: Settings, d: str, *, snapshots: str | Path | None = None, 
                                                     core_results=[bp.core_result] if bp.core_result else None,
                                                     unlinked_rates=rates_left, off_report=orp,
                                                     intraday_trades=intraday_trades, second_order=not no_gamma,
+                                                    manual_cds_revs=cds_revs,
                                                     **({"business_date": run_date, "cut_type": "prev_close"}
                                                        if on_close else {}))
         if gate is not None:

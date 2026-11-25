@@ -1788,7 +1788,7 @@ export interface components {
         CdsPositionName: {
             /**
              * Name
-             * @description The reference name of the CDS rows: the report's x_issuer, else the deal's name
+             * @description The reference name from CDS terms or the positions report
              */
             name: string;
             /** Name Key */
@@ -1803,6 +1803,11 @@ export interface components {
              * @description CDS rows of the run with this name
              */
             positions: number;
+            /**
+             * Currencies
+             * @description Currencies of those CDS positions
+             */
+            currencies: string[];
             /**
              * Has Curve
              * @description A curve is in force on the date for this name
@@ -2771,7 +2776,7 @@ export interface components {
             }[];
             /**
              * Spot Future
-             * @description report_base_plus_day, TDM#693: the report's lines of a spot type with a future value date (the row's ``spot_future``, private/1.9, else the ``x_spot_future`` of an adapter 0.9.14): out — taken out of the base and replaced by the deal {value_date, pair, amount, position_id, trade_ids, days, others}, unmatched — left in the base {value_date, pair, amount, why}, df1 — deals taken at the legs' nominal, discount factor 1 {position_id, trade_ids, amount, note}
+             * @description report_base_plus_day, TDM#693: the report's lines of a spot type with a future value date (the row's ``spot_future``, private/1.9, else the ``x_spot_future`` of an adapter 0.9.14): out — taken out of the base and replaced by the deal {value_date, pair, amount, position_id, trade_ids, days, others}, unmatched — left in the base {value_date, pair, amount, why, near?, other?}, df1 — deals taken at the legs' nominal, discount factor 1 {position_id, trade_ids, amount, note}. TDM#807: unmatched ``near`` (why amount only) — the leg in the line's currency closest to the line's amount {position_id, nominal: its signed amount, source: terms (the deal's trade terms), ocp_amount (the position's nominal) or fx_delta (the position's FX delta: a spot equivalent, not a nominal)}; ``other`` — a deal's leg in another currency has the line's amount {position_id, ccy, nominal, source}; ``none`` — the book has deals traded on or before the report's date (or without a date) and the report has no such line for it {deals: the book's deals with a leg in the currency, before / after: traded on or before / after the report's date, unknown: no trade date, field: the report file has the spot_future field in some row, so the adapter gives such lines and the book has none; false: in no row, so there are none or the file was read before the adapter gave them}
              */
             spot_future?: {
                 [key: string]: unknown;
@@ -2866,10 +2871,10 @@ export interface components {
             status: "both" | "computed_only" | "computed_invalid" | "imported_only" | "neither";
             /**
              * Used
-             * @description The value the run publishes
+             * @description The value the run publishes, or none for an unvalued CDS
              * @enum {string}
              */
-            used: "computed" | "imported";
+            used: "computed" | "imported" | "none";
             /**
              * Computed Pv Rub
              * @description PV by core from the trade terms (result v3)

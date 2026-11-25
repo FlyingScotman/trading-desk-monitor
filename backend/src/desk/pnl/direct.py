@@ -65,15 +65,18 @@ from typing import TYPE_CHECKING, Any
 
 from rub_fixed_income import RISK_BUCKETS, RISK_PILLARS, roll_key_rate_curve
 
+from ..curves.fx import implied_curve_id
 from ..curves.rates import KEY_RATE_CURVE_ID, KEY_RATE_SWAP_CURVE_ID
 from ..inbox.schema import norm_ccy
 from ..marketdata.adapter import bond_currency
+from ..marketdata.manual_cds import name_key
 from ..valuation.bonds import OFZ_CURVE, RUONIA_CURVE
 from ..valuation.derivatives import FLOW_DAYS
 from ..valuation.fallback import SimplePnl, fx_rate, fx_rate_cbr
 from ..valuation.fx_cross import UNCONFIRMED, CrossRow, cross_row
-from .flash import PUBLISHED_TO_CORE, FlashCurves, NoPnl
+from .flash import PUBLISHED_TO_CORE, FlashCurves, NoPnl, _zero
 from .reasons import (
+    CDS_CORE_REST,
     CORE_FX_METHOD,
     FX_CORE_REST,
     FX_METHOD,
@@ -277,6 +280,12 @@ def _received(prev: EodContext, ctx: EodContext, pv: Any, missing: list[str] | N
     """The cash the D-1 valuation's trades paid or settled in (D-1, D]: (RUB, the foreign amounts by currency, text).
     A flow counts when core stops counting it in that window (``out_on``); a foreign amount is in RUB at the D-1 rate.
     Raises ``NoPnl`` for flows that could not be read, a cash-settled NDF, or a window longer than the flows kept."""
+    if cds := pv.extra.get("cds"):
+        h = pv.extra.get("horizon") or {}
+        if h.get("date") != ctx.business_date.isoformat():
+            raise NoPnl("received_unknown", "нет расчёта купонов CDS на дату PnL")
+        ccy, cash = cds["ccy"], h["received_ccy"]
+        return h["received_rub"], {ccy: cash} if ccy != "RUB" and cash else {}, []
     flows = pv.extra.get("flows", [])
     if flows is None:
         raise NoPnl("received_unknown", f"core's flows of {prev.business_date} could not be read")
@@ -366,7 +375,8 @@ def _rates_split(prev: EodContext, ctx: EodContext, pv: Any, total: float, fx: f
     dates cannot be read. ``memo`` keeps the curves of the two dates (built once for all the rows). ``live``: the row
     has risk on D; a row whose trades all ended has no rates part (the market's move did not touch what was gone)."""
     h = pv.extra.get("horizon")
-    if not h or h.get("date") != ctx.business_date.isoformat() or pv.fx_delta:
+    cds = pv.extra.get("cds")
+    if not h or h.get("date") != ctx.business_date.isoformat() or (pv.fx_delta and not cds):
         return None
     if abs(h["received_rub"] - received) > RECEIVED_TOL_RUB:
         return None
@@ -377,13 +387,20 @@ def _rates_split(prev: EodContext, ctx: EodContext, pv: Any, total: float, fx: f
         except (ValueError, AttributeError):
             memo["curves"] = None
     curves = memo["curves"]
-    if curves is None:
+    if curves is None and not cds:
         return None
     terms: dict[str, dict[str, float]] = {}
     moves: dict[str, dict[str, float]] = {}
     left_out: list[str] = []
     for c, bs in sorted((pv.curve_buckets or {}).items() if live else ()):
-        move = _move_of(c, h, prev, ctx, curves, memo)
+        move = (curves.zero_move_bp(pv.discount_curve_id) if cds else _move_of(c, h, prev, ctx, curves, memo)
+                ) if curves is not None else {}
+        if cds and not move and c == implied_curve_id(cds["ccy"]):
+            # FlashCurves reads built snapshot entries. FX-implied is a request there and is built in FxMarket.
+            old, new = prev.fx.curves.get(c), ctx.fx.curves.get(c)
+            if old and new:
+                move = {b: (_zero(new.curve, t) - _zero(old.curve, t)) * 10_000
+                        for b, t in zip(RISK_BUCKETS, RISK_PILLARS)}
         if keep := {b: x * move[b] for b, x in bs.items() if b in move}:
             terms[c], moves[c] = keep, {b: move[b] for b in keep}
         if any(x and b not in move for b, x in bs.items()):
@@ -392,6 +409,30 @@ def _rates_split(prev: EodContext, ctx: EodContext, pv: Any, total: float, fx: f
     carry, roll = float(h["carry_rub"]), float(h["rolldown_rub"])
     return {"carry": carry, "rolldown": roll, "rates": rates, "other": total - fx - carry - roll - rates,
             "terms": terms, "moves": moves, "left_out": left_out}
+
+
+def _cds_spread_pnl(prev: dict[str, Any], cur: dict[str, Any]) -> tuple[float, list[str]]:
+    """Linear credit PnL from prior RUB CS01 per quoted tenor and C22 moves in bp."""
+    if prev["ccy"] != cur["ccy"]:
+        return 0.0, ["изменилась валюта сделки"]
+    current = {t["trade_id"]: t for t in cur["trades"]}
+    parts: list[float] = []
+    notes: list[str] = []
+    for prior in prev["trades"]:
+        trade_id = prior["trade_id"]
+        today = current.get(trade_id, {})
+        if prior.get("settled") or today.get("settled"):
+            continue
+        if not today or name_key(prior["reference_entity"]) != name_key(today["reference_entity"]):
+            notes.append(f"для сделки {trade_id} нет сопоставимой кривой C22")
+            continue
+        p, n = prior["spreads_bp"], today["spreads_bp"]
+        if p.keys() != n.keys():
+            notes.append(f"для сделки {trade_id} изменился состав теноров C22")
+        if prior["recovery"] != today["recovery"]:
+            notes.append(f"для сделки {trade_id} изменилась доля возмещения C22")
+        parts.extend(cs01 * (n[t] - p[t]) for t, cs01 in prior["cs01_by_quote_rub"].items() if t in p and t in n)
+    return math.fsum(parts), notes
 
 
 def _core_fx(prev: EodContext, ctx: EodContext, o: Outcome, p: Outcome | None, pv_now: float | None = None,
@@ -404,6 +445,9 @@ def _core_fx(prev: EodContext, ctx: EodContext, o: Outcome, p: Outcome | None, p
     assert v is not None
     now = v.pv_rub if pv_now is None else pv_now
     pv = p.valuation if p is not None else None
+    cds = v.extra.get("cds")
+    if cds and (pv is None or not pv.extra.get("cds")):
+        raise NoPnl("valued_differently", f"нет оценки CDS по условиям сделки на {prev.business_date}")
     if pv is None or not pv.extra.get("core"):
         return _pv_carried(prev, ctx, "valued_differently", f"not valued by core from its terms on {prev.business_date}")
     missing: list[str] = []
@@ -425,6 +469,11 @@ def _core_fx(prev: EodContext, ctx: EodContext, o: Outcome, p: Outcome | None, p
             + "; fx_gross = FX delta D-1 " + ("; ".join(parts) or "0"))
     fx_assumed = assumption("fx_rate_carried", ", ".join(missing)) if missing else None
     memo = memo if memo is not None else {}
+    spread, cds_notes = _cds_spread_pnl(pv.extra["cds"], cds) if cds else (0.0, [])
+    if cds:
+        note += "; spread = CS01 D-1 × изменение котировок C22 по совпадающим тенорам"
+        if cds_notes:
+            note += "; " + "; ".join(cds_notes)
     failed = None
     try:
         split = _rates_split(prev, ctx, pv, total, fx, received, memo,
@@ -438,18 +487,26 @@ def _core_fx(prev: EodContext, ctx: EodContext, o: Outcome, p: Outcome | None, p
     if split is not None:
         left = ("; the risk on " + ", ".join(split["left_out"]) + " has no move read here: in other") \
             if split["left_out"] else ""
-        return DirectPnl(RATES_CORE_METHOD, prev.business_date, ctx.business_date, total, fx_gross=fx,
-                         carry=split["carry"], rolldown=split["rolldown"], rates=split["rates"], other=split["other"],
+        cds_rest = "; ".join(["остаток после линейной переоценки по C22", *cds_notes,
+                              *(["нет движения кривой ставок: " + ", ".join(split["left_out"])]
+                                if split["left_out"] else [])])
+        return DirectPnl(RATES_CORE_METHOD, prev.business_date, ctx.business_date, total, fx_gross=fx, spread=spread,
+                         carry=split["carry"], rolldown=split["rolldown"], rates=split["rates"],
+                         other=split["other"] - spread,
                          fx_gross_cbr=cbr if delta else None, received_rub=received,
-                         other_reason=other_reason(RATES_CORE_REST, "the second order of the move and the day's fixing "
-                                                   "against the forward" + left),
+                         other_reason=other_reason(CDS_CORE_REST if cds else RATES_CORE_REST,
+                                                   cds_rest if cds else
+                                                   "the second order of the move and the day's fixing against the forward" + left),
                          assumption=fx_assumed, rates_linear_curves=split["terms"] or None,
                          curve_moves_bp=split["moves"] or None,
                          note=f"{note}; carry and rolldown: core's horizon to {ctx.business_date} of the D-1 trades "
                               f"(the cash of the window is in the carry); rates = D-1 bucket DV01 x the curve's move{left}")
-    return DirectPnl(CORE_FX_METHOD, prev.business_date, ctx.business_date, total, fx_gross=fx, other=total - fx,
+    rest = "; ".join(["остаток после линейной переоценки по C22 и FX", *cds_notes]) if cds else (
+        "rates, points and time: not the FX delta")
+    return DirectPnl(CORE_FX_METHOD, prev.business_date, ctx.business_date, total, fx_gross=fx, spread=spread,
+                     other=total - fx - spread,
                      fx_gross_cbr=cbr if delta else None, received_rub=received,
-                     other_reason=other_reason(FX_CORE_REST, "rates, points and time: not the FX delta"
+                     other_reason=other_reason(CDS_CORE_REST if cds else FX_CORE_REST, rest
                                                + (f"; the split into carry and rates failed ({failed})" if failed else "")),
                      assumption=fx_assumed, note=note)
 

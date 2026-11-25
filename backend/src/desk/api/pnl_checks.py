@@ -57,7 +57,7 @@ LABELS = {"recon": "Сверка тождества", "unexpl": "Необъяс�
 SEV = {"crit": 0, "warn": 1, "info": 2}
 UNEXPL_GROUPS = {"exact": "остаток точного flash", "simple": "без разложения: нет потоков ядра",
                  "yield": "по доходности", "reported": "по отчёту", "fx": "FX-сделки: прочие эффекты",
-                 "rates": "свопы и РЕПО: остаток после ставок", "other": "другой метод или не указан"}
+                 "rates": "свопы, CDS и РЕПО: остаток после ставок", "other": "другой метод или не указан"}
 """``unexplainedBy`` (TDM#436): what ``other`` (and ``reported``) is, by the calculation method's group, in this order."""
 METHOD_GROUP = {EXACT_V1_METHOD: "exact", EXACT_METHOD: "exact", EXACT_FX_METHOD: "exact", SIMPLE_METHOD: "simple",
                 YIELD_METHOD: "yield", REPORTED_METHOD: "reported", FX_METHOD: "fx", CORE_FX_METHOD: "fx",

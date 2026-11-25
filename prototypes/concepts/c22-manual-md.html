@@ -124,18 +124,23 @@ table.c22-tbl { border-collapse: separate; border-spacing: 0; font-size: 12.5px;
   function rowHtml(r) {
     const ed = rt.editable, d = draftFor(r), er = errs.get(r.key) || {}, c = r.curve;
     const dirty = ed && MD.isDirty(d, c), nm = esc(r.name);
+    const ccys = r.currencies || [];
+    const ccyHint = ccys.length === 1 ? ccys[0] : ccys.length ? '—' : MD.DEFAULTS.ccy;
     const cell = (field, label, ph, cls) => ed
-      ? '<input class="k-input c22-in ' + (cls || '') + (er[field] ? ' bad' : '') + '" data-f="' + field + '" inputmode="decimal" autocomplete="off" placeholder="' + ph + '" value="' + esc(field === 'recovery' ? d.recovery : field === 'ccy' ? d.ccy : d.spreads[field]) + '" aria-label="' + nm + ', ' + label + '"' + (er[field] ? ' title="' + esc(er[field]) + '"' : '') + '>'
+      ? '<input class="k-input c22-in ' + (cls || '') + (er[field] ? ' bad' : '') + '" data-f="' + field + '" inputmode="decimal" autocomplete="off" placeholder="' + esc(ph) + '" value="' + esc(field === 'recovery' ? d.recovery : field === 'ccy' ? d.ccy : d.spreads[field]) + '" aria-label="' + nm + ', ' + label + '"' + (er[field] ? ' title="' + esc(er[field]) + '"' : '') + '>'
       : '';
     const errTxt = Object.keys(er).map(k => er[k]).filter((x, i, a) => a.indexOf(x) === i).join('; ');
     const hasCurve = !!c;
     return '<tr class="c22-row' + (dirty ? ' dirty' : '') + '" data-k="' + esc(r.key) + '">' +
       (ed ? '<td><input type="checkbox" data-sel aria-label="Выбрать ' + nm + '"' + (picked.has(r.key) ? ' checked' : '') + '></td>' : '') +
       '<td class="c22-name" data-csv="' + nm + '"><b>' + nm + '</b><div class="c22-sub">' + (hasCurve ? '<span class="c22-man" title="Кривая введена вручную (других источников пока нет)">введено вручную</span>' : '<span class="c22-none">нет кривой на эту дату</span>') +
-      (r.positions ? '<span' + (r.deals && r.deals.length ? ' title="' + esc('Сделки: ' + r.deals.join(', ')) + '"' : '') + '>CDS-позиций в прогоне: ' + r.positions + '</span>' : '') + '</div>' + (errTxt ? '<div class="c22-err" role="alert">' + esc(errTxt) + '</div>' : '') + '</td>' +
+      (r.positions ? '<span' + (r.deals && r.deals.length ? ' title="' + esc('Сделки: ' + r.deals.join(', ')) + '"' : '') + '>CDS-позиций в прогоне: ' + r.positions + '</span>' : '') +
+      (ccys.length ? '<span>Валюта позиций: ' + esc(ccys.join(', ')) + '</span>' : '') +
+      (c && ccys.some(ccy => ccy !== c.ccy) ? '<span class="c22-err">Валюта кривой подходит не всем позициям</span>' : '') +
+      '</div>' + (errTxt ? '<div class="c22-err" role="alert">' + esc(errTxt) + '</div>' : '') + '</td>' +
       T.map(t => '<td class="n' + (ed ? '' : ' c22-ro-v') + '" data-csv="' + (c && c.spreads_bp[t] != null ? c.spreads_bp[t] : '') + '">' + (ed ? cell(t, 'срок ' + t + ', б.п.', '') : val(r, t)) + '</td>').join('') +
       '<td class="n' + (ed ? '' : ' c22-ro-v') + '" data-csv="' + (c ? +(c.recovery * 100).toFixed(2) : '') + '">' + (ed ? cell('recovery', 'доля возмещения, %', '25') : (c ? MD.fmtPct(c.recovery) + ' %' : '—')) + '</td>' +
-      '<td class="' + (ed ? '' : 'c22-ro-v') + '" data-csv="' + (c ? esc(c.ccy) : '') + '">' + (ed ? cell('ccy', 'валюта', 'USD', 'ccy') : (c ? esc(c.ccy) : '—')) + '</td>' +
+      '<td class="' + (ed ? '' : 'c22-ro-v') + '" data-csv="' + (c ? esc(c.ccy) : '') + '">' + (ed ? cell('ccy', 'валюта', ccyHint, 'ccy') : (c ? esc(c.ccy) : '—')) + '</td>' +
       '<td class="c22-who" data-csv="' + (c ? esc((c.entered_on_date ? 'введена на эту дату' : 'действует с ' + date(c.valid_from)) + ', ' + c.changed_by + ', ' + K.mskTime(c.changed_at, true)) : '') + '">' + whoCell(r) + '</td>' +
       '<td class="c22-act" data-csv="">' + (ed ? '<button class="k-btn pri c22-save" data-a="save">Сохранить</button> <button class="k-btn c22-cancel" data-a="cancel">Отмена</button> ' : '') +
       (hasCurve ? '<button class="k-btn" data-a="hist" aria-expanded="' + open.has(r.key) + '" title="Все правки этого имени: кто и когда">История</button> ' : '') +
@@ -229,7 +234,11 @@ table.c22-tbl { border-collapse: separate; border-spacing: 0; font-size: 12.5px;
   }
   function save(key) {
     if (busy) return;
-    const r = rowOf(key), d = draftFor(r), res = MD.readDraft(r.name, on, d);
+    const r = rowOf(key), d = draftFor(r), ccys = r.currencies || [];
+    const ccy = d.ccy.trim() || r.curve?.ccy || (ccys.length === 1 ? ccys[0] : '');
+    const res = !ccy && ccys.length > 1
+      ? { ok: false, errors: { ccy: 'укажите валюту кривой' } }
+      : MD.readDraft(r.name, on, { ...d, ccy });
     if (!res.ok) { errs.set(key, res.errors); say('Не сохранено: ' + Object.values(res.errors)[0], 'bad'); render(); return; }
     busy = true;
     api.put(res.body).then(x => {

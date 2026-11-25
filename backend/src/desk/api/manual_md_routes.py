@@ -25,7 +25,9 @@ from typing import Annotated
 from fastapi import APIRouter, Depends, Query, Request
 from pydantic import BaseModel, Field
 
+from ..inbox.schema import norm_ccy
 from ..marketdata import manual_cds as M
+from ..valuation.derivatives import CDS_NO_DATA
 from . import auth
 from .app import ApiError, Con, ConRW
 
@@ -52,10 +54,11 @@ class CdsCurve(BaseModel):
 
 
 class CdsPositionName(BaseModel):
-    name: str = Field(description="The reference name of the CDS rows: the report's x_issuer, else the deal's name")
+    name: str = Field(description="The reference name from CDS terms or the positions report")
     name_key: str
     deals: list[str] = Field(description="The names of the deals (source_instrument_name) of these rows, up to 5")
     positions: int = Field(description="CDS rows of the run with this name")
+    currencies: list[str] = Field(description="Currencies of those CDS positions")
     has_curve: bool = Field(description="A curve is in force on the date for this name")
 
 
@@ -132,13 +135,16 @@ def _cds_names_of(con, on: Date) -> tuple[int | None, list[dict]]:
     if run is None:
         return None, []
     rows = con.execute(
-        "SELECT COALESCE(NULLIF(btrim(x->>'x_issuer'), ''), NULLIF(btrim(source_instrument_name), ''),"
-        " source_instrument_id) AS name, count(*) AS n,"
-        " array_remove(array_agg(DISTINCT NULLIF(btrim(source_instrument_name), '')), NULL) AS deals"
-        " FROM position_input WHERE set_id = ANY(%s) AND lower(x->>'x_product_group') = 'cds'"
-        " AND COALESCE(NULLIF(btrim(x->>'x_issuer'), ''), NULLIF(btrim(source_instrument_name), ''),"
-        " source_instrument_id) IS NOT NULL GROUP BY 1 ORDER BY 1", (list(run["position_set_ids"]),)).fetchall()
-    return run["run_id"], [{"name": r["name"], "positions": r["n"], "deals": r["deals"]} for r in rows]
+        "SELECT DISTINCT i.position_id, NULLIF(btrim(i.source_instrument_name), '') AS deal,"
+        " COALESCE(t->>'reference_entity', NULLIF(btrim(i.x->>'x_issuer'), ''),"
+        " NULLIF(btrim(i.source_instrument_name), ''), i.source_instrument_id) AS name,"
+        " COALESCE(p.fact #>> '{extra,cds,ccy}', i.ccy) AS ccy"
+        " FROM position_input i LEFT JOIN run_position p ON p.run_id = %s AND p.position_id = i.position_id"
+        " LEFT JOIN LATERAL jsonb_array_elements(p.fact #> '{extra,cds,trades}') t ON true"
+        " WHERE i.set_id = ANY(%s) AND (lower(i.x->>'x_product_group') = 'cds' OR t IS NOT NULL"
+        " OR p.reason LIKE %s) ORDER BY name, i.position_id",
+        (run["run_id"], list(run["position_set_ids"]), CDS_NO_DATA + ":%")).fetchall()
+    return run["run_id"], rows
 
 
 @router.get(BASE + "/curves", response_model=CdsCurveList)
@@ -148,17 +154,25 @@ def list_curves(con: Con, on: Annotated[Date, Query(alias="date", description="T
     run_id, names = _cds_names_of(con, on)
     by_key: dict[str, dict] = {}
     for n in names:  # two spellings of one name are one name
+        if not n["name"]:
+            continue
         try:
             name = M.clean_name(M.strip_format(n["name"]))  # a report's name: invisible characters dropped, not the row
         except M.CurveError:
             continue
         k = M.name_key(name)
-        e = by_key.setdefault(k, {"name": name, "name_key": k, "positions": 0, "deals": [], "has_curve": k in have})
-        e["positions"] += n["positions"]
-        e["deals"] = sorted({*e["deals"], *n["deals"]})[:5]
+        e = by_key.setdefault(k, {"name": name, "name_key": k, "ids": set(), "deals": set(), "currencies": set(),
+                                  "has_curve": k in have})
+        e["ids"].add(n["position_id"])
+        if n["deal"]:
+            e["deals"].add(n["deal"])
+        if n["ccy"]:
+            e["currencies"].add(norm_ccy(n["ccy"]))
+    positions = [{"name": e["name"], "name_key": k, "positions": len(e["ids"]), "deals": sorted(e["deals"])[:5],
+                  "currencies": sorted(e["currencies"]), "has_curve": e["has_curve"]} for k, e in sorted(by_key.items())]
     return {"date": on, "run_id": run_id, "tenors": list(M.TENORS), "default_recovery": M.DEFAULT_RECOVERY,
             "default_ccy": M.DEFAULT_CCY, "max_spread_bp": M.MAX_SPREAD_BP, "curves": [_out(c, on) for c in curves],
-            "positions": sorted(by_key.values(), key=lambda e: e["name_key"])}
+            "positions": positions}
 
 
 @router.get(BASE + "/curve", response_model=CdsCurve)

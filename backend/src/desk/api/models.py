@@ -353,7 +353,8 @@ class ParallelRow(BaseModel):
     product: str | None = Field(description="Core's product (fx_forward, fx_swap, fx_ndf, fx_cross, fx_future; "
                                 "several joined by +), else <asset_class>_other")
     status: Literal["both", "computed_only", "computed_invalid", "imported_only", "neither"]
-    used: Literal["computed", "imported"] = Field(description="The value the run publishes")
+    used: Literal["computed", "imported", "none"] = Field(description="The value the run publishes, or none for an "
+                                                          "unvalued CDS")
     computed_pv_rub: float | None = Field(description="PV by core from the trade terms (result v3)")
     imported_pv_rub: float | None = Field(description="PV the report states (mv_rub, else the trades' pv_rub)")
     diff_rub: float | None = None

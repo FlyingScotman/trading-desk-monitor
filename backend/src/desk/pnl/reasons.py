@@ -49,7 +49,7 @@ METHOD_TEXT = {
     "desk-fx-spot-v1": "по курсу: сумма × изменение курса",
     "desk-reported-v1": "по отчёту: разница отчётных стоимостей",
     "desk-fx-core-v1": "FX-сделка: изменение PV ядра, курсовая часть по FX-дельте",
-    "desk-rates-core-v1": "своп или РЕПО ядром: кэрри и сдвиг кривой по ядру, ставки линейно по риску D-1, остаток отдельно",
+    "desk-rates-core-v1": "своп, CDS или РЕПО ядром: кэрри и сдвиг кривой, ставки линейно по риску D-1",
     "desk-core-new-trade-v1": "новая сделка: PnL от условий сделки (PV при заключении принят за 0)",
 }
 CORE_FX_METHOD = "desk-fx-core-v1"
@@ -70,6 +70,7 @@ YIELD_NO_CURVE = "yield_no_curve"
 REPORTED_VALUE = "reported_value"
 FX_CORE_REST = "fx_core_rest"
 RATES_CORE_REST = "rates_core_rest"
+CDS_CORE_REST = "cds_core_rest"
 FLASH_RESIDUAL = "flash_residual"
 OTHER_REASON_TEXT = {
     NO_CURVE_ON_DATE: "нет кривой на дату",
@@ -82,6 +83,7 @@ OTHER_REASON_TEXT = {
     REPORTED_VALUE: "оценка по отчёту",
     FX_CORE_REST: "FX-сделка: прочие эффекты",
     RATES_CORE_REST: "своп или РЕПО: остаток после ставок",
+    CDS_CORE_REST: "CDS: остаток после переоценки",
     FLASH_RESIDUAL: "остаток точного flash",
 }
 """``pnl.extra.other_reason.code`` (TDM#442) -> the label of the period's split of the unexplained, in this order. Why

@@ -397,6 +397,8 @@ def assemble(con, run: dict[str, Any], days: Memo | None = None) -> dict[str, An
                         "spreadType": p.get("spread_type"), "spreadCurve": p.get("spread_curve"),
                         "quote": None})
             pos.update({k: p[f] for k, f in (("zKbdBp", "z_kbd_bp"), ("zRuoniaBp", "z_ruonia_bp")) if f in p})
+        elif p.get("instr_type") == "CDS":
+            pos["accrued"] = p.get("accrued")
         if p.get("extra") is not None:
             pos["extra"] = p["extra"]
         positions.append(pos)

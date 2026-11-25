@@ -139,12 +139,14 @@ from rub_fixed_income import (
     RUONIA_OIS_COMPOUND,
     AccountingCategory,
     AveragedIndex,
+    BusinessCalendar,
     CalendarEntry,
     CalendarRangeError,
     CompoundedIndex,
     CoreRejection,
     CurveBootstrapRequest,
     DayCount,
+    DiscountCurve,
     FixedRepoRate,
     FloatingRepoRate,
     FuturesQuote,
@@ -181,6 +183,20 @@ from rub_fixed_income import (
     xcs_cnyrub_convention,
 )
 from rub_fixed_income import __version__ as CORE_VERSION
+from rub_fixed_income.cds import (
+    AccrualOnDefault,
+    CdsContract,
+    CdsConvention,
+    CdsCurveCache,
+    CdsCurveRequest,
+    CdsRiskEngine,
+    CdsRiskRequest,
+    CdsSide,
+    CdsSpreadQuote,
+    cds_factor_risk,
+    previous_imm_date,
+    standard_cds_maturity,
+)
 
 from ..curves import rates
 from ..curves.fx import (
@@ -192,10 +208,12 @@ from ..curves.fx import (
     FxOptions,
 )
 from ..curves.rates import KEY_RATE_CURVE_ID, KEY_RATE_SWAP_CURVE_ID, RUONIA_OIS_CURVE_ID
+from ..marketdata import manual_cds
 from ..marketdata.adapter import extend_calendar_back
 from .bonds import OIS_TAIL, RISK_CURVES, BondValuation
+from .fallback import fx_rate
 
-PUBLISHED_FACTORS = ("IR|", "FX|")
+PUBLISHED_FACTORS = ("IR|", "FX|", "CS")
 """Factors of the published Hessian (the Taylor's vocabulary, ``scenario.taylor``); the basis goes to ``basis01``."""
 RATE_TOLERANCE = 1e-4
 """Relative difference of ``contract_rate`` and the amounts' rate said in the assumptions."""
@@ -203,7 +221,7 @@ PUBLISHED_CURVES = {**RISK_CURVES, KEY_RATE_SWAP_CURVE_ID: RISK_CURVES[KEY_RATE_
 """Core curve ID -> published curve: a key-rate swap's projection is the key rate (``RUB KEY``), as a floater's."""
 FX_KINDS = ("fx_forward", "fx_swap")
 SWAP_KINDS = ("irs", "ois")
-LINKED_KINDS = (*FX_KINDS, *SWAP_KINDS, "ccs", "repo")
+LINKED_KINDS = (*FX_KINDS, *SWAP_KINDS, "ccs", "repo", "cds")
 """``product_kind`` of the trade_terms rows ``link`` attaches to a positions row (``bond_purchase`` is funding only)."""
 SWAP_INDEX = {"RUONIA": "ruonia", "KEY_RATE": "key_rate"}
 """``index_code`` of a swap's floating leg -> core's swap index."""
@@ -2053,6 +2071,218 @@ def _reported_pv(x: dict[str, Any], pvs: list[float | None]) -> float | None:
     if reported is None and any(p is not None for p in pvs):
         reported = math.fsum(p for p in pvs if p is not None)
     return None if reported is None else float(reported)
+
+
+CDS_NO_DATA = "cds_no_data"
+CDS_DAY_COUNTS = {"ACT/360": DayCount.ACT_360, "ACT/365": DayCount.ACT_365_FIXED,
+                  "ACT/365F": DayCount.ACT_365_FIXED, "ACT/ACT": DayCount.ACT_ACT_ISDA,
+                  "ACT/ACT-ISDA": DayCount.ACT_ACT_ISDA}
+CDS_FREQUENCIES = {"1M": 1, "3M": 3, "6M": 6, "12M": 12, "1Y": 12}
+CDS_SIDES = {"buy_protection": CdsSide.BUYER, "sell_protection": CdsSide.SELLER}
+CDS_IGNORED_CONVENTIONS = ("x_calendar", "x_rolling", "x_schedule_adjustment", "x_protection_start_date", "x_begin_at_end")
+
+
+def cds_gap(*missing: str) -> NotValued:
+    return NotValued(CDS_NO_DATA, "нет данных для оценки CDS: " + "; ".join(missing))
+
+
+def cds_reference(x: dict[str, Any], terms: dict[str, Any] | None = None) -> str:
+    name = terms.get("reference_entity") if terms is not None else (x.get("x") or {}).get("x_issuer")
+    return str(name or "").strip()
+
+
+def _cds_discount(ctx: Any, ccy: str) -> tuple[str, Any, str | None] | None:
+    built = {c.curve_id: c.curve for c in ctx.core_market.curves if isinstance(c.curve, DiscountCurve)}
+    if ccy == "RUB":
+        cid = primary = RUONIA_OIS_CURVE_ID
+    else:
+        # The snapshot can carry an FX-implied bootstrap request. The built currency curve is in FxMarket.
+        built.update((cid, c.curve) for cid, c in ctx.fx.curves.items() if c.ccy == ccy)
+        primary, others = ctx.fx.fx_curve_ids(ccy, ctx.fx_options)
+        ids = [primary, *others]
+        if ctx.proxy_curves:
+            ids.extend(i for i, c in ctx.fx.curves.items() if c.ccy == ccy and c.proxy)
+        cid = next((i for i in ids if i in built), "")
+    if cid not in built:
+        return None
+    quoted = ctx.fx.quote_entries.get(cid) if ctx.quote_curve_risk else None
+    # Core accepts standalone par quotes, but XCCY quote rebuilding also needs the RUB curve.
+    curve = quoted.curve if quoted and isinstance(quoted.curve, ParYieldCurveRequest) else ctx.risk_curve(cid, built[cid])
+    return cid, curve, primary if cid != primary else None
+
+
+def _cds_contract(t: dict[str, Any], name: str, ccy: str, standard: CdsConvention) -> CdsContract:
+    fields = ("trade_id", "trade_date", "start_date", "maturity_date", "notional_ccy", "coupon_bp",
+              "pay_accrued_on_default")
+    missing = [f for f in fields if t.get(f) is None]
+    if missing:
+        raise cds_gap("неполные условия сделки (trade_terms): " + ", ".join(missing))
+    dc, freq, side = t.get("day_count"), t.get("payment_frequency"), t.get("side")
+    for key, value, allowed in (("day_count", dc, CDS_DAY_COUNTS), ("payment_frequency", freq, CDS_FREQUENCIES),
+                                  ("side", side, CDS_SIDES)):
+        if value not in allowed:
+            raise cds_gap(f"неподдерживаемое значение {key}: {value}")
+    accrual = t["pay_accrued_on_default"]
+    if not isinstance(accrual, bool):
+        raise cds_gap("некорректное значение pay_accrued_on_default")
+    start, maturity = _day(t["start_date"]), _day(t["maturity_date"])
+    calendar = extend_calendar_back(standard.calendar, "MOEX_STOCK", start) if ccy == "RUB" else standard.calendar
+    convention = replace(standard, calendar=calendar,
+                         accrual_day_count=CDS_DAY_COUNTS[dc], payment_frequency_months=CDS_FREQUENCIES[freq],
+                         accrual_on_default=standard.accrual_on_default if accrual else AccrualOnDefault.NONE)
+    return CdsContract(str(t["trade_id"]), name, ccy, CDS_SIDES[side], _num(t["notional_ccy"]),
+                       _num(t["coupon_bp"]) / 10_000, start, maturity, convention)
+
+
+def value_cds_position(ctx: Any, position_id: str, x: dict[str, Any], terms: list[dict[str, Any]],
+                       curves: dict[str, manual_cds.Curve], credit_cache: CdsCurveCache, *,
+                       second_order: bool, horizon: date | None) -> BondValuation:
+    """Value every CDS trade of one position with core's standalone CDS engine."""
+    bd = ctx.business_date
+    if terms and (any(t.get("product_kind") != "cds" for t in terms)
+                  or len({t.get("trade_id") for t in terms}) != len(terms)):
+        raise cds_gap("смешанные или дублирующиеся условия сделки (trade_terms)")
+    ccys = {_ccy(t.get("ccy")) for t in terms} if terms else {_ccy(x.get("ccy"))}
+    if len(ccys) != 1:
+        raise cds_gap("разные валюты CDS в одной позиции")
+    ccy = ccys.pop()
+    # The latest adjusted IMM can fall after step-in. Quote schedules may need the preceding IMM.
+    quote_start = _add_months(previous_imm_date(bd), -3)
+    calendar = extend_calendar_back(ctx.calendar, "MOEX_STOCK", quote_start) if ccy == "RUB" else BusinessCalendar()
+    standard = CdsConvention.isda_standard(calendar)
+    contracts = []
+    for t in terms:
+        digital, stub = t.get("x_digital_recovery"), t.get("x_stub_type")
+        if digital is not None and str(digital).strip():
+            raise cds_gap("фиксированное возмещение (x_digital_recovery) требует отдельной модели CDS")
+        stub_name = str(stub).strip() if stub is not None else ""
+        if stub_name and not re.fullmatch(r"short[ _-]*front", stub_name, re.IGNORECASE):
+            raise cds_gap(f"нестандартный первый купонный период (x_stub_type: {stub})")
+        name = cds_reference(x, t)
+        if ccy and name:
+            try:
+                contracts.append((t, _cds_contract(t, name, ccy, standard)))
+            except (ValueError, ArithmeticError) as e:
+                raise cds_gap(f"некорректные условия сделки для {name}: {e}") from None
+    live_refs = {c.reference_entity for _, c in contracts if c.maturity_date > bd}
+    # Missing terms still get the market-data diagnostics of the positions row.
+    references = live_refs if terms and len(contracts) == len(terms) else (
+        {cds_reference(x, t) for t in terms} if terms else {cds_reference(x)})
+    needs_market = bool(references)
+    try:
+        discount = _cds_discount(ctx, ccy) if ccy and needs_market else None
+    except (ValueError, ArithmeticError) as e:
+        raise cds_gap(f"некорректная кривая дисконтирования для {ccy}: {e}") from None
+    rate = fx_rate(ctx, ccy) if ccy else None
+    missing = [] if terms else ["нет условий сделки (trade_terms)"]
+    for name in sorted(references):
+        curve = curves.get(manual_cds.name_key(name))
+        if not name:
+            missing.append("не указан эмитент CDS (reference_entity)")
+        elif curve is None:
+            missing.append(f"нет котировок C22 для {name}")
+        elif ccy and curve.ccy != ccy:
+            missing.append(f"кривая C22 для {name} задана в {curve.ccy}, а сделка в {ccy}")
+        elif not curve.points():
+            missing.append(f"нет котировок C22 для {name} (кривая без точек)")
+    if ccy is None:
+        missing.append("не указана валюта сделки (ccy)")
+    elif discount is None and needs_market:
+        missing.append(f"нет кривой дисконтирования для {ccy}")
+    if ccy and (rate is None or not math.isfinite(rate[0]) or rate[0] <= 0):
+        missing.append(f"нет курса {ccy}/RUB")
+    if missing:
+        raise cds_gap(*missing)
+    assert ccy is not None and rate is not None and len(contracts) == len(terms)
+    cid, discount_curve, fallback = discount if discount is not None else (None, None, None)
+    fx = rate[0]
+    assumptions = ["CDS: календарь " + ("MOEX_STOCK" if ccy == "RUB" else "понедельник–пятница (weekends-only)")
+                   + ", котировки C22 на полугодовом ролле ISDA (semiannual IMM)"]
+    if ccy == "RUB" and any("+rules_from_" in c.convention.calendar.version for _, c in contracts):
+        assumptions.append("Календарь MOEX_STOCK до начала истории хаба продолжен по правилам фиксированных праздников")
+    ignored = [f for f in CDS_IGNORED_CONVENTIONS
+               if any(t.get(f) is not None and str(t[f]).strip()
+                      and (f != "x_begin_at_end" or t[f] is not False) for t in terms)]
+    if ignored:
+        assumptions.append("Применены стандартные конвенции ISDA. Поля условий вне модели: " + ", ".join(ignored))
+    if fallback:
+        assumptions.append(f"Дисконтирование по запасной кривой {cid}, основная {fallback} отсутствует")
+    for name in sorted(live_refs):
+        curve = curves[manual_cds.name_key(name)]
+        if curve.valid_from < bd:
+            assumptions.append(f"Кривая C22 для {name} от {curve.valid_from:%d.%m.%Y}, "
+                               f"{(bd - curve.valid_from).days} дн.")
+    a = _Acc()
+    credit_buckets: dict[str, float] = defaultdict(float)
+    accrued, notional, carry, rolldown, received = 0.0, 0.0, 0.0, 0.0, 0.0
+    facts = []
+    for t, contract in contracts:
+        name = contract.reference_entity
+        side = str(t["side"])
+        notional += contract.notional if side == "sell_protection" else -contract.notional
+        fact = {"trade_id": contract.contract_id, "reference_entity": name, "side": side,
+                "notional_ccy": contract.notional, "coupon_bp": float(t["coupon_bp"])}
+        facts.append(fact)
+        if bd >= contract.maturity_date:
+            fact["settled"] = True
+            continue  # the final premium is in the previous valuation's horizon
+        assert cid is not None and discount_curve is not None
+        curve = curves[manual_cds.name_key(name)]
+        points = curve.points()
+        try:
+            quotes = tuple(CdsSpreadQuote(standard_cds_maturity(bd, round(years * 12), roll="semiannual"), bp / 10_000)
+                           for _, years, bp in points)
+            credit = CdsCurveRequest(bd, quotes, curve.recovery, standard)
+            engine = CdsRiskEngine(CdsRiskRequest(contract, bd, discount_curve, credit),
+                                   curve_cache=ctx.cache, credit_cache=credit_cache)
+            risk = engine.risk()
+            factors = cds_factor_risk(risk, _curve(cid) or cid, engine.second_order() if second_order else None)
+            v = risk.valuation
+            a.pv += v.pv * fx
+            a.calc_ids.append(risk.base_id)
+            accrued += v.accrued_premium * fx
+            for f, amount in factors.first_order_by_factor().items():
+                a.first[f] += amount * fx
+            for (fi, fj), amount in factors.hessian_by_factor().items():
+                a.hessian[tuple(sorted((fi, fj)))] += amount * fx  # type: ignore[index]
+            quote_risk = {tenor: q.cs01 * fx for (tenor, _, _), q in zip(points, risk.quote_buckets)}
+            for tenor, amount in quote_risk.items():
+                credit_buckets[tenor] += amount
+            fact.update(pv_ccy=v.pv, clean_pv_ccy=v.clean_pv, accrued_ccy=v.accrued_premium,
+                        par_spread_bp=v.par_spread * 10_000, curve_basis=risk.curve_basis, cs01_by_quote_rub=quote_risk,
+                        spreads_bp={tenor: bp for tenor, _, bp in points}, recovery=curve.recovery,
+                        curve_rev_id=curve.rev_id, curve_valid_from=curve.valid_from.isoformat(),
+                        curve_age_days=(bd - curve.valid_from).days)
+            if horizon is not None:
+                h = engine.horizon(horizon)
+                carry += h.carry * fx
+                rolldown += h.rolldown * fx
+                received += h.received
+        except (ValueError, ArithmeticError) as e:
+            raise cds_gap(f"некорректные условия сделки или параметры кривой C22 для {name}: {e}") from None
+    by_curve, buckets, _, _ = _risk(a)
+    reported = _reported_pv(x, [_num(t.get("pv_rub")) for t in terms])
+    extra = {
+        "core": {"product": "cds", "trades": [f["trade_id"] for f in facts], "curves": [cid] if cid else [],
+                 "core_version": CORE_VERSION, **({"curve_fallback_from": [fallback]} if fallback else {})},
+        "cds": {"ccy": ccy, "trades": facts},
+        "spread_buckets": dict(credit_buckets),
+        **({"fx_rates": {ccy: fx}} if ccy != "RUB" else {}),
+        **({"reported_pv_rub": reported, "pv_diff_rub": a.pv - reported} if reported is not None else {}),
+        **({"horizon": {"date": horizon.isoformat(), "carry_rub": carry, "rolldown_rub": rolldown,
+                        "received_rub": received * fx, "received_ccy": received}} if horizon is not None else {}),
+    }
+    return BondValuation(
+        secid="", quantity=notional, valuation_date=bd, settlement=bd,
+        horizon_date=max(c.maturity_date for _, c in contracts),
+        horizon_kind="maturity", price_basis="core", clean_pct=math.nan, accrued_rub=accrued, face_rub=fx,
+        current_coupon_pct=None, dirty_rub=math.nan, pv_rub=a.pv, ytm_pct=math.nan, macaulay_years=math.nan,
+        modified_duration=math.nan, z_spread_bp=math.nan, spread_kind="cds", dv01_rub=math.fsum(buckets.values()),
+        buckets=buckets, spread01_rub=a.first["CS"], spread_buckets=dict(credit_buckets), curve_buckets=by_curve,
+        discount_curve_id=cid,
+        calculation_id=a.calc_ids[0] if len(a.calc_ids) == 1 else f"desk-cds:{bd}:{position_id}",
+        hessian=_hessian(a), assumptions=tuple(assumptions),
+        fx_delta={ccy: a.pv / fx} if ccy != "RUB" else {}, extra=extra)
 
 
 def _rates_valuation(ctx: Any, r: Request, a: _Acc, notes: list[str], result: Any, snap: Any) -> BondValuation:

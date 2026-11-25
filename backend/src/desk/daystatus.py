@@ -102,6 +102,7 @@ nothing to compare with (``supersedes_pruned``); the screen shows this instead o
 
 RUN_CHANGES = {"positions": "позиции", "market": "снимок рынка", "prev_market": "снимок прошлого дня",
                "program": "версия программы", "second_order": "досчитаны вторые производные",
+               "manual_cds": "ручные кривые CDS",
                "cut": "срез (окончательное закрытие вместо предварительного)",
                **store.LATE_DATASETS, **store.LATE_REFERENCE}
 """What changed against the run a run superseded; ``ocp`` / ``cash_balances``: the OCP report or the balances in force
@@ -367,6 +368,7 @@ def _runs(con: psycopg.Connection, day: date) -> list[dict[str, Any]]:
     rows = _rows(con, "SELECT r.run_id, r.run_type, r.cut_type, r.cut_ts, r.status, r.started_at, r.completed_at,"
                       " r.supersedes_run_id, r.error, r.position_set_ids, r.market_snapshot_id, r.positions_known_at,"
                       " r.prev_market_snapshot_id, r.lineage->>'logic_version' AS logic_version,"
+                      " r.lineage->'manual_cds' AS manual_cds,"
                       " (r.lineage->>'second_order') IS DISTINCT FROM 'false' AS second_order,"
                       " r.coverage->'_total' AS coverage,"
                       f" r.run_id IN ({store.DEFAULT_RUNS}) AS is_default,"
@@ -393,6 +395,8 @@ def _runs(con: psycopg.Connection, day: date) -> list[dict[str, Any]]:
                 changed.append("prev_market")
             if old["logic_version"] != r["logic_version"]:
                 changed.append("program")
+            if old["manual_cds"] and r["manual_cds"] and old["manual_cds"] != r["manual_cds"]:
+                changed.append("manual_cds")
             if not old["second_order"] and r["second_order"]:  # the second pass of the history (TDM#627)
                 changed.append("second_order")
             if old["positions_known_at"] and r["positions_known_at"]:
@@ -502,16 +506,17 @@ def _facts(con: psycopg.Connection, settings: Settings, lo: date, hi: date, *,
         x["books_no_positions"] = sum(1 for b in store.current_books(con, d) if b.get("active", True)
                                       and (first_set.get(b["book_id"]) is None or first_set[b["book_id"]] > d))
         if x["default_run_id"]:
-            ids, known, swaps, orp = con.execute(
+            ids, known, swaps, orp, cds_revs = con.execute(
                 "SELECT position_set_ids, positions_known_at, lineage #>> '{positions,unlinked_swap_terms,trades}',"
-                " lineage #> '{positions,off_report}' FROM run WHERE run_id = %s", (x["default_run_id"],)).fetchone()
+                " lineage #> '{positions,off_report}', lineage->'manual_cds' FROM run WHERE run_id = %s",
+                (x["default_run_id"],)).fetchone()
             x["unlinked_swaps"] = int(swaps or 0)  # TDM#468: swap terms no positions row names, not valued
             # TDM#468: the derivatives off the positions report; a run before the switch has only the swaps above
             x["off_report"] = ({k: orp.get(k) for k in ("mode", "trades", "excluded", "included", "valued", "suspect", "invalid")}
                                if isinstance(orp, dict) else None)
             x["default_set_ids"] = sorted(ids or [])
             x["run_behind"] = x["default_set_ids"] != store.current_sets(con, d)[0]
-            x["late_inputs"] = store.late_inputs(con, d, known)
+            x["late_inputs"] = store.late_inputs(con, d, known, cds_revs=cds_revs)
     return out
 
 
@@ -552,6 +557,8 @@ def _rate(x: dict[str, Any]) -> dict[str, Any]:
             warn.append(f"{names[0].upper()}{names[1:]} загружены после расчёта: прогон не пересчитан")
         if "ocp_policy" in x["late_inputs"]:
             warn.append("политика ОВП изменилась после расчёта: прогон не пересчитан")
+        if "manual_cds" in x["late_inputs"]:
+            warn.append("ручные кривые CDS изменились после расчёта: прогон не пересчитан")
     if x["positions_in_force"] and x["books_no_positions"]:
         warn.append(f"книг без позиций: {x['books_no_positions']}")
     if x["books_rows_differ"]:

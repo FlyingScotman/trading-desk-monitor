@@ -50,7 +50,7 @@ def bad(value):
 
 
 def test_the_contract_is_1_9_and_the_field_is_in_the_schema() -> None:
-    assert CONTRACT == "private/1.9"
+    assert CONTRACT == "private/1.10"
     row = ok(spot_future=[LINE])
     assert row["spot_future"] == [{"value_date": "2026-12-17", "pair": "USD/RUB", "amount_ccy": "250000", "src": "R5"}]
     assert row["ccy"] == "USD"

@@ -1,4 +1,4 @@
-# Private input contract v1 (`private/1.9`)
+# Private input contract v1 (`private/1.10`)
 
 The rows a private adapter emits, one JSON Schema per dataset (`<dataset>.schema.json`) and per reference table of
 `reference()`, authoritative over the design tables of [08 §10](../../../docs/architecture/08_PRIVATE_ADAPTER_INTERFACE.md):

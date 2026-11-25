@@ -5621,7 +5621,7 @@
           "name": {
             "type": "string",
             "title": "Name",
-            "description": "The reference name of the CDS rows: the report's x_issuer, else the deal's name"
+            "description": "The reference name from CDS terms or the positions report"
           },
           "name_key": {
             "type": "string",
@@ -5640,6 +5640,14 @@
             "title": "Positions",
             "description": "CDS rows of the run with this name"
           },
+          "currencies": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Currencies",
+            "description": "Currencies of those CDS positions"
+          },
           "has_curve": {
             "type": "boolean",
             "title": "Has Curve",
@@ -5652,6 +5660,7 @@
           "name_key",
           "deals",
           "positions",
+          "currencies",
           "has_curve"
         ],
         "title": "CdsPositionName"
@@ -8038,10 +8047,11 @@
             "type": "string",
             "enum": [
               "computed",
-              "imported"
+              "imported",
+              "none"
             ],
             "title": "Used",
-            "description": "The value the run publishes"
+            "description": "The value the run publishes, or none for an unvalued CDS"
           },
           "computed_pv_rub": {
             "anyOf": [

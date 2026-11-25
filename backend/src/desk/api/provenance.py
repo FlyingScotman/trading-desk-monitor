@@ -702,6 +702,13 @@ def _used(lin: dict[str, Any], fact: dict[str, Any], names: dict[str, str]) -> l
     core = ex.get("core") or {}
     out: list[dict[str, Any]] = []
     if core:
+        for trade in (ex.get("cds") or {}).get("trades", ()):
+            if not trade.get("settled"):
+                rev, name = trade["curve_rev_id"], trade["reference_entity"]
+                age = trade.get("curve_age_days", 0)
+                out.append(_need("curve", f"manual_cds:{rev}", f"Ручная кривая CDS (C22) · {name}",
+                                 "stale" if age else "ok", f"ревизия {rev}, действует с {trade['curve_valid_from']}"
+                                 + (f", {age} дн." if age else "")))
         rub = core.get("rub_curve")
         if rub:
             out.append(_need("curve", rub, names.get(rub, rub), "ok", "дисконтирование рублёвых потоков"))
@@ -777,6 +784,8 @@ def _market(con, run: dict[str, Any], kind: str, fact: dict[str, Any] | None, te
     if fact is not None:
         items = _unique(_used(lin, fact, names))
         ex = fact.get("extra") or {}
+        if ex.get("cds"):
+            notes = list(ex.get("assumptions") or ()) + notes
         if _report_valued(fact):
             q = ex.get("quality") or ""
             notes.insert(0, "стоимость: " + cv.APPROX_TEXT.get(q, q or "из отчёта позиций"))
@@ -787,6 +796,9 @@ def _market(con, run: dict[str, Any], kind: str, fact: dict[str, Any] | None, te
         return {"basis": "used", "text": cv.PROVENANCE_TEXT["market_used"], "items": items, "notes": notes}
     if fallback:
         notes.insert(0, "оценка не по условиям сделки: " + cv.APPROX_TEXT.get(fallback, fallback))
+    if (reason or "").startswith(dv.CDS_NO_DATA + ":"):
+        notes.insert(0, reason.partition(":")[2].strip())
+        return {"basis": "needed", "text": cv.PROVENANCE_TEXT["market_needed"], "items": [], "notes": notes}
     if reason:
         notes.insert(0, "почему не оценена: " + cv.why_of(reason, x, None)["why"])
     if kind == "derivative" and (terms or x.get("ccy")):
@@ -872,7 +884,8 @@ def provenance(con, run: dict[str, Any], pid: str, feeds: list[dict[str, Any]] |
         off_trade = pid.split("|", 1)[1] if "|" in pid else str((ex.get("reported") or {}).get("deal_id") or pid)
     rep_src, row, same = _report(con, run, pid, book)
     x = {**(ex.get("reported") or {}), **(row or {})}
-    kind = _kind(x, fact, bd, off_trade is not None)
+    cds_gap = str(p.get("reason") or "").startswith(dv.CDS_NO_DATA + ":")
+    kind = "derivative" if cds_gap else _kind(x, fact, bd, off_trade is not None)
     got, sets, known, read = _terms(con, run, pid, book, x, fact, off_trade) if kind != "bond" else ([], {}, True, [])
     if kind == "linked":
         kind = "derivative" if got else "bond"

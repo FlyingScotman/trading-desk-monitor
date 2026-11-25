@@ -467,9 +467,10 @@ def direct_row(ctx: EodContext, book: str, pid: str, o: Outcome, x: dict[str, An
     v = o.valuation
     assert v is not None
     x = normalised(x)
+    cds = v.extra.get("cds")
     # a row without asset_class valued by core from its trade's terms is a derivative, not an unmapped bond (TDM#501)
     # or refused by core (``o.core_not_valued``: the plan gave it the OTC rule): an OTC row with the reason, not a bond
-    kind = (x.get("asset_class") or ("otc" if v.extra.get("core") or o.core_not_valued else "bond")).lower()
+    kind = "otc" if cds else (x.get("asset_class") or ("otc" if v.extra.get("core") or o.core_not_valued else "bond")).lower()
     fx = kind == "fx"
     itype, aclass, segment = DIRECT_KIND.get(kind, DIRECT_KIND["other"])
     why = list(v.assumptions)
@@ -485,13 +486,16 @@ def direct_row(ctx: EodContext, book: str, pid: str, o: Outcome, x: dict[str, An
     rates_core = core and bool(v.extra.get("swaps") or v.extra.get("repos") or v.extra.get("rates_settled"))
     if rates_core:
         ccy, rate, amount = "RUB", 1.0, v.quantity
+    if cds:
+        ccy, rate, amount = cds["ccy"], v.face_rub, v.quantity
+        why = list(v.assumptions)
     if amount is None:
         amount = v.pv_rub / rate
         why.append("notional unknown: the market value is shown")
     vd = x.get("value_date")
     if core and v.horizon_kind == "value_date":
         vd = v.horizon_date
-    mat = v.horizon_date if rates_core else x.get("maturity_date") or vd
+    mat = v.horizon_date if rates_core or cds else x.get("maturity_date") or vd
     name = x.get("source_instrument_name") or (f"{ccy} {vd or 'spot'}" if fx else x.get("source_instrument_id"))
     if kind == "bond":  # unmapped: the bank's name (D6), else its ISIN
         name = (name or x.get("isin") or pid) + FROM_REPORT
@@ -515,15 +519,18 @@ def direct_row(ctx: EodContext, book: str, pid: str, o: Outcome, x: dict[str, An
     else:
         delta = {ccy: amount if fx else v.pv_rub / rate} if ccy != "RUB" else {}
     return {
-        "position_id": pid, "book_id": book, "instr_type": "FX" if core and not rates_core else itype,
+        "position_id": pid, "book_id": book,
+        "instr_type": "CDS" if cds else "FX" if core and not rates_core else itype,
         "asset_class": aclass,
         "segment": segment, "name": name or pid, "isin": x.get("isin"), "issuer": None, "ccy": ccy,
         "maturity": mat.isoformat() if mat else None,
         "tenor_y": (mat - ctx.business_date).days / 365.25 if mat and (core or not fx) else None,
-        "side": rates_side(v.extra) if rates_core else ("BUY" if amount >= 0 else "SELL") if fx or core
+        "side": ("long" if amount >= 0 else "short") if cds else rates_side(v.extra) if rates_core
+        else ("BUY" if amount >= 0 else "SELL") if fx or core
         else "long" if amount >= 0 else "short",
         "notional": amount, "notional_rub": amount * rate, "price": _num(v.clean_pct), "mv": v.pv_rub / rate,
         "mv_rub": v.pv_rub, "dv01": v.dv01_rub, "cs01": v.spread01_rub, "ofz_spr01": 0.0,
+        **({"accrued": v.accrued_rub} if cds else {}),
         "risk": risk_by_curve(v), "gamma": [[a, b, g] for a, b, g in v.hessian] if core else [],
         "instrument_id": x.get("moex_secid") or x.get("source_instrument_id"),
         "new_today": _made_today(ctx, x),  # TDM#468: a derivative off the report made on the run's date
@@ -794,8 +801,9 @@ def run_content(ctx: EodContext, positions: list[tuple[str, str, Outcome]], prev
             if prev is not None and o.pnl is None:
                 no_pnl.append(f"{pid} {label}: нет PnL ({_why(o)})")
             rows.append(row := direct_row(ctx, book, pid, o, x or {}, quantities.get(pid)))
-            if row["instr_type"] == "BOND":  # tdm needs an issuer for a bond: the report's (D6), else none known
-                iss = _report_issuer(x or {})
+            if row["instr_type"] in ("BOND", "CDS"):
+                refs = {t["reference_entity"] for t in (row["extra"].get("cds") or {}).get("trades", [])}
+                iss = _report_issuer({"x": {"x_issuer": next(iter(refs))}} if len(refs) == 1 else x or {})
                 row["issuer"] = iss["issuer"]
                 issuers[row["issuer"]] = iss
             continue
@@ -844,7 +852,7 @@ def run_content(ctx: EodContext, positions: list[tuple[str, str, Outcome]], prev
                                  "риск позиции не в суммах DV01 (сводка прогона, таблица риска)")))
     direct = [o.pnl for _, _, o in positions if isinstance(o.pnl, DirectPnl)]
     for method, flag in ((FX_METHOD, "по курсу"), (REPORTED_METHOD, "по отчёту"), (CORE_FX_METHOD, "ядром"),
-                         (RATES_CORE_METHOD, "ядром: своп/РЕПО")):
+                         (RATES_CORE_METHOD, "ядром: своп/РЕПО/CDS")):
         if xs := [x for x in direct if x.method == method]:
             log.append(("INFO", f"PnL {flag} ({method}) у {len(xs)} поз.: {sum(x.total for x in xs):,.0f} ₽"))
     with_pnl = [o.pnl for _, _, o in positions if o.pnl and not isinstance(o.pnl, DirectPnl)]

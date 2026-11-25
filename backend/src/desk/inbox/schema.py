@@ -3,7 +3,8 @@
 Only the JSON-Schema subset those files use: ``type``, ``enum``, ``required``, ``properties`` (of a row and, since
 private/1.7, of an ``object`` field: ``ocp.derivatives_ccy``), ``items`` and ``required`` of an ``array`` of such
 objects (since private/1.9: ``ocp.spot_future``), ``patternProperties``, ``additionalProperties: false``, ``pattern``, ``minLength``, ``format: date``,
-``format: date-time`` (since private/1.6: ``trades.trade_ts``) and local ``$ref``. Error codes are the 08 §6.3 ones
+``format: date-time`` (since private/1.6: ``trades.trade_ts``) and local ``$ref``. CDS fields in private/1.10
+use the same enum, amount, string and boolean rules. Error codes are the 08 §6.3 ones
 and messages carry field names only, never values, because issues are shown and shared (08 §6.3). A validated row
 is normalised so that equal data hashes equally: amounts become plain decimal strings (a float through its shortest
 repr, so nothing is lost), integers (``type`` integer, since private/1.2) become ints, absent and null are the same

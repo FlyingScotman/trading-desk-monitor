@@ -162,7 +162,8 @@ def off_report_trades(inputs: PositionInputs, on: date, include: bool = True) ->
     docstring. ``include``: whether the switch is ``include`` (decides ``included`` against ``excluded``). A pure
     function of the inputs and the date. Sorted by (book, trade_id)."""
     rows = _rows(inputs)
-    pool = [*inputs.trade_terms, *(inputs.other_book_terms if BOOKS_WITHOUT_REPORT else ())]
+    pool = [t for t in (*inputs.trade_terms, *(inputs.other_book_terms if BOOKS_WITHOUT_REPORT else ()))
+            if t.get("product_kind") != "cds"]  # CDS terms describe positions in the report (TDM#614).
     linked, left, _ = dv._link(rows, pool)
     ids: dict[str, set[str]] = defaultdict(set)
     for pid, book, _, _ in inputs.rows:

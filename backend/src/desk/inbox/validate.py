@@ -271,7 +271,9 @@ def _check(decl: dict, hit: dict, result: Any, books: list[dict] | None, contrac
         for trade_id, legs in trades.items():
             if (uk, trade_id) in failed_terms:
                 continue
-            if any(r["product_kind"] in SWAP_KINDS for r in legs):
+            if len(legs) > 1 and any(r["product_kind"] == "cds" for r in legs):
+                flag("error", "bad_value", uk, legs[0].get("_src"), "a CDS trade needs exactly one row")
+            elif any(r["product_kind"] in SWAP_KINDS for r in legs):
                 for severity, code, message, src in _swap_trade_rules(legs):
                     flag(severity, code, uk, src, message)
     if known is not None:
@@ -356,10 +358,12 @@ FX_KINDS = ("fx_forward", "fx_swap")
 SWAP_KINDS = ("irs", "ois", "ccs")
 SWAP_LEG_FIELDS = ("leg_id", "side", "ccy", "notional_ccy", "start_date", "maturity_date")
 REPO_FIELDS = ("side", "ccy", "notional_ccy", "start_date")
+CDS_FIELDS = ("side", "ccy", "notional_ccy", "start_date", "maturity_date", "reference_entity", "coupon_bp",
+              "payment_frequency", "day_count", "pay_accrued_on_default")
 INSTRUMENT_FIELDS = ("instrument_id", "isin", "regnum", "moex_secid", "source_instrument_id")
 TERMS_SIDES = {"fx_forward": ("buy", "sell"), "fx_swap": ("buy", "sell"), "irs": ("pay", "receive"),
                "ois": ("pay", "receive"), "ccs": ("pay", "receive"), "repo": ("repo", "reverse_repo"),
-               "bond_purchase": ("buy",)}
+               "bond_purchase": ("buy",), "cds": ("buy_protection", "sell_protection")}
 """``trade_terms.side`` per ``product_kind`` (private/1.4): a value of another product is ``bad_value``."""
 UNSIGNED_TERMS = ("notional_ccy", "quantity", "face_amount_ccy")
 UNSIGNED_TRADES = ("quantity", "face_amount_ccy", "amount_ccy")
@@ -406,6 +410,14 @@ def _terms_rules(row: dict) -> list[tuple[str, str, str]]:
             out.append(("error", "bad_value", "maturity_date is not after start_date"))
         if kind == "repo" and not any(f in row for f in INSTRUMENT_FIELDS):
             out.append(("warning", "repo_without_security", "a repo without its security"))
+    elif kind == "cds":
+        need(CDS_FIELDS, "a CDS")
+        if "maturity_date" in row and "start_date" in row and row["maturity_date"] <= row["start_date"]:
+            out.append(("error", "bad_value", "maturity_date is not after start_date"))
+        if amount(row.get("notional_ccy")) == 0:
+            out.append(("error", "bad_value", "CDS notional_ccy must be positive"))
+        if (amount(row.get("coupon_bp")) or 0) < 0:
+            out.append(("error", "bad_value", "CDS coupon_bp must be non-negative"))
     elif kind == "bond_purchase":
         need(("ccy", "purchase_price_pct"), "a bond_purchase")
         if not any(f in row for f in INSTRUMENT_FIELDS):
