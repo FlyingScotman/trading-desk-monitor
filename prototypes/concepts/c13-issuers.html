@@ -233,11 +233,16 @@ table.mini tr.put td:first-child { box-shadow: inset 3px 0 0 var(--warn); }
     const two = K.h('div', 'c13-two'); dash.appendChild(two);
     const cp = panel('Кривая эмитента', '<span class="cm"></span>'); two.appendChild(cp);
     const cel = K.h('div', 'ch'); cp.querySelector('.bd').appendChild(cel);
+    const yieldNote = K.h('div', 'k-note'); cp.querySelector('.bd').appendChild(yieldNote);
     const uni = M.universeFx.filter(b => b.issuer === x.id && !b.held);
     let curveChart = null;
     const drawCurve = () => {
       if (curveChart) { curveChart.dispose(); dashCharts = dashCharts.filter(c => c !== curveChart); }
       const isY = st.curve === 'ytm';
+      const quoted = isY ? uni.filter(b => b.ytm != null) : [];
+      yieldNote.textContent = isY ? uni.filter(b => b.ytm == null && b.yieldNote)
+        .map(b => b.name + ' · ' + b.yieldNote).join(' ') : '';
+      yieldNote.hidden = !yieldNote.textContent;
       const ours = L.filter(p => (isY ? p.ytm != null && p.kind !== 'IN' : p.zspread != null));
       const ccys = [...new Set(ours.map(p => p.ccy))];
       const mx = Math.max(1, ...ours.map(p => Math.abs(p.mv)));
@@ -246,13 +251,13 @@ table.mini tr.put td:first-child { box-shadow: inset 3px 0 0 var(--warn); }
         symbolSize: (val, prm) => 8 + 18 * Math.sqrt(Math.abs(prm && prm.data && prm.data.p ? prm.data.p.mv : 0) / mx), symbol: 'circle', itemStyle: { color: K.ccyColor(c), opacity: .85 },
         label: { show: ours.length <= 10, position: 'right', fontSize: 10, color: K.css('--fg-2'), formatter: d => d.data.name.replace(x.full, '').replace(x.name, '').trim().slice(0, 18) },
       }));
-      if (isY && uni.length) ['USD', 'EUR', 'CNY'].forEach(c => { const a = uni.filter(b => b.ccy === c); if (a.length) series.push({ name: c + ' рынок', type: 'scatter', symbol: 'diamond', symbolSize: 9, data: a.map(b => ({ value: [b.tenor, b.ytm], name: b.name })), itemStyle: { color: 'transparent', borderColor: K.ccyColor(c), borderWidth: 1.5 } }); });
+      if (quoted.length) ['USD', 'EUR', 'CNY'].forEach(c => { const a = quoted.filter(b => b.ccy === c); if (a.length) series.push({ name: c + ' рынок', type: 'scatter', symbol: 'diamond', symbolSize: 9, data: a.map(b => ({ value: [b.tenor, b.ytm], name: b.name, yieldNote: b.yieldNote })), itemStyle: { color: 'transparent', borderColor: K.ccyColor(c), borderWidth: 1.5 } }); });
       if (isY && ccys.includes('RUB')) series.push({ name: 'ОФЗ (КБД)', type: 'line', showSymbol: false, data: M.pillars.map((t, i) => [t, M.ofzCurve[i]]), lineStyle: { type: 'dashed', width: 1.2, color: K.css('--fg-3') }, itemStyle: { color: K.css('--fg-3') } });
       if (isY && ccys.includes('RUB')) series.push({ name: 'RUONIA OIS', type: 'line', showSymbol: false, data: M.pillars.map((t, i) => [t, M.curve['RUB RUONIA'].pts[i]]), lineStyle: { type: 'dotted', width: 1.2, color: K.curveColors['RUB RUONIA'] }, itemStyle: { color: K.curveColors['RUB RUONIA'] } });
-      const maxT = Math.max(2, ...ours.map(p => p.tenor), ...(isY ? uni.map(b => b.tenor) : [])) * 1.08;
+      const maxT = Math.max(2, ...ours.map(p => p.tenor), ...quoted.map(b => b.tenor)) * 1.08;
       curveChart = K.chart(cel, () => ({
         grid: { left: 6, right: 16, top: 34, bottom: 18, containLabel: true }, legend: { top: 0, left: 0, type: 'scroll' },
-        tooltip: { trigger: 'item', formatter: d => Array.isArray(d.value) ? '<b>' + esc(d.data.name || d.seriesName) + '</b><br>срок ' + f.yrs(d.value[0]) + ' · ' + (isY ? f.pct(d.value[1]) : f.bp(d.value[1]) + ' б.п.') + (d.data.p ? '<br>MV ' + f.mn(d.data.p.mv, 0) + ' mm ₽ · щелчок — карточка' : '') : '' },
+        tooltip: { trigger: 'item', formatter: d => Array.isArray(d.value) ? '<b>' + esc(d.data.name || d.seriesName) + '</b><br>срок ' + f.yrs(d.value[0]) + ' · ' + (isY ? f.pct(d.value[1]) : f.bp(d.value[1]) + ' б.п.') + (d.data.p ? '<br>MV ' + f.mn(d.data.p.mv, 0) + ' mm ₽ · щелчок — карточка' : '') + (d.data.yieldNote ? '<br>' + esc(d.data.yieldNote) : '') : '' },
         xAxis: { type: 'value', name: 'лет до оферты / погашения', nameLocation: 'middle', nameGap: 22, max: Math.ceil(maxT), axisLabel: { formatter: '{value}' } },
         yAxis: { type: 'value', scale: true, axisLabel: { formatter: isY ? '{value}%' : '{value}' } },
         series,

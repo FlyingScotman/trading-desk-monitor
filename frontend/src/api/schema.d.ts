@@ -1128,17 +1128,37 @@ export interface components {
             clean_price?: number | null;
             /**
              * Ytm
-             * @description %, effective annual: MOEX's to yield_date, else the run's
+             * @description %, annual: MOEX effective yield to yield_date, else the run's; if flagged, recalculated by the core at T+1 or null
              */
             ytm?: number | null;
             /**
+             * Yield Note
+             * @description Why the core recalculated the flagged quote or could not do so
+             */
+            yield_note?: string | null;
+            /**
+             * Yield Source
+             * @description Core recalculation of flagged market analytics
+             */
+            yield_source?: "core" | null;
+            /**
+             * Yield Manual Override
+             * @description The hub's manual redemption correction is available
+             */
+            yield_manual_override?: boolean | null;
+            /**
+             * Duration Days
+             * @description Macaulay duration of the recalculated quote, in days
+             */
+            duration_days?: number | null;
+            /**
              * Z Spread Bp
-             * @description the desk run's Z-spread to its discount curve (RUONIA OIS since the owner's decision of 20.10; the KBD for an OFZ-PD / AD / IN since 0.2.6 and on a date without RUONIA OIS)
+             * @description Z-spread to the desk run's discount curve, or to the day's KBD for a flagged RUB quote recalculated by the core
              */
             z_spread_bp?: number | null;
             /**
              * G Spread Bp
-             * @description MOEX's
+             * @description MOEX's, or to the day's KBD for a flagged RUB quote recalculated by the core
              */
             g_spread_bp?: number | null;
             /** Accrued */
@@ -1177,7 +1197,7 @@ export interface components {
             price_basis?: string | null;
             /**
              * Yield Date
-             * @description the date MOEX's yield runs to: the offer or maturity
+             * @description the date the selected yield runs to: the offer or maturity
              */
             yield_date?: string | null;
             /**

@@ -291,11 +291,11 @@
       (differs(M.fxPnl, c) ? ' · PnL по курсу ' + M.fxPnl.label + ' ' + f.n(M.fxPnl.rate[c], 2) + ', ' + f.pcts(M.fxPnl.chgPct[c], 2)
         : differs(M.fxCbr, c) ? ' · ЦБ ' + f.n(M.fxCbr.rate[c], 2) + ', ' + f.pcts(M.fxCbr.chgPct[c], 2) : '');
     // дефолтные и дистрессные выпуски (#111, K.distress): их доходность MOEX — не движение рынка, в списки не входят
-    const mvOut = M.marketMovers.filter(b => K.distress(b)).length;
+    const mvOut = M.marketMovers.filter(b => b.chgBp != null && K.distress(b)).length;
     const mv = M.marketMovers.filter(b => !K.distress(b) && b.chgBp != null).sort((a, b) => b.chgBp - a.chgBp);
     const up = mv.slice(0, 6), dn = mv.slice(-6).reverse();
     const ccyFx = M.ccys.filter(c => c !== 'RUB');
-    const mvT = (arr, vk, t) => '<table class="mini" data-vk="' + vk + '" data-title="' + t + '"><thead><tr><th>Выпуск</th><th>Рейт.</th><th class="n">Дох.</th><th class="n">Δ б.п.</th></tr></thead><tbody>' + arr.map(b => '<tr><td class="name">' + esc(b.name) + ' <span class="mut3">' + esc(b.sector) + '</span></td><td class="mut">' + esc(b.rating) + '</td><td class="n">' + f.pct(b.ytm) + '</td><td class="n ' + (b.chgBp > 0 ? 'chg-up' : 'chg-dn') + '"><b>' + f.bps(b.chgBp) + '</b></td></tr>').join('') + '</tbody></table>';
+    const mvT = (arr, vk, t) => '<table class="mini" data-vk="' + vk + '" data-title="' + t + '"><thead><tr><th>Выпуск</th><th>Рейт.</th><th class="n">Дох.</th><th class="n">Δ б.п.</th></tr></thead><tbody>' + arr.map(b => '<tr><td class="name">' + esc(b.name) + ' <span class="mut3">' + esc(b.sector) + '</span></td><td class="mut">' + esc(b.rating) + '</td><td class="n">' + K.hint(f.pct(b.ytm), b.yieldNote) + '</td><td class="n ' + (b.chgBp > 0 ? 'chg-up' : 'chg-dn') + '"><b>' + f.bps(b.chgBp) + '</b></td></tr>').join('') + '</tbody></table>';
     html += '<section id="s6"><h2><span class="no">06</span> Рынок <span class="sp"></span><span class="k-note">изменения к закрытию ' + f.date(M.prevDate) + '</span></h2>' +
       '<p>' + mktSentence() + ' ' +
       fxRatesLine().replace(/\.$/, '') + '. Курсы: ' + ccyFx.map(c => c + ' ' + f.n(M.fx[c], 2) + ' · ' + f.pcts(M.fxChgPct[c], 2) + fxPnlRate(c) + ' · PnL ' + K.d({ title: 'FX PnL ' + c, unit: 'mm ₽', fmt: v => f.mns(v, 2), list: L.filter(p => p.ccy === c), val: p => p.pnl.fx }) + ' mm').join('; ') + '. ' +

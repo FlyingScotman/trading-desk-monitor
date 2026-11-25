@@ -40,20 +40,23 @@ from collections import defaultdict
 from collections.abc import Callable
 from datetime import date, timedelta
 from decimal import Decimal, InvalidOperation
+from pathlib import Path
 from typing import Any
 
 import psycopg
 from psycopg.types.json import Jsonb
 
 from . import ratings
-from .bundle import Snapshot
+from .bundle import Snapshot, read_bundle
+from .market_analytics import moex_bond_analytics_unreliable
 
 log = logging.getLogger(__name__)
 
-VERSION = 4
+VERSION = 6
 """Format of the rows written here: another value rebuilds them on the next load (2: an offer listed by two sources
 counted once; 3: the desk's rating of every bond, the sector by the bond class where the hub has none, R25; 4: a
-coupon not set yet listed with a zero amount is projected, TDM#166)."""
+coupon not set yet listed with a zero amount is projected, TDM#166; 6: flag unreliable analytics and store terms for
+recalculating them, TDM#766)."""
 KEEP = 4
 HORIZON_DAYS = 400
 BIG_RUB = 10e9
@@ -162,6 +165,8 @@ def bond_facts(data: dict[str, Any], as_of: date) -> dict[str, dict[str, Any]]:
             "issue_size": size, "face": face, "outstanding": size * face if size is not None and face is not None else None,
             "freq": freq, "freq_letter": FREQ_LETTER.get(freq) if freq else None, "cpn_pct": rate,
             "maturity": mat, "perpetual": bool(i.get("is_perpetual")), "structured": bool(i.get("is_structured")),
+            "effective_yield_unreliable": moex_bond_analytics_unreliable(
+                i.get("labels") or (), i.get("source_analytics_unreliable_reasons") or ()),
             "foreign_issuer": i.get("bond_class") in NOT_RUSSIAN or ((iss or {}).get("country") not in (None, "RU")),
         }
     return out
@@ -356,7 +361,8 @@ def _jsonb(x: Any) -> Jsonb:
 def load_static(con: psycopg.Connection, snap: Snapshot) -> str:
     """The static snapshot's facts into the read model (module doc). Returns ``loaded``, ``cached`` (in already)
     or ``older`` (``KEEP`` newer snapshots are in: not needed)."""
-    have = con.execute("SELECT version FROM md_static_summary WHERE snapshot_id = %s", (snap.id,)).fetchone()
+    have = con.execute("SELECT version, loaded_at FROM md_static_summary WHERE snapshot_id = %s",
+                       (snap.id,)).fetchone()
     if have and have[0] == VERSION:
         return "cached"
     newer = con.execute("SELECT count(*) FROM md_static_summary WHERE business_date > %s AND snapshot_id <> %s",
@@ -367,10 +373,27 @@ def load_static(con: psycopg.Connection, snap: Snapshot) -> str:
     facts = bond_facts(snap.data, as_of)
     fl = flows(snap.data, facts, as_of)
     cal = calendar(fl, facts, as_of)
+    summary = {"calendar": cal, "schema_version": snap.doc.get("schema_version")}
+    flagged = {sid for sid, f in facts.items() if f["effective_yield_unreliable"]}
+    if flagged:
+        cpns, reds, offers = _index(snap.data)
+        formulas = {f["secid"]: f for f in snap.data.get("floater_formulas") or () if f["secid"] in flagged}
+        for i in snap.data["instruments"]:
+            sid = i["secid"]
+            if sid in flagged:
+                facts[sid]["market_valuation_terms"] = {
+                    "instruments": [i], "coupon_periods": cpns[sid], "redemptions": reds[sid], "offers": offers[sid],
+                    "floater_formulas": [formulas[sid]] if sid in formulas else [],
+                }
+        calendar_ids = {i.get("calendar") or "MOEX_STOCK" for i in snap.data["instruments"] if i["secid"] in flagged}
+        summary["market_valuation_calendars"] = [c for c in snap.data.get("calendars") or ()
+                                                if c["calendar"] in calendar_ids]
     with con.transaction(), con.cursor() as cur:
         cur.execute("DELETE FROM md_static_summary WHERE snapshot_id = %s", (snap.id,))
-        cur.execute("INSERT INTO md_static_summary (snapshot_id, business_date, version, data) VALUES (%s, %s, %s, %s)",
-                    (snap.id, as_of, VERSION, _jsonb({"calendar": cal, "schema_version": snap.doc.get("schema_version")})))
+        # Rebuilding an older static must not make it outrank a later same-day publication.
+        cur.execute("INSERT INTO md_static_summary (snapshot_id, business_date, version, data, loaded_at)"
+                    " VALUES (%s, %s, %s, %s, COALESCE(%s, clock_timestamp()))",
+                    (snap.id, as_of, VERSION, _jsonb(summary), have[1] if have else None))
         with cur.copy("COPY md_static_bond (snapshot_id, secid, data) FROM STDIN") as cp:
             for sid, f in facts.items():
                 cp.write_row((snap.id, sid, json.dumps(f, ensure_ascii=False)))
@@ -383,6 +406,18 @@ def load_static(con: psycopg.Connection, snap: Snapshot) -> str:
                     " ORDER BY business_date DESC, loaded_at DESC OFFSET %s)", (KEEP,))
     log.info("static facts %s (%s): %d bonds, %d flows", snap.id[:12], snap.business_date, len(facts), len(fl))
     return "loaded"
+
+
+def refresh_cached(con: psycopg.Connection, folder: Path) -> int:
+    """Rebuild retained static facts with an older format from the local bundles, including offline."""
+    stale = con.execute("SELECT snapshot_id FROM md_static_summary WHERE version < %s"
+                        " ORDER BY business_date DESC, loaded_at DESC", (VERSION,)).fetchall()
+    loaded = 0
+    for (sid,) in stale:
+        path = folder / f"{sid}.json.gz"
+        if path.is_file() and load_static(con, read_bundle(path)) == "loaded":
+            loaded += 1
+    return loaded
 
 
 def load_cbr(con: psycopg.Connection, snap: Snapshot) -> str:

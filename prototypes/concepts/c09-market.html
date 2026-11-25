@@ -140,7 +140,7 @@ table.sp td:first-child, table.sp th:first-child { text-align: left; }
   let ourPts = [];
   const ym = K.chart(document.getElementById('ymap'), () => {
     const okU = b => (S.flt === 'all' || (S.flt === 'flt' ? b.flt : !b.flt)) && (!S.sec || b.sector === S.sec) && (b.isOfz || S.rt.includes(gOf(b)));
-    const U = S.ours ? [] : M.universeRub.filter(okU);
+    const U = S.ours ? [] : M.universeRub.filter(b => b.ytm != null && okU(b));
     const L = K.list().filter(p => !M.deal(p) && p.ccy === 'RUB' && p.kind !== 'IN' && (S.flt === 'all' || (S.flt === 'flt' ? K.cpnType(p) === 'float' : K.cpnType(p) === 'fix')) && (!S.sec || p.sector === S.sec || (S.sec === 'ОФЗ' && p.group === 'GOV')) && (p.group === 'GOV' || S.rt.includes(gOf(p))));
     ourPts = L;
     const maxMv = Math.max(1, ...L.map(p => Math.abs(p.mv)));
@@ -163,7 +163,7 @@ table.sp td:first-child, table.sp th:first-child { text-align: left; }
         trigger: 'item', formatter: pp => {
           if (pp.seriesName === 'наши') { const p = L[pp.data.i]; return '<b>' + esc(p.name) + '</b> · ' + esc(K.ratingText(p.rating, p.ratingInfo)) + '<br>' + esc(p.couponFmt) + ' · ' + (p.event.date ? ({ put: 'пут', call: 'колл', mat: 'погаш.' }[p.event.kind]) + ' ' + f.date(p.event.date) : 'даты события нет') + '<br>дох. ' + f.pct(p.ytm) + ' · G ' + f.bp(p.gspread) + ' · ' + p.spreadName + ' ' + f.bp(p.zspread) + ' б.п.<br>Z к КБД ' + f.bp(p.zKbd) + ' · Z к RUONIA ' + f.bp(p.zRuonia) + ' б.п.<br>MV ' + f.mn(p.mv, 0) + ' mm ₽ · DV01 ' + f.dv(p.dv01) + '<br><span style="opacity:.6">щелчок — карточка</span>'; }
           const b = pp.data.b; if (!b) return '';
-          return '<b>' + esc(b.name) + '</b><br>' + esc(b.sector) + ' · ' + esc(K.ratingText(b.rating, b.ratingInfo)) + (b.flt ? ' · флоатер' : '') + '<br>дох. ' + f.pct(b.ytm) + ' · G ' + f.bp(b.spread) + ' б.п. · срок ' + f.yrs(b.tenor) + '<br>объём ' + f.bn(b.size, 1) + ' bn';
+          return '<b>' + esc(b.name) + '</b><br>' + esc(b.sector) + ' · ' + esc(K.ratingText(b.rating, b.ratingInfo)) + (b.flt ? ' · флоатер' : '') + '<br>дох. ' + f.pct(b.ytm) + ' · G ' + f.bp(b.spread) + ' б.п. · срок ' + f.yrs(b.tenor) + '<br>объём ' + f.bn(b.size, 1) + ' bn' + (b.yieldNote ? '<br>' + esc(b.yieldNote) : '');
         },
       },
       xAxis: { type: 'value', name: S.x === 'dur' ? 'дюрация, лет' : 'срок до оферты/погашения, лет', nameLocation: 'middle', nameGap: 24, min: 0, max: v => Math.min(16, Math.ceil(v.max)) },
@@ -244,12 +244,12 @@ table.sp td:first-child, table.sp th:first-child { text-align: left; }
   // ---------- валютные ----------
   let fxU = [], fxL = [];
   const fm = K.chart(document.getElementById('fxmap'), () => {
-    fxU = M.universeFx.filter(b => b.ccy === S.fx);
+    fxU = M.universeFx.filter(b => b.ccy === S.fx && b.ytm != null);
     fxL = K.list().filter(p => !M.deal(p) && p.ccy === S.fx);
     const cid = M.curves.find(c => c.ccy === S.fx).id;
     return {
       grid: { left: 8, right: 16, top: 36, bottom: 28, containLabel: true }, legend: { top: 2, right: 10, data: ['рынок', 'наши', M.curve[cid].short] },
-      tooltip: { formatter: pp => { if (pp.seriesName === 'наши') { const p = fxL[pp.data.i]; return '<b>' + esc(p.name) + '</b><br>дох. ' + f.pct(p.ytm) + ' · Z ' + f.bp(p.zspread) + ' б.п.<br>MV ' + f.mn(p.mv, 0) + ' mm ₽<br><span style="opacity:.6">щелчок — карточка</span>'; } const b = pp.data.b; return b ? '<b>' + esc(b.name) + '</b><br>' + esc(b.rating) + ' · купон ' + f.pct(b.cpn) + ' ' + b.freq + '<br>дох. ' + f.pct(b.ytm) + ' · ' + (b.put ? 'пут ' + f.date(b.put) : 'погаш. ' + f.date(b.maturity)) + '<br>в обращении ' + f.mn(b.outstanding, 0) + ' mm ' + b.ccy + (b.held ? '<br><b>в портфеле</b>' : '') : ''; } },
+      tooltip: { formatter: pp => { if (pp.seriesName === 'наши') { const p = fxL[pp.data.i]; return '<b>' + esc(p.name) + '</b><br>дох. ' + f.pct(p.ytm) + ' · Z ' + f.bp(p.zspread) + ' б.п.<br>MV ' + f.mn(p.mv, 0) + ' mm ₽<br><span style="opacity:.6">щелчок — карточка</span>'; } const b = pp.data.b; return b ? '<b>' + esc(b.name) + '</b><br>' + esc(b.rating) + ' · купон ' + f.pct(b.cpn) + ' ' + b.freq + '<br>дох. ' + f.pct(b.ytm) + ' · ' + (b.put ? 'пут ' + f.date(b.put) : 'погаш. ' + f.date(b.maturity)) + '<br>в обращении ' + f.mn(b.outstanding, 0) + ' mm ' + b.ccy + (b.held ? '<br><b>в портфеле</b>' : '') + (b.yieldNote ? '<br>' + esc(b.yieldNote) : '') : ''; } },
       xAxis: { type: 'value', name: 'срок, лет', nameLocation: 'middle', nameGap: 22, min: 0 }, yAxis: { type: 'value', name: 'дох., %', nameTextStyle: { align: 'left' }, scale: true },
       series: [
         { name: 'рынок', type: 'scatter', data: fxU.map(b => ({ value: [b.tenor, b.ytm], b, symbolSize: 5 + Math.sqrt(b.outstanding / (S.fx === 'CNY' ? 2e10 : 1.5e9)) * 9, itemStyle: { color: K.issuerColor(b.issuer), opacity: 0.75 } })), label: { show: true, position: 'right', fontSize: 9, color: K.css('--fg-3'), formatter: pp => pp.data.b.issuerName.split(' ')[0] }, labelLayout: { hideOverlap: true } },
@@ -303,8 +303,9 @@ table.sp td:first-child, table.sp th:first-child { text-align: left; }
   const movers = () => {
     if (!MH || !MH.bonds) return M.marketMovers;
     const k = perIdx(S.per);
-    return M.universeRub.filter(b => b.value && MH.bonds[b.id] && MH.bonds[b.id].y[k] != null).sort((a, b) => b.value - a.value).slice(0, 60)
-      .map(b => ({ name: b.name, rating: b.rating, sector: b.sector, ytm: b.ytmMoex, spread: b.spread, chgBp: MH.bonds[b.id].y[k], chgPx: MH.bonds[b.id].p[k], vol: b.value }));
+    return M.universeRub.filter(b => b.value && MH.bonds[b.id] && (MH.bonds[b.id].y[k] != null || b.yieldNote))
+      .sort((a, b) => b.value - a.value).slice(0, 60)
+      .map(b => ({ name: b.name, rating: b.rating, sector: b.sector, ytm: b.yieldSource === 'core' ? b.ytm : b.ytmMoex, yieldNote: b.yieldNote, spread: b.spread, chgBp: MH.bonds[b.id].y[k], chgPx: MH.bonds[b.id].p[k], vol: b.value }));
   };
   // дефолтный или дистрессный выпуск (#111): пометка вместо доходности, изменение не число и не входит в шкалу
   const movRows = () => movers().map((b, i) => Object.assign({ id: 'm' + i, searchText: (b.name + ' ' + b.sector + ' ' + b.rating).toLowerCase(), dist: K.distress(b) }, b));
@@ -318,7 +319,7 @@ table.sp td:first-child, table.sp th:first-child { text-align: left; }
     rowsFn: () => mov, autoFilter: false, footer: false, sort: [['chgBp', -1]], maxHeight: '420px', onRow: () => { },
     columns: [
       { key: 'name', label: 'Выпуск' }, { key: 'sector', label: 'Сектор', fmt: v => '<span class="mut">' + esc(v) + '</span>' }, { key: 'rating', label: 'Рейтинг', fmt: v => '<b style="color:' + (RB.find(x => x[0] === rbOf(v)) || RB[4])[2] + '">●</b> ' + esc(v) },
-      { key: 'ytm', label: 'Доходность', num: true, val: r => r.dist ? null : r.ytm, fmt: (v, r) => r.dist ? K.distressTag(r.dist) : f.pct(v) },
+      { key: 'ytm', label: 'Доходность', num: true, val: r => r.dist ? null : r.ytm, fmt: (v, r) => r.dist ? K.distressTag(r.dist) : K.hint(f.pct(v), r.yieldNote) },
       { key: 'chgBp', label: 'Изм., б.п.', num: true, val: r => r.dist ? null : r.chgBp, fmt: v => v == null ? '<span class="mut3">—</span>' : f.bps(v), style: v => v == null ? '' : K.heat(-v, mxChg), title: 'рост доходности — красный; дефолтные и дистрессные выпуски — без числа и вне шкалы' },
       { key: 'chgPx', label: 'Изм. цены', num: true, unit: 'п.п.', fmt: v => v == null ? '—' : f.s(v, 2), title: 'изменение чистой цены, п.п.' },
       { key: 'bar', label: '', val: r => r.dist ? null : r.chgBp, fmt: v => v == null ? '' : K.bar(-v, mxChg) },

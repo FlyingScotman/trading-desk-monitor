@@ -629,13 +629,13 @@ MANUAL_OVERRIDE_LABEL = "redemptions_manual_override"
 ``source: "manual_override"``) and which then has neither label above: NOT a broken schedule, the exact path is valid."""
 
 
-def fixed_schedule(terms: BondTerms, settlement: date) -> FixedSchedule:
-    """The horizon, the coupons up to it and the checks core does not make (redemptions complete)."""
+def fixed_schedule(terms: BondTerms, settlement: date, *, offer_on: date | None = None) -> FixedSchedule:
+    """The horizon and complete schedule. Market analytics can select the put at T+1 via ``offer_on``."""
     eligibility(terms)
     if terms.face_value is None or terms.face_value <= 0:
         raise Rejected("no_face_value")
     notes: list[str] = []
-    offer, coupons = next_offer(terms, settlement), terms.coupons
+    offer, coupons = next_offer(terms, settlement if offer_on is None else offer_on), terms.coupons
     if terms.is_perpetual:
         if offer is None:  # never called (TDM#35): the listed coupons, then core's tail of the last one
             coupons = perpetual_coupons(terms, settlement)

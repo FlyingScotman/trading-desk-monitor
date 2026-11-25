@@ -6,7 +6,7 @@ before it (the latest day on or before one day, 7 days, one month, three months 
 previous year), and for those days
 
 * ``bonds``: per quoted bond (secid) its yield change in bp and its clean price change in points over each period
-  (``md_bond_day``: the history API's rows, else the snapshots');
+  (``md_bond_day``: the history API's rows, else the snapshots'; yield changes compare the same yield basis);
 * ``indices``: КС, RUONIA, RUSFAR, RUSFAR CNY, SOFR and €STR (hub 0.3.0, contract 1.3: one series per day by the
   hub's source order, ``SOURCE_ORDER``) and CPI year on year (the CBR's official ``CPI_RU_YOY`` of 1.3, else computed
   from CPI_RU_MOM, the product of the last twelve months, said in ``source``) from the hub's fixings, each with its
@@ -44,6 +44,7 @@ from ..marketdata import hubhistory
 from ..marketdata.adapter_rates import FIXING_SOURCE_ORDER
 from ..marketdata.history import kbd
 from ..marketdata.history import latest_market_day as latest_day
+from ..marketdata.market_analytics import recalculate
 from . import runs
 from .app import db, run_missing
 
@@ -88,17 +89,20 @@ def _r(v: float | None, n: int) -> float | None:
 def bond_changes(con, d: date, starts: dict[str, date | None]) -> dict[str, dict[str, list[float | None]]]:
     """secid -> {"y": [bp per period], "p": [price points per period]} for the bonds quoted on ``d``."""
     days = [d, *(x for x in starts.values() if x is not None)]
-    by: dict[date, dict[str, tuple[float | None, float | None]]] = defaultdict(dict)
-    for r in con.execute("SELECT business_date, secid, yield_pct, clean_pct FROM md_bond_day"
-                         " WHERE business_date = ANY(%s)", (days,)):
-        by[r["business_date"]][r["secid"]] = (r["yield_pct"], r["clean_pct"])
+    by: dict[date, dict[str, tuple[float | None, float | None, bool]]] = defaultdict(dict)
+    quotes = con.execute("SELECT business_date, secid, yield_pct, clean_pct, effective_yield_unreliable,"
+                         " accrued_per_bond, face_value, currency_id FROM md_bond_day"
+                         " WHERE business_date = ANY(%s)", (days,)).fetchall()
+    recalculate(con, quotes)
+    for r in quotes:
+        by[r["business_date"]][r["secid"]] = (r["yield_pct"], r["clean_pct"], r["effective_yield_unreliable"])
     out = {}
-    for secid, (y, p) in by[d].items():
+    for secid, (y, p, flagged) in by[d].items():
         ys, ps = [], []
         for k in PERIODS:
             o = by.get(starts[k]) if starts[k] is not None else None
-            y0, p0 = (o or {}).get(secid, (None, None))
-            ys.append(_r((y - y0) * 100, 1) if y is not None and y0 is not None else None)
+            y0, p0, flagged0 = (o or {}).get(secid, (None, None, False))
+            ys.append(_r((y - y0) * 100, 1) if y is not None and y0 is not None and flagged == flagged0 else None)
             ps.append(_r(p - p0, 3) if p is not None and p0 is not None else None)
         out[secid] = {"y": ys, "p": ps}
     return out
@@ -334,9 +338,11 @@ _CACHE: dict[tuple, dict[str, Any]] = {}
 
 
 def version(con) -> tuple:
-    """What changes when the market history does: the last fetch of the history API and the last snapshot loaded."""
+    """Version of the quote rows and of the static facts that choose their yield basis."""
     r = con.execute("SELECT (SELECT max(fetch_id) FROM md_hub_job) AS a, (SELECT sum(rows) FROM md_hub_job) AS b,"
-                    " (SELECT max(loaded_at) FROM md_snapshot_load) AS c, (SELECT code FROM md_hub_state) AS d"
+                    " (SELECT max(loaded_at) FROM md_snapshot_load) AS c, (SELECT code FROM md_hub_state) AS d,"
+                    " (SELECT max(loaded_at) FROM md_static_summary) AS s,"
+                    " (SELECT sum(version) FROM md_static_summary) AS sv"
                     ).fetchone()
     return tuple(r.values()) if isinstance(r, dict) else tuple(r)
 

@@ -45,6 +45,7 @@ from ..valuation.bonds import PRICE_BASIS_ORDER
 from .adapter import BondQuote, MarketView, StaticView, zcyc_parameters
 from .bundle import Snapshot, SnapshotError, parse_bundle, read_bundle
 from .hub import HubClient
+from .market_analytics import moex_bond_analytics_unreliable, recalculate
 
 log = logging.getLogger("desk.marketdata.history")
 
@@ -60,7 +61,7 @@ BAD_BUNDLE = (SnapshotError, KeyError, TypeError, ValueError, ArithmeticError)
 
 EOD_COLS = ("business_date", "secid", "board", "clean_pct", "price_basis", "yield_pct", "yield_date", "duration_days",
             "gspread_bp", "zspread_bp", "accrued_per_bond", "face_value", "volume_bonds", "value", "currency_id",
-            "num_trades", "icpi", "ir", "bei", "cbr")
+            "num_trades", "icpi", "ir", "bei", "cbr", "effective_yield_unreliable")
 INSTRUMENT_COLS = ("secid", "isin", "name", "short_name", "bond_class", "coupon_type", "face_unit", "maturity_date",
                    "is_perpetual", "business_date", "snapshot_id")
 
@@ -96,11 +97,12 @@ def market_rows(snap: Snapshot) -> tuple[dict[str, Any], list[tuple]]:
         y = _f(sa.get("effective_yield_pct"))
         if px is None and y is None:
             continue  # no price and no yield: not a quoted day of the bond
+        unreliable = moex_bond_analytics_unreliable(quote_flag=q.source_analytics_unreliable)
         rows.append((d, secid, q.board, px and px[1], px and px[0], y,
                      date.fromisoformat(sa["yield_date"]) if sa.get("yield_date") else None,
                      _f(sa.get("duration_days")), _f(sa.get("gspread_bp")), _f(sa.get("zspread_bp")),
                      _f(q.accrued_per_bond), _f(q.face_value), _f(q.volume_bonds), _f(q.value), q.currency_id,
-                     q.num_trades, *(_f(sa.get(k)) for k in ("icpi", "ir", "bei", "cbr"))))
+                     q.num_trades, *(_f(sa.get(k)) for k in ("icpi", "ir", "bei", "cbr")), unreliable))
     return head, rows
 
 
@@ -312,8 +314,9 @@ def _years(d: date, until: date | None) -> float | None:
 def bond_history(con: psycopg.Connection, *, instrument_id: str | None, isin: str | None, curve: str | None = None,
                  from_: date | None = None, to: date | None = None) -> dict[str, Any]:
     """The bond's series (the ``BondHistory`` shape): every day of ``md_bond_day`` (the history API's rows, else the
-    snapshots') in the range and every default run that holds it, by date. Market fields (price, MOEX yield and G-spread, accrued, volume) come from the quote,
-    the run fills those the quote lacks and adds the Z-spread and the desk's face (all books); a day without a run
+    snapshots') in the range and every default run that holds it, by date. Market fields (price, MOEX yield and
+    G-spread, accrued, volume) come from the quote. The run fills missing fields except for a flagged quote's yield
+    and adds the Z-spread and the desk's face (all books); a day without a run
     has ``face_amount`` null. The term (``tenor_y``) runs to the MOEX yield date (the offer while it is ahead, else
     maturity), else to maturity. ``curve_rate``: the KBD of the date at that term, for a RUB bond with known coupons,
     when ``curve`` is the KBD (``KBD_CURVE``; unset, ``own`` and ``base`` mean it too: the runs' only curve);
@@ -343,6 +346,7 @@ def bond_history(con: psycopg.Connection, *, instrument_id: str | None, isin: st
         " AND (%(from)s::date IS NULL OR b.business_date >= %(from)s::date)"
         " AND (%(to)s::date IS NULL OR b.business_date <= %(to)s::date)"
         " ORDER BY b.business_date, array_position(%(s)s, b.secid)", {"s": secids, "from": from_, "to": to}).fetchall()
+    recalculate(con, quotes)
     curves = {r["business_date"]: kbd(r["trade_date"], r["params"]) for r in cur.execute(
         "SELECT business_date, trade_date, params FROM md_kbd_day WHERE business_date = ANY(%s)",
         (sorted({f["business_date"] for f in facts}),))}
@@ -356,15 +360,28 @@ def bond_history(con: psycopg.Connection, *, instrument_id: str | None, isin: st
                      "source": "market", "face_amount": None, "yield_date": q["yield_date"],
                      "price_basis": q["price_basis"], "moex_zspread_bp": q["zspread_bp"],
                      **{k: q[k] for k in ("icpi", "ir", "bei")}, "origin": q["origin"]}
+        if q["effective_yield_unreliable"]:
+            points[d].update(yield_note=q["yield_note"], yield_source=q.get("yield_source"),
+                             yield_manual_override=q["yield_manual_override"], duration_days=q["duration_days"],
+                             moex_zspread_bp=None, z_spread_bp=q["zspread_bp"])
+    run_only = {r["fact"].get("instrument_id") or r["secid"] for r in facts if r["business_date"] not in points}
+    flagged = {r["secid"] for r in cur.execute("SELECT secid FROM md_bond_analytics_static"
+                                               " WHERE secid = ANY(%s) AND unreliable",
+                                               (list(run_only),))} if run_only else set()
     for r in facts:
         f, d = r["fact"], r["business_date"]
+        if d not in points and (f.get("instrument_id") or r["secid"]) in flagged:
+            points[d] = {"date": d, "source": "desk run",
+                         "yield_note": "Аналитика MOEX недостоверна. Нет рыночной котировки за дату."}
         p = points.setdefault(d, {"date": d, "source": "desk run"})
         if p.get("face_amount") is None:
-            p.update({"face_amount": 0.0, "z_spread_bp": f.get("spread_bp"), "run_tenor_y": f.get("tenor_y")})
+            p.update({"face_amount": 0.0, "run_tenor_y": f.get("tenor_y")})
+            if not p.get("yield_note"):
+                p["z_spread_bp"] = f.get("spread_bp")
             if p["source"] == "market":
                 p["source"] = "market + desk run"
             for k, v in (("clean_price", f.get("price")), ("ytm", f.get("ytm")), ("accrued", f.get("accrued"))):
-                if p.get(k) is None:
+                if p.get(k) is None and (k != "ytm" or not p.get("yield_note")):
                     p[k] = v
         p["face_amount"] += f.get("notional") or 0.0
     last = facts[-1]["fact"] if facts else {}
@@ -375,8 +392,12 @@ def bond_history(con: psycopg.Connection, *, instrument_id: str | None, isin: st
     for d in sorted(points):
         p = points[d]
         run_t = p.pop("run_tenor_y", None)
-        p["tenor_y"] = _years(d, p.get("yield_date")) or _years(d, maturity) or run_t
-        rate = curve_rate(curves.get(d), p["tenor_y"]) if known else None
+        term = _years(d, p.get("yield_date"))
+        p["tenor_y"] = term if p.get("yield_note") else term or _years(d, maturity) or run_t
+        params = curves.get(d)
+        if p.get("yield_note") and params is not None and params.trade_date != d:
+            params = None
+        rate = curve_rate(params, p["tenor_y"]) if known else None
         p["curve_rate"] = rate
         p["spread_to_curve_bp"] = (p["ytm"] - rate) * 100 if rate is not None and p.get("ytm") is not None else None
         series.append(p)
@@ -385,7 +406,7 @@ def bond_history(con: psycopg.Connection, *, instrument_id: str | None, isin: st
     elif not on_kbd:
         note = f"кривой {curve} в истории нет, есть только {KBD_CURVE} (КБД)"
     elif known:
-        note = ("ставка кривой — КБД (кривая ОФЗ) даты на сроке до оферты или погашения; спред = доходность MOEX"
+        note = ("ставка кривой — КБД (кривая ОФЗ) даты на сроке до оферты или погашения; спред = доходность"
                 " минус она")
     elif inst is None:
         note = "условий выпуска нет в снимках: ставка кривой не считается"

@@ -798,7 +798,7 @@
     });
   };
   M.hasDeep = id => id in deepCache;
-  const OPT = ['zspr', 'dm', 'dmPx', 'icpi', 'ir', 'bei', 'cpi', 'ofzSpr', 'ofzRuo', 'dmNote'];  // dmNote: почему DM нет (#33)
+  const OPT = ['zspr', 'dm', 'dmPx', 'icpi', 'ir', 'bei', 'cpi', 'ofzSpr', 'ofzRuo', 'dmNote', 'yieldNote'];
   M.posHistory = function (id, opts) {
     if (opts && opts.deep && deepCache[id] && deepCache[id].dates.length) return conv(deepCache[id], { deep: true }, id);
     const p = M.pos[id], s = histCache[id];

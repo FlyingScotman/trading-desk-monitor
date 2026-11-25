@@ -3935,7 +3935,8 @@
         R.tooltip.formatter = ps => { const i = at[(ps[0] || {}).axisValue], v = i == null ? null : H.dmPx[i]; return tf(ps) + (v != null ? '<br>DM по цене (оценка): <b>' + f.n(v, 1) + '</b>' : ''); };
       }
       hnote.innerHTML = R ? R.note + (isFloat && mode === 'dv01' ? '<div style="margin-top:3px">' + esc(K.tips.floaterDv01) + '</div>' : '')
-        + (isFloat && mode === 'spread' && H.dmNote ? '<div style="margin-top:3px">' + esc(H.dmNote) + '</div>' : '') : '';  // #33: почему DM нет
+        + (isFloat && mode === 'spread' && H.dmNote ? '<div style="margin-top:3px">' + esc(H.dmNote) + '</div>' : '')  // #33: почему DM нет
+        : mode === 'yield' && H.yieldNote ? esc(H.yieldNote) : '';
       hunit.style.display = mode === 'dv01' && perBondOk ? '' : 'none';
       const S = R ? R.series : mode === 'price' ? [{ name: 'Цена', data: H.price }]
         : mode === 'yield' ? [{ name: 'Доходность', data: H.ytm }, { name: 'ОФЗ на сроке', data: H.bench, lineStyle: { type: 'dashed', width: 1 } }]
