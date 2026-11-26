@@ -50,31 +50,35 @@ const bars = (pg, root) => pg.evaluate(sel => {
   });
   return out;
 }, root);
-// графики с барами внутри root: размах оси значений и данных (с нулём), длина области столбцов и самих столбцов, px
+// графики с барами внутри root: размах оси значений и всех рядов на ней (с нулём), длина области графика и данных, px
 const axes = (pg, root) => pg.evaluate(sel => {
   const out = [];
   document.querySelectorAll(sel + '[_echarts_instance_], ' + sel + ' [_echarts_instance_]').forEach(el => {
     const inst = echarts.getInstanceByDom(el), opt = inst && inst.getOption();
     if (!opt || !el.clientWidth || !(opt.series || []).some(s => s.type === 'bar')) return;
-    const horiz = !!(opt.yAxis || [])[0] && opt.yAxis[0].type === 'category';
-    const ax = inst.getModel().getComponent(horiz ? 'xAxis' : 'yAxis').axis, ext = ax.scale.getExtent();
-    const gr = inst.getModel().getComponent('grid').coordinateSystem.getRect();
+    const horiz = !!(opt.yAxis || [])[0] && opt.yAxis[0].type === 'category', dim = horiz ? 'x' : 'y';
+    const model = inst.getModel(), ax = model.getComponent(dim + 'Axis').axis, ext = ax.scale.getExtent();
+    const gr = model.getComponent('grid').coordinateSystem.getRect();
     let lo = 0, hi = 0;
-    (opt.series || []).forEach((s, si) => {
-      if (s.type !== 'bar') return;
-      const data = inst.getModel().getSeriesByIndex(si).getData();
-      for (let i = 0; i < data.count(); i++) { const v = data.get(data.mapDimension(horiz ? 'x' : 'y'), i); if (isFinite(v)) { lo = Math.min(lo, v); hi = Math.max(hi, v); } }
+    model.getSeries().forEach(s => {
+      if (s.coordinateSystem?.getAxis?.(dim) !== ax) return;
+      const data = s.getData(), base = data.mapDimension(dim);
+      const valueDim = data.getCalculationInfo('stackedDimension') === base ? data.getCalculationInfo('stackResultDimension') : base;
+      for (let i = 0; i < data.count(); i++) {
+        const v = data.get(valueDim, i);
+        if (Number.isFinite(v)) { lo = Math.min(lo, v); hi = Math.max(hi, v); }
+      }
     });
     const len = horiz ? gr.width : gr.height, px = v => Math.abs(ax.dataToCoord(v) - ax.dataToCoord(0));
-    out.push({ el: el.id || el.parentElement.id || el.className, axis: ext[1] - ext[0], data: hi - lo, len, bars: px(lo) + px(hi) });
+    out.push({ el: el.id || el.parentElement.id || el.className, axis: ext[1] - ext[0], data: hi - lo, len, span: px(lo) + px(hi) });
   });
   return out;
 }, root);
-const AXIS_MAX = 2.5, BARS_MIN = 0.35;
+const AXIS_MAX = 2.5, SPAN_MIN = 0.35;
 const notBloated = (L, what) => L.filter(x => x.data > 0).forEach(x => {
   const s = what + ' ' + x.el + ' ' + JSON.stringify(x);
   assert.ok(x.axis <= x.data * AXIS_MAX, s + ': ось не раздута');
-  assert.ok(x.bars >= x.len * BARS_MIN, s + ': столбцам хватает места');
+  assert.ok(x.span >= x.len * SPAN_MIN, s + ': данным хватает места');
 });
 const E = 0.5;  // допуск, px
 const atEnd = (L, what, opt) => {

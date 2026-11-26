@@ -699,6 +699,24 @@
   K.live = (el, ev, fn) => { const off = K.on(ev, () => { if (!el.isConnected) return off(); fn(); }); return off; };
   K.onFilter = fn => K.on('filter', fn);
 
+  const RISK_AXIS_KEY = 'concepts-risk-cum-axis';
+  const RISK_CUM_AXES = [['same', 'общая'], ['split', 'отдельная']];
+  const readRiskCumAxis = () => { try { return localStorage.getItem(RISK_AXIS_KEY) === 'split' ? 'split' : 'same'; } catch (e) { return 'same'; } };
+  K.riskCumAxis = readRiskCumAxis();
+  K.setRiskCumAxis = v => {
+    if ((v !== 'same' && v !== 'split') || v === K.riskCumAxis) return;
+    K.riskCumAxis = v;
+    try { localStorage.setItem(RISK_AXIS_KEY, v); } catch (e) { }
+    fire('riskaxis');
+  };
+  window.addEventListener?.('storage', e => {
+    if (e.storageArea !== localStorage || (e.key !== RISK_AXIS_KEY && e.key !== null)) return;
+    const v = readRiskCumAxis();
+    if (v === K.riskCumAxis) return;
+    K.riskCumAxis = v;
+    fire('riskaxis');
+  });
+
   // ---------- данные, которые приходят после страницы (TDM#629) ----------
   // lib/real.js грузит всё сверх прогона асинхронно и сообщает событием concepts-data на document: { name } — пришло
   // (алиасы бумаг — страницы перерисовываются, как при K.setAlias), { name, error } — сбой запроса (полоса ниже).
@@ -1238,17 +1256,18 @@
       if (runState.refresh) runState.refresh();
     });
   }
-  // меню вида (⚙ рядом с «(1) / −1», #255): формат отрицательных чисел и пороги «⚠ устарел» бейджа прогона
+  // меню вида (⚙ рядом с «(1) / −1», #255): формат чисел, ось кумулятива и пороги «⚠ устарел» бейджа прогона
   // (K.setRunAge: поле меняется по Enter и при уходе с поля; неверное значение не сохраняется — в поле возвращается
   // сохранённое, под полями — что не так). Клавиатура: при открытии фокус в панели, Tab и Shift+Tab ходят по кругу
   // внутри неё, Esc закрывает и возвращает фокус на ⚙
   function bindViewMenu(btn) {
     if (!btn) return;
-    let panel = null;
+    let panel = null, offRiskAxis = null;
     btn.setAttribute('aria-label', 'Вид'); btn.setAttribute('aria-expanded', 'false');
     const close = () => {
       document.removeEventListener('keydown', onKey, true); document.removeEventListener('click', onDoc, true);
       btn.setAttribute('aria-expanded', 'false');
+      if (offRiskAxis) { offRiskAxis(); offRiskAxis = null; }
       if (!panel) return;
       panel.remove(); if (openMenu === panel) openMenu = null; panel = null;
     };
@@ -1274,6 +1293,7 @@
       panel.style.cssText = 'position:fixed;z-index:140;width:' + W + 'px;max-height:70vh;overflow:auto;box-shadow:var(--shadow);padding:10px 14px;font-size:12.5px';
       panel.style.left = Math.max(8, Math.min(r.right - W, innerWidth - W - 10)) + 'px'; panel.style.top = (r.bottom + 4) + 'px';
       panel.innerHTML = '<div class="k-sec" style="margin-top:0">Отрицательные числа</div><div data-x="neg"></div>' +
+        '<div class="k-sec">Ось кумулятива</div><div data-x="riskaxis" role="group" aria-label="Ось кумулятива"></div>' +
         '<div class="k-sec">Бейдж прогона: «⚠ устарел»</div>' +
         field('fresh_min', 'Прогон устарел через, мин', 'по умолч. ' + K.RUN_AGE.fresh_min) +
         field('max_days', '…через, дней', 'по умолч. ' + K.RUN_AGE.max_days) +
@@ -1283,6 +1303,12 @@
       const err = h('div', 'k-viewerr'); err.setAttribute('role', 'status');
       panel.querySelectorAll('.k-viewf')[1].after(err);
       K.seg(panel.querySelector('[data-x=neg]'), K.NEG_FMTS, K.negFmt, v => K.setNegFmt(v));
+      const riskAxis = K.seg(panel.querySelector('[data-x=riskaxis]'), RISK_CUM_AXES, K.riskCumAxis, K.setRiskCumAxis);
+      const paintRiskAxis = () => riskAxis.querySelectorAll('button').forEach((b, i) => {
+        const on = RISK_CUM_AXES[i][0] === K.riskCumAxis;
+        b.classList.toggle('on', on); b.setAttribute('aria-pressed', String(on));
+      });
+      paintRiskAxis(); offRiskAxis = K.live(panel, 'riskaxis', paintRiskAxis);
       panel.querySelectorAll('input[data-k]').forEach(inp => {
         const k = inp.dataset.k;
         inp.value = a[k];
@@ -1478,7 +1504,7 @@
       srcChip() + (K.source === 'empty' ? '' : runBadgeChip()) + (K.source !== 'empty' && M.notes && M.notes.length ? notesChipHtml() : '') +
       '<button class="k-btn" data-a="search">Поиск <span class="k-kbd">Ctrl K</span></button>' +
       '<button class="k-btn" data-a="numfmt"></button>' +
-      '<button class="k-btn" data-a="view" title="Вид: формат отрицательных чисел, когда прогон считается устаревшим" aria-haspopup="dialog">⚙</button>' +
+      '<button class="k-btn" data-a="view" title="Вид: формат отрицательных чисел, ось кумулятива, когда прогон считается устаревшим" aria-haspopup="dialog">⚙</button>' +
       '<button class="k-btn" data-a="theme" title="Светлая / тёмная тема">◐</button>';
     document.body.prepend(bar);
     // вход: пользователь, «Выйти», CSRF; режим входа и роль того же ответа — права на правку имён бумаг (M.nameRights, TDM#777)
@@ -1786,8 +1812,15 @@
     return { data: out, idx, markLine, tip, note };
   };
 
+  K.riskAxes = cumAxisIndex => {
+    const formatter = v => K.tick(v, 1e3);
+    const axes = [{ type: 'value', unit: 'тыс ₽/бп', axisLabel: { formatter } }];
+    if (cumAxisIndex === 1) axes.push({ type: 'value', position: 'right', splitLine: { show: false }, axisLabel: { formatter, color: css('--warn') } });
+    return axes;
+  };
+
   // Риск по бакетам: стек по кривым, ромб — итог бакета, линия — кумулятивный риск до срока.
-  // opts: {curves:[id], list?, cs01?:bool, title?, height?}
+  // opts: {curves:[id], list?, ccy?, labels?:bool, legend?, gridTop?, cumSameAxis?:bool}
   K.riskStack = function (el, opts) {
     opts = opts || {};
     const list = () => opts.list ? opts.list() : K.list();
@@ -1805,21 +1838,23 @@
     let side = false, names = [], totals = {};
     const chart = K.chart(el, () => {
       cur = ser();
+      const sameAxis = typeof opts.cumSameAxis === 'boolean' ? opts.cumSameAxis : K.riskCumAxis !== 'split';
+      const cumAxisIndex = sameAxis ? 0 : 1;
       side = opts.legend === 'side' || (opts.legend !== 'top' && el.clientWidth >= 560);
       names = ids.map(id => id === 'CS01' ? 'CS01' : M.curve[id].short);
       totals = {}; names.forEach((n, i) => totals[n] = cur.data[i].reduce((a, b) => a + b, 0));
       totals['итог бакета'] = cur.tot.reduce((a, b) => a + b, 0);
       return {
         // широкая панель: легенда слева столбиком — название кривой и её сумма; узкая — легенда сверху
-        grid: side ? { left: 168, right: 8, top: 12, bottom: 4, containLabel: true } : { left: 8, right: 8, top: 34, bottom: 4, containLabel: true },
+        grid: { left: side ? 168 : 8, right: 8, top: opts.gridTop ?? (side ? 12 : 34), bottom: 4, containLabel: true },
         legend: side ? { orient: 'vertical', left: 0, top: 'middle', itemGap: 9, data: names.concat(['итог бакета', 'кумулятив']), formatter: n => { const t = totals[n]; return t == null ? n : '{n|' + n + '}{v|' + f.dv(t) + '}'; }, textStyle: { color: css('--fg-2'), rich: { n: { width: 84, color: css('--fg-2') }, v: { width: 54, align: 'right', fontWeight: 600, color: css('--fg') } } } }
           : { top: 0, left: 0, data: names.concat(['итог бакета', 'кумулятив']) },
         tooltip: { trigger: 'axis', axisPointer: { type: 'shadow' }, formatter: ps => { const k = ps[0].dataIndex; return '<b>' + M.buckets[k] + '</b><br>' + ps.map(p => p.marker + p.seriesName + ': <b>' + f.dv(p.value) + '</b>').join('<br>') + '<br><span style="opacity:.6">тыс ₽/бп · щелчок — вклад позиций</span>'; } },
         xAxis: { type: 'category', data: M.buckets },
-        yAxis: [{ type: 'value', unit: 'тыс ₽/бп', axisLabel: { formatter: v => K.tick(v, 1e3) } }, { type: 'value', position: 'right', splitLine: { show: false }, axisLabel: { formatter: v => K.tick(v, 1e3), color: css('--warn') } }],
+        yAxis: K.riskAxes(cumAxisIndex),
         series: ids.map((id, i) => ({ name: id === 'CS01' ? 'CS01' : M.curve[id].short, type: 'bar', stack: id !== 'CS01' && M.curve[id].kind === 'rate' ? 'r' : 'x' + i, barMaxWidth: 38, data: cur.data[i], itemStyle: { color: K.curveColors[id] } }))
           .concat([{ name: 'итог бакета', type: 'scatter', symbol: 'diamond', symbolSize: 11, data: cur.tot, itemStyle: { color: css('--fg'), borderColor: css('--bg'), borderWidth: 1 }, z: 5, label: { show: opts.labels !== false, position: 'top', formatter: p => Math.abs(p.value) < 500 ? '' : f.dv(p.value), color: css('--fg-2'), fontSize: 10 } },
-          { name: 'кумулятив', type: 'line', yAxisIndex: opts.cumSameAxis ? 0 : 1, smooth: false, data: cur.cum, symbol: 'circle', symbolSize: 4, lineStyle: { width: 2, type: 'dashed', color: css('--warn') }, itemStyle: { color: css('--warn') }, z: 4 }]),
+          { name: 'кумулятив', type: 'line', yAxisIndex: cumAxisIndex, smooth: false, data: cur.cum, symbol: 'circle', symbolSize: 4, lineStyle: { width: 2, type: 'dashed', color: css('--warn') }, itemStyle: { color: css('--warn') }, z: 4 }]),
       };
     });
     chart.on('click', pp => {
@@ -1830,7 +1865,10 @@
       const id = ids[pp.seriesIndex];
       K.drill({ title: (id === 'CS01' ? 'CS01' : M.curve[id].short) + ' · ' + M.buckets[k], unit: 'тыс ₽/бп', rows: L.map(p => ({ p, v: id === 'CS01' ? ((!opts.ccy || p.ccy === opts.ccy) ? p.cs01b[k] : 0) : p.risk[id][k] })) });
     });
-    K.live(el, 'filter', () => chart.redraw());
+    const offFilter = K.live(el, 'filter', () => chart.redraw());
+    const offRiskAxis = K.live(el, 'riskaxis', () => chart.redraw());
+    const dispose = chart.dispose;
+    chart.dispose = () => { offFilter(); offRiskAxis(); dispose(); };
     return chart;
   };
 

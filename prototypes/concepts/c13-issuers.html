@@ -195,10 +195,7 @@ table.mini tr.put td:first-child { box-shadow: inset 3px 0 0 var(--warn); }
   }
 
   // ---------- дашборд эмитента ----------
-  let dashCharts = [], curRs = null, redrawCurve = null;
-  // в узкой панели легенда K.riskStack наезжает на подпись правой оси: прячем подпись и опускаем сетку (и после смены темы)
-  const fixRs = () => curRs && curRs.setOption({ grid: { top: 52 }, yAxis: [{}, { name: '' }] });
-  K.on('theme', fixRs);
+  let dashCharts = [], redrawCurve = null;
   function panel(title, extra) { const p = K.h('div', 'k-panel'); p.innerHTML = '<div class="hd"><h3>' + title + '</h3><span class="sp"></span>' + (extra || '') + '</div><div class="bd"></div>'; return p; }
   function renderDash() {
     dashCharts.forEach(c => c.dispose()); dashCharts = []; redrawCurve = null;
@@ -271,8 +268,7 @@ table.mini tr.put td:first-child { box-shadow: inset 3px 0 0 var(--warn); }
     const rel = K.h('div', 'ch'); rp.querySelector('.bd').appendChild(rel);
     const cids = M.curves.filter(c => L.some(p => p.risk[c.id].some(v => Math.abs(v) > 1))).map(c => c.id);
     const sel = x.id;
-    const rs = K.riskStack(rel, { curves: cids.concat(L.some(p => p.cs01) ? ['CS01'] : []), list: () => K.list().filter(p => p.issuer === sel), labels: false });
-    curRs = rs; fixRs();
+    const rs = K.riskStack(rel, { curves: cids.concat(L.some(p => p.cs01) ? ['CS01'] : []), list: () => K.list().filter(p => p.issuer === sel), labels: false, gridTop: 36 });
     dashCharts.push(rs);
     // наши бумаги
     const bp = panel('Наши бумаги эмитента', '<span class="k-note">по сроку до оферты · валюта — столбец; группы «валюта → фикс / флоатеры» — переключателем</span>'); dash.appendChild(bp);

@@ -153,6 +153,24 @@
     if (!M.netErrors.some(x => x.what === what)) M.netErrors.push({ what, text, status: r.status });
     emit({ name: what, error: text, status: r.status, gone: !!r.gone });
   }
+  let riskRequest;
+  M.loadRisk = function () {
+    if (M.run.id == null) return Promise.resolve(null);
+    if (!riskRequest) riskRequest = getJson('../api/v1/runs/' + encodeURIComponent(M.run.id) + '/risk').then(r => {
+      if (r.error) {
+        if (r.status !== 404) riskRequest = undefined;
+        failed('риск прогона', r);
+      }
+      const j = r.body;
+      if (!j || String(j.run_id) !== String(M.run.id) || !Array.isArray(j.factors) || !Array.isArray(j.positions)) return null;
+      if (!Array.isArray(j.buckets) || j.buckets.length !== M.buckets.length || !M.buckets.every((b, i) => b === j.buckets[i])) {
+        failed('риск прогона', { status: r.status, error: 'бакеты риска не совпадают с бакетами прогона' });
+        return null;
+      }
+      return j;
+    });
+    return riskRequest;
+  };
   (D.riskNotes || []).forEach(n => M.notes.push(n.text + (n.detail ? ' (' + n.detail + ')' : '')));
   if (!D.pnlAvailable && D.pnlReasonText) M.notes.push('PnL: ' + D.pnlReasonText);
   if (!window.DESK_EXTRAS) M.notes.push((window.CONCEPTS_LOAD_ERROR || {}).data ? '/concepts-data.js не загрузился (ошибка сервера или нет связи): история, потоки и рынок пусты' : 'нет данных /concepts-data.js: история, потоки и рынок пусты');
@@ -253,6 +271,7 @@
     }
   }));
   M.curve = Object.fromEntries(M.curves.map(c => [c.id, c]));
+  M.riskCurveCcy = id => (C[id] || {}).ccy || (M.curve[curveOf(id)] || {}).ccy || id.split(' ')[0];
   M.ofzCurve = kbd;
   if (kbd.every(v => v == null)) M.notes.push('нет КБД в прогоне: кривая ОФЗ и базис пусты');
   function curveAt(id, t) {
