@@ -80,8 +80,6 @@ body { display: flex; flex-direction: column; overflow: hidden; }
   const grid = { left: 4, right: 8, top: 22, bottom: 2, containLabel: true };
   // колонка валюты: у K.posCols.ccy fmt получает порядковый номер валюты (val), а не код — рисуем по строке
   const ccyCol = Object.assign({}, K.posCols.ccy, { fmt: (v, r) => K.ccyTag(r.ccy) });
-  // стек риска в маленькой плитке: подпись правой оси «кумулятив» налезает на легенду
-  const stack = (el, opt) => { const c = K.riskStack(el, Object.assign({ labels: false }, opt)); c.setOption({ yAxis: [{}, { name: '' }] }); return c; };
 
   // ---------- плитки ----------
   const TILES = {
@@ -109,7 +107,7 @@ body { display: flex; flex-direction: column; overflow: hidden; }
       title: K.ccyTag('RUB') + ' риск по бакетам', modes: [['chart', 'стек'], ['table', 'таблица']],
       render(bd, mode) {
         if (mode === 'table') { bd.classList.remove('pad'); K.bucketTable(bd, 'RUB', { cs01: true, viewKey: 'c06-buckets-rub' }); return; }
-        const el = K.h('div', 'fill'); bd.appendChild(el); stack(el, { curves: ['RUB RUONIA', 'RUB KEY', 'RUB OFZ'] });
+        const el = K.h('div', 'fill'); bd.appendChild(el); K.riskStack(el, { curves: ['RUB RUONIA', 'RUB KEY', 'RUB OFZ'], labels: false });
       },
     },
     fxrisk: {
@@ -120,7 +118,7 @@ body { display: flex; flex-direction: column; overflow: hidden; }
           K.table(bd, { viewKey: 'c06-fx-bonds', rows: list(), search: false, footer: true, stripe: r => K.ccyColor(r.ccy), sort: [['dv01', 1]], columns: K.cols(['name', ccyCol, 'issuer', 'tenor', 'tradeDay', 'ytm', 'dv01', 'cs01']) });
           return;
         }
-        const el = K.h('div', 'fill'); bd.appendChild(el); stack(el, { curves: ['USD SOFR', 'EUR ESTR', 'CNY XCCY'], list });
+        const el = K.h('div', 'fill'); bd.appendChild(el); K.riskStack(el, { curves: ['USD SOFR', 'EUR ESTR', 'CNY XCCY'], list, labels: false });
       },
     },
     matrix: {
