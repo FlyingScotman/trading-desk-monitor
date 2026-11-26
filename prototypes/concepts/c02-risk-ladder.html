@@ -27,6 +27,7 @@
 .sm svg rect.b { cursor: pointer; }
 .sm svg rect.b:hover { opacity: 1 !important; stroke: var(--fg); stroke-width: .6; }
 .prof svg { display: block; }
+#sim .hd { flex-wrap: wrap; }
 .sim { display: grid; grid-template-columns: 300px minmax(0, 1fr) minmax(0, 1fr); gap: 14px; }
 @media (max-width: 1250px) { .sim { grid-template-columns: minmax(0, 1fr); } }  /* minmax: колонка уже графика (#263) */
 .sl { display: grid; grid-template-columns: 92px 1fr 54px; gap: 8px; align-items: center; margin: 6px 0; font-size: 12px; }
@@ -44,7 +45,7 @@
 <body>
 <div class="k-page">
   <div class="strip" id="strip"></div>
-  <div class="k-panel" id="sim"><div class="hd"><h3>Сдвиг кривых → PnL</h3><span class="k-note">линейно: DV01 × сдвиг, без выпуклости</span><span class="sp"></span><span class="scope"></span></div><div class="bd"></div></div>
+  <div class="k-panel" id="sim"><div class="hd"><h3>Сдвиг кривых → PnL</h3><span class="k-note" role="status"></span><span class="sp"></span><span class="scope"></span><span class="order"></span></div><div class="bd"></div></div>
   <div id="secs" class="k-grid"></div>
   <div class="k-panel" id="rates"><div class="hd"><h3>Свопы и РЕПО: оценка ядром</h3><span class="k-note">ядро и отчёт, риск по кривым RUONIA и КС, фиксинги индексов · щелчок по строке — карточка позиции</span></div><div class="bd"></div></div>
   <div class="k-panel" id="iss"><div class="hd"><h3>Эмитент × срок</h3><span class="k-note">тыс ₽/бп · щелчок по клетке — позиции</span><span class="sp"></span><span class="met"></span></div><div class="bd flush scroll"></div></div>
@@ -53,6 +54,7 @@
 <script src="lib/boot.js"></script>
 <script src="lib/kit.js"></script>
 <script src="lib/instr.js"></script>
+<script src="lib/c02-sim.js"></script>
 <script>
 (function () {
   const M = MOCK, K = KIT, f = K.f, esc = K.esc, css = K.css;
@@ -285,72 +287,94 @@
 
   // ---------- сдвиг кривых ----------
   const sim = { scope: 'ALL', par: 100, twist: 0, basis: 0, credit: 0 };
-  const lnA = Math.log(M.pillars[0]), lnB = Math.log(M.pillars[NB - 1]);
-  const tw = M.pillars.map(t => (Math.log(t) - lnA) / (lnB - lnA) - 0.5);
-  const shift = k => sim.par + sim.twist * tw[k];
-  const inScope = c => sim.scope === 'ALL' || sim.scope === c;
-  function simPos(p) {
-    let r = 0, b = 0, c = 0; const byB = new Array(NB).fill(0);
-    for (const id of ALLRATE) { if (!inScope(M.curve[id].ccy)) continue; const a = p.risk[id]; for (let k = 0; k < NB; k++) { const x = a[k] * shift(k); r += x; byB[k] += x; } }
-    if (inScope('RUB') && sim.basis) for (let k = 0; k < NB; k++) { const x = p.risk['RUB OFZ'][k] * sim.basis; b += x; byB[k] += x; }
-    if (inScope(p.ccy) && sim.credit) for (let k = 0; k < NB; k++) { const x = p.cs01b[k] * sim.credit; c += x; byB[k] += x; }
-    return { r, b, c, t: r + b + c, byB };
-  }
-  const SL = [['par', 'Параллельно', -300, 300, 5], ['twist', 'Наклон 20Y−3M', -300, 300, 5], ['basis', 'Базис ОФЗ', -150, 150, 5], ['credit', 'Кредит. спреды', -200, 300, 5]];
+  const runPositions = window.CONCEPTS_RUN?.positions || [];
+  let simulate = C02Sim.prepare(M, runPositions);
+  let riskPayload, withConvexity = true;
+  const hasConvexity = () => !!riskPayload && riskPayload.second_order !== false;
+  const showConvexity = () => hasConvexity() && withConvexity;
+  const SL = [['par', 'Параллельно', -300, 300, 5], ['twist', 'Наклон', -300, 300, 5], ['basis', 'Базис ОФЗ', -150, 150, 5], ['credit', 'Кредит. спреды', -200, 300, 5]];
   const PRE = [
     ['+100 парал.', { par: 100, twist: 0, basis: 0, credit: 0 }], ['−100 парал.', { par: -100, twist: 0, basis: 0, credit: 0 }],
     ['бычий стипенинг', { par: -100, twist: 100, basis: 0, credit: 0 }], ['медвежий флэттенинг', { par: 100, twist: -100, basis: 0, credit: 0 }],
     ['КС −200 (короткий)', { par: -100, twist: 200, basis: 0, credit: 0 }], ['ОФЗ шире на 30', { par: 0, twist: 0, basis: 30, credit: 0 }],
     ['risk-off: спреды +75, ставки +50', { par: 50, twist: -30, basis: 20, credit: 75 }], ['сброс', { par: 0, twist: 0, basis: 0, credit: 0 }],
   ];
-  let simChart = null, simRes = null;
+  let simChart, simRes = [], simShifts = [], simBuckets = M.buckets;
+  const simDrill = K.dScope();
+  const PARTS = [['r', 'ставки', 'Ставки', K.curveColors['RUB RUONIA']], ['b', 'базис', 'Базис', K.curveColors['RUB OFZ']], ['c', 'спреды', 'Спреды', K.curveColors.CS01], ['cvx', 'выпуклость', 'Выпукл.', K.curveColors['RUB KEY']]];
+  const activeParts = () => showConvexity() ? PARTS : PARTS.slice(0, 3);
+  function drawSimMode(linearOnly) {
+    const P = document.getElementById('sim');
+    let note;
+    if (hasConvexity()) note = withConvexity ? 'с выпуклостью · 2-й порядок Тейлора' : 'линейно · 1-й порядок Тейлора';
+    else if (riskPayload?.second_order === false) note = 'линейно: в этом прогоне нет вторых производных';
+    else if (M.run?.id == null) note = 'линейно: демо без вторых производных';
+    else if (riskPayload === undefined) note = 'линейно: загружаем вторые производные';
+    else note = 'линейно: вторые производные не загрузились';
+    if (linearOnly) {
+      const ending = linearOnly % 10, teens = linearOnly % 100 >= 11 && linearOnly % 100 <= 14;
+      const positions = !teens && ending === 1 ? 'позиция' : !teens && ending >= 2 && ending <= 4 ? 'позиции' : 'позиций';
+      note += ' · ' + linearOnly + ' ' + positions + ' — линейно, без вторых производных';
+    }
+    const status = P.querySelector('.hd .k-note');
+    if (status.textContent !== note) status.textContent = note;
+  }
   function buildSim() {
     const P = document.getElementById('sim'), bd = P.querySelector('.bd');
     K.seg(P.querySelector('.scope'), [['ALL', 'все валюты']].concat(M.ccys.map(c => [c, c])), sim.scope, v => { sim.scope = v; updSim(); });
     bd.innerHTML = '<div class="sim"><div class="ctl">' + SL.map(([k, l, a, b, s]) => '<div class="sl"><span>' + l + '</span><input type="range" min="' + a + '" max="' + b + '" step="' + s + '" value="' + sim[k] + '" data-k="' + k + '"><span class="val" data-v="' + k + '"></span></div>').join('') +
       '<div class="presets">' + PRE.map((x, i) => '<button class="k-btn" data-p="' + i + '">' + x[0] + '</button>').join('') + '</div>' +
-      '<div class="k-note" style="margin-top:8px">Сдвиг в бакете = параллельный + наклон × вес (от −½ на 3M до +½ на 20Y, лог-шкала). Базис — только RUB; спреды — CS01 бумаг выбранных валют.</div></div>' +
+      '<div class="k-note" style="margin-top:8px">Сдвиг в бакете = параллельный + наклон × вес (от −½ на ' + M.buckets[0] + ' до +½ на ' + M.buckets[NB - 1] + ', лог-шкала). Базис — только RUB; спреды — CS01 бумаг выбранных валют.</div></div>' +
       '<div><div class="bigpnl"></div><div class="comp"></div><div class="schart" style="height:230px"></div></div><div class="stbl" style="overflow:auto"></div></div>';
     bd.querySelectorAll('input[type=range]').forEach(i => i.oninput = () => { sim[i.dataset.k] = +i.value; updSim(); });
     bd.querySelectorAll('[data-p]').forEach(b => b.onclick = () => { Object.assign(sim, PRE[+b.dataset.p][1]); bd.querySelectorAll('input[type=range]').forEach(i => i.value = sim[i.dataset.k]); updSim(); });
     simChart = K.chart(bd.querySelector('.schart'), () => {
-      const R = simRes || [];
-      const sr = M.buckets.map((_, k) => M.sum(R, x => { let s = 0; for (const id of ALLRATE) if (inScope(M.curve[id].ccy)) s += x.p.risk[id][k] * shift(k); return s; }));
-      const sb = M.buckets.map((_, k) => inScope('RUB') ? M.sum(R, x => x.p.risk['RUB OFZ'][k] * sim.basis) : 0);
-      const sc = M.buckets.map((_, k) => M.sum(R, x => inScope(x.p.ccy) ? x.p.cs01b[k] * sim.credit : 0));
       return {
         animation: false, grid: { left: 6, right: 8, top: 28, bottom: 4, containLabel: true }, legend: { top: 0, left: 0 },
-        tooltip: { trigger: 'axis', axisPointer: { type: 'shadow' }, formatter: ps => '<b>' + M.buckets[ps[0].dataIndex] + '</b><br>' + ps.map(p => p.marker + p.seriesName + ': <b>' + (p.seriesName === 'сдвиг, б.п.' ? f.s(p.value, 0) : f.mns(p.value, 2) + ' mm ₽') + '</b>').join('<br>') },
-        xAxis: { type: 'category', data: M.buckets }, yAxis: [{ type: 'value', unit: 'mm ₽', axisLabel: { formatter: v => K.tick(v, 1e6) } }, { type: 'value', position: 'right', splitLine: { show: false }, axisLabel: { formatter: v => f.s(v, 0), color: css('--fg-3') } }],
+        tooltip: { trigger: 'axis', axisPointer: { type: 'shadow' }, formatter: ps => '<b>' + simBuckets[ps[0].dataIndex] + '</b><br>' + ps.map(p => p.marker + p.seriesName + ': <b>' + (p.seriesName === 'сдвиг, б.п.' ? f.s(p.value, 0) : f.mns(p.value, 2) + ' mm ₽') + '</b>').join('<br>') },
+        xAxis: { type: 'category', data: simBuckets }, yAxis: [{ type: 'value', unit: 'mm ₽', axisLabel: { formatter: v => K.tick(v, 1e6) } }, { type: 'value', position: 'right', splitLine: { show: false }, axisLabel: { formatter: v => f.s(v, 0), color: css('--fg-3') } }],
         series: [
-          { name: 'ставки', type: 'bar', stack: 'p', data: sr, itemStyle: { color: K.curveColors['RUB RUONIA'] } },
-          { name: 'базис', type: 'bar', stack: 'p', data: sb, itemStyle: { color: K.curveColors['RUB OFZ'] } },
-          { name: 'спреды', type: 'bar', stack: 'p', data: sc, itemStyle: { color: K.curveColors.CS01 } },
-          { name: 'сдвиг, б.п.', type: 'line', yAxisIndex: 1, data: M.buckets.map((_, k) => shift(k)), symbolSize: 4, lineStyle: { type: 'dashed', width: 1.4, color: css('--fg-3') }, itemStyle: { color: css('--fg-3') } },
+          ...activeParts().map(([key, name, , color]) => ({ name, type: 'bar', stack: 'p', data: simBuckets.map((_, k) => M.sum(simRes, x => x.byBucket[key][k])), itemStyle: { color } })),
+          { name: 'сдвиг, б.п.', type: 'line', yAxisIndex: 1, data: simShifts, symbolSize: 4, lineStyle: { type: 'dashed', width: 1.4, color: css('--fg-3') }, itemStyle: { color: css('--fg-3') } },
         ],
       };
     });
-    simChart.on('click', pp => { const k = pp.dataIndex; K.drill({ title: 'Сдвиг: PnL в бакете ' + M.buckets[k], unit: 'тыс ₽', fmt: f.k, rows: simRes.map(x => ({ p: x.p, v: x.byB[k] })) }); });
+    simChart.on('click', pp => { const k = pp.dataIndex; K.drill({ title: 'Сдвиг: PnL · ' + simBuckets[k], unit: 'тыс ₽', fmt: f.k, rows: simRes.map(x => ({ p: x.p, v: activeParts().reduce((s, [key]) => s + x.byBucket[key][k], 0) })) }); });
     updSim();
+    if (M.run?.id != null) M.loadRisk().then(payload => {
+      riskPayload = payload;
+      if (payload) simulate = C02Sim.prepare(M, runPositions, payload);
+      if (hasConvexity()) K.seg(P.querySelector('.order'), [[true, '+ выпуклость'], [false, 'линейно']], withConvexity, v => { withConvexity = v; updSim(); });
+      updSim();
+    });
   }
   function updSim() {
     const P = document.getElementById('sim'), bd = P.querySelector('.bd');
     SL.forEach(([k]) => { bd.querySelector('[data-v=' + k + ']').textContent = f.s(sim[k], 0); });
-    const L = K.list();
-    simRes = L.map(p => Object.assign({ p }, simPos(p)));
+    const { rows, shifts, linearOnly } = simulate(K.list(), sim, showConvexity());
+    simRes = rows;
+    simShifts = shifts;
+    drawSimMode(linearOnly);
+    const parts = activeParts();
+    simBuckets = simRes.some(x => parts.some(([key]) => x.byBucket[key][NB] !== 0)) ? [...M.buckets, 'Без срока'] : M.buckets;
+    K.dFree(simDrill);
+    const prevScope = K.dScopeSet(simDrill);
+    try { drawSimResults(bd, parts); } finally { K.dScopeSet(prevScope); }
+    if (simChart) simChart.redraw();
+  }
+  function drawSimResults(bd, parts) {
     const T = key => M.sum(simRes, key);
     const rowsOf = key => simRes.map(x => ({ p: x.p, v: x[key] }));
     bd.querySelector('.bigpnl').innerHTML = K.d({ title: 'Сдвиг кривых: PnL', unit: 'mm ₽', fmt: v => f.mns(v, 1), rows: rowsOf('t') }) + ' <span class="mut" style="font-size:13px;font-weight:400">mm ₽</span>';
-    bd.querySelector('.comp').innerHTML = 'ставки <b>' + K.d({ title: 'Сдвиг: ставки', unit: 'mm ₽', fmt: v => f.mns(v, 1), rows: rowsOf('r') }) + '</b> · базис <b>' + K.d({ title: 'Сдвиг: базис ОФЗ', unit: 'mm ₽', fmt: v => f.mns(v, 1), rows: rowsOf('b') }) + '</b> · спреды <b>' + K.d({ title: 'Сдвиг: спреды', unit: 'mm ₽', fmt: v => f.mns(v, 1), rows: rowsOf('c') }) + '</b>';
+    bd.querySelector('.comp').innerHTML = parts.map(([key, name]) => '<span>' + name + ' <b>' + K.d({ title: 'Сдвиг · ' + name, unit: 'mm ₽', fmt: v => f.mns(v, 1), rows: rowsOf(key) }) + '</b></span>').join(' · ');
     // по типам
-    const types = M.typeRows.map(t => ({ t, xs: simRes.filter(x => typeOf(x.p) === t.id) })).filter(r => r.xs.some(x => Math.abs(x.t) > 1));
+    const types = M.typeRows.map(t => ({ t, xs: simRes.filter(x => typeOf(x.p) === t.id) })).filter(r => r.xs.some(x => parts.some(([key]) => Math.abs(x[key]) > 1)));
     const mx = Math.max(1, ...types.map(r => Math.abs(M.sum(r.xs, 't'))));
     const cell = (xs, key, title) => { const v = M.sum(xs, key); return Math.abs(v) < 500 ? '<span class="mut3">·</span>' : K.d({ title, unit: 'mm ₽', fmt: v => f.mns(v, 1), rows: xs.map(x => ({ p: x.p, v: x[key] })) }); };
-    bd.querySelector('.stbl').innerHTML = '<table class="k-tbl" data-vk="c02-shift-types" data-title="Сдвиг кривых: эффект по типам, mm ₽"><thead><tr><th>Тип</th><th class="n">Ставки</th><th class="n">Базис</th><th class="n">Спреды</th><th class="n">Итого, mm ₽</th><th style="width:90px"></th></tr></thead><tbody>' +
-      types.map(r => { const v = M.sum(r.xs, 't'); return '<tr><td class="lbl"><b style="color:' + K.kindColor[r.t.kind] + '">●</b> ' + esc(r.t.label) + '</td><td class="n">' + cell(r.xs, 'r', r.t.label + ' · ставки') + '</td><td class="n">' + cell(r.xs, 'b', r.t.label + ' · базис') + '</td><td class="n">' + cell(r.xs, 'c', r.t.label + ' · спреды') + '</td><td class="n"><b>' + cell(r.xs, 't', r.t.label + ' · итого') + '</b></td><td>' + K.bar(v, mx) + '</td></tr>'; }).join('') +
-      '</tbody><tfoot><tr><td>Итого</td><td class="n">' + f.mns(T('r'), 1) + '</td><td class="n">' + f.mns(T('b'), 1) + '</td><td class="n">' + f.mns(T('c'), 1) + '</td><td class="n ' + f.cls(T('t')) + '">' + f.mns(T('t'), 1) + '</td><td></td></tr></tfoot></table>';
+    bd.querySelector('.stbl').innerHTML = '<table class="k-tbl" data-vk="c02-shift-types" data-title="Сдвиг кривых: эффект по типам, mm ₽"><thead><tr><th>Тип</th>' + parts.map(([, , label]) => '<th class="n">' + label + '</th>').join('') + '<th class="n">Итого, mm ₽</th><th style="width:90px"></th></tr></thead><tbody>' +
+      types.map(r => { const v = M.sum(r.xs, 't'); return '<tr><td class="lbl"><b style="color:' + K.kindColor[r.t.kind] + '">●</b> ' + esc(r.t.label) + '</td>' + parts.map(([key, name]) => '<td class="n">' + cell(r.xs, key, r.t.label + ' · ' + name) + '</td>').join('') + '<td class="n"><b>' + cell(r.xs, 't', r.t.label + ' · итого') + '</b></td><td>' + K.bar(v, mx) + '</td></tr>'; }).join('') +
+      '</tbody><tfoot><tr><td>Итого</td>' + parts.map(([key]) => '<td class="n">' + f.mns(T(key), 1) + '</td>').join('') + '<td class="n ' + f.cls(T('t')) + '">' + f.mns(T('t'), 1) + '</td><td></td></tr></tfoot></table>';
     K.tableToolsAll(bd.querySelector('.stbl'));
-    if (simChart) simChart.redraw();
   }
 
   // ---------- свопы и РЕПО: оценка ядром (#201; kit.js K.ratesCorePanel) ----------
