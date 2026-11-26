@@ -45,13 +45,13 @@ from ..store import CURRENT_RUNS
 
 log = logging.getLogger("desk.publish.summary")
 
-VERSION = 10  # 2: a floater's discount margin (pos[9]); 3: the OFZ basis of the KBD scheme, the spread to the KBD;
+VERSION = 11  # 2: a floater's discount margin (pos[9]); 3: the OFZ basis of the KBD scheme, the spread to the KBD;
 # 4: an OFZ-IN's nominal proxy out of the run's basis (basisIn, TDM#173); 5: an OFZ's RUONIA risk apart from its basis
 # (ofzRuo, pos[11]; TDM#213); 6: the funding its own factor, the carry without it (TDM#168); 7: a legacy tdm swap
 # (IRS / XCCY / CDS) in DER, not OTH.OTH (mvType, ``LEGACY_DER``; TDM#336); 8: an OTC row of the product group ``repo``
 # is MM.REPO (money market and funding), not DER.OTC (mvType; the owner's decision in TDM#361); 9: a position with an
 # impossible risk (``risk_problem``) is in riskBad, its risk in no sum (TDM#170); 10: a KBD floater's
-# ofzRuo is its basis, its RUONIA - basis stays on RUONIA (TDM#467)
+# ofzRuo is its basis, its RUONIA - basis stays on RUONIA (TDM#467); 11: C18 net carry on paired PnL rows
 CURVE_MAP = {"RUB OFZ": "RUB RUONIA", "USD": "USD SOFR", "EUR": "EUR ESTR", "CNY": "CNY XCCY"}
 """A run's risk curve -> the concept pages' curve (``desk.api.concepts`` re-exports it; ``lib/real.js`` mirrors it).
 ``RUB OFZ`` (the KBD: a fixed-coupon OFZ's rates risk since 0.2.6, its basis in RUONIA + basis since 0.2.7, every bond's
@@ -67,7 +67,7 @@ PNL = {"carry": ("carry", "rolldown"), "funding": ("funding",), "rates": ("rates
 roll-down without the funding, the position's funding (B1) is its own factor (TDM#168). The factors sum to the day's
 total as before. Funding not computed (a run before B1, not configured, a problem: no ``funding`` component) is None,
 not 0 (B1: said in words, never a free 0): ``NULLABLE``."""
-NULLABLE = frozenset({"funding", "fx"})
+NULLABLE = frozenset({"carry", "funding", "fx"})
 """Factors that are None, not 0, when none of their components is in the PnL; a run's sum of one is None when no
 position has it, else the sum of those that have it (the total counts it as 0, as the flash PnL does)."""
 GOV_CLASSES = {"ОФЗ-ПД": "PD", "ОФЗ-АД": "PD", "ОФЗ-ПК": "PK", "ОФЗ-ИН": "IN"}
@@ -272,7 +272,8 @@ def build(rows: Iterable[dict[str, Any]]) -> dict[str, Any]:
     mv_ccy: dict[str, float] = {}
     cs01 = basis = basis_pk = basis_in = ofz_spr = ofz_ruo = 0.0
     kbd_ofz = False  # a run before 0.2.6 has no OFZ on the KBD: its ofzRuo is null, not 0 (the pages read null)
-    pnl: dict[str, float] | None = None
+    pnl: dict[str, float | None] | None = None
+    net_carry: float | None = None
     pos: dict[str, list] = {}
     bad: dict[str, str] = {}
     for x in rows:
@@ -318,6 +319,10 @@ def build(rows: Iterable[dict[str, Any]]) -> dict[str, Any]:
             for kk, v in p.items():
                 if v is not None:
                     pnl[kk] = (pnl[kk] or 0.0) + v
+            # The independent factor sums cannot recover the intersection for C18.
+            funding, carry = p["funding"], p["carry"]
+            if funding is not None and carry is not None:
+                net_carry = (net_carry if net_carry is not None else 0.0) + (carry + funding)
         pos[x["position_id"]] = [_r(x["notional"], 2), _r(sum(curves.values()), 2), _r(x["cs01"], 2), _r(b, 2),
                                  _r(m, 0), _r(p["total"], 0) if p else None, _r(x["price"], 4),
                                  _r(x["spread_bp"], 2), {c: round(v, 2) for c, v in curves.items() if v},
@@ -327,7 +332,7 @@ def build(rows: Iterable[dict[str, Any]]) -> dict[str, Any]:
             "ofzRuo": ofz_ruo if kbd_ofz else None,
             "dv01Book": book,
             "mvType": mv_type,
-            "mvCcy": mv_ccy, "pnl": pnl, "pos": pos, "riskBad": bad}
+            "mvCcy": mv_ccy, "pnl": pnl, "netCarry": net_carry, "pos": pos, "riskBad": bad}
 
 
 def ensure(con: psycopg.Connection, run_ids: Iterable[int]) -> int:

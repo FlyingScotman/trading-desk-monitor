@@ -23,6 +23,7 @@ from desk import store
 from desk.api import create_app
 from desk.api.app import warm_bodies
 from desk.api.concepts import cbr
+from desk.api.concepts_run import _pnl, no_pnl
 from desk.marketdata import static_facts
 from desk.marketdata.adapter import MarketView
 from desk.marketdata.bundle import SnapshotDir
@@ -46,6 +47,7 @@ POSITION = {"id", "book", "assetClass", "segment", "instrType", "name", "isin", 
             "instrumentId", "accrued", "couponFreq", "yieldDate", "spreadCurve", "zKbdBp", "zRuoniaBp"}
 PNL = {"available", "reasonText", "carry", "rolldown", "rates", "convexity", "spread", "fx", "fxPartial", "funding", "newTrades",
        "other", "reported", "explained", "method", "methodText", "assumption"}
+PNL_SPLIT = {"carryCoupon", "carryPull"}
 
 
 MOVES = {"CURVE_MOVES", "FX_MOVE_PCT", "FX_CBR_MOVE_PCT"}
@@ -96,14 +98,29 @@ def assert_parity(c: TestClient, rid: int) -> dict:
         assert got["OCP"]["basis"] == ocp["published"]["basis"] and got["OCP"]["gaps"] == ocp["gaps"]
         assert [(x["book"], x["ccy"], x["amount"], x["source"]) for x in got["OCP"]["byBook"]] == [
             (x["book_id"], x["ccy"], x["amount"], x["source"]) for x in ocp["published"]["by_book"]]
-    assert all(set(p) <= POSITION and set(p["pnl"]) == PNL for p in got["positions"])
+    assert all(set(p) <= POSITION and set(p["pnl"]) == PNL | PNL_SPLIT for p in got["positions"])
+    projected = read(got)
     for k in TOP:
-        assert (zeroed(got[k]) if k in MOVES else got[k]) == want[k], k
+        assert (zeroed(got[k]) if k in MOVES else projected[k]) == want[k], k
     assert_moves(got)
     js = c.get(f"/concepts-run.js?run_id={rid}").text
     assert js.startswith("window.CONCEPTS_RUN = ") and js.endswith(";\n")
     assert json.loads(js[len("window.CONCEPTS_RUN = "):-2]) == got
     return got
+
+
+def test_carry_split_keeps_saved_zero_and_missing_amounts():
+    pnl = _pnl({"carry": 7, "extra": {"carry_coupon": 0, "carry_pull": 7}})
+    assert (pnl["carryCoupon"], pnl["carryPull"], pnl["explained"]) == (0, 7, 7)
+    for old in (_pnl({"carry": 7}), _pnl({"carry": 7, "extra": {}}), no_pnl("not_valued")):
+        assert all(old[k] is None for k in PNL_SPLIT)
+
+
+def test_carry_and_rolldown_keep_missing_and_measured_zero():
+    missing = _pnl({"funding": -7, "carry": None})
+    assert (missing["carry"], missing["rolldown"], missing["explained"]) == (None, None, -7)
+    measured = _pnl({"funding": -7, "rolldown": 0})
+    assert (measured["carry"], measured["rolldown"], measured["explained"]) == (None, 0, -7)
 
 
 def test_parity_on_the_golden_runs(store_url, book, client):  # noqa: F811
@@ -116,6 +133,8 @@ def test_parity_on_the_golden_runs(store_url, book, client):  # noqa: F811
     rid = run(store_url, book, cut_type="eod_preliminary")
     got = assert_parity(client, rid)
     assert got["pnlAvailable"] and any(p["pnl"]["available"] for p in got["positions"])
+    split = [p["pnl"] for p in got["positions"] if p["pnl"]["carryCoupon"] is not None]
+    assert split and all(abs(p["carryCoupon"] + p["carryPull"] - p["carry"]) < 1e-8 for p in split)
     # TDM#762: a valued bond's Z-spreads to the KBD and to RUONIA OIS; an OFZ-PD's own spread is the one to the KBD
     valued = [p for p in got["positions"] if p["instrType"] == "BOND" and not p.get("notValued")]
     assert all("zKbdBp" in p and "zRuoniaBp" in p for p in valued)
@@ -127,7 +146,8 @@ def test_parity_on_the_golden_runs(store_url, book, client):  # noqa: F811
     assert corp and all(p["zRuoniaBp"] == p["spreadBp"] and p["zKbdBp"] is not None for p in corp)
     nv = [p for p in got["positions"] if p.get("notValued")]
     assert len(nv) == 1 and nv[0]["mvRub"] is None and nv[0]["pnl"]["available"] is False
-    assert_parity(client, early)
+    absent = [p["pnl"] for p in assert_parity(client, early)["positions"] if not p["pnl"]["available"]]
+    assert absent and all(p[k] is None for p in absent for k in PNL_SPLIT)
     # the run shown, by date and by default, is the one /desk-data.js shows
     shown = client.get("/api/v1/compat/desk").json()["source"]["runId"]
     assert client.get("/api/v1/concepts/run").json()["source"]["runId"] == shown
