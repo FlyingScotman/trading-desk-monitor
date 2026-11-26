@@ -15,7 +15,7 @@ from datetime import date, timedelta
 import psycopg
 from psycopg.rows import dict_row
 from psycopg.types.json import Jsonb
-from test_r23_concepts import DATE, PREV, desk  # noqa: F401 - the fixture
+from test_r23_concepts import DATE, PREV, desk, extras  # noqa: F401 - the fixture
 
 from desk import store
 from desk.api import app as appmod
@@ -80,6 +80,15 @@ def history(store_url: str, days: list[str], base: int) -> dict[str, int]:
     different odd factor each."""
     rnd = random.Random(736)
     return {d: add_run(store_url, base, day=d, k=0.5 + rnd.random() * 1.7) for d in days}
+
+
+def test_concepts_history_uses_the_accrual_of_each_run(desk, store_url):  # noqa: F811
+    base = desk.get("/api/v1/concepts/run").json()["source"]["runId"]
+    add_run(store_url, base, day="2026-10-19", prev="2026-10-16")
+    last = add_run(store_url, base, day="2026-10-22", prev="2026-10-21")
+    doc = extras(desk, f"?run_id={last}")
+    assert doc["histDates"][-2:] == ["2026-10-19", "2026-10-22"]
+    assert doc["hist"]["accrualDays"][-2:] == [3, 1]
 
 
 EARLIER = ["2026-09-30", "2026-01-12", "2026-10-01", "2026-03-04", "2026-09-16", "2026-02-16", "2026-10-02",

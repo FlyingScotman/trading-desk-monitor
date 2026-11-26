@@ -55,7 +55,7 @@ POSITION_KEYS = (
 ``notValued`` only when there is one), plus a bond's ``BOND_KEYS``."""
 BOND_KEYS = ("instrumentId", "accrued", "couponFreq", "yieldDate", "spreadCurve", "zKbdBp", "zRuoniaBp")
 PNL_AMOUNTS = ("carry", "rolldown", "rates", "spread", "fx", "funding", "convexity", "newTrades", "other", "reported",
-               "explained")
+               "explained", "carryCoupon", "carryPull")
 PNL_KEYS_READ = (*PNL_AMOUNTS, "fxPartial", "available", "reasonText", "method", "methodText", "assumption")
 """A position's ``pnl`` as the pages read it: the amounts (all null without PnL, R10), whether it has one, why not and
 by which method. ``fxPartial``: the FX is one of its two parts only (TDM#414, #566): the sum is incomplete."""
@@ -140,14 +140,16 @@ def _pnl(q: dict[str, Any]) -> dict[str, Any]:
     """A position's ``pnl`` from its components (``run_position.pnl``): the explained PnL is their sum; a PnL by the
     reports (``REPORTED_METHOD``) is in ``reported``, not in ``other``."""
     comp = {k: q.get(k) or 0.0 for k in PNL_KEYS}
-    method = (q.get("extra") or {}).get("method")
+    ex = q.get("extra") or {}
+    method = ex.get("method")
     reported = comp["other"] if method == REPORTED_METHOD else 0.0
-    return {"carry": comp["carry"], "rolldown": comp["rolldown"], "rates": comp["rates"], "spread": comp["spread"],
+    return {"carry": q.get("carry"), "carryCoupon": ex.get("carry_coupon"), "carryPull": ex.get("carry_pull"),
+            "rolldown": q.get("rolldown"), "rates": comp["rates"], "spread": comp["spread"],
             "fx": fx_net(q), "fxPartial": fx_partial(q), "funding": q.get("funding"), "convexity": comp["convexity"],
             "newTrades": comp["new_trades"], "other": comp["other"] - reported, "reported": reported,
             "explained": sum(comp.values()), "available": True, "reasonText": None, "method": method,
             "methodText": METHOD_TEXT.get(method, method) if method else None,
-            "assumption": assumption_text((q.get("extra") or {}).get("assumption"))}
+            "assumption": assumption_text(ex.get("assumption"))}
 
 
 def _no_pnl_code(stored: dict[str, Any] | None, prev_date: date | None) -> tuple[str, str | None]:

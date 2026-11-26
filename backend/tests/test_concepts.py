@@ -67,6 +67,7 @@ def test_concepts_data_js(desk):
     x = extras(desk)
     assert x["histDates"] == [PREV, DATE] and x["asOf"] == DATE
     h = x["hist"]
+    assert h["accrualDays"] == [None, 1]
     assert "RUB RUONIA" in h["dv01"] and "USD" not in h["dv01"] and "USD SOFR" in h["dv01"]
     assert all(len(v) == 2 for v in h["dv01"].values()) and len(h["cs01"]) == 2 and len(h["basis01"]) == 2
     assert set(h["dv01Book"]) == {"OFZ", "CORP"} and {"GOV.PD", "GOV.PK"} <= set(h["mvType"])

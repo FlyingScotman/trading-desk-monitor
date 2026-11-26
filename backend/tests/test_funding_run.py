@@ -485,8 +485,13 @@ def test_summary_funding_its_own_factor_carry_without_it():
     no_fund = {k: v for k, v in q.items() if k != "funding"}
     s = summary.build([row("A", no_fund), row("B", no_fund)])  # no position's funding computed: the run's is null
     assert s["pnl"]["funding"] is None and s["pnl"]["carry"] == pytest.approx(2100.0)
+    assert s["netCarry"] is None
     assert s["pnl"]["total"] == pytest.approx(2 * before["total"])
     s = summary.build([row("A", q), row("B", no_fund)])  # one computed: the sum of those that have it
     assert s["pnl"]["funding"] == pytest.approx(-400.0)
+    assert s["netCarry"] == pytest.approx(650.0)
+    funded_only = summary.build([row("A", {"funding": -100.0})])
+    assert funded_only["netCarry"] is None and funded_only["pnl"]["carry"] is None
+    assert summary.build([row("A", {"carry": 0.0, "funding": 0.0})])["netCarry"] == 0.0
     assert s["pnl"]["total"] == pytest.approx(sum(v for k, v in s["pnl"].items() if k != "total"))
     assert summary.VERSION >= 6  # summaries of older versions are rebuilt with the funding factor

@@ -44,6 +44,7 @@
   }
   M.asOf = AS_OF;
   M.prevDate = '2026-10-20';
+  M.accrualDays = 1;
   M.cut = { type: 'intraday', time: '14:30', label: 'внутридневной 14:30' };
   M.util = { iso, parse, yearsTo, addDays, addMonths, rng, hash, round };
 
@@ -496,6 +497,10 @@
     const scale = Math.abs(p.mv || p.notionalRub * 0.02);
     p.pnlMtd = (p.carryDay + p.fundingDay) * 15 + p.pnl.total + (r() - 0.42) * scale * 0.004;
     p.pnlYtd = (p.carryDay + p.fundingDay) * 200 + p.pnlMtd + (r() - 0.35) * scale * 0.025;
+    p.carryPureDay = p.carryDay;
+    p.carryCouponDay = M.deal(p) ? null : p.carryPureDay * 0.9;
+    p.carryPullDay = p.carryCouponDay == null ? null : p.carryPureDay - p.carryCouponDay;
+    p.carryDay = carry;
     if (p.cpn && p.cpn.type === 'float') { p.ytmProxy = p.ytm; p.ytm = null; p.dm = p.zspread; }
     // портфель (колонка Portfolio отчёта): HTM-книга — HTM, часть торговых бумаг — AFS, остальное — торговый
     const bt = (M.books.find(b => b.id === p.book) || {}).type;
@@ -780,11 +785,12 @@
   M.histDates = businessDaysBack(130);
   (function deskHistory() {
     const n = M.histDates.length;
+    const accrualDays = M.histDates.map((d, i) => i ? (Date.parse(d) - Date.parse(M.histDates[i - 1])) / 864e5 : 1);
     const today = {
       dv01: {}, mv: {}, notionalType: {}, books: {},
     };
     M.curves.forEach(c => today.dv01[c.id] = positions.reduce((s, p) => s + p.dv01ByCurve[c.id], 0));
-    const series = {};
+    const series = { accrualDays };
     function walk(key, endVal, vol, trend) {
       const r = rng('hist' + key); const out = new Array(n); out[n - 1] = endVal;
       for (let i = n - 2; i >= 0; i--) out[i] = out[i + 1] - (r() - 0.5 + (trend || 0)) * vol * 2 + (r() < 0.04 ? (r() - 0.5) * vol * 12 : 0);
@@ -800,8 +806,9 @@
     const tp = positions.reduce((a, p) => { Object.keys(series.pnl).forEach(k => a[k] = (a[k] || 0) + p.pnl[k]); return a; }, {});
     for (let i = 0; i < n; i++) {
       const last = i === n - 1;
-      series.pnl.carry.push(last ? tp.carry : tp.carry * (0.8 + pr() * 0.4));
-      series.pnl.funding.push(last ? tp.funding : tp.funding * (0.95 + pr() * 0.1));
+      const days = accrualDays[i];
+      series.pnl.carry.push((last ? tp.carry : tp.carry * (0.8 + pr() * 0.4)) * days);
+      series.pnl.funding.push((last ? tp.funding : tp.funding * (0.95 + pr() * 0.1)) * days);
       series.pnl.rates.push(last ? tp.rates : (pr() - 0.5) * 30e6 + rndn() * 6e6);
       series.pnl.spread.push(last ? tp.spread : (pr() - 0.5) * 9e6);
       series.pnl.fx.push(last ? tp.fx : (pr() - 0.5) * 12e6);
@@ -809,6 +816,7 @@
       series.pnl.other.push(last ? tp.other : (pr() - 0.5) * 6e5);
     }
     series.pnl.total = series.pnl.carry.map((_, i) => Object.keys(series.pnl).reduce((s, k) => s + series.pnl[k][i], 0));
+    series.pnl.netCarry = series.pnl.carry.map((v, i) => v + series.pnl.funding[i]);  // все демо-позиции с кэрри и фондированием
     M.hist = series;
   })();
 

@@ -131,10 +131,10 @@ def run_fingerprint(con, run: dict[str, Any], history: bool = True) -> str:
 
 def _runs(con, run: dict[str, Any]) -> list[dict[str, Any]]:
     """The default runs up to the run's date (the run itself last, also when it is an intraday run), oldest first."""
-    rows = con.execute(f"SELECT run_id, business_date FROM run WHERE run_id IN ({DEFAULT_RUNS})"
+    rows = con.execute(f"SELECT run_id, business_date, prev_date FROM run WHERE run_id IN ({DEFAULT_RUNS})"
                        " AND business_date < %s ORDER BY business_date DESC LIMIT %s",
                        (run["business_date"], HIST_RUNS - 1)).fetchall()[::-1]
-    return [dict(r) for r in rows] + [{"run_id": run["run_id"], "business_date": run["business_date"]}]
+    return [dict(r) for r in rows] + [{k: run[k] for k in ("run_id", "business_date", "prev_date")}]
 
 
 def summaries(con, run_ids: list[int], writer: Writer = None,
@@ -347,6 +347,9 @@ def extras(con, run: dict[str, Any], writer: Writer = None, cache: SeriesCache |
         return {k: [s[field].get(k, 0.0) for s in sums] for k in keys}
 
     pnl = {k: [(s["pnl"] or {}).get(k) if s["pnl"] else None for s in sums] for k in (*PNL, "total")}
+    pnl["netCarry"] = [s.get("netCarry") for s in sums]
+    accrual_days = [(r["business_date"] - r["prev_date"]).days
+                    if r["prev_date"] and r["prev_date"] < r["business_date"] else None for r in runs]
     # the day's trades, the previous price and the spread change: against the run of the previous close only (the
     # run's prev_date); an older run (a gap in the history of runs, the backfill still running) would show every
     # change since then as a trade of the day
@@ -446,7 +449,8 @@ def extras(con, run: dict[str, Any], writer: Writer = None, cache: SeriesCache |
     if cb["next"] is None and not cb["meetings"]:
         notes.append("заседаний ЦБ нет в данных: появятся после прогона на снимке с cbr_meetings")
     return {"runId": run["run_id"], "asOf": as_of.isoformat(), "histDates": dates,
-            "hist": {"dv01": series("dv01"), "cs01": [s["cs01"] for s in sums], "basis01": [s["basis"] for s in sums],
+            "hist": {"accrualDays": accrual_days,
+                     "dv01": series("dv01"), "cs01": [s["cs01"] for s in sums], "basis01": [s["basis"] for s in sums],
                      "ofzSpr01": [s.get("ofzSpr", 0.0) for s in sums], "basisPk01": [s.get("basisPk", 0.0) for s in sums],
                      "basisIn01": [s.get("basisIn", 0.0) for s in sums],
                      "ofzRuo01": [s.get("ofzRuo") for s in sums],

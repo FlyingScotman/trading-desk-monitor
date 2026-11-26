@@ -421,7 +421,7 @@
   const pct = v => { const t = String(+(+v).toFixed(3)); const d = (t.split('.')[1] || '').length; return (+v).toFixed(Math.max(2, d)); };
   const XP = X.positions || {};
   const camel = o => Object.fromEntries(Object.entries(o).map(([k, v]) => [k.replace(/_([a-z])/g, (_, c) => c.toUpperCase()), v]));
-  const accrualDays = D.accrualDays || 1;
+  const accrualDays = M.accrualDays = D.accrualDays || 1;
   // ставка фондирования позиции, % (#168): rate_pct строк extra.funding (publish/funding_run.py: ставка последнего дня),
   // на конец периода, средняя с весом модуля тела строки в рублях (body_ccy × курс ЦБ прогона: строки бывают в разных
   // валютах); нет строк (не фондируется, не посчитано) — null
@@ -620,15 +620,21 @@
     p.fxDelta = p.fxDeltaBy[p.ccy] || 0;  // в валюте позиции; все валюты — p.fxDeltaBy (сумма разных валют — не мера)
     // PnL
     const e = d.pnl || {};
+    const perDay = v => { const amount = num(v); return amount == null ? null : amount / accrualDays; };
     if (e.available === false || !d.pnl) {
       p.pnl = { carry: null, funding: null, rates: null, spread: null, fx: null, trading: null, other: null, total: null, available: false, reason: e.reasonText || null };
       p.carryDay = null; p.rollDay = null; p.fundingDay = null;
+      p.carryPureDay = null; p.carryCouponDay = null; p.carryPullDay = null;
     } else {
       const z = v => v || 0;
-      // кэрри — без фондирования (#168), фондирование — свой фактор: null (не посчитано) в сумме — 0, итог тот же
-      p.pnl = { carry: z(e.carry) + z(e.rolldown), funding: num(e.funding), rates: z(e.rates) + z(e.convexity), spread: z(e.spread), fx: num(e.fx), fxPartial: !!e.fxPartial, trading: z(e.newTrades),
+      // Кэрри включает роллдаун. Без обоих компонентов кэрри отсутствует (B1).
+      const pure = num(e.carry), roll = num(e.rolldown);
+      const carry = pure == null && roll == null ? null : (pure ?? 0) + (roll ?? 0);
+      p.pnl = { carry, funding: num(e.funding), rates: z(e.rates) + z(e.convexity), spread: z(e.spread), fx: num(e.fx), fxPartial: !!e.fxPartial, trading: z(e.newTrades),
         other: z(e.other) + z(e.reported), total: z(e.explained), available: true, method: e.methodText || e.method || null, assumption: e.assumption || null };
-      p.carryDay = (z(e.carry) + z(e.rolldown)) / accrualDays; p.fundingDay = e.funding == null ? null : e.funding / accrualDays; p.rollDay = z(e.rolldown) / accrualDays;
+      p.carryPureDay = perDay(pure); p.carryCouponDay = perDay(e.carryCoupon); p.carryPullDay = perDay(e.carryPull);
+      p.rollDay = perDay(roll); p.fundingDay = perDay(p.pnl.funding);
+      p.carryDay = perDay(carry);
     }
     p.funding = e.available === false || !d.pnl ? null : num(e.funding);  // null: не посчитано (не настроено, проблема)
     p.fundingInfo = ex.funding || null;
@@ -747,16 +753,27 @@
   M.prevRun = X.prevRun && typeof X.prevRun === 'object' && typeof X.prevRun.date === 'string' && X.prevRun.date.length >= 10 ? { runId: X.prevRun.runId, date: X.prevRun.date,
     closed: (Array.isArray(X.prevRun.closed) ? X.prevRun.closed : []).filter(isObj).map(c => ({ positionId: String(c.positionId), book: c.book || null, ccy: c.ccy || null, portfolio: c.portfolio || null, name: c.name || String(c.positionId), notional: num(c.notional) })) } : null;
   const n = M.histDates.length;
-  const series = (src, keys, today) => { const o = {}; keys.forEach(k => { o[k] = (src && src[k]) ? src[k].map(v => v == null ? null : +v) : new Array(n).fill(0); if (!src && today) o[k][n - 1] = today(k); }); return o; };
+  const series = (src, keys, today, nullable = []) => { const o = {}; keys.forEach(k => { o[k] = (src && src[k]) ? src[k].map(v => v == null ? null : +v) : new Array(n).fill(nullable.includes(k) ? null : 0); if (!src && today) o[k][n - 1] = today(k); }); return o; };
   const sumBy = (f) => positions.reduce((s, p) => s + (f(p) || 0), 0);
+  const sameRunDays = (Date.parse(M.asOf) - Date.parse(M.prevDate)) / 864e5;
+  // В старом ответе точно известен только период открытого прогона.
+  const histDays = H.accrualDays || M.histDates.map(d => d === M.asOf && sameRunDays > 0 ? sameRunDays : null);
   M.hist = {
+    accrualDays: histDays,
     dv01: series(H.dv01, M.curves.map(c => c.id), id => sumBy(p => p.dv01ByCurve[id])),
     cs01: H.cs01 ? H.cs01.slice() : new Array(n).fill(0),
     dv01Book: series(H.dv01Book, M.books.map(b => b.id), id => sumBy(p => p.book === id ? p.dv01 : 0)),
     mvType: series(H.mvType, M.typeRows.map(t => t.id), id => sumBy(p => p.group + '.' + p.kind === id ? (M.deal(p) ? Math.abs(p.notionalRub) : p.mv) : 0)),
     mvCcy: series(H.mvCcy, M.ccys, c => sumBy(p => p.ccy === c && !M.deal(p) ? p.mv : 0)),
     // сегодня без истории: фактор, не посчитанный ни у одной позиции, — null, а не 0 (#327, B1)
-    pnl: series(H.pnl, ['carry', 'funding', 'rates', 'spread', 'fx', 'trading', 'other', 'total'], k => positions.some(p => p.pnl[k] != null) ? sumBy(p => p.pnl[k]) : null),
+    pnl: series(H.pnl, ['carry', 'funding', 'rates', 'spread', 'fx', 'trading', 'other', 'total', 'netCarry'],
+      k => {
+        const get = k === 'netCarry' ? p => {
+          const { carry, funding } = p.pnl;
+          return carry == null || funding == null ? null : carry + funding;
+        } : p => p.pnl[k];
+        return positions.some(p => get(p) != null) ? sumBy(get) : null;
+      }, ['carry', 'funding', 'netCarry']),
   };
   if (!H.cs01) M.hist.cs01[n - 1] = sumBy(p => p.cs01);
   // позиции с невозможным риском по датам (#170, сводка прогона riskBad): их риска в суммах нет — график отмечает дату

@@ -67,6 +67,24 @@ t('#327: фондирование не посчитано ни у одной п�
   assert.strictEqual(x.v, -1000); assert.strictEqual(x.n, 1); assert.strictEqual(x.miss, M2.positions.length - 1);
 });
 
+t('сегодня без истории: нетто в сумме за прогон только по позициям с обоими факторами', () => {
+  const { M } = load({ real: true, mutate: D => {
+    D.accrualDays = 3;
+    D.prevDate = new Date(Date.parse(D.asOf) - 3 * 864e5).toISOString().slice(0, 10);
+    D.positions = D.positions.slice(0, 4);
+    D.positions.forEach((p, i) => {
+      p.pnl = { available: true, carry: [null, null, 900, 600][i], rolldown: [null, 0, 100, 30][i],
+        funding: [-90, 0, null, -150][i] };
+    });
+  } });
+  assert.strictEqual(M.positions[0].pnl.carry, null);
+  assert.strictEqual(M.positions[0].carryDay, null);
+  assert.strictEqual(M.positions[0].fundingDay, -30);
+  assert.strictEqual(M.positions[1].carryDay, 0);
+  assert.deepStrictEqual(plain(M.hist.pnl.netCarry), [480]);
+  assert.deepStrictEqual(plain(M.hist.accrualDays), [3]);
+});
+
 t('HUD: нетто и кэрри без фондирования объясняют сумму компонентов (прогон и демо)', () => {
   for (const real of [true, false]) {
     const { M, K } = load({ real }), box = el();

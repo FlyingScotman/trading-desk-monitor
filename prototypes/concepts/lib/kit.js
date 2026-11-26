@@ -61,7 +61,7 @@
     const sc = (o, keys) => keys.forEach(x => { if (o[x] != null) o[x] *= k; });
     const arr = a => a && a.forEach((v, i) => a[i] = v == null ? v : v * k);  // null (не посчитано) остаётся null
     M.positions.forEach(p => {
-      sc(p, ['mv', 'accrued', 'carryDay', 'rollDay', 'fundingDay', 'dv01', 'basis01', 'ofzSpr01', 'cs01', 'notionalRub', 'pnlMtd', 'pnlYtd', 'funding']);
+      sc(p, ['mv', 'accrued', 'carryDay', 'carryCouponDay', 'carryPullDay', 'carryPureDay', 'rollDay', 'fundingDay', 'dv01', 'basis01', 'ofzSpr01', 'cs01', 'notionalRub', 'pnlMtd', 'pnlYtd', 'funding']);
       arr(p.cs01b); arr(p.ofzSprb); Object.keys(p.risk).forEach(c => arr(p.risk[c])); Object.keys(p.dv01ByCurve).forEach(c => p.dv01ByCurve[c] *= k);
       Object.keys(p.pnl).forEach(x => { if (typeof p.pnl[x] === 'number') p.pnl[x] *= k; });  // null (нет PnL) остаётся null
     });
@@ -351,7 +351,7 @@
   const CCY_NAMES = { RUB: 'Рубли', USD: 'Доллары', EUR: 'Евро', CNY: 'Юани', CHF: 'Франки', GBP: 'Фунты', HKD: 'Гонконгские доллары', JPY: 'Иены', AED: 'Дирхамы', KZT: 'Тенге', BYN: 'Белорусские рубли', TRY: 'Лиры', INR: 'Рупии' };
   K.ccyName = c => CCY_NAMES[c] || c;
   // rep — код валюты в отчёте, сведённый монитором в c (CNH = CNY, TDM#601): в подсказке, чтобы сверка с отчётом оставалась возможной
-  K.ccyTag = (c, rep) => '<span class="k-ccy" style="background:' + K.ccyColor(c) + '"' + (rep && rep !== c ? ' title="в отчёте — ' + rep + '"' : '') + '>' + c + '</span>';
+  K.ccyTag = (c, rep) => '<span class="k-ccy" style="background:' + esc(K.ccyColor(c)) + '"' + (rep && rep !== c ? ' title="в отчёте — ' + esc(rep) + '"' : '') + '>' + esc(c) + '</span>';
   K.curveColors = { 'RUB RUONIA': '#4c9dff', 'RUB KEY': '#22c3d6', 'RUB OFZ': '#9b7bff', 'USD SOFR': '#3fb67a', 'EUR ESTR': '#d58cff', 'CNY XCCY': '#f0645a', 'CS01': '#e3b341', 'OFZSPR': '#c98a3a' };
   K.PAL = ['#4c9dff', '#3fb67a', '#e3b341', '#f0645a', '#b48cff', '#22c3d6', '#ff8f3f', '#8bc34a', '#ef6fb0', '#7f8cff', '#c9a26b', '#5fd4a8', '#ff6b8b', '#a0b4c8'];
   // кривые прогона, которых нет в списке цветов (CNY implied, прокси, CHF…), — цвет из палитры, детерминированно по имени
@@ -1613,7 +1613,7 @@
     const tot = all.length && M.sum(all, 'v') == null ? null : rows.reduce((s, r) => s + r.v, 0);
     const fmtTot = v => v == null ? '<span class="mut3" title="не посчитано">—</span>' : fmt(v);
     o.el.querySelector('.t').innerHTML = esc(spec.title) + ' <span class="' + f.cls(tot) + '">' + fmtTot(tot) + '</span> <span class="mut" style="font-size:12px;font-weight:400">' + esc(spec.unit || '') + '</span>';
-    o.el.querySelector('.st').textContent = rows.length + ' позиций дают вклад' + (spec.note ? ' · ' + spec.note : '');
+    o.el.querySelector('.st').textContent = rows.length + (spec.mixedRows ? ' строк' : ' позиций') + ' дают вклад' + (spec.note ? ' · ' + spec.note : '');
     let dim = spec.dim || 'pos', q = '', view = 'table';
     const tools = h('div', '', ''); tools.style.cssText = 'display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:10px';
     const segBox = h('span'), viewBox = h('span'); const inp = h('input', 'k-input'); inp.placeholder = 'фильтр…';
@@ -1625,7 +1625,7 @@
     inp.oninput = () => { q = inp.value.toLowerCase(); draw(); };
     function draw() {
       const D = DIMS.find(d => d[0] === dim);
-      const g = {};
+      const g = Object.create(null);
       rows.filter(r => !q || r.p.searchText.includes(q)).forEach(r => { const k = D[2](r.p); (g[k] = g[k] || { k, label: D[3](r.p), v: 0, n: [], p: r.p }).v += r.v; g[k].n.push(r); });
       const list = Object.values(g).sort((a, b) => Math.abs(b.v) - Math.abs(a.v));
       const max = Math.max(...list.map(x => Math.abs(x.v)), 1); const absTot = list.reduce((s, x) => s + Math.abs(x.v), 0) || 1;
@@ -1646,7 +1646,7 @@
       let cum = 0;
       // размер: у позиции — номинал в её валюте и MV, у группы — MV её позиций (у деривативов MV — их PV)
       const mvOf = x => x.n.reduce((s, r) => s + (r.p.mv || 0), 0), mvTot = list.reduce((s, x) => s + mvOf(x), 0);
-      body.innerHTML = '<table class="k-tbl"><thead><tr><th></th><th>' + (dim === 'pos' ? 'Позиция' : D[1][0].toUpperCase() + D[1].slice(1)) + '</th>' + (dim === 'pos' ? '<th>Книга</th><th>Ccy</th><th class="n" title="в валюте позиции" data-csv="Номинал, mm в вал.">Номинал</th>' : '<th class="n">Позиций</th>') + '<th class="n">MV, mm ₽</th><th class="n">Вклад</th><th style="width:120px"></th><th class="n">Доля</th><th class="n">Накопл.</th></tr></thead><tbody>' +
+      body.innerHTML = '<table class="k-tbl"><thead><tr><th></th><th>' + (dim === 'pos' ? (spec.mixedRows ? 'Строка' : 'Позиция') : D[1][0].toUpperCase() + D[1].slice(1)) + '</th>' + (dim === 'pos' ? '<th>Книга</th><th>Ccy</th><th class="n" title="в валюте позиции" data-csv="Номинал, mm в вал.">Номинал</th>' : '<th class="n">' + (spec.mixedRows ? 'Строк' : 'Позиций') + '</th>') + '<th class="n">MV, mm ₽</th><th class="n">Вклад</th><th style="width:120px"></th><th class="n">Доля</th><th class="n">Накопл.</th></tr></thead><tbody>' +
         list.map(x => {
           cum += Math.abs(x.v);
           const stripe = dim === 'issuer' || dim === 'pos' ? K.issuerColor(x.p.issuer) : dim === 'ccy' ? K.ccyColor(x.k) : 'transparent';

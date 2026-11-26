@@ -1,0 +1,515 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="icon" href="data:,">
+<title>C18 · Анализ кэрри</title>
+<link rel="stylesheet" href="lib/kit.css">
+<style>
+.c18 { max-width: 1840px; margin: 0 auto; }
+.c18-ctl, .c18-ctl label, .c18-ctl nav { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; }
+.c18-ctl nav { margin-left: auto; }
+.c18-ban { border: 1px solid var(--warn); border-left-width: 4px; background: color-mix(in srgb, var(--warn) 9%, transparent); border-radius: 6px; padding: 8px 12px; overflow-wrap: anywhere; }
+.c18-ban .k-btn { margin-inline: 4px; }
+.c18 .k-kpis { grid-template-columns: repeat(auto-fit, minmax(175px, 1fr)); }
+.c18 .k-kb { width: 100%; }
+.c18 .k-kb td.c { white-space: normal; padding-right: 6px; }
+.c18-bleeder-name { display: inline-block; max-width: min(110px, 8vw); overflow: hidden; text-overflow: ellipsis; vertical-align: bottom; }
+.c18 .k-kpi[data-c18-kpi="net"] { background: var(--panel-2); border-color: var(--line-2); }
+.c18 .k-kpi[data-c18-kpi="bleed"] { border-left: 3px solid var(--neg); }
+.c18-grid { display: grid; gap: 12px; grid-template-columns: minmax(0, 1fr) minmax(0, 1.35fr); }
+.c18-grid.struct { grid-template-columns: minmax(0, 1.25fr) minmax(0, 1fr); }
+.c18-grid.leaders { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+.c18 .k-panel, .c18 .bd { min-width: 0; }
+.c18 .hd h3 { white-space: normal; }
+.c18-chart { height: 288px; }
+#chDim { height: 230px; }
+#chHist { min-height: 288px; height: 100%; }
+#dimTbl { max-height: 220px; }
+#posPanel { scroll-margin-top: 60px; }
+.c18 tr.bleed td:first-child { box-shadow: inset 3px 0 var(--neg); }
+.c18 .c18-missing, .c18 tr.missing .c18-name { color: var(--fg-3); }
+.c18 .c18-default { color: var(--warn); }
+.c18 td.c18-name { max-width: 235px; overflow: hidden; text-overflow: ellipsis; }
+.c18-lead .c18-bar { min-width: 54px; }
+.c18-lead .k-tbl th, .c18-lead .k-tbl td, #dimTbl .k-tbl th, #dimTbl .k-tbl td { padding: 3px 6px; }
+@media (max-width: 1100px) {
+  .c18-grid, .c18-grid.struct, .c18-grid.leaders { grid-template-columns: minmax(0, 1fr); }
+}
+</style>
+</head>
+<body>
+<main class="k-page c18">
+  <section class="k-panel"><div class="bd c18-ctl">
+    <span class="mut">Масштаб</span><span id="scale"></span>
+    <span class="mut">База breakeven</span><span id="beBase"></span>
+    <label>
+      <input id="inclBook" type="checkbox"> <span id="inclBookLabel">Учитывать внепозиционное фондирование книг</span>
+    </label>
+    <nav aria-label="Связанные мониторы"><a href="c17-forward-carry.html">Прогнозное кэрри (C17) →</a><a href="c19-pnl-history.html">PnL за период (C19) →</a></nav>
+  </div></section>
+  <div id="ban" hidden></div>
+  <div class="k-kpis" id="kpis"></div>
+  <div class="c18-grid">
+    <section class="k-panel">
+      <div class="hd"><h3>Формирование нетто-кэрри</h3><span class="sp"></span><span id="wfNote" class="k-note"></span></div>
+      <div class="bd"><div id="chWf" class="c18-chart" aria-label="Водопад нетто-кэрри"></div></div>
+    </section>
+    <section class="k-panel">
+      <div class="hd"><h3>Кэрри vs риск</h3><span class="sp"></span><span id="scX"></span><span id="scY"></span><span id="scCol"></span></div>
+      <div class="bd"><div id="chSc" class="c18-chart" aria-label="Диаграмма кэрри и риска"></div></div>
+    </section>
+  </div>
+  <div class="c18-grid struct">
+    <section class="k-panel">
+      <div class="hd"><h3>Разрез кэрри</h3><span class="sp"></span><span id="dim"></span></div>
+      <div class="bd"><div id="chDim" class="c18-chart" aria-label="Гросс-кэрри, фондирование и нетто по группам"></div><div id="dimTbl" class="k-tbl-wrap"></div></div>
+    </section>
+    <section class="k-panel">
+      <div class="hd"><h3>Динамика кэрри и фондирования</h3><span class="k-note" title="История содержит сводки по всему прогону">Все позиции</span><span class="sp"></span><span id="histNorm"></span><span id="histWin"></span></div>
+      <div class="bd"><div id="chHist" class="c18-chart" aria-label="История кэрри и фондирования"></div></div>
+    </section>
+  </div>
+  <div class="c18-grid leaders">
+    <section class="k-panel c18-lead">
+      <div class="hd"><h3>Отрицательный нетто-кэрри (Bleeders)</h3><span class="sp"></span><span id="bleedNote" class="k-note"></span></div>
+      <div id="bleedTbl" class="bd flush"></div>
+    </section>
+    <section class="k-panel c18-lead">
+      <div class="hd"><h3>Главные генераторы кэрри</h3><span class="sp"></span><span id="genNote" class="k-note"></span></div>
+      <div id="genTbl" class="bd flush"></div>
+    </section>
+  </div>
+  <section class="k-panel" id="posPanel">
+    <div class="hd"><h3>Позиции · кэрри и фондирование</h3><span class="sp"></span><span id="show"></span><span id="tblGrp"></span></div>
+    <div id="posTbl" class="bd flush"></div>
+  </section>
+</main>
+<script src="../echarts.min.js"></script>
+<script src="lib/boot.js"></script>
+<script src="lib/kit.js"></script>
+<script src="lib/instr.js"></script>
+<script src="lib/carry-analysis.js"></script>
+<script>
+(function () {
+  'use strict';
+  const M = MOCK, K = KIT, C = CARRY_ANALYSIS, f = K.f, esc = K.esc, $ = id => document.getElementById(id);
+  K.top({ title: 'C18 · Анализ кэрри', tag: 'текущий срез' });
+
+  const dimensions = [['book', 'Книги'], ['entity', 'Юрлица'], ['ccy', 'Валюты'], ['kind', 'Типы'], ['bucket', 'Срочность'], ['issuer', 'Эмитенты']];
+  const choices = {
+    scale: [['day', 'в день'], ['month', 'в месяц ×30'], ['year', 'в год ×365']],
+    beBase: [['net', 'Нетто-кэрри'], ['gross', 'Гросс-кэрри']],
+    scX: [['tenor', 'Срок'], ['dv01', '|DV01|'], ['cs01', '|CS01|']],
+    scY: [['netBp', 'б.п. год.'], ['netAmt', 'Нетто'], ['be30', 'BE 30д']],
+    scCol: [['ccy', 'Валюта'], ['kind', 'Тип']],
+    dim: dimensions, histWin: [[30, '30Д'], [60, '60Д'], [130, '130Д']], histNorm: [['day', 'в день (норм.)'], ['run', 'за прогон']],
+    show: [['all', 'Все'], ['full', 'С полным нетто'], ['bleed', 'Bleeders'], ['noFund', 'Без фондир.'], ['noCarry', 'Без кэрри']],
+    tblGrp: [['none', 'Без групп'], ...dimensions],
+  };
+  const st = { scale: 'day', beBase: 'net', inclBook: false, scX: 'tenor', scY: 'netBp', scCol: 'ccy', dim: 'book',
+    histWin: 60, histNorm: 'day', show: 'all', tblGrp: 'none' };
+  try {
+    const saved = JSON.parse(localStorage.getItem('c18-state') || 'null');
+    if (saved) {
+      for (const [key, items] of Object.entries(choices)) if (items.some(([v]) => v === saved[key])) st[key] = saved[key];
+      st.inclBook = saved.inclBook === true;
+    }
+  } catch (e) { }
+  function set(key, v) {
+    st[key] = v;
+    try { localStorage.setItem('c18-state', JSON.stringify(st)); } catch (e) { }
+    if (segments[key]) paintSegment(key);
+    if (key === 'show' && table) {
+      table.state.sort = [['netDay', v === 'bleed' ? 1 : -1]];
+    }
+    render();
+  }
+  const segments = {};
+  function paintSegment(key) {
+    segments[key].forEach((button, i) => {
+      const active = choices[key][i][0] === st[key];
+      button.classList.toggle('on', active);
+      button.setAttribute('aria-pressed', active);
+    });
+  }
+  for (const [key, items] of Object.entries(choices)) {
+    // Подписи сегментов могут содержать «<» и всегда идут как текст.
+    const box = K.seg($(key), items.map(([v, name]) => [v, esc(name)]), st[key], v => set(key, v));
+    segments[key] = [...box.querySelectorAll('button')];
+    paintSegment(key);
+  }
+  $('inclBook').checked = st.inclBook;
+  $('inclBook').onchange = e => set('inclBook', e.target.checked);
+  const selection = new URLSearchParams();
+  for (const key of ['run_id', 'as_of', 'demo']) {
+    const v = (window.CONCEPTS_SEL || {})[key];
+    if (v) selection.set(key, v);
+  }
+  if (selection.size) document.querySelectorAll('.c18-ctl nav a').forEach(a => { a.search = selection.toString(); });
+
+  const unit = (scale = st.scale) => K.u(({ day: 'тыс ₽/д', month: 'mm ₽/мес', year: 'mm ₽/год' })[scale]);
+  const div = (scale = st.scale) => scale === 'day' ? 1e3 : 1e6;
+  const plot = (v, scale = st.scale) => v == null ? null : C.money(v, scale) / div(scale);
+  const amount = (v, scale = st.scale) => f.s(plot(v, scale), (scale === 'day' ? 0 : 1) + (K.repr === 'RUB' ? 0 : 1));
+  const bp = (v, digits = 0) => f.s(v, digits);
+  const riskFloor = 1000 * M.toRepr.RUB;
+  const riskUnit = K.u('тыс ₽/б.п.');
+  const be = p => C.positionBE(p, st.beBase, riskFloor);
+  const tone = (v, text) => '<span class="' + f.cls(v) + '">' + text + '</span>';
+  const defaultMark = '<span class="c18-default">' + K.hint('⚑', 'Рыночная ставка фондирования по умолчанию') + '</span>';
+  const posName = p => esc(p.name) + ' ' + K.ccyTag(p.ccy, p.ccyReported) + (p.defaultFunding ? ' ' + defaultMark : '');
+  const complete = p => p.netDay != null;
+  const missingFunding = p => p.carryDay != null && p.fundingDay == null;
+  const bleed = p => p.netDay < 0;
+  const match = { all: () => true, full: complete, bleed, noFund: missingFunding, noCarry: p => p.carryDay == null };
+  const partRows = (list, key) => list.map(p => ({ p, v: p[key] })).filter(r => r.v != null);
+  const netTip = 'В нетто входят позиции, у которых рассчитаны кэрри и фондирование.';
+  const bookFundingTip = 'Включает фондирование остатков денежных средств, закрытых позиций и строк уровня книги без расчёта PnL. ' +
+    'Кэрри у позиций без PnL отсутствует. Применяются фильтры книг, юрлица и деска. Фильтры валюты и портфелей действуют на позиции.';
+  $('inclBookLabel').innerHTML = K.hint($('inclBookLabel').textContent, bookFundingTip);
+  const beTip = 'Breakeven сохраняет знак кэрри. В режиме «Нетто-кэрри» у bleeders он отрицательный. ' +
+    'Кэрри за 30 дней делится на модуль риска: DV01 для ставки, CS01 для флоатеров и CDS. ' +
+    'В группе берётся модуль суммы рисков со знаками. Длинные и короткие позиции компенсируют друг друга при параллельном сдвиге. ' +
+    'При риске ниже 1 тыс ₽/б.п. показан прочерк.';
+  const spreadTip = 'Годовой результат к сумме |MV| позиций с полным нетто. Сделки с расчётом к номиналу в этот показатель не входят.';
+  const mark = S => S.net != null && S.noFunding.length ? ' ' + K.hint('*', omitted(S)) : '';
+  const omitted = S => 'Вне нетто: ' + amount(S.omittedCarry) + ' ' + unit() + ' у ' + S.noFunding.length + ' поз. без фондирования';
+  const scope = K.dScope();
+  function spec(title, parts, note, mixedRows) {
+    const scale = st.scale;
+    return { title, rows: parts, unit: unit(scale), fmt: v => amount(v, scale), sc: div(scale) / C.money(1, scale), note, mixedRows };
+  }
+  const clickable = (title, v, parts, note, mixedRows) => v == null ? '—' : K.d(spec(title, parts, note, mixedRows), amount(v), f.cls(v));
+  function bookFundingRows(day) {
+    if (day == null) return [];
+    const name = C.BOOK_FUNDING_LABEL;
+    return [{ p: { id: name, name, book: '—', bookName: 'Все выбранные книги', ccy: K.repr,
+      issuerName: '—', searchText: name.toLowerCase() }, v: day }];
+  }
+
+  function coverage(S, list, ready) {
+    const notes = [];
+    if (!ready) notes.push('<b>Фондирование прогона не посчитано.</b> ' + esc(M.funding?.text));
+    if (S.noFunding.length) {
+      const books = [...new Set(S.noFunding.map(p => p.bookName || p.book))];
+      notes.push('<b>' + S.noFunding.length + ' поз. без фондирования</b> · ' + K.hint(esc(omitted(S)), books.join(', ')) +
+        ' <button class="k-btn" data-show="noFund">Показать без фондирования</button>');
+    }
+    if (S.defaultFunding.length) notes.push('<b>' + S.defaultFunding.length + ' поз. на рыночной ставке по умолчанию</b>');
+    if (S.noCarry.length) notes.push('<b>' + S.noCarry.length + ' поз. без расчёта кэрри</b> <button class="k-btn" data-show="noCarry">Показать без кэрри</button>');
+    const el = $('ban');
+    el.hidden = !notes.length;
+    el.innerHTML = notes.length ? '<div class="c18-ban"><b>Покрытие (B1) · ' + S.full.length + ' из ' + list.length + ' поз.</b> · ' +
+      notes.join(' · ') + ' · <a href="../settings.html#funding">Настройки → Фондирование</a></div>' : '';
+    el.querySelectorAll('[data-show]').forEach(b => b.onclick = () => jump(b.dataset.show));
+  }
+  function jump(show) {
+    set('show', show);
+    $('posPanel').scrollIntoView();
+  }
+
+  function kpis(S, list, leaders, bookDay, ready) {
+    const total = C.withBook(S, bookDay, st.inclBook);
+    const bookRows = bookFundingRows(total.book), netRows = partRows(S.full, 'netDay');
+    const bookIncluded = total.net != null && total.book != null;
+    const biggestBleeder = leaders.bleeders[0]?.name ?? '—';
+    const otherScale = st.scale === 'year' ? 'day' : 'year';
+    const kpi = (key, title, value, u, sub, tip) => K.kpi(title, value + K.kpiUnit(u), sub, '', tip, ' data-c18-kpi="' + key + '"');
+    $('kpis').innerHTML =
+      kpi('net', 'Нетто-кэрри' + mark(S), clickable('Нетто-кэрри', total.net, netRows.concat(bookRows), bookIncluded ? bookFundingTip : netTip, bookIncluded), unit(),
+        [[otherScale === 'day' ? 'в день' : 'в год ≈', tone(total.net, amount(total.net, otherScale)) + K.kpiUnit(unit(otherScale))],
+          ['покрыто', S.full.length + ' / ' + list.length + ' поз.'],
+          ...(st.inclBook ? [[K.hint((bookIncluded ? 'Добавлено · ' : '') + C.BOOK_FUNDING_LABEL, bookFundingTip),
+            amount(bookIncluded ? total.book : null)]] : [])], netTip) +
+      kpi('gross', 'Гросс-кэрри', clickable('Гросс-кэрри', S.gross, partRows(list, 'carryDay')), unit(),
+        C.carryParts(list).filter(p => p.key !== 'unsplit' || p.day != null).map(p =>
+          [esc(p.label), clickable(p.label, p.day, p.rows)]), 'Купон, pull-to-par и rolldown.') +
+      kpi('fund', 'Фондирование', ready ? clickable('Фондирование', total.funding, partRows(list, 'fundingDay').concat(bookRows), bookRows.length ? bookFundingTip : '', !!bookRows.length) : '—', unit(),
+        [['ср. ставка', f.pct(S.fundRate), 'Вес — |MV| или тело фондирования, если MV нет.'],
+          [K.hint(C.BOOK_FUNDING_LABEL, bookFundingTip), clickable(C.BOOK_FUNDING_LABEL, bookDay, bookFundingRows(bookDay), bookFundingTip, true)],
+          ['без фондирования', S.noFunding.length + ' поз.']], 'Стоимость фондирования и начисления по позициям.') +
+      kpi('spread', 'Нетто-спред к |MV|', tone(S.netBp, bp(S.netBp)), 'б.п. год.',
+        [['нетто', f.pcts(S.netPct)], ['кэрри', f.pct(S.carryPct)], ['фондирование', f.pct(S.fundingPct)],
+          ['ср. YTM фиксов', f.pct(S.ytm)]], spreadTip) +
+      kpi('be', 'Breakeven (30 дн.)', tone(S.rates.be, bp(S.rates.be, 1)), 'б.п.',
+        [['за 1 день', bp(S.rates.be == null ? null : S.rates.be / 30, 2)],
+          ['DV01, ' + riskUnit, f.dv(S.rates.risk)], ['флоатеры / CDS · CS01', tone(S.credit.be, bp(S.credit.be, 1)) + K.kpiUnit('б.п.')]], beTip) +
+      kpi('bleed', 'Bleeders (нетто &lt; 0)', clickable('Отрицательный нетто-кэрри', leaders.bleedDay, partRows(leaders.bleedRows, 'netDay')), unit(),
+        [['позиций', leaders.bleedRows.length + ' из ' + S.full.length],
+          ['доля |MV|', f.pct(leaders.bleedMvPct, 1)], ['крупнейший', '<span class="c18-bleeder-name" title="' + esc(biggestBleeder) + '">' +
+            esc(biggestBleeder) + '</span>']], 'Сумма отрицательного нетто по всем позициям с таким результатом.');
+  }
+
+  const charts = {};
+  function chart(id, options, click) {
+    const el = $(id);
+    if (!charts[id]) {
+      el.replaceChildren();
+      charts[id] = K.chart(el, options);
+      if (click) charts[id].on('click', click);
+    } else charts[id].update(options);
+  }
+  function emptyChart(id, note) {
+    if (charts[id]) { charts[id].dispose(); delete charts[id]; }
+    K.noData($(id), note);
+  }
+
+  const wfLabels = { coupon: 'Купон', pull: 'Pull-to-par', roll: 'Rolldown', unsplit: 'Без\nразбивки',
+    funding: 'Фондир.', book: 'Вне\nпозиций', net: 'Нетто' };
+  function waterfall(S, bookDay) {
+    const steps = C.waterfall(S, bookDay, st.inclBook);
+    const bookIncluded = steps.some(s => s.key === 'book');
+    $('wfNote').innerHTML = S.full.length + ' поз. с полным нетто · ' + esc(unit()) +
+      (bookIncluded ? ' · ' + K.hint('Добавлено · ' + C.BOOK_FUNDING_LABEL, bookFundingTip) : '');
+    if (!steps.length) return emptyChart('chWf', 'нет позиций с полным нетто');
+    chart('chWf', () => {
+      const colors = { coupon: K.css('--pos'), roll: '#22c3d6', unsplit: K.css('--fg-3'), funding: K.PNL_COLORS.funding,
+        book: K.PNL_COLORS.funding };
+      return {
+        grid: { left: 12, right: 14, top: 16, bottom: 10, containLabel: true },
+        xAxis: { type: 'category', data: steps.map(s => s.label),
+          axisLabel: { interval: 0, formatter: (_, i) => steps[i].label === 'Кэрри (купон + pull)' ? 'Кэрри\n(купон + pull)' : wfLabels[steps[i].key] } },
+        yAxis: { type: 'value', axisLabel: { formatter: v => f.n(v, 1) } },
+        tooltip: { trigger: 'axis', axisPointer: { type: 'shadow' }, formatter: ev => {
+          const s = steps[ev[0]?.dataIndex];
+          if (!s) return '';
+          return '<b>' + esc(s.label) + '</b><br>' + amount(s.day) + ' ' + unit() +
+            '<br>' + amount(s.day, 'day') + ' ' + unit('day') + ' · ' + amount(s.day, 'year') + ' ' + unit('year') +
+            (s.key === 'book' ? '<br>' + esc(bookFundingTip) : '<br>Позиций: ' + s.rows.length + ' из ' + S.full.length);
+        } },
+        series: [
+          { type: 'bar', stack: 'carry', stackStrategy: 'all', silent: true, itemStyle: { color: 'transparent' },
+            data: steps.map(s => plot(Math.min(s.start, s.end))) },
+          { type: 'bar', stack: 'carry', stackStrategy: 'all', barMaxWidth: 48, barMinHeight: 1, data: steps.map(s => ({
+            value: plot(Math.abs(s.day)), step: s,
+            label: K.barEnd(s.day, true),
+            itemStyle: { opacity: s.key === 'book' ? 0.55 : 1, color: colors[s.key] ||
+              K.css(s.day >= 0 ? '--pos' : s.key === 'pull' ? '--warn' : '--neg') },
+          })), label: { show: true, color: K.css('--fg'), formatter: ev => amount(ev.data.step.day) } },
+        ],
+      };
+    }, ev => {
+      const s = ev.data?.step;
+      if (!s) return;
+      const bookRows = bookFundingRows(s.key === 'book' ? s.day : s.book);
+      K.drill(spec(s.label, s.rows.concat(bookRows), bookRows.length ? bookFundingTip : netTip, !!bookRows.length));
+    });
+  }
+
+  function scatter(list) {
+    const x = p => st.scX === 'tenor' ? p.tenor : p[st.scX] == null ? null : Math.abs(p[st.scX]) / 1e3;
+    const y = p => {
+      if (st.scY === 'netBp') return p.netBp;
+      if (st.scY === 'netAmt') return plot(p.netDay);
+      const v = be(p);
+      return v == null ? null : Math.max(-200, Math.min(200, v));
+    };
+    const byColor = new Map();
+    const points = list.filter(complete).map(p => ({ p, value: [x(p), y(p), p.relativeBase] }))
+      .filter(q => q.value.slice(0, 2).every(Number.isFinite));
+    if (!points.length) return emptyChart('chSc', 'нет позиций с данными для выбранных осей');
+    const sizeMax = points.reduce((max, q) => Math.max(max, q.value[2] ?? 0), 1);
+    for (const q of points) {
+      const colorKey = st.scCol === 'ccy' ? q.p.ccy : C.groupKey(q.p, 'kind');
+      if (!byColor.has(colorKey)) byColor.set(colorKey, []);
+      byColor.get(colorKey).push(q);
+    }
+    const xLabel = st.scX === 'tenor' ? 'Срок, лет' : '|' + st.scX.toUpperCase() + '|, ' + riskUnit;
+    const yLabel = { netBp: 'Нетто, б.п. год.', netAmt: 'Нетто, ' + unit(), be30: 'Breakeven 30д, б.п.' }[st.scY];
+    chart('chSc', () => ({
+      grid: { left: 12, right: 18, bottom: 36, top: 54, containLabel: true },
+      xAxis: { type: 'value', name: xLabel, nameLocation: 'middle', nameGap: 28 },
+      yAxis: { type: 'value', name: yLabel, axisLabel: { formatter: v => f.n(v, 1) } },
+      legend: { type: 'scroll', top: 0 },
+      tooltip: { formatter: ev => {
+        const p = ev.data?.p;
+        if (!p) return '';
+        const be30 = be(p);
+        return '<b>' + esc(p.name) + '</b> · ' + esc(p.bookName || p.book) + '<br>' + esc(C.groupKey(p, 'kind')) + ' · ' + esc(p.ccy) +
+          ' · срок ' + f.yrs(p.tenor) + '<br>' + (p.toNotional ? 'Номинал' : '|MV|') + ' ' + f.mn(p.relativeBase, 1) + ' ' + K.u('mm ₽') +
+          '<br>Гросс ' + amount(p.carryDay, 'day') + ' · фондирование ' + amount(p.fundingDay, 'day') +
+          '<br>Нетто <b>' + amount(p.netDay, 'day') + ' ' + unit('day') + '</b> · ' + bp(p.netBp) + ' б.п. год. к ' + (p.toNotional ? 'номиналу' : '|MV|') +
+          '<br>BE 30д ' + bp(be30, 1) + ' б.п. · ' + p.riskKey.toUpperCase() +
+          (st.scY === 'be30' && Math.abs(be30) > 200 ? ' · за пределами шкалы ±200' : '');
+      } },
+      series: Array.from(byColor, ([name, data], i) => ({
+        type: 'scatter', name, data,
+        symbolSize: d => 8 + 28 * Math.sqrt((d[2] ?? 0) / sizeMax),
+        itemStyle: { opacity: 0.82, borderColor: K.css('--bg'), borderWidth: 1, color: st.scCol === 'ccy' ? K.ccyColor(name) :
+          (K.kindColor[data[0].p.kind] || K.css('--accent')) },
+        ...(i === 0 ? {
+          markLine: { silent: true, symbol: 'none', label: { show: false }, lineStyle: { color: K.css('--neg'), type: 'dashed' }, data: [{ yAxis: 0 }] },
+          markArea: { silent: true, itemStyle: { color: 'rgba(240,100,90,0.06)' }, data: [[{ yAxis: -Infinity }, { yAxis: 0 }]] },
+        } : {}),
+      })),
+    }), ev => { if (ev.data?.p) K.card(ev.data.p.id); });
+  }
+
+  function breakdown(list) {
+    const groups = C.groups(list, st.dim, st.beBase, riskFloor);
+    const el = $('dimTbl');
+    if (!groups.length) {
+      emptyChart('chDim', 'нет позиций под фильтром');
+      el.replaceChildren();
+      return;
+    }
+    const zoom = groups.length > 12;
+    chart('chDim', () => ({
+      barFit: true, grid: { left: 8, right: zoom ? 28 : 13, top: 30, bottom: 8, containLabel: true },
+      legend: { top: 0 },
+      dataZoom: zoom ? [
+        { type: 'inside', yAxisIndex: 0, startValue: 0, endValue: 11, zoomOnMouseWheel: false, moveOnMouseWheel: true },
+        { type: 'slider', yAxisIndex: 0, startValue: 0, endValue: 11, width: 8, right: 5, showDetail: false },
+      ] : [],
+      tooltip: { trigger: 'axis', axisPointer: { type: 'shadow' }, formatter: ev => {
+        const g = groups[ev[0]?.dataIndex];
+        if (!g) return '';
+        return '<b>' + esc(g.label) + '</b> · ' + g.full.length + '/' + g.rows.length + ' поз.<br>Гросс ' + amount(g.gross) +
+          '<br>Фондирование ' + amount(g.funding) + '<br>Нетто ' + amount(g.net) + ' ' + unit();
+      } },
+      yAxis: { type: 'category', data: groups.map(g => g.label), inverse: true, axisLabel: { width: 140, overflow: 'truncate' } },
+      xAxis: { type: 'value', unit: unit() },
+      series: [
+        { type: 'bar', name: 'Гросс-кэрри', stack: 'dim', barMaxWidth: 15, itemStyle: { color: K.css('--pos') }, data: groups.map(g => plot(g.gross)) },
+        { type: 'bar', name: 'Фондирование', stack: 'dim', barMaxWidth: 15, itemStyle: { color: K.PNL_COLORS.funding }, data: groups.map(g => plot(g.funding)) },
+        { type: 'scatter', name: 'Нетто', symbol: 'diamond', symbolSize: 9,
+          itemStyle: { color: K.css('--fg'), borderColor: K.css('--bg'), borderWidth: 1 },
+          data: groups.map((g, i) => [plot(g.net), i]) },
+      ],
+    }));
+    const cell = (g, label, v, key) => clickable(g.label + ' · ' + label, v, partRows(g.rows, key), key === 'netDay' ? netTip : '');
+    const headers = ['Разрез', 'Поз.', K.u('|MV|, bn ₽'), 'Гросс, ' + unit(), 'Фондир., ' + unit(), 'Нетто, ' + unit(), 'Нетто б.п.', 'BE 30д, б.п.', 'Покрытие'];
+    el.innerHTML = '<table class="k-tbl" data-vk="c18-breakdown" data-title="Разрез кэрри"><thead><tr>' + headers.map((s, i) => '<th class="' + (i ? 'n' : '') + '">' + esc(s) + '</th>').join('') +
+      '</tr></thead><tbody>' + groups.map(g => '<tr><td>' + esc(g.label) + '</td><td class="n">' + g.rows.length + '</td>' +
+        '<td class="n">' + f.bn(g.mv, 2) + '</td><td class="n">' + cell(g, 'Гросс-кэрри', g.gross, 'carryDay') +
+        '</td><td class="n">' + cell(g, 'Фондирование', g.funding, 'fundingDay') + '</td><td class="n">' +
+        cell(g, 'Нетто-кэрри', g.net, 'netDay') + mark(g) + '</td><td class="n">' + bp(g.netBp) +
+        '</td><td class="n">' + K.hint(bp(g.rates.be, 1) + ' / ' + bp(g.credit.be, 1), 'DV01 / CS01') +
+        '</td><td class="n">' + g.full.length + ' / ' + g.rows.length + '</td></tr>').join('') + '</tbody></table>';
+  }
+
+  function history() {
+    const data = C.history(M.histDates, M.hist.pnl, st.histNorm, st.histWin, M.hist.accrualDays);
+    if (data.length < 2 || !data.some(d => d.carry != null || d.funding != null)) return emptyChart('chHist', 'нет истории кэрри и фондирования');
+    const u = K.u(st.histNorm === 'day' ? 'mm ₽/д' : 'mm ₽/прогон');
+    const historySeries = (key, name, color, type) => ({
+      name, type, data: data.map(d => d[key] == null ? null : d[key] / 1e6),
+      ...(type === 'line' ? { showSymbol: false, connectNulls: false, lineStyle: { width: 2, color } } : { stack: 'history' }),
+      itemStyle: { color, opacity: type === 'line' ? 1 : 0.75 },
+    });
+    chart('chHist', () => ({
+      grid: { left: 8, right: 12, top: 38, bottom: 12, containLabel: true }, legend: { top: 0 },
+      tooltip: { trigger: 'axis', formatter: entries => {
+        const d = data[entries[0]?.dataIndex];
+        if (!d) return '';
+        const text = v => (v == null ? '—' : f.mns(v, 2) + ' ' + u);
+        return '<b>' + esc(f.date(d.date)) + '</b><br>Кэрри ' + text(d.carry) + '<br>Фондирование ' + text(d.funding) +
+          '<br>Нетто по позициям с обоими факторами ' + text(d.net);
+      } },
+      dataZoom: [{ type: 'inside' }],
+      xAxis: { type: 'category', data: data.map(d => d.date), axisLabel: { formatter: d => f.date(d).slice(0, 5) } },
+      yAxis: { type: 'value', unit: u },
+      series: [historySeries('carry', 'Кэрри', K.PNL_COLORS.carry, 'bar'),
+        historySeries('funding', 'Фондирование', K.PNL_COLORS.funding, 'bar'), historySeries('net', 'Нетто', K.css('--accent'), 'line')],
+    }));
+  }
+
+  function lead(id, list, count, message) {
+    $(id + 'Note').textContent = count + ' поз. · ' + unit();
+    const el = $(id + 'Tbl');
+    if (!list.length) return K.noData(el, message);
+    const max = Math.max(...list.map(p => Math.abs(p.netDay)));
+    const cell = (v, text) => '<td class="n ' + f.cls(v) + '">' + text + '</td>';
+    const title = id === 'bleed' ? 'Отрицательный нетто-кэрри' : 'Главные генераторы кэрри';
+    el.innerHTML = '<div class="k-tbl-wrap"><table class="k-tbl" data-vk="' + 'c18-' + id + '" data-title="' + title +
+      '"><thead><tr><th></th><th>Позиция</th><th>Книга</th>' +
+      '<th class="n">Гросс</th><th class="n">Фондир.</th><th class="n">Нетто</th><th class="n">б.п. год.</th><th></th></tr></thead><tbody>' +
+      list.map(p => '<tr class="row" data-card="' + esc(p.id) + '"><td class="stripe" style="background:' + esc(K.issuerColor(p.issuer)) +
+        '"></td><td class="c18-name" title="' + esc(p.name) + '">' + posName(p) + '</td><td>' + esc(p.bookName || p.book) + '</td>' +
+        cell(p.carryDay, amount(p.carryDay)) + cell(p.fundingDay, amount(p.fundingDay)) + cell(p.netDay, '<b>' + amount(p.netDay) + '</b>') +
+        cell(p.netBp, bp(p.netBp)) + '<td class="c18-bar">' + K.bar(p.netDay, max) + '</td></tr>').join('') + '</tbody></table></div>';
+  }
+
+  let list = [], table;
+  const groupBy = [];
+  const moneyCol = (key, label, fmt = v => amount(v)) => ({
+    key, label, num: true, nullable: true, unit: unit(), sum: p => p[key], cls: f.cls, fmt, sumFmt: v => amount(v), csvFmt: v => amount(v),
+  });
+  const moneyCols = [moneyCol('carryCouponDay', 'Купон'), moneyCol('carryPullDay', 'Pull-to-par'), moneyCol('rollDay', 'Rolldown'),
+    moneyCol('carryDay', 'Гросс-кэрри'), moneyCol('fundingDay', 'Фондир.', (v, p) => v != null ? amount(v) :
+      '<span class="c18-missing">' + K.hint(p.fundingInfo?.state === 'not_configured' ? 'нет правила' :
+        p.fundingInfo?.reason ? '— ⚠' : '—', p.fundingInfo?.reason) + '</span>'),
+    moneyCol('netDay', 'Нетто-кэрри', v => '<b>' + amount(v) + '</b>'),
+  ];
+  const [couponCol, pullCol, rollCol, grossCol, fundCol, netCol] = moneyCols;
+  function positions() {
+    moneyCols.forEach(c => { c.unit = unit(); });
+    groupBy.length = 0;
+    if (st.tblGrp !== 'none') groupBy.push({ key: p => C.groupId(p, st.tblGrp), label: (_, rows) => esc(C.groupKey(rows[0], st.tblGrp)) });
+    if (table) { table.redraw(); return; }
+    table = K.table($('posTbl'), {
+      viewKey: 'c18-positions', colPick: true, title: 'Позиции · кэрри и фондирование', autoFilter: false,
+      rowsFn: () => list.filter(match[st.show]), groupBy, maxHeight: '520px',
+      sort: [['netDay', st.show === 'bleed' ? 1 : -1]], rowCls: p => bleed(p) ? 'bleed' : complete(p) ? '' : 'missing',
+      footCount: rows => rows.filter(complete).length + ' / ' + rows.length + ' с полным нетто',
+      onRow: p => K.card(p.id), stripe: p => K.issuerColor(p.issuer),
+      columns: [
+        { key: 'name', label: 'Позиция', noHide: true, cls: 'c18-name', fmt: (_, p) => posName(p), csvFmt: esc },
+        { key: 'book', label: 'Книга', filter: true, val: p => C.groupKey(p, 'book'), csvFmt: esc },
+        { key: 'entity', label: 'Юрлицо', filter: true, val: p => C.groupKey(p, 'entity'), csvFmt: esc },
+        { key: 'kind', label: 'Тип', filter: true, val: p => C.groupKey(p, 'kind'), csvFmt: esc },
+        { key: 'tenor', label: 'Срок', num: true, fmt: f.yrs },
+        { key: 'mv', label: 'MV / Номинал', unit: K.u('mm ₽'), num: true, val: p => p.toNotional ? p.notionalRub : p.mv,
+          fmt: (v, p) => p.toNotional ? '<i title="Номинал сделки">' + f.mn(v, 1) + '</i>' : f.mn(v, 1) },
+        couponCol, pullCol, rollCol, grossCol, fundCol,
+        { key: 'fundRate', label: 'Ст. фонд.', num: true, unit: '%', fmt: v => f.n(v, 2) }, netCol,
+        { key: 'netBp', label: 'Нетто-спред', num: true, unit: 'б.п. год.', cls: f.cls,
+          fmt: (v, p) => p.toNotional && v != null ? K.hint(bp(v), 'К номиналу сделки') : bp(v) },
+        { key: 'be30', label: 'BE 30д', num: true, unit: 'б.п.', val: be, cls: f.cls, title: beTip,
+          fmt: (v, p) => bp(v, 1) + (v != null && p.riskKey === 'cs01' ? ' ' + K.hint('CS', 'Знаменатель CS01') : ''), csvFmt: v => bp(v, 1) },
+        { key: 'dv01', label: 'DV01', num: true, unit: riskUnit, fmt: f.dv },
+        { key: 'cs01', label: 'CS01', num: true, unit: riskUnit, fmt: f.dv },
+      ],
+    });
+  }
+
+  function render() {
+    const ready = C.fundingReady(M.funding), filter = K.filter;
+    list = C.rows(K.list(), { fundingReady: ready, fx: M.toRepr, isDeal: M.deal, isCds: p => INSTR.kindOf(p) === 'CDS' });
+    const S = C.summarize(list, st.beBase, riskFloor);
+    const selected = filter.entity || filter.desk || filter.type || filter.books?.length;
+    const bookDay = C.bookFunding(M.funding, M.accrualDays, selected ? b => K.scope.bookIn(filter, b, M.book[b]) : null);
+    const leaders = C.leaders(list);
+    K.dFree(scope);
+    const previous = K.dScopeSet(scope);
+    try {
+      coverage(S, list, ready);
+      kpis(S, list, leaders, bookDay, ready);
+      waterfall(S, bookDay);
+      scatter(list);
+      breakdown(list);
+      history();
+      lead('bleed', leaders.bleeders, leaders.bleedRows.length, 'Нет позиций с отрицательным нетто-кэрри');
+      lead('gen', leaders.generators, leaders.generatorCount, 'Нет позиций с положительным нетто-кэрри');
+      K.tableToolsAll(document.querySelector('.c18'));
+    } finally { K.dScopeSet(previous); }
+    positions();
+  }
+
+  K.commands([
+    ...choices.scale.map(([v, label]) => ({ label: 'Кэрри ' + label, run: () => set('scale', v) })),
+    ...dimensions.map(([v, label]) => ({ label: 'Разрез кэрри · ' + label, run: () => set('dim', v) })),
+    { label: 'Кэрри · отрицательное нетто (Bleeders)', run: () => jump('bleed') },
+    { label: 'Кэрри · без фондирования', run: () => jump('noFund') },
+  ]);
+  K.onFilter(render);
+  K.onAlias(render);
+  K.on('theme', render);
+  K.on('numfmt', render);
+  render();
+})();
+</script>
+</body>
+</html>
