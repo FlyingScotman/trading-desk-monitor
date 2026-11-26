@@ -73,9 +73,23 @@ t('#272: денежные оси (тыс/бп, bn) — K.tick, без f.dv и f.
   const c11 = P('c11-history.html');
   assert.ok(c11.includes("const ax = opts.tick ? v => K.tick(v, opts.tick) : opts.fmt;"), 'C11: деления по масштабу');
   assert.ok(c11.includes("{ fmt: v => f.dv(v), tick: 1e3, unit: 'тыс ₽/бп' }") && c11.includes("{ fmt: v => f.bn(v, 1), tick: 1e9, unit: 'bn ₽', stack: true }"));
-  assert.ok(/yAxis: \[\{ type: 'value', unit: 'тыс ₽\/бп', axisLabel: \{ formatter: v => K\.tick\(v, 1e3\) \} \}/.test(P('c02-risk-ladder.html')), 'C02: ось DV01');
+  assert.ok(P('c02-risk-ladder.html').includes('yAxis: K.riskAxes(cumAxisIndex)'), 'C02: ось DV01');
   const { K } = load('USD');
   assert.deepStrictEqual([K.tick(500, 1e3), K.tick(-2500, 1e3), K.tick(0.6e9, 1e9), K.tick(20e3, 1e3)], ['0.5', '(2.5)', '0.6', '20']);
+});
+
+t('бары риска и кумулятив используют одинаковые единицы при одной и двух осях', () => {
+  const { K } = load('USD');
+  assert.strictEqual(K.riskCumAxis, 'same');
+  const shared = { yAxis: K.riskAxes(0) }, split = { yAxis: K.riskAxes(1) };
+  K.axisUnits(shared); K.axisUnits(split);
+  assert.strictEqual(shared.yAxis.length, 1);
+  assert.strictEqual(shared.yAxis[0].name, 'тыс $/бп');
+  assert.strictEqual(split.yAxis.length, 2);
+  assert.strictEqual(split.yAxis[1].position, 'right');
+  assert.strictEqual(split.yAxis[1].splitLine.show, false);
+  assert.strictEqual(split.yAxis[1].axisLabel.formatter(1500), K.tick(1500, 1e3));
+  assert.strictEqual(shared.yAxis[0].axisLabel.formatter(1500), K.tick(1500, 1e3));
 });
 
 t('#272: смоук на 390 px проверяет, что кнопки переключателя видны без прокрутки; переключатель переносится, а не сжимается', () => {
