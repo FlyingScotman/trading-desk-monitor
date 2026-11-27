@@ -897,9 +897,9 @@ class SpreadRules(BaseModel):
 
 class ScenarioDefinition(BaseModel):
     """The prototype scenario shape. curves: bp per RISK_BUCKETS pillar (11) or one number for all, per
-    published curve ("RUB RUONIA" the RUB bonds' discount curve, "RUB KEY", "RUB OFZ" a shift of the OFZ yields,
-    the KBD's par yields (TDM#226: an OFZ in RUONIA + basis moves its basis by RUB OFZ - RUB RUONIA), a currency's
-    "USD"...), each moving only by its own vector; ofzSpread: OFZ Z-spread to RUONIA, bp; fx: % against RUB (+ = weaker rouble). Returned
+    published curve. "RUB RUONIA" shifts OIS quotes. "RUB KEY" shifts MOEX KEYRATE swap quotes, calibrated on the
+    scenario's RUONIA curve. "RUB OFZ" shifts the KBD par yields (an OFZ in RUONIA + basis moves its basis by
+    RUB OFZ - RUB RUONIA). ofzSpread: OFZ Z-spread to RUONIA, bp; fx: % against RUB (+ = weaker rouble). Returned
     normalized: 11-pillar lists, zeros and empty entries left out."""
 
     model_config = ConfigDict(extra="forbid", allow_inf_nan=False)

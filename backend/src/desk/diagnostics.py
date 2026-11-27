@@ -900,6 +900,7 @@ def rates_check(market: Any, static: Any, scrub: Scrubber) -> dict[str, Any]:
 
     def pick(lin: dict[str, Any]) -> dict[str, Any]:
         keep = ("dataset", "source", "quote_basis", "quote_set_id", "fetched_at", "stale_reasons", "last_node",
+                "spec_id", "curve_id", "ruonia_curve_id", "risk_unit",
                 "max_repricing_error_bp", "usable", "key_rate_fixing_date", "decision_meeting",
                 "next_policy_effective_date", "next_policy_estimated")
         out = {k: lin.get(k) for k in keep if k in lin}
@@ -917,7 +918,7 @@ def rates_check(market: Any, static: Any, scrub: Scrubber) -> dict[str, Any]:
         out["ruonia_ois"] = {"built": False, "error": scrub.text(f"{type(e).__name__}: {e}")}
     if ois is not None:
         try:
-            kr = rates.key_rate_projection(market, static, ois.curve)
+            kr = rates.key_rate_projection(market, static, ois)
             out["key_rate"] = {"built": True, **pick(kr.lineage)}
         except Exception as e:  # noqa: BLE001
             out["key_rate"] = {"built": False, "error": scrub.text(f"{type(e).__name__}: {e}")}

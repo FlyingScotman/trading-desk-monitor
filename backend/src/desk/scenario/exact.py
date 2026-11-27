@@ -7,9 +7,8 @@ reproduces the run's within ``BASE_TOLERANCE_RUB`` and core repriced it; its res
 the Taylor total the browser shows. Fallback rungs and rows without a bond (an FX forward, ``assumed``) have no
 cashflows: they stay Taylor only, with ``code`` = their quality. ``blended`` = exact of the covered positions + Taylor of the rest.
 
-Curves (R8): ``RUB RUONIA`` and ``RUB KEY`` move the RUONIA OIS curve (every RUB bond's discount curve, a RUONIA
-floater's projection) and the key-rate projection by name (``curve_shifts_bp``), each only by its own vector, as
-the Taylor moves each curve's factors: a floater sees the basis when one curve moves without the other. ``RUB OFZ`` is
+Curves: ``RUB RUONIA`` and ``RUB KEY`` shift OIS and KRS quotes respectively. Core recalibrates the key-rate curve
+on the shocked RUONIA, matching the Taylor factors. ``RUB OFZ`` is
 the KBD's par yields. An OFZ on the KBD of a run in RUONIA + basis (``valuation.bonds.OFZ_SCHEME``, TDM#213) moves by
 RUONIA's shift and by the basis ``RUB OFZ - RUB RUONIA`` (core's basis ID, ``OFZ_BASIS_ID``; core refuses a name of the
 KBD for it): with RUONIA held that is the KBD's move itself, and a move of all rates alike moves RUONIA with the basis
@@ -38,16 +37,17 @@ from typing import Any
 
 from rub_fixed_income import RISK_BUCKETS, BondScenario, PortfolioScenario
 
-from ..curves.rates import RUONIA_OIS_CURVE_ID
+from ..curves.rates import KEY_RATE_CURVE_ID, KEY_RATE_QUOTE_UNIT, RUONIA_OIS_CURVE_ID
 from ..marketdata.bundle import SnapshotDir
 from ..orchestrator import EodContext, prepare, value
 from ..valuation import derivatives as dv
 from ..valuation.bonds import OFZ_BASIS_ID, OFZ_CURVE, OFZ_SCHEME_P, RISK_CURVES, BondValuation
-from .definition import definition_hash, normalize, own_spread_shock
+from .definition import DefinitionError, definition_hash, normalize, own_spread_shock
 from .taylor import PARTS, risk_payload, run_taylor
 
-METHOD = "desk-scenario-exact-v3"
-"""v3 (TDM#213, #220): an OFZ on the KBD moves by RUONIA and the basis ``RUB OFZ - RUB RUONIA``, every curve of the run is
+METHOD = "desk-scenario-exact-v4"
+"""v4: linked KRS quote shocks. v3 (TDM#213, #220): an OFZ on the KBD moves by RUONIA and the basis
+``RUB OFZ - RUB RUONIA``, every curve of the run is
 named (a foreign curve no longer takes the ``RUB OFZ`` shock); v2 (R8): each curve moves only by its own shifts; v1
 moved a floater's projection curve with the KBD."""
 BASE_TOLERANCE_RUB = 1.0
@@ -56,9 +56,6 @@ CTX_CACHE_SIZE = 2
 NAMED_CURVES = tuple((core, published) for core, published in RISK_CURVES.items() if published != OFZ_CURVE)
 """(core curve ID, published curve) moved by name; the KBD is the shock's own curve (a bond whose discount curve
 is named moves it by its name)."""
-PUBLISHED = {core: published for core, published in dv.PUBLISHED_CURVES.items() if published != OFZ_CURVE}
-"""Core curve ID -> the published curve whose shifts move it (``derivatives.PUBLISHED_CURVES``: a key-rate swap's
-forward curve moves with ``RUB KEY``); a curve not in it is published under its own ID (``curves.fx``)."""
 KBD_SHORT_BUCKETS = ("1M", "3M", "6M")
 """The KBD's buckets without an instrument (``rub_ofz_kbd_v3``, par yields 1Y-20Y+): core 0.38 refuses a scenario whose
 shift there is neither 0 nor the 1Y shift (``InvalidTerms``; 0.37 dropped it), so ``kbd_shock`` sets them to 0."""
@@ -82,9 +79,9 @@ def core_scenario(name: str, norm: Mapping[str, Any], ds: float, core_curves: It
     rub = {c for _, c in NAMED_CURVES} | {OFZ_CURVE}
     ofz, ruonia = tuple(curves.get(OFZ_CURVE, zero)), tuple(curves.get(RISK_CURVES[RUONIA_OIS_CURVE_ID], zero))
     named = {core: tuple(curves.get(c, zero)) for core, c in NAMED_CURVES}
-    for core in core_curves:  # the run's other curves: by their published curve (a key-rate swap's: RUB KEY), else 0
+    for core in core_curves:
         if core not in named and core not in RISK_CURVES:
-            named[core] = tuple(curves.get(PUBLISHED.get(core, core), zero))
+            named[core] = tuple(curves.get(core, zero))
     # a foreign curve's core ID is its published name (curves.fx: CNY FX, CNY XCCY, USD UST); a currency's curve
     # without points (USD: a duration proxy) has no core curve, and core ignores a shift of a curve it does not have
     named.update((c, tuple(v)) for c, v in curves.items() if c not in rub)
@@ -113,8 +110,14 @@ def liability_pnl(fact: Mapping[str, Any], norm: Mapping[str, Any]) -> float:
 def run_curves(ctx: EodContext) -> tuple[str, ...]:
     """The core curve IDs of a run's markets (its bonds' and its FX products' and swaps'), sorted: what
     ``core_scenario`` names."""
-    return tuple(sorted({c.curve_id for m in (ctx.core_market, ctx.fx_risk_market) for c in m.curves}
-                        | {c.curve_id for c in ctx.swap_curves}))
+    return tuple(sorted(c.curve_id for c in ctx.fx_risk_market.curves))
+
+
+def require_curve_units(lineage: Mapping[str, Any] | None) -> None:
+    units = (lineage or {}).get("curve_units") or {}
+    if units.get(RISK_CURVES[KEY_RATE_CURVE_ID]) != KEY_RATE_QUOTE_UNIT:
+        raise DefinitionError("Прогон сделан до перехода на котировки свопов КС (расчёт v43). "
+                              "Пересчитайте прогон перед запуском точного сценария.")
 
 
 def _context(snapshots: SnapshotDir, run: Mapping[str, Any], ctx_cache: dict | None,
@@ -145,11 +148,13 @@ def reprice_run(snapshots: SnapshotDir, run: Mapping[str, Any], rows: list[Mappi
                 reference: Mapping[str, list], definition: Mapping[str, Any],
                 ctx_cache: dict | None = None, fixings: Any = None) -> dict[str, Any]:
     """``run``: ``run_id``, ``business_date`` (a date), ``cut_type``, ``market_snapshot_id`` (and ``quote_curve_risk``,
-    the run's lineage flag: absent is off; ``ofz_scheme``, its lineage's: absent is today's); ``rows``:
+    the run's lineage flag: absent is off; ``ofz_scheme``, its lineage's: absent is today's; ``lineage.curve_units``
+    for the KRS quote unit); ``rows``:
     ``run_position`` dicts (``position_id``, ``book_id``, ``secid``, ``quantity``, ``quality``, ``pv_rub``,
     ``fact``); ``reference``: ``run_reference`` data by kind; ``fixings``: the stored fixings history
     (``marketdata.fixing_history``) the run's cut is filled from, as the run's. Raises ``DefinitionError`` on a bad definition,
     ``SnapshotError`` when the run's snapshots are not in ``snapshots``. Returns the result JSON."""
+    require_curve_units(run.get("lineage"))
     payload = risk_payload(run, rows, reference)
     norm = normalize(definition, payload["curves"])
     h = definition_hash(norm)

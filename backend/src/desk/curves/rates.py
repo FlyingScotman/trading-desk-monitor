@@ -46,6 +46,7 @@ from rub_fixed_income import (
     FixingEntry,
     FixingHistory,
     KeyRateCurveBuildRequest,
+    KeyRateCurveRequest,
     KeyRateSwapQuote,
     OisQuote,
     ZcycParameters,
@@ -69,12 +70,9 @@ from desk.marketdata.adapter import zcyc_parameters
 from desk.marketdata.bundle import Snapshot, SnapshotError
 
 RUONIA_OIS_SPEC = "rub_ruonia_ois_moex_v2"
-KEY_RATE_PROJECTION_SPEC = "rub_key_rate_projection_v1"
 KEY_RATE_SWAP_SPEC = "rub_key_rate_swap_v1"
 RUONIA_OIS_CURVE_ID, KEY_RATE_CURVE_ID = "RUB_RUONIA_OIS", "RUB_KEY_RATE_PROJ"
-KEY_RATE_SWAP_CURVE_ID = "RUB_KEY_RATE_SWAP"
-"""The key-rate forward curve itself (spec ``rub_key_rate_swap_v1``, dated the business date): what core projects a
-key-rate swap on (``valuation.derivatives``); the floaters project on ``KEY_RATE_CURVE_ID``, built from it."""
+KEY_RATE_QUOTE_UNIT = "key_rate_quote"
 SELECTION_RULE = "business-date sets; not stale > bid_ask_mid > latest fetched_at"
 RUONIA_MAX_UNPUBLISHED_DAYS = 1
 """RUONIA of day D is published on D+1, so one trailing business day may be unpublished."""
@@ -85,8 +83,7 @@ class RatesInputError(ValueError):
 
 
 class QuoteSetMissing(RatesInputError):
-    """The market snapshot has no quote set of the dataset dated its business date: a coverage gap of the hub
-    (``curve_quote_sets`` coverage ``missing``), not a build error."""
+    """The market snapshot is missing the quote set or the required quotes for the business date."""
 
     def __init__(self, message: str, dataset: str) -> None:
         super().__init__(message)
@@ -98,8 +95,6 @@ class RatesCurve:
     entry: CurveEntry
     curve: DiscountCurve
     lineage: dict[str, Any]
-    swap_entry: CurveEntry | None = None
-    """``key_rate_projection`` only: the rebased key-rate forward curve as a ``rub_key_rate_swap_v1`` entry."""
 
 
 def ruonia_calendar(static: Snapshot, since: date, reach: date | None = None
@@ -151,6 +146,8 @@ def select_quote_set(market: Snapshot, dataset: str) -> tuple[ar.QuoteSet, dict[
         raise QuoteSetMissing(f"{market.business_date}: no {dataset} quote set dated the business date "
                               f"(present: {[(s.source, s.snapshot_date.isoformat()) for s in sets]})", dataset)
     best = min(dated, key=lambda s: (bool(s.stale_reasons), s.quote_basis != "bid_ask_mid", -s.fetched_at.timestamp()))
+    if dataset == "key_rate_swap" and not any(q.mid is not None for q in best.quotes):
+        raise QuoteSetMissing(f"{market.business_date}: no key-rate swap mids in set {best.quote_set_id}", dataset)
     return best, {
         "dataset": dataset, "quote_set_id": best.quote_set_id, "source": best.source, "quote_basis": best.quote_basis,
         "fetched_at": best.fetched_at.isoformat(), "stale_reasons": list(best.stale_reasons),
@@ -225,13 +222,12 @@ def key_rate_in_force(market: Snapshot) -> tuple[float, dict[str, Any]]:
                            "decision_meeting": decided[-1].meeting_date.isoformat() if decided else None}
 
 
-def key_rate_projection(market: Snapshot, static: Snapshot, discount: DiscountCurve,
+def key_rate_projection(market: Snapshot, static: Snapshot, ruonia: RatesCurve,
                         curve_id: str = KEY_RATE_CURVE_ID, *, rate_day_count: DayCount = DayCount.ACT_365_FIXED,
                         observation_days: Literal["business", "calendar"] = "calendar") -> RatesCurve:
-    """Key-rate projection from MOEX KEYRATE swaps, discounted on ``discount`` (the RUONIA OIS curve).
+    """One KRS quote request linked to RUONIA for portfolio risk, plus the built curve for display.
 
-    The defaults match the key-rate corporates (calendar-day observation, ACT/365F); a floater family
-    observed otherwise needs its own curve.
+    Core recalibrates the request on scenario RUONIA and applies each leg's observation rule.
     """
     bd = date.fromisoformat(market.business_date)
     qs, lineage = select_quote_set(market, "key_rate_swap")
@@ -259,12 +255,15 @@ def key_rate_projection(market: Snapshot, static: Snapshot, discount: DiscountCu
                                        q.ask if q.ask is not None else q.mid))
     if not quotes:
         raise RatesInputError(f"{market.business_date}: no usable key-rate swap quote in set {qs.quote_set_id}: {dropped}")
-    built = build_key_rate_forward_curve(KeyRateCurveBuildRequest(
-        bd, current, nxt.effective_date, tuple(quotes), forward_curve(discount, tom), cal))
+    build = KeyRateCurveBuildRequest(
+        bd, current, nxt.effective_date, tuple(quotes), forward_curve(ruonia.curve, tom), cal)
+    request = KeyRateCurveRequest(build, bd, current, ruonia_curve_id=ruonia.entry.curve_id)
+    built = build_key_rate_forward_curve(build)
     fwd = rebase_key_rate_curve(built.mid.curve, bd, rate_in_force=current)
     curve = key_rate_projection_curve(fwd, cal, rate_day_count=rate_day_count, observation_days=observation_days)
     lineage.update(
-        spec_id=KEY_RATE_PROJECTION_SPEC, curve_id=curve_id, curve_date=bd.isoformat(), calendar=cal_info,
+        spec_id=KEY_RATE_SWAP_SPEC, curve_id=curve_id, curve_date=bd.isoformat(), calendar=cal_info,
+        ruonia_curve_id=request.ruonia_curve_id, risk_unit=KEY_RATE_QUOTE_UNIT,
         current_rate=current, **current_info, next_policy_effective_date=nxt.effective_date.isoformat(),
         next_policy_estimated=nxt.is_estimated, tenors_used=[q.tenor for q in quotes], tenors_dropped=dropped,
         discount_curve_date=tom.isoformat(), last_node=curve.nodes[-1][0].isoformat(),
@@ -272,8 +271,7 @@ def key_rate_projection(market: Snapshot, static: Snapshot, discount: DiscountCu
         max_repricing_error_bp=built.mid.max_repricing_error_bp, usable=built.usable,
         segments=[{"start": s.start_date.isoformat(), "end": s.end_date.isoformat(), "rate": s.rate,
                    "tenor": s.pillar_tenor} for s in fwd.segments])
-    return RatesCurve(CurveEntry(curve_id, KEY_RATE_PROJECTION_SPEC, curve), curve, lineage,
-                      CurveEntry(KEY_RATE_SWAP_CURVE_ID, KEY_RATE_SWAP_SPEC, fwd))
+    return RatesCurve(CurveEntry(curve_id, KEY_RATE_SWAP_SPEC, request), curve, lineage)
 
 
 def fixing_known(f: ar.Fixing, cut: datetime) -> bool:

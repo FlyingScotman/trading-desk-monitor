@@ -91,7 +91,7 @@ def test_accrued_mismatch_keeps_the_valuation(ctx, outs):
 def value_one(ctx, terms, quote):
     from desk.valuation.bonds import value_bonds
 
-    valued, _ = value_bonds(ctx.core_market, [bond_request("x", terms, quote, ctx.business_date, 1.0)])
+    valued, _ = value_bonds(ctx.risk_market, [bond_request("x", terms, quote, ctx.business_date, 1.0)])
     return tuple(valued.values())
 
 

@@ -21,7 +21,7 @@ from .. import store
 from ..marketdata import fixing_history
 from ..marketdata.bundle import SnapshotDir
 from .definition import DefinitionError, definition_hash, normalize
-from .exact import METHOD, reprice_run
+from .exact import METHOD, reprice_run, require_curve_units
 
 log = logging.getLogger("desk.scenario")
 JOB_SQL = "SELECT j.*, r.result FROM scenario_job j LEFT JOIN scenario_result r USING (job_id)"
@@ -39,11 +39,12 @@ def submit(con: psycopg.Connection, base_run_id: int, definition: Mapping[str, A
     (``submit_all``). Raises LookupError when the run is missing, ValueError when it is not complete or the definition
     is invalid for it (DefinitionError)."""
     cur = _cur(con)
-    run = cur.execute("SELECT status FROM run WHERE run_id = %s", (base_run_id,)).fetchone()
+    run = cur.execute("SELECT status, lineage FROM run WHERE run_id = %s", (base_run_id,)).fetchone()
     if run is None:
         raise LookupError(f"run {base_run_id} not found")
     if run["status"] != "complete":
         raise ValueError(f"run {base_run_id} is {run['status']}, not complete")
+    require_curve_units(run["lineage"])
     ref = cur.execute("SELECT data FROM run_reference WHERE run_id = %s AND kind = 'curves'",
                       (base_run_id,)).fetchone()
     norm = normalize(definition, [c["curve_id"] for c in ref["data"]] if ref else [])
@@ -150,7 +151,7 @@ def run_once(con: psycopg.Connection, snapshots: SnapshotDir, ctx_cache: dict | 
         return None
     jid, rid = job["job_id"], job["base_run_id"]
     try:
-        run = cur.execute("SELECT run_id, business_date, cut_type, market_snapshot_id,"
+        run = cur.execute("SELECT run_id, business_date, cut_type, market_snapshot_id, lineage,"
                           " (lineage->>'quote_curve_risk')::boolean AS quote_curve_risk,"
                           " lineage->>'ofz_scheme' AS ofz_scheme,"
                           " (lineage->>'second_order') IS DISTINCT FROM 'false' AS second_order"

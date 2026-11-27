@@ -22,6 +22,7 @@ from pathlib import Path
 import pytest
 from rub_fixed_income import FixingEntry
 
+from desk.curves.rates import KEY_RATE_CURVE_ID
 from desk.marketdata.bundle import SnapshotDir
 from desk.orchestrator import prepare
 from desk.publish import derivatives_parallel, tdm_run
@@ -98,7 +99,7 @@ def test_swaps_and_repos_valued_by_core_with_risk_per_curve(plan):
     # REPOs: a lender's PV near its cash, a borrower's key-rate REPO with key-rate risk
     rp = r1.extra["repos"][0]
     assert r1.quantity == 5e8 and 5e8 < r1.pv_rub < 5.1e8 and rp["end_amount_source"] == "fixed"
-    assert r2.quantity == -5e8 and r2.pv_rub < 0 and "RUB KEY" in r2.curve_buckets
+    assert r2.quantity == -5e8 and r2.pv_rub < 0 and set(r2.curve_buckets) == {"RUB RUONIA"}  # matures before the next decision
     assert r2.extra["repos"][0]["fixing_id"] == "KEY_RATE"
     assert any("ACT/365-366" in a for a in r2.assumptions) and not any("ACT/365-366" in a for a in r1.assumptions)
     # the reconciliation with the report: mv_rub of the row, else the trades' pv_rub
@@ -217,8 +218,7 @@ def test_leg_conventions_from_the_terms(ctx):
 
 
 def test_quote_curve_risk_leaves_swaps_and_repos_as_they_are(ctx, plan):
-    """Core 0.38 ``quote_curve_risk`` (#219): swaps and REPOs read no foreign curve, and the key-rate swap projects on
-    the built forward curve, so the setting changes neither their PV nor their risk."""
+    """Core 0.38 ``quote_curve_risk`` (#219): swaps and REPOs use the same RUB quotes with the setting on and off."""
     on = pv1.plan(replace(ctx, quote_curve_risk=True), inputs(TERMS, ("S1", "K1", "R2"))).direct
     for pid in ("S1", "K1", "R2"):
         a, b = plan.direct[pid].valuation, on[pid].valuation
@@ -227,7 +227,7 @@ def test_quote_curve_risk_leaves_swaps_and_repos_as_they_are(ctx, plan):
 
 
 def test_without_the_key_rate_curve_key_rate_swaps_keep_the_report(ctx):
-    v = pv1.plan(replace(ctx, swap_curves=()), inputs(TERMS, ("K1", "S1"))).direct
+    v = pv1.plan(replace(ctx, quote_curves=tuple(c for c in ctx.quote_curves if c.curve_id != KEY_RATE_CURVE_ID)), inputs(TERMS, ("K1", "S1"))).direct
     assert v["K1"].core_not_valued[0] == "no_key_rate_curve" and v["S1"].valuation.extra["core"]["product"] == "ois"
 
 

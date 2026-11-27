@@ -300,7 +300,7 @@ def test_publish_fx_book_through_the_store_and_the_api(ctx, store_url):
 
     with store.connect(store_url) as conn:
         con = conn.cursor(row_factory=dict_row)
-        run_row = con.execute("SELECT run_id, business_date, cut_type, market_snapshot_id FROM run WHERE run_id = %s",
+        run_row = con.execute("SELECT run_id, business_date, cut_type, market_snapshot_id, lineage FROM run WHERE run_id = %s",
                               (rid,)).fetchone()
         prow = con.execute("SELECT position_id, book_id, secid, quantity, quality, pv_rub, fact FROM run_position"
                            " WHERE run_id = %s AND fact IS NOT NULL ORDER BY ord", (rid,)).fetchall()
@@ -544,7 +544,7 @@ def test_quote_curve_risk_behind_its_setting(ctx, tmp_path):
     assert isinstance(ctx.fx.quote_entries["CNY XCCY"].curve, XccyCurveBootstrapRequest)
     assert ctx.lineage()["quote_curve_risk"] is False and ctx.curve_units()["CNY XCCY"] == "zero"
     on = replace(ctx, quote_curve_risk=True)
-    assert on.lineage()["curve_units"] == {"RUB OFZ": "kbd_par", "RUB KEY": "zero", "RUB RUONIA": "ois_quote",
+    assert on.lineage()["curve_units"] == {"RUB OFZ": "kbd_par", "RUB KEY": "key_rate_quote", "RUB RUONIA": "ois_quote",
                                            "BYN FX": "zero", "CNY FX": "zero", "CNY RUSFAR": "zero",
                                            "CNY XCCY": "xccy_quote_fx", "USD FX": "zero"}
     # bonds: the XCCY curve stays built (core 0.38 takes XCCY quotes for FX products only)
@@ -611,4 +611,3 @@ def test_rub_ofz_scenario_moves_no_foreign_curve(tmp_path):
     sc = exact.core_scenario("x", norm, 0.0, named)
     shifts = dict(sc.curve_shifts_bp)
     assert "RUB_KBD" not in shifts and shifts["CNY XCCY"] == shifts["CNY FX"] == (0.0,) * 11
-    assert shifts["RUB_KEY_RATE_SWAP"] == shifts["RUB_KEY_RATE_PROJ"]  # a key-rate swap's curve moves with RUB KEY

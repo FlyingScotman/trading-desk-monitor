@@ -22,7 +22,7 @@ from desk.publish import tdm_run
 from desk.report import validation
 from desk.valuation import fallback
 from desk.valuation.bonds import DISCOUNT_CURVE_ID as RUONIA
-from desk.valuation.bonds import Rejected, face_on, fixed_schedule
+from desk.valuation.bonds import Rejected, current_period, face_on, fixed_schedule
 from desk.valuation.fallback import (
     FallbackContext,
     SimplePnl,
@@ -87,7 +87,15 @@ def test_market_value_floater_on_duration(ctx, exact):
         dirty = clean * float(o.quote.face_value) / 100 + float(o.quote.accrued_per_bond)
         assert v.pv_rub == pytest.approx(Q * dirty)
         assert v.dv01_rub < 0 and math.isclose(sum(v.buckets.values()), v.dv01_rub)
-        assert sum(1 for x in v.buckets.values() if x) <= 2  # split between two pillars
+        if sid == FRN:
+            assert set(v.risk()) == {"RUB KEY", "RUB RUONIA"}
+            coupon, _ = current_period(o.terms, v.valuation_date)
+            reset = (coupon.pay_date - v.valuation_date).days / 365
+            bp_pv = v.pv_rub * 1e-4 * v.modified_duration / v.macaulay_years
+            assert sum(v.risk()["RUB KEY"].values()) == pytest.approx((v.macaulay_years - reset) * bp_pv)
+            assert v.dv01_rub == pytest.approx(-reset * bp_pv)
+        else:
+            assert sum(1 for x in v.buckets.values() if x) <= 2
         assert any("next reset" in a for a in v.assumptions)
         # the spread risk keeps the full duration (an OFZ-PK's spread to RUONIA too, as core's ofz_spr01 since 0.2.6)
         assert v.spread01_rub < v.dv01_rub

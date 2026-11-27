@@ -53,7 +53,7 @@ delta), ``basis01`` (``FXBASIS|<ccy>``, RUB per bp), ``fixings`` (fixed / pendin
   ``maturity_date`` the (unadjusted) termination, ``spread_bp`` the float spread. ``RUONIA``: compounded, the MOEX OIS
   convention (``rub_ruonia_ois_moex_v2``), discounted and projected on ``RUB RUONIA`` (single curve), on the joint
   OIS calendar (``rates.ois_calendar``). ``KEY_RATE``: arithmetic average, MOEX IRS KEYRATE (``rub_key_rate_swap_v1``),
-  discounted on ``RUB RUONIA``, projected on the key-rate forward curve (``rates.KEY_RATE_SWAP_CURVE_ID``, published as
+  discounted on ``RUB RUONIA``, projected on the linked KRS quote curve (published as
   ``RUB KEY``). A leg's ``payment_frequency`` (``<n>M``, ``<n>Y``, ``term``) and ``day_count`` replace the
   convention's for that leg; without them the convention's apply, said in the assumptions (provisional). A swap whose
   period has started reads the run's fixings of its index (``rates.fixing_entries``: point-in-time, RUONIA with one
@@ -83,10 +83,8 @@ delta), ``basis01`` (``FXBASIS|<ccy>``, RUB per bp), ``fixings`` (fixed / pendin
   in the RUB cash of the flows (core gives the horizon's cash in RUB only; ``_foreign_flows``): an approximation.
   TDM#565 stage 2, the RUB leg: ``RUONIA`` compounded as before; ``KEY_RATE`` averaged arithmetically over calendar days
   as MOEX IRS KEYRATE (core's ``RUB_KEY_RATE_AVERAGE``; the terms' averaging flag is not read, as for IRS), projected on
-  the key-rate curve ``RUB_KEY_RATE_PROJ`` (calendar-day nodes, ACT/365F; published as ``RUB KEY``), its started period
-  reading the ``KEY_RATE`` history, and the forward curve ``RUB_KEY_RATE_SWAP`` of ``EodContext.swap_curves`` handed to
-  core for the horizon (``rub_key_rate_curve_id``: the flows of ``_rates_flows``; the carry of the PnL is zero, as for
-  every derivative); a swap with a period ending past the curve's last node is ``key_rate_curve_too_short`` (core would
+  the same KRS quote curve as the other key-rate products (published as ``RUB KEY``). A started period reads the
+  ``KEY_RATE`` history. A swap with a period ending past the curve's last node is ``key_rate_curve_too_short`` (core would
   refuse it as ``MissingMarketData``); no curve: ``no_key_rate_curve``. ``RUSFAR`` compounded on 365 / 366 (provisional),
   projected on ``RUB RUONIA`` without a basis (provisional), reading the run's ``RUSFAR`` fixings
   (``FxMarket.index_fixings``, ``curves.fx.RUB_OVERNIGHT``) for a started period; an arithmetically averaged one
@@ -177,6 +175,7 @@ from rub_fixed_income import (
     horizon_portfolio,
     joint_calendar,
     notional_exchanges,
+    resolve_tenor,
     swap_convention,
     swap_schedule,
     value_portfolio,
@@ -207,7 +206,7 @@ from ..curves.fx import (
     RUSFAR_RUB_INDEX,
     FxOptions,
 )
-from ..curves.rates import KEY_RATE_CURVE_ID, KEY_RATE_SWAP_CURVE_ID, RUONIA_OIS_CURVE_ID
+from ..curves.rates import KEY_RATE_CURVE_ID, RUONIA_OIS_CURVE_ID
 from ..inbox.schema import norm_ccy
 from ..marketdata import manual_cds
 from ..marketdata.adapter import extend_calendar_back
@@ -219,8 +218,8 @@ PUBLISHED_FACTORS = ("IR|", "FX|", "CS")
 """Factors of the published Hessian (the Taylor's vocabulary, ``scenario.taylor``); the basis goes to ``basis01``."""
 RATE_TOLERANCE = 1e-4
 """Relative difference of ``contract_rate`` and the amounts' rate said in the assumptions."""
-PUBLISHED_CURVES = {**RISK_CURVES, KEY_RATE_SWAP_CURVE_ID: RISK_CURVES[KEY_RATE_CURVE_ID]}
-"""Core curve ID -> published curve: a key-rate swap's projection is the key rate (``RUB KEY``), as a floater's."""
+PUBLISHED_CURVES = RISK_CURVES
+"""Core curve IDs shared by bonds and derivatives, mapped to their published names."""
 FX_KINDS = ("fx_forward", "fx_swap")
 SWAP_KINDS = ("irs", "ois")
 LINKED_KINDS = (*FX_KINDS, *SWAP_KINDS, "ccs", "repo", "cds")
@@ -990,9 +989,9 @@ def _swap_instrument(ctx: Any, s: SwapTerms, iid: str, calendars: dict[str, Cale
         raise NotValued("settled", f"swap {s.label} paid its last flow on {last}", last)
     projection = None
     if s.index == "key_rate":
-        if KEY_RATE_SWAP_CURVE_ID not in {c.curve_id for c in ctx.swap_curves}:
+        if ctx.key_rate_request is None:
             raise NotValued("no_key_rate_curve", f"no key-rate curve on {bd}: key-rate swaps keep the report's value")
-        projection = KEY_RATE_SWAP_CURVE_ID
+        projection = KEY_RATE_CURVE_ID
     fixing = None
     if s.float_dates[0] < bd:  # a floating period has started: its known part comes from the fixings
         fixing = FIXING_ID[s.index]
@@ -1030,7 +1029,7 @@ def _repo_instrument(ctx: Any, r: RepoTerms, iid: str) -> tuple[RepoInstrument, 
         if fixing not in _fixing_ids(ctx):
             raise NotValued("no_fixings", f"no {fixing} fixings in the run on {bd} for REPO {r.label}")
         if r.index_code == "KEY_RATE":
-            if KEY_RATE_CURVE_ID not in {c.curve_id for c in ctx.core_market.curves}:
+            if ctx.key_rate_request is None:
                 raise NotValued("no_key_rate_curve", f"no key-rate curve on {bd} for REPO {r.label}")
             projection = KEY_RATE_CURVE_ID
         rate = FloatingRepoRate(r.index_code, r.spread_bp / 1e4, basis,  # type: ignore[arg-type]
@@ -1051,10 +1050,6 @@ class CcsRubIndex(NamedTuple):
     projection_curve_id: str | None
     """The curve the leg projects on; None: the leg's discount curve (``RUB RUONIA``)."""
     note: str
-    key_rate_curve_id: str | None = None
-    """The key-rate forward curve (``rub_key_rate_swap_v1``) core's horizon rolls the key-rate leg by
-    (``XccyInstrument.rub_key_rate_curve_id``); the monitor's horizon is the flows (``_rates_flows``), the PnL's carry
-    is zero. It lies in ``EodContext.swap_curves``, not in ``core_market``."""
     reads_averaging_flag: bool = False
     """Whether ``x_overnight_arithmetic`` is read: an arithmetically averaged leg is then
     ``ccs_index_averaging_unsupported`` (RUSFAR, which core compounds). RUONIA's flag was never read; the key rate's leg
@@ -1066,11 +1061,11 @@ CCS_RUB_INDEX = {
     "KEY_RATE": CcsRubIndex(
         RUB_KEY_RATE_AVERAGE, FIXING_ID["key_rate"], "history", KEY_RATE_CURVE_ID,
         "key rate averaged arithmetically over calendar days as MOEX IRS KEYRATE (the terms' averaging flag is not "
-        "read, as for IRS), projected on the key-rate curve (RUB KEY)", KEY_RATE_SWAP_CURVE_ID),
+        "read, as for IRS), projected on the key-rate curve (RUB KEY)"),
     "RUSFAR": CcsRubIndex(
         CompoundedIndex(RUSFAR_RUB_INDEX, "nfa_act", "nfa_act"), RUSFAR_RUB_FIXING, "index", None,
         "RUSFAR compounded on 365 / 366 (provisional: the exchange's basis not confirmed), projected on RUONIA OIS "
-        "without a RUSFAR-RUONIA basis (provisional)", None, True)}
+        "without a RUSFAR-RUONIA basis (provisional)", True)}
 """``index_code`` of a CCS's RUB floating leg -> core's index, fixings and projection. Other indices are
 ``swap_index_unsupported``."""
 
@@ -1230,9 +1225,9 @@ def _ccs_build(ctx: Any, c: CcsTerms, iid: str, curve_of: dict[str, str]
     # the foreign leg is discounted on the currency's XCCY curve (calibrated on the XCS quotes) where the run has it,
     # else on the curve of the FX derivatives, whose quotes may end long before the swap does (said)
     present = {e.curve_id for e in ctx.core_market.curves}
-    if rub_idx is not None and rub_idx.projection_curve_id is not None and (
-            rub_idx.projection_curve_id not in present
-            or (rub_idx.key_rate_curve_id or "") not in {e.curve_id for e in ctx.swap_curves}):
+    rub_projection = rub_idx.projection_curve_id if rub_idx else None
+    key_rate = ctx.key_rate_request if rub_projection == KEY_RATE_CURVE_ID else None
+    if rub_projection == KEY_RATE_CURVE_ID and key_rate is None:
         raise NotValued("no_key_rate_curve", f"no key-rate curve on {bd}: the {c.rub.index_code} leg of CCS "
                                              f"{c.label} projects on it")
     if fidx is not None and fidx.curve_id not in present:
@@ -1299,8 +1294,9 @@ def _ccs_build(ctx: Any, c: CcsTerms, iid: str, curve_of: dict[str, str]
         notes.append(f"{c.label}: the MOEX XCS convention ({', '.join(takes)}) where the terms state no "
                      f"{' or '.join(lacks)} (provisional)")
     swap = XccySwap(c.label, legs[0], legs[1])
-    if rub_idx is not None and rub_idx.projection_curve_id is not None:  # the key-rate curve ends (about 10Y)
-        node = next(e.curve.nodes[-1][0] for e in ctx.core_market.curves if e.curve_id == rub_idx.projection_curve_id)
+    if key_rate is not None:
+        build = key_rate.build
+        node = resolve_tenor(build.trade_date, build.quotes[-1].tenor, build.calendar).end_date
         if any(p.accrual_end > node and p.payment_date > bd for p in swap.rub_leg.periods):
             raise NotValued("key_rate_curve_too_short", f"CCS {c.label}: a period of the {c.rub.index_code} leg ends "
                                                         f"past the key-rate curve (quotes to {node})")
@@ -1339,8 +1335,8 @@ def _ccs_build(ctx: Any, c: CcsTerms, iid: str, curve_of: dict[str, str]
         else:
             notes.append(f"{c.label}: {fidx.curve_id} quotes to {last}, the leg's periods end within them")
     inst = XccyInstrument(iid, swap, RUONIA_OIS_CURVE_ID, foreign_curve, rub_fixing_id=fixing,
-                          rub_projection_curve_id=rub_idx.projection_curve_id if rub_idx else None,
-                          rub_key_rate_curve_id=rub_idx.key_rate_curve_id if rub_idx else None,
+                          rub_projection_curve_id=rub_projection,
+                          rub_key_rate_curve_id=rub_projection,
                           foreign_projection_curve_id=fidx.curve_id if fidx else None,
                           foreign_fixing_id=foreign_fixing)
     return inst, notes, tuple(d for d in days if bd < d <= bd + timedelta(days=FLOW_DAYS))
@@ -1723,10 +1719,7 @@ def value(ctx: Any, requests: list[Request], *, options: FxOptions, second_order
              and (c := i.projection_curve_id) is not None}
     used |= {i.foreign_discount_curve_id for i in instruments if isinstance(i, XccyInstrument)}
     used |= {c for i in instruments if isinstance(i, XccyInstrument) and (c := i.foreign_projection_curve_id)}
-    # the RUB leg on the key rate: its projection curve (core_market) and, for the horizon, the key-rate forward curve
-    # (EodContext.swap_curves, added below)
-    used |= {c for i in instruments if isinstance(i, XccyInstrument)
-             for c in (i.rub_projection_curve_id, i.rub_key_rate_curve_id) if c is not None}
+    used |= {c for i in instruments if isinstance(i, XccyInstrument) and (c := i.rub_projection_curve_id)}
     index_ids = {f for i in instruments if isinstance(i, XccyInstrument) and (f := i.foreign_fixing_id) is not None}
     index_ids |= {f for i in instruments if isinstance(i, XccyInstrument) and (f := i.rub_fixing_id) in RUB_OVERNIGHT}
     fixing_ids = {f for i in instruments if isinstance(i, (SwapInstrument, RepoInstrument))
@@ -1736,7 +1729,7 @@ def value(ctx: Any, requests: list[Request], *, options: FxOptions, second_order
     # risk on RUONIA in its OIS par quotes, as the bonds' (EodContext.quote_curves); with the setting quote_curve_risk
     # the CNY XCCY curve as its par quotes too (EodContext.fx_risk_market), rebuilt by core on every shock. The fixings
     # only a swap or a REPO reads (point-in-time, with RUONIA's declared unpublished day), so an FX book's inputs stay
-    # as they were; the key-rate forward curve of a key-rate swap from EodContext.swap_curves
+    # as they were.
     fix_reach: dict[str, date] = {}
     for i in instruments:
         if isinstance(i, SwapInstrument) and i.fixing_id is not None:
@@ -1746,8 +1739,7 @@ def value(ctx: Any, requests: list[Request], *, options: FxOptions, second_order
                    fixings=_fixings_reaching(tuple(f for f in ctx.core_market.fixings if f.fixing_id in fixing_ids),
                                              fix_reach),
                    index_fixings=tuple(e for e in ctx.fx.index_fixings if e.fixing_id in index_ids),
-                   curves=(*(c for c in market.curves if c.curve_id in used),
-                           *(c for c in ctx.swap_curves if c.curve_id in used)),
+                   curves=tuple(c for c in market.curves if c.curve_id in used),
                    calendars=(*ctx.core_market.calendars, *calendars.values()),
                    futures_quotes=tuple(quotes.values()))
     # core's quote_curve_risk only when the call holds quotes it takes for them: a call without keeps its job ID
@@ -1756,8 +1748,9 @@ def value(ctx: Any, requests: list[Request], *, options: FxOptions, second_order
                              fx_curve_fallbacks=tuple(fallbacks),
                              quote_curve_risk=ctx.quote_curve_risk and quoted, ois_tail=OIS_TAIL if tail else None)
     result = value_portfolio(run_id=f"desk-eod-{bd}-derivatives", as_of=ctx.core_market.known_at, snapshot=snap,
-                             instruments=instruments, positions=positions, policy=policy, scenarios=scenarios)
-    cache = ShockedCurveCache()  # the curves are built once for all the horizons (the flows' and the PnL's)
+                             instruments=instruments, positions=positions, policy=policy, scenarios=scenarios,
+                             curve_cache=ctx.cache)
+    cache = ctx.cache
     _rates_flows(snap, policy, instruments, positions, pay_dates, owner, terms_of, flows, cache)
     horizons = _rates_horizon(snap, policy, instruments, positions, owner, horizon, cache) \
         if horizon is not None and horizon > bd else {}
@@ -2031,8 +2024,8 @@ def _rates_horizon(snap: Any, policy: ValuationPolicy, instruments: list[Any], p
                    ) -> dict[str, dict[str, Any]]:
     """Per position ID of a row of swaps and REPOs (every trade a RUB swap or REPO: a CCS or an FX trade in the row
     leaves it out), core's horizon to ``horizon`` summed over its trades: ``{"date", "carry_rub", "rolldown_rub",
-    "received_rub", "projections"}`` (``projections``: the core curve IDs the trades project their floating legs on, which
-    say what the risk on ``RUB KEY`` is the risk of: the key-rate forward curve or the projection curve). Core's ``carry_rub`` is the PV at the horizon on today's curves read forward, plus the cash paid
+    "received_rub", "projections"}`` (``projections`` lists the core IDs used by the floating legs). Core's
+    ``carry_rub`` is the PV at the horizon on today's curves read forward, plus the cash paid
     up to it, less today's PV (``received_rub`` is that cash); ``rolldown_rub`` the further change on the curves rolled to
     the horizon. ``pnl.direct`` splits the day's PnL of the D-1 row with them. A date core refuses is one call lost: its
     row is then tried alone, and one that fails again has no horizon (its PnL keeps everything in ``other``, said),

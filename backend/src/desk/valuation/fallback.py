@@ -146,6 +146,7 @@ from .bonds import (
     current_period,
     face_on,
     fixed_schedule,
+    is_key_rate_floater,
     next_offer,
     settlement_date,
     value_bonds,
@@ -275,7 +276,7 @@ def _medians(ctx: EodContext) -> dict[tuple[str, Any, Any], tuple[float, int]]:
             reqs.append(bond_request(t.secid, t, q, q.trade_date, 1.0))
         except Rejected:
             continue
-    valued, _ = value_bonds(ctx.core_market, reqs, cache=ctx.cache)
+    valued, _ = value_bonds(ctx.risk_market, reqs, cache=ctx.cache)
     groups: dict[tuple[str, Any, Any], list[float]] = defaultdict(list)
     for r in reqs:
         v = valued.get(r.position_id)
@@ -468,7 +469,7 @@ def bond_discount(ctx: EodContext, terms: BondTerms) -> tuple[str, Any, str | No
     for ``OFZ_KBD_CLASSES``, else the run's (``EodContext.discount``: RUONIA OIS, the KBD on a date without it); what
     core's risk engine takes for it (the KBD built with par buckets, RUONIA as its OIS bootstrap request:
     ``EodContext.risk_curve``) and the note of a KBD fallback."""
-    if terms.bond_class in OFZ_KBD_CLASSES:
+    if terms.bond_class in OFZ_KBD_CLASSES and not is_key_rate_floater(terms):
         return KBD_CURVE_ID, ctx.curve, None
     cid, built, note = ctx.discount
     return cid, ctx.risk_curve(cid, built), note  # RUONIA by its OIS quotes, as on the exact path
@@ -497,17 +498,13 @@ def _split(t: float, dv01: float) -> dict[str, float]:
     return out
 
 
-def key_rate_floater_proxy(disc: str, mac: float, reset: float, pv: float) -> dict[str, dict[str, float]]:
-    """The duration proxy of a key-rate floater by curve, as core books an exact one (R15): every cashflow is
-    discounted on ``disc`` (-Macaulay x PV at the full duration) and the coupons after the reset are projected on
-    the key-rate curve (``KEY_CURVE``): +duration at the horizon, -time to the reset at the reset (the forwards
-    between them). Summed over the curves the buckets are the single-curve proxy (-time to the reset x PV at the
-    reset), so the total DV01 and every parallel shift of all curves are unchanged; only a move of the key rate
-    against RUONIA (the basis) now moves the floater."""
-    proj = {b: x + y for (b, x), y in zip(_split(mac, mac * pv * 1e-4).items(),
-                                         _split(reset, -reset * pv * 1e-4).values())}
-    return {disc: {b: x + 0.0 for b, x in _split(mac, -mac * pv * 1e-4).items()},
-            KEY_CURVE: {b: x + 0.0 for b, x in proj.items()}}
+def key_rate_floater_proxy(disc: str, mac: float, reset: float, pv: float,
+                           yield_decimal: float) -> dict[str, dict[str, float]]:
+    """R15 near-par proxy: each leg uses modified duration to approximate its discounted annuity."""
+    bp_pv = pv * 1e-4 / (1 + yield_decimal)
+    discount = _split(mac, -mac * bp_pv)
+    before_reset = _split(reset, reset * bp_pv)
+    return {disc: discount, KEY_CURVE: {b: -x - before_reset[b] + 0.0 for b, x in discount.items()}}
 
 
 def _f(v: Any) -> float | None:
@@ -938,16 +935,16 @@ def approximate(ctx: EodContext, outcome: Outcome, quantity: float,
         why.append(note + (f": DV01 split between the nearest pillars of {curve}" if rate_t else ": DV01 0"))
         buckets = _split(rate_t, dv01) if rate_t else zero
         by_curve = {curve: buckets}
-        if not is_fx and t.coupon_type == "floating" and coupon is not None and mac > rate_t \
-                and (t.floater_formula or {}).get("benchmark") == "KEY_RATE":
-            by_curve = key_rate_floater_proxy(curve, mac, rate_t, pv / (1 + yy))
+        if not is_fx and coupon is not None and mac > rate_t and is_key_rate_floater(t):
+            by_curve = key_rate_floater_proxy(curve, mac, rate_t, pv, yy)
             why.append(f"key-rate floater (R15): discounting {-mac:.2f} y on {curve}, projection "
-                       f"+{mac:.2f} y / {-rate_t:.2f} y on {KEY_CURVE}; their sum is the DV01 to the reset")
+                       f"+{mac:.2f} y / {-rate_t:.2f} y in KRS quotes on {KEY_CURVE}")
         if (kb := by_curve.get(RISK_CURVES[KBD_CURVE_ID])) is not None:  # the KBD has no risk below 1Y (v3: in 1Y)
             by_curve[RISK_CURVES[KBD_CURVE_ID]] = {
                 b: (math.fsum(kb[k] for k in KBD_SHORT) + kb["1Y"] if b == "1Y" else 0.0 if b in KBD_SHORT else x)
                 for b, x in kb.items()}
-            buckets = {b: math.fsum(bs[b] for bs in by_curve.values()) for b in RISK_BUCKETS}
+        buckets = {b: math.fsum(bs[b] for bs in by_curve.values()) for b in RISK_BUCKETS}
+        dv01 = math.fsum(buckets.values())
         return make(quality, price_basis=basis, clean_pct=clean, accrued_rub=acc, face_rub=face * fx_face[0],
                     dirty_rub=dirty, pv_rub=pv, ytm_pct=ytm, macaulay_years=mac,
                     modified_duration=mac / (1 + yy), z_spread_bp=math.nan, dv01_rub=dv01,

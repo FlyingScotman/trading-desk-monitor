@@ -20,6 +20,7 @@ from rub_fixed_income import (
     DiscountCurve,
     FixingEntry,
     bootstrap_discount_curve,
+    forward_curve,
     kbd_discount_curve,
     resolve_tenor,
 )
@@ -67,12 +68,12 @@ def shifted_curve(c: DiscountCurve, prev_date: date, shift_bp: float) -> Discoun
         for n, df in c.nodes))
 
 
-def shifted_prev(ctx: EodContext, prev_date: date, shift_bp: float = SHIFT_BP, *, kbd_only: bool = False
-                 ) -> EodContext:
+def shifted_prev(ctx: EodContext, prev_date: date, shift_bp: float = SHIFT_BP, *, kbd_only: bool = False,
+                 key_rate_effective_date: date | None = None) -> EodContext:
     """The fixture's market on ``prev_date``: the KBD's level ``shift_bp`` lower (B1), the RUONIA OIS quotes
     ``shift_bp`` lower and the curve rebootstrapped (its risk is in those quotes: ``EodContext.quote_curves``), the
-    key-rate projection ``shift_bp`` lower in parallel, the fixings known before ``prev_date``. ``kbd_only``: a market
-    without the rates curves (the KBD fallback)."""
+    KRS quotes ``shift_bp`` lower, and the fixings known before ``prev_date``. For a different policy period, pass
+    the next effective date explicitly. ``kbd_only`` builds a market without the rates curves (the KBD fallback)."""
     params = dataclasses.replace(ctx.kbd, trade_date=prev_date, b1=ctx.kbd.b1 - shift_bp)
     curves = [CurveEntry(KBD_CURVE_ID, KBD_SPEC, params)]
     quoted = {e.curve_id: e for e in ctx.quote_curves}
@@ -93,6 +94,18 @@ def shifted_prev(ctx: EodContext, prev_date: date, shift_bp: float = SHIFT_BP, *
                 curves.append(dataclasses.replace(e, curve=bootstrap_discount_curve(tail)))
             else:
                 curves.append(dataclasses.replace(e, curve=shifted_curve(e.curve, prev_date, shift_bp)))
+        if (key := ctx.key_rate_request) is not None:
+            ruonia = next(e.curve for e in curves if e.curve_id == key.ruonia_curve_id)
+            tom = key.build.calendar.add_business_days(prev_date, 1)
+            move = shift_bp * 1e-4
+            build = dataclasses.replace(key.build, trade_date=prev_date, discount_curve=forward_curve(ruonia, tom),
+                                        next_policy_effective_date=(
+                                            key_rate_effective_date or key.build.next_policy_effective_date),
+                                        quotes=tuple(dataclasses.replace(q, bid=q.bid - move, mid=q.mid - move,
+                                                                         ask=q.ask - move) for q in key.build.quotes))
+            entry = quoted[rates.KEY_RATE_CURVE_ID]
+            quote_curves.append(dataclasses.replace(entry, curve=dataclasses.replace(key, build=build,
+                                                                                     business_date=prev_date)))
     fixings = tuple(FixingEntry(f.fixing_id, dataclasses.replace(
         f.history, valuation_date=prev_date, fixings=tuple(r for r in f.history.fixings if r[0] < prev_date),
         published_at=())) for f in ctx.core_market.fixings)
@@ -103,8 +116,7 @@ def shifted_prev(ctx: EodContext, prev_date: date, shift_bp: float = SHIFT_BP, *
 
 
 def flash_curves(prev: EodContext, ctx: EodContext) -> FlashCurves:
-    return FlashCurves.build(prev.kbd, ctx.kbd, prev.curve, ctx.curve, prev_market=prev.core_market,
-                             cur_market=ctx.core_market)
+    return FlashCurves.from_contexts(prev, ctx)
 
 
 def prev_outcome(prev: EodContext, o: Outcome, price_move_pct: float = 0.05) -> Outcome:
@@ -216,7 +228,9 @@ def test_floater_rates_on_both_curves(ctx, secid, curves):
     prev = shifted_prev(ctx, ctx.business_date - timedelta(days=1))
     p = prev_outcome(prev, o)
     f = explain(p.valuation, o.valuation, flash_curves(prev, ctx))
-    assert abs(f.rates - f.rates_linear) < 0.02 * abs(f.rates_linear) + 1.0, (f.rates, f.rates_linear)
+    # Discount and projection can nearly cancel, so measure the error against their gross contributions.
+    gross = sum(abs(sum(bs.values())) for bs in f.rates_linear_curves.values())
+    assert abs(f.rates - f.rates_linear) < 0.02 * gross + 1.0, (f.rates, f.rates_linear)
     assert abs(f.other) < 1.0, f.other
     assert abs(f.explained - f.total) < 1e-4
 

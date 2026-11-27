@@ -72,9 +72,9 @@ def test_ruonia_publication_calendar_skips_the_year_end_day(snaps):
 
 
 def test_key_rate_projection_starts_at_the_key_rate_in_force(snaps, ois):
-    kr = rates.key_rate_projection(*snaps, ois.curve)
+    kr = rates.key_rate_projection(*snaps, ois)
     lin, curve = kr.lineage, kr.curve
-    assert (kr.entry.spec_id, curve.curve_date, lin["current_rate"]) == (rates.KEY_RATE_PROJECTION_SPEC, BD, 0.14)
+    assert (kr.entry.spec_id, curve.curve_date, lin["current_rate"]) == (rates.KEY_RATE_SWAP_SPEC, BD, 0.14)
     assert lin["next_policy_effective_date"] == "2026-10-26" and lin["next_policy_estimated"]
     assert lin["tenors_used"] == TENORS[4:] and lin["max_repricing_error_bp"] < 1e-7
 
@@ -104,11 +104,13 @@ def test_fixings_are_point_in_time(snaps):
 
 def test_core_market_snapshot_accepts_the_entries(snaps, ois):
     market, static = snaps
-    kr = rates.key_rate_projection(market, static, ois.curve)
+    kr = rates.key_rate_projection(market, static, ois)
     fixings, _ = rates.fixing_entries(market, static)
     snap = MarketSnapshot(market.id, BD, datetime.fromisoformat(market.doc["known_at"]),
                           curves=(ois.entry, kr.entry), fixings=fixings)
     assert snap.projection_curve("RUB_RUONIA_OIS", "ruonia") is ois.entry.curve
-    assert snap.projection_curve("RUB_KEY_RATE_PROJ", "key_rate") is kr.curve
+    request = snap.curve(rates.KEY_RATE_CURVE_ID).curve
+    assert request is kr.entry.curve and request.ruonia_curve_id == ois.entry.curve_id
+    assert kr.lineage["risk_unit"] == "key_rate_quote"
     assert snap.point_in_time_fixing("RUONIA").latest_fixing_date == date(2026, 10, 14)
     assert snap.point_in_time_fixing("KEY_RATE").rate(date(2026, 10, 14)) == (pytest.approx(0.14), False)

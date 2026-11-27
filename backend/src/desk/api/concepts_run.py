@@ -386,6 +386,7 @@ def assemble(con, run: dict[str, Any]) -> dict[str, Any]:
         "asOf": as_of, "prevDate": run["prev_date"].isoformat() if run["prev_date"] else None,
         "pnlAvailable": code is None, "pnlReasonText": no_pnl_text(code) if code else None,
         "accrualDays": max(1, (run["business_date"] - prev).days),
+        # CURVES and CURVE_MOVES are chart points. Risk bucket units are in source.curveUnits.
         "BUCKETS": B, "PILLARS": list(RISK_PILLARS), "CURVES": curves, "CURVE_MOVES": moves,
         "FX": fx, "FX_MOVE_PCT": fx_move, "FX_CBR": fx_cbr, "FX_CBR_MOVE_PCT": fx_cbr_move, "FX_SOURCE": fx_source,
         "INDICES": {r["index_name"]: r["value"] for r in ref.get("indices", [])},

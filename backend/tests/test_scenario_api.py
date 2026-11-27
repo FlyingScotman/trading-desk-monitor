@@ -77,7 +77,11 @@ def test_risk_payload_and_compat_scenarios(store_url, book, client):
     tag = r.headers["ETag"]
     assert client.get(f"/api/v1/runs/{rid}/risk", headers={"If-None-Match": tag}).status_code == 304
     assert_error(client.get("/api/v1/runs/999999/risk"), 404, "not_found")
-    sc = client.get(f"/api/v1/compat/desk?run_id={rid}").json()["SCENARIOS"]
+    compat = client.get(f"/api/v1/compat/desk?run_id={rid}").json()
+    concepts = client.get(f"/api/v1/concepts/run?run_id={rid}").json()
+    assert concepts["source"]["curveUnits"] == compat["source"]["curveUnits"]
+    assert concepts["source"]["curveUnits"]["RUB KEY"] == "key_rate_quote"
+    sc = compat["SCENARIOS"]
     kh = next(s for s in sc if s["id"] == "keyhike")
     assert kh == {"id": "keyhike", "name": kh["name"], "kind": "preset", "description": None,
                   **normalize(KEYHIKE_PRESET)}
@@ -117,6 +121,23 @@ def test_job_end_to_end(store_url, book, client):
     assert failed["status"] == "failed" and failed["error"] and failed["result"] is None
     r3 = client.post("/api/v1/scenario-jobs", json={"base_run_id": rid, "definition": par})
     assert r3.status_code == 202 and r3.json()["job_id"] != j1["job_id"]
+
+
+@pytest.mark.parametrize("units", [None, {"RUB KEY": "zero"}])
+def test_exact_scenario_refuses_a_run_with_old_key_rate_units(store_url, book, client, monkeypatch, units):
+    ctx, _, _ = book
+    lineage = ctx.lineage()
+    if units is None:
+        del lineage["curve_units"]
+    else:
+        lineage["curve_units"] = units
+    monkeypatch.setattr(type(ctx), "lineage", lambda self: lineage.copy())
+    rid = run(store_url, book)
+    response = client.post("/api/v1/scenario-jobs", json={"base_run_id": rid, "definition": KEYHIKE})
+    error = assert_error(response, 422, "invalid_parameter")
+    assert "Пересчитайте прогон" in error["message"]
+    with store.connect(store_url) as con:
+        assert jobs.run_once(con, SnapshotDir(FIX)) is None
 
 
 def test_every_active_scenario_queued_once_per_run_and_its_results(store_url, book, client):

@@ -39,19 +39,19 @@ realised over the day against the forwards carry assumed are in ``rates``, as in
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any
 
 from rub_fixed_income import (
     CoreRejection,
     DiscountCurve,
     FloatingCouponLeg,
-    MarketSnapshot,
     explain_horizon_pnl,
 )
 
-from ..marketdata.adapter import core_instrument
+from ..curves.rates import KEY_RATE_CURVE_ID
+from ..marketdata.adapter import KBD_CURVE_ID, core_instrument
 from ..orchestrator import EodContext, Outcome
-from ..valuation.bonds import OFZ_KBD_CLASSES, SPREAD_CONVENTION, Rejected, discount_curve, fixed_schedule
+from ..valuation.bonds import SPREAD_CONVENTION, FloaterModel, Rejected, discount_curve, fixed_schedule
+from .flash import FlashCurves, NoPnl
 
 COMPONENTS = ("carry", "rolldown", "rates", "spread", "other")
 
@@ -90,6 +90,7 @@ def compare(prev_ctx: EodContext, prev_outcomes: list[Outcome], ctx: EodContext,
     """One row per position valued by core (exact or assumed) on both dates; ``outcomes`` must carry ``pnl``
     (``attach_pnl``). Core is given the D-1 schedule the valuation used (coupon gaps filled); a floater its D-1
     coupon model with the fixings and projection curves of both dates."""
+    curves = None
     rows = []
     for p, o in zip(prev_outcomes, outcomes, strict=True):
         pv, v = p.valuation, o.valuation
@@ -113,19 +114,21 @@ def compare(prev_ctx: EodContext, prev_outcomes: list[Outcome], ctx: EodContext,
             if s.floater is not None:
                 if pv.floater is None:
                     continue
-                inst, extra = pv.floater.instrument, _floater_inputs(pv.floater.instrument, prev_ctx.core_market,
-                                                                     ctx.core_market, pv.floater.guard_bp)
+                if curves is None:
+                    curves = FlashCurves.from_contexts(prev_ctx, ctx)
+                inst, extra = pv.floater.instrument, _floater_inputs(pv.floater, curves)
                 offer = pv.floater.offer  # a put the floater is valued to (None: maturity, or a call redeemed)
             else:
                 inst, extra = core_instrument(p.terms, pv.valuation_date, pv.horizon_date,
                                               None if offer is None else (offer[0], offer[1], "offer"),
                                               coupons=s.coupons), {}
-            x = explain_horizon_pnl(inst, _built(prev_ctx, p.terms), _built(ctx, p.terms), prev_ctx.calendar,
+            x = explain_horizon_pnl(inst, _built(prev_ctx, pv.discount_curve_id), _built(ctx, v.discount_curve_id),
+                                    prev_ctx.calendar,
                                     start_dirty_price_rub=pv.dirty_rub, end_dirty_price_rub=v.dirty_rub,
                                     spread_convention=SPREAD_CONVENTION,
                                     redemption_horizon="maturity" if offer is None else "open_put",
                                     curve_cache=ctx.cache, **extra)
-        except (CoreRejection, ValueError) as e:
+        except (CoreRejection, ValueError, NoPnl) as e:
             rows.append(Row(o.secid, q, recv, total, flash, None, reason=f"core: {e}"))
             continue
         core = {"carry": q * x.carry_rub, "rolldown": q * x.rolldown_rub, "rates": q * x.rates_rub,
@@ -137,17 +140,20 @@ def compare(prev_ctx: EodContext, prev_outcomes: list[Outcome], ctx: EodContext,
 
 
 
-def _floater_inputs(inst, prev: MarketSnapshot, cur: MarketSnapshot, guard_bp: float | None) -> dict:
+def _floater_inputs(fl: FloaterModel, curves: FlashCurves) -> dict:
     """``explain_horizon_pnl``'s floater arguments: the fixings known on each date and, when the leg projects off
     another curve than the discount curve (a key-rate floater, a KBD floater: TDM#33), that curve on each date; the
     KBD is in the market as its ZCYC parameters, built here as core builds it to project (``projection_curve``)."""
-    leg = inst.coupon_leg
+    prev, cur = curves.market(True), curves.market(False)
+    leg = fl.instrument.coupon_leg
     assert isinstance(leg, FloatingCouponLeg)
     out = {"fixings": prev.point_in_time_fixing(leg.fixing_id), "end_fixings": cur.point_in_time_fixing(leg.fixing_id),
-           "strike_guard_bp": guard_bp}
+           "strike_guard_bp": fl.guard_bp}
     pid = leg.projection_curve_id
     if pid is not None and pid != discount_curve(prev)[0]:
-        if leg.rule.index == "kbd":
+        if pid == KEY_RATE_CURVE_ID:
+            a, _, b = curves.key_rate_projections(fl)
+        elif leg.rule.index == "kbd":
             a, b = (m.projection_curve(pid, "kbd") for m in (prev, cur))
         else:
             a, b = ({c.curve_id: c.curve for c in m.curves}.get(pid) for m in (prev, cur))
@@ -157,6 +163,5 @@ def _floater_inputs(inst, prev: MarketSnapshot, cur: MarketSnapshot, guard_bp: f
     return out
 
 
-def _built(ctx: EodContext, terms: Any) -> Any:
-    """The built curve a bond is discounted on (``fallback.bond_discount``, built: core's explain reprices)."""
-    return ctx.curve if terms.bond_class in OFZ_KBD_CLASSES else ctx.discount[1]
+def _built(ctx: EodContext, curve_id: str | None) -> DiscountCurve:
+    return ctx.curve if curve_id == KBD_CURVE_ID else ctx.discount[1]

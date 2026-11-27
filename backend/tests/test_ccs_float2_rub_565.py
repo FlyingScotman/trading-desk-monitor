@@ -14,7 +14,7 @@ import pytest
 from test_ccs_float2_usd_565 import DATE, build
 from test_swaps_repo_tdm45 import BD, FIX, ccs, ccs_plan
 
-from desk.curves.rates import KEY_RATE_CURVE_ID, KEY_RATE_SWAP_CURVE_ID
+from desk.curves.rates import KEY_RATE_CURVE_ID
 from desk.marketdata.bundle import SnapshotDir
 from desk.orchestrator import prepare
 from desk.valuation import derivatives as dv
@@ -75,7 +75,7 @@ def test_the_key_rate_coupon_is_the_arithmetic_average_of_the_forward_curve_plus
     t = rub("KEY_RATE", spread="50", start=start.isoformat(), end=end.isoformat(), exchange="final")
     o, _ = value(ctx, t)
     assert o.core_not_valued is None, o.core_not_valued
-    fwd = next(c.curve for c in ctx.swap_curves if c.curve_id == KEY_RATE_SWAP_CURVE_ID)
+    fwd = ctx.key_rate_request.curve(ruonia=ctx.discount[1])
     avg = fwd.arithmetic_average(start, end)
     alpha = (end - start).days / 365.0  # ACT/ACT ISDA inside 2026
     want = -1.25e9 * (1.0 + (avg + 0.0050) * alpha)
@@ -100,11 +100,10 @@ def test_the_started_key_rate_period_reads_the_key_rate_history(ctx):
 
 
 def test_without_the_key_rate_curve_the_swap_is_not_valued(ctx):
-    o, _ = value(without_curve(ctx, KEY_RATE_CURVE_ID), rub("KEY_RATE"))
+    missing = replace(ctx, quote_curves=tuple(c for c in ctx.quote_curves if c.curve_id != KEY_RATE_CURVE_ID))
+    o, _ = value(missing, rub("KEY_RATE"))
     assert o.core_not_valued[0] == "no_key_rate_curve"
-    o, _ = value(replace(ctx, swap_curves=()), rub("KEY_RATE"))  # the forward curve of the horizon is missing too
-    assert o.core_not_valued[0] == "no_key_rate_curve"
-    assert value(without_curve(ctx, KEY_RATE_CURVE_ID), rub("RUONIA"))[0].core_not_valued is None
+    assert value(missing, rub("RUONIA"))[0].core_not_valued is None
 
 
 def test_the_key_rate_averaging_flag_is_not_read(ctx):
@@ -338,7 +337,7 @@ def test_a_preliminary_rusfar_fixing_is_said(tmp_path):
 
 
 def test_a_key_rate_swap_longer_than_the_curve_has_its_own_reason(ctx):
-    node = next(e.curve.nodes[-1][0] for e in ctx.core_market.curves if e.curve_id == KEY_RATE_CURVE_ID)
+    node = ctx.key_rate_display.nodes[-1][0]
     o, _ = value(ctx, rub("KEY_RATE", end="2040-10-08"))
     assert o.core_not_valued[0] == "key_rate_curve_too_short" and node.isoformat() in o.core_not_valued[1]
     from desk.api import coverage

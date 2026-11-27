@@ -92,7 +92,7 @@ def test_as_listed_it_was_not_a_floater(labelled):
 def test_labelled_floater_values_as_the_hub_floater(ctx, labelled):
     q = ctx.market.quote(labelled)
     floater = ctx.static.bonds[KEY]
-    (v, w) = value_bonds(ctx.core_market, [bond_request("x", labelled, q, ctx.business_date, 1.0),
+    (v, w) = value_bonds(ctx.risk_market, [bond_request("x", labelled, q, ctx.business_date, 1.0),
                                            bond_request("y", floater, q, ctx.business_date, 1.0)])[0].values()
     assert v.quality == "assumed" and v.assumptions[0].startswith("floater by its formula")
     risk = v.risk()

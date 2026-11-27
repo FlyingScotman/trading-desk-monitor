@@ -12,10 +12,8 @@ from __future__ import annotations
 
 import copy
 import dataclasses
-from datetime import timedelta
 
 import pytest
-from rub_fixed_income import KeyRateForwardCurve, KeyRateForwardSegment
 from test_deriv_pnl_flows_466 import (
     BD,
     FIX,
@@ -27,7 +25,7 @@ from test_deriv_pnl_flows_466 import (
 )
 from test_slice_s2 import shifted_prev
 
-from desk.curves.rates import KEY_RATE_SWAP_CURVE_ID
+from desk.curves.rates import KEY_RATE_CURVE_ID
 from desk.marketdata.bundle import SnapshotDir
 from desk.orchestrator import prepare
 from desk.pnl import direct
@@ -111,83 +109,46 @@ def test_a_move_of_the_curve_is_rates_by_the_d1_risk(ctx, moved):
 
 KEY_SWAP = [dict(t, product_kind="irs", start_date="2026-10-16", maturity_date="2027-10-18") for t in (
     swap("K1")[0] | {"side": "receive", "fixed_rate_pct": "14"}, swap("K1")[1] | {"side": "pay", "index_code": "KEY_RATE"})]
-"""A key-rate IRS (1 bn, to the end of 2027) starting after D: it projects on the key-rate forward curve."""
+"""A key-rate IRS (1 bn, to the end of 2027) starting after D."""
 
 
-def _key_curves_before(ctx, bp: float):
-    """``ctx.swap_curves`` as D-1 had them: the key-rate forward curve dated D-1, its forward rates ``bp`` lower, its
-    segments one day shorter (what ``roll_key_rate_curve`` to D gives back, shifted by ``bp``)."""
-    out = []
-    for e in ctx.swap_curves:
-        if e.curve_id == KEY_RATE_SWAP_CURVE_ID:
-            c, start, segs = e.curve, e.curve.current_rate_end, []
-            for sg in c.segments:
-                end = sg.end_date - (c.curve_date - PREV)
-                segs.append(KeyRateForwardSegment(start, end, sg.rate - bp * 1e-4, sg.pillar_tenor))
-                start = end
-            e = dataclasses.replace(e, curve=KeyRateForwardCurve(PREV, c.current_rate, c.current_rate_end, tuple(segs),
-                                                                 c.model_version))
-        out.append(e)
-    return tuple(out)
+KEY_REPO = [repo("R2", "repo", "2026-10-09", "2026-12-21", index_code="KEY_RATE", spread_bp="-50")]
 
 
-def test_a_swap_on_the_key_rate_has_its_key_rate_risk_in_rates(ctx):
-    """The key-rate forward curve of D moves 25 bp: the swap's risk on it (``RUB KEY``, a forward curve of its own, not
-    core's built curve) is multiplied by that move, so the rest stays at the level of a day on an unmoved market."""
-    flat, moved = (dataclasses.replace(_prev(ctx, bp), swap_curves=_key_curves_before(ctx, bp)) for bp in (0.0, MOVE_BP))
-    (of, _), (om, pm) = day(flat, ctx, KEY_SWAP, "K1"), day(moved, ctx, KEY_SWAP, "K1")
-    a, b = of.pnl, om.pnl
-    assert pm.valuation.extra["horizon"]["projections"] == ["RUB_KEY_RATE_SWAP"]
-    assert a.method == b.method == RATES_CORE_METHOD
-    key = pm.valuation.curve_buckets["RUB KEY"]
-    moves = b.curve_moves_bp["RUB KEY"]
-    assert sum(key.values()) != 0 and moves and all(m == pytest.approx(MOVE_BP, abs=0.5) for m in moves.values() if m)
-    assert sum(b.rates_linear_curves["RUB KEY"].values()) == pytest.approx(sum(key[k] * moves[k] for k in moves))
-    assert abs(b.rates_linear_curves["RUB KEY"] and sum(b.rates_linear_curves["RUB KEY"].values())) > 1e6
-    # the rest does not grow with the move: it is the flat day's, a few thousand roubles, not the 2 mn of the risk
-    assert abs(b.other) < 0.02 * abs(b.rates) and abs(b.other - a.other) < 0.02 * abs(b.rates), (a.other, b.other, b.rates)
-    assert "RUB KEY" not in b.extra()["other_reason"]["detail"]
-    assert b.explained == pytest.approx(b.total)
+def move_key_quotes(ctx, bp):
+    move = bp * 1e-4
+    key = ctx.key_rate_request
+    build = dataclasses.replace(key.build, quotes=tuple(
+        dataclasses.replace(q, bid=q.bid + move, mid=q.mid + move, ask=q.ask + move) for q in key.build.quotes))
+    entry = dataclasses.replace(ctx.risk_market.curve(KEY_RATE_CURVE_ID), curve=dataclasses.replace(key, build=build))
+    return dataclasses.replace(ctx, quote_curves=tuple(
+        entry if c.curve_id == KEY_RATE_CURVE_ID else c for c in ctx.quote_curves))
 
 
-def _later_decision(c, curve_date, gap_days: int, bp: float = 0.0):
-    """``c`` with the next decision ``gap_days`` after D (the forward segments that ended before it dropped, the first one
-    starting at it) and its forward rates ``bp`` higher."""
-    end, segs, start = BD + timedelta(days=gap_days), [], BD + timedelta(days=gap_days)
-    for sg in c.segments:
-        if sg.end_date > end:
-            segs.append(KeyRateForwardSegment(start, sg.end_date, sg.rate + bp * 1e-4, sg.pillar_tenor))
-            start = sg.end_date
-    return KeyRateForwardCurve(curve_date, c.current_rate, end, tuple(segs), c.model_version)
-
-
-def _swap_curves_of(entries, curve):
-    return tuple(dataclasses.replace(e, curve=curve) if e.curve_id == KEY_RATE_SWAP_CURVE_ID else e for e in entries)
-
-
-def test_a_decision_after_the_short_buckets_is_read_at_the_decision(ctx):
-    """The next decision of the Bank of Russia 45 days after D: core's weight of the 1M bucket lies after it, so its move is
-    read there, not taken as 0 (that left about 6 % of the rates in ``other``). 25 bp up: the rest stays small."""
-    before = next(e.curve for e in _key_curves_before(ctx, 0.0) if e.curve_id == KEY_RATE_SWAP_CURVE_ID)
-    now = next(e.curve for e in ctx.swap_curves if e.curve_id == KEY_RATE_SWAP_CURVE_ID)
-    prev = dataclasses.replace(_prev(ctx, MOVE_BP),
-                               swap_curves=_swap_curves_of(ctx.swap_curves, _later_decision(before, PREV, 45)))
-    cur = dataclasses.replace(ctx, swap_curves=_swap_curves_of(ctx.swap_curves, _later_decision(now, BD, 45, MOVE_BP)))
-    o, p = day(prev, cur, KEY_SWAP, "K1")
-    pnl, key = o.pnl, p.valuation.curve_buckets["RUB KEY"]
-    assert pnl.method == RATES_CORE_METHOD and key["1M"] != 0
-    assert pnl.curve_moves_bp["RUB KEY"]["1M"] == pytest.approx(MOVE_BP, abs=0.5)  # read at the decision, not 0
-    assert abs(pnl.other) < 0.02 * abs(pnl.rates), (pnl.other, pnl.rates)
+@pytest.mark.parametrize("terms,pid", [(KEY_SWAP, "K1"), (KEY_REPO, "R2")])
+def test_key_rate_derivatives_linear_pnl_matches_exact_repricing(ctx, flat, terms, pid):
+    move = 2.0
+    unchanged, _ = day(flat, ctx, terms, pid)
+    shocked, prior = day(flat, move_key_quotes(ctx, move), terms, pid)
+    pnl, history = shocked.pnl, prior.valuation
+    assert history.extra["horizon"]["projections"] == [KEY_RATE_CURVE_ID]
+    assert pnl.method == RATES_CORE_METHOD
+    assert pnl.curve_moves_bp["RUB KEY"] == pytest.approx(dict.fromkeys(history.risk()["RUB KEY"], move))
+    linear = sum(pnl.rates_linear_curves["RUB KEY"].values())
+    exact = shocked.valuation.pv_rub - unchanged.valuation.pv_rub
+    assert abs(exact) > 100.0
+    assert linear == pytest.approx(exact, rel=0.02)
+    assert pnl.rates - unchanged.pnl.rates == pytest.approx(linear)
+    assert pnl.explained == pytest.approx(pnl.total)
 
 
 def test_a_day_without_the_key_rate_curve_keeps_its_risk_in_other_and_the_run_goes_on(ctx, flat):
-    """D has no key-rate forward curve (a row whose other swap lives on, say): the key-rate risk has no move to multiply, so
+    """D has no KRS quotes (a row whose other swap lives on, say): the key-rate risk has no move to multiply, so
     it stays in ``other``, said; nothing raises (an uncaught error would stop the day's run)."""
-    prev = dataclasses.replace(flat, swap_curves=_key_curves_before(ctx, 0.0))
+    prev = flat
     inp, prev_inp = inputs(BD, KEY_SWAP, "K1"), inputs(PREV, KEY_SWAP, "K1")
     bp, pbp = pv1.plan(ctx, inp), pv1.plan(prev, prev_inp, horizon=BD)
-    bare = dataclasses.replace(ctx, swap_curves=())  # the valuation of D is done; its context lacks the curve
-    assert direct._key_rate_moves(prev, bare, {}) is None
+    bare = dataclasses.replace(ctx, quote_curves=tuple(c for c in ctx.quote_curves if c.curve_id != KEY_RATE_CURVE_ID))
     direct.attach(prev, bare, bp.direct, inp, pbp.direct, prev_inp.valid_dates)
     pnl = bp.direct["K1"].pnl
     assert bp.direct["K1"].no_pnl is None and pnl.method == RATES_CORE_METHOD
@@ -207,15 +168,6 @@ def test_an_error_in_the_split_falls_back_to_the_old_split_says_so_and_the_run_g
     assert "the split into carry and rates failed (RuntimeError)" in reason["detail"] and "secret" not in reason["detail"]
     warned = [r for r in caplog.records if r.levelname == "WARNING" and "failed (RuntimeError)" in r.getMessage()]
     assert len(warned) == 1 and "secret" not in warned[0].getMessage()
-
-
-def test_a_repo_on_the_key_rate_uses_the_built_projection_curve(ctx, moved):
-    """A REPO on the key rate projects on the built key-rate projection curve (``zero_move_bp`` of it), not the swap's
-    forward curve: its ``RUB KEY`` risk is multiplied by that curve's move."""
-    terms = [repo("R2", "repo", "2026-10-09", "2026-12-21", index_code="KEY_RATE", spread_bp="-50")]
-    o, p = day(moved, ctx, terms, "R2")
-    assert p.valuation.extra["horizon"]["projections"] == ["RUB_KEY_RATE_PROJ"]
-    assert "RUB KEY" in o.pnl.rates_linear_curves and o.pnl.method == RATES_CORE_METHOD
 
 
 def test_the_run_asks_for_the_horizon(ctx, moved):

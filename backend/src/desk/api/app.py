@@ -1295,7 +1295,9 @@ def create_app(store_url: str, static_dir: Path | None = None, app_dir: Path | N
     @app.get("/api/v1/concepts/run",
              description="The monitors' data of a run (``window.CONCEPTS_RUN``, ``/concepts-run.js``; TDM#289): "
                          "the run's dates and PnL state, buckets, curves, FX, indices, issuers, books, risk notes, "
-                         "funding status, source and positions, as ``lib/real.js`` reads them. 404 without a run "
+                         "funding status, source and positions, as ``lib/real.js`` reads them. "
+                         "Risk bucket units are in source.curveUnits (RUB KEY: key_rate_quote since calculation v43). "
+                         "RUB KEY chart points and their daily moves are zero rates. 404 without a run "
                          "(``details.reason``: no_runs, not_found)",
              responses={200: {"content": {"application/json": {"schema": {"type": "object"}}}}})
     def concepts_run_json(con: Con, request: Request,
