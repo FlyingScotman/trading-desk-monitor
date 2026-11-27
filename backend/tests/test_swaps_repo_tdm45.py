@@ -132,10 +132,10 @@ def test_unvalued_reason_is_cores_not_waiting_for_terms(plan):
     assert plan.direct["R3"].reason == "repo_open"  # an open REPO with mv_rub: the report's value, core's reason
     for code in ("ccs_unsupported", "ccs_foreign_floating_unsupported", "ccs_ccy_unsupported", "basis_swap_unsupported",
                  "repo_open", "no_fixings", "no_key_rate_curve"):
-        key, why, todo = coverage.cause(code, "IRS", None, None)
+        key, why, todo = coverage.cause(code, "IRS", None)
         assert key == code and "trade_terms" not in why and todo
-    assert "условий сделки" in coverage.cause("no_reported_value", "IRS", None, None)[1]  # no terms at all: as before
-    repo = coverage.cause("no_reported_value", "UNCLASSIFIED", "REPO", None)
+    assert "условий сделки" in coverage.cause("no_reported_value", "IRS", None)[1]  # no terms at all: as before
+    repo = coverage.cause("no_reported_value", "UNCLASSIFIED", "REPO")
     assert repo[0] == "repo" and "рыночного риска" not in repo[1]
 
 

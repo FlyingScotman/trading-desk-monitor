@@ -253,8 +253,6 @@ class FxOptions:
     positions of their own."""
     fixing_sources: tuple[tuple[str, str], ...] = (("CBR", "CBR"), ("ЦБ", "CBR"), ("ЦБ РФ", "CBR"))
     """``ndf_fixing_sources``: the report's fixing source -> the hub source (``CBR``: the CBR official rate)."""
-    futures_by_ticker: bool = False
-    """``futures_by_ticker``: a position row naming a FORTS FX future by ticker is valued by core (P3)."""
 
     def fixing_source(self, raw: str | None) -> str | None:
         if raw is None:
@@ -1010,5 +1008,4 @@ def options_from(settings: Any) -> FxOptions:
         implied_futures=bool(getattr(settings, "fx_implied_futures", d.implied_futures)),
         spot_source=getattr(settings, "fx_spot_source", d.spot_source),
         off_report=getattr(settings, "off_report_derivatives", "exclude") == "include",
-        fixing_sources=parse_fixing_sources(getattr(settings, "ndf_fixing_sources", None)) or d.fixing_sources,
-        futures_by_ticker=bool(getattr(settings, "futures_by_ticker", d.futures_by_ticker)))
+        fixing_sources=parse_fixing_sources(getattr(settings, "ndf_fixing_sources", None)) or d.fixing_sources)

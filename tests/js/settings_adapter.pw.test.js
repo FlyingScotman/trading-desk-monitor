@@ -181,13 +181,11 @@ test('настройки: инструменты адаптера и формы 
       await pg.goto(ORIGIN + '/settings.html#calc');
       await pg.waitForSelector('#fx_foreign_curve');
       await pg.locator('#fx_foreign_curve').selectOption('xccy');
-      await pg.locator('label.tgl', { has: pg.locator('#futures_by_ticker') }).click();
       await pg.locator('#save').click();
       await pg.waitForTimeout(300);
       const put = st.puts[st.puts.length - 1];
       assert.ok(put, 'сохранено');
       assert.strictEqual(put.fx_foreign_curve, 'xccy');
-      assert.strictEqual(put.futures_by_ticker, true);
       assert.strictEqual(put.quote_curve_risk, null, 'выключено, как по умолчанию — ключа нет');
       assert.strictEqual(put.fx_implied_futures, null, 'включено, как по умолчанию — ключа нет');
       assert.strictEqual(put.autopilot, true, 'прежние флаги — как раньше, явно');

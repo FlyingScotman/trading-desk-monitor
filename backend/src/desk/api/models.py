@@ -632,8 +632,10 @@ OcpGapCode = Literal["no_report", "stale_report", "outside_without_terms", "book
                      "base_older", "trades_not_loaded", "no_base_run", "trades_not_valued", "carried_forward_unit",
                      "trades_unknown_book", "derivatives_partial_pv", "derivatives_unknown_last_flow",
                      "off_report_excluded", "derivative_share", "balances_older_than_base", "balances_not_at_base",
-                     "fx_unit_unconfirmed", "spot_future_unmatched", "spot_future_ambiguous", "spot_future_df1", "spot_future_partial"]
-"""Every gap code the engine emits (``rules.ocp.gaps``, ``rules.ocp.DAY_GAP_TEXT``, ``publish.ocp_run``): a code
+                     "fx_unit_unconfirmed", "spot_future_unmatched", "spot_future_ambiguous", "spot_future_df1", "spot_future_partial",
+                     "expired_future_report_nominal", "no_future_expiry", "no_future_pair", "no_quantity",
+                     "no_future_notional", "sign_mismatch", "lot_mismatch", "ambiguous_future_quote", "no_future_quote"]
+"""Every gap code the engine emits (``rules.ocp`` and ``publish.ocp_run``): a code
 missing here failed the whole route (0.2.21: ``derivative_share`` and the balances' codes of DEC18)."""
 
 
@@ -925,11 +927,15 @@ class RiskPosition(BaseModel):
     gamma: list[tuple[int, int, float]] = Field(description="[i, j, RUB per unit_i x unit_j], i <= j")
 
 
+FX_SHOCK_LINEAR = ("Published OCP less the FX delta of non-linear derivatives. Included core-valued FX futures use "
+                   "their core FX sensitivity expressed at the OCP rate in place of their nominal.")
+
+
 class RiskOcpCcy(BaseModel):
     amount: float = Field(description="The published OCP of the currency, in the currency (+ long)")
     nonlinear: float = Field(description="Of it, the FX delta of the non-linear derivatives (options and positions with "
                                          "an FX gamma), in the currency")
-    linear: float = Field(description="amount - nonlinear: what the FX shock takes linearly")
+    linear: float = Field(description=FX_SHOCK_LINEAR)
     rate: float | None = Field(None, description="RUB per unit of the currency (the OCP's rate); null: none in the run")
 
 
@@ -940,12 +946,11 @@ class RiskOcpLine(BaseModel):
     ccy: str
     amount: float
     nonlinear: float
-    linear: float
+    linear: float = Field(description=FX_SHOCK_LINEAR)
 
 
 class RiskOcp(BaseModel):
-    """The published OCP of the run for the scenario screen's FX shock (TDM#577): linear part of the shock = the
-    OCP's lines without the non-linear derivatives x the shock, the same lines the OCP screen reads (TDM#567)."""
+    """Published OCP and adjusted linear exposure for the scenario screen's FX shock (TDM#577)."""
 
     available: bool = Field(description="false: the run has no published OCP, the screen falls back to the positions' "
                                         "FX deltas; reason says why")

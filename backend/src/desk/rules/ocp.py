@@ -370,11 +370,13 @@ NEW_FUTURE_GROUP_NOTE = "группа продукта «{group}» монито�
 
 def takes_ocp_amount(ex: Mapping[str, Any], amount_basis: AmountBasis | str | None) -> bool:
     """Whether the OCP takes a derivative row at its ``extra.ocp_amount`` (the nominal) and not at its FX delta: a row
-    core did not value (a CCS: its exchanges still to come), or a row core valued with ``amount_basis`` ``nominal``.
-    ``amount_basis`` None: the basis is not looked at (the published day's derivative lines are the PV whatever it
-    says). The one rule for ``classify``, ``derivative_lines`` and the scenario screen's FX shock (TDM#577)."""
-    if not ex.get("core"):
+    core did not value (a CCS: its exchanges still to come), an FX future (DEC18), or a core row on the nominal basis.
+    ``amount_basis`` None selects the published day's derivative rules, independent of the policy's basis."""
+    core = ex.get("core")
+    if not core:
         return bool(ex.get("ocp_amount"))
+    if "fx_future" in str(core.get("product") or "").lower():
+        return True
     return amount_basis is not None and AmountBasis(amount_basis) is AmountBasis.NOMINAL
 
 
@@ -387,6 +389,9 @@ def classify(row: Mapping[str, Any], terms: Sequence[Mapping[str, Any]], books: 
     the report on its own (TDM#416)."""
     ex = row.get("extra") or {}
     rep = ex.get("reported") or {}
+    unconfirmed = ex.get("ocp_unconfirmed") or {}
+    if unconfirmed.get("kind") == FX_FUTURE_GROUP:
+        return None, {}, "none", str(unconfirmed.get("text") or "")
     if future_class(row) == "other":  # DEC18: a future not on a currency has no OCP of its own
         if not _amounts(row.get("fx_delta"), policy):
             return None, {}, "none", ""
@@ -405,7 +410,7 @@ def classify(row: Mapping[str, Any], terms: Sequence[Mapping[str, Any]], books: 
     vd = _day(rep.get("value_date"))
     later = vd is not None and vd > add_business_days(on, policy.settle_window_bd)
     if core:
-        basis = policy.amount_basis.value
+        basis = AmountBasis.NOMINAL.value if "fx_future" in product else policy.amount_basis.value
         if takes_ocp_amount(ex, policy.amount_basis):
             delta = _amounts(ex.get("ocp_amount"), policy)
     elif ex.get("ocp_amount"):
@@ -417,8 +422,7 @@ def classify(row: Mapping[str, Any], terms: Sequence[Mapping[str, Any]], books: 
     else:
         basis = "notional" if ex.get("fx_delta_basis") or (fx_like and later and (ndf or own)) else "amount"
     if not delta:
-        # TDM#672: a forward on a cross without terms whose unit is not confirmed has no FX delta: said, not silent
-        return None, {}, basis, str((ex.get("ocp_unconfirmed") or {}).get("text") or "")
+        return None, {}, basis, str(unconfirmed.get("text") or "")
     if is_transfer(row, terms, books, policy):
         return "transfers", delta, basis, "сделка переноса ОВП: контрагент — книга переноса (ocp_to)"
     if ndf and not policy.include_ndf:
@@ -714,8 +718,9 @@ def reconcile(lines: Sequence[OcpLine], report_rows: Sequence[Mapping[str, Any]]
                 "books": sorted(books_at.get(b, set()) | ({b} if b else set())),
             })
     outside = []
+    futures = _core_future_nominals(lines)
     for (e, b, ccy), parts in sorted(derived.items()):
-        if b not in covered and abs(_sum(parts)) > 0:
+        if b not in covered and (_sum(parts) or (b, ccy) in futures):
             outside.append({"entity": e, "book_id": b, "ccy": ccy, "derived": _sum(parts), "components": parts})
     return out, outside
 
@@ -737,6 +742,15 @@ def _outside(parts: Mapping[str, float], policy: OcpPolicy) -> dict[str, float]:
     return {c: v for c, v in parts.items() if c not in policy.report_components and v}
 
 
+def _core_future_nominals(lines: Sequence[OcpLine]) -> dict[tuple[str, str], dict[str, float]]:
+    """Validated position nominals available to a published OCP line, by book and currency."""
+    out: dict[tuple[str, str], dict[str, float]] = defaultdict(dict)
+    for x in lines:
+        if x.component == "futures" and x.basis == "nominal" and x.position_id is not None:
+            out[x.book_id, x.ccy][x.position_id] = x.amount
+    return out
+
+
 def published(comparisons: Sequence[Mapping[str, Any]], outside_report: Sequence[Mapping[str, Any]],
               lines: Sequence[OcpLine], on: date, policy: OcpPolicy = PROVISIONAL_POLICY
               ) -> tuple[list[dict[str, Any]], list[str]]:
@@ -754,17 +768,21 @@ def published(comparisons: Sequence[Mapping[str, Any]], outside_report: Sequence
     - A book no report unit covers (``outside_report``): its derived OCP, ``derived``.
     - ``published`` ``derived``: every line derived (the reconciliation is unchanged)."""
     derived = derive(lines)
+    futures = _core_future_nominals(lines)
     out: list[dict[str, Any]] = []
     notes: list[str] = []
 
     def line(entity: str, book: str | None, books: Iterable[str], ccy: str, amount: float, source: str,
              reported: float | None = None, added: Mapping[str, float] | None = None,
              valid_date: Any = None) -> None:
-        if ccy != policy.reporting_ccy and (amount or reported is not None):  # the reporting currency has no OCP
-            out.append({"entity": entity, "book_id": book, "books": sorted(books), "ccy": ccy, "amount": amount,
+        books = sorted(books)
+        included = {pid: n for b in books for pid, n in futures.get((b, ccy), {}).items()
+                    if source != REPORT or "futures" not in policy.report_components}
+        if ccy != policy.reporting_ccy and (amount or reported is not None or included):
+            out.append({"entity": entity, "book_id": book, "books": books, "ccy": ccy, "amount": amount,
                         "source": source, "components": [c for c in COMPONENTS if (added or {}).get(c)],
                         "outside": {c: v for c, v in (added or {}).items() if v}, "reported": reported,
-                        "valid_date": valid_date})
+                        "valid_date": valid_date, **({"fx_future_nominals": included} if included else {})})
 
     if policy.published is PublishedBasis.DERIVED:
         for (e, b, ccy), parts in sorted(derived.items()):
@@ -854,15 +872,34 @@ def unconfirmed_gap(rows: Sequence[Mapping[str, Any]]) -> list[dict[str, Any]]:
     """The gap ``UNCONFIRMED_GAP`` of the run's rows with ``extra.ocp_unconfirmed``: their position ids and what is
     missing; none without such a row."""
     found = [(str(r["position_id"]), (r.get("extra") or {}).get("ocp_unconfirmed")) for r in rows]
-    found = [(pid, u) for pid, u in found if isinstance(u, Mapping)]
+    futures: dict[str, list[str]] = defaultdict(list)
+    for pid, u in found:
+        if isinstance(u, Mapping) and u.get("kind") == FX_FUTURE_GROUP:
+            futures[str(u["reason"])].append(pid)
+    found = [(pid, u) for pid, u in found if isinstance(u, Mapping) and u.get("kind") != FX_FUTURE_GROUP]
+    out = [{"code": reason, "items": ids[:GAP_LIST],
+            "text": FUTURE_GAP_TEXT[reason]} for reason, ids in sorted(futures.items())]
     if not found:
-        return []
+        return out
     pairs = sorted({str(u.get("pair") or "") for _, u in found} - {""})
-    return [{"code": UNCONFIRMED_GAP, "items": [pid for pid, _ in found][:GAP_LIST],
+    return out + [{"code": UNCONFIRMED_GAP, "items": [pid for pid, _ in found][:GAP_LIST],
              "text": f"позиций без условий сделки на кросс-паре ({', '.join(pairs[:5])}) не включено в ОВП по позициям: "
                      f"{len(found)}. Валюта строки отчёта не совпадает с первой валютой пары, единица номинала не "
                      "подтверждена: по позициям они войдут в ОВП после загрузки условий сделок; если книга есть в "
                      "отчёте ОВП, там может стоять номинал из отчёта"}]
+
+
+FUTURE_GAP_TEXT = {
+    "no_future_expiry": "валютный фьючерс без даты экспирации: в ОВП не включён",
+    "no_future_pair": "валютная пара фьючерса не подтверждена: позиция в ОВП не включена",
+    "no_quantity": "нет ненулевого числа контрактов: позиция фьючерса в ОВП не включена",
+    "no_future_notional": "нет номинала фьючерса: позиция в ОВП не включена",
+    "sign_mismatch": "знаки номинала и числа контрактов расходятся: позиция фьючерса в ОВП не включена",
+    "lot_mismatch": "лот фьючерса не совпадает с биржевым: позиция в ОВП не включена",
+    "ambiguous_future_quote": "лотовые условия подходят нескольким контрактам: позиция фьючерса в ОВП не включена",
+    "no_future_quote": "нет котировки FORTS: позиция фьючерса в ОВП не включена. "
+                       "Отдельный номинал из отчёта ОВП может быть учтён с пометкой",
+}
 
 
 def gaps(lines: Sequence[OcpLine], report_units: Sequence[Mapping[str, Any]],
@@ -1011,8 +1048,8 @@ def derivative_kind(row: Mapping[str, Any], terms: Sequence[Mapping[str, Any]],
 
 @dataclass(frozen=True)
 class DerivLine:
-    """One currency amount of a derivative for the derivatives' PV term (``derivative_lines``): always its PV (core's
-    FX delta, the spot equivalent), whatever ``amount_basis`` says (that one is the reconciliation's)."""
+    """One currency amount in the derivatives' term (``derivative_lines``). DEC18 uses nominal for an FX future;
+    other core products use their spot equivalent independently of ``amount_basis``."""
 
     position_id: str
     book_id: str
@@ -1028,6 +1065,11 @@ class DerivLine:
     one in the report's base."""
     first_trade: date | None = None
     """The earliest trade date of its terms; None: no terms."""
+    valued_by_core: bool = False
+
+    @property
+    def has_core_value(self) -> bool:
+        return self.valued_by_core or self.basis == "spot_equivalent"
 
     @property
     def in_term(self) -> bool:
@@ -1051,18 +1093,23 @@ def derivative_lines(rows: Sequence[Mapping[str, Any]], books: Mapping[str, Mapp
         kind = derivative_kind(r, t, policy, comp) if comp is not None else None
         if kind is None:
             continue
-        dates = _value_dates(r, t)
+        ex = r.get("extra") or {}
+        if kind == "fx_future":
+            rep = ex.get("reported") or {}
+            expiry = _day(rep.get("value_date") or rep.get("maturity_date") or r.get("maturity"))
+            dates = [expiry] if expiry is not None else []
+        else:
+            dates = _value_dates(r, t)
         tds = [d for x in t if (d := _day(x.get("trade_date")))]
         last, first = (max(dates) if dates else None), (min(tds) if tds else None)
-        core = bool((r.get("extra") or {}).get("core"))
+        core = bool(ex.get("core"))
         entity = str((books.get(r["book_id"]) or {}).get("entity") or "—")
-        ex = r.get("extra") or {}
-        no_pv = not core and takes_ocp_amount(ex, None)  # a CCS core did not value: its exchanges, not a PV
-        amounts = {c: a for c, a in sorted(_amounts(ex["ocp_amount"] if no_pv else r.get("fx_delta"),
-                                                    policy).items()) if a}
-        for ccy, a in amounts.items():
-            out.append(DerivLine(pid, str(r["book_id"]), entity, ccy, a, kind, last,
-                                 "spot_equivalent" if core else "notional", comp, first))
+        source = ex.get("ocp_amount") if takes_ocp_amount(ex, None) else r.get("fx_delta")
+        amounts = {c: a for c, a in _amounts(source, policy).items() if a}
+        basis = ("nominal" if kind == "fx_future" else "spot_equivalent") if core else "notional"
+        for ccy, a in sorted(amounts.items()):
+            out.append(DerivLine(pid, str(r["book_id"]), entity, ccy, a, kind, last, basis, comp, first,
+                                 valued_by_core=core))
         if not amounts:
             out.append(DerivLine(pid, str(r["book_id"]), entity, "", 0.0, kind, last, "none", comp, first))
     return out
@@ -1457,6 +1504,9 @@ def published_day(comparisons: Sequence[Mapping[str, Any]], outside_report: Sequ
                   days: Mapping[date, BaseDay] | None = None,
                   is_business_day: Callable[[date], bool] | None = None, derivs: Sequence[DerivLine] = (),
                   rates: Mapping[str, float] | None = None, cash_dates: Mapping[str, date] | None = None,
+                  expired_futures: Mapping[tuple[str, str], Sequence[tuple[date, float | None]]] | None = None,
+                  unconfirmed_futures: set[tuple[str, str]] | None = None,
+                  excluded_futures: set[tuple[str, str]] | None = None,
                   spot: Sequence[S.Deal] = ()
                   ) -> tuple[list[dict[str, Any]], list[str], list[dict[str, Any]], set[str]]:
     """The published OCP under ``report_base_plus_day`` (owner, 03.11.2026, TDM#531): (lines, notes, gaps, the books a
@@ -1504,6 +1554,7 @@ def published_day(comparisons: Sequence[Mapping[str, Any]], outside_report: Sequ
     ``derivative_share``, DEC18); ``cash_dates``: book -> the valid date of its cash balances of the run (a book absent
     from the report on the run of B itself)."""
     derived = derive(lines)
+    futures = _core_future_nominals(lines)
     by_bc: dict[tuple[str, str], list[OcpLine]] = defaultdict(list)
     for x in lines:
         by_bc[(x.book_id, x.ccy)].append(x)
@@ -1571,7 +1622,7 @@ def published_day(comparisons: Sequence[Mapping[str, Any]], outside_report: Sequ
                 winner[b] = key
 
     def line(sc: Mapping[str, Any], won: Iterable[str], ccy: str, amount: float, source: str, **kw: Any) -> None:
-        if ccy != policy.reporting_ccy and (amount or kw.get("reported") is not None):
+        if ccy != policy.reporting_ccy and (amount or kw.get("reported") is not None or kw.get("fx_future_nominals")):
             out.append({"entity": sc["entity"], "book_id": sc["book_id"], "books": sorted(won), "ccy": ccy,
                         "amount": amount, "source": source, "components": kw.pop("components", []),
                         "outside": kw.pop("outside", {}), "reported": kw.pop("reported", None),
@@ -1587,8 +1638,10 @@ def published_day(comparisons: Sequence[Mapping[str, Any]], outside_report: Sequ
         ccys = set(sc["by_ccy"]) | {c for (_, b, c) in derived if b in won}
         if sc["stale"]:
             for ccy in sorted(ccys):
+                included = {pid: n for b in won for pid, n in futures.get((b, ccy), {}).items()}
                 line(sc, won, ccy, math.fsum(_sum(derived.get((entity_of.get(b, sc["entity"]), b, ccy), {}))
-                                             for b in won), DERIVED_STALE)
+                                             for b in won), DERIVED_STALE,
+                     **({"fx_future_nominals": included} if included else {}))
             continue
         lost_keys = sorted({winner[b] for b in lost if scopes[winner[b]]["book_id"] is not None}, key=str)
         ccys |= {c for k in lost_keys for c in scopes[k]["by_ccy"]}
@@ -1673,7 +1726,12 @@ def published_day(comparisons: Sequence[Mapping[str, Any]], outside_report: Sequ
                     if x.book_id in won]
             # a derivative whose own component is outside the report is in ``outside`` (whole), never here too
             outside_kinds = {x.kind for x in mine if x.component not in policy.report_components}
+            expired = [n for b in won for expiry, n in (expired_futures or {}).get((b, ccy), ())
+                       if b0 is not None and b0 <= expiry <= on]
+            suspect = any((b, ccy) in (unconfirmed_futures or ()) or (b, "") in (unconfirmed_futures or ()) for b in won)
             for k in DERIVATIVE_KINDS:
+                report_nominal_ok = _nominal_ok(k, policy, outside_kinds) and (
+                    k != "fx_future" or not (expired or suspect))
                 term = [x for x in by_kind.get((ccy, k), ()) if x.book_id in won and x.in_term
                         and x.component in policy.report_components and (x.position_id, ccy) not in own_keys]
                 if k not in kinds:
@@ -1691,13 +1749,13 @@ def published_day(comparisons: Sequence[Mapping[str, Any]], outside_report: Sequ
                     # whose last flow is not after B is not in ``pv`` and is no gap)
                     unvalued = {x.position_id for x in mine if x.kind == k and x.in_term and x.basis == "none"}
                     held = {x.position_id for x in pv} | unvalued
-                    bare = {x.position_id for x in pv if x.basis != "spot_equivalent"} | unvalued
+                    bare = {x.position_id for x in pv if not x.has_core_value} | unvalued
                     if pv and bare:
                         (no_pv if bare >= held else partial).append(k)
                         # no position of the kind has a PV (no terms bound, core did not value it): the report's
                         # nominal of the kind in this currency, marked, instead of the positions' notionals or zeros
                         # (the owner, 03.11.2026); without such a nominal, the positions' own notionals, marked
-                        to_nominal = bare >= held and bool(nominal.get(k)) and _nominal_ok(k, policy, outside_kinds)
+                        to_nominal = bare >= held and bool(nominal.get(k)) and report_nominal_ok
                         if not to_nominal:  # with the nominal the gap is «номинал отчёта» (below), not this one too
                             issues["derivatives_partial_pv"].append(
                                 f"{where} {ccy}: {KIND_TEXT[k]} ("
@@ -1712,15 +1770,21 @@ def published_day(comparisons: Sequence[Mapping[str, Any]], outside_report: Sequ
                                               "last_flow": _iso(x.last_flow), "amount": x.amount,
                                               **({"note": "сделка после базы"} if k not in kinds else {}),
                                               **({"marker": "номинал позиции, PV нет"}
-                                                 if x.basis != "spot_equivalent" else {})}
+                                                 if not x.has_core_value else {})}
                                              for x in pv]
-                elif k in kinds and nominal.get(k) and _nominal_ok(k, policy, outside_kinds):
+                elif k in kinds and nominal.get(k) and report_nominal_ok:
                     items["derivatives"].append({"kind": "report_nominal", "derivative": k,
                                                  "component": KIND_COMPONENT[k], "set_id": sc["set_id"],
                                                  "book_id": sc["book_id"], "amount": nominal[k],
                                                  "marker": "номинал, PV нет"})
                     fallback.append(k)
                     issues["derivatives_nominal_fallback"].append(f"{where} {ccy}: {KIND_TEXT[k]}")
+                if k == "fx_future" and k in kinds and nominal.get(k) and expired and not any(x.has_core_value for x in pv):
+                    # A mixed aggregate cannot identify the expired legs. Use any live positions already found.
+                    known = [n for n in expired if n is not None]
+                    if term or len(known) != len(expired) or not math.isclose(
+                            nominal[k], math.fsum(known), abs_tol=1e-6):
+                        issues["expired_future_report_nominal"].append(f"{where} {ccy}")
             in_pv |= {x.position_id for x in mine if x.component not in policy.report_components}
             # TDM#693: the exposure of each deal matched with a report line, once (a deal in the PV term above, or whose
             # component is outside the report, is counted there)
@@ -1741,7 +1805,7 @@ def published_day(comparisons: Sequence[Mapping[str, Any]], outside_report: Sequ
                     got = [{"kind": "position", "position_id": d.position_id, "book_id": d.book_id,
                             "component": x.component, "basis": x.basis, "last_flow": _iso(x.last_flow),
                             "amount": x.amount,
-                            **({"marker": "номинал позиции, PV нет"} if x.basis != "spot_equivalent" else {})}
+                            **({"marker": "номинал позиции, PV нет"} if not x.has_core_value else {})}
                            for x in by_pos_ccy.get((d.position_id, ccy), ())]
                 for g in got:
                     g["note"] = "сопоставлена со строкой отчёта спот-типа"
@@ -1776,6 +1840,7 @@ def published_day(comparisons: Sequence[Mapping[str, Any]], outside_report: Sequ
                                      **({"value_date": t.value_date} if t.value_date else {}),
                                      **({"note": t.note} if t.note else {})}
                                     for t in day.trades or () if t.book_id in won and t.ccy == ccy and t.amount
+                                    and (t.book_id, t.position_id) not in (excluded_futures or ())
                                     and not (t.pv_kind and t.position_id in in_pv)]  # its position's whole PV is counted
             added: dict[str, float] = defaultdict(float)
             for b in sorted(won):
@@ -1851,12 +1916,15 @@ def published_day(comparisons: Sequence[Mapping[str, Any]], outside_report: Sequ
             for o in at_df1:
                 issues["spot_future_df1"].append(f"{where} {ccy}: {o['position_id']} — {o['note']}")
             has_report = bool(c) or bool(items["base"])
+            included = {i["position_id"]: n for i in items["derivatives"] + items["outside"]
+                        if (n := futures.get((i.get("book_id"), ccy), {}).get(i.get("position_id"))) is not None}
             line(sc, won, ccy, total, REPORT,
                  components=[k for k in COMPONENTS if added.get(k)], outside={k: v for k, v in added.items() if v},
                  reported=parts["base"] if has_report else 0.0 if sc["absent"] else None,
                  base_date=_iso(sc["valid_date"]),
                  set_id=sc["set_id"], base_kind=BASE_ABSENT if sc["absent"] else BASE_SPLIT if split else BASE_WHOLE,
                  parts=parts, contributions={p: _bounded(v) for p, v in items.items() if v}, fallback=fallback,
+                 **({"fx_future_nominals": included} if included else {}),
                  split_kinds=sorted(sc["kinds"]) if not sc["absent"] else [], partial_pv=partial, no_pv=no_pv,
                  base_older=b0 is not None and business_days_between(b0, on, is_business_day) > 1,
                  excluded=excluded, derivative_types=[] if sc["absent"] else _types_out(types),
@@ -1867,10 +1935,11 @@ def published_day(comparisons: Sequence[Mapping[str, Any]], outside_report: Sequ
                     if big else {}))
     covered = {b for sc in scopes.values() for b in sc["books"]}
     for x in outside_report:
-        if x["book_id"] not in covered and x["ccy"] != policy.reporting_ccy and x["derived"]:
-            out.append({"entity": x["entity"], "book_id": x["book_id"], "books": [x["book_id"]], "ccy": x["ccy"],
-                        "amount": x["derived"], "source": DERIVED, "components": [], "outside": {},
-                        "reported": None, "valid_date": None})
+        book, ccy = x["book_id"], x["ccy"]
+        included = futures.get((book, ccy), {})
+        if book not in covered and ccy != policy.reporting_ccy and (x["derived"] or included):
+            line({"entity": x["entity"], "book_id": book, "valid_date": None}, [book], ccy, x["derived"], DERIVED,
+                 **({"fx_future_nominals": included} if included else {}))
     absent = sorted(b for (s, b), sc in scopes.items() if sc["absent"] and any(
         x["book_id"] == b for x in out))
     if absent:
@@ -1896,6 +1965,8 @@ DAY_GAP_TEXT = {
     "derivatives_unknown_last_flow": "у дериватива нет даты последнего потока: считается, что поток после базы есть",
     "derivatives_nominal_fallback": "PV дериватива нет (нет условий сделки или ядро не оценило): взят номинал "
                                     "из отчёта ОВП",
+    "expired_future_report_nominal": "в совокупном номинале отчёта могут быть истёкшие фьючерсы. "
+                                     "В ОВП включены только доступные действующие позиции фьючерсов",
     "base_older": "база — отчёт ОВП не за прошлый рабочий день: переоценка и сделки — с даты отчёта",
     "trades_not_loaded": "сделки после базы не загружены: ОВП без них",
     "no_base_run": "прогона за дату базы нет: переоценка облигаций с даты базы не посчитана",
@@ -1972,7 +2043,7 @@ def derivatives_check(comparisons: Sequence[Mapping[str, Any]], derivs: Sequence
             held = {d.position_id for d in derivs if d.kind == k and d.in_term and d.book_id in books_in
                     and d.ccy in (c["ccy"], "")}
             bare = {d.position_id for d in derivs if d.kind == k and d.in_term and d.book_id in books_in
-                    and d.ccy in (c["ccy"], "") and d.basis != "spot_equivalent"}
+                    and d.ccy in (c["ccy"], "") and not d.has_core_value}
             out.append({"entity": c["entity"], "book_id": c.get("book_id"), "books": list(books_in), "ccy": c["ccy"],
                         "kind": k, "component": KIND_COMPONENT[k], "nominal": n, "pv": pv,
                         "pv_date": b0.isoformat() if b0 else None, "pv_source": src, "diff": diff,
@@ -2080,6 +2151,31 @@ def compute_ocp(rows: Sequence[Mapping[str, Any]], books: Mapping[str, Mapping[s
     check: list[dict[str, Any]] = []
     if policy.published is PublishedBasis.REPORT_BASE_PLUS_DAY:
         derivs = derivative_lines(rows, books, tb, on, policy)
+        expired_futures: dict[tuple[str, str], list[tuple[date, float | None]]] = defaultdict(list)
+        unconfirmed_futures: set[tuple[str, str]] = set()
+        excluded_futures: set[tuple[str, str]] = set()
+        for r in rows:
+            ex = r.get("extra") or {}
+            book, pid = r["book_id"], r["position_id"]
+            unconfirmed = ex.get("ocp_unconfirmed") or {}
+            if unconfirmed.get("kind") == FX_FUTURE_GROUP:
+                excluded_futures.add((book, pid))
+                reason = unconfirmed.get("reason")
+                if reason != "no_future_quote":
+                    currencies = {c for key in ("ccy", "quote_ccy") if (c := unconfirmed.get(key))}
+                    if reason == "no_future_pair" or not currencies:
+                        currencies = {""}  # the missing leg can affect any foreign currency of the book
+                    unconfirmed_futures.update((book, c) for c in currencies)
+            if ex.get("fx_future_state") == "expired" and (expiry := _day(r.get("maturity"))) is not None:
+                excluded_futures.add((book, pid))
+                rep = ex.get("reported") or {}
+                ccy = _code(rep.get("ccy"))
+                quote = _code((rep.get("x") or {}).get("x_sec_cur") or rep.get("x_sec_cur"))
+                if ccy:
+                    expired_futures[book, ccy].append((expiry, _f(rep.get("amount_ccy"))))
+                if quote and quote not in (ccy, policy.reporting_ccy):
+                    # The base report's quote leg may use a different cross rate. Its amount is unknown here.
+                    expired_futures[book, quote].append((expiry, None))
         if days:  # the trades after each base, now that the run's positions and derivatives are known
             kind_of = {d.position_id: d.kind for d in derivs}
             held = held_trades(rows)
@@ -2095,6 +2191,9 @@ def compute_ocp(rows: Sequence[Mapping[str, Any]], books: Mapping[str, Mapping[s
                                                            units=report_units, days=days,
                                                            is_business_day=is_business_day, derivs=derivs,
                                                            rates=rates, cash_dates=cash_dates(cash),
+                                                           expired_futures=expired_futures,
+                                                           unconfirmed_futures=unconfirmed_futures,
+                                                           excluded_futures=excluded_futures,
                                                            spot=spot_deals(rows, books, tb, on, policy))
         old = {u.get("set_id") for u in carried_units(report_units, {str(b): str(m.get("entity") or "—")
                                                                      for b, m in books.items()}, on, policy,

@@ -30,6 +30,13 @@ NO_PNL_TEXT = {
     "identity_failed": "компоненты не сходятся с итогом",
     "received_unknown": "неизвестна сумма купона или погашения за день",
     "no_prev_fx_rate": "нет курса валюты за предыдущий день",
+    "no_prev_future_price": "нет цены фьючерса за предыдущий день",
+    "no_prev_future_position": "фьючерсной позиции не было в расчёте за предыдущий день",
+    "prev_future_not_matched": "контракт фьючерса за предыдущий день не подобран",
+    "future_not_matched": "контракт фьючерса не подобран",
+    "no_future_price": "нет сопоставимой цены фьючерса за текущий день",
+    "future_contract_changed": "за предыдущий день в позиции был другой фьючерс",
+    "no_future_expiry": "фьючерс без даты экспирации",
     "fx_unit_unconfirmed": "валюта строки не совпадает с первой валютой пары, единица номинала не подтверждена: "
                            "PnL по курсу не считается до загрузки условий сделки",
     "no_prev_report": "нет отчётной стоимости позиции за предыдущий день",
@@ -49,10 +56,12 @@ METHOD_TEXT = {
     "desk-fx-spot-v1": "по курсу: сумма × изменение курса",
     "desk-reported-v1": "по отчёту: разница отчётных стоимостей",
     "desk-fx-core-v1": "FX-сделка: изменение PV ядра, курсовая часть по FX-дельте",
+    "desk-fx-future-v1": "валютный фьючерс: вариационная маржа, курсовая часть по FX-дельте",
     "desk-rates-core-v1": "своп, CDS или РЕПО ядром: кэрри и сдвиг кривой, ставки линейно по риску D-1",
     "desk-core-new-trade-v1": "новая сделка: PnL от условий сделки (PV при заключении принят за 0)",
 }
 CORE_FX_METHOD = "desk-fx-core-v1"
+FX_FUTURE_METHOD = "desk-fx-future-v1"
 RATES_CORE_METHOD = "desk-rates-core-v1"
 NEW_TRADE_METHOD = "desk-core-new-trade-v1"
 REPORTED_METHOD = "desk-reported-v1"

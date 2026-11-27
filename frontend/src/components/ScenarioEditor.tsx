@@ -75,9 +75,9 @@ export function ScenarioEditor({ presets, presetId, onPreset, buckets, curves, c
             {presets.map(p => <option key={p.scenario_id} value={p.scenario_id}>{p.name}</option>)}
           </select>
           {extras.length > 0 && <p className="note">Также в сценарии: {extras.join(' · ')}</p>}
-          {Object.keys(base.fx ?? {}).length > 0 && <p className="note">FX-шок считается от открытой валютной позиции (ОВП)
-            прогона, как на экране «ОВП»: откуда она взялась (облигация или кэш), неважно. Опционы и другие инструменты с гаммой
-            показаны отдельно. Если в прогоне ОВП нет, шок считается от валютных дельт позиций — об этом написано справа.</p>}
+          {Object.keys(base.fx ?? {}).length > 0 && <p className="note">Основа FX-шока — открытая валютная позиция прогона.
+            Для оценённых валютных фьючерсов берётся расчётная FX-дельта. Опционы и другие нелинейные инструменты
+            показаны отдельно. При отсутствии ОВП используются валютные дельты позиций.</p>}
         </div>
       </div>
 

@@ -59,14 +59,14 @@ def published(ctx, store_url):  # noqa: F811 - the module fixture
 
 def test_report_value_reasons_for_trs():
     c = coverage.cause
-    assert c("no_reported_value", "TRS", None, None)[0] == "report_no_value"
-    assert c("no_reported_value", "TRS", None, None, report_value_on=False)[0] == "report_value_off"
-    assert c("no_reported_value", "TRS", None, None, report_value=True)[0] == "run_before_report_value"
-    assert c("no_fx_rate", "TRS", None, None)[0] == "report_value_no_rate"
+    assert c("no_reported_value", "TRS", None)[0] == "report_no_value"
+    assert c("no_reported_value", "TRS", None, report_value_on=False)[0] == "report_value_off"
+    assert c("no_reported_value", "TRS", None, report_value=True)[0] == "run_before_report_value"
+    assert c("no_fx_rate", "TRS", None)[0] == "report_value_no_rate"
     for kind in ("IRS", "CCS"):  # core values them from their terms: they do wait for them
-        assert c("no_reported_value", kind, None, None)[0] == "swap_terms"
-    assert c("no_fx_rate", "OTC", None, None)[0] == "no_fx_rate"  # another kind: as before
-    why = {k: coverage.explain(f"{code}: x", "TRS", None, None, report_value=v, report_value_on=on)
+        assert c("no_reported_value", kind, None)[0] == "swap_terms"
+    assert c("no_fx_rate", "OTC", None)[0] == "no_fx_rate"  # another kind: as before
+    why = {k: coverage.explain(f"{code}: x", "TRS", None, report_value=v, report_value_on=on)
            for k, code, v, on in (("none", "no_reported_value", False, True), ("off", "no_reported_value", False, False),
                                   ("old", "no_reported_value", True, True), ("rate", "no_fx_rate", True, True))}
     assert why["none"]["why"].startswith("в отчёте позиций нет стоимости (NPV)")
@@ -78,7 +78,7 @@ def test_report_value_reasons_for_trs():
 
 def test_the_run_shows_cds_without_terms_with_empty_mv(published):
     con, r = published
-    u = coverage.unvalued(con, r, futures_by_ticker=False)
+    u = coverage.unvalued(con, r)
     g = {x["key"]: x for x in u["groups"]}
     cds_ids = {"D|CDS-USD", "D|CDS-RUB", "D|CDS-NONE", "D|CDS-ZWG", "E|CDS-OFF"}
     assert {k for k, v in g.items() if v["kind"] == "CDS"} == {"cds_no_data|CDS"}
@@ -103,6 +103,6 @@ def test_a_run_before_0_2_19_says_so(published, ctx):  # noqa: F811
     is there, so the reason is the old run, not the report."""
     _con, _r = published
     x = {"ccy": "USD", "asset_class": "otc", "x": {"x_product_group": "cds", "x_npv_ccy_value": -1.0, "x_npv_ccy": "USD"}}
-    assert coverage.why_of("no_reported_value: otc CDS: no mv_rub", x, None, None, True)["key"] == \
+    assert coverage.why_of("no_reported_value: otc CDS: no mv_rub", x, None, True)["key"] == \
         "run_before_report_value"
     assert fx_rate_cbr(ctx, "USD") is not None

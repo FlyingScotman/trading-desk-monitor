@@ -2408,7 +2408,7 @@ export interface components {
              * Code
              * @enum {string}
              */
-            code: "no_report" | "stale_report" | "outside_without_terms" | "books_outside_report" | "outside_double_count" | "report_without_derivatives_split" | "derivatives_nominal_fallback" | "base_older" | "trades_not_loaded" | "no_base_run" | "trades_not_valued" | "carried_forward_unit" | "trades_unknown_book" | "derivatives_partial_pv" | "derivatives_unknown_last_flow" | "off_report_excluded" | "derivative_share" | "balances_older_than_base" | "balances_not_at_base" | "fx_unit_unconfirmed" | "spot_future_unmatched" | "spot_future_ambiguous" | "spot_future_df1" | "spot_future_partial";
+            code: "no_report" | "stale_report" | "outside_without_terms" | "books_outside_report" | "outside_double_count" | "report_without_derivatives_split" | "derivatives_nominal_fallback" | "base_older" | "trades_not_loaded" | "no_base_run" | "trades_not_valued" | "carried_forward_unit" | "trades_unknown_book" | "derivatives_partial_pv" | "derivatives_unknown_last_flow" | "off_report_excluded" | "derivative_share" | "balances_older_than_base" | "balances_not_at_base" | "fx_unit_unconfirmed" | "spot_future_unmatched" | "spot_future_ambiguous" | "spot_future_df1" | "spot_future_partial" | "expired_future_report_nominal" | "no_future_expiry" | "no_future_pair" | "no_quantity" | "no_future_notional" | "sign_mismatch" | "lot_mismatch" | "ambiguous_future_quote" | "no_future_quote";
             /** Text */
             text: string;
             /**
@@ -3296,8 +3296,7 @@ export interface components {
         };
         /**
          * RiskOcp
-         * @description The published OCP of the run for the scenario screen's FX shock (TDM#577): linear part of the shock = the
-         *     OCP's lines without the non-linear derivatives x the shock, the same lines the OCP screen reads (TDM#567).
+         * @description Published OCP and adjusted linear exposure for the scenario screen's FX shock (TDM#577).
          */
         RiskOcp: {
             /**
@@ -3352,7 +3351,7 @@ export interface components {
             nonlinear: number;
             /**
              * Linear
-             * @description amount - nonlinear: what the FX shock takes linearly
+             * @description Published OCP less the FX delta of non-linear derivatives. Included core-valued FX futures use their core FX sensitivity expressed at the OCP rate in place of their nominal.
              */
             linear: number;
             /**
@@ -3378,7 +3377,10 @@ export interface components {
             amount: number;
             /** Nonlinear */
             nonlinear: number;
-            /** Linear */
+            /**
+             * Linear
+             * @description Published OCP less the FX delta of non-linear derivatives. Included core-valued FX futures use their core FX sensitivity expressed at the OCP rate in place of their nominal.
+             */
             linear: number;
         };
         /**

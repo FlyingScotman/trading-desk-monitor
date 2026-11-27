@@ -857,9 +857,6 @@ details.at-last .at-open::before{content:"показать"} details.at-last[ope
             <label for="off_report_derivatives">Деривативы вне отчёта позиций</label>
             <div><select class="inp" id="off_report_derivatives" data-key="off_report_derivatives" style="max-width:320px"><option value="">исключать (по умолчанию)</option><option value="include">включать</option></select>
               <p class="hint">Форварды, свопы, РЕПО и валютно-процентные свопы из условий сделок, которых нет в отчёте позиций. Включать — оцениваются отдельной позицией с пометкой «вне отчёта позиций» и входят в риски, PnL и ОВП. Исключать — не входят, их список — в «Чего нет в данных». Сделку, похожую на уже имеющуюся в отчёте позиций, монитор не включает, чтобы не посчитать дважды. После переключения сегодня и последние две недели пересчитываются сами.</p></div>
-            <label for="futures_by_ticker">Фьючерсы по тикеру</label>
-            <div><label class="tgl"><input type="checkbox" id="futures_by_ticker" data-key="futures_by_ticker" data-default="false"><span class="tgl-s"></span><span>валютный фьючерс FORTS по тикеру оценивает ядро</span></label>
-              <p class="hint">По умолчанию выключено.</p></div>
             <label for="ccy_aliases">Одна валюта под двумя кодами</label>
             <div><input class="inp mono" id="ccy_aliases" data-key="ccy_aliases" placeholder="CNH=CNY" autocomplete="off" style="max-width:320px">
               <p class="hint">«код в данных=код монитора» через запятую. Строки с первым кодом во всех данных — позиции, отчёт ОВП, сделки дня, условия сделок — считаются второй валютой и сливаются с её строками на всех экранах; курс, кривая и фиксинг одной подставляются за другую. Исходный код виден в подсказке строки («в отчёте — CNH»). Пусто — как в примере, CNH=CNY. Слово «нет» — ничего не сводить. Действует со следующего прогона.</p></div>

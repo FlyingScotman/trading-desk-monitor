@@ -780,7 +780,8 @@
   // A · the unexplained bar by reason, then by method group (TDM#436, TDM#442 on A): the method → group map and the
   // labels of /checks (pnl_checks.METHOD_GROUP, UNEXPL_GROUPS; tested against the backend); any other code or none — «other»
   const METHOD_GROUP = { 'desk-flash-exact-v1': 'exact', 'desk-flash-exact-v2': 'exact', 'desk-flash-exact-fx-v1': 'exact', 'desk-flash-simple-v1': 'simple',
-    'desk-flash-yield-v1': 'yield', 'desk-reported-v1': 'reported', 'desk-fx-spot-v1': 'fx', 'desk-fx-core-v1': 'fx', 'desk-rates-core-v1': 'rates' };
+    'desk-flash-yield-v1': 'yield', 'desk-reported-v1': 'reported', 'desk-fx-spot-v1': 'fx', 'desk-fx-core-v1': 'fx',
+    'desk-fx-future-v1': 'fx', 'desk-rates-core-v1': 'rates' };
   const UNEXPL_LABEL = { exact: 'остаток точного flash', simple: 'без разложения: нет потоков ядра', yield: 'по доходности', reported: 'по отчёту',
     fx: 'FX-сделки: прочие эффекты', rates: 'свопы, CDS и РЕПО: остаток после ставок', other: 'другой метод или не указан', mixed: 'позиции с несколькими методами' };
   const UNEXPL_ORDER = ['exact', 'simple', 'yield', 'reported', 'fx', 'rates', 'other', 'mixed'];

@@ -664,7 +664,11 @@
   // на чём стоит сумма позиции (basis строки ОВП, backend rules/ocp.py): номинал вместо PV — один из подозреваемых в завышении
   // суммы, поэтому у номинала рядом PV (его даёт ядро); остальные основания названы словами, неизвестное — как пришло
   const BASIS = { spot_equivalent: 'по спот-эквиваленту (PV)', notional: 'по номиналу, PV нет', amount: 'по сумме позиции', mv: 'по грязной MV', mv_net: 'по грязной MV за вычетом пассива' };
-  const basisText = i => i.basis === 'nominal' ? 'по номиналу; PV ' + (i.pv == null ? 'нет' : f.mns(i.pv, 2) + ' mm') : BASIS[i.basis] || (i.basis ? 'основание: ' + i.basis : '');
+  const basisText = i => {
+    if (i.basis !== 'nominal') return BASIS[i.basis] || (i.basis ? 'основание: ' + i.basis : '');
+    if (i.component === 'futures') return 'по номиналу';
+    return 'по номиналу; PV ' + (i.pv == null ? 'нет' : f.mns(i.pv, 2) + ' mm');
+  };
   function originItem(i, line, multi) {
     const bits = [];
     if (i.kind === 'cash') {

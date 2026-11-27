@@ -1,5 +1,5 @@
 """Derivatives through core ``value_portfolio`` (result contract v3): FX forwards, NDFs, FX swaps and crosses from the
-private contract's ``trade_terms`` (WP-M1, M3, M4), and FORTS FX futures by ticker (P3, setting ``futures_by_ticker``).
+private contract's ``trade_terms`` (WP-M1, M3, M4), and FORTS FX futures matched by currency, expiry and lot.
 
 ``valuation.positions.plan`` links each FX or OTC position row to its trades (``link``): a ``trade_terms`` row whose
 ``position_id`` is the row's, or whose ``trade_id`` is the row's ``deal_id`` or ``position_id``, in the same book. A row
@@ -208,10 +208,12 @@ from ..curves.fx import (
     FxOptions,
 )
 from ..curves.rates import KEY_RATE_CURVE_ID, KEY_RATE_SWAP_CURVE_ID, RUONIA_OIS_CURVE_ID
+from ..inbox.schema import norm_ccy
 from ..marketdata import manual_cds
 from ..marketdata.adapter import extend_calendar_back
 from .bonds import OIS_TAIL, RISK_CURVES, BondValuation
 from .fallback import fx_rate
+from .fx_cross import report_field
 
 PUBLISHED_FACTORS = ("IR|", "FX|", "CS")
 """Factors of the published Hessian (the Taylor's vocabulary, ``scenario.taylor``); the basis goes to ``basis01``."""
@@ -695,6 +697,34 @@ def ccs_ocp_amount(rows: list[dict[str, Any]], on: date) -> dict[str, float]:
     return {c: v for c, v in out.items() if v}
 
 
+@dataclass(frozen=True)
+class FutureTerms:
+    contract_id: str
+    ccy: str
+    expiry: date
+    lot: float
+    contracts: float
+    price: float  # RUB per unit of the foreign currency
+
+    def prices_used(self) -> dict[str, Any]:
+        return {"contract_id": self.contract_id, "lot": self.lot, "contracts": self.contracts,
+                "futures_price_rub_per_unit": self.price}
+
+
+def future_expiry(row: dict[str, Any]) -> date | None:
+    return _day(row.get("value_date") or row.get("maturity_date"))
+
+
+def future_quote_currency(row: dict[str, Any]) -> str:
+    # A cross can settle in RUB too. Only the quote currency establishes the pair.
+    return norm_ccy(str(report_field(row, "x_sec_cur") or "").strip())
+
+
+def rouble_future(row: dict[str, Any]) -> bool:
+    ccy = norm_ccy(row.get("ccy") or "")
+    return bool(ccy and ccy != "RUB" and future_quote_currency(row) == "RUB")
+
+
 @dataclass
 class Request:
     """A position row valued here: its trades' legs, its swaps or REPOs, or a FORTS future."""
@@ -704,9 +734,7 @@ class Request:
     row: dict[str, Any]
     """The positions row (``positions.normalised``)."""
     legs: list[TermsLeg] = field(default_factory=list)
-    future: dict[str, Any] | None = None
-    """The FORTS row of a future (``MarketView.future``) and ``contracts`` the signed number of contracts."""
-    contracts: float | None = None
+    future: FutureTerms | None = None
     trades: list[RatesTrade] = field(default_factory=list)
     """The swaps and REPOs of the row (``SwapTerms``, ``RepoTerms``), one core instrument each."""
     partial: bool = False
@@ -887,17 +915,17 @@ def core_legs(ctx: Any, leg: TermsLeg, iid: str, options: FxOptions, curve_of: d
         ccy, notes
 
 
-def _future(ctx: Any, r: Request, iid: str, curve_of: dict[str, str]) -> tuple[Any, str, Any]:
-    f = r.future or {}
-    ccy, price, unit = f.get("base_ccy"), _num(f.get("settle_price")), _num(f.get("settle_rub_per_unit"))
-    lot, d = _num(f.get("lot_volume")), _day(f.get("last_del_date"))
-    if not ccy or not price or not unit or not lot or d is None:
-        raise NotValued("future_terms_incomplete", f"{f.get('secid')}: base, settle price, lot, delivery date")
-    if ccy not in curve_of or ccy not in ctx.fx.spots:
-        raise NotValued("no_foreign_curve", f"no {ccy} curve or spot in the run")
-    contract = FxFuturesContract(f["secid"], ccy, lot, round(price / unit, 6), d)
-    return FxFuturesInstrument(iid, contract, RUONIA_OIS_CURVE_ID, curve_of[ccy]), ccy, \
-        FuturesQuote(f["secid"], price, price)
+def _future(ctx: Any, f: FutureTerms, iid: str, curve_of: dict[str, str]) -> FxFuturesInstrument:
+    ccy = f.ccy
+    spot = ctx.fx.spots.get(ccy)
+    if spot is None:
+        raise NotValued("no_fx_spot", f"no {ccy} spot in the run", ccy=ccy, missing="spot")
+    if f.expiry <= spot.value_date:
+        raise NotValued("future_spot_value_date", f"экспирация {f.expiry:%d.%m.%Y}, расчёт спота {spot.value_date:%d.%m.%Y}")
+    if ccy not in curve_of:
+        raise NotValued("no_foreign_curve", f"no {ccy} curve in the run", ccy=ccy, missing="curve")
+    contract = FxFuturesContract(f.contract_id, ccy, f.lot, 1.0, f.expiry)
+    return FxFuturesInstrument(iid, contract, RUONIA_OIS_CURVE_ID, curve_of[ccy])
 
 
 def _fixing_ids(ctx: Any) -> set[str]:
@@ -1607,7 +1635,8 @@ def value(ctx: Any, requests: list[Request], *, options: FxOptions, second_order
         if have:
             curve_of[ccy] = primary
             fallbacks.update({(primary, a): None for a in alts if a in present})
-    instruments, positions, quotes, owner, calendars = [], [], [], {}, {}
+    instruments, positions, owner, calendars = [], [], {}, {}
+    quotes: dict[str, FuturesQuote] = {}
     terms_of: dict[str, Any] = {}
     notes: dict[str, list[str]] = defaultdict(list)
     flows: dict[str, list[dict[str, Any]]] = defaultdict(list)
@@ -1649,9 +1678,12 @@ def value(ctx: Any, requests: list[Request], *, options: FxOptions, second_order
                     live_of[r.position_id] = replace(r, trades=[t for t in r.trades if id(t) not in dead], partial=True)
             elif r.future is not None:
                 iid = f"{r.position_id}#fut"
-                inst, ccy, q = _future(ctx, r, iid, curve_of)
-                built.append((inst, ccy, None, r.contracts or 0.0))
-                quotes.append(q)
+                f = r.future
+                inst = _future(ctx, f, iid, curve_of)
+                q = FuturesQuote(f.contract_id, f.price, f.price)
+                if quotes.setdefault(f.contract_id, q) != q:
+                    raise NotValued("future_quote_conflict", f"разные котировки FORTS для {f.contract_id}")
+                built.append((inst, f.ccy, None, f.contracts))
             else:
                 live = [t for t in r.legs if t.value_date >= bd]
                 gone_legs = [t for t in r.legs if t.value_date < bd]
@@ -1717,7 +1749,7 @@ def value(ctx: Any, requests: list[Request], *, options: FxOptions, second_order
                    curves=(*(c for c in market.curves if c.curve_id in used),
                            *(c for c in ctx.swap_curves if c.curve_id in used)),
                    calendars=(*ctx.core_market.calendars, *calendars.values()),
-                   futures_quotes=tuple(quotes))
+                   futures_quotes=tuple(quotes.values()))
     # core's quote_curve_risk only when the call holds quotes it takes for them: a call without keeps its job ID
     quoted = any(isinstance(c.curve, XccyCurveBootstrapRequest | ParYieldCurveRequest) for c in snap.curves)
     policy = ValuationPolicy(RUONIA_OIS_CURVE_ID, include_second_order=second_order,
@@ -2366,19 +2398,18 @@ def _valuation(ctx: Any, r: Request, a: _Acc, notes: list[str], result: Any) -> 
     amount = x.get("amount_ccy")
     if amount is None:
         amount = math.fsum(t.sign * t.n_base if t.base == ccy else -t.sign * t.n_quote if t.quote == ccy else 0.0
-                           for t in r.legs if t.value_date >= bd) if r.future is None else (r.contracts or 0.0)
+                           for t in r.legs if t.value_date >= bd)
     ocp: dict[str, float] = defaultdict(float, a.ocp_core)
     for t in r.legs:
         if t.value_date >= bd and id(t) not in a.ocp_legs:
             ocp[t.base] += t.sign * t.n_base
             ocp[t.quote] -= t.sign * t.n_quote
     if r.future is not None:
-        f = r.future
-        ocp[f["base_ccy"]] += (r.contracts or 0.0) * float(Decimal(str(f["lot_volume"])))
+        ocp[r.future.ccy] = x["amount_ccy"]
     reported = _reported_pv(x, [t.pv_rub for t in r.legs])
     horizon = max((t.value_date for t in r.legs if t.value_date >= bd), default=None)
     if r.future is not None:
-        horizon = _day(r.future.get("last_del_date"))
+        horizon = r.future.expiry
     product = "+".join(sorted(a.products))
     extra = {
         "core": {"product": product, "trades": sorted({t.trade_id for t in r.legs}) or None,
@@ -2392,6 +2423,8 @@ def _valuation(ctx: Any, r: Request, a: _Acc, notes: list[str], result: Any) -> 
         **({"reported_pv_rub": reported, "pv_diff_rub": a.pv - reported} if reported is not None else {}),
         "flows": a.flows,
     }
+    if (f := r.future) is not None:
+        extra["futures"] = f.prices_used()
     hessian = _hessian(a)
     return BondValuation(
         secid="", quantity=amount, valuation_date=bd, settlement=bd, horizon_date=horizon or bd,

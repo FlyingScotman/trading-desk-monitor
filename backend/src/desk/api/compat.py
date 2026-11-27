@@ -202,7 +202,7 @@ def _json(v: Any) -> Any:
 
 
 def _not_valued(r: dict[str, Any], books: dict[str, dict], x: dict[str, Any] | None,
-                portfolio: str | None, futures_by_ticker: bool | None = None,
+                portfolio: str | None,
                 hole: dict[str, str] | None = None, report_value_on: bool | None = None) -> dict[str, Any]:
     """A run_position without fact as a Desk Monitor position: visible, PV empty, nothing in any total. ``x``: its
     report row (``INPUT_FIELDS``, None for a legacy row): name, currency, maturity and the raw x_* fields; ``extra.why``
@@ -224,7 +224,7 @@ def _not_valued(r: dict[str, Any], books: dict[str, dict], x: dict[str, Any] | N
         "notValued": True,
         "pnl": no_pnl("not_valued", r["reason"]),
         "extra": {"quality": "not_valued", "valuation": "not_valued", "reason": r["reason"],
-                  "why": why_of(r["reason"], x, futures_by_ticker, hole, report_value_on),
+                  "why": why_of(r["reason"], x, hole, report_value_on),
                   "quantity": r["quantity"], **({"reported": x} if x else {})},
     }
 
@@ -410,11 +410,10 @@ def assemble(con, run: dict[str, Any], days: Memo | None = None) -> dict[str, An
         if unvalued else {}
     for i in inputs.values():  # TDM#601: CNH is CNY, as the run read the row (store.positions_for)
         alias_position(i)
-    fbt, on = None, {}
+    on = {}
     if unvalued:
-        from .coverage import _futures_by_ticker, report_value_by_book
+        from .coverage import report_value_by_book
 
-        fbt = _futures_by_ticker()
         on = report_value_by_book(con, run["position_set_ids"])  # TDM#607: the adapter's report value on or off
     from .coverage import history_hole
 
@@ -422,7 +421,7 @@ def assemble(con, run: dict[str, Any], days: Memo | None = None) -> dict[str, An
     for r in unvalued:
         i = inputs.get(r["position_id"])
         positions.append(_not_valued(r, books, {k: v for k, v in i.items() if k != "position_id"} if i else None,
-                                     portfolio_of(port_rows, book_types, r["book_id"], r["position_id"]), fbt,
+                                     portfolio_of(port_rows, book_types, r["book_id"], r["position_id"]),
                                      hole, on.get(str(r["book_id"]))))
     for c in dict.fromkeys(c for p in positions for c in p["risk"]):
         if c not in curves:  # a risk curve the run's reference lacks: shown without points, its risk never dropped

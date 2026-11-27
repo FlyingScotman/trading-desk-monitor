@@ -16,16 +16,25 @@ from __future__ import annotations
 
 import copy
 from dataclasses import replace
-from datetime import date
+from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 
 import pytest
 
+from desk.api.ocp_line import method_note, ocp_line
 from desk.curves import fx as fxcurves
 from desk.curves.rates import RUONIA_OIS_CURVE_ID
 from desk.marketdata import adapter
 from desk.marketdata.bundle import Snapshot, SnapshotDir
 from desk.orchestrator import market_rates, prepare
+from desk.pnl.direct import attach
+from desk.pnl.reasons import FX_FUTURE_METHOD
+from desk.publish.tdm_run import direct_row
+from desk.rules import ocp as O
+from desk.scenario.fx_ocp import fx_ocp
+from desk.scenario.taylor import risk_payload, run_taylor
+from desk.store import PositionInputs
+from desk.valuation import positions
 
 FIX = Path(__file__).parent / "fixtures" / "mdhub_v1_4"
 DATE = "2026-10-15"
@@ -95,7 +104,7 @@ def test_mini_contract_on_the_same_date_is_dropped(ctx):
                       settle_rub_per_unit="85.3")  # more volume, less open interest: the open interest decides
     market = market_with(ctx, lambda d: d["futures_prices"].append(mini))
     assert [r["secid"] for r in market.fx_futures("USD")] == ["SiZ6"]
-    assert market.future("UMZ6")["asset_code"] == "UM"  # a position's ticker lookup still finds the mini contract
+    assert {r["secid"] for r in market.fx_future_quotes("USD", all_contracts=True).rows} == {"SiZ6", "UMZ6"}
     _, fx, lin = curves_of(ctx, market)
     usd = lin["USD FX"]
     assert usd["status"] == "ok" and usd["futures"] == ["SiZ6"] and usd["futures_source"] == "eod"
@@ -394,3 +403,300 @@ def test_a_deal_needing_a_missing_curve_gets_the_reason_on_its_card(ctx):
     row = curve_row(fx, cny)
     assert (row["id"], row["state"]) == ("CNY XCCY", "replaced")
     assert row["text"] == f"вместо CNY FX: её нет в рыночных данных прогона (кривая не построена: missing. {err})"
+
+
+# --- FX futures positions, variation margin and OCP --------------------------------------------------------------
+
+BOOKS = {"B1": {"entity": "E"}, "B2": {"entity": "E"}}
+
+
+def future(**fields):
+    return {"asset_class": "fx", "ccy": "USD", "x_sec_cur": "RUB", "x_product_group": "fx_future", "value_date": Z6,
+            "amount_ccy": 2000.0, "x_quantity": 2.0, **fields}
+
+
+def inputs(ctx, *rows):
+    # The generic quantity differs from x_quantity and must never drive a futures valuation.
+    order = [(f"P{i}", "B1" if i < 2 else "B2", None, 77.0) for i in range(len(rows))]
+    return PositionInputs(order, [], {b: ctx.business_date for b in BOOKS}, datetime.now(UTC), "0" * 64,
+                          {p[0]: row for p, row in zip(order, rows)})
+
+
+def priced_market(ctx, cut):
+    def mutate(data):
+        data["futures_prices"] = [
+            usd_future(ctx, settle_rub_per_unit="85.25", lot_volume="1000"),
+            usd_future(ctx, secid="UMZ6", settle_rub_per_unit="85.75", lot_volume="100", open_position="1"),
+        ] if cut == "eod_final" else []
+        data["futures_prices_intraday"] = [
+            intraday("SiZ6", Z6, lot_volume="1000", last_rub_per_unit="85.25"),
+            intraday("UMZ6", Z6, lot_volume="100", open_position="1",
+                     bid_rub_per_unit="85.5", offer_rub_per_unit="86"),
+        ]
+
+    return market_with(ctx, mutate, cut)
+
+
+@pytest.mark.parametrize("cut", ["eod_final", "intraday", "eod_preliminary"])
+def test_matches_pair_exact_expiry_and_each_lot_and_deduplicates_contracts(ctx, cut):
+    market = priced_market(ctx, cut)
+    core, fx, _ = curves_of(ctx, market)
+    ctx = replace(ctx, market=market, core_market=core, fx=fx)
+    inp = inputs(ctx, future(), future(value_date=None, maturity_date=Z6, amount_ccy=-3000, x_quantity=-3),
+                 future(amount_ccy=200.01, x_quantity=None, x={"x_quantity": "2", "x_sec_cur": "RUB"}),
+                 future(amount_ccy=1000, x_quantity=1, x_sec_cur="RUR", source_instrument_id="synthetic-instrument"))
+    plan = positions.plan(ctx, inp)
+    assert {p.contract_id for p in plan.core_result.fx_futures} == {"SiZ6", "UMZ6"}
+    assert len(plan.core_result.fx_futures) == 4 and not plan.core_result.coverage.rejections
+    for pid, _, _, _ in inp.rows:
+        row, v = inp.extra[pid], plan.direct[pid].valuation
+        assert v.pv_rub == 0 and v.extra["core"]["product"] == "fx_future"
+        assert v.extra["ocp_amount"] == {"USD": row["amount_ccy"]}
+        p = v.extra["futures"]
+        assert p["contract_id"] == ("UMZ6" if pid == "P2" else "SiZ6")
+        contracts = float((row.get("x") or {}).get("x_quantity") or row["x_quantity"])
+        assert p["contracts"] == contracts and p["lot"] == abs(row["amount_ccy"] / contracts)
+        price = 85.75 if pid == "P2" else 85.25
+        assert p["futures_price_rub_per_unit"] == price
+        spot = ctx.fx.spots["USD"].rub_per_unit
+        assert v.fx_delta["USD"] == pytest.approx(row["amount_ccy"] * price / spot)
+        assert set(v.curve_buckets) == {"RUB RUONIA", "USD FX"}
+        assert v.extra["basis01"]["USD"] != 0
+        # Core reports the rates and basis Hessian and a first-order FX factor for futures.
+        assert any(a.startswith("IR|RUB RUONIA|") and b.startswith("IR|USD FX|") for a, b, _ in v.hessian)
+
+
+@pytest.mark.parametrize(("fields", "reason"), [
+    ({"amount_ccy": 1000}, "lot_mismatch"),
+    ({"value_date": Z6 + timedelta(days=1)}, "no_future_quote"),
+    ({"x_quantity": None}, "no_quantity"),
+    ({"x_quantity": 0}, "no_quantity"),
+    ({"x_quantity": -2}, "sign_mismatch"),
+    ({"amount_ccy": -2000}, "sign_mismatch"),
+    ({"x_sec_cur": None, "x_settlement_ccy": "RUB"}, "no_future_pair"),
+])
+def test_unmatched_position_is_excluded_from_ocp_and_scenarios(ctx, fields, reason):
+    ctx = replace(ctx, market=priced_market(ctx, "eod_final"))
+    x = future(**fields)
+    plan = positions.plan(ctx, inputs(ctx, x))
+    out = plan.direct["P0"]
+    assert plan.core_result is None and out.core_not_valued[0] == reason
+    assert "в ОВП не включён" in out.valuation.assumptions[0]
+    if reason == "lot_mismatch":
+        assert "лот в отчёте 500, лоты FORTS 100, 1000" in out.valuation.assumptions[0]
+    fact = direct_row(ctx, "B1", "P0", out, x, None)
+    assert fact["fx_delta"] == {} and fact["extra"]["ocp_unconfirmed"]["reason"] == reason
+    on = ctx.business_date
+    report = {"entity": "E", "book_id": "B1", "ccy": "USD", "ocp_ccy": "100", "_set_id": 1,
+              "derivatives_ccy": {"fx_future": "2000"}}
+    unit = {"scope": {"entity": "E", "book_id": "B1"}, "set_id": 1, "valid_date": on, "row_count": 1}
+    ocp = O.compute_ocp([fact], BOOKS, on, report_rows=[report], report_units=[unit])
+    assert not ocp.lines and any(g["code"] == reason and g["items"] == ["P0"] for g in ocp.gaps)
+    (line,) = ocp.published
+    if reason == "no_future_quote":
+        assert line["amount"] == 2100 and line["fallback"] == ["fx_future"]
+    else:
+        assert line["amount"] == 100 and not line["fallback"]
+    rows = [{"position_id": "P0", "book_id": "B1", "quality": "assumed", "secid": None, "pv_rub": 0.0, "fact": fact}]
+    payload = risk_payload({"run_id": 1, "business_date": on}, rows, {})
+    assert "FX|USD" not in payload["factors"]
+    status = {"basis": O.PROVISIONAL_POLICY.published.value, "byCcy": {"USD": {"rate": 90}}, "byBook": [ocp_line(line)]}
+    assert fx_ocp(status, payload, rows, published_lines=ocp.published)["by_ccy"]["USD"]["linear"] == line["amount"]
+
+
+def test_unpriced_mini_is_not_substituted_with_main_contract(ctx):
+    def mutate(data):
+        data["futures_prices"].append(usd_future(ctx, secid="UMZ6", lot_volume="100", settle_rub_per_unit=None))
+
+    ctx = replace(ctx, market=market_with(ctx, mutate))
+    out = positions.plan(ctx, inputs(ctx, future(amount_ccy=200))).direct["P0"]
+    assert out.reason == "no_future_quote" and "UMZ6" in out.detail
+
+
+@pytest.mark.parametrize("days_to_expiry", [-1, 0])
+@pytest.mark.parametrize("quote", ["RUB", "CNY"])
+def test_expired_futures_have_no_mv_or_ocp(ctx, days_to_expiry, quote):
+    expiry = ctx.business_date + timedelta(days=days_to_expiry)
+    x = future(value_date=expiry, x_sec_cur=quote, mv_rub=123.0)
+    out = positions.plan(ctx, inputs(ctx, x)).direct["P0"]
+    assert out.valuation.pv_rub == 0 and not out.valuation.fx_delta
+    assert "остатках по счетам" in out.valuation.assumptions[0]
+    fact = direct_row(ctx, "B1", "P0", out, x, None)
+    assert fact["mv_rub"] == fact["mv"] == 0 and not fact.get("fx_delta")
+    assert O.classify(fact, (), BOOKS, ctx.business_date, O.PROVISIONAL_POLICY)[:2] == (None, {})
+
+
+def test_undated_future_is_unvalued_and_keeps_its_gap_in_the_published_run(ctx, store_url):
+    from desk import store
+    from desk.api.app import ocp_out
+    from desk.publish import desk_run
+
+    inp = inputs(ctx, future(value_date=None, mv_rub=123.0), future(value_date=None, x_sec_cur="USD", ccy="EUR"))
+    plan = positions.plan(ctx, inp)
+    with store.connect(store_url) as con:
+        run_id, _, _ = desk_run.publish(con, ctx, positions.merge(plan, []), prev=None, inputs=inp)
+        facts = con.execute("SELECT pv_rub, fact, reason FROM run_position WHERE run_id = %s ORDER BY ord",
+                            (run_id,)).fetchall()
+        (ocp,) = con.execute("SELECT data FROM run_reference WHERE run_id = %s AND kind = 'ocp'", (run_id,)).fetchone()
+    assert len(facts) == 2 and all(mv is None and fact is None and reason.startswith("no_future_expiry:")
+                                   for mv, fact, reason in facts)
+    assert ocp["lines"] == [] and ocp["published"]["by_book"] == []
+    gap = next(g for g in ocp["gaps"] if g["code"] == "no_future_expiry")
+    assert gap["items"] == ["P0", "P1"] and "без даты экспирации: в ОВП не включён" in gap["text"]
+    response = ocp_out(run_id, ocp)
+    assert not response.left_out and any(g.code == "no_future_expiry" for g in response.gaps)
+
+
+def test_carried_split_report_does_not_restore_an_expired_future(ctx):
+    on = ctx.business_date
+    x = future(value_date=on)
+    out = positions.plan(ctx, inputs(ctx, x)).direct["P0"]
+    fact = direct_row(ctx, "B1", "P0", out, x, None)
+    report = {"entity": "E", "book_id": "B1", "ccy": "USD", "ocp_ccy": "500", "_set_id": 1,
+              "derivatives_ccy": {"fx_future": "2000.0000003"}}
+    unit = {"scope": {"entity": "E", "book_id": "B1"}, "set_id": 1, "valid_date": on - timedelta(days=1),
+            "row_count": 1}
+    calculated = O.compute_ocp([fact], BOOKS, on, report_rows=[report], report_units=[unit])
+    (line,) = calculated.published
+    assert line["amount"] == 500 and line["parts"]["derivatives"] == 0 and not line["fallback"]
+    assert "expired_future_report_nominal" not in {g["code"] for g in calculated.gaps}
+
+
+def test_carried_mixed_report_does_not_restore_the_expired_legs_of_a_cross(ctx):
+    on = ctx.business_date
+    expired = future(ccy="EUR", x_sec_cur="USD", value_date=on, amount_ccy=-2000)
+    live = future(ccy="EUR", x_sec_cur="USD", amount_ccy=1000)
+    plan = positions.plan(ctx, inputs(ctx, expired, live))
+    facts = [direct_row(ctx, "B1", f"P{i}", plan.direct[f"P{i}"], x, None) for i, x in enumerate((expired, live))]
+    report = [{"entity": "E", "book_id": "B1", "ccy": c, "ocp_ccy": "0", "_set_id": 1,
+               "derivatives_ccy": {"fx_future": n}} for c, n in [("EUR", "-1000"), ("USD", "1200")]]
+    unit = {"scope": {"entity": "E", "book_id": "B1"}, "set_id": 1, "valid_date": on - timedelta(days=1),
+            "row_count": 2}
+    ocp = O.compute_ocp(facts, BOOKS, on, report_rows=report, report_units=[unit])
+    assert {line["ccy"]: line["amount"] for line in ocp.published} == facts[1]["fx_delta"]
+    assert all(not line["fallback"] for line in ocp.published)
+    gap = next(g for g in ocp.gaps if g["code"] == "expired_future_report_nominal")
+    assert gap["items"] == ["книга B1 EUR", "книга B1 USD"]
+
+
+def test_cross_future_keeps_both_nominal_legs(ctx):
+    x = future(ccy="EUR", x_sec_cur="USD")
+    out = positions.plan(ctx, inputs(ctx, x)).direct["P0"]
+    assert not out.valuation.extra.get("core")
+    fact = direct_row(ctx, "B1", "P0", out, x, None)
+    comp, amounts, basis, _ = O.classify(fact, (), BOOKS, ctx.business_date, O.PROVISIONAL_POLICY)
+    assert comp == "futures" and basis == "notional"
+    rate = ctx.market.fx("EUR")["moex_19"] / ctx.market.fx("USD")["moex_19"]
+    assert amounts == pytest.approx({"EUR": 2000.0, "USD": -2000 * rate})
+
+
+def test_variation_margin_uses_previous_signed_nominal_and_core_spot_delta(ctx):
+    prev = replace(ctx, market=priced_market(ctx, "eod_final"))
+    before = inputs(prev, future(amount_ccy=-2000.0, x_quantity=-2))
+    prior = positions.plan(prev, before, second_order=False).direct
+    old = prior["P0"].valuation
+    market = market_with(ctx, lambda data: None)
+    market.business_date = ctx.business_date + timedelta(days=1)
+    spot = replace(ctx.fx.spots["USD"], rub_per_unit=old.extra["fx_rates"]["USD"] + 0.5)
+    cur = replace(ctx, market=market, fx=replace(ctx.fx, spots={**ctx.fx.spots, "USD": spot}))
+    after = inputs(cur, future(amount_ccy=-3000.0, x_quantity=-3))
+    # Reuse core's valuation shape and feed new marks and spot for the PnL-only leg of the test.
+    extra = {**old.extra, "futures": {**old.extra["futures"], "contracts": -3,
+                                       "futures_price_rub_per_unit": 86.75},
+             "ocp_amount": {"USD": -3000.0}, "fx_rates": {"USD": old.extra["fx_rates"]["USD"] + 0.5}}
+    current = {"P0": replace(prior["P0"], valuation=replace(old, extra=extra))}
+    attach(prev, cur, current, after, prior)
+    pnl = current["P0"].pnl
+    assert pnl.method == FX_FUTURE_METHOD and pnl.total == -3000.0
+    assert pnl.fx_gross == pytest.approx(old.fx_delta["USD"] * 0.5)
+    assert pnl.other == pytest.approx(pnl.total - pnl.fx_gross)
+    assert pnl.rates == pnl.carry == pnl.rolldown == 0 and pnl.explained == pytest.approx(pnl.total)
+    assert pnl.as_tdm()["fx_gross"] == pnl.fx_gross and pnl.extra()["total"] == pnl.total
+    fact = direct_row(cur, "B1", "P0", current["P0"], after.extra["P0"], None)
+    assert fact["extra"]["pnl"]["total"] == pnl.total
+    assert fact["extra"]["futures"]["futures_price_rub_per_unit"] == 86.75
+
+    without_price = replace(old, extra={**old.extra, "futures": {"contract_id": "SiZ6"}})
+    current["P0"].pnl = None
+    attach(prev, cur, current, after, {"P0": replace(prior["P0"], valuation=without_price)})
+    assert current["P0"].pnl is None and current["P0"].no_pnl.reason == "no_prev_future_price"
+    attach(prev, cur, current, after, {})
+    assert current["P0"].no_pnl.reason == "no_prev_future_position"
+    unmatched = positions.plan(prev, inputs(prev, future(x_quantity=None))).direct
+    attach(prev, cur, current, after, unmatched)
+    assert current["P0"].no_pnl.reason == "prev_future_not_matched"
+
+
+def test_cross_future_expires_with_its_existing_pnl_by_fx_rate(ctx):
+    market = market_with(ctx, lambda data: None)
+    market.business_date = ctx.business_date - timedelta(days=1)
+    eur = ctx.market.fx("EUR")["moex_19"]
+    market.fx = lambda ccy: {**ctx.market.fx(ccy), "moex_19": eur - 1} if ccy == "EUR" else ctx.market.fx(ccy)
+    prev = replace(ctx, market=market)
+    x = future(ccy="EUR", x_sec_cur="USD", value_date=ctx.business_date)
+    after = inputs(ctx, x)
+    current = positions.plan(ctx, after).direct
+    attach(prev, ctx, current, after, positions.plan(prev, inputs(prev, x)).direct)
+    out = current["P0"]
+    assert out.valuation.pv_rub == 0 and out.no_pnl is None and out.pnl.total == 2000
+
+
+def test_expiry_day_uses_the_final_mark_without_live_risk(ctx):
+    expiry = ctx.fx.spots["USD"].value_date
+    assert expiry == ctx.business_date + timedelta(days=1)
+    before = usd_future(ctx, last_del_date=expiry.isoformat(), settle_rub_per_unit="85.25")
+    prev = replace(ctx, market=market_with(ctx, lambda d: d.update(futures_prices=[before]), "eod_final"))
+    x = future(value_date=expiry)
+    prior = positions.plan(prev, inputs(prev, x), second_order=False).direct
+    assert prior["P0"].core_not_valued[0] == "future_spot_value_date"
+    assert prior["P0"].valuation.extra["futures"]["futures_price_rub_per_unit"] == 85.25
+
+    def mutate(data):
+        data["futures_prices"] = [{**before, "trade_date": expiry.isoformat(), "settle_rub_per_unit": "86.5"}]
+
+    market = market_with(ctx, mutate, "eod_final")
+    market.business_date = expiry
+    cur = replace(ctx, market=market)
+    after = inputs(cur, x)
+    current = positions.plan(cur, after).direct
+    attach(prev, cur, current, after, prior)
+    out = current["P0"]
+    assert out.valuation.pv_rub == 0 and not out.valuation.fx_delta
+    assert out.pnl.total == 2000 * (86.5 - 85.25)
+    assert out.pnl.other == out.pnl.total and "FX-дельты" in out.pnl.other_reason["detail"]
+
+
+def test_ocp_publishes_nominal_as_valued_and_scenario_uses_core_delta(ctx):
+    ctx = replace(ctx, market=priced_market(ctx, "eod_final"))
+    x = future()
+    out = positions.plan(ctx, inputs(ctx, x)).direct["P0"]
+    fact = direct_row(ctx, "B1", "P0", out, x, None)
+    on, policy = ctx.business_date, O.PROVISIONAL_POLICY
+    report = {"entity": "E", "book_id": "B1", "ccy": "USD", "ocp_ccy": "0", "_set_id": 1,
+              "derivatives_ccy": {"fx_future": "2000"}}
+    unit = {"scope": {"entity": "E", "book_id": "B1"}, "set_id": 1, "valid_date": on, "row_count": 1}
+    calculated = O.compute_ocp([fact], BOOKS, on, report_rows=[report], report_units=[unit])
+    (derivative,) = O.derivative_lines([fact], BOOKS, {}, on)
+    assert derivative.basis == "nominal" and derivative.amount == 2000.0 and derivative.valued_by_core
+    for basis in O.AmountBasis:
+        assert O.classify(fact, (), BOOKS, on, replace(policy, amount_basis=basis))[:3] == (
+            "futures", {"USD": 2000.0}, "nominal")
+    (line,) = calculated.published
+    assert line["parts"]["derivatives"] == 2000.0 and line["amount"] == 2000.0
+    assert not line["no_pv"] and not line["fallback"] and not line["partial_pv"]
+    assert line["contributions"]["derivatives"]["items"][0]["basis"] == "nominal"
+    line = ocp_line(line)
+    assert method_note(policy.published.value, [line]) is None
+    (check,) = calculated.derivatives_check
+    assert check["diff"] == 0 and not check["no_pv"] and not check["without_pv"]
+
+    rows = [{"position_id": "P0", "book_id": "B1", "quality": "exact", "secid": None, "pv_rub": 0.0, "fact": fact}]
+    payload = risk_payload({"run_id": 1, "business_date": on}, rows, {})
+    rate = ctx.fx.spots["USD"].rub_per_unit - 0.5  # distinct OCP rate, still use core spot for a percentage shock
+    status = {"basis": policy.published.value, "byCcy": {"USD": {"rate": rate}}, "byBook": [line]}
+    projected = fx_ocp(status, payload, rows, published_lines=calculated.published)
+    scope = projected["by_ccy"]["USD"]
+    assert scope["amount"] == 2000.0
+    shock = run_taylor(payload, {"fx": {"USD": 1}})["positions"][0]["fx"]
+    assert scope["linear"] * rate / 100 == pytest.approx(shock)
+    assert shock == pytest.approx(2000.0 * 85.25 / 100)

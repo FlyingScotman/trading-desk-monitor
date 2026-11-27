@@ -75,6 +75,54 @@ def test_missing_rate_is_named():
     assert fx_ocp(st, build(rows), rows)["missing_rate"] == ["USD"]
 
 
+def test_zero_net_futures_nominal_can_still_have_spot_risk():
+    from datetime import date
+
+    from desk.api.concepts_run import ocp_status
+    from desk.rules import ocp as O
+
+    rows = [row("main", "B1", {"USD": 1030.0}, product="fx_future"),
+            row("mini", "B1", {"USD": -1020.0}, product="fx_future")]
+    for r, nominal in zip(rows, [1000.0, -1000.0]):
+        r["fact"]["extra"].update(futures={"contract_id": r["position_id"]},
+                                  ocp_amount={"USD": nominal}, fx_rates={"USD": 90.0})
+    facts = [{**r["fact"], "position_id": r["position_id"], "book_id": r["book_id"]} for r in rows]
+    result = O.compute_ocp(facts, {"B1": {"entity": "E"}}, date.fromisoformat(DAY["business_date"]))
+    (pub,) = result.published
+    assert pub["amount"] == 0 and pub["fx_future_nominals"] == {"main": 1000.0, "mini": -1000.0}
+    st = ocp_status({"published": {"basis": "report_base_plus_day", "by_book": result.published,
+                                   "by_ccy": {"USD": {"total": 0, "rate": 90}}}})
+    out = fx_ocp(st, build(rows), rows, published_lines=result.published)
+    assert out["by_ccy"]["USD"] == {"amount": 0.0, "nonlinear": 0.0, "linear": 10.0, "rate": 90.0}
+    (line,) = out["by_book"]
+    assert (line["book"], line["amount"], line["linear"]) == ("B1", 0.0, 10.0)
+
+
+def test_opaque_report_and_absent_books_do_not_generate_futures_adjustments():
+    from datetime import date
+
+    from desk.api.concepts_run import ocp_status
+    from desk.rules import ocp as O
+
+    rows = [row("future", "B1", {"USD": 1050.0}, product="fx_future"),
+            row("absent", "B2", {"USD": 1050.0}, product="fx_future"),
+            row("unvalued", "B1", {"USD": 400.0}, group="fx_future")]
+    for r in rows:
+        r["fact"]["extra"].update(futures={"contract_id": r["position_id"]},
+                                  ocp_amount={"USD": 1000.0}, fx_rates={"USD": 90.0})
+    on = date.fromisoformat(DAY["business_date"])
+    facts = [{**r["fact"], "position_id": r["position_id"], "book_id": r["book_id"]} for r in rows if r["book_id"] == "B1"]
+    report = [{"entity": "E", "book_id": "B1", "ccy": "USD", "ocp_ccy": 2400, "_set_id": 1}]
+    units = [{"scope": {"entity": "E", "book_id": "B1"}, "set_id": 1, "valid_date": on, "row_count": 1}]
+    result = O.compute_ocp(facts, {"B1": {"entity": "E"}}, on, report_rows=report, report_units=units)
+    (line,) = result.published
+    assert line["amount"] == 2400 and "fx_future_nominals" not in line
+    st = ocp_status({"published": {"basis": "report_base_plus_day", "by_book": result.published,
+                                   "by_ccy": {"USD": {"total": 2400, "rate": 90}}}})
+    out = fx_ocp(st, build(rows), rows, published_lines=result.published)
+    assert out["by_ccy"]["USD"]["linear"] == 2400 and len(out["by_book"]) == 1
+
+
 def test_from_ocp_block_to_linear_part():
     """The run's stored block -> ``ocp_status`` (what the OCP screen reads) -> ``fx_ocp``: linear part = the screen's
     lines x rate, less the option's FX delta; an option taken at its nominal is marked approximate."""
