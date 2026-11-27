@@ -40,21 +40,22 @@ def test_the_scan_finds_the_codes_of_the_issue():
     for code in ("terms_incomplete", "terms_invalid", "terms_mixed", "no_rub_curve", "no_foreign_curve", "no_fx_spot",
                  "no_fx_calendar", "day_count_unsupported", "swap_frequency_unsupported",
                  "swap_notional_mismatch", "swap_ccy_unsupported", "repo_ccy_unsupported", "ndf_unsupported",
-                 "future_terms_incomplete", "settled", "not_valued", "no_reported_value", "repo_index_unsupported"):
+                 "no_future_quote", "lot_mismatch", "settled", "not_valued", "no_reported_value",
+                 "repo_index_unsupported"):
         assert code in found, code
     assert "core_missing_market_data" in core_codes()
 
 
 @pytest.mark.parametrize("code", sorted(emitted() | core_codes()))
 def test_every_code_has_words_and_a_hint(code):
-    key, why, todo = coverage.cause(code, "IRS", None, None)
+    key, why, todo = coverage.cause(code, "IRS", None)
     assert not why.startswith("не оценено ("), code  # the raw code is what the owner saw (TDM#589)
     assert todo and "options.json" not in why + todo and "desk " not in todo, code  # no files, no commands (TDM#553)
     assert coverage.short(key)
 
 
 def test_a_missing_fixing_in_words():
-    w = coverage.explain("core_missing_market_data: no RUONIA fixing on or before 2026-04-10", "IRS", None, None)
+    w = coverage.explain("core_missing_market_data: no RUONIA fixing on or before 2026-04-10", "IRS", None)
     assert w["key"] == "core_missing_market_data" and "рыночных данных" in w["why"]
     assert w["detail"].startswith("нет фиксинга RUONIA на 10.04.2026 или раньше")
     assert w["fix"] == {"label": "История прогонов", "href": "../settings.html#bf"}
@@ -69,12 +70,12 @@ def test_a_missing_fixing_in_words():
     ("no_reported_value: X: no mv_rub", "OTC", "нет оценки в отчёте", "Оценка и риск из отчёта о позициях"),
 ])
 def test_short_words_and_the_screen_that_fixes_it(reason, kind, short, fix):
-    w = coverage.explain(reason, kind, None, None)
+    w = coverage.explain(reason, kind, None)
     assert w["short"] == short and w["fix"]["label"] == fix and w["fix"]["href"].startswith("../settings.html#")
 
 
 def test_an_unknown_core_code_still_says_it_is_core():
-    key, why, _ = coverage.cause("core_something_new", "IRS", None, None)
+    key, why, _ = coverage.cause("core_something_new", "IRS", None)
     assert key == "core_something_new" and why.startswith("ядро отказало") and "something_new" in why
 
 
@@ -82,7 +83,7 @@ def test_the_unvalued_position_carries_the_words():
     r = {"position_id": "D|S1", "book_id": "D", "secid": None, "quantity": None,
          "reason": "core_missing_market_data: no RUONIA fixing on or before 2026-04-10"}
     x = {"asset_class": "otc", "ccy": "RUB", "x": {"x_product_group": "irs", "x_product": "Swap"}}
-    p = concepts_run._not_valued(r, {}, x, None, False)
+    p = concepts_run._not_valued(r, {}, x, None)
     w = p["extra"]["why"]
     assert p["notValued"] and w["key"] == "core_missing_market_data" and w["detail"].startswith("нет фиксинга RUONIA")
     assert "why" in concepts_run.EXTRA_KEYS_READ
@@ -93,12 +94,12 @@ def test_a_period_over_a_hole_of_the_stored_history_in_words():
     the card says so, with the hole of the run when known, and the fix is «История прогонов»."""
     reason = ("core_calendar_out_of_range: 2025-11-05 is outside calendar RUONIA_PUB(RU_PRODUCTION@ab, year-end from "
               "2026-10-15)+published_from_2025-11-29 (2025-11-29..2079-12-31)")
-    w = coverage.explain(reason, "IRS", None, None, {"from": "2025-11-10", "to": "2025-11-28"})
+    w = coverage.explain(reason, "IRS", None, {"from": "2025-11-10", "to": "2025-11-28"})
     assert w["detail"] == "в хранимой истории RUONIA пропуск с 10.11.2025 по 28.11.2025: период сделки его пересекает"
     assert w["fix"]["label"] == "История прогонов" and w["short"] == "пропуск фиксингов"
     assert "хранимой истории фиксингов" in w["why"] and "календар" not in w["why"] + w["todo"]   # not the hub's
     assert "Настройки → «Диагностика» → карточка «История прогонов» → строка «История фиксингов»" in w["todo"]
-    w = coverage.explain(reason, "IRS", None, None)  # no hole in the run's lineage: up to the day before
+    w = coverage.explain(reason, "IRS", None)  # no hole in the run's lineage: up to the day before
     assert w["detail"] == "в хранимой истории RUONIA пропуск по 28.11.2025: период сделки его пересекает"
     lin = {"rates": {"fixings": {"RUONIA": {"calendar_from_fixings": {"hole": {"from": "2025-11-10",
                                                                              "to": "2025-11-28"}}}}}}

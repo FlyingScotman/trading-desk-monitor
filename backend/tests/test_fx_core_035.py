@@ -264,18 +264,6 @@ def test_plan_links_rows_to_their_trades_and_flags_the_rest(ctx):
     assert f["FX|USD"] == pytest.approx(xr["fx_delta"]["USD"] * rates["USD"][0] / 100)
 
 
-def test_fx_future_by_ticker_behind_its_setting(ctx):
-    extra = {"F1": {"asset_class": "other", "source_instrument_id": "SiZ6"}}
-    inp = PositionInputs([("F1", "FUT", None, 5.0)], [], {"FUT": BD}, datetime.now(UTC), "0" * 64, extra)
-    off = pv1.plan(ctx, inp).direct["F1"]
-    assert off.valuation is None and off.reason == "no_reported_value"  # as before: no mv_rub, not valued
-    on = pv1.plan(replace(ctx, fx_options=fxcurves.FxOptions(futures_by_ticker=True)), inp).direct["F1"].valuation
-    # margined daily: the delta is N x F / S, not discounted
-    assert on.extra["core"]["product"] == "fx_future" and abs(on.pv_rub) < 1e-6  # margined at today's settlement
-    assert 5000 < on.fx_delta["USD"] < 5000 * 85.219 / 83.76 + 1 and on.extra["ocp_amount"] == {"USD": 5000.0}
-    assert set(on.curve_buckets) == {"RUB RUONIA", "USD FX"}
-
-
 def test_publish_fx_book_through_the_store_and_the_api(ctx, store_url):
     from fastapi.testclient import TestClient
 

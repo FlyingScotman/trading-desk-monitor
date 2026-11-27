@@ -86,9 +86,8 @@ def test_an_fx_forward_without_mv_rub_takes_the_value_in_its_currency(ctx):  # n
     assert v.extra["reported_ccy"]["ccy"] == "USD"
 
 
-def test_an_fx_future_keeps_its_pnl_by_the_rate_move():
-    """Review of TDM#591: an FX future's NPV in its currency (the margin, swept daily) is not its value: the row stays
-    at PV 0 on an assumption and its daily PnL the notional x the rate move; an FX swap without terms takes the value."""
+def test_an_unmatched_rouble_fx_future_needs_contract_prices_for_pnl():
+    """An FX future stays at PV 0 and requires FORTS prices for PnL; an FX swap without terms takes the report value."""
     import copy
     import dataclasses
 
@@ -96,7 +95,6 @@ def test_an_fx_future_keeps_its_pnl_by_the_rate_move():
 
     from desk.orchestrator import prepare as prep
     from desk.pnl import direct
-    from desk.pnl.reasons import FX_METHOD
     from desk.valuation.positions import plan
 
     c = prep(R.SnapshotDir(R.FIX), R.DATE)
@@ -108,7 +106,7 @@ def test_an_fx_future_keeps_its_pnl_by_the_rate_move():
                         if ccy == "USD" else {"cbr": None, "cbr_next": None, "moex_tom": None})
     p = dataclasses.replace(p, market=m)
     fut = {"asset_class": "fx", "ccy": "USD", "amount_ccy": -400.0, "value_date": "2027-01-15",
-           "x": {"x_product_group": "fx_future", "x_npv_ccy_value": 12.0, "x_npv_ccy": "USD"}}
+           "x": {"x_product_group": "fx_future", "x_sec_cur": "RUB", "x_npv_ccy_value": 12.0, "x_npv_ccy": "USD"}}
     swp = {**fut, "x": {**fut["x"], "x_product_group": "fx_swap"}}
     rows = [("F1", "TSY", None, None), ("S1", "TSY", None, None)]
     extra = {"F1": fut, "S1": swp}
@@ -117,6 +115,6 @@ def test_an_fx_future_keeps_its_pnl_by_the_rate_move():
     assert bp.direct["F1"].valuation.quality == "assumed" and "reported_ccy" not in bp.direct["F1"].valuation.extra
     assert bp.direct["S1"].valuation.quality == "reported_value"
     direct.attach(p, c, bp.direct, inp, plan(p, prev_inp).direct, prev_inp.valid_dates)
-    mkt = c.market.fx("USD")["moex_19"]
-    f1 = bp.direct["F1"].pnl
-    assert f1.method == FX_METHOD and f1.total == pytest.approx(-400 * (mkt - R.USD_PREV_MKT))
+    assert c.market.fx("USD")["moex_19"] != R.USD_PREV_MKT
+    f1 = bp.direct["F1"]
+    assert f1.pnl is None and f1.no_pnl.reason == "prev_future_not_matched"

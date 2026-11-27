@@ -165,7 +165,7 @@ def test_missing_or_invalid_inputs_never_use_report_mv(ctx, gap, detail):
     bp = positions.plan(ctx, position_inputs(ctx, x, ts), cds_curves={} if gap == "curve" else {KEY: c})
     outcome = bp.direct[PID]
     assert outcome.valuation is None
-    why = coverage.why_of(f"{outcome.reason}: {outcome.detail}", x, None)
+    why = coverage.why_of(f"{outcome.reason}: {outcome.detail}", x)
     assert why["short"] == "нет данных"
     assert why["detail"].startswith("нет данных для оценки CDS: ") and detail in why["detail"]
 
@@ -402,7 +402,7 @@ def test_eod_publishes_and_recalculates_after_c22_revision(tmp_path, store_url):
         api_run = con.execute("SELECT * FROM run WHERE run_id = %s", (rid,)).fetchone()
         shown = concepts_run.assemble(con, api_run)["positions"][0]
         assert shown["notValued"] and shown["mvRub"] is None and shown["extra"]["why"]["short"] == "нет данных"
-        assert coverage.unvalued(con, api_run, False)["groups"][0]["kind"] == "CDS"
+        assert coverage.unvalued(con, api_run)["groups"][0]["kind"] == "CDS"
         con.row_factory = tuple_row
         m.put_curve(con, BD, "Unrelated Synthetic Name", SPREADS, ccy="RUB")
         assert backfill.late_why(con, BD, run) is None

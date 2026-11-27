@@ -125,12 +125,12 @@ def test_a_cross_forward_that_is_no_ndf_group_is_taken_the_same_way(ctx):  # noq
     assert O.classify(row, (), BOOKS, B, POLICY)[0] == "fx_legs"
 
 
-def test_an_fx_future_is_not_touched(ctx):  # noqa: F811
-    # the future has its own rule (DEC18): a future whose currency is the quote stays one amount, as before
+def test_an_fx_future_uses_its_own_dec18_rule(ctx):  # noqa: F811
+    # The row's own currency is already the quote, so this future has no confirmed base amount.
     row = pub(ctx, ndf("USD", 1_000_000.0, "EUR", "USD", group="fx_future"))
-    assert row["fx_delta"] == {"USD": 1_000_000.0} and "ocp_unconfirmed" not in row["extra"]
+    assert row["fx_delta"] == {} and row["extra"]["ocp_unconfirmed"]["reason"] == "no_future_pair"
     row = pub(ctx, ndf("EUR", 1_000_000.0, "EUR", "USD", group="fx_future"))
-    assert any("FX future" in a for a in row["extra"]["assumptions"])
+    assert set(row["fx_delta"]) == {"EUR", "USD"} and any("FX future" in a for a in row["extra"]["assumptions"])
 
 
 # ---- rule 4: the row's currency is not the first of the pair ----------------------------------------------------------

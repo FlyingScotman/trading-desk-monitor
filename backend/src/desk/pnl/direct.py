@@ -30,6 +30,9 @@ positions valued at the report's figure. Each is flagged with its method (``reas
   the legs settled, x the rate move: the cash of a settled leg is taken at the D-1 rate and its later moves are the
   cash row's. A cash-settled NDF's amount is not recorded: ``received_unknown``.
 
+- A matched FX future (``_fx_future``): variation margin on the D-1 signed nominal times the move in FORTS prices
+  per unit of currency. FX is D-1 core delta times the spot move; the rest stays in other as for other FX derivatives.
+
 - A swap or REPO valued by core on both dates, in RUB, whose D-1 row carries core's horizon to D (``extra.horizon``,
   ``valuation.derivatives._rates_horizon``; ``dayrun`` asks for it) is split (``_rates_split``, method
   ``desk-rates-core-v1``, FlyingScotman/trading-desk-monitor#804): ``carry`` and ``rolldown`` are core's carry and rolldown of its
@@ -70,8 +73,9 @@ from ..curves.rates import KEY_RATE_CURVE_ID, KEY_RATE_SWAP_CURVE_ID
 from ..inbox.schema import norm_ccy
 from ..marketdata.adapter import bond_currency
 from ..marketdata.manual_cds import name_key
+from ..rules.ocp import FX_FUTURE_GROUP, product_group
 from ..valuation.bonds import OFZ_CURVE, RUONIA_CURVE
-from ..valuation.derivatives import FLOW_DAYS
+from ..valuation.derivatives import FLOW_DAYS, future_expiry, rouble_future
 from ..valuation.fallback import SimplePnl, fx_rate, fx_rate_cbr
 from ..valuation.fx_cross import UNCONFIRMED, CrossRow, cross_row
 from .flash import PUBLISHED_TO_CORE, FlashCurves, NoPnl, _zero
@@ -79,6 +83,7 @@ from .reasons import (
     CDS_CORE_REST,
     CORE_FX_METHOD,
     FX_CORE_REST,
+    FX_FUTURE_METHOD,
     FX_METHOD,
     NEW_TRADE_METHOD,
     NO_TERMS,
@@ -511,6 +516,59 @@ def _core_fx(prev: EodContext, ctx: EodContext, o: Outcome, p: Outcome | None, p
                      assumption=fx_assumed, note=note)
 
 
+def _fx_future(prev: EodContext, ctx: EodContext, o: Outcome, p: Outcome | None, x: dict[str, Any]) -> DirectPnl:
+    """Variation margin on the previous day's position, with the FX component at core's spot."""
+    v = o.valuation
+    assert v is not None
+    expiry, ccy = future_expiry(x), norm_ccy(x.get("ccy") or "")
+    if expiry is None:
+        raise NoPnl("no_future_expiry", "в отчёте нет даты экспирации валютного фьючерса")
+    if expiry <= prev.business_date:
+        return DirectPnl(FX_FUTURE_METHOD, prev.business_date, ctx.business_date, 0.0,
+                         note=f"фьючерс истёк {expiry:%d.%m.%Y}, за этот день вариационной маржи нет")
+    if p is None:
+        raise NoPnl("no_prev_future_position", f"позиции не было в расчёте за {prev.business_date:%d.%m.%Y}")
+    pv = p.valuation
+    prior = pv.extra.get("futures") if pv is not None else None
+    if not prior:
+        reason = (p.core_not_valued or (p.reason, p.detail))[1]
+        raise NoPnl("prev_future_not_matched", reason or f"контракт не был подобран за {prev.business_date:%d.%m.%Y}")
+    price_before = prior.get("futures_price_rub_per_unit")
+    if price_before is None:
+        raise NoPnl("no_prev_future_price", f"нет цены контракта за {prev.business_date:%d.%m.%Y}")
+    assert pv is not None and prior is not None
+    current = v.extra.get("futures")
+    price = current.get("futures_price_rub_per_unit") if current else None
+    if current and current["contract_id"] != prior["contract_id"]:
+        raise NoPnl("future_contract_changed", f"{prior['contract_id']} → {current['contract_id']}")
+    if price is None and expiry == ctx.business_date and pv.horizon_date == expiry:
+        # The position has expired for risk purposes. Its last mark still pays variation margin.
+        marks = [r["price"] for r in ctx.market.fx_future_quotes(ccy, all_contracts=True).rows
+                 if r["secid"] == prior["contract_id"] and r["last_del_date"] == expiry.isoformat()]
+        if len(marks) == 1:
+            price = marks[0]
+    if price is None:
+        if o.ocp_unconfirmed and o.reason != "no_future_quote":
+            raise NoPnl("future_not_matched", o.detail)
+        raise NoPnl("no_future_price", f"нет сопоставимой цены {prior['contract_id']} за {ctx.business_date:%d.%m.%Y}")
+    total = pv.quantity * (price - price_before)
+    delta = (pv.fx_delta or {}).get(ccy)
+    s0 = (pv.extra.get("fx_rates") or {}).get(ccy)
+    spot = ctx.fx.spots.get(ccy)
+    s1 = spot.rub_per_unit if spot is not None else None
+    c0, c1 = fx_rate_cbr(prev, ccy), fx_rate_cbr(ctx, ccy)
+    fx_cbr = delta * (c1[0] - c0[0]) if delta is not None and c0 and c1 else None
+    note = f"Вариационная маржа {prior['contract_id']} = номинал D-1 × ({price:g} − {price_before:g})"
+    if delta is None or s0 is None or s1 is None:
+        return DirectPnl(FX_FUTURE_METHOD, prev.business_date, ctx.business_date, total, other=total,
+                         fx_gross_cbr=fx_cbr, note=note,
+                         other_reason=other_reason(FX_CORE_REST, "нет спот-курса или FX-дельты для выделения FX-части"))
+    fx = delta * (s1 - s0)
+    return DirectPnl(FX_FUTURE_METHOD, prev.business_date, ctx.business_date, total, fx_gross=fx, other=total - fx,
+                     fx_gross_cbr=fx_cbr, note=f"{note}. FX = дельта D-1 × ({s1:g} − {s0:g})",
+                     other_reason=other_reason(FX_CORE_REST, "изменение цены фьючерса после вычета FX-части"))
+
+
 def _pv_carried(prev: EodContext, ctx: EodContext, code: str, detail: str) -> DirectPnl:
     """A derivative with no PV of D-1 from its terms: the PV of D stands for it, PnL 0 (TDM#576); ``code`` and ``detail``
     are what ``NoPnl`` said before."""
@@ -585,10 +643,17 @@ def attach(prev: EodContext, ctx: EodContext, direct: dict[str, Outcome], inputs
         if v is None:
             continue
         x = inputs.extra.get(pid) or {}
-        kind = (x.get("asset_class") or "bond").lower()
+        future = product_group(x) == FX_FUTURE_GROUP
+        kind = "fx" if future else (x.get("asset_class") or "bond").lower()
         vd = inputs.valid_dates.get(book.get(pid, ""))
         try:
-            if v.extra.get("core"):  # a derivative valued by core from its terms (valuation.derivatives)
+            if future and o.ocp_unconfirmed and not rouble_future(x):
+                raise NoPnl("future_not_matched", o.detail)
+            if ("fx_future" in ((v.extra.get("core") or {}).get("product") or "")
+                    or future and (rouble_future(x) or (v.extra.get("fx_future_state") == "expired"
+                                                      and v.horizon_date <= prev.business_date))):
+                o.pnl = _fx_future(prev, ctx, o, prev_direct.get(pid), x)  # type: ignore[assignment]
+            elif v.extra.get("core"):  # a derivative valued by core from its terms (valuation.derivatives)
                 pp = prev_direct.get(pid)
                 if not _is_core(pp):  # the same trades under another position id on D-1 (off the report <-> in it)
                     k = _trade_key(book.get(pid) or pid.partition("|")[0], o)

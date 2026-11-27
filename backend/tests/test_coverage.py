@@ -59,7 +59,7 @@ def published(ctx, store_url):  # noqa: F811 - the module fixture
 
 def test_unvalued_by_cause_and_kind(published):
     con, r = published
-    u = coverage.unvalued(con, r, futures_by_ticker=False)
+    u = coverage.unvalued(con, r)
     g = {x["key"]: x for x in u["groups"]}
     assert (u["total"], u["open"], u["closed"]) == (7, 6, 1)
     swaps = g["swap_terms|IRS"]
@@ -76,8 +76,8 @@ def test_unvalued_by_cause_and_kind(published):
     rate = next(x["rate"] for x in con.execute("SELECT data FROM run_reference WHERE run_id = %s AND kind = 'fx'",
                                                (r["run_id"],)).fetchone()["data"] if x["ccy"] == "OMR")
     assert omr["notionalRub"] == pytest.approx(1000 * rate) and rate > 100
-    assert coverage.cause("no_reported_value", "FX_FUT", None, False)[1].endswith("(выключена)")
-    assert coverage.cause("core_x", "OFZ_PD", None, None)[0] == "core_x"
+    assert coverage.cause("no_reported_value", "FX_FUT", None)[0] == "future_unmatched"
+    assert coverage.cause("core_x", "OFZ_PD", None)[0] == "core_x"
 
 
 def test_closed_rows():
@@ -102,5 +102,5 @@ def test_missing_rate_of_an_unvalued_row(published):
     con.execute("ALTER TABLE run_reference DISABLE TRIGGER USER")  # a published run's rows are frozen
     con.execute("UPDATE run_reference SET data = (SELECT jsonb_agg(e) FROM jsonb_array_elements(data) e"
                 " WHERE e->>'ccy' <> 'OMR') WHERE run_id = %s AND kind = 'fx'", (r["run_id"],))
-    u = coverage.unvalued(con, r, futures_by_ticker=False)
+    u = coverage.unvalued(con, r)
     assert u["fxMissing"] == ["OMR"] and next(g for g in u["groups"] if "D|OMR" in g["ids"])["noRate"] == ["OMR"]

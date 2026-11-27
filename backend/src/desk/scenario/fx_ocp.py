@@ -5,6 +5,7 @@ matter, the OCP of delta-1 instruments is simply the OCP. So the linear part of 
 OCP by currency (the same ``byBook`` lines the OCP screen reads, ``concepts_run.ocp_status``) x the shock, without the
 rows of non-linear derivatives. Those (an option, or any position with a non-zero second derivative in an FX factor) are
 shown apart by the screen: their PnL is not the OCP x the shock.
+For FX futures, DEC18 makes the OCP use the nominal. The linear shock uses their core sensitivity instead.
 
 ``fx_ocp`` gives, per published line, the amount in the currency, the non-linear derivatives' share of it (their FX
 delta, as the OCP takes an option) and the linear rest, with the currency's rate. A run without a published OCP gives
@@ -43,9 +44,10 @@ def nonlinear_positions(payload: Mapping[str, Any], rows: Sequence[Mapping[str, 
 
 
 def fx_ocp(status: Mapping[str, Any] | None, payload: Mapping[str, Any], rows: Sequence[Mapping[str, Any]],
-           amount_basis: str | None = None) -> dict[str, Any]:
+           amount_basis: str | None = None, *, published_lines: Sequence[Mapping[str, Any]] = ()) -> dict[str, Any]:
     """``status``: ``concepts_run.ocp_status`` of the run (None: no published OCP); ``amount_basis``: the run's OCP
-    policy (``block['policy']['amount_basis']``), None: the provisional default."""
+    policy, None: the provisional default. ``published_lines`` are the stored inputs of ``status['byBook']``;
+    only they know which position nominals were included in each line."""
     nl = nonlinear_positions(payload, rows)
     ids = sorted(nl)
     by_id = {r["position_id"]: r["fact"] for r in rows if r.get("fact")}
@@ -69,19 +71,38 @@ def fx_ocp(status: Mapping[str, Any] | None, payload: Mapping[str, Any], rows: S
     for book, ccys in nl.values():
         for ccy, x in ccys.items():
             by_book_ccy[(book, ccy)] += x
-    lines, tot = [], defaultdict(lambda: [0.0, 0.0])
+    rates = {c: x.get("rate") for c, x in (status.get("byCcy") or {}).items()}
+    # A book can be in the line while its futures are still in the opaque report base. Use only explicit contributions.
+    nominal_by_line = {(x.get("entity"), x.get("book_id"), tuple(x.get("books") or ()), x["ccy"], x.get("source")):
+                       x["fx_future_nominals"] for x in published_lines if x.get("fx_future_nominals")}
+    lines, tot = [], defaultdict(lambda: [0.0, 0.0, 0.0])
     for x in status.get("byBook") or []:
         amount = x.get("amount")
         if amount is None:
             continue
         books = [x["book"]] if x.get("book") else list(x.get("books") or [])
-        non = sum(by_book_ccy.get((b, x["ccy"]), 0.0) for b in books)
-        lines.append({"book": x.get("book"), "books": books, "entity": x.get("entity"), "ccy": x["ccy"],
-                      "amount": amount, "nonlinear": non, "linear": amount - non})
-        tot[x["ccy"]][0] += amount
-        tot[x["ccy"]][1] += non
-    by_ccy = {c: {"amount": a, "nonlinear": n, "linear": a - n, "rate": (status.get("byCcy") or {}).get(c, {}).get("rate")}
-              for c, (a, n) in sorted(tot.items())}
+        ccy = x["ccy"]
+        non = sum(by_book_ccy.get((b, ccy), 0.0) for b in books)
+        key = (x.get("entity"), x.get("book"), tuple(x.get("books") or ()), ccy, x.get("source"))
+        adjustment = 0.0
+        if rate := rates.get(ccy):
+            for pid, nominal in nominal_by_line.get(key, {}).items():
+                f = by_id.get(pid) or {}
+                ex = f.get("extra") or {}
+                if "fx_future" not in str((ex.get("core") or {}).get("product") or ""):
+                    continue
+                delta = (f.get("fx_delta") or {}).get(ccy)
+                spot = (ex.get("fx_rates") or {}).get(ccy)
+                if delta is not None and spot is not None:
+                    adjustment += delta * spot / rate - nominal
+        linear = amount - non + adjustment
+        lines.append({"book": x.get("book"), "books": books, "entity": x.get("entity"), "ccy": ccy,
+                      "amount": amount, "nonlinear": non, "linear": linear})
+        tot[ccy][0] += amount
+        tot[ccy][1] += non
+        tot[ccy][2] += linear
+    by_ccy = {c: {"amount": a, "nonlinear": n, "linear": linear, "rate": rates.get(c)}
+              for c, (a, n, linear) in sorted(tot.items())}
     return {"available": True, "reason": None, "as_of": status.get("asOf"), "basis": status.get("basis"),
             "method_note": status.get("methodNote"), "by_ccy": by_ccy, "by_book": lines, "nonlinear_ids": ids,
             "approx_ids": approx, "missing_rate": sorted(c for c, v in by_ccy.items() if v["rate"] is None and v["amount"])}

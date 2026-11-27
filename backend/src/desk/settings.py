@@ -80,8 +80,7 @@ checkout keeps its old names ``.devdata/inbox`` and ``.devdata/desk_pg``.
                            same kind, currency and date has no terms) is not included, to count nothing twice. It replaces
                            ``DESK_FX_UNLINKED_TERMS`` (kept readable: true gives ``include`` when the new key is absent).
                            ``DESK_NDF_FIXING_SOURCES`` (``CBR=CBR,ЦБ=CBR,ЦБ РФ=CBR``): the report's NDF fixing source ->
-                           the hub's. ``DESK_FUTURES_BY_TICKER`` (off): a non-bond row naming a FORTS FX future by
-                           ticker is valued by core. All provisional (curves.fx.FxOptions; DECISIONS.md open questions)
+                           the hub's. All provisional (curves.fx.FxOptions; DECISIONS.md open questions)
 * ``DESK_INBOX_LOOKBACK_DAYS``  the inbox scan and the autopilot's hub sync take report files (by modification
                            time, then by the report date ``match`` gives) and hub dates at most this many days old
                            (35; 0: no limit); a folder holding years of reports is not read. The backfill
@@ -214,7 +213,6 @@ JSON_KEYS: dict[str, tuple[str, str]] = {
     "off_report_derivatives": ("DESK_OFF_REPORT_DERIVATIVES", "str"),
     "ndf_fixing_sources": ("DESK_NDF_FIXING_SOURCES", "str"),
     "ccy_aliases": ("DESK_CCY_ALIASES", "str"),
-    "futures_by_ticker": ("DESK_FUTURES_BY_TICKER", "bool"),
     "inbox_lookback_days": ("DESK_INBOX_LOOKBACK_DAYS", "int0"),
     "update_dir": ("DESK_UPDATE_DIR", "path"),
     "update_repo": ("DESK_UPDATE_REPO", "str"),
@@ -330,7 +328,6 @@ class Settings:
     off_report_derivatives: str = "exclude"  # TDM#468: exclude | include the trade_terms derivatives no positions row names
     ndf_fixing_sources: str = "CBR=CBR,ЦБ=CBR,ЦБ РФ=CBR"  # the report's NDF fixing source -> the hub's
     ccy_aliases: str = "CNH=CNY"  # TDM#601: codes taken as one currency (inbox.schema.parse_ccy_aliases); «нет»: none
-    futures_by_ticker: bool = False  # a non-bond row naming a FORTS FX future by ticker is valued by core (P3)
     inbox_lookback_days: int = 35  # report dates at most this many days old (R22); 0: no limit
     history_days: int = 260  # hub business dates of market history for the bond charts (~1 year); 0: the cache only
     history_bonds_from: date = date(2024, 1, 3)  # the hub's history API: bonds from (its bond EOD starts here)
@@ -456,7 +453,6 @@ class Settings:
             ("off_report_derivatives", self.off_report_derivatives),
             ("ndf_fixing_sources", self.ndf_fixing_sources),
             ("ccy_aliases", ", ".join(f"{k} as {v}" for k, v in parse_ccy_aliases(self.ccy_aliases).items()) or "none"),
-            ("futures_by_ticker", "on" if self.futures_by_ticker else "off"),
             ("inbox_lookback_days", str(self.inbox_lookback_days) if self.inbox_lookback_days else "0 (no limit)"),
             ("update_dir", str(self.update_dir or "none")),
             ("update_repo", self.update_repo),
@@ -870,7 +866,6 @@ def _build(proc: dict[str, str], doc: dict[str, Any], file_env: dict[str, str], 
         off_report_derivatives=off_report,
         ndf_fixing_sources=(get("DESK_NDF_FIXING_SOURCES") or defaults.ndf_fixing_sources).strip(),
         ccy_aliases=(get("DESK_CCY_ALIASES") or defaults.ccy_aliases).strip(),
-        futures_by_ticker=flag("DESK_FUTURES_BY_TICKER", defaults.futures_by_ticker),
         inbox_lookback_days=count("DESK_INBOX_LOOKBACK_DAYS", defaults.inbox_lookback_days, 0),
         history_days=count("DESK_HISTORY_DAYS", defaults.history_days, 0),
         history_bonds_from=day("DESK_HISTORY_BONDS_FROM", defaults.history_bonds_from),

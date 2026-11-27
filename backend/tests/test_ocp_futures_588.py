@@ -72,10 +72,10 @@ def test_an_fx_future_on_a_cross_has_both_legs(ctx):  # noqa: F811
     assert comp == "futures" and amounts == pytest.approx(row["fx_delta"])
 
 
-def test_an_fx_future_against_the_rouble_has_no_rouble_leg(ctx):  # noqa: F811
+def test_an_fx_future_against_the_rouble_without_quantity_has_no_position_nominal(ctx):  # noqa: F811
     x = fx_future("USD", -250_000.0, "RUB")
     row = tdm_run.direct_row(ctx, "D1", "P1", one(ctx, x), x, None)
-    assert row["fx_delta"] == {"USD": -250_000.0}
+    assert row["fx_delta"] == {} and row["extra"]["ocp_unconfirmed"]["reason"] == "no_quantity"
 
 
 def test_an_option_on_a_currency_future_is_an_fx_option():

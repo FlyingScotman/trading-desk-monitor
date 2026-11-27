@@ -49,7 +49,7 @@ def test_a_ccs_given_as_two_rows_with_one_deal_id_is_valued_in_neither(ctx):
         assert not o.valuation or not o.valuation.fx_delta  # no CNY delta twice
     assert bp.ambiguous_terms == ["C7-CNY: C7", "C7-RUB: C7"]
     assert bp.unlinked_rates == []  # the trade is named, by two rows: not «no row names it»
-    why, todo = coverage.cause("terms_ambiguous", "CCS", None, None)[1:]
+    why, todo = coverage.cause("terms_ambiguous", "CCS", None)[1:]
     assert "нескольк" in why and todo
 
 

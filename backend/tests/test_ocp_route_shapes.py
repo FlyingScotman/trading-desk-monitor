@@ -121,7 +121,7 @@ def test_every_shape_of_the_engine_fits_the_route_model():
 def test_every_gap_code_of_the_engine_is_in_the_model():
     """A code the engine emits and the model does not list failed the whole route (0.2.21)."""
     engine = {"no_report", "stale_report", "outside_without_terms", "outside_double_count", "books_outside_report",
-              "off_report_excluded", *O.DAY_GAP_TEXT}
+              "off_report_excluded", O.UNCONFIRMED_GAP, *O.DAY_GAP_TEXT, *O.FUTURE_GAP_TEXT}
     assert engine <= set(typing.get_args(OcpGap.model_fields["code"].annotation))
 
 

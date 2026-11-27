@@ -66,7 +66,6 @@ from rub_fixed_income import (
 
 from ..curves import fx as fxcurves
 from ..curves import proxy, rates
-from ..inbox.schema import norm_ccy
 from ..marketdata import ratings
 from ..marketdata.adapter import MarketView, bond_currency
 from ..marketdata.bundle import SnapshotError
@@ -76,6 +75,7 @@ from ..pnl.direct import DirectPnl
 from ..pnl.flash import METHOD, STORE_ONLY_KEYS, FlashPnl
 from ..pnl.reasons import (
     CORE_FX_METHOD,
+    FX_FUTURE_METHOD,
     FX_METHOD,
     NO_PNL_TEXT,
     OTHER_REASON_TEXT,
@@ -87,6 +87,7 @@ from ..pnl.reasons import (
     RUN_NO_PREV_MARKET,
     assumption_text,
 )
+from ..rules.ocp import FX_FUTURE_GROUP, product_group
 from ..settings import REPO_ROOT
 from ..store import PositionInputs
 from ..valuation.bonds import (
@@ -102,6 +103,7 @@ from ..valuation.bonds import (
     is_kbd_floater,
     z_spreads,
 )
+from ..valuation.derivatives import future_expiry, future_quote_currency
 from ..valuation.fallback import METHOD as SIMPLE_METHOD
 from ..valuation.fallback import QUALITIES, SimplePnl, fx_rate, market_fx
 from ..valuation.fx_cross import UNCONFIRMED, cross_row, missing_rate, quote_leg
@@ -442,10 +444,9 @@ def fx_future_quote_leg(ctx: EodContext, x: dict[str, Any], base: str, nominal: 
     ``fx_future``; its amount is the nominal in the base currency, the row's ``ccy``) on a cross: (quote currency,
     − nominal x price, the note), the price the cross of the run's market rates (base / quote, RUB per unit each).
     A pair against RUB has no RUB leg: None, as a row that is no FX future. No rate of the quote: (None, 0, note)."""
-    rep = x.get("x") if isinstance(x.get("x"), dict) else {}
-    if str(rep.get("x_product_group") or x.get("x_product_group") or "").lower() != "fx_future":
+    if product_group(x) != FX_FUTURE_GROUP:
         return None
-    quote = norm_ccy(str(rep.get("x_sec_cur") or "")).upper() if rep.get("x_sec_cur") else ""
+    quote = future_quote_currency(x)
     if not quote or quote in ("RUB", base):
         return None
     got = quote_leg(ctx, base, quote, nominal)  # the rule of a forward without terms too (TDM#672)
@@ -471,6 +472,9 @@ def direct_row(ctx: EodContext, book: str, pid: str, o: Outcome, x: dict[str, An
     # a row without asset_class valued by core from its trade's terms is a derivative, not an unmapped bond (TDM#501)
     # or refused by core (``o.core_not_valued``: the plan gave it the OTC rule): an OTC row with the reason, not a bond
     kind = "otc" if cds else (x.get("asset_class") or ("otc" if v.extra.get("core") or o.core_not_valued else "bond")).lower()
+    future = product_group(x) == FX_FUTURE_GROUP
+    if future:
+        kind = "fx"
     fx = kind == "fx"
     itype, aclass, segment = DIRECT_KIND.get(kind, DIRECT_KIND["other"])
     why = list(v.assumptions)
@@ -478,7 +482,7 @@ def direct_row(ctx: EodContext, book: str, pid: str, o: Outcome, x: dict[str, An
     rate = v.face_rub if fx else (r[0] if (r := fx_rate(ctx, ccy)) else None)
     amount = v.quantity if fx else next((x[f] for f in ("face_outstanding_ccy", "face_amount_ccy")
                                          if x.get(f) is not None), None)
-    if rate is None:
+    if rate is None or not math.isfinite(rate):
         why.append(f"no {ccy} rate on {ctx.business_date}: shown in RUB")
         ccy, rate, amount = "RUB", 1.0, None  # the face is in the foreign currency: the notional is the MV
     core = bool(v.extra.get("core"))  # a derivative valued by core from its terms (valuation.derivatives)
@@ -492,15 +496,17 @@ def direct_row(ctx: EodContext, book: str, pid: str, o: Outcome, x: dict[str, An
     if amount is None:
         amount = v.pv_rub / rate
         why.append("notional unknown: the market value is shown")
-    vd = x.get("value_date")
+    vd = future_expiry(x) if future else x.get("value_date")
     if core and v.horizon_kind == "value_date":
         vd = v.horizon_date
-    mat = v.horizon_date if rates_core or cds else x.get("maturity_date") or vd
+    mat = v.horizon_date if rates_core or cds else vd if future else x.get("maturity_date") or vd
     name = x.get("source_instrument_name") or (f"{ccy} {vd or 'spot'}" if fx else x.get("source_instrument_id"))
     if kind == "bond":  # unmapped: the bank's name (D6), else its ISIN
         name = (name or x.get("isin") or pid) + FROM_REPORT
-    unconfirmed = None
-    if core:  # core's spot equivalent per currency, not the notional (the OCP amounts are in extra.ocp_amount)
+    unconfirmed = o.ocp_unconfirmed
+    if unconfirmed or v.extra.get("fx_future_state"):
+        delta = {}
+    elif core:  # core's spot equivalent per currency, not the notional (the OCP amounts are in extra.ocp_amount)
         delta = {c: d for c, d in (v.fx_delta or {}).items() if c != "RUB"}
     elif fx and ccy != "RUB" and (leg := fx_future_quote_leg(ctx, x, ccy, amount)) is not None:
         # DEC18 (TDM#588): an FX future on a cross: its nominal in the base currency and the quote leg
@@ -534,7 +540,7 @@ def direct_row(ctx: EodContext, book: str, pid: str, o: Outcome, x: dict[str, An
         "risk": risk_by_curve(v), "gamma": [[a, b, g] for a, b, g in v.hessian] if core else [],
         "instrument_id": x.get("moex_secid") or x.get("source_instrument_id"),
         "new_today": _made_today(ctx, x),  # TDM#468: a derivative off the report made on the run's date
-        **({"fx_delta": delta} if delta else {}),
+        **({"fx_delta": delta} if delta or o.ocp_unconfirmed else {}),
         **({"pnl": o.pnl.as_tdm()} if o.pnl else {}),
         "extra": {
             "valuation": ("computed" if core else "reported" if v.quality == "reported_value" else "approximated"),
@@ -852,6 +858,7 @@ def run_content(ctx: EodContext, positions: list[tuple[str, str, Outcome]], prev
                                  "риск позиции не в суммах DV01 (сводка прогона, таблица риска)")))
     direct = [o.pnl for _, _, o in positions if isinstance(o.pnl, DirectPnl)]
     for method, flag in ((FX_METHOD, "по курсу"), (REPORTED_METHOD, "по отчёту"), (CORE_FX_METHOD, "ядром"),
+                         (FX_FUTURE_METHOD, "по вариационной марже"),
                          (RATES_CORE_METHOD, "ядром: своп/РЕПО/CDS")):
         if xs := [x for x in direct if x.method == method]:
             log.append(("INFO", f"PnL {flag} ({method}) у {len(xs)} поз.: {sum(x.total for x in xs):,.0f} ₽"))

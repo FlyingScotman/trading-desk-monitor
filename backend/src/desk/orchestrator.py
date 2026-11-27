@@ -119,6 +119,8 @@ class Outcome:
     ocp_amount: dict[str, float] | None = None
     """Of such a CCS row: the foreign legs' notional per currency, to receive (+) or pay (-), for the OCP at the
     nominal basis (``dv.ccs_ocp_amount``)."""
+    ocp_unconfirmed: dict[str, Any] | None = None
+    """Why an FX futures position is excluded from position-based OCP, even when it has no valuation."""
 
 
 @dataclass

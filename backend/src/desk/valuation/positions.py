@@ -13,8 +13,8 @@ core (``direct``). ``merge`` puts the two back in the inputs' order for ``desk_r
   else ``mark_price_pct`` x face (+ ``accrued_ccy``) at the CBR rate; the report's risk (``reported_risk``) when it
   gives one, else none (DV01 and CS01 0). Nothing at all: not valued, reason ``unmapped_instrument``.
 - FX or OTC row with its trade's terms (private/1.2 ``trade_terms``: an FX forward, NDF, FX swap or cross; since 1.4
-  an IRS / OIS on RUONIA or the key rate, a REPO; a CCS RUB against a foreign currency, TDM#555), or a FORTS FX future named by ticker (setting
-  ``futures_by_ticker``): valued by core ``value_portfolio`` v3 (``valuation.derivatives``): PV, rates risk per curve
+  an IRS / OIS on RUONIA or the key rate, a REPO; a CCS RUB against a foreign currency, TDM#555), or a FORTS FX future
+  matched by pair, expiry and lot: valued by core ``value_portfolio`` v3 (``valuation.derivatives``): PV, rates risk per curve
   (``RUB RUONIA``, the foreign curve, ``RUB KEY``), FX delta per currency (core's spot equivalent), basis, fixing
   status. When core cannot (no curve, no spot, a fixing missing, a basis swap), the row keeps the rule below with the reason
   first in its assumptions.
@@ -54,12 +54,13 @@ from ..inbox.schema import load_schema, norm_ccy
 from ..marketdata import manual_cds
 from ..marketdata.adapter import bond_currency, ccy_code
 from ..orchestrator import EodContext, Outcome
-from ..rules.ocp import is_ndf, product_group
+from ..rules.ocp import FUTURE_GAP_TEXT, FX_FUTURE_GROUP, is_ndf, product_group
 from ..store import PositionInputs
 from . import derivatives as dv
 from . import offreport
 from .bonds import BondValuation, ccy_curve, face_on
 from .fallback import BROKEN_SCHEDULE_TEXT, fx_rate, fx_rate_cbr
+from .fx_cross import report_field
 from .offreport import OffReportTrade, off_report_trades
 
 MISMATCH_BONDS = 0.5
@@ -100,6 +101,8 @@ class BookPlan:
     """Trades off the report left out because they matured more than ``FLOW_DAYS`` ago."""
     cds_curve_revs: dict[str, int | None] = field(default_factory=dict)
     """By C22 name key. Also record absent curves so a new entry can make a position priceable."""
+    futures: dict[str, dv.FutureTerms] = field(default_factory=dict)
+    """Matched FORTS contracts. Their marks are usable for PnL even when core cannot calculate risk."""
 
 
 def _index(ctx: EodContext) -> dict[str, dict[str, str | None]]:
@@ -234,10 +237,23 @@ def _reported_row(ctx: EodContext, qty: float | None, x: dict[str, Any], reason:
 def _fx(ctx: EodContext, x: dict[str, Any]) -> Outcome:
     o = Outcome(None, None, None)  # type: ignore[arg-type]
     ccy, amount, vd = (x.get("ccy") or "").upper(), x.get("amount_ccy"), x.get("value_date")
+    group = product_group(x)
+    if group == FX_FUTURE_GROUP:
+        vd = dv.future_expiry(x)
+        if vd is None:
+            return _future_refused(o, x, dv.NotValued("no_future_expiry", "валютный фьючерс без даты экспирации"))
     if not ccy or amount is None:
         o.reason = "fx_row_without_ccy_or_amount"
         return o
-    if (fx := fx_rate(ctx, ccy)) is None:
+    fx = fx_rate(ctx, ccy)
+    if group == FX_FUTURE_GROUP and vd is not None and vd <= ctx.business_date:
+        v = _valuation(ctx, "fx", amount, 0.0, "assumed",
+                       [f"фьючерс истёк {vd:%d.%m.%Y}. Результат в остатках по счетам"],
+                       face=fx[0] if fx else math.nan, horizon=vd)
+        v.extra["fx_future_state"] = "expired"
+        o.valuation = v
+        return o
+    if fx is None:
         o.reason, o.detail = "no_fx_rate", f"{ccy} on {ctx.business_date}"
         return o
     leg = f"{amount:g} {ccy}" + (f" x {fx[1]} {fx[0]:g}" if ccy != "RUB" else "")
@@ -245,10 +261,7 @@ def _fx(ctx: EodContext, x: dict[str, Any]) -> Outcome:
     if vd is not None and vd > ctx.business_date:
         # A forward (NDF, FX future, an unsettled leg): the amount is an exposure, not a value. PV is the report's
         # mv_rub, else 0; the amount goes only into the FX delta (OCP) through ``tdm_run.direct_row``.
-        # TDM#591 for a forward or an FX swap without terms; a future is not (its NPV is the margin swept daily: its PnL
-        # stays the notional x the rate move, ``pnl.direct._fx_row``)
-        group = str((x.get("x") if isinstance(x.get("x"), dict) else {}).get("x_product_group")
-                    or x.get("x_product_group") or "").lower()
+        # TDM#591 converts the report's foreign PV for forwards and swaps. A future is margined daily.
         got = _npv_ccy(ctx, x, f"forward to {vd}") if x.get("mv_rub") is None and "future" not in group else None
         if x.get("mv_rub") is not None:
             pv, quality = x["mv_rub"], "reported_value"
@@ -386,11 +399,10 @@ def is_ndf_row(x: dict[str, Any], terms: list[dict[str, Any]] | None = None) -> 
 
 def _derivatives(ctx: EodContext, inputs: PositionInputs, p: BookPlan, second_order: bool,
                  horizon: date | None, cds_curves: dict[str, manual_cds.Curve]) -> dict[str, BondValuation | dv.NotValued]:
-    """The FX and OTC rows valued by core (``valuation.derivatives``): those with trade_terms, a FORTS FX future by
-    ticker (setting ``futures_by_ticker``), and with ``off_report_derivatives`` = ``include`` the trades no row names (added to the
-    plan as rows of their own, TDM#468). Returns per position ID the valuation or why core did not value it."""
+    """Value FX and OTC rows with trade terms, matching FORTS FX futures, and included off-report trades (TDM#468).
+    Returns per position ID the valuation or why core did not value it."""
     opts = ctx.fx_options
-    rows, classless = [], set()
+    rows = []
     cds_trades = [t for t in inputs.trade_terms if t.get("product_kind") == "cds"]
     cds_keys = {(str(t["book_id"]), str(k)) for t in cds_trades
                 for k in (t.get("position_id"), t.get("trade_id")) if k}
@@ -398,20 +410,18 @@ def _derivatives(ctx: EodContext, inputs: PositionInputs, p: BookPlan, second_or
         x = inputs.extra.get(pid)
         if x is None:
             continue
-        if ((x.get("asset_class") or "bond").lower() != "bond" or product_group(x) == "cds"
+        if ((x.get("asset_class") or "bond").lower() != "bond" or product_group(x) in {"cds", FX_FUTURE_GROUP}
                 or (book, pid) in cds_keys or (book, str(x.get("deal_id"))) in cds_keys):
             rows.append((pid, book, normalised(x)))
         elif not x.get("asset_class") and x.get("deal_id"):
             # TDM#501: a row without asset_class but with a deal: its trade's terms link it, else it is a bond as before
             rows.append((pid, book, normalised(x)))
-            classless.add(pid)
     linked, unlinked, ambiguous = dv.link(rows, inputs.trade_terms)
     p.ambiguous_terms = sorted(f"{pid}: {', '.join(ts)}" for pid, ts in ambiguous.items())
     p.unlinked_terms = sorted({f"{t.get('book_id')}|{t.get('trade_id')}" for t in unlinked})
     p.unlinked_rates = dv.unlinked_rates(rows, inputs.trade_terms, ctx.business_date)
     reqs, out = [], {}
     credit_cache = CdsCurveCache()
-    qty = {pid: q for pid, _, _, q in inputs.rows}
     for pid, book, x in rows:
         terms = linked.get(pid, [])
         cds = [t for t in terms if t.get("product_kind") == "cds"]
@@ -429,6 +439,21 @@ def _derivatives(ctx: EodContext, inputs: PositionInputs, p: BookPlan, second_or
                                                  second_order=second_order, horizon=horizon)
             except dv.NotValued as e:
                 out[pid] = e
+        elif product_group(x) == FX_FUTURE_GROUP:
+            expiry = dv.future_expiry(x)
+            ccy, quote = x.get("ccy"), dv.future_quote_currency(x)
+            base = norm_ccy(str(report_field(x, "x_prim_cur") or "").strip())
+            if expiry is None or expiry <= ctx.business_date:
+                continue
+            if not ccy or not quote or ccy == quote or (base and base != ccy):
+                out[pid] = dv.NotValued("no_future_pair", "в отчёте не подтверждена валютная пара фьючерса")
+            elif dv.rouble_future(x):
+                try:
+                    f = _future_terms(ctx, x, expiry)
+                    p.futures[pid] = f
+                    reqs.append(dv.Request(pid, book, x, future=f))
+                except dv.NotValued as e:
+                    out[pid] = e
         elif pid in ambiguous:
             out[pid] = dv.NotValued("terms_ambiguous", f"trade {', '.join(ambiguous[pid])} is the terms of several "
                                                        "positions rows (one deal_id on several rows)")
@@ -437,12 +462,6 @@ def _derivatives(ctx: EodContext, inputs: PositionInputs, p: BookPlan, second_or
                 reqs.append(dv.request_of(pid, book, x, linked[pid], ctx.business_date))
             except dv.NotValued as e:
                 out[pid] = e
-        elif pid not in classless and opts.futures_by_ticker and (f := _future_row(ctx, x)) is not None:
-            n = qty.get(pid) if qty.get(pid) is not None else x.get("amount_ccy")
-            if n is None:
-                out[pid] = dv.NotValued("no_quantity", f"future {f['secid']}: no number of contracts")
-            else:
-                reqs.append(dv.Request(pid, book, x, future=f, contracts=float(n)))
     # TDM#468: the trades off the positions report; with the switch ``include`` each is a row of its own
     p.off_report, p.off_report_matured = off_report_trades(inputs, ctx.business_date, opts.off_report)
     for t in p.off_report:
@@ -475,17 +494,69 @@ def _derivatives(ctx: EodContext, inputs: PositionInputs, p: BookPlan, second_or
     return got
 
 
-def _future_row(ctx: EodContext, x: dict[str, Any]) -> dict[str, Any] | None:
-    """The FORTS FX future a non-bond row names by ticker (``moex_secid``, else ``source_instrument_id``)."""
-    for k in ("moex_secid", "source_instrument_id"):
-        if x.get(k) and (f := ctx.market.future(str(x[k]))) is not None and f.get("is_fx"):
-            return f
-    return None
+def _future_terms(ctx: EodContext, x: dict[str, Any], expiry: date) -> dv.FutureTerms:
+    ccy = x["ccy"]
+    quantity = report_field(x, "x_quantity")
+    try:
+        contracts = float(quantity) if quantity is not None and not isinstance(quantity, bool) else math.nan
+    except (TypeError, ValueError, OverflowError):
+        contracts = math.nan
+    if not math.isfinite(contracts) or contracts == 0:
+        raise dv.NotValued("no_quantity", "нет ненулевого числа контрактов в отчёте (x_quantity)")
+    amount = x.get("amount_ccy")
+    if amount is None or not math.isfinite(amount):
+        raise dv.NotValued("no_future_notional", "нет номинала валютного фьючерса в отчёте")
+    if (amount > 0 > contracts) or (amount < 0 < contracts):
+        raise dv.NotValued("sign_mismatch", f"разные знаки номинала ({amount:g} {ccy}) и числа контрактов ({contracts:g})")
+    lot = abs(amount / contracts)
+    quotes = ctx.market.fx_future_quotes(ccy, all_contracts=True)
+    day = expiry.isoformat()
+    dated = [r for r in (*quotes.rows, *quotes.unpriced) if r["last_del_date"] == day]
+    pair = f"{ccy}/RUB на {expiry:%d.%m.%Y}"
+    if not dated:
+        raise dv.NotValued("no_future_quote", f"нет котировки FORTS {pair}")
+    lots = []
+    for row in dated:
+        try:
+            lot_volume = float(row.get("lot_volume"))
+        except (TypeError, ValueError, OverflowError):
+            continue
+        if math.isfinite(lot_volume) and lot_volume > 0:
+            lots.append((row, lot_volume))
+    matches = [r for r, v in lots if math.isclose(lot, v, rel_tol=1e-4)]
+    if not matches:
+        listed = ", ".join(f"{v:g}" for v in sorted({v for _, v in lots})) or "нет данных"
+        raise dv.NotValued("lot_mismatch", f"FORTS {pair}: лот в отчёте {lot:g}, лоты FORTS {listed}")
+    if len(matches) != 1:
+        tickers = ", ".join(sorted(r["secid"] for r in matches))
+        raise dv.NotValued("ambiguous_future_quote", f"FORTS {pair}: лоту {lot:g} соответствуют {tickers}")
+    quote = matches[0]
+    if "price" not in quote:
+        raise dv.NotValued("no_future_quote", f"нет котировки FORTS {pair} для {quote['secid']} (лот {lot:g})")
+    return dv.FutureTerms(quote["secid"], ccy, expiry, lot, contracts, quote["price"])
 
 
 def _core_outcome(v: BondValuation, result: Any) -> Outcome:
     o = Outcome(None, None, None, valuation=v)  # type: ignore[arg-type]
     o.core_result = result
+    return o
+
+
+def _future_refused(o: Outcome, x: dict[str, Any], e: dv.NotValued) -> Outcome:
+    o.reason, o.detail = e.reason, e.detail
+    o.core_not_valued = (e.reason, e.detail)
+    if e.reason in FUTURE_GAP_TEXT:
+        ccy, quote = x.get("ccy"), dv.future_quote_currency(x)
+        text = f"{e.detail}: в ОВП не включён"
+        o.ocp_unconfirmed = {"kind": FX_FUTURE_GROUP, "reason": e.reason, "text": text,
+                             "ccy": ccy, "quote_ccy": quote,
+                             **({"pair": f"{ccy}/{quote}"} if ccy and quote else {})}
+    else:
+        text = f"Валютный фьючерс: {e.detail}. Для ОВП используется номинал позиции"
+    if o.valuation is not None:
+        o.valuation = replace(o.valuation, assumptions=(text, *o.valuation.assumptions))
+        if e.ccy and e.missing in MISSING_CODES:
+            o.valuation.extra["risk_missing"] = risk_missing(MISSING_CODES[e.missing], e.ccy)
     return o
 
 
@@ -513,7 +584,7 @@ def _not_by_core(o: Outcome, e: dv.NotValued) -> Outcome:
 def plan(ctx: EodContext, inputs: PositionInputs, *, second_order: bool = True, horizon: date | None = None,
          cds_curves: dict[str, manual_cds.Curve] | None = None) -> BookPlan:
     """Requests for core and the outcomes of the rows valued here, in ``inputs.rows`` order (then the trades added
-    with ``off_report_derivatives``). The FX and OTC rows with trade terms (or an FX future by ticker) are valued by core
+    with ``off_report_derivatives``). The FX and OTC rows with trade terms (or a matching FORTS FX future) are valued by core
     (``valuation.derivatives``); the others, and those core rejects, keep the rule of the module docstring.
     ``horizon``: the plan of D-1 asked for the date the PnL goes to (``dayrun``): its swaps and REPOs carry core's carry
     and rolldown to it (``dv.value``)."""
@@ -546,11 +617,15 @@ def plan(ctx: EodContext, inputs: PositionInputs, *, second_order: bool = True, 
             p.direct[pid] = Outcome("", None, None, reason=core.reason, detail=core.detail,
                                     core_not_valued=(core.reason, core.detail))
             continue
-        if kind == "fx":
+        future = product_group(x) == FX_FUTURE_GROUP
+        if kind == "fx" or future:
             o = _fx(ctx, x)
             if core is not None:
-                o = _not_by_core(o, core)
-            elif x.get("value_date") is not None and x["value_date"] > ctx.business_date and o.valuation is not None:
+                o = _future_refused(o, x, core) if future else _not_by_core(o, core)
+                if o.valuation is not None and (f := p.futures.get(pid)) is not None:
+                    o.valuation.extra["futures"] = f.prices_used()
+            elif (not future and x.get("value_date") is not None and x["value_date"] > ctx.business_date
+                  and o.valuation is not None):
                 o = _not_by_core(o, dv.NotValued(NO_TERMS, "no trade_terms row names this position: FX delta = "
                                                            "the notional, undiscounted"))
                 if o.valuation is not None and is_ndf_row(x):  # TDM#616: no rates risk without the terms, said so

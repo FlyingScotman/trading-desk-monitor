@@ -484,11 +484,11 @@ def test_a_position_takes_only_its_own_legs_of_a_trade(seeded):
     assert [(i["trade_id"], i["leg_id"]) for i in src["trade_terms"]["items"]] == [("T12", "a")]
 
 
-def test_an_fx_future_by_ticker_needs_no_terms(seeded):
+def test_an_fx_future_needs_no_terms(seeded):
     c, rid, _ = seeded
     j, src, mism = _get(c, rid, "FUT1")
     assert j["valued"] and src["trade_terms"]["state"] == "not_needed" and mism == []
-    assert "тикеру" in src["trade_terms"]["text"]
+    assert "биржевые котировки" in src["trade_terms"]["text"]
 
 
 def test_fixings_are_needed_once_a_floating_period_has_started(seeded):

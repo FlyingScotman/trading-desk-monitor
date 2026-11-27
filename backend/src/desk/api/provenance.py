@@ -268,15 +268,15 @@ def terms_gap(con, run: dict[str, Any], pid: str, book: str, x: dict[str, Any], 
 
 
 def _terms_source(kind: str, got: list[dict[str, Any]], sets: dict[int, dict[str, Any]], known: bool,
-                  any_units: bool, by_ticker: bool = False) -> dict[str, Any]:
+                  any_units: bool, future: bool = False) -> dict[str, Any]:
     if got:
         items = [_set_item("trade_terms", sets.get(r["_set_id"], {}), trade_id=r.get("trade_id"),
                            leg_id=r.get("leg_id"), product_kind=r.get("product_kind")) for r in got]
         return _source("trade_terms", "deal", "present", cv.PROVENANCE_TEXT["terms_rows"], items)
     if kind == "bond":
         return _source("trade_terms", "deal", "not_needed", cv.PROVENANCE_TEXT["terms_bond"])
-    if by_ticker:
-        return _source("trade_terms", "deal", "not_needed", cv.PROVENANCE_TEXT["terms_by_ticker"])
+    if future:
+        return _source("trade_terms", "deal", "not_needed", cv.PROVENANCE_TEXT["terms_future"])
     if kind == "other":
         return _source("trade_terms", "deal", "not_needed", cv.PROVENANCE_TEXT["terms_not_needed"])
     if not known:
@@ -800,7 +800,7 @@ def _market(con, run: dict[str, Any], kind: str, fact: dict[str, Any] | None, te
         notes.insert(0, reason.partition(":")[2].strip())
         return {"basis": "needed", "text": cv.PROVENANCE_TEXT["market_needed"], "items": [], "notes": notes}
     if reason:
-        notes.insert(0, "почему не оценена: " + cv.why_of(reason, x, None)["why"])
+        notes.insert(0, "почему не оценена: " + cv.why_of(reason, x)["why"])
     if kind == "derivative" and (terms or x.get("ccy")):
         if not lin.get("rates") and not lin.get("fx"):
             return {"basis": "unknown", "text": cv.PROVENANCE_TEXT["market_unknown"], "items": [], "notes": notes}
@@ -838,7 +838,7 @@ def _kind(x: dict[str, Any], fact: dict[str, Any] | None, bd: date, off: bool) -
 
 def _future(x: dict[str, Any], reason: str | None) -> bool:
     """The report row is an FX future (``concepts.instr_kind``: its product group), or the run's reason names the future
-    it took the row for (``valuation.positions._future_row``: ``future <ticker>: ...``)."""
+    it took the row for in an older run (``future <ticker>: ...``)."""
     rep = x.get("x") if isinstance(x.get("x"), dict) else {}
     kind = concepts.instr_kind({"ccy": x.get("ccy"), "asset_class": x.get("asset_class"), "extra": {"reported": rep}})
     detail = str(reason or "").partition(":")[2].strip()
@@ -897,9 +897,8 @@ def provenance(con, run: dict[str, Any], pid: str, feeds: list[dict[str, Any]] |
     reason = p.get("reason") or (None if by_core else ex.get("not_exact_reason"))
     pos = lin.get("positions") or {}
     any_units = any(str((u.get("scope") or {}).get("book_id")) == book for u in pos.get("trade_terms") or ())
-    # an FX future valued by its exchange ticker (setting ``futures_by_ticker``): no terms to have
-    by_ticker = "fx_future" in str((ex.get("core") or {}).get("product") or "") or (not got and _future(x, reason))
-    terms_src = _terms_source(kind, got, sets, known, any_units or bool(got), by_ticker)
+    future = "fx_future" in str((ex.get("core") or {}).get("product") or "") or (not got and _future(x, reason))
+    terms_src = _terms_source(kind, got, sets, known, any_units or bool(got), future)
     ids = {str(v) for v in (x.get("deal_id"), off_trade) if v} | {str(r.get("trade_id")) for r in got if r.get("trade_id")}
     for col in ("pnl", "no_pnl"):   # the trades the run put in this position (``pnl.new_trades``)
         block = p.get(col) or {}
@@ -911,7 +910,7 @@ def provenance(con, run: dict[str, Any], pid: str, feeds: list[dict[str, Any]] |
                                *(_ccy(k) for k in ((fact or {}).get("fx_delta") or {})),
                                *(_ccy(t.get(k)) for t in got for k in ("base_ccy", "quote_ccy", "ccy"))) if c})
     mism, detail = [], {}
-    if row is not None and kind == "derivative" and not got and known and not by_ticker:
+    if row is not None and kind == "derivative" and not got and known and not future:
         mism.append("report_no_terms")
         detail["report_no_terms"] = terms_gap(con, run, pid, book, x, fact, off_trade, reason, read)
     if row is None and n_trades and not got:

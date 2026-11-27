@@ -15,7 +15,6 @@ numbers (an FX forward without trade terms: the notional as FX delta)."""
 from __future__ import annotations
 
 import math
-import os
 import re
 from datetime import date, timedelta
 from decimal import Decimal
@@ -143,6 +142,16 @@ CAUSES: dict[str, tuple[str, str]] = {
                                 "ставка); MV в отчёте нет"), "до оценки ядром — " + REPORT_MV),
     "ndf_unsupported": ("NDF с расчётом в валюте не из пары сделки: ядро такие не оценивает; MV в отчёте нет",
                         "до оценки ядром — " + REPORT_MV),
+    "no_future_quote": ("нет котировки FORTS на дату экспирации", "проверьте срез рынка за дату прогона"),
+    "lot_mismatch": ("лот валютного фьючерса не совпал с биржевым", "проверьте номинал и число контрактов в отчёте"),
+    "sign_mismatch": ("знаки номинала и числа контрактов фьючерса расходятся", "проверьте знаки в отчёте позиций"),
+    "no_future_expiry": ("валютный фьючерс без даты экспирации: в ОВП не включён", "проверьте дату экспирации в отчёте"),
+    "no_future_pair": ("валютная пара фьючерса не подтверждена", "проверьте валюты пары в отчёте позиций"),
+    "ambiguous_future_quote": ("лот и дата подходят нескольким контрактам FORTS", "проверьте биржевые данные"),
+    "future_quote_conflict": ("в срезе разные цены одного контракта FORTS", "проверьте биржевые данные"),
+    "future_spot_value_date": ("для расчёта риска ядру нужна экспирация позже даты расчёта спота",
+                               "вариационная маржа считается по доступным ценам контракта"),
+    "no_future_notional": ("в отчёте нет номинала валютного фьючерса", "проверьте номинал в отчёте"),
     "future_terms_incomplete": (("валютный фьючерс: у контракта в срезе хаба нет базовой валюты, расчётной цены, лота "
                                  "или даты исполнения; MV в отчёте нет"),
                                 "данные фьючерсов приходят со срезом хаба: обновите данные за дату — или " + REPORT_MV),
@@ -206,7 +215,7 @@ CORE_CAUSES: dict[str, tuple[str, str]] = {
 SHORT = {"report_no_value": "нет стоимости в отчёте", "report_value_no_rate": "нет курса",
          "report_value_off": "нет стоимости в книге", "run_before_report_value": "старый прогон",
          "swap_terms": "ждёт условий", "repo": "ждёт условий", "no_trade_terms": "ждёт условий",
-         "future_ticker": "ждёт настройки", "index_unmapped": "индекс не сопоставлен",
+         "no_future_quote": "нет котировки", "lot_mismatch": "лот не совпал", "index_unmapped": "индекс не сопоставлен",
          "terms_incomplete": "условия неполные", "terms_invalid": "условия с ошибкой", "terms_mixed": "условия смешаны",
          "terms_ambiguous": "условия на нескольких строках", "settled": "исполнена", "closed": "закрыта",
          "unmapped_instrument": "бумага не найдена", "not_in_static_snapshot": "бумага не найдена",
@@ -222,7 +231,7 @@ CAUSE_FIX = {"report_value_off": "report_risk", "report_value_no_rate": "hub", "
              "swap_terms": "terms", "repo": "terms", "no_trade_terms": "terms", "terms_incomplete": "terms",
              "terms_invalid": "terms", "terms_mixed": "terms", "terms_ambiguous": "terms", "repo_open": "terms",
              "core_invalid_terms": "terms", "index_unmapped": "indexes", "swap_index_unsupported": "indexes",
-             "no_report_mv": "report_risk", "bond_derivative": "report_risk", "future_ticker": "report_risk",
+             "no_report_mv": "report_risk", "bond_derivative": "report_risk", "future_unmatched": "hub", "no_future_quote": "hub",
              "core_missing_market_data": "history", "core_undeclared_fixing_gap": "history", "no_fixings": "hub",
              "no_fx_rate": "hub", "no_fx_spot": "hub", "no_rub_curve": "hub", "no_key_rate_curve": "hub",
              "no_foreign_curve": "hub", "no_foreign_projection_curve": "hub", "future_terms_incomplete": "hub",
@@ -245,7 +254,7 @@ def closed(quantity: Any, row: dict[str, Any]) -> bool:
     return bool(known) and all(abs(v) < 1e-9 for v in known)
 
 
-def cause(code: str, kind: str, product: str | None, futures_by_ticker: bool | None, *,
+def cause(code: str, kind: str, product: str | None, *,
           report_value: bool = False, report_value_on: bool | None = None) -> tuple[str, str, str]:
     """(group key, why, what to do) of an unvalued row: the reason code (before ``:``) read with its kind.
     ``report_value``: the row has the report's value in its currency (``x_npv_ccy_value``); ``report_value_on``: some
@@ -253,6 +262,8 @@ def cause(code: str, kind: str, product: str | None, futures_by_ticker: bool | N
     value looks off; None: unknown)."""
     if kind in SWAPS and kind not in TERMS_SWAPS and code in ("no_reported_value", "no_fx_rate"):
         return (key := no_terms_cause(code, report_value, report_value_on), *NO_TERMS_CAUSES[key])
+    if kind == "FX_FUT" and code == "no_quantity":
+        return (code, "в отчёте нет ненулевого числа контрактов", "проверьте количество контрактов")
     if code in CAUSES:
         return (code, *CAUSES[code])
     if code == "no_reported_value":
@@ -260,9 +271,8 @@ def cause(code: str, kind: str, product: str | None, futures_by_ticker: bool | N
             return ("swap_terms", "своп ждёт условий сделки (trade_terms): ядро оценит его по ним; MV в отчёте нет",
                     "до условий сделки — " + REPORT_MV)
         if kind == "FX_FUT":
-            on = {True: "включена", False: "выключена", None: "не прочитана"}[futures_by_ticker]
-            return ("future_ticker", f"валютный фьючерс: оценка ядром по тикеру FORTS — настройка futures_by_ticker ({on})",
-                    "включите futures_by_ticker (Настройки) — или " + REPORT_MV)
+            return ("future_unmatched", "валютный фьючерс без оценки",
+                    "проверьте дату экспирации, номинал, число контрактов и биржевые котировки за дату")
         if kind in ("BOND_FUT", "BOND_FWD"):
             return ("bond_derivative", "фьючерс / форвард на облигации: ядро их пока не оценивает, MV в отчёте нет",
                     REPORT_MV)
@@ -370,14 +380,14 @@ def short(key: str) -> str:
     return "не оценено"
 
 
-def explain(reason: str | None, kind: str, product: str | None, futures_by_ticker: bool | None,
+def explain(reason: str | None, kind: str, product: str | None,
             hole: dict[str, str] | None = None, *, report_value: bool = False,
             report_value_on: bool | None = None) -> dict[str, Any]:
     """The words of an unvalued row's reason (``run_position.reason``: ``code: detail``) for the position card and the
     blotter (TDM#589): ``key``, ``why``, ``todo``, ``short``, ``detail`` (a known detail in words, else the raw one),
     ``fix`` ({label, href}: the settings screen that fixes it, or None)."""
     code, _, detail = (reason or "").partition(":")
-    key, why, todo = cause(code.strip(), kind, product, futures_by_ticker, report_value=report_value,
+    key, why, todo = cause(code.strip(), kind, product, report_value=report_value,
                            report_value_on=report_value_on)
     detail = detail.strip()
     if is_history_hole(detail):  # not the hub's calendar: a hole of the monitor's stored fixings (TDM#590)
@@ -400,22 +410,12 @@ def _rates(con, run_id: int) -> dict[str, float]:
     return out
 
 
-def _futures_by_ticker() -> bool | None:
-    from ..settings import SettingsError, load
-
-    try:
-        return bool(load(dict(os.environ)).futures_by_ticker)  # a copy: no proxy keys exported
-    except (SettingsError, OSError):  # no settings (a read-only copy): unknown
-        return None
-
-
-def unvalued(con, run: dict[str, Any], futures_by_ticker: bool | None = None) -> dict[str, Any]:
-    """The module doc's breakdown of the run's unvalued positions. ``futures_by_ticker``: the setting (None: read)."""
+def unvalued(con, run: dict[str, Any]) -> dict[str, Any]:
+    """The module doc's breakdown of the run's unvalued positions."""
     rows = con.execute("SELECT position_id, book_id, quantity, reason FROM run_position WHERE run_id = %s"
                        " AND fact IS NULL ORDER BY ord", (run["run_id"],)).fetchall()
     if not rows:
         return {"total": 0, "open": 0, "closed": 0, "groups": [], "fxMissing": []}
-    fbt = _futures_by_ticker() if futures_by_ticker is None else futures_by_ticker
     inputs = {i["position_id"]: i for i in con.execute(
         "SELECT position_id, asset_class, ccy, amount_ccy, face_amount_ccy, face_outstanding_ccy, mv_rub, x"
         " FROM position_input WHERE set_id = ANY(%s) AND position_id = ANY(%s)",
@@ -441,7 +441,7 @@ def unvalued(con, run: dict[str, Any], futures_by_ticker: bool | None = None) ->
             key, why, todo = "closed", "закрытая сделка или нулевой объём в отчёте", "не пропуск: в счёт не входит"
             n_closed += 1
         else:
-            key, why, todo = cause(code, kind, product, fbt, report_value=has_report_value(x),
+            key, why, todo = cause(code, kind, product, report_value=has_report_value(x),
                                    report_value_on=on.get(str(r["book_id"])))
         gk = f"{key}|{kind}"
         g = groups.setdefault(gk, {"key": gk, "cause": key, "kind": kind, "kindLabel": concepts.KIND_LABEL.get(kind, kind),
@@ -501,7 +501,7 @@ PROVENANCE_TEXT = {
     "terms_book_none": "условия сделок этой книги в прогон не загружались",
     "terms_bond": "облигация: условия выпуска — из статики хаба, условия сделки не нужны",
     "terms_not_needed": "для этой строки условия сделки не используются",
-    "terms_by_ticker": "валютный фьючерс: оценивается по тикеру биржи, условия сделки не нужны",
+    "terms_future": "валютный фьючерс: для расчёта используются данные позиции и биржевые котировки",
     "trades_rows": "сделки дня из списка сделок",
     "trades_none": "в списке сделок дня этой позиции нет",
     "trade_earlier": "сделка за {day}: в позиции начала дня",
@@ -569,7 +569,7 @@ def off_report(con, run: dict[str, Any]) -> dict[str, Any] | None:
     return None
 
 
-def why_of(reason: str | None, x: dict[str, Any] | None, futures_by_ticker: bool | None,
+def why_of(reason: str | None, x: dict[str, Any] | None,
            hole: dict[str, str] | None = None, report_value_on: bool | None = None) -> dict[str, Any]:
     """``explain`` of an unvalued position from its report row ``x`` (``position_input``: ``ccy``, ``asset_class``,
     its ``x_*`` under ``x``): the ``extra.why`` of the concept pages' and compat's not-valued position (TDM#589)."""
@@ -577,5 +577,5 @@ def why_of(reason: str | None, x: dict[str, Any] | None, futures_by_ticker: bool
     rep = x.get("x") if isinstance(x.get("x"), dict) else {}
     kind = concepts.instr_kind({"ccy": x.get("ccy"), "asset_class": x.get("asset_class"), "extra": {"reported": rep}})
     product = rep.get("x_product") if isinstance(rep.get("x_product"), str) else None
-    return explain(reason, kind, product, futures_by_ticker, hole, report_value=has_report_value(rep),
+    return explain(reason, kind, product, hole, report_value=has_report_value(rep),
                    report_value_on=report_value_on)

@@ -144,8 +144,9 @@ test('C16 on a run: a position says what its sum stands on; a nominal comes with
   const item = (id, basis, pv) => ({ kind: 'position', key: 'FXB|' + id, position_id: 'FXB|' + id, book_id: 'FXB', component: 'fx_legs', basis, amount: 1e6, pv, note: '', name: id, set: SET });
   const items = [item('NOM', 'nominal', 9.5e5), item('NOPV', 'nominal', null), item('PV', 'spot_equivalent', null), item('NTL', 'notional', null),
     item('AMT', 'amount', null), item('MV', 'mv', null), item('MVN', 'mv_net', null), item('ODD', 'something_new', null),
+    { ...item('FUT', 'nominal', 1.05e6), component: 'futures' },
     { kind: 'liability', key: 'FUND|FXB|USD|B1', position_id: 'FXB|B1', book_id: 'FXB', component: 'funding', basis: 'liability', amount: -1e6, pv: null, note: '', name: 'Bond' }];
-  const { pg, browser, errors } = await openDrawer({ origins: [ORG({ items, sum: 7e6, amount: 7e6, matches: true })], fx: FX });
+  const { pg, browser, errors } = await openDrawer({ origins: [ORG({ items, sum: 8e6, amount: 8e6, matches: true })], fx: FX });
   try {
     const dr = pg.locator('.k-drawer');
     const by = async id => dr.locator('[data-c16-origin]', { hasText: 'FXB|' + id }).first();
@@ -158,6 +159,7 @@ test('C16 on a run: a position says what its sum stands on; a nominal comes with
     assert.equal((await basis('MV'))[0], 'по грязной MV');
     assert.equal((await basis('MVN'))[0], 'по грязной MV за вычетом пассива');
     assert.equal((await basis('ODD'))[0], 'основание: something_new');
+    assert.equal((await basis('FUT'))[0], 'по номиналу');
     // the liability has no basis of a position: it is named by its kind
     assert.equal((await basis('B1')).length, 0);
     assert.ok(!BAD.test(await dr.innerText()));

@@ -108,5 +108,5 @@ def test_an_irs_leg_ending_before_it_starts_is_invalid():
 def test_an_old_runs_leg_dates_reason_still_reads(ctx):
     # runs before 0.2.21 stored swap_dates_mismatch; its explanation stays readable
     detail = "сделка S1: фиксированная нога 06.10.2026–06.10.2028, плавающая 07.10.2026–09.10.2028"
-    why = coverage.explain(f"swap_dates_mismatch: {detail}", "IRS", None, None)
+    why = coverage.explain(f"swap_dates_mismatch: {detail}", "IRS", None)
     assert "IRS" in why["why"] and why["detail"] == detail
