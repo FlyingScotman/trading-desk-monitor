@@ -68,12 +68,12 @@ def shifted_curve(c: DiscountCurve, prev_date: date, shift_bp: float) -> Discoun
         for n, df in c.nodes))
 
 
-def shifted_prev(ctx: EodContext, prev_date: date, shift_bp: float = SHIFT_BP, *, kbd_only: bool = False
-                 ) -> EodContext:
+def shifted_prev(ctx: EodContext, prev_date: date, shift_bp: float = SHIFT_BP, *, kbd_only: bool = False,
+                 key_rate_effective_date: date | None = None) -> EodContext:
     """The fixture's market on ``prev_date``: the KBD's level ``shift_bp`` lower (B1), the RUONIA OIS quotes
     ``shift_bp`` lower and the curve rebootstrapped (its risk is in those quotes: ``EodContext.quote_curves``), the
-    key-rate projection ``shift_bp`` lower in parallel, the fixings known before ``prev_date``. ``kbd_only``: a market
-    without the rates curves (the KBD fallback)."""
+    KRS quotes ``shift_bp`` lower, and the fixings known before ``prev_date``. For a different policy period, pass
+    the next effective date explicitly. ``kbd_only`` builds a market without the rates curves (the KBD fallback)."""
     params = dataclasses.replace(ctx.kbd, trade_date=prev_date, b1=ctx.kbd.b1 - shift_bp)
     curves = [CurveEntry(KBD_CURVE_ID, KBD_SPEC, params)]
     quoted = {e.curve_id: e for e in ctx.quote_curves}
@@ -99,6 +99,8 @@ def shifted_prev(ctx: EodContext, prev_date: date, shift_bp: float = SHIFT_BP, *
             tom = key.build.calendar.add_business_days(prev_date, 1)
             move = shift_bp * 1e-4
             build = dataclasses.replace(key.build, trade_date=prev_date, discount_curve=forward_curve(ruonia, tom),
+                                        next_policy_effective_date=(
+                                            key_rate_effective_date or key.build.next_policy_effective_date),
                                         quotes=tuple(dataclasses.replace(q, bid=q.bid - move, mid=q.mid - move,
                                                                          ask=q.ask - move) for q in key.build.quotes))
             entry = quoted[rates.KEY_RATE_CURVE_ID]

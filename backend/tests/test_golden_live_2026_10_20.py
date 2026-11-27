@@ -54,12 +54,12 @@ def run():
 
 def test_accrued_is_moex_s_to_the_kopeck(run):
     ctx, outs = run
+    market = ctx.risk_market
     for s, o in outs.items():
         if s in FX:
             continue
         r = bonds.bond_request("G", o.terms, o.quote, o.quote.trade_date, 1.0)
-        assert bonds._prepare(r, ctx.core_market).accrued == pytest.approx(float(o.quote.accrued_per_bond),
-                                                                           abs=0.005), s
+        assert bonds._prepare(r, market).accrued == pytest.approx(float(o.quote.accrued_per_bond), abs=0.005), s
 
 
 def test_yield_and_duration_at_moex_convention(run):
@@ -104,8 +104,12 @@ def test_g_spread_dm_and_spread_buckets(run):
     for s in KEY:
         v = outs[s].valuation
         assert v.discount_margin_bp < v.z_spread_bp - 2.0, s  # KEY projected above RUONIA: DM under Z
-    assert outs["RU000A10AAU6"].valuation.discount_margin_bp == pytest.approx(21.25, abs=0.01)
-    assert outs["RU000A10AAU6"].valuation.z_spread_bp == pytest.approx(24.25, abs=0.01)
+    v = outs["RU000A10AAU6"].valuation
+    # Core 0.47 builds the projection DFs on the leg's business-day grid. The previous calendar-day grid gave
+    # DM 21.2501 and Z 24.2548 bp with the same calibrated policy path and RUONIA discount curve.
+    assert v.floater.instrument.coupon_leg.rule.observation_days == "business"
+    assert v.discount_margin_bp == pytest.approx(21.2764, abs=0.01)
+    assert v.z_spread_bp == pytest.approx(24.0170, abs=0.01)
 
 
 def test_fx_bonds_pnl_at_the_19_00_rate(run):

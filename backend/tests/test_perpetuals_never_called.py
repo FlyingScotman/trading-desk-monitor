@@ -14,6 +14,7 @@ from pathlib import Path
 
 import pytest
 from test_slice_s2 import prev_outcome, shifted_prev
+from test_swap_pnl_split_804 import move_key_quotes
 
 from desk.marketdata.bundle import SnapshotDir
 from desk.orchestrator import Outcome, attach_pnl, prepare
@@ -137,8 +138,33 @@ def test_flash_pnl_reprices_the_tail(ctx, secid, make):
     assert f is not None, o.no_pnl
     assert f.total == pytest.approx(f.carry + f.rolldown + f.rates + f.spread + f.other)
     assert abs(f.other) < 1e-6 * o.valuation.pv_rub and f.carry > 0
-    if make is not reset_perpetual:  # the KBD's par move is not one number on RUONIA + basis: no linear check there
+    if make is key_rate_perpetual:
+        assert f.rates_linear_curves is not None
+        legs = f.rates_linear_curves
+        krs, ois = sum(legs["RUB KEY"].values()), sum(legs["RUB RUONIA"].values())
+        assert ois < 0 < krs
+        # The two legs nearly cancel. Measure the approximation error against their gross PnL.
+        assert abs(f.rates - f.rates_linear) < 0.01 * (abs(krs) + abs(ois))
+    elif make is not reset_perpetual:  # the KBD's par move is not one number on RUONIA + basis: no linear check there
         assert f.rates == pytest.approx(f.rates_linear, rel=0.05)
+
+
+def test_flash_pnl_of_key_rate_perpetual_matches_a_krs_quote_move(ctx):
+    terms = key_rate_perpetual(ctx.static.bonds[KEY])
+    prev = shifted_prev(ctx, ctx.business_date - timedelta(days=1), shift_bp=0.0)
+    base = value_terms(ctx, terms)
+    prior = prev_outcome(prev, base)
+    shocked_ctx = move_key_quotes(ctx, 2.0)
+    shocked = value_terms(shocked_ctx, terms)
+    attach_pnl(prev, [prior], ctx, [base])
+    attach_pnl(prev, [prior], shocked_ctx, [shocked])
+    assert base.pnl is not None and shocked.pnl is not None
+
+    # The difference holds the dates and RUONIA fixed and isolates the KRS quote shock.
+    exact = shocked.pnl.rates - base.pnl.rates
+    linear = shocked.pnl.rates_linear - base.pnl.rates_linear
+    assert exact > 0.1
+    assert linear == pytest.approx(exact, rel=0.002)
 
 
 def test_key_rate_perpetual_projects_on_the_key_rate(ctx):

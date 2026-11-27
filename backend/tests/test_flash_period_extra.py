@@ -47,10 +47,8 @@ def bonds(ctx) -> dict[str, Outcome]:
             if o.valuation is not None}
 
 
-def flash(ctx, o: Outcome, d0: date, shift_bp: float = 10.0) -> tuple[FlashPnl, Outcome]:
-    """``o`` explained from ``d0`` (the fixture's market moved back to it, ``shift_bp`` lower); the quote's face
-    dropped so that a bond amortized since ``d0`` is valued on its face then."""
-    prev = shifted_prev(ctx, d0, shift_bp)
+def flash(prev, ctx, o: Outcome) -> tuple[FlashPnl, Outcome]:
+    """Explain ``o`` from the previous market, using the face from the schedule on that date."""
     p = prev_outcome(prev, dataclasses.replace(o, quote=dataclasses.replace(o.quote, face_value=None)),
                      price_move_pct=0.05)
     return explain(p.valuation, o.valuation, flash_curves(prev, ctx)), p
@@ -100,10 +98,10 @@ def day_coupon(v, q: float, days: int) -> float:
                                           ("RU000A109XR1", {"RUB RUONIA", "RUB KEY"})])
 def test_fixed_bond_and_floaters_over_a_day(ctx, bonds, secid, curves):
     o = bonds[secid]
-    d0 = ctx.business_date - timedelta(days=1)
-    f, p = flash(ctx, o, d0)
+    prev = shifted_prev(ctx, ctx.business_date - timedelta(days=1))
+    f, p = flash(prev, ctx, o)
     ex = check(f, p)
-    unchanged(f, p, o, flash_curves(shifted_prev(ctx, d0), ctx))
+    unchanged(f, p, o, flash_curves(prev, ctx))
     assert set(ex["rates_linear_curves"]) == curves and set(ex["curve_moves_bp"]) == curves
     assert ex["received_coupon_rub"] == ex["received_principal_rub"] == 0.0
     assert all(abs(m - 10.0) < 1.0 for c in curves for m in ex["curve_moves_bp"][c].values())  # 10 bp up
@@ -117,10 +115,10 @@ def test_fixed_bond_and_floaters_over_a_day(ctx, bonds, secid, curves):
 def test_ofz_in_ruonia_plus_basis(ctx, bonds):
     o = bonds["SU26238RMFS4"]
     assert o.valuation.ofz_ruonia
-    d0 = ctx.business_date - timedelta(days=1)
-    f, p = flash(ctx, o, d0)
+    prev = shifted_prev(ctx, ctx.business_date - timedelta(days=1))
+    f, p = flash(prev, ctx, o)
     ex = check(f, p)
-    unchanged(f, p, o, flash_curves(shifted_prev(ctx, d0), ctx))
+    unchanged(f, p, o, flash_curves(prev, ctx))
     # only the KBD's published curve (its basis risk x the KBD's par move); the factor split sums to the same total
     assert set(ex["rates_linear_curves"]) == {"RUB OFZ"} and set(ex["curve_moves_bp"]) == {"RUB OFZ", "RUB RUONIA"}
     assert ex["rates_linear_ruonia"] + ex["rates_linear_basis"] == pytest.approx(f.rates_linear, abs=1e-9)
@@ -136,9 +134,10 @@ def test_a_coupon_paid_inside_the_interval(ctx, bonds, secid, d0):
     o = bonds[secid]
     paid = [c for c in o.terms.coupons if d0 < c.pay_date <= ctx.business_date]
     assert paid
-    f, p = flash(ctx, o, d0, shift_bp=5.0)
+    prev = shifted_prev(ctx, d0, shift_bp=5.0)
+    f, p = flash(prev, ctx, o)
     ex = check(f, p)
-    unchanged(f, p, o, flash_curves(shifted_prev(ctx, d0, 5.0), ctx))
+    unchanged(f, p, o, flash_curves(prev, ctx))
     assert ex["received_coupon_rub"] == pytest.approx(QTY * sum(float(c.amount_per_bond) for c in paid))
     assert ex["received_principal_rub"] == pytest.approx(0.0, abs=1e-6)
     # the coupon paid is income only for the days held: the accrued bought on d0 comes off it
@@ -152,9 +151,11 @@ def test_an_amortization_paid_inside_the_interval(ctx, bonds):
     d0 = date(2026, 7, 20)
     red = [r for r in o.terms.redemptions if d0 < r.date <= ctx.business_date]
     assert red
-    f, p = flash(ctx, o, d0, shift_bp=5.0)
+    # The July market has its own next policy date, before its first KRS maturity in October.
+    prev = shifted_prev(ctx, d0, shift_bp=5.0, key_rate_effective_date=date(2026, 7, 27))
+    f, p = flash(prev, ctx, o)
     ex = check(f, p)
-    unchanged(f, p, o, flash_curves(shifted_prev(ctx, d0, 5.0), ctx))
+    unchanged(f, p, o, flash_curves(prev, ctx))
     assert ex["received_principal_rub"] == pytest.approx(QTY * sum(float(r.value_per_bond) for r in red))
     assert ex["received_coupon_rub"] > 0 and ex["carry_coupon"] > 0
 
@@ -223,9 +224,9 @@ class _AccruedFails:
 def test_a_failing_breakdown_never_fails_the_pnl(ctx, bonds, caplog, monkeypatch):
     """The breakdowns are nice to have: any error leaves their keys out, the PnL and its numbers as without them."""
     o = bonds["RU000A1034P7"]
-    d0 = ctx.business_date - timedelta(days=1)
-    f, p = flash(ctx, o, d0)
-    curves = flash_curves(shifted_prev(ctx, d0), ctx)
+    prev = shifted_prev(ctx, ctx.business_date - timedelta(days=1))
+    f, p = flash(prev, ctx, o)
+    curves = flash_curves(prev, ctx)
     with caplog.at_level(logging.DEBUG, logger="desk.pnl.flash"):
         g = explain(dataclasses.replace(p.valuation, instrument=_AccruedFails()), o.valuation, curves)
     assert "TypeError" in caplog.text
