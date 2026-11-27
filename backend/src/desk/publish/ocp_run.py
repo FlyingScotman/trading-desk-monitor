@@ -383,7 +383,9 @@ def _compute(con: psycopg.Connection, on: date, market: MarketView | None, conte
         inputs={"cash_units": len(cash.units) if cash else 0, "liabilities": len(liabs),
                 "trade_terms": len(inputs.trade_terms),
                 "base_days": {b.isoformat(): {"run_id": d.run_id, "bonds": len(d.bonds),
-                                              "trades": None if d.trade_rows is None else len(d.trade_rows)}
+                                              "trades": None if d.trade_rows is None else len(d.trade_rows),
+                                              "trades_missing_dates": d.trades_missing_dates,
+                                              "trades_last_report_ts": d.trades_last_report_ts}
                               for b, d in sorted(days.items())}})
     block = funding_run._jsonable(block)
     log = [("INFO", _summary(block))]
@@ -529,9 +531,8 @@ def base_days(con: psycopg.Connection, on: date, known_at: Any, units: list[dict
               is_bd: Callable[[date], bool] | None, rows: list[dict[str, Any]], books: Mapping[str, Mapping],
               terms: Mapping[str, Any]) -> dict[date, O.BaseDay]:
     """Per base date B before ``on`` of a usable report unit (``report_base_plus_day``, TDM#531): B's default run, the
-    ``trades`` of every date of (B, ``on``] (``trade_rows``; none stored on any of them: not loaded), the bonds'
-    revaluation since B (``bond_moves``, the quantity on each payment date from those trades) and the derivatives' PV
-    on B (B's block ``derivatives_pv``)."""
+    trades of (B, ``on``] with coverage checked for each business date, the last source cut of each earlier business
+    date, the bonds' revaluation since B and the derivatives' PV on B (B's block ``derivatives_pv``)."""
     out: dict[date, O.BaseDay] = {}
     if policy.published is not O.PublishedBasis.REPORT_BASE_PLUS_DAY:
         return out
@@ -539,12 +540,19 @@ def base_days(con: psycopg.Connection, on: date, known_at: Any, units: list[dict
         if b0 >= on or O._stale(b0, on, policy, is_bd):
             continue
         trade_rows: list[dict[str, Any]] = []
+        missing, report_times = [], {}
         loaded, d = False, b0
         while d < on:
             d += timedelta(days=1)
             t = store.dataset_rows(con, "trades", d, known_at=known_at)
             loaded = loaded or bool(t.units)
             trade_rows += t.rows
+            if not (is_bd(d) if is_bd is not None else d.weekday() < 5):
+                continue
+            if not t.units:
+                missing.append(d)
+            elif d < on:
+                report_times[d] = max((ts for u in t.units if (ts := u.get("report_ts")) is not None), default=None)
         rid, facts, _ = funding_run._previous_rows(con, b0)
         moves = bond_moves(rows, {f["position_id"]: f for f in facts}, books, terms, b0, on,
                            O.current_trades(trade_rows, b0)) if rid else []
@@ -553,7 +561,8 @@ def base_days(con: psycopg.Connection, on: date, known_at: Any, units: list[dict
         cash_b = store.dataset_rows(con, "cash_balances", b0, known_at=known_at).rows \
             if policy.cash_from_balances else None
         out[b0] = O.BaseDay(b0, rid, moves, None, [], _pv_base(con, rid), trade_rows if loaded else None,
-                            base_positions={f["position_id"] for f in facts} if rid else None, cash_rows=cash_b)
+                            base_positions={f["position_id"] for f in facts} if rid else None, cash_rows=cash_b,
+                            trades_missing_dates=tuple(missing), trades_last_report_ts=report_times)
     return out
 
 

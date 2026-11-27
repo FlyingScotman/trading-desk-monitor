@@ -118,6 +118,13 @@ def test_every_shape_of_the_engine_fits_the_route_model():
     assert {"derivative_share", "balances_older_than_base"} <= codes
 
 
+def test_legacy_ocp_inputs_without_base_days_are_kept():
+    block = ocp_run.empty_block(ocp_run.COMPUTED, "ОВП", B,
+                                inputs={"cash_units": 1, "liabilities": 0, "trade_terms": 2})
+    out = ocp_out(1, block)
+    assert not out.left_out and out.inputs.cash_units == 1 and out.inputs.base_days == {}
+
+
 def test_every_gap_code_of_the_engine_is_in_the_model():
     """A code the engine emits and the model does not list failed the whole route (0.2.21)."""
     engine = {"no_report", "stale_report", "outside_without_terms", "outside_double_count", "books_outside_report",

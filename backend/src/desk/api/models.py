@@ -647,6 +647,22 @@ class OcpGap(BaseModel):
     items: list[str] = Field(description="Scopes, books or position ids concerned (at most 50)")
 
 
+class OcpBaseDayInputs(BaseModel):
+    run_id: int | None
+    bonds: int
+    trades: int | None
+    trades_missing_dates: list[date] = Field(default_factory=list)
+    trades_last_report_ts: dict[str, datetime | None] = Field(default_factory=dict, description=(
+        "Earlier business days in the trade window, by ISO date. The latest known source cut, or null if untimed."))
+
+
+class OcpInputs(BaseModel):
+    cash_units: int
+    liabilities: int
+    trade_terms: int
+    base_days: dict[str, OcpBaseDayInputs] = Field(default_factory=dict)
+
+
 class RunOcp(BaseModel):
     """The run's OCP (wave B2, TDM#59, ``publish.ocp_run``): the **published** OCP (TDM#416: the bank's report + the
     components outside it, derived where no report unit covers) and its ``gaps``, the OCP derived from positions by
@@ -681,6 +697,7 @@ class RunOcp(BaseModel):
     report: dict[str, Any] = Field(description="The report's units in force and its number of rows")
     totals: dict[str, Any] | None
     notes: list[str]
+    inputs: OcpInputs | None = None
     books: dict[str, dict[str, Any]] = Field(default_factory=dict, description=(
         "TDM#556: name, desk, book_type and entity of the published OCP's books without positions in the run (a book "
         "only the OCP report knows); the run's reference books have the others"))

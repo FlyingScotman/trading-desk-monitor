@@ -52,13 +52,13 @@ ENT1;N1;USD;100;;
 
 
 def _stale_run(store_url, ctx, tmp_path):
-    """N1: a report two business days old, positions of the 9th, cash of the 1st; D1, T1, X1 as the other tests."""
+    """N1: a report three business days old, positions of the 12th, cash of the 1st."""
     with store.connect(store_url) as con:
         _scan(con, tmp_path, report=False, books=IDLE)
         inbox = tmp_path / "in"
         _csv(inbox / "positions_20261012.csv", EARLY_POSITIONS)
         _csv(inbox / "cash_balances_20261001.csv", OLD_CASH)
-        _csv(inbox / "ocp_20261013.csv", OLD_REPORT)
+        _csv(inbox / "ocp_20261012.csv", OLD_REPORT)
         s = Settings(snapshot_cache=SNAPS, inbox_dirs=(inbox,), inbox_archive=tmp_path / "archive",
                      private_adapter=None, private_adapter_config=tmp_path / "cfg", inbox_poll_seconds=0,
                      inbox_lookback_days=0)

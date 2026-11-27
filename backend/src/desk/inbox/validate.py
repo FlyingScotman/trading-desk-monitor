@@ -246,7 +246,8 @@ def _check(decl: dict, hit: dict, result: Any, books: list[dict] | None, contrac
             if norm["asset_class"] == "bond" and not any(f in norm for f in BOND_SIZE_FIELDS):
                 flag("error", "missing_required", uk, src, "a bond needs quantity, face_amount_ccy or "
                                                            "face_outstanding_ccy")
-            if norm["asset_class"] == "fx" and "amount_ccy" not in norm:
+            # Keep an FX future with an unconfirmed nominal so the run can report its OCP gap.
+            if norm["asset_class"] == "fx" and "amount_ccy" not in norm and norm.get("x_product_group") != "fx_future":
                 flag("error", "missing_required", uk, src, "an fx row needs amount_ccy")
         for severity, code, message in (_row_rules(ds, norm) if not errs else ()):
             flag(severity, code, uk, src, message)

@@ -796,7 +796,7 @@ Key: (`book_id`, `position_id`).
 | `quantity` | num | Bonds: number of bonds, signed |
 | `face_amount_ccy` | num | Bonds: number of bonds × **initial** face, signed |
 | `face_outstanding_ccy` | num | Bonds: number of bonds × current (amortized) face, signed |
-| `amount_ccy` | num | FX and cash-like rows: amount, signed; required for `fx` |
+| `amount_ccy` | num | FX and cash-like rows: signed amount. Required for `fx`, except an FX futures row (`x_product_group=fx_future`) with unconfirmed nominal. Keep that row with the amount absent. It raises an OCP gap and supplies no FX risk. |
 | `value_date` | date | FX forwards and other dated rows. An `fx` row with a `value_date` after the business date is a forward (NDF, FX future, unsettled leg): its PV is `mv_rub` if given, else 0, and `amount_ccy` counts only in the FX delta (open currency position). Without it, or with one not after the business date, the row is cash: PV = amount × the rate of the day |
 | `deal_id` | str | OTC |
 | `mark_price_pct`, `accrued_ccy`, `mv_rub`, `book_value_rub` | num | Reconciliation |
@@ -1215,7 +1215,7 @@ field came from (`ocp_policy:<policy_id>`). A field two rows in force give with 
 | `settle_window_bd` | int | Up to how many business days after the date an FX row without terms is cash to be settled, not a forward |
 | `tolerance_ccy` | num | The break threshold, units of the currency (DEC12) |
 | `report_max_age_days` | int | `report_plus_outside`: a report unit carried forward from more than this many calendar days before the run's date is not published: its books take the derived OCP, said in the run; absent: 0 (only the report of the date) |
-| `report_max_age_bd` | int | Since 1.7, `report_base_plus_day`: a report unit more than this many business days before the run's date is not a base: its books take the derived OCP (`derived_stale_report`), said in the run; absent: 1 (Friday's report is Monday's base) |
+| `report_max_age_bd` | int | Since 1.7, `report_base_plus_day`: a report unit more than this many business days before the run's date is not a base: its books take the derived OCP (`derived_stale_report`), said in the run; absent: 2 (owner, 27.11.2026) |
 
 ### Differences from 1.3, settled here
 

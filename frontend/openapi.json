@@ -6553,6 +6553,67 @@
         ],
         "title": "MissingPosition"
       },
+      "OcpBaseDayInputs": {
+        "properties": {
+          "run_id": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Run Id"
+          },
+          "bonds": {
+            "type": "integer",
+            "title": "Bonds"
+          },
+          "trades": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Trades"
+          },
+          "trades_missing_dates": {
+            "items": {
+              "type": "string",
+              "format": "date"
+            },
+            "type": "array",
+            "title": "Trades Missing Dates"
+          },
+          "trades_last_report_ts": {
+            "additionalProperties": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "format": "date-time"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "type": "object",
+            "title": "Trades Last Report Ts",
+            "description": "Earlier business days in the trade window, by ISO date. The latest known source cut, or null if untimed."
+          }
+        },
+        "type": "object",
+        "required": [
+          "run_id",
+          "bonds",
+          "trades"
+        ],
+        "title": "OcpBaseDayInputs"
+      },
       "OcpComparison": {
         "properties": {
           "level": {
@@ -7002,6 +7063,36 @@
         ],
         "title": "OcpGap",
         "description": "What is missing for the published OCP to be trusted."
+      },
+      "OcpInputs": {
+        "properties": {
+          "cash_units": {
+            "type": "integer",
+            "title": "Cash Units"
+          },
+          "liabilities": {
+            "type": "integer",
+            "title": "Liabilities"
+          },
+          "trade_terms": {
+            "type": "integer",
+            "title": "Trade Terms"
+          },
+          "base_days": {
+            "additionalProperties": {
+              "$ref": "#/components/schemas/OcpBaseDayInputs"
+            },
+            "type": "object",
+            "title": "Base Days"
+          }
+        },
+        "type": "object",
+        "required": [
+          "cash_units",
+          "liabilities",
+          "trade_terms"
+        ],
+        "title": "OcpInputs"
       },
       "OcpLineOut": {
         "properties": {
@@ -11118,6 +11209,16 @@
             },
             "type": "array",
             "title": "Notes"
+          },
+          "inputs": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/OcpInputs"
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "books": {
             "additionalProperties": {

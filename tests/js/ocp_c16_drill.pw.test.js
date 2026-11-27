@@ -175,13 +175,14 @@ test('C16 on a run: the drill-down of a past day asks /ocp of that day\'s run (T
   const FX = { USD: { market: 81.45, cbr: 81.12 } };
   const hist = { runId: null, asOf: AS_OF, from: D1, to: AS_OF, books: {}, days: [
     { date: D1, runId: 7, runType: 'EOD', state: 'computed', basis: 'report_plus_outside', fx: FX, lines: [L(5e6)] },
-    { date: AS_OF, runId: 8, runType: 'EOD', state: 'computed', basis: 'report_base_plus_day', fx: FX, lines: [L(3e6, { baseDate: D1, baseKind: 'without_derivatives', parts: {} })] }] };
+    { date: AS_OF, runId: 8, runType: 'EOD', state: 'computed', basis: 'report_base_plus_day', fx: FX, lines: [L(3e6, { baseDate: B, baseOlder: true, baseKind: 'without_derivatives', parts: {} })] }] };
   const block = (id, x) => ({ run_id: id, state: 'computed', components: [{ key: 'options', name: 'опционы' }], parts: [{ key: 'base', name: 'база: отчёт ОВП без деривативов' }], published: { basis: x.basis, by_book: [x.line] } });
   // прошлый день — прежняя методика: отчёт целиком + вне отчёта; текущий — база + PV деривативов
   const old = block(7, { basis: 'report_plus_outside', line: { entity: 'Головной банк', book_id: 'FXB', books: ['FXB'], ccy: 'USD', amount: 5e6, source: 'report', components: ['options'], outside: { options: 1e6 }, reported: 4e6, valid_date: B } });
-  const now = block(8, { basis: 'report_base_plus_day', line: { entity: 'Головной банк', book_id: 'FXB', books: ['FXB'], ccy: 'USD', amount: 3e6, source: 'report', components: [], outside: {}, reported: 2e6, valid_date: D1, base_date: D1, base_kind: 'without_derivatives',
-    parts: { base: 2e6, derivatives: 1e6, bonds: 0, trades: 0, outside: 0 }, contributions: { base: { items: [{ kind: 'report', valid_date: D1, file: 'ocp.csv', rows: 1, amount: 2e6 }], rest: null }, derivatives: { items: [{ kind: 'position', position_id: 'FXB|F1', derivative: 'fx_forward', amount: 1e6 }], rest: null } },
+  const now = block(8, { basis: 'report_base_plus_day', line: { entity: 'Головной банк', book_id: 'FXB', books: ['FXB'], ccy: 'USD', amount: 3e6, source: 'report', components: [], outside: {}, reported: 2e6, valid_date: B, base_date: B, base_kind: 'without_derivatives',
+    parts: { base: 2e6, derivatives: 1e6, bonds: 0, trades: 0, outside: 0 }, contributions: { base: { items: [{ kind: 'report', valid_date: B, file: 'ocp.csv', rows: 1, amount: 2e6 }], rest: null }, derivatives: { items: [{ kind: 'position', position_id: 'FXB|F1', derivative: 'fx_forward', amount: 1e6 }], rest: null } },
     excluded: [{ kind: 'fx_forward', component: 'fx_legs', nominal: 1.02e6, added: 1e6, outside: 0, positions: 1, fallback: false, diff: 2e4 }] } });
+  now.inputs = { base_days: { [B]: { trades_missing_dates: [AS_OF], trades_last_report_ts: { [D1]: D1 + 'T14:45:00Z' } } } };
   const b2 = await pw.chromium.launch();
   try {
     const ctx = await b2.newContext({ viewport: { width: 1366, height: 900 } }), pg = await ctx.newPage(), errors = [], asked = [];
@@ -208,11 +209,15 @@ test('C16 on a run: the drill-down of a past day asks /ocp of that day\'s run (T
     assert.deepEqual(asked, ['/api/v1/runs/8/ocp'], 'день таблицы — прогон дня');
     assert.ok((await pg.locator('.k-drawer [data-c16-sum]').innerText()).includes('= ячейке таблицы'));
     assert.equal(await pg.locator('.k-drawer [data-c16-exwarn]').count(), 0, 'небольшая разница PV и номинала — без предупреждения');
+    const ddmmyy = s => s.slice(2).split('-').reverse().join('.');
+    assert.ok((await pg.locator('.k-drawer [data-c16-trades-missing]').innerText()).includes(ddmmyy(AS_OF)));
+    assert.ok((await pg.locator('.k-drawer [data-c16-trade-cuts]').innerText()).includes(ddmmyy(D1) + ' — 17:45 МСК'));
     await pg.locator('.k-drawer [data-c16-day]').selectOption(D1);
     await pg.waitForFunction(() => document.querySelector('.k-drawer [data-c16-sum]') && document.querySelector('.k-drawer .st').textContent.includes('#7'));
     assert.deepEqual(asked, ['/api/v1/runs/8/ocp', '/api/v1/runs/7/ocp'], 'прошлый день — /ocp его прогона, не история');
     const txt = await pg.locator('.k-drawer [data-c16-dbody]').innerText();
     assert.ok(txt.includes('целиком, с деривативами') && txt.includes('вне отчёта: опционы') && txt.includes('= ячейке таблицы'), txt);
+    assert.equal(await pg.locator('.k-drawer [data-c16-trades-missing], .k-drawer [data-c16-trade-cuts]').count(), 0);
     // повторно тот же день — без нового запроса
     await pg.locator('.k-drawer [data-c16-day]').selectOption(AS_OF);
     await pg.locator('.k-drawer [data-c16-part="base"]').waitFor();

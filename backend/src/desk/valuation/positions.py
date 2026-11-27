@@ -54,7 +54,7 @@ from ..inbox.schema import load_schema, norm_ccy
 from ..marketdata import manual_cds
 from ..marketdata.adapter import bond_currency, ccy_code
 from ..orchestrator import EodContext, Outcome
-from ..rules.ocp import FUTURE_GAP_TEXT, FX_FUTURE_GROUP, is_ndf, product_group
+from ..rules.ocp import FUTURE_GAP_TEXT, FX_FUTURE_GROUP, PERPETUAL_FUTURE_NOTE, is_ndf, product_group
 from ..store import PositionInputs
 from . import derivatives as dv
 from . import offreport
@@ -238,21 +238,33 @@ def _fx(ctx: EodContext, x: dict[str, Any]) -> Outcome:
     o = Outcome(None, None, None)  # type: ignore[arg-type]
     ccy, amount, vd = (x.get("ccy") or "").upper(), x.get("amount_ccy"), x.get("value_date")
     group = product_group(x)
-    if group == FX_FUTURE_GROUP:
+    future = group == FX_FUTURE_GROUP
+    if future:
         vd = dv.future_expiry(x)
-        if vd is None:
-            return _future_refused(o, x, dv.NotValued("no_future_expiry", "валютный фьючерс без даты экспирации"))
-    if not ccy or amount is None:
+    if not ccy or (amount is None and not future):
         o.reason = "fx_row_without_ccy_or_amount"
         return o
     fx = fx_rate(ctx, ccy)
-    if group == FX_FUTURE_GROUP and vd is not None and vd <= ctx.business_date:
-        v = _valuation(ctx, "fx", amount, 0.0, "assumed",
-                       [f"фьючерс истёк {vd:%d.%m.%Y}. Результат в остатках по счетам"],
-                       face=fx[0] if fx else math.nan, horizon=vd)
-        v.extra["fx_future_state"] = "expired"
-        o.valuation = v
-        return o
+    if future:
+        qty = amount if amount is not None else math.nan
+        rate = fx[0] if fx else math.nan
+        if vd is None:
+            o.valuation = _valuation(ctx, "fx", qty, 0.0, "assumed", [PERPETUAL_FUTURE_NOTE], face=rate)
+            o.valuation.extra["fx_future_state"] = "perpetual"
+            return o
+        if vd <= ctx.business_date:
+            o.valuation = _valuation(ctx, "fx", qty, 0.0, "assumed",
+                                     [f"фьючерс истёк {vd:%d.%m.%Y}. Результат в остатках по счетам"],
+                                     face=rate, horizon=vd)
+            o.valuation.extra["fx_future_state"] = "expired"
+            return o
+        if not math.isfinite(qty):
+            pv = x.get("mv_rub")
+            o.valuation = _valuation(
+                ctx, "fx", qty, pv if pv is not None else 0.0, "reported_value" if pv is not None else "assumed",
+                ["стоимость из отчёта" if pv is not None else "фьючерс с ежедневной маржой: PV принят за 0"],
+                face=rate, horizon=vd)
+            return o
     if fx is None:
         o.reason, o.detail = "no_fx_rate", f"{ccy} on {ctx.business_date}"
         return o
@@ -443,17 +455,26 @@ def _derivatives(ctx: EodContext, inputs: PositionInputs, p: BookPlan, second_or
             expiry = dv.future_expiry(x)
             ccy, quote = x.get("ccy"), dv.future_quote_currency(x)
             base = norm_ccy(str(report_field(x, "x_prim_cur") or "").strip())
-            if expiry is None or expiry <= ctx.business_date:
+            amount = x.get("amount_ccy")
+            if expiry is not None and expiry <= ctx.business_date and amount is not None and math.isfinite(amount):
                 continue
             if not ccy or not quote or ccy == quote or (base and base != ccy):
                 out[pid] = dv.NotValued("no_future_pair", "в отчёте не подтверждена валютная пара фьючерса")
-            elif dv.rouble_future(x):
-                try:
-                    f = _future_terms(ctx, x, expiry)
+                continue
+            try:
+                amount = _future_notional(x)
+                if expiry is None:
+                    quantity = report_field(x, "x_quantity")
+                    contracts = None if quantity is None else _future_quantity(quantity)
+                    if contracts is not None and not math.isfinite(contracts):
+                        raise dv.NotValued("no_quantity", "число контрактов фьючерса в отчёте некорректно (x_quantity)")
+                    _check_future_sign(ccy, amount, contracts)
+                elif dv.rouble_future(x):
+                    f = _future_terms(ctx, x, expiry, amount)
                     p.futures[pid] = f
                     reqs.append(dv.Request(pid, book, x, future=f))
-                except dv.NotValued as e:
-                    out[pid] = e
+            except dv.NotValued as e:
+                out[pid] = e
         elif pid in ambiguous:
             out[pid] = dv.NotValued("terms_ambiguous", f"trade {', '.join(ambiguous[pid])} is the terms of several "
                                                        "positions rows (one deal_id on several rows)")
@@ -494,20 +515,32 @@ def _derivatives(ctx: EodContext, inputs: PositionInputs, p: BookPlan, second_or
     return got
 
 
-def _future_terms(ctx: EodContext, x: dict[str, Any], expiry: date) -> dv.FutureTerms:
-    ccy = x["ccy"]
-    quantity = report_field(x, "x_quantity")
+def _future_quantity(quantity: Any) -> float:
     try:
-        contracts = float(quantity) if quantity is not None and not isinstance(quantity, bool) else math.nan
+        return float(quantity) if quantity is not None and not isinstance(quantity, bool) else math.nan
     except (TypeError, ValueError, OverflowError):
-        contracts = math.nan
-    if not math.isfinite(contracts) or contracts == 0:
-        raise dv.NotValued("no_quantity", "нет ненулевого числа контрактов в отчёте (x_quantity)")
+        return math.nan
+
+
+def _future_notional(x: dict[str, Any]) -> float:
     amount = x.get("amount_ccy")
     if amount is None or not math.isfinite(amount):
-        raise dv.NotValued("no_future_notional", "нет номинала валютного фьючерса в отчёте")
-    if (amount > 0 > contracts) or (amount < 0 < contracts):
-        raise dv.NotValued("sign_mismatch", f"разные знаки номинала ({amount:g} {ccy}) и числа контрактов ({contracts:g})")
+        raise dv.NotValued("no_future_notional", "номинал валютного фьючерса не подтверждён")
+    return amount
+
+
+def _check_future_sign(ccy: str, amount: float, contracts: float | None) -> None:
+    if contracts is not None and ((amount > 0 > contracts) or (amount < 0 < contracts)):
+        raise dv.NotValued("sign_mismatch",
+                           f"разные знаки номинала ({amount:g} {ccy}) и числа контрактов ({contracts:g})")
+
+
+def _future_terms(ctx: EodContext, x: dict[str, Any], expiry: date, amount: float) -> dv.FutureTerms:
+    ccy = x["ccy"]
+    contracts = _future_quantity(report_field(x, "x_quantity"))
+    if not math.isfinite(contracts) or contracts == 0:
+        raise dv.NotValued("no_quantity", "нет ненулевого числа контрактов в отчёте (x_quantity)")
+    _check_future_sign(ccy, amount, contracts)
     lot = abs(amount / contracts)
     quotes = ctx.market.fx_future_quotes(ccy, all_contracts=True)
     day = expiry.isoformat()
@@ -554,7 +587,10 @@ def _future_refused(o: Outcome, x: dict[str, Any], e: dv.NotValued) -> Outcome:
     else:
         text = f"Валютный фьючерс: {e.detail}. Для ОВП используется номинал позиции"
     if o.valuation is not None:
-        o.valuation = replace(o.valuation, assumptions=(text, *o.valuation.assumptions))
+        assumptions = o.valuation.assumptions
+        if o.ocp_unconfirmed and o.valuation.extra.get("fx_future_state") == "perpetual":
+            assumptions = ("бессрочный валютный фьючерс: PV = 0",)
+        o.valuation = replace(o.valuation, assumptions=(text, *assumptions))
         if e.ccy and e.missing in MISSING_CODES:
             o.valuation.extra["risk_missing"] = risk_missing(MISSING_CODES[e.missing], e.ccy)
     return o
