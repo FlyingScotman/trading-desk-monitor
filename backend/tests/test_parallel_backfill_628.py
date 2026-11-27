@@ -159,7 +159,7 @@ def test_a_bundle_that_does_not_come_ahead_of_its_date_stalls_the_run_where_the_
     res, _ = _cycle(s, store_url, t0 + timedelta(hours=2), rows=rows, client=object(), hub_answered=True, workers=3)
     assert res["stalled"] is None and backfill.state(s)["problems"]["2026-10-15"]["alone"]
     res, _ = _cycle(s, store_url, t0 + timedelta(hours=3), rows=rows, client=object(), workers=3)
-    assert [d for d, _ in res["failed"]] == ["2026-10-15"]  # as one after the other: tried every time
+    assert not res["failed"] and res["skipped"] == ["2026-10-15"]  # retried as in the sequential run
 
 
 def test_a_date_whose_bundle_failed_ahead_does_not_stop_the_dates_after_it_for_good(tmp_path, cache, store_url,

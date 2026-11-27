@@ -42,6 +42,10 @@ class SnapshotError(ValueError):
     pass
 
 
+class MissingSnapshotError(SnapshotError):
+    """A required snapshot file is absent from the cache."""
+
+
 @dataclass(frozen=True)
 class Snapshot:
     id: str
@@ -134,15 +138,18 @@ class SnapshotDir:
         self._manifests: dict[str, dict[str, Any]] = {}
         idx, seen, changed = _read_index(self.root), set(), False
         for p in sorted(self.root.glob("*.json.gz")):
-            st = p.stat()
-            e = idx.get(p.name)
-            if isinstance(e, dict) and e.get("size") == st.st_size and e.get("mtime_ns") == st.st_mtime_ns \
-                    and isinstance(e.get("m"), dict):
-                m = e["m"]
-            else:
-                m = _manifest(p)
-                idx[p.name] = {"size": st.st_size, "mtime_ns": st.st_mtime_ns, "m": m}
-                changed = True
+            try:
+                st = p.stat()
+                e = idx.get(p.name)
+                if isinstance(e, dict) and e.get("size") == st.st_size and e.get("mtime_ns") == st.st_mtime_ns \
+                        and isinstance(e.get("m"), dict):
+                    m = e["m"]
+                else:
+                    m = _manifest(p)
+                    idx[p.name] = {"size": st.st_size, "mtime_ns": st.st_mtime_ns, "m": m}
+                    changed = True
+            except FileNotFoundError:
+                continue  # a prune removed this bundle during the scan
             seen.add(p.name)
             self._manifests[p.name.split(".")[0]] = m
         for name in [n for n in idx if n not in seen]:
@@ -155,8 +162,13 @@ class SnapshotDir:
         """snapshot id -> kind, cut_type, business_date, static_snapshot_id of every bundle in the folder."""
         return {sid: dict(m) for sid, m in self._manifests.items()}
 
-    def get(self, snapshot_id: str) -> Snapshot:
-        return read_bundle(self.root / f"{snapshot_id}.json.gz")
+    def get(self, snapshot_id: str, *, label: str | None = None) -> Snapshot:
+        """Read a bundle, with an optional description for a missing file."""
+        try:
+            return read_bundle(self.root / f"{snapshot_id}.json.gz")
+        except FileNotFoundError as e:
+            label = label or f"snapshot {snapshot_id}"
+            raise MissingSnapshotError(f"{label} is not in the cache ({self.root})") from e
 
     def provenance(self, snapshot_id: str) -> dict[str, Any] | None:
         """Hub facts written by ``desk sync`` beside the bundle (host, published_at); None for files
@@ -173,7 +185,7 @@ class SnapshotDir:
         ids = [sid for sid, m in self._manifests.items()
                if m["kind"] == "market" and m["cut_type"] == cut_type and m["business_date"] == business_date]
         if not ids:
-            raise SnapshotError(f"no {cut_type} market snapshot for {business_date} in {self.root}")
+            raise MissingSnapshotError(f"no {cut_type} market snapshot for {business_date} in {self.root}")
         if len(ids) > 1:
             # Corrections supersede; pick the one no other snapshot supersedes (of the intraday cuts of a date,
             # several stand: the latest cut). Two can stand for one cut when the cache skipped a link of the chain
@@ -186,7 +198,8 @@ class SnapshotDir:
         return ids[0]
 
     def market(self, business_date: str, cut_type: str = "eod_final") -> Snapshot:
-        return self.get(self.market_id(business_date, cut_type))
+        sid = self.market_id(business_date, cut_type)
+        return self.get(sid, label=f"market snapshot {sid[:12]} ({business_date}, {cut_type})")
 
     def ids(self) -> list[str]:
         return list(self._manifests)

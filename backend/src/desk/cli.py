@@ -67,7 +67,7 @@ from .dayrun import ContextCache, age_label, eod_run, stored_fixings
 from .marketdata import cache, fixing_history, history
 from .marketdata.adapter import MarketView
 from .marketdata.bundle import SnapshotDir, SnapshotError
-from .marketdata.hub import HubClient, HubError, hub_check
+from .marketdata.hub import HubClient, HubError, HubUnavailable, hub_check
 from .orchestrator import prepare, value
 from .settings import Settings, SettingsError, adapter_config_dir, load, mask_url
 
@@ -680,8 +680,13 @@ def cmd_backfill(a: argparse.Namespace) -> int:
     rows = None
     if not a.no_hub and st.hub_url:
         client = HubClient(st)
-        rows = backfill.hub_rows(client, d_from)
-        print(f"hub {client.host}: {len(rows)} eod_final dates from {rows[-1][0] if rows else '-'}")
+        try:
+            rows = backfill.hub_rows(client, d_from)
+        except HubUnavailable as e:
+            print(f"hub unavailable ({e}); using the local snapshot cache", file=sys.stderr)
+            client = None
+        else:
+            print(f"hub {client.host}: {len(rows)} eod_final dates from {rows[-1][0] if rows else '-'}")
     with _store(a) as con:
         if not a.no_inbox and not a.dry_run:
             line = backfill.inbox(con, st, d_from, force=a.rescan)
@@ -721,8 +726,6 @@ def cmd_backfill(a: argparse.Namespace) -> int:
                 print(f"  {d} FAILED: {err}")
             for d in res["unconverged"]:
                 print(f"  {d} still stale after its run: tried again next time (#23)")
-            for d in res["skipped"]:
-                print(f"  {d} skipped: its bundle is not cached and the hub is off")
             if res["unchanged"]:
                 print(f"  {len(res['unchanged'])} dates not made again: the spread they carry came out the same")
             complete = complete and res["complete"]
@@ -744,7 +747,8 @@ def cmd_backfill(a: argparse.Namespace) -> int:
                     time.sleep(5)
                 try:
                     one = backfill.Plan(p2.date_from, p2.date_to, batch, p2.hub, p2.rows)
-                    res = backfill.run_second(st, one, store_url=url, out=print, contexts=contexts, workers=workers, pool=pool)
+                    res = backfill.run_second(st, one, store_url=url, client=client, out=print,
+                                              contexts=contexts, workers=workers, pool=pool)
                 finally:
                     lock.release()
                 failed += len(res["failed"])

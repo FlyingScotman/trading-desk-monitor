@@ -377,9 +377,7 @@ def prepare(snapshots: SnapshotDir, business_date: str, cut_type: str = "eod_fin
     if market_snapshot_id is None:
         snap = snapshots.market(business_date, cut_type)
     else:
-        if not (snapshots.root / f"{market_snapshot_id}.json.gz").is_file():
-            raise SnapshotError(f"market snapshot {market_snapshot_id} is not in {snapshots.root}")
-        snap = snapshots.get(market_snapshot_id)
+        snap = snapshots.get(market_snapshot_id, label=f"market snapshot {market_snapshot_id}")
         if (snap.kind, snap.business_date) != ("market", business_date):
             raise SnapshotError(f"snapshot {market_snapshot_id} is {snap.kind} of {snap.business_date}, "
                                 f"not the market of {business_date}")
@@ -388,7 +386,10 @@ def prepare(snapshots: SnapshotDir, business_date: str, cut_type: str = "eod_fin
         snap, filled = fixing_history.extend(snap, fixings)
     market = MarketView(snap)
     assert snap.static_snapshot_id
-    static = StaticView(snapshots.get(snap.static_snapshot_id))
+    static_snapshot = snapshots.get(snap.static_snapshot_id,
+                                    label=f"static snapshot {snap.static_snapshot_id[:12]} of market snapshot "
+                                          f"{snap.id[:12]} ({business_date}, {cut_type})")
+    static = StaticView(static_snapshot)
     kbd_hist = rates.kbd_history(snapshots, business_date, static.snapshot)
     core_market, rates_lineage, quote_curves, swap_curves = with_rates(market, static, market.core_market(static),
                                                                        kbd_hist)

@@ -11,15 +11,20 @@ from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 
 import pytest
+import test_slice_s3
 from test_inbox_r22 import CONFIG, GOOD, put
 from test_market_history import FIX, OFZ, STATIC, USD_FACE, shifted, write
 
 from desk import backfill, bookfile, cli, dayrun, store
 from desk.autopilot import Autopilot
 from desk.inbox import scan
+from desk.marketdata.bundle import SnapshotDir, SnapshotError, read_bundle
+from desk.marketdata.hub import HubClient
+from desk.orchestrator import prepare
 from desk.settings import Settings, check_settings_doc
 
 DATES = ["2026-10-09", "2026-10-12", "2026-10-13", "2026-10-14", "2026-10-15"]
+server, stub = test_slice_s3.server, test_slice_s3.stub
 
 
 @pytest.fixture
@@ -225,6 +230,168 @@ def test_a_date_not_cached_without_a_hub_is_skipped(tmp_path, cache, store_url):
     assert res["skipped"] == ["2026-10-16"] and res["done"] == ["2026-10-14", "2026-10-15"]
 
 
+@pytest.mark.parametrize("hub", ["available", "offline", "unreachable", "missing"])
+def test_backfill_with_only_the_market_snapshot_cached(tmp_path, cache, store_url, stub, hub):
+    d = DATES[-1]
+    load(store_url, tmp_path, d, 10)
+    s = settings(tmp_path, cache, store_url)
+    static_path = cache / f"{STATIC}.json.gz"
+    static_path.unlink()
+    client = None if hub == "offline" else HubClient(test_slice_s3.settings(stub))
+    if hub == "unreachable":
+        stub.broken.add(STATIC)
+    elif hub == "missing":
+        stub.status = 404
+    lines = []
+    rows = [(d, SnapshotDir(cache).market_id(d))] if client else None
+    with store.connect(store_url) as con:
+        p = backfill.plan(con, s, date.fromisoformat(d), date.fromisoformat(d), rows)
+        res = backfill.run(s, p, store_url=store_url, client=client, out=lines.append)
+        again = backfill.plan(con, s, date.fromisoformat(d), date.fromisoformat(d))
+        status = backfill.status(con, s, today=date.fromisoformat(d))
+    assert not p.todo[0].cached
+    if hub == "missing":
+        [(failed_date, error)] = res["failed"]
+        assert failed_date == d and "404" in error and STATIC in error
+        assert not res["skipped"] and not res["stalled"]
+        assert again.count("failed") == 1 and not again.todo
+        assert [(row["date"], row["kind"]) for row in status["problem_dates"]] == [(d, "failed")]
+        return
+    assert not res["failed"] and not backfill.state(s).get("failed")
+    if hub == "available":
+        assert res["done"] == [d] and static_path.is_file()
+        path = f"/v1/snapshots/{STATIC}/bundle"
+        assert [url for url in stub.requests if url.endswith("/bundle")] == [path]
+        assert again.count("done") == 1
+    else:
+        assert res["skipped"] == [d] and not res["done"]
+        assert any(d in line and "not cached and no hub" in line for line in lines)
+        assert again.todo[0].date == d
+
+
+@pytest.mark.parametrize("cut_type", ["eod_final", "eod_preliminary"])
+@pytest.mark.parametrize("missing", ["market", "static"])
+def test_backfill_restores_the_planned_previous_close(tmp_path, cache, store_url, stub, cut_type, missing):
+    prev, d = DATES[-2:]
+    (cache / f"{SnapshotDir(cache).market_id(prev)}.json.gz").unlink()
+    source = read_bundle(FIX / f"{STATIC}.json.gz").doc
+    prev_static = write(cache, {**source, "business_date": prev})
+    doc = {**shifted(prev, 1, light=False), "cut_type": cut_type, "static_snapshot_id": prev_static}
+    prev_id = write(cache, doc)
+    sid = prev_id if missing == "market" else prev_static
+    path = cache / f"{sid}.json.gz"
+    stub.bundles[sid] = path.read_bytes()
+    published = "2026-10-16T15:45:00+00:00"
+    stub.rows.extend([{"snapshot_id": prev_id, "business_date": prev, "kind": "market", "cut_type": cut_type,
+                       "static_snapshot_id": prev_static, "published_at": published},
+                      {"snapshot_id": prev_static, "business_date": prev, "kind": "static", "cut_type": "daily",
+                       "published_at": published}])
+    load(store_url, tmp_path, d, 10)
+    s = settings(tmp_path, cache, store_url)
+    with store.connect(store_url) as con:
+        p = backfill.plan(con, s, date.fromisoformat(d), date.fromisoformat(d))
+        assert (p.todo[0].prev_date, p.todo[0].prev_cut, p.todo[0].sig[2]) == (prev, cut_type, prev_id)
+        path.unlink()  # also covers a previous-close bundle removed after planning
+        if missing == "static":
+            # The full EOD calculation itself reads the previous close's static when it prepares flash PnL.
+            with pytest.raises(SnapshotError, match=f"static snapshot {prev_static[:12]}.*market snapshot {prev_id[:12]}"):
+                dayrun.eod_run(s, d, no_gamma=True, read_model=False, out=lambda _: None)
+        offline = backfill.run(s, p, store_url=store_url, out=lambda _: None)
+        assert offline["skipped"] == [d] and not offline["failed"]
+        lines = []
+        res = backfill.run(s, p, store_url=store_url, client=HubClient(test_slice_s3.settings(stub)), out=lines.append)
+        assert res["done"] == [d] and path.is_file()
+        assert any(f"flash PnL {prev} -> {d}" in line for line in lines)
+        assert store.default_runs(con, date.fromisoformat(d))[date.fromisoformat(d)]["prev_market_snapshot_id"] == prev_id
+    assert [url for url in stub.requests if url.endswith("/bundle")] == [f"/v1/snapshots/{sid}/bundle"]
+
+
+@pytest.mark.parametrize("missing", ["static", "market", "explicit_market"])
+def test_prepare_reports_a_snapshot_file_missing_from_cache(cache, missing):
+    d = DATES[-1]
+    sd = SnapshotDir(cache)
+    market_id = sd.market_id(d)
+    sid = STATIC if missing == "static" else market_id
+    (cache / f"{sid}.json.gz").unlink()
+    match = f"static snapshot {sid[:12]}.*market snapshot {market_id[:12]}" if missing == "static" else (
+        f"market snapshot {market_id[:12]}")
+    with pytest.raises(SnapshotError, match=match):
+        prepare(sd, d, market_snapshot_id=market_id if missing == "explicit_market" else None)
+
+
+def test_legacy_missing_snapshot_failure_is_retried_on_the_same_inputs(tmp_path, cache, store_url):
+    old, retry, other = DATES[-3:]
+    lo, hi = date.fromisoformat(old), date.fromisoformat(other)
+    load(store_url, tmp_path, old, 10)
+    s = settings(tmp_path, cache, store_url)
+    with store.connect(store_url) as con:
+        first = backfill.plan(con, s, lo, lo)
+        assert backfill.run(s, first, store_url=store_url, out=lambda _: None)["done"] == [old]
+        old_run_id = store.default_runs(con, lo)[lo]["run_id"]
+        sigs = {day.date: day.sig for day in backfill.plan(con, s, lo, hi).todo}
+        windows_path = rf"D:\custom market cache\{STATIC}.json.gz"
+        legacy = f"FileNotFoundError: {FileNotFoundError(2, 'No such file or directory', windows_path)}"
+        other_error = "FileNotFoundError: [Errno 2] No such file or directory: 'reports/input.csv'"
+        problems = {d: {"kind": "failed", "error": error, "sig": sigs[d], "attempts": 1}
+                    for d, error in [(retry, legacy), (other, other_error)]}
+        backfill.save_state(s, {"failed": sigs.copy(), "problems": problems})
+        p = backfill.plan(con, s, lo, hi)
+        assert [(day.date, day.status) for day in p.days] == [(old, "done"), (retry, "todo"), (other, "failed")]
+        assert p.todo[0].sig == sigs[retry]
+        assert backfill.run(s, p, store_url=store_url, out=lambda _: None)["done"] == [retry]
+        assert store.default_runs(con, lo)[lo]["run_id"] == old_run_id
+    assert backfill.state(s)["problems"] == {other: problems[other]}
+
+
+def test_missing_snapshot_after_bundle_check_is_skipped(tmp_path, cache, store_url, monkeypatch):
+    d = DATES[-1]
+    day = date.fromisoformat(d)
+    load(store_url, tmp_path, d, 10)
+    s = settings(tmp_path, cache, store_url)
+    real = dayrun.eod_run
+
+    def remove_static(*args, **kwargs):
+        (cache / f"{STATIC}.json.gz").unlink()
+        return real(*args, **kwargs)
+
+    monkeypatch.setattr(dayrun, "eod_run", remove_static)
+    with store.connect(store_url) as con:
+        p = backfill.plan(con, s, day, day)
+        lines = []
+        res = backfill.run(s, p, store_url=store_url, out=lines.append)
+        assert res["skipped"] == [d] and not res["failed"] and not res["stalled"]
+        assert any("static snapshot" in line and "is not in the cache" in line for line in lines)
+        assert backfill.plan(con, s, day, day).todo[0].date == d
+
+
+def test_second_pass_retries_legacy_missing_snapshot_failure(tmp_path, cache, store_url, stub):
+    d = DATES[-1]
+    day = date.fromisoformat(d)
+    load(store_url, tmp_path, d, 10)
+    s = settings(tmp_path, cache, store_url)
+    with store.connect(store_url) as con:
+        first = backfill.plan(con, s, day, day)
+        assert backfill.run(s, first, store_url=store_url, out=lambda _: None)["done"] == [d]
+        queued = backfill.plan(con, s, day, day).second_todo[0]
+        path = str(cache / f"{STATIC}.json.gz")
+        error = f"FileNotFoundError: {FileNotFoundError(2, 'No such file or directory', path)}"
+        backfill.save_state(s, {"second": {"failed": {d: {"sig": queued.sig, "run_id": queued.run_id,
+                                                         "attempts": backfill.MAX_ATTEMPTS, "error": error}}}})
+        (cache / f"{STATIC}.json.gz").unlink()
+        p = backfill.plan(con, s, day, day)
+        assert p.count("done") == 1 and not p.todo and not p.second_todo[0].cached
+        offline = backfill.run_second(s, p, store_url=store_url, out=lambda _: None)
+        assert offline["skipped"] == [d] and not offline["failed"]
+        client = HubClient(test_slice_s3.settings(stub))
+        stub.broken.add(STATIC)
+        outage = backfill.run_second(s, p, store_url=store_url, client=client, out=lambda _: None)
+        assert outage["skipped"] == [d] and not outage["failed"] and outage["stopped"]
+        stub.broken.clear()
+        res = backfill.run_second(s, p, store_url=store_url, client=client, out=lambda _: None)
+        assert res["done"] == [d]
+        assert backfill.plan(con, s, day, day).count_second("done") == 1
+
+
 def _hub(cache: Path, monkeypatch, hub_dir: Path) -> tuple[list[tuple[str, str]], list[str]]:
     """The hub's rows (newest first): the cache's snapshot of each date, else ``hub_dir``'s (its re-published
     dates); ``cache.sync`` copies a date's ``hub_dir`` bundle into the cache. Returns (rows, the dates synced)."""
@@ -362,6 +529,54 @@ def test_autopilot_step_after_the_eod_step_within_its_budget(tmp_path, cache, st
     off = settings(tmp_path, cache, store_url, backfill=False)
     st = Autopilot(settings_loader=lambda: off, store_url=store_url, today=lambda: date(2026, 11, 30)).run_cycle(hub=False)
     assert "backfill" not in {x["name"] for x in st["steps"]}
+
+
+def test_autopilot_leaves_a_missing_snapshot_for_backfill(tmp_path, cache, store_url, stub, monkeypatch):
+    d = DATES[-1]
+    day = date.fromisoformat(d)
+    load(store_url, tmp_path, d, 10)
+    hub = test_slice_s3.settings(stub)
+    s = settings(tmp_path, cache, store_url, hub_url=hub.hub_url, hub_token=hub.hub_token,
+                 backfill_from=d, backfill_budget_s=0.001)
+    ap = Autopilot(settings_loader=lambda: s, store_url=store_url, today=lambda: day)
+    rows = [(d, SnapshotDir(cache).market_id(d))]
+    monkeypatch.setattr(backfill, "hub_rows", lambda *_: rows)
+    (cache / f"{STATIC}.json.gz").unlink()
+    with store.connect(store_url) as con:
+        status, detail = ap._eod(s, con, store_url, [], [])
+        assert status == "skipped" and "static snapshot" in detail
+        assert not ap.diagnostics()["failed_inputs"]
+        status, detail = ap._backfill(s, con, store_url, True, [])
+        assert status == "ok" and "ran 1 dates" in detail
+    assert default_dates(store_url) == [d]
+
+
+@pytest.mark.parametrize("entrypoint", ["autopilot", "cli"])
+def test_backfill_uses_the_cache_when_the_hub_date_list_is_unavailable(
+        tmp_path, cache, store_url, stub, entrypoint, monkeypatch, capsys):
+    d = DATES[-1]
+    day = date.fromisoformat(d)
+    load(store_url, tmp_path, d, 10)
+    (cache / f"{STATIC}.json.gz").unlink()
+    stub.status = 503
+    hub = test_slice_s3.settings(stub)
+    s = settings(tmp_path, cache, store_url, hub_url=hub.hub_url, hub_token=hub.hub_token, backfill_from=d)
+    if entrypoint == "autopilot":
+        ap = Autopilot(settings_loader=lambda: s, store_url=store_url, today=lambda: day)
+        with store.connect(store_url) as con:
+            status, detail = ap._backfill(s, con, store_url, True, [])
+        assert status == "ok" and "hub unavailable" in detail
+        assert "skipped 1 dates with unavailable snapshots" in detail
+    else:
+        for key, value in {"DESK_ENV_FILE": tmp_path / "none.env", "DESK_HOME": s.home, "DESK_STORE_URL": store_url,
+                           "DESK_SNAPSHOT_CACHE": cache, "DESK_HUB_URL": hub.hub_url, "DESK_HUB_TOKEN": hub.hub_token}.items():
+            monkeypatch.setenv(key, str(value))
+        assert cli.main(["backfill", "--from", d, "--to", d, "--no-inbox"]) == 0
+        captured = capsys.readouterr()
+        assert "hub unavailable" in captured.err and "cache only" in captured.out
+        assert f"{d} skipped" in captured.out
+    assert stub.requests and all(url.startswith("/v1/snapshots?") for url in stub.requests)
+    assert not backfill.state(s).get("failed") and not default_dates(store_url)
 
 
 def test_inbox_reads_the_older_reports_once(tmp_path, store_url):
@@ -803,10 +1018,11 @@ def test_a_download_outage_is_not_ended_by_a_date_run_from_the_cache(tmp_path, c
     monkeypatch.setattr(backfill.cache, "sync", sync)
     t0 = datetime(2026, 10, 20, 9, 0, tzinfo=UTC)
     res, st = _cycle(s, store_url, t0, rows=rows, client=object())
-    assert not res["done"] and [d for d, _ in res["failed"]] == ["2026-10-12"] and synced == [["2026-10-12"]]
+    assert not res["done"] and not res["failed"] and res["skipped"] == ["2026-10-12"]
+    assert synced == [["2026-10-12"]]
     res, st = _cycle(s, store_url, t0 + timedelta(hours=1), rows=rows, client=object())
     # 12.10 a second time, 14.10 from the cache runs (not the downloads), 15.10 fails to download: it stands
-    assert res["done"] == ["2026-10-14"] and [d for d, _ in res["failed"]] == ["2026-10-12", "2026-10-15"]
+    assert res["done"] == ["2026-10-14"] and not res["failed"] and res["skipped"] == ["2026-10-12", "2026-10-15"]
     stall = res["stalled"]
     assert stall["cause"] == "hub" and stall["status"] == 502 and stall["phase"] == "bundle" and stall["stops"] == 2
     assert stall["date"] == "2026-10-12" and stall["dates"] == ["2026-10-12", "2026-10-15"]
@@ -1010,7 +1226,7 @@ def test_one_bundle_that_does_not_come_while_the_hub_answers_does_not_load(tmp_p
     st = backfill.state(s)["problems"]["2026-10-15"]
     assert st["alone"] and st["phase"] == "bundle"  # «does not load» (the status of the cache plan has no hub dates)
     res, st = _cycle(s, store_url, t0 + timedelta(hours=3), rows=rows, client=object())
-    assert res["stalled"] is None and [d for d, _ in res["failed"]] == ["2026-10-15"]  # tried every time
+    assert res["stalled"] is None and not res["failed"] and res["skipped"] == ["2026-10-15"]  # tried every time
 
 
 def test_an_unreachable_store_is_not_waited_for_a_slow_one_is():
@@ -1116,7 +1332,7 @@ def test_a_file_error_of_one_date_is_its_failure_not_a_stall(tmp_path, cache, st
 
 
 def test_a_date_skipped_without_a_bundle_does_not_use_up_the_budget(tmp_path, cache, store_url):
-    """#447: the oldest date has no bundle (skipped, nothing tried); with a budget of 0 the next date is still tried."""
+    """#447: skipped dates cannot consume a zero budget. The next date with both closes cached runs."""
     load(store_url, tmp_path, "2026-10-08", 10)
     load(store_url, tmp_path, "2026-10-14", 10)
     s = settings(tmp_path, cache, store_url)
@@ -1125,7 +1341,8 @@ def test_a_date_skipped_without_a_bundle_does_not_use_up_the_budget(tmp_path, ca
                           hub=[("2026-10-08", "a" * 64), *[(d, "") for d in reversed(DATES)]])
     assert p.todo[0].date == "2026-10-08" and not p.todo[0].cached
     res = backfill.run(s, p, store_url=store_url, budget_s=0.0, out=lambda line: None)
-    assert res["skipped"] == ["2026-10-08"] and (res["done"] or res["unconverged"])  # the next date was tried
+    assert res["skipped"] == ["2026-10-08", "2026-10-09"]  # 08.10 is also the previous close of 09.10
+    assert res["done"] == ["2026-10-12"]
 
 
 def test_tls_and_cut_off_body_errors_are_the_network():

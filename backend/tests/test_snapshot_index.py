@@ -10,7 +10,7 @@ import pytest
 from test_market_history import FIX, shifted, write
 
 from desk.marketdata import bundle
-from desk.marketdata.bundle import MANIFEST_INDEX, SnapshotDir
+from desk.marketdata.bundle import MANIFEST_INDEX, MissingSnapshotError, SnapshotDir
 
 
 @pytest.fixture
@@ -42,6 +42,23 @@ def test_index_lists_without_parsing_again(folder, monkeypatch):
     seen = parses(monkeypatch)
     assert SnapshotDir(folder).manifests() == first and seen == []
     assert f"{sid}.json.gz" not in (folder / MANIFEST_INDEX).read_text(encoding="utf-8")
+
+
+def test_snapshot_disappearing_during_the_scan_is_not_indexed(folder, monkeypatch):
+    sid = write(folder, shifted("2026-10-14", 1))
+    read_manifest = bundle._manifest
+
+    def prune(path):
+        if path.name == f"{sid}.json.gz":
+            path.unlink()
+        return read_manifest(path)
+
+    monkeypatch.setattr(bundle, "_manifest", prune)
+    snapshots = SnapshotDir(folder)
+    assert snapshots.market_dates() == ["2026-10-15"]
+    assert sid not in snapshots.ids() and sid not in (folder / MANIFEST_INDEX).read_text(encoding="utf-8")
+    with pytest.raises(MissingSnapshotError, match=f"snapshot {sid} is not in the cache"):
+        snapshots.get(sid)
 
 
 def test_broken_index_and_read_only_folder(folder, monkeypatch):
