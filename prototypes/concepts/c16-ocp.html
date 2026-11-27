@@ -743,6 +743,19 @@
       (marks.length ? '<div class="k-note warn">' + esc(marks.join('; ')) + '</div>' : '') + spotFutureHtml(line) + excludedHtml(line) + rateNote(line);
   }
   const baseFile = bd => { const r = bd && (bd.rows || []).find(x => x.key === 'base'); return r && r.file || ''; };
+  function tradeWindowHtml(lines, inputs) {
+    const windows = (inputs || {}).base_days || {};
+    return [...new Set(lines.map(x => x.base_date).filter(d => windows[d]))].sort().map(d => {
+      const w = windows[d], missing = w.trades_missing_dates || [];
+      const cuts = Object.entries(w.trades_last_report_ts || {}).sort().map(([day, ts]) => {
+        const time = K.mskTime(ts);
+        return f.date(day) + ' — ' + (time ? time + ' МСК' : 'время среза неизвестно');
+      });
+      return (missing.length ? '<div class="k-note warn" data-c16-trades-missing>Сделки после базы загружены не за все рабочие дни. Нет выгрузки за ' +
+        esc(missing.map(f.date).join(', ')) + '.</div>' : '') +
+        (cuts.length ? '<div class="k-note mut" data-c16-trade-cuts>Последние известные срезы сделок: ' + esc(cuts.join(', ')) + '</div>' : '');
+    }).join('');
+  }
   let PARTN = {};
   function drill(r, ccy, date) {
     const o = K.drawer(true), key = keyOf(r), who = r.x.book ? bookName(r.x.book) : entityName(r.x.entity) + ' · часть отчёта';
@@ -788,7 +801,8 @@
           ? '<div class="k-note mut" data-c16-reread>В файле отчёта на эту дату нет разбивки деривативов: файл прочитан адаптером до того, как в нём заданы виды строк деривативов («Настройки» → «ОВП: типы строк»), или до версии адаптера с такой разбивкой, и с тех пор не перечитан. Пометка говорит о том, как монитор принял файл, а не о том, что в отчёте источника. Чтобы дата перешла на текущую методику, перечитайте отчёты: «Настройки» → «Адаптер и источники» → «Папки» → карточка «Перечитать отчёты за период» → «Источник» (источник отчёта ОВП), «С даты» и «По дату» (' + esc(wdText) + ') → кнопка «Перечитать». Карточка видна только с этого компьютера или администратору. Пересчёт даты идёт сам, ход — «Настройки» → «Диагностика» → карточка «История прогонов».</div>'
           : '';
         const meth = (oldM ? '<div class="k-note warn" data-c16-method-drill>' + esc(day.methodNote) + '</div>' : '') + rereadM;
-        out.innerHTML = left + nocheck + meth + (lines.length ? lines.map(x => lineHtml(x, cellOf(x.ccy), bdOf(x))).join('') : '<div class="k-empty">В этот день у строки нет ОВП' + (cur ? ' в ' + esc(cur) : '') + '</div>');
+        out.innerHTML = left + nocheck + meth + tradeWindowHtml(lines, J.inputs) +
+          (lines.length ? lines.map(x => lineHtml(x, cellOf(x.ccy), bdOf(x))).join('') : '<div class="k-empty">В этот день у строки нет ОВП' + (cur ? ' в ' + esc(cur) : '') + '</div>');
         K.tableToolsAll(out);
       }).catch(e => { out.innerHTML = '<div class="k-empty">' + esc(e.gone ? M.RUN_GONE : 'Разбор не загрузился: ' + e.message) + '</div>'; });
     };

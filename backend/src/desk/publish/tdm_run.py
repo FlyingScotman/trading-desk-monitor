@@ -478,13 +478,18 @@ def direct_row(ctx: EodContext, book: str, pid: str, o: Outcome, x: dict[str, An
     fx = kind == "fx"
     itype, aclass, segment = DIRECT_KIND.get(kind, DIRECT_KIND["other"])
     why = list(v.assumptions)
+    perpetual = v.extra.get("fx_future_state") == "perpetual"
+    unknown_future_nominal = future and not math.isfinite(v.quantity)
     ccy = ccy0 = x.get("ccy") or "RUB"  # ccy0: the report row's own, for the cross (ccy may be shown in RUB below)
     rate = v.face_rub if fx else (r[0] if (r := fx_rate(ctx, ccy)) else None)
     amount = v.quantity if fx else next((x[f] for f in ("face_outstanding_ccy", "face_amount_ccy")
                                          if x.get(f) is not None), None)
     if rate is None or not math.isfinite(rate):
-        why.append(f"no {ccy} rate on {ctx.business_date}: shown in RUB")
-        ccy, rate, amount = "RUB", 1.0, None  # the face is in the foreign currency: the notional is the MV
+        if perpetual:
+            why.append(f"нет курса {ccy} на {ctx.business_date}: рублёвый эквивалент номинала неизвестен")
+        else:
+            why.append(f"no {ccy} rate on {ctx.business_date}: shown in RUB")
+            ccy, rate, amount = "RUB", 1.0, None  # the face is in the foreign currency: the notional is the MV
     core = bool(v.extra.get("core"))  # a derivative valued by core from its terms (valuation.derivatives)
     # a swap or a REPO valued by core: its notional (a REPO's signed cash) and its maturity are the terms'
     rates_core = core and bool(v.extra.get("swaps") or v.extra.get("repos") or v.extra.get("rates_settled"))
@@ -493,7 +498,7 @@ def direct_row(ctx: EodContext, book: str, pid: str, o: Outcome, x: dict[str, An
     if cds:
         ccy, rate, amount = cds["ccy"], v.face_rub, v.quantity
         why = list(v.assumptions)
-    if amount is None:
+    if amount is None and not unknown_future_nominal:
         amount = v.pv_rub / rate
         why.append("notional unknown: the market value is shown")
     vd = future_expiry(x) if future else x.get("value_date")
@@ -504,16 +509,17 @@ def direct_row(ctx: EodContext, book: str, pid: str, o: Outcome, x: dict[str, An
     if kind == "bond":  # unmapped: the bank's name (D6), else its ISIN
         name = (name or x.get("isin") or pid) + FROM_REPORT
     unconfirmed = o.ocp_unconfirmed
-    if unconfirmed or v.extra.get("fx_future_state"):
+    if unconfirmed or v.extra.get("fx_future_state") == "expired":
         delta = {}
     elif core:  # core's spot equivalent per currency, not the notional (the OCP amounts are in extra.ocp_amount)
         delta = {c: d for c, d in (v.fx_delta or {}).items() if c != "RUB"}
-    elif fx and ccy != "RUB" and (leg := fx_future_quote_leg(ctx, x, ccy, amount)) is not None:
-        # DEC18 (TDM#588): an FX future on a cross: its nominal in the base currency and the quote leg
-        delta = {ccy: amount}
-        if leg[0]:
-            delta[leg[0]] = leg[1]
-        why.append(leg[2])
+    elif future and (perpetual or ccy != "RUB"):
+        # DEC18 (TDM#588): the base nominal and, for a cross, the quote leg.
+        delta = {ccy: amount} if ccy != "RUB" else {}
+        if (leg := fx_future_quote_leg(ctx, x, ccy, amount)) is not None:
+            if leg[0]:
+                delta[leg[0]] = leg[1]
+            why.append(leg[2])
     elif fx and (cr := cross_row(ctx, o, x, ccy0, v.quantity)) is not None:
         # TDM#672: a forward on a cross without terms: both legs of the pair, or no FX delta when the unit of its
         # amount is not confirmed (said in the assumptions, the card and the OCP)
@@ -524,6 +530,10 @@ def direct_row(ctx: EodContext, book: str, pid: str, o: Outcome, x: dict[str, An
         delta = {rc["ccy"]: rc["value"]} if rc["ccy"] != "RUB" else {}
     else:
         delta = {ccy: amount if fx else v.pv_rub / rate} if ccy != "RUB" else {}
+    future_rates = {c: r[0] for c in delta if (r := fx_rate(ctx, c)) is not None} if perpetual else {}
+    notional, notional_rub = (None, None) if unknown_future_nominal else (amount, amount * rate)
+    if perpetual:
+        notional_rub = _num(notional_rub)
     return {
         "position_id": pid, "book_id": book,
         "instr_type": "CDS" if cds else "FX" if core and not rates_core else itype,
@@ -531,10 +541,12 @@ def direct_row(ctx: EodContext, book: str, pid: str, o: Outcome, x: dict[str, An
         "segment": segment, "name": name or pid, "isin": x.get("isin"), "issuer": None, "ccy": ccy,
         "maturity": mat.isoformat() if mat else None,
         "tenor_y": (mat - ctx.business_date).days / 365.25 if mat and (core or not fx) else None,
-        "side": ("long" if amount >= 0 else "short") if cds else rates_side(v.extra) if rates_core
+        "side": None if notional is None
+        else ("long" if amount >= 0 else "short") if cds else rates_side(v.extra) if rates_core
         else ("BUY" if amount >= 0 else "SELL") if fx or core
         else "long" if amount >= 0 else "short",
-        "notional": amount, "notional_rub": amount * rate, "price": _num(v.clean_pct), "mv": v.pv_rub / rate,
+        "notional": notional, "notional_rub": notional_rub, "price": _num(v.clean_pct),
+        "mv": 0.0 if perpetual else v.pv_rub / rate,
         "mv_rub": v.pv_rub, "dv01": v.dv01_rub, "cs01": v.spread01_rub, "ofz_spr01": 0.0,
         **({"accrued": v.accrued_rub} if cds else {}),
         "risk": risk_by_curve(v), "gamma": [[a, b, g] for a, b, g in v.hessian] if core else [],
@@ -548,9 +560,11 @@ def direct_row(ctx: EodContext, book: str, pid: str, o: Outcome, x: dict[str, An
             "assumptions": why, "quantity_bonds": qty, **({"not_exact_reason": o.reason} if o.reason else {}),
             **({"off_report": True} if x.get("off_report") else {}),
             **({"pnl": pnl_extra(o.pnl)} if o.pnl else {}),
-            **({"fx_rate": rate} if ccy != "RUB" else {}), **v.extra, **reported(x),
+            **({"fx_rate": rate} if ccy != "RUB" and math.isfinite(rate) else {}),
+            **({"fx_rates": future_rates} if future_rates else {}), **v.extra, **reported(x),
             **({"ocp_amount": o.ocp_amount} if o.ocp_amount and "ocp_amount" not in v.extra else {}),
-            **({"fx_delta_basis": "notional (no trade terms: undiscounted)"} if fx and not core and delta else {}),
+            **({"fx_delta_basis": "nominal (perpetual FX future, DEC18)"} if perpetual and delta else
+               {"fx_delta_basis": "notional (no trade terms: undiscounted)"} if fx and not core and delta else {}),
             **({"ocp_unconfirmed": unconfirmed} if unconfirmed else {}),
         },
     }

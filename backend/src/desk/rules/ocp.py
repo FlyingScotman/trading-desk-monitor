@@ -76,7 +76,7 @@ import re
 from collections import defaultdict
 from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import asdict, dataclass, field, replace
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
 from decimal import Decimal
 from enum import Enum
 from functools import partial
@@ -144,10 +144,9 @@ class OcpPolicy:
     report_max_age_days: int = 0
     """``report_plus_outside`` only: a report unit carried forward from a ``valid_date`` more than this many calendar
     days before the run's date is not published: its books fall back to the derived OCP (``derived_stale_report``)."""
-    report_max_age_bd: int = 1
-    """``report_base_plus_day`` only (owner, 03.11.2026, TDM#531): a report unit whose ``valid_date`` is more than this
-    many business days before the run's date is not a base: its books fall back to the derived OCP
-    (``derived_stale_report``). 1: Friday's report is Monday's base."""
+    report_max_age_bd: int = 2
+    """``report_base_plus_day`` only (owner, 27.11.2026, TDM#531): the base can be up to two business days older than
+    the run's date. An older report's books use the derived OCP (``derived_stale_report``)."""
 
     def __post_init__(self) -> None:
         bad = set(self.report_components) - set(COMPONENTS)
@@ -185,7 +184,7 @@ OPEN_DECISIONS: tuple[OpenDecision, ...] = (
 
 DECIDED: dict[str, str] = {
     "published": "OQ-18 (владелец, 04.11.2026, TDM#567; 03.11.2026, TDM#531; 28.10.2026, TDM#416)",
-    "report_max_age_bd": "OQ-18 (владелец, 03.11.2026, TDM#531)",
+    "report_max_age_bd": "OQ-18 (владелец, 27.11.2026, TDM#531)",
     "bond_funding_liability": "OQ-04 (владелец, 23.10.2026, TDM#54)",
 }
 """Policy fields an owner decision sets (``docs/program/DECISIONS.md``): never provisional, the private adapter's
@@ -328,6 +327,7 @@ FX_FUTURE_GROUP = "fx_future"
 """The report's product group of an FX future (DEC18, TDM#588): only this group (or core's product ``fx_future``) is
 an FX future in the OCP."""
 
+PERPETUAL_FUTURE_NOTE = "бессрочный валютный фьючерс: PV = 0, дельта и ОВП по номиналу (DEC18)"
 
 FX_FUTURE_OPTION_GROUP = "fx_future_option"
 """An option on a currency future (the adapter's FutureOptionFX): an option on a currency, as ``fx_option``."""
@@ -409,7 +409,10 @@ def classify(row: Mapping[str, Any], terms: Sequence[Mapping[str, Any]], books: 
     fx_like = row.get("instr_type") == "FX" or kind == "fx"
     vd = _day(rep.get("value_date"))
     later = vd is not None and vd > add_business_days(on, policy.settle_window_bd)
-    if core:
+    perpetual = own == "futures" and ex.get("fx_future_state") == "perpetual"
+    if perpetual:
+        basis = AmountBasis.NOMINAL.value
+    elif core:
         basis = AmountBasis.NOMINAL.value if "fx_future" in product else policy.amount_basis.value
         if takes_ocp_amount(ex, policy.amount_basis):
             delta = _amounts(ex.get("ocp_amount"), policy)
@@ -430,7 +433,7 @@ def classify(row: Mapping[str, Any], terms: Sequence[Mapping[str, Any]], books: 
     if row.get("instr_type") == "BOND":
         return "bonds", delta, basis, ("грязная MV за вычетом валютного пассива фондирования" if basis == "mv_net"
                                        else "")
-    note = "" if core or basis != "notional" else \
+    note = PERPETUAL_FUTURE_NOTE if perpetual else "" if core or basis != "notional" else \
         "CCS не оценён ядром: обмены валютной ноги по условиям сделки, не PV" if no_pv else \
         "без условий сделки: номинал, не PV"
     if ndf:
@@ -893,7 +896,7 @@ FUTURE_GAP_TEXT = {
     "no_future_expiry": "валютный фьючерс без даты экспирации: в ОВП не включён",
     "no_future_pair": "валютная пара фьючерса не подтверждена: позиция в ОВП не включена",
     "no_quantity": "нет ненулевого числа контрактов: позиция фьючерса в ОВП не включена",
-    "no_future_notional": "нет номинала фьючерса: позиция в ОВП не включена",
+    "no_future_notional": "номинал валютного фьючерса не подтверждён: позиция в ОВП не включена",
     "sign_mismatch": "знаки номинала и числа контрактов расходятся: позиция фьючерса в ОВП не включена",
     "lot_mismatch": "лот фьючерса не совпадает с биржевым: позиция в ОВП не включена",
     "ambiguous_future_quote": "лотовые условия подходят нескольким контрактам: позиция фьючерса в ОВП не включена",
@@ -1066,10 +1069,11 @@ class DerivLine:
     first_trade: date | None = None
     """The earliest trade date of its terms; None: no terms."""
     valued_by_core: bool = False
+    perpetual: bool = False
 
     @property
-    def has_core_value(self) -> bool:
-        return self.valued_by_core or self.basis == "spot_equivalent"
+    def has_ocp_value(self) -> bool:
+        return self.perpetual or self.valued_by_core or self.basis == "spot_equivalent"
 
     @property
     def in_term(self) -> bool:
@@ -1103,13 +1107,14 @@ def derivative_lines(rows: Sequence[Mapping[str, Any]], books: Mapping[str, Mapp
         tds = [d for x in t if (d := _day(x.get("trade_date")))]
         last, first = (max(dates) if dates else None), (min(tds) if tds else None)
         core = bool(ex.get("core"))
+        perpetual = kind == "fx_future" and ex.get("fx_future_state") == "perpetual"
         entity = str((books.get(r["book_id"]) or {}).get("entity") or "—")
         source = ex.get("ocp_amount") if takes_ocp_amount(ex, None) else r.get("fx_delta")
-        amounts = {c: a for c, a in _amounts(source, policy).items() if a}
-        basis = ("nominal" if kind == "fx_future" else "spot_equivalent") if core else "notional"
+        amounts = {c: a for c, a in _amounts(source, policy).items() if a or perpetual}
+        basis = "nominal" if kind == "fx_future" and (core or perpetual) else "spot_equivalent" if core else "notional"
         for ccy, a in sorted(amounts.items()):
             out.append(DerivLine(pid, str(r["book_id"]), entity, ccy, a, kind, last, basis, comp, first,
-                                 valued_by_core=core))
+                                 valued_by_core=core, perpetual=perpetual))
         if not amounts:
             out.append(DerivLine(pid, str(r["book_id"]), entity, "", 0.0, kind, last, "none", comp, first))
     return out
@@ -1297,6 +1302,10 @@ class BaseDay:
     """``cash_rows`` as OCP lines (``cash_lines``; ``compute_ocp`` makes them)."""
     cash_dates: dict[str, date] = field(default_factory=dict)
     """Book -> the newest valid date of its ``cash_rows``."""
+    trades_missing_dates: tuple[date, ...] = ()
+    """Business dates of (B, D] with no trades unit, including when some other dates have trades."""
+    trades_last_report_ts: dict[date, datetime | None] = field(default_factory=dict)
+    """Prior business dates of (B, D) with trades units and the latest known source cut time for each."""
 
 
 @dataclass
@@ -1540,7 +1549,7 @@ def published_day(comparisons: Sequence[Mapping[str, Any]], outside_report: Sequ
     - ``bonds``: the revaluation of the foreign-currency bonds since B (``BaseDay.bonds``) when the report holds
       ``bonds``;
     - ``trades``: the trades after B (``BaseDay.trades``), but a derivative the positions already hold where its kind
-      is apart (its PV is in ``derivatives``); not loaded: none, said (gap ``trades_not_loaded``);
+      is apart (its PV is in ``derivatives``); missing business dates in (B, D] raise ``trades_not_loaded``;
     - ``outside``: the components the report does not hold, from positions, as ``report_plus_outside``.
 
     The run on B itself has no bonds' revaluation and no trades: the report without derivatives + their PV. A unit
@@ -1681,8 +1690,10 @@ def published_day(comparisons: Sequence[Mapping[str, Any]], outside_report: Sequ
         if b0 is not None and b0 < on:
             if business_days_between(b0, on, is_business_day) > 1:
                 issues["base_older"].append(f"{where} от {b0:%d.%m.%Y}")
-            if day is None or day.trades is None:
-                issues["trades_not_loaded"].append(where)
+            missing = day.trades_missing_dates if day is not None else ()
+            if day is None or day.trades is None or missing:
+                dates = ", ".join(f"{d:%d.%m.%Y}" for d in missing)
+                issues["trades_not_loaded"].append(f"{where}: нет выгрузки за {dates}" if dates else where)
             if "bonds" in policy.report_components and (day is None or day.run_id is None):
                 issues["no_base_run"].append(f"{where}: {b0:%d.%m.%Y}")
             if day is not None:
@@ -1743,13 +1754,14 @@ def published_day(comparisons: Sequence[Mapping[str, Any]], outside_report: Sequ
                         or (x.first_trade is not None and b0 is not None and x.first_trade > b0))]
                 else:
                     pv = [x for x in term if x.last_flow is None or b0 is None or x.last_flow > b0]
-                    issues["derivatives_unknown_last_flow"] += [x.position_id for x in pv if x.last_flow is None]
+                    issues["derivatives_unknown_last_flow"] += [x.position_id for x in pv
+                                                                if x.last_flow is None and not x.perpetual]
                     # coverage: positions of the kind valued at their notional (no terms) or with no amount at all
                     # (only those with flows still to come: ``pv``, and the ones with no amount at all; a position
                     # whose last flow is not after B is not in ``pv`` and is no gap)
                     unvalued = {x.position_id for x in mine if x.kind == k and x.in_term and x.basis == "none"}
                     held = {x.position_id for x in pv} | unvalued
-                    bare = {x.position_id for x in pv if not x.has_core_value} | unvalued
+                    bare = {x.position_id for x in pv if not x.has_ocp_value} | unvalued
                     if pv and bare:
                         (no_pv if bare >= held else partial).append(k)
                         # no position of the kind has a PV (no terms bound, core did not value it): the report's
@@ -1768,9 +1780,10 @@ def published_day(comparisons: Sequence[Mapping[str, Any]], outside_report: Sequ
                     items["derivatives"] += [{"kind": "position", "position_id": x.position_id, "book_id": x.book_id,
                                               "derivative": k, "component": x.component, "basis": x.basis,
                                               "last_flow": _iso(x.last_flow), "amount": x.amount,
-                                              **({"note": "сделка после базы"} if k not in kinds else {}),
+                                              **({"note": PERPETUAL_FUTURE_NOTE} if x.perpetual else
+                                                 {"note": "сделка после базы"} if k not in kinds else {}),
                                               **({"marker": "номинал позиции, PV нет"}
-                                                 if not x.has_core_value else {})}
+                                                 if not x.has_ocp_value else {})}
                                              for x in pv]
                 elif k in kinds and nominal.get(k) and report_nominal_ok:
                     items["derivatives"].append({"kind": "report_nominal", "derivative": k,
@@ -1779,7 +1792,7 @@ def published_day(comparisons: Sequence[Mapping[str, Any]], outside_report: Sequ
                                                  "marker": "номинал, PV нет"})
                     fallback.append(k)
                     issues["derivatives_nominal_fallback"].append(f"{where} {ccy}: {KIND_TEXT[k]}")
-                if k == "fx_future" and k in kinds and nominal.get(k) and expired and not any(x.has_core_value for x in pv):
+                if k == "fx_future" and k in kinds and nominal.get(k) and expired and not any(x.has_ocp_value for x in pv):
                     # A mixed aggregate cannot identify the expired legs. Use any live positions already found.
                     known = [n for n in expired if n is not None]
                     if term or len(known) != len(expired) or not math.isclose(
@@ -1805,7 +1818,7 @@ def published_day(comparisons: Sequence[Mapping[str, Any]], outside_report: Sequ
                     got = [{"kind": "position", "position_id": d.position_id, "book_id": d.book_id,
                             "component": x.component, "basis": x.basis, "last_flow": _iso(x.last_flow),
                             "amount": x.amount,
-                            **({"marker": "номинал позиции, PV нет"} if not x.has_core_value else {})}
+                            **({"marker": "номинал позиции, PV нет"} if not x.has_ocp_value else {})}
                            for x in by_pos_ccy.get((d.position_id, ccy), ())]
                 for g in got:
                     g["note"] = "сопоставлена со строкой отчёта спот-типа"
@@ -1968,7 +1981,7 @@ DAY_GAP_TEXT = {
     "expired_future_report_nominal": "в совокупном номинале отчёта могут быть истёкшие фьючерсы. "
                                      "В ОВП включены только доступные действующие позиции фьючерсов",
     "base_older": "база — отчёт ОВП не за прошлый рабочий день: переоценка и сделки — с даты отчёта",
-    "trades_not_loaded": "сделки после базы не загружены: ОВП без них",
+    "trades_not_loaded": "сделки после базы загружены не за все рабочие дни",
     "no_base_run": "прогона за дату базы нет: переоценка облигаций с даты базы не посчитана",
     "trades_not_valued": "сделки после базы, которые правило ОВП не оценивает (не облигация и не валюта)",
     "trades_unknown_book": "сделки после базы в книгах, которых нет в справочнике книг: в ОВП не вошли",
@@ -2043,7 +2056,7 @@ def derivatives_check(comparisons: Sequence[Mapping[str, Any]], derivs: Sequence
             held = {d.position_id for d in derivs if d.kind == k and d.in_term and d.book_id in books_in
                     and d.ccy in (c["ccy"], "")}
             bare = {d.position_id for d in derivs if d.kind == k and d.in_term and d.book_id in books_in
-                    and d.ccy in (c["ccy"], "") and not d.has_core_value}
+                    and d.ccy in (c["ccy"], "") and not d.has_ocp_value}
             out.append({"entity": c["entity"], "book_id": c.get("book_id"), "books": list(books_in), "ccy": c["ccy"],
                         "kind": k, "component": KIND_COMPONENT[k], "nominal": n, "pv": pv,
                         "pv_date": b0.isoformat() if b0 else None, "pv_source": src, "diff": diff,

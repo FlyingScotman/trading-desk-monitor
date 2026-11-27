@@ -647,8 +647,16 @@ def attach(prev: EodContext, ctx: EodContext, direct: dict[str, Outcome], inputs
         kind = "fx" if future else (x.get("asset_class") or "bond").lower()
         vd = inputs.valid_dates.get(book.get(pid, ""))
         try:
-            if future and o.ocp_unconfirmed and not rouble_future(x):
-                raise NoPnl("future_not_matched", o.detail)
+            perpetual = v.extra.get("fx_future_state") == "perpetual"
+            if future and o.ocp_unconfirmed:
+                code = o.ocp_unconfirmed["reason"]
+                if perpetual or code in {"no_future_notional", "no_future_pair"}:
+                    raise NoPnl(code, o.detail)
+                if not rouble_future(x):
+                    raise NoPnl("future_not_matched", o.detail)
+            if perpetual:
+                raise NoPnl("no_perpetual_future_pnl",
+                            "для PnL бессрочного фьючерса нужны данные о вариационной марже и фандинге")
             if ("fx_future" in ((v.extra.get("core") or {}).get("product") or "")
                     or future and (rouble_future(x) or (v.extra.get("fx_future_state") == "expired"
                                                       and v.horizon_date <= prev.business_date))):

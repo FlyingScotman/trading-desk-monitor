@@ -490,7 +490,10 @@
       ]
      },
      "notional": {
-      "type": "number"
+      "type": [
+       "number",
+       "null"
+      ]
      },
      "notional_rub": {
       "type": [

@@ -13,7 +13,7 @@ from __future__ import annotations
 
 import math
 from dataclasses import replace
-from datetime import date, datetime
+from datetime import UTC, date, datetime
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -107,7 +107,7 @@ def assert_parts_sum(r):
 
 def test_default_basis_is_report_base_plus_day_from_its_date():
     assert O.PROVISIONAL_POLICY.published is O.PublishedBasis.REPORT_BASE_PLUS_DAY
-    assert O.PROVISIONAL_POLICY.report_max_age_bd == 1 and "report_max_age_bd" in O.DECIDED
+    assert O.PROVISIONAL_POLICY.report_max_age_bd == 2 and "27.11.2026" in O.DECIDED["report_max_age_bd"]
     assert not hasattr(O, "BASIS_SINCE") and not hasattr(O, "default_published")  # no date keeps the old default
 
 
@@ -289,20 +289,21 @@ def test_friday_report_is_mondays_base_and_older_is_stale():
     r = run(on=mon, units=fri, days={date(2026, 10, 16): O.BaseDay(date(2026, 10, 16), run_id=1, trade_rows=[])})
     assert {x["source"] for x in r.published if x["book_id"] in ("D1", "T1")} == {"report"}
     assert "stale_report" not in {g["code"] for g in r.gaps}
-    # Thursday's report on Monday: two business days, the limit is one: derived, said
-    old = run(on=mon)
+    # Thursday's report on Tuesday is three business days old.
+    tue = date(2026, 10, 20)
+    old = run(on=tue)
     p = pub(old)
     assert p[("D1", "USD")]["source"] == "derived_stale_report" and "parts" not in p[("D1", "USD")]
     assert p[("D1", "USD")]["amount"] == pytest.approx(490_000 + 40_000)  # all of D1 from positions
     stale = [g for g in old.gaps if g["code"] == "stale_report"]
-    assert len(stale) == 2 and "старше 1 раб. дн." in stale[0]["text"]
+    assert len(stale) == 2 and "старше 2 раб. дн." in stale[0]["text"]
     # a holiday on Monday (the run's calendar): Friday's report is Tuesday's base
-    tue = date(2026, 10, 20)
-    hol = run(on=tue, units=fri, is_business_day=lambda d: d.weekday() < 5 and d != mon,
+    hol = run(on=tue, units=fri, policy=replace(POLICY, report_max_age_bd=1),
+              is_business_day=lambda d: d.weekday() < 5 and d != mon,
               days={date(2026, 10, 16): O.BaseDay(date(2026, 10, 16), run_id=1, trade_rows=[])})
     assert pub(hol)[("D1", "USD")]["source"] == "report"
-    # the adapter may admit an older base: then its date is said
-    two = run(on=mon, policy=replace(POLICY, report_max_age_bd=2), days={B: O.BaseDay(B, run_id=1, trade_rows=[])})
+    # Thursday's report on Monday is usable by default and its date is shown.
+    two = run(on=mon, days={B: O.BaseDay(B, run_id=1, trade_rows=[])})
     assert pub(two)[("D1", "USD")]["source"] == "report" and pub(two)[("D1", "USD")]["base_older"] is True
     assert pub(r)[("D1", "USD")]["base_older"] is False  # Friday's base on Monday: the previous business day
     assert {g["code"]: g for g in two.gaps}["base_older"]["items"][0] == "книга D1 от 15.10.2026"
@@ -868,7 +869,7 @@ def test_contract_1_7_ocp_row_and_policy():
     assert s.policy.published is O.PublishedBasis.REPORT_BASE_PLUS_DAY and s.policy.report_max_age_bd == 2
     assert s.source["report_max_age_bd"] == "ocp_policy:firm"
     neg = apply_ocp_policy([{**norm, "report_max_age_bd": -1}])
-    assert neg.policy.report_max_age_bd == 1 and neg.conflicts
+    assert neg.policy.report_max_age_bd == 2 and neg.conflicts
     _, issues = check_reference_tables({"books": [{**books[0], "_src": "L2"}],
                                         "ocp_policy": [{**pol, "report_max_age_bd": "-1"}]})
     assert [i["code"] for i in issues] == ["bad_policy_value"]
@@ -1001,6 +1002,60 @@ def test_run_on_the_base_date_then_inside_the_next_day(store_url, ctx, tmp_path)
     day = {x["date"]: x for x in hist["days"]}["2026-10-16"]
     line = next(x for x in day["lines"] if x["book"] == "D1" and x["ccy"] == "USD")
     assert line["baseDate"] == "2026-10-15" and line["parts"]["trades"] == 200_000 and line["setId"]
+
+
+@pytest.mark.parametrize(("prior", "current", "holiday", "missing", "amount", "cut"), [
+    (None, True, False, [D], 200_000, {}),
+    ("full", True, False, [], 250_000, {D.isoformat(): "2026-10-16T14:45:00Z"}),
+    ("empty", True, False, [], 200_000, {D.isoformat(): None}),
+    (None, False, False, [D, date(2026, 10, 19)], 0, {}),
+    (None, True, True, [], 200_000, {}),
+])
+def test_trades_cover_every_business_day_after_base(store_url, prior, current, holiday, missing, amount, cut):
+    from desk.api.app import ocp_out
+
+    on = date(2026, 10, 19)  # the window contains Friday and Monday
+    scope = {"entity": "ENT1", "book_id": "D1"}
+
+    def add(con, dataset, day, rows, ts=None):
+        return store.store_dataset_set(
+            con, dataset=dataset, scope=scope if dataset == "ocp" else {"book_id": "D1"}, valid_date=day,
+            rows=rows, source="synthetic", priority=None, report_date=day, report_ts=ts, seq=None,
+            generated_at=None, file_mtime=datetime.now(UTC), file_name="example.csv", sha256="a" * 64,
+            adapter_fingerprint="synthetic", unit_hash=unit_hash(rows), completeness="full_snapshot")
+
+    def trade(day, amount):
+        return {"trade_id": str(day), "trade_version": 1, "status": "live", "trade_date": str(day),
+                "book_id": "D1", "asset_class": "fx", "side": "buy", "amount_ccy": str(amount), "ccy": "USD"}
+
+    with store.connect(store_url) as con:
+        con.execute("INSERT INTO inbox_file (sha256, path, name, size_bytes, mtime)"
+                    " VALUES (%s, 'example.csv', 'example.csv', 0, now())", ("a" * 64,))
+        add(con, "ocp", B, [REPORT[0]])
+        if prior == "full":
+            add(con, "trades", D, [trade(D, 40_000)], datetime(2026, 10, 16, 10, tzinfo=UTC))
+            add(con, "trades", D, [trade(D, 50_000)], datetime(2026, 10, 16, 14, 45, tzinfo=UTC))
+        elif prior == "empty":
+            add(con, "trades", D, [])
+        if current:
+            add(con, "trades", on, [trade(on, 200_000)])
+        inp = store.positions_for(con, on)
+        cal = SimpleNamespace(is_business_day=lambda d: d.weekday() < 5 and d != D) if holiday else None
+        r = ocp_run.compute(con, on, None, [], {"books": [BOOKS["D1"]]}, inp,
+                            replace(POLICY, report_max_age_bd=2), calendar=cal)
+    assert r.status == ocp_run.COMPUTED, r.block["text"]
+    result = ocp_out(1, r.block).model_dump(mode="json")
+    assert not result["left_out"]
+    (line,) = result["published"]["by_book"]
+    assert line["base_older"] is (not holiday) and line["parts"]["trades"] == amount
+    issues = [g["text"] for g in result["gaps"] if g["code"] == "trades_not_loaded"]
+    assert bool(issues) == bool(missing)
+    assert all(d.strftime("%d.%m.%Y") in issues[0] for d in missing)
+    got = r.block["inputs"]["base_days"][B.isoformat()]
+    assert got["trades_missing_dates"] == [d.isoformat() for d in missing]
+    assert got["trades_last_report_ts"] == {d: ts.replace("Z", "+00:00") if ts else None for d, ts in cut.items()}
+    assert got["trades"] == (int(current) + (prior == "full") if prior or current else None)
+    assert result["inputs"]["base_days"][B.isoformat()]["trades_last_report_ts"] == cut
 
 
 def test_pv_on_a_base_published_on_another_basis_is_unknown(store_url):

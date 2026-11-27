@@ -114,6 +114,62 @@ old;;1;report_plus_outside
 """
 
 
+@pytest.mark.parametrize(("base", "quote", "expiry"), [
+    ("USD", "RUB", "2026-12-17"),
+    ("EUR", "USD", "2026-12-17"),
+    ("USD", "RUB", ""),
+])
+def test_unconfirmed_future_does_not_reject_its_book_or_enter_ocp_and_c02(store_url, ctx, tmp_path, base, quote, expiry):
+    from desk.scenario.taylor import run_taylor
+
+    positions = (
+        "book_id;position_id;asset_class;source_instrument_id;ccy;amount_ccy;value_date;x_product_group;x_sec_cur\n"
+        "D1;D1|CASH;fx;USD;USD;1000;;;\n"
+        f"D1;D1|FUTURE;fx;SYNTH-FUTURE;{base};;{expiry};fx_future;{quote}\n"
+    )
+    report = "entity;book_id;ccy;ocp_ccy;derivatives_ccy\nENT1;D1;USD;1000;fx_future=5000\n"
+    if base == "EUR":
+        report += "ENT1;D1;EUR;0;fx_future=4000\n"
+    with store.connect(store_url) as con:
+        _scan(con, tmp_path, positions=positions, ocp=report)
+        rid, _ = _run(con, ctx)
+        reason, fact = con.execute(
+            "SELECT reason, fact FROM run_position WHERE run_id = %s AND position_id = %s",
+            (rid, "D1|FUTURE")).fetchone()
+    assert reason.startswith("no_future_notional:")
+    assert fact["notional"] is fact["notional_rub"] is None and fact["fx_delta"] == {}
+    assert fact["extra"]["ocp_unconfirmed"]["reason"] == "no_future_notional"
+    client = TestClient(create_app(store_url))
+    o = client.get(f"/api/v1/runs/{rid}/ocp").json()
+    gap, = [g for g in o["gaps"] if g["code"] == "no_future_notional"]
+    assert gap["items"] == ["D1|FUTURE"] and "номинал" in gap["text"]
+    assert not o["left_out"]
+    assert all(x["position_id"] != "D1|FUTURE" for x in o["lines"])
+    expected = {"USD": 1000, **({"EUR": 0} if base == "EUR" else {})}
+    assert {x["ccy"]: x["amount"] for x in o["published"]["by_book"]} == expected
+    assert all(not x["fallback"] for x in o["published"]["by_book"])
+    risk = client.get(f"/api/v1/runs/{rid}/risk").json()
+    assert {k: v["linear"] for k, v in risk["ocp"]["by_ccy"].items()} == expected
+    assert risk["factors"] == ["FX|USD"]
+    shocked = {x["position_id"]: x["fx"] for x in run_taylor(risk, {"fx": {"USD": 1, "EUR": 1}})["positions"]}
+    assert shocked == pytest.approx({"D1|FUTURE": 0, "D1|CASH": 10 * o["published"]["by_ccy"]["USD"]["rate"]})
+
+
+def test_positions_validator_still_rejects_a_forward_without_a_nominal():
+    from desk.inbox.validate import check_read
+
+    decl = {"source": "test", "dataset": "positions", "time_basis": "start_of_day", "completeness": "full_snapshot",
+            "scope": ["book_id"], "covers": "listed"}
+    hit = {"source": "test", "report_date": "2026-10-16", "date_from": "name", "report_ts": None, "seq": None}
+    scope = {"book_id": "D1"}
+    row = {**scope, "_src": "L2", "position_id": "D1|FWD", "asset_class": "fx", "source_instrument_id": "SYNTH-FWD",
+           "ccy": "USD", "value_date": "2026-12-17",
+           "x_product_group": "fx_forward", "x_sec_cur": "RUB"}
+    out = check_read(decl, hit, {"rows": [row], "scopes": [scope], "issues": [], "controls": {}, "meta": {}}, books=None)
+    assert out.units[0]["status"] == "rejected"
+    assert [(x["code"], x["message"]) for x in out.issues] == [("missing_required", "an fx row needs amount_ccy")]
+
+
 def test_ocp_end_to_end_inbox_run_api(store_url, ctx, tmp_path):
     with store.connect(store_url) as con:
         _scan(con, tmp_path, policy=OLD_BASIS)

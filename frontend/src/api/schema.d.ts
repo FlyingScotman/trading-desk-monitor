@@ -2206,6 +2206,24 @@ export interface components {
             /** Reason */
             reason: string;
         };
+        /** OcpBaseDayInputs */
+        OcpBaseDayInputs: {
+            /** Run Id */
+            run_id: number | null;
+            /** Bonds */
+            bonds: number;
+            /** Trades */
+            trades: number | null;
+            /** Trades Missing Dates */
+            trades_missing_dates?: string[];
+            /**
+             * Trades Last Report Ts
+             * @description Earlier business days in the trade window, by ISO date. The latest known source cut, or null if untimed.
+             */
+            trades_last_report_ts?: {
+                [key: string]: string | null;
+            };
+        };
         /**
          * OcpComparison
          * @description The reported OCP against the OCP derived from positions, at the level of the report (a book or an entity).
@@ -2416,6 +2434,19 @@ export interface components {
              * @description Scopes, books or position ids concerned (at most 50)
              */
             items: string[];
+        };
+        /** OcpInputs */
+        OcpInputs: {
+            /** Cash Units */
+            cash_units: number;
+            /** Liabilities */
+            liabilities: number;
+            /** Trade Terms */
+            trade_terms: number;
+            /** Base Days */
+            base_days?: {
+                [key: string]: components["schemas"]["OcpBaseDayInputs"];
+            };
         };
         /** OcpLineOut */
         OcpLineOut: {
@@ -4183,6 +4214,7 @@ export interface components {
             } | null;
             /** Notes */
             notes: string[];
+            inputs?: components["schemas"]["OcpInputs"] | null;
             /**
              * Books
              * @description TDM#556: name, desk, book_type and entity of the published OCP's books without positions in the run (a book only the OCP report knows); the run's reference books have the others
