@@ -165,7 +165,13 @@ from .backfill import late_why, same_logic
 from .inbox.timesem import MSK
 from .marketdata import cache, history, hubhistory, manual_cds, static_facts
 from .marketdata.adapter import StaticView
-from .marketdata.bundle import SnapshotDir, SnapshotError, previous_close, previous_market
+from .marketdata.bundle import (
+    MissingSnapshotError,
+    SnapshotDir,
+    SnapshotError,
+    previous_close,
+    previous_market,
+)
 from .marketdata.hub import HubClient, HubError, HubUnavailable
 from .scenario import jobs as scenario_jobs
 from .settings import Settings, load
@@ -1079,10 +1085,15 @@ class Autopilot:
             if (self._backfill_rows is None or self._backfill_rows[1] != d_from.isoformat()
                     or now - self._backfill_rows[0] >= RECHECK_S):
                 self._progress("backfill", 0, None, "список дат хаба")
-                self._backfill_rows = (now, d_from.isoformat(), backfill.hub_rows(client, d_from))
-            # the hub dates the sync cannot load (#146) are left out: neither run nor anyone's previous close until
-            # they load, as in the eod step's runs on the cache (#163, #447: the header shows them as not loading)
-            rows = [r for r in self._backfill_rows[2] if r[0] not in self._sync_retry]
+                try:
+                    self._backfill_rows = (now, d_from.isoformat(), backfill.hub_rows(client, d_from))
+                except HubUnavailable as e:
+                    self._hub_down = str(e)
+                    parts.append(f"hub unavailable ({e})")
+                    client = None
+            if client is not None:
+                # As in the eod step, omit hub dates whose downloads are already waiting for retry (#146).
+                rows = [r for r in self._backfill_rows[2] if r[0] not in self._sync_retry]
         p = backfill.plan(con, settings, d_from, today, rows)
         s = p.summary()
         span = (f"{s['from']}..{s['to']}: {s['done']} of {s['dates'] - s['no_positions'] - s['no_market']} dates with "
@@ -1124,7 +1135,7 @@ class Autopilot:
             if res["unconverged"]:
                 parts.append(f"still stale after the run, tried again next cycle: {', '.join(res['unconverged'][:5])}")
             if res["skipped"]:
-                parts.append(f"{len(res['skipped'])} dates not cached and no hub")
+                parts.append(f"skipped {len(res['skipped'])} dates with unavailable snapshots")
             if res["unchanged"]:
                 parts.append(f"{len(res['unchanged'])} dates keep the spread they carry (its source came out the same): "
                              "not made again")
@@ -1148,7 +1159,8 @@ class Autopilot:
                     parts.append(_stall_text(stall2))
                     parts.append(span)
                     return "error", "; ".join(parts)
-                res2 = backfill.run_second(settings, p2, store_url=url, budget_s=budget - (res["seconds"] if res else 0.0),
+                res2 = backfill.run_second(settings, p2, store_url=url, client=client,
+                                           budget_s=budget - (res["seconds"] if res else 0.0),
                                            out=self._eod_line, contexts=self._contexts, exclude=exclude,
                                            workers=pool.workers if pool is not None else 1, pool=pool,
                                            between=self._between_dates, now=self._now(),
@@ -1170,7 +1182,7 @@ class Autopilot:
                 if res2["left"]:
                     parts.append(f"{res2['left']} dates of the second derivatives in the next cycles")
         parts.append(span)
-        return ("error" if (res and res["failed"]) or failed2 or stalled2 else "ok"), "; ".join(parts)
+        return ("error" if (res and (res["failed"] or res["stalled"])) or failed2 or stalled2 else "ok"), "; ".join(parts)
 
     def _prune_intraday_stale(self, con: psycopg.Connection) -> None:
         """Each cycle: the INTRADAY runs a newer one of their date replaced at least ``INTRADAY_GRACE`` ago
@@ -1307,6 +1319,10 @@ class Autopilot:
             try:
                 rid = eod_run(settings, d, snapshots=settings.snapshot_cache, store_url=url, report_dir=None,
                               out=self._eod_line)
+            except MissingSnapshotError as e:
+                self._eod_tried.discard(d)  # backfill can download the missing snapshot this cycle
+                notes.append(f"{d} skipped ({e})")
+                continue
             except Exception as e:
                 log.exception("autopilot: eod %s failed", d)
                 self._fail(d, sig, e)
