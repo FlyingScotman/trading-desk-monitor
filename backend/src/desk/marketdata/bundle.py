@@ -162,13 +162,11 @@ class SnapshotDir:
         """snapshot id -> kind, cut_type, business_date, static_snapshot_id of every bundle in the folder."""
         return {sid: dict(m) for sid, m in self._manifests.items()}
 
-    def get(self, snapshot_id: str, *, label: str | None = None) -> Snapshot:
-        """Read a bundle, with an optional description for a missing file."""
+    def get(self, snapshot_id: str) -> Snapshot:
         try:
             return read_bundle(self.root / f"{snapshot_id}.json.gz")
         except FileNotFoundError as e:
-            label = label or f"snapshot {snapshot_id}"
-            raise MissingSnapshotError(f"{label} is not in the cache ({self.root})") from e
+            raise MissingSnapshotError(f"snapshot {snapshot_id} is not in the cache ({self.root})") from e
 
     def provenance(self, snapshot_id: str) -> dict[str, Any] | None:
         """Hub facts written by ``desk sync`` beside the bundle (host, published_at); None for files
@@ -199,7 +197,11 @@ class SnapshotDir:
 
     def market(self, business_date: str, cut_type: str = "eod_final") -> Snapshot:
         sid = self.market_id(business_date, cut_type)
-        return self.get(sid, label=f"market snapshot {sid[:12]} ({business_date}, {cut_type})")
+        try:
+            return self.get(sid)
+        except MissingSnapshotError as e:
+            raise MissingSnapshotError(f"market snapshot {sid[:12]} ({business_date}, {cut_type}) "
+                                       f"is not in the cache ({self.root})") from e
 
     def ids(self) -> list[str]:
         return list(self._manifests)

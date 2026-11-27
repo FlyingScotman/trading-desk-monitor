@@ -47,7 +47,7 @@ from .marketdata.adapter import (
     StaticView,
     bond_currency,
 )
-from .marketdata.bundle import SnapshotDir, SnapshotError
+from .marketdata.bundle import MissingSnapshotError, SnapshotDir, SnapshotError
 from .marketdata.reference import Reference
 from .marketdata.reference import facts as reference_of
 from .pnl.direct import split_fx
@@ -377,7 +377,11 @@ def prepare(snapshots: SnapshotDir, business_date: str, cut_type: str = "eod_fin
     if market_snapshot_id is None:
         snap = snapshots.market(business_date, cut_type)
     else:
-        snap = snapshots.get(market_snapshot_id, label=f"market snapshot {market_snapshot_id}")
+        try:
+            snap = snapshots.get(market_snapshot_id)
+        except MissingSnapshotError as e:
+            raise MissingSnapshotError(f"market snapshot {market_snapshot_id} is not in the cache "
+                                       f"({snapshots.root})") from e
         if (snap.kind, snap.business_date) != ("market", business_date):
             raise SnapshotError(f"snapshot {market_snapshot_id} is {snap.kind} of {snap.business_date}, "
                                 f"not the market of {business_date}")
@@ -386,9 +390,12 @@ def prepare(snapshots: SnapshotDir, business_date: str, cut_type: str = "eod_fin
         snap, filled = fixing_history.extend(snap, fixings)
     market = MarketView(snap)
     assert snap.static_snapshot_id
-    static_snapshot = snapshots.get(snap.static_snapshot_id,
-                                    label=f"static snapshot {snap.static_snapshot_id[:12]} of market snapshot "
-                                          f"{snap.id[:12]} ({business_date}, {cut_type})")
+    try:
+        static_snapshot = snapshots.get(snap.static_snapshot_id)
+    except MissingSnapshotError as e:
+        raise MissingSnapshotError(f"static snapshot {snap.static_snapshot_id[:12]} of market snapshot "
+                                   f"{snap.id[:12]} ({business_date}, {cut_type}) is not in the cache "
+                                   f"({snapshots.root})") from e
     static = StaticView(static_snapshot)
     kbd_hist = rates.kbd_history(snapshots, business_date, static.snapshot)
     core_market, rates_lineage, quote_curves, swap_curves = with_rates(market, static, market.core_market(static),
