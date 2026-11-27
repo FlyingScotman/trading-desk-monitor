@@ -49,7 +49,7 @@ from rub_fixed_income import __version__ as CORE_VERSION
 
 from ..marketdata.adapter import core_instrument
 from ..orchestrator import EodContext, Outcome
-from ..valuation.bonds import SPREAD_CONVENTION, Rejected, fixed_schedule
+from ..valuation.bonds import SPREAD_CONVENTION, Rejected, fixed_schedule, is_key_rate_floater
 from ..valuation.fallback import QUALITIES
 
 Z_CONTINUOUS = ZSpreadConvention(compounding=CONTINUOUS)
@@ -103,7 +103,8 @@ def _accrual_to_settlement(ctx: EodContext, o: Outcome) -> float | None:
     try:
         if v.floater is not None:
             inst = v.floater.instrument
-            return inst.accrued(v.settlement, ctx.core_market) - inst.accrued(v.valuation_date, ctx.core_market)
+            market = ctx.risk_market if is_key_rate_floater(t) else ctx.core_market
+            return inst.accrued(v.settlement, market) - inst.accrued(v.valuation_date, market)
         sch = fixed_schedule(t, v.valuation_date)
         inst = core_instrument(t, v.valuation_date, sch.horizon_date, sch.offer, coupons=sch.coupons)
         return inst.accrued(v.settlement) - inst.accrued(v.valuation_date)

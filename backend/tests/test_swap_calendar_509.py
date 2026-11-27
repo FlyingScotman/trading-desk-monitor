@@ -89,7 +89,7 @@ def test_january_a_swap_begun_the_year_before_a_calendar_that_starts_on_1_januar
         c["holidays"] = [h for h in c["holidays"] if h >= "2027-01-01"]
         c["working_weekends"] = [h for h in c["working_weekends"] if h >= "2027-01-01"]
     static = StaticView(dataclasses.replace(snap, doc={**snap.doc, "data": {**snap.data, "calendars": rows}}))
-    jan = SimpleNamespace(business_date=date(2027, 1, 15), static=static, swap_curves=ctx.swap_curves,
+    jan = SimpleNamespace(business_date=date(2027, 1, 15), static=static, key_rate_request=ctx.key_rate_request,
                           core_market=ctx.core_market)
     for index in ("ruonia", "key_rate"):
         terms = dv.SwapTerms.of(ois("2026-03-10", "2030-03-10", "3M", index.upper()))

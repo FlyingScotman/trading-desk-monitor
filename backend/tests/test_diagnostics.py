@@ -115,6 +115,9 @@ def test_diagnostics_sections_and_no_private_data(diag_run, tmp_path, stub):
     assert "ratescalcs/usd_futures_yields" in snap["expected_missing"]
     assert snap["rates_check"]["ruonia_ois"]["built"] and snap["rates_check"]["ruonia_ois"]["source"] == "ratescalcs"
     assert snap["rates_check"]["key_rate"]["built"]
+    assert snap["rates_check"]["key_rate"]["spec_id"] == "rub_key_rate_swap_v1"
+    assert snap["rates_check"]["key_rate"]["ruonia_curve_id"] == "RUB_RUONIA_OIS"
+    assert snap["rates_check"]["key_rate"]["risk_unit"] == "key_rate_quote"
     assert doc["static"][0]["instruments"] == 10 and doc["static"][0]["by_coupon_type"]["floating"] == 2
     # inbox and positions: counts only
     assert doc["inbox"]["files_by_status"] == {"accepted": 1} and doc["inbox"]["adapter"]["loaded"]

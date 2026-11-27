@@ -58,7 +58,7 @@ def golden():
              "quantity": r["extra"]["quantity_bonds"], "quality": r["extra"]["quality"], "pv_rub": r["mv_rub"],
              "fact": desk_run._finite(r)} for r in content.rows]
     run = {"run_id": 1, "business_date": date(2026, 10, 15), "cut_type": "eod_final",
-           "market_snapshot_id": ctx.market.snapshot.id}
+           "market_snapshot_id": ctx.market.snapshot.id, "lineage": ctx.lineage()}
     return snaps, ctx, run, rows, content.reference
 
 
@@ -130,7 +130,7 @@ def test_reprice_run_keyhike(golden):
     snaps, _, run, rows, reference = golden
     cache: dict = {}
     res = reprice_run(snaps, run, rows, reference, KEYHIKE, cache)
-    assert res["method"] == "desk-scenario-exact-v3" and res["definition_hash"] == definition_hash(normalize(KEYHIKE))
+    assert res["method"] == "desk-scenario-exact-v4" and res["definition_hash"] == definition_hash(normalize(KEYHIKE))
     by_q = {r["position_id"]: r["quality"] for r in rows}
     fallback = sorted(pid for pid, q in by_q.items() if q not in ("exact", "assumed"))
     cov = res["coverage"]

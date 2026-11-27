@@ -98,7 +98,7 @@ def test_floater_accrued_is_core_s(ctx, outs):
         assert o.valuation.accrued_rub == pytest.approx(moex)
         terms, q = o.terms, dataclasses.replace(o.quote, accrued_per_bond=None)
         r = bonds.bond_request("X", terms, q, q.trade_date, 1000.0)
-        (v,) = bonds.value_bonds(ctx.core_market, [r])[0].values()
+        (v,) = bonds.value_bonds(ctx.risk_market, [r])[0].values()
         assert v.accrued_rub == pytest.approx(moex, abs=0.005), s
         # a published coupon accrues pro rata exactly: no assumption (only a projected or assumed period is flagged)
         assert not any(a.startswith("accrued computed") for a in v.assumptions)

@@ -257,7 +257,7 @@ def _prev_rates(ctx: EodContext, prev: MarketView) -> dict[str, DiscountCurve]:
     try:
         ois = rates.ruonia_ois(prev.snapshot, ctx.static.snapshot)
         out[ois.entry.curve_id] = ois.curve
-        kr = rates.key_rate_projection(prev.snapshot, ctx.static.snapshot, ois.curve)
+        kr = rates.key_rate_projection(prev.snapshot, ctx.static.snapshot, ois)
         out[kr.entry.curve_id] = kr.curve
     except (rates.RatesInputError, SnapshotError, CoreRejection, ValueError):
         pass
@@ -289,6 +289,8 @@ def curves_reference(ctx: EodContext, prev: MarketView | None, rows: list[dict[s
             "points": curve_points(ctx, prev)}]
     built = {c.curve_id: c.curve for c in ctx.core_market.curves
              if c.curve_id in RATES_CURVES and isinstance(c.curve, DiscountCurve)}
+    if ctx.key_rate_display is not None:
+        built[rates.KEY_RATE_CURVE_ID] = ctx.key_rate_display
     old = _prev_rates(ctx, prev) if prev and built else {}
     for cid, name in RATES_CURVES.items():
         if cid in built:

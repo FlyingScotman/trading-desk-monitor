@@ -491,7 +491,7 @@ def assemble(con, run: dict[str, Any], days: Memo | None = None) -> dict[str, An
                    # how the run values OFZ (valuation.bonds.OFZ_SCHEME): "ruonia_basis" since 0.2.7, "kbd_par" in
                    # 0.2.6 (and a run without RUONIA OIS quotes), null before
                    "ofzScheme": (run.get("lineage") or {}).get("ofz_scheme"),
-                   # the unit of each curve's buckets (orchestrator.EodContext.curve_units, #171): null before
+                   # Risk bucket units (RUB KEY: key_rate_quote since v43). Chart points remain zero rates for RUB KEY.
                    "curveUnits": (run.get("lineage") or {}).get("curve_units"),
                    **run_slice(run)},
     }

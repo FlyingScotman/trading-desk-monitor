@@ -28,10 +28,15 @@ function load(opts) {
     XMLHttpRequest: XHR };
   ctx.window = ctx;
   vm.createContext(ctx);
-  loadRun(ctx);
-  if (opts.patch) opts.patch(ctx.window.CONCEPTS_RUN);
-  if (opts.extras) ctx.window.DESK_EXTRAS = opts.extras;
-  vm.runInContext(P('concepts/lib/real.js'), ctx);
+  if (opts.demo) {
+    ctx.CONCEPTS_SOURCE = 'demo';
+    vm.runInContext(P('concepts/lib/mock.js'), ctx);
+  } else {
+    loadRun(ctx);
+    if (opts.patch) opts.patch(ctx.window.CONCEPTS_RUN);
+    if (opts.extras) ctx.window.DESK_EXTRAS = opts.extras;
+    vm.runInContext(P('concepts/lib/real.js'), ctx);
+  }
   vm.runInContext(P('concepts/lib/kit.js'), ctx);
   vm.runInContext(P('concepts/lib/instr.js'), ctx);
   return { M: ctx.window.MOCK, K: ctx.window.KIT, D: ctx.window.CONCEPTS_RUN };
@@ -85,6 +90,16 @@ t('R44: «на 1 бумагу» — риск на бумагу не меняет
   const plain = K.runSeries({ dates: ['a', 'b'], dv01: [-1000, null], notional: [1, 1] }, 'dv01');
   assert.deepStrictEqual(Array.from(plain.series[0].data), [-1, null]); assert.strictEqual(plain.note, '');
   assert.ok(K.tips.floaterDv01.includes('до ближайшей фиксации') && K.tips.floaterDv01.includes('пилообразный'));
+});
+
+t('#826: подсказки КС и нетто DV01 читают единицы из прогона', () => {
+  const { K } = load({ patch: D => { D.source.curveUnits = { 'RUB KEY': 'key_rate_quote' }; } });
+  assert.match(K.curveTip('RUB KEY'), /MOEX KEYRATE.*сдвинутой RUONIA/);
+  assert.match(K.tips.dv01, /около \+4 %/);
+  assert.match(K.tips.dv01, /KRS и OIS.*к нулю/);
+  assert.doesNotMatch(K.curveTip('RUB RUONIA'), /MOEX KEYRATE/);
+  assert.match(load().K.curveTip('RUB KEY'), /прежний расчёт/);
+  assert.match(load({ demo: true }).K.curveTip('RUB KEY'), /Демонстрационные данные/);
 });
 
 const UV = { total: 4, open: 3, closed: 1, fxMissing: ['OMR'], groups: [
@@ -147,7 +162,7 @@ t('#171: прогон с риском валютных кривых в друг�
   M.curveUnits = { 'USD UST': 'par_yield_quote', 'CNY XCCY': 'xccy_quote_fx' };
   assert.ok(K.curveTip('USD UST').includes('par-доходностям прокси') && K.curveTip('USD UST').includes('quote_curve_risk'));
   assert.ok(K.curveTip('CNY XCCY').includes('у FX-сделок') && K.curveTip('CNY XCCY').includes('в разных единицах'));
-  assert.ok(K.tips.ruonia.includes('IRS KEYRATE') && !K.tips.ruonia.includes('пока'), 'КС: почему ещё в нулевых ставках');
+  assert.ok(K.tips.ruonia.includes('MOEX OIS RUONIA'));
 });
 
 t('#291: заседания ЦБ — M.cbr.schedule из concepts.cbr(); C17 берёт их оттуда, без window.DESK', () => {

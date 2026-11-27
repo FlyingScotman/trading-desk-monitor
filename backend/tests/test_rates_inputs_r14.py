@@ -30,7 +30,7 @@ from desk.marketdata import history
 from desk.marketdata.bundle import SnapshotDir
 from desk.orchestrator import prepare, value
 from desk.settings import Settings
-from desk.valuation.fallback import KEY_CURVE, _split, key_rate_floater_proxy
+from desk.valuation.fallback import KEY_CURVE, key_rate_floater_proxy
 
 OFZ, CORP, KEY = "SU26238RMFS4", "RU000A0JXQ44", "RU000A109XR1"
 DATE = "2026-10-15"
@@ -79,7 +79,7 @@ def test_missing_rates_inputs_are_named_and_the_risk_goes_where_it_says(tmp_path
         assert key.quality in ("exact", "assumed") and set(key.risk()) == {"RUB KEY", "RUB RUONIA"}
         return
     # R15: no key-rate projection, so core refuses the floater and the ladder values it; its projection is still on
-    # RUB KEY (positive) against its discounting (negative), and summed over the curves it is the old single-curve proxy
+    # RUB KEY (positive) against its discounting (negative), in KRS quote units
     assert outs[KEY].reason == "core_missing_market_data" and key.quality == "market_value"
     r = key.risk()
     assert set(r) == {disc, KEY_CURVE} and sum(r[KEY_CURVE].values()) > 0 > sum(r[disc].values())
@@ -94,6 +94,15 @@ def test_a_curve_that_cannot_be_built_is_an_error_not_a_gap(tmp_path):
     (n, _) = rates.input_notes(ctx.rates, date(2026, 10, 15))
     assert n["code"] == "curve_error:ruonia_ois" and "no usable RUONIA OIS quote" in n["detail"]
     assert n["text"].startswith("кривая RUONIA за 15.10 не построена")
+
+
+def test_empty_key_rate_quotes_are_missing(tmp_path):
+    ctx = prepare(SnapshotDir(cache_without(tmp_path, no_mids="key_rate_swap")), DATE)
+    assert ctx.rates["status"]["key_rate_swap"] == "missing"
+    assert ctx.key_rate_request is None and ctx.curve_units()["RUB KEY"] == "key_rate_quote"
+    (outcome,) = value(ctx, [(KEY, 1000.0)])
+    assert outcome.reason == "core_missing_market_data"
+    assert outcome.valuation.quality == "market_value"
 
 
 def test_the_run_log_and_the_risk_pages_say_what_is_missing(tmp_path, store_url):
@@ -133,13 +142,16 @@ def test_risk_notes_of_older_runs():
     assert risk_notes({"business_date": date(2026, 10, 19), "lineage": None}) == []
 
 
-def test_key_rate_floater_proxy_splits_without_changing_the_total():
-    pv, mac, reset = 1_000_000.0, 2.0, 0.25
-    by = key_rate_floater_proxy("RUB RUONIA", mac, reset, pv)
-    single = _split(reset, -reset * pv * 1e-4)
-    assert {b: by["RUB RUONIA"][b] + by[KEY_CURVE][b] for b in single} == pytest.approx(single)
-    assert sum(by["RUB RUONIA"].values()) == pytest.approx(-200.0)
-    assert sum(by[KEY_CURVE].values()) == pytest.approx((mac - reset) * pv * 1e-4)
+def test_key_rate_floater_proxy_has_negative_reset_dv01():
+    pv, mac, reset, y = 1_000_000.0, 2.0, 0.25, 0.15
+    by = key_rate_floater_proxy("RUB RUONIA", mac, reset, pv, y)
+    discount = math.fsum(by["RUB RUONIA"].values())
+    projection = math.fsum(by[KEY_CURVE].values())
+    bp_pv = pv * 1e-4 / (1 + y)
+    assert discount == pytest.approx(-mac * bp_pv)
+    assert projection == pytest.approx((mac - reset) * bp_pv)
+    assert discount + projection == pytest.approx(-reset * bp_pv)
+    assert discount + projection < 0
 
 
 # ---- R17: late and corrected closes

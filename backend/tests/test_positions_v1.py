@@ -268,7 +268,7 @@ def test_publish_api_and_compat(ctx, store_url):
     assert c.get(f"/api/v1/runs/{rid}/risk").status_code == 200
     with store.connect(store_url) as conn:  # T2: an FX forward is assumed but has no bond to reprice
         con = conn.cursor(row_factory=dict_row)
-        run_row = con.execute("SELECT run_id, business_date, cut_type, market_snapshot_id FROM run WHERE run_id = %s",
+        run_row = con.execute("SELECT run_id, business_date, cut_type, market_snapshot_id, lineage FROM run WHERE run_id = %s",
                               (rid,)).fetchone()
         prow = con.execute("SELECT position_id, book_id, secid, quantity, quality, pv_rub, fact FROM run_position"
                            " WHERE run_id = %s AND fact IS NOT NULL ORDER BY ord", (rid,)).fetchall()

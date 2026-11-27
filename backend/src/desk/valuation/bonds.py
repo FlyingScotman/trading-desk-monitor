@@ -94,6 +94,7 @@ from rub_fixed_income import (
     FloatingCouponLeg,
     FloatingCouponRule,
     Instrument,
+    KeyRateCurveRequest,
     MarketSnapshot,
     ObservationShift,
     ObservationWindow,
@@ -146,9 +147,7 @@ CAP_FLOOR_GUARD_BP = 25.0
 
 OFZ_CURVE, RUONIA_CURVE = "RUB OFZ", "RUB RUONIA"
 RISK_CURVES = {KBD_CURVE_ID: OFZ_CURVE, RUONIA_OIS_CURVE_ID: RUONIA_CURVE, KEY_RATE_CURVE_ID: "RUB KEY"}
-"""Core curve ID -> the published curve its bucket DV01 goes on (the run's ``curves`` reference, R8): a key-rate
-floater has RUONIA OIS (discounting) and the key-rate projection, each with its own buckets, so its basis risk
-shows."""
+"""Core curve ID -> published curve. A key-rate floater has OIS quote risk and KRS quote risk."""
 DISCOUNT_CURVE_ID = RUONIA_OIS_CURVE_ID
 """The discount curve of RUB bonds other than ``OFZ_KBD_CLASSES`` (the owner's decision of 20.10); ``KBD_CURVE_ID`` when
 the market has none."""
@@ -189,6 +188,10 @@ def discount_curve(market: MarketSnapshot) -> tuple[str, str | None]:
         return DISCOUNT_CURVE_ID, None
     return KBD_CURVE_ID, (f"discounted on the KBD: no RUONIA OIS curve in the market of {market.business_date}, "
                           "risk on RUB OFZ, spread to the KBD")
+
+
+def is_key_rate_floater(terms: BondTerms) -> bool:
+    return terms.coupon_type == "floating" and (terms.floater_formula or {}).get("benchmark") == "KEY_RATE"
 
 
 FLOATER_BENCHMARKS = ("KEY_RATE", "RUONIA", "RUONIA_3M", "RUONIA_INDEX", "ZCYC")
@@ -1019,6 +1022,8 @@ def core_call(market: MarketSnapshot, requests: list[BondRequest], *, second_ord
     foreign = foreign or {}
     out: dict[str, Rejected] = {}
     disc, disc_note = discount_curve(market)
+    key_rate = next((c.curve for c in market.curves if c.curve_id == KEY_RATE_CURVE_ID
+                     and isinstance(c.curve, KeyRateCurveRequest)), None)
     for r in requests:  # core values at the business date; the MOEX accrued is as of the trade date
         ccy = bond_currency(r.terms)
         if r.quote.trade_date != market.business_date:
@@ -1029,6 +1034,11 @@ def core_call(market: MarketSnapshot, requests: list[BondRequest], *, second_ord
                                           "USD/EUR: the par-yield proxies with proxy_curves_for_risk)")
         elif ccy != "RUB" and not any(x.currency == ccy for x in market.fx):
             out[r.position_id] = Rejected("no_fx_rate", f"{ccy} on {market.business_date}")
+        elif is_key_rate_floater(r.terms):
+            if key_rate is None:
+                out[r.position_id] = Rejected("core_missing_market_data", f"no KRS quote curve on {market.business_date}")
+            elif ccy != "RUB" or key_rate.ruonia_curve_id != disc:
+                out[r.position_id] = Rejected("core_invalid_terms", "key-rate floater needs the linked RUB RUONIA curve")
     reqs = [r for r in requests if r.position_id not in out]
     instruments, quotes, positions, calls, ok, kinds = {}, {}, [], {}, {}, {}  # calls: the exercise assumptions
     on_kbd: set[str] = set()
@@ -1046,7 +1056,7 @@ def core_call(market: MarketSnapshot, requests: list[BondRequest], *, second_ord
         ok[r.terms.secid] = prep
         instruments[inst.instrument_id] = inst
         kinds[inst.instrument_id] = "ofz" if r.terms.bond_class in OFZ_CLASSES else "credit"
-        if r.terms.bond_class in OFZ_KBD_CLASSES and bond_currency(r.terms) == "RUB":
+        if r.terms.bond_class in OFZ_KBD_CLASSES and inst.currency == "RUB" and not is_key_rate_floater(r.terms):
             on_kbd.add(inst.instrument_id)
         # no MOEX accrued: core's own (a floater's too since core 0.33); a foreign bond's in its currency
         quotes[inst.instrument_id] = price_observation(inst.instrument_id, r.price_basis, r.clean_pct,

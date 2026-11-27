@@ -117,8 +117,9 @@ import logging
 import math
 from dataclasses import dataclass, field, replace
 from datetime import date, timedelta
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
+import numpy as np
 from rub_fixed_income import (
     RISK_BUCKETS,
     RISK_PILLARS,
@@ -126,7 +127,10 @@ from rub_fixed_income import (
     BondRiskEngine,
     BondRiskRequest,
     CoreRejection,
+    DayCount,
     DiscountCurve,
+    FloatingCouponLeg,
+    KeyRateCurveRequest,
     MarketSnapshot,
     PerpetualTail,
     ShockedCurveCache,
@@ -134,13 +138,19 @@ from rub_fixed_income import (
     kbd_discount_curve,
     kbd_effective_yield,
     kbd_zero_rate_bp,
+    key_rate_projection_curve,
+    key_rate_weights,
+    resolve_tenor,
     roll_curve,
 )
 
-from ..curves.rates import RUONIA_OIS_CURVE_ID
+from ..curves.rates import KEY_RATE_CURVE_ID, RUONIA_OIS_CURVE_ID
 from ..marketdata.adapter import KBD_CURVE_ID
 from ..valuation.bonds import RISK_CURVES, SPREAD_CONVENTION, BondValuation, FloaterModel
 from .reasons import FLASH_RESIDUAL, PRICE_SOURCE_SWITCH, other_reason
+
+if TYPE_CHECKING:
+    from ..orchestrator import EodContext
 
 log = logging.getLogger(__name__)
 MODEL_PRICE = "model_price"
@@ -206,9 +216,8 @@ def _zero(c: DiscountCurve, t: float) -> float:
 @dataclass(frozen=True)
 class FlashCurves:
     """The curves of the steps by core curve ID: D-1, D-1 rolled to D, and D. The KBD under ``KBD_CURVE_ID``
-    (its roll: the D-1 ZCYC parameters dated D); every other built curve of both markets (RUONIA OIS, the key-rate
-    projection) rolled by core ``roll_curve``. ``prev_market``/``cur_market`` give a floater the fixings known on
-    each date."""
+    (its roll: the D-1 ZCYC parameters dated D); the other discount curves roll via core ``roll_curve``.
+    The risk markets provide KRS quotes. Exact flash PnL builds their projections with the coupon's observation rule."""
 
     prev: ZcycParameters
     cur: ZcycParameters
@@ -217,12 +226,23 @@ class FlashCurves:
     cur_curves: dict[str, DiscountCurve]
     prev_market: MarketSnapshot | None = None
     cur_market: MarketSnapshot | None = None
+    prev_risk_market: MarketSnapshot | None = None
+    cur_risk_market: MarketSnapshot | None = None
     _moves: dict[str, dict[str, float]] = field(default_factory=dict, repr=False, compare=False)
+    _key_projections: dict[tuple, tuple[DiscountCurve, DiscountCurve, DiscountCurve]] = field(
+        default_factory=dict, repr=False, compare=False)
+
+    @classmethod
+    def from_contexts(cls, prev: EodContext, cur: EodContext) -> FlashCurves:
+        return cls.build(prev.kbd, cur.kbd, prev.curve, cur.curve, prev_market=prev.core_market,
+                         cur_market=cur.core_market, prev_risk_market=prev.risk_market, cur_risk_market=cur.risk_market)
 
     @classmethod
     def build(cls, prev: ZcycParameters, cur: ZcycParameters,
               prev_curve: DiscountCurve | None = None, cur_curve: DiscountCurve | None = None, *,
-              prev_market: MarketSnapshot | None = None, cur_market: MarketSnapshot | None = None) -> FlashCurves:
+              prev_market: MarketSnapshot | None = None, cur_market: MarketSnapshot | None = None,
+              prev_risk_market: MarketSnapshot | None = None, cur_risk_market: MarketSnapshot | None = None
+              ) -> FlashCurves:
         """The KBD is core's (``kbd_discount_curve``), as in the valuations; the other curves are the markets'."""
         if prev.trade_date >= cur.trade_date:
             raise ValueError(f"previous curve {prev.trade_date} is not before {cur.trade_date}")
@@ -235,7 +255,7 @@ class FlashCurves:
                 if isinstance(e.curve, DiscountCurve) and e.curve_id in now and e.curve_id != KBD_CURVE_ID:
                     p[e.curve_id], c[e.curve_id] = e.curve, now[e.curve_id]
                     r[e.curve_id] = roll_curve(e.curve, now[e.curve_id].curve_date)
-        return cls(prev, cur, p, r, c, prev_market, cur_market)
+        return cls(prev, cur, p, r, c, prev_market, cur_market, prev_risk_market, cur_risk_market)
 
     @property
     def prev_curve(self) -> DiscountCurve:
@@ -249,17 +269,20 @@ class FlashCurves:
     def cur_curve(self) -> DiscountCurve:
         return self.cur_curves[KBD_CURVE_ID]
 
-    def zero_move_bp(self, curve_id: str = KBD_CURVE_ID) -> dict[str, float]:
+    def curve_move_bp(self, curve_id: str = KBD_CURVE_ID) -> dict[str, float]:
         """The move per risk pillar at the same tenor of ``curve_id`` in the unit of its bucket DV01 (empty when the
         curve is not on both dates): the KBD's par yield of an annual-coupon instrument by its parameters
         (``kbd_par_yield_bp``, the unit of ``rub_ofz_kbd_v3``; the 1M-6M buckets carry no KBD risk); the RUONIA OIS
-        curve's par rate (``par_rate_bp``: core bumps its quotes, ``EodContext.quote_curves``); another curve's
+        curve's par rate (``par_rate_bp``) or the KRS mids mapped to the core risk buckets; another curve's
         continuously compounded zero rate at the pillar's date counted in days (``round(t x 365.25)``) on its own
         time basis, as its bucket shifts read it."""
         if curve_id not in self._moves:
             if curve_id == KBD_CURVE_ID:
                 out = {b: kbd_par_yield_bp(self.cur, t) - kbd_par_yield_bp(self.prev, t)
                        for b, t in zip(RISK_BUCKETS, RISK_PILLARS)}
+            elif curve_id == KEY_RATE_CURVE_ID:
+                old, new = self.key_rate_requests()
+                out = _key_rate_moves(old, new) if old is not None and new is not None else {}
             elif curve_id in self.cur_curves and curve_id in PAR_CURVES:
                 out = {b: par_rate_bp(self.cur_curves[curve_id], t) - par_rate_bp(self.prev_curves[curve_id], t)
                        for b, t in zip(RISK_BUCKETS, RISK_PILLARS)}
@@ -271,11 +294,61 @@ class FlashCurves:
             self._moves[curve_id] = out
         return self._moves[curve_id]
 
-    def market(self, prev: bool) -> MarketSnapshot:
-        m = self.prev_market if prev else self.cur_market
+    def key_rate_requests(self) -> tuple[KeyRateCurveRequest | None, KeyRateCurveRequest | None]:
+        def request(m: MarketSnapshot | None) -> KeyRateCurveRequest | None:
+            return next((e.curve for e in m.curves if isinstance(e.curve, KeyRateCurveRequest)), None) if m else None
+
+        return request(self.prev_risk_market), request(self.cur_risk_market)
+
+    def key_rate_projections(self, fl: FloaterModel) -> tuple[DiscountCurve, DiscountCurve, DiscountCurve]:
+        old, new = self.key_rate_requests()
+        if old is None or new is None:
+            raise NoPnl("curve_missing", "RUB KEY: no KRS quotes on both dates")
+        leg = fl.instrument.coupon_leg
+        assert isinstance(leg, FloatingCouponLeg)
+        rule = leg.rule
+        calendars = {previous: self.market(previous).point_in_time_fixing(leg.fixing_id).calendar
+                     for previous in (True, False)}
+        key = calendars[True], calendars[False], rule.rate_day_count, rule.observation_days
+        if key not in self._key_projections:
+            def build(request: KeyRateCurveRequest, previous: bool) -> DiscountCurve:
+                market = self.market(previous, key_rate=True)
+                ois = market.curve(RUONIA_OIS_CURVE_ID).curve
+                discount = (self.prev_curves if previous else self.cur_curves)[RUONIA_OIS_CURVE_ID]
+                forward = request.bind_ruonia(ois).curve(ruonia=discount)
+                return key_rate_projection_curve(forward, calendars[previous], rate_day_count=rule.rate_day_count,
+                                                 observation_days=rule.observation_days)
+
+            prev, cur = build(old, True), build(new, False)
+            self._key_projections[key] = (prev, roll_curve(prev, cur.curve_date), cur)
+        return self._key_projections[key]
+
+    def market(self, prev: bool, *, key_rate: bool = False) -> MarketSnapshot:
+        if key_rate:
+            m = self.prev_risk_market if prev else self.cur_risk_market
+        else:
+            m = self.prev_market if prev else self.cur_market
         if m is None:
             raise NoPnl("no_market", "a floater needs the fixings of both dates")
         return m
+
+
+def _key_rate_moves(old: KeyRateCurveRequest, new: KeyRateCurveRequest) -> dict[str, float]:
+    """Fit matched tenor moves to the ACT/ACT ISDA weights used by D-1 KRS risk."""
+    mids = {q.tenor: q.mid for q in new.build.quotes}
+    weights, moves = [], []
+    for quote in old.build.quotes:
+        if quote.tenor in mids:
+            end = resolve_tenor(old.build.trade_date, quote.tenor, old.build.calendar).end_date
+            t = DayCount.ACT_ACT_ISDA.year_fraction(old.business_date, end)
+            weights.append(key_rate_weights(t))
+            moves.append((mids[quote.tenor] - quote.mid) * 10_000)
+    if not moves:
+        return {}
+    # Keep a parallel move parallel even when several bucket weights are collinear.
+    level = math.fsum(moves) / len(moves)
+    shifts = np.linalg.lstsq(weights, np.asarray(moves) - level, rcond=None)[0] + level
+    return dict(zip(RISK_BUCKETS, map(float, shifts)))
 
 
 @dataclass(frozen=True)
@@ -503,7 +576,8 @@ def _coupon_income(prev: BondValuation, fl: FloaterModel | None, curves: FlashCu
         log.debug("flash PnL received coupons left out: %s: %s", type(e).__name__, e)
         return None, None
     try:
-        market = curves.market(True) if fl is not None else None  # the D-1 fixings, as V_carry
+        key_rate = fl is not None and getattr(fl.instrument.coupon_leg, "projection_curve_id", None) == KEY_RATE_CURVE_ID
+        market = curves.market(True, key_rate=key_rate) if fl is not None else None  # D-1 fixings, as V_carry
         a0, a1 = prev.instrument.accrued(s0, market), prev.instrument.accrued(s1, market)
         return received, q * (a1 - a0) + received
     except Exception as e:  # noqa: BLE001 - an indexed leg (no CPI series), a floater core cannot accrue, a bug:
@@ -600,7 +674,8 @@ def explain(prev: BondValuation, cur: BondValuation, curves: FlashCurves,
     fl = prev.floater
     proj = getattr(fl.instrument.coupon_leg, "projection_curve_id", None) if fl else None
     two = proj is not None and proj != disc
-    if missing := [c for c in (disc, *((proj,) if two else ())) if c not in curves.cur_curves]:
+    key_rate = proj == KEY_RATE_CURVE_ID
+    if missing := [c for c in (disc, *((proj,) if two and not key_rate else ())) if c not in curves.cur_curves]:
         raise NoPnl("curve_missing", f"{', '.join(missing)}: not built on both dates")
     # A foreign bond (core 0.34): its flows and curve are in its currency, the steps too; the components are
     # converted at the D rate and the rate move on the D-1 PV is fx_gross, so they add up to the RUB total.
@@ -613,19 +688,22 @@ def explain(prev: BondValuation, cur: BondValuation, curves: FlashCurves,
     q, kind, flows = prev.quantity, prev.spread_kind, prev.cashflows
     s0, s1 = prev.valuation_date, cur.valuation_date
 
-    def pv(s: date, step: dict[str, DiscountCurve], z: float, on_d: bool) -> float:
+    def pv(s: date, step: dict[str, DiscountCurve], z: float, on_d: bool,
+           key_projection: DiscountCurve | None = None) -> float:
         if fl is None:
             return _pv(flows, s, step[disc], z, kind, q, cache, prev.perpetual_tail)
-        return _pv_floater(fl, s, curves.market(not on_d), step[disc], step[proj] if two else None,  # type: ignore[index]
+        projection = key_projection if key_rate else step[proj] if two else None  # type: ignore[index]
+        return _pv_floater(fl, s, curves.market(not on_d), step[disc], projection,
                            z, kind, q, cache)
 
     try:
-        v0 = pv(s0, curves.prev_curves, prev.z_spread_bp, False)
+        kp, kr, kc = curves.key_rate_projections(fl) if fl and key_rate else (None, None, None)
+        v0 = pv(s0, curves.prev_curves, prev.z_spread_bp, False, kp)
         received = q * sum(f.amount for f in flows if s0 < f.payment_date <= s1)
-        v_carry = pv(s1, curves.prev_curves, prev.z_spread_bp, False) + received
-        v_roll = pv(s1, curves.roll_curves, prev.z_spread_bp, True) + received
-        v_rates = pv(s1, curves.cur_curves, prev.z_spread_bp, True) + received
-        v_spread = pv(s1, curves.cur_curves, cur.z_spread_bp, True) + received
+        v_carry = pv(s1, curves.prev_curves, prev.z_spread_bp, False, kp) + received
+        v_roll = pv(s1, curves.roll_curves, prev.z_spread_bp, True, kr) + received
+        v_rates = pv(s1, curves.cur_curves, prev.z_spread_bp, True, kc) + received
+        v_spread = pv(s1, curves.cur_curves, cur.z_spread_bp, True, kc) + received
     except (ValueError, RuntimeError, CoreRejection) as e:
         raise NoPnl("core_error", str(e)) from e
     # The D-1 risk is in RUB at the D-1 rate (core converts a foreign bond's sensitivities at its snapshot's rate,
@@ -636,14 +714,14 @@ def explain(prev: BondValuation, cur: BondValuation, curves: FlashCurves,
         if prev.ofz_ruonia and c != kbd and fl is None:  # an OFZ in RUONIA + basis: the KBD's own move is its first order
             continue  # (below). A KBD floater (TDM#467) is discounted on RUONIA: its RUB RUONIA (RUONIA less the basis,
             # the discount) moves with RUONIA's own move, B dK + (R - B) dO, so the basis part is B (dK - dO), not B dK - R dO
-        move = curves.zero_move_bp(PUBLISHED_TO_CORE.get(c, c))
+        move = curves.curve_move_bp(PUBLISHED_TO_CORE.get(c, c))
         bs = {b: x * to_d for b, x in bs.items()}
         linear += sum(x * move.get(b, 0.0) for b, x in bs.items())
         used.append((c, bs, move))
     ofz, d_ois = None, None
     ofz_ruonia = {b: x * to_d for b, x in prev.ofz_ruonia.items()}
     if ofz_ruonia:  # RUONIA + basis: the day moved the KBD itself (dK), so B dK; RUONIA's part R dO, the rest basis
-        d_ois = curves.zero_move_bp(RUONIA_OIS_CURVE_ID)
+        d_ois = curves.curve_move_bp(RUONIA_OIS_CURVE_ID)
         ruonia = math.fsum(x * d_ois.get(b, 0.0) for b, x in ofz_ruonia.items())
         ofz = (ruonia, linear - ruonia)
     terms, moves = _linear_terms(used, ofz_ruonia, d_ois)

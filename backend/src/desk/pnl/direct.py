@@ -37,9 +37,9 @@ positions valued at the report's figure. Each is flagged with its method (``reas
   ``valuation.derivatives._rates_horizon``; ``dayrun`` asks for it) is split (``_rates_split``, method
   ``desk-rates-core-v1``, FlyingScotman/trading-desk-monitor#804): ``carry`` and ``rolldown`` are core's carry and rolldown of its
   trades to D (the carry holds the cash the trades paid in (D-1, D], at core's own projection, as ``received_rub``),
-  ``rates`` is the D-1 bucket DV01 per curve x that curve's move in the unit of its buckets (``FlashCurves
-  .zero_move_bp``, as a bond's ``rates_linear``; a swap's risk on the key rate: the move of the key-rate forward curve
-  per bucket, ``_key_rate_moves``), ``other`` the rest, with the reason ``rates_core_rest``: the second
+  ``rates`` is the D-1 bucket DV01 per curve times the move in the bucket's units
+  (``FlashCurves.curve_move_bp``, shared with bond ``rates_linear``). ``other`` is the rest, with reason
+  ``rates_core_rest``: the second
   order of the move, the day's fixing against the forward, the risk on a curve whose move is not read here (said in
   the reason). Without that horizon (it could not be read, the cash of the flows differs from core's) the row is
   as before: the whole change in ``other``, ``fx_core_rest``.
@@ -63,13 +63,12 @@ from __future__ import annotations
 import logging
 import math
 from dataclasses import dataclass, field, replace
-from datetime import date, timedelta
+from datetime import date
 from typing import TYPE_CHECKING, Any
 
-from rub_fixed_income import RISK_BUCKETS, RISK_PILLARS, roll_key_rate_curve
+from rub_fixed_income import RISK_BUCKETS, RISK_PILLARS
 
 from ..curves.fx import implied_curve_id
-from ..curves.rates import KEY_RATE_CURVE_ID, KEY_RATE_SWAP_CURVE_ID
 from ..inbox.schema import norm_ccy
 from ..marketdata.adapter import bond_currency
 from ..marketdata.manual_cds import name_key
@@ -320,54 +319,9 @@ def _received(prev: EodContext, ctx: EodContext, pv: Any, missing: list[str] | N
 
 log = logging.getLogger(__name__)
 
-RATES_CURVES = (RUONIA_CURVE, OFZ_CURVE)
-"""The published curves whose risk ``_rates_split`` multiplies by a move read from the built curves: the RUONIA OIS curve
-(a swap's discount and projection) and the KBD. ``RUB KEY`` (``KEY_RATE``) is the key-rate forward curve of a swap
-(``_key_rate_moves``) or the projection curve of a REPO (its built curve, ``zero_move_bp``), by what the row's trades
-project on (``extra.horizon.projections``); a row with both has its key-rate risk in ``other``, said."""
-KEY_CURVE = "RUB KEY"
+RATES_CURVES = (RUONIA_CURVE, OFZ_CURVE, "RUB KEY")
+"""Published rates curves whose bucket moves are shared with the bond flash PnL."""
 
-
-def _key_rate_moves(prev: EodContext, ctx: EodContext, memo: dict[str, Any]) -> dict[str, float] | None:
-    """The move of the key-rate forward curve (``EodContext.swap_curves``) per risk bucket, bp, from D-1 rolled to D to
-    the curve of D (None: a curve missing or not rollable). Core shifts a bucket's weight over the days after the key rate
-    in force (``current_rate_end``), at the curve time of each day (ACT/365F), so a bucket is read at the date its pillar
-    falls on from D: the forward rate of D's curve there less that of D-1's curve rolled to D (``roll_key_rate_curve``:
-    the pillar segments held in tenor, as core's horizon rolls them, so the carry and rolldown of the horizon are
-    that part of the move). A bucket whose date falls before the next decision is read at the decision (core's weight of
-    a bucket lies on the days after ``current_rate_end``, the rate in force does not move with the curve); one past the
-    end of a curve has none read (left out, said)."""
-    if "key" not in memo:
-        memo["key"] = None
-        try:
-            kp, kc = (next((e.curve for e in m.swap_curves if e.curve_id == KEY_RATE_SWAP_CURVE_ID), None)
-                      for m in (prev, ctx))
-            if kp is not None and kc is not None:
-                day = ctx.business_date
-                rolled = roll_key_rate_curve(kp, day)
-                out: dict[str, float] = {}
-                for b, t in zip(RISK_BUCKETS, RISK_PILLARS):
-                    d = max(day + timedelta(days=round(t * 365)), kc.current_rate_end)
-                    if d < kc.horizon_date and d < rolled.horizon_date:
-                        out[b] = (kc.rate_at(d) - rolled.rate_at(d)) * 1e4
-                memo["key"] = out
-        except (AttributeError, ValueError):  # (core's refusals are ValueErrors)
-            memo["key"] = None
-    return memo["key"]
-
-
-def _move_of(curve: str, h: dict[str, Any], prev: EodContext, ctx: EodContext, curves: FlashCurves,
-             memo: dict[str, Any]) -> dict[str, float]:
-    """The move per bucket of the published ``curve`` of a row whose horizon is ``h``; empty when it is not read."""
-    if curve in RATES_CURVES:
-        return curves.zero_move_bp(PUBLISHED_TO_CORE.get(curve, curve))
-    if curve == KEY_CURVE:
-        proj = set(h.get("projections") or ())
-        if proj == {KEY_RATE_SWAP_CURVE_ID}:
-            return _key_rate_moves(prev, ctx, memo) or {}
-        if proj == {KEY_RATE_CURVE_ID}:
-            return curves.zero_move_bp(KEY_RATE_CURVE_ID)
-    return {}
 RECEIVED_TOL_RUB = 1.0
 """``_rates_split`` is taken only when core's cash to the horizon is the cash ``_received`` found in the flows, to this."""
 
@@ -387,8 +341,7 @@ def _rates_split(prev: EodContext, ctx: EodContext, pv: Any, total: float, fx: f
         return None
     if "curves" not in memo:
         try:
-            memo["curves"] = FlashCurves.build(prev.kbd, ctx.kbd, prev.curve, ctx.curve, prev_market=prev.core_market,
-                                               cur_market=ctx.core_market)
+            memo["curves"] = FlashCurves.from_contexts(prev, ctx)
         except (ValueError, AttributeError):
             memo["curves"] = None
     curves = memo["curves"]
@@ -398,8 +351,10 @@ def _rates_split(prev: EodContext, ctx: EodContext, pv: Any, total: float, fx: f
     moves: dict[str, dict[str, float]] = {}
     left_out: list[str] = []
     for c, bs in sorted((pv.curve_buckets or {}).items() if live else ()):
-        move = (curves.zero_move_bp(pv.discount_curve_id) if cds else _move_of(c, h, prev, ctx, curves, memo)
-                ) if curves is not None else {}
+        move = {}
+        if curves is not None and (cds or c in RATES_CURVES):
+            cid = pv.discount_curve_id if cds else PUBLISHED_TO_CORE[c]
+            move = curves.curve_move_bp(cid)
         if cds and not move and c == implied_curve_id(cds["ccy"]):
             # FlashCurves reads built snapshot entries. FX-implied is a request there and is built in FxMarket.
             old, new = prev.fx.curves.get(c), ctx.fx.curves.get(c)
