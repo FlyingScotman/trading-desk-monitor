@@ -117,8 +117,8 @@ import psycopg
 
 from . import fsretry, logic_version, store, trades
 from .marketdata import cache, manual_cds
-from .marketdata.bundle import SnapshotDir, previous_close
-from .marketdata.hub import HubError, TransportError
+from .marketdata.bundle import MissingSnapshotError, SnapshotDir, previous_close
+from .marketdata.hub import HubError, HubUnavailable, TransportError
 from .settings import Settings
 from .valuation.fallback import SPREAD_EPS_BP
 
@@ -153,6 +153,7 @@ class Day:
     failed date is remembered under it; a ``done`` date has it too (the second pass's give-up is remembered under it)."""
     market_id: str | None = None
     cached: bool = False
+    """The market and static files of the date and its planned previous close are cached."""
     prev_date: str | None = None
     """The close before the date (``bundle.previous_close``, the run's too, #203): the flash PnL's basis."""
     prev_cut: str | None = None
@@ -249,6 +250,9 @@ STORE_FAULT_ERROR = re.compile(r"^(?:InternalError_|DataCorrupted|IndexCorrupted
 ``store_fault``): a state written before such an error was a stall. Stored as it is (the class name, a colon, the
 message); the «вторые производные: » the settings page puts before a second pass's error is the screen's, not stored.
 The class name must be whole (``InternalErrorX`` is not it), and plain ``InternalError`` is not a class XX one."""
+MISSING_SNAPSHOT_ERROR = re.compile(
+    r"""^FileNotFoundError: \[Errno 2\] .*?['"](?:.*[/\\])?[0-9a-fA-F]{64}\.json\.gz['"]$""")
+"""The raw missing-bundle error saved by 0.2.36 (TDM#825), with a POSIX or Windows path."""
 _HEAL_LOCK = threading.Lock()
 
 
@@ -260,14 +264,14 @@ def _read_state(settings: Settings) -> dict[str, Any]:
         return {}
 
 
-def _frozen_by_store(st: dict[str, Any]) -> tuple[list[str], list[str]]:
-    """The dates a store's own error froze (``release_store_faults``): (first pass, second pass)."""
+def _frozen_by_error(st: dict[str, Any], pattern: re.Pattern[str]) -> tuple[list[str], list[str]]:
+    """The failed dates with a matching saved error (first pass, second pass)."""
     problems = st.get("problems")
     first = [d for d, pr in problems.items() if isinstance(pr, dict) and pr.get("kind") == "failed"
-             and STORE_FAULT_ERROR.match(str(pr.get("error") or ""))] if isinstance(problems, dict) else []
+             and pattern.match(str(pr.get("error") or ""))] if isinstance(problems, dict) else []
     sec = st.get("second")
     gave_up = sec.get("failed") if isinstance(sec, dict) else None
-    second = [d for d, g in gave_up.items() if isinstance(g, dict) and STORE_FAULT_ERROR.match(str(g.get("error") or ""))
+    second = [d for d, g in gave_up.items() if isinstance(g, dict) and pattern.match(str(g.get("error") or ""))
               ] if isinstance(gave_up, dict) else []
     return first, second
 
@@ -278,7 +282,11 @@ def release_store_faults(st: dict[str, Any]) -> tuple[int, int]:
     ``second.failed``) are let go, so the plan makes them again; the dates that failed on their own error, one that does
     not converge and the stalls stay. Matched by the class name at the start of the recorded error
     (``STORE_FAULT_ERROR``). Returns (first pass dates, second pass dates); ``st`` is changed in place."""
-    first, second = _frozen_by_store(st)
+    return _release_failures(st, STORE_FAULT_ERROR)
+
+
+def _release_failures(st: dict[str, Any], pattern: re.Pattern[str]) -> tuple[int, int]:
+    first, second = _frozen_by_error(st, pattern)
     for d in first:
         del st["problems"][d]
         (st.get("failed") or {}).pop(d, None)
@@ -288,17 +296,21 @@ def release_store_faults(st: dict[str, Any]) -> tuple[int, int]:
 
 
 def state(settings: Settings) -> dict[str, Any]:
-    """The backfill's state file. A date a store's own error froze (``release_store_faults``, TDM#749) is let go as the
-    file is read: written back at once, said in the log with the counts, so the next read finds nothing to do."""
+    """Read the state file and release legacy failures caused by a store fault or missing snapshot file."""
     st = _read_state(settings)
-    if any(_frozen_by_store(st)):
+    if any(_frozen_by_error(st, STORE_FAULT_ERROR)) or any(_frozen_by_error(st, MISSING_SNAPSHOT_ERROR)):
         with _HEAL_LOCK:
             st = _read_state(settings)  # (again under the lock: not the copy of a reader that was held up)
             first, second = release_store_faults(st)
-            if first or second:
+            missing_first, missing_second = _release_failures(st, MISSING_SNAPSHOT_ERROR)
+            if first or second or missing_first or missing_second:
                 save_state(settings, st)
+            if first or second:
                 log.warning("backfill: %d dates of the first pass and %d of the second were failed on the store's own "
                             "error (not the dates' data): planned again", first, second)
+            if missing_first or missing_second:
+                log.info("backfill: %d dates of the first pass and %d of the second failed on missing snapshot files: "
+                         "planned again", missing_first, missing_second)
     return st
 
 
@@ -467,6 +479,14 @@ def stale_spreads(con: psycopg.Connection, runs: dict[date, dict], date_from: da
     return out
 
 
+def _market_cached(sd: SnapshotDir, sid: str) -> bool:
+    manifest = sd.manifest(sid)
+    if manifest is None:
+        return False
+    static = manifest.get("static_snapshot_id")
+    return not static or sd.manifest(static) is not None
+
+
 def plan(con: psycopg.Connection, settings: Settings, date_from: date, date_to: date,
          hub: list[tuple[str, str]] | None = None) -> Plan:
     """What the backfill would do (module doc, step 2). ``hub``: the hub's (date, snapshot id) rows (``hub_rows``);
@@ -502,6 +522,8 @@ def plan(con: psycopg.Connection, settings: Settings, date_from: date, date_to: 
             continue
         pc = previous_close(sd, d, hub_ids)  # the run's previous close once the run synced it (#203)
         pd, pcut, prev = pc if pc else (None, None, None)
+        # The flash PnL prepares both markets, each with its own static snapshot (dayrun.eod_run).
+        bundles_cached = _market_cached(sd, snap) and (prev is None or _market_cached(sd, prev))
         run = runs.get(date.fromisoformat(d))
         ih = inputs_hash(con, date.fromisoformat(d), settings, stamp)  # TDM#557, #569: remembered
         late = late_why(con, date.fromisoformat(d), run, revs)
@@ -528,12 +550,12 @@ def plan(con: psycopg.Connection, settings: Settings, date_from: date, date_to: 
             second = ("done" if run["second_order"] else
                       "failed" if giveup.get("sig") == sig and giveup.get("attempts", 0) >= MAX_ATTEMPTS
                       else "todo")
-            days.append(Day(d, "done", sig=sig, market_id=snap, cached=is_cached, prev_date=pd, prev_cut=pcut,
+            days.append(Day(d, "done", sig=sig, market_id=snap, cached=bundles_cached, prev_date=pd, prev_cut=pcut,
                             second=second, run_id=run["run_id"], carry=carry))
         elif failed.get(d) == sig:
-            days.append(Day(d, "failed", why, sig, snap, is_cached, pd, pcut))
+            days.append(Day(d, "failed", why, sig, snap, bundles_cached, pd, pcut))
         else:
-            days.append(Day(d, "todo", why, sig, snap, is_cached, pd, pcut, chain=chain))
+            days.append(Day(d, "todo", why, sig, snap, bundles_cached, pd, pcut, chain=chain))
             todo_dates.add(date.fromisoformat(d))
     return Plan(lo, hi, days, hub is not None, hub)
 
@@ -615,8 +637,8 @@ def transient(e: BaseException) -> bool:
     Network: ``TransportError`` (the hub client's, urllib or curl), ``TimeoutError``, ``ConnectionError``, DNS, TLS
     (``ssl.SSLError``) and urllib/http.client errors. Store: ``psycopg.OperationalError`` (also ``DiskFull``) and the
     store's internal errors (``store_broken``, class XX, TDM#749).
-    A full disk or an exceeded quota (``ENOSPC``, ``EDQUOT``) is a stall too (``disk``). Any other ``OSError`` (a missing or locked cache file,
-    permission) is the date's own error, not a stall."""
+    A full disk or an exceeded quota (``ENOSPC``, ``EDQUOT``) is a stall too (``disk``). The passes handle
+    ``MissingSnapshotError`` separately as a skip. Other ``OSError`` cases, such as permissions, belong to the date."""
     if isinstance(e, HubError):
         return e.status is None or e.status >= 500 or e.status in (401, 403, 407, 429)
     return _disk_full(e) or store_broken(e) or isinstance(e, (
@@ -730,9 +752,47 @@ def _differs(con: psycopg.Connection, day: Day) -> str:
 
 
 SKIP = object()
-"""``bundle_step``: the date's bundle is not cached and there is no hub to download it from."""
+"""A required bundle is missing and could not be downloaded."""
+SKIP_REASON = "a required snapshot is not cached and no hub copy is available"
 PIPE_BROKEN = object()
 """``_eod``: a process of the pool died."""
+
+
+def _ensure_bundles(cache_dir: Path, day: Day, hub_plan: bool, client: Any) -> bool | object:
+    """Check the market and static snapshots the run needs, downloading missing files when possible."""
+    sd = SnapshotDir(cache_dir)
+    dates = set(sd.market_dates())
+    prev_id = day.sig[2] if day.prev_date and day.sig else None
+    planned = [(day.date, day.market_id)]
+    if hub_plan and day.prev_cut == "eod_final":
+        planned.append((day.prev_date, prev_id))
+    want = [d for d, sid in planned if d and
+            (d not in dates or (hub_plan and sid and sd.market_id(d) != sid))]
+    downloaded = bool(want)
+    if want:
+        if client is None:
+            return SKIP
+        cache.sync(client, cache_dir, want)
+        sd = SnapshotDir(cache_dir)
+    if day.date not in sd.market_dates():
+        return SKIP
+    market_id = sd.market_id(day.date)
+    if hub_plan and day.market_id and market_id != day.market_id:
+        return SKIP  # the hub's latest cut changed since the plan was made
+
+    if prev_id and sd.manifest(prev_id) is None:
+        if client is None or day.prev_date in want:
+            return SKIP
+        # A known cache-only or preliminary close must be fetched by id, even if it was pruned.
+        downloaded |= cache.fetch(client, cache_dir, prev_id)
+        sd = SnapshotDir(cache_dir)
+    pc = previous_close(sd, day.date)  # the cache may have acquired a newer close since planning
+    static_ids = {(sd.manifest(sid) or {}).get("static_snapshot_id") for sid in (market_id, pc[2] if pc else None) if sid}
+    for sid in sorted(sid for sid in static_ids if sid and sd.manifest(sid) is None):
+        if client is None:
+            return SKIP
+        downloaded |= cache.fetch(client, cache_dir, sid)
+    return downloaded
 
 
 def _submit(pipe: Any, date: str) -> bool:
@@ -891,21 +951,7 @@ def run(settings: Settings, p: Plan, *, store_url: str | None = None, client: An
     prefetched: dict[str, Any] = {}  # date -> downloaded (bool), SKIP or the error its bundle step raised (workers > 1)
     blocked: list[int] = []  # the index of a date whose bundle step failed ahead: the dates after it wait for the loop
 
-    def bundle_step(day: Day) -> bool | object:
-        """The date's bundle: downloaded when it is not cached, or cached under another snapshot than the plan's
-        (the hub re-published the date or the previous close, #439); an unchanged cached date is not. Returns whether it
-        was downloaded, ``SKIP`` when it is not cached and there is no hub."""
-        sd = SnapshotDir(cache_dir)
-        have = set(sd.market_dates())
-        # The previous close is the plan's, the one the run then picks (``bundle.previous_close``, #203);
-        # a cached eod_preliminary one is not the hub's to sync
-        planned = ((day.date, day.market_id),
-                   (day.prev_date if day.prev_cut == "eod_final" else None, day.sig[2] if day.sig else None))
-        want = [x for x, sid in planned if x and (x not in have or (p.hub and sid and sd.market_id(x) != sid))]
-        if want and client is not None:
-            cache.sync(client, cache_dir, want)
-            return True
-        return False if day.date in have else SKIP
+    bundle_step = partial(_ensure_bundles, cache_dir, hub_plan=p.hub, client=client)
 
     def fill(i: int) -> None:
         """Workers > 1: the dates from ``i`` on are given to the pool, up to ``workers`` + ``LOOKAHEAD`` in flight, their
@@ -1001,6 +1047,7 @@ def run(settings: Settings, p: Plan, *, store_url: str | None = None, client: An
                     raise step  # the bundle step of a date given to the pool ahead failed: as it fails here
                 if step is SKIP:
                     skipped.append(day.date)
+                    out(f"backfill {day.date} skipped: {SKIP_REASON}")
                     tried -= 1  # nothing was tried: no bundle, no time spent
                     continue
                 downloaded = step
@@ -1029,6 +1076,11 @@ def run(settings: Settings, p: Plan, *, store_url: str | None = None, client: An
                     again = next((x for x in plan(con, settings, d, d, p.rows).days if x.date == day.date), None)
                     if again is not None and again.status != "done":
                         still = (again.why or again.status, _differs(con, day))
+            except MissingSnapshotError as e:
+                skipped.append(day.date)
+                out(f"backfill {day.date} skipped: {e}")
+                _go_on(pipe, day.date)
+                continue
             except Exception as e:  # one date's bad data must not stop the others
                 if transient(e):  # the store or the network, not the date: not remembered as failed
                     err = f"{type(e).__name__}: {e}"
@@ -1045,7 +1097,11 @@ def run(settings: Settings, p: Plan, *, store_url: str | None = None, client: An
                     elif same and old.get("recheck"):
                         problems[day.date]["recheck"] = True
                     log.exception("backfill %s interrupted (%d in a row)", day.date, n)
-                    failed.append((day.date, f"{err} (not the date's data: tried again next time)"))
+                    if phase == "bundle" and isinstance(e, HubUnavailable):
+                        skipped.append(day.date)
+                        out(f"backfill {day.date} skipped: {SKIP_REASON} ({e})")
+                    else:
+                        failed.append((day.date, f"{err} (not the date's data: tried again next time)"))
                     if alone and not passed:
                         _go_on(pipe, day.date)
                         continue  # its own error (later dates loaded meanwhile): it no longer holds the queue (#23)
@@ -1140,7 +1196,8 @@ MISMATCH_SHOWN = 3
 """How many of the differing totals a warning of the second pass names."""
 
 
-def run_second(settings: Settings, p: Plan, *, store_url: str | None = None, budget_s: float | None = None,
+def run_second(settings: Settings, p: Plan, *, store_url: str | None = None, client: Any = None,
+               budget_s: float | None = None,
                out: Callable[[str], None] = print, progress: Callable[[int, int, str], None] | None = None,
                contexts: Any = None, exclude: set[str] | frozenset[str] = frozenset(),
                workers: int = 1, pool_init: Any = None, pool: Any = None,
@@ -1229,13 +1286,17 @@ def run_second(settings: Settings, p: Plan, *, store_url: str | None = None, bud
             if budget_s is not None and tried and not (pipe is not None and pipe.has(day.date)) \
                     and time.monotonic() - t0 >= budget_s:
                 break
-            if not day.cached or day.date not in have:
-                skipped.append(day.date)  # nothing to value on; the first pass downloaded it, a prune took it
-                continue
-            tried += 1
-            if progress is not None:
-                progress(p.count_second("done") + len(done), total, day.date)
+            phase = "bundle"
             try:
+                if (not day.cached or day.date not in have) and (
+                        client is None or _ensure_bundles(cache_dir, day, p.hub, client) is SKIP):
+                    skipped.append(day.date)
+                    out(f"backfill {day.date} skipped: {SKIP_REASON}")
+                    continue
+                phase = "run"
+                tried += 1
+                if progress is not None:
+                    progress(p.count_second("done") + len(done), total, day.date)
                 out(f"backfill {day.date}: second derivatives (the run {day.run_id} has none)")
                 t1 = time.monotonic()
                 alone = partial(eod_run, settings, day.date, snapshots=cache_dir, store_url=store_url, report_dir=None,
@@ -1273,8 +1334,16 @@ def run_second(settings: Settings, p: Plan, *, store_url: str | None = None, bud
                 else:
                     log.info("backfill second pass %s: its inputs changed meanwhile, the new run read the new ones: "
                              "the totals are not compared", day.date)
+            except MissingSnapshotError as e:
+                skipped.append(day.date)
+                out(f"backfill {day.date} skipped: {e}")
+                _go_on(pipe, day.date)
+                continue
             except Exception as e:  # one date's error must not stop the others
                 if transient(e):
+                    if phase == "bundle" and isinstance(e, HubUnavailable):
+                        skipped.append(day.date)
+                        out(f"backfill {day.date} skipped: {SKIP_REASON} ({e})")
                     stopped = f"{type(e).__name__}: {e}"
                     log.exception("backfill second pass %s interrupted", day.date)
                     stall = {**_stall({"source": "store" if isinstance(e, psycopg.OperationalError) or store_broken(e)
